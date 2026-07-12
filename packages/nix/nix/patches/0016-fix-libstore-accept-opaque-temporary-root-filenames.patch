@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 12 Jul 2026 15:23:02 -0700
+Subject: [PATCH] fix(libstore): accept opaque temporary root filenames
+
+Newer Nix processes can share a store with 2.34 and create per-instance
+temporary root files named temproots-<pid>-<random>. Treat the filename
+as opaque diagnostic data so one such entry cannot abort every garbage
+collection with std::invalid_argument and exhaust the store.
+
+Refs indexable-inc/index#3031
+
+Assisted-by: Codex <noreply@openai.com>
+
+diff --git a/src/libstore/gc.cc b/src/libstore/gc.cc
+index 16b81abf2..12f492a5e 100644
+--- a/src/libstore/gc.cc
++++ b/src/libstore/gc.cc
+@@ -168,8 +168,6 @@ void LocalStore::findTempRoots(Roots & tempRoots, bool censor)
+         }
+         auto path = i.path();
+ 
+-        pid_t pid = std::stoi(name);
+-
+         debug("reading temporary root file %1%", PathFmt(path));
+         AutoCloseFD fd(toDescriptor(open(
+             path.string().c_str(),
+@@ -204,7 +202,7 @@ void LocalStore::findTempRoots(Roots & tempRoots, bool censor)
+         while ((end = contents.find((char) 0, pos)) != std::string::npos) {
+             auto root = std::string_view(contents).substr(pos, end - pos);
+             debug("got temporary root '%s'", root);
+-            tempRoots[parseStorePath(root)].emplace(censor ? censored : fmt("{temp:%d}", pid));
++            tempRoots[parseStorePath(root)].emplace(censor ? censored : fmt("{temp:%s}", name));
+             pos = end + 1;
+         }
+     }
+diff --git a/tests/functional/gc.sh b/tests/functional/gc.sh
+index c58f47021..576bb546c 100755
+--- a/tests/functional/gc.sh
++++ b/tests/functional/gc.sh
+@@ -6,6 +6,14 @@ TODO_NixOS
+ 
+ clearStore
+ 
++# A newer Nix may share this store and use an opaque, per-instance temporary
++# root filename. GC must treat the filename as diagnostic data rather than
++# assuming that every non-hidden entry is a decimal PID.
++futureTempRoot="$NIX_STATE_DIR/temproots/temproots-123-456"
++touch "$futureTempRoot"
++nix-store --gc --print-roots
++test ! -e "$futureTempRoot"
++
+ drvPath=$(nix-instantiate dependencies.nix)
+ outPath=$(nix-store -rvv "$drvPath")
+ 

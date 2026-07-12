@@ -65,6 +65,10 @@
     {
       "patch": "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch",
       "deps": []
+    },
+    {
+      "patch": "0016-fix-libstore-accept-opaque-temporary-root-filenames.patch",
+      "deps": []
     }
   ]
 }
