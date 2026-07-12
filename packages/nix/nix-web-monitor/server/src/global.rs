@@ -26,8 +26,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use nix_web_monitor_parser::global::parse_builds;
-use nix_web_monitor_parser::{GlobalBuild, GlobalBuilds, MonitorState};
+use nix_web_monitor_parser::global::{flatten_graph, parse_builds, parse_graph};
+use nix_web_monitor_parser::{GlobalBuild, GlobalBuilds, GlobalCoordinator, MonitorState};
 use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast};
 
@@ -56,7 +56,7 @@ const LOG_TAIL_BYTES: usize = 64 * 1024;
 /// panel shows (or a hidden panel) and the loop retries.
 pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadcast::Sender<Bytes>) {
     loop {
-        let Some(builds) = poll_builds().await else {
+        let Some(global) = poll_view().await else {
             // Undetected: publish the undetected view once (its `Default` carries
             // the "not available" status) so a later detection can flip the panel
             // on, then back off before re-probing.
@@ -64,59 +64,88 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
             tokio::time::sleep(RETRY_INTERVAL).await;
             continue;
         };
-        let status = format!("{} active", builds.len());
-        let global = GlobalBuilds {
-            detected: true,
-            builds,
-            status,
-        };
         publish(&monitor, &deltas, global).await;
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 
-/// Run `nix store builds --json` and parse its output into a build list, or
-/// `None` when the subcommand is unavailable (stock nix) or errored.
+/// The invocation variants per view. The patched command is gated behind the
+/// `build-status-dir` experimental feature, so the feature-enabling form is the
+/// one that normally succeeds and goes first (one subprocess per tick on a
+/// patched nix). The plain form is the fallback for a nix that rejects the
+/// unknown feature name but has the command ungated or the feature enabled via
+/// nix.conf.
+const FEATURE_VARIANTS: [&[&str]; 2] = [
+    &["--extra-experimental-features", "nix-command build-status-dir"],
+    &["--extra-experimental-features", "nix-command"],
+];
+
+/// Poll the machine-wide view, preferring the goal-graph form.
 ///
-/// Detection is by *result*, not by exit-code text-matching: whatever variant of
-/// the invocation yields a parseable JSON array wins. A stock nix prints an
-/// "unknown command" / "unknown experimental feature" error to stderr (not a
-/// JSON array), so every variant fails to parse and this returns `None` ->
-/// undetected.
-async fn poll_builds() -> Option<Vec<GlobalBuild>> {
-    // The patched command is gated behind the `build-status-dir` experimental
-    // feature, so the feature-enabling form is the one that normally succeeds
-    // and goes first (one subprocess per tick on a patched nix). The plain form
-    // is the fallback for a nix that rejects the unknown feature name but has
-    // the command ungated or the feature enabled via nix.conf.
-    const ATTEMPTS: [&[&str]; 2] = [
-        &[
-            "store",
-            "builds",
-            "--json",
-            "--extra-experimental-features",
-            "nix-command build-status-dir",
-        ],
-        &["store", "builds", "--json", "--extra-experimental-features", "nix-command"],
-    ];
-    for args in ATTEMPTS {
-        if let Some(builds) = try_builds(args).await {
-            return Some(builds);
+/// `--graph --json` carries strictly more (every coordinator's waiting,
+/// running and completed goals with dependency edges), and the flat build list
+/// is derived from it with [`flatten_graph`], the same flattening the patched
+/// nix applies for plain `--json`, so one subprocess feeds both the forest and
+/// the flat rows. A patched nix that predates `--graph` rejects the flag; the
+/// probe then falls back to the flat form and leaves `coordinators` empty.
+/// `None` when nothing answers (stock nix): undetected.
+///
+/// Detection is by *result*, not by exit-code text-matching: whatever variant
+/// of the invocation yields a parseable payload wins. A stock nix prints an
+/// "unknown command" / "unknown experimental feature" error to stderr (not
+/// JSON), so every variant fails to parse.
+async fn poll_view() -> Option<GlobalBuilds> {
+    for feature_args in FEATURE_VARIANTS {
+        if let Some(coordinators) = try_graph(feature_args).await {
+            let builds = flatten_graph(&coordinators);
+            return Some(GlobalBuilds {
+                detected: true,
+                status: format!("{} active", builds.len()),
+                builds,
+                coordinators,
+            });
+        }
+    }
+    for feature_args in FEATURE_VARIANTS {
+        if let Some(builds) = try_builds(feature_args).await {
+            return Some(GlobalBuilds {
+                detected: true,
+                status: format!("{} active", builds.len()),
+                builds,
+                coordinators: Vec::new(),
+            });
         }
     }
     None
 }
 
-/// Run one `nix` argument variant and return the parsed builds if its stdout is
-/// a JSON build array. Any spawn failure, or output that is not a build array,
-/// yields `None` so the caller falls through to the next variant / undetected.
-async fn try_builds(args: &[&str]) -> Option<Vec<GlobalBuild>> {
-    let output = Command::new("nix").args(args).output().await.ok()?;
-    // Parse stdout regardless of exit status: a patched nix might print the array
-    // and still exit nonzero on some warning, and a stock nix prints its error to
-    // stderr with empty stdout, so the parse is the real detector.
-    let stdout = String::from_utf8_lossy(&output.stdout);
+/// Run `nix store builds --graph --json` with one feature variant and return
+/// the parsed coordinators if its stdout is a graph document.
+async fn try_graph(feature_args: &[&str]) -> Option<Vec<GlobalCoordinator>> {
+    let stdout = run_nix(&["store", "builds", "--graph", "--json"], feature_args).await?;
+    parse_graph(stdout.trim()).ok()
+}
+
+/// Run `nix store builds --json` with one feature variant and return the parsed
+/// builds if its stdout is a JSON build array.
+async fn try_builds(feature_args: &[&str]) -> Option<Vec<GlobalBuild>> {
+    let stdout = run_nix(&["store", "builds", "--json"], feature_args).await?;
     parse_builds(stdout.trim()).ok()
+}
+
+/// Spawn one `nix` invocation and capture its stdout. Any spawn failure yields
+/// `None` so the caller falls through to the next variant / undetected.
+async fn run_nix(args: &[&str], feature_args: &[&str]) -> Option<String> {
+    let output = Command::new("nix")
+        .args(args)
+        .args(feature_args)
+        .output()
+        .await
+        .ok()?;
+    // Return stdout regardless of exit status: a patched nix might print the
+    // payload and still exit nonzero on some warning, and a stock nix prints
+    // its error to stderr with empty stdout, so the parse is the real detector.
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Push a machine-wide build view to the monitor and broadcast the change.
@@ -294,6 +323,7 @@ mod tests {
             detected: true,
             status: format!("{} active", builds.len()),
             builds,
+            coordinators: Vec::new(),
         };
 
         assert_eq!(global.builds.len(), 2);
@@ -423,6 +453,7 @@ mod tests {
         state.set_global(GlobalBuilds {
             detected: true,
             builds: vec![with_log, without_log],
+            coordinators: Vec::new(),
             status: "2 active".to_owned(),
         });
         let monitor = Arc::new(RwLock::new(state));

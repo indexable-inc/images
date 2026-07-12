@@ -87,6 +87,38 @@ export const globalWhySchema = v.object({
 /// reaches the wire, so the wire value is a closed set.
 export const globalBuildKindSchema = v.picklist(['build', 'substitution', 'other']);
 
+/// Lifecycle state of one goal in a coordinator's graph. Mirrors the Rust
+/// `GlobalGoalStatus`, which folds unknown future states into `other`.
+export const globalGoalStatusSchema = v.picklist(['waiting', 'running', 'done', 'failed', 'other']);
+
+/// One goal in a coordinator's graph, from `nix store builds --graph --json`.
+/// `id` is the drv path (build) or store path (substitution); `waiters` names
+/// the goals that want this one (edges point upward, so the panel inverts them
+/// into the dependency forest). The running extras (`startTime` in unix
+/// *seconds*, `logFile`, `builderPid`) are null on non-running goals. Mirrors
+/// the Rust `GlobalGoal`.
+export const globalGoalSchema = v.object({
+  id: v.string(),
+  kind: globalBuildKindSchema,
+  status: globalGoalStatusSchema,
+  waiters: v.array(v.string()),
+  outputs: v.array(v.string()),
+  startTime: v.nullable(v.number()),
+  logFile: v.nullable(v.string()),
+  builderPid: v.nullable(v.number())
+});
+
+/// One coordinating nix process and its whole goal graph: the requested roots
+/// plus every goal it knows (waiting, running, and session-completed). Mirrors
+/// the Rust `GlobalCoordinator`.
+export const globalCoordinatorSchema = v.object({
+  pid: v.nullable(v.number()),
+  user: v.nullable(v.string()),
+  uid: v.nullable(v.number()),
+  roots: v.array(v.string()),
+  goals: v.array(globalGoalSchema)
+});
+
 /// One active build or substitution goal on the machine, from the patched-nix
 /// `nix store builds --json` subcommand. Mirrors the Rust `GlobalBuild`; a
 /// substitution has a null `drvPath` and sets `storePath`. `startTime` is unix
@@ -111,6 +143,9 @@ export const globalBuildSchema = v.object({
 export const globalBuildsSchema = v.object({
   detected: v.boolean(),
   builds: v.array(globalBuildSchema),
+  /// Per-coordinator goal graphs; empty on a patched nix without `--graph`,
+  /// in which case the panel falls back to the flat `builds` rows.
+  coordinators: v.array(globalCoordinatorSchema),
   status: v.string()
 });
 
@@ -246,6 +281,9 @@ export type DaemonHotPath = v.InferOutput<typeof daemonHotPathSchema>;
 export type DaemonInfo = v.InferOutput<typeof daemonInfoSchema>;
 export type GlobalWhy = v.InferOutput<typeof globalWhySchema>;
 export type GlobalBuildKind = v.InferOutput<typeof globalBuildKindSchema>;
+export type GlobalGoalStatus = v.InferOutput<typeof globalGoalStatusSchema>;
+export type GlobalGoal = v.InferOutput<typeof globalGoalSchema>;
+export type GlobalCoordinator = v.InferOutput<typeof globalCoordinatorSchema>;
 export type GlobalBuild = v.InferOutput<typeof globalBuildSchema>;
 export type GlobalBuilds = v.InferOutput<typeof globalBuildsSchema>;
 export type ActivationStep = v.InferOutput<typeof activationStepSchema>;
@@ -288,7 +326,7 @@ export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
       currentPath: null,
       hotPaths: []
     },
-  global: { detected: false, builds: [], status: '' },
+  global: { detected: false, builds: [], coordinators: [], status: '' },
   activation: { active: false, command: '', steps: [], status: '' },
   diff: null,
   expected: {},

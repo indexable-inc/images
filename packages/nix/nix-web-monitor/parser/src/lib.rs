@@ -14,7 +14,10 @@ pub mod global;
 pub use activation::{Activation, ActivationStatus, ActivationStep};
 pub use build_view::{ActivityRow, BuildCounts, BuildRow, BuildView};
 pub use daemon::{DaemonInfo, DaemonOps, OpClass};
-pub use global::{GlobalBuild, GlobalBuildKind, GlobalBuilds, GlobalWhy};
+pub use global::{
+    GlobalBuild, GlobalBuildKind, GlobalBuilds, GlobalCoordinator, GlobalGoal, GlobalGoalStatus,
+    GlobalWhy,
+};
 
 const NIX_JSON_PREFIX: &str = "@nix ";
 

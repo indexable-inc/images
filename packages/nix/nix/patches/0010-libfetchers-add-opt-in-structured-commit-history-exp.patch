@@ -860,7 +860,7 @@ index 24a7b8008..ee154be7a 100644
  
      virtual bool isShallow() = 0;
 diff --git a/src/libutil/experimental-features.cc b/src/libutil/experimental-features.cc
-index e4f8b30ab..b121a9ce8 100644
+index 492a61858..5327f6214 100644
 --- a/src/libutil/experimental-features.cc
 +++ b/src/libutil/experimental-features.cc
 @@ -25,7 +25,7 @@ struct ExperimentalFeatureDetails
@@ -872,7 +872,7 @@ index e4f8b30ab..b121a9ce8 100644
  
  constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
      {
-@@ -293,6 +293,20 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
+@@ -294,6 +294,20 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
          )",
          .trackingUrl = "https://github.com/NixOS/nix/milestone/60",
      },

@@ -739,6 +739,73 @@ main.dragging-v .splitter-v::after {
   color: var(--panel);
 }
 
+/* One goal row of a coordinator's dependency forest (graph-capable patched
+ * nix). Indented by tree depth; tight rows, since a forest shows many more
+ * of them and position already carries the why. */
+.global-goal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding-left: calc(var(--goal-depth, 0) * 0.9rem);
+}
+
+/* Session-completed goals are the record, not the live work: keep them
+ * legible but recessive, like the invocation tree's planned rows. */
+.global-goal.settled {
+  opacity: 0.55;
+}
+
+/* A diamond's repeat appearance: the goal already expanded above under
+ * another dependent, so this row is a reference, not a subtree. */
+.global-repeat {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+/* One requesting user's header: name left, build count right. Rendered only
+ * when attribution adds information (several users, or one known user). */
+.global-group {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: -0.3rem;
+}
+
+.global-group-count {
+  color: var(--faint);
+}
+
+/* badge | name | version | log | elapsed, name flexes and truncates. */
+.global-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.global-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink);
+}
+
+.global-version {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.global-elapsed {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
 /* Inline log tail under a row: a short fixed-height stream pinned to the
  * newest lines, mirroring the main log drawer's look at panel scale. */
 .global-log-view {

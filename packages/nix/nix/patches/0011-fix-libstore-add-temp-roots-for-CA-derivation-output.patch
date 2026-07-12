@@ -47,7 +47,7 @@ Refs indexable-inc/index#2334
 Assisted-by: Claude <noreply@anthropic.com>
 
 diff --git a/src/libstore/build/derivation-building-goal.cc b/src/libstore/build/derivation-building-goal.cc
-index fea6e05a4..1d3f2b439 100644
+index 639f6772c..b03568ecb 100644
 --- a/src/libstore/build/derivation-building-goal.cc
 +++ b/src/libstore/build/derivation-building-goal.cc
 @@ -105,6 +105,12 @@ Goal::Co DerivationBuildingGoal::gaveUpOnSubstitution(bool storeDerivation)
@@ -63,7 +63,7 @@ index fea6e05a4..1d3f2b439 100644
          if (worker.store.isValidPath(i))
              continue;
          if (!worker.settings.useSubstitutes)
-@@ -1304,9 +1310,19 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
+@@ -1315,9 +1321,19 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
          auto drvOutput = DrvOutput{info.outputHash, i.first};
          if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
              if (auto real = worker.store.queryRealisation(drvOutput)) {
@@ -102,10 +102,10 @@ index 4f99928d7..fb545e2a5 100644
          PathStatus status = !worker.store.isValidPath(outputPath)               ? PathStatus::Absent
                              : !checkHash || worker.pathContentsGood(outputPath) ? PathStatus::Valid
 diff --git a/src/libstore/unix/build/derivation-builder.cc b/src/libstore/unix/build/derivation-builder.cc
-index fc877dd56..6ef32233f 100644
+index d7a7bb205..311d49e47 100644
 --- a/src/libstore/unix/build/derivation-builder.cc
 +++ b/src/libstore/unix/build/derivation-builder.cc
-@@ -1840,6 +1840,15 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
+@@ -1847,6 +1847,15 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
             their usual "final destination" */
          auto finalDestPath = store.printStorePath(newInfo.path);
  

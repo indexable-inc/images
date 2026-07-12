@@ -20,7 +20,7 @@ already behaves.
 Assisted-by: Claude <noreply@anthropic.com>
 
 diff --git a/src/libexpr/eval-settings.cc b/src/libexpr/eval-settings.cc
-index 5cf0ae0..69c2494 100644
+index 5cf0ae043..69c24943e 100644
 --- a/src/libexpr/eval-settings.cc
 +++ b/src/libexpr/eval-settings.cc
 @@ -82,7 +82,16 @@ Strings EvalSettings::getDefaultNixPath()
