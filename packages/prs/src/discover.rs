@@ -135,12 +135,21 @@ pub fn parse_pr_url(url: &str) -> Option<PrRef> {
     })
 }
 
-/// First PR URL in a patch's header: the `git format-patch` mail headers and
-/// commit message, i.e. everything before the first `diff --git` line.
+/// Everything before the first `diff --git` line: the `git format-patch` mail
+/// headers and commit message. A raw `git diff` patch has no header and may
+/// START with `diff --git`, so a leading boundary yields an empty header
+/// instead of scanning the diff body for PR URLs.
+fn patch_header(text: &str) -> &str {
+    if text.starts_with("diff --git ") {
+        return "";
+    }
+    text.split("\ndiff --git ").next().unwrap_or("")
+}
+
+/// First PR URL in a patch's header.
 fn header_pr(path: &Path) -> Option<PrRef> {
     let text = std::fs::read_to_string(path).ok()?;
-    let header = text.split("\ndiff --git ").next()?;
-    header.lines().find_map(parse_pr_url)
+    patch_header(&text).lines().find_map(parse_pr_url)
 }
 
 fn is_patch_file(path: &Path) -> bool {
@@ -315,7 +324,24 @@ pub fn collect(root: Option<&Path>, forks: &[Fork]) -> Vec<PatchRow> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_pr_url;
+    use super::{parse_pr_url, patch_header};
+
+    #[test]
+    fn format_patch_header_stops_at_first_diff() {
+        let text = "Subject: fix\n\nSee https://github.com/o/r/pull/1\n\
+                    \ndiff --git a/x b/x\n+https://github.com/o/r/pull/2\n";
+        assert!(patch_header(text).contains("pull/1"));
+        assert!(!patch_header(text).contains("pull/2"));
+    }
+
+    #[test]
+    fn raw_diff_has_no_header() {
+        // A `git diff`-generated patch starts at the diff boundary; a PR URL
+        // inside the diff body is not this patch's upstream PR.
+        let text = "diff --git a/x b/x\n--- a/x\n+++ b/x\n\
+                    +see https://github.com/o/r/pull/3\n";
+        assert_eq!(patch_header(text), "");
+    }
 
     #[test]
     fn parses_pr_urls() {

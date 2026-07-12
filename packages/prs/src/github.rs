@@ -139,6 +139,14 @@ pub fn fetch(prs: &[PrRef], token: &str) -> Result<BTreeMap<String, PrStatus>> {
             return Err(eyre!("GitHub GraphQL API returned {http_status}"));
         }
         let body: Value = response.json().wrap_err("decoding GraphQL response")?;
+        // GitHub answers HTTP 200 with a GraphQL `errors` payload and
+        // `data: null` for rate limits and query failures; surface that as a
+        // fetch error so callers take the degraded no-status path instead of
+        // silently rendering blank status columns.
+        if body["data"].is_null() {
+            let errors = &body["errors"];
+            return Err(eyre!("GitHub GraphQL API returned errors: {errors}"));
+        }
         for (index, pr) in chunk.iter().enumerate() {
             let node = &body["data"][format!("pr{index}")]["pullRequest"];
             if let Some(status) = parse_status(node) {
