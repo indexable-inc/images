@@ -1763,7 +1763,10 @@ fn render_build_script_run_phase(
     script.push_str("  cat \"$build_script_stdout\" >&2\n");
     script.push_str("  exit \"$build_script_status\"\n");
     script.push_str("fi\n");
-    script.push_str("cp -R \"$build_script_out_dir\" \"$out/out-dir\"\n");
+    // Build helpers may use symlinks as a writable scratch optimization. The
+    // store output owns the serialized files, not links back into NIX_BUILD_TOP.
+    script.push_str("mkdir -p \"$out/out-dir\"\n");
+    script.push_str("cp -RL \"$build_script_out_dir\"/. \"$out/out-dir\"/\n");
     script.push_str(
         r#"if [ -d "$out/out-dir" ]; then
   while IFS= read -r -d "" build_script_output_file; do
@@ -5431,6 +5434,10 @@ links = "native_ffi"
         assert!(
             rendered.contains("export CARGO_TARGET_DIR=$NIX_BUILD_TOP/cargo-target"),
             "build helpers must not fall back to another build user's scratch directory"
+        );
+        assert!(
+            rendered.contains("cp -RL \"$build_script_out_dir\"/. \"$out/out-dir\"/"),
+            "serialized build-script output must dereference scratch symlinks"
         );
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"native_ffi\""));
         assert!(rendered.contains("export RUSTDOC=\"$(type -p rustdoc)\""));
