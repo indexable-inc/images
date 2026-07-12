@@ -910,7 +910,7 @@ mod tests {
         let test = test_node(10, "fragmented").await;
         let node = test.node;
         let source = Score::new();
-        source.set_control(4, 0.75)?;
+        source.set_control(4, 0.75, 0)?;
         let frame = Message::ScoreChunk { end: true, bytes: source.export_snapshot()? }.encode()?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let client = TcpStream::connect(listener.local_addr()?).await?;
@@ -926,7 +926,7 @@ mod tests {
         };
         let (_, sent_result) = tokio::join!(connection, sender);
         sent_result?;
-        let value = node.score.lock().expect("score lock").controls()[0].value;
+        let value = node.score.lock().expect("score lock").controls_at(0)[0].value;
         assert!((value - 0.75).abs() < f32::EPSILON);
         Ok(())
     }
