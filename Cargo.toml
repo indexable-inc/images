@@ -89,6 +89,7 @@ members = [
   "packages/nix/oci-image-builder",
   "packages/search/polars-mixedbread",
   "packages/progress-style",
+  "packages/prs",
   "packages/tui/reel",
   "packages/repo-walker",
   "packages/screencast/screencast",
@@ -310,6 +311,7 @@ pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 pythonize = "0.28"
 quartz_nbt = "0.2.9"
 quote = "1"
+ratatui = "0.30"
 rayon = "1"
 regex = "1"
 repo-walker = { path = "packages/repo-walker" }

@@ -1,6 +1,6 @@
 # Single source of truth for the de-forked packages: each one pins an upstream
 # `flake = false` input and keeps its delta as an ordered `patches/` series
-# next to the package (see lib/util/patched-src.nix). One list drives four
+# next to the package (see lib/util/patched-src.nix). One list drives five
 # consumers so they cannot drift:
 #
 #   - `packages/<...>/default.nix` applies the series via `ix.patchedSrc`.
@@ -12,6 +12,8 @@
 #   - `packages/upstream-sync` reads the per-patch upstreaming intent and per-repo
 #     `upstreamPolicy` to drive the upstreaming loop (refresh tracked PR state,
 #     find duplicates, and open PRs for `attempt`-marked patches). See that tool.
+#   - `packages/prs` (`nix run .#prs`) reads the same rendered JSON to show
+#     every patch with its associated upstream PR and that PR's live status.
 #
 # Adding a de-forked package is one entry here plus its `patches/` folder.
 #
@@ -75,6 +77,10 @@
 #                      prExtra  : OPTIONAL upstream-specific PR-template content
 #                                 (issue refs, checklists) that does not belong in
 #                                 a commit message; appended after the PR body.
+#                      pr       : OPTIONAL GitHub PR URL for a patch whose upstream
+#                                 PR is not tracked in `upstream-status.json` (e.g.
+#                                 a pre-existing PR someone else opened). `prs`
+#                                 reads it; `upstream-sync` ignores it.
 #                    A patch with no entry defaults to `hold` with an "unclassified"
 #                    reason (fail-safe: an unclassified patch is never sent upstream
 #                    automatically). `upstream-sync` treats a repo whose
