@@ -15,6 +15,17 @@
   # (repo policy: no hash literals in tracked .nix).
   pins = ix.pins.loadPins ./pins.json;
   portableServicesTest = import ./portable-services.nix {inherit lib pkgs ix;};
+  # Cross-platform Nix daemon defaults module (#2992): stub-based evalModules
+  # cases plus one real nixosSystem eval. index has no nix-darwin input, so
+  # the darwin side runs on option stubs mirroring the shared declarations.
+  nixDefaultsTest = import ./nix-defaults.nix {
+    inherit
+      lib
+      pkgs
+      paths
+      nixpkgs
+      ;
+  };
   symphonyHomeModuleTest = import ./symphony-home-module.nix {
     inherit
       lib
@@ -6202,6 +6213,7 @@ in {
   # Strict type + annotation gate over the public ix-sdk Python sources.
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
+  nixDefaults = nixDefaultsTest;
   symphonyHomeModule = symphonyHomeModuleTest;
   provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
@@ -6216,6 +6228,7 @@ in {
       fleetTest
       helperTest
       portableServicesTest
+      nixDefaultsTest
       symphonyHomeModuleTest
       provenanceTest
       cargoUnitPrebuiltTest
