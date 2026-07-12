@@ -138,6 +138,9 @@
         change your confidence; gather it if it can affect the answer, and skip
         probes that are intrusive, noisy, or unlikely to change the decision.
 
+        Pass `--no-write-lock-file` for diagnostic and other read-only flake
+        evaluations. Update lock files only as an explicit task outcome.
+
         Success at an intermediate layer is not the outcome. A wrapper's zero
         exit, an upstream job reporting done, a cache reporting populated, or
         a green pipeline stage says only that that layer finished; every hop
@@ -154,7 +157,9 @@
         file, host, or log; checking the strongest source first is cheaper than a
         wrong conclusion. Separately, a config switch was declared good because
         an upstream cache publish finished, inferring the end state through
-        untested hops instead of reading the live generation.
+        untested hops instead of reading the live generation. A diagnostic flake
+        evaluation created and staged a lock file because the read-only intent was
+        not expressed to Nix.
       '';
     };
   }
