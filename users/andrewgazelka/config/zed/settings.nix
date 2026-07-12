@@ -106,6 +106,7 @@
   git_panel = {
     dock = "left";
   };
+  go_to_definition_fallback = "none";
   gutter = {
     bookmarks = false;
     breakpoints = false;
