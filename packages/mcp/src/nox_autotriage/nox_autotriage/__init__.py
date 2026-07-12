@@ -131,7 +131,7 @@ def config_from_env() -> TriageConfig:
         if not val:
             raise RuntimeError(
                 f"Required environment variable {name!r} is not set. "
-                "Inject it via the symphony workflow env block."
+                "Inject it via the workflow env block."
             )
         return val
 
