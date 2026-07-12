@@ -37,7 +37,7 @@ def test_start_finish_set_session_and_snapshot_emit_fact_shapes(tmp_path: Path, 
     calls = _capture(monkeypatch)
     conn = store.connect(tmp_path / "session.ixnb")
     store.start(conn, id="abc", name="Example", code="x = 1", started_at=10.0, budget=3.0, topic="t")
-    store.finish(conn, id="abc", status="done", ended_at=12.0, output="hello", result="1", error=None, outputs=[{"text": "hello"}], bindings={"x": 1}, namespace=[])
+    store.finish(conn, id="abc", kind="cell", status="done", ended_at=12.0, output="hello", result="1", error=None, outputs=[{"text": "hello"}], bindings={"x": 1}, namespace=[])
     store.set_session(conn, name="Demo", client="claude")
     store.save_snapshot(conn, created_at=13.0, blob=b"state", names=["x"], skipped=[])
     _drain(conn)
