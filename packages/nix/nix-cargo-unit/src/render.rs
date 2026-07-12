@@ -1692,6 +1692,29 @@ fn render_build_script_run_phase(
         "export OPT_LEVEL={}",
         shell::quote(&run_unit.profile.opt_level)
     )?;
+    let package_name = nix_attr(&run_unit.package_name());
+    let platform = run_unit
+        .platform
+        .as_ref()
+        .map_or_else(|| "null".to_string(), |platform| nix_attr(platform));
+    writeln!(
+        script,
+        "cargo_encoded_rustflags=( {} )",
+        run_unit
+            .profile
+            .rustflags
+            .iter()
+            .map(|flag| shell::quote(flag))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )?;
+    writeln!(
+        script,
+        "${{renderCargoEncodedRustflags {package_name} {platform}}}"
+    )?;
+    script.push_str(
+        "export CARGO_ENCODED_RUSTFLAGS=\"$(IFS=$'\\x1f'; printf '%s' \"${cargo_encoded_rustflags[*]}\")\"\n",
+    );
     writeln!(
         script,
         "export DEBUG={}",
@@ -5328,7 +5351,7 @@ links = "native_ffi"
                         "src_path": build_rs_path,
                         "edition": "2024"
                     },
-                    "profile": { "name": "release", "opt_level": "3" },
+                    "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-cpu=native"] },
                     "features": ["arch", "simd-support"],
                     "mode": "build",
                     "dependencies": []
@@ -5342,7 +5365,7 @@ links = "native_ffi"
                         "src_path": build_rs_path,
                         "edition": "2024"
                     },
-                    "profile": { "name": "release", "opt_level": "3" },
+                    "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-cpu=native"] },
                     "features": ["arch", "simd-support"],
                     "mode": "run-custom-build",
                     "platform": "x86_64-unknown-linux-gnu",
@@ -5383,6 +5406,12 @@ links = "native_ffi"
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"native_ffi\""));
         assert!(rendered.contains("export CARGO_FEATURE_ARCH=1"));
         assert!(rendered.contains("export CARGO_FEATURE_SIMD_SUPPORT=1"));
+        assert!(rendered.contains("cargo_encoded_rustflags=( '-C' 'target-cpu=native' )"));
+        assert!(
+            rendered
+                .contains("${renderCargoEncodedRustflags \"native\" \"x86_64-unknown-linux-gnu\"}")
+        );
+        assert!(rendered.contains("export CARGO_ENCODED_RUSTFLAGS="));
         assert!(rendered.contains("\"$RUSTC\" --print cfg --target \"$TARGET\""));
         assert!(rendered.contains("cargo_cfg_env=\"CARGO_CFG_$(printf '%s' \"$cargo_cfg_key\""));
         assert!(
