@@ -1539,7 +1539,12 @@
         gnutar
         ;
     }
-    // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
+    // lib.optionalAttrs (system == "x86_64-linux") {
+      inherit check;
+      # Keep the natural plural spelling runnable instead of letting Nix fall
+      # through to the non-runnable top-level `checks` schema output.
+      checks = check;
+    }
     // repoFlakePackages
     // examplePackages
     // nonNixExampleImages
