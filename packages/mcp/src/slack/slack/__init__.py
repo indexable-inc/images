@@ -21,9 +21,35 @@ No token is baked into the repo.
     await slack.send("general", "in-thread reply", thread_ts="1234567890.123456")
     await slack.search("deploy staging")                # search across Slack
 
+    await slack.react("general", ts, "thumbsup")        # emoji reactions
+    await slack.edit("general", ts, "fixed wording")    # edit an own message
+    await slack.delete("general", ts)                   # delete an own message
+    await slack.upload("/tmp/report.pdf", "general")    # share a file
+    await slack.download("F0123ABCDEF")                 # fetch a shared file
+    await slack.users()                                 # the workspace roster
+    await slack.user("@hari")                           # one person's profile
+    await slack.self()                                  # whoami for this token
+    await slack.permalink("general", ts)                # stable message URL
+    await slack.join("incidents")                       # join a public channel
+    await slack.channel_info("general")                 # topic/purpose/members
+    await slack.pins("general")                         # pinned items
+    await slack.pin("general", ts)                      # pin / unpin a message
+    await slack.mark_read("general", ts)                # move your read cursor
+    await slack.presence("@hari")                       # active / away
+
 Each call returns a polars DataFrame with a fixed schema so empty results stay
 typed. Raises :exc:`SlackError` when no token is configured; the message names
 the next step (``slack.login(token)``).
+
+Beyond reading and posting, the module covers what a full Slack participant
+does: reactions (:func:`react` / :func:`unreact` / :func:`reactions`), editing
+and deleting **own** messages (:func:`edit` / :func:`delete`), file sharing
+both ways (:func:`upload` / :func:`download`), people lookup (:func:`users` /
+:func:`user` / :func:`self` / :func:`presence`), and channel housekeeping
+(:func:`join` / :func:`channel_info` / :func:`pins` / :func:`pin` /
+:func:`unpin` / :func:`mark_read` / :func:`permalink`). Each function's
+docstring names the OAuth scope it needs; a token without it fails with a
+``missing_scope`` error that names the scope to add.
 
 **Replies come back to the agent.** By default every :func:`send` registers the
 message's thread with a background watcher that polls Slack and pushes each
@@ -43,7 +69,11 @@ The token's reach is whatever OAuth scopes the Slack app was granted, so a
 search or DM read can fail with ``missing_scope``; the error names the scope to
 add to the app (then re-mint the token). Common scopes: ``channels:history`` /
 ``groups:history`` / ``im:history`` (read messages), ``im:read`` (list DMs),
-``search:read`` (search), ``chat:write`` (post).
+``search:read`` (search), ``chat:write`` (post, edit, delete),
+``reactions:read`` / ``reactions:write`` (reactions), ``files:read`` /
+``files:write`` (download / upload files), ``users:read`` (roster, profiles,
+presence), ``pins:read`` / ``pins:write`` (pins), ``channels:join`` (join a
+public channel), ``channels:write`` (mark read).
 
 Slack messages carry the signed-in user's personal data (DMs, private channels),
 so this module is confined to **incognito sessions**: in a shared (multiplayer)
@@ -58,6 +88,7 @@ import dataclasses
 import json
 import os
 import pathlib
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -73,21 +104,39 @@ from private_session import SHARED_ENV, find_token, require_private_session
 __all__ = [
     "SlackError",
     "SlackTransientError",
+    "channel_info",
     "channels",
+    "delete",
     "dms",
+    "download",
+    "edit",
+    "join",
     "login",
     "logout",
+    "mark_read",
     "messages",
+    "permalink",
+    "pin",
+    "pins",
+    "presence",
+    "react",
+    "reactions",
     "search",
+    "self",
     "send",
     "status",
     "thread",
+    "unpin",
+    "unreact",
     "unwatch",
+    "upload",
+    "user",
+    "users",
     "watch",
     "watches",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # The env var a shared (multiplayer) room sets on the one MCP it replicates
 # across participants. Incognito is the default: an unset (or empty) value means
@@ -181,6 +230,31 @@ _WATCHES_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "thread_ts": pl.Utf8,
     "last_seen_ts": pl.Utf8,
     "expires_at": pl.Float64,
+}
+
+_USERS_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
+    "id": pl.Utf8,
+    "name": pl.Utf8,
+    "real_name": pl.Utf8,
+    "display_name": pl.Utf8,
+    "tz": pl.Utf8,
+    "is_bot": pl.Boolean,
+    "deleted": pl.Boolean,
+}
+
+_REACTIONS_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
+    "emoji": pl.Utf8,
+    "count": pl.Int64,
+    "users": pl.List(pl.Utf8),
+}
+
+_PINS_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
+    "type": pl.Utf8,
+    "ts": pl.Utf8,
+    "user": pl.Utf8,
+    "text": pl.Utf8,
+    "created": pl.Int64,
+    "created_by": pl.Utf8,
 }
 
 # --- thread watching -------------------------------------------------------
@@ -608,6 +682,89 @@ def _api_call(method: str, token: str, params: dict[str, Any] | None = None) -> 
             )
         raise SlackError(f"Slack API error for {method}: {error}")
     return data
+
+
+def _upload_bytes(url: str, data: bytes) -> None:
+    """POST raw bytes to a pre-signed Slack upload URL (step 2 of the external
+    upload flow, between ``files.getUploadURLExternal`` and
+    ``files.completeUploadExternal``). The URL is minted by Slack and single-use;
+    no Authorization header is needed (and none is sent). Errors map like
+    :func:`_api_call`: 429/5xx transient, other HTTP codes permanent."""
+    if not url.startswith("https://"):
+        raise SlackError(f"refusing non-https Slack upload URL: {url!r}")
+    req = urllib.request.Request(  # noqa: S310 -- https enforced above; URL minted by Slack, not user-supplied
+        url,
+        data=data,
+        headers={"Content-Type": "application/octet-stream"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310
+            resp.read()
+    except urllib.error.HTTPError as exc:
+        kind = SlackTransientError if exc.code == 429 or exc.code >= 500 else SlackError
+        raise kind(f"Slack file upload HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise SlackTransientError(f"Slack file upload failed: {exc.reason}") from exc
+
+
+def _read_upload_source(file: str) -> tuple[bytes, str]:
+    """Read a local file for :func:`upload` (blocking; runs via ``to_thread``).
+
+    Returns ``(bytes, default filename)``; raises :exc:`SlackError` when the
+    path is missing or not a regular file, so the error UX matches the rest of
+    the module instead of leaking a bare ``OSError``.
+    """
+    path = pathlib.Path(file).expanduser()
+    if not path.is_file():
+        raise SlackError(f"no such file to upload: {path}")
+    return path.read_bytes(), path.name
+
+
+def _save_download(content: bytes, name: str, path: str | None) -> str:
+    """Persist :func:`download` bytes (blocking; runs via ``to_thread``).
+
+    ``path`` semantics: None -> a fresh temp directory (nothing overwritten);
+    an existing directory -> ``name`` inside it; anything else -> the exact
+    destination (parents created). Returns the saved path as a string.
+    """
+    if path is None:
+        dest = pathlib.Path(tempfile.mkdtemp(prefix="slack-file-")) / name
+    else:
+        dest = pathlib.Path(path).expanduser()
+        if dest.is_dir():
+            dest = dest / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(content)
+    return str(dest)
+
+
+def _download_url(url: str, token: str) -> bytes:
+    """GET a Slack-hosted private file URL with the bearer token.
+
+    Only https URLs on ``slack.com`` (or a subdomain -- ``url_private`` lives on
+    ``files.slack.com``) are accepted: the token must never be sent to a host an
+    attacker could have smuggled into a file record. Errors map like
+    :func:`_api_call`: 429/5xx transient, other HTTP codes permanent.
+    """
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or ""
+    if parsed.scheme != "https" or not (host == "slack.com" or host.endswith(".slack.com")):
+        raise SlackError(f"refusing to send the Slack token to non-Slack URL {url!r}")
+    req = urllib.request.Request(  # noqa: S310 -- https + slack.com host enforced above
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310
+            # typeshed types urlopen's result as Any; pin the read to bytes.
+            content: bytes = resp.read()
+            return content
+    except urllib.error.HTTPError as exc:
+        kind = SlackTransientError if exc.code == 429 or exc.code >= 500 else SlackError
+        raise kind(f"Slack file download HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise SlackTransientError(f"Slack file download failed: {exc.reason}") from exc
 
 
 def login(token: str) -> dict[str, Any]:
@@ -1172,3 +1329,589 @@ async def search(
     return pl.DataFrame(rows, schema_overrides=_SEARCH_SCHEMA).select(
         list(_SEARCH_SCHEMA)
     )
+
+
+# --- full participation: reactions, edits, files, people, pins ---------------
+#
+# Everything below is what a human participant does beyond reading and posting.
+# Same shape as the rest of the module: async, _require_incognito() first,
+# blocking urllib hops through asyncio.to_thread (the kernel's one event loop is
+# shared with every other job), channels resolved like messages(), and each
+# docstring names the OAuth scope the call needs.
+
+
+async def react(channel: str, ts: str, emoji: str) -> dict[str, Any]:
+    """Add an emoji reaction to a message.
+
+    ``channel`` resolves like :func:`messages`; ``ts`` is the message's Slack
+    timestamp (from :func:`messages` / :func:`thread` / :func:`send`);
+    ``emoji`` is the emoji name, with or without colons (``"thumbsup"`` or
+    ``":thumbsup:"``).
+
+    Idempotent: reacting again with the same emoji returns ``added=False``
+    instead of raising. Returns ``{"ok": True, "added": bool, "channel": id,
+    "ts": ts, "emoji": name}``. Needs the ``reactions:write`` scope. Raises
+    :exc:`SlackError` on other failures or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    name = emoji.strip().strip(":")
+    if not name:
+        raise SlackError("emoji must not be empty")
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    added = True
+    try:
+        await asyncio.to_thread(
+            _api_call,
+            "reactions.add",
+            token,
+            {"channel": channel_id, "timestamp": ts, "name": name},
+        )
+    except SlackTransientError:
+        raise
+    except SlackError as exc:
+        if "already_reacted" not in str(exc):
+            raise
+        added = False
+    return {"ok": True, "added": added, "channel": channel_id, "ts": ts, "emoji": name}
+
+
+async def unreact(channel: str, ts: str, emoji: str) -> dict[str, Any]:
+    """Remove your own emoji reaction from a message.
+
+    Arguments as in :func:`react`. Idempotent: removing a reaction you never
+    added returns ``removed=False`` instead of raising. Returns ``{"ok": True,
+    "removed": bool, "channel": id, "ts": ts, "emoji": name}``. Needs the
+    ``reactions:write`` scope. Raises :exc:`SlackError` on other failures or in
+    a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    name = emoji.strip().strip(":")
+    if not name:
+        raise SlackError("emoji must not be empty")
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    removed = True
+    try:
+        await asyncio.to_thread(
+            _api_call,
+            "reactions.remove",
+            token,
+            {"channel": channel_id, "timestamp": ts, "name": name},
+        )
+    except SlackTransientError:
+        raise
+    except SlackError as exc:
+        if "no_reaction" not in str(exc):
+            raise
+        removed = False
+    return {"ok": True, "removed": removed, "channel": channel_id, "ts": ts, "emoji": name}
+
+
+async def reactions(channel: str, ts: str) -> pl.DataFrame:
+    """The reactions on one message, as a polars DataFrame.
+
+    ``channel`` resolves like :func:`messages`; ``ts`` is the message's Slack
+    timestamp. Columns: ``emoji`` (name without colons), ``count``, ``users``
+    (list of reacting user IDs; Slack caps the list per reaction, so ``count``
+    can exceed ``len(users)`` on very popular messages).
+
+    Needs the ``reactions:read`` scope. Raises :exc:`SlackError` when no token
+    is configured, the message is not found, or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    data = await asyncio.to_thread(
+        _api_call,
+        "reactions.get",
+        token,
+        {"channel": channel_id, "timestamp": ts, "full": "true"},
+    )
+    msg: dict[str, Any] = data.get("message") or {}
+    rows = [
+        {
+            "emoji": r.get("name", ""),
+            "count": int(r.get("count") or 0),
+            "users": [str(u) for u in r.get("users") or []],
+        }
+        for r in msg.get("reactions") or []
+    ]
+    if not rows:
+        return pl.DataFrame(schema=_REACTIONS_SCHEMA)
+    return pl.DataFrame(rows, schema_overrides=_REACTIONS_SCHEMA).select(
+        list(_REACTIONS_SCHEMA)
+    )
+
+
+async def edit(channel: str, ts: str, text: str) -> dict[str, Any]:
+    """Rewrite one of **your own** messages in place.
+
+    ``channel`` resolves like :func:`messages`; ``ts`` is the message's Slack
+    timestamp (the ``ts`` returned by :func:`send`); ``text`` replaces the whole
+    body. A user token can only edit messages posted as that user -- editing
+    someone else's fails with ``cant_update_message``.
+
+    Returns ``{"ok": True, "channel": id, "ts": ts, "text": stored text}``.
+    Needs the ``chat:write`` scope. Raises :exc:`SlackError` on failure or in a
+    shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    data = await asyncio.to_thread(
+        _api_call,
+        "chat.update",
+        token,
+        {"channel": channel_id, "ts": ts, "text": text},
+    )
+    stored: dict[str, Any] = data.get("message") or {}
+    return {
+        "ok": True,
+        "channel": data.get("channel", "") or channel_id,
+        "ts": data.get("ts", "") or ts,
+        "text": stored.get("text", "") or data.get("text", "") or text,
+    }
+
+
+async def delete(channel: str, ts: str) -> dict[str, Any]:
+    """Delete one of **your own** messages.
+
+    ``channel`` resolves like :func:`messages`; ``ts`` is the message's Slack
+    timestamp. A user token can only delete messages posted as that user --
+    deleting someone else's fails with ``cant_delete_message``. Deleting a
+    thread parent leaves its replies in place (Slack's own behavior).
+
+    Returns ``{"ok": True, "channel": id, "ts": ts}``. Needs the ``chat:write``
+    scope. Raises :exc:`SlackError` on failure or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    data = await asyncio.to_thread(
+        _api_call,
+        "chat.delete",
+        token,
+        {"channel": channel_id, "ts": ts},
+    )
+    return {
+        "ok": True,
+        "channel": data.get("channel", "") or channel_id,
+        "ts": data.get("ts", "") or ts,
+    }
+
+
+async def upload(
+    file: str | bytes,
+    channel: str | None = None,
+    *,
+    filename: str | None = None,
+    title: str | None = None,
+    initial_comment: str | None = None,
+    thread_ts: str | None = None,
+) -> dict[str, Any]:
+    """Upload a file to Slack, optionally sharing it into a channel.
+
+    ``file`` is a local path (its bytes are read; ``filename`` defaults to the
+    path's name) or raw ``bytes`` (then ``filename`` is required). ``channel``
+    resolves like :func:`messages`; when omitted the file is uploaded private
+    to you (shareable later from the Slack UI). ``title`` labels the file
+    (defaults to the filename), ``initial_comment`` posts alongside it, and
+    ``thread_ts`` shares it into a thread (only valid together with
+    ``channel``).
+
+    Uses Slack's external upload flow (``files.getUploadURLExternal`` ->
+    pre-signed POST -> ``files.completeUploadExternal``); the legacy
+    ``files.upload`` API is retired. Slack processes the upload asynchronously
+    after the complete call, so the file can take a moment to render in the
+    channel.
+
+    Returns ``{"ok": True, "id": file id, "name": filename, "size": bytes,
+    "channel": id or ""}``. Needs the ``files:write`` scope. Raises
+    :exc:`SlackError` on failure or in a shared room.
+    """
+    _require_incognito()
+    if thread_ts and not channel:
+        raise SlackError("thread_ts is only valid together with channel")
+    token = _token()
+
+    if isinstance(file, bytes):
+        if not filename:
+            raise SlackError("filename is required when uploading raw bytes")
+        payload = file
+    else:
+        payload, default_name = await asyncio.to_thread(_read_upload_source, file)
+        filename = filename or default_name
+
+    channel_id = ""
+    if channel:
+        channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+
+    ticket = await asyncio.to_thread(
+        _api_call,
+        "files.getUploadURLExternal",
+        token,
+        {"filename": filename, "length": len(payload)},
+    )
+    upload_url = str(ticket.get("upload_url", ""))
+    file_id = str(ticket.get("file_id", ""))
+    if not upload_url or not file_id:
+        raise SlackError("Slack did not return an upload URL for files.getUploadURLExternal")
+    await asyncio.to_thread(_upload_bytes, upload_url, payload)
+
+    params: dict[str, Any] = {
+        "files": json.dumps([{"id": file_id, "title": title or filename}]),
+    }
+    if channel_id:
+        params["channel_id"] = channel_id
+    if initial_comment:
+        params["initial_comment"] = initial_comment
+    if thread_ts:
+        params["thread_ts"] = thread_ts
+    await asyncio.to_thread(_api_call, "files.completeUploadExternal", token, params)
+    return {
+        "ok": True,
+        "id": file_id,
+        "name": filename,
+        "size": len(payload),
+        "channel": channel_id,
+    }
+
+
+async def download(file_id: str, path: str | None = None) -> dict[str, Any]:
+    """Fetch a Slack-hosted file by its file ID (``F…``) and save it locally.
+
+    File IDs come from Slack permalinks, ``files.list``-style payloads, or the
+    ``files`` attached to messages. ``path`` is where to save: a directory
+    (the file keeps its Slack name inside it), a full destination path, or
+    omitted (a fresh temp directory, so nothing is overwritten).
+
+    The bytes are fetched from the file's ``url_private`` with the bearer
+    token; only ``slack.com`` hosts are accepted, so the token cannot leak to
+    an attacker-controlled URL. Returns ``{"ok": True, "id": file id, "name":
+    ..., "mimetype": ..., "size": bytes, "path": saved path}``. Needs the
+    ``files:read`` scope. Raises :exc:`SlackError` on failure or in a shared
+    room.
+    """
+    _require_incognito()
+    token = _token()
+    data = await asyncio.to_thread(_api_call, "files.info", token, {"file": file_id})
+    info: dict[str, Any] = data.get("file") or {}
+    url = str(info.get("url_private_download") or info.get("url_private") or "")
+    if not url:
+        raise SlackError(f"Slack file {file_id!r} has no downloadable URL")
+    content = await asyncio.to_thread(_download_url, url, token)
+    name = str(info.get("name") or file_id)
+    dest = await asyncio.to_thread(_save_download, content, name, path)
+    return {
+        "ok": True,
+        "id": file_id,
+        "name": name,
+        "mimetype": str(info.get("mimetype") or ""),
+        "size": len(content),
+        "path": dest,
+    }
+
+
+async def users(*, limit: int = 500, include_deleted: bool = False) -> pl.DataFrame:
+    """The workspace roster, as a polars DataFrame.
+
+    Columns: ``id``, ``name`` (handle), ``real_name``, ``display_name``,
+    ``tz`` (e.g. ``"America/Los_Angeles"``), ``is_bot``, ``deleted``.
+    Deactivated accounts are dropped unless ``include_deleted=True``; ``limit``
+    caps the rows returned (Slack paginates automatically).
+
+    Needs the ``users:read`` scope. Raises :exc:`SlackError` when no token is
+    configured or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    rows: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while len(rows) < limit:
+        params: dict[str, Any] = {"limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        data = await asyncio.to_thread(_api_call, "users.list", token, params)
+        for u in data.get("members", []):
+            if u.get("deleted") and not include_deleted:
+                continue
+            prof: dict[str, Any] = u.get("profile") or {}
+            rows.append(
+                {
+                    "id": u.get("id", ""),
+                    "name": u.get("name", "") or "",
+                    "real_name": prof.get("real_name") or u.get("real_name") or "",
+                    "display_name": prof.get("display_name") or "",
+                    "tz": u.get("tz", "") or "",
+                    "is_bot": bool(u.get("is_bot")),
+                    "deleted": bool(u.get("deleted")),
+                }
+            )
+            if len(rows) >= limit:
+                break
+        cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            break
+    if not rows:
+        return pl.DataFrame(schema=_USERS_SCHEMA)
+    return pl.DataFrame(rows, schema_overrides=_USERS_SCHEMA).select(list(_USERS_SCHEMA))
+
+
+async def user(name_or_id: str) -> dict[str, Any]:
+    """One person's profile, by user ID, ``@handle``, display name, or real name.
+
+    Returns ``{"id", "name", "real_name", "display_name", "title", "tz",
+    "is_bot", "deleted"}``. Needs the ``users:read`` scope. Raises
+    :exc:`SlackError` when no user matches, no token is configured, or in a
+    shared room.
+    """
+    _require_incognito()
+    token = _token()
+    uid = await asyncio.to_thread(_resolve_user, name_or_id, token)
+    data = await asyncio.to_thread(_api_call, "users.info", token, {"user": uid})
+    u: dict[str, Any] = data.get("user") or {}
+    prof: dict[str, Any] = u.get("profile") or {}
+    return {
+        "id": u.get("id", "") or uid,
+        "name": u.get("name", "") or "",
+        "real_name": prof.get("real_name") or u.get("real_name") or "",
+        "display_name": prof.get("display_name") or "",
+        "title": prof.get("title") or "",
+        "tz": u.get("tz", "") or "",
+        "is_bot": bool(u.get("is_bot")),
+        "deleted": bool(u.get("deleted")),
+    }
+
+
+async def self() -> dict[str, Any]:
+    """Who this token is signed in as (``auth.test``).
+
+    Returns ``{"user_id", "user" (handle), "team", "team_id", "url"
+    (workspace URL), "bot_id" ("" for a user token)}``. Needs no extra scope.
+    Raises :exc:`SlackError` when no token is configured, the token is invalid,
+    or in a shared room. For a non-raising configuration probe use
+    :func:`status`.
+    """
+    _require_incognito()
+    token = _token()
+    data = await asyncio.to_thread(_api_call, "auth.test", token)
+    return {
+        "user_id": str(data.get("user_id", "")),
+        "user": str(data.get("user", "")),
+        "team": str(data.get("team", "")),
+        "team_id": str(data.get("team_id", "")),
+        "url": str(data.get("url", "")),
+        "bot_id": str(data.get("bot_id") or ""),
+    }
+
+
+async def permalink(channel: str, ts: str) -> str:
+    """The stable ``https://...slack.com/archives/...`` URL for one message.
+
+    ``channel`` resolves like :func:`messages`; ``ts`` is the message's Slack
+    timestamp. The URL works in a browser and unfurls in Slack. Needs no extra
+    scope beyond seeing the conversation. Raises :exc:`SlackError` when the
+    message is not found, no token is configured, or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    data = await asyncio.to_thread(
+        _api_call,
+        "chat.getPermalink",
+        token,
+        {"channel": channel_id, "message_ts": ts},
+    )
+    return str(data.get("permalink", ""))
+
+
+async def join(channel: str) -> dict[str, Any]:
+    """Join a public channel (so :func:`send` / :func:`messages` work in it).
+
+    ``channel`` resolves like :func:`messages`. Idempotent: joining a channel
+    you are already in returns ``already_member=True``. Private channels cannot
+    be joined this way (Slack requires an invite).
+
+    Returns ``{"ok": True, "channel": id, "name": ..., "already_member":
+    bool}``. Needs the ``channels:join`` scope. Raises :exc:`SlackError` on
+    failure or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    data = await asyncio.to_thread(
+        _api_call, "conversations.join", token, {"channel": channel_id}
+    )
+    ch: dict[str, Any] = data.get("channel") or {}
+    warnings = str(data.get("warning", ""))
+    return {
+        "ok": True,
+        "channel": ch.get("id", "") or channel_id,
+        "name": ch.get("name", "") or "",
+        "already_member": "already_in_channel" in warnings,
+    }
+
+
+async def channel_info(channel: str) -> dict[str, Any]:
+    """Metadata for one conversation (channel, group, or DM).
+
+    ``channel`` resolves like :func:`messages`. Returns ``{"id", "name",
+    "is_private", "is_member", "is_archived", "is_im", "num_members",
+    "topic", "purpose", "created" (unix seconds)}``; DM fields that do not
+    apply come back empty/zero.
+
+    Needs the matching read scope (``channels:read`` / ``groups:read`` /
+    ``im:read`` / ``mpim:read``). Raises :exc:`SlackError` when the
+    conversation is not found, no token is configured, or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    data = await asyncio.to_thread(
+        _api_call,
+        "conversations.info",
+        token,
+        {"channel": channel_id, "include_num_members": "true"},
+    )
+    ch: dict[str, Any] = data.get("channel") or {}
+    return {
+        "id": ch.get("id", "") or channel_id,
+        "name": ch.get("name", "") or "",
+        "is_private": bool(ch.get("is_private")),
+        "is_member": bool(ch.get("is_member")),
+        "is_archived": bool(ch.get("is_archived")),
+        "is_im": bool(ch.get("is_im")),
+        "num_members": int(ch.get("num_members") or 0),
+        "topic": (ch.get("topic") or {}).get("value", "") or "",
+        "purpose": (ch.get("purpose") or {}).get("value", "") or "",
+        "created": int(ch.get("created") or 0),
+    }
+
+
+async def pins(channel: str) -> pl.DataFrame:
+    """The pinned items in a conversation, as a polars DataFrame.
+
+    ``channel`` resolves like :func:`messages`. Columns: ``type`` (``message``
+    or ``file``), ``ts`` (the message timestamp; empty for files), ``user``
+    (author), ``text`` (message text, or the file's name), ``created`` (when it
+    was pinned, unix seconds), ``created_by`` (who pinned it).
+
+    Needs the ``pins:read`` scope. Raises :exc:`SlackError` when no token is
+    configured, the conversation is not found, or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    data = await asyncio.to_thread(_api_call, "pins.list", token, {"channel": channel_id})
+    rows: list[dict[str, Any]] = []
+    for item in data.get("items", []):
+        kind = str(item.get("type", ""))
+        msg: dict[str, Any] = item.get("message") or {}
+        f: dict[str, Any] = item.get("file") or {}
+        rows.append(
+            {
+                "type": kind,
+                "ts": msg.get("ts", "") or "",
+                "user": msg.get("user") or msg.get("username") or f.get("user") or "",
+                "text": msg.get("text") or f.get("name") or "",
+                "created": int(item.get("created") or 0),
+                "created_by": item.get("created_by", "") or "",
+            }
+        )
+    if not rows:
+        return pl.DataFrame(schema=_PINS_SCHEMA)
+    return pl.DataFrame(rows, schema_overrides=_PINS_SCHEMA).select(list(_PINS_SCHEMA))
+
+
+async def pin(channel: str, ts: str) -> dict[str, Any]:
+    """Pin a message to its conversation.
+
+    ``channel`` resolves like :func:`messages`; ``ts`` is the message's Slack
+    timestamp. Idempotent: pinning an already-pinned message returns
+    ``pinned=False`` instead of raising. Returns ``{"ok": True, "pinned":
+    bool, "channel": id, "ts": ts}``. Needs the ``pins:write`` scope. Raises
+    :exc:`SlackError` on other failures or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    pinned = True
+    try:
+        await asyncio.to_thread(
+            _api_call, "pins.add", token, {"channel": channel_id, "timestamp": ts}
+        )
+    except SlackTransientError:
+        raise
+    except SlackError as exc:
+        if "already_pinned" not in str(exc):
+            raise
+        pinned = False
+    return {"ok": True, "pinned": pinned, "channel": channel_id, "ts": ts}
+
+
+async def unpin(channel: str, ts: str) -> dict[str, Any]:
+    """Unpin a message from its conversation.
+
+    Arguments as in :func:`pin`. Idempotent: unpinning a message that is not
+    pinned returns ``removed=False`` instead of raising. Returns ``{"ok":
+    True, "removed": bool, "channel": id, "ts": ts}``. Needs the
+    ``pins:write`` scope. Raises :exc:`SlackError` on other failures or in a
+    shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    removed = True
+    try:
+        await asyncio.to_thread(
+            _api_call, "pins.remove", token, {"channel": channel_id, "timestamp": ts}
+        )
+    except SlackTransientError:
+        raise
+    except SlackError as exc:
+        if "no_pin" not in str(exc) and "not_pinned" not in str(exc):
+            raise
+        removed = False
+    return {"ok": True, "removed": removed, "channel": channel_id, "ts": ts}
+
+
+async def mark_read(channel: str, ts: str) -> dict[str, Any]:
+    """Move your read cursor in a conversation up to ``ts``.
+
+    ``channel`` resolves like :func:`messages`; ``ts`` is the timestamp of the
+    most recent message to mark as read (everything at or before it). Keeps
+    the human's unread badge honest after an agent has read a channel on their
+    behalf.
+
+    Returns ``{"ok": True, "channel": id, "ts": ts}``. Needs the matching
+    write scope (``channels:write`` / ``groups:write`` / ``im:write`` /
+    ``mpim:write``). Raises :exc:`SlackError` on failure or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    await asyncio.to_thread(
+        _api_call, "conversations.mark", token, {"channel": channel_id, "ts": ts}
+    )
+    return {"ok": True, "channel": channel_id, "ts": ts}
+
+
+async def presence(name_or_id: str | None = None) -> dict[str, Any]:
+    """Whether a user is ``active`` or ``away`` right now.
+
+    ``name_or_id`` resolves like :func:`user`; omit it for your own presence.
+    Returns ``{"user": id or "", "presence": "active" | "away"}`` -- Slack's
+    presence is deliberately coarse (no per-device detail on modern tokens).
+    Needs the ``users:read`` scope. Raises :exc:`SlackError` when no token is
+    configured, the user is not found, or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    params: dict[str, Any] = {}
+    uid = ""
+    if name_or_id:
+        uid = await asyncio.to_thread(_resolve_user, name_or_id, token)
+        params["user"] = uid
+    data = await asyncio.to_thread(_api_call, "users.getPresence", token, params)
+    return {"user": uid, "presence": str(data.get("presence", ""))}

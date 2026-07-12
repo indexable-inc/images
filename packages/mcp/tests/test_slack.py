@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -546,3 +547,408 @@ def test_unwatch_and_watches_frame(
     assert slack.unwatch(_CHANNEL_ID, out["ts"]) == {"removed": True}
     assert slack.unwatch(_CHANNEL_ID, out["ts"]) == {"removed": False}
     assert slack.watches().height == 0
+
+
+# --- full participation: reactions, edits, files, people, pins ---------------
+
+_MSG_TS = "1781740000.000123"
+
+
+@pytest.fixture
+def canned_api(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Token + a dispatching api stub: tests seed ``responses`` per method
+    (a dict to return, or an exception to raise) and read ``calls`` back."""
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    monkeypatch.delenv(slack.SHARED_ENV, raising=False)
+    state: dict[str, Any] = {"calls": [], "responses": {}}
+
+    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        state["calls"].append((method, params or {}))
+        resp = state["responses"].get(method, {"ok": True})
+        if isinstance(resp, Exception):
+            raise resp
+        return dict(resp)
+
+    monkeypatch.setattr(slack, "_api_call", fake_api)
+    return state
+
+
+def test_react_strips_colons_and_targets_message(canned_api: dict[str, Any]) -> None:
+    out = asyncio.run(slack.react(_CHANNEL_ID, _MSG_TS, ":tada:"))
+    method, params = canned_api["calls"][-1]
+    assert method == "reactions.add"
+    assert params == {"channel": _CHANNEL_ID, "timestamp": _MSG_TS, "name": "tada"}
+    assert out == {
+        "ok": True,
+        "added": True,
+        "channel": _CHANNEL_ID,
+        "ts": _MSG_TS,
+        "emoji": "tada",
+    }
+
+
+def test_react_already_reacted_is_idempotent(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["reactions.add"] = slack.SlackError(
+        "Slack API error for reactions.add: already_reacted"
+    )
+    out = asyncio.run(slack.react(_CHANNEL_ID, _MSG_TS, "tada"))
+    assert out["ok"] is True
+    assert out["added"] is False
+
+
+def test_react_transient_error_propagates(canned_api: dict[str, Any]) -> None:
+    # A 429 must NOT be swallowed as "already reacted": the caller should see
+    # the retryable error type.
+    canned_api["responses"]["reactions.add"] = slack.SlackTransientError(
+        "Slack API HTTP 429 for reactions.add"
+    )
+    with pytest.raises(slack.SlackTransientError):
+        asyncio.run(slack.react(_CHANNEL_ID, _MSG_TS, "tada"))
+
+
+def test_react_empty_emoji_raises_before_network(canned_api: dict[str, Any]) -> None:
+    with pytest.raises(slack.SlackError, match="emoji"):
+        asyncio.run(slack.react(_CHANNEL_ID, _MSG_TS, "::"))
+    assert canned_api["calls"] == []
+
+
+def test_unreact_no_reaction_is_idempotent(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["reactions.remove"] = slack.SlackError(
+        "Slack API error for reactions.remove: no_reaction"
+    )
+    out = asyncio.run(slack.unreact(_CHANNEL_ID, _MSG_TS, "tada"))
+    method, params = canned_api["calls"][-1]
+    assert method == "reactions.remove"
+    assert params["name"] == "tada"
+    assert out["removed"] is False
+
+
+def test_reactions_frame(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["reactions.get"] = {
+        "ok": True,
+        "message": {
+            "reactions": [
+                {"name": "tada", "count": 2, "users": ["U0AAAA0000", "U0BBBB0000"]},
+                {"name": "eyes", "count": 1, "users": ["U0AAAA0000"]},
+            ]
+        },
+    }
+    frame = asyncio.run(slack.reactions(_CHANNEL_ID, _MSG_TS))
+    method, params = canned_api["calls"][-1]
+    assert method == "reactions.get"
+    assert params["timestamp"] == _MSG_TS
+    assert frame.columns == ["emoji", "count", "users"]
+    assert frame["emoji"].to_list() == ["tada", "eyes"]
+    assert frame["users"].to_list()[0] == ["U0AAAA0000", "U0BBBB0000"]
+
+
+def test_reactions_empty_stays_typed(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["reactions.get"] = {"ok": True, "message": {}}
+    frame = asyncio.run(slack.reactions(_CHANNEL_ID, _MSG_TS))
+    assert frame.height == 0
+    assert frame.columns == ["emoji", "count", "users"]
+
+
+def test_edit_builds_chat_update(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["chat.update"] = {
+        "ok": True,
+        "channel": _CHANNEL_ID,
+        "ts": _MSG_TS,
+        "message": {"text": "fixed wording"},
+    }
+    out = asyncio.run(slack.edit(_CHANNEL_ID, _MSG_TS, "fixed wording"))
+    method, params = canned_api["calls"][-1]
+    assert method == "chat.update"
+    assert params == {"channel": _CHANNEL_ID, "ts": _MSG_TS, "text": "fixed wording"}
+    assert out == {"ok": True, "channel": _CHANNEL_ID, "ts": _MSG_TS, "text": "fixed wording"}
+
+
+def test_delete_builds_chat_delete(canned_api: dict[str, Any]) -> None:
+    out = asyncio.run(slack.delete(_CHANNEL_ID, _MSG_TS))
+    method, params = canned_api["calls"][-1]
+    assert method == "chat.delete"
+    assert params == {"channel": _CHANNEL_ID, "ts": _MSG_TS}
+    assert out["ok"] is True
+    assert out["ts"] == _MSG_TS
+
+
+def test_upload_from_path_runs_external_flow(
+    canned_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    src = tmp_path / "report.txt"
+    src.write_bytes(b"12345")
+    canned_api["responses"]["files.getUploadURLExternal"] = {
+        "ok": True,
+        "upload_url": "https://files.slack.com/upload/v1/abc",
+        "file_id": "F0FILE00000",
+    }
+    uploaded: list[tuple[str, bytes]] = []
+    monkeypatch.setattr(slack, "_upload_bytes", lambda url, data: uploaded.append((url, data)))
+
+    out = asyncio.run(
+        slack.upload(str(src), _CHANNEL_ID, initial_comment="fresh numbers", thread_ts=_PARENT_TS)
+    )
+    ticket = next(p for m, p in canned_api["calls"] if m == "files.getUploadURLExternal")
+    assert ticket == {"filename": "report.txt", "length": 5}
+    assert uploaded == [("https://files.slack.com/upload/v1/abc", b"12345")]
+    complete = next(p for m, p in canned_api["calls"] if m == "files.completeUploadExternal")
+    assert complete["channel_id"] == _CHANNEL_ID
+    assert complete["initial_comment"] == "fresh numbers"
+    assert complete["thread_ts"] == _PARENT_TS
+    assert json.loads(complete["files"]) == [{"id": "F0FILE00000", "title": "report.txt"}]
+    assert out == {
+        "ok": True,
+        "id": "F0FILE00000",
+        "name": "report.txt",
+        "size": 5,
+        "channel": _CHANNEL_ID,
+    }
+
+
+def test_upload_raw_bytes_requires_filename(canned_api: dict[str, Any]) -> None:
+    with pytest.raises(slack.SlackError, match="filename"):
+        asyncio.run(slack.upload(b"payload", _CHANNEL_ID))
+    assert canned_api["calls"] == []
+
+
+def test_upload_thread_ts_requires_channel(canned_api: dict[str, Any]) -> None:
+    with pytest.raises(slack.SlackError, match="thread_ts"):
+        asyncio.run(slack.upload(b"payload", filename="x.txt", thread_ts=_PARENT_TS))
+    assert canned_api["calls"] == []
+
+
+def test_upload_missing_path_raises(canned_api: dict[str, Any], tmp_path: Path) -> None:
+    with pytest.raises(slack.SlackError, match="no such file"):
+        asyncio.run(slack.upload(str(tmp_path / "absent.bin"), _CHANNEL_ID))
+    assert canned_api["calls"] == []
+
+
+def test_download_saves_into_directory(
+    canned_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    canned_api["responses"]["files.info"] = {
+        "ok": True,
+        "file": {
+            "name": "report.pdf",
+            "mimetype": "application/pdf",
+            "url_private": "https://files.slack.com/files-pri/T0-F0/report.pdf",
+        },
+    }
+    monkeypatch.setattr(slack, "_download_url", lambda url, token: b"pdf-bytes")
+    out = asyncio.run(slack.download("F0FILE00000", str(tmp_path)))
+    method, params = canned_api["calls"][-1]
+    assert method == "files.info"
+    assert params == {"file": "F0FILE00000"}
+    dest = tmp_path / "report.pdf"
+    assert out["path"] == str(dest)
+    assert out["mimetype"] == "application/pdf"
+    assert out["size"] == 9
+    assert dest.read_bytes() == b"pdf-bytes"
+
+
+def test_download_url_refuses_non_slack_hosts() -> None:
+    # The bearer token must never be sent to a host smuggled into a file
+    # record: anything not https on slack.com is refused before any request.
+    for url in (
+        "http://files.slack.com/x",
+        "https://evil.example.com/x",
+        "https://notslack.com/x",
+        "https://fakeslack.com/x",
+    ):
+        with pytest.raises(slack.SlackError, match="refusing"):
+            slack._download_url(url, "xoxp-test")
+
+
+def test_users_frame_skips_deleted_by_default(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["users.list"] = {
+        "ok": True,
+        "members": [
+            {
+                "id": "U0AAAA0000",
+                "name": "hari",
+                "tz": "America/Los_Angeles",
+                "profile": {"real_name": "Hari Seldon", "display_name": "hari"},
+            },
+            {"id": "U0GONE00000", "name": "left", "deleted": True},
+        ],
+    }
+    frame = asyncio.run(slack.users())
+    assert frame.columns == ["id", "name", "real_name", "display_name", "tz", "is_bot", "deleted"]
+    assert frame["id"].to_list() == ["U0AAAA0000"]
+    assert frame["real_name"][0] == "Hari Seldon"
+    both = asyncio.run(slack.users(include_deleted=True))
+    assert both.height == 2
+
+
+def test_user_lookup_by_id(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["users.info"] = {
+        "ok": True,
+        "user": {
+            "id": "U0AAAA0000",
+            "name": "hari",
+            "tz": "America/Los_Angeles",
+            "is_bot": False,
+            "profile": {"real_name": "Hari Seldon", "display_name": "hari", "title": "Mathist"},
+        },
+    }
+    out = asyncio.run(slack.user("U0AAAA0000"))
+    # A U... id short-circuits _resolve_user: no users.list scan, straight to users.info.
+    assert [m for m, _ in canned_api["calls"]] == ["users.info"]
+    assert out["id"] == "U0AAAA0000"
+    assert out["real_name"] == "Hari Seldon"
+    assert out["title"] == "Mathist"
+    assert out["tz"] == "America/Los_Angeles"
+    assert out["is_bot"] is False
+
+
+def test_self_reports_identity(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["auth.test"] = {
+        "ok": True,
+        "user_id": _SELF_USER,
+        "user": "ix-agent",
+        "team": "Indexable",
+        "team_id": "T0TEAM00000",
+        "url": "https://indexable.slack.com/",
+    }
+    out = asyncio.run(slack.self())
+    assert out == {
+        "user_id": _SELF_USER,
+        "user": "ix-agent",
+        "team": "Indexable",
+        "team_id": "T0TEAM00000",
+        "url": "https://indexable.slack.com/",
+        "bot_id": "",
+    }
+
+
+def test_permalink_returns_url(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["chat.getPermalink"] = {
+        "ok": True,
+        "permalink": "https://indexable.slack.com/archives/C0123456789/p1781740000000123",
+    }
+    url = asyncio.run(slack.permalink(_CHANNEL_ID, _MSG_TS))
+    method, params = canned_api["calls"][-1]
+    assert method == "chat.getPermalink"
+    assert params == {"channel": _CHANNEL_ID, "message_ts": _MSG_TS}
+    assert url.startswith("https://indexable.slack.com/archives/")
+
+
+def test_join_reports_already_member(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["conversations.join"] = {
+        "ok": True,
+        "channel": {"id": _CHANNEL_ID, "name": "incidents"},
+        "warning": "already_in_channel",
+    }
+    out = asyncio.run(slack.join(_CHANNEL_ID))
+    method, params = canned_api["calls"][-1]
+    assert method == "conversations.join"
+    assert params == {"channel": _CHANNEL_ID}
+    assert out == {
+        "ok": True,
+        "channel": _CHANNEL_ID,
+        "name": "incidents",
+        "already_member": True,
+    }
+
+
+def test_channel_info_shape(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["conversations.info"] = {
+        "ok": True,
+        "channel": {
+            "id": _CHANNEL_ID,
+            "name": "general",
+            "is_member": True,
+            "num_members": 42,
+            "created": 1700000000,
+            "topic": {"value": "all things ix"},
+            "purpose": {"value": "company-wide"},
+        },
+    }
+    out = asyncio.run(slack.channel_info(_CHANNEL_ID))
+    method, params = canned_api["calls"][-1]
+    assert method == "conversations.info"
+    assert params["include_num_members"] == "true"
+    assert out["name"] == "general"
+    assert out["num_members"] == 42
+    assert out["topic"] == "all things ix"
+    assert out["is_archived"] is False
+    assert out["created"] == 1700000000
+
+
+def test_pins_frame_covers_messages_and_files(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["pins.list"] = {
+        "ok": True,
+        "items": [
+            {
+                "type": "message",
+                "created": 1700000001,
+                "created_by": "U0AAAA0000",
+                "message": {"ts": _MSG_TS, "user": "U0BBBB0000", "text": "read me first"},
+            },
+            {
+                "type": "file",
+                "created": 1700000002,
+                "created_by": "U0AAAA0000",
+                "file": {"user": "U0BBBB0000", "name": "runbook.md"},
+            },
+        ],
+    }
+    frame = asyncio.run(slack.pins(_CHANNEL_ID))
+    assert frame.columns == ["type", "ts", "user", "text", "created", "created_by"]
+    assert frame["type"].to_list() == ["message", "file"]
+    assert frame["text"].to_list() == ["read me first", "runbook.md"]
+    assert frame["ts"].to_list() == [_MSG_TS, ""]
+
+
+def test_pin_already_pinned_is_idempotent(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["pins.add"] = slack.SlackError(
+        "Slack API error for pins.add: already_pinned"
+    )
+    out = asyncio.run(slack.pin(_CHANNEL_ID, _MSG_TS))
+    assert out == {"ok": True, "pinned": False, "channel": _CHANNEL_ID, "ts": _MSG_TS}
+
+
+def test_unpin_no_pin_is_idempotent(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["pins.remove"] = slack.SlackError(
+        "Slack API error for pins.remove: no_pin"
+    )
+    out = asyncio.run(slack.unpin(_CHANNEL_ID, _MSG_TS))
+    assert out == {"ok": True, "removed": False, "channel": _CHANNEL_ID, "ts": _MSG_TS}
+
+
+def test_mark_read_builds_conversations_mark(canned_api: dict[str, Any]) -> None:
+    out = asyncio.run(slack.mark_read(_CHANNEL_ID, _MSG_TS))
+    method, params = canned_api["calls"][-1]
+    assert method == "conversations.mark"
+    assert params == {"channel": _CHANNEL_ID, "ts": _MSG_TS}
+    assert out == {"ok": True, "channel": _CHANNEL_ID, "ts": _MSG_TS}
+
+
+def test_presence_self_omits_user_param(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["users.getPresence"] = {"ok": True, "presence": "active"}
+    out = asyncio.run(slack.presence())
+    method, params = canned_api["calls"][-1]
+    assert method == "users.getPresence"
+    assert params == {}
+    assert out == {"user": "", "presence": "active"}
+
+
+def test_presence_other_user_by_id(canned_api: dict[str, Any]) -> None:
+    canned_api["responses"]["users.getPresence"] = {"ok": True, "presence": "away"}
+    out = asyncio.run(slack.presence("U0AAAA0000"))
+    _, params = canned_api["calls"][-1]
+    assert params == {"user": "U0AAAA0000"}
+    assert out == {"user": "U0AAAA0000", "presence": "away"}
+
+
+def test_participation_verbs_refuse_shared_room(
+    canned_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same privacy boundary as the read/send surface: a shared (multiplayer)
+    # room refuses before any network call.
+    monkeypatch.setenv(slack.SHARED_ENV, "1")
+    with pytest.raises(slack.SlackError, match="shared"):
+        asyncio.run(slack.react(_CHANNEL_ID, _MSG_TS, "tada"))
+    with pytest.raises(slack.SlackError, match="shared"):
+        asyncio.run(slack.users())
+    assert canned_api["calls"] == []

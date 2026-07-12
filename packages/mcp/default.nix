@@ -1861,6 +1861,14 @@
     assert _asyncio.iscoroutinefunction(slack.thread)
     assert _asyncio.iscoroutinefunction(slack.send)
     assert _asyncio.iscoroutinefunction(slack.search)
+    # The full-participant surface (reactions, edits, files, people, pins) is
+    # async end-to-end as well.
+    for _name in (
+        "react", "unreact", "reactions", "edit", "delete", "upload", "download",
+        "users", "user", "self", "permalink", "join", "channel_info",
+        "pins", "pin", "unpin", "mark_read", "presence",
+    ):
+        assert _asyncio.iscoroutinefunction(getattr(slack, _name)), _name
 
     # In a shared (multiplayer) room Slack is refused before any network call,
     # so personal workspace data never reaches state other participants can see.
