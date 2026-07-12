@@ -7,14 +7,12 @@ import asyncio
 from email.message import EmailMessage
 
 import pytest
+from support import make_message
 
 from switchboard import (
     ConfigError,
     EmailAdapter,
-    Identity,
     InboundMessage,
-    Message,
-    Provenance,
     RoomBinding,
     SmtpConfig,
     ThreadRef,
@@ -29,17 +27,6 @@ BINDING = RoomBinding(
     recipients=("gwen@ext.example",),
     guest_facing=True,
 )
-
-
-def make_message(body: str = "status update", thread: ThreadRef | None = None) -> Message:
-    return Message(
-        id="sb-eng-1",
-        room_id="eng",
-        sender=Identity(id="alice", display_name="Alice"),
-        body=body,
-        thread=thread,
-        provenance=Provenance(origin_platform="memory", origin_message_id="m1"),
-    )
 
 
 # ---------------------------------------------------------------------------

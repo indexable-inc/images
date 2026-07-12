@@ -12,31 +12,18 @@ from collections.abc import Callable, Iterator
 
 import httpx
 import pytest
+from support import make_message
 
 from switchboard import (
     AdapterSendError,
     ConfigError,
-    Identity,
     InboundMessage,
-    Message,
-    Provenance,
     RoomBinding,
     SlackAdapter,
     ThreadRef,
 )
 
 BINDING = RoomBinding(id="b-slack", platform="slack", address="C42")
-
-
-def make_message(body: str = "hi", thread: ThreadRef | None = None) -> Message:
-    return Message(
-        id="sb-eng-1",
-        room_id="eng",
-        sender=Identity(id="alice", display_name="Alice"),
-        body=body,
-        thread=thread,
-        provenance=Provenance(origin_platform="memory", origin_message_id="m1"),
-    )
 
 
 def make_adapter(

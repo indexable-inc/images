@@ -49,13 +49,11 @@ class Identity(BaseModel):
     handles: dict[str, str] = Field(default_factory=dict)
 
 
+# Guests are external people (typically reached over email): disclosure rules
+# apply to the bindings that face them. Agents are AI participants and see
+# everything internal members see.
 class Role(StrEnum):
-    """A member's standing in a room.
-
-    Guests are external people (typically reached over email): disclosure
-    rules apply to the bindings that face them. Agents are AI participants;
-    they see everything internal members see.
-    """
+    """A member's standing in a room."""
 
     MEMBER = "member"
     GUEST = "guest"
@@ -69,12 +67,10 @@ class Member(BaseModel):
     role: Role = Role.MEMBER
 
 
+# ``inbound`` lets platform messages into the room but never fans out to the
+# platform; ``outbound`` is the mirror (a broadcast-only leg).
 class Direction(StrEnum):
-    """Which way a binding forwards.
-
-    ``inbound`` lets platform messages into the room but never fans out to the
-    platform; ``outbound`` is the mirror (a broadcast-only leg).
-    """
+    """Which way a binding forwards."""
 
     BOTH = "both"
     INBOUND = "inbound"
