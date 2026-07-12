@@ -52,7 +52,9 @@ struct Loading {
 }
 
 impl Renderer {
-    /// A renderer over a shared score and blob store.
+    /// A renderer over a shared score and blob store. The currently named
+    /// instrument is prepared before return; later score changes compile on
+    /// a background worker so rendering keeps its deadline.
     #[must_use]
     pub fn new(score: Arc<Mutex<Score>>, blobs: Arc<BlobStore>) -> Self {
         let mut renderer = Self {
@@ -84,7 +86,9 @@ impl Renderer {
     /// an instrument is loaded or staged after the refresh.
     ///
     /// # Errors
-    /// Fails when the named module bytes are present but invalid.
+    /// Fails on blob-store I/O or when the compiler worker cannot start or
+    /// disappears. Invalid and malformed peer input is logged and ignored
+    /// so the last valid instrument keeps playing.
     ///
     /// # Panics
     /// Panics when the score mutex is poisoned.
