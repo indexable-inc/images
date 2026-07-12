@@ -27,6 +27,11 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+# The shared HTTP behavior crate, declared once here and inherited by the
+# `httpd` and `kernel` backends with `http-core.workspace = true`.
+[workspace.dependencies]
+http-core = { path = "http-core" }
+
 [profile.release]
 # The kernel backend is a single-purpose image: abort-on-panic keeps the
 # freestanding binary free of unwinding machinery, and the userspace backends
