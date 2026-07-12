@@ -592,6 +592,13 @@ struct McpClient {
     next_id: u64,
 }
 
+/// Raw HTTP reply from one MCP POST: the status code plus the body text
+/// (plain JSON or an SSE stream, decoded later by [`parse_rpc_response`]).
+struct PostReply {
+    status: u16,
+    body: String,
+}
+
 impl McpClient {
     fn connect(url: &str, key: &str) -> Option<Self> {
         let http = reqwest::blocking::Client::builder()
@@ -621,7 +628,7 @@ impl McpClient {
         Some(client)
     }
 
-    fn post(&mut self, body: &Value) -> Option<(u16, String)> {
+    fn post(&mut self, body: &Value) -> Option<PostReply> {
         let mut req = self
             .http
             .post(&self.url)
@@ -647,9 +654,10 @@ impl McpClient {
         {
             self.session_id = Some(sid.to_owned());
         }
-        let status = resp.status().as_u16();
-        let text = resp.text().unwrap_or_default();
-        Some((status, text))
+        Some(PostReply {
+            status: resp.status().as_u16(),
+            body: resp.text().unwrap_or_default(),
+        })
     }
 
     /// One JSON-RPC request; returns the `result` value or logs and None.
@@ -657,18 +665,19 @@ impl McpClient {
         let id = self.next_id;
         self.next_id += 1;
         let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        let (status, text) = self.post(&body)?;
-        if !(200..300).contains(&status) {
+        let reply = self.post(&body)?;
+        if !(200..300).contains(&reply.status) {
             log(&format!(
-                "{method} -> HTTP {status}: {}",
-                truncate_chars(&text, 300)
+                "{method} -> HTTP {}: {}",
+                reply.status,
+                truncate_chars(&reply.body, 300)
             ));
             return None;
         }
-        let Some(msg) = parse_rpc_response(&text, id) else {
+        let Some(msg) = parse_rpc_response(&reply.body, id) else {
             log(&format!(
                 "{method}: no JSON-RPC reply for id {id} in body: {}",
-                truncate_chars(&text, 300)
+                truncate_chars(&reply.body, 300)
             ));
             return None;
         };
