@@ -35,6 +35,16 @@
       home-manager
       ;
   };
+  # Darwin loopback localhost proxy (#2988): stub-option eval of
+  # modules/darwin/localhost-proxy.nix; its check builds the module's
+  # caddy-validated Caddyfile, so a rejected config fails CI.
+  localhostProxyTest = import ./localhost-proxy.nix {
+    inherit
+      lib
+      pkgs
+      paths
+      ;
+  };
   # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
   # (`checks.<system>.minecraft-blocks-vm`).
@@ -6204,6 +6214,7 @@ in {
   portableServices = portableServicesTest;
   symphonyHomeModule = symphonyHomeModuleTest;
   provenance = provenanceTest;
+  localhostProxy = localhostProxyTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
   inherit baseImageNixDb;
@@ -6218,6 +6229,7 @@ in {
       portableServicesTest
       symphonyHomeModuleTest
       provenanceTest
+      localhostProxyTest
       cargoUnitPrebuiltTest
     ]
   );
