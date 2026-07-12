@@ -1,0 +1,16 @@
+# Smallest possible lens-declaring binary: emits a JSON object on stdout and
+# carries `{"v":1,"stdout":{"lens":"json"}}` in its `.ix.link` section, so a
+# lens-aware shell (the patched nushell in packages/nushell) turns a bare
+# `^link-meta-demo` into structured output.
+[package]
+name = "link-meta-demo"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Demo binary that declares a JSON stdout lens via embedded linking metadata"
+
+[dependencies]
+link-meta.workspace = true
+
+[lints]
+workspace = true

@@ -72,6 +72,8 @@ members = [
   "packages/ix-windows",
   "packages/terminal/kitty",
   "packages/search/lake/iceberg",
+  "packages/link-meta",
+  "packages/link-meta/demo",
   "packages/minecraft/bot",
   "packages/minecraft/nbt",
   "packages/minecraft/protocol",
@@ -257,6 +259,7 @@ insta = { version = "1.42", features = ["json"] }
 lazy-regex = "3.4"
 libc = "0.2"
 libloading = "0.8"
+link-meta = { path = "packages/link-meta" }
 source-linear = { path = "packages/search/source/linear" }
 source-github = { path = "packages/search/source/github" }
 mixedbread = { path = "packages/search/mixedbread" }

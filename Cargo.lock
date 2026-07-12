@@ -6048,6 +6048,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "link-meta"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "link-meta-demo"
+version = "0.1.0"
+dependencies = [
+ "link-meta",
+]
+
+[[package]]
 name = "linked-hash-map"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,17 @@
+# Linking metadata for compiled binaries: a macro that embeds a small,
+# versioned JSON blob in a dedicated section of the binary (ELF `.ix.link`,
+# Mach-O `__DATA,__ix_link`) naming the lens a shell should apply to the
+# binary's stdout, plus a reader that extracts it without executing anything.
+# The consumer side for nushell lives in packages/nushell/patches.
+[package]
+name = "link-meta"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Embed and read shell-readable linking metadata (stdout lens declarations) in compiled binaries"
+
+[dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
