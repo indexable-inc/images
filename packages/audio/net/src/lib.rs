@@ -294,7 +294,7 @@ async fn exchange_handshake(
         Ok::<_, anyhow::Error>(Handshake {
             remote,
             clock: remote_clock,
-            takeover: proposal.takeover && remote_clock.ready,
+            takeover: proposal.takeover,
         })
     })
     .await
@@ -464,7 +464,6 @@ impl Node {
     fn handshake_clock(&self, remote: &Hello) -> ClockProposal {
         let local = self.advertised_clock();
         let takeover = local.ready
-            && remote.clock.ready
             && local.leader_id == self.config.peer_id.0
             && self.config.peer_id.0 < remote.clock.leader_id;
         if takeover {
@@ -586,20 +585,26 @@ impl Node {
     /// Drop one connection's claim on a peer; when the last one goes, the
     /// peer has left the session and the election reruns.
     fn peer_disconnected(&self, remote_id: PeerId) {
-        {
+        let peer_left = {
             let mut peers = self.peers.lock().expect("peers lock");
             if let Some(entry) = peers.get_mut(&remote_id) {
                 entry.connections = entry.connections.saturating_sub(1);
                 if entry.connections == 0 {
                     peers.remove(&remote_id);
+                    true
+                } else {
+                    false
                 }
+            } else {
+                true
+            }
+        };
+        if peer_left {
+            let mut takeover = self.takeover.lock().expect("takeover lock");
+            if *takeover == Some(remote_id) {
+                *takeover = None;
             }
         }
-        let mut takeover = self.takeover.lock().expect("takeover lock");
-        if *takeover == Some(remote_id) {
-            *takeover = None;
-        }
-        drop(takeover);
         self.elect();
     }
 
@@ -607,10 +612,10 @@ impl Node {
     /// follower can therefore proxy a leader outside our direct topology.
     fn elect(&self) {
         let mut leader = self.leader.lock().expect("leader lock");
-        let next = {
+        let (next, waiting_for_takeover) = {
             let peers = self.peers.lock().expect("peers lock");
             let takeover = *self.takeover.lock().expect("takeover lock");
-            peers
+            let next = peers
                 .iter()
                 .filter(|(id, entry)| {
                     entry.ready
@@ -622,10 +627,20 @@ impl Node {
                     proxy_id: *id,
                     epoch_micros: entry.epoch_micros,
                     ping_addr: entry.ping_addr,
-                })
+                });
+            let waiting = takeover.is_some_and(|id| {
+                peers.get(&id).is_some_and(|entry| !entry.ready)
+            });
+            (next, waiting)
         };
         if *leader == next {
-            return;
+            if waiting_for_takeover {
+                *self.clock_ready.lock().expect("clock ready lock") = false;
+                return;
+            }
+            if next.is_some() || *self.clock_ready.lock().expect("clock ready lock") {
+                return;
+            }
         }
         if let (Some(current), Some(new)) = (*leader, next)
             && current.has_same_measurement_path(new)
@@ -641,6 +656,9 @@ impl Node {
         if let Some(new) = next {
             *self.clock_ready.lock().expect("clock ready lock") = false;
             debug!(leader = new.leader_id.0, proxy = new.proxy_id.0, ping = %new.ping_addr, "following clock route");
+        } else if waiting_for_takeover {
+            *self.clock_ready.lock().expect("clock ready lock") = false;
+            debug!("waiting for takeover route clock");
         } else {
             let now = self.config.time.now_micros();
             self.clock.send_if_modified(|clock| {
@@ -871,6 +889,97 @@ mod tests {
         let advertised = node.advertised_clock();
         assert_eq!(advertised.leader_id, 1);
         assert!(advertised.ready);
+    }
+
+    #[tokio::test]
+    async fn takeover_survives_until_the_last_peer_connection_closes() {
+        let test = test_node(1, "duplicate-takeover").await;
+        let node = test.node;
+        let remote = hello(
+            3,
+            Clock { leader_id: 3, epoch_micros: 500_000, ready: true },
+        );
+        let peer = "127.0.0.1:8000".parse().expect("peer address");
+        node.peer_connected(&remote, peer, remote.clock, true);
+        node.peer_connected(&remote, peer, remote.clock, false);
+
+        node.peer_disconnected(PeerId(3));
+
+        assert_eq!(*node.takeover.lock().expect("takeover lock"), Some(PeerId(3)));
+        assert_eq!(
+            node.leader.lock().expect("leader lock").expect("leader").proxy_id,
+            PeerId(3)
+        );
+        assert_eq!(
+            node.peers.lock().expect("peers lock")[&PeerId(3)].connections,
+            1
+        );
+
+        node.peer_disconnected(PeerId(3));
+        assert_eq!(*node.takeover.lock().expect("takeover lock"), None);
+        assert_eq!(*node.leader.lock().expect("leader lock"), None);
+    }
+
+    #[tokio::test]
+    async fn lower_id_waits_for_an_unready_session_before_takeover() {
+        let test = test_node(1, "unready-takeover").await;
+        let node = test.node;
+        let remote = hello(
+            3,
+            Clock { leader_id: 3, epoch_micros: 500_000, ready: false },
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind TCP");
+        let mut client = TcpStream::connect(listener.local_addr().expect("listener address"))
+            .await
+            .expect("connect peer");
+        let (mut server, _) = listener.accept().await.expect("accept peer");
+        let remote_clock = remote.clock;
+        let peer = tokio::spawn(async move {
+            Message::read_from(&mut server).await?.context("local Hello")?;
+            Message::Hello(remote).write_to(&mut server).await?;
+            let proposal = Message::read_from(&mut server)
+                .await?
+                .context("local clock proposal")?;
+            Message::Clock(remote_clock).write_to(&mut server).await?;
+            Ok::<_, anyhow::Error>(proposal)
+        });
+        let handshake = exchange_handshake(&node, &mut client, HANDSHAKE_TIMEOUT)
+            .await
+            .expect("exchange handshake");
+        let Message::Clock(proposal) = peer.await.expect("peer task").expect("peer handshake") else {
+            panic!("clock proposal");
+        };
+        assert!(!proposal.ready);
+        assert!(handshake.takeover);
+        node.peer_connected(
+            &handshake.remote,
+            "127.0.0.1:8000".parse().expect("peer address"),
+            handshake.clock,
+            handshake.takeover,
+        );
+        assert_eq!(*node.takeover.lock().expect("takeover lock"), Some(PeerId(3)));
+        assert!(!node.advertised_clock().ready);
+        assert_eq!(*node.leader.lock().expect("leader lock"), None);
+
+        node.peer_disconnected(PeerId(3));
+        assert_eq!(*node.takeover.lock().expect("takeover lock"), None);
+        assert!(node.advertised_clock().ready);
+
+        node.peer_connected(
+            &handshake.remote,
+            "127.0.0.1:8000".parse().expect("peer address"),
+            handshake.clock,
+            handshake.takeover,
+        );
+        node.peer_clock(
+            PeerId(3),
+            Clock { leader_id: 3, epoch_micros: 500_000, ready: true },
+        );
+        assert_eq!(
+            node.leader.lock().expect("leader lock").expect("leader").proxy_id,
+            PeerId(3)
+        );
+        assert!(!node.advertised_clock().ready);
     }
 
     #[tokio::test]
