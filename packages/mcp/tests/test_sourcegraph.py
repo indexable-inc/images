@@ -4,9 +4,9 @@ These never reach sourcegraph.com: every code path is exercised with an
 ``httpx.MockTransport`` injected via the module's ``_client`` hook, so there is
 no network and no token. They cover: anonymous-by-default auth (and the
 ``SRC_ACCESS_TOKEN`` header when set), the ``count:`` append/preserve rule, the
-FileMatch/Repository/CommitSearchResult row shapes, the relative-to-absolute
-``url`` normalization, the fixed empty-frame schema, the error-envelope to
-SourcegraphError mapping, and the 5xx retry.
+FileMatch/Repository/CommitSearchResult row shapes, line-targeted absolute
+URLs, the fixed empty-frame schema, the error-envelope to SourcegraphError
+mapping, the request timeout, and the 5xx retry.
 """
 
 from __future__ import annotations
@@ -32,7 +32,9 @@ import sourcegraph
 
 _NON_CALLABLE = {"SourcegraphError"}
 _PUBLIC_FUNCS = [
-    getattr(sourcegraph, name) for name in sourcegraph.__all__ if name not in _NON_CALLABLE
+    getattr(sourcegraph, name)
+    for name in sourcegraph.__all__
+    if name not in _NON_CALLABLE
 ]
 
 
@@ -66,7 +68,9 @@ def test_type_hints_explicit(func: Callable[..., object]) -> None:
     )
 
 
-def _envelope(results: list[dict[str, Any]], *, match_count: int | None = None) -> dict[str, Any]:
+def _envelope(
+    results: list[dict[str, Any]], *, match_count: int | None = None
+) -> dict[str, Any]:
     """A GraphQL success envelope shaped like the live search response."""
     return {
         "data": {
@@ -176,8 +180,10 @@ def test_search_rows_and_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     assert row["commit"].startswith("abc123")
     # The API's instance-relative url is absolutized against the endpoint.
     assert row["url"] == (
-        "https://sourcegraph.com/github.com/rust-lang/rust/-/blob/library/core/src/mem/mod.rs"
+        "https://sourcegraph.com/github.com/rust-lang/rust/-/blob/"
+        "library/core/src/mem/mod.rs?L42"
     )
+    assert content.row(1, named=True)["url"].endswith("?L100")
     repo_row = df.filter(pl.col("kind") == "repo").row(0, named=True)
     assert repo_row["repo"] == "github.com/pola-rs/polars"
     assert repo_row["path"] is None
@@ -186,7 +192,10 @@ def test_search_rows_and_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     commit_row = df.filter(pl.col("kind") == "commit").row(0, named=True)
     assert commit_row["commit"].startswith("feedface")
     assert commit_row["content"] == "Stabilize transmute in const fn"
-    assert commit_row["url"] == "https://sourcegraph.com/github.com/rust-lang/rust/-/commit/feedface"
+    assert (
+        commit_row["url"]
+        == "https://sourcegraph.com/github.com/rust-lang/rust/-/commit/feedface"
+    )
 
     # The request went to the GraphQL endpoint, anonymously.
     (request,) = seen
@@ -196,20 +205,44 @@ def test_search_rows_and_schema(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_count_appended_and_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SRC_ACCESS_TOKEN", raising=False)
-    seen = _install_handler(monkeypatch, lambda _req: httpx.Response(200, json=_envelope([])))
+    seen = _install_handler(
+        monkeypatch, lambda _req: httpx.Response(200, json=_envelope([]))
+    )
 
     asyncio.run(sourcegraph.search("foo", first=7))
     asyncio.run(sourcegraph.search("foo count:all"))
+    asyncio.run(sourcegraph.search('"retry count:3"', first=11))
 
     first_query = json.loads(seen[0].content)["variables"]["query"]
     second_query = json.loads(seen[1].content)["variables"]["query"]
+    quoted_query = json.loads(seen[2].content)["variables"]["query"]
     assert first_query == "foo count:7"
     assert second_query == "foo count:all"  # caller's count: wins, nothing appended
+    assert quoted_query == '"retry count:3" count:11'
+
+
+def test_request_timeout_outlives_sourcegraph_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SRC_ACCESS_TOKEN", raising=False)
+    seen = _install_handler(
+        monkeypatch, lambda _req: httpx.Response(200, json=_envelope([]))
+    )
+
+    asyncio.run(sourcegraph.search("foo"))
+
+    (request,) = seen
+    timeout = request.extensions["timeout"]
+    # Sourcegraph allows normal searches to execute for 60 seconds. The
+    # transport must leave room for the server response after that deadline.
+    assert timeout["read"] > 60
 
 
 def test_token_sent_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SRC_ACCESS_TOKEN", "sgp_test_token")
-    seen = _install_handler(monkeypatch, lambda _req: httpx.Response(200, json=_envelope([])))
+    seen = _install_handler(
+        monkeypatch, lambda _req: httpx.Response(200, json=_envelope([]))
+    )
 
     asyncio.run(sourcegraph.search("foo"))
 
@@ -220,7 +253,9 @@ def test_token_sent_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_endpoint_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SRC_ACCESS_TOKEN", raising=False)
     monkeypatch.setenv("SRC_ENDPOINT", "https://sourcegraph.example.com/")
-    seen = _install_handler(monkeypatch, lambda _req: httpx.Response(200, json=_envelope([])))
+    seen = _install_handler(
+        monkeypatch, lambda _req: httpx.Response(200, json=_envelope([]))
+    )
 
     asyncio.run(sourcegraph.search("foo"))
 
@@ -229,15 +264,22 @@ def test_endpoint_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert request.url.path == "/.api/graphql"  # trailing slash stripped, no `//`
 
 
-def test_urls_absolutized_against_custom_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_urls_absolutized_against_custom_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Relative API urls resolve against the configured instance, not the
     # sourcegraph.com default; already-absolute urls pass through untouched.
     monkeypatch.delenv("SRC_ACCESS_TOKEN", raising=False)
     monkeypatch.setenv("SRC_ENDPOINT", "https://sourcegraph.example.com/")
-    absolute_repo = {**_REPO_MATCH, "url": "https://mirror.example.net/github.com/pola-rs/polars"}
+    absolute_repo = {
+        **_REPO_MATCH,
+        "url": "https://mirror.example.net/github.com/pola-rs/polars",
+    }
     _install_handler(
         monkeypatch,
-        lambda _req: httpx.Response(200, json=_envelope([_COMMIT_MATCH, absolute_repo])),
+        lambda _req: httpx.Response(
+            200, json=_envelope([_COMMIT_MATCH, absolute_repo])
+        ),
     )
 
     df = asyncio.run(sourcegraph.search("foo"))
@@ -265,7 +307,9 @@ def test_path_only_file_match(monkeypatch: pytest.MonkeyPatch) -> None:
     # A `type:path` hit has no lineMatches but must still produce a row.
     monkeypatch.delenv("SRC_ACCESS_TOKEN", raising=False)
     path_match = {**_FILE_MATCH, "lineMatches": []}
-    _install_handler(monkeypatch, lambda _req: httpx.Response(200, json=_envelope([path_match])))
+    _install_handler(
+        monkeypatch, lambda _req: httpx.Response(200, json=_envelope([path_match]))
+    )
 
     df = asyncio.run(sourcegraph.search("type:path mod.rs"))
 

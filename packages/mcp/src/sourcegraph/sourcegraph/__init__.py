@@ -44,8 +44,8 @@ so every code path is exercisable with no network.
 from __future__ import annotations
 
 import os
-import re
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit, urlunsplit
 
 import polars as pl
 
@@ -60,6 +60,11 @@ __all__ = [
 __version__ = "0.1.0"
 
 _DEFAULT_ENDPOINT = "https://sourcegraph.com"
+
+# Sourcegraph caps normal searches at 60 seconds by default. Leave time for
+# the response after the server deadline:
+# https://github.com/sourcegraph/sourcegraph-public-snapshot/blob/c864f15af264f0f456a6d8a83290b5c940715349/internal/search/limits/limits.go#L15-L20
+_SEARCH_TIMEOUT_S = 65.0
 
 # Fixed schema so empty results stay typed (polars cannot infer a schema from
 # zero rows) and downstream `.filter`/`.group_by` compose without surprises.
@@ -108,6 +113,16 @@ def _absolute_url(url: str | None) -> str | None:
     if url and url.startswith("/"):
         return _endpoint() + url
     return url
+
+
+def _line_url(url: str | None, line: int | None) -> str | None:
+    """Target a 1-based line using Sourcegraph's modern URL format."""
+    if url is None or line is None:
+        return url
+    parsed = urlsplit(url)
+    selector = f"L{line}"
+    query = f"{selector}&{parsed.query}" if parsed.query else selector
+    return urlunsplit(parsed._replace(query=query))
 
 
 # _client is module-level so tests can replace it with a factory that injects
@@ -193,7 +208,7 @@ async def _gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     total_attempts = len(_RETRY_BACKOFFS_S) + 1
     for attempt in range(total_attempts):
         last = attempt == total_attempts - 1
-        async with _client() as client:
+        async with _client(timeout=_SEARCH_TIMEOUT_S) as client:
             resp = await client.post("/.api/graphql", json=payload)
             if 500 <= resp.status_code < 600 and not last:
                 await asyncio.sleep(_RETRY_BACKOFFS_S[attempt])
@@ -208,9 +223,34 @@ async def _gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("unreachable: _gql retry loop exited without return or raise")
 
 
-# `count:` (with optional trailing value) already present in the query means the
-# caller owns the result cap; `first=` must not append a second one.
-_COUNT_RE = re.compile(r"(^|\s)count:\S*", re.IGNORECASE)
+def _has_count_filter(query: str) -> bool:
+    """Return whether an unquoted query token starts with ``count:``."""
+    in_quotes = False
+    escaped = False
+    at_token_start = True
+    for index, char in enumerate(query):
+        if escaped:
+            escaped = False
+            at_token_start = False
+            continue
+        if char == "\\":
+            escaped = True
+            at_token_start = False
+            continue
+        if char == '"':
+            in_quotes = not in_quotes
+            at_token_start = False
+            continue
+        if in_quotes:
+            continue
+        if char.isspace():
+            at_token_start = True
+            continue
+        if at_token_start:
+            if query[index : index + len("count:")].lower() == "count:":
+                return True
+            at_token_start = False
+    return False
 
 
 def _rows_from_file_match(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -229,16 +269,21 @@ def _rows_from_file_match(result: dict[str, Any]) -> list[dict[str, Any]]:
     if not line_matches:
         # A path-only hit (`type:path` / `select:file`) still deserves a row.
         return [{**base, "line": None, "content": None}]
-    return [
-        {
-            **base,
-            # The GraphQL API's lineNumber is 0-based; editors and humans are
-            # 1-based, so convert at the boundary.
-            "line": lm["lineNumber"] + 1 if lm.get("lineNumber") is not None else None,
-            "content": lm.get("preview"),
-        }
-        for lm in line_matches
-    ]
+    rows: list[dict[str, Any]] = []
+    for line_match in line_matches:
+        # The GraphQL API's lineNumber is 0-based; editors and humans are
+        # 1-based, so convert at the boundary.
+        line_number = line_match.get("lineNumber")
+        line = line_number + 1 if line_number is not None else None
+        rows.append(
+            {
+                **base,
+                "line": line,
+                "content": line_match.get("preview"),
+                "url": _line_url(base["url"], line),
+            }
+        )
+    return rows
 
 
 def _row_from_repository(result: dict[str, Any]) -> dict[str, Any]:
@@ -289,9 +334,11 @@ async def search(query: str, *, first: int = 50) -> pl.DataFrame:
     or private-instance search.  Raises :class:`SourcegraphError` on GraphQL
     errors and ``httpx.HTTPStatusError`` on HTTP errors.
     """
-    effective = query if _COUNT_RE.search(query) else f"{query} count:{first}"
+    effective = query if _has_count_filter(query) else f"{query} count:{first}"
     data = await _gql(_SEARCH_QUERY, {"query": effective})
-    results: list[dict[str, Any]] = ((data.get("search") or {}).get("results") or {}).get("results") or []
+    results: list[dict[str, Any]] = (
+        (data.get("search") or {}).get("results") or {}
+    ).get("results") or []
 
     rows: list[dict[str, Any]] = []
     for result in results:
