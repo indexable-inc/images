@@ -1675,7 +1675,11 @@ fn render_build_script_run_phase(
         "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/\n",
     );
     script.push_str("chmod -R u+w \"$build_script_manifest_dir\"\n");
-    script.push_str("build_script_out_dir=$(mktemp -d)\n");
+    // `TMPDIR` can name another `_nixbld` user's sandbox when a build-script
+    // binary crosses the compile/run derivation boundary. Anchor OUT_DIR in the
+    // current derivation so native generators such as cxxbridge can write it.
+    script.push_str("build_script_out_dir=$NIX_BUILD_TOP/build-script-out\n");
+    script.push_str("mkdir -p \"$build_script_out_dir\"\n");
     script.push_str("build_script_env=()\n");
     script.push_str("export OUT_DIR=$build_script_out_dir\n");
     ensure_source_contains_unit(source, run_unit)?;
@@ -5415,6 +5419,10 @@ links = "native_ffi"
         assert!(rendered.contains("export CARGO_PKG_LICENSE_FILE=\"LICENSE\""));
         assert!(rendered.contains("export CARGO_PKG_RUST_VERSION=\"1.85\""));
         assert!(rendered.contains("export CARGO_PKG_README=\"README.md\""));
+        assert!(
+            rendered.contains("build_script_out_dir=$NIX_BUILD_TOP/build-script-out"),
+            "build-script OUT_DIR must belong to the run derivation's build user"
+        );
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"native_ffi\""));
         assert!(rendered.contains("export RUSTDOC=\"$(type -p rustdoc)\""));
         assert!(rendered.contains("export CARGO_FEATURE_ARCH=1"));
