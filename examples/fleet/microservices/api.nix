@@ -52,8 +52,7 @@ in {
     cache-reachable = {
       description = "cache is reachable from this api replica";
       tcp = {
-        host = cache.host;
-        port = cache.port;
+        inherit (cache) host port;
       };
     };
   };

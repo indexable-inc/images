@@ -8,7 +8,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-http-core = { path = "../http-core" }
+http-core.workspace = true
 bootloader_api = "0.11.15"
 x86_64 = "0.15.4"
 spin = "0.9.8"
