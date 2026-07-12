@@ -123,14 +123,12 @@ let
       filter = sourceClosureFilter root includes;
     };
 
-  scopedWorkspaceSource =
-    name: relative:
-    builtins.path {
-      inherit name;
-      # Use a package-shaped source root for each local unit so one workspace
-      # crate edit does not invalidate its siblings.
-      path = sourceRootPath workspaceRoot + pkgs.lib.optionalString (relative != "") "/${relative}";
-    };
+  scopedWorkspaceSource = name: relative: builtins.path {
+    inherit name;
+    # Use a package-shaped source root for each local unit so one workspace
+    # crate edit does not invalidate its siblings.
+    path = sourceRootPath workspaceRoot + pkgs.lib.optionalString (relative != "") "/${relative}";
+  };
 
   scopedWorkspaceClosureSource = name: includes: scopedClosureSource workspaceRoot name includes;
 

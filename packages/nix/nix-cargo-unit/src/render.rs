@@ -14,6 +14,7 @@ pub struct RenderOptions {
     pub workspace_root: PathBuf,
     pub vendor_root: Option<PathBuf>,
     pub cargo_lock_sources: CargoLockSources,
+    pub cargo_metadata: CargoMetadata,
     pub content_addressed: bool,
     pub toolchain_id: Option<String>,
     pub deny_unused_crate_dependencies: bool,
@@ -38,28 +39,39 @@ struct CargoLockPackageEntry {
     source: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct CargoManifest {
-    package: Option<CargoManifestPackage>,
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CargoMetadata {
+    packages: BTreeMap<String, CargoMetadataPackage>,
 }
 
 #[derive(Debug, Deserialize)]
-struct CargoManifestPackage {
+struct CargoMetadataDocument {
+    packages: Vec<CargoMetadataPackage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+struct CargoMetadataPackage {
+    id: String,
+    name: String,
+    manifest_path: PathBuf,
+    #[serde(default)]
+    authors: Vec<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    homepage: Option<String>,
+    #[serde(default)]
+    repository: Option<String>,
+    #[serde(default)]
+    license: Option<String>,
+    #[serde(default)]
+    license_file: Option<String>,
+    #[serde(default)]
+    rust_version: Option<String>,
+    #[serde(default)]
+    readme: Option<String>,
+    #[serde(default)]
     links: Option<String>,
-    #[serde(default)]
-    authors: Option<toml::Value>,
-    #[serde(default)]
-    description: Option<toml::Value>,
-    #[serde(default)]
-    homepage: Option<toml::Value>,
-    #[serde(default)]
-    repository: Option<toml::Value>,
-    #[serde(default)]
-    license: Option<toml::Value>,
-    #[serde(default, rename = "license-file")]
-    license_file: Option<toml::Value>,
-    #[serde(default, rename = "rust-version")]
-    rust_version: Option<toml::Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,6 +155,38 @@ impl CargoLockSources {
     }
 }
 
+impl CargoMetadata {
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let metadata = fs::read_to_string(path)
+            .wrap_err_with(|| format!("reading Cargo metadata from {}", path.display()))?;
+        Self::parse(&metadata)
+            .wrap_err_with(|| format!("parsing Cargo metadata from {}", path.display()))
+    }
+
+    fn parse(metadata: &str) -> Result<Self> {
+        let document: CargoMetadataDocument = serde_json::from_str(metadata)?;
+        let mut packages = BTreeMap::new();
+        for package in document.packages {
+            let id = package.id.clone();
+            if packages.insert(id.clone(), package).is_some() {
+                return Err(eyre!("Cargo metadata contains duplicate package id {id}"));
+            }
+        }
+        Ok(Self { packages })
+    }
+
+    fn package_for_unit(&self, unit: &Unit) -> Result<&CargoMetadataPackage> {
+        self.packages.get(&unit.pkg_id).ok_or_else(|| {
+            eyre!(
+                "Cargo metadata has no package for unit {} {} with id {}",
+                unit.package_name(),
+                unit.package_version(),
+                unit.pkg_id
+            )
+        })
+    }
+}
+
 fn cargo_lock_source_matches_pkg_id(pkg_id_source: &str, cargo_lock_source: &str) -> bool {
     if pkg_id_source == cargo_lock_source {
         return true;
@@ -161,6 +205,7 @@ struct PreparedGraph {
     source_entries: BTreeMap<String, SourceEntry>,
     transitive_unit_deps: Vec<BTreeSet<usize>>,
     build_script_runs: BTreeMap<usize, BuildScriptRun>,
+    package_metadata: Vec<CargoMetadataPackage>,
 }
 
 struct BuildScriptRun {
@@ -611,6 +656,12 @@ impl PreparedGraph {
             .get(key)
             .ok_or_else(|| eyre!("unit index {index} references missing scoped source {key}"))
     }
+
+    fn package_metadata(&self, index: usize) -> Result<&CargoMetadataPackage> {
+        self.package_metadata
+            .get(index)
+            .ok_or_else(|| eyre!("unit index {index} has no Cargo package metadata"))
+    }
 }
 
 fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedGraph> {
@@ -651,10 +702,16 @@ fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedG
         })
         .collect();
 
+    let package_metadata = graph
+        .units
+        .iter()
+        .map(|unit| options.cargo_metadata.package_for_unit(unit).cloned())
+        .collect::<Result<Vec<_>>>()?;
+
     let mut source_refs = Vec::with_capacity(graph.units.len());
     let mut source_entries = BTreeMap::new();
-    for unit in &graph.units {
-        let source = source_entry_for_unit(unit, options)?;
+    for (unit, metadata) in graph.units.iter().zip(&package_metadata) {
+        let source = source_entry_for_unit(unit, metadata, options)?;
         let key = source.name.clone();
         source_refs.push(key.clone());
         source_entries.entry(key).or_insert(source);
@@ -707,6 +764,7 @@ fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedG
         source_entries,
         transitive_unit_deps,
         build_script_runs,
+        package_metadata,
     })
 }
 
@@ -1048,7 +1106,10 @@ fn render_driver_build_phase(
     script.push_str("build_script_flags=()\n");
     script.push_str("rustc_env=()\n");
     script.push_str("rustc_args=()\n\n");
-    script.push_str(&cargo_package_exports(unit)?);
+    script.push_str(&cargo_package_exports(
+        unit,
+        prepared.package_metadata(index)?,
+    ));
     writeln!(
         script,
         "export CARGO_MANIFEST_DIR={}",
@@ -1060,6 +1121,7 @@ fn render_driver_build_phase(
         let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
         append_build_script_flag_reader(&mut script, &run_ref, unit);
     }
+    append_transitive_link_search_paths(&mut script, graph, prepared, index);
     append_direct_dependency_metadata_exports(&mut script, graph, prepared, index)?;
 
     push_rustc_args(&mut script, unit, &prepared.hashes[index], driver);
@@ -1387,14 +1449,14 @@ fn append_extra_rustc_args(script: &mut String, unit: &Unit) {
 }
 
 fn unit_links(unit: &Unit) -> bool {
-    !unit.is_custom_build_compile()
-        && (unit.is_bin()
-            || unit.is_test()
-            || unit.is_benchmark()
-            || unit.is_proc_macro()
-            || unit.target.has_crate_type("cdylib")
-            || unit.target.has_crate_type("dylib")
-            || unit.target.has_crate_type("staticlib"))
+    unit.is_custom_build_compile()
+        || unit.is_bin()
+        || unit.is_test()
+        || unit.is_benchmark()
+        || unit.is_proc_macro()
+        || unit.target.has_crate_type("cdylib")
+        || unit.target.has_crate_type("dylib")
+        || unit.target.has_crate_type("staticlib")
 }
 
 fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Unit) {
@@ -1436,6 +1498,59 @@ fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Un
     let _ = writeln!(
         script,
         "compile_out_dir=$(mktemp -d)\nif [ -d {quoted_run_ref}/out-dir ]; then\n  cp -R {quoted_run_ref}/out-dir/. \"$compile_out_dir\"/\nfi\nrustc_env+=( OUT_DIR=\"$compile_out_dir\" )\n"
+    );
+}
+
+fn append_transitive_link_search_paths(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+) {
+    let unit = &graph.units[index];
+    if !unit_links(unit) {
+        return;
+    }
+
+    for run_index in dependency_link_search_runs(graph, index) {
+        let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
+        append_rustc_dependency_link_search_reader(script, &run_ref);
+    }
+}
+
+fn dependency_link_search_runs(graph: &UnitGraph, index: usize) -> BTreeSet<usize> {
+    fn collect(
+        graph: &UnitGraph,
+        index: usize,
+        visited: &mut BTreeSet<usize>,
+        runs: &mut BTreeSet<usize>,
+    ) {
+        for dependency in &graph.units[index].dependencies {
+            let dependency_index = dependency.index;
+            let dependency_unit = &graph.units[dependency_index];
+            if dependency_unit.is_run_custom_build() || dependency_unit.is_proc_macro() {
+                continue;
+            }
+            if !visited.insert(dependency_index) {
+                continue;
+            }
+            if let Some(run_index) = unit_build_script_run(graph, dependency_index) {
+                runs.insert(run_index);
+            }
+            collect(graph, dependency_index, visited, runs);
+        }
+    }
+
+    let mut visited = BTreeSet::new();
+    let mut runs = BTreeSet::new();
+    collect(graph, index, &mut visited, &mut runs);
+    runs
+}
+
+fn append_rustc_dependency_link_search_reader(script: &mut String, run_ref: &str) {
+    let _ = writeln!(
+        script,
+        "if [ -f \"{run_ref}/rustc-link-search\" ]; then\n  while IFS= read -r transitive_link_search_path; do\n    [ -n \"$transitive_link_search_path\" ] && rustc_args+=( -L \"$transitive_link_search_path\" )\n  done < \"{run_ref}/rustc-link-search\"\nfi"
     );
 }
 
@@ -1619,7 +1734,6 @@ fn render_build_script_run(
     attrs.multiline(
         "buildPhase",
         &render_build_script_run_phase(
-            graph,
             prepared,
             run_index,
             run_unit,
@@ -1644,7 +1758,6 @@ fn render_build_script_run(
 
 #[allow(clippy::too_many_lines)]
 fn render_build_script_run_phase(
-    graph: &UnitGraph,
     prepared: &PreparedGraph,
     run_index: usize,
     run_unit: &Unit,
@@ -1669,11 +1782,24 @@ fn render_build_script_run_phase(
         shell::quote(source.package_root())
     )?;
     script.push_str("mkdir -p \"$build_script_manifest_dir\"\n");
-    script.push_str(
-        "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/\n",
-    );
+    if source.base.scope() == SourceScope::Closure {
+        script.push_str("cp -RL \"$src\"/. \"$out\"/\n");
+    } else {
+        script.push_str(
+            "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/\n",
+        );
+    }
     script.push_str("chmod -R u+w \"$build_script_manifest_dir\"\n");
-    script.push_str("build_script_out_dir=$(mktemp -d)\n");
+    // `TMPDIR` can name another `_nixbld` user's sandbox when a build-script
+    // binary crosses the compile/run derivation boundary. Anchor OUT_DIR in the
+    // current derivation so native generators such as cxxbridge can write it.
+    script.push_str("build_script_out_dir=$NIX_BUILD_TOP/build-script-out\n");
+    script.push_str("mkdir -p \"$build_script_out_dir\"\n");
+    // Cargo's target directory gives build helpers a writable shared scratch
+    // root. Without it cxx-build falls back to scratch's compile-time OUT_DIR,
+    // which belongs to the build user that compiled the helper dependency.
+    script.push_str("export CARGO_TARGET_DIR=$build_script_out_dir/cargo-target\n");
+    script.push_str("mkdir -p \"$CARGO_TARGET_DIR\"\n");
     script.push_str("build_script_env=()\n");
     script.push_str("export OUT_DIR=$build_script_out_dir\n");
     ensure_source_contains_unit(source, run_unit)?;
@@ -1730,11 +1856,12 @@ fn render_build_script_run_phase(
         })
     )?;
     script.push_str(concat!("export NUM_JOBS=''", "${NIX_BUILD_CORES:-1}\n"));
-    script.push_str(&cargo_package_exports(run_unit)?);
-    script.push_str(&cargo_manifest_links_export(run_unit)?);
+    let package_metadata = prepared.package_metadata(run_index)?;
+    script.push_str(&cargo_package_exports(run_unit, package_metadata));
+    script.push_str(&cargo_manifest_links_export(package_metadata));
     append_cargo_feature_exports(&mut script, run_unit);
     append_cargo_cfg_exports(&mut script);
-    append_dependency_metadata_exports(&mut script, graph, prepared, build_script_run)?;
+    append_dependency_metadata_exports(&mut script, prepared, build_script_run)?;
     script.push_str("cd \"$CARGO_MANIFEST_DIR\"\n");
     script.push_str("build_script_stdout=$(mktemp)\n");
     script.push_str("build_script_stderr=$(mktemp)\n");
@@ -1752,7 +1879,10 @@ fn render_build_script_run_phase(
     script.push_str("  cat \"$build_script_stdout\" >&2\n");
     script.push_str("  exit \"$build_script_status\"\n");
     script.push_str("fi\n");
-    script.push_str("cp -R \"$build_script_out_dir\" \"$out/out-dir\"\n");
+    // Build helpers may use symlinks as a writable scratch optimization. The
+    // store output owns the serialized files, not links back into NIX_BUILD_TOP.
+    script.push_str("mkdir -p \"$out/out-dir\"\n");
+    script.push_str("cp -RL \"$build_script_out_dir\"/. \"$out/out-dir\"/\n");
     script.push_str(
         r#"if [ -d "$out/out-dir" ]; then
   while IFS= read -r -d "" build_script_output_file; do
@@ -1934,11 +2064,10 @@ fn render_clippy_unit_names_by_package(graph: &UnitGraph, prepared: &PreparedGra
     out
 }
 
-fn cargo_package_exports(unit: &Unit) -> Result<String> {
+fn cargo_package_exports(unit: &Unit, metadata: &CargoMetadataPackage) -> String {
     let mut script = String::new();
     let package_name = unit.package_name();
     let version = unit.package_version();
-    let manifest = optional_cargo_manifest_package(unit)?;
     // Build scripts observe Cargo's split version fields, including the empty
     // prerelease string. ring uses CARGO_PKG_VERSION_PRE in its links invariant.
     let version_without_build_metadata = version.split_once('+').map_or(version, |(base, _)| base);
@@ -1950,16 +2079,12 @@ fn cargo_package_exports(unit: &Unit) -> Result<String> {
     let minor = version_parts.next().unwrap_or("0");
     let patch = version_parts.next().unwrap_or("0");
 
-    let metadata = manifest
-        .as_ref()
-        .map(cargo_manifest_package_metadata)
-        .unwrap_or_default();
-
     // CARGO_CRATE_NAME is the rust identifier rustc receives via `--crate-name`.
     // Cargo normalizes the target's name (`-` → `_`); crates like rmcp read this
     // via `env!()` at compile time.
     let crate_name = unit.target.name.replace('-', "_");
     let is_bin = unit.target.has_kind("bin");
+    let authors = metadata.authors.join(":");
 
     for (name, value) in [
         ("CARGO_CRATE_NAME", crate_name.as_str()),
@@ -1969,13 +2094,35 @@ fn cargo_package_exports(unit: &Unit) -> Result<String> {
         ("CARGO_PKG_VERSION_MINOR", minor),
         ("CARGO_PKG_VERSION_PATCH", patch),
         ("CARGO_PKG_VERSION_PRE", version_pre),
-        ("CARGO_PKG_AUTHORS", metadata.authors.as_str()),
-        ("CARGO_PKG_DESCRIPTION", metadata.description.as_str()),
-        ("CARGO_PKG_HOMEPAGE", metadata.homepage.as_str()),
-        ("CARGO_PKG_REPOSITORY", metadata.repository.as_str()),
-        ("CARGO_PKG_LICENSE", metadata.license.as_str()),
-        ("CARGO_PKG_LICENSE_FILE", metadata.license_file.as_str()),
-        ("CARGO_PKG_RUST_VERSION", metadata.rust_version.as_str()),
+        ("CARGO_PKG_AUTHORS", authors.as_str()),
+        (
+            "CARGO_PKG_DESCRIPTION",
+            metadata.description.as_deref().unwrap_or_default(),
+        ),
+        (
+            "CARGO_PKG_HOMEPAGE",
+            metadata.homepage.as_deref().unwrap_or_default(),
+        ),
+        (
+            "CARGO_PKG_REPOSITORY",
+            metadata.repository.as_deref().unwrap_or_default(),
+        ),
+        (
+            "CARGO_PKG_LICENSE",
+            metadata.license.as_deref().unwrap_or_default(),
+        ),
+        (
+            "CARGO_PKG_LICENSE_FILE",
+            metadata.license_file.as_deref().unwrap_or_default(),
+        ),
+        (
+            "CARGO_PKG_RUST_VERSION",
+            metadata.rust_version.as_deref().unwrap_or_default(),
+        ),
+        (
+            "CARGO_PKG_README",
+            metadata.readme.as_deref().unwrap_or_default(),
+        ),
     ] {
         let _ = writeln!(script, "export {name}={}", shell_env_value(value));
     }
@@ -1988,16 +2135,17 @@ fn cargo_package_exports(unit: &Unit) -> Result<String> {
         );
     }
 
-    Ok(script)
+    script
 }
 
-fn cargo_manifest_links_export(unit: &Unit) -> Result<String> {
+fn cargo_manifest_links_export(package: &CargoMetadataPackage) -> String {
     // Cargo injects package.links for build.rs. nix-cargo-unit runs build scripts
     // outside Cargo, and crates like ring panic when CARGO_MANIFEST_LINKS is absent.
-    Ok(cargo_manifest_package(unit)?
-        .and_then(|package| package.links)
-        .map(|links| format!("export CARGO_MANIFEST_LINKS={}\n", shell_env_value(&links)))
-        .unwrap_or_default())
+    package
+        .links
+        .as_ref()
+        .map(|links| format!("export CARGO_MANIFEST_LINKS={}\n", shell_env_value(links)))
+        .unwrap_or_default()
 }
 
 fn shell_env_value(value: &str) -> String {
@@ -2021,83 +2169,6 @@ fn nix_indented_string_fragment(value: &str) -> String {
 
 fn nix_indented_string(value: &str) -> String {
     format!("''\n{value}''")
-}
-
-#[derive(Default)]
-struct CargoManifestPackageMetadata {
-    authors: String,
-    description: String,
-    homepage: String,
-    repository: String,
-    license: String,
-    license_file: String,
-    rust_version: String,
-}
-
-fn cargo_manifest_package_metadata(package: &CargoManifestPackage) -> CargoManifestPackageMetadata {
-    CargoManifestPackageMetadata {
-        authors: manifest_string_list(package.authors.as_ref()).join(":"),
-        description: manifest_string(package.description.as_ref()),
-        homepage: manifest_string(package.homepage.as_ref()),
-        repository: manifest_string(package.repository.as_ref()),
-        license: manifest_string(package.license.as_ref()),
-        license_file: manifest_string(package.license_file.as_ref()),
-        rust_version: manifest_string(package.rust_version.as_ref()),
-    }
-}
-
-fn manifest_string(value: Option<&toml::Value>) -> String {
-    value
-        .and_then(toml::Value::as_str)
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn manifest_string_list(value: Option<&toml::Value>) -> Vec<String> {
-    value
-        .and_then(toml::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(toml::Value::as_str)
-                .map(ToString::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn optional_cargo_manifest_package(unit: &Unit) -> Result<Option<CargoManifestPackage>> {
-    let manifest_path = crate_root_for_unit(unit).join("Cargo.toml");
-    let manifest = match fs::read_to_string(&manifest_path) {
-        Ok(manifest) => manifest,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            return Err(err)
-                .wrap_err_with(|| format!("reading package manifest {}", manifest_path.display()));
-        }
-    };
-
-    cargo_manifest_package_from_str(&manifest)
-        .wrap_err_with(|| format!("parsing package manifest {}", manifest_path.display()))
-}
-
-fn cargo_manifest_package(unit: &Unit) -> Result<Option<CargoManifestPackage>> {
-    let manifest_path = crate_root_for_unit(unit).join("Cargo.toml");
-    let manifest = fs::read_to_string(&manifest_path)
-        .wrap_err_with(|| format!("reading package manifest {}", manifest_path.display()))?;
-
-    cargo_manifest_package_from_str(&manifest)
-        .wrap_err_with(|| format!("parsing package manifest {}", manifest_path.display()))
-}
-
-fn cargo_manifest_package_from_str(manifest: &str) -> Result<Option<CargoManifestPackage>> {
-    let manifest: CargoManifest = toml::from_str(manifest)?;
-    Ok(manifest.package)
-}
-
-#[cfg(test)]
-fn cargo_manifest_package_links(manifest: &str) -> Result<Option<String>> {
-    Ok(cargo_manifest_package_from_str(manifest)?.and_then(|package| package.links))
 }
 
 fn append_cargo_feature_exports(script: &mut String, unit: &Unit) {
@@ -2152,14 +2223,12 @@ fn append_direct_dependency_metadata_exports(
         if dep_unit.is_run_custom_build() {
             continue;
         }
-        let Some(links) =
-            optional_cargo_manifest_package(dep_unit)?.and_then(|package| package.links)
-        else {
+        let Some(links) = prepared.package_metadata(dep.index)?.links.as_ref() else {
             continue;
         };
 
         let dep_ref = format!("${{units.{}}}", nix_attr(&prepared.names[dep.index]));
-        let env_prefix = cargo_links_env_prefix(&links);
+        let env_prefix = cargo_links_env_prefix(links);
         let _ = writeln!(
             script,
             r#"# Cargo exposes dependency build-script metadata through DEP_<links>_*.
@@ -2182,18 +2251,15 @@ fi"#,
 
 fn append_dependency_metadata_exports(
     script: &mut String,
-    graph: &UnitGraph,
     prepared: &PreparedGraph,
     build_script_run: &BuildScriptRun,
 ) -> Result<()> {
     for dep_run_index in &build_script_run.dependency_runs {
-        let dep_run_unit = &graph.units[*dep_run_index];
-        let Some(links) = cargo_manifest_package(dep_run_unit)?.and_then(|package| package.links)
-        else {
+        let Some(links) = prepared.package_metadata(*dep_run_index)?.links.as_ref() else {
             continue;
         };
         let dep_run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[*dep_run_index]));
-        let env_prefix = cargo_links_env_prefix(&links);
+        let env_prefix = cargo_links_env_prefix(links);
         let _ = writeln!(
             script,
             r#"# Cargo exposes metadata from build-script dependencies through DEP_<links>_*.
@@ -2257,7 +2323,11 @@ fn nearest_manifest_root(source: &Path) -> Option<PathBuf> {
     }
 }
 
-fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceEntry> {
+fn source_entry_for_unit(
+    unit: &Unit,
+    metadata: &CargoMetadataPackage,
+    options: &RenderOptions,
+) -> Result<SourceEntry> {
     if unit.is_external() {
         let vendor_root = options.vendor_root.as_ref().ok_or_else(|| {
             eyre!(
@@ -2266,7 +2336,7 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
                 unit.package_version()
             )
         })?;
-        let scoped = vendored_source_root_for_unit(unit, vendor_root)?;
+        let scoped = vendored_source_root_for_unit(unit, metadata, vendor_root)?;
 
         let base = match scoped.scope {
             SourceScope::Package => SourceBase::VendorPackage,
@@ -2284,16 +2354,16 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
         });
     }
 
-    let scoped = local_source_root_for_unit(unit, &options.workspace_root)?;
-
+    let scoped = local_source_root_for_unit(unit, metadata, &options.workspace_root)?;
+    let base = match scoped.scope {
+        SourceScope::Package => SourceBase::Workspace,
+        SourceScope::Closure => SourceBase::WorkspaceClosure,
+    };
     let source_key = local_source_key(unit);
 
     Ok(SourceEntry {
-        name: source_name(SourceBase::Workspace, unit, &source_key, &scoped.relative),
-        base: match scoped.scope {
-            SourceScope::Package => SourceBase::Workspace,
-            SourceScope::Closure => SourceBase::WorkspaceClosure,
-        },
+        name: source_name(base, unit, &source_key, &scoped.relative),
+        base,
         root: scoped.root,
         relative: scoped.relative,
         include_relatives: scoped.include_relatives,
@@ -2301,7 +2371,11 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
     })
 }
 
-fn local_source_root_for_unit(unit: &Unit, workspace_root: &Path) -> Result<ScopedSourceRoot> {
+fn local_source_root_for_unit(
+    unit: &Unit,
+    metadata: &CargoMetadataPackage,
+    workspace_root: &Path,
+) -> Result<ScopedSourceRoot> {
     let package_root =
         local_package_root_from_pkg_id(&unit.pkg_id).unwrap_or_else(|| crate_root_for_unit(unit));
     relative_path_string(&package_root, workspace_root).map_err(|_| {
@@ -2315,7 +2389,12 @@ fn local_source_root_for_unit(unit: &Unit, workspace_root: &Path) -> Result<Scop
     })?;
 
     let package_relative = relative_path_string(&package_root, workspace_root)?;
-    let include_relatives = source_closure_relatives(&package_root, workspace_root)?;
+    let include_relatives = source_closure_relatives(
+        &package_root,
+        workspace_root,
+        metadata,
+        ExternalSymlinkPolicy::Reject,
+    )?;
 
     if include_relatives.len() > 1 || include_relatives.first() != Some(&package_relative) {
         return Ok(ScopedSourceRoot {
@@ -2334,7 +2413,11 @@ fn local_source_root_for_unit(unit: &Unit, workspace_root: &Path) -> Result<Scop
     })
 }
 
-fn vendored_source_root_for_unit(unit: &Unit, vendor_root: &Path) -> Result<ScopedSourceRoot> {
+fn vendored_source_root_for_unit(
+    unit: &Unit,
+    metadata: &CargoMetadataPackage,
+    vendor_root: &Path,
+) -> Result<ScopedSourceRoot> {
     let source = Path::new(&unit.target.src_path);
     let relative = source.strip_prefix(vendor_root).map_err(|_| {
         eyre!(
@@ -2358,7 +2441,12 @@ fn vendored_source_root_for_unit(unit: &Unit, vendor_root: &Path) -> Result<Scop
     };
 
     let crate_relative = relative_path_string(&crate_root, vendor_root)?;
-    let include_relatives = source_closure_relatives(&crate_root, vendor_root)?;
+    let include_relatives = source_closure_relatives(
+        &crate_root,
+        vendor_root,
+        metadata,
+        ExternalSymlinkPolicy::PreserveStoreTarget,
+    )?;
 
     if include_relatives.len() > 1 || include_relatives.first() != Some(&crate_relative) {
         return Ok(ScopedSourceRoot {
@@ -2469,10 +2557,45 @@ fn file_url_path(path: &str) -> Option<PathBuf> {
         .ok()
 }
 
-fn source_closure_relatives(root: &Path, source_boundary: &Path) -> Result<Vec<String>> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExternalSymlinkPolicy {
+    Reject,
+    PreserveStoreTarget,
+}
+
+fn source_closure_relatives(
+    root: &Path,
+    source_boundary: &Path,
+    metadata: &CargoMetadataPackage,
+    external_symlinks: ExternalSymlinkPolicy,
+) -> Result<Vec<String>> {
     let source_boundary = normalize_path(source_boundary);
     let mut included_roots = BTreeSet::from([normalize_path(root)]);
     let mut queue = VecDeque::from([normalize_path(root)]);
+
+    while let Some(scan_root) = queue.pop_front() {
+        collect_source_closure_roots(
+            &scan_root,
+            &source_boundary,
+            &mut included_roots,
+            &mut queue,
+        )?;
+    }
+
+    for relative in [&metadata.license_file, &metadata.readme]
+        .into_iter()
+        .flatten()
+    {
+        let path = normalize_path(&root.join(relative));
+        add_metadata_source_path(
+            &path,
+            &source_boundary,
+            metadata,
+            external_symlinks,
+            &mut included_roots,
+            &mut queue,
+        )?;
+    }
 
     while let Some(scan_root) = queue.pop_front() {
         collect_source_closure_roots(
@@ -2487,6 +2610,126 @@ fn source_closure_relatives(root: &Path, source_boundary: &Path) -> Result<Vec<S
         .iter()
         .map(|path| relative_path_string(path, &source_boundary))
         .collect()
+}
+
+fn add_metadata_source_path(
+    path: &Path,
+    source_boundary: &Path,
+    metadata: &CargoMetadataPackage,
+    external_symlinks: ExternalSymlinkPolicy,
+    included_roots: &mut BTreeSet<PathBuf>,
+    queue: &mut VecDeque<PathBuf>,
+) -> Result<()> {
+    if !path.starts_with(source_boundary) {
+        return Err(eyre!(
+            "Cargo package {} metadata path {} resolves outside source boundary {}",
+            metadata.name,
+            path.display(),
+            source_boundary.display()
+        ));
+    }
+
+    let resolved_path =
+        resolve_metadata_source_path(path, source_boundary, metadata, external_symlinks)?;
+    enqueue_source_closure_path(path, source_boundary, included_roots, queue);
+    if resolved_path != path {
+        enqueue_source_closure_path(&resolved_path, source_boundary, included_roots, queue);
+    }
+
+    Ok(())
+}
+
+fn resolve_metadata_source_path(
+    path: &Path,
+    source_boundary: &Path,
+    metadata: &CargoMetadataPackage,
+    external_symlinks: ExternalSymlinkPolicy,
+) -> Result<PathBuf> {
+    if !source_boundary.exists() && !source_boundary.is_symlink() {
+        return Ok(path.to_path_buf());
+    }
+
+    let canonical_boundary = fs::canonicalize(source_boundary).wrap_err_with(|| {
+        format!(
+            "failed to resolve source boundary {} for Cargo package {}",
+            source_boundary.display(),
+            metadata.name
+        )
+    })?;
+    let mut existing_ancestor = path;
+    let mut missing_suffix = Vec::new();
+    while !existing_ancestor.exists() && !existing_ancestor.is_symlink() {
+        if existing_ancestor == source_boundary {
+            break;
+        }
+        let component = existing_ancestor.file_name().ok_or_else(|| {
+            eyre!(
+                "Cargo package {} metadata path {} has no ancestor inside source boundary {}",
+                metadata.name,
+                path.display(),
+                source_boundary.display()
+            )
+        })?;
+        missing_suffix.push(component.to_os_string());
+        existing_ancestor = existing_ancestor.parent().ok_or_else(|| {
+            eyre!(
+                "Cargo package {} metadata path {} has no ancestor inside source boundary {}",
+                metadata.name,
+                path.display(),
+                source_boundary.display()
+            )
+        })?;
+    }
+
+    let mut canonical_path = fs::canonicalize(existing_ancestor).wrap_err_with(|| {
+        format!(
+            "failed to resolve Cargo package {} metadata path {}",
+            metadata.name,
+            path.display()
+        )
+    })?;
+    canonical_path.extend(missing_suffix.into_iter().rev());
+    if !canonical_path.starts_with(&canonical_boundary) {
+        let shares_store = canonical_boundary
+            .parent()
+            .is_some_and(|store| canonical_path.starts_with(store));
+        if external_symlinks == ExternalSymlinkPolicy::PreserveStoreTarget && shares_store {
+            return Ok(path.to_path_buf());
+        }
+        return Err(eyre!(
+            "Cargo package {} metadata path {} resolves outside source boundary {} to {}",
+            metadata.name,
+            path.display(),
+            source_boundary.display(),
+            canonical_path.display()
+        ));
+    }
+
+    let relative = canonical_path
+        .strip_prefix(&canonical_boundary)
+        .map_err(|_| {
+            eyre!(
+                "Cargo package {} metadata path {} lost source boundary {} after validation",
+                metadata.name,
+                path.display(),
+                source_boundary.display()
+            )
+        })?;
+    Ok(normalize_path(&source_boundary.join(relative)))
+}
+
+fn enqueue_source_closure_path(
+    path: &Path,
+    source_boundary: &Path,
+    included_roots: &mut BTreeSet<PathBuf>,
+    queue: &mut VecDeque<PathBuf>,
+) {
+    if let Some(include_root) = include_closure_root(path, source_boundary)
+        && included_roots.insert(include_root.clone())
+        && include_root.is_dir()
+    {
+        queue.push_back(include_root);
+    }
 }
 
 fn collect_source_closure_roots(
@@ -2854,6 +3097,46 @@ fn test_binary_expr(unit: &Unit, prepared: &PreparedGraph, index: usize) -> Stri
     format!("{unit_ref}/bin/{}", unit.target.name)
 }
 
+fn append_doctest_dependencies(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+    unit_ref: &str,
+) -> Result<()> {
+    let unit = &graph.units[index];
+    for dep_index in &prepared.transitive_unit_deps[index] {
+        let dep = &graph.units[*dep_index];
+        if dep.is_bin() {
+            continue;
+        }
+        writeln!(
+            script,
+            "rustdoc_args+=( -L \"dependency=${{units.{}}}/lib\" )",
+            nix_attr(&prepared.names[*dep_index])
+        )?;
+    }
+    writeln!(script, "rustdoc_args+=( -L \"dependency={unit_ref}/lib\" )")?;
+    writeln!(
+        script,
+        "rustdoc_args+=( --extern \"{}=$(cat {unit_ref}/nix-support/extern-path)\" )",
+        unit.target.name.replace('-', "_")
+    )?;
+    for dependency in &unit.dependencies {
+        let dep_unit = &graph.units[dependency.index];
+        if dep_unit.is_run_custom_build() || dep_unit.is_bin() {
+            continue;
+        }
+        writeln!(
+            script,
+            "rustdoc_args+=( --extern \"{}=$(cat ${{units.{}}}/nix-support/extern-path)\" )",
+            dependency.extern_crate_name,
+            nix_attr(&prepared.names[dependency.index])
+        )?;
+    }
+    Ok(())
+}
+
 fn render_doctest_command(
     graph: &UnitGraph,
     prepared: &PreparedGraph,
@@ -2875,7 +3158,10 @@ fn render_doctest_command(
         shell::double_quote(&package_root)
     )?;
     script.push_str("cd \"$CARGO_MANIFEST_DIR\"\n");
-    script.push_str(&cargo_package_exports(unit)?);
+    script.push_str(&cargo_package_exports(
+        unit,
+        prepared.package_metadata(index)?,
+    ));
     script.push_str("build_script_rustdoc_args=()\n");
     script.push_str("doctest_build_args=()\n");
     script.push_str("doctest_runtime_library_paths=()\n");
@@ -2908,35 +3194,7 @@ fn render_doctest_command(
         push_rustdoc_arg(&mut script, platform);
     }
     append_doctest_builder_args(&mut script, graph, prepared, index, mode);
-    for dep_index in &prepared.transitive_unit_deps[index] {
-        let dep = &graph.units[*dep_index];
-        if dep.is_bin() {
-            continue;
-        }
-        writeln!(
-            script,
-            "rustdoc_args+=( -L \"dependency=${{units.{}}}/lib\" )",
-            nix_attr(&prepared.names[*dep_index])
-        )?;
-    }
-    writeln!(script, "rustdoc_args+=( -L \"dependency={unit_ref}/lib\" )")?;
-    writeln!(
-        script,
-        "rustdoc_args+=( --extern \"{}=$(cat {unit_ref}/nix-support/extern-path)\" )",
-        unit.target.name.replace('-', "_")
-    )?;
-    for dependency in &unit.dependencies {
-        let dep_unit = &graph.units[dependency.index];
-        if dep_unit.is_run_custom_build() || dep_unit.is_bin() {
-            continue;
-        }
-        writeln!(
-            script,
-            "rustdoc_args+=( --extern \"{}=$(cat ${{units.{}}}/nix-support/extern-path)\" )",
-            dependency.extern_crate_name,
-            nix_attr(&prepared.names[dependency.index])
-        )?;
-    }
+    append_doctest_dependencies(&mut script, graph, prepared, index, &unit_ref)?;
     writeln!(
         script,
         "rustdoc_args+=( {} )",
@@ -2989,6 +3247,10 @@ fn append_doctest_builder_args(
     if let Some(run_index) = unit_build_script_run(graph, index) {
         let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
         append_doctest_build_script_flag_reader(script, &run_ref);
+    }
+    for run_index in dependency_link_search_runs(graph, index) {
+        let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
+        append_doctest_dependency_link_search_reader(script, &run_ref);
     }
 
     script.push_str("rustdoc_args+=( \"''${build_script_rustdoc_args[@]}\" )\n");
@@ -3056,6 +3318,14 @@ fn append_doctest_build_script_flag_reader(script: &mut String, run_ref: &str) {
         "if [ -f {quoted_run_ref}/rustc-env ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && export \"$line\"\n  done < {quoted_run_ref}/rustc-env\nfi",
     );
     let _ = writeln!(script, "export OUT_DIR={quoted_run_ref}/out-dir\n");
+}
+
+fn append_doctest_dependency_link_search_reader(script: &mut String, run_ref: &str) {
+    let quoted_run_ref = format!("\"{run_ref}\"");
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/rustc-link-search ]; then\n  while IFS= read -r transitive_link_search_path; do\n    if [ -n \"$transitive_link_search_path\" ]; then\n      build_script_rustdoc_args+=( '-L' \"$transitive_link_search_path\" )\n      doctest_link_search_path=\"$transitive_link_search_path\"\n      case \"$doctest_link_search_path\" in\n        *=*) doctest_link_search_path=\"''${{doctest_link_search_path#*=}}\" ;;\n      esac\n      case \"$doctest_link_search_path\" in\n        {quoted_run_ref}/out-dir|{quoted_run_ref}/out-dir/*) doctest_runtime_library_paths+=( \"$doctest_link_search_path\" ) ;;\n      esac\n    fi\n  done < {quoted_run_ref}/rustc-link-search\nfi"
+    );
 }
 
 fn append_doctest_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str) {
@@ -3343,6 +3613,31 @@ impl Attrs {
 mod tests {
     use super::*;
 
+    fn cargo_metadata(graph: &UnitGraph) -> CargoMetadata {
+        let packages = graph
+            .units
+            .iter()
+            .map(|unit| {
+                let package = CargoMetadataPackage {
+                    id: unit.pkg_id.clone(),
+                    name: unit.package_name().into_owned(),
+                    manifest_path: crate_root_for_unit(unit).join("Cargo.toml"),
+                    authors: Vec::new(),
+                    description: None,
+                    homepage: None,
+                    repository: None,
+                    license: None,
+                    license_file: None,
+                    rust_version: None,
+                    readme: None,
+                    links: None,
+                };
+                (package.id.clone(), package)
+            })
+            .collect();
+        CargoMetadata { packages }
+    }
+
     fn cargo_lock_sources(packages: &[(&str, &str, &str)]) -> CargoLockSources {
         CargoLockSources {
             packages: packages
@@ -3384,6 +3679,7 @@ mod tests {
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -3392,6 +3688,23 @@ mod tests {
         )
         .unwrap_err()
         .to_string()
+    }
+
+    fn render_graph(graph: &UnitGraph, workspace_root: PathBuf) -> String {
+        render_units_nix(
+            graph,
+            &RenderOptions {
+                workspace_root,
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(graph),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap()
     }
 
     #[test]
@@ -3426,6 +3739,7 @@ mod tests {
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: true,
@@ -3517,6 +3831,7 @@ mod tests {
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: false,
@@ -3590,6 +3905,7 @@ mod tests {
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: false,
@@ -3670,6 +3986,7 @@ mod tests {
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: true,
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: false,
@@ -3746,6 +4063,7 @@ mod tests {
                 "1.0.0",
                 "registry+https://github.com/rust-lang/crates.io-index",
             )]),
+            cargo_metadata: cargo_metadata(&graph),
             content_addressed: false,
             toolchain_id: None,
             deny_unused_crate_dependencies: false,
@@ -3824,6 +4142,7 @@ mod tests {
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -3876,6 +4195,7 @@ mod tests {
                     "1.0.0",
                     "registry+https://github.com/rust-lang/crates.io-index",
                 )]),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -3925,6 +4245,7 @@ mod tests {
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4062,19 +4383,7 @@ version = "0.1.0"
             vec![("dag-runner".to_string(), 0)]
         );
 
-        let rendered = render_units_nix(
-            &graph,
-            &RenderOptions {
-                workspace_root: workspace.path().to_path_buf(),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap();
+        let rendered = render_graph(&graph, workspace.path().to_path_buf());
 
         // The build unit (rustc) and its sibling clippy unit each set
         // CARGO_BIN_EXE_<name> for integration tests because clippy needs the
@@ -4138,6 +4447,7 @@ version = "0.1.0"
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4210,6 +4520,7 @@ version = "0.1.0"
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4270,6 +4581,7 @@ version = "0.1.0"
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4357,13 +4669,13 @@ version = "0.1.0"
           "roots": [2]
         }))
         .unwrap();
-
         let rendered = render_units_nix(
             &graph,
             &RenderOptions {
                 workspace_root: workspace.path().to_path_buf(),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4494,6 +4806,7 @@ version = "0.1.0"
                     "1.0.0",
                     "registry+https://github.com/rust-lang/crates.io-index",
                 )]),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: true,
@@ -4576,6 +4889,7 @@ version = "0.1.0"
                     "1.0.15",
                     "registry+https://github.com/rust-lang/crates.io-index",
                 )]),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4651,6 +4965,7 @@ version = "0.1.0"
                     ),
                     ("itoa", "1.0.15", "sparse+https://example.invalid/index/"),
                 ]),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4701,6 +5016,7 @@ version = "0.1.0"
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: Some(PathBuf::from("/vendor")),
                 cargo_lock_sources: cargo_lock_sources(&[("snafu", "0.9.0", locked_source)]),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4749,6 +5065,7 @@ version = "0.1.0"
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: Some(PathBuf::from("/vendor")),
                 cargo_lock_sources: cargo_lock_sources(&[("rtnetlink", "0.20.0", locked_source)]),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4815,6 +5132,7 @@ version = "0.1.0"
                 workspace_root: workspace.clone(),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4900,6 +5218,7 @@ const CRLF: &str = include_str!("../../testdata/crlf.toml");
                 workspace_root: workspace.clone(),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -4984,6 +5303,7 @@ version = "4.6.1"
                     "4.6.1",
                     "registry+https://github.com/rust-lang/crates.io-index",
                 )]),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -5084,6 +5404,7 @@ version = "4.6.1"
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: true,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -5132,6 +5453,7 @@ version = "4.6.1"
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: true,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -5178,6 +5500,7 @@ version = "4.6.1"
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -5257,6 +5580,7 @@ version = "4.6.1"
                 workspace_root: PathBuf::from("/workspace"),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -5269,7 +5593,7 @@ version = "4.6.1"
         assert!(rendered.contains("${renderExtraRustcArgs \"host\" null}"));
         assert!(rendered.contains("${renderExtraRustcArgs \"hello\" \"x86_64-apple-darwin\"}"));
         assert!(rendered.contains("${renderExtraLinkRustcArgs \"x86_64-apple-darwin\"}"));
-        assert!(!rendered.contains("${renderExtraLinkRustcArgs null}"));
+        assert!(rendered.contains("${renderExtraLinkRustcArgs null}"));
         assert!(!rendered.contains("${renderExtraRustcArgs \"build-helper\" null}"));
     }
 
@@ -5283,41 +5607,299 @@ version = "4.6.1"
     }
 
     #[test]
-    fn cargo_manifest_links_reads_dotted_package_keys() {
-        let links = cargo_manifest_package_links(
-            r#"
-package.name = "native"
-package.version = "0.1.0"
-package.links = "native_ffi"
-"#,
+    fn cargo_metadata_reads_resolved_package_fields() {
+        let metadata = CargoMetadata::parse(
+            r#"{
+              "packages": [{
+                "id": "path+file:///workspace#native@0.1.0",
+                "name": "native",
+                "manifest_path": "/workspace/Cargo.toml",
+                "authors": ["Native Team", "Build Crew"],
+                "readme": "../README.md",
+                "links": "native_ffi"
+              }]
+            }"#,
         )
         .unwrap();
+        let package = &metadata.packages["path+file:///workspace#native@0.1.0"];
 
-        assert_eq!(links.as_deref(), Some("native_ffi"));
+        assert_eq!(package.authors, ["Native Team", "Build Crew"]);
+        assert_eq!(package.readme.as_deref(), Some("../README.md"));
+        assert_eq!(package.links.as_deref(), Some("native_ffi"));
     }
 
     #[test]
-    fn cargo_manifest_links_rejects_non_string_values() {
-        let err = cargo_manifest_package_links(
-            r#"
-[package]
-name = "native"
-version = "0.1.0"
-links = 5
-"#,
+    fn cargo_metadata_rejects_non_string_links() {
+        let err = CargoMetadata::parse(
+            r#"{
+              "packages": [{
+                "id": "path+file:///workspace#native@0.1.0",
+                "name": "native",
+                "manifest_path": "/workspace/Cargo.toml",
+                "links": 5
+              }]
+            }"#,
         )
         .unwrap_err()
         .to_string();
 
         assert!(
             err.contains("invalid type"),
-            "expected TOML type error, got: {err}"
+            "expected JSON type error, got: {err}"
         );
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
-    fn build_script_runs_receive_cargo_target_cfg_and_feature_environment() {
+    fn resolved_readme_metadata_controls_exports_and_source_scope() {
+        let graph: UnitGraph = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "units": [
+                {
+                    "pkg_id": "path+file:///workspace/crates/inherited#inherited@0.1.0",
+                    "target": {
+                        "kind": ["custom-build"],
+                        "crate_types": ["bin"],
+                        "name": "build-script-build",
+                        "src_path": "/workspace/crates/inherited/build.rs",
+                        "edition": "2024"
+                    },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": []
+                },
+                {
+                    "pkg_id": "path+file:///workspace/crates/inherited#inherited@0.1.0",
+                    "target": {
+                        "kind": ["custom-build"],
+                        "crate_types": ["bin"],
+                        "name": "build-script-build",
+                        "src_path": "/workspace/crates/inherited/build.rs",
+                        "edition": "2024"
+                    },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "run-custom-build",
+                    "dependencies": [
+                        { "index": 0, "extern_crate_name": "build_script_build" }
+                    ]
+                },
+                {
+                    "pkg_id": "path+file:///workspace/crates/default#default@0.1.0",
+                    "target": {
+                        "kind": ["lib"],
+                        "crate_types": ["lib"],
+                        "name": "default",
+                        "src_path": "/workspace/crates/default/src/lib.rs",
+                        "edition": "2024"
+                    },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": []
+                }
+            ],
+            "roots": [2]
+        }))
+        .unwrap();
+        let mut metadata = cargo_metadata(&graph);
+        metadata
+            .packages
+            .get_mut(&graph.units[0].pkg_id)
+            .unwrap()
+            .readme = Some("../../README.md".to_string());
+        metadata
+            .packages
+            .get_mut(&graph.units[2].pkg_id)
+            .unwrap()
+            .readme = Some("README.md".to_string());
+        let options = RenderOptions {
+            workspace_root: PathBuf::from("/workspace"),
+            vendor_root: None,
+            cargo_lock_sources: CargoLockSources::default(),
+            cargo_metadata: metadata,
+            content_addressed: false,
+            toolchain_id: None,
+            deny_unused_crate_dependencies: false,
+            deny_panics: false,
+        };
+        let prepared = prepare_graph(&graph, &options).unwrap();
+        let inherited = prepared.source_entry(1).unwrap();
+        let default = prepared.source_entry(2).unwrap();
+
+        assert_eq!(inherited.base, SourceBase::WorkspaceClosure);
+        assert_eq!(
+            inherited.include_relatives,
+            ["README.md", "crates/inherited"]
+        );
+        assert_eq!(default.base, SourceBase::Workspace);
+
+        let rendered = render_units_nix(&graph, &options).unwrap();
+        assert!(rendered.contains("export CARGO_PKG_README=\"../../README.md\""));
+        assert!(rendered.contains("export CARGO_PKG_README=\"README.md\""));
+        assert!(rendered.contains("cp -RL \"$src\"/. \"$out\"/"));
+        assert!(rendered.contains("build_script_manifest_dir=$out/'crates/inherited'"));
+        assert!(rendered.contains("scope = \"closure\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_readme_symlink_target_is_in_source_closure() {
+        use std::os::unix::fs::symlink;
+
+        let workspace_root = std::env::temp_dir().join(format!(
+            "nix-cargo-unit-readme-symlink-{}",
+            std::process::id()
+        ));
+        let package_root = workspace_root.join("crates/example");
+        let docs_root = workspace_root.join("docs");
+        let _ = fs::remove_dir_all(&workspace_root);
+        fs::create_dir_all(&package_root).unwrap();
+        fs::create_dir_all(&docs_root).unwrap();
+        fs::write(docs_root.join("README.md"), "shared readme").unwrap();
+        symlink("docs/README.md", workspace_root.join("README.md")).unwrap();
+
+        let metadata = CargoMetadataPackage {
+            id: "path+file:///workspace/crates/example#example@0.1.0".to_string(),
+            name: "example".to_string(),
+            manifest_path: package_root.join("Cargo.toml"),
+            authors: Vec::new(),
+            description: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            license_file: None,
+            rust_version: None,
+            readme: Some("../../README.md".to_string()),
+            links: None,
+        };
+
+        let included = source_closure_relatives(
+            &package_root,
+            &workspace_root,
+            &metadata,
+            ExternalSymlinkPolicy::Reject,
+        )
+        .unwrap();
+        assert_eq!(included, ["README.md", "crates/example", "docs"]);
+
+        fs::remove_dir_all(workspace_root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_path_rejects_intermediate_symlink_outside_source_boundary() {
+        use std::os::unix::fs::symlink;
+
+        let workspace_root = std::env::temp_dir().join(format!(
+            "nix-cargo-unit-readme-boundary-{}",
+            std::process::id()
+        ));
+        let outside_root = workspace_root.with_extension("outside");
+        let package_root = workspace_root.join("crates/example");
+        let _ = fs::remove_dir_all(&workspace_root);
+        let _ = fs::remove_dir_all(&outside_root);
+        fs::create_dir_all(&package_root).unwrap();
+        fs::create_dir_all(&outside_root).unwrap();
+        fs::write(outside_root.join("README.md"), "outside readme").unwrap();
+        symlink(&outside_root, workspace_root.join("docs")).unwrap();
+
+        let metadata = CargoMetadataPackage {
+            id: "path+file:///workspace/crates/example#example@0.1.0".to_string(),
+            name: "example".to_string(),
+            manifest_path: package_root.join("Cargo.toml"),
+            authors: Vec::new(),
+            description: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            license_file: None,
+            rust_version: None,
+            readme: Some("../../docs/README.md".to_string()),
+            links: None,
+        };
+
+        let error = source_closure_relatives(
+            &package_root,
+            &workspace_root,
+            &metadata,
+            ExternalSymlinkPolicy::Reject,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("resolves outside source boundary"),
+            "expected source boundary error, got: {error}"
+        );
+
+        fs::remove_dir_all(workspace_root).unwrap();
+        fs::remove_dir_all(outside_root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vendor_metadata_path_preserves_store_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let vendor_root = std::env::temp_dir().join(format!(
+            "nix-cargo-unit-vendor-readme-{}",
+            std::process::id()
+        ));
+        let source_root = vendor_root.with_extension("source");
+        let crate_root = vendor_root.join("gimli-0.32.3");
+        let _ = fs::remove_dir_all(&vendor_root);
+        let _ = fs::remove_dir_all(&source_root);
+        fs::create_dir_all(&vendor_root).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        fs::write(source_root.join("README.md"), "vendored readme").unwrap();
+        symlink(&source_root, &crate_root).unwrap();
+
+        let metadata = CargoMetadataPackage {
+            id: "registry+https://github.com/rust-lang/crates.io-index#gimli@0.32.3".to_string(),
+            name: "gimli".to_string(),
+            manifest_path: crate_root.join("Cargo.toml"),
+            authors: Vec::new(),
+            description: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            license_file: None,
+            rust_version: None,
+            readme: Some("README.md".to_string()),
+            links: None,
+        };
+
+        let included = source_closure_relatives(
+            &crate_root,
+            &vendor_root,
+            &metadata,
+            ExternalSymlinkPolicy::PreserveStoreTarget,
+        )
+        .unwrap();
+        assert_eq!(included, ["gimli-0.32.3"]);
+
+        fs::remove_dir_all(vendor_root).unwrap();
+        fs::remove_dir_all(source_root).unwrap();
+    }
+
+    #[test]
+    fn readme_metadata_is_shell_and_nix_escaped() {
+        let graph = single_library_graph(
+            "path+file:///workspace#escaped@0.1.0",
+            "escaped",
+            "/workspace/src/lib.rs",
+            "2024",
+        );
+        let mut metadata = cargo_metadata(&graph);
+        let readme = "README-$\"`${value}''.md";
+        let package = metadata.packages.get_mut(&graph.units[0].pkg_id).unwrap();
+        package.readme = Some(readme.to_string());
+
+        let exports = cargo_package_exports(&graph.units[0], package);
+        assert!(exports.contains(&format!(
+            "export CARGO_PKG_README={}",
+            shell_env_value(readme)
+        )));
+    }
+
+    fn build_script_environment_fixture() -> (PathBuf, UnitGraph, CargoMetadata) {
         let workspace = std::env::temp_dir().join(format!(
             "nix-cargo-unit-render-test-{}",
             std::time::SystemTime::now()
@@ -5337,6 +5919,7 @@ repository = "https://example.com/native.git"
 license = "MIT"
 license-file = "LICENSE"
 rust-version = "1.85"
+readme = "README.md"
 links = "native_ffi"
 "#,
         )
@@ -5345,7 +5928,7 @@ links = "native_ffi"
         fs::write(&build_rs, "fn main() {}\n").unwrap();
         let build_rs_path = build_rs.to_string_lossy();
         let pkg_id = format!("path+file://{}#native@0.1.0-alpha.1", workspace.display());
-        let graph: UnitGraph = serde_json::from_value(serde_json::json!({
+        let graph = serde_json::from_value(serde_json::json!({
             "version": 1,
             "units": [
                 {
@@ -5384,12 +5967,32 @@ links = "native_ffi"
         }))
         .unwrap();
 
+        let mut metadata = cargo_metadata(&graph);
+        let package = metadata.packages.get_mut(&graph.units[0].pkg_id).unwrap();
+        package.authors = vec!["Native Team".to_string(), "Build Crew".to_string()];
+        package.description = Some("Native FFI fixtures".to_string());
+        package.homepage = Some("https://example.com/native".to_string());
+        package.repository = Some("https://example.com/native.git".to_string());
+        package.license = Some("MIT".to_string());
+        package.license_file = Some("LICENSE".to_string());
+        package.rust_version = Some("1.85".to_string());
+        package.readme = Some("README.md".to_string());
+        package.links = Some("native_ffi".to_string());
+
+        (workspace, graph, metadata)
+    }
+
+    #[test]
+    fn build_script_runs_receive_cargo_target_cfg_and_feature_environment() {
+        let (workspace, graph, cargo_metadata) = build_script_environment_fixture();
+
         let rendered = render_units_nix(
             &graph,
             &RenderOptions {
                 workspace_root: workspace.clone(),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata,
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -5409,6 +6012,19 @@ links = "native_ffi"
         assert!(rendered.contains("export CARGO_PKG_LICENSE=\"MIT\""));
         assert!(rendered.contains("export CARGO_PKG_LICENSE_FILE=\"LICENSE\""));
         assert!(rendered.contains("export CARGO_PKG_RUST_VERSION=\"1.85\""));
+        assert!(rendered.contains("export CARGO_PKG_README=\"README.md\""));
+        assert!(
+            rendered.contains("build_script_out_dir=$NIX_BUILD_TOP/build-script-out"),
+            "build-script OUT_DIR must belong to the run derivation's build user"
+        );
+        assert!(
+            rendered.contains("export CARGO_TARGET_DIR=$build_script_out_dir/cargo-target"),
+            "nested Cargo artifacts must be serialized with build-script outputs"
+        );
+        assert!(
+            rendered.contains("cp -RL \"$build_script_out_dir\"/. \"$out/out-dir\"/"),
+            "serialized build-script output must dereference scratch symlinks"
+        );
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"native_ffi\""));
         assert!(rendered.contains("export RUSTDOC=\"$(type -p rustdoc)\""));
         assert!(rendered.contains("export CARGO_FEATURE_ARCH=1"));
@@ -5485,6 +6101,12 @@ links = "nested_native"
             "roots": []
         }))
         .unwrap();
+        let mut metadata = cargo_metadata(&graph);
+        metadata
+            .packages
+            .get_mut(&graph.units[0].pkg_id)
+            .unwrap()
+            .links = Some("nested_native".to_string());
 
         let rendered = render_units_nix(
             &graph,
@@ -5492,6 +6114,7 @@ links = "nested_native"
                 workspace_root: workspace.clone(),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: metadata,
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -5634,8 +6257,8 @@ version = "0.1.0"
                 {
                     "pkg_id": app_pkg_id,
                     "target": {
-                        "kind": ["lib"],
-                        "crate_types": ["lib"],
+                        "kind": ["bin"],
+                        "crate_types": ["bin"],
                         "name": "app",
                         "src_path": app_lib_rs_path,
                         "edition": "2024"
@@ -5650,6 +6273,12 @@ version = "0.1.0"
             "roots": []
         }))
         .unwrap();
+        let mut metadata = cargo_metadata(&graph);
+        metadata
+            .packages
+            .get_mut(&graph.units[0].pkg_id)
+            .unwrap()
+            .links = Some("native-ffi".to_string());
 
         let rendered = render_units_nix(
             &graph,
@@ -5657,6 +6286,7 @@ version = "0.1.0"
                 workspace_root: workspace.clone(),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: metadata,
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
@@ -5679,7 +6309,130 @@ version = "0.1.0"
         assert!(rendered.contains(
             "rustc_env+=( \"DEP_NATIVE_FFI_$cargo_metadata_key=$cargo_metadata_value\" )"
         ));
+        assert!(rendered.contains("rustc_args+=( -L \"$transitive_link_search_path\" )"));
+        assert!(rendered.contains("native-sys-build-script-run-0.1.0-"));
         fs::remove_dir_all(workspace).unwrap();
+    }
+
+    fn native_link_graph() -> UnitGraph {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "units": [
+                {
+                    "pkg_id": "path+file:///workspace/target-sys#target-sys@0.1.0",
+                    "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/target-sys/build.rs", "edition": "2024" },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": []
+                },
+                {
+                    "pkg_id": "path+file:///workspace/target-sys#target-sys@0.1.0",
+                    "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/target-sys/build.rs", "edition": "2024" },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "run-custom-build",
+                    "dependencies": [{ "index": 0, "extern_crate_name": "build_script_build" }]
+                },
+                {
+                    "pkg_id": "path+file:///workspace/target-sys#target-sys@0.1.0",
+                    "target": { "kind": ["lib"], "crate_types": ["lib"], "name": "target_sys", "src_path": "/workspace/target-sys/src/lib.rs", "edition": "2024" },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [{ "index": 1, "extern_crate_name": "build_script_build" }]
+                },
+                {
+                    "pkg_id": "path+file:///workspace/host-sys#host-sys@0.1.0",
+                    "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/host-sys/build.rs", "edition": "2024" },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": []
+                },
+                {
+                    "pkg_id": "path+file:///workspace/host-sys#host-sys@0.1.0",
+                    "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/host-sys/build.rs", "edition": "2024" },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "run-custom-build",
+                    "dependencies": [{ "index": 3, "extern_crate_name": "build_script_build" }]
+                },
+                {
+                    "pkg_id": "path+file:///workspace/host-sys#host-sys@0.1.0",
+                    "target": { "kind": ["lib"], "crate_types": ["lib"], "name": "host_sys", "src_path": "/workspace/host-sys/src/lib.rs", "edition": "2024" },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [{ "index": 4, "extern_crate_name": "build_script_build" }]
+                },
+                {
+                    "pkg_id": "path+file:///workspace/macros#macros@0.1.0",
+                    "target": { "kind": ["proc-macro"], "crate_types": ["proc-macro"], "name": "macros", "src_path": "/workspace/macros/src/lib.rs", "edition": "2024" },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [{ "index": 5, "extern_crate_name": "host_sys" }]
+                },
+                {
+                    "pkg_id": "path+file:///workspace/app#app@0.1.0",
+                    "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/app/build.rs", "edition": "2024" },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [{ "index": 2, "extern_crate_name": "target_sys" }]
+                },
+                {
+                    "pkg_id": "path+file:///workspace/app#app@0.1.0",
+                    "target": { "kind": ["bin"], "crate_types": ["bin"], "name": "app", "src_path": "/workspace/app/src/main.rs", "edition": "2024" },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [
+                        { "index": 2, "extern_crate_name": "target_sys" },
+                        { "index": 6, "extern_crate_name": "macros" }
+                    ]
+                },
+                {
+                    "pkg_id": "path+file:///workspace/app#app@0.1.0",
+                    "target": { "kind": ["lib"], "crate_types": ["lib"], "name": "app", "src_path": "/workspace/app/src/lib.rs", "edition": "2024", "doctest": true },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [
+                        { "index": 2, "extern_crate_name": "target_sys" },
+                        { "index": 6, "extern_crate_name": "macros" }
+                    ]
+                }
+            ],
+            "roots": [8, 9]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn native_link_search_paths_follow_the_link_graph() {
+        let graph = native_link_graph();
+        let options = RenderOptions {
+            workspace_root: PathBuf::from("/workspace"),
+            vendor_root: None,
+            cargo_lock_sources: CargoLockSources::default(),
+            cargo_metadata: cargo_metadata(&graph),
+            content_addressed: false,
+            toolchain_id: None,
+            deny_unused_crate_dependencies: false,
+            deny_panics: false,
+        };
+        let prepared = prepare_graph(&graph, &options).unwrap();
+
+        assert_eq!(dependency_link_search_runs(&graph, 6), BTreeSet::from([4]));
+        assert_eq!(dependency_link_search_runs(&graph, 7), BTreeSet::from([1]));
+        assert_eq!(dependency_link_search_runs(&graph, 8), BTreeSet::from([1]));
+        assert_eq!(dependency_link_search_runs(&graph, 9), BTreeSet::from([1]));
+
+        let build_script_compile =
+            render_driver_build_phase(&graph, &options, &prepared, 7, Driver::Rustc).unwrap();
+        let app = render_driver_build_phase(&graph, &options, &prepared, 8, Driver::Rustc).unwrap();
+        let doctest =
+            render_doctest_command(&graph, &prepared, 9, DoctestCommandMode::RunAll).unwrap();
+        let target_run = &prepared.names[1];
+        let host_run = &prepared.names[4];
+
+        assert!(build_script_compile.contains(target_run));
+        assert!(app.contains(target_run));
+        assert!(!app.contains(host_run));
+        assert!(doctest.contains(target_run));
+        assert!(!doctest.contains(host_run));
     }
 
     #[test]
@@ -5735,6 +6488,7 @@ version = "0.1.0"
                 workspace_root: workspace.clone(),
                 vendor_root: None,
                 cargo_lock_sources: CargoLockSources::default(),
+                cargo_metadata: cargo_metadata(&graph),
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,

@@ -307,6 +307,7 @@
       pkgs.runCommand "cargo-unit-graph.json"
       (
         {
+          outputs = [ "out" "metadata" ];
           nativeBuildInputs =
             [
               args.rustToolchain
@@ -343,6 +344,9 @@
           wait "$pid"
         done
 
+        # The renderer needs metadata for every unit any cargoTargets entry can
+        # activate, including optional dependencies selected by feature flags.
+        cargo metadata --format-version 1 --all-features --frozen --offline > "$metadata"
         nix-cargo-unit merge ${lib.concatStringsSep " " (lib.genList unitGraphFile (length cargoTargets))} > "$out"
       '';
 
@@ -365,6 +369,7 @@
       {
         nativeBuildInputs = [nixCargoUnit];
         cargoLockForRender = context.cargoLockPath;
+        cargoMetadataForRender = unitGraphJson.metadata;
       }
       ''
         nix-cargo-unit render \
@@ -373,6 +378,7 @@
           --toolchain-id ${escapeShellArg workspaceToolchainId} \
           ${lib.escapeShellArgs extraFlags} \
           --cargo-lock "$cargoLockForRender" \
+          --cargo-metadata "$cargoMetadataForRender" \
           < ${unitGraphJson} \
           > "$out"
       '';

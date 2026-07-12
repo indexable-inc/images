@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use clap::Parser as _;
 use color_eyre::eyre::WrapErr as _;
 use model::UnitGraph;
-use render::{CargoLockSources, RenderOptions, render_units_nix};
+use render::{CargoLockSources, CargoMetadata, RenderOptions, render_units_nix};
 
 #[derive(Debug, clap::Parser)]
 #[command(
@@ -111,6 +111,10 @@ struct RenderArgs {
     /// Cargo.lock used to resolve exact registry, sparse, and git source identities.
     #[arg(long, value_name = "PATH")]
     cargo_lock: PathBuf,
+
+    /// Cargo metadata JSON for resolved package fields and manifest paths.
+    #[arg(long, value_name = "PATH")]
+    cargo_metadata: PathBuf,
 
     /// Emit CA-derivation attributes on generated units.
     #[arg(long)]
@@ -295,6 +299,7 @@ fn render(args: RenderArgs) -> color_eyre::Result<()> {
     let graph: UnitGraph =
         serde_json::from_str(&input).wrap_err("parsing Cargo unit graph JSON")?;
     let cargo_lock_sources = CargoLockSources::from_path(&args.cargo_lock)?;
+    let cargo_metadata = CargoMetadata::from_path(&args.cargo_metadata)?;
 
     let rendered = render_units_nix(
         &graph,
@@ -302,6 +307,7 @@ fn render(args: RenderArgs) -> color_eyre::Result<()> {
             workspace_root: args.workspace_root,
             vendor_root: args.vendor_root,
             cargo_lock_sources,
+            cargo_metadata,
             content_addressed: args.content_addressed,
             toolchain_id: args.toolchain_id,
             deny_unused_crate_dependencies: args.deny_unused_crate_dependencies,
