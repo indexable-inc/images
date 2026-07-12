@@ -64,15 +64,18 @@
   }
 
   /// A drag on the splitter after visible child `position` shifts size between
-  /// that child and its next stored sibling. Deltas arrive in pixels; the
-  /// state layer works in fractions of the whole split, so scale by the
-  /// currently distributed share (hidden siblings keep their stored
+  /// that child and the next *visible* sibling -- the two panes the rendered
+  /// splitter actually sits between, which are not adjacent in the stored
+  /// children when a hidden sibling lies between them. Deltas arrive in
+  /// pixels; the state layer works in fractions of the whole split, so scale
+  /// by the currently distributed share (hidden siblings keep their stored
   /// fractions and regain them when they reappear).
   function dragBetween(position: number, deltaPx: number): void {
     const left = visible.at(position);
-    if (left === undefined) return;
+    const right = visible.at(position + 1);
+    if (left === undefined || right === undefined) return;
     const fraction = (deltaPx / extentPx()) * expandedShare;
-    dock.state.resizeSplit(split, left.index, fraction);
+    dock.state.resizeSplit(split, left.index, right.index, fraction);
   }
 
   function keyStep(position: number, sign: -1 | 1, big: boolean): void {
