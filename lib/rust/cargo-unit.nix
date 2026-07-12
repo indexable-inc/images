@@ -143,9 +143,6 @@
   precedence (`target.<triple>.rustflags` over `build.rustflags`); `cfg(...)`
   target sections and the `[env]` table are not honored. Default off.
 
-  `packageSourceIncludes.<package> = [ "path" ];` adds workspace-relative
-  paths required by compile-time macros without widening every package source.
-
   Returns the generated attrset with `sourceAudit`, `units`, `roots`, `checkedRoots`,
   `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
   `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
@@ -310,6 +307,7 @@
       pkgs.runCommand "cargo-unit-graph.json"
       (
         {
+          outputs = [ "out" "metadata" ];
           nativeBuildInputs =
             [
               args.rustToolchain
@@ -346,6 +344,9 @@
           wait "$pid"
         done
 
+        # The renderer needs metadata for every unit any cargoTargets entry can
+        # activate, including optional dependencies selected by feature flags.
+        cargo metadata --format-version 1 --all-features --frozen --offline > "$metadata"
         nix-cargo-unit merge ${lib.concatStringsSep " " (lib.genList unitGraphFile (length cargoTargets))} > "$out"
       '';
 
@@ -368,6 +369,7 @@
       {
         nativeBuildInputs = [nixCargoUnit];
         cargoLockForRender = context.cargoLockPath;
+        cargoMetadataForRender = unitGraphJson.metadata;
       }
       ''
         nix-cargo-unit render \
@@ -376,6 +378,7 @@
           --toolchain-id ${escapeShellArg workspaceToolchainId} \
           ${lib.escapeShellArgs extraFlags} \
           --cargo-lock "$cargoLockForRender" \
+          --cargo-metadata "$cargoMetadataForRender" \
           < ${unitGraphJson} \
           > "$out"
       '';
@@ -443,7 +446,6 @@
             packageTestEnv
             ;
           packageBuildEnv = rawArgs.packageBuildEnv or {};
-          packageSourceIncludes = rawArgs.packageSourceIncludes or {};
           packageRustcArgs = rawArgs.packageRustcArgs or {};
           inherit extraRustcArgsForPlatform extraLinkRustcArgsForPlatform;
           # Manifest-derived flags come first so per-call `policy.clippy`

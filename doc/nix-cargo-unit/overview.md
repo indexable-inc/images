@@ -103,7 +103,9 @@ in [internals](internals.md).
   `inRustWorkspace` (it is its own workspace).
 - **Consumed by** `lib/rust/cargo-unit.nix`: `buildWorkspace` runs
   `cargo ... --unit-graph` per `cargoTargets` entry, pipes the graphs through
-  `nix-cargo-unit merge`, then `nix-cargo-unit render --cargo-lock ...`
+  `nix-cargo-unit merge`, records Cargo's resolved package model with
+  `cargo metadata`, then calls `nix-cargo-unit render --cargo-lock ...
+  --cargo-metadata ...`
   (two IFD stages), imports the resulting `units.nix`, and exposes the result as
   `ix.cargoUnit` / `ix.rustWorkspace.units`. The `--deny-panics` check calls back
   into this same package as the `scan-panics` scanner
@@ -113,7 +115,7 @@ in [internals](internals.md).
 
 `clap` (CLI), `color-eyre` (errors), `object` (rlib/object
 parsing for the panic scan), `serde`/`serde_json` (unit graph), `sha2` (identity
-hashing), `toml` (`Cargo.lock` and manifests), `url` (package-id parsing).
+hashing), `toml` (`Cargo.lock`), `url` (package-id parsing).
 
 ## Module map
 

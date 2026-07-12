@@ -53,6 +53,9 @@
       lib.fileset.intersection (lib.fileset.gitTracked packagePath) (
         lib.fileset.unions [
           (packagePath + "/Cargo.toml")
+          (lib.fileset.maybeMissing (packagePath + "/README"))
+          (lib.fileset.maybeMissing (packagePath + "/README.md"))
+          (lib.fileset.maybeMissing (packagePath + "/README.txt"))
           (packagePath + "/src")
           (lib.fileset.maybeMissing (packagePath + "/benches"))
           (lib.fileset.maybeMissing (packagePath + "/build.rs"))
