@@ -400,9 +400,7 @@ fn try_handle(state: &State, request: Request) -> Result<Response> {
         }
         Request::SetControl { control, value } => {
             ensure_control_index(control)?;
-            let at_frame = nonnegative_frame(
-                state.node.clock().frame_at(state.time.now_micros(), state.sample_rate),
-            );
+            let at_frame = nonnegative_frame(synchronized_frame_now(state)?);
             state
                 .score
                 .lock()
@@ -444,12 +442,16 @@ fn nonnegative_frame(frame: i64) -> u64 {
 
 /// The shared frame one second from now; the default publish switch point.
 fn one_second_out(state: &State) -> Result<u64> {
+    let now = synchronized_frame_now(state)?;
+    Ok((now + i64::from(state.sample_rate)).max(0).unsigned_abs())
+}
+
+fn synchronized_frame_now(state: &State) -> Result<i64> {
     let clock = state.node.clock();
     if state.pending_session_clock == Some(clock) {
-        anyhow::bail!("session clock is not synchronized yet; retry or pass --at explicitly");
+        anyhow::bail!("session clock is not synchronized yet; retry when synchronization completes");
     }
-    let now = clock.frame_at(state.time.now_micros(), state.sample_rate);
-    Ok((now + i64::from(state.sample_rate)).max(0).unsigned_abs())
+    Ok(clock.frame_at(state.time.now_micros(), state.sample_rate))
 }
 
 #[cfg(test)]
@@ -578,6 +580,17 @@ mod tests {
         );
         assert!(response.ok);
         assert_eq!(state.score.lock().expect("lock").instrument()?.expect("instrument").at_frame, 123);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn immediate_control_waits_for_a_joined_session_clock() -> Result<()> {
+        let TestState { state, _dir } = test_state_with_pending_clock(true).await?;
+        let response = handle(&state, Request::SetControl { control: 0, value: 0.5 });
+
+        assert!(!response.ok);
+        assert!(response.error.as_deref().is_some_and(|error| error.contains("not synchronized")));
+        assert!(state.score.lock().expect("lock").controls_at(0).is_empty());
         Ok(())
     }
 
