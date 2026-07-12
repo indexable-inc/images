@@ -1065,6 +1065,7 @@ fn render_driver_build_phase(
         let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
         append_build_script_flag_reader(&mut script, &run_ref, unit);
     }
+    append_transitive_link_search_paths(&mut script, graph, prepared, index);
     append_direct_dependency_metadata_exports(&mut script, graph, prepared, index)?;
 
     push_rustc_args(&mut script, unit, &prepared.hashes[index], driver);
@@ -1442,6 +1443,30 @@ fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Un
         script,
         "compile_out_dir=$(mktemp -d)\nif [ -d {quoted_run_ref}/out-dir ]; then\n  cp -R {quoted_run_ref}/out-dir/. \"$compile_out_dir\"/\nfi\nrustc_env+=( OUT_DIR=\"$compile_out_dir\" )\n"
     );
+}
+
+fn append_transitive_link_search_paths(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+) {
+    let unit = &graph.units[index];
+    if !unit_links(unit) {
+        return;
+    }
+
+    let dependency_runs: BTreeSet<usize> = prepared.transitive_unit_deps[index]
+        .iter()
+        .filter_map(|dep_index| unit_build_script_run(graph, *dep_index))
+        .collect();
+    for run_index in dependency_runs {
+        let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
+        let _ = writeln!(
+            script,
+            "if [ -f \"{run_ref}/rustc-link-search\" ]; then\n  while IFS= read -r transitive_link_search_path; do\n    [ -n \"$transitive_link_search_path\" ] && rustc_args+=( -L \"$transitive_link_search_path\" )\n  done < \"{run_ref}/rustc-link-search\"\nfi"
+        );
+    }
 }
 
 fn append_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str) {
@@ -5675,8 +5700,8 @@ version = "0.1.0"
                 {
                     "pkg_id": app_pkg_id,
                     "target": {
-                        "kind": ["lib"],
-                        "crate_types": ["lib"],
+                        "kind": ["bin"],
+                        "crate_types": ["bin"],
                         "name": "app",
                         "src_path": app_lib_rs_path,
                         "edition": "2024"
@@ -5720,6 +5745,10 @@ version = "0.1.0"
         assert!(rendered.contains(
             "rustc_env+=( \"DEP_NATIVE_FFI_$cargo_metadata_key=$cargo_metadata_value\" )"
         ));
+        assert!(rendered.contains(
+            "rustc_args+=( -L \"$transitive_link_search_path\" )"
+        ));
+        assert!(rendered.contains("native-sys-build-script-run-0.1.0-"));
         fs::remove_dir_all(workspace).unwrap();
     }
 
