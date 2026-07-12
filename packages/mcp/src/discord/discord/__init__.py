@@ -166,6 +166,16 @@ _WATCHES_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "expires_at": pl.Float64,
 }
 
+
+def _frame(
+    rows: list[dict[str, Any]], schema: dict[str, pl.DataType | type[pl.DataType]]
+) -> pl.DataFrame:
+    """``rows`` as a polars frame with the given fixed schema -- typed even when
+    empty, columns in schema order. The one tail every listing function shares."""
+    if not rows:
+        return pl.DataFrame(schema=schema)
+    return pl.DataFrame(rows, schema_overrides=schema).select(list(schema))
+
 # --- channel watching --------------------------------------------------------
 #
 # Every send() registers its channel here (opt out with watch=False); a single
@@ -223,9 +233,7 @@ def _resolve_notify() -> Callable[..., Awaitable[None]] | None:
         from ix_notebook_mcp import runtime  # imported here: optional, kernel-only dependency
     except ImportError:
         return None
-    if getattr(runtime, "_store", None) is None:
-        return None
-    return runtime.notify
+    return None if getattr(runtime, "_store", None) is None else runtime.notify
 
 
 def _self_user(token: str) -> str:
@@ -280,11 +288,14 @@ def _ensure_watcher() -> None:
 async def _watch_loop() -> None:
     global _watcher_task
     try:
-        while _watches:
+        # Sleep-then-poll until the watch table drains; the next register
+        # restarts the loop.
+        while True:
             await asyncio.sleep(_WATCH_POLL_SECONDS)
+            if not _watches:
+                break
             await _poll_watches_once()
     finally:
-        # The loop exits when the watch table drains; the next register restarts it.
         _watcher_task = None
 
 
@@ -447,10 +458,7 @@ def watches() -> pl.DataFrame:
     Columns: ``channel_id``, ``last_seen_id``, ``expires_at`` (unix seconds;
     activity renews it).
     """
-    rows = [dataclasses.asdict(w) for w in _watches.values()]
-    if not rows:
-        return pl.DataFrame(schema=_WATCHES_SCHEMA)
-    return pl.DataFrame(rows, schema_overrides=_WATCHES_SCHEMA).select(list(_WATCHES_SCHEMA))
+    return _frame([dataclasses.asdict(w) for w in _watches.values()], _WATCHES_SCHEMA)
 
 
 class DiscordError(RuntimeError):
@@ -475,14 +483,15 @@ def _token() -> str:
     Resolution order: ``DISCORD_BOT_TOKEN`` env, then ``~/.config/discord/token``
     (written by :func:`login`).
     """
-    if token := find_token(_TOKEN_ENV_VARS, _TOKEN_FILE):
-        return token
-    raise DiscordError(
-        "No Discord bot token is configured for this session. "
-        "Call `discord.login(token)` with the bot's token (Developer Portal "
-        "-> Bot -> Token), set the DISCORD_BOT_TOKEN environment variable, "
-        "or run `discord.status()` to check the current state."
-    )
+    token = find_token(_TOKEN_ENV_VARS, _TOKEN_FILE)
+    if token is None:
+        raise DiscordError(
+            "No Discord bot token is configured for this session. "
+            "Call `discord.login(token)` with the bot's token (Developer Portal "
+            "-> Bot -> Token), set the DISCORD_BOT_TOKEN environment variable, "
+            "or run `discord.status()` to check the current state."
+        )
+    return token
 
 
 def _note_rate_limit(headers: email.message.Message) -> None:
@@ -660,14 +669,7 @@ def login(token: str) -> dict[str, Any]:
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
-    # A different token can be a different bot: the cached self-id would make
-    # the watcher misclassify whose messages are "ours" (up to and including
-    # notifying the agent about its own posts). Existing watches belong to
-    # whichever identity created them and cannot be polled (or would be
-    # misattributed) once it changes -- same reasoning as logout().
-    global _self_id
-    _self_id = None
-    _watches.clear()
+    _reset_identity()
     return {"configured": True, "path": str(_TOKEN_FILE)}
 
 
@@ -682,10 +684,19 @@ def logout() -> dict[str, Any]:
     """
     removed = _TOKEN_FILE.exists()
     _TOKEN_FILE.unlink(missing_ok=True)
+    _reset_identity()
+    return {"signed_out": True, "removed": removed}
+
+
+def _reset_identity() -> None:
+    """Forget the cached bot identity and drop every watch. A different token
+    can be a different bot: a stale self-id would make the watcher misclassify
+    whose messages are "ours" (up to and including notifying the agent about
+    its own posts), and existing watches belong to whichever identity created
+    them -- they cannot be polled (or would be misattributed) once it changes."""
     global _self_id
     _self_id = None
     _watches.clear()
-    return {"signed_out": True, "removed": removed}
 
 
 def status() -> dict[str, Any]:
@@ -697,18 +708,12 @@ def status() -> dict[str, Any]:
     ``discord.login(token)`` to configure.
     """
     try:
-        tok = _token()
+        # One try covers both failure modes (no token, bad token): either way
+        # the answer is "not configured", never an exception.
+        data = _api_dict("GET", "/users/@me", _token())
     except DiscordError:
         return {"configured": False, "user": None, "id": None}
-    try:
-        data = _api_dict("GET", "/users/@me", tok)
-        return {
-            "configured": True,
-            "user": data.get("username"),
-            "id": data.get("id"),
-        }
-    except DiscordError:
-        return {"configured": False, "user": None, "id": None}
+    return {"configured": True, "user": data.get("username"), "id": data.get("id")}
 
 
 async def guilds(*, limit: int = 200) -> pl.DataFrame:
@@ -741,9 +746,7 @@ async def guilds(*, limit: int = 200) -> pl.DataFrame:
         after = str(batch[-1].get("id", ""))
         if not after:
             break
-    if not rows:
-        return pl.DataFrame(schema=_GUILDS_SCHEMA)
-    return pl.DataFrame(rows, schema_overrides=_GUILDS_SCHEMA).select(list(_GUILDS_SCHEMA))
+    return _frame(rows, _GUILDS_SCHEMA)
 
 
 def _channel_row(ch: dict[str, Any], guild_id: str) -> dict[str, Any]:
@@ -786,9 +789,7 @@ async def channels(guild_id: str | None = None) -> pl.DataFrame:
     for gid in gids:
         batch = _api_list("GET", f"/guilds/{gid}/channels", token)
         rows.extend(_channel_row(ch, gid) for ch in batch)
-    if not rows:
-        return pl.DataFrame(schema=_CHANNELS_SCHEMA)
-    return pl.DataFrame(rows, schema_overrides=_CHANNELS_SCHEMA).select(list(_CHANNELS_SCHEMA))
+    return _frame(rows, _CHANNELS_SCHEMA)
 
 
 async def dms() -> pl.DataFrame:
@@ -818,9 +819,7 @@ async def dms() -> pl.DataFrame:
                 "recipient": str(first.get("username", "")),
             }
         )
-    if not rows:
-        return pl.DataFrame(schema=_DMS_SCHEMA)
-    return pl.DataFrame(rows, schema_overrides=_DMS_SCHEMA).select(list(_DMS_SCHEMA))
+    return _frame(rows, _DMS_SCHEMA)
 
 
 def _message_row(msg: dict[str, Any]) -> dict[str, Any]:
@@ -871,9 +870,7 @@ async def messages(channel_id: str, *, limit: int = 50) -> pl.DataFrame:
         before = str(batch[-1].get("id", ""))
         if not before:
             break
-    if not rows:
-        return pl.DataFrame(schema=_MESSAGES_SCHEMA)
-    return pl.DataFrame(rows, schema_overrides=_MESSAGES_SCHEMA).select(list(_MESSAGES_SCHEMA))
+    return _frame(rows, _MESSAGES_SCHEMA)
 
 
 async def thread(thread_id: str, *, limit: int = 100) -> pl.DataFrame:

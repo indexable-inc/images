@@ -44,6 +44,48 @@ _SELF_ID = "1000000000000000001"
 _HUMAN_ID = "2000000000000000002"
 
 
+def _api_double(
+    handler: Callable[[str], object], calls: list[str] | None = None
+) -> Callable[..., object]:
+    """An `_api_call` double with the real signature: appends each request's
+    path to `calls` and routes it through `handler` (return a payload, or
+    raise). One factory so the many per-test stubs stay one-liners."""
+
+    def fake(
+        http_method: str,
+        path: str,
+        token: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> object:
+        if calls is not None:
+            calls.append(path)
+        return handler(path)
+
+    return fake
+
+
+def _auth_then_raise(exc: Exception) -> Callable[[str], object]:
+    """A handler that answers the identity probe and fails everything else."""
+
+    def handle(path: str) -> object:
+        if path == "/users/@me":
+            return {"id": _SELF_ID}
+        raise exc
+
+    return handle
+
+
+def _raise_always(exc: Exception) -> Callable[[str], object]:
+    """A handler that fails every request (including the identity probe)."""
+
+    def handle(path: str) -> object:
+        raise exc
+
+    return handle
+
+
 def test_all_names_exist() -> None:
     for name in discord.__all__:
         assert hasattr(discord, name), f"{name} in __all__ but missing from module"
@@ -55,17 +97,20 @@ def test_error_type() -> None:
 
 
 def test_type_hints_explicit() -> None:
-    # Mirrors the ruff ANN gate: every public function fully annotates its params
-    # and return type.
+    # Mirrors the ruff ANN gate: every public function fully annotates its
+    # params and return type. One collecting pass, so a failure names every
+    # offender at once.
+    missing: list[str] = []
     for func in _PUBLIC_FUNCS:
         sig = inspect.signature(func)
-        assert sig.return_annotation is not inspect.Signature.empty, (
-            f"{func.__name__} missing return annotation"
+        if sig.return_annotation is inspect.Signature.empty:
+            missing.append(f"{func.__name__} -> ?")
+        missing.extend(
+            f"{func.__name__}({pname})"
+            for pname, param in sig.parameters.items()
+            if param.annotation is inspect.Parameter.empty
         )
-        for pname, param in sig.parameters.items():
-            assert param.annotation is not inspect.Parameter.empty, (
-                f"{func.__name__}({pname}) missing annotation"
-            )
+    assert not missing, f"missing annotations: {missing}"
 
 
 # --- token resolution ----------------------------------------------------------
@@ -239,18 +284,7 @@ def test_messages_normalizes_rows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_messages_empty_channel_stays_typed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "bot-test")
-
-    def fake_api(
-        http_method: str,
-        path: str,
-        token: str,
-        *,
-        payload: dict[str, Any] | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> object:
-        return []
-
-    monkeypatch.setattr(discord, "_api_call", fake_api)
+    monkeypatch.setattr(discord, "_api_call", _api_double(lambda _path: []))
     frame = asyncio.run(discord.messages(_CHANNEL_ID))
     assert frame.height == 0
     assert frame.columns == list(discord._MESSAGES_SCHEMA)
@@ -259,19 +293,7 @@ def test_messages_empty_channel_stays_typed(monkeypatch: pytest.MonkeyPatch) -> 
 def test_thread_is_messages_on_the_thread_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "bot-test")
     paths: list[str] = []
-
-    def fake_api(
-        http_method: str,
-        path: str,
-        token: str,
-        *,
-        payload: dict[str, Any] | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> object:
-        paths.append(path)
-        return []
-
-    monkeypatch.setattr(discord, "_api_call", fake_api)
+    monkeypatch.setattr(discord, "_api_call", _api_double(lambda _path: [], paths))
     asyncio.run(discord.thread("1234500000000000000"))
     assert paths == ["/channels/1234500000000000000/messages"]
 
@@ -446,19 +468,9 @@ def test_poll_drops_watch_on_error_with_notice(
 ) -> None:
     asyncio.run(discord.send(_CHANNEL_ID, "will break"))
 
-    def broken_api(
-        http_method: str,
-        path: str,
-        token: str,
-        *,
-        payload: dict[str, Any] | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> object:
-        if path == "/users/@me":
-            return {"id": _SELF_ID}
-        raise discord.DiscordError("boom")
-
-    monkeypatch.setattr(discord, "_api_call", broken_api)
+    monkeypatch.setattr(
+        discord, "_api_call", _api_double(_auth_then_raise(discord.DiscordError("boom")))
+    )
     asyncio.run(discord._poll_watches_once())
     assert discord._watches == {}
     assert len(fresh_watch_state) == 1
@@ -472,19 +484,11 @@ def test_poll_keeps_watch_on_transient_error(
 ) -> None:
     asyncio.run(discord.send(_CHANNEL_ID, "rate-limited"))
 
-    def limited_api(
-        http_method: str,
-        path: str,
-        token: str,
-        *,
-        payload: dict[str, Any] | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> object:
-        if path == "/users/@me":
-            return {"id": _SELF_ID}
-        raise discord.DiscordTransientError("Discord API rate limited")
-
-    monkeypatch.setattr(discord, "_api_call", limited_api)
+    monkeypatch.setattr(
+        discord,
+        "_api_call",
+        _api_double(_auth_then_raise(discord.DiscordTransientError("Discord API rate limited"))),
+    )
     asyncio.run(discord._poll_watches_once())
     # The watch survives a 429 and nothing spurious is delivered.
     assert _CHANNEL_ID in discord._watches
@@ -500,17 +504,8 @@ def test_poll_drains_with_one_notice_on_permanent_auth_failure(
     asyncio.run(discord.send("1100000000000000002", "two"))
     monkeypatch.setattr(discord, "_self_id", None)  # force /users/@me on next poll
 
-    def dead_auth(
-        http_method: str,
-        path: str,
-        token: str,
-        *,
-        payload: dict[str, Any] | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> object:
-        raise discord.DiscordError("Discord bot token is invalid or was revoked (HTTP 401).")
-
-    monkeypatch.setattr(discord, "_api_call", dead_auth)
+    dead = discord.DiscordError("Discord bot token is invalid or was revoked (HTTP 401).")
+    monkeypatch.setattr(discord, "_api_call", _api_double(_raise_always(dead)))
     asyncio.run(discord._poll_watches_once())
     assert discord._watches == {}
     assert len(fresh_watch_state) == 1
@@ -528,17 +523,8 @@ def test_poll_survives_transient_auth_failure(
     asyncio.run(discord.send(_CHANNEL_ID, "hold on"))
     monkeypatch.setattr(discord, "_self_id", None)
 
-    def flaky_auth(
-        http_method: str,
-        path: str,
-        token: str,
-        *,
-        payload: dict[str, Any] | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> object:
-        raise discord.DiscordTransientError("Discord API rate limited for /users/@me")
-
-    monkeypatch.setattr(discord, "_api_call", flaky_auth)
+    flaky = discord.DiscordTransientError("Discord API rate limited for /users/@me")
+    monkeypatch.setattr(discord, "_api_call", _api_double(_raise_always(flaky)))
     asyncio.run(discord._poll_watches_once())
     assert _CHANNEL_ID in discord._watches
     assert fresh_watch_state == []
@@ -575,19 +561,7 @@ def test_watch_without_delivery_channel_makes_no_api_calls(
     monkeypatch.setattr(discord, "_watches", {})
     monkeypatch.setattr(discord, "_resolve_notify", lambda: None)
     calls: list[str] = []
-
-    def fake_api(
-        http_method: str,
-        path: str,
-        token: str,
-        *,
-        payload: dict[str, Any] | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> object:
-        calls.append(path)
-        return []
-
-    monkeypatch.setattr(discord, "_api_call", fake_api)
+    monkeypatch.setattr(discord, "_api_call", _api_double(lambda _path: [], calls))
     out = asyncio.run(discord.watch(_CHANNEL_ID))
     assert out["watching"] is False
     assert calls == []
@@ -690,19 +664,8 @@ def test_poll_skips_cycle_while_rate_limited(
     asyncio.run(discord.send(_CHANNEL_ID, "then a 429"))
     monkeypatch.setattr(discord, "_rate_limited_until", time.time() + 60.0)
     calls: list[str] = []
-
-    def no_api(
-        http_method: str,
-        path: str,
-        token: str,
-        *,
-        payload: dict[str, Any] | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> object:
-        calls.append(path)
-        raise AssertionError("no request may be made while rate limited")
-
-    monkeypatch.setattr(discord, "_api_call", no_api)
+    forbidden = AssertionError("no request may be made while rate limited")
+    monkeypatch.setattr(discord, "_api_call", _api_double(_raise_always(forbidden), calls))
     asyncio.run(discord._poll_watches_once())
     assert calls == []
     assert _CHANNEL_ID in discord._watches
