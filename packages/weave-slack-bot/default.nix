@@ -28,12 +28,14 @@ in
     doCheck = true;
 
     checkPhase = ''
+      # shell
       runHook preCheck
       ${python}/bin/python3 -m unittest discover -s tests -p 'test_*.py'
       runHook postCheck
     '';
 
     installPhase = ''
+      # shell
       runHook preInstall
       install -Dm755 weave_slack_bot.py $out/libexec/weave-slack-bot.py
       makeWrapper ${python}/bin/python3 $out/bin/weave-slack-bot \
