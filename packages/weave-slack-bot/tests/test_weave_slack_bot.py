@@ -3,6 +3,7 @@
 import asyncio
 import importlib.util
 import pathlib
+import re
 import sys
 import unittest
 
@@ -78,6 +79,18 @@ class FailingSlack(FakeSlack):
     async def chat_postMessage(self, **kwargs):
         self.calls.append(("chat_postMessage", kwargs))
         raise FakeSlackApiError(self.code)
+
+
+class RecordingWeaveClient(bot_module.WeaveClient):
+    def __init__(self):
+        super().__init__("http://weave.invalid", "weave-slack-bot@ix.dev")
+        self.requests = []
+
+    async def _post(
+        self, path: str, body: dict[str, object]
+    ) -> dict[str, object]:
+        self.requests.append((path, body))
+        return {}
 
 
 def payload(event_type="app_mention", **event):
@@ -265,6 +278,32 @@ class EncodingTests(unittest.TestCase):
                 }
             },
         )
+
+
+class WeaveOperationIdTests(unittest.IsolatedAsyncioTestCase):
+    async def test_all_write_paths_emit_valid_operation_ids(self):
+        weave = RecordingWeaveClient()
+        item = event()
+
+        await weave.seed_agent("slack-bot", "fable", "system")
+        await weave.record(item)
+        await weave.dispatch(item, "slack-bot")
+        await weave.mark_sent(item, "200.1")
+
+        operation_ids = [
+            body["operation_id"]
+            for path, body in weave.requests
+            if path in {"/api/facts", "/api/chat"}
+        ]
+        self.assertEqual(len(operation_ids), 5)
+        for value in operation_ids:
+            self.assertIsNotNone(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value))
+
+    def test_operation_id_rejects_invalid_parts(self):
+        with self.assertRaisesRegex(  # noqa: PT027 -- this package uses unittest
+            ValueError, "invalid Weave operation id"
+        ):
+            bot_module.operation_id("slack", "invalid:key")
 
 
 if __name__ == "__main__":
