@@ -33,11 +33,35 @@
   git,
   primaryCheckouts,
   repoPackages,
+  # RFC 0009 cross lane (Linux->Darwin): the claude-hooks binary itself is
+  # cross-compiled (ix.rustWorkspace is the target workspace), but
+  # makeBinaryWrapper would compile a build-host ELF wrapper and `git`/`search`
+  # here are host-native store paths -- all dead on the Mac. Cross mode ships a
+  # portable #!/bin/sh shim instead: IX_GIT is left unset (claude-hooks falls
+  # back to `git` on PATH) and IX_SEARCH drops out (prompt-priors is inert
+  # without it, its documented degraded mode) -- the same ambient-PATH posture
+  # as wrap-package.nix's nativePathSuffix.
+  isCross ? false,
 }:
-runCommand "claude-hooks-wrapped" {nativeBuildInputs = [makeBinaryWrapper];} ''
-  makeBinaryWrapper ${ix.rustWorkspace.units.binaries.claude-hooks}/bin/claude-hooks \
-    $out/bin/claude-hooks \
-    --set IX_GIT ${lib.getExe git} \
-    --set IX_DEFAULT_PRIMARY_CHECKOUTS ${lib.escapeShellArg (lib.concatStringsSep ":" primaryCheckouts)} \
-    ${lib.optionalString (repoPackages ? search) "--set IX_SEARCH ${lib.getExe repoPackages.search}"}
-''
+if isCross
+then
+  runCommand "claude-hooks-wrapped" {
+    shim = ''
+      #!/bin/sh
+      export IX_DEFAULT_PRIMARY_CHECKOUTS=${lib.escapeShellArg (lib.concatStringsSep ":" primaryCheckouts)}
+      exec ${ix.rustWorkspace.units.binaries.claude-hooks}/bin/claude-hooks "$@"
+    '';
+    passAsFile = ["shim"];
+  } ''
+    mkdir -p $out/bin
+    cp "$shimPath" $out/bin/claude-hooks
+    chmod 0755 $out/bin/claude-hooks
+  ''
+else
+  runCommand "claude-hooks-wrapped" {nativeBuildInputs = [makeBinaryWrapper];} ''
+    makeBinaryWrapper ${ix.rustWorkspace.units.binaries.claude-hooks}/bin/claude-hooks \
+      $out/bin/claude-hooks \
+      --set IX_GIT ${lib.getExe git} \
+      --set IX_DEFAULT_PRIMARY_CHECKOUTS ${lib.escapeShellArg (lib.concatStringsSep ":" primaryCheckouts)} \
+      ${lib.optionalString (repoPackages ? search) "--set IX_SEARCH ${lib.getExe repoPackages.search}"}
+  ''
