@@ -3376,6 +3376,10 @@
         message = "base image should publish from the ix/base repository";
       }
       {
+        assertion = !base.config.networking.resolvconf.enable;
+        message = "image platform should preserve the runtime DNS configuration written by ix-vm-guest";
+      }
+      {
         assertion = lib.elemAt base.config.nix.settings.substituters 0 == "https://cache.ix.dev";
         message = "base profile should route Nix through cache.ix.dev before fallback substituters";
       }
