@@ -54,13 +54,12 @@ jobs:
       - name: Install Determinate Nix
         uses: indexable-inc/index/.github/actions/install-nix@main
 
-      # Underscore digit separators: index's own tree must be evaluated by the
-      # patched client. Guarded to index -- for a cross-repo caller (ix) the
-      # checkout is the caller's repository, where the pinned bootstrap rev
-      # does not exist. Fully qualified like install-nix above, for the same
-      # reason.
+      # Underscore digit separators require the patched client in index and in
+      # downstream callers such as ix. The action reads its source lock from
+      # index and fetches that source independently when the checkout belongs
+      # to a caller. Fully qualified like install-nix above because a reusable
+      # workflow checks out the caller's repository.
       - name: Bootstrap patched Nix client
-        if: github.repository == 'indexable-inc/index'
         uses: indexable-inc/index/.github/actions/bootstrap-patched-nix@main
 
       # PRs authored by the default GITHUB_TOKEN never get pull_request CI on

@@ -1,0 +1,231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 12 Jul 2026 19:09:02 -0700
+Subject: [PATCH] fix(libstore): recheck free space after GC lock
+
+Each daemon process can queue auto-GC from the same low-space observation. Recheck after acquiring the global lock so callers skip stale work once an earlier collector restores the store.
+
+Refs indexable-inc/index#3085
+
+Assisted-by: Codex <noreply@openai.com>
+
+diff --git a/src/libstore/gc.cc b/src/libstore/gc.cc
+index 12f492a5e..216058003 100644
+--- a/src/libstore/gc.cc
++++ b/src/libstore/gc.cc
+@@ -349,8 +349,14 @@ struct GCLimitReached
+ {};
+ 
+ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
++{
++    collectGarbageImpl(options, results, GCTrigger::Explicit);
++}
++
++void LocalStore::collectGarbageImpl(const GCOptions & options, GCResults & results, GCTrigger trigger)
+ {
+     const auto & gcSettings = config->getLocalSettings().getGCSettings();
++    auto maxFreed = options.maxFreed;
+ 
+     bool shouldDelete = options.action == GCOptions::gcDeleteDead || options.action == GCOptions::gcDeleteSpecific;
+     bool keepOutputs = gcSettings.keepOutputs;
+@@ -391,6 +397,19 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
+     auto fdGCLock = openGCLock();
+     FdLock gcLock(fdGCLock.get(), ltWrite, true, "waiting for the big garbage collector lock...");
+ 
++    if (trigger == GCTrigger::Auto) {
++        auto avail = availableStoreSpace();
++        if (avail >= gcSettings.minFree || avail >= gcSettings.maxFree) {
++            printInfo(
++                "skipping auto-GC because %s is available after acquiring the garbage collector lock",
++                renderSize(avail));
++            return;
++        }
++
++        maxFreed = gcSettings.maxFree - avail;
++        printInfo("running auto-GC to free %d bytes", maxFreed);
++    }
++
+     /* Synchronisation point to test ENOENT handling in
+        addTempRoot(), see tests/gc-non-blocking.sh. */
+     if (auto p = getEnv("_NIX_TEST_GC_SYNC_1"))
+@@ -562,8 +581,8 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
+ 
+         results.bytesFreed += bytesFreed;
+ 
+-        if (results.bytesFreed > options.maxFreed) {
+-            printInfo("deleted more than %d bytes; stopping", options.maxFreed);
++        if (results.bytesFreed > maxFreed) {
++            printInfo("deleted more than %d bytes; stopping", maxFreed);
+             throw GCLimitReached();
+         }
+     };
+@@ -705,7 +724,7 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
+                     printStorePath(i));
+         }
+ 
+-    } else if (options.maxFreed > 0) {
++    } else if (maxFreed > 0) {
+ 
+         if (shouldDelete)
+             printInfo("deleting garbage...");
+@@ -805,24 +824,28 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
+     // if (options.action == GCOptions::gcDeleteDead) vacuumDB();
+ }
+ 
++uint64_t LocalStore::availableStoreSpace()
++{
++#if HAVE_STATVFS
++    static auto fakeFreeSpaceFile = getEnv("_NIX_TEST_FREE_SPACE_FILE");
++    if (fakeFreeSpaceFile)
++        return std::stoll(readFile(*fakeFreeSpaceFile));
++
++    struct statvfs st;
++    if (statvfs(config->realStoreDir.get().c_str(), &st))
++        throw SysError("getting filesystem info about '%s'", PathFmt(config->realStoreDir.get()));
++
++    return (uint64_t) st.f_bavail * st.f_frsize;
++#else
++    throw UnimplementedError("checking free store space");
++#endif
++}
++
+ void LocalStore::autoGC(bool sync)
+ {
+ #if HAVE_STATVFS
+     const auto & gcSettings = config->getLocalSettings().getGCSettings();
+ 
+-    static auto fakeFreeSpaceFile = getEnv("_NIX_TEST_FREE_SPACE_FILE");
+-
+-    auto getAvail = [this]() -> uint64_t {
+-        if (fakeFreeSpaceFile)
+-            return std::stoll(readFile(*fakeFreeSpaceFile));
+-
+-        struct statvfs st;
+-        if (statvfs(config->realStoreDir.get().c_str(), &st))
+-            throw SysError("getting filesystem info about '%s'", PathFmt(config->realStoreDir.get()));
+-
+-        return (uint64_t) st.f_bavail * st.f_frsize;
+-    };
+-
+     std::shared_future<void> future;
+ 
+     {
+@@ -839,7 +862,7 @@ void LocalStore::autoGC(bool sync)
+         if (now < state->lastGCCheck + std::chrono::seconds(gcSettings.minFreeCheckInterval))
+             return;
+ 
+-        auto avail = getAvail();
++        auto avail = availableStoreSpace();
+ 
+         state->lastGCCheck = now;
+ 
+@@ -854,7 +877,7 @@ void LocalStore::autoGC(bool sync)
+         std::promise<void> promise;
+         future = state->gcFuture = promise.get_future().share();
+ 
+-        std::thread([promise{std::move(promise)}, this, avail, getAvail, &gcSettings]() mutable {
++        std::thread([promise{std::move(promise)}, this]() mutable {
+             try {
+ 
+                 /* Wake up any threads waiting for the auto-GC to finish. */
+@@ -866,15 +889,11 @@ void LocalStore::autoGC(bool sync)
+                 });
+ 
+                 GCOptions options;
+-                options.maxFreed = gcSettings.maxFree - avail;
+-
+-                printInfo("running auto-GC to free %d bytes", options.maxFreed);
+-
+                 GCResults results;
+ 
+-                collectGarbage(options, results);
++                collectGarbageImpl(options, results, GCTrigger::Auto);
+ 
+-                _state->lock()->availAfterGC = getAvail();
++                _state->lock()->availAfterGC = availableStoreSpace();
+ 
+             } catch (...) {
+                 // FIXME: we could propagate the exception to the
+diff --git a/src/libstore/include/nix/store/local-store.hh b/src/libstore/include/nix/store/local-store.hh
+index 0b1e13b51..60fed64ae 100644
+--- a/src/libstore/include/nix/store/local-store.hh
++++ b/src/libstore/include/nix/store/local-store.hh
+@@ -327,6 +327,15 @@ private:
+ 
+     AutoCloseFD openGCLock();
+ 
++    enum class GCTrigger {
++        Explicit,
++        Auto,
++    };
++
++    uint64_t availableStoreSpace();
++
++    void collectGarbageImpl(const GCOptions & options, GCResults & results, GCTrigger trigger);
++
+ public:
+ 
+     Roots findRoots(bool censor) override;
+diff --git a/tests/functional/gc-auto.sh b/tests/functional/gc-auto.sh
+index ea877f27f..36e4ebd5f 100755
+--- a/tests/functional/gc-auto.sh
++++ b/tests/functional/gc-auto.sh
+@@ -87,3 +87,58 @@ wait "$pid2"
+ 
+ [[ foo = $(cat "$TEST_ROOT"/result-A/bar) ]]
+ [[ foo = $(cat "$TEST_ROOT"/result-B/bar) ]]
++
++# Two processes can both decide to auto-GC before either acquires the global
++# lock. Once the first collector restores free space, the queued process must
++# recheck the threshold instead of starting another collection from its stale
++# decision.
++clearStore
++echo 3000 > "$fake_free"
++garbage=$(nix store add-path --name convoy-garbage ./nar-access.sh)
++test -e "$garbage"
++
++echo 100 > "$fake_free"
++gcLock=$TEST_ROOT/gc-lock.fifo
++mkfifo "$gcLock"
++firstInput=$TEST_ROOT/convoy-first
++secondInput=$TEST_ROOT/convoy-second
++echo first > "$firstInput"
++echo second > "$secondInput"
++firstResult=$TEST_ROOT/convoy-first.result
++secondResult=$TEST_ROOT/convoy-second.result
++firstLog=$TEST_ROOT/convoy-first.log
++secondLog=$TEST_ROOT/convoy-second.log
++
++_NIX_TEST_GC_SYNC_2=$gcLock nix store add-path --name convoy-first "$firstInput" -v \
++    --min-free 1K --max-free 2K --min-free-check-interval 0 \
++    > "$firstResult" 2> "$firstLog" &
++firstPid=$!
++
++# Opening the write end proves that the first collector holds gc.lock and is
++# blocked at _NIX_TEST_GC_SYNC_2. Keep the descriptor open while the second
++# process reaches the lock queue.
++exec 3> "$gcLock"
++nix store add-path --name convoy-second "$secondInput" -v \
++    --min-free 1K --max-free 2K --min-free-check-interval 0 \
++    > "$secondResult" 2> "$secondLog" 3>&- &
++secondPid=$!
++
++for _ in {1..100}; do
++    if grepQuiet -F "waiting for the big garbage collector lock" "$secondLog"; then
++        break
++    fi
++    kill -0 "$secondPid" || fail "second auto-GC exited before waiting for gc.lock"
++    sleep 0.1
++done
++grepQuiet -F "waiting for the big garbage collector lock" "$secondLog"
++
++echo 3000 > "$fake_free.tmp"
++mv "$fake_free.tmp" "$fake_free"
++exec 3>&-
++
++wait "$firstPid"
++wait "$secondPid"
++test -e "$(cat "$firstResult")"
++test -e "$(cat "$secondResult")"
++grepQuiet -F "skipping auto-GC because" "$secondLog"
++grepQuietInverse -F "running auto-GC to free" "$secondLog"
