@@ -233,7 +233,7 @@
         # shell
         makeBinaryWrapper ${codexBinary}/bin/${binName} "$out/bin/${binName}" \
           --prefix PATH : ${
-          lib.makeBinPath ([ripgrep] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [bubblewrap])
+          lib.makeBinPath ([ripgrep] ++ lib.optional pkgs.stdenv.hostPlatform.isLinux bubblewrap)
         }
         ${lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
           installShellCompletion --cmd ${binName} \
@@ -260,7 +260,7 @@ in
     # symlinkJoin links the whole codex output (libexec, completions, ...); we only
     # replace the entrypoint with our wrapper so the baked defaults ride every
     # invocation while everything else stays pristine.
-    nativeBuildInputs = lib.optionals (!isCross) [makeBinaryWrapper];
+    nativeBuildInputs = lib.optional (!isCross) makeBinaryWrapper;
     postBuild =
       if isCross
       then ''

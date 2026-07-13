@@ -118,8 +118,8 @@
           # Silence the warning-as-error false positives upstream documents
           # (GCC stringop-overflow in BoringSSL; Clang character-conversion).
           NIX_CFLAGS_COMPILE = toString (
-            lib.optionals stdenv.cc.isGNU ["-Wno-error=stringop-overflow"]
-            ++ lib.optionals stdenv.cc.isClang ["-Wno-error=character-conversion"]
+            lib.optional stdenv.cc.isGNU "-Wno-error=stringop-overflow"
+            ++ lib.optional stdenv.cc.isClang "-Wno-error=character-conversion"
           );
         }
         // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
