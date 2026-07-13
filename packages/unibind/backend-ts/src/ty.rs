@@ -155,7 +155,7 @@ pub fn ret(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> TokenStream {
 /// The glue module's alias for the exported user module. Rendered paths
 /// to user types anchor here instead of `super::<user>` because
 /// napi-derive re-quotes signature types into a nested
-/// `__napi_impl_helper__*` module, where `super::` resolves to the glue
+/// `__napi_impl_helper_<name>_<id>` module, where `super::` resolves to the glue
 /// module instead of the exported module's parent; the helper's
 /// `use super::*;` glob re-imports this alias, so the same tokens resolve
 /// at both depths.
