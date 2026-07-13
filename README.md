@@ -72,7 +72,6 @@ reviewable bindings rather than a text blob, so behavior changes land as PR diff
 | [`system-prompt-eval`](packages/agent/system-prompt-eval/) | Spawns sandboxed `claude -p` rollouts, scores them with an LLM judge, commits the scores |
 | [`claude-hooks`](doc/claude-hooks/overview.md) | Lifecycle hooks as one Rust binary; every hook fails open and silent, so a broken hook never blocks a session |
 | [`subagent-cache`](packages/agent/subagent-cache/) | Memoizes read-only investigations across the team, validated by Postgres recall + a Haiku judge + file-freshness hashing |
-| [`symphony`](packages/agent/symphony/) | Elixir/OTP runtime orchestrating multi-repo Codex sessions from a `.sym` DSL, each in its own git worktree |
 | [`distiller`](packages/agent/distiller/) | Turns raw session transcripts into searchable, reusable lessons |
 | [`pi-harnesses`](packages/agent/pi-harnesses/) | Fixed agent postures: sandboxed engine, beam-search executor, skeptical prosecutor |
 | [`claude-stories`](packages/agent/claude-stories/) | A status-line row of teammate avatars, peer-discovered over Tailscale with no central server |
