@@ -28,9 +28,11 @@ runs:
         # died and where.
         trap 'echo "::error title=bootstrap-patched-nix::failed at line $LINENO: $BASH_COMMAND"' ERR
         source_repository="$(BOOTSTRAP_LOCK_FIELD=repository \
-          nix eval --impure --raw --file "$BOOTSTRAP_LOCK_READER")"
+          nix --extra-experimental-features nix-command \
+            eval --impure --raw --file "$BOOTSTRAP_LOCK_READER")"
         bootstrap_rev="$(BOOTSTRAP_LOCK_FIELD=revision \
-          nix eval --impure --raw --file "$BOOTSTRAP_LOCK_READER")"
+          nix --extra-experimental-features nix-command \
+            eval --impure --raw --file "$BOOTSTRAP_LOCK_READER")"
         source_repo="$GITHUB_WORKSPACE"
         if [[ "$GITHUB_REPOSITORY" == "$source_repository" ]]; then
           if ! git -C "$source_repo" rev-parse --verify --quiet "$bootstrap_rev^{commit}" >/dev/null; then
