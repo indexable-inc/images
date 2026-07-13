@@ -306,6 +306,8 @@ fn tui_diff(format: Format, old: &[u8], new: &[u8]) -> TuiDiff {
 /// Everything the TUI needs to render one pending file: identity, the diff
 /// of each side (base vs the file on disk, plus base vs the staged incoming
 /// base while a conflict is unresolved), and the conflict overlap.
+// clone:ignore -- identifier-blind shape match with cve-scan's unrelated
+// PackageEvidence (any two eight-field pub structs collide).
 pub struct TuiEntry {
     pub path: String,
     pub state: State,
