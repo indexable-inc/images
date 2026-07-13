@@ -11,7 +11,6 @@
 # codex-rs/Cargo.lock and the new WEBRTC_TAG out of
 # webrtc-sys/build/src/lib.rs, then re-run `nix store prefetch-file` on the URLs.
 {
-  lib,
   fetchurl,
   runCommand,
   unzip,

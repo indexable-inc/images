@@ -21,7 +21,7 @@
   target ? null,
 }: let
   inherit (pkgs) stdenv;
-  cargoUnit = ix.cargoUnit;
+  inherit (ix) cargoUnit;
 
   isCross = target != null;
   targetIsDarwin = isCross && lib.hasSuffix "-apple-darwin" target;
@@ -32,10 +32,15 @@
     if !isCross
     then stdenv.hostPlatform.system
     else if targetIsDarwin
-    then (if lib.hasPrefix "aarch64-" target then "aarch64-darwin" else "x86_64-darwin")
+    then
+      (
+        if lib.hasPrefix "aarch64-" target
+        then "aarch64-darwin"
+        else "x86_64-darwin"
+      )
     else throw "codex rust.nix: unsupported cross target ${target}";
 
-  prebuilt = import ./prebuilt.nix {inherit (pkgs) lib fetchurl runCommand unzip;} targetSystem;
+  prebuilt = import ./prebuilt.nix {inherit (pkgs) fetchurl runCommand unzip;} targetSystem;
 
   # The Apple cross toolchain (zig cc + macOS SDK), or null for a native build.
   # Same wiring as lib/rust/workspace.nix `mkUnits`.
