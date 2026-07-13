@@ -49,8 +49,8 @@
     then
       ix.appleSdkToolchain {
         appleSdk = ix.macosSdk {inherit pkgs;};
-        inherit lib target;
-        inherit (pkgs) writeBashApplication;
+        inherit lib target pkgs;
+        inherit (ix) writeBashApplication;
       }
     else null;
 
