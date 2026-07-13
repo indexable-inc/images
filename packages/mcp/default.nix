@@ -617,14 +617,10 @@
     ''
   );
   # Slack: read channels, messages, threads; send messages; search -- all per-user
-  # with a self-service token flow. Pure Python over stdlib urllib + polars;
-  # socket() (Socket Mode push ingress) additionally uses the already-bundled
-  # aiohttp, imported lazily so plain Web-API use never needs it.
+  # with a self-service token flow. Pure Python over stdlib urllib + polars.
   # Per-user credential: SLACK_USER_TOKEN/SLACK_TOKEN env or ~/.config/slack/token
-  # (mode 0600, written by slack.login(token)); Socket Mode adds an app-level
-  # SLACK_APP_TOKEN env or ~/.config/slack/app_token (slack.login_app(token)).
-  # Incognito sessions only (personal workspace data never reaches a shared
-  # room). Cross-platform.
+  # (mode 0600, written by slack.login(token)). Incognito sessions only (personal
+  # workspace data never reaches a shared room). Cross-platform.
   slackPythonSource = builtins.path {
     name = "ix-mcp-slack-python-source";
     path = ./src/slack;
@@ -1893,22 +1889,6 @@
     # status() answers instead of raising when not configured.
     state = slack.status()
     assert state["configured"] is False, state
-
-    # Socket Mode surface. In the sandbox there is no delivery channel, so
-    # socket() reports inactive without any network call; socket_stop() is
-    # idempotent; set_status without a token raises naming the fix.
-    assert callable(slack.login_app) and callable(slack.socket_stop)
-    assert _asyncio.iscoroutinefunction(slack.socket)
-    assert _asyncio.iscoroutinefunction(slack.set_status)
-    out = _asyncio.run(slack.socket())
-    assert out == {"socket": False, "mentions_only": True, "thinking": True}, out
-    assert slack.socket_stop() == {"stopped": False}
-    try:
-        _asyncio.run(slack.set_status("C0123456789", "1781738574.768059"))
-    except slack.SlackError as exc:
-        assert "token" in str(exc).lower(), exc
-    else:
-        raise SystemExit("expected SlackError from set_status with no token")
     print("slack-ok")
   '';
   # The `beeper` helper imports and exposes its public surface. A real API call
@@ -5581,11 +5561,9 @@
       mkdir -p "$out"
     '';
 
-  # Network-free unit tests for the `slack` helper: module shape, that `send`
-  # builds the right chat.postMessage params for top-level vs. in-thread
-  # replies, the thread/channel watch pollers, and the Socket Mode frame
-  # handler + connection loop (stubbing the two network primitives, `_api_call`
-  # and `_open_socket` -- so no aiohttp needed here).
+  # Network-free unit tests for the `slack` helper: module shape plus that
+  # `send` builds the right chat.postMessage params for top-level vs. in-thread
+  # replies (stubbing the one network primitive).
   slackTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
     ps.polars

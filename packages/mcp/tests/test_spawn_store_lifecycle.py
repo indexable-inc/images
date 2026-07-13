@@ -15,7 +15,7 @@ def test_spawn_finish_updates_its_process_without_creating_a_run(
     calls: list[tuple[str, str, object]] = []
 
     def fake_json(
-        method: str, url: str, *, body: object = None, content: bytes | None = None
+        method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None
     ) -> object:
         calls.append((method, url, body if body is not None else content))
         if url.endswith("/api/blob"):
@@ -27,7 +27,7 @@ def test_spawn_finish_updates_its_process_without_creating_a_run(
     monkeypatch.setenv("WEAVE_URL", "http://weave.test")
     monkeypatch.setenv("IX_WEAVE_AGENT", "agent:test")
     monkeypatch.setattr(store, "_http_json", fake_json)
-    monkeypatch.setattr(store, "_http_bytes", lambda method, url, content=None: b"[]")
+    monkeypatch.setattr(store, "_http_bytes", lambda method, url, content=None, headers=None: b"[]")
 
     conn = store.connect(tmp_path / "spawn.ixnb")
     store.start(

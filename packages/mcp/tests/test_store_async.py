@@ -42,7 +42,7 @@ def test_async_conn_kwargs_and_store_functions(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setenv("WEAVE_URL", "http://weave.test")
     monkeypatch.setenv("IX_WEAVE_AGENT", "agent:test")
 
-    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
         if url.endswith("/api/query"):
             # pivot rows for one finished run child of agent:test
             rows = [
