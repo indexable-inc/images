@@ -75,6 +75,12 @@ Contract:
   to prompt into a captured pipe. A call
   that wants ANSI re-enables it with ``env={"NO_COLOR": "",
   "CLICOLOR_FORCE": "1"}`` (or ``with-env`` inside the pipeline).
+- ``SSH_AUTH_SOCK`` is probed once per call: the long-lived kernel
+  outlives the ssh agent it inherited the socket from, so when the path no
+  longer accepts connections it is unset (process env and this engine) with
+  a loud log line instead of letting ``git commit`` signing fail
+  mid-session with ``agent refused operation`` (issue #3140). A live
+  socket, and a deliberate ``env=`` override, are never touched.
 - Each kernel session gets its OWN engine (stored in the session's
   namespace), so one agent's ``let``/``cd``/``def`` never leaks into or
   clobbers another session's pipelines.
@@ -116,6 +122,7 @@ import inspect as _inspect
 import os
 import pathlib
 import re
+import socket
 import time
 from typing import TYPE_CHECKING, Literal, NamedTuple, overload
 
@@ -321,6 +328,76 @@ def _resolve_dir(cwd: str | os.PathLike) -> str:
     return os.fspath(resolved)
 
 
+# The engine keeps its own env copy (seeded from the host env at
+# construction), so a dead SSH_AUTH_SOCK must be hidden there too, not just
+# in os.environ. One eval, atomic under the engine lock: compare-and-hide
+# only while the engine still holds the dead path (a deliberate env=
+# override is the caller's business, never clobbered). The dead path crosses
+# as a per-eval env var instead of a source literal, so no hand-rendered
+# nushell string quoting; the sentinel hides itself in the same eval so it
+# never persists into `$env`.
+_DEAD_SOCK_VAR = "__ix_nu_dead_ssh_auth_sock"
+_HIDE_DEAD_SOCK = (
+    f"if ($env.SSH_AUTH_SOCK? == $env.{_DEAD_SOCK_VAR}) {{ hide-env SSH_AUTH_SOCK }}; "
+    f"hide-env -i {_DEAD_SOCK_VAR}"
+)
+
+
+def _dead_ssh_auth_sock() -> str | None:
+    """The dead socket ``SSH_AUTH_SOCK`` points at, or ``None`` when the
+    variable is unset or the socket accepts connections.
+
+    The long-lived kernel inherits ``SSH_AUTH_SOCK`` once at startup while
+    the agent behind it (1Password, launchd) restarts independently, so
+    hours into a session the path goes dead and ``git commit`` signing fails
+    with ``agent refused operation`` with no hint that the env is the
+    culprit (issue #3140). One connect(2) per call catches that before the
+    pipeline runs. Synchronous on purpose, like :func:`_resolve_dir`: a
+    local unix socket connect succeeds or fails immediately.
+    """
+    path = os.environ.get("SSH_AUTH_SOCK")
+    if not path:
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(1.0)
+            probe.connect(path)
+    except OSError:
+        return path
+    return None
+
+
+async def _drop_dead_ssh_auth_sock(engine: Engine, cwd: str | None) -> None:
+    """Unset ``SSH_AUTH_SOCK`` everywhere when its socket is dead, loudly.
+
+    Unsetting reproduces the manual ``hide-env -i SSH_AUTH_SOCK`` workaround
+    (issue #3140): with no agent socket in the env, git's signing program
+    resolves the live agent itself. No refresh is attempted: a replacement
+    socket at the same path would have passed the probe. ``cwd`` mirrors the
+    caller's resolved directory so an explicit ``cwd=`` still recovers a
+    deleted remembered PWD in the same call (issue #2587).
+    """
+    dead = _dead_ssh_auth_sock()
+    if dead is None:
+        return
+    del os.environ["SSH_AUTH_SOCK"]
+    coroutine, _handle = engine.eval(
+        _HIDE_DEAD_SOCK, input=None, cwd=cwd, env={_DEAD_SOCK_VAR: dead}, check=True
+    )
+    try:
+        await coroutine
+    except NuCwdError:
+        # The main eval's recovery contract (issue #2587) must survive this
+        # pre-eval: discard the stale engine so a retry starts fresh.
+        _discard_engine(engine)
+        raise
+    print(
+        f"[nu] SSH_AUTH_SOCK pointed at a dead agent socket ({dead}); "
+        "unset it (process env and this engine) so commit signing stops "
+        "failing with 'agent refused operation' (issue #3140)"
+    )
+
+
 async def _run(
     code: str,
     *,
@@ -343,6 +420,7 @@ async def _run(
         _rename_current_job(name)
 
     engine = _default_engine()
+    await _drop_dead_ssh_auth_sock(engine, resolved_cwd)
     loop = asyncio.get_running_loop()
     state: dict[str, object] = {
         "code": code,

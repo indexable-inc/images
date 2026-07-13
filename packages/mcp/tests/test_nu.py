@@ -10,7 +10,11 @@ crossing, the df -> nu -> df roundtrip, the NuError diagnostic surface,
 import asyncio
 import datetime
 import inspect
+import os
 import pathlib
+import shutil
+import socket
+import tempfile
 
 import polars as pl
 import pytest
@@ -521,4 +525,90 @@ def test_externals_run_color_free_even_when_host_forces_color(
     finally:
         # The forced-color engine (and the env= override, which persists on
         # the stack) must not leak into later tests.
+        nu.reset()
+
+
+def _short_socket_path() -> pathlib.Path:
+    # AF_UNIX sun_path caps at ~104 bytes on macOS; pytest's tmp_path nests
+    # too deep under the sandbox TMPDIR to bind reliably, so carve a
+    # short-named dir instead (the caller removes it).
+    return pathlib.Path(tempfile.mkdtemp(prefix="nu-sock-")) / "a.sock"
+
+
+def test_dead_ssh_auth_sock_is_unset_everywhere_and_logged(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Issue #3140: the long-lived kernel outlives the ssh agent it inherited
+    # SSH_AUTH_SOCK from, and git commit signing then fails mid-session with
+    # 'agent refused operation'. A socket file with no listener is exactly
+    # that shape (connect -> ECONNREFUSED); the probe must unset the variable
+    # in the process env AND the engine's own env copy, and say so loudly.
+    sock_path = _short_socket_path()
+    holder = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    holder.bind(str(sock_path))
+    holder.close()  # the file stays; nothing accepts connections
+    monkeypatch.setenv("SSH_AUTH_SOCK", str(sock_path))
+    nu.reset()  # the engine copies the host env at construction
+    try:
+        assert run(nu.value("2 + 2")) == 4
+        assert "SSH_AUTH_SOCK" not in os.environ
+        assert run(nu.value("'SSH_AUTH_SOCK' in $env")) is False
+        # The sentinel carrying the dead path must not persist into $env.
+        assert run(nu.value("$env | columns | where $it =~ 'ix_nu_dead' | length")) == 0
+        logged = capsys.readouterr().out
+        assert str(sock_path) in logged
+        assert "3140" in logged
+    finally:
+        shutil.rmtree(sock_path.parent)
+        nu.reset()
+
+
+def test_missing_ssh_auth_sock_path_counts_as_dead(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other stale shape: the launchd/agent directory is gone entirely
+    # (connect -> ENOENT).
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/nonexistent/ix-3140/agent.sock")
+    nu.reset()
+    try:
+        assert run(nu.value("2 + 2")) == 4
+        assert "SSH_AUTH_SOCK" not in os.environ
+        assert "/nonexistent/ix-3140/agent.sock" in capsys.readouterr().out
+    finally:
+        nu.reset()
+
+
+def test_live_ssh_auth_sock_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sock_path = _short_socket_path()
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(sock_path))
+    server.listen(1)
+    monkeypatch.setenv("SSH_AUTH_SOCK", str(sock_path))
+    nu.reset()
+    try:
+        assert run(nu.value("$env.SSH_AUTH_SOCK")) == str(sock_path)
+        assert os.environ["SSH_AUTH_SOCK"] == str(sock_path)
+        assert capsys.readouterr().out == ""
+    finally:
+        server.close()
+        shutil.rmtree(sock_path.parent)
+        nu.reset()
+
+
+def test_deliberate_env_override_survives_host_sock_death(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # env= persists on the engine's stack; only an engine value EQUAL to the
+    # dead host path is hidden, so a caller's own override is never
+    # clobbered even while the process env copy gets unset.
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    nu.reset()
+    try:
+        run(nu.value("2 + 2", env={"SSH_AUTH_SOCK": "/deliberate/override.sock"}))
+        monkeypatch.setenv("SSH_AUTH_SOCK", "/nonexistent/ix-3140/dead.sock")
+        assert run(nu.value("$env.SSH_AUTH_SOCK")) == "/deliberate/override.sock"
+        assert "SSH_AUTH_SOCK" not in os.environ
+    finally:
         nu.reset()
