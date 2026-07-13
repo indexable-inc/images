@@ -22,6 +22,13 @@ When work exposes a real bug, broken assumption, or unidiomatic pattern that
 will outlive the current task, file a GitHub issue right then. One concrete
 observation per issue.
 
+Before filing a code-level issue derived from a running or profiled binary (a
+stack trace, symbol, or hot function), pin the binary to a repo+rev: the build
+path often embeds the rev, `git cat-file -t <rev>` in each candidate repo
+confirms the owner, and `gh api search/code` on a quoted symbol finds the
+source. Then confirm the symbol still exists on that repo's main; if it is
+gone, the fix already landed, so cite the removing PR instead of filing.
+
 Apply labels at filing time. Use labels to make the next action sortable:
 `bug`, `enhancement`, `documentation`, `rfc`, `help wanted`, `good first issue`,
 and `ai-capable` when an agent can plausibly finish the issue from the body

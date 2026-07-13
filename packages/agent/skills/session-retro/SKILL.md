@@ -52,7 +52,12 @@ For each candidate:
    showed up. A weak flag on a repo tool, a misleading system-prompt rule, a
    missing memory: each has a clear owner (`indexable-inc/index`,
    `indexable-inc/ix`, or another org repo).
-2. **Search open issues first**: `gh search issues --repo <owner>/<repo>
+2. **Pin binary-derived evidence**: when the item comes from a running or
+   profiled binary, resolve the binary to a repo+rev and confirm the quoted
+   symbol still exists on that repo's main before filing (per the `issues`
+   skill); a symbol gone from main means the fix already landed, so cite the
+   removing PR instead of filing.
+3. **Search open issues first**: `gh search issues --repo <owner>/<repo>
    "<keywords>" --state open` (or `gh issue list --repo <o>/<r> --search
    "<keywords>"`). If a real duplicate exists, do NOT re-file. When you have new
    evidence, comment on the existing issue instead (`gh issue comment`).
