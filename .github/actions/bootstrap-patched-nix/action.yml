@@ -7,10 +7,11 @@ description: >-
   (builds still talk to the host daemon; the 2.34.7+ix client is
   protocol-compatible with the fleet daemon family). Evaluating the current
   tree to build that client would be circular, so the client is built from a
-  pinned separator-free rev and substituted from the warm store /
-  cache.ix.dev on repeat runs. Requires the repository to be checked out and
-  a nix client on PATH (the host daemon's on self-hosted runners, the
-  install-nix action's elsewhere).
+  pinned separator-free revision and substituted from the warm store /
+  cache.ix.dev on repeat runs. Downstream repositories fetch that revision
+  from the repository that owns this action. Requires git and a nix client on
+  PATH (the host daemon's on self-hosted runners, the install-nix action's
+  elsewhere).
 
 runs:
   using: composite
@@ -18,22 +19,40 @@ runs:
     - name: Build the patched Nix client from the pinned rev
       shell: bash
       env:
-        # The pinned bootstrap rev: the newest rev whose own eval closure is
-        # separator-free AND that carries the nix-ix lexer patch (0014,
-        # index#2666). Any such rev works; move it forward deliberately when
-        # the nix-ix closure changes shape (it is not wired to any update
-        # automation). The rev stays fetchable through the PR's head ref even
-        # after a squash merge.
-        BOOTSTRAP_REV: bf7a9b0d8577b32e542e8a3425ace8bb0c9bbaed
+        BOOTSTRAP_LOCK: ${{ github.action_path }}/lock.json
+        BOOTSTRAP_LOCK_READER: ${{ github.action_path }}/read-lock.nix
       run: |
         set -euo pipefail
         # Runner logs are not always reachable from automation, so failures
         # must explain themselves through annotations: name the command that
         # died and where.
         trap 'echo "::error title=bootstrap-patched-nix::failed at line $LINENO: $BASH_COMMAND"' ERR
-        if ! git rev-parse --verify --quiet "$BOOTSTRAP_REV^{commit}" >/dev/null; then
-          echo "::notice title=bootstrap-patched-nix::pinned rev not in checkout; fetching $BOOTSTRAP_REV"
-          git fetch --depth 1 origin "$BOOTSTRAP_REV"
+        source_repository="$(BOOTSTRAP_LOCK_FIELD=repository \
+          nix --extra-experimental-features nix-command \
+            eval --impure --raw --file "$BOOTSTRAP_LOCK_READER")"
+        bootstrap_rev="$(BOOTSTRAP_LOCK_FIELD=revision \
+          nix --extra-experimental-features nix-command \
+            eval --impure --raw --file "$BOOTSTRAP_LOCK_READER")"
+        source_repo="$GITHUB_WORKSPACE"
+        if [[ "$GITHUB_REPOSITORY" == "$source_repository" ]]; then
+          if ! git -C "$source_repo" rev-parse --verify --quiet "$bootstrap_rev^{commit}" >/dev/null; then
+            echo "::notice title=bootstrap-patched-nix::pinned rev not in checkout; fetching $bootstrap_rev"
+            git -C "$source_repo" fetch --depth 1 origin "$bootstrap_rev"
+          fi
+        else
+          # A downstream checkout's origin cannot supply index's pinned
+          # bootstrap revision. Fetch it from the action owner so consumers do
+          # not copy this bootstrap machinery into their own repositories.
+          source_repo="$RUNNER_TEMP/nix-ix-bootstrap-source"
+          git init -q "$source_repo"
+          git -C "$source_repo" fetch \
+            --depth 1 \
+            "https://github.com/$source_repository.git" \
+            "$bootstrap_rev"
+        fi
+        if ! git -C "$source_repo" rev-parse --verify --quiet "$bootstrap_rev^{commit}" >/dev/null; then
+          echo "::error title=bootstrap-patched-nix::pinned rev $bootstrap_rev is unavailable from $source_repository"
+          exit 1
         fi
         # Materialize the pinned tree with `git archive` and build it from a
         # synthetic single-commit git repo. Every other flake-ref shape hits
@@ -44,13 +63,13 @@ runs:
         # checkout builds from.
         src="$RUNNER_TEMP/nix-ix-bootstrap"
         mkdir -p "$src"
-        git archive "$BOOTSTRAP_REV" | tar -x -C "$src"
+        git -C "$source_repo" archive "$bootstrap_rev" | tar -x -C "$src"
         git -C "$src" -c init.defaultBranch=bootstrap init -q
         git -C "$src" add -A
         git -C "$src" \
           -c user.email=bootstrap@ix.dev -c user.name=bootstrap \
           -c commit.gpgsign=false \
-          commit -q -m "nix-ix bootstrap @ $BOOTSTRAP_REV"
+          commit -q -m "nix-ix bootstrap @ $bootstrap_rev"
         if ! out=$(nix build \
           --extra-experimental-features "nix-command flakes" \
           --out-link "$RUNNER_TEMP/nix-ix" \
@@ -60,5 +79,11 @@ runs:
           echo "::error title=bootstrap-patched-nix::nix build failed: $short"
           exit 1
         fi
+        client="$RUNNER_TEMP/nix-ix/bin/nix"
+        if [[ "$("$client" --extra-experimental-features nix-command \
+          eval --raw --expr 'toString 25_565')" != 25565 ]]; then
+          echo "::error title=bootstrap-patched-nix::built client does not accept underscore digit separators"
+          exit 1
+        fi
         echo "$RUNNER_TEMP/nix-ix/bin" >> "$GITHUB_PATH"
-        echo "::notice title=bootstrap-patched-nix::$("$RUNNER_TEMP/nix-ix/bin/nix" --version) on PATH"
+        echo "::notice title=bootstrap-patched-nix::$("$client" --version) on PATH"

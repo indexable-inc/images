@@ -4,8 +4,25 @@ set -euo pipefail
 approval_tag="[approve-user-change:v1]"
 approval_body="${approval_tag} Every changed path belongs to the pull request author’s registered users directory."
 
-valid_login() {
+valid_user_login() {
   [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]]
+}
+
+valid_app_login() {
+  [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?\[bot\]$ ]]
+}
+
+principal_kind() {
+  local login="$1"
+  local github_type="$2"
+
+  if [ "$github_type" = User ] && valid_user_login "$login"; then
+    echo user
+  elif [ "$github_type" = Bot ] && valid_app_login "$login"; then
+    echo app
+  else
+    return 1
+  fi
 }
 
 changes_belong_to_user() {
@@ -47,13 +64,19 @@ main() {
   : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
   : "${PR_AUTHOR:?PR_AUTHOR is required}"
   : "${PR_AUTHOR_ID:?PR_AUTHOR_ID is required}"
+  : "${PR_AUTHOR_TYPE:?PR_AUTHOR_TYPE is required}"
   : "${PR_NUMBER:?PR_NUMBER is required}"
   : "${EXPECTED_BASE_SHA:?EXPECTED_BASE_SHA is required}"
   : "${EXPECTED_HEAD_SHA:?EXPECTED_HEAD_SHA is required}"
 
-  if ! valid_login "$PR_AUTHOR"; then
-    echo "Refusing invalid GitHub login: $PR_AUTHOR" >&2
+  local author_kind
+  author_kind="$(principal_kind "$PR_AUTHOR" "$PR_AUTHOR_TYPE")" || {
+    echo "Refusing invalid GitHub principal: ${PR_AUTHOR_TYPE} ${PR_AUTHOR}" >&2
     exit 1
+  }
+  if [ "$author_kind" = app ]; then
+    echo "GitHub App author ${PR_AUTHOR} requires human approval."
+    exit 0
   fi
 
   local login="${PR_AUTHOR,,}"
@@ -74,9 +97,11 @@ main() {
 
   jq -e \
     --arg author "$login" \
+    --arg author_type "$PR_AUTHOR_TYPE" \
     --arg base_sha "$EXPECTED_BASE_SHA" \
     --arg head_sha "$EXPECTED_HEAD_SHA" \
     '(.user.login | ascii_downcase) == $author
+      and .user.type == $author_type
       and .base.ref == "main"
       and .base.sha == $base_sha
       and .head.sha == $head_sha' \

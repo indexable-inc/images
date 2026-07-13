@@ -21,7 +21,7 @@ from ix_notebook_mcp import store
 def _capture(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     posted: list[dict] = []
 
-    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
         if url.endswith("/api/facts"):
             posted.extend(body if isinstance(body, list) else [body])
         return {"seq": 1, "id": "f1"}

@@ -129,7 +129,7 @@
   # Four replicas of one base node declaring updateStrategy.maxUnavailable = 2.
   rollingPlan = jsonFormat.generate "ix-fleet-rolling-plan.json" {
     order = map (index: "api-${toString index}") (lib.range 0 3);
-    nodes = lib.listToAttrs (map (index: {
+    nodes = lib.genAttrs' (lib.range 0 3) (index: {
       name = "api-${toString index}";
       value = {
         name = "api-${toString index}";
@@ -151,7 +151,7 @@
         snapshot = false;
         updateStrategy.maxUnavailable = 2;
       };
-    }) (lib.range 0 3));
+    });
   };
 
   # A live (non-dry-run) `up` hands its whole fan-out to IX_FLEET_DAG_RUNNER
@@ -167,9 +167,12 @@
       strictDeps = true;
     }
     ''
-      export IX_FLEET_DAG_RUNNER=${pkgs.writeShellScript "capture-dag-spec" ''
-        cp "$1" dag-spec.json
-      ''}
+      export IX_FLEET_DAG_RUNNER=${lib.getExe (ix.writeBashApplication pkgs {
+        name = "capture-dag-spec";
+        text = ''
+          cp "$1" dag-spec.json
+        '';
+      })}
       ix-fleet --plan ${rollingPlan} up --skip-push --skip-health
       jq -e '
         (.nodes | length == 4)

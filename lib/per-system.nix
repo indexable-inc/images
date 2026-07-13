@@ -141,9 +141,7 @@
           '^\.github/.*\.ya?ml$'
           '(^|/)docker-compose\.ya?ml$'
           '(^|/)plugin\.yml$'
-          '^packages/agent/symphony/workflows/.*/repositories\.yaml$'
           '^\.editorconfig$'
-          '^packages/agent/symphony/elixir/\.sobelow-conf$'
           '^packages/minecraft/minestom/servers/[^/]+/gradle\.properties$'
           '^packages/minecraft/minestom/servers/[^/]+/gradle/verification-metadata\.xml$'
           '^packages/minecraft/minestom/servers/[^/]+/src/main/resources/logback\.xml$'
@@ -883,6 +881,24 @@
     in
       lib.mergeAttrsList (map rootsForTarget crossTargets)
   );
+  # A cross package whose build rides a distinct `cargoUnit.buildWorkspace`
+  # instead of the shared `crossWorkspace` (codex: its codex-rs is a second
+  # workspace) exposes that workspace's unit-graph IFD artifacts via
+  # `passthru.workspaceIfdRoots`. `crossIfdRoots` only covers the shared
+  # workspace, so harvest these too -- otherwise a Mac consumer substituting the
+  # cross output re-vendors/re-renders that graph at eval and hits the #1890
+  # trap on x86_64-linux drvs it cannot build. Generic over `crossPackages`, so
+  # a future second-workspace cross package joins with no hand-kept list.
+  crossPackageIfdRoots = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+    lib.concatMapAttrs (
+      name: pkg:
+        lib.mapAttrs' (
+          rootName: drv: lib.nameValuePair "cross-ifd-${name}-${rootName}" drv
+        )
+        (pkg.passthru.workspaceIfdRoots or {})
+    )
+    crossPackages
+  );
   darwinPackageAliases = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     lib.genAttrs (lib.attrNames darwinTargetsBySystem) (
       darwinSystem: let
@@ -1383,13 +1399,6 @@
               mkdir -p "$out"
             '';
           run-records-session = repoPackages.run.passthru.tests.recordsSession;
-          # Symphony's required quality lane (compile -Werror, mix format,
-          # `mix credo --strict`, mix test), built through the shared
-          # ix.buildElixirCheck lane against the repo-wide strict Credo config
-          # (lib/elixir/credo.exs); see packages/agent/symphony/default.nix. The
-          # advisory lane (dialyzer, sobelow, deps.audit) stays a local
-          # `mix quality` run.
-          symphony-elixir = repoPackages.symphony.passthru.tests.elixir;
           # hive's quality lane through the same shared ix.buildElixirCheck:
           # `mix compile --warnings-as-errors` (Elixir 1.18's set-theoretic type
           # checker) plus format, `mix credo --strict`, and test. The lint half
@@ -1521,9 +1530,6 @@
               test -f "$pkg/share/nix-web-monitor/index.html"
               mkdir -p "$out"
             '';
-          site-case-tests = pkgs.linkFarm "site-case-tests" (
-            lib.mapAttrsToList (name: path: {inherit name path;}) siteTests.cases
-          );
           site-test = siteTests.all;
         };
         checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
@@ -1554,11 +1560,14 @@
       claude-plugin = claudePluginDir;
       # CI tools are pinned to the flake's nixpkgs so workflows resolve exact
       # executables with `nix build .#<tool>` instead of trusting runner PATH.
-      # cache-push uses attic/jq/xargs/gh; cve-scan uses curl/jq/tar.
+      # cache-push uses attic/jq/xargs/gh; cve-scan uses curl/jq/tar, and its
+      # PR gate uses node for ratchet-cli.mjs.
       # This avoids depending on a tool being on the runner PATH or a floating
       # `nixpkgs#` registry reference. The self-hosted runner PATH carries
-      # coreutils + nix but not findutils, jq, or gh, so the bare commands are
-      # `command not found` (cve-scan run 28598889924 died on exactly that).
+      # coreutils + nix but not findutils, jq, gh, or node, so the bare
+      # commands are `command not found` (cve-scan run 28598889924 died on
+      # exactly that; the regression gate's ratchet step died the same way on
+      # bare `node` in run 29196909666).
       inherit
         (pkgs)
         attic-client
@@ -1568,6 +1577,7 @@
         findutils
         gh
         gnutar
+        nodejs
         ;
     }
     // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
@@ -1678,6 +1688,9 @@ in {
   #      forces at eval when it substitutes a Darwin cross output. These are
   #      build-time deps of the cross packages, so they are absent from those
   #      packages' runtime closures; adding them as roots is the fix for #1687.
+  #      `crossPackageIfdRoots` extends this to cross packages that ride a second
+  #      `buildWorkspace` (codex's codex-rs), whose own unit graph `crossIfdRoots`
+  #      -- keyed off the shared `crossWorkspace` -- does not see.
   #   4. On Darwin hosts, the native lane's eval-time IFD outputs
   #      (`nativeIfdRoots`): the same three unit-graph artifacts as (3) but for
   #      the host's own target, which a Darwin consumer forces at eval when it
@@ -1720,7 +1733,7 @@ in {
     # lane sees the cross drvs and its system filter drops them.
     if pkgs.stdenv.hostPlatform.isDarwin
     then imagesAsClosures // nativeIfdRoots
-    else imagesAsClosures // exampleNodeToplevels // crossIfdRoots;
+    else imagesAsClosures // exampleNodeToplevels // crossIfdRoots // crossPackageIfdRoots;
 
   # The policy manifest is safe to `nix eval --json`: derivations live in the
   # separate securityRootPaths output and must be realized before their terminal
@@ -1782,20 +1795,6 @@ in {
         pkgs.valgrind
         pkgs.samply
         pkgs.jemalloc
-      ];
-    };
-
-    # Dev loop for packages/symphony: the Elixir/OTP pairing the runtime pins
-    # (1.19 on 28) plus the host tools bin/run-nix expects. codex is the plain
-    # nixpkgs CLI; authenticate it before `nix run .#symphony`.
-    symphony = pkgs.mkShellNoCC {
-      packages = [
-        (ix.languages.elixir.toolchain pkgs {version = "1.19";})
-        (ix.languages.erlang.toolchain pkgs {version = "28";})
-        pkgs.codex
-        pkgs.gh
-        pkgs.git
-        pkgs.openssh
       ];
     };
   };

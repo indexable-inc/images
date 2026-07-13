@@ -6,7 +6,6 @@
   ix,
   optionsModule,
   raycastModule,
-  symphonyModule,
 }: {
   config,
   pkgs,
@@ -103,62 +102,12 @@ in {
   imports = [
     optionsModule
     raycastModule
-    # Symphony BEAM runtime (mechanism in index, values in the
-    # services.symphony block below): scheduled agent workflows with Slack
-    # digests. Renders a launchd agent here via portable-services.
-    symphonyModule
     # Ghostty config, generated from Nix (home/ghostty.nix). Replaces the former
     # out-of-store symlink to ghostty/config.
     ghosttyModule
   ];
 
   home.sessionPath = ["$HOME/.lmstudio/bin"];
-
-  # Symphony runtime: the BEAM is the scheduler (cron triggers tick inside
-  # it), so the agent stays resident (restart=always in the home module).
-  # packDir points at the mutable index checkout: editing a .sym or prompt
-  # there applies live, no restart. A lid-closed 9am fire is deferred to at
-  # most one catch-up run on wake (CronState watermark); an always-on linux
-  # host can enable this same module for hard scheduling guarantees.
-  # Secrets (SLACK_BOT_OAUTH_TOKEN) live in the environmentFile, never the
-  # store; seed it from the team vault (see README in that directory).
-  services.symphony = {
-    enable = true;
-    primaryRepo = cfg.paths.indexCheckout;
-    packDir = cfg.paths.symphonyPack;
-    environmentFile = "${config.home.homeDirectory}/.config/symphony/env";
-    extraPath = [
-      # Plain upstream codex, NOT the index wrapper: the wrapper bakes the
-      # ix-mcp/exa MCP servers as argv -c flags that --ignore-user-config
-      # cannot remove, and their bootstrap wedges unattended launchd runs
-      # (verified live 2026-07-06: 0% CPU codex, MCP init never completed).
-      pkgs.codex
-      # Plain upstream claude-code for the same reason: the ~/.local/bin
-      # wrapper's baked ix-mcp bootstrap wedges and chats on stdout in
-      # unattended launchd runs (04:30Z truncated-reply tick). The index
-      # build, not nixpkgs' (whose fetcher needs __noChroot, blocked by
-      # the darwin sandbox).
-      indexPkgs.claude-code
-      pkgs.jq
-      pkgs.gh
-      pkgs.git
-    ];
-    extraEnvironment = {
-      SYMPHONY_SLACK_NOTIFY_CHANNEL = "C0A4TD9G7HR"; # #general
-      SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS = "insights,triage";
-      # Standing local room-server (tmux session `room-server`, gc-rooted
-      # ix#room-server at ~/.local/share/room-server/app) for :local /
-      # {:room, url} placements; agent threads are watchable at this URL.
-      SYMPHONY_ROOM_SERVER_URL = "http://127.0.0.1:3010";
-      # Compiled overseer report app (template.html + bundle.js); the
-      # overseer workflow tick splices its data.json into the template.
-      # TODO(darwin-cache): flip to the declarative reference once the
-      # e9ef6062 cache-ready pin's native darwin codex substitutes (the
-      # 21:56Z switch attempt built codex locally and failed); until then
-      # the env-file bridge carries the gc-rooted store path.
-      # OVERSEER_APP = "${indexPkgs.overseer-report}";
-    };
-  };
 
   # Raycast Focus session defaults, written to the com.raycast.macos defaults
   # domain at switch time. The blocklist itself stays UI-managed: Raycast
@@ -691,8 +640,7 @@ in {
   # locally so one registry owns the number; WebTransport stays on 4433. The binary is the gc-rooted out-link of
   # ix#room-server (config has no ix input; refresh with
   # `nix build ~/Projects/indexable-inc/ix#room-server --out-link
-  # ~/.local/share/room-server/app`). Symphony reaches it via
-  # SYMPHONY_ROOM_SERVER_URL above.
+  # ~/.local/share/room-server/app`).
   launchd.agents.room-server = {
     enable = true;
     config = {

@@ -61,6 +61,18 @@
     {
       "patch": "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch",
       "deps": []
+    },
+    {
+      "patch": "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch",
+      "deps": []
+    },
+    {
+      "patch": "0016-fix-libstore-accept-opaque-temporary-root-filenames.patch",
+      "deps": []
+    },
+    {
+      "patch": "0017-fix-libstore-recheck-free-space-after-GC-lock.patch",
+      "deps": []
     }
   ]
 }

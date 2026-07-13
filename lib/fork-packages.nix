@@ -477,6 +477,26 @@
           upstream = "hold";
           reason = "Language syntax change; must start as an upstream issue/RFC, and humans submit nix patches upstream per NixOS/nix#15984.";
         };
+        "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch" = {
+          upstream = "hold";
+          reason = "Fixes repeated installables multiplying `nix build --json` results (indexable-inc/index#2633). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0016: a newer Nix uses opaque per-instance temporary-root filenames.
+        # The 2.34 collector parsed every entry as a decimal PID, so one newer
+        # file disabled both scheduled and reactive GC until the store filled
+        # (index#3031). Upstream master already treats the name as opaque in
+        # NixOS/nix#15992; this is the reader-side backport for mixed versions.
+        "0016-fix-libstore-accept-opaque-temporary-root-filenames.patch" = {
+          upstream = "hold";
+          reason = "Backports the mixed-version temporary-root reader from NixOS/nix#15992 (indexable-inc/index#3031). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0017: each daemon process decides whether to auto-GC before waiting
+        # for the store-global gc.lock. Recheck under that lock so queued
+        # callers do not repeat a collection after the first restores space.
+        "0017-fix-libstore-recheck-free-space-after-GC-lock.patch" = {
+          upstream = "hold";
+          reason = "Prevents stale queued auto-GC decisions from serializing CI jobs behind repeated collections (indexable-inc/index#3085, indexable-inc/ix#7145). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];

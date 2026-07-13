@@ -160,17 +160,17 @@ def github-path-is-fresh [path: path, max_age: duration] {
 }
 
 def github-pr-check-token [check: record] {
-    let conclusion = ($check.conclusion? | default "" | str upcase)
+    let conclusion = ($check.conclusion? | default "" | str uppercase)
     if not ($conclusion | is-empty) {
         return $conclusion
     }
 
-    let status = ($check.status? | default "" | str upcase)
+    let status = ($check.status? | default "" | str uppercase)
     if not ($status | is-empty) {
         return $status
     }
 
-    $check.state? | default "" | str upcase
+    $check.state? | default "" | str uppercase
 }
 
 def github-pr-check-state [rollup: list] {

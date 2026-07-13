@@ -524,7 +524,6 @@ in {
       # Development - Build tools
       cmake # cross-platform build system generator
       pkg-config # query compiler/linker flags for installed libs
-      bazel_8 # Google's hermetic, parallel build system (v8.x)
       # watchman  # commented 2026-05-22: upstream folly test (UninitializedMemoryHacksTest) fails to compile under current clang, blocking rebuilds. Re-enable when nixpkgs bumps folly.
       just # command runner (`justfile` — like make without the gotchas)
       capnproto # Cap'n Proto IDL + RPC (faster Protobuf alternative)
@@ -720,7 +719,7 @@ in {
       termdown # countdown timer / stopwatch (duplicate also listed above)
       twurl # `curl` with built-in Twitter/X OAuth signing
       ugrep # fast grep with PDF/zip/tar/JSON support
-      unar # universal unarchiver (rar/7z/zip/tar/etc. via The Unarchiver)
+      # unar # universal unarchiver (rar/7z/zip/tar/etc. via The Unarchiver); disabled 2026-07-12: same ld64-957.1 libc++-hardening trap as vengi-tools (index#3133), crashes linking `unar` via xcodebuild, no cache.nixos.org aarch64-darwin build. Re-enable with vengi-tools once the pin carries NixOS/nixpkgs#536365.
       viddy # modern `watch` with diff highlighting and time-travel
       vivid # LS_COLORS theme generator (used by `eza`/`ls`)
       wabt # WebAssembly Binary Toolkit (`wasm2wat`, `wat2wasm`, `wasm-objdump`)
@@ -744,7 +743,7 @@ in {
       protoc-gen-swift # Swift codegen plugin for protoc
       # sif                                             # Singularity Image Format tooling
       swiftformat # Swift source code formatter
-      vengi-tools # voxel/mesh conversion toolkit; `vengi-voxconvert` supports binvox without x86_64-darwin nixpkgs
+      # vengi-tools # voxel/mesh conversion toolkit (`vengi-voxconvert` for binvox); disabled 2026-07-12: current nixpkgs crashes cctools ld64 (EXC_BREAKPOINT in ld::passes::stubs::Pass::process) linking its first executable, deterministically, and cache.nixos.org has no aarch64-darwin build. Re-enable via index#3133 once the toolchain regression is resolved.
       # wezterm # GPU terminal emulator; disabled 2026-07-01: aarch64-darwin output was absent from cache.nixos.org and rebuilt locally for ~46m during a routine flake update. Use Alacritty or `nix run nixpkgs#wezterm -- ...` when needed.
       cfg.packages.mercuryCli # Mercury CLI (custom flake input)
       indexPkgs.elevenlabs-say # ElevenLabs say-style TTS CLI (-r/-v, streaming); key via ELEVENLABS_API_KEY
@@ -947,8 +946,8 @@ in {
 
   # Ghostty themes and shaders (cross-platform location); the assets are
   # shared, not per-user, so they live in modules/home/ghostty.
-  home.file.".config/ghostty/themes".source = ../../../modules/home/ghostty/themes;
-  home.file.".config/ghostty/shaders".source = ../../../modules/home/ghostty/shaders;
+  home.file.".config/ghostty/themes".source = ix.paths.modules + "/home/ghostty/themes";
+  home.file.".config/ghostty/shaders".source = ix.paths.modules + "/home/ghostty/shaders";
 
   # Alacritty
   home.file.".config/alacritty/alacritty.toml".source = renderStructured "alacritty-alacritty";

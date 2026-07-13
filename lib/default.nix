@@ -163,6 +163,13 @@
   # Exposed so a downstream consumer passes it straight through to `mkForkChecks`
   # rather than reaching into index's package layout by path.
   forkDagCheckSrc = paths.packagesRoot + "/rebase-patches";
+  # Public patch data for consumers whose system Nix is not `nix-ix`. Keep the
+  # patch bytes owned by index so fleet configurations consume one source of
+  # truth instead of copying the fix into each repository.
+  nixPatches = {
+    autoGcRecheckAfterLock = paths.packagesRoot + "/nix/nix/patches/0017-fix-libstore-recheck-free-space-after-GC-lock.patch";
+    opaqueTemporaryRootFilenames = paths.packagesRoot + "/nix/nix/patches/0016-fix-libstore-accept-opaque-temporary-root-filenames.patch";
+  };
   secretRefs = import ./util/secret-refs.nix {inherit lib;};
   selfVersionFor = self: import ./util/self-version.nix {inherit lib self;};
   checks = import ./checks.nix {inherit lib;};
@@ -693,6 +700,7 @@
       mkMinecraftSyncManaged
       mutableJson
       netCidr
+      nixPatches
       paths
       patchedSrc
       patchedSrcFor
