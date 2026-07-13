@@ -4493,7 +4493,8 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
     natively (highlighted card with the read span), so a large read informs the
     model without flooding the dashboard. ``target`` is read as a file when it
     names an existing file, otherwise evaluated as a Python expression in the user
-    namespace (e.g. ``jobs['ab12'].output``, a variable you bound). ``start`` and
+    namespace (e.g. ``jobs['ab12'].output``, a variable you bound); top-level
+    ``await`` is allowed, exactly as in a cell. ``start`` and
     ``end`` select a 1-based inclusive line range. ``session`` evaluates the
     expression in that MCP session's namespace (the same one its ``python_exec``
     cells run in), so a variable bound there resolves. Backs the ``read`` MCP tool.
@@ -4502,11 +4503,20 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
     value = None
     path = _existing_file(target)
     if path is None:
-        # Not a file on disk: evaluate the expression. If the VALUE is a string
-        # naming an existing file (`os.path.join(...)`, a variable holding a
-        # path), the same file rule applies to it -- an expression yielding a
+        # Not a file on disk: evaluate the expression. Compiled with top-level
+        # await allowed, matching cells (_compile), so `await jobs['ab12']` is a
+        # valid target instead of a SyntaxError (index#3139); an awaited target's
+        # coroutine resolves right here on the kernel loop. If the VALUE is a
+        # string naming an existing file (`os.path.join(...)`, a variable holding
+        # a path), the same file rule applies to it -- an expression yielding a
         # path reads the file, never echoes the path string back.
-        value = eval(target, ns) if isinstance(target, str) else target  # noqa: S307 -- intentional: evaluating user-provided expression in kernel namespace
+        if isinstance(target, str):
+            code_obj = compile(target, "<read>", "eval", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+            value = eval(code_obj, ns)  # noqa: S307 -- intentional: evaluating user-provided expression in kernel namespace
+            if inspect.iscoroutine(value):
+                value = await value
+        else:
+            value = target
         path = _existing_file(value)
     if path is not None:
         # Off the loop: a large file read is blocking I/O, the one thing that
