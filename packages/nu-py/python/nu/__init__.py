@@ -13,6 +13,7 @@ binary runs with ``^cmd``::
     rec = await nu("http get https://api.github.com/repos/nushell/nushell")
     text = await nu("^git status --short")                  # external binary via ^ (stdout str)
     df = await nu("^gh pr list --json number,title | from json")  # JSON-mode CLI
+    out = await nu(["gh", "issue", "comment", "42", "--body", body])  # argv list, no hand-quoting
 
 This is not a subprocess: the engine (PyO3 bindings over nu-engine) lives in
 this process and its state is persistent, like a REPL: a ``let``, a ``def``,
@@ -60,6 +61,13 @@ Contract:
   #2391). ``^git show | to text; ^git status | to text`` returns the status
   and prints the show. To CAPTURE more than one pipeline's output, make
   separate calls (or build one final value, e.g. a record).
+- An argv LIST runs as ONE external command (issue #3106): ``await
+  nu(["gh", "pr", "create", "--title", title, "--body", body])`` renders
+  every element as a nu string literal through the module's single quoting
+  renderer, so spaces, quotes, newlines, ``$``, globs, and bare dashes in
+  arguments pass through byte-for-byte and nothing is shell-parsed. The
+  first element is the program (``os.PathLike`` elements work); ``input=``,
+  ``check=False``, and the rest of the contract apply unchanged.
 - ``await nu.value(code)`` is the escape hatch when you want the plain
   Python value (a scalar, a nested dict) instead of a frame.
 - Values cross natively, not as JSON: dates arrive as UTC ``Datetime``
@@ -117,6 +125,7 @@ import os
 import pathlib
 import re
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal, NamedTuple, overload
 
 from ._nu import Engine, NuCwdError, NuError
@@ -319,8 +328,50 @@ def _resolve_dir(cwd: str | os.PathLike) -> str:
     return os.fspath(resolved)
 
 
+# Nu double-quoted literals recognize exactly these escape sequences;
+# everything else is literal (`$` interpolates only in `$"..."`, globs only
+# apply to bare words), so escaping the backslash, the quote, and control
+# characters makes a literal that round-trips any argv element byte-for-byte.
+_ARGV_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def _quote(text: str) -> str:
+    """Render ``text`` as a nu double-quoted string literal."""
+    parts = ['"']
+    for ch in text:
+        esc = _ARGV_ESCAPES.get(ch)
+        if esc is not None:
+            parts.append(esc)
+        elif ch.isprintable() or ch == " ":
+            parts.append(ch)
+        else:
+            parts.append(f"\\u{{{ord(ch):x}}}")
+    parts.append('"')
+    return "".join(parts)
+
+
+def _render_argv(argv: Sequence[str | os.PathLike[str]]) -> str:
+    """An argv list as one nu external command (issue #3106).
+
+    Every element becomes a double-quoted literal, so the arguments are
+    passed to the program exactly as given: no glob expansion, no ``$``
+    interpolation, no flag parsing, no re-quoting by hand. This is the one
+    renderer for the nu-source format; callers never assemble it themselves.
+    """
+    if len(argv) == 0:
+        raise ValueError("argv list is empty: the first element is the program to run")
+    words: list[str] = []
+    for index, element in enumerate(argv):
+        if not isinstance(element, (str, os.PathLike)):
+            raise TypeError(
+                f"argv[{index}] is {type(element).__name__}, expected str or os.PathLike"
+            )
+        words.append(_quote(os.fspath(element)))
+    return "^" + " ".join(words)
+
+
 async def _run(
-    code: str,
+    code: str | Sequence[str | os.PathLike[str]],
     *,
     input: object | None = None,
     cwd: str | os.PathLike | None = None,
@@ -334,6 +385,8 @@ async def _run(
     With ``check=True`` a non-zero trailing external raises inside the engine,
     so the exit code of anything that returns is 0.
     """
+    if not isinstance(code, str):
+        code = _render_argv(code)
     resolved_cwd = _resolve_dir(cwd) if cwd is not None else None
     if name is not None and _rename_current_job is not None and (
         _ix_current is not None and _ix_current.get() is not None
@@ -482,7 +535,7 @@ def _to_frame(decoded: object) -> pl.DataFrame:
 
 @overload
 async def nu(
-    code: str,
+    code: str | Sequence[str | os.PathLike[str]],
     *,
     input: object | None = ...,
     cwd: str | os.PathLike | None = ...,
@@ -495,7 +548,7 @@ async def nu(
 
 @overload
 async def nu(
-    code: str,
+    code: str | Sequence[str | os.PathLike[str]],
     *,
     input: object | None = ...,
     cwd: str | os.PathLike | None = ...,
@@ -507,7 +560,7 @@ async def nu(
 
 
 async def nu(
-    code: str,
+    code: str | Sequence[str | os.PathLike[str]],
     *,
     input: object | None = None,
     cwd: str | os.PathLike | None = None,
@@ -519,6 +572,13 @@ async def nu(
     """Run ``code`` as nushell source and return the result as a polars
     DataFrame for tabular output, a plain ``dict`` when the pipeline's value
     is a single record, or the plain ``str`` when it is a lone string.
+
+    ``code`` may instead be an argv LIST (``["gh", "pr", "create", "--body",
+    body]``): it runs as one external command with every element rendered as
+    a nu string literal, so arguments carrying spaces, quotes, newlines,
+    ``$``, globs, or bare dashes pass through byte-for-byte with no shell
+    parsing and no hand-quoting (issue #3106). The first element is the
+    program; ``os.PathLike`` elements are accepted.
 
     Multi-statement source is fine; the last pipeline's output is the result,
     every earlier pipeline's output prints into the job's stdout instead of
@@ -576,7 +636,7 @@ async def nu(
 
 
 async def value(
-    code: str,
+    code: str | Sequence[str | os.PathLike[str]],
     *,
     input: object | None = None,
     cwd: str | os.PathLike | None = None,

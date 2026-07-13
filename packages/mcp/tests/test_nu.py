@@ -506,3 +506,105 @@ def test_externals_run_color_free_even_when_host_forces_color(
         # The forced-color engine (and the env= override, which persists on
         # the stack) must not leak into later tests.
         nu.reset()
+
+
+# --- argv list form (issue #3106) ------------------------------------------
+# `nu(["cmd", ...])` runs one external command with every element rendered by
+# the module's quoting renderer, so callers never hand-quote arguments again.
+
+ARGV_ECHO = "import json, sys; print(json.dumps(sys.argv[1:]))"
+
+
+def echo_argv(*args: str) -> list[str]:
+    """Round-trip ``args`` through a real external via the argv-list form."""
+    import json
+    import sys
+
+    out = run(nu([sys.executable, "-c", ARGV_ECHO, *args]))
+    assert isinstance(out, str)
+    return json.loads(out)
+
+
+def test_argv_list_runs_one_external_command() -> None:
+    assert echo_argv("alpha", "beta") == ["alpha", "beta"]
+
+
+def test_argv_spaces_stay_single_arguments() -> None:
+    # The issue's core failure: hand-rendered f-strings broke on spaces.
+    args = ["two words", "  padded  ", ""]
+    assert echo_argv(*args) == args
+
+
+def test_argv_quotes_and_backslashes_round_trip() -> None:
+    args = ['he said "hi"', "it's", "back\\slash", 'mix\\"of both']
+    assert echo_argv(*args) == args
+
+
+def test_argv_multiline_and_control_chars_round_trip() -> None:
+    # The reported shape (issue #3106): a multiline `--body` forced a temp
+    # file + `--body-file` fallback. Newlines (and friends) must just work.
+    args = ["line1\nline2\n", "tab\there", "crlf\r\n", "\x1b[31mred"]
+    assert echo_argv(*args) == args
+
+
+def test_argv_is_never_shell_parsed() -> None:
+    # Globs, interpolation, subexpressions, flags, separators: all literal.
+    args = ["*", "~", "$env.PWD", "(2 + 2)", "--flag", "--", "-", ";", "|", "&&", "`tick`"]
+    assert echo_argv(*args) == args
+
+
+def test_argv_unicode_round_trips() -> None:
+    assert echo_argv("h\u00e9llo \U0001f680") == ["h\u00e9llo \U0001f680"]
+
+
+def test_argv_pathlike_elements_and_spaced_program(tmp_path: pathlib.Path) -> None:
+    # subprocess semantics: PathLike is a valid argv element, including a
+    # program path containing a space (the hand-quoting worst case).
+    import json
+    import sys
+
+    spaced = tmp_path / "my program"
+    spaced.symlink_to(sys.executable)
+    out = run(nu([spaced, "-c", ARGV_ECHO, tmp_path]))
+    assert isinstance(out, str)
+    assert json.loads(out) == [str(tmp_path)]
+
+
+def test_argv_input_pipes_to_stdin() -> None:
+    import sys
+
+    reader = "import sys; print(sys.stdin.read().upper())"
+    out = run(nu([sys.executable, "-c", reader], input="hi"))
+    assert isinstance(out, str)
+    assert out.strip() == "HI"
+
+
+def test_argv_check_false_surfaces_exit_code() -> None:
+    import sys
+
+    result, exit_code = run(
+        nu([sys.executable, "-c", "print('kept'); raise SystemExit(3)"], check=False)
+    )
+    assert exit_code == 3
+    assert isinstance(result, str)
+    assert result.strip() == "kept"
+
+
+def test_argv_value_returns_plain_python() -> None:
+    import sys
+
+    out = run(nu.value([sys.executable, "-c", "print(41 + 1)"]))
+    assert isinstance(out, str)
+    assert out.strip() == "42"
+
+
+def test_argv_empty_list_raises() -> None:
+    with pytest.raises(ValueError, match="argv list is empty"):
+        run(nu([]))
+
+
+def test_argv_non_string_element_raises() -> None:
+    import sys
+
+    with pytest.raises(TypeError, match=r"argv\[1\] is int"):
+        run(nu([sys.executable, 42]))  # type: ignore[list-item]  -- the rejection under test
