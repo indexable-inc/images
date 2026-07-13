@@ -13,6 +13,7 @@ mod apply;
 mod cmd;
 mod diff;
 mod store;
+mod tui;
 mod value;
 
 use std::path::PathBuf;
@@ -61,6 +62,8 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Browse mutable-file drift interactively.
+    Tui,
     /// One file's logical diff (upper vs base).
     Diff {
         path: String,
@@ -106,6 +109,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 return Ok(ExitCode::FAILURE);
             }
         }
+        Command::Tui => tui::run(&store)?,
         Command::Diff { path, raw } => cmd::print_diff(&store, &path, raw)?,
         Command::Discard { path } => cmd::discard(&store, &path)?,
         Command::Adopt { path } => cmd::adopt(&store, &path)?,
