@@ -83,7 +83,18 @@
   # `[mcp_servers.<name>]` config wins per-key through config-launch.
   mcpServers ?
     (import (ix.paths.packagesRoot + "/agent/common.nix") {
-      inherit lib ix repoPackages;
+      inherit lib ix;
+      # Cross (Linux->Darwin) lane: repoPackages are host-native builds, so
+      # baking `index` would point mcp_servers.index.command at a Linux ix-mcp
+      # the Mac cannot exec (and no Darwin ix-mcp exists in this eval -- it is
+      # a host Python env, not a cross Rust unit). Bake no kernel there: the
+      # same exa-only fallback as the overlay set, and the permissions gate
+      # below then keeps codex's native shell tools enabled instead of
+      # assuming a baked kernel.
+      repoPackages =
+        if ix.cross.isCross or false
+        then builtins.removeAttrs repoPackages ["mcp"]
+        else repoPackages;
       promptOmitRules = omitRules;
     }).defaultServers,
   # The house model/base instructions Codex should run with. This becomes a
@@ -159,6 +170,9 @@
 
   # Codex reads hooks from config, not from launch flags, so expose the rendered
   # shared hook policy for home-manager or managed requirements consumers.
+  # `isCross` makes the runner a portable sh shim around the cross-compiled
+  # claude-hooks (see hook-runner.nix), so the hooksJson a Mac installs from
+  # the aliased package carries no build-host ELF wrappers or Linux tool paths.
   hookRunner = import (ix.paths.packagesRoot + "/agent/policy/hook-runner.nix") {
     inherit
       lib
@@ -168,6 +182,7 @@
       git
       primaryCheckouts
       repoPackages
+      isCross
       ;
   };
   hooksJson = (formats.json {}).generate "codex-hooks.json" {

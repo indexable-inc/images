@@ -25,10 +25,12 @@
   rustyV8Version = "149.2.0";
   rustcTarget = onlyKnown {
     x86_64-linux = "x86_64-unknown-linux-gnu";
+    aarch64-linux = "aarch64-unknown-linux-gnu";
     aarch64-darwin = "aarch64-apple-darwin";
   } "rustcTarget";
   rustyV8Hash = onlyKnown {
     x86_64-linux = "sha256-iu2YY323533Iv7i7R1nsW95HLQv3lD9Y4OYqNQlFxVk=";
+    aarch64-linux = "sha256-+XdRJ8pk3MSjZi0BpSGizvuluY+DOUOog9hHc7Kv88U=";
     aarch64-darwin = "sha256-+rsuyNO6Wm3qY9uaNalg3FypheujLzQrm6Sqocc0sv4=";
   } "librusty_v8 hash";
 
@@ -39,10 +41,12 @@
   webrtcTag = "webrtc-24f6822-2";
   webrtcTriple = onlyKnown {
     x86_64-linux = "linux-x64-release";
+    aarch64-linux = "linux-arm64-release";
     aarch64-darwin = "mac-arm64-release";
   } "webrtc triple";
   webrtcHash = onlyKnown {
     x86_64-linux = "sha256-89SaZMN+qJmvUt3GhfUx8Kvi+3VSiqTa4lKtqqA77Mw=";
+    aarch64-linux = "sha256-QBPVPoY+RwQt1Ztnsb2EltoER6yEw9cMFwSZQG8Tqgs=";
     aarch64-darwin = "sha256-eb5cwV5uBjPEOA4z4XLX6/Gm3Og+ngmXYdYQPw1+tsE=";
   } "webrtc hash";
   rustyV8Archive = fetchurl {

@@ -122,7 +122,13 @@
           # The v8 crate's build script consumes this prebuilt static archive
           # instead of downloading it.
           RUSTY_V8_ARCHIVE = "${prebuilt.librustyV8}";
-          # openssl-sys finds the system openssl through pkg-config.
+          # openssl-sys finds the system openssl through pkg-config. Host
+          # (Linux) scope only, so it stays correct under cross: openssl only
+          # enters codex's graph via native-tls (openssl on Linux,
+          # Security.framework on macOS) and musl-only vendored pins, so no
+          # *-apple-darwin unit ever compiles openssl-sys -- the only units
+          # that read this are host-side Linux ones, where TARGET == HOST and
+          # the pkg-config crate accepts the unqualified path.
           PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
           # Silence the warning-as-error false positives upstream documents
           # (GCC stringop-overflow in BoringSSL; Clang character-conversion).
@@ -133,21 +139,30 @@
         }
         // lib.optionalAttrs (appleToolchain != null) appleToolchain.env
         // lib.optionalAttrs (appleToolchain != null) {
-          # appleToolchain.env's *unqualified* CFLAGS/CXXFLAGS carry
-          # `-isysroot <appleSdk>`, and cc-rs falls back to them for host
-          # units too. The cross graph builds proc-macro deps for the host
-          # (sqlx-macros -> sqlx-sqlite -> libsqlite3-sys), where a
-          # Linux-targeting clang with Apple headers cannot compile the
-          # bundled sqlite3.c (`__linux__` turns on mremap/pread64 paths the
-          # macOS SDK lacks). Triple-qualified vars outrank the unqualified
-          # fallback in cc-rs, so pin the host triple's flags back to empty.
+          # appleToolchain.env's *unqualified* CC/CXX/CFLAGS/CXXFLAGS are the
+          # Darwin cross wrappers and `-isysroot <appleSdk>` flags, and cc-rs
+          # falls back to them for host units too (CC_<triple> > HOST_CC > CC).
+          # The cross graph builds proc-macro deps for the host (sqlx-macros ->
+          # sqlx-sqlite -> libsqlite3-sys), where a Darwin-targeting zig cc
+          # with Apple headers cannot compile the bundled sqlite3.c
+          # (`__linux__` turns on mremap/pread64 paths the macOS SDK lacks).
+          # Triple-qualified vars outrank the unqualified fallback in cc-rs, so
+          # pin the host triple back to the host stdenv toolchain and empty
+          # flags. AR/RANLIB stay the bare llvm ones: llvm-ar is
+          # object-format-agnostic, so it archives host ELF objects fine.
+          "CC_${hostEnvName}" = "${pkgs.stdenv.cc}/bin/cc";
+          "CXX_${hostEnvName}" = "${pkgs.stdenv.cc}/bin/c++";
           "CFLAGS_${hostEnvName}" = "";
           "CXXFLAGS_${hostEnvName}" = "";
         };
       # Build scripts emit `-l` flags that reach the final link, but their
       # `rustc-link-search` paths do not cross cargoUnit's per-unit boundary, so
       # the native libs the codex binary links (openssl, libcap on Linux) need
-      # their lib dirs added to the final link search directly.
+      # their lib dirs added to the final link search directly. The runtime
+      # rpath rides along for free: the native final link runs through stdenv's
+      # cc/ld-wrapper, which appends an `-rpath` entry for every store dir in
+      # `-L`, embedding these paths in the ELF and pulling the libs into the
+      # output's runtime closure.
       extraLinkRustcArgsForPlatform = _platform:
         ["-L" "native=${pkgs.openssl.out}/lib"]
         ++ lib.optionals stdenv.hostPlatform.isLinux ["-L" "native=${pkgs.libcap.lib}/lib"];
