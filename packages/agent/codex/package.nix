@@ -12,4 +12,9 @@
   # top of that same base, without changing what the overlay hands other code.
   flake = true;
   overlay = false;
+  # RFC 0009 cross lane: on a Linux build host, also expose codex cross-compiled
+  # to Darwin (default target aarch64-apple-darwin), so the darwin cache lane can
+  # substitute it instead of building codex-rs natively on a Mac. default.nix
+  # reads the `ix.cross` signal and threads the target into rust.nix.
+  cross = true;
 }
