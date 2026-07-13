@@ -186,9 +186,15 @@ impl BuildStatSampler {
 fn start_generation_without_procfs(pid: i64) -> Option<u64> {
     // Prefix of XNU's `struct kinfo_proc` (bsd/sys/sysctl.h): its first field
     // is `kp_proc` (`struct extern_proc`, bsd/sys/proc.h), whose first field
-    // is the start-time union, so the start `timeval` sits at offset 0. Only
-    // that field is typed; the rest is opaque, over-sized padding so the
-    // kernel's copyout (648 bytes on 64-bit) always fits.
+    // is the union `p_un` -- run-queue pointers in the live kernel, but
+    // `struct timeval __p_starttime` in the copied-out view: the kernel's
+    // `fill_user64_externproc` (bsd/kern/kern_sysctl.c) writes the start time
+    // into exactly that member (`#define p_starttime p_un.__p_starttime`),
+    // which is how `ps` computes `lstart`. So the start `timeval` sits at
+    // offset 0, and the kernel's `user64_timeval` ({i64 seconds, i32 micros})
+    // matches darwin's native `timeval` field layout. Only that field is
+    // typed here; the rest is opaque, over-sized padding so the kernel's
+    // copyout (648 bytes on 64-bit) always fits.
     #[repr(C)]
     struct KinfoProcPrefix {
         start_time: libc::timeval,

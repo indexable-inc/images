@@ -165,6 +165,14 @@
 <style>
   .pane-window {
     position: absolute;
+    /* Floating windows must paint over everything docked. Docked pane
+     * content creates positioned boxes of its own (the build tree's sticky
+     * .root-row sits at z-index 1), and a plain positioned ancestor without
+     * a z-index does not contain them, so without this a docked pane's
+     * sticky header would bleed through a window dragged over it. One shared
+     * band well above any content z-index keeps windows on top while
+     * DOM order (see `raise`) still decides the stacking between windows. */
+    z-index: 10;
     display: flex;
     flex-direction: column;
     min-width: 0;
