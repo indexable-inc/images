@@ -8,7 +8,7 @@ patched code. An agent that reads the code answers correctly ("validated"); one
 that trusts memory or the README answers the stale way ("stale").
 
 This simulates the future: code keeps changing, so the house default must be to
-check the artifact, not recall it (the `validate` / `liveSystemEvidence` rules).
+check the artifact, not recall it (the `validate` rule).
 The headline is the fraction of rollouts that validated.
 
 Runs with a shell in a throwaway sandbox dir; with ``--sandbox`` the rollout is
