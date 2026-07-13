@@ -66,6 +66,11 @@ _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", d
 # memory, store writes, and poll payloads all stay bounded.
 _MAX_OUTPUT_CHARS = 256_000
 
+# Model-facing result text carried inline by one call. Full results stay on the
+# Job for paging; nested leaf renders use the same ceiling before composition so
+# a container cannot multiply unbounded child strings in memory.
+_SUMMARY_CHARS = 50_000
+
 # n-pty chunk-stream flush policy: bulk job output rides CAS as ~1 chunk fact
 # per flush instead of per-character facts. Flush when either
 # _STREAM_FLUSH_BYTES accumulate (size cap, checked at feed time) or
@@ -698,6 +703,21 @@ def _nuon_key(value: Any) -> str:
     return text if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", text) else json.dumps(text, ensure_ascii=False)
 
 
+def _named_tuple_items(value: Any) -> list[tuple[str, Any]] | None:
+    """Return a named tuple's field/value pairs, or None for a plain tuple."""
+    if not isinstance(value, tuple):
+        return None
+    fields = getattr(type(value), "_fields", None)
+    if not isinstance(fields, tuple) or not all(isinstance(field, str) for field in fields):
+        return None
+    return [(field, getattr(value, field)) for field in fields]
+
+
+_NUON_MAX_DEPTH = 8
+_NESTED_RENDER_MAX_DEPTH = 8
+_NESTED_RENDER_MAX_ITEMS = 200
+
+
 def _nuon_table(columns: list[Any], rows: list[Mapping[Any, Any]], *, _depth: int = 0) -> str:
     header = ", ".join(_nuon_key(c) for c in columns)
     if not rows:
@@ -711,7 +731,7 @@ def _nuon_table(columns: list[Any], rows: list[Mapping[Any, Any]], *, _depth: in
 
 def _nuon(value: Any, *, _depth: int = 0) -> str:
     """A compact Nushell NUON subset for model-facing structured output."""
-    if _depth > 8:
+    if _depth > _NUON_MAX_DEPTH:
         return json.dumps(_safe_repr(value), ensure_ascii=False)
     if value is None:
         return "null"
@@ -1007,13 +1027,11 @@ class Result:
                 user_html=f'<pre class="ix-result">{_ansi_to_html(value)}</pre>',
                 llm_result=text_view,
             )
-        if _is_multi_rich(value):
-            # A tuple/list that carries a rich element (a DataFrame, a figure, a
-            # nested Result) is several things to SHOW, not one table: render each
-            # element with its own view, stacked, rather than stringifying the rich
-            # one into a `value` cell. `Result((repr_text, df))` thus shows the text
-            # and the real table, not a 2-row frame of two reprs.
-            return _result_from_values(list(value), llm_result=llm_result)
+        if _requires_nested_render(value):
+            # Generic Polars sequence coercion cannot represent rich values
+            # nested in named tuples or ordinary containers. Preserve each leaf's
+            # own bounded render and each container's structure instead.
+            return _result_from_nested(value, llm_result=llm_result)
         frame = _frame_view(value)
         if frame is not None:
             # A rich result type (anything with ``_ix_to_frame_``) that exposes a
@@ -1165,20 +1183,175 @@ def _as_frame_if_tabular(value: Any) -> Any:
     return value
 
 
-def _is_rich_element(value: Any) -> bool:
-    """True if ``value`` carries its own rich view (a DataFrame, a figure/image,
-    an htpy element, or a Result), so flattening it into a one-column frame would
-    throw that view away. Plain scalars and containers are not rich."""
-    return isinstance(value, Result) or _is_polars_df(value) or _is_displayable(value)
+def _contains_nested_view(
+    value: Any, *, _depth: int = 0, _seen: set[int] | None = None
+) -> bool:
+    """Whether a value must stay out of generic Polars container coercion.
+
+    Named tuples retain their fields. Rich leaves retain their own render. A
+    cycle or depth cutoff returns true conservatively because handing an
+    uninspected container to Polars can panic below Python's Exception boundary.
+    """
+    if _named_tuple_items(value) is not None:
+        return True
+    if isinstance(value, Result) or _is_polars_df(value) or _is_displayable(value):
+        return True
+    if not isinstance(value, (Mapping, list, tuple)):
+        return False
+    if _depth >= _NESTED_RENDER_MAX_DEPTH:
+        return True
+    seen = _seen if _seen is not None else set()
+    identity = id(value)
+    if identity in seen:
+        return True
+    seen.add(identity)
+    try:
+        children = value.values() if isinstance(value, Mapping) else value
+        return any(
+            _contains_nested_view(child, _depth=_depth + 1, _seen=seen)
+            for child in children
+        )
+    finally:
+        seen.remove(identity)
 
 
-def _is_multi_rich(value: Any) -> bool:
-    """True for a non-empty list/tuple that carries at least one rich element, so
-    ``Result.of`` should stack each element's view instead of coercing the whole
-    sequence to a single table. A list/tuple of plain scalars (or of mappings)
-    stays tabular -- only a sequence mixing in a DataFrame/figure/Result needs the
-    stacked treatment."""
-    return isinstance(value, (list, tuple)) and bool(value) and any(_is_rich_element(v) for v in value)
+def _requires_nested_render(value: Any) -> bool:
+    """Whether this container needs the bounded recursive renderer."""
+    return _named_tuple_items(value) is not None or (
+        isinstance(value, (Mapping, list, tuple)) and _contains_nested_view(value)
+    )
+
+
+@dataclasses.dataclass
+class _NestedRender:
+    user_html: str
+    model_value: Any
+    llm_images: list
+
+
+def _nested_marker(message: str) -> _NestedRender:
+    return _NestedRender(
+        user_html=f'<pre class="ix-result">{_escape_html(message)}</pre>',
+        model_value=message,
+        llm_images=[],
+    )
+
+
+def _nested_leaf_value(value: Any, rendered: Result) -> Any:
+    """Structured scalar value, or the leaf's already-bounded model render."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, bytes) and _image_bytes_mime(value) is None:
+        return value
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        with contextlib.suppress(Exception):
+            return iso()
+    text = rendered.llm_result
+    if len(text) <= _SUMMARY_CHARS:
+        return text
+    return (
+        text[:_SUMMARY_CHARS]
+        + f"\n... [nested value clipped to {_SUMMARY_CHARS} of {len(text)} chars]"
+    )
+
+
+def _render_nested(
+    value: Any, *, _depth: int = 0, _seen: set[int] | None = None
+) -> _NestedRender:
+    fields = _named_tuple_items(value)
+    is_mapping = isinstance(value, Mapping)
+    is_sequence = isinstance(value, (list, tuple))
+    if fields is None and not is_mapping and not is_sequence:
+        rendered = Result.of(value)
+        return _NestedRender(
+            user_html=rendered.user_html,
+            model_value=_nested_leaf_value(value, rendered),
+            llm_images=list(rendered.llm_images),
+        )
+    if _depth >= _NESTED_RENDER_MAX_DEPTH:
+        return _nested_marker(
+            f"<{type(value).__name__} omitted at nested render depth "
+            f"{_NESTED_RENDER_MAX_DEPTH}>"
+        )
+    seen = _seen if _seen is not None else set()
+    identity = id(value)
+    if identity in seen:
+        return _nested_marker(f"<cycle to {type(value).__name__}>")
+    seen.add(identity)
+    try:
+        if fields is not None:
+            rendered_fields = [
+                (name, _render_nested(field, _depth=_depth + 1, _seen=seen))
+                for name, field in fields
+            ]
+            user_html = '<dl class="ix-result-record">' + "".join(
+                f'<dt data-ix-field="{html_lib.escape(name, quote=True)}">'
+                f"{_escape_html(name)}</dt><dd>{field.user_html}</dd>"
+                for name, field in rendered_fields
+            ) + "</dl>"
+            return _NestedRender(
+                user_html=user_html,
+                model_value={name: field.model_value for name, field in rendered_fields},
+                llm_images=[
+                    image
+                    for _, field in rendered_fields
+                    for image in field.llm_images
+                ],
+            )
+        if is_mapping:
+            total = len(value)
+            rendered_entries: list[tuple[Any, _NestedRender]] = []
+            for index, (key, child) in enumerate(value.items()):
+                if index >= _NESTED_RENDER_MAX_ITEMS:
+                    break
+                rendered_entries.append(
+                    (key, _render_nested(child, _depth=_depth + 1, _seen=seen))
+                )
+            omitted = total - len(rendered_entries)
+            user_html = '<dl class="ix-result-record">' + "".join(
+                f'<dt>{_escape_html(str(key))}</dt><dd>{child.user_html}</dd>'
+                for key, child in rendered_entries
+            )
+            if omitted:
+                user_html += f"<dt>truncated</dt><dd>{omitted} more entries</dd>"
+            user_html += "</dl>"
+            model_value: Any = {
+                key: child.model_value for key, child in rendered_entries
+            }
+            if omitted:
+                model_value = {"items": model_value, "truncated": omitted}
+            return _NestedRender(
+                user_html=user_html,
+                model_value=model_value,
+                llm_images=[
+                    image
+                    for _, child in rendered_entries
+                    for image in child.llm_images
+                ],
+            )
+        total = len(value)
+        rendered_items = [
+            _render_nested(child, _depth=_depth + 1, _seen=seen)
+            for child in value[:_NESTED_RENDER_MAX_ITEMS]
+        ]
+        omitted = total - len(rendered_items)
+        user_html = "".join(
+            f'<div class="ix-result-item" data-ix-index="{index}">{item.user_html}</div>'
+            for index, item in enumerate(rendered_items)
+        )
+        if omitted:
+            user_html += f'<div class="ix-result-truncated">{omitted} more items</div>'
+        model_value = [item.model_value for item in rendered_items]
+        if omitted:
+            model_value.append({"truncated": omitted})
+        return _NestedRender(
+            user_html=user_html,
+            model_value=model_value,
+            llm_images=[image for item in rendered_items for image in item.llm_images],
+        )
+    finally:
+        seen.remove(identity)
 
 
 def _result_from_values(values: Any, *, llm_result: str | None = None) -> Result:
@@ -1195,6 +1368,16 @@ def _result_from_values(values: Any, *, llm_result: str | None = None) -> Result
     for item in items:
         images.extend(item.llm_images)
     return Result(user_html=user_html, llm_result=text, llm_images=images)
+
+
+def _result_from_nested(value: Any, *, llm_result: str | None = None) -> Result:
+    """Render nested containers once, preserving names, views, and model caps."""
+    rendered = _render_nested(value)
+    return Result(
+        user_html=rendered.user_html,
+        llm_result=llm_result if llm_result is not None else _nuon(rendered.model_value),
+        llm_images=rendered.llm_images,
+    )
 
 
 class Resource:
@@ -2838,12 +3021,11 @@ async def _runner(job: Job, ns: dict) -> None:
             job._exc = _kexc
         job._exc_tb = _kexc.__traceback__
         job._append(job.error)
-    except (Exception, SystemExit) as _exc:
+    except BaseException as _exc:
         # Isolate user code from the kernel: a job's SyntaxError, exception, or
-        # even sys.exit()/exit() becomes a failed job (traceback captured) instead
-        # of escaping the task and tearing down the shared kernel session.
-        # asyncio.CancelledError is BaseException, not caught here, so cooperative
-        # cancellation (handled above) still propagates.
+        # even a PyO3 PanicException becomes a failed job (traceback captured)
+        # instead of escaping the task and leaving the run marked running.
+        # Cancellation and KeyboardInterrupt retain their dedicated paths above.
         job.status = "error"
         # Trim the kernel's plumbing frames so the traceback starts at the cell,
         # and record the failing cell line for the dashboard's error highlight.
@@ -2948,10 +3130,10 @@ async def _spawn_runner(job: Job, aw: Awaitable[Any]) -> None:
         if isinstance(aw, asyncio.Future):
             aw.cancel()
         raise
-    except (Exception, KeyboardInterrupt, SystemExit) as _exc:
+    except BaseException as _exc:
         # Isolate like _runner: a failed awaitable becomes a failed job
-        # (traceback captured, `await jobs['<id>']` re-raises) instead of
-        # escaping the task and dying as an unretrieved background failure.
+        # (traceback captured, `await jobs['<id>']` re-raises), including a
+        # renderer PanicException. Cancellation retains its path above.
         job.status = "error"
         job.error = _user_traceback(_exc)
         job._exc = _exc
@@ -4266,13 +4448,6 @@ async def __ix_run(
     if not job.task.done():
         job.backgrounded = True
     return job
-
-
-# How many chars of a job's output/result the per-call summary carries inline.
-# The full output stays in the kernel as ``jobs[id]`` (paged via tail/head/slice/
-# grep/lines); the summary also reports the full sizes so the server can tell the
-# caller when a reply was truncated and point at the job to page.
-_SUMMARY_CHARS = 50_000
 
 
 def _result_text(job: Job) -> str:

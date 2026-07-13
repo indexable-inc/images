@@ -2670,6 +2670,8 @@
       cp ${./tests/test_pr_watch_automerge.py} test_pr_watch_automerge.py
       # Issue #2540: input= routes past no-input statements (cd /tmp; ^cat) or raises.
       cp ${./tests/test_nu_input_routing.py} test_nu_input_routing.py
+      # Issue #3079: nested NuResult frames render as named structured data and finish the job.
+      cp ${./tests/test_nested_nu_results.py} test_nested_nu_results.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
@@ -2689,6 +2691,7 @@
         test_unexecuted_note.py \
         test_pr_watch_automerge.py \
         test_nu_input_routing.py \
+        test_nested_nu_results.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp typecheck smoke failed:" >&2
         cat stdout stderr >&2
