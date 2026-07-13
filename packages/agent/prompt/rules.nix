@@ -932,10 +932,16 @@
       text = ''
         Keep technical tokens byte-exact: code, paths, flags, commands, URLs, error
         strings, and identifiers. Mark hypothetical or changed variants clearly.
+        Never expand an abbreviated Git hash by inventing the missing characters.
+        Before emitting a full Git object ID, resolve it from Git with
+        `git rev-parse <ref>` or copy it from current structured output; otherwise
+        report only the exact abbreviation you observed.
       '';
       reason = ''
         Paraphrased flags, paths, and error strings broke copy-paste and exact
-        matching.
+        matching. An agent read abbreviated hashes from `git log --oneline`, then
+        invented plausible suffixes and reported nonexistent 40-character commit
+        IDs.
       '';
     };
   }
