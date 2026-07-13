@@ -6,7 +6,7 @@
 # 1.18's set-theoretic type checker, plus format, `mix credo --strict` against
 # the shared lib/elixir/credo.exs, and test) is built through the shared
 # ix.buildElixirCheck lane and exposed as `passthru.tests.elixir`, wired into
-# `checks` through lib/per-system.nix, exactly like symphony.
+# `checks` through lib/per-system.nix.
 #
 # credo is the sole hex dep and is test-only (see mix.exs), so the `hive`
 # launcher still runs `mix` offline in :dev with no deps; only the sandboxed

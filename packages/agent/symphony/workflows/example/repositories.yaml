@@ -1,5 +1,0 @@
-repositories:
-  - name: example
-    owner_repo: example/example
-    default_branch: main
-    primary: true
