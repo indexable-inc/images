@@ -363,12 +363,7 @@ class SlackBot:
             )
 
     async def _set_working(self, event: SlackEvent) -> None:
-        try:
-            await self.slack.reactions_add(
-                channel=event.channel, timestamp=event.message_ts, name="eyes"
-            )
-        except Exception as error:  # cosmetic; duplicate/missing scope are benign
-            LOG.debug("working reaction failed for %s: %s", event.key, error)
+        await self._reaction(event, "eyes", add=True, context="working")
         try:
             await self.slack.assistant_threads_setStatus(
                 channel_id=event.channel,
@@ -423,20 +418,27 @@ class SlackBot:
                 delay = min(delay * 2, 60)
 
     async def _finish_working(self, event: SlackEvent) -> None:
+        await self._reaction(event, "eyes", add=False, context="remove working")
+        await self._reaction(event, "white_check_mark", add=True, context="completion")
+
+    async def _reaction(
+        self,
+        event: SlackEvent,
+        name: str,
+        *,
+        add: bool,
+        context: str,
+    ) -> None:
+        operation = self.slack.reactions_add if add else self.slack.reactions_remove
         try:
-            await self.slack.reactions_remove(
-                channel=event.channel, timestamp=event.message_ts, name="eyes"
-            )
-        except Exception as error:
-            LOG.debug("removing working reaction failed for %s: %s", event.key, error)
-        try:
-            await self.slack.reactions_add(
+            await operation(
                 channel=event.channel,
                 timestamp=event.message_ts,
-                name="white_check_mark",
+                name=name,
             )
         except Exception as error:
-            LOG.debug("completion reaction failed for %s: %s", event.key, error)
+            # Reactions are cosmetic; duplicate and missing-scope errors are benign.
+            LOG.debug("%s reaction failed for %s: %s", context, event.key, error)
 
 
 async def run(args: argparse.Namespace) -> None:
