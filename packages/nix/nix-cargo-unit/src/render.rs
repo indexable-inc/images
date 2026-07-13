@@ -1433,9 +1433,11 @@ fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Un
         script,
         "if [ -f {quoted_run_ref}/cargo-metadata ]; then\n  cp {quoted_run_ref}/cargo-metadata build/cargo-metadata\nfi",
     );
+    // Generated source paths enter crate metadata, so mktemp entropy makes
+    // separately realized content-addressed dependencies byte-incompatible.
     let _ = writeln!(
         script,
-        "compile_out_dir=$(mktemp -d)\nif [ -d {quoted_run_ref}/out-dir ]; then\n  cp -R {quoted_run_ref}/out-dir/. \"$compile_out_dir\"/\nfi\nrustc_env+=( OUT_DIR=\"$compile_out_dir\" )\n"
+        "compile_out_dir=$NIX_BUILD_TOP/cargo-unit-build-script-out\nmkdir -p \"$compile_out_dir\"\nif [ -d {quoted_run_ref}/out-dir ]; then\n  cp -R {quoted_run_ref}/out-dir/. \"$compile_out_dir\"/\nfi\nrustc_args+=( --remap-path-prefix \"$compile_out_dir=/cargo-unit-build-script-out\" )\nrustc_env+=( OUT_DIR=\"$compile_out_dir\" )\n"
     );
 }
 
@@ -4295,11 +4297,17 @@ version = "0.1.0"
         )
         .unwrap();
         let build_rs = workspace.path().join("build.rs");
+        let leaf_rs = workspace.path().join("src/leaf.rs");
         let lib_rs = workspace.path().join("src/lib.rs");
+        let middle_rs = workspace.path().join("src/middle.rs");
         fs::write(&build_rs, "fn main() {}\n").unwrap();
+        fs::write(&leaf_rs, "pub fn leaf() {}\n").unwrap();
         fs::write(&lib_rs, "pub fn native() {}\n").unwrap();
+        fs::write(&middle_rs, "pub fn middle() {}\n").unwrap();
         let build_rs = build_rs.to_string_lossy();
+        let leaf_rs = leaf_rs.to_string_lossy();
         let lib_rs = lib_rs.to_string_lossy();
+        let middle_rs = middle_rs.to_string_lossy();
         let pkg_id = format!("path+file://{}#native@0.1.0", workspace.path().display());
 
         let graph: UnitGraph = serde_json::from_value(serde_json::json!({
@@ -4340,6 +4348,36 @@ version = "0.1.0"
               "target": {
                 "kind": ["lib"],
                 "crate_types": ["lib"],
+                "name": "leaf",
+                "src_path": leaf_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "build",
+              "dependencies": []
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "name": "middle",
+                "src_path": middle_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "build",
+              "dependencies": [
+                { "index": 2, "extern_crate_name": "leaf" }
+              ]
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["lib"],
+                "crate_types": ["lib"],
                 "name": "native",
                 "src_path": lib_rs,
                 "edition": "2024"
@@ -4350,11 +4388,12 @@ version = "0.1.0"
               "features": [],
               "mode": "build",
               "dependencies": [
-                { "index": 1, "extern_crate_name": "build_script_build" }
+                { "index": 1, "extern_crate_name": "build_script_build" },
+                { "index": 3, "extern_crate_name": "middle" }
               ]
             }
           ],
-          "roots": [2]
+          "roots": [4]
         }))
         .unwrap();
 
@@ -4421,7 +4460,18 @@ version = "0.1.0"
         assert!(!rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
         assert!(rendered.contains("done < \"${units."));
         assert!(rendered.contains("/rustc-env"));
-        assert!(rendered.contains("compile_out_dir=$(mktemp -d)"));
+        assert!(
+            rendered.contains("compile_out_dir=$NIX_BUILD_TOP/cargo-unit-build-script-out")
+        );
+        assert!(rendered.contains(
+            "rustc_args+=( --remap-path-prefix \"$compile_out_dir=/cargo-unit-build-script-out\" )"
+        ));
+        assert!(rendered.contains(
+            "rustdoc_args+=( -L \"dependency=${units.\"middle-0.1.0-"
+        ));
+        assert!(rendered.contains(
+            "rustdoc_args+=( -L \"dependency=${units.\"leaf-0.1.0-"
+        ));
         assert!(rendered.contains("/out-dir/. \"$compile_out_dir\"/"));
         assert!(rendered.contains("rustc_env+=( OUT_DIR=\"$compile_out_dir\" )"));
         assert!(!rendered.contains("--test-args --exact"));
