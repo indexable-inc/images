@@ -93,13 +93,18 @@ sizing all work.
 An empty screen reads back as an empty `Vec`, not an error; `read_blocking`
 keeps the wait-for-first-paint behavior by polling until content appears.
 
+`raw_output(tail)` returns the PTY output byte stream as received, before VT
+parsing, for debugging what the child actually emitted; it is ring-buffered
+like scrollback and reads a cached ring, so it is synchronous.
+
 ## Process lifecycle
 
 The actor owns the child, so a handle can observe and control it:
 
-- `is_alive` / `exit_state` report whether the child is running or its exit
-  code (`ExitState::Exited(Some(code))`, or `Exited(None)` when a signal killed
-  it).
+- `is_alive` / `exit_state` report whether the child is running or how it
+  ended (`ExitState::Exited(ExitStatus::Code(code))`, `ExitStatus::Signal(n)`
+  for a signal death; `ExitStatus::returncode()` is the
+  `subprocess.Popen.returncode` encoding of either).
 - `wait(timeout)` blocks until exit, returning `None` on timeout; `wait_async`
   is the future form.
 - `kill` sends `SIGKILL`, which (unlike a cooperative Ctrl+C) a program cannot

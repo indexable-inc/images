@@ -8,7 +8,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use crate::types::ExitState;
+use crate::raw::RawOutput;
+use crate::types::{ExitState, ExitStatus};
 use crate::{Error, error::Result};
 use engine::{
     EngineLink, EngineRequest, snapshot_to_chars, snapshot_to_cursor, snapshot_to_styled_cells,
@@ -45,6 +46,15 @@ pub enum PtyCommand {
     },
 }
 
+/// State shared between the actor and its handles rather than channelled:
+/// the engine-maintained DECCKM flag the actor reads on writes, and the raw
+/// byte ring the actor fills and [`TuiInstance`](crate::TuiInstance) reads
+/// synchronously.
+pub struct SharedCaches {
+    pub app_cursor_keys: Arc<SyncRwLock<bool>>,
+    pub raw_output: Arc<parking_lot::Mutex<RawOutput>>,
+}
+
 /// Owns the PTY master and the child process for one terminal. It is the only
 /// task that touches either, so every read, write, signal, and the exit reap
 /// serialize through this one mailbox.
@@ -64,12 +74,16 @@ pub async fn pty_actor(
     mut commands: mpsc::Receiver<PtyCommand>,
     engine: EngineLink,
     exit_tx: watch::Sender<ExitState>,
-    app_cursor_keys: Arc<SyncRwLock<bool>>,
+    caches: SharedCaches,
 ) {
     let EngineLink {
         requests: engine_tx,
         query_replies: mut engine_query_replies,
     } = engine;
+    let SharedCaches {
+        app_cursor_keys,
+        raw_output,
+    } = caches;
     let mut read_buffer = [0u8; 8192];
     let mut pty_active = true;
     let mut child_exited = false;
@@ -164,6 +178,9 @@ pub async fn pty_actor(
                     Ok(n) => {
                         #[allow(clippy::indexing_slicing, reason = "n is guaranteed to be <= read_buffer.len() by read()")]
                         let chunk = &read_buffer[..n];
+                        // Capture the pre-parse byte stream first, so raw
+                        // output stays observable even if the engine is gone.
+                        raw_output.lock().push(chunk);
                         // Forward to the engine thread, which owns the !Send
                         // terminal. A closed channel means the engine is gone,
                         // so stop feeding the PTY.
@@ -188,8 +205,8 @@ pub async fn pty_actor(
             // once it resolves we disable the branch and publish the exit code.
             status = child.wait(), if !child_exited => {
                 child_exited = true;
-                let code = status.ok().and_then(|status| status.code());
-                let _ = exit_tx.send(ExitState::Exited(code));
+                let status = status.map_or(ExitStatus::Unknown, exit_status);
+                let _ = exit_tx.send(ExitState::Exited(status));
             }
 
             else => break,
@@ -237,6 +254,20 @@ async fn resize_engine(
         .send(EngineRequest::Resize { rows, cols, reply })
         .map_err(|_| Error::TuiNotFound { id })?;
     response.await.map_err(|_| Error::TuiNotFound { id })?
+}
+
+/// Split a unix wait status into exit code vs terminating signal.
+///
+/// A status with neither (which POSIX does not produce for a reaped child)
+/// maps to [`ExitStatus::Unknown`] rather than being conflated with a signal
+/// death.
+fn exit_status(status: std::process::ExitStatus) -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+    match (status.code(), status.signal()) {
+        (Some(code), _) => ExitStatus::Code(code),
+        (None, Some(signal)) => ExitStatus::Signal(signal),
+        (None, None) => ExitStatus::Unknown,
+    }
 }
 
 /// Rewrite normal-mode cursor-key sequences into their application-mode form

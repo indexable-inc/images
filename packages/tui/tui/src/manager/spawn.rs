@@ -6,9 +6,10 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::actor::engine;
-use crate::actor::{PtyCommand, pty_actor};
+use crate::actor::{PtyCommand, SharedCaches, pty_actor};
 use crate::manager::TuiInstance;
 use crate::manager::reader;
+use crate::raw::{self, RawOutput};
 use crate::types::{CursorShape, ExitState, SpawnConfig};
 use crate::{Error, Result};
 
@@ -105,12 +106,21 @@ pub(super) fn spawn_tui(
         Arc::clone(&cursor_shape),
         Arc::clone(&app_cursor_keys),
     )?;
+    // The pre-parse PTY byte stream, kept for debugging (index#3110). The
+    // actor pushes each chunk as it arrives; the instance reads it
+    // synchronously, so it is shared like `cursor_shape` rather than
+    // channelled.
+    let raw_output = Arc::new(parking_lot::Mutex::new(RawOutput::new(raw::LIMIT)));
 
     // The actor owns the child: it reaps it (so short-lived commands leave no
     // zombie), publishes the exit code through `exit_tx`, and can signal it on
     // a kill request. It forwards bytes and reads to the engine thread.
+    let caches = SharedCaches {
+        app_cursor_keys,
+        raw_output: Arc::clone(&raw_output),
+    };
     runtime.spawn(async move {
-        pty_actor(id, pty, child, command_rx, engine, exit_tx, app_cursor_keys).await;
+        pty_actor(id, pty, child, command_rx, engine, exit_tx, caches).await;
     });
 
     let instance = TuiInstance {
@@ -121,6 +131,7 @@ pub(super) fn spawn_tui(
         scrollback_limit: scrollback_lines,
         size: Arc::new(parking_lot::RwLock::new((rows, cols))),
         cursor_shape,
+        raw_output,
         command_tx,
         exit_rx,
         runtime: Arc::clone(runtime),

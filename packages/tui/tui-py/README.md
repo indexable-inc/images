@@ -17,8 +17,8 @@ The API is async-only. A single process-wide tokio runtime drives every
 spawned PTY, and every I/O method is a coroutine that bridges a real Rust
 future into asyncio via [pyo3-async-runtimes][pyo3-async-runtimes], with no
 thread-pool hop, so fanning out to many terminals is plain `asyncio.gather`.
-Only construction and the shape accessors (`id`, `command`, `size`,
-`is_alive`, `exit_code`) are synchronous.
+Only construction and the cached accessors (`id`, `command`, `size`,
+`is_alive`, `exit_code`, `returncode`, `raw_output`) are synchronous.
 
 PyPI distribution name: `ix-tui`. Import name: `tui`.
 
@@ -278,9 +278,16 @@ async def main() -> None:
     code = await t.wait(timeout=3)     # blocks until exit; raises WaitTimeout on deadline
     print(code, t.is_alive)            # 7 False
     print(t.exit_code)                 # 7 (None while running or if killed by a signal)
+    print(t.returncode)                # 7, without blocking (None while running,
+                                       # negated signal number after a signal death)
 
 asyncio.run(main())
 ```
+
+When the rendered screen misleads (a blank alt screen, a missing repaint),
+`t.raw_output()` returns the PTY output byte stream as received, before VT
+parsing, ring-buffered like scrollback; `t.raw_output(tail=64)` is just the
+trailing bytes. Both it and `returncode` are synchronous cached reads.
 
 `await t.interrupt()` sends a cooperative Ctrl+C. `await t.kill()` sends
 `SIGKILL`, which a program that traps interrupts (an editor in normal mode, a

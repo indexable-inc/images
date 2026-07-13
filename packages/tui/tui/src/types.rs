@@ -100,9 +100,44 @@ impl CursorShape {
 pub enum ExitState {
     /// The process is still running.
     Running,
-    /// The process has exited. `Some(code)` carries its exit code; `None` means
-    /// it was terminated by a signal and so has no exit code.
-    Exited(Option<i32>),
+    /// The process has exited; the payload says how.
+    Exited(ExitStatus),
+}
+
+/// How an exited process ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitStatus {
+    /// A normal exit with this code.
+    Code(i32),
+    /// Terminated by this signal number.
+    Signal(i32),
+    /// The child is gone but its status was unobservable (the reap failed or
+    /// the actor dropped before publishing one).
+    Unknown,
+}
+
+impl ExitStatus {
+    /// The exit code of a normal exit; `None` for a signal death or an
+    /// unobservable status.
+    #[must_use]
+    pub const fn code(self) -> Option<i32> {
+        match self {
+            Self::Code(code) => Some(code),
+            Self::Signal(_) | Self::Unknown => None,
+        }
+    }
+
+    /// The `subprocess.Popen.returncode` encoding: the exit code, or the
+    /// negated signal number for a signal death. `None` only when the status
+    /// was unobservable.
+    #[must_use]
+    pub const fn returncode(self) -> Option<i32> {
+        match self {
+            Self::Code(code) => Some(code),
+            Self::Signal(signal) => Some(-signal),
+            Self::Unknown => None,
+        }
+    }
 }
 
 /// Spawn-time terminal configuration.

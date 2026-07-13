@@ -59,7 +59,7 @@ pub async fn collect_panes(manager: &crate::TuiManager) -> Vec<Pane> {
                 cursor_visible: cursor.visible,
                 cursor_shape: instance.cursor_shape().as_str().to_owned(),
                 exit_code: match instance.exit_state() {
-                    crate::ExitState::Exited(code) => code,
+                    crate::ExitState::Exited(status) => status.code(),
                     crate::ExitState::Running => None,
                 },
             },

@@ -203,7 +203,7 @@ impl Tui {
     #[napi]
     pub fn exit_code(&self) -> Option<i32> {
         match self.inner.exit_state() {
-            tui::ExitState::Exited(code) => code,
+            tui::ExitState::Exited(status) => status.code(),
             tui::ExitState::Running => None,
         }
     }
@@ -213,7 +213,7 @@ impl Tui {
     #[napi]
     pub async fn wait(&self) -> Result<Option<i32>> {
         Ok(match self.inner.wait_async().await {
-            tui::ExitState::Exited(code) => code,
+            tui::ExitState::Exited(status) => status.code(),
             tui::ExitState::Running => None,
         })
     }

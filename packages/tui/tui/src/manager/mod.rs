@@ -12,7 +12,10 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::actor::PtyCommand;
-use crate::types::{CursorPos, CursorShape, ExitState, FullOutput, SpawnConfig, StyledCell};
+use crate::raw::RawOutput;
+use crate::types::{
+    CursorPos, CursorShape, ExitState, ExitStatus, FullOutput, SpawnConfig, StyledCell,
+};
 use crate::{Error, Result};
 
 /// A handle to one spawned PTY-backed process.
@@ -40,6 +43,9 @@ pub struct TuiInstance {
     /// Latest cursor shape, updated by the VT engine on every render. Shared
     /// across clones like `size` so the frame builder can read it synchronously.
     pub(crate) cursor_shape: Arc<RwLock<CursorShape>>,
+    /// Ring of the most recent raw PTY output bytes, pushed by the actor as
+    /// they arrive and shared across clones like `size`.
+    pub(crate) raw_output: Arc<parking_lot::Mutex<RawOutput>>,
     pub(crate) command_tx: mpsc::Sender<PtyCommand>,
     pub(crate) exit_rx: watch::Receiver<ExitState>,
     pub(crate) runtime: Arc<Runtime>,
@@ -63,6 +69,17 @@ impl TuiInstance {
     #[must_use]
     pub fn cursor_shape(&self) -> CursorShape {
         *self.cursor_shape.read()
+    }
+
+    /// The PTY output byte stream as received, before VT parsing.
+    ///
+    /// Ring-buffered like scrollback (the most recent bytes are kept, the
+    /// oldest fall off); with `tail`, only the trailing `tail` bytes. Reads a
+    /// cached ring, so it stays synchronous like
+    /// [`is_alive`](Self::is_alive).
+    #[must_use]
+    pub fn raw_output(&self, tail: Option<usize>) -> Vec<u8> {
+        self.raw_output.lock().bytes(tail)
     }
 
     /// The cursor's position and visibility in viewport cell coordinates.
@@ -174,10 +191,14 @@ impl TuiInstance {
                 Some(timeout) => match tokio::time::timeout(timeout, settle).await {
                     // Resolved (exited) or the sender dropped: either way, done.
                     Ok(Ok(state)) => Some(*state),
-                    Ok(Err(_)) => Some(ExitState::Exited(None)),
+                    Ok(Err(_)) => Some(ExitState::Exited(ExitStatus::Unknown)),
                     Err(_) => None,
                 },
-                None => Some(settle.await.map_or(ExitState::Exited(None), |state| *state)),
+                None => Some(
+                    settle
+                        .await
+                        .map_or(ExitState::Exited(ExitStatus::Unknown), |state| *state),
+                ),
             }
         })
     }
@@ -237,7 +258,7 @@ impl TuiInstance {
         let mut rx = self.exit_rx.clone();
         rx.wait_for(|state| matches!(state, ExitState::Exited(_)))
             .await
-            .map_or(ExitState::Exited(None), |state| *state)
+            .map_or(ExitState::Exited(ExitStatus::Unknown), |state| *state)
     }
 }
 
