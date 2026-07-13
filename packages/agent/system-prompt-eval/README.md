@@ -59,8 +59,7 @@ code or trust stale training knowledge? The fixture's README states the *old*
 behavior; the code is patched to the *new* behavior. An agent that reads the
 code answers correctly (`validated`); one that trusts memory/docs answers the
 stale way (`stale`). This simulates the future: code keeps changing, so the
-house default must be to validate the artifact (the `validate` /
-`liveSystemEvidence` rules). Headline = fraction validated.
+house default must be to validate the artifact (the `validate` rule). Headline = fraction validated.
 
 - runs a shell in a throwaway dir with the fake-`git` shim on `PATH`.
 - `--sandbox` wraps each rollout in the OS sandbox (`sandbox-exec` on macOS,

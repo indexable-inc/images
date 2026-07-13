@@ -4323,7 +4323,7 @@
       }
       {
         assertion =
-          !lib.strings.hasInfix "Publish durable writeups" (
+          !lib.strings.hasInfix "Publish substantial investigations" (
             builtins.readFile homeAgentConfig.programs.codex.finalPackage.passthru.modelInstructionsFile
           );
         message = "Codex Home Manager module should thread systemPrompt.omitRules into the package wrapper";
