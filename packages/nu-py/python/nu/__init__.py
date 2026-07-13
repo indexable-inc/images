@@ -303,6 +303,28 @@ class NuResult(NamedTuple):
     result: pl.DataFrame | dict[str, object] | str
     exit_code: int
 
+    def __ix_llm__(self) -> str | None:
+        """Model-facing text for the kernel's Result rendering (issue #3131).
+
+        The generic tuple rendering coerced ``(text, exit_code)`` into a mixed
+        one-column frame whose NUON escaped every newline, so a background job
+        wrapping ``nu(..., check=False)`` had no readable lines to page
+        (``jobs['<id>'].tail()`` returned frame fragments). Render the
+        command's own output verbatim instead, with ``sh``-style trailing
+        ``[exit N]`` marker on a non-zero exit; a frame result returns None so
+        the kernel's rich table rendering still applies.
+        """
+        if isinstance(self.result, str):
+            body = self.result
+        elif isinstance(self.result, dict):
+            body = repr(self.result)
+        else:
+            return None
+        marker = f"[exit {self.exit_code}]"
+        if not body:
+            return marker
+        return body if self.exit_code == 0 else f"{body}\n{marker}"
+
 
 def _resolve_dir(cwd: str | os.PathLike) -> str:
     """Return an existing directory as an absolute path.

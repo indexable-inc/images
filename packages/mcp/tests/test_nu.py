@@ -522,3 +522,47 @@ def test_externals_run_color_free_even_when_host_forces_color(
         # The forced-color engine (and the env= override, which persists on
         # the stack) must not leak into later tests.
         nu.reset()
+
+
+# --------------------------------------------------------------------------- #
+# Issue #3131: NuResult renders as the command's own output text, so a job
+# wrapping `nu(..., check=False)` pages real lines instead of a NUON frame
+# with every newline escaped.
+# --------------------------------------------------------------------------- #
+
+
+def test_nuresult_llm_text_is_the_output_plus_exit_marker() -> None:
+    assert nu.NuResult("line one\nline two", 3).__ix_llm__() == "line one\nline two\n[exit 3]"
+
+
+def test_nuresult_llm_text_zero_exit_is_verbatim() -> None:
+    # A clean exit needs no marker: the text reads exactly like a check=True
+    # lone-string result.
+    assert nu.NuResult("hi\nthere", 0).__ix_llm__() == "hi\nthere"
+
+
+def test_nuresult_llm_text_empty_output_is_the_marker_alone() -> None:
+    assert nu.NuResult("", 1).__ix_llm__() == "[exit 1]"
+    assert nu.NuResult("", 0).__ix_llm__() == "[exit 0]"
+
+
+def test_nuresult_llm_text_record_result_is_its_repr() -> None:
+    assert nu.NuResult({"stdout": "x"}, 0).__ix_llm__() == "{'stdout': 'x'}"
+
+
+def test_nuresult_llm_text_frame_result_defers_to_rich_rendering() -> None:
+    # None tells the kernel to keep its rich DataFrame rendering (styled table
+    # for the human, compact NUON for the model).
+    assert nu.NuResult(pl.DataFrame({"a": [1]}), 0).__ix_llm__() is None
+
+
+def test_check_false_multiline_external_llm_text_keeps_real_newlines() -> None:
+    # The issue's shape end to end: a failing multi-line external under
+    # check=False must render its stdout as lines, not as escaped fragments.
+    import sys
+
+    script = "print('alpha'); print('beta'); raise SystemExit(3)"
+    res = run(nu(f'^{sys.executable} -c "{script}"', check=False))
+    assert isinstance(res, nu.NuResult)
+    assert res.exit_code == 3
+    assert res.__ix_llm__() == "alpha\nbeta\n[exit 3]"
