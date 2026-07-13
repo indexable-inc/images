@@ -490,6 +490,13 @@
           upstream = "hold";
           reason = "Backports the mixed-version temporary-root reader from NixOS/nix#15992 (indexable-inc/index#3031). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # 0017: each daemon process decides whether to auto-GC before waiting
+        # for the store-global gc.lock. Recheck under that lock so queued
+        # callers do not repeat a collection after the first restores space.
+        "0017-fix-libstore-recheck-free-space-after-GC-lock.patch" = {
+          upstream = "hold";
+          reason = "Prevents stale queued auto-GC decisions from serializing CI jobs behind repeated collections (indexable-inc/index#3085, indexable-inc/ix#7145). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];
