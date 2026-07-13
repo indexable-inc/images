@@ -297,7 +297,7 @@ def test_api_job_ui_serves_embedded_view(tmp_path: Path, monkeypatch: pytest.Mon
     facts: dict[tuple[str, str], object] = {}
     blobs: dict[str, bytes] = {}
 
-    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
         if url.endswith("/api/facts"):
             items = body if isinstance(body, list) else [body]
             for item in items:
@@ -324,7 +324,7 @@ def test_api_job_ui_serves_embedded_view(tmp_path: Path, monkeypatch: pytest.Mon
 
     monkeypatch.setenv("WEAVE_URL", "http://weave.stub")
     monkeypatch.setattr(store, "_http_json", fake_json)
-    monkeypatch.setattr(store, "_http_bytes", lambda method, url, content=None: blobs.get(url.rsplit("/", 1)[-1], b""))
+    monkeypatch.setattr(store, "_http_bytes", lambda method, url, content=None, headers=None: blobs.get(url.rsplit("/", 1)[-1], b""))
 
     db = tmp_path / "ui.db"
     conn = store.connect(db)
