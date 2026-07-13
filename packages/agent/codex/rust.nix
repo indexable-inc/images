@@ -145,7 +145,7 @@
     }
     // lib.optionalAttrs isCross {
       inherit target;
-      rustToolchain = ix.rustToolchainFor pkgs {
+      rustToolchain = ix.languages.rust.toolchain pkgs {
         channel = "stable";
         version = "latest";
         targets = [target];
