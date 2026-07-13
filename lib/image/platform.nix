@@ -616,6 +616,12 @@ in {
       # pending and blocks services such as minecraft.
       useDHCP = false;
 
+      # ix-vm-guest writes the runtime-provided nameservers to /etc/resolv.conf
+      # before starting the image. NixOS 26.05 enables resolvconf by default;
+      # with no NixOS-owned nameservers, stage 2 then replaces that file with an
+      # empty one and breaks DNS in an otherwise connected VM.
+      resolvconf.enable = lib.mkDefault false;
+
       # In-guest firewall is the NixOS nftables backend, enforcing each
       # module's `services.*.openFirewall` and `networking.firewall.allowed*`
       # declarations. ix VMs are `boot.isContainer = true` and share the
