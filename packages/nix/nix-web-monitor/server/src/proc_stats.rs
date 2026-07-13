@@ -48,11 +48,38 @@ struct CpuBaseline {
     sampled_at: Instant,
 }
 
+/// What a CPU baseline belongs to: the process *and* the goal it was building
+/// when sampled. The process identity alone is not enough -- a long-lived
+/// nix-daemon worker keeps its `(pid, start_ticks)` while finishing one
+/// derivation and picking up the next, so a baseline keyed only by process
+/// would hand the new build's first sample the previous build's ticks. The
+/// goal fields (drv or store path plus the goal's start second, all straight
+/// from the `nix store builds` payload) separate sequential builds on one
+/// worker; a poll where any of them changed starts the counter fresh.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct BaselineKey {
+    process: ProcessIdentity,
+    drv_path: Option<String>,
+    store_path: Option<String>,
+    start_time: Option<i64>,
+}
+
+impl BaselineKey {
+    fn for_build(build: &GlobalBuild, process: ProcessIdentity) -> Self {
+        Self {
+            process,
+            drv_path: build.drv_path.clone(),
+            store_path: build.store_path.clone(),
+            start_time: build.start_time,
+        }
+    }
+}
+
 /// Stateful sampler: remembers each build pid's subtree cpu ticks from the
 /// previous poll so the next poll can turn the delta into a rate.
 #[derive(Debug, Default)]
 pub struct BuildStatSampler {
-    previous: HashMap<ProcessIdentity, CpuBaseline>,
+    previous: HashMap<BaselineKey, CpuBaseline>,
 }
 
 impl BuildStatSampler {
@@ -81,7 +108,7 @@ impl BuildStatSampler {
                 // drop any stale baseline.
                 continue;
             };
-            let identity = root.identity;
+            let key = BaselineKey::for_build(build, root.identity);
             let subtree = subtree_pids(pid, &children);
             let ticks: u64 = subtree
                 .iter()
@@ -91,27 +118,22 @@ impl BuildStatSampler {
             let rss = aggregate_rss(&subtree, read_rss_bytes);
 
             build.rss_bytes = rss;
-            build.cpu_percent = self.cpu_percent_for(identity, ticks, now);
+            build.cpu_percent = self.cpu_percent_for(&key, ticks, now);
             next.insert(
-                identity,
+                key,
                 CpuBaseline {
                     cpu_ticks: ticks,
                     sampled_at: now,
                 },
             );
         }
-        // Keep baselines only for pids still active, so a recycled pid never
-        // inherits a stale counter.
+        // Keep baselines only for goals still active, so neither a recycled
+        // pid nor a worker's next build inherits a stale counter.
         self.previous = next;
     }
 
-    fn cpu_percent_for(
-        &self,
-        identity: ProcessIdentity,
-        cpu_ticks: u64,
-        now: Instant,
-    ) -> Option<u32> {
-        let baseline = self.previous.get(&identity)?;
+    fn cpu_percent_for(&self, key: &BaselineKey, cpu_ticks: u64, now: Instant) -> Option<u32> {
+        let baseline = self.previous.get(key)?;
         let elapsed = now.duration_since(baseline.sampled_at).as_secs_f64();
         if elapsed <= 0.0 {
             return None;
@@ -312,20 +334,24 @@ mod tests {
         assert_eq!(subtree, vec![10, 11, 12, 13]);
     }
 
+    /// A baseline key for tests: `process` plus the goal fields of `build`.
+    fn key_for(build: &GlobalBuild, pid: i64, start_ticks: u64) -> BaselineKey {
+        BaselineKey::for_build(build, ProcessIdentity { pid, start_ticks })
+    }
+
     #[test]
     fn recycled_pid_does_not_inherit_cpu_baseline() {
         let sampled_at = Instant::now();
-        let original = ProcessIdentity {
-            pid: 42,
-            start_ticks: 100,
+        let build = GlobalBuild {
+            drv_path: Some("/nix/store/aaa-hello.drv".to_owned()),
+            start_time: Some(1_700_000_000),
+            ..GlobalBuild::default()
         };
-        let recycled = ProcessIdentity {
-            pid: 42,
-            start_ticks: 200,
-        };
+        let original = key_for(&build, 42, 100);
+        let recycled = key_for(&build, 42, 200);
         let sampler = BuildStatSampler {
             previous: HashMap::from([(
-                original,
+                original.clone(),
                 CpuBaseline {
                     cpu_ticks: 1000,
                     sampled_at,
@@ -335,24 +361,56 @@ mod tests {
         let one_second_later = sampled_at + std::time::Duration::from_secs(1);
 
         assert_eq!(
-            sampler.cpu_percent_for(original, 1050, one_second_later),
+            sampler.cpu_percent_for(&original, 1050, one_second_later),
             Some(50)
         );
         assert_eq!(
-            sampler.cpu_percent_for(recycled, 1050, one_second_later),
+            sampler.cpu_percent_for(&recycled, 1050, one_second_later),
+            None
+        );
+    }
+
+    /// A long-lived daemon worker that finishes one derivation and starts
+    /// another between polls keeps its process identity; the goal fields in
+    /// the key must stop the new build's first sample from inheriting the old
+    /// build's ticks.
+    #[test]
+    fn next_goal_on_same_worker_starts_without_baseline() {
+        let sampled_at = Instant::now();
+        let first = GlobalBuild {
+            drv_path: Some("/nix/store/aaa-first.drv".to_owned()),
+            start_time: Some(1_700_000_000),
+            ..GlobalBuild::default()
+        };
+        let second = GlobalBuild {
+            drv_path: Some("/nix/store/bbb-second.drv".to_owned()),
+            start_time: Some(1_700_000_060),
+            ..GlobalBuild::default()
+        };
+        let finished = key_for(&first, 42, 100);
+        let started = key_for(&second, 42, 100);
+        let sampler = BuildStatSampler {
+            previous: HashMap::from([(
+                finished,
+                CpuBaseline {
+                    cpu_ticks: 1000,
+                    sampled_at,
+                },
+            )]),
+        };
+        let one_second_later = sampled_at + std::time::Duration::from_secs(1);
+
+        assert_eq!(
+            sampler.cpu_percent_for(&started, 1050, one_second_later),
             None
         );
     }
 
     #[test]
     fn idle_sample_clears_baselines_without_procfs_work() {
-        let identity = ProcessIdentity {
-            pid: 42,
-            start_ticks: 100,
-        };
         let mut sampler = BuildStatSampler {
             previous: HashMap::from([(
-                identity,
+                key_for(&GlobalBuild::default(), 42, 100),
                 CpuBaseline {
                     cpu_ticks: 1000,
                     sampled_at: Instant::now(),

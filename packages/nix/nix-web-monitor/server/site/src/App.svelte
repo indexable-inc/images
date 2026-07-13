@@ -68,6 +68,27 @@
     logPanel?.inspect(text);
   }
 
+  /// Surface a conditional pane when it first becomes visible. The old
+  /// hardcoded layout rendered the activation/diff panels the moment those
+  /// phases existed; in the dock they join a group whose active tab defaults
+  /// to `machine`, so without this a switch's progress or failure output sits
+  /// behind another tab until the operator notices. Fires only on the
+  /// hidden-to-visible transition, never on later polls, so it cannot
+  /// repeatedly steal the operator's tab choice.
+  function revealOnAppear(id: string, isVisible: () => boolean): void {
+    let wasVisible = false;
+    $effect(() => {
+      const visible = isVisible();
+      // Wait for the dock binding; the effect re-runs when it lands.
+      if (dock === null) return;
+      if (visible && !wasVisible) dock.reveal(id);
+      wasVisible = visible;
+    });
+  }
+
+  revealOnAppear('activation', () => snapshot.activation.active);
+  revealOnAppear('changes', () => snapshot.diff !== null);
+
   onMount(() => {
     closeEvents = openMonitorEvents(
       (nextSnapshot) => {
