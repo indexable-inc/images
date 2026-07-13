@@ -167,6 +167,7 @@
   # patch bytes owned by index so fleet configurations consume one source of
   # truth instead of copying the fix into each repository.
   nixPatches = {
+    autoGcRecheckAfterLock = paths.packagesRoot + "/nix/nix/patches/0017-fix-libstore-recheck-free-space-after-GC-lock.patch";
     opaqueTemporaryRootFilenames = paths.packagesRoot + "/nix/nix/patches/0016-fix-libstore-accept-opaque-temporary-root-filenames.patch";
   };
   secretRefs = import ./util/secret-refs.nix {inherit lib;};
