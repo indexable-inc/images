@@ -524,7 +524,6 @@ in {
       # Development - Build tools
       cmake # cross-platform build system generator
       pkg-config # query compiler/linker flags for installed libs
-      bazel_8 # Google's hermetic, parallel build system (v8.x)
       # watchman  # commented 2026-05-22: upstream folly test (UninitializedMemoryHacksTest) fails to compile under current clang, blocking rebuilds. Re-enable when nixpkgs bumps folly.
       just # command runner (`justfile` — like make without the gotchas)
       capnproto # Cap'n Proto IDL + RPC (faster Protobuf alternative)
