@@ -52,7 +52,7 @@ in {
       };
       validate_model = true;
       explorer = {
-        port = 19801;
+        port = 19_801;
       };
       spawn_search = {
         initial_size = 16;
@@ -60,7 +60,7 @@ in {
       };
     };
 
-    datapacks."max-height" = {
+    datapacks.max-height = {
       inherit (worldHeight) dimensionTypes pack;
       # `dimensionTypes` only writes under `data/minecraft/dimension_type/`.
       # The diffusion mod points the overworld at its own dim type instead

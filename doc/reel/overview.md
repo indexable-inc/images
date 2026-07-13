@@ -57,19 +57,20 @@ per run (`src/main.rs:101-115`).
 ## Recording flow (`src/record.rs`)
 
 `record` spawns `bash --noprofile --norc -i` via `tui::TuiManager::spawn` with a
-`SpawnConfig { rows, cols, scrollback_lines: 2000 }` (`record.rs:19-34`). Hidden
-setup (not captured) sets a clean `PS1`, empty `PS2`, `TERM=xterm-256color`,
-`HISTFILE=/dev/null`, then clears the screen (`record.rs:38-44`). Each scripted
-`Action` is then replayed, capturing one `Frame` per wall-clock frame interval
-via `term.read_styled_cells()` + `term.read_cursor()` (`record.rs:57-69`):
+`SpawnConfig { rows, cols, scrollback_lines: 2000, ..SpawnConfig::default() }`
+(`record.rs:19-35`). Hidden setup (not captured) sets a clean `PS1`, empty
+`PS2`, `TERM=xterm-256color`, `HISTFILE=/dev/null`, then clears the screen
+(`record.rs:39-45`). Each scripted `Action` is then replayed, capturing one
+`Frame` per wall-clock frame interval via `term.read_styled_cells()` +
+`term.read_cursor()` (`record.rs:58-70`):
 
 - `Type` reveals one char at a time, holding each for `frames_per_char` frames so
   typing reads at a steady ~18 chars/sec at any capture rate
-  (`record.rs:47-48,80-91`).
+  (`record.rs:48-49,81-92`).
 - `Send` writes raw bytes (e.g. `\r`, `\x04` EOF) and captures one frame.
 - `Hold(n)` captures `n` frames of the static screen.
 - `WaitFor { needle, max }` captures until `term.read_viewport()` contains
-  `needle` or `max` frames pass (`record.rs:103-112`) - used to wait for the
+  `needle` or `max` frames pass (`record.rs:104-113`) - used to wait for the
   Python `>>>` prompt before typing into the REPL.
 
 Sampling on wall-clock cadence means the child's real output streams into the

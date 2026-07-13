@@ -1,6 +1,6 @@
 # The wheel is built by Nix, not a PEP 517 backend:
 # packages/search/search-py/default.nix compiles the PyO3 cdylib through the
-# shared cargo-unit workspace graph and packages it with wheel/mkwheel.py. This
+# shared cargo-unit workspace graph and packages it with lib/build/pyo3-wheel.py. This
 # file stays as project metadata (the version is read by the Nix build) plus the
 # pyright config. There is no `[build-system]`; `pip install .` is not a
 # supported path. Build with `nix build .#search-py`.

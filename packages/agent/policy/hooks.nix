@@ -23,6 +23,8 @@
     reviewEditLogger = hookRunnerSubcommand "review-log-edit";
     stopReviewGate = hookRunnerSubcommand "review-gate";
     stopRetroGate = hookRunnerSubcommand "retro-gate";
+    wakeupArmLogger = hookRunnerSubcommand "wakeup-log";
+    stopWakeupGate = hookRunnerSubcommand "wakeup-gate";
     frictionIssueReporter = hookRunnerSubcommand "friction-report";
     subagentCachePopulate = hookRunnerSubcommand "subagent-cache-populate";
   };
@@ -93,6 +95,13 @@
         command = hookCommands.reviewEditLogger;
         agents = ["claude"];
       }
+      # Records each armed ScheduleWakeup fire time so the Stop gate below can
+      # tell a dropped wakeup from a fired one (index#2259).
+      {
+        matcher = "ScheduleWakeup";
+        command = hookCommands.wakeupArmLogger;
+        agents = ["claude"];
+      }
     ];
 
     Stop = [
@@ -100,10 +109,21 @@
         command = hookCommands.stopReviewGate;
         agents = ["claude"];
       }
-      # Retrospect a substantive session and file GitHub issues for what was
-      # improvable, once per session (own marker), like the review gate above.
+      # Retrospect a substantive session once per session (own marker), like
+      # the review gate above — but out-of-band: the hook detaches a worker
+      # that ships the transcript to the ix-mcp HTTP kernel (weave CAS blob)
+      # and `weave.delegate`s a fleet agent to file GitHub issues for what was
+      # improvable. Stop is never blocked; without fleet creds
+      # (IX_MCP_API_KEY[_FILE]) it fails open and does nothing.
       {
         command = hookCommands.stopRetroGate;
+        agents = ["claude"];
+      }
+      # Blocks once when an armed ScheduleWakeup vanished before its fire time
+      # (index#2259: pending wakeups are in-memory only and cleared by session
+      # resume or user abort, so a drop is otherwise a silent stall).
+      {
+        command = hookCommands.stopWakeupGate;
         agents = ["claude"];
       }
       {

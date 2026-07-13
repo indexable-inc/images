@@ -6,14 +6,21 @@ write to them, so here we hand the MCP protocol those private fds exclusively.
 
 The stdio transport is also a Claude Code channel (research preview,
 https://code.claude.com/docs/en/channels-reference): it advertises the
-``claude/channel`` experimental capability and pumps the store's ``outbox``
+``claude/channel`` experimental capability and pumps the tier-3 mailbox outbox
 (what the kernel's ``notify()`` writes) as ``notifications/claude/channel``
 events, so kernel code can push into the running agent session. Channels are
 stdio-only by contract (Claude Code spawns the channel server as a subprocess
-and a session opts in per-entry via ``--channels`` /
-``--dangerously-load-development-channels``), so the HTTP transport does not
-grow one. A client that did not opt in ignores both the capability and the
+and a session opts in per-entry via ``--channels``), so the HTTP transport does
+not grow one. A client that did not opt in ignores both the capability and the
 notifications, so this costs nothing when unused.
+
+Under a Weave-driven session (``Config.channel_delivery == "weave-chat"``,
+set via IX_MCP_CHANNEL_DELIVERY by weave's session_env) the pump does NOT
+emit channel notifications: a self-woken Claude turn is out-of-band to Weave
+(its hook callbacks are rejected 401 and its work never reaches the journal).
+Each outbox row is instead posted to Weave's chat ingress (POST
+``{WEAVE_URL}/api/chat`` addressed to IX_WEAVE_AGENT), where Weave's observer
+opens a normal run and prompts the session itself.
 """
 
 from __future__ import annotations
@@ -23,8 +30,12 @@ import hmac
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable, MutableMapping
-from contextlib import AsyncExitStack
+import time
+import uuid
+from collections.abc import Awaitable, Callable, Iterator, MutableMapping
+from contextlib import AsyncExitStack, contextmanager
+
+from xml.sax.saxutils import quoteattr
 
 import anyio
 from anyio.abc import ObjectSendStream
@@ -32,7 +43,7 @@ from mcp.server.session import InitializationState, ServerSession
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
-from . import store
+from . import mailbox, store
 from .config import config
 from .tools import mcp
 
@@ -47,12 +58,63 @@ CHANNEL_CAPABILITIES = {"claude/channel": {}}
 # a notify() reaches the client within ~this bound.
 _OUTBOX_POLL_SECONDS = 0.5
 
+# One write-behind store connection for session lifecycle facts, shared by every
+# connection this process serves. Lazy, and per-module like the dashboard's
+# AsyncConn (each store.connect re-asserts the same agent/kernel identity, so
+# that stays idempotent); an embedder without a CLI config (store_path=None)
+# simply gets no session facts.
+_facts_conn: store.WeaveStore | None = None
+
+
+def _session_conn() -> store.WeaveStore | None:
+    global _facts_conn
+    if _facts_conn is None and config().store_path is not None:
+        _facts_conn = store.connect(config().store_path)
+    return _facts_conn
+
+
+@contextmanager
+def _session_entity(transport_kind: str) -> Iterator[Callable[[str], None]]:
+    """Land one MCP connection as its own session entity for its lifetime.
+
+    Entering asserts the weave2 session contract (docs/weave2.md 4.6: every
+    connection is a graph node attached to this server's agent); exiting
+    re-asserts status "closed" -- latest wins, never retracted, so a closed
+    session greys out instead of disappearing. Yields an upgrade callable that
+    replaces the transport-kind client fact with the name the client declared
+    in the initialize handshake, once known. Under WEAVE_URL=off the facade
+    makes every write a silent no-op.
+    """
+    conn = _session_conn()
+    if conn is None:
+        yield lambda name: None
+        return
+    sid = uuid.uuid4().hex[:8]
+    connected_at = time.time()
+
+    def upgrade(name: str) -> None:
+        # Same connected_at: the facade's per-attr dedupe reduces this
+        # re-assert to just the changed client fact.
+        store.session_facts(conn, id=sid, status="connected", client=name, connected_at=connected_at)
+
+    store.session_facts(conn, id=sid, status="connected", client=transport_kind, connected_at=connected_at)
+    try:
+        yield upgrade
+    finally:
+        store.session_facts(conn, id=sid, status="closed")
+
 
 async def serve() -> None:
-    if config().transport == "http":
-        await _serve_http()
-    else:
-        await _serve_stdio()
+    try:
+        if config().transport == "http":
+            await _serve_http()
+        else:
+            await _serve_stdio()
+    finally:
+        # Best-effort drain (close flushes the write-behind queue) so the final
+        # status="closed" facts do not die with the process.
+        if _facts_conn is not None:
+            _facts_conn.close()
 
 
 async def _serve_stdio() -> None:
@@ -98,96 +160,188 @@ async def _run_with_channel_pump(server, read_stream, write_stream, init_options
     (see :func:`_can_hold_session`), fall back to the plain ``run`` with an
     ungated pump -- correct today because nothing writes the outbox before init
     (the store's outbox is cleared at startup), just not future-proofed.
+
+    Either path also lands this one connection as its own session entity (see
+    :func:`_session_entity`); stdio single-session mode therefore emits exactly
+    one. Only the held-session path can name the real client afterwards -- the
+    fallback has no session to read ``client_params`` from.
     """
     if not _can_hold_session(server):
         logger.warning("channel pump: SDK internals unavailable; running without the initialized gate")
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(pump_outbox, write_stream, None)
-            await server.run(read_stream, write_stream, init_options)
-            tg.cancel_scope.cancel()
+        with _session_entity("stdio"):
+            async with anyio.create_task_group() as tg:
+                initialized = anyio.Event()
+                initialized.set()
+                tg.start_soon(pump_outbox, write_stream, initialized)
+                await server.run(read_stream, write_stream, init_options)
+                tg.cancel_scope.cancel()
         return
     async with AsyncExitStack() as stack:
         lifespan_context = await stack.enter_async_context(server.lifespan(server))
         session = await stack.enter_async_context(
             ServerSession(read_stream, write_stream, init_options)
         )
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(pump_outbox, write_stream, session)
-            async for message in session.incoming_messages:
-                tg.start_soon(
-                    functools.partial(
-                        server._handle_message, message, session, lifespan_context, raise_exceptions=False
+        initialized = anyio.Event()
+        with _session_entity("stdio") as upgrade_client:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(pump_outbox, write_stream, initialized)
+                tg.start_soon(_watch_client_name, session, initialized, upgrade_client)
+                async for message in session.incoming_messages:
+                    if not initialized.is_set() and _session_initialized(session):
+                        initialized.set()
+                    tg.start_soon(
+                        functools.partial(
+                            server._handle_message, message, session, lifespan_context, raise_exceptions=False
+                        )
                     )
-                )
-            tg.cancel_scope.cancel()
+                tg.cancel_scope.cancel()
 
 
-def _session_initialized(session: ServerSession | None) -> bool:
-    """Whether the client has completed the initialize handshake. None session
-    (the fallback path) reports True: there is nothing to gate on there."""
-    if session is None:
-        return True
+def _session_initialized(session: ServerSession) -> bool:
+    """Whether the client has completed the initialize handshake."""
     return getattr(session, "_initialization_state", None) is InitializationState.Initialized
+
+
+async def _watch_client_name(
+    session: ServerSession,
+    initialized: anyio.Event,
+    upgrade: Callable[[str], None],
+) -> None:
+    """Upgrade the session entity's client fact from the transport kind to the
+    name declared in the initialize handshake. ``client_params`` is set before
+    session reports Initialized; a client that never completes the handshake
+    leaves this task waiting and keeps the transport kind."""
+    await initialized.wait()
+    params = session.client_params
+    if params is not None:
+        upgrade(params.clientInfo.name)
 
 
 async def pump_outbox(
     write_stream: ObjectSendStream[SessionMessage],
-    session: ServerSession | None,
+    initialized: anyio.Event,
 ) -> None:
-    """Drain this session's share of the store outbox into
+    """Drain this session's share of the in-process mailbox outbox into
     ``notifications/claude/channel`` events (broadcast rows plus rows addressed
-    to ``config().server_session_id`` -- see ``store.take_outbox``).
+    to ``config().server_session_id``).
 
     Custom notification methods are not in the SDK's typed ``ServerNotification``
     union, so the JSON-RPC message is built directly and sent on the transport's
     write stream -- the same bytes ``ServerSession.send_notification`` would
-    produce. Holds every send until the client is ``initialized`` (see
-    :func:`_session_initialized`), so a startup/replay ``notify()`` never emits a
-    notification before the handshake completes. Best-effort per tick: a store
-    hiccup retries next tick, and a closed transport ends the pump (the task
-    group tears it down anyway).
-    """
-    cfg = config()
-    if not cfg.store_path:
-        return
-    conn = store.connect(cfg.store_path)
-    try:
-        while True:
-            # Wait for the handshake before draining, so rows that accrue during
-            # startup are held (not dropped) until the client can receive them.
-            if not _session_initialized(session):
-                await anyio.sleep(_OUTBOX_POLL_SECONDS)
-                continue
-            try:
-                # Serve only this session's mail: broadcast rows (explicit
-                # notify() -- pr_watch and friends) plus rows addressed to this
-                # server's own session id. A job lifecycle event addressed to
-                # another session stays queued for its own pump instead of
-                # waking this client (issue #2165).
-                rows = store.take_outbox(conn, session=cfg.server_session_id)
-            except Exception:
-                rows = []  # best-effort: a read error this tick just retries next tick
-            for row in rows:
-                try:
-                    meta = json.loads(row["meta"] or "{}")
-                except ValueError:
-                    meta = {}
-                params: dict = {"content": row["content"]}
-                if meta:
-                    params["meta"] = meta
-                notification = JSONRPCNotification(
-                    jsonrpc="2.0",
-                    method="notifications/claude/channel",
-                    params=params,
-                )
-                try:
-                    await write_stream.send(SessionMessage(message=JSONRPCMessage(notification)))
-                except (anyio.ClosedResourceError, anyio.BrokenResourceError):
-                    return
-            await anyio.sleep(_OUTBOX_POLL_SECONDS)
-    finally:
-        conn.close()
+    produce. Holds every send on the initialization event, so a startup/replay
+    ``notify()`` never emits a notification before the handshake completes.
 
+    Under ``channel_delivery == "weave-chat"`` rows go to Weave's chat ingress
+    instead of the client (see the module docstring): ``take_outbox`` is
+    destructive, so undelivered rows ride a local ``pending`` buffer until a
+    2xx acknowledges them, each keeping the one message id minted for it so a
+    retry after an ambiguous failure lands on the same message entity.
+    """
+    await initialized.wait()
+    cfg = config()
+    box = mailbox.get_mailbox()
+    weave_chat = _weave_chat_target() if cfg.channel_delivery == "weave-chat" else None
+    pending: list[dict] = []
+    while True:
+        try:
+            # Serve only this session's mail: broadcast rows (explicit
+            # notify() -- pr_watch and friends) plus rows addressed to this
+            # server's own session id. A job lifecycle event addressed to
+            # another session stays queued for its own pump instead of
+            # waking this client (issue #2165).
+            rows = box.take_outbox(session=cfg.server_session_id)
+        except Exception:
+            rows = []  # best-effort: a read error this tick just retries next tick
+        if weave_chat is not None:
+            pending.extend({**row, "msg_id": f"msg-ixch-{uuid.uuid4().hex[:12]}"} for row in rows)
+            pending = await _deliver_weave_chat(weave_chat, pending)
+            await anyio.sleep(_OUTBOX_POLL_SECONDS)
+            continue
+        for row in rows:
+            try:
+                meta = json.loads(row["meta"] or "{}")
+            except ValueError:
+                meta = {}
+            params: dict = {"content": row["content"]}
+            if meta:
+                params["meta"] = meta
+            notification = JSONRPCNotification(
+                jsonrpc="2.0",
+                method="notifications/claude/channel",
+                params=params,
+            )
+            try:
+                await write_stream.send(SessionMessage(message=JSONRPCMessage(notification)))
+            except (anyio.ClosedResourceError, anyio.BrokenResourceError):
+                return
+        await anyio.sleep(_OUTBOX_POLL_SECONDS)
+
+
+def _weave_chat_target() -> tuple[str, str] | None:
+    """The (weave_url, agent) a weave-chat pump posts to, or None when the
+    environment cannot support the mode -- the pump then falls back loudly to
+    client notifications rather than silently dropping events."""
+    url = os.environ.get("WEAVE_URL", "").rstrip("/")
+    agent = os.environ.get("IX_WEAVE_AGENT", "")
+    if not url or url.lower() == "off" or not agent:
+        logger.warning(
+            "channel_delivery=weave-chat needs WEAVE_URL and IX_WEAVE_AGENT; "
+            "falling back to client notifications"
+        )
+        return None
+    return url, agent
+
+
+def _channel_chat_text(row: dict) -> str:
+    """Render one outbox row in the same ``<channel ...>content</channel>``
+    shape Claude Code gives channel notifications, so the agent reads identical
+    provenance whichever way the event reached it."""
+    try:
+        meta = json.loads(row["meta"] or "{}")
+    except ValueError:
+        meta = {}
+    attrs = "".join(f" {key}={quoteattr(str(value))}" for key, value in meta.items())
+    return f'<channel source="ix-mcp"{attrs}>{row["content"]}</channel>'
+
+
+async def _deliver_weave_chat(target: tuple[str, str], pending: list[dict]) -> list[dict]:
+    """POST pending rows to Weave's chat ingress, oldest first, in order.
+
+    Returns the rows still undelivered: the first failure keeps its row and
+    everything behind it queued for the next tick, preserving order. Weave's
+    /api/chat ``id`` is idempotent (one message entity per id; an answered or
+    claimed message never re-dispatches), so retrying a POST whose response
+    was lost cannot double-run the agent. Rows older than the outbox TTL are
+    dropped with an error line -- the same bound the mailbox itself enforces
+    -- so a long Weave outage cannot grow the buffer without limit."""
+    url, agent = target
+    cutoff = time.time() - mailbox._OUTBOX_MAX_AGE_SECONDS
+    expired = [row for row in pending if row["created_at"] < cutoff]
+    if expired:
+        logger.error(
+            "dropping %d channel event(s) undelivered to weave past the outbox TTL",
+            len(expired),
+        )
+    kept = [row for row in pending if row["created_at"] >= cutoff]
+    for index, row in enumerate(kept):
+        body = {
+            "author": "ix-mcp",
+            "to": agent,
+            "role": "user",
+            "id": row["msg_id"],
+            "text": _channel_chat_text(row),
+        }
+        try:
+            # store._http_json is the one seam every Weave HTTP call in this
+            # process goes through (and what tests stub); blocking stdlib
+            # urllib, so run it off the event loop.
+            await anyio.to_thread.run_sync(
+                functools.partial(store._http_json, "POST", f"{url}/api/chat", body=body)
+            )
+        except Exception as exc:
+            logger.warning("weave chat delivery failed, retrying next tick: %s", exc)
+            return kept[index:]
+    return []
 
 # ASGI plumbing types for the HTTP transport's auth gate. `object` values (not
 # Any) keep the wrapper honestly typed; only our own literal dicts flow through.
@@ -266,6 +420,26 @@ def _gate(inner: _App, api_key: str | None) -> _App:
     return app
 
 
+def _wrap_run_as_session(server) -> None:  # noqa: ANN001 -- SDK server type is internal
+    """Land each streamable-HTTP MCP session as its own session entity.
+
+    The SDK's ``StreamableHTTPSessionManager`` runs exactly one ``server.run``
+    per MCP session (``_handle_stateful_request``), so wrapping this instance's
+    ``run`` is the one choke point where the transport learns of HTTP session
+    creation and teardown (DELETE, idle cancel, or shutdown all return through
+    it). The stdio held-session mirror cannot apply here -- the manager owns
+    the per-session streams -- so the client fact stays the transport kind.
+    """
+    inner_run = server.run
+
+    @functools.wraps(inner_run)
+    async def run_as_session(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202 -- mirrors the SDK's call shape
+        with _session_entity("http"):
+            return await inner_run(*args, **kwargs)
+
+    server.run = run_as_session
+
+
 async def _serve_http() -> None:
     """Serve MCP over streamable HTTP (endpoint path: `/mcp`).
 
@@ -278,6 +452,7 @@ async def _serve_http() -> None:
     cfg = config()
     mcp.settings.host = cfg.mcp_http_host
     mcp.settings.port = cfg.mcp_http_port
+    _wrap_run_as_session(mcp._mcp_server)
     app = _gate(mcp.streamable_http_app(), cfg.api_key)
     server = uvicorn.Server(
         uvicorn.Config(

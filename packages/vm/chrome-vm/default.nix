@@ -19,7 +19,7 @@
   # The aarch64-darwin vmkit binary (self-signs + re-execs at runtime). Repo
   # crates aren't overlaid into `pkgs`, so reach it through the workspace units
   # the same way packages/mcp does.
-  vmkit = ix.rustWorkspace.units.binaries."vmkit";
+  vmkit = ix.rustWorkspace.units.binaries.vmkit;
 in
   writeNushellApplication {
     name = "chrome-vm";

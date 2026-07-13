@@ -1,5 +1,5 @@
 # Metadata only: the wheel is assembled by Nix (default.nix builds the PyO3
-# cdylib and wheel/mkwheel.py packages it), not a PEP 517 backend. There is no
+# cdylib and lib/build/pyo3-wheel.py packages it), not a PEP 517 backend. There is no
 # [build-system]; build with `nix build .#polars-sftp`.
 [project]
 name = "polars-sftp"

@@ -40,7 +40,12 @@ struct IndexedNode<'a> {
     node: &'a NodeInfo,
 }
 
-pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGroup> {
+pub fn find(
+    scan: &Output,
+    generated_files: &[bool],
+    threshold: f64,
+    metric: Type3Metric,
+) -> Vec<CloneGroup> {
     // Banding derived once from the threshold: shared by every kind group so the
     // LSH S-curve matches the configured similarity floor (see
     // `banding_for_threshold`).
@@ -148,6 +153,7 @@ pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGrou
 
                 let Some(group) = try_make_group(
                     scan,
+                    generated_files,
                     &CandidatePair {
                         loc_a: pair.first,
                         loc_b: pair.second,
@@ -230,11 +236,25 @@ struct CandidatePair {
 
 /// Try to build a Type-3 clone group from two node locations.
 /// Returns `None` if they're already Type-1/Type-2 or below threshold.
-fn try_make_group(scan: &Output, pair: &CandidatePair) -> Option<CloneGroup> {
+fn try_make_group(
+    scan: &Output,
+    generated_files: &[bool],
+    pair: &CandidatePair,
+) -> Option<CloneGroup> {
     let file_a = scan.files.get(pair.loc_a.file_id)?;
     let file_b = scan.files.get(pair.loc_b.file_id)?;
     let node_a = file_a.nodes.get(pair.loc_a.node_idx)?;
     let node_b = file_b.nodes.get(pair.loc_b.node_idx)?;
+
+    // A tree contains the same code at several nesting levels. Comparing two
+    // intersecting nodes from that tree reports a fragment against itself,
+    // which dominated repo-scale Type-3 output and inflated duplication stats.
+    // Disjoint nodes in one file remain valid candidates.
+    if pair.loc_a.file_id == pair.loc_b.file_id
+        && ranges_overlap(&node_a.byte_range, &node_b.byte_range)
+    {
+        return None;
+    }
 
     // Skip pairs already caught as Type-1 or Type-2
     if node_a.content_hash == node_b.content_hash
@@ -265,10 +285,14 @@ fn try_make_group(scan: &Output, pair: &CandidatePair) -> Option<CloneGroup> {
             metric: pair.metric,
         },
         fragments: vec![
-            Fragment::from_node(file_a, node_a),
-            Fragment::from_node(file_b, node_b),
+            Fragment::from_node(file_a, node_a, *generated_files.get(pair.loc_a.file_id)?),
+            Fragment::from_node(file_b, node_b, *generated_files.get(pair.loc_b.file_id)?),
         ],
     })
+}
+
+const fn ranges_overlap(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
+    a.start < b.end && b.start < a.end
 }
 
 /// Compute structural similarity between two AST nodes using the default

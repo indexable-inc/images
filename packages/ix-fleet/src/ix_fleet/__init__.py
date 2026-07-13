@@ -36,8 +36,11 @@ class ReplacementImage(BaseModel):
 
     imageName: str = Field(min_length=1)
     destination: str = Field(min_length=1)
-    source: str = Field(min_length=1)
-    sourceDrv: str = Field(min_length=1)
+    # The flake attr of the node's CAS-manifest image (`.#<node>`), built at
+    # push time. The plan deliberately carries no out/drv path: instantiating
+    # the manifest builder evaluates the node's whole system closure (IFD), so
+    # plan rendering must never force it.
+    sourceInstallable: str = Field(min_length=1)
 
 
 class SwitchSpec(BaseModel):
@@ -62,6 +65,14 @@ class HealthCheck(BaseModel):
     # `from` is a Python keyword, so accept it under an alias and store as
     # `from_` on the model.
     from_: typing.Literal["guest", "host"] = Field(alias="from")
+
+
+class UpdateStrategy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Kubernetes RollingUpdate semantics for a replica group: at most this many
+    # replicas are recreated (and therefore down) at once during `up`/`replace`.
+    maxUnavailable: int = Field(ge=1)
 
 
 class SecretTarget(BaseModel):
@@ -103,6 +114,7 @@ class FleetNode(BaseModel):
     l7ProxyPorts: list[int] = Field(default_factory=empty_int_list)
     dependsOn: list[str] = Field(default_factory=empty_str_list)
     healthChecks: dict[str, HealthCheck] = Field(default_factory=dict)
+    updateStrategy: UpdateStrategy | None = None
 
 
 class FleetPlan(BaseModel):
@@ -180,6 +192,14 @@ def selected_nodes(plan: FleetPlan, selectors: list[str]) -> list[FleetNode]:
             visit(name)
 
     return ordered
+
+
+def selected_in_order(plan: FleetPlan, selectors: list[str]) -> list[FleetNode]:
+    """The selected nodes in plan order, WITHOUT pulling in their dependency
+    closure. Read-only commands (`status`, `logs`) use this: asking about
+    `worker` should not silently report on `web` too."""
+    selected = selected_names(plan, selectors)
+    return [plan.nodes[name] for name in plan.order if name in selected]
 
 
 def step(message: str) -> None:
@@ -340,21 +360,47 @@ async def wait_node_ready(node: FleetNode, *, dry_run: bool) -> None:
 async def push_replacement_image(node: FleetNode, *, dry_run: bool) -> str:
     image = node.replacementImage
     if dry_run:
-        step(f"+ realise {image.sourceDrv} and image push -> {image.destination}")
+        step(f"+ build {image.sourceInstallable} and image push-manifest -> {image.destination}")
         return image.destination
 
-    # Realising the OCI image is host-side nix work; the push itself goes through
-    # the SDK (sdk-core owns the chunk/dedup/upload pipeline).
-    source = image.source
-    out = await run_cli(["nix-store", "--realise", image.sourceDrv], dry_run=False)
-    realised = [line.strip() for line in out.splitlines() if line.strip()]
-    if realised:
-        source = realised[-1]
-    if not await asyncio.to_thread(Path(source).exists):
-        raise RuntimeError(f"OCI image derivation did not realise to an existing path: {source}")
+    # Building the CAS image is host-side nix work; the push goes through the
+    # ix CLI: `push-manifest` streams data chunks straight from the origin
+    # /nix/store files the locator names, so nothing is staged host-side.
+    out = await run_cli(
+        ["nix", "build", "--no-link", "--print-out-paths", image.sourceInstallable],
+        dry_run=False,
+    )
+    built = [line.strip() for line in out.splitlines() if line.strip()]
+    if not built:
+        raise RuntimeError(f"nix build printed no out path for {image.sourceInstallable}")
+    image_dir = Path(built[-1])
+    manifest = image_dir / "manifest.cas"
+    locator = image_dir / "locator.bin"
+    for required in (manifest, locator):
+        if not await asyncio.to_thread(required.exists):
+            raise RuntimeError(f"CAS image {image_dir} is missing {required.name}")
 
-    step(f"pushing {image.destination} from {source}")
-    return await client().image_push(source, image.destination, region=node.region)
+    step(f"pushing {image.destination} from {image_dir}")
+    out = await run_cli(
+        [
+            "ix",
+            "image",
+            "push-manifest",
+            "--locator",
+            str(locator),
+            str(manifest),
+            image.destination,
+            "--region",
+            node.region,
+        ],
+        dry_run=False,
+    )
+    # The pushed reference is the only stdout line (phase progress renders on
+    # stderr), the same normalized reference the SDK's image_push returned.
+    pushed = [line.strip() for line in out.splitlines() if line.strip()]
+    if not pushed:
+        raise RuntimeError(f"ix image push-manifest printed no reference for {image.destination}")
+    return pushed[-1]
 
 
 async def list_nodes() -> list[ix_sdk.BranchInfo]:
@@ -583,6 +629,59 @@ def expand_host_command(command: list[str], env: dict[str, str]) -> list[str]:
     return [string.Template(arg).safe_substitute(env) for arg in command]
 
 
+async def attempt_health_check(node: FleetNode, check: HealthCheck) -> str | None:
+    """Run one attempt of `check` against `node`.
+
+    Returns None on success and a failure detail otherwise. The retry policy
+    lives in the callers: `run_health_check` loops this until `check.attempts`
+    run out (the deploy-time wait), `status` runs it exactly once per check
+    (a point-in-time readiness snapshot). Deliberately does not catch
+    `ix_sdk.IxError`: on the deploy path an exec RPC error means the guest is
+    not up yet and must fail the workflow fast (see `run_up_node_workflow`);
+    `status` wraps its own calls instead.
+    """
+    if check.from_ == "guest":
+        # Run the check argv inside the VM through the SDK exec channel.
+        branch = await client().find_by_name(node.name)
+        if branch is None:
+            return f"{node.name} not found"
+        try:
+            result = await asyncio.wait_for(
+                branch.exec(list(check.command), check=False, quiet=True),
+                check.timeoutSec,
+            )
+        except TimeoutError:
+            return f"timed out after {check.timeoutSec}s"
+        if result.exit_code == 0:
+            return None
+        return (result.stdout + result.stderr).strip() or f"exit status {result.exit_code}"
+
+    # Host check: run on the operator's machine with IX_NODE_* env so it
+    # can probe the node from outside (public reachability, firewall).
+    info = find_node(await list_nodes(), node.name)
+    host_env = node_env_vars(node, info)
+    if check.requiresIpv4 and not host_env.get("IX_NODE_IPV4"):
+        return "node has not reported IX_NODE_IPV4 yet"
+    env = {**os.environ, **host_env}
+    command = expand_host_command(check.command, host_env)
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), check.timeoutSec)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        return f"timed out after {check.timeoutSec}s"
+    if process.returncode == 0:
+        return None
+    detail = (stdout_b.decode(errors="replace") + stderr_b.decode(errors="replace")).strip()
+    return detail or f"exit status {process.returncode}"
+
+
 async def run_health_check(
     node: FleetNode,
     check_name: str,
@@ -600,56 +699,11 @@ async def run_health_check(
     step(f"checking {node.name}/{check_name} ({check.from_}): {check.description}")
     last_error = ""
     for attempt in range(1, check.attempts + 1):
-        if check.from_ == "guest":
-            # Run the check argv inside the VM through the SDK exec channel.
-            branch = await client().find_by_name(node.name)
-            if branch is None:
-                last_error = f"{node.name} not found"
-            else:
-                try:
-                    result = await asyncio.wait_for(
-                        branch.exec(list(check.command), check=False, quiet=True),
-                        check.timeoutSec,
-                    )
-                except TimeoutError:
-                    last_error = f"timed out after {check.timeoutSec}s"
-                else:
-                    if result.exit_code == 0:
-                        step(f"healthy {node.name}/{check_name}")
-                        return
-                    last_error = (result.stdout + result.stderr).strip()
-        else:
-            # Host check: run on the operator's machine with IX_NODE_* env so it
-            # can probe the node from outside (public reachability, firewall).
-            info = find_node(await list_nodes(), node.name)
-            host_env = node_env_vars(node, info)
-            if check.requiresIpv4 and not host_env.get("IX_NODE_IPV4"):
-                last_error = "node has not reported IX_NODE_IPV4 yet"
-                if attempt < check.attempts:
-                    await asyncio.sleep(check.intervalSec)
-                continue
-            env = {**os.environ, **host_env}
-            command = expand_host_command(check.command, host_env)
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            try:
-                stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), check.timeoutSec)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
-                last_error = f"timed out after {check.timeoutSec}s"
-            else:
-                if process.returncode == 0:
-                    step(f"healthy {node.name}/{check_name}")
-                    return
-                last_error = (
-                    stdout_b.decode(errors="replace") + stderr_b.decode(errors="replace")
-                ).strip()
-
+        error = await attempt_health_check(node, check)
+        if error is None:
+            step(f"healthy {node.name}/{check_name}")
+            return
+        last_error = error
         if attempt < check.attempts:
             await asyncio.sleep(check.intervalSec)
 
@@ -900,6 +954,33 @@ async def run_up_node_workflow(node: FleetNode, args: argparse.Namespace) -> Non
         await run_node_health_checks(node, dry_run=args.dry_run)
 
 
+def rolling_update_edges(nodes_in_order: list[FleetNode]) -> dict[str, str]:
+    """Serialization edges implementing `updateStrategy.maxUnavailable`.
+
+    `up`/`replace` recreate each VM, so a replica is down from its delete until
+    its health checks pass. For replicas that share a `baseName` and declare an
+    update strategy, chain replica i onto replica i-maxUnavailable: the DAG
+    then holds a sliding window of at most maxUnavailable concurrent
+    recreations, and (because each per-node workflow ends with its health
+    checks) the window only advances as recreated replicas come back healthy —
+    Kubernetes RollingUpdate, expressed as dependency edges. Nodes without a
+    strategy keep today's fully-concurrent behavior.
+    """
+    groups: dict[str, list[FleetNode]] = {}
+    for node in nodes_in_order:
+        if node.updateStrategy is not None:
+            groups.setdefault(node.baseName, []).append(node)
+    edges: dict[str, str] = {}
+    for members in groups.values():
+        strategy = members[0].updateStrategy
+        assert strategy is not None  # group membership requires a strategy
+        window = strategy.maxUnavailable
+        for position, node in enumerate(members):
+            if position >= window:
+                edges[node.name] = members[position - window].name
+    return edges
+
+
 async def run_node_workflow_dag(
     plan: FleetPlan,
     args: argparse.Namespace,
@@ -908,9 +989,14 @@ async def run_node_workflow_dag(
 ) -> None:
     pushes_images = subcommand in {"_up-node", "_replace-node"} and "--skip-push" not in extra_args
     last_push_by_destination: dict[str, str] = {}
+    selected = selected_nodes(plan, args.on)
+    rolling = rolling_update_edges(selected)
     nodes: dict[str, dict[str, typing.Any]] = {}
-    for node in selected_nodes(plan, args.on):
+    for node in selected:
         depends_on = list(node.dependsOn)
+        rolling_dep = rolling.get(node.name)
+        if rolling_dep is not None and rolling_dep not in depends_on:
+            depends_on.append(rolling_dep)
         if pushes_images:
             previous = last_push_by_destination.get(node.replacementImage.destination)
             if previous is not None and previous not in depends_on:
@@ -990,13 +1076,7 @@ async def cmd_replace(plan: FleetPlan, args: argparse.Namespace) -> None:
             await run_replace_node_workflow(node, args)
         return
 
-    await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
-    extra_args: list[str] = []
-    if args.skip_push:
-        extra_args.append("--skip-push")
-    if args.skip_health:
-        extra_args.append("--skip-health")
-    await run_node_workflow_dag(plan, args, "_replace-node", extra_args)
+    await run_deploy_dag(plan, args, "_replace-node")
 
 
 async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
@@ -1005,13 +1085,17 @@ async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
             await run_up_node_workflow(node, args)
         return
 
+    await run_deploy_dag(plan, args, "_up-node")
+
+
+async def run_deploy_dag(plan: FleetPlan, args: argparse.Namespace, command: str) -> None:
     await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
     extra_args: list[str] = []
     if args.skip_push:
         extra_args.append("--skip-push")
     if args.skip_health:
         extra_args.append("--skip-health")
-    await run_node_workflow_dag(plan, args, "_up-node", extra_args)
+    await run_node_workflow_dag(plan, args, command, extra_args)
 
 
 async def cmd_replace_node(plan: FleetPlan, args: argparse.Namespace) -> None:
@@ -1042,6 +1126,189 @@ async def cmd_down(plan: FleetPlan, args: argparse.Namespace) -> None:
             failures.append(f"{node.name}: {error}")
     if failures:
         raise RuntimeError("failed to remove fleet nodes: " + "; ".join(failures))
+
+
+class CheckResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    healthy: bool
+    detail: str | None = None
+
+
+class NodeStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    status: str
+    ready: str
+    address: str | None
+    region: str
+    image: str | None
+    desiredImage: str
+    checks: list[CheckResult]
+    healthy: bool
+
+
+async def status_check(node: FleetNode, name: str, check: HealthCheck) -> CheckResult:
+    """One point-in-time run of a health check for `status`. Unlike the deploy
+    path there is no retry loop and no hard failure: an exec RPC error just
+    means the check is unhealthy right now, which is exactly what a status
+    report should say."""
+    try:
+        detail = await attempt_health_check(node, check)
+    except ix_sdk.IxError as error:
+        detail = str(error)
+    return CheckResult(name=name, healthy=detail is None, detail=detail)
+
+
+async def node_status(
+    node: FleetNode,
+    rows: list[ix_sdk.BranchInfo],
+    *,
+    with_checks: bool,
+) -> NodeStatus:
+    info = find_node(rows, node.name)
+    live_status = "missing" if info is None else status_str(info.status)
+    address: str | None = None
+    image: str | None = None
+    region = node.region
+    if info is not None:
+        address = info.ipv4 or info.ipv6
+        image = info.image
+        if info.region is not None:
+            region = info.region.slug
+    checks: list[CheckResult] = []
+    if with_checks and node.healthChecks:
+        if live_status == "running":
+            checks = list(
+                await asyncio.gather(
+                    *(
+                        status_check(node, name, node.healthChecks[name])
+                        for name in sorted(node.healthChecks)
+                    )
+                )
+            )
+        else:
+            # No point probing a VM that is not up; report every declared
+            # check as failing with the reason instead of timing out on each.
+            checks = [
+                CheckResult(name=name, healthy=False, detail=f"node is {live_status}")
+                for name in sorted(node.healthChecks)
+            ]
+    passed = sum(1 for check in checks if check.healthy)
+    ready = f"{passed}/{len(checks)}" if with_checks and node.healthChecks else "-"
+    return NodeStatus(
+        name=node.name,
+        status=live_status,
+        ready=ready,
+        address=address,
+        region=region,
+        image=image,
+        desiredImage=node.replacementImage.destination,
+        checks=checks,
+        healthy=live_status == "running" and all(check.healthy for check in checks),
+    )
+
+
+def render_status_table(reports: list[NodeStatus], *, wide: bool) -> str:
+    headers = ["NODE", "STATUS", "READY", "ADDRESS"]
+    if wide:
+        headers.extend(["REGION", "IMAGE", "DESIRED-IMAGE"])
+    rows: list[list[str]] = []
+    for report in reports:
+        row = [report.name, report.status, report.ready, report.address or "-"]
+        if wide:
+            row.extend([report.region, report.image or "-", report.desiredImage])
+        rows.append(row)
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for column, cell in enumerate(row):
+            widths[column] = max(widths[column], len(cell))
+    lines = ["  ".join(cell.ljust(widths[column]) for column, cell in enumerate(line)).rstrip() for line in [headers, *rows]]
+    for report in reports:
+        for check in report.checks:
+            if not check.healthy:
+                detail = f": {check.detail}" if check.detail else ""
+                lines.append(f"  ✗ {report.name}/{check.name}{detail}")
+    return "\n".join(lines)
+
+
+async def collect_status(plan: FleetPlan, args: argparse.Namespace) -> list[NodeStatus]:
+    nodes = selected_in_order(plan, args.on)
+    rows = await list_nodes()
+    return list(
+        await asyncio.gather(
+            *(node_status(node, rows, with_checks=not args.no_checks) for node in nodes)
+        )
+    )
+
+
+def render_status(reports: list[NodeStatus], output: str) -> None:
+    if output == "json":
+        print(json.dumps([report.model_dump() for report in reports], indent=2))
+    else:
+        print(render_status_table(reports, wide=output == "wide"))
+
+
+async def cmd_status(plan: FleetPlan, args: argparse.Namespace) -> None:
+    if args.dry_run:
+        # Desired state only: a dry run never touches the API, so report what
+        # the plan wants each node to be rather than what is live.
+        for node in selected_in_order(plan, args.on):
+            checks = ",".join(sorted(node.healthChecks)) or "-"
+            step(
+                f"+ status {node.name}: image={node.replacementImage.destination} "
+                f"region={node.region} checks={checks}"
+            )
+        return
+
+    if args.watch:
+        while True:
+            reports = await collect_status(plan, args)
+            render_status(reports, args.output)
+            print(flush=True)
+            await asyncio.sleep(args.interval)
+
+    reports = await collect_status(plan, args)
+    render_status(reports, args.output)
+    if any(not report.healthy for report in reports):
+        raise SystemExit(1)
+
+
+def logs_command(args: argparse.Namespace) -> list[str]:
+    command = ["journalctl", "--no-pager", "-n", str(args.lines)]
+    if args.unit is not None:
+        command.extend(["-u", args.unit])
+    if args.since is not None:
+        command.extend(["--since", args.since])
+    return command
+
+
+async def node_logs(node: FleetNode, command: list[str]) -> str:
+    branch = await client().find_by_name(node.name)
+    if branch is None:
+        raise RuntimeError(f"{node.name} not found")
+    result = await branch.exec(list(command), check=False, quiet=True)
+    if result.exit_code != 0:
+        detail = (result.stdout + result.stderr).strip()
+        raise RuntimeError(f"journalctl on {node.name} failed: {detail or result.exit_code}")
+    return result.stdout
+
+
+async def cmd_logs(plan: FleetPlan, args: argparse.Namespace) -> None:
+    nodes = selected_in_order(plan, args.on)
+    command = logs_command(args)
+    if args.dry_run:
+        for node in nodes:
+            step(f"+ logs {node.name}: exec {shlex.join(command)}")
+        return
+
+    outputs = await asyncio.gather(*(node_logs(node, command) for node in nodes))
+    prefix = len(nodes) > 1
+    for node, output in zip(nodes, outputs, strict=True):
+        for line in output.splitlines():
+            print(f"[{node.name}] {line}" if prefix else line)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1076,6 +1343,17 @@ def parser() -> argparse.ArgumentParser:
     add_common_options(diff, defaults=False)
     health = sub.add_parser("health")
     add_common_options(health, defaults=False)
+    status = sub.add_parser("status")
+    add_common_options(status, defaults=False)
+    status.add_argument("-o", "--output", choices=["table", "wide", "json"], default="table")
+    status.add_argument("--watch", action="store_true")
+    status.add_argument("--interval", type=int, default=5, metavar="SECONDS")
+    status.add_argument("--no-checks", action="store_true")
+    logs = sub.add_parser("logs")
+    add_common_options(logs, defaults=False)
+    logs.add_argument("-u", "--unit")
+    logs.add_argument("-n", "--lines", type=int, default=100)
+    logs.add_argument("--since")
     switch = sub.add_parser("switch")
     add_common_options(switch, defaults=False)
     switch.add_argument("--no-snapshot", action="store_true")
@@ -1117,6 +1395,10 @@ async def main() -> None:
         await cmd_diff(plan, args)
     elif args.command == "health":
         await cmd_health(plan, args)
+    elif args.command == "status":
+        await cmd_status(plan, args)
+    elif args.command == "logs":
+        await cmd_logs(plan, args)
     elif args.command == "switch":
         await cmd_switch(plan, args)
     elif args.command == "replace":
@@ -1134,6 +1416,9 @@ async def main() -> None:
 def run() -> None:
     try:
         asyncio.run(main())
+    except KeyboardInterrupt:
+        # `status --watch` runs until interrupted; exit quietly like kubectl.
+        raise SystemExit(130) from None
     except (
         OSError,
         ValidationError,

@@ -11,6 +11,11 @@ export interface SpawnOptions {
   rows?: number;
   cols?: number;
   scrollbackLines?: number;
+  /**
+   * Extra environment for the child (per-session identity/config). The crate
+   * forces `TERM`/`COLORTERM` after these, so those two always win.
+   */
+  env?: Record<string, string>;
 }
 
 /** Scrollback history plus the visible viewport, read together. */

@@ -6,7 +6,7 @@
   LTS lands.
   */
   nodesFor = pkgs: {
-    "latest" = pkgs.nodejs;
+    latest = pkgs.nodejs;
     "20" = pkgs.nodejs_20;
     "22" = pkgs.nodejs_22;
     "24" = pkgs.nodejs_24;

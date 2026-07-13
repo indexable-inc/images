@@ -28,8 +28,12 @@ mod jitter;
 mod keymap;
 #[cfg(target_os = "macos")]
 mod render;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod send_queue;
 #[cfg(target_os = "macos")]
 mod trace;
+#[cfg(target_os = "macos")]
+mod transport;
 #[cfg(target_os = "macos")]
 mod view;
 #[cfg(target_os = "macos")]
@@ -72,6 +76,14 @@ struct Cli {
     #[arg(long)]
     native_titlebar: bool,
 
+    /// Forward Cmd chords to the guest as raw Super chords (Linux
+    /// semantics) instead of the default translation to Linux editing
+    /// equivalents (Cmd+A/C/V/X/Z -> Ctrl+same, Cmd+Backspace ->
+    /// Ctrl+Backspace, Cmd+Left/Right -> Home/End; unmapped Cmd chords are
+    /// swallowed like a native app without that shortcut).
+    #[arg(long)]
+    no_chord_translation: bool,
+
     /// Serve the built-in mock guest on a temp socket and connect to it:
     /// one animated test window, received input logged to stderr.
     #[arg(long, conflicts_with_all = ["connect", "tcp"])]
@@ -110,11 +122,11 @@ fn run_host(cli: Cli) -> ExitCode {
                 std::process::exit(1);
             }
         });
-        conn::Target::Unix(path)
+        transport::Target::Unix(path)
     } else if let Some(path) = cli.connect {
-        conn::Target::Unix(path)
+        transport::Target::Unix(path)
     } else if let Some(addr) = cli.tcp {
-        conn::Target::Tcp(addr)
+        transport::Target::Tcp(addr)
     } else {
         eprintln!("panes-host: one of --connect, --tcp, --mock, --mock-serve is required");
         return ExitCode::FAILURE;
@@ -124,12 +136,19 @@ fn run_host(cli: Cli) -> ExitCode {
     // supervisor thread; window presentation neither waits for it nor learns
     // about it.
     if let Some(path) = cli.audio_connect {
-        audio::spawn(audio::Target::Unix(path));
+        audio::spawn(transport::Target::Unix(path));
     } else if let Some(addr) = cli.audio_tcp {
-        audio::spawn(audio::Target::Tcp(addr));
+        audio::spawn(transport::Target::Tcp(addr));
     }
 
-    app::run(target, cli.title_prefix, cli.native_titlebar)
+    app::run(
+        target,
+        app::RunOptions {
+            title_prefix: cli.title_prefix,
+            native_titlebar: cli.native_titlebar,
+            chord_translation: !cli.no_chord_translation,
+        },
+    )
 }
 
 #[cfg(not(target_os = "macos"))]

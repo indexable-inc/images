@@ -946,9 +946,11 @@ fn render_panic_object_unit(
             pname: format!("{}-panic-objects", graph.units[index].target.name),
             native_build_inputs: "[ rustToolchain ] ++ extraNativeBuildInputs",
             driver: Driver::ObjectEmit,
-            install_phase:
-                "mkdir -p $out\nfind build -maxdepth 1 -name '*.o' -exec cp {} \"$out/\" ';'\n"
-                    .to_string(),
+            // Content-addressed like the build unit, so it hits the same
+            // killed-build orphan `cp` failure (#2247); guard it identically.
+            install_phase: format!(
+                "{ORPHAN_OUTPUT_PRECHECK}mkdir -p $out\nfind build -maxdepth 1 -name '*.o' -exec cp {{}} \"$out/\" ';'\n"
+            ),
             package_name: None,
         },
     )
@@ -1431,9 +1433,11 @@ fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Un
         script,
         "if [ -f {quoted_run_ref}/cargo-metadata ]; then\n  cp {quoted_run_ref}/cargo-metadata build/cargo-metadata\nfi",
     );
+    // Generated source paths enter crate metadata, so mktemp entropy makes
+    // separately realized content-addressed dependencies byte-incompatible.
     let _ = writeln!(
         script,
-        "compile_out_dir=$(mktemp -d)\nif [ -d {quoted_run_ref}/out-dir ]; then\n  cp -R {quoted_run_ref}/out-dir/. \"$compile_out_dir\"/\nfi\nrustc_env+=( OUT_DIR=\"$compile_out_dir\" )\n"
+        "compile_out_dir=$NIX_BUILD_TOP/cargo-unit-build-script-out\nmkdir -p \"$compile_out_dir\"\nif [ -d {quoted_run_ref}/out-dir ]; then\n  cp -R {quoted_run_ref}/out-dir/. \"$compile_out_dir\"/\nfi\nrustc_args+=( --remap-path-prefix \"$compile_out_dir=/cargo-unit-build-script-out\" )\nrustc_env+=( OUT_DIR=\"$compile_out_dir\" )\n"
     );
 }
 
@@ -1443,6 +1447,34 @@ fn append_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str)
         "if [ -f {quoted_run_ref}/{file} ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && build_script_flags+=( -C \"link-arg=$line\" )\n  done < {quoted_run_ref}/{file}\nfi",
     );
 }
+
+// A killed content-addressed build on a store without a build sandbox (the
+// darwin default) can leave its resolved output path behind in /nix/store as an
+// invalid directory owned by the `_nixbld` user that ran it. Nix does not remove
+// that orphan before a later rebuild of the same drv, so a fresh builder (a
+// different `_nixbld` uid) hits the pre-existing dir at `$out` and the artifact
+// `cp` below fails with a bare `cp: ... Permission denied` one phase after rustc
+// succeeded, which reads like a linker/OOM failure (#2247). Detect the orphan
+// first and fail with the path, its owner, and the recovery recipe. A valid
+// sealed store path is always root-owned and never pre-exists for a fresh build,
+// so an existing non-writable `$out` here is unambiguously a killed-build
+// leftover; we only detect and report it, never delete a store path from a
+// builder. A nix builder puts GNU coreutils `stat` first on PATH even on
+// darwin, so query the owner with GNU `-c '%U'` first; BSD `stat -f '%Su'` is
+// only the fallback (GNU stat would misparse `-f` as `--file-system`).
+const ORPHAN_OUTPUT_PRECHECK: &str = "\
+if [ -e \"$out\" ] && [ ! -w \"$out\" ]; then
+  echo >&2 \"error: refusing to install over a pre-existing, non-writable output path:\"
+  echo >&2 \"  $out\"
+  echo >&2 \"  owner: $(stat -c '%U' \"$out\" 2>/dev/null || stat -f '%Su' \"$out\" 2>/dev/null || echo '?')\"
+  echo >&2 \"This is an invalid orphan left by a killed content-addressed build (see index#2247).\"
+  echo >&2 \"Nix does not clear it before rebuilding, so this build cannot write its output.\"
+  echo >&2 \"Recover on the host (a valid store path is root-owned; an invalid one is not):\"
+  echo >&2 \"  nix-store --check-validity \\\"$out\\\"   # nonzero exit => invalid => safe to remove\"
+  echo >&2 \"  sudo rm -rf \\\"$out\\\"\"
+  exit 1
+fi
+";
 
 fn render_install_phase(unit: &Unit, options: &RenderOptions, hash: &str) -> String {
     let unused_crate_dependencies_install = if collects_unused_crate_dependencies(unit, options) {
@@ -1458,7 +1490,7 @@ fi
     if unit.is_bin() || unit.is_test() {
         format!(
             "\
-mkdir -p $out/bin $out/nix-support
+{ORPHAN_OUTPUT_PRECHECK}mkdir -p $out/bin $out/nix-support
 cp {} $out/bin/{}
 chmod 755 $out/bin/{}
 if [ -f build/cargo-metadata ]; then
@@ -1474,7 +1506,7 @@ fi
         let lib_name = unit.target.name.replace('-', "_");
         format!(
             "\
-mkdir -p $out/lib $out/nix-support
+{ORPHAN_OUTPUT_PRECHECK}mkdir -p $out/lib $out/nix-support
 for build_artifact in build/*; do
   case \"$build_artifact\" in
     *.dwo|*.dwp) continue ;;
@@ -1633,7 +1665,11 @@ fn render_build_script_run_phase(
         "build_script_manifest_dir_source={}",
         shell::double_quote(&manifest_dir)
     )?;
-    script.push_str("build_script_manifest_dir=$out/manifest-dir\n");
+    writeln!(
+        script,
+        "build_script_manifest_dir=$out/{}",
+        shell::quote(source.package_root())
+    )?;
     script.push_str("mkdir -p \"$build_script_manifest_dir\"\n");
     script.push_str(
         "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/\n",
@@ -1645,6 +1681,7 @@ fn render_build_script_run_phase(
     ensure_source_contains_unit(source, run_unit)?;
     script.push_str("export CARGO_MANIFEST_DIR=$build_script_manifest_dir\n");
     script.push_str("export RUSTC=\"$(type -p rustc)\"\n");
+    script.push_str("export RUSTDOC=\"$(type -p rustdoc)\"\n");
     script.push_str("HOST_TRIPLE=\"$($RUSTC -vV | sed -n 's/^host: //p')\"\n");
     script.push_str("export HOST=\"$HOST_TRIPLE\"\n");
     if let Some(platform) = &run_unit.platform {
@@ -1662,6 +1699,29 @@ fn render_build_script_run_phase(
         "export OPT_LEVEL={}",
         shell::quote(&run_unit.profile.opt_level)
     )?;
+    let package_name = nix_attr(&run_unit.package_name());
+    let platform = run_unit
+        .platform
+        .as_ref()
+        .map_or_else(|| "null".to_string(), |platform| nix_attr(platform));
+    writeln!(
+        script,
+        "cargo_encoded_rustflags=( {} )",
+        run_unit
+            .profile
+            .rustflags
+            .iter()
+            .map(|flag| shell::quote(flag))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )?;
+    writeln!(
+        script,
+        "${{renderCargoEncodedRustflags {package_name} {platform}}}"
+    )?;
+    script.push_str(
+        "export CARGO_ENCODED_RUSTFLAGS=\"$(IFS=$'\\x1f'; printf '%s' \"''${cargo_encoded_rustflags[*]}\")\"\n",
+    );
     writeln!(
         script,
         "export DEBUG={}",
@@ -3298,6 +3358,44 @@ mod tests {
         }
     }
 
+    fn single_library_graph(pkg_id: &str, name: &str, src_path: &str, edition: &str) -> UnitGraph {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "units": [{
+                "pkg_id": pkg_id,
+                "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": name,
+                    "src_path": src_path,
+                    "edition": edition
+                },
+                "profile": { "name": "release", "opt_level": "3" },
+                "mode": "build",
+                "dependencies": []
+            }],
+            "roots": [0]
+        }))
+        .unwrap()
+    }
+
+    fn render_error(graph: &UnitGraph) -> String {
+        render_units_nix(
+            graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap_err()
+        .to_string()
+    }
+
     #[test]
     fn renders_one_derivation_per_build_unit() {
         let graph: UnitGraph = serde_json::from_str(
@@ -3521,6 +3619,82 @@ mod tests {
         // lib's rustc build, the lib's clippy build, and the bin's clippy
         // build.
         assert_eq!(rendered.matches("'extra-filename=").count(), 3);
+    }
+
+    #[test]
+    fn install_phase_guards_against_stale_orphan_output() {
+        // Every rustc build unit (both the lib and the bin here) must open its
+        // installPhase with the orphan-output pre-check before any mkdir/cp, so a
+        // killed content-addressed build's leftover output at `$out` fails loud
+        // with the recovery recipe instead of a bare `cp: Permission denied`
+        // (index#2247).
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "hello-cli",
+                    "src_path": "/workspace/src/main.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0, 1]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: true,
+                toolchain_id: Some("rustc-test".to_string()),
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        // The guard fires on a pre-existing, non-writable `$out` (the killed-build
+        // orphan) and names the recovery recipe. One occurrence per build unit
+        // (the lib and the bin); it must land before the artifact `cp`.
+        assert_eq!(
+            rendered
+                .matches("refusing to install over a pre-existing, non-writable output path")
+                .count(),
+            2
+        );
+        assert!(rendered.contains("nix-store --check-validity"));
+        // The guard runs first: it is prepended directly to the installPhase
+        // mkdir in both the lib and the bin branches, so it must be immediately
+        // adjacent to (and hence before) the mkdir that precedes the artifact cp.
+        assert!(rendered.contains("exit 1\nfi\nmkdir -p $out/lib $out/nix-support"));
+        assert!(rendered.contains("exit 1\nfi\nmkdir -p $out/bin $out/nix-support"));
     }
 
     #[test]
@@ -4110,25 +4284,31 @@ version = "0.1.0"
         assert_eq!(rendered.matches("\"beta\" = mkDoctestEntry").count(), 2);
     }
 
-    #[test]
-    fn doctest_commands_match_cargo_rustdoc_contract() {
-        let workspace = tempfile::tempdir().unwrap();
-        fs::create_dir_all(workspace.path().join("src")).unwrap();
+    fn write_doctest_contract_sources(workspace: &Path) -> [String; 4] {
+        fs::create_dir_all(workspace.join("src")).unwrap();
         fs::write(
-            workspace.path().join("Cargo.toml"),
+            workspace.join("Cargo.toml"),
             r#"[package]
 name = "native"
 version = "0.1.0"
 "#,
         )
         .unwrap();
-        let build_rs = workspace.path().join("build.rs");
-        let lib_rs = workspace.path().join("src/lib.rs");
+        let build_rs = workspace.join("build.rs");
+        let leaf_rs = workspace.join("src/leaf.rs");
+        let lib_rs = workspace.join("src/lib.rs");
+        let middle_rs = workspace.join("src/middle.rs");
         fs::write(&build_rs, "fn main() {}\n").unwrap();
+        fs::write(&leaf_rs, "pub fn leaf() {}\n").unwrap();
         fs::write(&lib_rs, "pub fn native() {}\n").unwrap();
-        let build_rs = build_rs.to_string_lossy();
-        let lib_rs = lib_rs.to_string_lossy();
-        let pkg_id = format!("path+file://{}#native@0.1.0", workspace.path().display());
+        fs::write(&middle_rs, "pub fn middle() {}\n").unwrap();
+
+        [build_rs, leaf_rs, lib_rs, middle_rs].map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn doctest_contract_graph(workspace: &Path) -> UnitGraph {
+        let [build_rs, leaf_rs, lib_rs, middle_rs] = write_doctest_contract_sources(workspace);
+        let pkg_id = format!("path+file://{}#native@0.1.0", workspace.display());
 
         let graph: UnitGraph = serde_json::from_value(serde_json::json!({
           "version": 1,
@@ -4168,6 +4348,36 @@ version = "0.1.0"
               "target": {
                 "kind": ["lib"],
                 "crate_types": ["lib"],
+                "name": "leaf",
+                "src_path": leaf_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "build",
+              "dependencies": []
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "name": "middle",
+                "src_path": middle_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "build",
+              "dependencies": [
+                { "index": 2, "extern_crate_name": "leaf" }
+              ]
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["lib"],
+                "crate_types": ["lib"],
                 "name": "native",
                 "src_path": lib_rs,
                 "edition": "2024"
@@ -4178,13 +4388,22 @@ version = "0.1.0"
               "features": [],
               "mode": "build",
               "dependencies": [
-                { "index": 1, "extern_crate_name": "build_script_build" }
+                { "index": 1, "extern_crate_name": "build_script_build" },
+                { "index": 3, "extern_crate_name": "middle" }
               ]
             }
           ],
-          "roots": [2]
+          "roots": [4]
         }))
         .unwrap();
+
+        graph
+    }
+
+    #[test]
+    fn doctest_commands_match_cargo_rustdoc_contract() {
+        let workspace = tempfile::tempdir().unwrap();
+        let graph = doctest_contract_graph(workspace.path());
 
         let rendered = render_units_nix(
             &graph,
@@ -4249,7 +4468,18 @@ version = "0.1.0"
         assert!(!rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
         assert!(rendered.contains("done < \"${units."));
         assert!(rendered.contains("/rustc-env"));
-        assert!(rendered.contains("compile_out_dir=$(mktemp -d)"));
+        assert!(
+            rendered.contains("compile_out_dir=$NIX_BUILD_TOP/cargo-unit-build-script-out")
+        );
+        assert!(rendered.contains(
+            "rustc_args+=( --remap-path-prefix \"$compile_out_dir=/cargo-unit-build-script-out\" )"
+        ));
+        assert!(rendered.contains(
+            "rustdoc_args+=( -L \"dependency=${units.\"middle-0.1.0-"
+        ));
+        assert!(rendered.contains(
+            "rustdoc_args+=( -L \"dependency=${units.\"leaf-0.1.0-"
+        ));
         assert!(rendered.contains("/out-dir/. \"$compile_out_dir\"/"));
         assert!(rendered.contains("rustc_env+=( OUT_DIR=\"$compile_out_dir\" )"));
         assert!(!rendered.contains("--test-args --exact"));
@@ -4856,89 +5086,29 @@ version = "4.6.1"
     }
 
     #[test]
-    fn rejects_unscoped_local_sources() {
-        let graph: UnitGraph = serde_json::from_str(
-            r#"{
-              "version": 1,
-              "units": [
-                {
-                  "pkg_id": "path+file:///repo/crates/alpha#alpha@0.1.0",
-                  "target": {
-                    "kind": ["lib"],
-                    "crate_types": ["lib"],
-                    "name": "alpha",
-                    "src_path": "/repo/crates/alpha/src/lib.rs",
-                    "edition": "2024"
-                  },
-                  "profile": { "name": "release", "opt_level": "3" },
-                  "mode": "build",
-                  "dependencies": []
-                }
-              ],
-              "roots": [0]
-            }"#,
-        )
-        .unwrap();
+    fn rejects_sources_without_a_resolvable_owner() {
+        let cases = [
+            (
+                "path+file:///repo/crates/alpha#alpha@0.1.0",
+                "alpha",
+                "/repo/crates/alpha/src/lib.rs",
+                "2024",
+                "outside workspace root",
+            ),
+            (
+                "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.15",
+                "itoa",
+                "/vendor/itoa-1.0.15/src/lib.rs",
+                "2021",
+                "needs --vendor-root",
+            ),
+        ];
 
-        let error = render_units_nix(
-            &graph,
-            &RenderOptions {
-                workspace_root: PathBuf::from("/workspace"),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("outside workspace root"));
-    }
-
-    #[test]
-    fn rejects_external_sources_without_vendor_root() {
-        let graph: UnitGraph = serde_json::from_str(
-            r#"{
-              "version": 1,
-              "units": [
-                {
-                  "pkg_id": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.15",
-                  "target": {
-                    "kind": ["lib"],
-                    "crate_types": ["lib"],
-                    "name": "itoa",
-                    "src_path": "/vendor/itoa-1.0.15/src/lib.rs",
-                    "edition": "2021"
-                  },
-                  "profile": { "name": "release", "opt_level": "3" },
-                  "mode": "build",
-                  "dependencies": []
-                }
-              ],
-              "roots": [0]
-            }"#,
-        )
-        .unwrap();
-
-        let error = render_units_nix(
-            &graph,
-            &RenderOptions {
-                workspace_root: PathBuf::from("/workspace"),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("needs --vendor-root"));
+        for (pkg_id, name, source, edition, expected) in cases {
+            let graph = single_library_graph(pkg_id, name, source, edition);
+            let error = render_error(&graph);
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]
@@ -5204,6 +5374,7 @@ links = 5
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn build_script_runs_receive_cargo_target_cfg_and_feature_environment() {
         let workspace = std::env::temp_dir().join(format!(
             "nix-cargo-unit-render-test-{}",
@@ -5244,7 +5415,7 @@ links = "native_ffi"
                         "src_path": build_rs_path,
                         "edition": "2024"
                     },
-                    "profile": { "name": "release", "opt_level": "3" },
+                    "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-cpu=native"] },
                     "features": ["arch", "simd-support"],
                     "mode": "build",
                     "dependencies": []
@@ -5258,7 +5429,7 @@ links = "native_ffi"
                         "src_path": build_rs_path,
                         "edition": "2024"
                     },
-                    "profile": { "name": "release", "opt_level": "3" },
+                    "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-cpu=native"] },
                     "features": ["arch", "simd-support"],
                     "mode": "run-custom-build",
                     "platform": "x86_64-unknown-linux-gnu",
@@ -5297,8 +5468,15 @@ links = "native_ffi"
         assert!(rendered.contains("export CARGO_PKG_LICENSE_FILE=\"LICENSE\""));
         assert!(rendered.contains("export CARGO_PKG_RUST_VERSION=\"1.85\""));
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"native_ffi\""));
+        assert!(rendered.contains("export RUSTDOC=\"$(type -p rustdoc)\""));
         assert!(rendered.contains("export CARGO_FEATURE_ARCH=1"));
         assert!(rendered.contains("export CARGO_FEATURE_SIMD_SUPPORT=1"));
+        assert!(rendered.contains("cargo_encoded_rustflags=( '-C' 'target-cpu=native' )"));
+        assert!(
+            rendered
+                .contains("${renderCargoEncodedRustflags \"native\" \"x86_64-unknown-linux-gnu\"}")
+        );
+        assert!(rendered.contains("export CARGO_ENCODED_RUSTFLAGS="));
         assert!(rendered.contains("\"$RUSTC\" --print cfg --target \"$TARGET\""));
         assert!(rendered.contains("cargo_cfg_env=\"CARGO_CFG_$(printf '%s' \"$cargo_cfg_key\""));
         assert!(
@@ -5315,9 +5493,10 @@ links = "native_ffi"
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_nanos())
         ));
-        fs::create_dir_all(workspace.join("builder")).unwrap();
+        let package_root = workspace.join("crates/nested-native");
+        fs::create_dir_all(package_root.join("builder")).unwrap();
         fs::write(
-            workspace.join("Cargo.toml"),
+            package_root.join("Cargo.toml"),
             r#"[package]
 name = "nested-native"
 version = "0.1.0"
@@ -5325,10 +5504,10 @@ links = "nested_native"
 "#,
         )
         .unwrap();
-        let build_rs = workspace.join("builder").join("main.rs");
+        let build_rs = package_root.join("builder").join("main.rs");
         fs::write(&build_rs, "fn main() {}\n").unwrap();
         let build_rs_path = build_rs.to_string_lossy();
-        let pkg_id = format!("path+file://{}#nested-native@0.1.0", workspace.display());
+        let pkg_id = format!("path+file://{}#nested-native@0.1.0", package_root.display());
         let graph: UnitGraph = serde_json::from_value(serde_json::json!({
             "version": 1,
             "units": [
@@ -5380,7 +5559,7 @@ links = "nested_native"
         .unwrap();
 
         assert!(rendered.contains("build_script_manifest_dir_source=\"$src\""));
-        assert!(rendered.contains("build_script_manifest_dir=$out/manifest-dir"));
+        assert!(rendered.contains("build_script_manifest_dir=$out/'crates/nested-native'"));
         assert!(rendered.contains(
             "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/"
         ));

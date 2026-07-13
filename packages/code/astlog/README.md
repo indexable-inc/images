@@ -61,7 +61,11 @@ is a syntax node or text derived from one, so the universe is finite and
 naive fixpoint iteration terminates. Builtins: `ancestor`, `parent` (tree
 position), `text`, `kind`, `same-text` (values), `same-file`,
 `(text-match <node-or-text> "<regex>")` (regex over the value's text; the
-pattern must be a string literal and is compiled once at setup), and
+pattern must be a string literal and is compiled once at setup),
+`(misgrouped-digits <node-or-text> <fixed>)` (holds when the value's text is a
+numeric literal whose underscore digit grouping is not the canonical
+Rust-style threes, binding `<fixed>` to the canonical regrouping -- the engine
+half of the Nix digit-grouping lints and their autofix), and
 `(no-descendant <node> "<kind>" "<text>")` (holds when the node has no strict
 descendant with that kind and exact source text, the narrowest absence check
 the lint rules need). General negation and aggregates are deliberately absent

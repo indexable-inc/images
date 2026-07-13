@@ -19,9 +19,9 @@
   # The exact committed house prompt, rendered to text at build time so
   # `nix run .#system-prompt-eval` tests precisely what ships. A candidate edit
   # is tested with --system-prompt-file / --system-prompt-nix instead.
-  promptFile = pkgs.writeText "house-system-prompt.txt" (
-    import (ix.paths.packagesRoot + "/agent/system-prompt.nix") {inherit lib;}
-  );
+  promptFile =
+    pkgs.writeText "house-system-prompt.txt"
+    (import (ix.paths.packagesRoot + "/agent/prompt") {inherit lib;}).systemPrompt;
 
   unwrapped = ix.buildUvApplication pkgs {
     pname = "system-prompt-eval";

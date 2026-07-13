@@ -225,7 +225,7 @@ def test_legacy_state_slugs_falls_back_to_transcript_dir() -> None:
     """A cwd-less session keyed off the decoded transcript dir, like old scan()."""
     from distiller.transcripts import Session, legacy_state_slugs
 
-    # No recorded cwd: old _resolve_path used the decoded `-home-u-repo` dir name.
+    # No recorded cwd: old resolve_cwd used the decoded `-home-u-repo` dir name.
     sessions = [
         Session(
             session_id="a",

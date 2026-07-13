@@ -187,8 +187,6 @@ in {
   ];
 
   options.users.andrewgazelka = {
-    enable = lib.mkEnableOption "andrewgazelka's personal services (ix-downtime watcher + boss bar overlay)";
-
     logDir = lib.mkOption {
       type = lib.types.str;
       default = "${config.home.homeDirectory}/Library/Logs";
@@ -335,9 +333,11 @@ in {
       };
     };
 
-    # CI progress bars are configured through the reusable `services.ciBars`
-    # module (imported above); this module just turns it on with our repos in
-    # `config`. No personal options needed here.
+    ciBars.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Show CI status bars.";
+    };
 
     sound.linuxSayCommand = lib.mkOption {
       type = lib.types.str;
@@ -376,7 +376,7 @@ in {
     };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = {
     assertions = [
       {
         assertion = cfg.lifelog.enable -> cfg.lifelog.package != null;
@@ -477,7 +477,7 @@ in {
     # (script, palette, average-duration logic) lives in that shared component, so
     # this is the whole personal config for it.
     services.ciBars = {
-      enable = true;
+      enable = cfg.ciBars.enable;
       repos = cfg.prWatch.repos;
       inherit (cfg) logDir;
     };

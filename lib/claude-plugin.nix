@@ -30,7 +30,15 @@ let
   in
     assert lib.assertMsg (collisions == [])
     "claudePlugin.mkPlugin: extraSkills name(s) collide with index skills: ${lib.concatStringsSep ", " collisions}";
-      pkgs.runCommand "claude-plugin-${name}" {} ''
+      pkgs.runCommand "claude-plugin-${name}" {
+        # Manifest identity for consumers that address the plugin by name and
+        # version (e.g. Codex's plugins/cache/<marketplace>/<plugin>/<version>
+        # install path).
+        passthru = {
+          pluginName = name;
+          inherit version;
+        };
+      } ''
         mkdir -p "$out/.claude-plugin"
         cp ${manifest} "$out/.claude-plugin/plugin.json"
         cp -RL ${skillsDir} "$out/skills"
@@ -39,6 +47,38 @@ let
           cp ${hooksFile} "$out/hooks/hooks.json"
         ''}
       '';
+  # A marketplace wraps plugins one directory level up so runtimes that only
+  # install from marketplaces (Codex: `[marketplaces.<name>]` config with
+  # `source_type = "local"`) can consume the same plugin dirs Claude Code
+  # loads directly via `--plugin-dir`. Codex resolves
+  # `.claude-plugin/marketplace.json` and `.claude-plugin/plugin.json` as
+  # compatible manifest locations, so one store path serves both ecosystems.
+  mkMarketplace = {
+    pkgs,
+    name,
+    owner ? "indexable-inc",
+    # Attrset from plugin name to a plugin directory (an `mkPlugin` output).
+    plugins,
+  }: let
+    manifest = (pkgs.formats.json {}).generate "claude-marketplace-${name}-manifest.json" {
+      inherit name;
+      owner.name = owner;
+      plugins =
+        lib.mapAttrsToList (pluginName: _: {
+          name = pluginName;
+          source = "./plugins/${pluginName}";
+        })
+        plugins;
+    };
+  in
+    pkgs.runCommand "claude-marketplace-${name}" {} ''
+      mkdir -p "$out/.claude-plugin" "$out/plugins"
+      cp ${manifest} "$out/.claude-plugin/marketplace.json"
+      ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
+          pluginName: pluginDir: ''cp -RL ${pluginDir} "$out/plugins/${pluginName}"''
+        )
+        plugins)}
+    '';
 in {
   /**
   Build a Claude Code plugin directory for `--plugin-dir`.
@@ -61,4 +101,18 @@ in {
   the agent by baking `--plugin-dir=<this>` (claude-code's `pluginDirs`).
   */
   inherit mkPlugin;
+
+  /**
+  Wrap `mkPlugin` outputs into a Claude-format marketplace directory
+  (`.claude-plugin/marketplace.json` + `plugins/<name>/`), the layout Codex
+  installs from via a `[marketplaces.<name>]` config entry with
+  `source_type = "local"` and `source = <this dir>`.
+
+  Arguments:
+  - `pkgs`: the package set used to build the directory.
+  - `name`: the marketplace name (plugin ids become `<plugin>@<name>`).
+  - `owner`: marketplace manifest owner metadata.
+  - `plugins`: attrset from plugin name to plugin directory.
+  */
+  inherit mkMarketplace;
 }

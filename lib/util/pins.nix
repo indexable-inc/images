@@ -171,6 +171,14 @@
         }
       '';
     };
+
+  # Overlay consumers do not receive update tooling. Keep that nullable
+  # package boundary here so every pinned package cannot drift into its own
+  # copy of the same conditional wrapper.
+  mkOptionalUpdater = args @ {writeNushellApplication, ...}:
+    if writeNushellApplication == null
+    then null
+    else mkUpdater args;
 in {
-  inherit loadPins loadPin mkUpdater;
+  inherit loadPins loadPin mkUpdater mkOptionalUpdater;
 }

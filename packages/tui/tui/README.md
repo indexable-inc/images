@@ -149,15 +149,23 @@ else `/tmp/ix-dash-<user>`, kept short for the macOS 104-byte socket-path limit.
 
 ## Configuration
 
-Pass a [`SpawnConfig`] to set the terminal size and scrollback depth at spawn:
+Pass a [`SpawnConfig`] to set the terminal size, scrollback depth, and extra
+child environment at spawn:
 
 ```rust
 use tui::SpawnConfig;
 
-let config = SpawnConfig { rows: 40, cols: 120, scrollback_lines: 50_000 };
+let config = SpawnConfig {
+    rows: 40,
+    cols: 120,
+    scrollback_lines: 50_000,
+    ..SpawnConfig::default()
+};
 ```
 
 Size is fixed for the life of the process; there is no runtime resize today.
+`env` pairs are applied to the child in order before the crate forces
+`TERM=xterm-256color` and `COLORTERM=truecolor`, so those two always win.
 
 ## Errors
 

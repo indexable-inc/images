@@ -33,6 +33,6 @@
   <text x="570" y="80" font-size="13" text-anchor="middle">web</text>
   <text x="570" y="97" font-size="11" text-anchor="middle" class="muted">nginx :8080</text>
   <line x1="246" y1="84" x2="472" y2="84" class="edge"/>
-  <text x="359" y="76" font-size="11" text-anchor="middle" class="muted">health check: curl http://web:8080/</text>
+  <text x="359" y="76" font-size="11" text-anchor="middle" class="muted">http probe: GET http://web:8080/</text>
   <text x="359" y="102" font-size="11" text-anchor="middle" class="muted">resolved by node name</text>
 </svg>

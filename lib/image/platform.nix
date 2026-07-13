@@ -19,6 +19,63 @@
     (unitName unit)
   ];
 
+  # `ix.healthChecks.<name>.http` sugar: an in-guest HTTP readiness probe.
+  # `--fail` maps curl's exit code onto the check result the same way a
+  # Kubernetes httpGet probe treats a >= 400 status as unhealthy.
+  mkHttpCommand = http: [
+    (lib.getExe pkgs.curl)
+    "--fail"
+    "--silent"
+    "--show-error"
+    "http://${http.host}:${toString http.port}${http.path}"
+  ];
+
+  # `ix.healthChecks.<name>.tcp` sugar: an in-guest TCP connect probe,
+  # the analog of a Kubernetes tcpSocket probe.
+  mkTcpCommand = tcp: [
+    (lib.getExe' pkgs.netcat-openbsd "nc")
+    "-z"
+    tcp.host
+    (toString tcp.port)
+  ];
+
+  httpProbeType = lib.types.submodule {
+    options = {
+      port = lib.mkOption {
+        type = lib.types.port;
+        description = "Port the HTTP listener answers on.";
+      };
+
+      path = lib.mkOption {
+        type = lib.types.str;
+        default = "/";
+        example = "/healthz";
+        description = "Request path; give the service a cheap dedicated readiness route where you can.";
+      };
+
+      host = lib.mkOption {
+        type = lib.types.str;
+        default = "127.0.0.1";
+        description = "Host to connect to from inside the guest.";
+      };
+    };
+  };
+
+  tcpProbeType = lib.types.submodule {
+    options = {
+      port = lib.mkOption {
+        type = lib.types.port;
+        description = "Port to open a TCP connection to.";
+      };
+
+      host = lib.mkOption {
+        type = lib.types.str;
+        default = "127.0.0.1";
+        description = "Host to connect to from inside the guest.";
+      };
+    };
+  };
+
   healthCheckType = lib.types.submodule (
     {
       name,
@@ -46,6 +103,38 @@
             pass `foo.socket` or `foo.timer` to probe another unit type.
 
             Mutually exclusive with `command`: set one or the other, not both.
+          '';
+        };
+
+        http = lib.mkOption {
+          type = lib.types.nullOr httpProbeType;
+          default = null;
+          example = lib.literalExpression ''{ port = 8080; path = "/healthz"; }'';
+          description = ''
+            An in-guest HTTP readiness probe, the analog of a Kubernetes
+            `httpGet` probe: setting `http` derives a curl `command` that
+            succeeds on 2xx/3xx and fails on any status >= 400 (curl
+            `--fail`). The probe binary is pinned into the image closure
+            automatically, so no `environment.systemPackages` bookkeeping
+            is needed.
+
+            Sugar for `command`; set at most one of `unit`, `http`, `tcp`,
+            or an explicit `command`.
+          '';
+        };
+
+        tcp = lib.mkOption {
+          type = lib.types.nullOr tcpProbeType;
+          default = null;
+          example = lib.literalExpression ''{ port = 5432; }'';
+          description = ''
+            An in-guest TCP connect probe, the analog of a Kubernetes
+            `tcpSocket` probe: setting `tcp` derives an `nc -z` `command`
+            that succeeds once the port accepts a connection. The probe
+            binary is pinned into the image closure automatically.
+
+            Sugar for `command`; set at most one of `unit`, `http`, `tcp`,
+            or an explicit `command`.
           '';
         };
 
@@ -112,12 +201,21 @@
         };
       };
 
-      # `unit` sugar lives here, not in `command`'s default: a public option's
+      # Probe sugar lives here, not in `command`'s default: a public option's
       # default must be a self-contained literal (repo astlog rule), so the
-      # `unit` -> command branch is seeded in config as an mkDefault a real
-      # `command` (priority 100) still overrides.
-      config = lib.mkIf (config.unit != null) {
-        command = lib.mkDefault (mkUnitCommand config.unit);
+      # sugar -> command branch is seeded in config as an mkDefault a real
+      # `command` (priority 100) still overrides. One definition site (first
+      # set sugar wins) rather than one mkIf per sugar, so setting two sugars
+      # reaches the readable platform-level assertion instead of a module
+      # "conflicting definition values" error.
+      config = lib.mkIf (config.unit != null || config.http != null || config.tcp != null) {
+        command = lib.mkDefault (
+          if config.unit != null
+          then mkUnitCommand config.unit
+          else if config.http != null
+          then mkHttpCommand config.http
+          else mkTcpCommand config.tcp
+        );
       };
     }
   );
@@ -191,14 +289,50 @@
     )
     config.ix.healthChecks;
 
-  # Health checks that set `unit` must not also override `command`: the whole
-  # point of `unit` is that it derives the command, so a custom command means
-  # `unit` is silently ignored. Flag it instead of letting them disagree.
-  overSpecifiedHealthChecks =
+  # The declarative probe sugars (`unit`, `http`, `tcp`) each derive `command`,
+  # so they are mutually exclusive with each other and with an explicit
+  # `command`: a check that sets two sources of truth would silently ignore
+  # one. `probeSugars` mirrors the submodule's derivation order.
+  probeSugars = check: lib.filter (sugar: check.${sugar} != null) ["unit" "http" "tcp"];
+  sugarCommand = check:
+    if check.unit != null
+    then mkUnitCommand check.unit
+    else if check.http != null
+    then mkHttpCommand check.http
+    else mkTcpCommand check.tcp;
+
+  multiSugarHealthChecks =
     lib.filterAttrs (
-      _name: check: check.unit != null && check.command != mkUnitCommand check.unit
+      _name: check: builtins.length (probeSugars check) > 1
     )
     config.ix.healthChecks;
+
+  # Health checks that set a probe sugar must not also override `command`: the
+  # whole point of the sugar is that it derives the command, so a custom
+  # command means the sugar is silently ignored. Flag it instead of letting
+  # them disagree.
+  overSpecifiedHealthChecks =
+    lib.filterAttrs (
+      _name: check: probeSugars check != [] && check.command != sugarCommand check
+    )
+    config.ix.healthChecks;
+
+  # `http`/`tcp` probes exec pinned in-guest store paths (curl, nc), which do
+  # not exist on the operator's machine; a host-side reachability probe needs
+  # an explicit `command` with tools from the operator's PATH.
+  hostProbeSugarHealthChecks =
+    lib.filterAttrs (
+      _name: check: check.from == "host" && (check.http != null || check.tcp != null)
+    )
+    config.ix.healthChecks;
+
+  # Probe binaries ride the system closure: the plan strips string context
+  # from check argv (fleet.nix `planHealthChecks`), so nothing else retains
+  # curl/nc for a check that is the only reference to them.
+  healthCheckValues = lib.attrValues config.ix.healthChecks;
+  healthProbePackages =
+    lib.optional (lib.any (check: check.http != null) healthCheckValues) pkgs.curl
+    ++ lib.optional (lib.any (check: check.tcp != null) healthCheckValues) pkgs.netcat-openbsd;
 
   # `ix.networking.expose.<name>` is the one declaration for "this image listens
   # here": it registers the port in the claim registry (so collisions are caught
@@ -392,17 +526,51 @@ in {
         '';
       }
       {
+        assertion = multiSugarHealthChecks == {};
+        message = ''
+          ix.healthChecks set more than one of `unit`, `http`, and `tcp`, which
+          conflict (each derives the check's command):
+            ${
+            lib.concatMapAttrsStringSep ", " (
+              name: check: "${name} (${lib.concatStringsSep " + " (probeSugars check)})"
+            )
+            multiSugarHealthChecks
+          }
+
+          Pick the one probe that proves readiness, or write an explicit
+          `command` when a single probe is not enough.
+        '';
+      }
+      {
         assertion = overSpecifiedHealthChecks == {};
         message = ''
-          ix.healthChecks set both `unit` and a custom `command`, which conflict
-          (a custom command makes `unit` a no-op):
+          ix.healthChecks set both a probe sugar (`unit`, `http`, or `tcp`) and
+          a custom `command`, which conflict (a custom command makes the sugar
+          a no-op):
             ${lib.concatStringsSep ", " (lib.attrNames overSpecifiedHealthChecks)}
 
-          Set `unit` for a `systemctl is-active` probe, or `command` for an
-          explicit argv -- not both.
+          Set `unit` for a `systemctl is-active` probe, `http`/`tcp` for a
+          readiness probe, or `command` for an explicit argv -- not both.
+        '';
+      }
+      {
+        assertion = hostProbeSugarHealthChecks == {};
+        message = ''
+          ix.healthChecks can only use `http`/`tcp` probes on guest checks
+          (their probe binaries are pinned inside the image, not on the
+          operator's machine):
+            ${lib.concatStringsSep ", " (lib.attrNames hostProbeSugarHealthChecks)}
+
+          Keep `from = "guest"`, or write an explicit host `command` using
+          tools from the operator's PATH.
         '';
       }
     ];
+
+    # Keep declared `http`/`tcp` probe binaries in the image closure (and on
+    # PATH for interactive debugging): the fleet plan strips string context
+    # from check argv, so nothing else would retain them.
+    environment.systemPackages = healthProbePackages;
 
     # The host platform (x86_64-linux) and the YourKit-only unfree predicate
     # live on the shared `imagePkgs` instantiation in `default.nix`: every
@@ -559,6 +727,18 @@ in {
         ];
         allow-import-from-derivation = lib.mkDefault true;
         warn-dirty = false;
+        # nixpkgs' nix-daemon module bakes `sandbox-fallback = false` as a
+        # "legacy configuration conversion" (nixos/modules/services/system/
+        # nix-daemon.nix), which turns a build FATAL the moment the kernel
+        # lacks the namespaces sandboxing needs. ix guests deliberately run
+        # without user namespaces (hardening sets `allowNamespaces = false`)
+        # and the VM is itself the isolation boundary, so a build that cannot
+        # be sandboxed should degrade to an unsandboxed build with a warning,
+        # not kill `ix up`. Restore Nix's own upstream default of `true`.
+        # mkForce because the nixpkgs assignment is unconditional, not a
+        # default. See indexable-inc/index#2453.
+        # astlog-ignore: no-mkforce nixpkgs sets this unconditionally; #2453 owns the fix.
+        sandbox-fallback = lib.mkForce true;
       };
       gc = {
         automatic = true;

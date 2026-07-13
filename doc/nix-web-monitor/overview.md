@@ -1,6 +1,6 @@
 # nix-web-monitor
 
-`packages/nix-web-monitor` runs a Nix command with quiet terminal output and a
+`packages/nix/nix-web-monitor` runs a Nix command with quiet terminal output and a
 live browser monitor: a build tree, log tail, activity DAG, store-optimisation
 totals, and a `nix-daemon` syscall panel, all on one HTTP port. It is two Rust
 workspace crates:

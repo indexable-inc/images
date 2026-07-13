@@ -1,0 +1,22 @@
+# The `bare` backend: a freestanding x86_64 kernel (no OS underneath at all).
+# Only builds with `--target x86_64-unknown-none`; xtask wraps it into a
+# bootable BIOS disk image with the `bootloader` crate.
+[package]
+name = "kernel"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+http-core.workspace = true
+bootloader_api = "0.11.15"
+x86_64 = "0.15.4"
+spin = "0.9.8"
+linked_list_allocator = "0.10.6"
+virtio-drivers = "0.13.0"
+smoltcp = { version = "0.13.1", default-features = false, features = [
+  "medium-ethernet",
+  "proto-ipv4",
+  "socket-tcp",
+  "alloc",
+] }

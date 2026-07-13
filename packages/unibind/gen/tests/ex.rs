@@ -8,12 +8,12 @@
 use unibind_core::ir;
 use unibind_gen::ex::ExEmitter;
 use unibind_gen::host::HostEmitter as _;
+use unibind_test_support::assert_snapshot;
 
 fn names(ex: Option<&str>) -> ir::Names {
     ir::Names {
-        py: None,
-        ts: None,
         ex: ex.map(str::to_owned),
+        ..ir::Names::default()
     }
 }
 
@@ -144,6 +144,7 @@ fn sample_interface() -> ir::Interface {
         names: names(Some("SampleFault")),
         docs: docs(&["Boundary failures."]),
         py_base: None,
+        jvm_base: None,
         variants: vec![
             ir::ErrorVariant {
                 name: "StoreGone".to_owned(),
@@ -186,16 +187,6 @@ fn sample_interface() -> ir::Interface {
         errors: vec![error],
         objects: vec![cursor],
     }
-}
-
-fn assert_snapshot(actual: &str, expected: &str, name: &str) {
-    if actual.trim() == expected.trim() {
-        return;
-    }
-    println!("=== actual {name} ===");
-    println!("{actual}");
-    println!("=== end {name} ===");
-    panic!("{name} drifted; copy the printed block into tests/snapshots/{name}");
 }
 
 #[test]

@@ -15,6 +15,7 @@ mod guards;
 mod retro;
 mod review;
 mod session_banner;
+mod wakeup;
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -81,6 +82,8 @@ fn main() -> ExitCode {
         Some("review-log-edit") => review::review_log_edit(),
         Some("review-gate") => review::review_gate(),
         Some("retro-gate") => retro::retro_gate(),
+        Some("wakeup-log") => wakeup::wakeup_log(),
+        Some("wakeup-gate") => wakeup::wakeup_gate(),
         Some("cargo-guard") => guards::cargo_guard(),
         Some("bash-habits-guard") => guards::bash_habits_guard(),
         Some("search-guard") => guards::search_guard(),
@@ -110,6 +113,28 @@ pub(crate) fn read_stdin() -> Option<String> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf).ok()?;
     Some(buf)
+}
+
+/// `session_id` is interpolated into state-file paths; accept only a plain
+/// filename component so a crafted value cannot escape a state dir.
+pub(crate) fn safe_session(payload: &Value) -> Option<String> {
+    let session = payload.get("session_id").and_then(Value::as_str)?;
+    if session.is_empty() || session == "." || session == ".." || session.contains('/') {
+        return None;
+    }
+    Some(session.to_owned())
+}
+
+/// True when a hook payload fired inside a subagent (Task tool) rather than
+/// the main thread. Claude Code populates `agent_id` ONLY inside a subagent
+/// call (`PostToolUse` carries it; the docs call it the way to "distinguish
+/// subagent hook calls from main-thread calls"), so its presence is the
+/// authoritative author signal while `session_id` stays the parent's.
+pub(crate) fn is_subagent(payload: &Value) -> bool {
+    payload
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
 }
 
 fn cap_chars(s: &str, max: usize) -> String {

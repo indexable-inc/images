@@ -10,31 +10,18 @@
 //! host on its next write -- and while `PipeWire` is down the pump writes
 //! nothing, which would wedge the accept loop behind a corpse.
 
-use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::net::TcpStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context as _;
+use panes_guest_transport::{Acceptor, Conn};
+pub use panes_guest_transport::ListenSpec;
 use panes_protocol::audio::{self, SampleFormat, ToGuest, ToHost};
 use panes_protocol::{WireError, read_msg_bounded, write_msg};
 use tracing::{debug, info, warn};
-#[cfg(target_os = "linux")]
-use vsock::{VMADDR_CID_ANY, VsockListener, VsockStream};
-
-/// Where to accept the (single) host connection.
-pub enum ListenSpec {
-    /// `AF_VSOCK` port, the production transport. The variant exists on
-    /// every platform (so the CLI needs no cfg), but binding it outside
-    /// Linux fails with a legible error: the daemon has no host-side role
-    /// there, only the unix/TCP dev listeners.
-    Vsock(u32),
-    Unix(PathBuf),
-    Tcp(String),
-}
 
 /// The fixed stream format advertised in the audio Hello. The sample format
 /// is always [`SampleFormat::S16le`]: it is what the `PipeWire` tap is
@@ -56,114 +43,6 @@ const PCM_BACKOFF_MAX: Duration = Duration::from_secs(5);
 /// the buffer: `read` returns whatever is available), large enough that the
 /// per-message framing overhead is noise.
 const READ_BUF_BYTES: usize = 4096;
-
-/// Object-safe stream, mirroring the compositor's transport: the accept-side
-/// types only share Read/Write, and the watchdog thread needs its own handle
-/// plus a shutdown lever that reaches the shared socket (dropping one dup'd
-/// fd does not unblock a reader parked on another).
-trait Conn: Read + Write + Send {
-    fn try_clone_conn(&self) -> std::io::Result<Box<dyn Conn>>;
-    fn shutdown_conn(&self);
-}
-
-impl Conn for TcpStream {
-    fn try_clone_conn(&self) -> std::io::Result<Box<dyn Conn>> {
-        Ok(Box::new(self.try_clone()?))
-    }
-    fn shutdown_conn(&self) {
-        let _ = self.shutdown(std::net::Shutdown::Both);
-    }
-}
-
-impl Conn for UnixStream {
-    fn try_clone_conn(&self) -> std::io::Result<Box<dyn Conn>> {
-        Ok(Box::new(self.try_clone()?))
-    }
-    fn shutdown_conn(&self) {
-        let _ = self.shutdown(std::net::Shutdown::Both);
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Conn for VsockStream {
-    fn try_clone_conn(&self) -> std::io::Result<Box<dyn Conn>> {
-        Ok(Box::new(self.try_clone()?))
-    }
-    fn shutdown_conn(&self) {
-        let _ = self.shutdown(std::net::Shutdown::Both);
-    }
-}
-
-enum Acceptor {
-    #[cfg(target_os = "linux")]
-    Vsock(VsockListener),
-    Unix(UnixListener),
-    Tcp(TcpListener),
-}
-
-/// The Linux half of [`ListenSpec::Vsock`]'s contract.
-#[cfg(target_os = "linux")]
-fn bind_vsock(port: u32) -> anyhow::Result<Acceptor> {
-    let listener = VsockListener::bind_with_cid_port(VMADDR_CID_ANY, port)
-        .with_context(|| format!("bind vsock port {port}"))?;
-    info!(port, "listening on vsock");
-    Ok(Acceptor::Vsock(listener))
-}
-
-/// The non-Linux half: `AF_VSOCK` does not exist here, and pretending would
-/// only defer the failure to accept time.
-#[cfg(not(target_os = "linux"))]
-fn bind_vsock(_port: u32) -> anyhow::Result<Acceptor> {
-    anyhow::bail!("AF_VSOCK is Linux-only; use --listen-unix or --listen-tcp on a development host")
-}
-
-impl Acceptor {
-    fn bind(spec: &ListenSpec) -> anyhow::Result<Self> {
-        match spec {
-            ListenSpec::Vsock(port) => bind_vsock(*port),
-            ListenSpec::Unix(path) => {
-                // A previous run's socket file would fail the bind with
-                // EADDRINUSE even though nothing is listening.
-                match std::fs::remove_file(path) {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == ErrorKind::NotFound => {}
-                    Err(err) => {
-                        return Err(err)
-                            .with_context(|| format!("remove stale {}", path.display()));
-                    }
-                }
-                let listener = UnixListener::bind(path)
-                    .with_context(|| format!("bind unix socket {}", path.display()))?;
-                info!(path = %path.display(), "listening on unix socket");
-                Ok(Self::Unix(listener))
-            }
-            ListenSpec::Tcp(addr) => {
-                let listener =
-                    TcpListener::bind(addr).with_context(|| format!("bind tcp {addr}"))?;
-                info!(addr, "listening on tcp");
-                Ok(Self::Tcp(listener))
-            }
-        }
-    }
-
-    fn accept(&self) -> std::io::Result<Box<dyn Conn>> {
-        match self {
-            #[cfg(target_os = "linux")]
-            Self::Vsock(listener) => {
-                let (stream, _addr) = listener.accept()?;
-                Ok(Box::new(stream))
-            }
-            Self::Unix(listener) => {
-                let (stream, _addr) = listener.accept()?;
-                Ok(Box::new(stream))
-            }
-            Self::Tcp(listener) => {
-                let (stream, _addr) = listener.accept()?;
-                Ok(Box::new(stream))
-            }
-        }
-    }
-}
 
 /// Bind (fatal so a misconfigured transport fails loudly under systemd
 /// `Restart=on-failure`) and serve host connections forever.

@@ -30,7 +30,7 @@
   # Audio: one fixed PCM format end to end. The PipeWire graph clock, the
   # protocol-simple tap, and the format panes-audio advertises to the host
   # must all agree, and these bindings are the single source of truth.
-  audioRate = 48000;
+  audioRate = 48_000;
   audioChannels = 2;
   # The tap is loopback TCP, not a unix socket, because
   # module-protocol-simple's unix accept path is dead code in PipeWire 1.6
@@ -260,7 +260,7 @@ in {
     # OVMF does not work with repart's default 4096-byte sector size.
     sectorSize = 512;
     partitions = {
-      "esp" = {
+      esp = {
         contents = let
           # aarch64-only image (see package.nix), so the EFI arch is fixed.
           # Avoids depending on `config.nixpkgs.hostPlatform` (unset under
@@ -279,7 +279,7 @@ in {
           SizeMinBytes = "256M";
         };
       };
-      "root" = {
+      root = {
         storePaths = [config.system.build.toplevel];
         # Closure registration consumed by boot.postBootCommands above (first
         # boot loads it into the nix db, then deletes it).

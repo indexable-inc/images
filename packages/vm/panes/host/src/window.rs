@@ -76,13 +76,13 @@ pub struct WindowParams {
 }
 
 define_class!(
-    // `NSWindow` subclass whose only job is un-swallowing Cmd keyUps: AppKit
-    // routes a keyUp with Command held into key-equivalent processing and
-    // never delivers it to the responder chain, so the guest would see the
-    // key stuck down and its clients would auto-repeat it until focus is
-    // lost (one Cmd-Backspace tap in a guest editor deleted forever). Hand
-    // those keyUps to the content view like any other key event; the view's
-    // held-key set drops the ones whose press the guest never saw.
+    // `NSWindow` subclass whose only job is routing Cmd keyUps to the view.
+    // AppKit discards those during key-equivalent processing in
+    // `NSApplication.sendEvent` -- ABOVE this window, so this override alone
+    // never fires on the normal path; `app::install_key_up_monitor`
+    // re-delivers the event to the key window and lands here. Hand it to the
+    // content view like any other key event; the view's held-key map drops
+    // the ones whose press the guest never saw.
     #[unsafe(super(NSWindow))]
     #[thread_kind = MainThreadOnly]
     #[name = "PanesWindow"]
@@ -298,9 +298,10 @@ impl PaneWindow {
         mtm: MainThreadMarker,
         renderer: &Renderer,
         params: &WindowParams,
-        title_prefix: &str,
-        native_titlebar: bool,
+        options: &crate::app::RunOptions,
     ) -> Self {
+        let title_prefix = &options.title_prefix;
+        let native_titlebar = options.native_titlebar;
         let scale = f64::from(params.scale.max(1));
         let content = NSRect::new(
             NSPoint::new(0.0, 0.0),
@@ -339,7 +340,7 @@ impl PaneWindow {
         ns.setAcceptsMouseMovedEvents(true);
         ns.center();
 
-        let view = PanesView::new(mtm, params.id, content);
+        let view = PanesView::new(mtm, params.id, content, options.chord_translation);
         let layer = CAMetalLayer::new();
         layer.setDevice(Some(&renderer.device));
         layer.setPixelFormat(objc2_metal::MTLPixelFormat::BGRA8Unorm);

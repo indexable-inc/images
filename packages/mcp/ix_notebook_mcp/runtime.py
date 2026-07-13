@@ -53,8 +53,11 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, overload
 
+if TYPE_CHECKING:
+    import polars as pl
+
 from . import readstats, registry, typecheck
-from .config import build_stamp
+from .config import build_stamp, process_cwd
 
 _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", default=None)
 
@@ -62,6 +65,19 @@ _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", d
 # and the dashboard). A chatty/runaway job keeps only the most recent slice, so
 # memory, store writes, and poll payloads all stay bounded.
 _MAX_OUTPUT_CHARS = 256_000
+
+# n-pty chunk-stream flush policy: bulk job output rides CAS as ~1 chunk fact
+# per flush instead of per-character facts. Flush when either
+# _STREAM_FLUSH_BYTES accumulate (size cap, checked at feed time) or
+# _STREAM_FLUSH_SECS elapse since the first unflushed byte (latency cap,
+# checked by the _flusher tick), whichever first. Volume math: a saturated
+# stream lands one fact per 4096 output bytes instead of 4096 per-character
+# facts (~4e3 fewer), and every avoided fact also carries fixed journal
+# framing (seq, entity, attr, value tagging) that dwarfs a 1-byte payload,
+# so total journal volume sits ~5 orders of magnitude under per-character
+# facts; an idle trickle is capped at 1 fact/s.
+_STREAM_FLUSH_BYTES = 4096
+_STREAM_FLUSH_SECS = 1.0
 
 # Bounded record of background-task failures, newest last; bound into the user
 # namespace as `task_errors`. asyncio only reports a failed, never-awaited task
@@ -185,9 +201,9 @@ JOB_MIME = "application/x-ix-job+json"
 IX_LLM_MIME = "application/x-ix-llm+json"
 
 # The custom mime a Result uses to carry a STRUCTURED human view — a
-# ``{"renderer": <name>, "data": <json>}`` spec the dashboard renders natively
-# (pane_bridge republishes it as a `data` pane routed through the frontend's
-# renderer registry) instead of a baked HTML string in a sandboxed frame.
+# ``{"renderer": <name>, "data": <json>}`` spec a view-aware frontend routes
+# through its renderer registry instead of a baked HTML string in a sandboxed
+# frame; it persists with the run's stored outputs (see _normalize_bundle).
 # Mirrors outputs.IX_VIEW_MIME.
 IX_VIEW_MIME = "application/x-ix-view+json"
 
@@ -235,6 +251,86 @@ def _rename_current_job(name: str) -> None:
     if _store is not None and _store_conn is not None:
         with contextlib.suppress(Exception):  # best-effort: a store write must not abort user code
             _store.rename(_store_conn, id=job.id, name=name)
+
+
+class _StreamWriter:
+    """Full-fidelity job output -> CAS chunk stream (weave2 n-pty, index side).
+
+    ``Job._append`` feeds every write here besides the trimmed in-memory
+    buffer: the existing previews (``last_output``, ``line`` facts) stay the
+    cheap derived view, this stream keeps the complete bytes. On the first
+    byte the writer mints ``pty-stream:<job id8>`` child_of the run/process
+    entity; bytes then buffer locally and flush as ONE ``(S, chunk, <hash>)``
+    fact per the _STREAM_FLUSH_BYTES/_STREAM_FLUSH_SECS policy above, with a
+    final flush on job exit (``_persist_final``). Flushed bytes ride the
+    store's write-behind queue and the CAS put happens on its writer thread,
+    so a flush never blocks user prints on HTTP. With ``WEAVE_URL=off`` (or
+    no store at all) the writer is entirely inert: nothing buffers, nothing
+    is minted."""
+
+    __slots__ = ("_buf", "_buflen", "_ent", "_first_ts", "_job")
+
+    def __init__(self, job: Job) -> None:
+        self._job = job
+        self._ent: str | None = None
+        self._buf: list[bytes] = []
+        self._buflen = 0
+        self._first_ts = 0.0
+
+    def feed(self, s: str) -> None:
+        if _store is None or _store_conn is None or _store_conn.disabled or not s:
+            return
+        with contextlib.suppress(Exception):  # best-effort: a store write must not abort user code
+            if self._ent is None:
+                self._ent = _store.stream_open(_store_conn, id=self._job.id, kind=self._job.kind)
+            if not self._buf:
+                self._first_ts = time.monotonic()
+            data = s.encode("utf-8", "replace")
+            self._buf.append(data)
+            self._buflen += len(data)
+            if self._buflen >= _STREAM_FLUSH_BYTES:
+                self._flush()
+
+    def poll(self) -> None:
+        """Time-cap flush; the _flusher tick is this writer's only clock."""
+        if self._buf and time.monotonic() - self._first_ts >= _STREAM_FLUSH_SECS:
+            with contextlib.suppress(Exception):  # best-effort: a store write must not kill the loop
+                self._flush()
+
+    def close(self) -> None:
+        """Final flush on job exit, so the last partial chunk is never lost."""
+        if self._buf:
+            with contextlib.suppress(Exception):  # best-effort: persist during cleanup must not raise
+                self._flush()
+
+    def _flush(self) -> None:
+        # Swap-out, not clear-in-place: a concurrent feed (a to_thread print)
+        # lands either wholly in this chunk or wholly in the next.
+        buf, self._buf, self._buflen = self._buf, [], 0
+        _store.stream_chunk(_store_conn, self._ent, b"".join(buf))
+
+    def _snapshot(self, state_json: str) -> None:
+        """Documented seam, unused for now: assert (S, snapshot, <hash>) of a
+        terminal-emulator state so replay can seek instead of replaying from
+        the start. No emulator ships in this env (pyte is deliberately not a
+        dependency), so nothing calls this yet; the weave-side replay renderer
+        treats a stream with no snapshots as replay-from-start, so chunks
+        alone are complete. ``state_json`` contract (version 1):
+
+            {"v": 1, "cols": int, "rows": int,
+             "cursor": {"x": int, "y": int},
+             "lines": [{"text": str, "attrs": [[start, len, sgr]]?}]}
+
+        ``attrs`` is optional per line: [start, len, sgr] spans; ``sgr`` is
+        the semicolon-joined SGR parameter list exactly as it would appear in
+        CSI <params> m, applied to that span from a fresh default state
+        ("1;31" = bold red). Lines are padded/truncated to ``cols``. Agreed
+        with the weave-side vt100 replay renderer (viz/src/lib/vt/)."""
+        if _store is None or _store_conn is None or _store_conn.disabled:
+            return
+        if self._ent is None:
+            self._ent = _store.stream_open(_store_conn, id=self._job.id, kind=self._job.kind)
+        _store.stream_snapshot(_store_conn, self._ent, state_json.encode("utf-8"))
 
 
 class _Tee:
@@ -354,6 +450,9 @@ class Job:
         self._exc_tb: types.TracebackType | None = None
         self._buf: list[str] = []
         self._buflen = 0
+        # Full-fidelity output -> CAS chunk stream (weave2 n-pty); inert
+        # unless a store is configured.
+        self._stream = _StreamWriter(self)
         # Rich outputs (mime bundles) display()-ed while this job runs.
         self._displays: list[dict] = []
         self.task: asyncio.Task | None = None
@@ -367,11 +466,18 @@ class Job:
         # Set once __ix_run returns before the task finishes. When such a job
         # reaches a terminal state later, notify the agent session.
         self.backgrounded = False
+        # The live weave view entity backing this run's human HTML (weave2
+        # n-toolviews), set by _persist_final once the finished result is
+        # stored; rides the job summary so the server attaches it to the tool
+        # result's _meta. None while running, when the result carries no
+        # human HTML, or when persistence is off (WEAVE_URL=off).
+        self.weave_view: str | None = None
 
     def _append(self, s: str) -> None:
         """Append output, trimming to the most recent _MAX_OUTPUT_CHARS so a
         runaway job cannot grow the buffer (or the store row / poll payload)
         without bound."""
+        self._stream.feed(s)  # full bytes ride the chunk stream; the trim below only bounds the preview
         self._buf.append(s)
         self._buflen += len(s)
         if self._buflen > _MAX_OUTPUT_CHARS:
@@ -1439,7 +1545,7 @@ class Jobs(dict[str, Job]):
     run, keyed by job id. Beyond the dict surface, :meth:`spawn` registers an
     ad-hoc awaitable as a first-class background job, so work an agent started
     itself (a coroutine, a Task) gets the same lifecycle as a backgrounded cell:
-    a dashboard card, a completion notification, and a pageable/awaitable
+    a dashboard card, a best-effort completion wake, and a pageable/awaitable
     ``jobs['<id>']`` handle (issue #2164)."""
 
     def spawn(self, aw: Awaitable[Any], *, name: str | None = None, topic: str | None = None) -> Job:
@@ -1448,7 +1554,7 @@ class Jobs(dict[str, Job]):
 
         The awaitable gets the full job lifecycle: it appears in ``jobs`` /
         ``history()`` and on the dashboard, its completion pushes a channel
-        notification exactly like a backgrounded cell, and its value is
+        notification addressed to the session that spawned it, and its value is
         retrieved with ``await jobs['<id>']`` (or ``.result`` once done; a
         failure re-raises there, like any other job). ``name`` labels the job
         (defaults to the coroutine's qualname); ``topic`` files it under a
@@ -1748,7 +1854,7 @@ async def notify(content: str, **meta: Any) -> None:
 
     This server is a Claude Code channel (research preview): when the client
     session was launched with the channel enabled (``claude
-    --dangerously-load-development-channels server:<name>``), the event lands in
+    --channels server:<name>``), the event lands in
     the agent's context as ``<channel source="<name>" key="val">content</channel>``
     and wakes it. Each keyword becomes a tag attribute (values are stringified)::
 
@@ -1824,6 +1930,14 @@ def _notify_job_finished(job: Job) -> None:
     server's session id (the stdio client), so the wake reaches the session
     that started the job and no other -- the dashboard still shows every job
     globally from the executions table (issue #2165).
+
+    Known limit (issue #2400): one Claude Code process multiplexes its parent
+    conversation and in-process subagents onto a single stdio MCP session, and
+    the client sends no per-agent identity on tool calls (only
+    ``claudecode/toolUseId``, see anthropics/claude-code#32514), so a
+    subagent's job wake still lands in the parent conversation. That split
+    needs the client to expose the caller; the addressing here is where it
+    will slot in.
     """
     if not job.backgrounded or job.kind == "replay":
         return
@@ -1918,6 +2032,16 @@ def _pr_resource_html(state: Mapping[str, Any]) -> str:
     )
 
 
+# GitHub mergeStateStatus values under which `gh pr merge --auto` merges the
+# PR the moment it is armed (#2532): nothing blocking remains, either because
+# the repo has no required checks or because they already passed, so "arm,
+# then watch, then merge" silently degrades to "merge now". UNSTABLE is
+# mergeable with failing or pending NON-required checks; those never block.
+_INSTANT_MERGE_STATES: frozenset[str] = frozenset({"CLEAN", "UNSTABLE", "HAS_HOOKS"})
+_MERGEABILITY_POLL_S: float = 2.0
+_MERGEABILITY_TIMEOUT_S: float = 30.0
+
+
 async def watch_pr(
     pr: str | int,
     *,
@@ -1947,6 +2071,7 @@ async def watch_pr(
         "elapsed": "",
     }
     started = time.time()
+    auto_merge_note = ""
     resource = register_resource(
         render=lambda: _pr_resource_html(state),
         id=f"pr-{safe_id}",
@@ -1965,11 +2090,12 @@ async def watch_pr(
         )
 
     async def refresh() -> dict[str, Any]:
-        out = await run_nu(
+        # `from json` on a gh object yields a nu record, which nu() returns as
+        # a plain dict (issue #2390).
+        row: dict[str, Any] = await run_nu(
             'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
             'url,autoMergeRequest,isDraft,reviewDecision | complete | get stdout | from json'
         )
-        row = out.to_dicts()[0]
         checks = row.get("statusCheckRollup") or []
         title = row.get("title") or f"PR {row.get('number') or clean_pr}"
         state.update(
@@ -1980,7 +2106,11 @@ async def watch_pr(
                 "status": str(row.get("state") or "").lower(),
                 "merge_state": row.get("mergeStateStatus") or "",
                 "checks": checks,
-                "auto_merge": "auto merge on" if row.get("autoMergeRequest") else "auto merge off",
+                "auto_merge": (
+                    "auto merge skipped: already mergeable"
+                    if auto_merge_note
+                    else ("auto merge on" if row.get("autoMergeRequest") else "auto merge off")
+                ),
                 "elapsed": _format_duration(time.time() - started),
                 "error": "",
             }
@@ -1988,11 +2118,47 @@ async def watch_pr(
         return row
 
     if auto_merge:
-        flag = f"--{merge_method}"
-        delete = "--delete-branch" if delete_branch else ""
-        merge = await run_nu(f"gh pr merge $env.PR --auto {flag} {delete} | complete")
-        if int(merge["exit_code"][0]) != 0:
-            state["error"] = str(merge["stderr"][0] or merge["stdout"][0])
+        # Arming auto merge on an already-mergeable PR merges it instantly,
+        # before any watching happens (#2532): branch-protection endpoints
+        # need admin and gh's statusCheckRollup carries no isRequired, so
+        # mergeStateStatus is the one read-accessible "would merge right now"
+        # signal. A fresh PR reports UNKNOWN while GitHub computes
+        # mergeability, so poll briefly for a real answer first.
+        row = await refresh()
+        deadline = time.time() + _MERGEABILITY_TIMEOUT_S
+        while (
+            row.get("state") == "OPEN"
+            and str(row.get("mergeStateStatus") or "UNKNOWN") == "UNKNOWN"
+            and time.time() < deadline
+        ):
+            await asyncio.sleep(_MERGEABILITY_POLL_S)
+            row = await refresh()
+        if str(row.get("mergeStateStatus") or "") in _INSTANT_MERGE_STATES:
+            auto_merge_note = (
+                f"auto merge NOT armed: PR {clean_pr} is already mergeable "
+                f"(mergeStateStatus={row.get('mergeStateStatus')}: no blocking "
+                f"required checks remain), so arming would merge it immediately, "
+                f"before any watching. Merge explicitly "
+                f"(gh pr merge {clean_pr} --{merge_method}) once your own gate is green."
+            )
+            print(auto_merge_note, flush=True)
+            await notify(auto_merge_note, resource=resource.id, pr=clean_pr)
+        else:
+            flag = f"--{merge_method}"
+            delete = "--delete-branch" if delete_branch else ""
+            # `| complete` yields a nu record: a plain dict, not a 1-row frame
+            # (issue #2390).
+            merge: dict[str, Any] = await run_nu(
+                f"gh pr merge $env.PR --auto {flag} {delete} | complete"
+            )
+            if int(merge["exit_code"]) != 0:
+                state["error"] = str(merge["stderr"] or merge["stdout"])
+
+    def finished(result: dict[str, Any]) -> dict[str, Any]:
+        """Carry the skipped-auto-merge note onto the returned summary."""
+        if auto_merge_note:
+            result["auto_merge"] = auto_merge_note
+        return result
 
     last: dict[str, Any] = {}
     while True:
@@ -2007,18 +2173,18 @@ async def watch_pr(
             state["status"] = "merged" if last.get("state") == "MERGED" else "closed"
             resource.close()
             await notify(f"PR {clean_pr} finished with state {last.get('state')}", resource=resource.id, pr=clean_pr)
-            return {"state": last.get("state"), "url": last.get("url"), "checks": len(checks)}
+            return finished({"state": last.get("state"), "url": last.get("url"), "checks": len(checks)})
         if failures:
             state["status"] = "failed"
             state["error"] = "One or more required actions failed."
             resource.close()
             await notify(f"PR {clean_pr} has failing checks", resource=resource.id, pr=clean_pr)
-            return {"state": "failed", "url": last.get("url"), "failures": failures}
+            return finished({"state": "failed", "url": last.get("url"), "failures": failures})
         if time.time() - started > timeout:
             state["status"] = "timed out"
             resource.close()
             await notify(f"PR {clean_pr} watch timed out", resource=resource.id, pr=clean_pr)
-            return {"state": "timed out", "url": last.get("url"), "checks": len(checks)}
+            return finished({"state": "timed out", "url": last.get("url"), "checks": len(checks)})
         await asyncio.sleep(interval)
 
 
@@ -2472,6 +2638,50 @@ def _error_line(exc: BaseException, job: Job) -> int | None:
     return line
 
 
+def _cell_stop_line(exc: BaseException, job: Job) -> int | None:
+    """The top-level cell line executing when ``exc`` escaped: the shallowest
+    traceback frame in this job's pseudo-file. Distinct from :func:`_error_line`
+    (the deepest cell frame, for the dashboard's highlight): a failure inside a
+    function the cell defined stops the cell at the call site, and it is the
+    call site that decides which later top-level statements never ran."""
+    target = f"<job {job.id}>"
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_filename == target:
+            return tb.tb_lineno
+        tb = tb.tb_next
+    return None
+
+
+def _unexecuted_note(exc: BaseException, job: Job) -> str:
+    """A one-line warning naming the bindings the failed cell never reached
+    (issue #2526). A cell that raises partway through leaves every assignment
+    at/after the failing statement unexecuted while the namespace keeps the old
+    values, so a retry cell that reuses those names silently operates on stale
+    state (the incident: a rebuilt email reused the previous run's ``body`` and
+    sent a duplicate). Static and best-effort (see
+    :func:`introspect.unexecuted_bindings`); empty when nothing at/after the
+    failure binds a name."""
+    line = _cell_stop_line(exc, job)
+    if line is None:
+        return ""
+    try:
+        from .introspect import unexecuted_bindings
+
+        names = unexecuted_bindings(job.code, line)
+    except Exception:
+        # Best-effort: a failure here just means no note.
+        return ""
+    if not names:
+        return ""
+    return (
+        "\nNOTE: this cell failed before updating: "
+        + ", ".join(names)
+        + " (their current values, if any, predate this cell; rebuild them "
+        + "before reuse)."
+    )
+
+
 def _typecheck_enabled() -> bool:
     """Whether per-cell type checking runs. Default ON; the escape hatch is the
     ``IX_MCP_TYPECHECK`` env var (``0``/``false``/``no``/``off`` disables it) or,
@@ -2487,6 +2697,26 @@ def _typecheck_enabled() -> bool:
     except Exception:
         # No config set (one-shot eval, bare kernel, tests): default on.
         return True
+
+
+def _restore_clobbered_builtins(ns: dict, job: Job) -> None:
+    """Re-inject every kernel builtin the finished cell rebound or deleted
+    (issue #2430). A cell that assigned to a builtin name (``api = ...``,
+    ``json = json.loads(...)``) used to silently destroy that helper for every
+    later cell in the session -- and ``del`` could not bring it back, because
+    the injected binding was gone rather than shadowed. Called from the
+    runner's ``finally`` so error and cancel paths restore too; the warning
+    lands in the job's output, naming the builtin so the author picks a
+    different name on the retry."""
+    for name, canonical in _protected_builtins.items():
+        if ns.get(name, _ABSENT) is canonical:
+            continue
+        ns[name] = canonical
+        job._append(
+            f"[ix] '{name}' is a kernel builtin; this cell rebound or deleted "
+            f"it, so the builtin was restored (the cell's own '{name}' value "
+            "was discarded) -- use a different name\n"
+        )
 
 
 async def _runner(job: Job, ns: dict) -> None:
@@ -2603,7 +2833,7 @@ async def _runner(job: Job, ns: dict) -> None:
         else:
             # The user's own code raised KeyboardInterrupt; keep its real
             # traceback (trimmed to the cell's frames) and the failing line.
-            job.error = _user_traceback(_kexc)
+            job.error = _user_traceback(_kexc) + _unexecuted_note(_kexc, job)
             job.error_line = _error_line(_kexc, job)
             job._exc = _kexc
         job._exc_tb = _kexc.__traceback__
@@ -2620,7 +2850,7 @@ async def _runner(job: Job, ns: dict) -> None:
         tb = _user_traceback(_exc)
         job.error_line = _error_line(_exc, job)
         hint = _type_error_hint(_exc) if isinstance(_exc, TypeError) else ""
-        job.error = tb + hint
+        job.error = tb + hint + _unexecuted_note(_exc, job)
         # Keep the exception object itself, so `await jobs['<id>']` re-raises it
         # (type + message + the cell's own traceback) instead of yielding None.
         job._exc = _exc
@@ -2628,6 +2858,10 @@ async def _runner(job: Job, ns: dict) -> None:
         job._append(job.error)
     finally:
         job.ended = time.time()
+        # Before persisting: the restore warning must ride the job's stored
+        # output, and the namespace snapshot must see the restored builtin,
+        # not the clobbered value.
+        _restore_clobbered_builtins(ns, job)
         _ix_current.reset(token)
         _persist_final(job)
         _mark_snapshot_dirty()
@@ -2638,6 +2872,8 @@ async def _runner(job: Job, ns: dict) -> None:
 def _persist_final(job: Job) -> None:
     if _store is None or _store_conn is None:
         return
+    # Final chunk flush first: the stream tail lands before the finish facts.
+    job._stream.close()
     # Record this run's name references first, so the snapshot below already shows
     # the just-finished job among each name's assigned_in/used_in.
     _record_refs(job)
@@ -2646,6 +2882,7 @@ def _persist_final(job: Job) -> None:
         _store.finish(
             _store_conn,
             id=job.id,
+            kind=job.kind,
             status=job.status,
             ended_at=job.ended or time.time(),
             output=job.output,
@@ -2656,6 +2893,16 @@ def _persist_final(job: Job) -> None:
             bindings=_cell_bindings(job),
             namespace=_namespace_snapshot(job),
         )
+    # A finished cell whose result carries a human HTML view becomes a live
+    # weave view entity (weave2 n-toolviews): the html goes to CAS once and
+    # the view hangs off the run entity for lineage and cascade cleanup; the
+    # id rides the job summary so the server attaches it to the tool result's
+    # _meta. Replays and spawns mint none -- a reopened session would
+    # otherwise duplicate views for cells that already have theirs.
+    html = getattr(job._result, "user_html", "") if job.kind == "cell" else ""
+    if html:
+        with contextlib.suppress(Exception):  # best-effort, like the writes above
+            job.weave_view = _store.save_tool_view(_store_conn, id=job.id, html=html, label=job.name)
 
 
 async def _spawn_runner(job: Job, aw: Awaitable[Any]) -> None:
@@ -2715,17 +2962,11 @@ async def _spawn_runner(job: Job, aw: Awaitable[Any]) -> None:
         _ix_current.reset(token)
         _persist_final(job)
         _mark_snapshot_dirty()
-        # Spawned jobs are backgrounded by construction, so completion always
-        # notifies (the suppress mirrors _runner: a session without the channel
-        # has nothing to deliver to, and that must not fail the job's cleanup).
+        # The durable job row above is the completion authority. The addressed
+        # channel wake is intentionally best-effort, not exactly-once: it may be
+        # lost, but must never be broadcast elsewhere or fail job cleanup.
         with contextlib.suppress(Exception):
-            await notify(
-                f"Background job {job.name} finished with status {job.status}.",
-                job_id=job.id,
-                job_name=job.name,
-                status=job.status,
-                topic=job.topic,
-            )
+            _notify_job_finished(job)
 
 
 def _cell_bindings(job: Job) -> dict:
@@ -3123,10 +3364,11 @@ def _normalize_bundle(data: dict, metadata: dict | None = None) -> dict:
         if len(encoded) > _MAX_IMAGE_BUNDLE:
             encoded = json.dumps({"text": text, "images": []})
         out[IX_LLM_MIME] = encoded
-    # Carry the structured human view (IX_VIEW_MIME) so pane_bridge can publish
-    # it as a native `data` pane. JSON cannot be clipped without corrupting it,
-    # so an oversize spec is dropped whole and the text/html fallback renders
-    # instead; producers keep their payloads under the cap (see _READ_CONTEXT_MAX).
+    # Carry the structured human view (IX_VIEW_MIME) so it persists with the
+    # run's stored outputs for native `data`-pane rendering. JSON cannot be
+    # clipped without corrupting it, so an oversize spec is dropped whole and
+    # the text/html fallback renders instead; producers keep their payloads
+    # under the cap (see _READ_CONTEXT_MAX).
     view = data.get(IX_VIEW_MIME)
     if isinstance(view, dict):
         encoded = json.dumps(view)
@@ -3362,7 +3604,8 @@ def doc(obj: Any) -> Result:
     Result -- so the documented "everything through Result" path also works for
     reading docs. ``help()`` only writes to stdout (not your channel) and returns
     ``None``, so ``Result(help(x))`` shows nothing; use ``doc(grep)`` instead.
-    Pair it with `api()`: `api('grep')` to find a name, `doc(grep)` to read it."""
+    Pair it with `api()`: filter its frame to find a name, then use
+    `doc(grep)` to read it."""
     name = getattr(obj, "__name__", None) or type(obj).__name__
     sig = ""
     if callable(obj):
@@ -3378,8 +3621,7 @@ def _build_row() -> dict:
     """The catalog's header row: which build this kernel IS. The in-band
     staleness signal (index#2110): when an agent's docs promise a helper or
     kwarg this catalog lacks, the stamp attributes the gap to a stale deploy
-    instead of a phantom API. Prepended after filtering, so even a filtered
-    miss (`api('check')` finding nothing) still shows it."""
+    instead of a phantom API."""
     return {
         "where": "kernel",
         "name": "build",
@@ -3390,37 +3632,34 @@ def _build_row() -> dict:
     }
 
 
-def api(filter: str | None = None) -> Any:
+def api() -> pl.DataFrame:
     """A live catalog of every helper the kernel gives you: the always-present
     namespace builtins (`Result`, `cells`, `jobs`, `sh`, ...) and the public
     surface of each bundled module (`view`, `nix`, `fleet`, ...), each with
-    its signature and a one-line summary. Call `api()` to discover what exists
-    instead of guessing names or grepping source; pass `filter` to match a
-    substring against the name, summary, or module. The first row is always the
+    its provenance, signature, and a one-line summary. Call `api()` to discover
+    what exists instead of guessing names or grepping source. Filter and sort the
+    returned Polars DataFrame directly, for example
+    `api().filter(pl.col("where") == "view")`. The first row is always the
     kernel's own build stamp (rev, commit date, age), so a catalog that lacks
     something your docs describe is attributable to a stale deploy.
 
-    Returns a polars DataFrame (filter/sort it further, e.g.
-    `api().filter(pl.col("where") == "view")`), or plain text if polars is absent.
+    Leave the frame as the cell's final expression or yield it. Passing it to
+    ``print`` converts it to Polars' terminal representation before MCP can render
+    the structured result.
     """
-    rows = _api_rows()
-    if filter:
-        q = filter.lower()
-        rows = [
-            r for r in rows
-            if q in r["name"].lower() or q in r["summary"].lower() or q in r["where"].lower()
-        ]
-    rows.insert(0, _build_row())
-    try:
-        import polars as _pl
+    import polars as pl
 
-        return _pl.DataFrame(
-            rows,
-            schema={"where": _pl.Utf8, "name": _pl.Utf8, "kind": _pl.Utf8, "sig": _pl.Utf8, "summary": _pl.Utf8},
-        )
-    except Exception:
-        width = max((len(r["sig"]) for r in rows), default=0)
-        return "\n".join(f'{r["where"]:>6}  {r["sig"]:<{width}}  {r["summary"]}' for r in rows)
+    rows = [_build_row(), *_api_rows()]
+    return pl.DataFrame(
+        rows,
+        schema={
+            "where": pl.Utf8,
+            "name": pl.Utf8,
+            "kind": pl.Utf8,
+            "sig": pl.Utf8,
+            "summary": pl.Utf8,
+        },
+    )
 
 
 def read_stats() -> dict[str, int]:
@@ -3644,6 +3883,7 @@ async def _flusher() -> None:
                     _store.update_output(
                         _store_conn, job.id, job.output, job._displays or None, line=job.line
                     )
+                job._stream.poll()  # time-cap chunk flush (weave2 n-pty)
         await _sweep_resources()
         _drain_inputs()
         cells._sync()
@@ -4073,6 +4313,10 @@ def _job_summary(job: Job) -> dict:
         # Where a still-running job is right now (cell line), so a budget-expired
         # reply can say not just "running" but "running, on line N".
         "line": _current_line(job) if job.running() else None,
+        # The run's live weave view entity (weave2 n-toolviews, set by
+        # _persist_final), so the server can attach it to the tool result's
+        # _meta. None while running or when no view was minted.
+        "weave_view": job.weave_view,
     }
 
 
@@ -4123,6 +4367,53 @@ async def __ix_exec(
     the shared one)."""
     job = await __ix_run(code, budget=budget, name=name, session=session, topic=topic)
     _emit(job)
+
+
+def __ix_cancel_running(
+    session: str | None = None,
+    job_id: str | None = None,
+    exclude: str | None = None,
+) -> list[str]:
+    """Cancel the specific run this session's in-flight ``python_exec`` launched,
+    so an abandoned call stops instead of finishing in the background.
+
+    The MCP server calls this when the client cancels an in-flight
+    ``python_exec`` request (``notifications/cancelled`` or a transport abort):
+    the tool coroutine is cancelled server-side, but the kernel job it started
+    keeps running as a background task -- executing side effects the caller
+    already abandoned (index#2387). Cancelling that job here is the SAME path as
+    an explicit ``jobs['<id>'].cancel()``, so it drains and records cleanly.
+
+    ``job_id`` is the id of the run the abandoned call launched, read off the
+    drained exec reply's summary and plumbed through by the server (index#2406).
+    We cancel STRICTLY that job: never a heuristic "newest running job for the
+    session", because the abandoned call's reply is drained under the shell lock
+    before this poke runs, so by the time we get here the launched run has either
+    backgrounded (still running -- cancel it) or finished within budget (nothing
+    to do). Guessing "newest" in the finished case would deterministically kill
+    an unrelated background job the same session started earlier and did NOT
+    abandon (the wrong-job kill in the issue). Targeting by id also inherently
+    spares jobs the call detached with ``jobs.spawn`` (index#2387): a spawned
+    child has its own id, so it is never the target. So:
+
+      - ``job_id`` absent (an old cancel path with no summary, e.g. a cancel that
+        landed before any iopub): cancel NOTHING rather than guess.
+      - the target is unknown, belongs to another session, or already finished:
+        cancel NOTHING (the common race is a fast call that completed in budget).
+      - otherwise cancel exactly that one job.
+
+    The ``session`` guard is kept so a stray/forged ``job_id`` can never reach
+    across sessions. ``exclude`` skips a job id -- the raw cancel request's own
+    frame is never a ``jobs`` entry, but the guard keeps the helper honest if
+    that ever changes. Returns the ids cancelled (empty when there was nothing to
+    cancel)."""
+    if job_id is None or job_id == exclude:
+        return []
+    target = jobs.get(job_id)
+    if target is None or target.session != session or not target.running():
+        return []
+    target.cancel()
+    return [target.id]
 
 
 def __ix_emit_read_stats_final() -> None:
@@ -4341,13 +4632,24 @@ def _register_rich_formatters(shell: Any) -> None:
 
 _user_ns: dict | None = None
 
+# Every name install() binds into the namespace (jobs, nu, api, ...), keyed to
+# its canonical object. A cell that rebound or deleted one (``api = ...``,
+# ``del nu``) used to silently brick that helper for the rest of the session,
+# and ``del`` could not bring it back (issue #2430): the runner re-injects
+# these after every cell (see _restore_clobbered_builtins).
+_protected_builtins: dict[str, Any] = {}
+
+# Sentinel distinguishing "name deleted" from any real value (None included)
+# when checking the namespace for clobbered builtins.
+_ABSENT: Any = object()
+
 
 def _install_signal_handlers() -> None:
     """Wire the two operator signals the MCP server uses to inspect or rescue a
     kernel whose event loop is blocked by a synchronous call.
 
     SIGUSR1: faulthandler dumps every thread's Python stack to the file named by
-    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel.TRACE_ENV``). The handler is C-level
+    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel_host.TRACE_ENV``). The handler is C-level
     so it runs even while the main thread is parked in a blocking call; the
     ``kernel_trace`` tool reads the file back.
 
@@ -4457,34 +4759,44 @@ def install(user_ns: dict | None = None) -> None:
             _store_conn = None
 
     target = user_ns if user_ns is not None else globals()
-    target["jobs"] = jobs
-    target["history"] = history
-    target["doc"] = doc
-    target["Job"] = Job
-    target["Result"] = Result
-    target["cells"] = cells
-    target["Cells"] = Cells
-    target["session"] = session
+
+    def _bind(name: str, value: Any) -> None:
+        """Bind one runtime builtin and register it for post-cell restore: every
+        name bound through here is re-injected by the runner when a cell rebinds
+        or deletes it (issue #2430)."""
+        target[name] = value
+        _protected_builtins[name] = value
+
+    _protected_builtins.clear()
+    _bind("jobs", jobs)
+    _bind("history", history)
+    _bind("doc", doc)
+    _bind("Job", Job)
+    _bind("Result", Result)
+    _bind("cells", cells)
+    _bind("Cells", Cells)
+    _bind("session", session)
     # Seed the default session label with this kernel's working directory; the
     # connecting client's identity is folded in later (see Kernel.set_client).
     with contextlib.suppress(OSError):
-        session._workdir = pathlib.Path.cwd().name or ""
+        session._workdir = process_cwd().name or ""
         session._rev += 1  # ensure the first flush mirrors the default to the store
-    target["resources"] = resources
-    target["Resource"] = Resource
-    target["register_resource"] = register_resource
-    target["Input"] = Input
-    target["ask"] = ask
-    target["notify"] = notify
-    target["watch_pr"] = watch_pr
-    target["input_channels"] = input_channels
-    target["__ix_run"] = __ix_run
-    target["__ix_exec"] = __ix_exec
-    target["__ix_read"] = __ix_read
-    target["__ix_emit_read_stats_final"] = __ix_emit_read_stats_final
-    target["__ix_snapshot"] = __ix_snapshot
-    target["__ix_restore"] = __ix_restore
-    target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")
+    _bind("resources", resources)
+    _bind("Resource", Resource)
+    _bind("register_resource", register_resource)
+    _bind("Input", Input)
+    _bind("ask", ask)
+    _bind("notify", notify)
+    _bind("watch_pr", watch_pr)
+    _bind("input_channels", input_channels)
+    _bind("__ix_run", __ix_run)
+    _bind("__ix_exec", __ix_exec)
+    _bind("__ix_cancel_running", __ix_cancel_running)
+    _bind("__ix_read", __ix_read)
+    _bind("__ix_emit_read_stats_final", __ix_emit_read_stats_final)
+    _bind("__ix_snapshot", __ix_snapshot)
+    _bind("__ix_restore", __ix_restore)
+    _bind("DASHBOARD_URL", os.environ.get("IX_MCP_DASHBOARD_URL", ""))
     # `sh`/`zsh` are RETIRED (agents shell out through `await nu(...)`; the sh
     # module's public entry points now raise a migration hint). Bind them anyway
     # so a stale `await sh(cmd)` in an old transcript fails LOUDLY with that hint
@@ -4493,8 +4805,8 @@ def install(user_ns: dict | None = None) -> None:
     with contextlib.suppress(Exception):  # sh may be absent outside the bundled interpreter; skip it
         import sh as _sh_module
 
-        target["sh"] = _sh_module
-        target["zsh"] = _sh_module.zsh
+        _bind("sh", _sh_module)
+        _bind("zsh", _sh_module.zsh)
     # Bind the filesystem-search helpers as top-level callables (`await grep(...)`
     # / `find(...)` / `spotlight(...)`) the way `sh` is bound, so the most common
     # search/listing actions need no import. They live in the bundled `fsearch`
@@ -4503,9 +4815,9 @@ def install(user_ns: dict | None = None) -> None:
     with contextlib.suppress(Exception):  # fsearch may be absent outside the bundled interpreter; skip it
         import fsearch as _fsearch_module
 
-        target["grep"] = _fsearch_module.grep
-        target["find"] = _fsearch_module.find
-        target["spotlight"] = _fsearch_module.spotlight
+        _bind("grep", _fsearch_module.grep)
+        _bind("find", _fsearch_module.find)
+        _bind("spotlight", _fsearch_module.spotlight)
     # Pre-bind the most-reached-for bundled module so `view.ls(...)` works with no
     # import, the way Result/cells/jobs/sh do (an explicit `import view` returns
     # the same object). It is already imported at startup (01-ix-polars installs
@@ -4513,24 +4825,23 @@ def install(user_ns: dict | None = None) -> None:
     # fleet, search) stay import-on-demand to keep the namespace lean.
     for _mod_name in registry.preimport_names():
         with contextlib.suppress(Exception):  # best-effort per-module import; continue on missing modules
-            target[_mod_name] = __import__(_mod_name)
+            _bind(_mod_name, __import__(_mod_name))
     # The kernel is async-first and polars-first: nearly every session reaches
     # for asyncio (ensure_future / sleep), json (every CLI's --json output), and
     # pl within its first cells, and a NameError on `asyncio` in an async kernel
     # is pure friction (observed twice in one 2026-06-10 session). Bound like
     # sh/view; an explicit import returns the same module.
-    target["asyncio"] = asyncio
-    target["json"] = json
-    with contextlib.suppress(Exception):  # polars may be absent; skip binding pl
-        import polars as _polars_mod
+    _bind("asyncio", asyncio)
+    _bind("json", json)
+    import polars as _polars_mod
 
-        target["pl"] = _polars_mod
-    target["api"] = api
-    target["read_stats"] = read_stats
+    _bind("pl", _polars_mod)
+    _bind("api", api)
+    _bind("read_stats", read_stats)
     # Failures of fire-and-forget tasks, newest last (see the deque's comment).
     # A report also lands in the spawning job's output, tagged `[task_errors]`,
     # which is how the name advertises itself.
-    target["task_errors"] = task_errors
+    _bind("task_errors", task_errors)
 
     # Everything in the namespace up to here is the runtime's own surface plus
     # the kernel preamble -- not user state. Session checkpoints cover only the

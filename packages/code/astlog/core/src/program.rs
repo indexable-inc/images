@@ -34,6 +34,7 @@ pub const BUILTINS: &[(&str, usize)] = &[
     ("same-text", 2),
     ("same-file", 2),
     ("text-match", 2),
+    ("misgrouped-digits", 2),
     ("no-descendant", 3),
     ("attached-sibling", 3),
 ];
@@ -342,30 +343,14 @@ fn check_atoms(atoms: &[BodyAtom], arities: &HashMap<&str, usize>) -> Result<(),
                 }
                 .build()
             })?;
-            if neg.args.len() != expected {
-                return ArityMismatchSnafu {
-                    name: neg.name.clone(),
-                    expected,
-                    got: neg.args.len(),
-                    line: neg.line,
-                }
-                .fail();
-            }
+            check_relation_arity(neg, expected)?;
             continue;
         }
         let BodyAtom::App(app) = atom else {
             continue;
         };
         if let Some(expected) = builtin_arity(&app.name) {
-            if app.args.len() != expected {
-                return BuiltinAritySnafu {
-                    name: app.name.clone(),
-                    expected,
-                    got: app.args.len(),
-                    line: app.line,
-                }
-                .fail();
-            }
+            check_arity(app, expected, true)?;
             // The pattern is compiled once at evaluator setup, which requires
             // it to be a literal; a variable pattern would also make match
             // results depend on corpus text, which no rule legitimately needs.
@@ -385,8 +370,19 @@ fn check_atoms(atoms: &[BodyAtom], arities: &HashMap<&str, usize>) -> Result<(),
             }
             .build()
         })?;
-        if app.args.len() != expected {
-            return ArityMismatchSnafu {
+        check_relation_arity(app, expected)?;
+    }
+    Ok(())
+}
+
+fn check_relation_arity(app: &AppAtom, expected: usize) -> Result<(), Error> {
+    check_arity(app, expected, false)
+}
+
+fn check_arity(app: &AppAtom, expected: usize, builtin: bool) -> Result<(), Error> {
+    if app.args.len() != expected {
+        if builtin {
+            return BuiltinAritySnafu {
                 name: app.name.clone(),
                 expected,
                 got: app.args.len(),
@@ -394,6 +390,13 @@ fn check_atoms(atoms: &[BodyAtom], arities: &HashMap<&str, usize>) -> Result<(),
             }
             .fail();
         }
+        return ArityMismatchSnafu {
+            name: app.name.clone(),
+            expected,
+            got: app.args.len(),
+            line: app.line,
+        }
+        .fail();
     }
     Ok(())
 }

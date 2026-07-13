@@ -237,7 +237,7 @@
 
       diameter = mkOption {
         type = types.ints.positive;
-        default = 12000;
+        default = 12_000;
         description = "World border diameter in blocks.";
       };
 
@@ -527,7 +527,7 @@
 
   serverFiles = cfg.serverFiles // pluginConfigFiles;
 
-  defaultWorldName = toString (cfg.properties."level-name" or "world");
+  defaultWorldName = toString (cfg.properties.level-name or "world");
   annotatedWorldNames = lib.unique (
     [defaultWorldName] ++ lib.attrNames cfg.worlds ++ datapackWorldNames
   );
@@ -951,7 +951,7 @@ in {
 
       port = mkOption {
         type = types.port;
-        default = 25575;
+        default = 25_575;
         description = "TCP port for Minecraft RCON.";
       };
 
@@ -1000,7 +1000,7 @@ in {
 
       rconPort = mkOption {
         type = types.port;
-        default = 25575;
+        default = 25_575;
         description = "Local RCON port used to ask PlugManX to reload Bukkit-family plugins.";
       };
 
@@ -1072,7 +1072,7 @@ in {
 
     port = mkOption {
       type = types.port;
-      default = 25565;
+      default = 25_565;
     };
 
     openFirewall = mkOption {
@@ -1145,7 +1145,7 @@ in {
       properties = lib.mkMerge [
         {
           server-port = lib.mkDefault cfg.port;
-          max-players = lib.mkDefault 100000;
+          max-players = lib.mkDefault 100_000;
           online-mode = lib.mkDefault true;
           enforce-secure-profile = lib.mkDefault true;
           gamemode = lib.mkDefault "survival";

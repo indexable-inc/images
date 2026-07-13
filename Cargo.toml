@@ -6,7 +6,16 @@ members = [
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
   "packages/agent/subagent-cache",
+  "packages/audio/app",
+  "packages/audio/blob",
+  "packages/audio/clock",
   "packages/audio/dsp",
+  "packages/audio/e2e",
+  "packages/audio/engine",
+  "packages/audio/instrument",
+  "packages/audio/melody",
+  "packages/audio/net",
+  "packages/audio/score",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",
@@ -27,11 +36,15 @@ members = [
   "packages/code/clone-detect/hash",
   "packages/code/clone-detect/pragma",
   "packages/code/clone-detect/scanner",
+  "packages/code/clone-detect/test-support",
+  "packages/code/tree-sitter-nix",
   "packages/config-launch",
+  "packages/cve-scan",
   "packages/code/code-highlight",
   "packages/search/code-tokenizer",
   "packages/dag-runner",
   "packages/code/edit-applier",
+  "packages/code/error-chain",
   "packages/efx/cli",
   "packages/efx/engine",
   "packages/efx/ir",
@@ -53,15 +66,21 @@ members = [
   "packages/google/gmail/cli",
   "packages/google/mcp",
   "packages/google/py",
+  "packages/index-delta",
   "packages/indexbench",
   "packages/ix-dev-diagnose",
   "packages/ix-windows",
   "packages/terminal/kitty",
   "packages/search/lake/iceberg",
-  "packages/minecraft/minecraft/nbt",
-  "packages/minecraft/minecraft/sound",
-  "packages/minecraft/minecraft/sync-managed",
+  "packages/minecraft/bot",
+  "packages/minecraft/nbt",
+  "packages/minecraft/protocol",
+  "packages/minecraft/protocol/jvm",
+  "packages/minecraft/protocol/py",
+  "packages/minecraft/sound",
+  "packages/minecraft/sync-managed",
   "packages/mirror",
+  "packages/mcp/server-info",
   "packages/search/mixedbread",
   "packages/mynoise",
   "packages/nu-py",
@@ -94,20 +113,25 @@ members = [
   "packages/tui/tui-node",
   "packages/tui/tui-py",
   "packages/unibind/backend-ex",
+  "packages/unibind/backend-jvm",
   "packages/unibind/backend-py",
   "packages/unibind/backend-ts",
   "packages/unibind/conformance",
   "packages/unibind/conformance-ex",
+  "packages/unibind/conformance-jvm",
   "packages/unibind/conformance-ts",
   "packages/unibind/core",
   "packages/unibind/ex-runtime",
   "packages/unibind/gen",
+  "packages/unibind/jvm-runtime",
   "packages/unibind/macros",
   "packages/unibind/py-runtime",
   "packages/unibind/runtime",
+  "packages/unibind/test-support",
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
   "packages/vm/panes/host",
+  "packages/vm/panes/guest-transport",
   "packages/vm/panes/protocol",
   "packages/vm/vmkit",
   "packages/tui/vt/ix-vt",
@@ -156,7 +180,13 @@ anstyle = "1"
 anyhow = "1"
 arrow = "59"
 ast-merge-ast = { path = "packages/code/ast-merge/ast" }
+audio-blob = { path = "packages/audio/blob" }
+audio-clock = { path = "packages/audio/clock" }
 audio-dsp = { path = "packages/audio/dsp" }
+audio-engine = { path = "packages/audio/engine" }
+audio-instrument = { path = "packages/audio/instrument" }
+audio-net = { path = "packages/audio/net" }
+audio-score = { path = "packages/audio/score" }
 ast-merge-diff = { path = "packages/code/ast-merge/diff" }
 ast-merge-git = { path = "packages/code/ast-merge/git" }
 ast-merge-langs = { path = "packages/code/ast-merge/langs" }
@@ -169,6 +199,7 @@ bytes = "1"
 # Pure-Rust bzip2 (the 0.6 default backend is libbz2-rs-sys), used to read
 # Nix's build logs, which are bzip2-compressed on disk while being written.
 bzip2 = "0.6"
+cc = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
 source-atuin = { path = "packages/search/source/atuin" }
@@ -181,6 +212,8 @@ clone-detect = { path = "packages/code/clone-detect/detect" }
 clone-hash = { path = "packages/code/clone-detect/hash" }
 clone-pragma = { path = "packages/code/clone-detect/pragma" }
 clone-scanner = { path = "packages/code/clone-detect/scanner" }
+clone-test-support = { path = "packages/code/clone-detect/test-support" }
+error-chain = { path = "packages/code/error-chain" }
 code-highlight = { path = "packages/code/code-highlight" }
 code-tokenizer = { path = "packages/search/code-tokenizer" }
 file-search = { path = "packages/search/file-search" }
@@ -203,6 +236,7 @@ efx-engine = { path = "packages/efx/engine" }
 efx-ir = { path = "packages/efx/ir" }
 efx-lang = { path = "packages/efx/lang" }
 file-language = { path = "packages/code/file-language" }
+flate2 = "1"
 flecs-query-core = { path = "packages/flecs-query/core" }
 fontdue = "0.9"
 futures = "0.3"
@@ -238,32 +272,37 @@ nix-web-monitor-parser = { path = "packages/nix/nix-web-monitor/parser" }
 # nu-command drops its default `sqlite` feature (`stor`, `into sqlite`): its
 # rusqlite 0.37 pins libsqlite3-sys 0.35, which collides with source-atuin's
 # rusqlite 0.40 on the one-per-graph `links = "sqlite3"` native library.
-nu-cmd-extra = "0.113.1"
-nu-cmd-lang = "0.113.1"
-nu-command = { version = "0.113.1", default-features = false, features = [
-  "os",
-  "network",
-  "rustls-tls",
-] }
-nu-engine = "0.113.1"
-nu-experimental = "0.113.1"
-nu-parser = "0.113.1"
-nu-protocol = "0.113.1"
+nu-cmd-extra = "0.114.0"
+nu-cmd-lang = "0.114.0"
+nu-command = { version = "0.114.0", default-features = false, features = ["os", "network", "rustls-tls"] }
+nu-engine = "0.114.0"
+nu-experimental = "0.114.0"
+nu-parser = "0.114.0"
+nu-protocol = "0.114.0"
 numpy = "0.28"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 objc2-quartz-core = "0.3"
 objc2-web-kit = "0.3"
-object = { version = "0.37", default-features = false, features = ["read"] }
+object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
+mc-protocol = { path = "packages/minecraft/protocol" }
+mcp-server-info = { path = "packages/mcp/server-info" }
+md-5 = "0.10"
 panes-protocol = { path = "packages/vm/panes/protocol" }
+panes-guest-transport = { path = "packages/vm/panes/guest-transport" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 percent-encoding = "2"
+# Apple property lists for index-delta's logical-diff engines: macOS `defaults`
+# domains and LaunchAgents are plists (XML and binary), so drift in them must be
+# diffed as parsed values, not bytes.
+plist = "1"
 prettyplease = "0.2"
 proc-macro2 = "1"
 progress-style = { path = "packages/progress-style" }
+rmcp = { version = "2.0", default-features = false, features = ["server", "macros", "transport-io"] }
 protobuf = "3"
 pty-process = { version = "0.5", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }
@@ -341,6 +380,10 @@ tree-sitter-kotlin-ng = "1.1"
 tree-sitter-language = "0.1"
 tree-sitter-lua = "0.5"
 tree-sitter-md = "0.5"
+# Patched with underscore digit separators in numeric literals: the
+# [patch.crates-io] entry below substitutes the in-repo fork
+# (packages/code/tree-sitter-nix) for this crates-io release everywhere the
+# workspace resolves it.
 tree-sitter-nix = "0.3"
 tree-sitter-ocaml = "0.25"
 tree-sitter-php = "0.24"
@@ -357,10 +400,13 @@ tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
 unibind = { path = "packages/unibind/macros" }
 unibind-backend-ex = { path = "packages/unibind/backend-ex" }
+unibind-backend-jvm = { path = "packages/unibind/backend-jvm" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
 unibind-backend-ts = { path = "packages/unibind/backend-ts" }
 unibind-core = { path = "packages/unibind/core" }
+unibind-test-support = { path = "packages/unibind/test-support" }
 unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
+unibind-jvm-runtime = { path = "packages/unibind/jvm-runtime" }
 unibind-py-runtime = { path = "packages/unibind/py-runtime" }
 unibind-runtime = { path = "packages/unibind/runtime" }
 url = { version = "2.5.8", default-features = false }
@@ -369,6 +415,30 @@ webpki-roots = "1"
 # `transparent` is a non-default feature: without it `with_transparent(true)`
 # is a silent no-op and the webview paints an opaque canvas, hiding the
 # ix-windows blur behind a flat card.
+# Sandboxed deterministic runtime for shared-audio instrument modules
+# (packages/audio/instrument). Minimal feature set: Cranelift JIT, the
+# runtime itself, WAT text support for built-in/demo instruments, and the
+# std/signals/parallel-compilation platform features.
+wasmtime = { version = "46", default-features = false, features = [
+  "anyhow",
+  "cranelift",
+  "runtime",
+  "wat",
+  "std",
+  "parallel-compilation",
+] }
 wry = { version = "0.55", features = ["transparent"] }
 x509-parser = "0.18"
 xxhash-rust = { version = "0.8", default-features = false }
+# Container format only (ReplayMod .mcpr archives); the compression backends
+# are opted into per consumer, so the default heavyweight codecs (zstd, lzma,
+# bzip2) stay out of the build graph.
+zip = { version = "7", default-features = false }
+
+# Workspace-wide crate substitutions. `tree-sitter-nix` is the in-repo fork
+# carrying underscore digit separators in numeric literals (the dialect the
+# patched nix-ix lexer accepts; see packages/code/tree-sitter-nix/README.md),
+# so astlog, clone-detect, and every other ast-merge-langs consumer parse the
+# same numbers nix does.
+[patch.crates-io]
+tree-sitter-nix = { path = "packages/code/tree-sitter-nix" }

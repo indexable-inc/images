@@ -9,7 +9,7 @@ session can read and send mail and manage a calendar with no setup file:
 
     await google_auth.login()            # sign in: opens your browser (once)
     gmail = google_auth.gmail()          # googleapiclient Resource for Gmail
-    gmail.users().messages().send(userId="me", body=...).execute()
+    await google_auth.send("a@b.com", "subject", "body")  # MIME + threading handled
     cal = google_auth.calendar()         # ... and Calendar
 
     google_auth.status()                 # {"signed_in", "email", "scopes"}
@@ -45,15 +45,19 @@ people.
 from __future__ import annotations
 
 import asyncio
+import base64
 import datetime
 import json
 import os
 import subprocess
 import webbrowser
+from email.message import EmailMessage
+from functools import partial
 from typing import Any
 
 from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, ConfigDict, ValidationError
+from private_session import SHARED_ENV, require_private_session
 
 __all__ = [
     "GoogleAuthError",
@@ -62,6 +66,7 @@ __all__ = [
     "gmail",
     "login",
     "logout",
+    "send",
     "service",
     "status",
 ]
@@ -122,24 +127,12 @@ class GoogleAuthError(RuntimeError):
 # participants. Incognito is the default, so an unset (or empty) value means a
 # token may be minted; only a truthy value marks the session shared and refuses
 # minting, keeping the personal Google grant out of synced room state.
-SHARED_ENV = "IX_MCP_SHARED"
-
-
-def _require_incognito() -> None:
-    """Allow Google access unless the session is a shared (multiplayer) room.
-
-    Gmail/Calendar read personal data, so they are confined to incognito
-    sessions -- the default for a plain ix-mcp. A shared room marks the MCP it
-    replicates across participants with ``IX_MCP_SHARED``; only then is access
-    refused, so a personal credential never reaches state other people can see.
-    """
-    if os.environ.get(SHARED_ENV):
-        raise GoogleAuthError(
-            "Gmail and Calendar are not available in a shared (multiplayer) room "
-            "(IX_MCP_SHARED is set), because they would expose a personal mailbox "
-            "to everyone in the room. Use them from an incognito chat instead; its "
-            "transcript and credential stay private to you."
-        )
+_require_incognito = partial(
+    require_private_session,
+    "Gmail and Calendar",
+    "a personal mailbox",
+    GoogleAuthError,
+)
 
 
 def _binary() -> str:
@@ -257,6 +250,107 @@ def calendar(version: str = "v3") -> Any:  # noqa: ANN401 -- googleapiclient Res
     Run `await login()` first if not signed in.
     """
     return service("calendar", version)
+
+
+def _payload_text(payload: dict[str, Any]) -> str:
+    """The first text/plain content in a Gmail payload tree, decoded.
+
+    Gmail returns the body base64url-encoded either directly on
+    ``payload.body`` (a simple message) or nested under ``payload.parts``
+    (multipart); recurse until a text/plain part with data appears.
+    """
+    if payload.get("mimeType", "text/plain").startswith("text/plain"):
+        data = payload.get("body", {}).get("data")
+        if data:
+            return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+    for part in payload.get("parts") or []:
+        text = _payload_text(part)
+        if text:
+            return text
+    return ""
+
+
+def _send_blocking(
+    to: str,
+    subject: str,
+    body: str,
+    cc: str | None,
+    reply_to_message_id: str | None,
+) -> dict[str, Any]:
+    """Assemble, send, and read back one message (blocking; see `send`)."""
+    messages = gmail().users().messages()
+
+    msg = EmailMessage()
+    msg["To"] = to
+    msg["Subject"] = subject
+    if cc:
+        msg["Cc"] = cc
+    msg.set_content(body)
+
+    request: dict[str, Any] = {}
+    if reply_to_message_id:
+        original = messages.get(
+            userId="me",
+            id=reply_to_message_id,
+            format="metadata",
+            metadataHeaders=["Message-ID", "References"],
+        ).execute()
+        headers = {
+            h["name"].lower(): h["value"] for h in original.get("payload", {}).get("headers", [])
+        }
+        # Gmail threads a reply only when the requested threadId is accompanied
+        # by the RFC 5322 reply headers: In-Reply-To names the parent, and
+        # References extends the parent's own chain with the parent itself.
+        message_id = headers.get("message-id")
+        if message_id:
+            msg["In-Reply-To"] = message_id
+            references = headers.get("references")
+            msg["References"] = f"{references} {message_id}" if references else message_id
+        request["threadId"] = original["threadId"]
+
+    request["raw"] = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+    sent = messages.send(userId="me", body=request).execute()
+
+    # Read the delivered message back and return its body: the caller verifies
+    # content from the return value instead of trusting that the arguments made
+    # it out (issue #2523: a stale-namespace retry once resent an old body while
+    # `labelIds: SENT` still read as success).
+    delivered = messages.get(userId="me", id=sent["id"], format="full").execute()
+    return {
+        "id": sent["id"],
+        "thread_id": delivered.get("threadId") or sent.get("threadId", ""),
+        "body": _payload_text(delivered.get("payload") or {}),
+    }
+
+
+async def send(
+    to: str,
+    subject: str,
+    body: str,
+    *,
+    cc: str | None = None,
+    reply_to_message_id: str | None = None,
+) -> dict[str, Any]:
+    """Send plain-text mail as the signed-in account; return what was delivered.
+
+    Owns the whole fiddly path so no session hand-rolls it: assembles the MIME
+    message, base64url-encodes it for ``messages().send``, and, for a reply,
+    threads it properly -- pass ``reply_to_message_id`` (the Gmail message
+    ``id`` of the message being answered, from ``messages().list()`` /
+    ``.get()``) and the helper fetches that message and sets ``threadId``,
+    ``In-Reply-To``, and ``References``. Give a reply the thread's subject
+    (``Re: <original>``), which Gmail also requires for threading.
+
+    Returns ``{"id", "thread_id", "body"}`` where ``body`` is read back from
+    the message Gmail actually stored, so verifying the delivered content is
+    free: check the returned body, not just that the call succeeded.
+
+    Raises `GoogleAuthError` when not signed in (run `await login()`) or in a
+    shared room.
+    """
+    _require_incognito()
+    # googleapiclient is blocking (httplib2); keep the kernel's loop free.
+    return await asyncio.to_thread(_send_blocking, to, subject, body, cc, reply_to_message_id)
 
 
 def status() -> dict[str, Any]:

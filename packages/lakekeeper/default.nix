@@ -24,16 +24,12 @@
   # the mismatch error. The updater deliberately skips it rather than write a
   # wrong hash.
   pin = ix.pins.loadPin ./pins.json "lakekeeper";
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      ix.pins.mkUpdater {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix;
-        pname = "lakekeeper";
-        relPath = "packages/lakekeeper/pins.json";
-      };
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "lakekeeper";
+    relPath = "packages/lakekeeper/pins.json";
+  };
 in
   stdenv.mkDerivation {
     pname = "lakekeeper";

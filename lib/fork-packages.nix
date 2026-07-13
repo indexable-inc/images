@@ -92,11 +92,18 @@
 {
   forkPackages = [
     {
+      # Codex uses importCargoLock, but git dependencies still carry fixed
+      # output hashes in packages/agent/codex/default.nix. A free-floating base
+      # can move Cargo.lock past those hashes, including for downstream flakes
+      # that lock codex-src transitively; that broke every ix prod deploy for
+      # 13h on 2026-07-07. The input is pinned by rev in flake.nix. Bump it by
+      # hand, rebase the patches, then build Codex and refresh any git dependency
+      # hashes named by Nix.
       name = "codex";
       input = "codex-src";
       url = "https://github.com/openai/codex.git";
       patchDir = "packages/agent/codex/patches";
-      autoUpdate = true;
+      autoUpdate = false;
       upstreamPolicy = {
         # Codex is invitation-only: unsolicited PRs are closed without review, so
         # `prsWelcome = false` and the tool never opens a PR here regardless of
@@ -115,6 +122,30 @@
         "0002-tui-refresh-adaptive-syntax-theme-on-focus-regain.patch" = {
           upstream = "never";
           reason = "General fix for openai/codex#18942, but codex closes unsolicited PRs (prsWelcome = false); the upstream issue is the feedback channel.";
+        };
+      };
+    }
+    {
+      name = "zed";
+      input = "zed-upstream";
+      url = "https://github.com/zed-industries/zed.git";
+      patchDir = "packages/zed/patches";
+      autoUpdate = false;
+      forkRepo = "indexable-inc/zed";
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "false";
+        citation = "https://github.com/zed-industries/zed/blob/main/CONTRIBUTING.md#ai-policy";
+        notes = "Zed permits human-directed LLM assistance but rejects autonomous-agent contributions; keep this patch in the maintained fork unless a human takes it upstream.";
+      };
+      patches = {
+        "0001-editor-optionally-exclude-the-invocation-reference.patch" = {
+          upstream = "never";
+          reason = "Useful general editor behavior, but Zed's contribution policy rejects autonomous-agent submissions.";
+        };
+        "0002-nix-expose-stable-application-package.patch" = {
+          upstream = "never";
+          reason = "Required to install the stable app from Zed's own flake, but Zed's contribution policy rejects autonomous-agent submissions.";
         };
       };
     }
@@ -142,6 +173,30 @@
         "0002-proc-show-kernel-working-directory-cwd-in-the-detail.patch" = {
           upstream = "hold";
           reason = "General feature (show process cwd in detail view); wants a quality pass and a discussion issue first.";
+        };
+      };
+    }
+    {
+      name = "nushell";
+      input = "nushell-src";
+      url = "https://github.com/nushell/nushell.git";
+      patchDir = "packages/nushell/patches";
+      autoUpdate = true;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/nushell/nushell/blob/main/CONTRIBUTING.md";
+        notes = "PRs welcome for focused changes; CONTRIBUTING has no AI-specific policy as of 2026-07-07. Include tests and user-facing release-note context.";
+      };
+      patches = {
+        "0001-Add-xattrs-column-to-ls-l.patch" = {
+          upstream = "attempt";
+          reason = "General filesystem feature requested in nushell/nushell#7106; prior PR #7158 was abandoned and explicitly left open for takeover.";
+          prExtra = "Related issue: nushell/nushell#7106. Prior closed attempt: nushell/nushell#7158.";
+        };
+        "0002-Derive-feature-list-for-cargo-unit-builds.patch" = {
+          upstream = "never";
+          reason = "Repo-specific: cargo-unit does not export Cargo's aggregate CARGO_CFG_FEATURE env var, so the package derives it from CARGO_FEATURE_* for ix builds.";
         };
       };
     }
@@ -376,7 +431,7 @@
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        # Structured git history export (RFC 0010). Designed to be
+        # Structured git history export (RFC 0011). Designed to be
         # upstreamable (deterministic, opt-in, experimental-feature gated,
         # never in lock files -- it dodges the objections that sank
         # leaveDotGit-for-flakes), but held: repo-wide upstreaming pause
@@ -385,6 +440,62 @@
         "0010-libfetchers-add-opt-in-structured-commit-history-exp.patch" = {
           upstream = "hold";
           reason = "Feature-sized change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/RFC first.";
+        };
+        # 0011: temp roots for in-flight CA build outputs, closing the min-free
+        # auto-GC race that broke wide cargo-unit graphs (index#2334).
+        "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch" = {
+          upstream = "hold";
+          reason = "Fix for min-free auto-GC deleting in-flight CA build outputs (indexable-inc/index#2334). Hold: humans submit nix patches upstream per NixOS/nix#15984; overlaps the still-open upstream discussion NixOS/nix#15613 / NixOS/nix#15719.";
+        };
+        # 0012: temp root for the floating-CA scratch output path itself
+        # (makeFallbackPath), the residual GC window 0011 left open: a
+        # non-chroot builder writes the unregistered scratch path directly,
+        # and a concurrent GC deletes it mid-build (index#2354).
+        "0012-fix-libstore-add-temp-root-for-floating-CA-scratch-o.patch" = {
+          upstream = "hold";
+          reason = "Companion to 0011: roots the floating-CA scratch output path during non-chroot builds (indexable-inc/index#2354). Upstream master has the same gap, but humans submit nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0013: opt-in `forge-fetch-via-git` -- fetch github:/gitlab:/sourcehut:
+        # inputs through the Git smart protocol into the tarball cache (delta
+        # transfers via a per-repo negotiation ref) instead of downloading a
+        # full archive of every new revision. Bit-identical to the archive path
+        # (archive-compatible-tree check with automatic tarball fallback), so
+        # upstreamable in principle, but held like 0010: feature-sized fetcher
+        # changes should start as an upstream discussion, not a cold PR.
+        "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch" = {
+          upstream = "hold";
+          reason = "Feature-sized fetcher change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/discussion first (touches lock-file-adjacent fetch semantics).";
+        };
+        # 0014: underscore digit separators in numeric literals (`1_000`,
+        # `1_000.000_1`, `2.5e1_0`), Rust-shaped (between digits only; a
+        # leading underscore is still an identifier), stripped before the
+        # value is parsed. Repo `.nix` files stay separator-free until the
+        # whole toolchain (stock nix, alejandra/statix/deadnix, tree-sitter)
+        # accepts the syntax; astlog's digit-grouping lints track that
+        # backlog (astlog-rules/nix.astlog).
+        "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch" = {
+          upstream = "hold";
+          reason = "Language syntax change; must start as an upstream issue/RFC, and humans submit nix patches upstream per NixOS/nix#15984.";
+        };
+        "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch" = {
+          upstream = "hold";
+          reason = "Fixes repeated installables multiplying `nix build --json` results (indexable-inc/index#2633). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0016: a newer Nix uses opaque per-instance temporary-root filenames.
+        # The 2.34 collector parsed every entry as a decimal PID, so one newer
+        # file disabled both scheduled and reactive GC until the store filled
+        # (index#3031). Upstream master already treats the name as opaque in
+        # NixOS/nix#15992; this is the reader-side backport for mixed versions.
+        "0016-fix-libstore-accept-opaque-temporary-root-filenames.patch" = {
+          upstream = "hold";
+          reason = "Backports the mixed-version temporary-root reader from NixOS/nix#15992 (indexable-inc/index#3031). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0017: each daemon process decides whether to auto-GC before waiting
+        # for the store-global gc.lock. Recheck under that lock so queued
+        # callers do not repeat a collection after the first restores space.
+        "0017-fix-libstore-recheck-free-space-after-GC-lock.patch" = {
+          upstream = "hold";
+          reason = "Prevents stale queued auto-GC decisions from serializing CI jobs behind repeated collections (indexable-inc/index#3085, indexable-inc/ix#7145). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
       };
     }

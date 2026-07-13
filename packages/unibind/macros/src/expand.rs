@@ -70,80 +70,69 @@ fn backends(
     if selects(unibind_core::Backend::Ex) {
         glue.extend(backend_ex(interface, module, selected.is_some())?);
     }
+    if selects(unibind_core::Backend::Jvm) {
+        glue.extend(backend_jvm(interface, module, selected.is_some())?);
+    }
     Ok(glue)
 }
 
-#[cfg(feature = "py")]
-fn backend_py(
-    interface: &unibind_core::ir::Interface,
-    module: &mut syn::ItemMod,
-    _explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    let rendered = unibind_backend_py::render(interface).map_err(|error| LowerError {
-        span: proc_macro2::Span::call_site(),
-        message: error.message,
-    })?;
-    splice_record_attrs(
-        interface,
-        module,
-        rendered.records.iter().map(|record| RecordAttrs {
-            outer: &record.outer,
-            fields: &record.fields,
-        }),
-    );
-    Ok(rendered.glue)
+macro_rules! enabled_backend {
+    ($name:ident, $feature:literal, $render:path) => {
+        #[cfg(feature = $feature)]
+        fn $name(
+            interface: &unibind_core::ir::Interface,
+            module: &mut syn::ItemMod,
+            _explicit: bool,
+        ) -> Result<TokenStream, LowerError> {
+            let rendered = ($render)(interface).map_err(|error| LowerError {
+                span: proc_macro2::Span::call_site(),
+                message: error.message,
+            })?;
+            splice_record_attrs(
+                interface,
+                module,
+                rendered.records.iter().map(|record| RecordAttrs {
+                    outer: &record.outer,
+                    fields: &record.fields,
+                }),
+            );
+            Ok(rendered.glue)
+        }
+    };
 }
 
-#[cfg(not(feature = "py"))]
-fn backend_py(
-    _interface: &unibind_core::ir::Interface,
-    _module: &mut syn::ItemMod,
-    explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    if explicit {
-        return Err(LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: "backends(py) needs the `py` cargo feature of unibind".to_owned(),
-        });
-    }
-    Ok(TokenStream::new())
+macro_rules! disabled_backend {
+    ($name:ident, $feature:literal) => {
+        #[cfg(not(feature = $feature))]
+        fn $name(
+            _interface: &unibind_core::ir::Interface,
+            _module: &mut syn::ItemMod,
+            explicit: bool,
+        ) -> Result<TokenStream, LowerError> {
+            if explicit {
+                return Err(LowerError {
+                    span: proc_macro2::Span::call_site(),
+                    message: concat!(
+                        "backends(",
+                        $feature,
+                        ") needs the `",
+                        $feature,
+                        "` cargo feature of unibind"
+                    )
+                    .to_owned(),
+                });
+            }
+            Ok(TokenStream::new())
+        }
+    };
 }
 
-#[cfg(feature = "ts")]
-fn backend_ts(
-    interface: &unibind_core::ir::Interface,
-    module: &mut syn::ItemMod,
-    _explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    let rendered = unibind_backend_ts::render(interface).map_err(|error| LowerError {
-        span: proc_macro2::Span::call_site(),
-        message: error.message,
-    })?;
-    splice_record_attrs(
-        interface,
-        module,
-        rendered.records.iter().map(|record| RecordAttrs {
-            outer: &record.outer,
-            fields: &record.fields,
-        }),
-    );
-    Ok(rendered.glue)
-}
-
-#[cfg(not(feature = "ts"))]
-fn backend_ts(
-    _interface: &unibind_core::ir::Interface,
-    _module: &mut syn::ItemMod,
-    explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    if explicit {
-        return Err(LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: "backends(ts) needs the `ts` cargo feature of unibind".to_owned(),
-        });
-    }
-    Ok(TokenStream::new())
-}
+enabled_backend!(backend_py, "py", unibind_backend_py::render);
+disabled_backend!(backend_py, "py");
+enabled_backend!(backend_ts, "ts", unibind_backend_ts::render);
+disabled_backend!(backend_ts, "ts");
+enabled_backend!(backend_jvm, "jvm", unibind_backend_jvm::render);
+disabled_backend!(backend_jvm, "jvm");
 
 #[cfg(feature = "ex")]
 fn backend_ex(
@@ -173,24 +162,11 @@ fn backend_ex(
     Ok(rendered.glue)
 }
 
-#[cfg(not(feature = "ex"))]
-fn backend_ex(
-    _interface: &unibind_core::ir::Interface,
-    _module: &mut syn::ItemMod,
-    explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    if explicit {
-        return Err(LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: "backends(ex) needs the `ex` cargo feature of unibind".to_owned(),
-        });
-    }
-    Ok(TokenStream::new())
-}
+disabled_backend!(backend_ex, "ex");
 
 /// One record's backend-rendered attributes, index-aligned with the
 /// record's fields.
-#[cfg(any(feature = "py", feature = "ts", feature = "ex"))]
+#[cfg(any(feature = "py", feature = "ts", feature = "ex", feature = "jvm"))]
 struct RecordAttrs<'a> {
     outer: &'a [syn::Attribute],
     fields: &'a [Vec<syn::Attribute>],
@@ -200,7 +176,7 @@ struct RecordAttrs<'a> {
 /// `#[derive(NifStruct)]`-shaped attributes to the record structs the IR
 /// was lowered from. Records and rendered attribute sets are index-aligned
 /// by construction.
-#[cfg(any(feature = "py", feature = "ts", feature = "ex"))]
+#[cfg(any(feature = "py", feature = "ts", feature = "ex", feature = "jvm"))]
 fn splice_record_attrs<'a>(
     interface: &unibind_core::ir::Interface,
     module: &mut syn::ItemMod,

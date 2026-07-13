@@ -114,11 +114,26 @@
     };
 
     # Upstream openai/codex, patched in-repo (packages/agent/codex/patches).
-    # Pinned at the merge-base of the old fork branch; `nix flake update
-    # codex-src` bumps the base and `nix run .#rebase-patches -- codex`
-    # regenerates the series.
+    # Pinned BY REV: importCargoLock removes the aggregate cargoHash, but git
+    # dependencies still carry fixed output hashes in the package. A
+    # branch-loose URL lets a blanket `nix flake update` float the source past
+    # those hashes, which broke every ix prod deploy for 13h on 2026-07-07.
+    # Bump this rev deliberately, run `nix run .#rebase-patches -- codex`, then
+    # build Codex and refresh any git dependency hashes named by Nix. The
+    # scheduled content and fork updaters intentionally leave this input alone.
     codex-src = {
-      url = "github:openai/codex";
+      url = "github:openai/codex/1f0566d3f59298d1bb88820a0d35294f1eeb07ea";
+      flake = false;
+    };
+
+    # The maintained fork is the application source. Its own flake owns the
+    # Rust lock, toolchain, and platform build.
+    zed-src.url = "github:indexable-inc/zed/ix-patched";
+
+    # Unmodified upstream base for validating and regenerating the patch series
+    # that produces zed-src's ix-patched branch.
+    zed-upstream = {
+      url = "github:zed-industries/zed/v1.10.x";
       flake = false;
     };
 
@@ -143,6 +158,14 @@
     # (macOS disk IO sorting, cwd detail box) onto the new tail.
     btop-src = {
       url = "github:aristocratos/btop";
+      flake = false;
+    };
+
+    # Upstream nushell/nushell, patched in-repo (packages/nushell/patches).
+    # Tracks upstream main (autoUpdate = true in lib/fork-packages.nix): the
+    # scheduled fork-sync bumps nushell-src and rebases the xattr patch.
+    nushell-src = {
+      url = "github:nushell/nushell";
       flake = false;
     };
 
@@ -209,13 +232,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # TODO: re-add the `symphony` flake input that provided
-    # `pkgs.symphony-room-server`. room-server's real home is the ix monorepo
-    # (`crates/room`, `ix#packages.x86_64-linux.room-server`), but ix already
-    # inputs index (`ix/flake.nix`), so index cannot source it from ix without a
-    # circular flake dependency. Pin removed for now; re-add once that cycle is
-    # resolved or room-server moves into this repo.
-
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
     # `packages/tui/vt/libghostty-vt` owns the build. Pinned to the commit the
     # local clone validated against; `requireZig` in `build.zig.zon` is exact
@@ -259,6 +275,7 @@
     home-manager,
     hermes-agent,
     btop-src,
+    nushell-src,
     drgn-src,
     perftest-src,
     pg-uint128-src,
@@ -268,6 +285,8 @@
     snix-src,
     clippy-src,
     codex-src,
+    zed-src,
+    zed-upstream,
     nix-src,
     ghostty,
     mesa-src,
@@ -346,6 +365,7 @@
         home-manager
         hermes-agent
         btop-src
+        nushell-src
         drgn-src
         perftest-src
         fff-src
@@ -354,6 +374,8 @@
         snix-src
         clippy-src
         codex-src
+        zed-src
+        zed-upstream
         nix-src
         ghostty
         mesa-src
@@ -363,7 +385,6 @@
       "x86_64-linux"
       "aarch64-linux"
       "aarch64-darwin"
-      "x86_64-darwin"
     ];
     perSystem = lib.genAttrs devSystems (
       system:
@@ -380,21 +401,122 @@
     );
     collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
     linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or {};
-    # Graft the Linux->Darwin cross aliases over a collected per-system set, so
+    # Graft the Linux-to-Darwin cross aliases over a collected per-system set so
     # a Darwin namespace resolves an aliased attr to the cross-compiled
     # x86_64-linux derivation instead of a native rebuild. Applied to both
     # `packages` (the consumer surface) and `cachePushRoots` (what
-    # cache-push.yml publishes): the darwin cache lane realises the post-alias
+    # cache-push.yml publishes): the Darwin cache lane realises the post-alias
     # set filtered to native aarch64-darwin drvs, so an alias-shadowed native
-    # variant (e.g. dag-runner) is neither built nor published -- consumers can
+    # variant (e.g. dag-runner) is neither built nor published. Consumers can
     # never install it (#1890).
     withDarwinAliases = raw:
       raw
       // lib.genAttrs [
         "aarch64-darwin"
-        "x86_64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     packages = withDarwinAliases (collect "packages");
+    rawSecurityRoots = collect "securityRoots";
+    rawSecurityRootPaths = collect "securityRootPaths";
+    securityRoots =
+      rawSecurityRoots
+      // {
+        aarch64-darwin =
+          rawSecurityRoots.aarch64-darwin
+          // lib.mapAttrs (
+            name: _:
+              (rawSecurityRoots.aarch64-darwin.${name} or rawSecurityRoots.x86_64-linux.${name})
+              // {
+                attr = "packages.aarch64-darwin.${name}";
+              }
+          )
+          (linuxDarwinAliases.aarch64-darwin or {});
+      };
+    securityRootPaths =
+      rawSecurityRootPaths
+      // {
+        aarch64-darwin =
+          rawSecurityRootPaths.aarch64-darwin
+          // (linuxDarwinAliases.aarch64-darwin or {});
+      };
+    indexPackages = system: packages.${system};
+    personalConfigRoot = ./users/andrewgazelka/config;
+    personalOptionsModule = ./users/andrewgazelka/options.nix;
+    mutableFilesHomeModule = import ./modules/home/mutable-files.nix {
+      inherit indexPackages;
+      portableServicesModule = ix.portableServices.homeModule;
+    };
+    # One instance shared by every wiring site (the workstation profile and
+    # homeModules.provenance); the module's `key` also dedups the instances a
+    # consumer combines, but there is no reason to make them re-apply the
+    # walker.
+    provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+    claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
+      inherit indexPackages;
+      promptModule = ./packages/agent/prompt;
+    };
+    codexHomeModule = import ./packages/agent/home-manager/codex.nix {
+      inherit indexPackages;
+      promptModule = ./packages/agent/prompt;
+    };
+    personalServicesModule = import ./users/andrewgazelka/home.nix {
+      inherit indexPackages ix;
+      claudeCodeModule = claudeCodeHomeModule;
+      portableServicesModule = ix.portableServices.homeModule;
+    };
+    symphonyHomeModule = import ./packages/agent/symphony/home-module.nix {
+      inherit indexPackages ix;
+      portableServicesModule = ix.portableServices.homeModule;
+      beamvmModule = import ./packages/beamvm/home-module.nix {
+        inherit indexPackages ix;
+        portableServicesModule = ix.portableServices.homeModule;
+      };
+    };
+    personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
+      inherit indexPackages personalServicesModule ix;
+      codexModule = codexHomeModule;
+      configRoot = personalConfigRoot;
+      mutableFilesModule = mutableFilesHomeModule;
+      provenanceModule = provenanceHomeModule;
+      optionsModule = personalOptionsModule;
+      indexSkillsSrc = paths.skills;
+      tmuxModule = ./modules/home/tmux.nix;
+    };
+    personalDarwinHomeModule = import ./users/andrewgazelka/profiles/darwin-home.nix {
+      inherit indexPackages ix;
+      configRoot = personalConfigRoot;
+      ghosttyModule = ./users/andrewgazelka/config/home/ghostty.nix;
+      raycastModule = ./modules/home/raycast.nix;
+      optionsModule = personalOptionsModule;
+      symphonyModule = symphonyHomeModule;
+    };
+    personalLightProfile = system:
+      home-manager.lib.homeManagerConfiguration {
+        pkgs = import nixpkgs {
+          inherit system;
+          config = {};
+        };
+        extraSpecialArgs = {
+          inputs = throw "light personal profiles must not access consumer inputs";
+          self = throw "light personal profiles must not access the consuming flake";
+          indexPackages = throw "light personal profiles must not access index packages";
+        };
+        modules = [
+          ./users/andrewgazelka/profiles/portable.nix
+          (import ./users/andrewgazelka/profiles/development.nix {
+            agentLua = ./modules/profiles/base/nvim/agent.lua;
+            configRoot = personalConfigRoot;
+          })
+          {
+            home = {
+              username = "profile-test";
+              homeDirectory =
+                if lib.hasSuffix "darwin" system
+                then "/Users/profile-test"
+                else "/home/profile-test";
+            };
+          }
+        ];
+      };
   in {
     lib = ix;
     inherit (ix) nixosModules;
@@ -405,41 +527,99 @@
       # services); import it from a darwin host to get the casks merged in. See
       # users/andrewgazelka/darwin.nix.
       andrewgazelka = ./users/andrewgazelka/darwin.nix;
+      # Per-generation provenance manifest for nix-darwin: bake deployed-path
+      # -> defining nix file:line backlinks (provenance.json) into the system
+      # closure so `whence </etc/...>` answers from /run/current-system with
+      # zero eval. Set `provenance.rev = self.rev or self.dirtyRev or null`
+      # in the consuming flake. See modules/darwin/provenance.nix.
+      provenance = import ./modules/darwin/provenance.nix {inherit (ix) provenance;};
+      # System-level (root, /etc) adapter for declarative-but-writable files:
+      # same model as homeModules.mutable-files, state under
+      # /var/db/index-delta, boot-time reseed daemon. See
+      # modules/darwin/mutable-files.nix.
+      mutable-files = import ./modules/darwin/mutable-files.nix {
+        indexPackages = system: packages.${system};
+      };
+      # Declarative NFS automounts via macOS autofs: each entry renders a
+      # direct-map line, /etc/auto_master gains the include idempotently, and
+      # activation reloads automountd. See modules/darwin/nfs.nix.
+      nfs = ./modules/darwin/nfs.nix;
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a
       # native launchd agent on macOS and native systemd user units on Linux.
       portable-services = ix.portableServices.homeModule;
+      tmux = ./modules/home/tmux.nix;
+      # Shared modern-CLI package baseline (bat, delta, eza, fd, ripgrep, ...).
+      # Import it and set `cliBaseline.enable = true`; override
+      # `cliBaseline.packages` to trim or swap tools. See
+      # modules/home/cli-baseline.nix.
+      cli-baseline = ./modules/home/cli-baseline.nix;
+      # Per-project nvim-server multiplexer (tmux replacement): one headless
+      # nvim server per git root, `mux` attaches with --remote-ui, and the
+      # optional zsh integration makes bare `ssh <host>`/`mosh <host>`
+      # auto-attach the remote's mux. Import it and set
+      # `programs.mux.enable = true`; needs an nvim config shipping a `mux`
+      # lua module. See modules/home/mux.nix.
+      mux = import ./modules/home/mux.nix {inherit ix;};
+      # XDG hygiene: point tool state/caches/config (cargo, go, npm/pnpm,
+      # python, docker, aws, psql/sqlite histories, wget/less) at the XDG
+      # base directories instead of $HOME. Import it and set
+      # `xdgTidy.enable = true`. See modules/home/xdg-tidy.nix.
+      xdg-tidy = ./modules/home/xdg-tidy.nix;
+      # Cursor-shape feedback for zsh vi mode (beam insert, block command,
+      # reset around every prompt/command). Import it and set
+      # `zshViCursor.enable = true`. See modules/home/zsh-vi-cursor.nix.
+      zsh-vi-cursor = ./modules/home/zsh-vi-cursor.nix;
       # Declarative-but-writable JSON config files (last-applied 3-way merge),
       # for config an app rewrites at runtime. See lib/mutable-json.nix.
+      # Prefer `mutable-files` below for new config: it never auto-merges,
+      # covers more formats, and queues drift for explicit resolution.
       mutable-json = ix.mutableJson.homeModule;
+      # Declarative-but-writable files with logical (format-aware) drift
+      # tracking and a model-oriented resolution queue — no auto-merge.
+      # Declared content seeds a plain writable file; ephemeral files reset
+      # at login (drift journaled), durable files queue base-vs-drift
+      # conflicts in `index-delta status --json` for discard / adopt /
+      # absorb-into-Nix via `index-delta apply-ops`. See
+      # modules/home/mutable-files.nix and packages/index-delta.
+      mutable-files = mutableFilesHomeModule;
       # Reusable workstation module (macOS): declare Raycast Focus session
       # defaults (title, filter mode, duration) and have them written to the
       # com.raycast.macos defaults domain at switch time. Import it and set
       # `programs.raycast.focus = { enable = true; ... }`. See
       # modules/home/raycast.nix.
       raycast = ./modules/home/raycast.nix;
+      # Per-generation provenance manifest: every home-manager generation
+      # carries provenance.json mapping deployed files back to the nix
+      # file:line that defined them, and `whence <path>` reads it with zero
+      # eval. Set `provenance.rev = self.rev or self.dirtyRev or null` in
+      # the consuming flake. See modules/home/provenance.nix.
+      provenance = provenanceHomeModule;
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
-      claude-code = import ./packages/agent/home-manager/claude-code.nix {
-        indexPackages = system: packages.${system};
-      };
-      codex = import ./packages/agent/home-manager/codex.nix {
-        indexPackages = system: packages.${system};
-      };
+      claude-code = claudeCodeHomeModule;
+      codex = codexHomeModule;
       # Personal-but-shareable workstation module for github:andrewgazelka: the
       # ix.dev downtime watcher + boss bar overlay + the shared say-detached
       # sound helper, all as portable services. Closed over the per-system
       # flake packages so it resolves bossbar / minecraft-sound for the host it
       # runs on. See users/andrewgazelka/home.nix.
-      andrewgazelka = import ./users/andrewgazelka/home.nix {
-        indexPackages = system: packages.${system};
-        portableServicesModule = ix.portableServices.homeModule;
-        claudeCodeModule = import ./packages/agent/home-manager/claude-code.nix {
-          indexPackages = system: packages.${system};
-        };
-        inherit ix;
+      andrewgazelka-portable = ./users/andrewgazelka/profiles/portable.nix;
+      andrewgazelka-development = import ./users/andrewgazelka/profiles/development.nix {
+        agentLua = ./modules/profiles/base/nvim/agent.lua;
+        configRoot = personalConfigRoot;
       };
+      andrewgazelka-workstation = personalWorkstationModule;
+      andrewgazelka-darwin = personalDarwinHomeModule;
+      # Personal-but-shareable server module for github:harivansh-afk: the
+      # dotfiles hari runs as the `hari` user on hari-compute-1 (zsh, git,
+      # neovim plus the mux nvim multiplexer, and the CLI tool set around
+      # them), ported from his personal nix repo. Consumes the shared
+      # cli-baseline, mux, xdg-tidy, and zsh-vi-cursor modules above; the
+      # source repo's secrets/theme machinery is deliberately absent. See
+      # users/harivansh-afk/home.nix.
+      harivansh-afk = import ./users/harivansh-afk/home.nix {inherit ix;};
       # Reusable workstation module: draw one Minecraft boss bar per in-flight
       # GitHub Actions run across a set of repos (green = running, filled by
       # elapsed / average duration; purple = queued/unpicked). Import it and set
@@ -465,20 +645,7 @@
       # by composing portable-services. Mirrors the NixOS module's option
       # vocabulary; point `packDir` at a mutable checkout for hot-reloaded
       # workflows and skills. See packages/agent/symphony/home-module.nix.
-      symphony = import ./packages/agent/symphony/home-module.nix {
-        indexPackages = system: packages.${system};
-        portableServicesModule = ix.portableServices.homeModule;
-        # The beamvm runtime (services.symphony.runtime = "beamvm", the
-        # default) hosts the compiled release in the persistent VM; the
-        # module composes it directly so importing homeModules.symphony
-        # alone is enough.
-        beamvmModule = import ./packages/beamvm/home-module.nix {
-          indexPackages = system: packages.${system};
-          portableServicesModule = ix.portableServices.homeModule;
-          inherit ix;
-        };
-        inherit ix;
-      };
+      symphony = symphonyHomeModule;
       # Workstation-facing module: persistent BEAM VMs as user services with
       # the OTP applications they host declared in Nix. Updating an app
       # hot-swaps its code in the running VM (no restart, no dropped
@@ -493,7 +660,13 @@
     overlays.default = ix.overlay;
     templates = {};
     inherit packages;
-    checks = collect "checks";
+    checks = lib.mapAttrs (
+      system: systemChecks:
+        systemChecks
+        // {
+          personal-light-profile = (personalLightProfile system).activationPackage;
+        }
+    ) (collect "checks");
     # Sharded keying of the same check derivations for the memory-bounded CI
     # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
     # (ENG-2201). Kept separate from `checks` because its per-package
@@ -518,6 +691,12 @@
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
     # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
     cachePushRoots = withDarwinAliases (collect "cachePushRoots");
+    # Typed security exposure roots consumed as JSON by the runtime DAG scanner.
+    # Unlike cachePushRoots, every entry carries policy metadata and names only
+    # a shipped runtime output or an example service closure. securityRootPaths
+    # carries the derivations separately so callers realize terminal store paths
+    # instead of trusting content-addressed placeholders from evaluation.
+    inherit securityRoots securityRootPaths;
     formatter = collect "formatter";
     apps = collect "apps";
     devShells = collect "devShells";

@@ -7,8 +7,8 @@
 # did from the standalone flake's `packages.default`.
 #
 # The room stack symphony drives over HTTP (room-server and the room UI)
-# lives in the ix monorepo. TODO: re-add the `room-server` binary once the
-# ix<->index flake cycle is resolved. Only the runtime moved here.
+# lives in the ix monorepo (`crates/room`, `packages/room`). Index
+# intentionally packages only the Elixir runtime, not room-server.
 {
   lib,
   pkgs,
@@ -55,7 +55,7 @@
     };
     inherit elixir;
     mixEnv = "test";
-    inherit (pins."mix-deps") hash;
+    inherit (pins.mix-deps) hash;
   };
 
   # mix.lock pins lazy_html (a C++ NIF over lexbor) as a test-only dep for
@@ -65,7 +65,7 @@
   # with the upstream release tarball; elixir_make still verifies it against
   # the checksum.exs pinned inside the dep before unpacking. Refresh the
   # url/hash in pins.json when a mix.lock bump moves lazy_html.
-  lazyHtmlNif = pkgs.fetchurl {inherit (pins."lazy-html-nif") url hash;};
+  lazyHtmlNif = pkgs.fetchurl {inherit (pins.lazy-html-nif) url hash;};
 
   # The required quality lane the standalone repo ran per PR (make ci:
   # compile --warnings-as-errors, format --check-formatted, credo, test),
@@ -126,7 +126,7 @@
     };
     inherit elixir;
     mixEnv = "prod";
-    inherit (pins."mix-deps-prod") hash;
+    inherit (pins.mix-deps-prod) hash;
     __darwinAllowLocalNetworking = true;
   };
 

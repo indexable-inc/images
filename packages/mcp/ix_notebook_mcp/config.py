@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import stat
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,32 @@ def is_tailnet_ipv4(value: str) -> bool:
 # (ix_notebook_mcp.mesh) and the bundled `mesh` module's peer probes both read
 # it through :func:`mesh_port`, so the two sides cannot drift.
 DEFAULT_MESH_PORT = 8798
+
+
+def process_cwd() -> Path:
+    """The process working directory, self-healing a deleted one (index#2120).
+
+    A long-lived kernel can have its cwd removed under it (e.g. an auto-cleaned
+    ``.claude`` worktree a cell had ``os.chdir``'d into). From then on
+    ``Path.cwd()`` raises ``FileNotFoundError`` -- and because the per-cell type
+    checker resolves the cwd BEFORE user code runs, every subsequent cell
+    (including a repair ``os.chdir``) dies on that traceback until the server is
+    restarted. Every per-call cwd read goes through here instead: on a vanished
+    cwd the process moves itself to ``$HOME``, says so loudly on stderr (which
+    reaches journald), and carries on. One recovery, one warning; any other
+    error still propagates.
+    """
+    try:
+        return Path.cwd()
+    except FileNotFoundError:
+        home = Path.home()
+        os.chdir(home)
+        print(
+            f"[ix-mcp] working directory vanished (deleted under the process); moved to {home}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return home
 
 
 def mesh_port() -> int:
@@ -170,6 +197,11 @@ class Config:
     # restore (load the checkpoint, replay the gap) before running new cells.
     session_resume: bool = False
 
+    # Where the kernel process runs: "local" (a direct child of this serve, the
+    # default) or "ray" (a KernelActor on the fleet's Ray cluster, one per
+    # serve; see kernel_host.py). Wired from the IX_MCP_KERNEL env var by the CLI.
+    kernel_host: str = "local"
+
     # This machine's tailscale IPv4, resolved once by the CLI, or None when
     # tailscale is absent or its backend is down. The `/mesh` endpoint binds
     # ONLY this address (index#1787): the tailnet is the trust boundary, and
@@ -185,6 +217,18 @@ class Config:
     # (issue #2165). "" (an embedder without the CLI) disables addressing --
     # every event is then a broadcast, the pre-#2165 behavior.
     server_session_id: str = ""
+
+    # Where the transport pump delivers channel outbox events. "client" (the
+    # default) emits notifications/claude/channel on the MCP transport, waking
+    # the connected client session. "weave-chat" instead posts each event as a
+    # chat message to the Weave agent (POST {WEAVE_URL}/api/chat, addressed to
+    # IX_WEAVE_AGENT): a Weave-driven Claude session must never be woken
+    # out-of-band (its turns are Weave-initiated; a self-woken turn's hook
+    # callbacks are rejected 401 and its work never reaches the journal), so
+    # Weave opens a normal run for the message and prompts the session itself.
+    # Sourced from IX_MCP_CHANNEL_DELIVERY by the CLI; Weave sets it in the
+    # env of every session it spawns (weave session_env).
+    channel_delivery: str = "client"
 
     # "stdio" (the default; what an MCP client launches), "http", or "none"
     # (the standalone notebook engine: kernel + dashboard, no MCP transport).

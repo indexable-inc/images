@@ -255,6 +255,40 @@
 (lint no-empty-list-concat error
   "`[ ] ++ X` and `X ++ [ ]` are no-ops; drop the empty operand")
 
+;; no-escapeshellargs-for-loop: `for <var> in ${lib.escapeShellArgs xs}` in a
+;; nix-rendered bash string iterates a word list that is nix-computed, so when
+;; the list dedups/filters to a single element the loop renders as
+;; `for v in one-word`, which shellcheck flags SC2043 ("loop only runs once")
+;; and `writeBashApplication` treats as a fatal build error. This surfaces only
+;; when the toplevel is built (deploy job), never in PR CI, so a single-element
+;; render turns main red after merge (ix#6688). Materialize the list into a bash
+;; array and iterate it: `xs=(${lib.escapeShellArgs xs}); for v in "''${xs[@]}"`
+;; renders zero, one, or many elements uniformly and never trips SC2043. The
+;; preceding string fragment is the `... for <var> in ` text; the interpolation
+;; is the escapeShellArgs call.
+(rule (no-escapeshellargs-for-loop n frag f)
+  (match nix "
+    (string_expression
+      (string_fragment) @frag
+      .
+      (interpolation
+        expression: (apply_expression
+          function: [(variable_expression) (select_expression)] @f)) @n)")
+  (text-match f "^(lib\\.)?escapeShellArgs$")
+  (text-match frag "(^|[^A-Za-z0-9_])for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]*$"))
+(rule (no-escapeshellargs-for-loop n frag f)
+  (match nix "
+    (indented_string_expression
+      (string_fragment) @frag
+      .
+      (interpolation
+        expression: (apply_expression
+          function: [(variable_expression) (select_expression)] @f)) @n)")
+  (text-match f "^(lib\\.)?escapeShellArgs$")
+  (text-match frag "(^|[^A-Za-z0-9_])for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]*$"))
+(lint no-escapeshellargs-for-loop error
+  "`for <var> in ${{lib.escapeShellArgs xs}}` trips shellcheck SC2043 when the nix-computed list renders single-element, failing writeBashApplication only at deploy time; materialize a bash array (`xs=(${{lib.escapeShellArgs xs}}); for v in \"${{xs[@]}}\"`) so zero/one/many elements iterate uniformly")
+
 ;; no-fake-hash: Fake hashes are banned. Compute the real SRI hash before
 ;; editing tracked Nix files.
 (rule (no-fake-hash n)
@@ -659,6 +693,22 @@
   (text-match n "^(lib\\.)?types\\.unspecified$"))
 (lint no-types-unspecified error
   "`types.unspecified` accepts anything, including bottom; use a real type or `attrsOf <type>` / `oneOf [ ... ]`")
+
+;; prefer-bare-attr-name: quoted attribute names that are valid Nix
+;; identifiers are JSON-shaped noise. The full string check excludes escapes and
+;; interpolation; reserved words still require quotes in an attribute path.
+(rule (nix-reserved-attr-name name)
+  (match nix "(string_fragment) @name")
+  (text-match name "^(assert|else|if|in|inherit|let|rec|then|with)$"))
+(rule (prefer-bare-attr-name quoted name)
+  (match nix "(attrpath (string_expression (string_fragment) @name) @quoted)")
+  (text-match quoted "^\"[A-Za-z_][A-Za-z0-9_'-]*\"$")
+  (text-match name "^[A-Za-z_][A-Za-z0-9_'-]*$")
+  (not (nix-reserved-attr-name name)))
+(rewrite unquote-bare-attr-name (prefer-bare-attr-name quoted name)
+  (replace quoted "{name}"))
+(lint prefer-bare-attr-name error
+  "attribute name `{name}` is a valid bare identifier; remove the unnecessary quotes")
 
 ;; no-unquoted-splice: `legacyPackages.${system}` interpolates outside a
 ;; string. Prefer `import nixpkgs { inherit system; }` to get a package set;
@@ -1525,3 +1575,41 @@
   (text-match v "\\./configure\\b"))
 (lint prefer-phase-flags error
   "a whole-phase override carrying custom targets/flags should be `makeFlags` / `buildFlags` / `configureFlags` / `installTargets`")
+
+;; Digit grouping in numeric literals (Rust convention): a literal with five
+;; or more consecutive digits is read by counting digits; group them in
+;; threes with underscore separators (`10_000`, `0.000_001`), grouping the
+;; integer part and the exponent from the right and the fraction from the
+;; left of the decimal point. The toolchain speaks this dialect end to end:
+;; the patched nix lexer
+;; (packages/nix/nix/patches/0014-libexpr-accept-underscore-digit-separators)
+;; strips the separators before parsing the value, and the in-repo
+;; tree-sitter-nix fork (packages/code/tree-sitter-nix) lexes an underscore
+;; literal as one integer/float node, so these rules see whole literals.
+;; Two lints share the misgrouped-digits builtin (which binds the canonical
+;; regrouping), each with a rewrite so `astlog fix` repairs the literal:
+;; - no-misgrouped-digit-separators (error): a literal that already carries
+;;   separators must use exactly the canonical grouping (`1_0000` ->
+;;   `10_000`).
+;; - prefer-digit-grouping (error): a bare literal with five or more
+;;   consecutive digits must carry separators (`10000` -> `10_000`). The
+;;   whole CI toolchain speaks the dialect (patched nix client + evaluator,
+;;   rnix-patched alejandra/statix/deadnix, the tree-sitter fork), so the
+;;   repo's literals are grouped and the gate holds the line.
+(rule (misgrouped-number n fixed)
+  (match nix "[(integer_expression) (float_expression)] @n")
+  (misgrouped-digits n fixed))
+(rule (no-misgrouped-digit-separators n fixed)
+  (misgrouped-number n fixed)
+  (text-match n "_"))
+(lint no-misgrouped-digit-separators error
+  "underscore separators must group digits in threes (integer part and exponent from the right, fraction from the left); write `{fixed}`")
+(rewrite regroup-digit-separators (no-misgrouped-digit-separators n fixed)
+  (replace n "{fixed}"))
+(rule (prefer-digit-grouping n fixed)
+  (misgrouped-number n fixed)
+  (text-match n "^[^_]*$"))
+(lint prefer-digit-grouping error
+  "five or more consecutive digits are read by counting; group them in threes with underscore separators: `{fixed}`")
+(rewrite group-digit-literal (prefer-digit-grouping n fixed)
+  (replace n "{fixed}"))

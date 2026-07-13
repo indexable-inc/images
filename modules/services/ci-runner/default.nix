@@ -101,10 +101,15 @@ in {
       extra-experimental-features = [
         "nix-command"
         "flakes"
+        # Repo-owned Rust units are floating content-addressed derivations. This
+        # is a daemon protocol capability, not something a workflow-side
+        # NIX_CONFIG can add for an untrusted runner user.
+        "ca-derivations"
       ];
-      # Consume the repo flake's nixConfig substituters without the interactive
-      # prompt; `nix flake check` otherwise stalls waiting for confirmation.
-      accept-flake-config = true;
+      # The daemon owns the same cache and key below. Runner users are
+      # untrusted, so consuming the flake's restricted copies only emits
+      # ignored-setting warnings and cannot change daemon policy.
+      accept-flake-config = false;
       extra-substituters = ["https://cache.ix.dev"];
       extra-trusted-public-keys = [
         "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="

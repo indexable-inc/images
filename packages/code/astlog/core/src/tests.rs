@@ -47,6 +47,23 @@ fn write_sample(dir: &tempfile::TempDir, name: &str, content: &str) -> TestResul
     Ok(())
 }
 
+fn only_node_text(
+    name: &str,
+    source: &str,
+    rules: &str,
+    relation: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    write_sample(&dir, name, source)?;
+    let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
+    let rows = analysis.database.relations[relation].rows();
+    assert_eq!(rows.len(), 1, "{relation} should contain exactly one row");
+    let Value::Node(node) = &rows[0][0] else {
+        return Err(format!("{relation} column 0 should be a node").into());
+    };
+    Ok(analysis.corpus.node_text(*node).to_owned())
+}
+
 #[test]
 fn unwrap_join_finds_only_result_functions() -> TestResult {
     let dir = tempfile::tempdir()?;
@@ -57,7 +74,11 @@ fn unwrap_join_finds_only_result_functions() -> TestResult {
     assert_eq!(unwrap_calls.rows().len(), 2, "both unwrap sites match");
 
     let fixable = &analysis.database.relations["fixable"];
-    assert_eq!(fixable.rows().len(), 1, "only the Result-returning fn joins");
+    assert_eq!(
+        fixable.rows().len(),
+        1,
+        "only the Result-returning fn joins"
+    );
     let Value::Node(call) = &fixable.rows()[0][0] else {
         return Err("fixable column 0 should be a node".into());
     };
@@ -255,37 +276,25 @@ fn text_match_pattern_must_be_a_literal() {
 }
 
 #[test]
-fn no_descendant_requires_kind_and_text_absence() -> TestResult {
-    // Two functions: one calls danger(), one does not. `no-descendant`
-    // keeps only the function whose subtree has no `danger` identifier.
-    let source = "
+fn node_query_predicates_select_expected_source() -> TestResult {
+    let cases = [
+        (
+            "sample.rs",
+            "
 fn clean() { safe(); }
 fn dirty() { danger(); }
-";
-    let rules = r#"
+",
+            r#"
 (rule (danger-free f)
   (match rust "(function_item) @f")
   (no-descendant f "identifier" "danger"))
-"#;
-    let dir = tempfile::tempdir()?;
-    write_sample(&dir, "sample.rs", source)?;
-    let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
-    let rows = analysis.database.relations["danger-free"].rows();
-    assert_eq!(rows.len(), 1, "only the clean function qualifies");
-    let Value::Node(node) = &rows[0][0] else {
-        return Err("danger-free column 0 should be a node".into());
-    };
-    assert!(analysis.corpus.node_text(*node).contains("clean"));
-    Ok(())
-}
-
-#[test]
-fn attached_sibling_scans_the_annotation_block() -> TestResult {
-    // `attached-sibling` searches the annotation block directly above each def
-    // (preceding siblings up to the previous def), so a `@spec` counts even with a
-    // `@doc` or comment between it and the def. `(not (attached-sibling ...))`
-    // then keeps only the def with no `@spec` in its block.
-    let source = "
+"#,
+            "danger-free",
+            "clean",
+        ),
+        (
+            "sample.ex",
+            "
 defmodule Demo do
   @spec documented() :: :ok
   def documented(), do: :ok
@@ -300,33 +309,18 @@ defmodule Demo do
 
   def undocumented(), do: :ok
 end
-";
-    let rules = r#"
+",
+            r#"
 (rule (a-def c) (match elixir "(call (identifier) @i) @c") (text i "def"))
 (rule (spec-attached c) (a-def c) (attached-sibling c "identifier" "spec"))
 (rule (undocumented-def c) (a-def c) (not (spec-attached c)))
-"#;
-    let dir = tempfile::tempdir()?;
-    write_sample(&dir, "sample.ex", source)?;
-    let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
-    let rows = analysis.database.relations["undocumented-def"].rows();
-    assert_eq!(
-        rows.len(),
-        1,
-        "only the def with no @spec in its annotation block qualifies"
-    );
-    let Value::Node(node) = &rows[0][0] else {
-        return Err("undocumented-def column 0 should be a node".into());
-    };
-    assert!(analysis.corpus.node_text(*node).contains("undocumented"));
-    Ok(())
-}
-
-#[test]
-fn negation_filters_by_name_join() -> TestResult {
-    // `keep` is a function that defines a spec for its own name; `drop` is spec'd
-    // for a *different* name. A name-matched negation flags only `drop`.
-    let source = "
+"#,
+            "undocumented-def",
+            "undocumented",
+        ),
+        (
+            "sample.ex",
+            "
 defmodule Demo do
   @spec keep(integer()) :: integer()
   def keep(x), do: x
@@ -334,8 +328,8 @@ defmodule Demo do
   @spec other() :: :ok
   def drop(y), do: y
 end
-";
-    let rules = r#"
+",
+            r#"
 (rule (def-name d n)
   (match elixir "(call (identifier) @kw (arguments (call (identifier) @n))) @d")
   (text kw "def"))
@@ -347,69 +341,49 @@ end
   (def-name d n)
   (text n t)
   (not (spec-name t)))
-"#;
-    let dir = tempfile::tempdir()?;
-    write_sample(&dir, "sample.ex", source)?;
-    let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
-    let rows = analysis.database.relations["unspecced"].rows();
-    assert_eq!(rows.len(), 1, "only the def with no same-named @spec qualifies");
-    let Value::Node(node) = &rows[0][0] else {
-        return Err("unspecced column 0 should be a node".into());
-    };
-    assert!(analysis.corpus.node_text(*node).contains("drop"));
+"#,
+            "unspecced",
+            "drop",
+        ),
+    ];
+
+    for (name, source, rules, relation, expected) in cases {
+        let actual = only_node_text(name, source, rules, relation)?;
+        assert!(
+            actual.contains(expected),
+            "{relation} should select source containing {expected:?}, got {actual:?}"
+        );
+    }
     Ok(())
 }
 
 #[test]
-fn unsafe_negation_is_rejected() {
-    // `y` appears only inside the negated atom, with nothing to filter against.
-    let rules = r#"
-(rule (thing x) (match rust "(identifier) @x"))
-(rule (bad x) (match rust "(identifier) @x") (not (thing y)))
-"#;
-    let Err(error) = analyze(rules, &[]) else {
-        panic!("negation over an unbound variable must be rejected");
-    };
-    let message = error.to_string();
-    assert!(
-        message.contains("only inside `(not ...)`"),
-        "expected unsafe-negation error, got: {message}"
-    );
-}
-
-#[test]
-fn negation_before_its_binding_is_rejected() {
-    // `t` is bound by `(text n t)` only AFTER the negation. The evaluator runs
-    // left-to-right, so `t` would be unbound when `(not ...)` runs and bound
-    // existentially per row instead of filtering -- safety must reject it.
-    let rules = r#"
-(rule (named n) (match rust "(identifier) @n"))
+fn unsafe_negation_forms_are_rejected() {
+    let cases = [
+        (
+            "unbound rule variable",
+            r#"(rule (thing x) (match rust "(identifier) @x"))
+(rule (bad x) (match rust "(identifier) @x") (not (thing y)))"#,
+        ),
+        (
+            "binding after negation",
+            r#"(rule (named n) (match rust "(identifier) @n"))
 (rule (other t) (match rust "(identifier) @x") (text x t))
-(rule (bad n) (named n) (not (other t)) (text n t))
-"#;
-    let Err(error) = analyze(rules, &[]) else {
-        panic!("negation before its binding atom must be rejected");
-    };
-    assert!(
-        error.to_string().contains("only inside"),
-        "expected unsafe-negation error, got: {error}"
-    );
-}
-
-#[test]
-fn rewrite_negation_safety_is_checked() {
-    // The same range-restriction applies to rewrite bodies, not just rules.
-    let rules = r#"
-(rule (thing x) (match rust "(identifier) @x"))
-(rewrite r (match rust "(identifier) @x") (not (thing y)) (replace x "z"))
-"#;
-    let Err(error) = analyze(rules, &[]) else {
-        panic!("unbound negation in a rewrite body must be rejected");
-    };
-    assert!(
-        error.to_string().contains("only inside"),
-        "expected unsafe-negation error, got: {error}"
-    );
+(rule (bad n) (named n) (not (other t)) (text n t))"#,
+        ),
+        (
+            "unbound rewrite variable",
+            r#"(rule (thing x) (match rust "(identifier) @x"))
+(rewrite r (match rust "(identifier) @x") (not (thing y)) (replace x "z"))"#,
+        ),
+    ];
+    for (name, rules) in cases {
+        let error = analyze(rules, &[]).expect_err(name);
+        assert!(
+            error.to_string().contains("only inside"),
+            "{name}: expected unsafe-negation error, got {error}"
+        );
+    }
 }
 
 #[test]
@@ -499,9 +473,9 @@ fn scan_emits_located_findings_with_spliced_message() -> TestResult {
     assert_eq!((first.line, first.column), (3, 13));
     assert!(first.end_line == 3 && first.end_column > first.column);
     assert!(
-        findings.windows(2).all(|pair| {
-            (&pair[0].file, pair[0].line) <= (&pair[1].file, pair[1].line)
-        }),
+        findings
+            .windows(2)
+            .all(|pair| { (&pair[0].file, pair[0].line) <= (&pair[1].file, pair[1].line) }),
         "findings are sorted by position"
     );
     Ok(())
@@ -579,7 +553,10 @@ fn f() -> u32 {
     let only = &suppressed[0];
     assert_eq!(only.finding.text, "a().unwrap()");
     assert_eq!(only.finding.line, 3);
-    assert_eq!(only.comment_line, 3, "trailing comment shares the row's line");
+    assert_eq!(
+        only.comment_line, 3,
+        "trailing comment shares the row's line"
+    );
     assert_eq!(
         only.comment_text,
         "// astlog-ignore: unwrap-call (legacy, drop me)"
@@ -674,5 +651,117 @@ fn no_descendant_is_strict() -> TestResult {
     let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
     let rows = analysis.database.relations["ident-without-self"].rows();
     assert_eq!(rows.len(), 1, "the identifier has no matching descendant");
+    Ok(())
+}
+
+#[test]
+fn misgrouped_digits_flags_and_regroups_nix_literals() -> TestResult {
+    // Mirrors the shape of the repo's digit-grouping lints
+    // (astlog-rules/nix.astlog). The workspace's tree-sitter-nix fork lexes
+    // underscore literals as single integer/float nodes (matching the
+    // patched nix lexer), so one literal is one node, one finding, one edit.
+    let source = r#"{
+  ungrouped = 100000;
+  misgrouped = 1_0000;
+  misgroupedFrac = 1_0000.000001;
+  fine = 10_000;
+  short = 1000;
+  frac = 0.000001;
+  fracFine = 1_000.000_1;
+  quoted = "100000";
+}
+"#;
+    let rules = r#"
+(rule (needs-grouping n fixed)
+  (match nix "[(integer_expression) (float_expression)] @n")
+  (misgrouped-digits n fixed))
+(lint needs-grouping error "group digits in threes: `{fixed}`")
+(rewrite regroup (needs-grouping n fixed)
+  (replace n "{fixed}"))
+"#;
+    let dir = tempfile::tempdir()?;
+    write_sample(&dir, "sample.nix", source)?;
+    let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
+
+    let findings = analysis.findings()?;
+    let texts: Vec<(&str, &str)> = findings
+        .iter()
+        .map(|finding| (finding.text.as_str(), finding.message.as_str()))
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            ("100000", "group digits in threes: `100_000`"),
+            ("1_0000", "group digits in threes: `10_000`"),
+            ("1_0000.000001", "group digits in threes: `10_000.000_001`"),
+            ("0.000001", "group digits in threes: `0.000_001`"),
+        ],
+        "one finding per literal, none for grouped/short/string literals"
+    );
+
+    let rewritten = analysis.rewritten();
+    assert_eq!(rewritten.len(), 1);
+    let content = &rewritten[0].content;
+    assert!(content.contains("ungrouped = 100_000;"));
+    assert!(content.contains("misgrouped = 10_000;"));
+    assert!(content.contains("misgroupedFrac = 10_000.000_001;"));
+    assert!(content.contains("frac = 0.000_001;"));
+    assert!(content.contains("fine = 10_000;"), "grouped literal untouched");
+    assert!(content.contains("short = 1000;"), "four digits stay bare");
+    assert!(
+        content.contains("fracFine = 1_000.000_1;"),
+        "grouped fraction untouched"
+    );
+    assert!(
+        content.contains("quoted = \"100000\";"),
+        "string contents untouched"
+    );
+    Ok(())
+}
+
+#[test]
+fn misgrouped_digits_handles_exponents_and_rejects_non_numbers() -> TestResult {
+    // Exponent digits group from the right like the integer part; a call
+    // argument is still a literal of its own, and non-number text (the
+    // application node's text) never unifies.
+    let source = "{
+  expUngrouped = 2.5e1_0;
+  expFine = 2.5e10_000;
+  applied = builtins.trace 100000 true;
+}
+";
+    let rules = r#"
+(rule (misgrouped-number n fixed)
+  (match nix "[(integer_expression) (float_expression) (apply_expression)] @n")
+  (misgrouped-digits n fixed))
+"#;
+    let dir = tempfile::tempdir()?;
+    write_sample(&dir, "sample.nix", source)?;
+    let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
+    let rows = analysis.database.relations["misgrouped-number"].rows();
+    let mut derived: Vec<(String, String)> = rows
+        .iter()
+        .map(|row| {
+            let Value::Node(node) = &row[0] else {
+                panic!("misgrouped-number column 0 should be a node");
+            };
+            let Value::Text(fixed) = &row[1] else {
+                panic!("misgrouped-number column 1 should be text");
+            };
+            (
+                analysis.corpus.node_text(*node).to_owned(),
+                fixed.to_string(),
+            )
+        })
+        .collect();
+    derived.sort();
+    assert_eq!(
+        derived,
+        vec![
+            ("100000".to_owned(), "100_000".to_owned()),
+            ("2.5e1_0".to_owned(), "2.5e10".to_owned()),
+        ],
+        "the misgrouped exponent and the applied literal fire; the canonical exponent and the application node do not"
+    );
     Ok(())
 }

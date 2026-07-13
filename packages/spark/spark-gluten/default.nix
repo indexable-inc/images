@@ -36,16 +36,12 @@
   # re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "gluten";
   inherit (pin) version;
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      ix.pins.mkUpdater {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix;
-        pname = "spark-gluten";
-        relPath = "packages/spark/spark-gluten/pins.json";
-      };
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "spark-gluten";
+    relPath = "packages/spark/spark-gluten/pins.json";
+  };
   sparkVersion = "3.5";
   scalaVersion = "2.12";
   jarName = "gluten-velox-bundle.jar";

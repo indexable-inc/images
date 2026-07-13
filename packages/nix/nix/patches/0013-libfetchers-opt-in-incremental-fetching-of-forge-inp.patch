@@ -1,0 +1,501 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Fri, 10 Jul 2026 08:01:30 +0000
+Subject: [PATCH] libfetchers: opt-in incremental fetching of forge inputs via
+ the Git protocol
+
+Updating a `github:` (or `gitlab:`/`sourcehut:`) input today downloads a
+full archive tarball of the new revision from the forge's CDN, however
+small the actual change: bumping a large flake input re-transfers tens
+of megabytes to learn a one-commit delta. The unpacked objects already
+land in a global Git object store (the tarball cache), so all the data
+needed for an incremental transfer is sitting locally -- only the
+transport ignores it.
+
+Behind a new `forge-fetch-via-git` setting (default false), fetch the
+revision through the Git smart protocol into that same cache instead:
+
+- `GitArchiveInputScheme::downloadArchive` first tries
+  `fetchArchiveViaGit`, which shallow-fetches the wanted commit (all
+  three forges serve reachable SHA1 wants) straight into the tarball
+  cache. Because the smart protocol transfers only objects missing
+  locally, an update downloads roughly the delta since the previously
+  fetched revision rather than a full archive.
+
+- Negotiation needs local commits to be advertised as "have"s, and the
+  fetched commits are deliberately unreferenced in the tarball cache
+  (its GC story is object-age based). Keep one `refs/forge/<digest>`
+  ref per repository URL pointing at the last fetched commit; the
+  digest is used because owner/repo segments are not always legal
+  refname components (e.g. GitHub's `.github` repositories).
+
+- The result must be indistinguishable from the archive path, since
+  `narHash` from unpacked archives is what ends up in lock files. A
+  commit's tree unpacks bit-identically to its archive iff it contains
+  no submodule (gitlink) entries and no `export-ignore`/`export-subst`
+  gitattributes. The new `GitRepo::getArchiveCompatibleTree` walks the
+  tree and returns its hash only when that holds (the `.gitattributes`
+  content check is a conservative substring match: a false positive
+  merely costs the optimization). Incompatible revisions, and anything
+  the server refuses to serve, fall back to the archive download
+  automatically, so the setting can never change what an input
+  evaluates to.
+
+- The tarball cache's invariant is to contain only packfiles, and its
+  objects are typically unreferenced, so a plain `git fetch` into it
+  could explode objects loose or auto-gc them away. `GitRepo::fetch`
+  gains a `packfilesOnly` mode (`fetch.unpackLimit=1`, `gc.auto=0`,
+  `maintenance.auto=false`) used for these fetches.
+
+The fetcher-cache entries written (`gitRevToTreeHash`,
+`gitRevToLastModified`) are the same ones the archive path writes, keyed
+the same way, so the two paths share cached results in both directions.
+`lastModified` comes from the commit's commit time, which is exactly
+what forge archives encode as file mtimes and the tarball path extracts
+from them.
+
+Includes unit-test coverage for `getArchiveCompatibleTree` (clean tree
+with benign gitattributes, `export-ignore`/`export-subst` at top level
+and in a subdirectory, gitlink entries) and an rl-next release note.
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/doc/manual/rl-next/forge-fetch-via-git.md b/doc/manual/rl-next/forge-fetch-via-git.md
+new file mode 100644
+index 000000000..6d1b4ddee
+--- /dev/null
++++ b/doc/manual/rl-next/forge-fetch-via-git.md
+@@ -0,0 +1,27 @@
++---
++synopsis: "Forge fetchers: opt-in incremental fetching via the Git protocol"
++prs: []
++---
++
++The `github:`, `gitlab:` and `sourcehut:` fetchers can now fetch a
++revision through the Git smart protocol instead of downloading an
++archive tarball from the forge, behind the new `forge-fetch-via-git`
++setting:
++
++```
++nix flake update --option forge-fetch-via-git true
++```
++
++The revision's objects are fetched (shallow) straight into the global
++Git object cache that archive tarballs are already unpacked into, and
++Nix keeps a per-repository negotiation ref in that cache. Since the Git
++protocol only transfers objects missing locally, updating an input
++downloads roughly the delta since the previously fetched revision
++instead of a full archive of the new revision.
++
++The result is bit-identical to the archive download, so lock files and
++`narHash` are unaffected. Revisions whose trees would not export
++identically to their archive (repositories using submodules or the
++`export-ignore`/`export-subst` Git attributes), and revisions the Git
++server refuses to serve, automatically fall back to the archive
++download.
+diff --git a/src/libfetchers-tests/git-utils.cc b/src/libfetchers-tests/git-utils.cc
+index 0b21fd0c6..78e36b57e 100644
+--- a/src/libfetchers-tests/git-utils.cc
++++ b/src/libfetchers-tests/git-utils.cc
+@@ -174,6 +174,81 @@ TEST_F(GitUtilsTest, peel_reference)
+     git_repository_free(rawRepo);
+ }
+ 
++TEST_F(GitUtilsTest, archive_compatible_tree)
++{
++    git_repository * rawRepo = nullptr;
++    ASSERT_EQ(git_repository_open(&rawRepo, tmpDir.string().c_str()), 0);
++
++    git_signature * sig = nullptr;
++    ASSERT_EQ(git_signature_now(&sig, "nix", "nix@example.com"), 0);
++
++    auto makeBlob = [&](std::string_view content) {
++        git_oid oid;
++        EXPECT_EQ(git_blob_create_from_buffer(&oid, rawRepo, content.data(), content.size()), 0);
++        return oid;
++    };
++
++    auto makeTree = [&](const std::vector<std::tuple<const char *, git_oid, git_filemode_t>> & entries) {
++        git_treebuilder * builder = nullptr;
++        EXPECT_EQ(git_treebuilder_new(&builder, rawRepo, nullptr), 0);
++        for (auto & [name, oid, mode] : entries)
++            EXPECT_EQ(git_treebuilder_insert(nullptr, builder, name, &oid, mode), 0);
++        git_oid oid;
++        EXPECT_EQ(git_treebuilder_write(&oid, builder), 0);
++        git_treebuilder_free(builder);
++        return oid;
++    };
++
++    auto makeCommit = [&](const git_oid & treeOid) {
++        git_tree * tree = nullptr;
++        EXPECT_EQ(git_tree_lookup(&tree, rawRepo, &treeOid), 0);
++        git_oid oid;
++        EXPECT_EQ(git_commit_create_v(&oid, rawRepo, nullptr, sig, sig, nullptr, "test commit", tree, 0), 0);
++        git_tree_free(tree);
++        return Hash::parseAny(git_oid_tostr_s(&oid), HashAlgorithm::SHA1);
++    };
++
++    auto hello = makeBlob("hello world");
++
++    /* A tree without gitlinks whose .gitattributes (if any) don't mention
++       export-ignore/export-subst exports identically to its archive. */
++    auto benignAttrs = makeBlob("* text=auto\n*.png binary\n");
++    auto cleanTree = makeTree({{"file.txt", hello, GIT_FILEMODE_BLOB}, {".gitattributes", benignAttrs, GIT_FILEMODE_BLOB}});
++    auto cleanRev = makeCommit(cleanTree);
++
++    auto repo = openRepo();
++    auto result = repo->getArchiveCompatibleTree(cleanRev);
++    ASSERT_TRUE(result.has_value());
++    ASSERT_EQ(result->gitRev(), std::string(git_oid_tostr_s(&cleanTree)));
++
++    /* export-ignore in a top-level .gitattributes disqualifies the tree. */
++    auto ignoreAttrs = makeBlob("docs/ export-ignore\n");
++    ASSERT_EQ(
++        repo->getArchiveCompatibleTree(
++            makeCommit(makeTree({{"file.txt", hello, GIT_FILEMODE_BLOB}, {".gitattributes", ignoreAttrs, GIT_FILEMODE_BLOB}}))),
++        std::nullopt);
++
++    /* ... as does export-subst in a .gitattributes inside a subdirectory. */
++    auto substAttrs = makeBlob("version.txt export-subst\n");
++    auto subTree = makeTree({{".gitattributes", substAttrs, GIT_FILEMODE_BLOB}, {"version.txt", hello, GIT_FILEMODE_BLOB}});
++    ASSERT_EQ(
++        repo->getArchiveCompatibleTree(
++            makeCommit(makeTree({{"file.txt", hello, GIT_FILEMODE_BLOB}, {"sub", subTree, GIT_FILEMODE_TREE}}))),
++        std::nullopt);
++
++    /* A gitlink (submodule) entry disqualifies the tree; the referenced
++       commit needn't exist in this repository, as for real submodules. */
++    git_oid fakeSubmodule;
++    ASSERT_EQ(git_oid_fromstr(&fakeSubmodule, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 0);
++    ASSERT_EQ(
++        repo->getArchiveCompatibleTree(
++            makeCommit(makeTree({{"file.txt", hello, GIT_FILEMODE_BLOB}, {"dep", fakeSubmodule, GIT_FILEMODE_COMMIT}}))),
++        std::nullopt);
++
++    git_signature_free(sig);
++    git_repository_free(rawRepo);
++}
++
+ TEST(GitUtils, isLegalRefName)
+ {
+     ASSERT_TRUE(isLegalRefName("A/b"));
+diff --git a/src/libfetchers/git-utils.cc b/src/libfetchers/git-utils.cc
+index 5a9eed039..e1bcb0bdf 100644
+--- a/src/libfetchers/git-utils.cc
++++ b/src/libfetchers/git-utils.cc
+@@ -729,6 +729,63 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
+         return git_commit_time(commit.get());
+     }
+ 
++    std::optional<Hash> getArchiveCompatibleTree(const Hash & rev) override
++    {
++        auto commit = peelObject<Commit>(lookupObject(*this, hashToOID(rev)).get(), GIT_OBJECT_COMMIT);
++
++        Tree tree;
++        if (git_commit_tree(Setter(tree), commit.get()))
++            throw GitError("getting tree of commit '%s'", rev.gitRev());
++
++        struct State
++        {
++            git_repository * repo;
++            bool compatible = true;
++        } state{*this};
++
++        auto callback = [](const char * root, const git_tree_entry * entry, void * payload) -> int {
++            auto & state = *(State *) payload;
++
++            /* Submodules become gitlink tree entries, which archives (and
++               thus unpacked archives) do not contain. */
++            if (git_tree_entry_filemode(entry) == GIT_FILEMODE_COMMIT) {
++                state.compatible = false;
++                return -1;
++            }
++
++            /* `export-ignore` drops paths from archives and `export-subst`
++               rewrites blob contents in them; either makes the archive
++               differ from the raw tree. The substring check is
++               conservative: a false positive merely falls back to the
++               archive fetch. */
++            if (git_tree_entry_type(entry) == GIT_OBJECT_BLOB
++                && std::string_view(git_tree_entry_name(entry)) == ".gitattributes") {
++                Object obj;
++                if (git_tree_entry_to_object(Setter(obj), state.repo, entry)) {
++                    state.compatible = false;
++                    return -1;
++                }
++                auto blob = (git_blob *) obj.get();
++                std::string_view contents((const char *) git_blob_rawcontent(blob), git_blob_rawsize(blob));
++                if (contents.find("export-ignore") != contents.npos
++                    || contents.find("export-subst") != contents.npos) {
++                    state.compatible = false;
++                    return -1;
++                }
++            }
++
++            return 0;
++        };
++
++        if (git_tree_walk(tree.get(), GIT_TREEWALK_PRE, callback, &state) && state.compatible)
++            throw GitError("walking tree of commit '%s'", rev.gitRev());
++
++        if (!state.compatible)
++            return std::nullopt;
++
++        return toHash(*git_tree_id(tree.get()));
++    }
++
+     bool isShallow() override
+     {
+         return git_repository_is_shallow(*this);
+@@ -894,7 +951,7 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
+ 
+     ref<GitFileSystemObjectSink> getFileSystemObjectSink() override;
+ 
+-    void fetch(const std::string & url, const std::string & refspec, bool shallow) override
++    void fetch(const std::string & url, const std::string & refspec, bool shallow, bool packfilesOnly) override
+     {
+         Activity act(*logger, lvlTalkative, actFetchTree, fmt("fetching Git repository '%s'", url));
+ 
+@@ -908,10 +965,20 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
+             dir.native(),
+             OS_STR("--git-dir"),
+             OS_STR("."),
+-            OS_STR("fetch"),
+-            OS_STR("--progress"),
+-            OS_STR("--force"),
+         };
++        if (packfilesOnly) {
++            /* Keep the fetched objects packed however few they are, and
++               don't let the fetch trigger an auto-gc: most objects in the
++               tarball cache are unreferenced by design, so a gc would
++               prune them. */
++            for (auto opt : {OS_STR("fetch.unpackLimit=1"), OS_STR("gc.auto=0"), OS_STR("maintenance.auto=false")}) {
++                gitArgs.push_back(OS_STR("-c"));
++                gitArgs.push_back(opt);
++            }
++        }
++        gitArgs.push_back(OS_STR("fetch"));
++        gitArgs.push_back(OS_STR("--progress"));
++        gitArgs.push_back(OS_STR("--force"));
+         if (shallow) {
+             gitArgs.push_back(OS_STR("--depth"));
+             gitArgs.push_back(OS_STR("1"));
+diff --git a/src/libfetchers/github.cc b/src/libfetchers/github.cc
+index b86fa926a..b7e05f7b0 100644
+--- a/src/libfetchers/github.cc
++++ b/src/libfetchers/github.cc
+@@ -5,6 +5,7 @@
+ #include "nix/util/types.hh"
+ #include "nix/util/url-parts.hh"
+ #include "nix/util/git.hh"
++#include "nix/util/hash.hh"
+ #include "nix/fetchers/fetchers.hh"
+ #include "nix/fetchers/fetch-settings.hh"
+ #include "nix/fetchers/tarball.hh"
+@@ -265,12 +266,83 @@ struct GitArchiveInputScheme : InputScheme
+ 
+     virtual DownloadUrl getDownloadUrl(const Settings & settings, const Input & input) const = 0;
+ 
++    /**
++     * The URL for fetching the repository through the Git protocol (the
++     * same repository `clone()` clones).
++     */
++    virtual ParsedURL getGitUrl(const Input & input) const = 0;
++
+     struct TarballInfo
+     {
+         Hash treeHash;
+         time_t lastModified;
+     };
+ 
++    /**
++     * Try to obtain the tree of commit `rev` by fetching it through the
++     * Git smart protocol into the tarball cache, which doubles as a
++     * global Git object store: the protocol only transfers objects that
++     * are missing locally, so updating an input downloads roughly the
++     * delta against the previously fetched revision rather than a full
++     * archive of the new one.
++     *
++     * Returns std::nullopt when the tree would not be bit-identical to
++     * the unpacked archive (submodules, export attributes) or when the
++     * server cannot serve the revision; the caller then falls back to
++     * the archive download.
++     */
++    std::optional<TarballInfo>
++    fetchArchiveViaGit(const Settings & settings, const Input & input, const Hash & rev) const
++    {
++        auto cache = settings.getTarballCache();
++
++        auto url = getGitUrl(input);
++
++        try {
++            if (!cache->hasObject(rev)) {
++                /* Advertising the previously fetched commit of this
++                   repository during negotiation is what lets the server
++                   send only the missing objects, so keep a per-repository
++                   ref pointing at the last fetched commit. The ref name is
++                   a digest of the URL because owner/repo segments are not
++                   always legal refname components (e.g. a repository named
++                   `.github`). */
++                auto negotiationRef =
++                    fmt("refs/forge/%s",
++                        hashString(HashAlgorithm::SHA256, url.to_string()).to_string(HashFormat::Nix32, false));
++                cache->fetch(
++                    url.to_string(),
++                    fmt("%s:%s", rev.gitRev(), negotiationRef),
++                    /*shallow=*/true,
++                    /*packfilesOnly=*/true);
++            }
++
++            if (!cache->hasObject(rev))
++                return std::nullopt;
++
++            auto treeHash = cache->getArchiveCompatibleTree(rev);
++
++            if (!treeHash) {
++                debug(
++                    "revision '%s' of '%s' would not export identically to its archive "
++                    "(submodules or export attributes); falling back to an archive fetch",
++                    rev.gitRev(),
++                    input.to_string());
++                return std::nullopt;
++            }
++
++            return TarballInfo{.treeHash = *treeHash, .lastModified = (time_t) cache->getLastModified(rev)};
++        } catch (Error & e) {
++            warn(
++                "failed to fetch revision '%s' of '%s' via the Git protocol; "
++                "falling back to an archive fetch: %s",
++                rev.gitRev(),
++                input.to_string(),
++                e.msg());
++            return std::nullopt;
++        }
++    }
++
+     std::pair<Input, TarballInfo> downloadArchive(const Settings & settings, Store & store, Input input) const
+     {
+         if (!maybeGetStrAttr(input.attrs, "ref"))
+@@ -305,6 +377,14 @@ struct GitArchiveInputScheme : InputScheme
+             }
+         }
+ 
++        if (settings.forgeFetchViaGit) {
++            if (auto tarballInfo = fetchArchiveViaGit(settings, input, *rev)) {
++                cache->upsert(treeHashKey, Attrs{{"treeHash", tarballInfo->treeHash.gitRev()}});
++                cache->upsert(lastModifiedKey, Attrs{{"lastModified", (uint64_t) tarballInfo->lastModified}});
++                return {std::move(input), *tarballInfo};
++            }
++        }
++
+         /* Stream the tarball into the tarball cache. */
+         auto url = getDownloadUrl(settings, input);
+ 
+@@ -460,6 +540,11 @@ struct GitHubInputScheme : GitArchiveInputScheme
+         return DownloadUrl{parseURL(url), headers};
+     }
+ 
++    ParsedURL getGitUrl(const Input & input) const override
++    {
++        return parseURL(fmt("https://%s/%s/%s.git", getHost(input), getOwner(input), getRepo(input)));
++    }
++
+     void clone(const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir)
+         const override
+     {
+@@ -548,6 +633,13 @@ struct GitLabInputScheme : GitArchiveInputScheme
+         return DownloadUrl{parseURL(url), headers};
+     }
+ 
++    ParsedURL getGitUrl(const Input & input) const override
++    {
++        auto host = maybeGetStrAttr(input.attrs, "host").value_or("gitlab.com");
++        return parseURL(
++            fmt("https://%s/%s/%s.git", host, getStrAttr(input.attrs, "owner"), getStrAttr(input.attrs, "repo")));
++    }
++
+     void clone(const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir)
+         const override
+     {
+@@ -644,6 +736,13 @@ struct SourceHutInputScheme : GitArchiveInputScheme
+         return DownloadUrl{parseURL(url), headers};
+     }
+ 
++    ParsedURL getGitUrl(const Input & input) const override
++    {
++        auto host = maybeGetStrAttr(input.attrs, "host").value_or("git.sr.ht");
++        return parseURL(
++            fmt("https://%s/%s/%s", host, getStrAttr(input.attrs, "owner"), getStrAttr(input.attrs, "repo")));
++    }
++
+     void clone(const Settings & settings, Store & store, const Input & input, const std::filesystem::path & destDir)
+         const override
+     {
+diff --git a/src/libfetchers/include/nix/fetchers/fetch-settings.hh b/src/libfetchers/include/nix/fetchers/fetch-settings.hh
+index 2ab215a68..de1cd4bdf 100644
+--- a/src/libfetchers/include/nix/fetchers/fetch-settings.hh
++++ b/src/libfetchers/include/nix/fetchers/fetch-settings.hh
+@@ -116,6 +116,31 @@ struct Settings : public Config
+           e.g. `github:NixOS/patchelf/7c2f768bf9601268a4e71c2ebe91e2011918a70f?narHash=sha256-PPXqKY2hJng4DBVE0I4xshv/vGLUskL7jl53roB8UdU%3D`.
+         )"};
+ 
++    Setting<bool> forgeFetchViaGit{
++        this,
++        false,
++        "forge-fetch-via-git",
++        R"(
++          If enabled, inputs from GitHub and similar Git forges (`github:`,
++          `gitlab:` and `sourcehut:`) whose revision is known are fetched
++          through the Git smart protocol instead of by downloading an
++          archive tarball of the revision from the forge.
++
++          The objects are fetched into the same global Git object cache
++          that archive tarballs are unpacked into
++          (`~/.cache/nix/tarball-cache-v2`), and Nix keeps a per-repository
++          negotiation ref in that cache. Since the Git protocol only
++          transfers objects that are missing locally, updating an input
++          downloads just the objects that changed since the previously
++          fetched revision instead of a full archive of the new revision.
++
++          The result is bit-identical to the archive path. Revisions whose
++          trees would not export identically to their archive (repositories
++          using submodules, or the `export-ignore`/`export-subst` Git
++          attributes) and revisions the Git server refuses to serve fall
++          back to the archive download automatically.
++        )"};
++
+     Setting<std::string> flakeRegistry{
+         this,
+         "https://channels.nixos.org/flake-registry.json",
+diff --git a/src/libfetchers/include/nix/fetchers/git-utils.hh b/src/libfetchers/include/nix/fetchers/git-utils.hh
+index ee154be7a..02d4c7a81 100644
+--- a/src/libfetchers/include/nix/fetchers/git-utils.hh
++++ b/src/libfetchers/include/nix/fetchers/git-utils.hh
+@@ -139,7 +139,26 @@ struct GitRepo
+ 
+     virtual void flush() = 0;
+ 
+-    virtual void fetch(const std::string & url, const std::string & refspec, bool shallow) = 0;
++    /**
++     * Fetch `refspec` from `url` by running the `git` executable.
++     *
++     * `packfilesOnly` keeps the fetched objects in packfiles regardless
++     * of their number (`fetch.unpackLimit=1`) and suppresses automatic
++     * maintenance, for repositories like the tarball cache whose
++     * invariant is to contain only packfiles and whose objects are
++     * typically unreferenced (an auto-gc would prune them).
++     */
++    virtual void
++    fetch(const std::string & url, const std::string & refspec, bool shallow, bool packfilesOnly = false) = 0;
++
++    /**
++     * If the tree of commit `rev` would export byte-identically to a
++     * Git archive of that commit -- i.e. it contains no submodule
++     * (gitlink) entries and no `.gitattributes` file mentioning
++     * `export-ignore` or `export-subst` -- return that tree's hash.
++     * Otherwise return std::nullopt.
++     */
++    virtual std::optional<Hash> getArchiveCompatibleTree(const Hash & rev) = 0;
+ 
+     /**
+      * Verify that commit `rev` is signed by one of the keys in

@@ -1,4 +1,9 @@
-{indexPackages}: {
+{
+  indexPackages,
+  # Path to the house prompt module (packages/agent/prompt), injected by the
+  # importing flake so this module never climbs the tree with `../`.
+  promptModule,
+}: {
   config,
   lib,
   pkgs,
@@ -14,6 +19,15 @@
     "text"
   ];
 
+  housePrompt = import promptModule {
+    inherit lib;
+    omitRules = cfg.houseContext.omitRules;
+  };
+  houseContextText = lib.concatStringsSep "\n\n" (
+    [(housePrompt.contextFor "claude")]
+    ++ lib.optional (cfg.houseContext.extraText != "") cfg.houseContext.extraText
+  );
+
   optionalOverride = condition: name: value:
     lib.optionalAttrs condition {${name} = value;};
   packageOverrides =
@@ -22,10 +36,16 @@
         (cfg)
         addDirs
         dangerouslySkipPermissions
+        features
         personalStartupContext
-        pluginDirs
         primaryCheckouts
+        systemTools
         ;
+      # The index plugin (skills as `/index:<skill>`) rides the wrapper's
+      # `--plugin-dir` layer ahead of any user-specified plugin dirs.
+      pluginDirs =
+        lib.optional cfg.housePlugin.enable indexPkgs.agent-plugin
+        ++ cfg.pluginDirs;
       omitRules = cfg.systemPrompt.omitRules;
       extraSettings = cfg.defaults;
     }
@@ -49,6 +69,9 @@ in {
         Lower-priority Claude Code settings passed through the wrapper's
         read-only default layer. Runtime user settings are still managed by
         Home Manager's native {option}`programs.claude-code.settings` option.
+        The wrapper answers {command}`claude --which-settings` with the store
+        path of the rendered layer, since no file under {file}`~/.claude`
+        explains it.
       '';
     };
 
@@ -56,6 +79,37 @@ in {
       type = lib.types.bool;
       default = true;
       description = "Bake Claude Code's bypass-permissions flag into the wrapper.";
+    };
+
+    features = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.nullOr (lib.types.either lib.types.bool lib.types.int));
+      default = {};
+      example = {
+        context1M = true;
+        autoCompactWindow = null;
+      };
+      description = ''
+        Typed Claude Code feature posture forwarded to the wrapper's
+        `features` argument: booleans gate features (false bakes the
+        feature's CLAUDE_CODE_DISABLE_* env var into both the launch layer
+        and the settings env), `autoCompactWindow` is a token count for
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW (null bakes nothing). Keys must
+        exist in the wrapper's defaultFeatures table.
+      '';
+    };
+
+    systemTools = lib.mkOption {
+      type = lib.types.attrsOf lib.types.bool;
+      default = {};
+      example = {
+        AskUserQuestion = true;
+        DesignSync = true;
+      };
+      description = ''
+        Overrides for Claude Code built-in orchestration and hosted-service
+        tools. Tool names must be present in the wrapper's defaultSystemTools
+        table. True enables the tool; false denies it.
+      '';
     };
 
     addDirs = lib.mkOption {
@@ -94,6 +148,54 @@ in {
         Home Manager's native {option}`programs.claude-code.mcpServers` remains
         the user config layer.
       '';
+    };
+
+    housePlugin = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Bake the index plugin (the repo skill set, invoked as
+          `/index:<skill>`) into the wrapper as a {command}`--plugin-dir`
+          layer. Disable to run without the house skills.
+        '';
+      };
+    };
+
+    houseContext = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Write the house context render (the tagged prompt rules minus the
+          `system`-only basics, see packages/agent/prompt) to
+          {file}`~/.claude/CLAUDE.md` through the native
+          {option}`programs.claude-code.context` option, so sessions whose
+          runtime keeps its stock system prompt (claude.ai desktop, unwrapped
+          CLIs) still ride the house rules. Keep this off when the consuming
+          Home Manager configuration already manages {file}`.claude/CLAUDE.md`
+          through {option}`home.file`.
+        '';
+      };
+
+      extraText = lib.mkOption {
+        type = lib.types.lines;
+        default = "";
+        description = ''
+          Personal instructions appended after the house rules in the
+          rendered context file.
+        '';
+      };
+
+      omitRules = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = ''
+          Rule names omitted from the house context render (independent of
+          {option}`programs.claude-code.systemPrompt.omitRules`, which governs
+          the baked system prompt).
+        '';
+      };
     };
 
     systemPrompt = lib.mkOption {
@@ -149,6 +251,9 @@ in {
       }
     ];
 
-    programs.claude-code.package = lib.mkDefault defaultedPackage;
+    programs.claude-code = {
+      package = lib.mkDefault defaultedPackage;
+      context = lib.mkIf cfg.houseContext.enable (lib.mkDefault houseContextText);
+    };
   };
 }

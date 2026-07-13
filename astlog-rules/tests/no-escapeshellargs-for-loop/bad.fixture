@@ -1,0 +1,6 @@
+{ lib, names }:
+''
+  for name in ${lib.escapeShellArgs names}; do
+    echo "$name"
+  done
+''

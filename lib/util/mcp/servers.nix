@@ -12,6 +12,8 @@
   indexApiEnvVars = [
     "GH_TOKEN"
     "GITHUB_TOKEN"
+    "GOOGLE_OAUTH_CLIENT_ID"
+    "GOOGLE_OAUTH_CLIENT_SECRET"
     "IX_TOKEN"
     "LINEAR_API_KEY"
     "NOTION_API_KEY"

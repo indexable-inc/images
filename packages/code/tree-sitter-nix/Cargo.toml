@@ -1,0 +1,26 @@
+[package]
+name = "tree-sitter-nix"
+# Pinned to the upstream version this fork replaces: the workspace patches the
+# crates-io `tree-sitter-nix` with this crate (root Cargo.toml
+# `[patch.crates-io]`), and a patch entry must satisfy the dependents'
+# `"0.3"` requirement.
+version = "0.3.0"
+edition.workspace = true
+publish.workspace = true
+description = "nix grammar for tree-sitter, with underscore digit separators in numeric literals"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[lib]
+name = "tree_sitter_nix"
+
+[dependencies]
+tree-sitter-language.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[dev-dependencies]
+tree-sitter.workspace = true

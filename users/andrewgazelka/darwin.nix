@@ -14,10 +14,28 @@
 #
 # These are GUI apps and Mac-App-Store apps with no usable Nix package; anything
 # that ships a real Nix package belongs in home.packages / environment, not here.
-{
+{lib, ...}: let
+  # Shared verified name -> MAS ID catalog; this module only picks which apps
+  # this user installs. `lib.getAttrs` throws on an unknown name, so a typo
+  # here is an eval error instead of a silent zap-uninstall.
+  # This module is exported as a bare path (flake `darwinModules.andrewgazelka`)
+  # so external darwin hosts can import it without `ix` in their module args;
+  # the catalog can only be reached relatively here.
+  # astlog-ignore: no-parent-path
+  masCatalog = import ../../lib/darwin/mas-apps.nix;
+in {
   homebrew = {
+    # WARNING: the consuming host runs `brew bundle --force-cleanup --zap` on
+    # activation (see hosts/hydra/default.nix), which UNINSTALLS any cask not in
+    # this list AND any cask whose declared name doesn't match what's installed.
+    # A pre-release suffix is a DIFFERENT cask: `ghostty@tip` != `ghostty`,
+    # `slack@beta` != `slack`. Declare the suffixed channel but have the stable
+    # app installed (or vice-versa) and the next `darwin-rebuild switch` zaps the
+    # running app out from under you. (#1303 flipped these to @beta/@tip/@nightly
+    # and so zapped stable ghostty.) Keep entries stable (no `@channel`) unless
+    # you also install that exact channel locally so declared == installed.
     casks = [
-      "1password-cli@beta"
+      "1password-cli"
       "beeper"
       "chatgpt"
       "chatgpt-atlas"
@@ -25,30 +43,30 @@
       # Cloudflare WARP: tunnels IPv4+IPv6 to Cloudflare, so an IPv6-only or
       # broken-IPv4 network (e.g. hotel wifi with dead DHCPv4) can still reach
       # IPv4-only hosts like github and Apple's APNs. Needs UDP egress to work.
-      "cloudflare-warp@beta"
+      "cloudflare-warp"
       "codex-app"
       "contexts"
       "cursor"
-      "emacs-app@nightly"
-      "ghostty@tip"
+      "emacs-app"
+      "ghostty"
       "google-chrome"
       "helium-browser"
       "linear"
       "lm-studio"
-      "mullvad-vpn@beta"
+      "mullvad-vpn"
       "notion"
-      "obs@beta"
+      "obs"
       "obsidian"
       "postico"
       "prismlauncher"
       "raycast"
       "screen-studio"
       "setapp"
-      "signal@beta"
+      "signal"
       "skim"
-      "slack@beta"
+      "slack"
       "spotify"
-      "stremio@beta"
+      "stremio"
       "superhuman"
       "superwhisper"
       "tailscale-app"
@@ -59,9 +77,8 @@
       # RealVNC viewer: the ix fleet's headless remote desktop is wayvnc, which
       # offers only RFB security type "None" (no auth); macOS Screen Sharing.app
       # refuses no-auth servers, so a third-party client is required to reach
-      # `vnc://<host>.tail368802.ts.net:5900`. See ix nix/modules/desktop/remote-desktop.nix.
+      # `vnc://<host>.<tailnet>.ts.net:5900`. See ix nix/modules/desktop/remote-desktop.nix.
       "vnc-viewer"
-      "zed@preview"
       "zoom"
     ];
 
@@ -71,29 +88,32 @@
     # Every Mac App Store app installed on the workstation must be listed here:
     # onActivation.cleanup = "zap" uninstalls any MAS app not declared, so an
     # omission deletes the app on the next switch (it lost Final Cut/Logic/Xcode
-    # once before this list was completed). IDs come from `mas list`.
-    masApps = {
-      "Things 3" = 904280696;
-      "Super Easy Timer" = 1353137878;
-      "Flighty – Live Flight Tracker" = 1358823008;
-      "Apple Configurator 2" = 1037126344;
-      "Final Cut Pro" = 424389933;
-      "Logic Pro" = 634148309;
-      "GarageBand" = 682658836;
-      "iMovie" = 408981434;
-      "Xcode" = 497799835;
-      "TestFlight" = 899247664;
-      "Apple Developer" = 640199958;
-      "Fantastical" = 975937182;
-      "WireGuard" = 1451685025;
-      "Pages" = 409201541;
-      "Numbers" = 409203825;
-      "Keynote" = 409183694;
-      "Portal" = 1436994560;
-      "Microsoft Word" = 462054704;
-      "Microsoft Excel" = 462058435;
-      "Microsoft PowerPoint" = 462062816;
-      "Microsoft Outlook" = 985367838;
-    };
+    # once before this list was completed). IDs live in the shared catalog
+    # (lib/darwin/mas-apps.nix); this list is just the selection.
+    masApps =
+      lib.getAttrs [
+        "Things 3"
+        "Super Easy Timer"
+        "Flighty – Live Flight Tracker"
+        "Apple Configurator 2"
+        "Final Cut Pro"
+        "Logic Pro"
+        "GarageBand"
+        "iMovie"
+        "Xcode"
+        "TestFlight"
+        "Apple Developer"
+        "Fantastical"
+        "WireGuard"
+        "Pages"
+        "Numbers"
+        "Keynote"
+        "Portal"
+        "Microsoft Word"
+        "Microsoft Excel"
+        "Microsoft PowerPoint"
+        "Microsoft Outlook"
+      ]
+      masCatalog;
   };
 }

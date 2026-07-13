@@ -141,7 +141,7 @@ def _run(args: argparse.Namespace) -> int:
         print(
             f"agent '{args.agent}' is not implemented yet; only --agent claude works. "
             "See the codex-backend tracking issue. Codex shares the same house "
-            "system prompt (packages/agent/prompt.nix), so this is the next backend.",
+            "system prompt (packages/agent/prompt/), so this is the next backend.",
             file=sys.stderr,
         )
         return 2
@@ -166,6 +166,14 @@ def _run(args: argparse.Namespace) -> int:
     for name in _selected(args.eval):
         _progress(f"== eval: {name} ==")
         reports.append(_run_one(name, ctx))
+
+    # Stamp the model config onto each eval's summary so the viewer can show, per
+    # eval and per rollout, exactly which agent/judge/effort produced the scores
+    # (a matrix run sets these per eval).
+    for rep in reports:
+        rep.summary["agent_model"] = args.model
+        rep.summary["effort"] = args.effort
+        rep.summary["judge_model"] = args.judge_model
 
     for rep in reports:
         print(f"\n== {rep.name} ==")

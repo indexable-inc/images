@@ -88,7 +88,12 @@ in
       "$sanitized"
 
     mkdir -p "$out"
-    python3 ${./wheel/mkwheel.py} \
+    python3 ${ix.paths.root}/lib/build/pyo3-wheel.py \
+      --package tui \
+      --dist-name ix-tui \
+      --so-name _tui.abi3.so \
+      --summary ${lib.escapeShellArg "Python bindings for the TUI PTY-backed terminal manager, imported as tui"} \
+      --requires-dist ${lib.escapeShellArg "numpy>=1.26"} \
       --cdylib "$sanitized" \
       --python-src ${pythonSource} \
       --version ${version} \

@@ -216,6 +216,22 @@ def test_a_hung_checker_still_lets_the_cell_execute(tmp_path: Path, monkeypatch:
     assert ns.get("ran_anyway") is True
 
 
+def test_a_deleted_cwd_self_heals_instead_of_wedging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # index#2120: the kernel's cwd deleted under it (an auto-cleaned worktree)
+    # made the pre-cell cwd resolution raise FileNotFoundError, so EVERY later
+    # cell died before running -- even a repair os.chdir was blocked. The check
+    # must move the process somewhere real, warn loudly, and pass the cell.
+    doomed = tmp_path / "doomed"
+    doomed.mkdir()
+    monkeypatch.chdir(doomed)
+    doomed.rmdir()
+    assert _check("x = 1 + 2").ok
+    assert Path.cwd() == Path.home()  # the process recovered to a real directory
+    assert "working directory vanished" in capsys.readouterr().err
+
+
 # --------------------------------------------------------------------------- #
 # end to end through the runner: a type error blocks execution
 # --------------------------------------------------------------------------- #

@@ -699,23 +699,29 @@ fn hash_bool(hasher: &mut sha2::Sha256, value: bool) {
     hasher.update(b"\0");
 }
 
-impl Lto {
-    pub const fn identity_byte(self) -> u8 {
-        match self {
-            Self::Off => b'0',
-            Self::Thin => b'1',
-            Self::Fat => b'2',
-        }
-    }
+macro_rules! impl_optional_profile_value {
+    ($type:ty { $($variant:ident => ($identity:literal, $rustc:expr)),+ $(,)? }) => {
+        impl $type {
+            pub const fn identity_byte(self) -> u8 {
+                match self {
+                    $(Self::$variant => $identity),+
+                }
+            }
 
-    pub const fn rustc_value(self) -> Option<&'static str> {
-        match self {
-            Self::Off => None,
-            Self::Thin => Some("thin"),
-            Self::Fat => Some("fat"),
+            pub const fn rustc_value(self) -> Option<&'static str> {
+                match self {
+                    $(Self::$variant => $rustc),+
+                }
+            }
         }
-    }
+    };
 }
+
+impl_optional_profile_value!(Lto {
+    Off => (b'0', None),
+    Thin => (b'1', Some("thin")),
+    Fat => (b'2', Some("fat")),
+});
 
 impl DebugInfo {
     pub const fn identity_byte(self) -> u8 {
@@ -759,23 +765,11 @@ impl Panic {
     }
 }
 
-impl Strip {
-    pub const fn identity_byte(self) -> u8 {
-        match self {
-            Self::None => b'0',
-            Self::Debuginfo => b'1',
-            Self::Symbols => b'2',
-        }
-    }
-
-    pub const fn rustc_value(self) -> Option<&'static str> {
-        match self {
-            Self::None => None,
-            Self::Debuginfo => Some("debuginfo"),
-            Self::Symbols => Some("symbols"),
-        }
-    }
-}
+impl_optional_profile_value!(Strip {
+    None => (b'0', None),
+    Debuginfo => (b'1', Some("debuginfo")),
+    Symbols => (b'2', Some("symbols")),
+});
 
 #[cfg(test)]
 mod tests {
@@ -789,51 +783,32 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_missing_root_units() {
-        let graph: UnitGraph = serde_json::from_str(
-            r#"{
-              "version": 1,
-              "units": [],
-              "roots": [0]
-            }"#,
-        )
-        .unwrap();
-
-        let error = graph.ensure_supported().unwrap_err().to_string();
-
-        assert!(error.contains("root unit index 0"));
-    }
-
-    #[test]
-    fn validation_rejects_missing_dependency_units() {
-        let graph: UnitGraph = serde_json::from_str(
-            r#"{
-              "version": 1,
-              "units": [
-                {
-                  "pkg_id": "path+file:///workspace#hello@0.1.0",
-                  "target": {
-                    "kind": ["lib"],
-                    "crate_types": ["lib"],
-                    "name": "hello",
-                    "src_path": "/workspace/src/lib.rs",
-                    "edition": "2024"
-                  },
-                  "profile": { "name": "dev", "opt_level": "0" },
-                  "mode": "build",
-                  "dependencies": [
-                    { "index": 1, "extern_crate_name": "missing" }
-                  ]
-                }
-              ],
-              "roots": [0]
-            }"#,
-        )
-        .unwrap();
-
-        let error = graph.ensure_supported().unwrap_err().to_string();
-
-        assert!(error.contains("unit 0 dependency missing"));
+    fn validation_rejects_references_to_missing_units() {
+        let cases = [
+            (r#"{"version":1,"units":[],"roots":[0]}"#, "root unit index 0"),
+            (
+                r#"{
+                  "version": 1,
+                  "units": [{
+                    "pkg_id": "path+file:///workspace#hello@0.1.0",
+                    "target": {
+                      "kind": ["lib"], "crate_types": ["lib"],
+                      "name": "hello", "src_path": "/workspace/src/lib.rs", "edition": "2024"
+                    },
+                    "profile": { "name": "dev", "opt_level": "0" },
+                    "mode": "build",
+                    "dependencies": [{ "index": 1, "extern_crate_name": "missing" }]
+                  }],
+                  "roots": [0]
+                }"#,
+                "unit 0 dependency missing",
+            ),
+        ];
+        for (json, expected) in cases {
+            let graph: UnitGraph = serde_json::from_str(json).unwrap();
+            let error = graph.ensure_supported().unwrap_err().to_string();
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]
