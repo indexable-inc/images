@@ -1,6 +1,7 @@
 {
   ix,
   lib,
+  updateScriptWriter ? null,
 }:
 # Upstream NixOS/nix pinned at tag 2.34.7 (the `nix-src` input, surfaced as
 # `ix.nixSrc`) with the in-repo patch series (./patches) applied, built through
@@ -29,6 +30,51 @@ let
   # formal is fragile against `callPackage` auto-binding, and the rest of the
   # nix/* packages read `pkgs` off their argument the same way.
   inherit (ix) pkgs;
+
+  bootstrapLockPath = ix.paths.root + "/.github/actions/bootstrap-patched-nix/lock.json";
+  bootstrapLock = lib.importJSON bootstrapLockPath;
+  updateScriptArgs = {
+    name = "nix-ix-bootstrap-lock-update";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.git
+    ];
+    meta.description = "Resolve the Nix bootstrap source ref into its generated lock";
+    text = ''
+      # nu
+      const lock_path = ".github/actions/bootstrap-patched-nix/lock.json"
+
+      def main [source_ref?: string] {
+        let current = (open $lock_path)
+        let repository = ($current.repository | into string)
+        let requested = ($source_ref | default $current.revision)
+        let source_repo = (^mktemp -d | str trim)
+        let initialized = (^git init -q $source_repo | complete)
+        if $initialized.exit_code != 0 {
+          ^rm -rf $source_repo
+          error make {msg: $"failed to initialize bootstrap source: ($initialized.stderr | str trim)"}
+        }
+        let fetched = (
+          ^git -C $source_repo fetch --depth 1 $"https://github.com/($repository).git" $requested
+          | complete
+        )
+        if $fetched.exit_code != 0 {
+          ^rm -rf $source_repo
+          error make {msg: $"failed to fetch bootstrap source `($requested)`: ($fetched.stderr | str trim)"}
+        }
+        let resolved = (^git -C $source_repo rev-parse FETCH_HEAD | complete)
+        ^rm -rf $source_repo
+        if $resolved.exit_code != 0 {
+          error make {msg: $"failed to resolve bootstrap source `($requested)`: ($resolved.stderr | str trim)"}
+        }
+        let revision = ($resolved.stdout | str trim)
+        {repository: $repository, revision: $revision}
+        | to json --indent 2
+        | save --force $lock_path
+        print $"updated ($lock_path) to ($revision)"
+      }
+    '';
+  };
 
   # nixpkgs builds `nixVersions.nix_2_34` as
   # `(nixComponents_2_34.overrideSource fetchedSrc).appendPatches patches_common`
@@ -164,11 +210,14 @@ in
     passthru =
       (old.passthru or {})
       // {
-        inherit closureGates;
+        inherit bootstrapLock closureGates;
         tests =
           (old.passthru.tests or old.tests or {})
           // {
             inherit smoke;
           };
+      }
+      // lib.optionalAttrs (updateScriptWriter != null) {
+        updateScript = updateScriptWriter updateScriptArgs;
       };
   })

@@ -236,7 +236,9 @@ MODULES: tuple[Module, ...] = (
         "slack",
         "read Slack channels, messages, and threads into polars, send messages, and search "
         "(`await slack.channels()` / `messages(channel)` / `thread(channel, ts)` / `send(channel, text)` / `search(query)`); "
-        "`watch_channel(channel)` streams new channel messages (mentions only, by default) back to the agent; "
+        "`watch_channel(channel)` streams new channel messages (mentions only, by default) back to the agent, "
+        "and `await slack.socket()` arms Socket Mode push ingress (@mentions in every channel the bot is in, plus DMs, "
+        "with a native thinking indicator; needs an app-level token via `login_app(token)` or SLACK_APP_TOKEN); "
         "`slack.login(token)` stores your user token (mode 0600); `status()` / `logout()` manage it. "
         "Incognito sessions only (personal Slack data never reaches a shared room)",
         # Mirrors slack._token()'s documented resolution order; the smoke test
