@@ -9,7 +9,7 @@ from ix_notebook_mcp import store
 def _capture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, object]]:
     calls: list[tuple[str, str, object]] = []
 
-    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
         calls.append((method, url, body if body is not None else content))
         if url.endswith("/api/blob"):
             return {"hash": f"h{len(calls):063d}"}
@@ -18,7 +18,7 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, object]]:
         return [] if isinstance(body, list) else {"seq": 1, "id": "f1"}
 
     monkeypatch.setattr(store, "_http_json", fake_json)
-    monkeypatch.setattr(store, "_http_bytes", lambda method, url, content=None: b"[]")
+    monkeypatch.setattr(store, "_http_bytes", lambda method, url, content=None, headers=None: b"[]")
     return calls
 
 
