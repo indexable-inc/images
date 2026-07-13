@@ -1521,9 +1521,6 @@
               test -f "$pkg/share/nix-web-monitor/index.html"
               mkdir -p "$out"
             '';
-          site-case-tests = pkgs.linkFarm "site-case-tests" (
-            lib.mapAttrsToList (name: path: {inherit name path;}) siteTests.cases
-          );
           site-test = siteTests.all;
         };
         checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
