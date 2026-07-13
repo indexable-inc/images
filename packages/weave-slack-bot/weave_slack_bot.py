@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import ssl
 import urllib.error
 import urllib.request
@@ -37,6 +38,7 @@ _TRANSIENT_SLACK_ERRORS = {
     "request_timeout",
     "service_unavailable",
 }
+_WEAVE_OPERATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def slack_error_code(error: Exception) -> str | None:
@@ -57,6 +59,14 @@ class WeaveError(RuntimeError):
 
 class PermanentDeliveryError(RuntimeError):
     pass
+
+
+def operation_id(*parts: str) -> str:
+    """Build an identifier accepted by the Weave facts and chat APIs."""
+    value = "-".join(parts)
+    if _WEAVE_OPERATION_ID.fullmatch(value) is None:
+        raise ValueError(f"invalid Weave operation id: {value!r}")
+    return value
 
 
 @dataclasses.dataclass(frozen=True)
@@ -163,7 +173,7 @@ class WeaveClient:
         entity = f"agent:{agent}"
         digest = hashlib.sha256(f"{model}\0{system}".encode()).hexdigest()
         await self.operation(
-            f"slack-agent-config:{digest}",
+            operation_id("slack-agent-config", digest),
             [
                 fact(entity, "type", "agent"),
                 fact(entity, "name", agent),
@@ -174,7 +184,7 @@ class WeaveClient:
 
     async def record(self, event: SlackEvent) -> None:
         await self.operation(
-            f"slack-ingress-record:{event.key}",
+            operation_id("slack-ingress-record", event.key),
             [
                 fact(event.entity, "type", "slack_event"),
                 fact(event.entity, "event_id", event.event_id),
@@ -201,7 +211,7 @@ class WeaveClient:
         await self._post(
             "/api/chat",
             {
-                "operation_id": f"slack-ingress-chat:{event.key}",
+                "operation_id": operation_id("slack-ingress-chat", event.key),
                 "id": event.message_id,
                 "author": self.identity,
                 "from": f"slack:{event.user or 'unknown'}",
@@ -211,7 +221,7 @@ class WeaveClient:
             },
         )
         await self.operation(
-            f"slack-ingress-dispatched:{event.key}",
+            operation_id("slack-ingress-dispatched", event.key),
             [fact(event.entity, "state", "awaiting_reply")],
         )
 
@@ -224,7 +234,7 @@ class WeaveClient:
 
     async def mark_sent(self, event: SlackEvent, reply_ts: str) -> None:
         await self.operation(
-            f"slack-egress-sent:{event.key}",
+            operation_id("slack-egress-sent", event.key),
             [
                 fact(event.entity, "reply_ts", reply_ts),
                 fact(event.entity, "state", "sent"),
