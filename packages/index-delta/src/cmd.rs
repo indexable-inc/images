@@ -285,20 +285,24 @@ pub enum State {
     Snoozed,
 }
 
-/// One side of a pending file's diff. Text sides get a line diff; when
-/// either side is not UTF-8 (a binary plist, say) a lossy line diff would be
-/// gibberish, so the logical ops the differ computes stand in instead.
+/// One side of a pending file's diff, in the representation its format is
+/// modeled in. Structured formats diff as logical ops: object key order is
+/// not significant (RFC 8259 §4, and likewise toml/yaml/plist tables), so a
+/// byte-level line diff would bury one real edit under an app rewriting the
+/// file in its own key order. Only true text files diff as lines.
 pub enum TuiDiff {
     Text { old: String, new: String },
     Ops(Vec<Op>),
 }
 
 fn tui_diff(format: Format, old: &[u8], new: &[u8]) -> TuiDiff {
-    match (str::from_utf8(old), str::from_utf8(new)) {
-        (Ok(old), Ok(new)) => TuiDiff::Text {
+    match (format, str::from_utf8(old), str::from_utf8(new)) {
+        (Format::Text, Ok(old), Ok(new)) => TuiDiff::Text {
             old: old.to_owned(),
             new: new.to_owned(),
         },
+        // Structured formats, plus non-UTF-8 text sides (a binary plist,
+        // say) where a lossy line diff would be gibberish.
         _ => TuiDiff::Ops(diff::diff_bytes(format, old, new)),
     }
 }
@@ -323,9 +327,6 @@ pub fn tui_entries(store: &Store) -> Result<Vec<TuiEntry>> {
     let mut entries = Vec::new();
     for meta in store.all_metas()? {
         let entry = status_entry(store, &meta)?;
-        if entry.state == State::Clean {
-            continue;
-        }
         let base = store.base_bytes(&meta.path)?;
         let upper = fs::read(&meta.path).unwrap_or_default();
         let staged = store.staged_bytes(&meta.path)?;
@@ -340,7 +341,20 @@ pub fn tui_entries(store: &Store) -> Result<Vec<TuiEntry>> {
             overlap: entry.overlap,
         });
     }
+    // Every managed file is listed; the ones needing attention sort first
+    // and clean files sink to the bottom (stable, so store order holds
+    // within a state).
+    entries.sort_by_key(|entry| attention_rank(entry.state));
     Ok(entries)
+}
+
+const fn attention_rank(state: State) -> u8 {
+    match state {
+        State::Conflict => 0,
+        State::Drifted => 1,
+        State::Snoozed => 2,
+        State::Clean => 3,
+    }
 }
 
 #[derive(Serialize)]
@@ -875,8 +889,68 @@ mod tests {
             }]
         );
         assert!(matches!(
-            tui_diff(Format::Json, b"{}", b"{}"),
+            tui_diff(Format::Text, b"a\n", b"b\n"),
             TuiDiff::Text { .. }
         ));
+    }
+
+    #[test]
+    fn tui_lists_clean_files_after_pending() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let store = Store::open(root.join("state")).expect("open");
+        // "a" sorts before "b" by path; only attention rank may reorder them.
+        let clean = root.join("home/a.json");
+        let drifted = root.join("home/b.json");
+        let source = root.join("store/base.json");
+        fs::create_dir_all(source.parent().expect("parent")).expect("mkdir");
+        fs::write(&source, r#"{"a": 1}"#).expect("write source");
+        let manifest = root.join("manifest.json");
+        let files: Vec<_> = [&clean, &drifted]
+            .into_iter()
+            .map(|path| {
+                serde_json::json!({
+                    "path": path, "source": source, "persistence": "durable",
+                })
+            })
+            .collect();
+        fs::write(
+            &manifest,
+            serde_json::json!({ "files": files }).to_string(),
+        )
+        .expect("write manifest");
+        activate(&store, &manifest).expect("activate");
+        fs::write(&drifted, r#"{"a": 2}"#).expect("drift");
+
+        let entries = tui_entries(&store).expect("entries");
+        let states: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry.state, entry.path.clone()))
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                (State::Drifted, drifted.to_string_lossy().into_owned()),
+                (State::Clean, clean.to_string_lossy().into_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn tui_diff_hides_key_reorder_noise_in_structured_formats() {
+        // An app rewriting a json file in its own key order must not drown
+        // the one real edit: the model diff shows exactly that edit.
+        let old = br#"{"a": 1, "src": {"repo": "r", "source": "github"}}"#;
+        let new = br#"{"src": {"source": "github", "repo": "r"}, "a": 1, "model": "m"}"#;
+        let TuiDiff::Ops(ops) = tui_diff(Format::Json, old, new) else {
+            panic!("structured formats must diff as logical ops");
+        };
+        assert_eq!(
+            ops,
+            vec![Op::Add {
+                path: "/model".to_owned(),
+                value: "m".into(),
+            }]
+        );
     }
 }

@@ -1,8 +1,9 @@
 //! `index-delta tui`: an interactive drift browser. The sidebar lists every
-//! pending file; the detail pane renders the real unified diff (base vs the
-//! file on disk, plus base vs the staged incoming base for conflicts). Enter
-//! suspends into `$VISUAL`/`$EDITOR` on the selected file and re-diffs on
-//! return.
+//! pending file; the detail pane renders each side's diff (base vs the file
+//! on disk, plus base vs the staged incoming base for conflicts) in its
+//! format's model: logical ops for structured formats, a unified line diff
+//! for text. Enter suspends into `$VISUAL`/`$EDITOR` on the selected file
+//! and re-diffs on return.
 
 use std::env;
 use std::io::{self, Stdout};
@@ -289,7 +290,11 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &App) {
             Style::new().fg(badge.color).bold(),
         ));
     }
-    if app.entries.is_empty() {
+    if app
+        .entries
+        .iter()
+        .all(|entry| entry.state == State::Clean)
+    {
         spans.push(Span::styled(
             "  ✓ all clean",
             Style::new().fg(Color::Green).bold(),
@@ -310,7 +315,7 @@ fn render_sidebar(frame: &mut ratatui::Frame, area: Rect, app: &App) {
         ]))
     });
     let list = List::new(items)
-        .block(pane_block(&format!("pending · {}", app.entries.len())))
+        .block(pane_block(&format!("files · {}", app.entries.len())))
         .highlight_symbol("▌")
         .highlight_style(Style::new().bg(Color::DarkGray).bold());
     let mut state = ListState::default();
@@ -321,8 +326,8 @@ fn render_sidebar(frame: &mut ratatui::Frame, area: Rect, app: &App) {
 fn render_detail(frame: &mut ratatui::Frame, area: Rect, app: &App) {
     let Some(entry) = app.entries.get(app.selected) else {
         let empty = Paragraph::new(Line::styled(
-            "✓ nothing to resolve",
-            Style::new().fg(Color::Green).bold(),
+            "no managed files",
+            Style::new().fg(DIM).bold(),
         ))
         .block(pane_block("diff"));
         frame.render_widget(empty, area);
@@ -401,6 +406,13 @@ fn detail_lines(entry: &TuiEntry) -> Vec<Line<'static>> {
         ));
     }
     lines.push(Line::default());
+    if entry.state == State::Clean {
+        lines.push(Line::styled(
+            "✓ matches the declared base",
+            Style::new().fg(Color::Green),
+        ));
+        return lines;
+    }
     match &entry.incoming {
         Some(incoming) => {
             lines.push(section("your edits · base → file"));
@@ -434,26 +446,33 @@ fn diff_lines(diff: &TuiDiff) -> Vec<Line<'static>> {
     }
 }
 
-/// Logical ops as styled lines: the diff view for sides a line diff cannot
-/// render, e.g. binary plists.
+/// Logical ops as styled lines: the model diff for structured formats.
+/// Values render for reading, not re-parsing — strings shed their quotes,
+/// containers pretty-print — so one real edit reads as one line instead of
+/// a raw-file hunk.
 fn ops_lines(ops: &[Op]) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for op in ops {
         match op {
-            Op::Add { path, value } => lines.push(Line::styled(
-                format!("+ {path} = {value}"),
-                Style::new().fg(Color::Green),
-            )),
-            Op::Remove { path, from } => lines.push(Line::styled(
-                format!("- {path} = {from}"),
-                Style::new().fg(Color::Red),
-            )),
-            Op::Replace { path, from, to } => lines.push(Line::from(vec![
-                Span::styled(format!("~ {path}  "), Style::new().fg(Color::Yellow)),
-                Span::styled(from.to_string(), Style::new().fg(Color::Red)),
-                Span::styled(" → ", Style::new().fg(DIM)),
-                Span::styled(to.to_string(), Style::new().fg(Color::Green)),
-            ])),
+            Op::Add { path, value } => entry_lines(&mut lines, '+', Color::Green, path, value),
+            Op::Remove { path, from } => entry_lines(&mut lines, '-', Color::Red, path, from),
+            Op::Replace { path, from, to } => {
+                if let (Some(from), Some(to)) = (scalar(from), scalar(to)) {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("~ {path}  "), Style::new().fg(Color::Yellow)),
+                        Span::styled(from, Style::new().fg(Color::Red)),
+                        Span::styled(" → ", Style::new().fg(DIM)),
+                        Span::styled(to, Style::new().fg(Color::Green)),
+                    ]));
+                } else {
+                    lines.push(Line::styled(
+                        format!("~ {path}"),
+                        Style::new().fg(Color::Yellow),
+                    ));
+                    block_lines(&mut lines, '-', Color::Red, from);
+                    block_lines(&mut lines, '+', Color::Green, to);
+                }
+            }
             Op::Text { diff } => lines.extend(diff.lines().map(patch_line)),
             Op::Binary => lines.push(Line::styled(
                 "(binary contents differ)",
@@ -468,6 +487,70 @@ fn ops_lines(ops: &[Op]) -> Vec<Line<'static>> {
         ));
     }
     lines
+}
+
+/// `<mark> path  value` on one line for scalars, or `<mark> path` above the
+/// container's pretty-printed block.
+fn entry_lines(
+    lines: &mut Vec<Line<'static>>,
+    mark: char,
+    color: Color,
+    path: &str,
+    value: &serde_json::Value,
+) {
+    if let Some(text) = scalar(value) {
+        lines.push(Line::styled(
+            format!("{mark} {path}  {text}"),
+            Style::new().fg(color),
+        ));
+    } else {
+        lines.push(Line::styled(
+            format!("{mark} {path}"),
+            Style::new().fg(color),
+        ));
+        block_lines(lines, mark, color, value);
+    }
+}
+
+fn block_lines(
+    lines: &mut Vec<Line<'static>>,
+    mark: char,
+    color: Color,
+    value: &serde_json::Value,
+) {
+    for text in pretty(value) {
+        lines.push(Line::styled(
+            format!("{mark}   {text}"),
+            Style::new().fg(color),
+        ));
+    }
+}
+
+/// A scalar rendered bare when its spelling is unambiguous; strings keep
+/// their JSON quoting only where dropping it would lie (empty, multi-line,
+/// or whitespace-trimmed). Containers return `None` and pretty-print.
+fn scalar(value: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    match value {
+        Value::String(text) => {
+            let ambiguous = text.is_empty() || text.contains('\n') || text.trim() != text;
+            Some(if ambiguous {
+                value.to_string()
+            } else {
+                text.clone()
+            })
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => Some(value.to_string()),
+        Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn pretty(value: &serde_json::Value) -> Vec<String> {
+    serde_json::to_string_pretty(value)
+        .expect("a Value has no non-string keys, so pretty-printing cannot fail")
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Style one line of an already-rendered unified diff by its marker.
@@ -598,6 +681,14 @@ mod tests {
     }
 
     #[test]
+    fn clean_detail_reports_in_sync_without_a_diff() {
+        let entry = entry(State::Clean, None, Vec::new());
+        let text = rendered(&detail_lines(&entry)).join("\n");
+        assert!(text.contains("✓ matches the declared base"));
+        assert!(!text.contains("@@"), "clean entries must not render a diff");
+    }
+
+    #[test]
     fn conflict_detail_shows_both_sides_and_overlap() {
         let entry = entry(
             State::Conflict,
@@ -645,14 +736,42 @@ mod tests {
             Op::Binary,
         ];
         let lines = rendered(&ops_lines(&ops));
-        assert_eq!(lines[0], "+ /a = 1");
-        assert_eq!(lines[1], "- /b = 2");
+        assert_eq!(lines[0], "+ /a  1");
+        assert_eq!(lines[1], "- /b  2");
         assert_eq!(lines[2], "~ /c  3 → 4");
         assert_eq!(lines[3], "(binary contents differ)");
         assert_eq!(
             rendered(&ops_lines(&[]))[0],
             "(no logical changes; drift is formatting- or key-order-only)"
         );
+    }
+
+    #[test]
+    fn ops_render_strings_bare_and_containers_pretty() {
+        use serde_json::json;
+        let ops = vec![
+            Op::Add {
+                path: "/model".to_owned(),
+                value: json!("claude-fable-5[1m]"),
+            },
+            Op::Replace {
+                path: "/mode".to_owned(),
+                from: json!("auto"),
+                to: json!(" padded"),
+            },
+            Op::Add {
+                path: "/rules".to_owned(),
+                value: json!({"deep": true}),
+            },
+        ];
+        let lines = rendered(&ops_lines(&ops));
+        assert_eq!(lines[0], "+ /model  claude-fable-5[1m]");
+        // Ambiguous strings keep their quotes.
+        assert_eq!(lines[1], "~ /mode  auto → \" padded\"");
+        assert_eq!(lines[2], "+ /rules");
+        assert_eq!(lines[3], "+   {");
+        assert_eq!(lines[4], "+     \"deep\": true");
+        assert_eq!(lines[5], "+   }");
     }
 
     #[test]
