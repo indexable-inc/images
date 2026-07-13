@@ -427,9 +427,10 @@ READ = (
     "python_exec whenever the content is for you to read, not for the human to look at — a normal "
     "cell's result streams to BOTH audiences, so it would flood the dashboard. `target` is read "
     "as a file when it names an existing file, otherwise it is evaluated as a Python expression "
-    "in the kernel namespace (e.g. `jobs['ab12'].output` to page a job, or a variable you bound "
-    "earlier); an expression whose value is a string naming an existing file reads that file "
-    "too. Pass `start` / `end` for a 1-based inclusive line range. When the kernel cannot execute "
+    "in the kernel namespace with top-level await allowed, exactly as in a cell (e.g. "
+    "`jobs['ab12'].output` to page a job, `await jobs['ab12']` to wait for one, or a variable "
+    "you bound earlier); an expression whose value is a string naming an existing file reads "
+    "that file too. Pass `start` / `end` for a 1-based inclusive line range. When the kernel cannot execute "
     "the read (wedged or dead), the tool ERRORS with 'kernel unavailable' rather than returning "
     "empty output, so empty content always means the file or value is genuinely empty."
 )
