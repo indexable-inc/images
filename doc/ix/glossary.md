@@ -96,8 +96,9 @@ These do not match each other - check this table before importing or invoking.
 ## room-server
 
 `room-server`: a Rust backend in the private ix monorepo (`crates/room/server`)
-that runs agent turns for symphony. It is not built in this public repo;
-references in `doc/symphony` and `doc/codex` resolve to it.
+that runs agent turns for the Weave runtime (which superseded the decommissioned
+Symphony, ENG-7401). It is not built in this public repo; references in
+`doc/codex` resolve to it.
 
 ## See also
 
