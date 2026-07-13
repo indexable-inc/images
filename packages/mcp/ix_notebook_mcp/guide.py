@@ -69,7 +69,8 @@ JOBS = (
     "Each call runs as an async task and waits up to `budget` seconds; if the work is still going "
     "it keeps running in the background and the call returns a job handle. Background jobs live "
     "in the `jobs` dict, so manage them with more python_exec: `jobs['ab12']` to inspect, `await "
-    "jobs['ab12']` to wait (it yields the run's value), `jobs['ab12'].cancel()` to stop, "
+    "jobs['ab12']` to wait (it yields a `Result`: use `.text` for rendered text or `.value` "
+    "for the original Python value), `jobs['ab12'].cancel()` to stop, "
     "`jobs['ab12'].done()` to test if it has finished, `[j for j in jobs.values() if "
     "j.running()]` to list. `budget` is how long the run holds the one shared shell channel "
     "before it backgrounds, so keep it small and poll: do NOT pass a huge budget to sit on a "
@@ -77,7 +78,7 @@ JOBS = (
     "time and is capped server-side anyway. Let the work background, then re-await or poll "
     "`.done()` in a later cell. `jobs.spawn(coro, name=...)` registers an awaitable you created "
     "yourself as a first-class job with the same lifecycle (appears in `jobs`, notifies on "
-    "completion, result via `await jobs['<id>']`)."
+    "completion, result text via `(await jobs['<id>']).text`)."
 )
 
 PAGING = (
@@ -217,11 +218,23 @@ NU = (
 DELEGATE = (
     "Delegate work to coding agents with the weave verbs. `task = await "
     "weave.delegate('prompt', name='reviewer', model=..., system=...)` appends task facts to "
-    "the shared journal; the weave app fulfills them as a live interactive Claude session - "
-    "visible and interruptible in the Constellation - and the outcome folds back to "
-    "agent:main automatically. `await weave.result(task)` blocks until the task finishes and "
-    "returns its result text (`timeout=` to bound the wait). Run a long delegation as a "
-    "background job and push a channel event with `await notify(...)` when it finishes."
+    "the shared journal; the weave app fulfills them as a live interactive session - "
+    "visible and interruptible in the Constellation - and publishes the terminal outcome to "
+    "the journal. `harness=` picks the CLI per dispatch: 'claude' (the default) or 'codex' "
+    "(the OpenAI Codex CLI); 'omp' is reserved and raises for now. With `harness='codex'`, "
+    "`model=` takes any Codex model id - current catalog: gpt-5.6-sol (recommended for "
+    "delegated task work), gpt-5.6-terra, gpt-5.6-luna, plus the older gpt-5.5 / gpt-5.4 / "
+    "gpt-5.2 - or omit it to use the codex CLI's configured default; `effort=` sets the "
+    "reasoning effort (low/medium/high/xhigh on all models, max/ultra on sol and terra only) "
+    "and is codex-only, rejected with `harness='claude'`. Reusing an agent `name=` across "
+    "dispatches is latest-wins on the agent entity, so vary config on fresh names (the default "
+    "auto-name is always fresh). `await weave.result(task)` blocks until the task finishes and "
+    "returns its result text or raises its failed/cancelled outcome (`timeout=` to bound the "
+    "wait). Keep the main thread free with `job = jobs.spawn(weave.result(task), "
+    "name='delegate: reviewer')`; the durable task result is authoritative and the automatic "
+    "addressed channel wake is best-effort, not exactly-once, so do not add a manual "
+    "`notify(...)`. Once done, read `job.result.text` (or `(await job).text`); `job.result` is "
+    "a `Result` wrapper, not a string."
 )
 
 NIX = (
@@ -414,9 +427,10 @@ READ = (
     "python_exec whenever the content is for you to read, not for the human to look at — a normal "
     "cell's result streams to BOTH audiences, so it would flood the dashboard. `target` is read "
     "as a file when it names an existing file, otherwise it is evaluated as a Python expression "
-    "in the kernel namespace (e.g. `jobs['ab12'].output` to page a job, or a variable you bound "
-    "earlier); an expression whose value is a string naming an existing file reads that file "
-    "too. Pass `start` / `end` for a 1-based inclusive line range. When the kernel cannot execute "
+    "in the kernel namespace with top-level await allowed, exactly as in a cell (e.g. "
+    "`jobs['ab12'].output` to page a job, `await jobs['ab12']` to wait for one, or a variable "
+    "you bound earlier); an expression whose value is a string naming an existing file reads "
+    "that file too. Pass `start` / `end` for a 1-based inclusive line range. When the kernel cannot execute "
     "the read (wedged or dead), the tool ERRORS with 'kernel unavailable' rather than returning "
     "empty output, so empty content always means the file or value is genuinely empty."
 )

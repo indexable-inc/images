@@ -436,6 +436,26 @@
     name = "ix-mcp-nix-python-source";
     path = ./src/nix;
   };
+  # `sharedaudio`: drive the local shared-audio daemon (packages/audio) over
+  # its unix control socket: status, local volume, and publishing WASM
+  # instruments / control changes to every peer. Pure stdlib JSON-lines
+  # client, cross-platform, so every session can `import sharedaudio`.
+  sharedaudioPythonSource = builtins.path {
+    name = "ix-mcp-sharedaudio-python-source";
+    path = ./src/sharedaudio;
+  };
+  sharedaudioModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-sharedaudio-python-module"
+    {
+      strictDeps = true;
+      meta.description = "shared-audio daemon control client bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/sharedaudio"
+      mkdir -p "$site"
+      cp -r ${sharedaudioPythonSource}/sharedaudio/. "$site/"
+    ''
+  );
   nixModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-nix-python-module"
     {
@@ -1345,6 +1365,7 @@
       ixNotebookMcpModule
       viewModule
       nixModule
+      sharedaudioModule
       fleetModule
       meshModule
       weaveModule
@@ -2012,6 +2033,15 @@
   # The server package imports and registers its full tool surface. Exercises the
   # FastMCP registration (schemas from type hints) without starting a kernel or
   # the Jupyter Server, so it is sandbox-safe.
+  # Every first-party `src/` package (each one becomes a toPythonModule above)
+  # must surface in the `api()` catalog (a `registry.MODULES` row) or carry an
+  # explicit reason in `registry.UNCATALOGED`: `svelte` was bundled but missing
+  # from the catalog for months (index#3091). Derived from the directory
+  # listing so the next module cannot repeat that; the filter drops the lone
+  # `private_session.py` file (a shared guard, not a module dir).
+  srcModules = builtins.attrNames (
+    lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./src)
+  );
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
@@ -2026,6 +2056,12 @@
     + "assert '(query:' not in instr and '(path:' not in instr, 'a signature leaked into the instructions'; "
     + "missing = [m.name for m in registry.MODULES if ('`' + m.name + '`') not in instr]; "
     + "assert not missing, ('registry modules missing from instructions: %r' % (missing,)); "
+    + "import json; bundled = json.loads(${builtins.toJSON (builtins.toJSON srcModules)}); "
+    + "cataloged = set(registry.module_names()) | set(registry.UNCATALOGED); "
+    + "dropped = [n for n in bundled if n not in cataloged]; "
+    + "assert not dropped, ('bundled src/ modules missing from the api() catalog -- add a registry.Module row or a registry.UNCATALOGED reason: %r' % (dropped,)); "
+    + "stale = sorted(set(registry.UNCATALOGED) - set(bundled)); "
+    + "assert not stale, ('registry.UNCATALOGED names modules not under src/: %r' % (stale,)); "
     + "print('server-ok', len(names))"
   );
 
@@ -2597,7 +2633,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540) + kernel host seam: local child vs ray actor";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540) + read target top-level await (#3139) + nu-job line paging (#3131) + kernel host seam: local child vs ray actor";
     }
     ''
       export HOME=$TMPDIR/home
@@ -2617,6 +2653,8 @@
       cp ${./tests/test_cancel_running.py} test_cancel_running.py
       # Issue #2164: jobs.spawn registers an ad-hoc awaitable as a first-class job.
       cp ${./tests/test_jobs_spawn.py} test_jobs_spawn.py
+      # A spawned job starts and finishes the same proc entity; no detached run phantom.
+      cp ${./tests/test_spawn_store_lifecycle.py} test_spawn_store_lifecycle.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
       # Issue #2542: find('*.py') auto-detects a glob-shaped non-regex pattern.
@@ -2647,10 +2685,15 @@
       cp ${./tests/test_pr_watch_automerge.py} test_pr_watch_automerge.py
       # Issue #2540: input= routes past no-input statements (cd /tmp; ^cat) or raises.
       cp ${./tests/test_nu_input_routing.py} test_nu_input_routing.py
+      # Issue #3139: the read tool's target expression allows top-level await.
+      cp ${./tests/test_read_await.py} test_read_await.py
+      # Issue #3131: a job wrapping nu(check=False) pages real stdout lines.
+      cp ${./tests/test_nu_job_output.py} test_nu_job_output.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
         test_jobs_spawn.py \
+        test_spawn_store_lifecycle.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_fsearch_glob_pattern.py \
@@ -2665,6 +2708,8 @@
         test_unexecuted_note.py \
         test_pr_watch_automerge.py \
         test_nu_input_routing.py \
+        test_read_await.py \
+        test_nu_job_output.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp typecheck smoke failed:" >&2
         cat stdout stderr >&2

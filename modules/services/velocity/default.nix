@@ -270,7 +270,7 @@ in {
 
     port = mkOption {
       type = types.port;
-      default = 25565;
+      default = 25_565;
       description = "TCP port Velocity binds for Java clients.";
     };
 
@@ -442,7 +442,7 @@ in {
 
       readTimeout = mkOption {
         type = types.ints.positive;
-        default = 30000;
+        default = 30_000;
         description = "Backend read timeout in milliseconds.";
       };
 
@@ -542,7 +542,7 @@ in {
 
       port = mkOption {
         type = types.port;
-        default = 25565;
+        default = 25_565;
         description = "UDP port for query responses.";
       };
 

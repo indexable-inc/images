@@ -31,6 +31,7 @@ def _run(
         store.finish(
             conn,
             id=id,
+            kind="cell",
             status="done",
             ended_at=started_at + 1,
             output="",

@@ -61,9 +61,9 @@
       }
     else cfg.package;
 
-  huggingfaceCli = pkgs.python3.withPackages (pythonPackages: [
-    pythonPackages.huggingface-hub
-    pythonPackages.hf-transfer
+  huggingfaceCli = pkgs.python3.withPackages (ps: [
+    ps.huggingface-hub
+    ps.hf-transfer
   ]);
 
   modelDir = "${cfg.stateDir}/models/${cfg.model.alias}";
@@ -139,7 +139,7 @@ in {
 
     port = lib.mkOption {
       type = lib.types.port;
-      default = 18080;
+      default = 18_080;
       description = "Port the server listens on.";
     };
 
@@ -174,10 +174,10 @@ in {
       type = lib.types.attrsOf settingsValueType;
       default = {};
       example = {
-        "ctx-size" = 65536;
-        "n-gpu-layers" = 99;
+        ctx-size = 65_536;
+        n-gpu-layers = 99;
         mlock = true;
-        "flash-attn" = "on";
+        flash-attn = "on";
       };
       description = ''
         Extra `llama-server` command-line settings merged over the computed

@@ -6,7 +6,16 @@ members = [
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
   "packages/agent/subagent-cache",
+  "packages/audio/app",
+  "packages/audio/blob",
+  "packages/audio/clock",
   "packages/audio/dsp",
+  "packages/audio/e2e",
+  "packages/audio/engine",
+  "packages/audio/instrument",
+  "packages/audio/melody",
+  "packages/audio/net",
+  "packages/audio/score",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",
@@ -28,6 +37,7 @@ members = [
   "packages/code/clone-detect/pragma",
   "packages/code/clone-detect/scanner",
   "packages/code/clone-detect/test-support",
+  "packages/code/tree-sitter-nix",
   "packages/config-launch",
   "packages/cve-scan",
   "packages/code/code-highlight",
@@ -170,7 +180,13 @@ anstyle = "1"
 anyhow = "1"
 arrow = "59"
 ast-merge-ast = { path = "packages/code/ast-merge/ast" }
+audio-blob = { path = "packages/audio/blob" }
+audio-clock = { path = "packages/audio/clock" }
 audio-dsp = { path = "packages/audio/dsp" }
+audio-engine = { path = "packages/audio/engine" }
+audio-instrument = { path = "packages/audio/instrument" }
+audio-net = { path = "packages/audio/net" }
+audio-score = { path = "packages/audio/score" }
 ast-merge-diff = { path = "packages/code/ast-merge/diff" }
 ast-merge-git = { path = "packages/code/ast-merge/git" }
 ast-merge-langs = { path = "packages/code/ast-merge/langs" }
@@ -183,6 +199,7 @@ bytes = "1"
 # Pure-Rust bzip2 (the 0.6 default backend is libbz2-rs-sys), used to read
 # Nix's build logs, which are bzip2-compressed on disk while being written.
 bzip2 = "0.6"
+cc = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
 source-atuin = { path = "packages/search/source/atuin" }
@@ -210,6 +227,7 @@ ix-vt-sys = { path = "packages/tui/vt/ix-vt-sys", version = "0.1.0" }
 kitty = { path = "packages/terminal/kitty" }
 lake-iceberg = { path = "packages/search/lake/iceberg" }
 color-eyre = "0.6"
+crossterm = "0.29"
 dashboard-core = { path = "packages/dashboard/dashboard-core" }
 deadpool-postgres = "0.14"
 devicons = "0.6"
@@ -294,6 +312,7 @@ pythonize = "0.28"
 quartz_nbt = "0.2.9"
 quote = "1"
 rayon = "1"
+ratatui = "0.30"
 regex = "1"
 repo-walker = { path = "packages/repo-walker" }
 image = { version = "0.25", default-features = false }
@@ -363,6 +382,10 @@ tree-sitter-kotlin-ng = "1.1"
 tree-sitter-language = "0.1"
 tree-sitter-lua = "0.5"
 tree-sitter-md = "0.5"
+# Patched with underscore digit separators in numeric literals: the
+# [patch.crates-io] entry below substitutes the in-repo fork
+# (packages/code/tree-sitter-nix) for this crates-io release everywhere the
+# workspace resolves it.
 tree-sitter-nix = "0.3"
 tree-sitter-ocaml = "0.25"
 tree-sitter-php = "0.24"
@@ -394,6 +417,18 @@ webpki-roots = "1"
 # `transparent` is a non-default feature: without it `with_transparent(true)`
 # is a silent no-op and the webview paints an opaque canvas, hiding the
 # ix-windows blur behind a flat card.
+# Sandboxed deterministic runtime for shared-audio instrument modules
+# (packages/audio/instrument). Minimal feature set: Cranelift JIT, the
+# runtime itself, WAT text support for built-in/demo instruments, and the
+# std/signals/parallel-compilation platform features.
+wasmtime = { version = "46", default-features = false, features = [
+  "anyhow",
+  "cranelift",
+  "runtime",
+  "wat",
+  "std",
+  "parallel-compilation",
+] }
 wry = { version = "0.55", features = ["transparent"] }
 x509-parser = "0.18"
 xxhash-rust = { version = "0.8", default-features = false }
@@ -401,3 +436,11 @@ xxhash-rust = { version = "0.8", default-features = false }
 # are opted into per consumer, so the default heavyweight codecs (zstd, lzma,
 # bzip2) stay out of the build graph.
 zip = { version = "7", default-features = false }
+
+# Workspace-wide crate substitutions. `tree-sitter-nix` is the in-repo fork
+# carrying underscore digit separators in numeric literals (the dialect the
+# patched nix-ix lexer accepts; see packages/code/tree-sitter-nix/README.md),
+# so astlog, clone-detect, and every other ast-merge-langs consumer parse the
+# same numbers nix does.
+[patch.crates-io]
+tree-sitter-nix = { path = "packages/code/tree-sitter-nix" }

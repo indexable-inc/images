@@ -21,6 +21,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -44,13 +45,20 @@ _QUEUE_MAX = 10_000
 _BEAT_S = 60.0
 _WARNED_OFF = False
 
-def _http_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
-    headers: dict[str, str] = {}
+def _http_json(
+    method: str,
+    url: str,
+    *,
+    body: object = None,
+    content: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> object:
+    all_headers: dict[str, str] = dict(headers or {})
     data: bytes | None = content
     if body is not None:
         data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - configured local/Weave endpoint
+        all_headers["Content-Type"] = "application/json"
+    req = Request(url, data=data, headers=all_headers, method=method)  # noqa: S310 - configured local/Weave endpoint
     with urlopen(req, timeout=10.0) as resp:  # noqa: S310
         raw = resp.read()
     if not raw:
@@ -58,10 +66,16 @@ def _http_json(method: str, url: str, *, body: object = None, content: bytes | N
     return json.loads(raw.decode("utf-8"))
 
 
-def _http_bytes(method: str, url: str, *, content: bytes | None = None) -> bytes:
-    req = Request(url, data=content, method=method)  # noqa: S310 - configured local/Weave endpoint
+def _http_bytes(method: str, url: str, *, content: bytes | None = None, headers: dict[str, str] | None = None) -> bytes:
+    req = Request(url, data=content, headers=dict(headers or {}), method=method)  # noqa: S310 - configured local/Weave endpoint
     with urlopen(req, timeout=10.0) as resp:  # noqa: S310
         return resp.read()
+
+
+def _auth_denied(exc: Exception) -> bool:
+    """An authentication rejection is permanent for this process: the
+    credential (or its absence) will not change under retry."""
+    return isinstance(exc, HTTPError) and exc.code in (401, 403)
 
 
 def _now() -> float:
@@ -123,6 +137,11 @@ class WeaveStore:
         suffix = _stable8(path)
         self.weave_url = os.environ.get("WEAVE_URL", _DEFAULT_WEAVE_URL).rstrip("/")
         self.disabled = self.weave_url.lower() == "off"
+        # The per-session store credential (weave session_env). Sent as
+        # X-Api-Key on every weave request, the same header the sibling
+        # `weave` client module uses; absent on open-loopback dev servers.
+        # The mailbox/data API is a different trust domain: no token there.
+        self._token = os.environ.get("WEAVE_TOKEN") or ""
         self.agent = os.environ.get("IX_WEAVE_AGENT") or f"agent:{suffix}"
         self.kernel = f"kernel:{suffix}"
         self.mailbox_base = os.environ.get("IX_MCP_DATA_API_URL", _DEFAULT_DATA_API).rstrip("/")
@@ -159,6 +178,28 @@ class WeaveStore:
                 (self.kernel, "heartbeat_ms", now),
                 (self.agent, "on_kernel", self.kernel),
             ])
+
+    def _auth(self) -> dict[str, str]:
+        return {"X-Api-Key": self._token} if self._token else {}
+
+    def _disable_on_auth_denial(self, exc: Exception) -> None:
+        """Weave rejected the credential: retrying cannot help, so fail loudly
+        once and drop to the disabled mode instead of silently backing off
+        forever (the failure mode that hid a dead kernel-presence lane)."""
+        hint = "with credential" if self._token else "without WEAVE_TOKEN"
+        print(
+            f"ix-mcp store: weave rejected writes ({exc}) {hint}; persistence "
+            f"writes to {self.weave_url} are DISABLED for this process - the "
+            "kernel will not appear on the board (set WEAVE_TOKEN to a "
+            "credential the weave server accepts)",
+            file=sys.stderr,
+        )
+        with self._cv:
+            self.disabled = True
+            self._queue.clear()
+            self._inflight = False
+            self._closed = True
+            self._cv.notify_all()
 
     def close(self) -> None:
         # Best-effort drain so queued facts do not die with the process.
@@ -216,14 +257,14 @@ class WeaveStore:
         cached = self._blob_cache.get(digest)
         if cached:
             return _HashRef(cached)
-        h = str(_http_json("POST", f"{self.weave_url}/api/blob", content=data)["hash"])
+        h = str(_http_json("POST", f"{self.weave_url}/api/blob", content=data, headers=self._auth())["hash"])
         self._blob_cache[digest] = h
         return _HashRef(h)
 
     def get_blob(self, hash_: str) -> bytes:
         if self.disabled or not hash_:
             return b""
-        return _http_bytes("GET", f"{self.weave_url}/api/blob/{quote(hash_, safe='')}")
+        return _http_bytes("GET", f"{self.weave_url}/api/blob/{quote(hash_, safe='')}", headers=self._auth())
 
     def _resolve_blob_item(self, item: dict) -> dict:
         """blob_fact items defer their CAS put to the writer thread: PUT the
@@ -259,12 +300,15 @@ class WeaveStore:
                 self._inflight = True
             try:
                 body = [self._resolve_blob_item(item) for item in batch]
-                _http_json("POST", f"{self.weave_url}/api/facts", body=body if len(body) != 1 else body[0])
+                _http_json("POST", f"{self.weave_url}/api/facts", body=body if len(body) != 1 else body[0], headers=self._auth())
                 backoff = 0.25
                 with self._cv:
                     self._inflight = False
                     self._cv.notify_all()
             except Exception as exc:
+                if _auth_denied(exc):
+                    self._disable_on_auth_denial(exc)
+                    return
                 print(f"ix-mcp store: weave write failed, retrying: {exc}", file=sys.stderr)
                 with self._cv:
                     for item in reversed(batch):
@@ -285,7 +329,7 @@ class WeaveStore:
         payload: dict[str, Any] = {"program": program}
         if as_of is not None:
             payload["as_of"] = as_of
-        return _http_json("POST", f"{self.weave_url}/api/query", body=payload)
+        return _http_json("POST", f"{self.weave_url}/api/query", body=payload, headers=self._auth())
 
     def mailbox(self, method: str, path: str, *, json_body: object = None) -> object:
         try:
@@ -504,8 +548,11 @@ def stream_snapshot(conn: WeaveStore, stream: str, data: bytes) -> None:
         conn._enqueue_blob_fact(stream, "snapshot", data)
 
 
-def finish(conn: WeaveStore, *, id: str, status: str, ended_at: float, output: str, result: str | None, error: str | None, error_line: int | None = None, outputs: list | None = None, bindings: dict | None = None, namespace: list | None = None) -> None:
-    ent = _entity("run", id)
+def finish(conn: WeaveStore, *, id: str, kind: str, status: str, ended_at: float, output: str, result: str | None, error: str | None, error_line: int | None = None, outputs: list | None = None, bindings: dict | None = None, namespace: list | None = None) -> None:
+    # This must select the same entity as start(): spawned awaitables are
+    # processes, not runs. Finishing a spawn under run:<id> leaves proc:<id>
+    # permanently running and creates a detached phantom run.
+    ent = _entity("proc", id) if kind == "spawn" else _entity("run", id)
     ended = _ms(ended_at)
     facts: list[tuple[str, str, Any]] = [(ent, "status", status), (ent, "ended_ms", ended), (ent, "last_output", (output or "")[-200:]), (conn.agent, "last_output", (output or "")[-200:])]
     if result is not None:

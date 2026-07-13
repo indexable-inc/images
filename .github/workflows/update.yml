@@ -37,6 +37,11 @@ jobs:
       - name: Install Determinate Nix
         uses: ./.github/actions/install-nix
 
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
       # Runs every content updater in parallel via dag-runner (see
       # lib/per-system.nix). Each regenerates its own source files relative to
       # the repo root: the Minecraft catalogs/sound pack, and each pinned

@@ -18,6 +18,8 @@
   snix-src,
   clippy-src,
   codex-src,
+  zed-src,
+  zed-upstream,
   nix-src,
   ghostty,
   mesa-src,
@@ -161,6 +163,13 @@
   # Exposed so a downstream consumer passes it straight through to `mkForkChecks`
   # rather than reaching into index's package layout by path.
   forkDagCheckSrc = paths.packagesRoot + "/rebase-patches";
+  # Public patch data for consumers whose system Nix is not `nix-ix`. Keep the
+  # patch bytes owned by index so fleet configurations consume one source of
+  # truth instead of copying the fix into each repository.
+  nixPatches = {
+    autoGcRecheckAfterLock = paths.packagesRoot + "/nix/nix/patches/0017-fix-libstore-recheck-free-space-after-GC-lock.patch";
+    opaqueTemporaryRootFilenames = paths.packagesRoot + "/nix/nix/patches/0016-fix-libstore-accept-opaque-temporary-root-filenames.patch";
+  };
   secretRefs = import ./util/secret-refs.nix {inherit lib;};
   selfVersionFor = self: import ./util/self-version.nix {inherit lib self;};
   checks = import ./checks.nix {inherit lib;};
@@ -310,10 +319,15 @@
     buildRustPackage
     ;
   cargoUnit = cargoUnitFor pkgs;
+  cargoUnitExternal = import ./rust/external.nix {repoRoot = paths.root;};
   # Default patched-source builder, bound to the top-level x86_64-linux pkgs for
   # image/module eval; `ixForPackages` / the overlay context rebind it to the
   # consuming pkgs so a patched source builds for its own system.
   patchedSrc = patchedSrcFor pkgs;
+  # Patch the vendored rnix inside a rust tool so it lexes underscore digit
+  # separators in nix numeric literals; the alejandra/statix/deadnix package
+  # dirs under packages/nix/ consume this. See its doc comment.
+  rnixDigitSeparators = import ./util/rnix-digit-separators;
   goUnitFor = pkgs:
     import ./build/go-unit.nix {
       inherit lib pkgs;
@@ -526,6 +540,7 @@
       rustWorkspaceFor
       clippy-src
       ghostty
+      zed-src
       ;
   };
 
@@ -685,6 +700,7 @@
       mkMinecraftSyncManaged
       mutableJson
       netCidr
+      nixPatches
       paths
       patchedSrc
       patchedSrcFor
@@ -693,6 +709,7 @@
       publicArtifactsFor
       relativePath
       repoMetadata
+      rnixDigitSeparators
       ruffAnnArgs
       rustWorkspace
       rustWorkspaceFor
@@ -715,6 +732,7 @@
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
+    zedSrc = zed-upstream;
     clippySrc = clippy-src;
     nixSrc = nix-src;
     drgnSrc = drgn-src;
@@ -795,6 +813,7 @@
         appleSdkToolchain
         bunLockFor
         cargoUnitFor
+        cargoUnitExternal
         discoverModules
         discoverTree
         errors

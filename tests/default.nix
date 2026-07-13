@@ -15,14 +15,6 @@
   # (repo policy: no hash literals in tracked .nix).
   pins = ix.pins.loadPins ./pins.json;
   portableServicesTest = import ./portable-services.nix {inherit lib pkgs ix;};
-  symphonyHomeModuleTest = import ./symphony-home-module.nix {
-    inherit
-      lib
-      pkgs
-      ix
-      paths
-      ;
-  };
   # Provenance walker + home module (whence, #2413): asserts the manifest of
   # a real home-manager eval links deployed paths to their defining sites,
   # so it takes the home-manager flake input rather than option stubs.
@@ -313,7 +305,7 @@
           {
             services.minecraft.rcon = {
               enable = true;
-              port = 25576;
+              port = 25_576;
               openFirewall = true;
             };
           }
@@ -352,7 +344,7 @@
         {
           services.minecraft.plugins = {
             pvpindex-factions = {};
-            simple-voice-chat.port = 24455;
+            simple-voice-chat.port = 24_455;
             terraformgenerator.worlds = [
               "factions"
               "factions_nether"
@@ -375,10 +367,10 @@
         {
           services.minecraft.properties = {
             query = {
-              port = 25565;
+              port = 25_565;
             };
             rcon = {
-              port = 25575;
+              port = 25_575;
             };
           };
         }
@@ -674,26 +666,6 @@
     # Outer pkgs has no allowUnfree, so forcing pkgs.claude-code here would
     # throw at eval; use lib.getName over the rendered systemPackages list.
     packageNames = map lib.getName config.environment.systemPackages;
-  };
-
-  # The symphony control-plane module (modules/services/symphony) evaluated
-  # standalone, the way ix's host modules consume it. `package` only needs a
-  # /bin path shape at eval, so hello stands in for the launcher.
-  symphonyService = let
-    config = evalConfig [
-      {
-        ix.image.name = "test/symphony-module";
-        services.symphony = {
-          enable = true;
-          package = pkgs.hello;
-          primaryRepo = "/srv/checkouts/index";
-          environmentFile = "/run/secrets/symphony.env";
-        };
-      }
-    ];
-  in {
-    inherit config;
-    unit = config.systemd.services.symphony;
   };
 
   pythonAppClosureProbe = ix.writePythonApplication pkgs {
@@ -2246,7 +2218,7 @@
       services.velocity = {
         enable = true;
         address = "10.0.0.5";
-        port = 25570;
+        port = 25_570;
         openFirewall = false;
       };
     }
@@ -2278,8 +2250,8 @@
     {
       services.minecraft-bedrock = {
         enable = true;
-        port = 19132;
-        portv6 = 19132;
+        port = 19_132;
+        portv6 = 19_132;
       };
     }
   ];
@@ -3102,7 +3074,7 @@
           ports = ixRayHead.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
           builtins.elem 6379 ports
-          && builtins.elem 10001 ports
+          && builtins.elem 10_001 ports
           && builtins.elem 8799 ports
           && builtins.elem 6380 ports
           && builtins.elem 6381 ports;
@@ -3123,11 +3095,11 @@
             6381
             8798
             8799
-            10001
+            10_001
           ];
         in
           builtins.all (p: !(builtins.elem p globalPorts)) rayPorts
-          && builtins.all (r: !(r.from == 10002 && r.to == 10031)) globalRanges;
+          && builtins.all (r: !(r.from == 10_002 && r.to == 10_031)) globalRanges;
         message = "ix-ray must never open its ports on the global firewall, only on tailscale0";
       }
       {
@@ -3139,7 +3111,7 @@
           builtins.elem 8799 ports
           && builtins.elem 6380 ports
           && !(builtins.elem 6379 ports)
-          && !(builtins.elem 10001 ports);
+          && !(builtins.elem 10_001 ports);
         message = "ix-ray worker should open exec + manager ports but not the GCS/client ports";
       }
       {
@@ -3240,7 +3212,7 @@
         assertion = let
           ports = ixSparkMaster.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
-          builtins.elem 15002 ports && builtins.elem 7077 ports;
+          builtins.elem 15_002 ports && builtins.elem 7077 ports;
         message = "ix-spark master should open the Connect (15002) and master (7077) ports on tailscale0";
       }
       {
@@ -3255,7 +3227,7 @@
             7078
             7079
             7080
-            15002
+            15_002
           ];
         message = "ix-spark must never open its ports on the global firewall, only on tailscale0";
       }
@@ -3269,7 +3241,7 @@
           && !(ixSparkWorker.systemd.services ? spark-master)
           && !(ixSparkWorker.systemd.services ? spark-connect)
           && !(builtins.elem 7077 ports)
-          && !(builtins.elem 15002 ports);
+          && !(builtins.elem 15_002 ports);
         message = "ix-spark worker should run only a worker and open no master/connect ports";
       }
       {
@@ -3442,6 +3414,10 @@
         message = "base image should publish from the ix/base repository";
       }
       {
+        assertion = !base.config.networking.resolvconf.enable;
+        message = "image platform should preserve the runtime DNS configuration written by ix-vm-guest";
+      }
+      {
         assertion = lib.elemAt base.config.nix.settings.substituters 0 == "https://cache.ix.dev";
         message = "base profile should route Nix through cache.ix.dev before fallback substituters";
       }
@@ -3462,7 +3438,7 @@
       {
         assertion =
           factionsExample.cfg.worldBorder.enable
-          && factionsExample.cfg.worldBorder.diameter == 12000
+          && factionsExample.cfg.worldBorder.diameter == 12_000
           && factionsExample.cfg.properties.max-world-size == 6000;
         message = "factions example should declare a managed world border";
       }
@@ -3476,7 +3452,7 @@
         message = "factions example should keep RCON private while exposing Minecraft and BlueMap";
       }
       {
-        assertion = builtins.elem 24454 factionsExample.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 24_454 factionsExample.config.networking.firewall.allowedUDPPorts;
         message = "factions example should expose Simple Voice Chat on the default UDP port";
       }
       {
@@ -3490,7 +3466,7 @@
             "simple-voice-chat"
           ]
           && claims.simple-voice-chat.protocol == "udp"
-          && claims.simple-voice-chat.port == 24454;
+          && claims.simple-voice-chat.port == 24_454;
         message = "factions example should register every service listener in ix.networking.portClaims";
       }
       {
@@ -3561,7 +3537,7 @@
         assertion =
           survivalExample.minecraft.paper.enable
           && survivalExample.minecraft.version == "26.1.2"
-          && survivalExample.minecraft.port == 25566
+          && survivalExample.minecraft.port == 25_566
           && !survivalExample.minecraft.openFirewall
           && !survivalExample.minecraft.properties.online-mode;
         message = "survival example should keep Paper behind the proxy";
@@ -3570,13 +3546,13 @@
         assertion = let
           ports = survivalExample.config.networking.firewall.allowedTCPPorts;
         in
-          builtins.elem 25565 ports
-          && !(builtins.elem 25566 ports)
+          builtins.elem 25_565 ports
+          && !(builtins.elem 25_566 ports)
           && !(builtins.elem survivalExample.minecraft.rcon.port ports);
         message = "survival example should expose Velocity while keeping backend and RCON private";
       }
       {
-        assertion = builtins.elem 19132 survivalExample.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 19_132 survivalExample.config.networking.firewall.allowedUDPPorts;
         message = "survival example should expose Geyser's Bedrock UDP listener";
       }
       {
@@ -3589,10 +3565,10 @@
             "minecraft-rcon"
             "geyser"
           ]
-          && claims.velocity.port == 25565
-          && claims.minecraft.port == 25566
+          && claims.velocity.port == 25_565
+          && claims.minecraft.port == 25_566
           && claims.geyser.protocol == "udp"
-          && claims.geyser.port == 19132;
+          && claims.geyser.port == 19_132;
         message = "survival example should register proxy, backend, RCON, and Bedrock listeners";
       }
       {
@@ -4095,7 +4071,7 @@
           inherit (minecraftBlocksExample) schema;
         in
           schema.coordOffset
-          == 1048576
+          == 1_048_576
           && lib.hasInfix "mortonEncode" schema.createTableSql
           && lib.hasInfix "toUInt32(x + 1048576)" schema.mortonExpr
           && builtins.length schema.mortonFields == 3
@@ -4470,41 +4446,13 @@
       }
     ];
 
-    # The control-plane runtime module that moved in-tree with
-    # packages/symphony. These pin the env contract ix's hil deployment and
-    # the worker module read off the unit, so a refactor that renames an
-    # option or drops the EnvironmentFile pass-through fails here instead of
-    # on a host switch.
-    symphony = [
-      {
-        assertion = symphonyService.unit.environment.SYMPHONY_WORKFLOW_PACK == "example";
-        message = "symphony module should default to the bundled example workflow pack";
-      }
-      {
-        assertion = symphonyService.unit.environment.SYMPHONY_PRIMARY_REPO == "/srv/checkouts/index";
-        message = "symphony module should export the primary repo checkout to the runtime";
-      }
-      {
-        assertion = lib.hasSuffix "/bin/symphony" symphonyService.unit.serviceConfig.ExecStart;
-        message = "symphony module should exec /bin/symphony from the configured package";
-      }
-      {
-        assertion = symphonyService.unit.serviceConfig.EnvironmentFile == "/run/secrets/symphony.env";
-        message = "symphony module should pass the secrets EnvironmentFile through to systemd";
-      }
-      {
-        assertion = !(symphonyService.unit.environment ? SYMPHONY_HOST_USER);
-        message = "symphony module should keep host-placement env unset until hostRuntime.enable";
-      }
-    ];
-
     minecraft = [
       {
         assertion = minecraft.cfg.version == "26.1.2";
         message = "default Minecraft module should follow versions.nix default runtime version";
       }
       {
-        assertion = minecraft.cfg.properties.max-players == 100000;
+        assertion = minecraft.cfg.properties.max-players == 100_000;
         message = "default Minecraft module should allow the large ix player ceiling";
       }
       {
@@ -4738,13 +4686,13 @@
         message = "Paper minecraft should seed pluginCatalog from the generated 26.1.2 Paper catalog";
       }
       {
-        assertion = builtins.elem 24455 minecraft.paperPlugins.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 24_455 minecraft.paperPlugins.config.networking.firewall.allowedUDPPorts;
         message = "Simple Voice Chat should open its UDP port when installed as a Paper plugin";
       }
       {
         assertion =
           minecraft.paperPlugins.cfg.serverFiles."plugins/voicechat/voicechat-server.properties".port
-          == 24455;
+          == 24_455;
         message = "Simple Voice Chat should render Paper plugin config under plugins/voicechat";
       }
       {
@@ -5485,11 +5433,11 @@
         message = "services.minestom.yourkit.sessionName should appear in the agent options";
       }
       {
-        assertion = builtins.elem 10001 minestomYourkit.firewallTcpPorts;
+        assertion = builtins.elem 10_001 minestomYourkit.firewallTcpPorts;
         message = "services.minestom.yourkit.openFirewall should open the YourKit port in the firewall";
       }
       {
-        assertion = minestomYourkit.portClaim != null && minestomYourkit.portClaim.port == 10001;
+        assertion = minestomYourkit.portClaim != null && minestomYourkit.portClaim.port == 10_001;
         message = "services.minestom.yourkit.enable should register a portClaim for the YourKit port";
       }
       {
@@ -6240,7 +6188,6 @@ in {
   # Strict type + annotation gate over the public ix-sdk Python sources.
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
-  symphonyHomeModule = symphonyHomeModuleTest;
   provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
@@ -6254,7 +6201,6 @@ in {
       fleetTest
       helperTest
       portableServicesTest
-      symphonyHomeModuleTest
       provenanceTest
       cargoUnitPrebuiltTest
     ]
