@@ -227,6 +227,7 @@ ix-vt-sys = { path = "packages/tui/vt/ix-vt-sys", version = "0.1.0" }
 kitty = { path = "packages/terminal/kitty" }
 lake-iceberg = { path = "packages/search/lake/iceberg" }
 color-eyre = "0.6"
+crossterm = "0.29"
 dashboard-core = { path = "packages/dashboard/dashboard-core" }
 deadpool-postgres = "0.14"
 devicons = "0.6"
@@ -311,6 +312,7 @@ pythonize = "0.28"
 quartz_nbt = "0.2.9"
 quote = "1"
 rayon = "1"
+ratatui = "0.30"
 regex = "1"
 repo-walker = { path = "packages/repo-walker" }
 image = { version = "0.25", default-features = false }
