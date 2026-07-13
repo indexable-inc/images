@@ -284,6 +284,39 @@ enum State {
     Snoozed,
 }
 
+pub struct TuiEntry {
+    pub path: String,
+    pub state: String,
+    pub diff: String,
+}
+
+pub fn tui_entries(store: &Store) -> Result<Vec<TuiEntry>> {
+    store
+        .all_metas()?
+        .into_iter()
+        .map(|meta| {
+            let entry = status_entry(store, &meta)?;
+            let state = match entry.state {
+                State::Clean => return Ok(None),
+                State::Drifted => "drifted",
+                State::Conflict => "conflict",
+                State::Snoozed => "snoozed",
+            };
+            let diff = serde_json::to_string_pretty(&serde_json::json!({
+                "yourEdits": entry.your_edits,
+                "incomingEdits": entry.incoming_edits,
+                "overlap": entry.overlap,
+            }))?;
+            Ok(Some(TuiEntry {
+                path: entry.path,
+                state: state.to_owned(),
+                diff,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|entries| entries.into_iter().flatten().collect())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusEntry {
