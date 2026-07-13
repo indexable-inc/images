@@ -2418,6 +2418,22 @@ in {
         repoPackages.astlog
         pkgs.alejandra
       ];
+      # ix-vt-sys's build script reads IX_VT_GHOSTTY_LIB_DIR to emit the
+      # libghostty-vt link search path, and the ix-vt/tui test binaries dlopen
+      # the dylib at runtime. Export the unit graph's own lib dir
+      # (lib/rust/workspace.nix) so plain `cargo test -p tui -p ix-vt` works
+      # from the devshell (#3118).
+      env = let
+        inherit (ix.rustWorkspaceFor pkgs) ghosttyLibDir;
+      in
+        {
+          IX_VT_GHOSTTY_LIB_DIR = ghosttyLibDir;
+        }
+        // lib.optionalAttrs pkgs.stdenv.isDarwin {
+          # Plain cargo emits no rpath entry for the dylib, so darwin's loader
+          # resolves @rpath/libghostty-vt.dylib via the fallback path.
+          DYLD_FALLBACK_LIBRARY_PATH = ghosttyLibDir;
+        };
     };
 
     bench = pkgs.mkShellNoCC {
