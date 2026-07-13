@@ -80,7 +80,8 @@ runs:
           exit 1
         fi
         client="$RUNNER_TEMP/nix-ix/bin/nix"
-        if [[ "$("$client" eval --raw --expr 'toString 25_565')" != 25565 ]]; then
+        if [[ "$("$client" --extra-experimental-features nix-command \
+          eval --raw --expr 'toString 25_565')" != 25565 ]]; then
           echo "::error title=bootstrap-patched-nix::built client does not accept underscore digit separators"
           exit 1
         fi
