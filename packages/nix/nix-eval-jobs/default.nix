@@ -18,7 +18,7 @@
 
   # The override's real risk is silently relinking against nixpkgs' default
   # Nix family after an update, so the smoke test checks both the executable
-  # and its propagated Nix component version -- including the `+ix` marker,
+  # and its propagated Nix component version -- including the `+ix` build-metadata marker,
   # so a silent fallback to the stock 2.34 components fails here.
   smoke =
     pkgs.runCommand "nix-eval-jobs-smoke"
@@ -28,7 +28,7 @@
     }
     ''
       case ${package.nixComponents.nix-cli.version} in
-        2.34.*+ix) ;;
+        2.34.*+ix*) ;;
         *)
           echo "nix-eval-jobs is not linked to the patched 2.34 (+ix) component family" >&2
           exit 1
