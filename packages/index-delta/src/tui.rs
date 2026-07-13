@@ -1,73 +1,119 @@
-use std::io::{self, Stdout};
+//! `index-delta tui`: an interactive drift browser. The sidebar lists every
+//! pending file; the detail pane renders the real unified diff (base vs the
+//! file on disk, plus base vs the staged incoming base for conflicts). Enter
+//! suspends into `$VISUAL`/`$EDITOR` on the selected file and re-diffs on
+//! return.
 
-use anyhow::Result;
+use std::env;
+use std::io::{self, Stdout};
+use std::process::Command;
+
+use anyhow::{Context, Result, bail};
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Style},
-    text::Line,
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    text::{Line, Span, Text},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
 };
+use similar::{ChangeTag, TextDiff};
 
-use crate::{cmd::tui_entries, store::Store};
+use crate::cmd::{State, TuiEntry, tui_entries};
+use crate::store::{Persistence, Store};
 
 type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 
-struct App {
-    entries: Vec<Entry>,
-    selected: usize,
+const ACCENT: Color = Color::Cyan;
+const DIM: Color = Color::DarkGray;
+
+const fn state_badge(state: State) -> (&'static str, &'static str, Color) {
+    match state {
+        State::Clean => ("✓", "clean", Color::Green),
+        State::Drifted => ("~", "drifted", Color::Yellow),
+        State::Conflict => ("✗", "conflict", Color::Red),
+        State::Snoozed => ("·", "snoozed", DIM),
+    }
 }
 
 struct Entry {
     path: String,
-    state: String,
-    diff: String,
+    state: State,
+    detail: Vec<Line<'static>>,
+}
+
+struct App {
+    entries: Vec<Entry>,
+    selected: usize,
+    scroll: u16,
+    message: Option<String>,
 }
 
 impl App {
-    const fn new(entries: Vec<Entry>) -> Self {
-        Self {
+    fn load(store: &Store) -> Result<Self> {
+        let entries = tui_entries(store)?
+            .iter()
+            .map(|entry| Entry {
+                path: entry.path.clone(),
+                state: entry.state,
+                detail: detail_lines(entry),
+            })
+            .collect();
+        Ok(Self {
             entries,
             selected: 0,
-        }
+            scroll: 0,
+            message: None,
+        })
     }
 
-    fn move_down(&mut self) {
-        if !self.entries.is_empty() {
-            self.selected = (self.selected + 1).min(self.entries.len() - 1);
-        }
+    /// Re-read the store (after an edit) keeping the selection on the same
+    /// path when it is still pending.
+    fn reload(&mut self, store: &Store) -> Result<()> {
+        let path = self
+            .entries
+            .get(self.selected)
+            .map(|entry| entry.path.clone());
+        self.entries = Self::load(store)?.entries;
+        self.selected = path
+            .and_then(|path| self.entries.iter().position(|entry| entry.path == path))
+            .unwrap_or(0)
+            .min(self.entries.len().saturating_sub(1));
+        self.scroll = self.scroll.min(self.max_scroll());
+        Ok(())
     }
 
-    const fn move_up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+    fn select(&mut self, index: usize) {
+        self.selected = index.min(self.entries.len().saturating_sub(1));
+        self.scroll = 0;
     }
 
-    const fn move_first(&mut self) {
-        self.selected = 0;
+    fn max_scroll(&self) -> u16 {
+        let lines = self
+            .entries
+            .get(self.selected)
+            .map_or(0, |entry| entry.detail.len().saturating_sub(1));
+        u16::try_from(lines).unwrap_or(u16::MAX)
     }
 
-    const fn move_last(&mut self) {
-        self.selected = self.entries.len().saturating_sub(1);
+    fn scroll_down(&mut self, lines: u16) {
+        self.scroll = self.scroll.saturating_add(lines).min(self.max_scroll());
+    }
+
+    fn scroll_up(&mut self, lines: u16) {
+        self.scroll = self.scroll.saturating_sub(lines);
     }
 }
 
 pub fn run(store: &Store) -> Result<()> {
-    let entries = tui_entries(store)?
-        .into_iter()
-        .map(|entry| Entry {
-            path: entry.path,
-            state: entry.state,
-            diff: entry.diff,
-        })
-        .collect();
+    let app = App::load(store)?;
     let mut terminal = init_terminal()?;
-    let result = run_loop(&mut terminal, App::new(entries));
+    let result = run_loop(&mut terminal, store, app);
     restore_terminal(&mut terminal)?;
     result
 }
@@ -86,85 +132,394 @@ fn restore_terminal(terminal: &mut TuiTerminal) -> Result<()> {
     Ok(())
 }
 
-fn run_loop(terminal: &mut TuiTerminal, mut app: App) -> Result<()> {
+fn run_loop(terminal: &mut TuiTerminal, store: &Store, mut app: App) -> Result<()> {
     loop {
         terminal.draw(|frame| render(frame, &app))?;
         let Event::Key(key) = event::read()? else {
             continue;
         };
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-            KeyCode::Char('j') | KeyCode::Down => app.move_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.move_up(),
-            KeyCode::Char('g') | KeyCode::Home => app.move_first(),
-            KeyCode::Char('G') | KeyCode::End => app.move_last(),
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        app.message = None;
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('q') | KeyCode::Esc, _) => return Ok(()),
+            (KeyCode::Char('j') | KeyCode::Down, _) => app.select(app.selected + 1),
+            (KeyCode::Char('k') | KeyCode::Up, _) => app.select(app.selected.saturating_sub(1)),
+            (KeyCode::Char('g') | KeyCode::Home, _) => app.select(0),
+            (KeyCode::Char('G') | KeyCode::End, _) => app.select(usize::MAX),
+            (KeyCode::Char('J'), _) => app.scroll_down(1),
+            (KeyCode::Char('K'), _) => app.scroll_up(1),
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) | (KeyCode::PageDown, _) => {
+                app.scroll_down(12);
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
+                app.scroll_up(12);
+            }
+            (KeyCode::Char('r'), _) => app.reload(store)?,
+            (KeyCode::Enter, _) => {
+                let Some(entry) = app.entries.get(app.selected) else {
+                    continue;
+                };
+                let path = entry.path.clone();
+                match edit(terminal, &path) {
+                    Ok(()) => app.reload(store)?,
+                    Err(error) => app.message = Some(format!("{error:#}")),
+                }
+            }
             _ => {}
         }
     }
 }
 
+/// Suspend the TUI, run the user's editor on `path`, and resume.
+fn edit(terminal: &mut TuiTerminal, path: &str) -> Result<()> {
+    // Set-but-empty counts as unset, matching git's editor resolution.
+    let editor = ["VISUAL", "EDITOR"]
+        .into_iter()
+        .find_map(|name| env::var(name).ok().filter(|value| !value.is_empty()))
+        .context("neither $VISUAL nor $EDITOR is set")?;
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    // $EDITOR is a shell fragment by convention (it may carry flags), so it
+    // must go through a shell; the path rides as "$1" and never needs
+    // escaping.
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$1\""))
+        .arg("index-delta-edit")
+        .arg(path)
+        .status();
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    // Rebuild instead of `Terminal::clear()`: clear does a cursor-position
+    // DSR round-trip (ESC[6n) that times out on terminals that never reply,
+    // leaving the old buffers intact and the screen blank. A fresh Terminal
+    // starts with empty buffers, so the next draw repaints every cell.
+    *terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+    let status = status.context("launching editor")?;
+    if !status.success() {
+        bail!("editor exited with {status}");
+    }
+    Ok(())
+}
+
+// --- rendering ---
+
 fn render(frame: &mut ratatui::Frame, app: &App) {
-    let [body, footer] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(frame.area());
-    let [sidebar, detail_area] =
-        Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)]).areas(body);
-    let items = app
-        .entries
-        .iter()
-        .map(|entry| ListItem::new(Line::from(format!("{} {}", entry.state, entry.path))));
+    let [header, body, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+    render_header(frame, header, app);
+    let [sidebar, detail] =
+        Layout::horizontal([Constraint::Percentage(34), Constraint::Percentage(66)]).areas(body);
+    render_sidebar(frame, sidebar, app);
+    render_detail(frame, detail, app);
+    render_footer(frame, footer, app);
+}
+
+fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &App) {
+    let mut spans = vec![Span::styled(
+        " index-delta ",
+        Style::new().fg(Color::Black).bg(ACCENT).bold(),
+    )];
+    for state in [State::Conflict, State::Drifted, State::Snoozed] {
+        let count = app
+            .entries
+            .iter()
+            .filter(|entry| entry.state == state)
+            .count();
+        if count == 0 {
+            continue;
+        }
+        let (icon, word, color) = state_badge(state);
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("{icon} {count} {word}"),
+            Style::new().fg(color).bold(),
+        ));
+    }
+    if app.entries.is_empty() {
+        spans.push(Span::styled(
+            "  ✓ all clean",
+            Style::new().fg(Color::Green).bold(),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_sidebar(frame: &mut ratatui::Frame, area: Rect, app: &App) {
+    let items = app.entries.iter().map(|entry| {
+        let (icon, _, color) = state_badge(entry.state);
+        ListItem::new(Line::from(vec![
+            Span::styled(format!("{icon} "), Style::new().fg(color).bold()),
+            Span::raw(tilde(&entry.path)),
+        ]))
+    });
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Mutable files"),
-        )
-        .highlight_style(Style::default().bg(Color::DarkGray));
+        .block(pane_block(format!("pending · {}", app.entries.len())))
+        .highlight_symbol("▌")
+        .highlight_style(Style::new().bg(Color::DarkGray).bold());
     let mut state = ListState::default();
     state.select((!app.entries.is_empty()).then_some(app.selected));
-    frame.render_stateful_widget(list, sidebar, &mut state);
+    frame.render_stateful_widget(list, area, &mut state);
+}
 
-    let detail_text = app
-        .entries
-        .get(app.selected)
-        .map_or("No mutable-file drift to review.", |entry| {
-            entry.diff.as_str()
-        });
-    let detail = Paragraph::new(detail_text)
-        .block(Block::default().borders(Borders::ALL).title("Diff"))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(detail, detail_area);
-    let help = Line::from("j/k move  g/G first/last  q quit");
-    frame.render_widget(Paragraph::new(help), footer);
+fn render_detail(frame: &mut ratatui::Frame, area: Rect, app: &App) {
+    let Some(entry) = app.entries.get(app.selected) else {
+        let empty = Paragraph::new(Line::styled(
+            "✓ nothing to resolve",
+            Style::new().fg(Color::Green).bold(),
+        ))
+        .block(pane_block("diff".to_owned()));
+        frame.render_widget(empty, area);
+        return;
+    };
+    // No wrapping: diff lines must keep their column alignment.
+    let paragraph = Paragraph::new(Text::from(entry.detail.clone()))
+        .block(pane_block(tilde(&entry.path)))
+        .scroll((app.scroll, 0));
+    frame.render_widget(paragraph, area);
+}
+
+fn render_footer(frame: &mut ratatui::Frame, area: Rect, app: &App) {
+    if let Some(message) = &app.message {
+        let line = Line::styled(format!(" {message}"), Style::new().fg(Color::Red).bold());
+        frame.render_widget(Paragraph::new(line), area);
+        return;
+    }
+    let mut spans = vec![Span::raw(" ")];
+    for (keys, action) in [
+        ("j/k", "files"),
+        ("J/K", "scroll"),
+        ("^d/^u", "page"),
+        ("g/G", "ends"),
+        ("⏎", "edit"),
+        ("r", "refresh"),
+        ("q", "quit"),
+    ] {
+        spans.push(Span::styled(keys, Style::new().fg(ACCENT).bold()));
+        spans.push(Span::styled(format!(" {action}  "), Style::new().fg(DIM)));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn pane_block(title: String) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(DIM))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::new().fg(ACCENT).bold(),
+        ))
+}
+
+fn tilde(path: &str) -> String {
+    env::var("HOME")
+        .ok()
+        .and_then(|home| {
+            let rest = path.strip_prefix(&home)?;
+            rest.starts_with('/').then(|| format!("~{rest}"))
+        })
+        .unwrap_or_else(|| path.to_owned())
+}
+
+// --- detail content ---
+
+fn detail_lines(entry: &TuiEntry) -> Vec<Line<'static>> {
+    let (icon, word, color) = state_badge(entry.state);
+    let persistence = match entry.persistence {
+        Persistence::Ephemeral => "ephemeral · resets at next login",
+        Persistence::Durable => "durable",
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{icon} {word}"), Style::new().fg(color).bold()),
+        Span::styled(format!("  {}", entry.format), Style::new().fg(ACCENT)),
+        Span::styled(format!("  {persistence}"), Style::new().fg(DIM)),
+    ])];
+    if let Some(declared_at) = &entry.declared_at {
+        lines.push(Line::styled(
+            format!("declared at {declared_at}"),
+            Style::new().fg(DIM),
+        ));
+    }
+    lines.push(Line::default());
+    match &entry.staged {
+        Some(staged) => {
+            lines.push(section("your edits · base → file"));
+            lines.extend(unified(&entry.base, &entry.upper));
+            lines.push(Line::default());
+            lines.push(section("incoming · base → staged"));
+            lines.extend(unified(&entry.base, staged));
+            if !entry.overlap.is_empty() {
+                lines.push(Line::default());
+                lines.push(Line::styled(
+                    "⚠ overlapping addresses",
+                    Style::new().fg(Color::Red).bold(),
+                ));
+                for address in &entry.overlap {
+                    lines.push(Line::styled(
+                        format!("  {address}"),
+                        Style::new().fg(Color::Red),
+                    ));
+                }
+            }
+        }
+        None => lines.extend(unified(&entry.base, &entry.upper)),
+    }
+    lines
+}
+
+fn section(title: &str) -> Line<'static> {
+    Line::styled(
+        format!("── {title} ──"),
+        Style::new().fg(Color::Magenta).bold(),
+    )
+}
+
+/// A unified diff as styled lines: cyan hunk headers, red deletions, green
+/// insertions, dim context.
+fn unified(old: &str, new: &str) -> Vec<Line<'static>> {
+    let diff = TextDiff::from_lines(old, new);
+    let mut lines = Vec::new();
+    for group in diff.grouped_ops(3) {
+        let (Some(first), Some(last)) = (group.first(), group.last()) else {
+            continue;
+        };
+        lines.push(Line::styled(
+            format!(
+                "@@ -{},{} +{},{} @@",
+                first.old_range().start + 1,
+                last.old_range().end - first.old_range().start,
+                first.new_range().start + 1,
+                last.new_range().end - first.new_range().start,
+            ),
+            Style::new().fg(ACCENT),
+        ));
+        for op in &group {
+            for change in diff.iter_changes(op) {
+                let text = change.value().trim_end_matches('\n');
+                lines.push(match change.tag() {
+                    ChangeTag::Delete => {
+                        Line::styled(format!("-{text}"), Style::new().fg(Color::Red))
+                    }
+                    ChangeTag::Insert => {
+                        Line::styled(format!("+{text}"), Style::new().fg(Color::Green))
+                    }
+                    ChangeTag::Equal => Line::styled(format!(" {text}"), Style::new().fg(DIM)),
+                });
+            }
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::styled(
+            "(no line-level changes; drift is formatting- or key-order-only)",
+            Style::new().fg(DIM).italic(),
+        ));
+    }
+    lines
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Entry};
+    use super::*;
+    use crate::value::Format;
+
+    fn entry(state: State, staged: Option<&str>, overlap: Vec<String>) -> TuiEntry {
+        TuiEntry {
+            path: "/tmp/config.json".to_owned(),
+            state,
+            format: Format::Json,
+            persistence: Persistence::Durable,
+            declared_at: Some("home/test.nix:1".to_owned()),
+            base: "{\n  \"a\": 1\n}\n".to_owned(),
+            upper: "{\n  \"a\": 2\n}\n".to_owned(),
+            staged: staged.map(str::to_owned),
+            overlap,
+        }
+    }
+
+    fn rendered(lines: &[Line<'_>]) -> Vec<String> {
+        lines.iter().map(ToString::to_string).collect()
+    }
 
     fn app() -> App {
-        App::new(vec![
-            Entry {
-                path: "a".into(),
-                state: "drifted".into(),
-                diff: String::new(),
-            },
-            Entry {
-                path: "b".into(),
-                state: "conflict".into(),
-                diff: String::new(),
-            },
-        ])
+        let entries = vec![entry(State::Drifted, None, Vec::new()), {
+            let mut second = entry(State::Conflict, None, Vec::new());
+            second.path = "/tmp/other.json".to_owned();
+            second
+        }]
+        .iter()
+        .map(|entry| Entry {
+            path: entry.path.clone(),
+            state: entry.state,
+            detail: detail_lines(entry),
+        })
+        .collect();
+        App {
+            entries,
+            selected: 0,
+            scroll: 0,
+            message: None,
+        }
     }
 
     #[test]
-    fn vim_navigation_stays_within_entries() {
+    fn unified_marks_deletions_and_insertions() {
+        let lines = rendered(&unified("a\nb\n", "a\nc\n"));
+        assert!(lines[0].starts_with("@@ "));
+        assert!(lines.contains(&"-b".to_owned()));
+        assert!(lines.contains(&"+c".to_owned()));
+    }
+
+    #[test]
+    fn unified_reports_formatting_only_drift() {
+        let lines = rendered(&unified("same\n", "same\n"));
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("formatting"));
+    }
+
+    #[test]
+    fn conflict_detail_shows_both_sides_and_overlap() {
+        let entry = entry(
+            State::Conflict,
+            Some("{\n  \"a\": 3\n}\n"),
+            vec!["a".to_owned()],
+        );
+        let text = rendered(&detail_lines(&entry)).join("\n");
+        assert!(text.contains("your edits · base → file"));
+        assert!(text.contains("incoming · base → staged"));
+        assert!(text.contains("⚠ overlapping addresses"));
+    }
+
+    #[test]
+    fn navigation_clamps_and_resets_scroll() {
         let mut app = app();
-        app.move_up();
+        app.select(app.selected.saturating_sub(1));
         assert_eq!(app.selected, 0);
-        app.move_last();
-        app.move_down();
+        app.select(usize::MAX);
         assert_eq!(app.selected, 1);
-        app.move_first();
-        assert_eq!(app.selected, 0);
+        app.scroll_down(200);
+        assert_eq!(app.scroll, app.max_scroll());
+        app.select(0);
+        assert_eq!(app.scroll, 0);
+        app.scroll_down(2);
+        app.scroll_up(200);
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    fn tilde_shortens_only_whole_home_prefix() {
+        let home = std::env::var("HOME").expect("HOME");
+        assert_eq!(tilde(&format!("{home}/x.json")), "~/x.json");
+        assert_eq!(
+            tilde(&format!("{home}stead/x.json")),
+            format!("{home}stead/x.json")
+        );
     }
 }

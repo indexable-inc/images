@@ -277,44 +277,51 @@ pub fn reseed_ephemeral(store: &Store) -> Result<()> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum State {
+pub enum State {
     Clean,
     Drifted,
     Conflict,
     Snoozed,
 }
 
+/// Everything the TUI needs to render one pending file: identity, the raw
+/// texts to diff (base vs the file on disk, plus the staged incoming base
+/// while a conflict is unresolved), and the conflict overlap.
 pub struct TuiEntry {
     pub path: String,
-    pub state: String,
-    pub diff: String,
+    pub state: State,
+    pub format: Format,
+    pub persistence: Persistence,
+    pub declared_at: Option<String>,
+    pub base: String,
+    pub upper: String,
+    pub staged: Option<String>,
+    pub overlap: Vec<String>,
 }
 
 pub fn tui_entries(store: &Store) -> Result<Vec<TuiEntry>> {
-    store
-        .all_metas()?
-        .into_iter()
-        .map(|meta| {
-            let entry = status_entry(store, &meta)?;
-            let state = match entry.state {
-                State::Clean => return Ok(None),
-                State::Drifted => "drifted",
-                State::Conflict => "conflict",
-                State::Snoozed => "snoozed",
-            };
-            let diff = serde_json::to_string_pretty(&serde_json::json!({
-                "yourEdits": entry.your_edits,
-                "incomingEdits": entry.incoming_edits,
-                "overlap": entry.overlap,
-            }))?;
-            Ok(Some(TuiEntry {
-                path: entry.path,
-                state: state.to_owned(),
-                diff,
-            }))
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(|entries| entries.into_iter().flatten().collect())
+    let mut entries = Vec::new();
+    for meta in store.all_metas()? {
+        let entry = status_entry(store, &meta)?;
+        if entry.state == State::Clean {
+            continue;
+        }
+        let base = store.base_bytes(&meta.path)?;
+        let upper = fs::read(&meta.path).unwrap_or_default();
+        let staged = store.staged_bytes(&meta.path)?;
+        entries.push(TuiEntry {
+            path: entry.path,
+            state: entry.state,
+            format: meta.format,
+            persistence: meta.persistence,
+            declared_at: meta.declared_at.clone(),
+            base: String::from_utf8_lossy(&base).into_owned(),
+            upper: String::from_utf8_lossy(&upper).into_owned(),
+            staged: staged.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+            overlap: entry.overlap,
+        });
+    }
+    Ok(entries)
 }
 
 #[derive(Serialize)]
