@@ -25,6 +25,16 @@ export function goalKey(build: GlobalBuild): string {
   return `${goalPath(build)}:${String(build.pid ?? 0)}:${String(build.startTime ?? 0)}`;
 }
 
+/// Render key for a keyed goal list. A goal with no worker pid keeps no
+/// identity of its own, so same-path pidless goals would collapse to one
+/// `goalKey` and break keyed-each row identity; disambiguate those by their
+/// position in the status list. Goals with a pid keep the plain `goalKey`, so
+/// log-drawer state stays attached across polls.
+export function goalRenderKey(build: GlobalBuild, index: number): string {
+  const key = goalKey(build);
+  return build.pid === null ? `${key}:${String(index)}` : key;
+}
+
 /// Tooltip for one goal row: the full store path plus the identity details
 /// (outputs, worker pid, requesting user/uid, cause) that would crowd the row
 /// itself. Shared by the why-chain tree rows and the flat sorted rows.

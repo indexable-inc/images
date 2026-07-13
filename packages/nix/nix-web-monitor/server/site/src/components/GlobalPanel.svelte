@@ -3,7 +3,7 @@
   import GlobalFlatRow from '$components/GlobalFlatRow.svelte';
   import GlobalTreeRow from '$components/GlobalTreeRow.svelte';
   import { formatBytes } from '$lib/format';
-  import { buildGlobalForest, goalKey } from '$lib/global-forest';
+  import { buildGlobalForest, goalRenderKey } from '$lib/global-forest';
   import { useNow } from '$lib/now.svelte';
   import type { GlobalBuild, GlobalBuilds } from '$lib/types';
 
@@ -49,16 +49,20 @@
   const forest = $derived(buildGlobalForest(global.builds));
 
   /// Flat orderings put the biggest consumer (or the oldest goal) first;
-  /// goals the sampler could not measure sink to the bottom.
-  const sorted = $derived.by((): GlobalBuild[] => {
-    const goals = [...global.builds];
+  /// goals the sampler could not measure sink to the bottom. Render keys are
+  /// taken before sorting so a pidless goal's disambiguating index follows the
+  /// status-list order, not the sort-dependent row position.
+  const sorted = $derived.by((): { goal: GlobalBuild; key: string }[] => {
+    const goals = global.builds.map((goal, index) => ({ goal, key: goalRenderKey(goal, index) }));
     if (sortMode === 'cpu') {
-      goals.sort((a, b) => (b.cpuPercent ?? -1) - (a.cpuPercent ?? -1));
+      goals.sort((a, b) => (b.goal.cpuPercent ?? -1) - (a.goal.cpuPercent ?? -1));
     } else if (sortMode === 'mem') {
-      goals.sort((a, b) => (b.rssBytes ?? -1) - (a.rssBytes ?? -1));
+      goals.sort((a, b) => (b.goal.rssBytes ?? -1) - (a.goal.rssBytes ?? -1));
     } else {
       goals.sort(
-        (a, b) => (a.startTime ?? Number.MAX_SAFE_INTEGER) - (b.startTime ?? Number.MAX_SAFE_INTEGER)
+        (a, b) =>
+          (a.goal.startTime ?? Number.MAX_SAFE_INTEGER) -
+          (b.goal.startTime ?? Number.MAX_SAFE_INTEGER)
       );
     }
     return goals;
@@ -152,8 +156,8 @@
       </div>
     {:else}
       <div class="global-tree">
-        {#each sorted as goal (goalKey(goal))}
-          <GlobalFlatRow {goal} now={now.value} {openLog} ontogglelog={toggleLog} />
+        {#each sorted as entry (entry.key)}
+          <GlobalFlatRow goal={entry.goal} now={now.value} {openLog} ontogglelog={toggleLog} />
         {/each}
       </div>
     {/if}

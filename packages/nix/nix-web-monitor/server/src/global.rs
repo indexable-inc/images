@@ -95,16 +95,18 @@ async fn poll_builds() -> Option<Vec<GlobalBuild>> {
     // feature, so the feature-enabling form is the one that normally succeeds
     // and goes first (one subprocess per tick on a patched nix). The plain form
     // is the fallback for a nix that rejects the unknown feature name but has
-    // the command ungated or the feature enabled via nix.conf.
+    // the command ungated or the feature enabled via nix.conf. The feature flag
+    // must precede the subcommand: nix only honors it there, so a trailing flag
+    // leaves the features off and a patched host misdetects as stock.
     const ATTEMPTS: [&[&str]; 2] = [
         &[
+            "--extra-experimental-features",
+            "nix-command build-status-dir",
             "store",
             "builds",
             "--json",
-            "--extra-experimental-features",
-            "nix-command build-status-dir",
         ],
-        &["store", "builds", "--json", "--extra-experimental-features", "nix-command"],
+        &["--extra-experimental-features", "nix-command", "store", "builds", "--json"],
     ];
     for args in ATTEMPTS {
         if let Some(builds) = try_builds(args).await {
