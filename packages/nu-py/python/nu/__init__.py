@@ -309,11 +309,13 @@ def _resolve_dir(cwd: str | os.PathLike) -> str:
 
     The engine persists PWD across calls, so a relative value would later be
     interpreted against an unrelated process directory and poison the session.
-    Resolve and validate it before the persistent engine sees it. This stays
-    synchronous on purpose: it is one local filesystem lookup, and keeping the
-    path method out of the async caller avoids ASYNC240.
+    Resolve and validate it before the persistent engine sees it (a leading
+    ``~`` expands first: every shell accepts one here, so callers reach for
+    it naturally, index#3101). This stays synchronous on purpose: it is one
+    local filesystem lookup, and keeping the path method out of the async
+    caller avoids ASYNC240.
     """
-    resolved = pathlib.Path(cwd).resolve()
+    resolved = pathlib.Path(cwd).expanduser().resolve()
     if not resolved.is_dir():
         raise ValueError(f"cwd is not a directory: {os.fspath(cwd)!r}")
     return os.fspath(resolved)
