@@ -7044,6 +7044,7 @@ dependencies = [
  "bzip2",
  "clap",
  "ignore",
+ "libc",
  "nix-web-monitor-parser",
  "rmp-serde",
  "serde",

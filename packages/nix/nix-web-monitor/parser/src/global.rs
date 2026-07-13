@@ -103,14 +103,17 @@ pub struct GlobalBuild {
     /// the server from `/proc/<pid>/status` (`VmRSS`). `None` under the same
     /// conditions as `cpu_percent`.
     pub rss_bytes: Option<u64>,
-    /// The worker process's kernel start time in clock ticks since boot
-    /// (`/proc/<pid>/stat` field 22), annotated by the server's sampler like
-    /// `cpu_percent`. This is the worker's true generation: `start_time` has
-    /// one-second resolution, so a pid recycled for the same derivation within
-    /// the same second is only distinguishable by these ticks. The UI folds it
-    /// into its per-goal identity and echoes it back to `/api/global-log`.
-    /// `None` when `pid` is missing, the process was gone at sampling time, or
-    /// on a platform without procfs.
+    /// The worker process's kernel start time, annotated by the server's
+    /// sampler like `cpu_percent`: clock ticks since boot on Linux
+    /// (`/proc/<pid>/stat` field 22), the `sysctl(KERN_PROC_PID)` start
+    /// timestamp in microseconds on macOS. This is the worker's true
+    /// generation: `start_time` has one-second resolution, so a pid recycled
+    /// for the same derivation within the same second is only distinguishable
+    /// by this value (the status payload has no per-worker field of its own --
+    /// `logFile` is a pure function of the drv path). Opaque: the UI folds it
+    /// into its per-goal identity and echoes it back to `/api/global-log`
+    /// verbatim. `None` when `pid` is missing or the process was gone at
+    /// sampling time.
     pub start_ticks: Option<u64>,
 }
 

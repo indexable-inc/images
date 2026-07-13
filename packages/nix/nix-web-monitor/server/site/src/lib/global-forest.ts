@@ -20,8 +20,9 @@ export function goalPath(build: GlobalBuild): string {
 
 /// Stable per-goal identity for UI state (open log drawers): the status dir
 /// keys entries by `<path>-<pid>`, start time distinguishes a later worker
-/// after Linux recycles the same pid, and the server-sampled kernel start
-/// ticks distinguish a recycle *within* the same start second (startTime is
+/// after the OS recycles the same pid, and the server-sampled kernel start
+/// time (procfs ticks on Linux, the sysctl start timestamp on macOS)
+/// distinguishes a recycle *within* the same start second (startTime is
 /// whole seconds), so an open drawer can never silently retarget to a
 /// successor worker.
 export function goalKey(build: GlobalBuild): string {

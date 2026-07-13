@@ -186,12 +186,13 @@ async fn publish(
 /// status directory itself advertised for a *currently active* build, so the
 /// endpoint cannot be steered at arbitrary files.
 ///
-/// `start_ticks` is the worker's kernel start-tick generation as the client
-/// last saw it, matched exactly (`None` included): `start_time` is whole
-/// seconds, so the ticks are what keep a pid recycled for the same drv within
-/// one second from resolving to its predecessor's log. `None` only matches a
-/// worker the sampler has no ticks for (no procfs) -- it is never a wildcard
-/// over a sampled one.
+/// `start_ticks` is the worker's kernel start-time generation as the client
+/// last saw it (procfs ticks on Linux, the sysctl start timestamp on macOS),
+/// matched exactly (`None` included): `start_time` is whole seconds, so the
+/// generation is what keeps a pid recycled for the same drv within one second
+/// from resolving to its predecessor's log. `None` only matches a worker the
+/// sampler could not see (already gone when sampled) -- it is never a
+/// wildcard over a sampled one.
 pub async fn log_file_for(
     monitor: &Arc<RwLock<MonitorState>>,
     drv_path: &str,
@@ -513,8 +514,9 @@ mod tests {
             log_file: Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2".to_owned()),
             ..GlobalBuild::default()
         };
-        // No procfs figures (non-Linux host): the whole identity is
-        // (pid, start second, no ticks) and still matches exactly.
+        // The sampler could not see this worker (gone between the status
+        // poll and the sample): the whole identity is (pid, start second,
+        // no generation) and still matches exactly.
         let unsampled = GlobalBuild {
             drv_path: Some("/nix/store/ccc-baz.drv".to_owned()),
             pid: Some(21),

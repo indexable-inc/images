@@ -10,10 +10,11 @@
     drvPath: string;
     pid: number;
     startTime: number;
-    /// Server-sampled kernel start ticks: the true worker generation, which
-    /// pins the tail to this worker even if the pid is recycled for the same
-    /// drv within the same startTime second. Null only when the server had no
-    /// procfs figures for the worker; the server matches that exactly too.
+    /// Server-sampled kernel start time (procfs ticks on Linux, the sysctl
+    /// start timestamp on macOS): the true worker generation, which pins the
+    /// tail to this worker even if the pid is recycled for the same drv
+    /// within the same startTime second. Null only when the server could not
+    /// see the worker at all; the server matches that exactly too.
     startTicks: number | null;
   };
 

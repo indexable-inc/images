@@ -381,11 +381,11 @@ struct GlobalLogQuery {
     drv: String,
     pid: i64,
     start: i64,
-    /// The worker's kernel start-tick generation as the UI last saw it in the
+    /// The worker's kernel start-time generation as the UI last saw it in the
     /// status payload (`start` is whole seconds, so this is what pins a pid
     /// recycled within one second). Matched exactly, `None` included: a
-    /// request omitting it only resolves a worker the sampler has no ticks
-    /// for (no procfs), never a sampled one.
+    /// request omitting it only resolves a worker the sampler could not see
+    /// (already gone when sampled), never a sampled one.
     #[serde(rename = "startTicks")]
     start_ticks: Option<u64>,
 }

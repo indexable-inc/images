@@ -1,4 +1,4 @@
-//! Per-build cpu/memory sampling for the machine-wide view (Linux only).
+//! Per-build cpu/memory/generation sampling for the machine-wide view.
 //!
 //! `nix store builds --json` reports each goal's builder pid but nothing about
 //! what that process is doing to the machine. This module fills the gap
@@ -10,9 +10,18 @@
 //! fields matter: compilers that fork and exit between two polls would
 //! otherwise vanish from the live subtree sum and under-report the build.
 //!
-//! Best-effort like the rest of the global view: a pid that exits mid-sample,
-//! an unreadable `/proc` entry, or a non-Linux host just leaves the fields
-//! `None` and the UI omits the columns. Nothing here can fail the probe.
+//! The cpu/rss columns are Linux-only, but the third annotation -- the
+//! worker's kernel start time, i.e. its *generation* -- must not be: it is
+//! what tells a pid recycled for the same derivation within the same
+//! whole-second `startTime` apart from its predecessor, so without it an open
+//! log drawer could silently retarget (see `start_ticks` on `GlobalBuild`).
+//! The status payload itself carries no per-worker field (`logFile` is a pure
+//! function of the drv path), so on a host without procfs (macOS/nix-darwin)
+//! the generation comes from `sysctl(KERN_PROC_PID)` instead.
+//!
+//! Best-effort like the rest of the global view: a pid that exits mid-sample
+//! or an unreadable `/proc` entry just leaves the fields `None` and the UI
+//! omits the columns. Nothing here can fail the probe.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -95,17 +104,32 @@ impl BuildStatSampler {
             self.previous.clear();
             return;
         }
+        self.annotate_from(builds, &read_proc_table(), start_generation_without_procfs);
+    }
 
+    /// [`annotate`](Self::annotate) against an explicit proc table and
+    /// no-procfs generation source, so tests can exercise both platforms'
+    /// wiring on either.
+    fn annotate_from(
+        &mut self,
+        builds: &mut [GlobalBuild],
+        table: &HashMap<i64, ProcStat>,
+        fallback_generation: impl Fn(i64) -> Option<u64>,
+    ) {
         let now = Instant::now();
-        let table = read_proc_table();
-        let children = children_by_parent(&table);
+        let children = children_by_parent(table);
         let mut next = HashMap::new();
 
         for build in builds.iter_mut() {
             let Some(pid) = build.pid else { continue };
             let Some(root) = table.get(&pid) else {
-                // Builder already gone (or no procfs): nothing to report, and
-                // drop any stale baseline.
+                // No procfs row: the builder is already gone, or the host has
+                // no procfs at all (macOS/nix-darwin). cpu/rss genuinely need
+                // the table and stay absent, but the generation must not go
+                // with them -- `None` here is what lets a same-second pid
+                // recycle silently retarget an open log drawer -- so it falls
+                // back to the platform's non-procfs start-time source.
+                build.start_ticks = fallback_generation(pid);
                 continue;
             };
             let key = BaselineKey::for_build(build, root.identity);
@@ -148,6 +172,64 @@ impl BuildStatSampler {
             elapsed,
         ))
     }
+}
+
+/// The worker's start generation on a host without procfs: macOS/nix-darwin,
+/// where it is the kernel's per-process start timestamp in microseconds from
+/// `sysctl(KERN_PROC_PID)` -- unprivileged for any pid (the same interface
+/// `ps` uses), so it covers the daemon's root-owned workers too. Not
+/// comparable to Linux's ticks-since-boot, and it does not need to be: a
+/// generation is an opaque value the UI echoes back verbatim and
+/// `/api/global-log` matches exactly. `None` when the process is already
+/// gone, mirroring the procfs path.
+#[cfg(target_os = "macos")]
+fn start_generation_without_procfs(pid: i64) -> Option<u64> {
+    // Prefix of XNU's `struct kinfo_proc` (bsd/sys/sysctl.h): its first field
+    // is `kp_proc` (`struct extern_proc`, bsd/sys/proc.h), whose first field
+    // is the start-time union, so the start `timeval` sits at offset 0. Only
+    // that field is typed; the rest is opaque, over-sized padding so the
+    // kernel's copyout (648 bytes on 64-bit) always fits.
+    #[repr(C)]
+    struct KinfoProcPrefix {
+        start_time: libc::timeval,
+        _rest: [u8; 1024],
+    }
+
+    let pid = libc::pid_t::try_from(pid).ok()?;
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+    let mut info = KinfoProcPrefix {
+        start_time: libc::timeval { tv_sec: 0, tv_usec: 0 },
+        _rest: [0; 1024],
+    };
+    let mut size = std::mem::size_of::<KinfoProcPrefix>();
+    // SAFETY: `mib` and the output buffer are live locals sized as passed;
+    // the kernel writes at most `size` bytes and updates `size` to what it
+    // actually wrote. No pointer outlives the call.
+    let status = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            4,
+            (&raw mut info).cast(),
+            &raw mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    // A pid that is already gone reports success with nothing written, so
+    // require the start `timeval` to actually be there.
+    if status != 0 || size < std::mem::size_of::<libc::timeval>() {
+        return None;
+    }
+    let seconds = u64::try_from(info.start_time.tv_sec).ok()?;
+    let micros = u64::try_from(info.start_time.tv_usec).ok()?;
+    Some(seconds * 1_000_000 + micros)
+}
+
+/// On Linux the proc table is the (richer) generation source, so a missing
+/// row only ever means the process is gone: there is nothing to fall back to.
+#[cfg(not(target_os = "macos"))]
+const fn start_generation_without_procfs(_pid: i64) -> Option<u64> {
+    None
 }
 
 /// Sum the readable resident sizes in a process subtree. `None` distinguishes
@@ -439,26 +521,91 @@ mod tests {
         );
     }
 
+    /// One own-pid build annotated through the public entry point, shared by
+    /// the platform end-to-end tests below. The sampler keeps its baselines
+    /// across calls (they key on process+goal identity, not list identity),
+    /// so calling this twice models two polls of the same build.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn annotate_own_process(sampler: &mut BuildStatSampler) -> GlobalBuild {
+        let mut builds = vec![GlobalBuild {
+            pid: Some(i64::from(std::process::id())),
+            ..GlobalBuild::default()
+        }];
+        sampler.annotate(&mut builds);
+        builds.remove(0)
+    }
+
     /// End-to-end on the live procfs: sampling our own pid twice yields a
     /// resident size and (second sample) a cpu figure.
     #[cfg(target_os = "linux")]
     #[test]
     fn sampler_annotates_own_process() {
         let mut sampler = BuildStatSampler::new();
-        let mut builds = vec![GlobalBuild {
-            pid: Some(i64::from(std::process::id())),
-            ..GlobalBuild::default()
-        }];
-        sampler.annotate(&mut builds);
-        assert!(builds[0].rss_bytes.is_some_and(|rss| rss > 0));
+        let first = annotate_own_process(&mut sampler);
+        assert!(first.rss_bytes.is_some_and(|rss| rss > 0));
         // The worker generation is annotated from the very first sample.
-        assert!(builds[0].start_ticks.is_some());
+        assert!(first.start_ticks.is_some());
         // First sample has no baseline yet.
-        assert_eq!(builds[0].cpu_percent, None);
+        assert_eq!(first.cpu_percent, None);
 
         std::thread::sleep(std::time::Duration::from_millis(30));
-        sampler.annotate(&mut builds);
-        assert!(builds[0].cpu_percent.is_some());
+        assert!(annotate_own_process(&mut sampler).cpu_percent.is_some());
+    }
+
+    /// Without a procfs row for the pid -- the builder exited mid-poll, or
+    /// the host has no procfs at all (macOS/nix-darwin) -- the worker
+    /// generation comes from the platform fallback, so the same-second
+    /// pid-recycle hole stays closed off-Linux too. cpu/rss genuinely need
+    /// the proc table and stay absent, and no cpu baseline is kept.
+    #[test]
+    fn missing_proc_row_takes_fallback_generation() {
+        // (goal pid, fallback's answer for that pid) -> expected start_ticks.
+        // The fallback asserts it is only ever asked for the goal's own pid,
+        // so the pidless row doubles as "no process, no lookup".
+        let cases: [(Option<i64>, Option<u64>, Option<u64>); 3] = [
+            (Some(42), Some(1_720_200_000_123_456), Some(1_720_200_000_123_456)),
+            (Some(43), None, None),
+            (None, Some(777), None),
+        ];
+        for (pid, generation, expected) in cases {
+            let mut sampler = BuildStatSampler::new();
+            let mut builds = vec![GlobalBuild {
+                pid,
+                ..GlobalBuild::default()
+            }];
+            sampler.annotate_from(&mut builds, &HashMap::new(), |asked| {
+                assert_eq!(Some(asked), pid, "fallback asked for the goal's pid only");
+                generation
+            });
+            assert_eq!(builds[0].start_ticks, expected, "generation for pid {pid:?}");
+            assert_eq!(builds[0].cpu_percent, None);
+            assert_eq!(builds[0].rss_bytes, None);
+            assert!(sampler.previous.is_empty(), "no baseline without a proc row");
+        }
+    }
+
+    /// End-to-end on the live sysctl source: sampling our own pid yields a
+    /// generation even though the host has no procfs, and a plausible one
+    /// (a start time after 2020, not in the future).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sampler_annotates_own_process_generation_without_procfs() {
+        let mut sampler = BuildStatSampler::new();
+        let build = annotate_own_process(&mut sampler);
+
+        let generation = build.start_ticks.expect("own process has a generation");
+        let now_micros = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock is past the epoch")
+                .as_micros(),
+        )
+        .expect("microseconds since epoch fit u64");
+        assert!(generation > 1_577_836_800_000_000, "start is after 2020");
+        assert!(generation <= now_micros, "start is not in the future");
+        // No procfs: the Linux-only columns stay absent.
+        assert_eq!(build.cpu_percent, None);
+        assert_eq!(build.rss_bytes, None);
     }
 
     /// A pid that no longer exists yields no stats and no stale baseline.
