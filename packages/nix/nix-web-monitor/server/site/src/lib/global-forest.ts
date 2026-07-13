@@ -25,6 +25,14 @@ export function goalPath(build: GlobalBuild): string {
 /// distinguishes a recycle *within* the same start second (startTime is
 /// whole seconds), so an open drawer can never silently retarget to a
 /// successor worker.
+///
+/// The `0` placeholders exist only for keyed-row identity: a goal whose
+/// generation the server could not sample (unreadable procfs, or the worker
+/// gone before the sample) offers no log drawer at all -- the row components
+/// gate the toggle on a non-null `startTicks` -- because a placeholder
+/// generation is exactly what a same-second pid recycle could collide with.
+/// If an open drawer's goal *loses* its generation, its key changes and the
+/// drawer closes rather than tail an unverifiable worker.
 export function goalKey(build: GlobalBuild): string {
   return `${goalPath(build)}:${String(build.pid ?? 0)}:${String(build.startTime ?? 0)}:${String(build.startTicks ?? 0)}`;
 }

@@ -52,7 +52,7 @@
       >{formatBytes(goal.rssBytes)}</span
     >
   {/if}
-  {#if goal.drvPath !== null && goal.pid !== null && goal.startTime !== null && goal.logFile !== null}
+  {#if goal.drvPath !== null && goal.pid !== null && goal.startTime !== null && goal.startTicks !== null && goal.logFile !== null}
     <button
       type="button"
       class="global-log-toggle"
@@ -68,7 +68,7 @@
   <span class="activity-dur">{elapsed}</span>
 </div>
 
-{#if goal.drvPath !== null && goal.pid !== null && goal.startTime !== null && openLog === key}
+{#if goal.drvPath !== null && goal.pid !== null && goal.startTime !== null && goal.startTicks !== null && openLog === key}
   <GlobalLogView
     drvPath={goal.drvPath}
     pid={goal.pid}

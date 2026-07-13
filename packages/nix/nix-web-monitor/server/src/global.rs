@@ -65,7 +65,13 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
         let Some(builds) = poll_builds().await else {
             // Undetected: publish the undetected view once (its `Default` carries
             // the "not available" status) so a later detection can flip the panel
-            // on, then back off before re-probing.
+            // on, then back off before re-probing. Drop the cpu baselines with
+            // it: a transient failure after builds were sampled would otherwise
+            // keep them across the (30-second) back-off, and a recovered row's
+            // first cpu% would average the whole outage instead of the poll
+            // window. Starting fresh makes recovery behave like a first-ever
+            // sample: rss only, cpu% from the next poll.
+            sampler = BuildStatSampler::new();
             publish(&monitor, &deltas, GlobalBuilds::default()).await;
             tokio::time::sleep(RETRY_INTERVAL).await;
             continue;

@@ -13,9 +13,11 @@
     /// Server-sampled kernel start time (procfs ticks on Linux, the sysctl
     /// start timestamp on macOS): the true worker generation, which pins the
     /// tail to this worker even if the pid is recycled for the same drv
-    /// within the same startTime second. Null only when the server could not
-    /// see the worker at all; the server matches that exactly too.
-    startTicks: number | null;
+    /// within the same startTime second. Never null: a goal whose generation
+    /// the server could not sample offers no log drawer at all (the rows gate
+    /// on it), because a generation-less identity is exactly what a
+    /// same-second pid recycle could silently retarget.
+    startTicks: number;
   };
 
   const { drvPath, pid, startTime, startTicks }: Props = $props();
@@ -32,16 +34,14 @@
     targetDrvPath: string,
     targetPid: number,
     targetStartTime: number,
-    targetStartTicks: number | null
+    targetStartTicks: number
   ): Promise<void> {
     try {
-      // startTicks is omitted only when the server itself sampled no ticks
-      // for the worker; the server matches the absence exactly (no wildcard).
       const query = new URLSearchParams({
         drv: targetDrvPath,
         pid: String(targetPid),
         start: String(targetStartTime),
-        ...(targetStartTicks === null ? {} : { startTicks: String(targetStartTicks) })
+        startTicks: String(targetStartTicks)
       });
       const response = await fetch(`/api/global-log?${query.toString()}`);
       if (!response.ok) {

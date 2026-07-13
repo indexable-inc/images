@@ -51,10 +51,26 @@
   };
 
   const goals = $derived(forest.goalsByPath.get(path) ?? []);
-  /// The goal whose affordances the row carries. The rare extra goals for the
-  /// same path (the status dir keys entries by `<path>-<pid>`, one per daemon
-  /// worker) fold into a ×N marker. Undefined on a skeleton ancestor.
+  /// The goal whose affordances (badge, log toggle, elapsed) the row carries:
+  /// the oldest one. The rare extra goals for the same path (the status dir
+  /// keys entries by `<path>-<pid>`, one per daemon worker) fold into a ×N
+  /// marker. Undefined on a skeleton ancestor.
   const primary = $derived(goals.at(0));
+  /// Row cpu/rss cover *every* worker folded into the ×N marker, not just
+  /// `primary`: the flat views give each worker its own figures and the
+  /// header's machine totals sum them all, so a per-`primary` readout would
+  /// under-report the path. `null` (column omitted) when no worker was
+  /// sampled, mirroring the per-goal columns.
+  const cpuPercent = $derived(sumSampled(goals.map((goal) => goal.cpuPercent)));
+  const rssBytes = $derived(sumSampled(goals.map((goal) => goal.rssBytes)));
+
+  /// Sum of the sampled values, or `null` when none were sampled (so a wholly
+  /// unmeasured row omits the column rather than showing a fabricated 0).
+  function sumSampled(values: readonly (number | null)[]): number | null {
+    const sampled = values.filter((value): value is number => value !== null);
+    if (sampled.length === 0) return null;
+    return sampled.reduce((total, value) => total + value, 0);
+  }
   const parts = $derived(splitDerivation(path));
   const children = $derived(
     (forest.childrenByPath.get(path) ?? []).filter((child) => !ancestors.has(child))
@@ -119,17 +135,17 @@
   {#if primary !== undefined && primary.user !== null}
     <span class="global-user" title="requested by {primary.user}">{primary.user}</span>
   {/if}
-  {#if primary !== undefined && primary.cpuPercent !== null}
-    <span class="global-stat" title="cpu across the builder's process tree"
-      >{String(primary.cpuPercent)}%</span
+  {#if cpuPercent !== null}
+    <span class="global-stat" title="cpu across every worker's process tree"
+      >{String(cpuPercent)}%</span
     >
   {/if}
-  {#if primary !== undefined && primary.rssBytes !== null}
-    <span class="global-stat" title="resident memory across the builder's process tree"
-      >{formatBytes(primary.rssBytes)}</span
+  {#if rssBytes !== null}
+    <span class="global-stat" title="resident memory across every worker's process tree"
+      >{formatBytes(rssBytes)}</span
     >
   {/if}
-  {#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && primary.logFile !== null}
+  {#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && primary.startTicks !== null && primary.logFile !== null}
     <button
       type="button"
       class="global-log-toggle"
@@ -148,7 +164,7 @@
   <span class="activity-dur">{primary === undefined ? '' : elapsed(primary)}</span>
 </div>
 
-{#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && openLog === goalKey(primary)}
+{#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && primary.startTicks !== null && openLog === goalKey(primary)}
   <GlobalLogView
     drvPath={primary.drvPath}
     pid={primary.pid}
