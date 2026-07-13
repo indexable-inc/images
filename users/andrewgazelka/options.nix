@@ -2,9 +2,7 @@
   config,
   lib,
   ...
-}: let
-  cfg = config.users.andrewgazelka;
-in {
+}: {
   options.users.andrewgazelka = {
     blockedHosts = lib.mkOption {
       type = lib.types.listOf lib.types.str;
@@ -70,12 +68,6 @@ in {
         default = "${config.home.homeDirectory}/.config/nix";
         defaultText = lib.literalExpression ''"''${config.home.homeDirectory}/.config/nix"'';
         description = "Private runtime configuration directory containing secret files.";
-      };
-      symphonyPack = lib.mkOption {
-        type = lib.types.str;
-        default = "${cfg.paths.indexCheckout}/packages/agent/symphony/workflows/indexable";
-        defaultText = lib.literalExpression ''"''${config.users.andrewgazelka.paths.indexCheckout}/packages/agent/symphony/workflows/indexable"'';
-        description = "Mutable Symphony workflow pack directory.";
       };
       vscodeIslands = lib.mkOption {
         type = lib.types.nullOr lib.types.path;

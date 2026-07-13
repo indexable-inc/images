@@ -6,7 +6,7 @@
   # note below).
   packageSet = true;
   # Flake-output only, deliberately NOT an overlay: `pkgs.codex` must stay the
-  # plain nixpkgs CLI because symphony's room-server wrapper pins `pkgs.codex`
+  # plain nixpkgs CLI because the room-server wrapper pins `pkgs.codex`
   # as the binary it spawns over JSON-RPC. Our wrapper is an additive output
   # (`nix run .#codex`, `index.packages.<sys>.codex`) that bakes our defaults on
   # top of that same base, without changing what the overlay hands other code.

@@ -3,6 +3,10 @@ title: "overseer: a 10-minute adviser over the nation of agents"
 date: 2026-07-08
 ---
 
+*Historical: Symphony was decommissioned in favor of Weave (ENG-7401).
+This article is kept as a record of the overseer workflow as it ran on
+Symphony; the mechanics below no longer reflect the live system.*
+
 Every 10 minutes on hydra, a symphony cron workflow snapshots every
 running claude/codex/BEAM process, their session transcripts (last ask,
 last reply, tool-error counts, activity age), symphony run states, and
