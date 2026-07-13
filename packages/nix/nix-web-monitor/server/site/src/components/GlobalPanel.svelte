@@ -32,14 +32,24 @@
 
   function loadSort(): SortMode {
     if (typeof window === 'undefined') return 'tree';
-    const stored = window.localStorage.getItem(SORT_KEY);
+    let stored: string | null;
+    try {
+      stored = window.localStorage.getItem(SORT_KEY);
+    } catch {
+      // Storage may be unavailable (private mode); fall back to the default.
+      return 'tree';
+    }
     const found = SORTS.find(([mode]) => mode === stored);
     return found === undefined ? 'tree' : found[0];
   }
 
   function setSort(mode: SortMode): void {
     sortMode = mode;
-    window.localStorage.setItem(SORT_KEY, mode);
+    try {
+      window.localStorage.setItem(SORT_KEY, mode);
+    } catch {
+      // Best-effort: a full/blocked storage only loses persistence.
+    }
   }
 
   /// The why-chain forest: active goals hang under the derivations that

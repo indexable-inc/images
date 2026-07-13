@@ -96,6 +96,10 @@
       const width = Math.max(MIN_WIDTH, Math.min(drag.baseA + dx, box.width));
       const height = Math.max(MIN_HEIGHT, Math.min(drag.baseB + dy, box.height));
       dock.state.resizeFloating(floating.id, width, height);
+      // The position clamp depends on the size: a pane parked at the
+      // left-edge limit (x = 48 - width) that then shrinks would keep no
+      // sliver inside the dock. Re-clamp against the new dimensions.
+      clampToDock();
     }
   }
 
