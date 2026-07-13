@@ -62,7 +62,7 @@ in {
       "raycast"
       "screen-studio"
       "setapp"
-      "signal@beta"
+      "signal"
       "skim"
       "slack"
       "spotify"
