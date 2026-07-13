@@ -303,17 +303,41 @@ class NuResult(NamedTuple):
     result: pl.DataFrame | dict[str, object] | str
     exit_code: int
 
+    def __ix_llm__(self) -> str | None:
+        """Model-facing text for the kernel's Result rendering (issue #3131).
+
+        The generic tuple rendering coerced ``(text, exit_code)`` into a mixed
+        one-column frame whose NUON escaped every newline, so a background job
+        wrapping ``nu(..., check=False)`` had no readable lines to page
+        (``jobs['<id>'].tail()`` returned frame fragments). Render the
+        command's own output verbatim instead, with ``sh``-style trailing
+        ``[exit N]`` marker on a non-zero exit; a frame result returns None so
+        the kernel's rich table rendering still applies.
+        """
+        if isinstance(self.result, str):
+            body = self.result
+        elif isinstance(self.result, dict):
+            body = repr(self.result)
+        else:
+            return None
+        marker = f"[exit {self.exit_code}]"
+        if not body:
+            return marker
+        return body if self.exit_code == 0 else f"{body}\n{marker}"
+
 
 def _resolve_dir(cwd: str | os.PathLike) -> str:
     """Return an existing directory as an absolute path.
 
     The engine persists PWD across calls, so a relative value would later be
     interpreted against an unrelated process directory and poison the session.
-    Resolve and validate it before the persistent engine sees it. This stays
-    synchronous on purpose: it is one local filesystem lookup, and keeping the
-    path method out of the async caller avoids ASYNC240.
+    Resolve and validate it before the persistent engine sees it (a leading
+    ``~`` expands first: every shell accepts one here, so callers reach for
+    it naturally, index#3101). This stays synchronous on purpose: it is one
+    local filesystem lookup, and keeping the path method out of the async
+    caller avoids ASYNC240.
     """
-    resolved = pathlib.Path(cwd).resolve()
+    resolved = pathlib.Path(cwd).expanduser().resolve()
     if not resolved.is_dir():
         raise ValueError(f"cwd is not a directory: {os.fspath(cwd)!r}")
     return os.fspath(resolved)

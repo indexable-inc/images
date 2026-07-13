@@ -141,9 +141,7 @@
           '^\.github/.*\.ya?ml$'
           '(^|/)docker-compose\.ya?ml$'
           '(^|/)plugin\.yml$'
-          '^packages/agent/symphony/workflows/.*/repositories\.yaml$'
           '^\.editorconfig$'
-          '^packages/agent/symphony/elixir/\.sobelow-conf$'
           '^packages/minecraft/minestom/servers/[^/]+/gradle\.properties$'
           '^packages/minecraft/minestom/servers/[^/]+/gradle/verification-metadata\.xml$'
           '^packages/minecraft/minestom/servers/[^/]+/src/main/resources/logback\.xml$'
@@ -1401,13 +1399,6 @@
               mkdir -p "$out"
             '';
           run-records-session = repoPackages.run.passthru.tests.recordsSession;
-          # Symphony's required quality lane (compile -Werror, mix format,
-          # `mix credo --strict`, mix test), built through the shared
-          # ix.buildElixirCheck lane against the repo-wide strict Credo config
-          # (lib/elixir/credo.exs); see packages/agent/symphony/default.nix. The
-          # advisory lane (dialyzer, sobelow, deps.audit) stays a local
-          # `mix quality` run.
-          symphony-elixir = repoPackages.symphony.passthru.tests.elixir;
           # hive's quality lane through the same shared ix.buildElixirCheck:
           # `mix compile --warnings-as-errors` (Elixir 1.18's set-theoretic type
           # checker) plus format, `mix credo --strict`, and test. The lint half
@@ -1804,20 +1795,6 @@ in {
         pkgs.valgrind
         pkgs.samply
         pkgs.jemalloc
-      ];
-    };
-
-    # Dev loop for packages/symphony: the Elixir/OTP pairing the runtime pins
-    # (1.19 on 28) plus the host tools bin/run-nix expects. codex is the plain
-    # nixpkgs CLI; authenticate it before `nix run .#symphony`.
-    symphony = pkgs.mkShellNoCC {
-      packages = [
-        (ix.languages.elixir.toolchain pkgs {version = "1.19";})
-        (ix.languages.erlang.toolchain pkgs {version = "28";})
-        pkgs.codex
-        pkgs.gh
-        pkgs.git
-        pkgs.openssh
       ];
     };
   };

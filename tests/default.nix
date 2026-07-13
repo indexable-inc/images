@@ -15,14 +15,6 @@
   # (repo policy: no hash literals in tracked .nix).
   pins = ix.pins.loadPins ./pins.json;
   portableServicesTest = import ./portable-services.nix {inherit lib pkgs ix;};
-  symphonyHomeModuleTest = import ./symphony-home-module.nix {
-    inherit
-      lib
-      pkgs
-      ix
-      paths
-      ;
-  };
   # Provenance walker + home module (whence, #2413): asserts the manifest of
   # a real home-manager eval links deployed paths to their defining sites,
   # so it takes the home-manager flake input rather than option stubs.
@@ -674,26 +666,6 @@
     # Outer pkgs has no allowUnfree, so forcing pkgs.claude-code here would
     # throw at eval; use lib.getName over the rendered systemPackages list.
     packageNames = map lib.getName config.environment.systemPackages;
-  };
-
-  # The symphony control-plane module (modules/services/symphony) evaluated
-  # standalone, the way ix's host modules consume it. `package` only needs a
-  # /bin path shape at eval, so hello stands in for the launcher.
-  symphonyService = let
-    config = evalConfig [
-      {
-        ix.image.name = "test/symphony-module";
-        services.symphony = {
-          enable = true;
-          package = pkgs.hello;
-          primaryRepo = "/srv/checkouts/index";
-          environmentFile = "/run/secrets/symphony.env";
-        };
-      }
-    ];
-  in {
-    inherit config;
-    unit = config.systemd.services.symphony;
   };
 
   pythonAppClosureProbe = ix.writePythonApplication pkgs {
@@ -4432,34 +4404,6 @@
       }
     ];
 
-    # The control-plane runtime module that moved in-tree with
-    # packages/symphony. These pin the env contract ix's hil deployment and
-    # the worker module read off the unit, so a refactor that renames an
-    # option or drops the EnvironmentFile pass-through fails here instead of
-    # on a host switch.
-    symphony = [
-      {
-        assertion = symphonyService.unit.environment.SYMPHONY_WORKFLOW_PACK == "example";
-        message = "symphony module should default to the bundled example workflow pack";
-      }
-      {
-        assertion = symphonyService.unit.environment.SYMPHONY_PRIMARY_REPO == "/srv/checkouts/index";
-        message = "symphony module should export the primary repo checkout to the runtime";
-      }
-      {
-        assertion = lib.hasSuffix "/bin/symphony" symphonyService.unit.serviceConfig.ExecStart;
-        message = "symphony module should exec /bin/symphony from the configured package";
-      }
-      {
-        assertion = symphonyService.unit.serviceConfig.EnvironmentFile == "/run/secrets/symphony.env";
-        message = "symphony module should pass the secrets EnvironmentFile through to systemd";
-      }
-      {
-        assertion = !(symphonyService.unit.environment ? SYMPHONY_HOST_USER);
-        message = "symphony module should keep host-placement env unset until hostRuntime.enable";
-      }
-    ];
-
     minecraft = [
       {
         assertion = minecraft.cfg.version == "26.1.2";
@@ -6202,7 +6146,6 @@ in {
   # Strict type + annotation gate over the public ix-sdk Python sources.
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
-  symphonyHomeModule = symphonyHomeModuleTest;
   provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
@@ -6216,7 +6159,6 @@ in {
       fleetTest
       helperTest
       portableServicesTest
-      symphonyHomeModuleTest
       provenanceTest
       cargoUnitPrebuiltTest
     ]

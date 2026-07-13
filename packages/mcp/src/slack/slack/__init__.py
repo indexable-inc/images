@@ -96,7 +96,7 @@ __all__ = [
     "watches",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.7.0"
 
 # The env var a shared (multiplayer) room sets on the one MCP it replicates
 # across participants. Incognito is the default: an unset (or empty) value means

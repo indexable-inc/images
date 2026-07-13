@@ -17,7 +17,7 @@ Isolation is a pluggable backend:
   could read the corpus without searching. It is the default for local runs.
 - [`IxVmBackend`] is the typed seam for the **airtight** boundary: run each
   agent inside a disposable ix VM whose only view of the corpus is the search
-  tool (the same pattern Symphony uses for Codex). It is not wired up yet: ix
+  tool (the same pattern the agent runtime uses for Codex). It is not wired up yet: ix
   VMs run on x86_64-linux compute nodes, so this backend is implemented as an
   explicit, observable error rather than a silent fallback to local.
 """

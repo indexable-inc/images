@@ -91,7 +91,7 @@ class FakeWeave:
         raise AssertionError(f"weave_stub: unhandled query shape: {program!r}")
 
     # -- transport hooks ------------------------------------------------------
-    def http_json(self, method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+    def http_json(self, method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
         if url.endswith("/api/facts"):
             items = body if isinstance(body, list) else [body]
             acks = [self._apply(item) for item in items]
@@ -106,7 +106,7 @@ class FakeWeave:
             raise ConnectionError("no data api in unit tests (mailbox falls back in-process)")
         raise AssertionError(f"weave_stub: unhandled url {url}")
 
-    def http_bytes(self, method: str, url: str, *, content: bytes | None = None) -> bytes:
+    def http_bytes(self, method: str, url: str, *, content: bytes | None = None, headers: dict | None = None) -> bytes:
         digest = url.rsplit("/", 1)[-1]
         return self.blobs.get(digest, b"")
 
