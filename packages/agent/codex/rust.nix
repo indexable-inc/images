@@ -42,6 +42,10 @@
 
   prebuilt = import ./prebuilt.nix {inherit (pkgs) fetchurl runCommand unzip;} targetSystem;
 
+  # The build host's Rust triple in env-var spelling (x86_64_unknown_linux_gnu),
+  # for the host-side cc-rs overrides below.
+  hostEnvName = lib.replaceStrings ["-"] ["_"] pkgs.stdenv.hostPlatform.rust.rustcTarget;
+
   # The Apple cross toolchain (zig cc + macOS SDK), or null for a native build.
   # Same wiring as lib/rust/workspace.nix `mkUnits`.
   appleToolchain =
@@ -127,7 +131,19 @@
             ++ lib.optional stdenv.cc.isClang "-Wno-error=character-conversion"
           );
         }
-        // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
+        // lib.optionalAttrs (appleToolchain != null) appleToolchain.env
+        // lib.optionalAttrs (appleToolchain != null) {
+          # appleToolchain.env's *unqualified* CFLAGS/CXXFLAGS carry
+          # `-isysroot <appleSdk>`, and cc-rs falls back to them for host
+          # units too. The cross graph builds proc-macro deps for the host
+          # (sqlx-macros -> sqlx-sqlite -> libsqlite3-sys), where a
+          # Linux-targeting clang with Apple headers cannot compile the
+          # bundled sqlite3.c (`__linux__` turns on mremap/pread64 paths the
+          # macOS SDK lacks). Triple-qualified vars outrank the unqualified
+          # fallback in cc-rs, so pin the host triple's flags back to empty.
+          "CFLAGS_${hostEnvName}" = "";
+          "CXXFLAGS_${hostEnvName}" = "";
+        };
       # Build scripts emit `-l` flags that reach the final link, but their
       # `rustc-link-search` paths do not cross cargoUnit's per-unit boundary, so
       # the native libs the codex binary links (openssl, libcap on Linux) need
