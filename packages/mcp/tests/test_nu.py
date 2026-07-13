@@ -379,6 +379,22 @@ def test_nonexistent_explicit_cwd_is_rejected_at_the_boundary(tmp_path: pathlib.
         run(nu.value("2 + 2", cwd=tmp_path / "missing"))
 
 
+def test_tilde_cwd_expands_to_home(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Issue #3101: every shell expands `~` in a working-directory argument,
+    # so callers reach for it naturally; rejecting it as "not a directory"
+    # forced os.path.expanduser at every call site.
+    home = tmp_path / "home"
+    (home / "proj").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    try:
+        run(nu.value("2 + 2", cwd="~/proj"))
+        assert pathlib.Path(run(nu.value("$env.PWD"))).resolve() == (home / "proj").resolve()
+    finally:
+        nu.reset()
+
+
 def test_cwd_is_respected(tmp_path: pathlib.Path) -> None:
     (tmp_path / "hello.txt").write_text("hi")
     df = run(nu("ls | get name", cwd=tmp_path))
