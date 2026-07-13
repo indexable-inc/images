@@ -70,7 +70,8 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
             tokio::time::sleep(RETRY_INTERVAL).await;
             continue;
         };
-        let (returned_sampler, builds) = annotate_off_runtime(sampler, builds).await;
+        let AnnotatedPoll { sampler: returned_sampler, builds } =
+            annotate_off_runtime(sampler, builds).await;
         sampler = returned_sampler;
         let status = format!("{} active", builds.len());
         let global = GlobalBuilds {
@@ -98,16 +99,27 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
 async fn annotate_off_runtime(
     mut sampler: BuildStatSampler,
     mut builds: Vec<GlobalBuild>,
-) -> (BuildStatSampler, Vec<GlobalBuild>) {
+) -> AnnotatedPoll {
     tokio::task::spawn_blocking(move || {
         sampler.annotate(&mut builds);
-        (sampler, builds)
+        AnnotatedPoll { sampler, builds }
     })
     .await
     // The closure neither panics nor is cancelled, so a join error is a bug;
     // the probe's contract is to never die, so recover with a fresh sampler
     // (one tick without cpu figures) rather than crash.
-    .unwrap_or_else(|_| (BuildStatSampler::new(), Vec::new()))
+    .unwrap_or_else(|_| AnnotatedPoll {
+        sampler: BuildStatSampler::new(),
+        builds: Vec::new(),
+    })
+}
+
+/// One poll's builds after the off-runtime annotate pass, with the sampler --
+/// owner of the previous tick's cpu baselines -- riding back for the next
+/// tick.
+struct AnnotatedPoll {
+    sampler: BuildStatSampler,
+    builds: Vec<GlobalBuild>,
 }
 
 /// Run `nix store builds --json` and parse its output into a build list, or
@@ -482,6 +494,9 @@ mod tests {
     /// This is the arbitrary-file-read gate on `/api/global-log`.
     #[tokio::test]
     async fn log_file_for_resolves_only_active_builds() {
+        // One row of the identity table below: (drv, pid, start second,
+        // ticks) -> expected log path.
+        type Case = (&'static str, i64, i64, Option<u64>, Option<&'static str>);
         let with_log = GlobalBuild {
             drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
             pid: Some(11),
@@ -519,9 +534,9 @@ mod tests {
         });
         let monitor = Arc::new(RwLock::new(state));
 
-        // Table of (drv, pid, start second, ticks) -> expected log path; the
-        // misses each break exactly one identity component.
-        let cases: [(&str, i64, i64, Option<u64>, Option<&str>); 9] = [
+        // Table of identity cases; the misses each break exactly one
+        // identity component.
+        let cases: [Case; 9] = [
             ("/nix/store/aaa-foo.drv", 11, 100, Some(9000), Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2")),
             ("/nix/store/aaa-foo.drv", 12, 200, Some(9500), Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2")),
             ("/nix/store/ccc-baz.drv", 21, 300, None, Some("/nix/var/log/nix/drvs/cc/cbaz.drv.bz2")),
