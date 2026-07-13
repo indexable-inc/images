@@ -12,7 +12,7 @@ nixpkgs/flake-lock bump.
 
 `package.nix` sets `flake = true` but deliberately NOT `overlay`
 (`packages/agent/codex/package.nix:7-13`): `pkgs.codex` must stay the plain nixpkgs
-CLI because symphony's room-server wrapper pins `pkgs.codex` as the binary it
+CLI because the room-server wrapper pins `pkgs.codex` as the binary it
 spawns over JSON-RPC. This wrapper is an additive output
 (`nix run .#codex`, `index.packages.<sys>.codex`) that bakes defaults on top of
 the same base without changing what the overlay hands other code.

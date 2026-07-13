@@ -31,7 +31,6 @@ the table below.
 | seaweedfs | Single-node S3-compatible object storage via SeaweedFS (`weed server -s3`). | `services.ix-seaweedfs.enable` (`modules/services/seaweedfs/default.nix:55`) |
 | spark | Apache Spark standalone cluster shipping the Gluten + Velox native execution engine by default. | `services.ix-spark.enable` (`modules/services/spark/default.nix:193`) |
 | subagent-cache | Content-validated subagent investigation cache daemon (axum + Postgres) that serves prior findings while their read files are unchanged. | `services.subagent-cache.enable` (`modules/services/subagent-cache/default.nix:33`) |
-| symphony | Minimal opinionated systemd unit for the Symphony runtime, reading secrets from an EnvironmentFile you control. | `services.symphony.enable` (`modules/services/symphony/default.nix:27`) |
 | velocity | Velocity Minecraft proxy. | `services.velocity.enable` (`modules/services/velocity/default.nix:239`) |
 
 Each module exposes more than `enable`. Read the module's `options` block for

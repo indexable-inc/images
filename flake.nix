@@ -463,14 +463,6 @@
       claudeCodeModule = claudeCodeHomeModule;
       portableServicesModule = ix.portableServices.homeModule;
     };
-    symphonyHomeModule = import ./packages/agent/symphony/home-module.nix {
-      inherit indexPackages ix;
-      portableServicesModule = ix.portableServices.homeModule;
-      beamvmModule = import ./packages/beamvm/home-module.nix {
-        inherit indexPackages ix;
-        portableServicesModule = ix.portableServices.homeModule;
-      };
-    };
     personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
       inherit indexPackages personalServicesModule ix;
       codexModule = codexHomeModule;
@@ -487,7 +479,6 @@
       ghosttyModule = ./users/andrewgazelka/config/home/ghostty.nix;
       raycastModule = ./modules/home/raycast.nix;
       optionsModule = personalOptionsModule;
-      symphonyModule = symphonyHomeModule;
     };
     personalLightProfile = system:
       home-manager.lib.homeManagerConfiguration {
@@ -639,22 +630,6 @@
       indexer = import ./packages/search/indexer/home-module.nix {
         indexPackages = system: packages.${system};
         portableServicesModule = ix.portableServices.homeModule;
-      };
-      # Workstation-facing module: run the Symphony BEAM runtime as a user
-      # service (native launchd agent on macOS, systemd user unit on Linux)
-      # by composing portable-services. Mirrors the NixOS module's option
-      # vocabulary; point `packDir` at a mutable checkout for hot-reloaded
-      # workflows and skills. See packages/agent/symphony/home-module.nix.
-      symphony = symphonyHomeModule;
-      # Workstation-facing module: persistent BEAM VMs as user services with
-      # the OTP applications they host declared in Nix. Updating an app
-      # hot-swaps its code in the running VM (no restart, no dropped
-      # connections); only a beamvm/toolchain update restarts. See
-      # packages/beamvm/home-module.nix and packages/beamvm/harness.ex.
-      beamvm = import ./packages/beamvm/home-module.nix {
-        indexPackages = system: packages.${system};
-        portableServicesModule = ix.portableServices.homeModule;
-        inherit ix;
       };
     };
     overlays.default = ix.overlay;

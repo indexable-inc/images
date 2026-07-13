@@ -799,7 +799,7 @@ pub fn friction_report() {
     let _ = fs::create_dir_all(state_dir());
 
     // Meta-session filter (index#2275): headless judges run in mktemp scratch
-    // cwds (the symphony overseer tick, one-off summarizers). Their transcripts
+    // cwds (overseer ticks, one-off summarizers). Their transcripts
     // are role prompts and reports, not agent work, and mining them burned a
     // model call per tick and filed noise. Deterministic skip, logged so the
     // exclusion stays visible in friction.log.
