@@ -10,9 +10,14 @@
     drvPath: string;
     pid: number;
     startTime: number;
+    /// Server-sampled kernel start ticks: the true worker generation, which
+    /// pins the tail to this worker even if the pid is recycled for the same
+    /// drv within the same startTime second. Null only when the server had no
+    /// procfs figures for the worker; the server matches that exactly too.
+    startTicks: number | null;
   };
 
-  const { drvPath, pid, startTime }: Props = $props();
+  const { drvPath, pid, startTime, startTicks }: Props = $props();
 
   /// Refetch cadence while open; matches the global probe's two-second poll,
   /// so the tail is as live as the row it belongs to.
@@ -25,13 +30,17 @@
   async function fetchTail(
     targetDrvPath: string,
     targetPid: number,
-    targetStartTime: number
+    targetStartTime: number,
+    targetStartTicks: number | null
   ): Promise<void> {
     try {
+      // startTicks is omitted only when the server itself sampled no ticks
+      // for the worker; the server matches the absence exactly (no wildcard).
       const query = new URLSearchParams({
         drv: targetDrvPath,
         pid: String(targetPid),
-        start: String(targetStartTime)
+        start: String(targetStartTime),
+        ...(targetStartTicks === null ? {} : { startTicks: String(targetStartTicks) })
       });
       const response = await fetch(`/api/global-log?${query.toString()}`);
       if (!response.ok) {
@@ -58,8 +67,8 @@
   $effect(() => {
     // Fetch on mount / re-target, then poll. The interval dies with the
     // component, so collapsing the row stops the traffic.
-    void fetchTail(drvPath, pid, startTime);
-    const timer = setInterval(() => void fetchTail(drvPath, pid, startTime), POLL_MS);
+    void fetchTail(drvPath, pid, startTime, startTicks);
+    const timer = setInterval(() => void fetchTail(drvPath, pid, startTime, startTicks), POLL_MS);
     return () => {
       clearInterval(timer);
     };

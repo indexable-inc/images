@@ -69,5 +69,10 @@
 </div>
 
 {#if goal.drvPath !== null && goal.pid !== null && goal.startTime !== null && openLog === key}
-  <GlobalLogView drvPath={goal.drvPath} pid={goal.pid} startTime={goal.startTime} />
+  <GlobalLogView
+    drvPath={goal.drvPath}
+    pid={goal.pid}
+    startTime={goal.startTime}
+    startTicks={goal.startTicks}
+  />
 {/if}

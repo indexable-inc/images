@@ -103,8 +103,9 @@
     return parts.length === 0 ? 'idle' : parts.join(' · ');
   }
 
-  /// Which goal's log drawer is open, keyed `<path>:<pid>`. One at a time
-  /// keeps the panel compact; clicking the open row's toggle closes it.
+  /// Which goal's log drawer is open, keyed by `goalKey` (path, pid, start
+  /// second, start-tick generation). One at a time keeps the panel compact;
+  /// clicking the open row's toggle closes it.
   let openLog = $state<string | null>(null);
 
   function toggleLog(key: string): void {

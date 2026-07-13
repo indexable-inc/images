@@ -12,8 +12,9 @@
     collapsed: SvelteSet<string>;
     ontoggle: (path: string) => void;
     now: number;
-    /// Which goal's log drawer is open, keyed `<path>:<pid>:<startTime>`. One
-    /// at a time across the whole panel keeps it compact.
+    /// Which goal's log drawer is open, keyed
+    /// `<path>:<pid>:<startTime>:<startTicks>` (see `goalKey`). One at a time
+    /// across the whole panel keeps it compact.
     openLog: string | null;
     ontogglelog: (key: string) => void;
     /// Vertical-line flags for each ancestor column (true = ancestor has a
@@ -148,7 +149,12 @@
 </div>
 
 {#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && openLog === goalKey(primary)}
-  <GlobalLogView drvPath={primary.drvPath} pid={primary.pid} startTime={primary.startTime} />
+  <GlobalLogView
+    drvPath={primary.drvPath}
+    pid={primary.pid}
+    startTime={primary.startTime}
+    startTicks={primary.startTicks}
+  />
 {/if}
 
 {#if !isCollapsed}

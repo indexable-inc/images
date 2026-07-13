@@ -119,6 +119,11 @@ impl BuildStatSampler {
 
             build.rss_bytes = rss;
             build.cpu_percent = self.cpu_percent_for(&key, ticks, now);
+            // The worker's kernel start ticks are its generation: the payload's
+            // `start_time` is whole seconds, so this is what tells a recycled
+            // pid apart from its predecessor within the same second. The UI
+            // keys log drawers on it and `/api/global-log` matches it exactly.
+            build.start_ticks = Some(root.identity.start_ticks);
             next.insert(
                 key,
                 CpuBaseline {
@@ -446,6 +451,8 @@ mod tests {
         }];
         sampler.annotate(&mut builds);
         assert!(builds[0].rss_bytes.is_some_and(|rss| rss > 0));
+        // The worker generation is annotated from the very first sample.
+        assert!(builds[0].start_ticks.is_some());
         // First sample has no baseline yet.
         assert_eq!(builds[0].cpu_percent, None);
 
@@ -466,6 +473,7 @@ mod tests {
         sampler.annotate(&mut builds);
         assert_eq!(builds[0].cpu_percent, None);
         assert_eq!(builds[0].rss_bytes, None);
+        assert_eq!(builds[0].start_ticks, None);
         assert!(sampler.previous.is_empty());
     }
 }

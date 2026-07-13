@@ -103,6 +103,15 @@ pub struct GlobalBuild {
     /// the server from `/proc/<pid>/status` (`VmRSS`). `None` under the same
     /// conditions as `cpu_percent`.
     pub rss_bytes: Option<u64>,
+    /// The worker process's kernel start time in clock ticks since boot
+    /// (`/proc/<pid>/stat` field 22), annotated by the server's sampler like
+    /// `cpu_percent`. This is the worker's true generation: `start_time` has
+    /// one-second resolution, so a pid recycled for the same derivation within
+    /// the same second is only distinguishable by these ticks. The UI folds it
+    /// into its per-goal identity and echoes it back to `/api/global-log`.
+    /// `None` when `pid` is missing, the process was gone at sampling time, or
+    /// on a platform without procfs.
+    pub start_ticks: Option<u64>,
 }
 
 /// Wire-friendly snapshot of the machine-wide build view.

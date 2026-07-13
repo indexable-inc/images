@@ -381,6 +381,13 @@ struct GlobalLogQuery {
     drv: String,
     pid: i64,
     start: i64,
+    /// The worker's kernel start-tick generation as the UI last saw it in the
+    /// status payload (`start` is whole seconds, so this is what pins a pid
+    /// recycled within one second). Matched exactly, `None` included: a
+    /// request omitting it only resolves a worker the sampler has no ticks
+    /// for (no procfs), never a sampled one.
+    #[serde(rename = "startTicks")]
+    start_ticks: Option<u64>,
 }
 
 /// Tail of one machine build's on-disk log, as plain text.
@@ -395,8 +402,14 @@ async fn global_log(
     State(state): State<AppState>,
     Query(query): Query<GlobalLogQuery>,
 ) -> Response {
-    let Some(log_file) =
-        global::log_file_for(&state.monitor, &query.drv, query.pid, query.start).await
+    let Some(log_file) = global::log_file_for(
+        &state.monitor,
+        &query.drv,
+        query.pid,
+        query.start,
+        query.start_ticks,
+    )
+    .await
     else {
         return (
             StatusCode::NOT_FOUND,
@@ -1453,6 +1466,7 @@ mod tests {
                     drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
                     pid: Some(42),
                     start_time: Some(1_720_200_000),
+                    start_ticks: Some(777_000),
                     log_file: Some(log_path.to_string_lossy().into_owned()),
                     ..nix_web_monitor_parser::GlobalBuild::default()
                 }],
@@ -1460,68 +1474,55 @@ mod tests {
             });
         let app = router(Path::new("/nonexistent-site"), state);
 
-        let found = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
+        // The full worker identity is (drv, pid, start second, startTicks
+        // generation); each refusal case below breaks exactly one component.
+        let hit = "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000&startTicks=777000";
+        let misses = [
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=43&start=1720200000&startTicks=777000",
+                "a different worker for the same drv must not resolve to this log",
+            ),
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200001&startTicks=777000",
+                "a reused pid must not resolve the previous worker's log",
+            ),
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000&startTicks=777001",
+                "a pid reused within the same second is a new generation, not this log",
+            ),
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000",
+                "omitting the generation must not wildcard onto a sampled worker",
+            ),
+            (
+                "/api/global-log?drv=%2Fetc%2Fpasswd&pid=42&start=1720200000&startTicks=777000",
+                "a drv the machine view does not list must not resolve to a file",
+            ),
+        ];
+
+        let request_status = |uri: &str| {
+            let request = Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request builds");
+            let app = app.clone();
+            async move { app.oneshot(request).await.expect("router responds") }
+        };
+
+        let found = request_status(hit).await;
         assert_eq!(found.status(), StatusCode::OK);
         let body = axum::body::to_bytes(found.into_body(), 1 << 20)
             .await
             .expect("body collects");
         assert_eq!(&body[..], b"builder says hi\n");
 
-        let wrong_worker = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=43&start=1720200000")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
-        assert_eq!(
-            wrong_worker.status(),
-            StatusCode::NOT_FOUND,
-            "a different worker for the same drv must not resolve to this log"
-        );
-
-        let recycled_worker = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200001")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
-        assert_eq!(
-            recycled_worker.status(),
-            StatusCode::NOT_FOUND,
-            "a reused pid must not resolve the previous worker's log"
-        );
-
-        let unknown = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/global-log?drv=%2Fetc%2Fpasswd&pid=42&start=1720200000")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
-        assert_eq!(
-            unknown.status(),
-            StatusCode::NOT_FOUND,
-            "a drv the machine view does not list must not resolve to a file"
-        );
+        for (uri, reason) in misses {
+            assert_eq!(
+                request_status(uri).await.status(),
+                StatusCode::NOT_FOUND,
+                "{reason}"
+            );
+        }
 
         std::fs::remove_dir_all(&dir).expect("clean scratch dir");
     }

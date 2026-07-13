@@ -109,7 +109,14 @@ export const globalBuildSchema = v.object({
   /// without procfs.
   cpuPercent: v.nullable(v.number()),
   /// Server-sampled resident set size of the builder's process tree, bytes.
-  rssBytes: v.nullable(v.number())
+  rssBytes: v.nullable(v.number()),
+  /// The worker process's kernel start time in clock ticks since boot, sampled
+  /// by the server from procfs. This is the worker's true generation:
+  /// `startTime` is whole seconds, so a pid recycled for the same drv within
+  /// one second is only told apart by these ticks. Folded into `goalKey` and
+  /// echoed back to `/api/global-log`. Null when the pid is missing, the
+  /// process was gone at sampling time, or the host has no procfs.
+  startTicks: v.nullable(v.number())
 });
 
 /// Machine-wide build view. `detected` is false on stock nix (the subcommand is

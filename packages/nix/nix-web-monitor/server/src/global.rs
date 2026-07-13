@@ -62,7 +62,7 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
     // also the cpu averaging window.
     let mut sampler = BuildStatSampler::new();
     loop {
-        let Some(mut builds) = poll_builds().await else {
+        let Some(builds) = poll_builds().await else {
             // Undetected: publish the undetected view once (its `Default` carries
             // the "not available" status) so a later detection can flip the panel
             // on, then back off before re-probing.
@@ -70,7 +70,8 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
             tokio::time::sleep(RETRY_INTERVAL).await;
             continue;
         };
-        sampler.annotate(&mut builds);
+        let (returned_sampler, builds) = annotate_off_runtime(sampler, builds).await;
+        sampler = returned_sampler;
         let status = format!("{} active", builds.len());
         let global = GlobalBuilds {
             detected: true,
@@ -80,6 +81,33 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
         publish(&monitor, &deltas, global).await;
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+/// Annotate one poll's builds with procfs cpu/rss/generation figures on the
+/// blocking pool.
+///
+/// The sampler's pass ([`BuildStatSampler::annotate`]) is synchronous
+/// filesystem I/O: a full `/proc` sweep (one `stat` read per process on the
+/// host) plus a `status` read per subtree pid. On a machine busy enough to
+/// need this panel that can take long enough to stall an async runtime
+/// worker, so it must not run inline in the probe task. The sampler owns the
+/// previous tick's cpu baselines, so it moves into the closure and rides back
+/// with the annotated list. Its idle short-circuit (no pids -> clear
+/// baselines, no procfs reads) still applies inside the closure, so an idle
+/// tick costs one no-op blocking task.
+async fn annotate_off_runtime(
+    mut sampler: BuildStatSampler,
+    mut builds: Vec<GlobalBuild>,
+) -> (BuildStatSampler, Vec<GlobalBuild>) {
+    tokio::task::spawn_blocking(move || {
+        sampler.annotate(&mut builds);
+        (sampler, builds)
+    })
+    .await
+    // The closure neither panics nor is cancelled, so a join error is a bug;
+    // the probe's contract is to never die, so recover with a fresh sampler
+    // (one tick without cpu figures) rather than crash.
+    .unwrap_or_else(|_| (BuildStatSampler::new(), Vec::new()))
 }
 
 /// Run `nix store builds --json` and parse its output into a build list, or
@@ -145,11 +173,19 @@ async fn publish(
 /// This is the gate on `/api/global-log`: the server only ever opens paths the
 /// status directory itself advertised for a *currently active* build, so the
 /// endpoint cannot be steered at arbitrary files.
+///
+/// `start_ticks` is the worker's kernel start-tick generation as the client
+/// last saw it, matched exactly (`None` included): `start_time` is whole
+/// seconds, so the ticks are what keep a pid recycled for the same drv within
+/// one second from resolving to its predecessor's log. `None` only matches a
+/// worker the sampler has no ticks for (no procfs) -- it is never a wildcard
+/// over a sampled one.
 pub async fn log_file_for(
     monitor: &Arc<RwLock<MonitorState>>,
     drv_path: &str,
     pid: i64,
     start_time: i64,
+    start_ticks: Option<u64>,
 ) -> Option<PathBuf> {
     monitor
         .read()
@@ -161,6 +197,7 @@ pub async fn log_file_for(
             build.drv_path.as_deref() == Some(drv_path)
                 && build.pid == Some(pid)
                 && build.start_time == Some(start_time)
+                && build.start_ticks == start_ticks
         })
         .and_then(|build| build.log_file.as_deref().map(PathBuf::from))
 }
@@ -440,14 +477,16 @@ mod tests {
     }
 
     /// `log_file_for` only resolves builds the status view currently lists:
-    /// the drv must be active *and* carry a recorded log. This is the
-    /// arbitrary-file-read gate on `/api/global-log`.
+    /// the drv must be active *and* carry a recorded log, and the whole worker
+    /// identity (pid, start second, start-tick generation) must match exactly.
+    /// This is the arbitrary-file-read gate on `/api/global-log`.
     #[tokio::test]
     async fn log_file_for_resolves_only_active_builds() {
         let with_log = GlobalBuild {
             drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
             pid: Some(11),
             start_time: Some(100),
+            start_ticks: Some(9000),
             log_file: Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2".to_owned()),
             ..GlobalBuild::default()
         };
@@ -455,7 +494,17 @@ mod tests {
             drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
             pid: Some(12),
             start_time: Some(200),
+            start_ticks: Some(9500),
             log_file: Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2".to_owned()),
+            ..GlobalBuild::default()
+        };
+        // No procfs figures (non-Linux host): the whole identity is
+        // (pid, start second, no ticks) and still matches exactly.
+        let unsampled = GlobalBuild {
+            drv_path: Some("/nix/store/ccc-baz.drv".to_owned()),
+            pid: Some(21),
+            start_time: Some(300),
+            log_file: Some("/nix/var/log/nix/drvs/cc/cbaz.drv.bz2".to_owned()),
             ..GlobalBuild::default()
         };
         let without_log = GlobalBuild {
@@ -465,36 +514,34 @@ mod tests {
         let mut state = MonitorState::default();
         state.set_global(GlobalBuilds {
             detected: true,
-            builds: vec![with_log, other_worker, without_log],
-            status: "3 active".to_owned(),
+            builds: vec![with_log, other_worker, unsampled, without_log],
+            status: "4 active".to_owned(),
         });
         let monitor = Arc::new(RwLock::new(state));
 
-        assert_eq!(
-            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 11, 100).await,
-            Some(PathBuf::from("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2"))
-        );
-        assert_eq!(
-            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 12, 200).await,
-            Some(PathBuf::from("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2"))
-        );
-        assert_eq!(
-            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 11, 101).await,
-            None,
-            "a recycled pid must not resolve its predecessor's log"
-        );
-        assert_eq!(
-            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 13, 100).await,
-            None
-        );
-        assert_eq!(
-            log_file_for(&monitor, "/nix/store/bbb-bar.drv", 11, 100).await,
-            None
-        );
-        assert_eq!(
-            log_file_for(&monitor, "/etc/passwd", 11, 100).await,
-            None
-        );
+        // Table of (drv, pid, start second, ticks) -> expected log path; the
+        // misses each break exactly one identity component.
+        let cases: [(&str, i64, i64, Option<u64>, Option<&str>); 9] = [
+            ("/nix/store/aaa-foo.drv", 11, 100, Some(9000), Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2")),
+            ("/nix/store/aaa-foo.drv", 12, 200, Some(9500), Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2")),
+            ("/nix/store/ccc-baz.drv", 21, 300, None, Some("/nix/var/log/nix/drvs/cc/cbaz.drv.bz2")),
+            // A recycled pid must not resolve its predecessor's log: neither
+            // across start seconds nor -- same second -- across generations.
+            ("/nix/store/aaa-foo.drv", 11, 101, Some(9000), None),
+            ("/nix/store/aaa-foo.drv", 11, 100, Some(9001), None),
+            // No wildcard: omitted ticks never resolve a sampled worker.
+            ("/nix/store/aaa-foo.drv", 11, 100, None, None),
+            ("/nix/store/aaa-foo.drv", 13, 100, Some(9000), None),
+            ("/nix/store/bbb-bar.drv", 11, 100, Some(9000), None),
+            ("/etc/passwd", 11, 100, Some(9000), None),
+        ];
+        for (drv, pid, start, ticks, expected) in cases {
+            assert_eq!(
+                log_file_for(&monitor, drv, pid, start, ticks).await,
+                expected.map(PathBuf::from),
+                "identity ({drv}, {pid}, {start}, {ticks:?})"
+            );
+        }
     }
 
     /// A large plain log is read from its end and still opens on a whole line.
