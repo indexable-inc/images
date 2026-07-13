@@ -122,6 +122,7 @@ _SELF_USER = "U0SELF00000"
 def fresh_watch_state(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, str]]]:
     """Reset module watch state and route notify() into a recorder."""
     monkeypatch.setattr(slack, "_watches", {})
+    monkeypatch.setattr(slack, "_channel_watches", {})
     monkeypatch.setattr(slack, "_watcher_task", None)
     monkeypatch.setattr(slack, "_self_ids", None)
     delivered: list[tuple[str, dict[str, str]]] = []
@@ -213,19 +214,28 @@ def test_send_without_delivery_channel_reports_not_watching(
     assert slack._watches == {}
 
 
+def _serve_messages(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    messages: list[dict[str, Any]],
+) -> None:
+    """Swap in an api serving `messages` from `method` (plus auth.test identity)."""
+
+    def fake_api(called: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        if called == "auth.test":
+            return {"ok": True, "user_id": _SELF_USER}
+        assert called == method
+        return {"ok": True, "messages": messages}
+
+    monkeypatch.setattr(slack, "_api_call", fake_api)
+
+
 def _poll(
     monkeypatch: pytest.MonkeyPatch,
     replies: list[dict[str, Any]],
 ) -> None:
-    """Swap in a replies-serving api and run one poll pass."""
-
-    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if method == "auth.test":
-            return {"ok": True, "user_id": _SELF_USER}
-        assert method == "conversations.replies"
-        return {"ok": True, "messages": replies}
-
-    monkeypatch.setattr(slack, "_api_call", fake_api)
+    """Serve `replies` and run one thread poll pass."""
+    _serve_messages(monkeypatch, "conversations.replies", replies)
     asyncio.run(slack._poll_watches_once())
 
 
@@ -297,20 +307,9 @@ def test_poll_notify_failure_keeps_cursor_for_retry(
         raise RuntimeError("notify channel down")
 
     monkeypatch.setattr(slack, "_resolve_notify", lambda: boom)
-
-    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if method == "auth.test":
-            return {"ok": True, "user_id": _SELF_USER}
-        assert method == "conversations.replies"
-        return {
-            "ok": True,
-            "messages": [{"ts": "1781739999.000001", "user": "U0OTHER0000", "text": "hi"}],
-        }
-
-    monkeypatch.setattr(slack, "_api_call", fake_api)
     # The failure is contained (the watch loop must survive to retry), the
     # cursor stays put, and the watch is kept.
-    asyncio.run(slack._poll_watches_once())
+    _poll(monkeypatch, [{"ts": "1781739999.000001", "user": "U0OTHER0000", "text": "hi"}])
     assert slack._watches[(_CHANNEL_ID, root)].last_seen_ts == before
 
 
@@ -546,3 +545,325 @@ def test_unwatch_and_watches_frame(
     assert slack.unwatch(_CHANNEL_ID, out["ts"]) == {"removed": True}
     assert slack.unwatch(_CHANNEL_ID, out["ts"]) == {"removed": False}
     assert slack.watches().height == 0
+
+
+# --- channel watching --------------------------------------------------------
+
+
+def _arm_channel(
+    monkeypatch: pytest.MonkeyPatch,
+    cursor: str,
+    *,
+    mentions_only: bool = True,
+    channel: str = _CHANNEL_ID,
+) -> dict[str, Any]:
+    """Register a channel watch by running watch_channel with a stubbed history
+    whose newest ts is ``cursor`` (empty history when ``cursor`` is falsy)."""
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    monkeypatch.delenv(slack.SHARED_ENV, raising=False)
+
+    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        if method == "auth.test":
+            return {"ok": True, "user_id": _SELF_USER}
+        assert method == "conversations.history"
+        return {"ok": True, "messages": [{"ts": cursor}] if cursor else []}
+
+    monkeypatch.setattr(slack, "_api_call", fake_api)
+    out = asyncio.run(slack.watch_channel(channel, mentions_only=mentions_only))
+    assert out["watching"] is True
+    return out
+
+
+def _poll_channel(monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, Any]]) -> None:
+    """Serve `messages` and run one channel poll pass."""
+    _serve_messages(monkeypatch, "conversations.history", messages)
+    asyncio.run(slack._poll_channel_watches_once())
+
+
+def test_watch_channel_bootstraps_cursor_from_history(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """watch_channel starts from the newest ts already in the channel, so only
+    messages arriving after the call are delivered."""
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    monkeypatch.delenv(slack.SHARED_ENV, raising=False)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        params = params or {}
+        calls.append((method, params))
+        assert method == "conversations.history"
+        assert params["limit"] == 1  # newest-first, so one row is the newest ts
+        return {"ok": True, "messages": [{"ts": "1781740000.000005", "user": "U0OTHER0000"}]}
+
+    monkeypatch.setattr(slack, "_api_call", fake_api)
+    out = asyncio.run(slack.watch_channel(_CHANNEL_ID))
+    assert out == {"watching": True, "channel": _CHANNEL_ID, "mentions_only": True}
+    w = slack._channel_watches[_CHANNEL_ID]
+    assert w.last_seen_ts == "1781740000.000005"
+    assert w.mentions_only is True
+
+
+def test_watch_channel_without_delivery_channel_makes_no_api_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    monkeypatch.delenv(slack.SHARED_ENV, raising=False)
+    monkeypatch.setattr(slack, "_channel_watches", {})
+    monkeypatch.setattr(slack, "_resolve_notify", lambda: None)
+    calls: list[str] = []
+
+    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append(method)
+        return {"ok": True}
+
+    monkeypatch.setattr(slack, "_api_call", fake_api)
+    out = asyncio.run(slack.watch_channel(_CHANNEL_ID))
+    assert out == {"watching": False, "channel": "", "mentions_only": True}
+    assert calls == []
+    assert slack._channel_watches == {}
+
+
+def test_channel_poll_delivers_new_message_fenced(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _arm_channel(monkeypatch, "1781740000.000000", mentions_only=False)
+    # History returns newest-first; the poll must sort ascending. The message at
+    # the cursor is already seen and must not re-deliver.
+    _poll_channel(
+        monkeypatch,
+        [
+            {"ts": "1781740100.000001", "user": "U0OTHER0000", "text": "hello channel"},
+            {"ts": "1781740000.000000", "user": "U0OTHER0000", "text": "old, at cursor"},
+        ],
+    )
+    assert len(fresh_watch_state) == 1
+    content, meta = fresh_watch_state[0]
+    assert "hello channel" in content
+    assert "<untrusted-slack-message>" in content
+    assert meta["slack_event"] == "channel_message"
+    assert meta["slack_channel"] == _CHANNEL_ID
+    assert meta["slack_ts"] == "1781740100.000001"
+    assert meta["slack_user"] == "U0OTHER0000"
+    # A reply goes into the message's own thread, so slack_thread_ts is its ts.
+    assert meta["slack_thread_ts"] == "1781740100.000001"
+    assert slack._channel_watches[_CHANNEL_ID].last_seen_ts == "1781740100.000001"
+    # Cursor advanced: a second identical poll is silent.
+    _poll_channel(
+        monkeypatch,
+        [{"ts": "1781740100.000001", "user": "U0OTHER0000", "text": "hello channel"}],
+    )
+    assert len(fresh_watch_state) == 1
+
+
+def test_channel_poll_mentions_only_filters_non_mentions(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _arm_channel(monkeypatch, "1781740000.000000", mentions_only=True)
+    _poll_channel(
+        monkeypatch,
+        [
+            {"ts": "1781740100.000001", "user": "U0OTHER0000", "text": "just chatter, no ping"},
+            {"ts": "1781740100.000002", "user": "U0OTHER0000", "text": f"hey <@{_SELF_USER}> look"},
+        ],
+    )
+    assert len(fresh_watch_state) == 1
+    content, meta = fresh_watch_state[0]
+    assert "look" in content
+    assert meta["slack_ts"] == "1781740100.000002"
+    # The non-mention was examined and skipped, but still advances the cursor.
+    assert slack._channel_watches[_CHANNEL_ID].last_seen_ts == "1781740100.000002"
+
+
+def test_channel_poll_suppresses_own_posts(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Own posts are suppressed on either self identity (user or, for an xoxb
+    token, bot_id)."""
+    _arm_channel(monkeypatch, "1781740000.000000", mentions_only=False)
+    monkeypatch.setattr(slack, "_self_ids", None)  # re-resolve to pick up bot_id
+
+    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        if method == "auth.test":
+            return {"ok": True, "user_id": _SELF_USER, "bot_id": "B0SELFBOT00"}
+        assert method == "conversations.history"
+        return {
+            "ok": True,
+            "messages": [
+                {"ts": "1781740100.000001", "user": _SELF_USER, "text": "own user post"},
+                {"ts": "1781740100.000002", "bot_id": "B0SELFBOT00", "text": "own bot post"},
+            ],
+        }
+
+    monkeypatch.setattr(slack, "_api_call", fake_api)
+    asyncio.run(slack._poll_channel_watches_once())
+    assert fresh_watch_state == []
+    assert slack._channel_watches[_CHANNEL_ID].last_seen_ts == "1781740100.000002"
+
+
+def test_channel_poll_skips_noise_subtypes(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _arm_channel(monkeypatch, "1781740000.000000", mentions_only=False)
+    _poll_channel(
+        monkeypatch,
+        [
+            {
+                "ts": "1781740100.000001",
+                "user": "U0OTHER0000",
+                "subtype": "channel_join",
+                "text": "has joined",
+            },
+        ],
+    )
+    assert fresh_watch_state == []
+    assert slack._channel_watches[_CHANNEL_ID].last_seen_ts == "1781740100.000001"
+
+
+def test_channel_poll_skips_thread_replies_except_broadcast(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plain thread reply (thread_ts != ts) is skipped; a thread_broadcast and
+    a thread parent (thread_ts == ts) are kept."""
+    _arm_channel(monkeypatch, "1781740000.000000", mentions_only=False)
+    _poll_channel(
+        monkeypatch,
+        [
+            {
+                "ts": "1781740100.000001",
+                "user": "U0OTHER0000",
+                "thread_ts": "1781730000.000000",
+                "text": "a plain reply",
+            },
+            {
+                "ts": "1781740100.000002",
+                "user": "U0OTHER0000",
+                "thread_ts": "1781730000.000000",
+                "subtype": "thread_broadcast",
+                "text": "a broadcast reply",
+            },
+            {
+                "ts": "1781740100.000003",
+                "user": "U0OTHER0000",
+                "thread_ts": "1781740100.000003",
+                "text": "a thread parent",
+            },
+        ],
+    )
+    contents = [c for c, _ in fresh_watch_state]
+    assert len(contents) == 2
+    assert any("a broadcast reply" in c for c in contents)
+    assert any("a thread parent" in c for c in contents)
+    assert not any("a plain reply" in c for c in contents)
+
+
+def test_channel_poll_notify_failure_keeps_cursor_for_retry(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _arm_channel(monkeypatch, "1781740000.000000", mentions_only=False)
+    before = slack._channel_watches[_CHANNEL_ID].last_seen_ts
+
+    async def boom(content: str, **meta: str) -> None:
+        raise RuntimeError("notify channel down")
+
+    monkeypatch.setattr(slack, "_resolve_notify", lambda: boom)
+    # Cursor unchanged, so the undelivered message redelivers next cycle.
+    _poll_channel(monkeypatch, [{"ts": "1781740100.000001", "user": "U0OTHER0000", "text": "hi"}])
+    assert slack._channel_watches[_CHANNEL_ID].last_seen_ts == before
+
+
+def test_unwatch_channel_idempotent(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _arm_channel(monkeypatch, "1781740000.000000")
+    assert slack.unwatch_channel(_CHANNEL_ID) == {"removed": True}
+    assert slack.unwatch_channel(_CHANNEL_ID) == {"removed": False}
+    assert slack._channel_watches == {}
+
+
+def test_watches_frame_shows_thread_and_channel_kinds(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    threaded_api: list[tuple[str, dict[str, Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = asyncio.run(slack.send(_CHANNEL_ID, "watched thread"))
+    _arm_channel(monkeypatch, "1781740000.000000", channel="C9999999999")
+    frame = slack.watches()
+    assert frame.height == 2
+    assert next(iter(frame.columns)) == "kind"
+    rows = {r["kind"]: r for r in frame.to_dicts()}
+    assert set(rows) == {"thread", "channel"}
+    assert rows["thread"]["thread_ts"] == out["ts"]
+    assert rows["thread"]["channel_id"] == _CHANNEL_ID
+    # A channel row leaves thread_ts empty and expires_at null.
+    assert rows["channel"]["channel_id"] == "C9999999999"
+    assert rows["channel"]["thread_ts"] == ""
+    assert rows["channel"]["expires_at"] is None
+
+
+def test_channel_watch_eviction_keeps_newest(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registering past the cap evicts the oldest-registered watch and keeps the
+    newest."""
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    monkeypatch.delenv(slack.SHARED_ENV, raising=False)
+
+    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"ok": True, "messages": []}
+
+    monkeypatch.setattr(slack, "_api_call", fake_api)
+
+    async def arm_all() -> None:
+        for i in range(slack._CHANNEL_WATCH_MAX + 1):
+            await slack.watch_channel(f"C{i:010d}")
+
+    asyncio.run(arm_all())
+    assert len(slack._channel_watches) == slack._CHANNEL_WATCH_MAX
+    # The first-registered channel is evicted; the last-registered is kept.
+    assert "C0000000000" not in slack._channel_watches
+    assert f"C{slack._CHANNEL_WATCH_MAX:010d}" in slack._channel_watches
+
+
+def test_channel_poll_drops_watch_on_permanent_error_with_notice(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _arm_channel(monkeypatch, "1781740000.000000", mentions_only=False)
+
+    def broken_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        if method == "auth.test":
+            return {"ok": True, "user_id": _SELF_USER}
+        raise slack.SlackError("channel gone")
+
+    monkeypatch.setattr(slack, "_api_call", broken_api)
+    asyncio.run(slack._poll_channel_watches_once())
+    assert slack._channel_watches == {}
+    assert len(fresh_watch_state) == 1
+    assert fresh_watch_state[0][1]["slack_event"] == "watch_dropped"
+
+
+def test_channel_poll_keeps_watch_on_transient_error(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _arm_channel(monkeypatch, "1781740000.000000", mentions_only=False)
+
+    def limited_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        if method == "auth.test":
+            return {"ok": True, "user_id": _SELF_USER}
+        raise slack.SlackTransientError("Slack API HTTP 429 for conversations.history")
+
+    monkeypatch.setattr(slack, "_api_call", limited_api)
+    asyncio.run(slack._poll_channel_watches_once())
+    assert _CHANNEL_ID in slack._channel_watches
+    assert fresh_watch_state == []
