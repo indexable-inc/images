@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::str;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -284,18 +285,35 @@ pub enum State {
     Snoozed,
 }
 
-/// Everything the TUI needs to render one pending file: identity, the raw
-/// texts to diff (base vs the file on disk, plus the staged incoming base
-/// while a conflict is unresolved), and the conflict overlap.
+/// One side of a pending file's diff. Text sides get a line diff; when
+/// either side is not UTF-8 (a binary plist, say) a lossy line diff would be
+/// gibberish, so the logical ops the differ computes stand in instead.
+pub enum TuiDiff {
+    Text { old: String, new: String },
+    Ops(Vec<Op>),
+}
+
+fn tui_diff(format: Format, old: &[u8], new: &[u8]) -> TuiDiff {
+    match (str::from_utf8(old), str::from_utf8(new)) {
+        (Ok(old), Ok(new)) => TuiDiff::Text {
+            old: old.to_owned(),
+            new: new.to_owned(),
+        },
+        _ => TuiDiff::Ops(diff::diff_bytes(format, old, new)),
+    }
+}
+
+/// Everything the TUI needs to render one pending file: identity, the diff
+/// of each side (base vs the file on disk, plus base vs the staged incoming
+/// base while a conflict is unresolved), and the conflict overlap.
 pub struct TuiEntry {
     pub path: String,
     pub state: State,
     pub format: Format,
     pub persistence: Persistence,
     pub declared_at: Option<String>,
-    pub base: String,
-    pub upper: String,
-    pub staged: Option<String>,
+    pub yours: TuiDiff,
+    pub incoming: Option<TuiDiff>,
     pub overlap: Vec<String>,
 }
 
@@ -315,9 +333,8 @@ pub fn tui_entries(store: &Store) -> Result<Vec<TuiEntry>> {
             format: meta.format,
             persistence: meta.persistence,
             declared_at: meta.declared_at.clone(),
-            base: String::from_utf8_lossy(&base).into_owned(),
-            upper: String::from_utf8_lossy(&upper).into_owned(),
-            staged: staged.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+            yours: tui_diff(meta.format, &base, &upper),
+            incoming: staged.map(|staged| tui_diff(meta.format, &base, &staged)),
             overlap: entry.overlap,
         });
     }
@@ -830,5 +847,34 @@ mod tests {
         );
         assert_eq!(fixture.target_contents(), r#"{"handmade": true}"#);
         assert_eq!(fixture.entry().state, State::Drifted);
+    }
+    #[test]
+    fn tui_diff_uses_logical_ops_for_binary_sides() {
+        let bplist = |value: i64| {
+            let mut dict = plist::Dictionary::new();
+            dict.insert("a".to_owned(), plist::Value::from(value));
+            let mut bytes = Vec::new();
+            plist::Value::Dictionary(dict)
+                .to_writer_binary(&mut bytes)
+                .expect("serialize bplist");
+            bytes
+        };
+        let (old, new) = (bplist(1), bplist(2));
+        assert!(str::from_utf8(&old).is_err(), "fixture must be binary");
+        let TuiDiff::Ops(ops) = tui_diff(Format::Plist, &old, &new) else {
+            panic!("binary sides must diff as logical ops, not lossy text");
+        };
+        assert_eq!(
+            ops,
+            vec![Op::Replace {
+                path: "/a".to_owned(),
+                from: 1.into(),
+                to: 2.into(),
+            }]
+        );
+        assert!(matches!(
+            tui_diff(Format::Json, b"{}", b"{}"),
+            TuiDiff::Text { .. }
+        ));
     }
 }

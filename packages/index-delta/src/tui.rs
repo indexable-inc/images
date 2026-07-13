@@ -8,7 +8,7 @@ use std::env;
 use std::io::{self, Stdout};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
@@ -24,7 +24,8 @@ use ratatui::{
 };
 use similar::{ChangeTag, TextDiff};
 
-use crate::cmd::{State, TuiEntry, tui_entries};
+use crate::cmd::{State, TuiDiff, TuiEntry, tui_entries};
+use crate::diff::Op;
 use crate::store::{Persistence, Store};
 
 type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
@@ -32,12 +33,34 @@ type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 const ACCENT: Color = Color::Cyan;
 const DIM: Color = Color::DarkGray;
 
-const fn state_badge(state: State) -> (&'static str, &'static str, Color) {
+struct Badge {
+    icon: &'static str,
+    label: &'static str,
+    color: Color,
+}
+
+const fn state_badge(state: State) -> Badge {
     match state {
-        State::Clean => ("✓", "clean", Color::Green),
-        State::Drifted => ("~", "drifted", Color::Yellow),
-        State::Conflict => ("✗", "conflict", Color::Red),
-        State::Snoozed => ("·", "snoozed", DIM),
+        State::Clean => Badge {
+            icon: "✓",
+            label: "clean",
+            color: Color::Green,
+        },
+        State::Drifted => Badge {
+            icon: "~",
+            label: "drifted",
+            color: Color::Yellow,
+        },
+        State::Conflict => Badge {
+            icon: "✗",
+            label: "conflict",
+            color: Color::Red,
+        },
+        State::Snoozed => Badge {
+            icon: "·",
+            label: "snoozed",
+            color: DIM,
+        },
     }
 }
 
@@ -98,14 +121,14 @@ impl App {
             .entries
             .get(self.selected)
             .map_or(0, |entry| entry.detail.len().saturating_sub(1));
-        u16::try_from(lines).unwrap_or(u16::MAX)
+        u16::try_from(lines.min(usize::from(u16::MAX))).expect("capped at u16::MAX")
     }
 
     fn scroll_down(&mut self, lines: u16) {
         self.scroll = self.scroll.saturating_add(lines).min(self.max_scroll());
     }
 
-    fn scroll_up(&mut self, lines: u16) {
+    const fn scroll_up(&mut self, lines: u16) {
         self.scroll = self.scroll.saturating_sub(lines);
     }
 }
@@ -120,9 +143,18 @@ pub fn run(store: &Store) -> Result<()> {
 
 fn init_terminal() -> Result<TuiTerminal> {
     enable_raw_mode()?;
+    // From here on a failure must unwind the terminal state already taken,
+    // best-effort so cleanup never shadows the root error.
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    Terminal::new(CrosstermBackend::new(stdout)).map_err(Into::into)
+    if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+        let _ = disable_raw_mode();
+        return Err(error.into());
+    }
+    Terminal::new(CrosstermBackend::new(stdout)).map_err(|error| {
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+        error.into()
+    })
 }
 
 fn restore_terminal(terminal: &mut TuiTerminal) -> Result<()> {
@@ -162,9 +194,9 @@ fn run_loop(terminal: &mut TuiTerminal, store: &Store, mut app: App) -> Result<(
                     continue;
                 };
                 let path = entry.path.clone();
-                match edit(terminal, &path) {
-                    Ok(()) => app.reload(store)?,
-                    Err(error) => app.message = Some(format!("{error:#}")),
+                match edit(terminal, &path)? {
+                    EditOutcome::Edited => app.reload(store)?,
+                    EditOutcome::EditorFailed(error) => app.message = Some(format!("{error:#}")),
                 }
             }
             _ => {}
@@ -172,13 +204,27 @@ fn run_loop(terminal: &mut TuiTerminal, store: &Store, mut app: App) -> Result<(
     }
 }
 
+/// The editor round-trip's two failure severities: the editor itself
+/// failing is recoverable (shown in the footer), while a terminal that
+/// could not be suspended or resumed leaves raw mode and the alternate
+/// screen in an unknown state, so those errors propagate and end the TUI
+/// through the normal restore path.
+enum EditOutcome {
+    Edited,
+    EditorFailed(anyhow::Error),
+}
+
 /// Suspend the TUI, run the user's editor on `path`, and resume.
-fn edit(terminal: &mut TuiTerminal, path: &str) -> Result<()> {
+fn edit(terminal: &mut TuiTerminal, path: &str) -> Result<EditOutcome> {
     // Set-but-empty counts as unset, matching git's editor resolution.
-    let editor = ["VISUAL", "EDITOR"]
+    let Some(editor) = ["VISUAL", "EDITOR"]
         .into_iter()
         .find_map(|name| env::var(name).ok().filter(|value| !value.is_empty()))
-        .context("neither $VISUAL nor $EDITOR is set")?;
+    else {
+        return Ok(EditOutcome::EditorFailed(anyhow!(
+            "neither $VISUAL nor $EDITOR is set"
+        )));
+    };
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     // $EDITOR is a shell fragment by convention (it may carry flags), so it
@@ -190,19 +236,19 @@ fn edit(terminal: &mut TuiTerminal, path: &str) -> Result<()> {
         .arg("index-delta-edit")
         .arg(path)
         .status();
-    enable_raw_mode()?;
+    enable_raw_mode().context("resuming after editor")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen).context("resuming after editor")?;
     // Rebuild instead of `Terminal::clear()`: clear does a cursor-position
     // DSR round-trip (ESC[6n) that times out on terminals that never reply,
     // leaving the old buffers intact and the screen blank. A fresh Terminal
     // starts with empty buffers, so the next draw repaints every cell.
     *terminal = Terminal::new(CrosstermBackend::new(stdout))?;
-    let status = status.context("launching editor")?;
-    if !status.success() {
-        bail!("editor exited with {status}");
-    }
-    Ok(())
+    Ok(match status.context("launching editor") {
+        Ok(status) if status.success() => EditOutcome::Edited,
+        Ok(status) => EditOutcome::EditorFailed(anyhow!("editor exited with {status}")),
+        Err(error) => EditOutcome::EditorFailed(error),
+    })
 }
 
 // --- rendering ---
@@ -236,11 +282,11 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &App) {
         if count == 0 {
             continue;
         }
-        let (icon, word, color) = state_badge(state);
+        let badge = state_badge(state);
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            format!("{icon} {count} {word}"),
-            Style::new().fg(color).bold(),
+            format!("{} {count} {}", badge.icon, badge.label),
+            Style::new().fg(badge.color).bold(),
         ));
     }
     if app.entries.is_empty() {
@@ -254,14 +300,17 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &App) {
 
 fn render_sidebar(frame: &mut ratatui::Frame, area: Rect, app: &App) {
     let items = app.entries.iter().map(|entry| {
-        let (icon, _, color) = state_badge(entry.state);
+        let badge = state_badge(entry.state);
         ListItem::new(Line::from(vec![
-            Span::styled(format!("{icon} "), Style::new().fg(color).bold()),
+            Span::styled(
+                format!("{} ", badge.icon),
+                Style::new().fg(badge.color).bold(),
+            ),
             Span::raw(tilde(&entry.path)),
         ]))
     });
     let list = List::new(items)
-        .block(pane_block(format!("pending · {}", app.entries.len())))
+        .block(pane_block(&format!("pending · {}", app.entries.len())))
         .highlight_symbol("▌")
         .highlight_style(Style::new().bg(Color::DarkGray).bold());
     let mut state = ListState::default();
@@ -275,13 +324,13 @@ fn render_detail(frame: &mut ratatui::Frame, area: Rect, app: &App) {
             "✓ nothing to resolve",
             Style::new().fg(Color::Green).bold(),
         ))
-        .block(pane_block("diff".to_owned()));
+        .block(pane_block("diff"));
         frame.render_widget(empty, area);
         return;
     };
     // No wrapping: diff lines must keep their column alignment.
     let paragraph = Paragraph::new(Text::from(entry.detail.clone()))
-        .block(pane_block(tilde(&entry.path)))
+        .block(pane_block(&tilde(&entry.path)))
         .scroll((app.scroll, 0));
     frame.render_widget(paragraph, area);
 }
@@ -308,7 +357,7 @@ fn render_footer(frame: &mut ratatui::Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn pane_block(title: String) -> Block<'static> {
+fn pane_block(title: &str) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -332,13 +381,16 @@ fn tilde(path: &str) -> String {
 // --- detail content ---
 
 fn detail_lines(entry: &TuiEntry) -> Vec<Line<'static>> {
-    let (icon, word, color) = state_badge(entry.state);
+    let badge = state_badge(entry.state);
     let persistence = match entry.persistence {
         Persistence::Ephemeral => "ephemeral · resets at next login",
         Persistence::Durable => "durable",
     };
     let mut lines = vec![Line::from(vec![
-        Span::styled(format!("{icon} {word}"), Style::new().fg(color).bold()),
+        Span::styled(
+            format!("{} {}", badge.icon, badge.label),
+            Style::new().fg(badge.color).bold(),
+        ),
         Span::styled(format!("  {}", entry.format), Style::new().fg(ACCENT)),
         Span::styled(format!("  {persistence}"), Style::new().fg(DIM)),
     ])];
@@ -349,13 +401,13 @@ fn detail_lines(entry: &TuiEntry) -> Vec<Line<'static>> {
         ));
     }
     lines.push(Line::default());
-    match &entry.staged {
-        Some(staged) => {
+    match &entry.incoming {
+        Some(incoming) => {
             lines.push(section("your edits · base → file"));
-            lines.extend(unified(&entry.base, &entry.upper));
+            lines.extend(diff_lines(&entry.yours));
             lines.push(Line::default());
             lines.push(section("incoming · base → staged"));
-            lines.extend(unified(&entry.base, staged));
+            lines.extend(diff_lines(incoming));
             if !entry.overlap.is_empty() {
                 lines.push(Line::default());
                 lines.push(Line::styled(
@@ -370,9 +422,63 @@ fn detail_lines(entry: &TuiEntry) -> Vec<Line<'static>> {
                 }
             }
         }
-        None => lines.extend(unified(&entry.base, &entry.upper)),
+        None => lines.extend(diff_lines(&entry.yours)),
     }
     lines
+}
+
+fn diff_lines(diff: &TuiDiff) -> Vec<Line<'static>> {
+    match diff {
+        TuiDiff::Text { old, new } => unified(old, new),
+        TuiDiff::Ops(ops) => ops_lines(ops),
+    }
+}
+
+/// Logical ops as styled lines: the diff view for sides a line diff cannot
+/// render, e.g. binary plists.
+fn ops_lines(ops: &[Op]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for op in ops {
+        match op {
+            Op::Add { path, value } => lines.push(Line::styled(
+                format!("+ {path} = {value}"),
+                Style::new().fg(Color::Green),
+            )),
+            Op::Remove { path, from } => lines.push(Line::styled(
+                format!("- {path} = {from}"),
+                Style::new().fg(Color::Red),
+            )),
+            Op::Replace { path, from, to } => lines.push(Line::from(vec![
+                Span::styled(format!("~ {path}  "), Style::new().fg(Color::Yellow)),
+                Span::styled(from.to_string(), Style::new().fg(Color::Red)),
+                Span::styled(" → ", Style::new().fg(DIM)),
+                Span::styled(to.to_string(), Style::new().fg(Color::Green)),
+            ])),
+            Op::Text { diff } => lines.extend(diff.lines().map(patch_line)),
+            Op::Binary => lines.push(Line::styled(
+                "(binary contents differ)",
+                Style::new().fg(DIM).italic(),
+            )),
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::styled(
+            "(no logical changes; drift is formatting- or key-order-only)",
+            Style::new().fg(DIM).italic(),
+        ));
+    }
+    lines
+}
+
+/// Style one line of an already-rendered unified diff by its marker.
+fn patch_line(text: &str) -> Line<'static> {
+    let style = match text.as_bytes().first() {
+        Some(b'@') => Style::new().fg(ACCENT),
+        Some(b'-') => Style::new().fg(Color::Red),
+        Some(b'+') => Style::new().fg(Color::Green),
+        _ => Style::new().fg(DIM),
+    };
+    Line::styled(text.to_owned(), style)
 }
 
 fn section(title: &str) -> Line<'static> {
@@ -430,16 +536,23 @@ mod tests {
     use super::*;
     use crate::value::Format;
 
+    fn text_diff(old: &str, new: &str) -> TuiDiff {
+        TuiDiff::Text {
+            old: old.to_owned(),
+            new: new.to_owned(),
+        }
+    }
+
     fn entry(state: State, staged: Option<&str>, overlap: Vec<String>) -> TuiEntry {
+        let base = "{\n  \"a\": 1\n}\n";
         TuiEntry {
             path: "/tmp/config.json".to_owned(),
             state,
             format: Format::Json,
             persistence: Persistence::Durable,
             declared_at: Some("home/test.nix:1".to_owned()),
-            base: "{\n  \"a\": 1\n}\n".to_owned(),
-            upper: "{\n  \"a\": 2\n}\n".to_owned(),
-            staged: staged.map(str::to_owned),
+            yours: text_diff(base, "{\n  \"a\": 2\n}\n"),
+            incoming: staged.map(|staged| text_diff(base, staged)),
             overlap,
         }
     }
@@ -449,7 +562,7 @@ mod tests {
     }
 
     fn app() -> App {
-        let entries = vec![entry(State::Drifted, None, Vec::new()), {
+        let entries = [entry(State::Drifted, None, Vec::new()), {
             let mut second = entry(State::Conflict, None, Vec::new());
             second.path = "/tmp/other.json".to_owned();
             second
@@ -511,6 +624,35 @@ mod tests {
         app.scroll_down(2);
         app.scroll_up(200);
         assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    fn ops_render_addressed_edits_and_binary_fallback() {
+        let ops = vec![
+            Op::Add {
+                path: "/a".to_owned(),
+                value: 1.into(),
+            },
+            Op::Remove {
+                path: "/b".to_owned(),
+                from: 2.into(),
+            },
+            Op::Replace {
+                path: "/c".to_owned(),
+                from: 3.into(),
+                to: 4.into(),
+            },
+            Op::Binary,
+        ];
+        let lines = rendered(&ops_lines(&ops));
+        assert_eq!(lines[0], "+ /a = 1");
+        assert_eq!(lines[1], "- /b = 2");
+        assert_eq!(lines[2], "~ /c  3 → 4");
+        assert_eq!(lines[3], "(binary contents differ)");
+        assert_eq!(
+            rendered(&ops_lines(&[]))[0],
+            "(no logical changes; drift is formatting- or key-order-only)"
+        );
     }
 
     #[test]
