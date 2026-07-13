@@ -843,6 +843,22 @@ in {
   # Emacs (~/.emacs.d is auto-created on first launch and takes precedence over XDG)
   home.file.".emacs.d/init.el".source = repoFile "emacs/init.el";
 
+  # Nushell (Linux). The config tree hard-requires NIX_PRIVATE_CONFIG_DIR
+  # (functions/secrets.nu) and vivid (functions/theme.nu), both provided only
+  # by this profile, so it deploys here, not in the index-free development
+  # baseline (#3126). The Darwin copy lives in darwin-home.nix.
+  home.file.".config/nushell" = lib.mkIf pkgs.stdenv.isLinux {
+    source = repoFile "nushell";
+  };
+  home.file.".config/nushell-hm-session-vars.nu".text =
+    lib.concatStringsSep "\n" (
+      lib.mapAttrsToList (
+        name: value: "$env.${name} = ${builtins.toJSON (toString value)}"
+      )
+      config.home.sessionVariables
+    )
+    + "\n";
+
   # Starship is configured natively below via `programs.starship` (settings
   # from home/starship.nix), so no out-of-store symlink here.
 

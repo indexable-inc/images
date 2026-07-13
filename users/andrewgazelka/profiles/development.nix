@@ -3,12 +3,7 @@
 {
   agentLua,
   configRoot,
-}: {
-  config,
-  lib,
-  pkgs,
-  ...
-}: let
+}: {pkgs, ...}: let
   nvimLua = pkgs.runCommand "andrewgazelka-nvim-lua" {__structuredAttrs = true;} ''
     cp -R ${configRoot + "/nvim/lua"} "$out"
     chmod -R u+w "$out"
@@ -17,20 +12,6 @@
   '';
 in {
   xdg.configFile."nvim/lua".source = nvimLua;
-
-  home.file = {
-    ".config/nushell" = lib.mkIf pkgs.stdenv.isLinux {
-      source = configRoot + "/nushell";
-    };
-    ".config/nushell-hm-session-vars.nu".text =
-      lib.concatStringsSep "\n" (
-        lib.mapAttrsToList (
-          name: value: "$env.${name} = ${builtins.toJSON (toString value)}"
-        )
-        config.home.sessionVariables
-      )
-      + "\n";
-  };
 
   programs = {
     bash.enable = true;
