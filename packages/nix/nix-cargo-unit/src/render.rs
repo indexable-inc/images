@@ -4284,31 +4284,31 @@ version = "0.1.0"
         assert_eq!(rendered.matches("\"beta\" = mkDoctestEntry").count(), 2);
     }
 
-    #[test]
-    fn doctest_commands_match_cargo_rustdoc_contract() {
-        let workspace = tempfile::tempdir().unwrap();
-        fs::create_dir_all(workspace.path().join("src")).unwrap();
+    fn write_doctest_contract_sources(workspace: &Path) -> [String; 4] {
+        fs::create_dir_all(workspace.join("src")).unwrap();
         fs::write(
-            workspace.path().join("Cargo.toml"),
+            workspace.join("Cargo.toml"),
             r#"[package]
 name = "native"
 version = "0.1.0"
 "#,
         )
         .unwrap();
-        let build_rs = workspace.path().join("build.rs");
-        let leaf_rs = workspace.path().join("src/leaf.rs");
-        let lib_rs = workspace.path().join("src/lib.rs");
-        let middle_rs = workspace.path().join("src/middle.rs");
+        let build_rs = workspace.join("build.rs");
+        let leaf_rs = workspace.join("src/leaf.rs");
+        let lib_rs = workspace.join("src/lib.rs");
+        let middle_rs = workspace.join("src/middle.rs");
         fs::write(&build_rs, "fn main() {}\n").unwrap();
         fs::write(&leaf_rs, "pub fn leaf() {}\n").unwrap();
         fs::write(&lib_rs, "pub fn native() {}\n").unwrap();
         fs::write(&middle_rs, "pub fn middle() {}\n").unwrap();
-        let build_rs = build_rs.to_string_lossy();
-        let leaf_rs = leaf_rs.to_string_lossy();
-        let lib_rs = lib_rs.to_string_lossy();
-        let middle_rs = middle_rs.to_string_lossy();
-        let pkg_id = format!("path+file://{}#native@0.1.0", workspace.path().display());
+
+        [build_rs, leaf_rs, lib_rs, middle_rs].map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn doctest_contract_graph(workspace: &Path) -> UnitGraph {
+        let [build_rs, leaf_rs, lib_rs, middle_rs] = write_doctest_contract_sources(workspace);
+        let pkg_id = format!("path+file://{}#native@0.1.0", workspace.display());
 
         let graph: UnitGraph = serde_json::from_value(serde_json::json!({
           "version": 1,
@@ -4396,6 +4396,14 @@ version = "0.1.0"
           "roots": [4]
         }))
         .unwrap();
+
+        graph
+    }
+
+    #[test]
+    fn doctest_commands_match_cargo_rustdoc_contract() {
+        let workspace = tempfile::tempdir().unwrap();
+        let graph = doctest_contract_graph(workspace.path());
 
         let rendered = render_units_nix(
             &graph,
