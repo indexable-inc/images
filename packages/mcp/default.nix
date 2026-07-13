@@ -2053,6 +2053,15 @@
   # The server package imports and registers its full tool surface. Exercises the
   # FastMCP registration (schemas from type hints) without starting a kernel or
   # the Jupyter Server, so it is sandbox-safe.
+  # Every first-party `src/` package (each one becomes a toPythonModule above)
+  # must surface in the `api()` catalog (a `registry.MODULES` row) or carry an
+  # explicit reason in `registry.UNCATALOGED`: `svelte` was bundled but missing
+  # from the catalog for months (index#3091). Derived from the directory
+  # listing so the next module cannot repeat that; the filter drops the lone
+  # `private_session.py` file (a shared guard, not a module dir).
+  srcModules = builtins.attrNames (
+    lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./src)
+  );
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
@@ -2067,6 +2076,12 @@
     + "assert '(query:' not in instr and '(path:' not in instr, 'a signature leaked into the instructions'; "
     + "missing = [m.name for m in registry.MODULES if ('`' + m.name + '`') not in instr]; "
     + "assert not missing, ('registry modules missing from instructions: %r' % (missing,)); "
+    + "import json; bundled = json.loads(${builtins.toJSON (builtins.toJSON srcModules)}); "
+    + "cataloged = set(registry.module_names()) | set(registry.UNCATALOGED); "
+    + "dropped = [n for n in bundled if n not in cataloged]; "
+    + "assert not dropped, ('bundled src/ modules missing from the api() catalog -- add a registry.Module row or a registry.UNCATALOGED reason: %r' % (dropped,)); "
+    + "stale = sorted(set(registry.UNCATALOGED) - set(bundled)); "
+    + "assert not stale, ('registry.UNCATALOGED names modules not under src/: %r' % (stale,)); "
     + "print('server-ok', len(names))"
   );
 
