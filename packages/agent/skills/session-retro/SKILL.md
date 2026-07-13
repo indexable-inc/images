@@ -53,10 +53,10 @@ For each candidate:
    missing memory: each has a clear owner (`indexable-inc/index`,
    `indexable-inc/ix`, or another org repo).
 2. **Pin binary-derived evidence**: when the item comes from a running or
-   profiled binary, resolve the binary to a repo+rev and confirm the quoted
-   symbol still exists on that repo's main before filing (per the `issues`
-   skill); a symbol gone from main means the fix already landed, so cite the
-   removing PR instead of filing.
+   profiled binary, resolve the binary to a repo+rev and check the quoted
+   symbol against that repo's main before filing (per the `issues` skill); if
+   the symbol is gone, read the removing PR, and cite it instead of filing
+   when it already fixed the bug.
 3. **Search open issues first**: `gh search issues --repo <owner>/<repo>
    "<keywords>" --state open` (or `gh issue list --repo <o>/<r> --search
    "<keywords>"`). If a real duplicate exists, do NOT re-file. When you have new
