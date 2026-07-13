@@ -9,13 +9,14 @@
   # under the bare `nix` name would make it its own base (infinite recursion),
   # exactly as nix-eval-jobs / nix-output-monitor document for their overrides.
   #
-  # `autoUpdate = false` in lib/fork-packages.nix keeps the base pinned by rev
-  # and out of the scheduled fork-sync, so it is not wired to the routine
-  # `nix run .#update` DAG (like clippy, and unlike codex/btop): the daemon
-  # version moves only under a deliberate change. Hence no `updateScript` flag.
+  # `autoUpdate = false` in lib/fork-packages.nix keeps the daemon source out of
+  # scheduled fork-sync. The updater only resolves the bootstrap action's
+  # explicitly requested source ref into its generated lock; it does not move
+  # the daemon version.
   id = "nix-ix";
   packageSet = true;
   flake = true;
   overlay = false;
   passthruTests = true;
+  updateScript = true;
 }
