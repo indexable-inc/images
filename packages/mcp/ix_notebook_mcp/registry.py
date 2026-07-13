@@ -151,6 +151,22 @@ MODULES: tuple[Module, ...] = (
     ),
     Module("tui", "drive and snapshot a terminal program; renders as HTML"),
     Module(
+        "svelte",
+        "author live interactive dashboard resources as real Svelte 5 components instead of "
+        'hand-rolled HTML/JS strings: `await svelte.component("Board.svelte", id=..., '
+        "state=..., actions=...)` compiles via the bundled svelte-bundle CLI into one "
+        "self-contained no-network bundle and registers the resource, with the virtual `ix` "
+        "module (`$data` / `act` / `replies`) wired to kernel state; `await svelte.bundle(src)` "
+        "returns just the compiled JS. THE path for any non-trivial UI",
+    ),
+    Module(
+        "sharedaudio",
+        "drive the local shared-audio daemon (packages/audio) over its control socket: "
+        "`sharedaudio.status()` / `volume()` / `mute()`, and `publish()` / `set_control()` / "
+        "`schedule()` push WASM instruments and control changes to every peer in the session "
+        "(needs a running `shared-audio daemon`)",
+    ),
+    Module(
         "screen",
         "native macOS desktop control: capture the screen, a region, or one app's window "
         "(`screen.capture(app=...)`), move/click the mouse, type, and manage apps (macOS only)",
@@ -293,6 +309,18 @@ MODULES: tuple[Module, ...] = (
         ),
     ),
 )
+
+# Bundled `src/` packages deliberately absent from the catalog, each with the
+# reason it stays out. The packaging check (`serverTools` in
+# packages/mcp/default.nix) reads the real `src/` directory listing and fails
+# when a bundled module is neither a `Module` row above nor named here, so a
+# new module cannot silently drop out of `api()` the way `svelte` did
+# (index#3091).
+UNCATALOGED: dict[str, str] = {
+    "fsearch": "internal engine behind the `grep` / `find` / `spotlight` builtins",
+    "sh": "retired shim that raises a migration hint; shell-out is `nu`",
+    "nox_autotriage": "nox conformance -> linear.triage adapter driven by CI automation, not cells",
+}
 
 # Always-present namespace builtins (installed by runtime.install; no import).
 BUILTINS: tuple[Builtin, ...] = (
