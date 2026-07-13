@@ -146,7 +146,7 @@ def test_transport_pump_weave_chat_posts_instead_of_notifying(monkeypatch: pytes
         posts: list[tuple] = []
         posted = anyio.Event()
 
-        def fake_http(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+        def fake_http(method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
             posts.append((method, url, body))
             anyio.from_thread.run_sync(posted.set)
             return {"id": body["id"], "seq": 1}
@@ -183,7 +183,7 @@ def test_transport_pump_weave_chat_retries_failed_post_with_same_id(monkeypatch:
         attempts: list[str] = []
         retried = anyio.Event()
 
-        def fake_http(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+        def fake_http(method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
             attempts.append(body["id"])
             if len(attempts) == 1:
                 raise ConnectionError("weave down")
