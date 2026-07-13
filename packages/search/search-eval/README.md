@@ -109,7 +109,7 @@ The agent runs behind a pluggable backend:
   accordingly and use the airtight backend below when the isolation must hold.
 - `--backend ixvm` is the typed seam for the **airtight** boundary: run each
   agent inside a disposable ix VM whose only view of the corpus is the search
-  tool (the same shape Symphony uses to run Codex). It is not implemented yet and
+  tool (the same shape the agent runtime uses to run Codex). It is not implemented yet and
   returns an explicit error rather than silently falling back: ix VMs run on
   x86_64-linux compute nodes, so wiring this up belongs in a follow-up. The
   interface lives in [`agent.py`](src/search_eval/agent.py).

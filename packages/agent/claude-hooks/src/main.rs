@@ -68,7 +68,6 @@ const FLEET_NOUNS: &[&str] = &[
     "cargo",
     "clippy",
     "nushell",
-    "symphony",
     "vmkit",
     "cachix",
 ];
