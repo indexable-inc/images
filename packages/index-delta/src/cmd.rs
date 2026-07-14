@@ -631,78 +631,7 @@ pub fn pull(store: &Store, repo_root: &Path, path: Option<&str>) -> Result<PullR
         Some(path) => vec![require_meta(store, path)?],
         None => store.all_metas()?,
     };
-    let explicit = path.is_some();
-    let mut plans = Vec::new();
-    let mut destinations = HashMap::new();
-
-    for meta in metas {
-        if meta.format != Format::Text {
-            if explicit {
-                bail!("{} is tracked as {}, not text", meta.path, meta.format);
-            }
-            continue;
-        }
-        let Some(source_file) = meta.source_file.clone() else {
-            if explicit {
-                bail!("{} does not record a sourceFile", meta.path);
-            }
-            continue;
-        };
-        let base = store.base_bytes(&meta.path)?;
-        let upper = fs::read(&meta.path)
-            .with_context(|| format!("reading managed target {}", meta.path))?;
-        if upper == base {
-            continue;
-        }
-        if store.staged_bytes(&meta.path)?.is_some() {
-            bail!(
-                "{} has a staged conflict; resolve it before pulling",
-                meta.path
-            );
-        }
-        let relative = Path::new(&source_file);
-        if relative.is_absolute() {
-            bail!(
-                "{} records an absolute sourceFile: {source_file}",
-                meta.path
-            );
-        }
-        let source_path = repo_root.join(relative).canonicalize().with_context(|| {
-            format!(
-                "resolving sourceFile {source_file} for managed target {}",
-                meta.path
-            )
-        })?;
-        if !source_path.starts_with(&repo_root) {
-            bail!(
-                "sourceFile {source_file} for {} escapes repository root {}",
-                meta.path,
-                repo_root.display()
-            );
-        }
-        if let Some(other) = destinations.insert(source_path.clone(), meta.path.clone()) {
-            bail!(
-                "{} and {} record the same sourceFile destination: {source_file}",
-                other,
-                meta.path
-            );
-        }
-        let repo_source = fs::read(&source_path)
-            .with_context(|| format!("reading repository source {}", source_path.display()))?;
-        if repo_source != base {
-            bail!(
-                "repository source {source_file} differs from the tracked base for {}; activate the current repository source before pulling",
-                meta.path
-            );
-        }
-        plans.push(PullPlan {
-            path: meta.path,
-            source_file,
-            source_path,
-            base,
-            upper,
-        });
-    }
+    let plans = plan_pull(store, &repo_root, metas, path.is_some())?;
 
     let mut staged = Vec::with_capacity(plans.len());
     for plan in plans {
@@ -774,6 +703,98 @@ pub fn pull(store: &Store, repo_root: &Path, path: Option<&str>) -> Result<PullR
         });
     }
     Ok(PullReport { pulled })
+}
+
+fn plan_pull(
+    store: &Store,
+    repo_root: &Path,
+    metas: Vec<Meta>,
+    explicit: bool,
+) -> Result<Vec<PullPlan>> {
+    let mut plans = Vec::new();
+    let mut destinations = HashMap::new();
+    for meta in metas {
+        let Some(plan) = plan_pull_file(store, repo_root, meta, explicit)? else {
+            continue;
+        };
+        if let Some(other) = destinations.insert(plan.source_path.clone(), plan.path.clone()) {
+            bail!(
+                "{} and {} record the same sourceFile destination: {}",
+                other,
+                plan.path,
+                plan.source_file
+            );
+        }
+        plans.push(plan);
+    }
+    Ok(plans)
+}
+
+fn plan_pull_file(
+    store: &Store,
+    repo_root: &Path,
+    meta: Meta,
+    explicit: bool,
+) -> Result<Option<PullPlan>> {
+    if meta.format != Format::Text {
+        if explicit {
+            bail!("{} is tracked as {}, not text", meta.path, meta.format);
+        }
+        return Ok(None);
+    }
+    let Some(source_file) = meta.source_file else {
+        if explicit {
+            bail!("{} does not record a sourceFile", meta.path);
+        }
+        return Ok(None);
+    };
+    let base = store.base_bytes(&meta.path)?;
+    let upper =
+        fs::read(&meta.path).with_context(|| format!("reading managed target {}", meta.path))?;
+    if upper == base {
+        return Ok(None);
+    }
+    if store.staged_bytes(&meta.path)?.is_some() {
+        bail!(
+            "{} has a staged conflict; resolve it before pulling",
+            meta.path
+        );
+    }
+    let relative = Path::new(&source_file);
+    if relative.is_absolute() {
+        bail!(
+            "{} records an absolute sourceFile: {source_file}",
+            meta.path
+        );
+    }
+    let source_path = repo_root.join(relative).canonicalize().with_context(|| {
+        format!(
+            "resolving sourceFile {source_file} for managed target {}",
+            meta.path
+        )
+    })?;
+    if !source_path.starts_with(repo_root) {
+        bail!(
+            "sourceFile {source_file} for {} escapes repository root {}",
+            meta.path,
+            repo_root.display()
+        );
+    }
+    let repo_source = fs::read(&source_path)
+        .with_context(|| format!("reading repository source {}", source_path.display()))?;
+    if repo_source != base {
+        bail!(
+            "repository source {source_file} differs from the tracked base for {}; activate the current repository source before pulling",
+            meta.path
+        );
+    }
+    Ok(Some(PullPlan {
+        path: meta.path,
+        source_file,
+        source_path,
+        base,
+        upper,
+    }))
 }
 
 fn stage_source(
@@ -877,6 +898,11 @@ mod tests {
         manifest: std::path::PathBuf,
     }
 
+    struct TextRepo {
+        root: PathBuf,
+        source: PathBuf,
+    }
+
     impl Fixture {
         fn new(persistence: &str) -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
@@ -932,7 +958,7 @@ mod tests {
             fs::read_to_string(&self.target).expect("read target")
         }
 
-        fn text_repo(&self) -> (PathBuf, PathBuf) {
+        fn text_repo(&self) -> TextRepo {
             let repo = self.dir.path().join("repo");
             let repo_source = repo.join("config.nu");
             fs::create_dir_all(&repo).expect("mkdir repo");
@@ -940,7 +966,10 @@ mod tests {
             fs::write(&repo_source, "let value = 1\n").expect("write repo source");
             self.set_base("let value = 1\n");
             self.write_manifest_for("durable", Some("text"), Some("config.nu"));
-            (repo, repo_source)
+            TextRepo {
+                root: repo,
+                source: repo_source,
+            }
         }
 
         fn entry(&self) -> StatusEntry {
@@ -1044,14 +1073,14 @@ mod tests {
     #[test]
     fn pull_copies_text_upper_to_recorded_source_and_reports_json() {
         let fixture = Fixture::new("durable");
-        let (repo, repo_source) = fixture.text_repo();
+        let repo = fixture.text_repo();
         fixture.activate();
         fs::write(&fixture.target, "let value = 2\n").expect("drift");
 
-        let report = pull(&fixture.store, &repo, Some(&fixture.target)).expect("pull");
+        let report = pull(&fixture.store, &repo.root, Some(&fixture.target)).expect("pull");
 
         assert_eq!(
-            fs::read_to_string(repo_source).expect("read repo source"),
+            fs::read_to_string(repo.source).expect("read repo source"),
             "let value = 2\n"
         );
         assert_eq!(
@@ -1068,16 +1097,17 @@ mod tests {
     #[test]
     fn pull_refuses_when_repository_source_moved_from_tracked_base() {
         let fixture = Fixture::new("durable");
-        let (repo, repo_source) = fixture.text_repo();
+        let repo = fixture.text_repo();
         fixture.activate();
         fs::write(&fixture.target, "let value = 2\n").expect("drift");
-        fs::write(&repo_source, "let value = 3\n").expect("move repo source");
+        fs::write(&repo.source, "let value = 3\n").expect("move repo source");
 
-        let error = pull(&fixture.store, &repo, Some(&fixture.target)).expect_err("reject stale");
+        let error =
+            pull(&fixture.store, &repo.root, Some(&fixture.target)).expect_err("reject stale");
 
         assert!(error.to_string().contains("differs from the tracked base"));
         assert_eq!(
-            fs::read_to_string(repo_source).expect("read repo source"),
+            fs::read_to_string(repo.source).expect("read repo source"),
             "let value = 3\n"
         );
     }
@@ -1085,18 +1115,18 @@ mod tests {
     #[test]
     fn pull_refuses_a_staged_conflict() {
         let fixture = Fixture::new("durable");
-        let (repo, repo_source) = fixture.text_repo();
+        let repo = fixture.text_repo();
         fixture.activate();
         fs::write(&fixture.target, "let local = true\n").expect("drift");
         fixture.set_base("let value = 2\n");
         fixture.activate();
 
         let error =
-            pull(&fixture.store, &repo, Some(&fixture.target)).expect_err("reject conflict");
+            pull(&fixture.store, &repo.root, Some(&fixture.target)).expect_err("reject conflict");
 
         assert!(error.to_string().contains("has a staged conflict"));
         assert_eq!(
-            fs::read_to_string(repo_source).expect("read repo source"),
+            fs::read_to_string(repo.source).expect("read repo source"),
             "let value = 1\n"
         );
     }
@@ -1104,7 +1134,7 @@ mod tests {
     #[test]
     fn pull_refuses_a_source_outside_the_repository() {
         let fixture = Fixture::new("durable");
-        let (repo, _) = fixture.text_repo();
+        let repo = fixture.text_repo();
         fixture.activate();
         fs::write(&fixture.target, "let value = 2\n").expect("drift");
         fs::write(fixture.dir.path().join("outside.nu"), "let value = 1\n")
@@ -1117,7 +1147,8 @@ mod tests {
         meta.source_file = Some("../outside.nu".to_owned());
         fixture.store.save_meta(&meta).expect("save meta");
 
-        let error = pull(&fixture.store, &repo, Some(&fixture.target)).expect_err("reject escape");
+        let error =
+            pull(&fixture.store, &repo.root, Some(&fixture.target)).expect_err("reject escape");
 
         assert!(error.to_string().contains("escapes repository root"));
     }
@@ -1125,7 +1156,7 @@ mod tests {
     #[test]
     fn pull_refuses_duplicate_repository_destinations() {
         let fixture = Fixture::new("durable");
-        let (repo, repo_source) = fixture.text_repo();
+        let repo = fixture.text_repo();
         let other = fixture.dir.path().join("home/other.nu");
         let other_string = other.to_string_lossy().into_owned();
         let files = [&fixture.target, &other_string].map(|path| {
@@ -1146,11 +1177,11 @@ mod tests {
         fs::write(&fixture.target, "let value = 2\n").expect("first drift");
         fs::write(&other, "let value = 3\n").expect("second drift");
 
-        let error = pull(&fixture.store, &repo, None).expect_err("reject duplicate");
+        let error = pull(&fixture.store, &repo.root, None).expect_err("reject duplicate");
 
         assert!(error.to_string().contains("same sourceFile destination"));
         assert_eq!(
-            fs::read_to_string(repo_source).expect("read repo source"),
+            fs::read_to_string(repo.source).expect("read repo source"),
             "let value = 1\n"
         );
     }
@@ -1158,17 +1189,17 @@ mod tests {
     #[test]
     fn pull_skips_an_explicit_clean_target() {
         let fixture = Fixture::new("durable");
-        let (repo, repo_source) = fixture.text_repo();
+        let repo = fixture.text_repo();
         fixture.activate();
 
-        let report = pull(&fixture.store, &repo, Some(&fixture.target)).expect("pull clean");
+        let report = pull(&fixture.store, &repo.root, Some(&fixture.target)).expect("pull clean");
 
         assert_eq!(
             serde_json::to_value(report).expect("serialize report"),
             serde_json::json!({ "pulled": [] })
         );
         assert_eq!(
-            fs::read_to_string(repo_source).expect("read repo source"),
+            fs::read_to_string(repo.source).expect("read repo source"),
             "let value = 1\n"
         );
     }
