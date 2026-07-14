@@ -3949,6 +3949,14 @@ _baseline_names: frozenset[str] = frozenset()
 # checkpoint and the namespace pane -- an untouched proxy is dropped by TYPE, not
 # by name (see _snapshot_candidates / _namespace_candidates).
 _lazy_module_names: frozenset[str] = frozenset()
+# The retired `sh`/`zsh` stubs, keyed to the exact object install() bound. Bound
+# AFTER the baseline snapshot and never protected, so a user's own definition of
+# the name wins for the rest of the session (issue #3215: the per-cell builtin
+# restore used to rebind the disabled stub over a user-defined `sh`) and, like
+# any user name, is checkpointed; an untouched stub is excluded by identity
+# instead (see _snapshot_candidates / _namespace_candidates), the way an
+# untouched lazy proxy is excluded by type.
+_retired_stubs: dict[str, Any] = {}
 # True while __ix_restore is replaying. The debounced checkpoint must not fire
 # then: replayed cells' source rows carry ended_at from the PREVIOUS run, so a
 # mid-restore checkpoint would advance the anchor past the cells not yet
@@ -4040,6 +4048,7 @@ def _snapshot_candidates(ns: dict) -> dict:
         and not _IPYTHON_MACHINERY.fullmatch(name)
         and not isinstance(value, types.ModuleType)
         and not isinstance(value, _LazyModule)  # untouched lazy proxy: not user state
+        and _retired_stubs.get(name) is not value  # untouched retired stub: not user state
     }
 
 
@@ -4055,6 +4064,7 @@ def _namespace_candidates(ns: dict) -> dict:
         and not name.startswith("__")
         and not _IPYTHON_MACHINERY.fullmatch(name)
         and not isinstance(value, _LazyModule)  # untouched lazy proxy: not user state
+        and _retired_stubs.get(name) is not value  # untouched retired stub: not user state
     }
 
 
@@ -4261,6 +4271,11 @@ def _session_ns(session: str | None) -> dict:
         # into every fresh session. A fresh proxy is stateless and correct.
         for name in _lazy_module_names:
             ns[name] = _LazyModule(name)
+        # Seed the retired stubs from their canonical objects, never from
+        # `shared[name]`, for the same reason: the shared binding may be a
+        # user's own `sh` by now.
+        for name, stub in _retired_stubs.items():
+            ns[name] = stub
         _session_namespaces[session] = ns
     return ns
 
@@ -4826,16 +4841,6 @@ def install(user_ns: dict | None = None) -> None:
     _bind("__ix_snapshot", __ix_snapshot)
     _bind("__ix_restore", __ix_restore)
     _bind("DASHBOARD_URL", os.environ.get("IX_MCP_DASHBOARD_URL", ""))
-    # `sh`/`zsh` are RETIRED (agents shell out through `await nu(...)`; the sh
-    # module's public entry points now raise a migration hint). Bind them anyway
-    # so a stale `await sh(cmd)` in an old transcript fails LOUDLY with that hint
-    # rather than a bare NameError. The kernel's own internals reach the private
-    # runner via `from sh import _exec`, which is never bound into the namespace.
-    with contextlib.suppress(Exception):  # sh may be absent outside the bundled interpreter; skip it
-        import sh as _sh_module
-
-        _bind("sh", _sh_module)
-        _bind("zsh", _sh_module.zsh)
     # Bind the filesystem-search helpers as top-level callables (`await grep(...)`
     # / `find(...)` / `spotlight(...)`) the way `sh` is bound, so the most common
     # search/listing actions need no import. They live in the bundled `fsearch`
@@ -4890,6 +4895,22 @@ def install(user_ns: dict | None = None) -> None:
     _lazy_module_names = frozenset(_lazy_names)
     for _mod_name in _lazy_names:
         target[_mod_name] = _LazyModule(_mod_name)
+    # `sh`/`zsh` are RETIRED (agents shell out through `await nu(...)`; the sh
+    # module's public entry points now raise a migration hint). Bind them anyway
+    # so a stale `await sh(cmd)` in an old transcript fails LOUDLY with that hint
+    # rather than a bare NameError -- but after the baseline snapshot and never
+    # through _bind, so a user's own `sh` wins over the disabled stub for the
+    # rest of the session (issue #3215; see _retired_stubs). The kernel's own
+    # internals reach the private runner via `from sh import _exec`, which is
+    # never bound into the namespace.
+    _retired_stubs.clear()
+    with contextlib.suppress(Exception):  # sh may be absent outside the bundled interpreter; skip it
+        import sh as _sh_module
+
+        _retired_stubs["sh"] = _sh_module
+        _retired_stubs["zsh"] = _sh_module.zsh
+    for _stub_name, _stub in _retired_stubs.items():
+        target[_stub_name] = _stub
     # A fresh session starts with no recorded references (the namespace is empty of
     # user names; refs accumulate as runs touch them).
     _name_refs.clear()

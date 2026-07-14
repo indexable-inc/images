@@ -78,6 +78,40 @@ def test_reimporting_the_same_module_is_not_a_clobber(monkeypatch: pytest.Monkey
     assert "kernel builtin" not in job.output
 
 
+def test_user_definition_wins_over_retired_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    # issue #3215: the retired `sh` stub was install()-protected, so the
+    # post-cell restore silently rebound the disabled stub over a user's own
+    # `async def sh` between cells. A user definition must win and stay bound.
+    sh_module = pytest.importorskip("sh")
+    ns: dict = {}
+    runtime.install(ns)
+    monkeypatch.setattr(runtime, "_session_namespaces", {})
+    assert ns["sh"] is sh_module, "the loud migration stub is bound at start"
+    assert "sh" not in runtime._protected_builtins
+    assert "zsh" not in runtime._protected_builtins
+    job = _run("async def sh(cmd: str) -> str:\n    return 'user:' + cmd")
+    assert job.status == "done"
+    assert "kernel builtin" not in job.output, "shadowing a retired stub must not warn"
+    assert ns["sh"] is not sh_module, "the user's `sh` must survive the cell's end"
+    job = _run("out = await sh('ls')")
+    assert job.status == "done", job.error
+    assert ns["out"] == "user:ls", "a later cell must call the user's binding, not the stub"
+
+
+def test_untouched_stub_is_not_user_state() -> None:
+    # An untouched stub binding stays out of checkpoints and the namespace pane
+    # (it is runtime courtesy surface, not user state); a rebound name is kept.
+    stub = object()
+    ns = {"sh": stub, "mine": 41}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runtime, "_baseline_names", frozenset())
+        mp.setattr(runtime, "_retired_stubs", {"sh": stub})
+        assert set(runtime._snapshot_candidates(ns)) == {"mine"}
+        assert set(runtime._namespace_candidates(ns)) == {"mine"}
+        ns["sh"] = "rebound"
+        assert set(runtime._snapshot_candidates(ns)) == {"sh", "mine"}
+
+
 def test_install_registers_builtins_but_not_lazy_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     # End-to-end against the real install(): the helper surface (api, jobs, and
     # the preimported modules) is protected; lazy-proxied module names are NOT --
