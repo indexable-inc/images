@@ -72,6 +72,7 @@
       ruffToml = paths.root + "/ruff.toml";
     })
     ruffAnnArgs
+    ruffAnnArgv
     ;
 
   inherit
@@ -705,6 +706,7 @@
       relativePath
       rnixDigitSeparators
       ruffAnnArgs
+      ruffAnnArgv
       rustWorkspace
       rustWorkspaceFor
       secretRefs

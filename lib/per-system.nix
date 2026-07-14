@@ -30,544 +30,6 @@
     inherit (ix.lists) findDuplicates;
   };
 
-  # Each lint stage is one subcommand on a single binary so the spec keys
-  # off `lib.getExe lintStage` without registering four sibling packages.
-  # The Nu wrapper checks syntax at build time, so a typo in a stage shows
-  # up in the `lint` derivation build, not at `nix run` time.
-  lintStage = ix.writeNushellApplication pkgs {
-    name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | ruff | clone); driven by `lint`";
-    runtimeInputs = [
-      pkgs.alejandra
-      pkgs.deadnix
-      pkgs.fd
-      pkgs.ruff
-      pkgs.statix
-      repoPackages.astlog
-      repoPackages.clone
-    ];
-    text = ''
-      # nu
-      def "main alejandra" [] {
-        let nix_files = (fd --extension nix | lines)
-        alejandra --check ...$nix_files
-      }
-      def "main statix" [] { statix check . }
-      # Strict: no `-L`/`--no-lambda-pattern-names`. That flag exists because
-      # dropping a pattern name is unsafe without `...` in the pattern (it
-      # narrows the callable signature); an unused name here must be deleted
-      # (migrating call sites) or kept behind `...`, matching what the LSP
-      # already flags as unused.
-      def "main deadnix" [] { deadnix --fail . }
-      # The Nix style rules as astlog lint declarations
-      # (astlog-rules/nix.astlog, #1060/#1062). `astlog scan` emits one
-      # finding per lint-declared relation row and exits nonzero on any
-      # error-severity finding, so adding a (lint ...) extends the gate
-      # without touching this invocation. Legitimate exceptions are
-      # suppressed in place with `astlog-ignore: <rule>` comments. Only
-      # .nix files are handed to the corpus: astlog would otherwise parse
-      # every known-grammar file in the repo to run nix-only rules.
-      def "main astlog" [] {
-        let nix_files = (fd --extension nix | lines)
-        astlog scan astlog-rules/nix.astlog ...$nix_files
-      }
-      # The Rust style rules (astlog-rules/rust.astlog), the successor to the
-      # ast-grep rust rules (#1060 ported the nix rules first). Scoped to the
-      # corpus/search crates, the `files:` scope those rules carried under
-      # ast-grep; astlog walks each directory and runs the rust rules over its
-      # .rs files. Both rulesets share the `astlog-rules` flake-check self-test.
-      def "main astlog-rust" [] {
-        let dirs = (
-          [
-            packages/indexer
-            packages/search
-            packages/search-core
-            packages/search-py
-            packages/source
-            packages/sink
-          ]
-          | where {|d| $d | path exists}
-        )
-        if ($dirs | is-not-empty) {
-          astlog scan astlog-rules/rust.astlog ...$dirs
-        }
-        # The Cargo/workspace rules (astlog-rules/cargo.astlog, TOML grammar) run
-        # over every Cargo.toml in the repo: `no-cargo-path-dep` bans inter-crate
-        # `path` deps in member tables so local crates are declared once in a
-        # [workspace.dependencies] and inherited with `workspace = true`. A
-        # separate ruleset because the `astlog-rules` self-test maps one source
-        # extension per ruleset (rust.astlog -> .rs, cargo.astlog -> .toml).
-        let cargo_files = (fd --hidden --glob Cargo.toml | lines)
-        if ($cargo_files | is-not-empty) {
-          astlog scan astlog-rules/cargo.astlog ...$cargo_files
-        }
-      }
-      # The Elixir lint rules (astlog-rules/elixir.astlog), two families. Type
-      # discipline: a struct needs a `@type`, a public `def` needs a preceding
-      # `@spec` (behaviour callbacks marked `@impl` are exempt), and a module
-      # needs a `@moduledoc` — the lint-level nudge toward the shape Elixir
-      # 1.18's set-theoretic checker can check. Correctness/security: no unsafe
-      # dynamic atom creation (atom-table DoS), no leftover `IO.inspect`. Run
-      # over every package's `lib/` Elixir, not a hand-maintained directory list:
-      # the only scoping is to `lib/` itself, because `mix.exs` build functions
-      # and `test/` ExUnit helpers are not the type-checked runtime surface and
-      # speccing them would be noise. `fd` already skips gitignored `_build`/`deps`.
-      def "main astlog-elixir" [] {
-        let files = (
-          fd --extension ex --extension exs
-          | lines
-          | where {|p| $p =~ '(^|/)lib/' }
-        )
-        if ($files | is-not-empty) {
-          astlog scan astlog-rules/elixir.astlog ...$files
-        }
-      }
-      # Repository configuration belongs in composable Nix expressions. Keep
-      # serialized files only where an external consumer owns the filename or
-      # the file is generated data, a lock, a fixture, or a protocol payload.
-      def "main filenames" [] {
-        let allowed = [
-          # Ecosystem-owned configuration and manifests.
-          '(^|/)Cargo\.toml$'
-          '(^|/)pyproject\.toml$'
-          '(^|/)rust-toolchain\.toml$'
-          '(^|/)mise\.toml$'
-          '(^|/)osv-scanner\.toml$'
-          '(^|/)ruff\.toml$'
-          '(^|/)statix\.toml$'
-          '(^|/)\.cargo/config\.toml$'
-          '^clone\.toml$'
-          '^packages/cve-scan/whitelist\.toml$'
-          '^\.github/.*\.ya?ml$'
-          '(^|/)docker-compose\.ya?ml$'
-          '(^|/)plugin\.yml$'
-          '^\.editorconfig$'
-          '^packages/minecraft/minestom/servers/[^/]+/gradle\.properties$'
-          '^packages/minecraft/minestom/servers/[^/]+/gradle/verification-metadata\.xml$'
-          '^packages/minecraft/minestom/servers/[^/]+/src/main/resources/logback\.xml$'
-          # Gradle owns these root-build names; the catalog and verification
-          # metadata are generated inputs shared by the Minestom subprojects.
-          '^packages/minecraft/minestom/gradle\.properties$'
-          '^packages/minecraft/minestom/gradle/libs\.versions\.toml$'
-          '^packages/minecraft/minestom/gradle/verification-metadata\.xml$'
-          '^packages/minecraft/minestom/gradle/snapshot-metadata\.xml$'
-
-          # Generated manifests, locks, editor settings, and typed data.
-          '(^|/)(package|tsconfig)\.json$'
-          '(^|/)(package-lock|lock)\.json$'
-          '(^|/)(pins|manifest)\.json$'
-          '^\.(claude|vscode|zed)/settings\.json$'
-          '^\.vscode/extensions\.json$'
-          '^\.github/user-owners\.json$'
-          '(^|/)(dag|upstream-status)\.json$'
-          '(^|/)(fixtures?[^/]*|snapshots?|catalogs?|metadata|sounds|seeds)/.*\.json$'
-          '^examples/.*\.json$'
-          '^packages/agent/claude-code/system-prompts/models\.json$'
-          '^packages/agent/system-prompt-eval-viewer/src/sample\.json$'
-          '^packages/code/code-highlight/src/islands-theme\.json$'
-          # Generated by `tree-sitter generate` and embedded by the grammar
-          # crate's lib.rs (see packages/code/tree-sitter-nix/README.md).
-          '^packages/code/tree-sitter-nix/src/node-types\.json$'
-          '^tests/.*\.json$'
-        ]
-        let candidates = (
-          fd --hidden --type file
-          --extension toml --extension json --extension yaml --extension yml
-          --extension kdl --extension ini --extension conf --extension cfg --extension xml
-          --extension properties --extension editorconfig --extension sobelow-conf
-          --exclude .git --exclude .claude/worktrees
-          | lines
-        )
-        let denied = ($candidates | where {|path| not ($allowed | any {|pattern| $path =~ $pattern})})
-        if ($denied | is-not-empty) {
-          print --stderr "prefer .nix for repository-owned configuration; serialized files require an external filename or generated/data role:"
-          $denied | each {|path| print --stderr $"  ($path)" }
-          exit 1
-        }
-      }
-      # A grouping directory must never restate its parent's name — the
-      # directory-tree form of the scopedNaming rule. The one occurrence,
-      # packages/minecraft/minecraft/{bot,nbt,...}, was flattened into
-      # packages/minecraft (b32885d); this stage keeps the doubled segment
-      # from coming back. Scoped to consecutive duplicates in the grouping
-      # hierarchy only: a package root (a `package.nix` or `default.nix`
-      # marker, the same markers packages/registry.nix discovers by) and
-      # everything beneath it is exempt, because an eponym package inside
-      # its area (packages/nix/nix) is deliberate and language layouts
-      # inside a package (the mcp server's Python src/slack/slack) repeat a
-      # segment by convention. Non-consecutive repeats (foo/bar/foo) are
-      # fine and stay out of scope.
-      def "main dirnames" [] {
-        let offenders = (
-          fd --type directory . packages
-          | lines
-          | where {|dir| ($dir | path basename) == ($dir | path dirname | path basename) }
-          | where {|dir|
-              let segments = ($dir | path split)
-              let enclosing = (1..($segments | length) | each {|n| $segments | first $n | path join })
-              not ($enclosing | any {|scope|
-                ["package.nix" "default.nix"] | any {|marker| ($scope | path join $marker | path exists) }
-              })
-            }
-        )
-        if ($offenders | is-not-empty) {
-          print --stderr "grouping directory restates its parent's name; flatten the child into its parent:"
-          $offenders | each {|dir| print --stderr $"  ($dir)" }
-          exit 1
-        }
-      }
-      # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
-      # pathlib + pytest + explicit annotations + no `typing.cast`; see
-      # lib/ruff-ann.nix) over EVERY tracked .py, so non-package dirs
-      # (tools/, users/, skills/, sdk/, examples/, lib/) are covered too, not just
-      # the per-package build gates. `fd` skips gitignored paths; `.claude` (agent
-      # worktrees and assets) is filtered out explicitly.
-      def "main ruff" [] {
-        let py_files = (
-          fd --extension py
-          | lines
-          | where {|p| not ($p | str starts-with ".claude/") }
-        )
-        if ($py_files | is-not-empty) {
-          ruff check ${ix.ruffAnnArgs} ...$py_files
-        }
-      }
-      # Code clone detection over the whole tree (packages/code/clone-detect).
-      # `clone .` walks up for the repo `clone.toml`, whose `[budget]
-      # global_pct` is the ceiling on whole-scan `duplication_pct`; the binary
-      # exits nonzero when the global gate fails, so this gate ratchets
-      # duplication down without failing on every pre-existing clone. Only the
-      # global gate runs here: the diff gate needs a `.git` directory, and the
-      # CI lint derivation copies a `.git`-less source tree. `clone` prints the
-      # DetectionResult JSON to stdout; redirect it to null so a failing stage's
-      # log shows the tracing gate summary (stderr), not the full JSON blob.
-      def "main clone" [] {
-        clone . out> /dev/null
-      }
-      def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | ruff | clone" }
-      }
-    '';
-  };
-
-  # One stage list drives both the dag spec (default human path) and the
-  # `--json` runner inside `lint`, so adding a stage cannot update one path
-  # and silently miss the other.
-  lintStages = [
-    "alejandra"
-    "statix"
-    "deadnix"
-    "astlog"
-    "astlog-rust"
-    "astlog-elixir"
-    "filenames"
-    "dirnames"
-    "ruff"
-    "clone"
-  ];
-
-  lintSpec = (pkgs.formats.json {}).generate "lint-dag.json" {
-    nodes = lib.genAttrs lintStages (stage: {
-      command = [
-        (lib.getExe lintStage)
-        stage
-      ];
-    });
-  };
-
-  lint = ix.writeNushellApplication pkgs {
-    name = "lint";
-    meta.description = "Run all Nix formatting and lint checks in parallel via dag-runner";
-    runtimeInputs = [repoPackages.dag-runner];
-    text = ''
-      # nu
-      const stages = ${builtins.toJSON lintStages}
-      const stage_bin = "${lib.getExe lintStage}"
-
-      def --wrapped main [...args] {
-        # `--json` (#1683) emits one JSON document — [{check, ok, output}] —
-        # so agents can load lint results as a dataframe instead of grepping
-        # the human log. It runs the same stage binary the dag spec points
-        # at; dag-runner is bypassed only because its json mode is an NDJSON
-        # event stream that drops the captured diagnostics. Exit code matches
-        # the dag-runner contract: the worst stage exit code.
-        if "--json" in $args {
-          if ($args | length) > 1 {
-            error make { msg: "--json takes no other arguments" }
-          }
-          let runs = (
-            $stages
-            | par-each --keep-order {|stage|
-                let r = (do { ^$stage_bin $stage } | complete)
-                {
-                  check: $stage
-                  ok: ($r.exit_code == 0)
-                  # `ansi strip` because the stages color their diagnostics and
-                  # nushell's `to json` passes raw ESC bytes through unescaped,
-                  # which strict parsers (jq) reject as invalid JSON.
-                  output: (($r.stdout + $r.stderr) | ansi strip)
-                  exit_code: $r.exit_code
-                }
-              }
-          )
-          print ($runs | reject exit_code | to json)
-          exit ($runs | get exit_code | math max)
-        }
-        exec dag-runner ...$args ${lintSpec}
-      }
-    '';
-  };
-
-  # `check` is the full CI gate as one repo-owned command: check.yml runs
-  # `nix run .#check`, so the same two steps run in CI and locally from a single
-  # definition. It targets x86_64-linux explicitly because that is the system CI
-  # builds for; a linux runner can only pure-eval the cross-platform darwin
-  # images, and that cross-eval was most of what made the old single-threaded
-  # `nix flake check` slow. `nix` is taken from the ambient PATH on purpose
-  # (this is always invoked as `nix run .#check`, so the host's daemon-matched
-  # nix is already present); pinning a client nix here could mismatch the host
-  # Nix 2.34.x daemon.
-  #
-  # Step 1 (nix-fast-build) builds every `ciChecks.x86_64-linux` derivation: it
-  # evaluates with nix-eval-jobs (parallel) and streams each drv into a build
-  # pool as it resolves. --skip-cached drops paths already in a substituter (a
-  # warm run does almost no work), --no-nom keeps plain logs, --no-link leaves no
-  # result symlinks. It exits nonzero iff a build or eval fails: that is the gate.
-  # --eval-workers 16 with --eval-max-memory-size 6144 is a headroom guard rail
-  # (above nix-eval-jobs' 4 GiB default per worker, below the old 8 GiB), not a
-  # workaround: the per-crate check split (see the `checks` block below) keeps
-  # each worker's eval bounded by the largest single crate. Both binaries are
-  # nix-fast-build is the repo-built nixpkgs 1.5.0 package with a patch that
-  # makes --skip-cached skip a `local` (warm-store) output, not just a remotely
-  # `cached` one. nix-eval-jobs is built against the fleet daemon's stable Nix
-  # 2.34 protocol family rather than nixpkgs' moving default. The eval
-  # cache is disabled for the parallel evaluator: all workers share one
-  # per-flake SQLite database, so writes contend and can fail with "database is
-  # busy" without providing useful hits on a fresh commit. See the $fast_build
-  # and $eval_jobs comments below.
-  #
-  # Step 2 (nix-eval-jobs) is the schema/eval gate over the package outputs,
-  # broader than the `checks` set step 1 built. nix-eval-jobs is the same
-  # parallel evaluator nix-fast-build wraps; run eval-only over
-  # packages.x86_64-linux it spreads per-attribute eval across 16 workers and
-  # realizes IFD (the `site` import-npm-lock source) on demand. Each worker is a
-  # full evaluator that can grow to the 4 GiB-per-worker cap and the host runs
-  # many CI jobs at once, so 16 both bounds memory and already collapses the eval
-  # toward the slowest single attribute (warm store, eval-cache off: 342s at 1
-  # worker, 75s at 16, 70s at 32). The eval cache is off because it is keyed per
-  # commit (it never hits on a fresh CI commit) and parallel workers otherwise
-  # contend writing the same per-commit sqlite ("database is busy"). The
-  # resulting cold per-commit re-eval is tracked separately; a flake eval cache
-  # would amortize it. nix-eval-jobs
-  # reports a per-attribute eval failure as a JSON `error` line and still exits 0,
-  # so the gate is the error-line check; a startup or lock failure exits nonzero
-  # and aborts the run (Nushell propagates external failures like bash
-  # `set -o pipefail`). Uses the repo-built nix-eval-jobs directly by store path
-  # rather than `nix run`.
-  #
-  # `check closure` (the closure-gate.yml required check, #1873) reuses step 1's
-  # build gate over `.#cachePushRoots.x86_64-linux`: the exact set the
-  # post-merge cache-push linux lane publishes, so a package whose build broke
-  # (not just its eval) goes red at the PR instead of on every consumer.
-  check = ix.writeNushellApplication pkgs {
-    name = "check";
-    meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux (`closure` subcommand: build .#cachePushRoots.x86_64-linux)";
-    text = ''
-      # Patched nix-fast-build (packages/nix/nix-fast-build): stock --skip-cached
-      # only skips a job whose nix-eval-jobs cacheStatus is `cached` (in a remote
-      # substituter); a `local` output (already in this warm runner's store but
-      # never pushed) falls through and is re-realized every run. On this CI the
-      # rust units and image closures are floating-CA and resolve to `local`, so
-      # the patch makes --skip-cached skip `local` too. nixpkgs' 1.5.0 tag is the
-      # same commit (7f185e0) the flake ref used to pin, so this is a like-for-like
-      # source swap plus the patch. Invoked directly by store path, not `nix run`.
-      const fast_build = "${lib.getExe repoPackages.nix-fast-build}"
-      # nix-eval-jobs is linked to the stable Nix 2.34 components the fleet
-      # daemon runs. Built for x86_64-linux (the CI gate system); `check` itself
-      # is x86_64-linux-only.
-      const eval_jobs = "${lib.getExe repoPackages.nix-eval-jobs}"
-
-      # Shared build gate: build every derivation under $flake with
-      # nix-fast-build and exit 1 on any failure, after replaying each failed
-      # build's log. `main` runs it over ciChecks; `main closure` over the
-      # cache-push roots.
-      def build-gate [flake: string] {
-        # ca-derivations: the rust workspace units default to
-        # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating
-        # the target set resolves floating content-addressed drvs. The
-        # evaluator (nix-eval-jobs, which nix-fast-build wraps) needs the
-        # `ca-derivations` experimental feature, or it aborts with
-        # "experimental Nix feature 'ca-derivations' is disabled". The caller
-        # owns cache policy: developers may accept the flake config, while
-        # self-hosted CI ignores its restricted cache settings. Pin only the CA
-        # feature here so nested evaluator processes remain self-contained.
-        # --result-format json --result-file emits one record per attr per phase
-        # ({attr, type: EVAL|BUILD, duration, success, error, outputs}) into the
-        # cwd. blast-radius consumes this on a later PR via `--timings` to
-        # annotate the rebuilt-checks list with wall-clock seconds. The path is
-        # relative to the runner cwd; check.yml uploads it as an artifact.
-        # nix-fast-build prints "Cannot build <drv>" for a failed check but not the
-        # build's own output, so a clippy lint or a test panic surfaces only as a
-        # bare "build exited with 1" with no diagnostic to act on. Catch the
-        # failure, then replay each failed build's log via `nix log` so the actual
-        # clippy/test output lands in the CI log. The failed attrs are read from
-        # the --result-file this just wrote (one {attr,type,success,...} record
-        # per attr per phase); it is written even on failure.
-        # `try` returns false on success and the `catch` returns true, so the
-        # failure is carried in an immutable binding (nushell forbids mutating an
-        # outer `mut` from inside the catch closure).
-        let build_failed = (
-          try {
-            ^$fast_build ...[
-              "--flake" $flake
-              # Drive nix-fast-build with the daemon-family-compatible
-              # evaluator rather than its nixpkgs default.
-              "--nix-eval-jobs" $eval_jobs
-              "--eval-max-memory-size" "6144"
-              "--eval-workers" "16"
-              "--skip-cached"
-              # Stop scheduling new checks as soon as one fails (in-flight
-              # builds still finish). Default nix-fast-build behavior is to
-              # build every remaining check and only report at the end, which
-              # spends the full wall time before flake-check goes red (#2128).
-              # The failed-attr log replay below still works: the result file
-              # is written on failure with the records collected so far.
-              "--fail-fast"
-              "--no-nom"
-              "--no-link"
-              "--result-format" "json"
-              "--result-file" "check-results.json"
-              "--option" "eval-cache" "false"
-              "--option" "extra-experimental-features" "ca-derivations"
-            ]
-            false
-          } catch {
-            true
-          }
-        )
-
-        if ("check-results.json" | path exists) {
-          let failed = (
-            open check-results.json
-            | get results
-            | where type == "BUILD" and success == false
-          )
-          for f in $failed {
-            # GitHub Actions log group so a long clippy dump stays collapsible;
-            # harmless plain text in a local `nix run .#check`.
-            print --stderr $"::group::build log: ($f.attr)"
-            let inst = $"($flake).($f.attr)"
-            # Fast path: replay the retained build log via `nix log` (works for
-            # input-addressed checks like the browser smoke test).
-            let drv = (
-              ^nix eval --raw
-                --option extra-experimental-features ca-derivations
-                $"($inst).drvPath"
-              | complete
-            )
-            let logged = if $drv.exit_code == 0 and (($drv.stdout | str trim) | is-not-empty) {
-              ^nix log ($drv.stdout | str trim) | complete
-            } else {
-              { exit_code: 1, stdout: "" }
-            }
-            if $logged.exit_code == 0 and (($logged.stdout | str trim) | is-not-empty) {
-              print --stderr $logged.stdout
-              # The tail as an annotation too: raw log downloads are blocked
-              # from automation, and the checks API only carries annotations.
-              let tail = (
-                $logged.stdout | lines | last 10 | str join " | " | str substring 0..600
-              )
-              print $"::error title=($f.attr) build log tail::($tail)"
-            } else {
-              # A content-addressed build (the rust units default to CA) keeps
-              # its log under the *resolved* drv, which `nix log` cannot fetch by
-              # the original -- so re-run the one failed check with -L to stream
-              # the diagnostic (clippy lint / test output). nix does not cache
-              # failures, so this just re-attempts that single check.
-              let rebuilt = (do {
-                ^nix build ...[
-                  $inst
-                  "-L"
-                  "--no-link"
-                  "--option" "extra-experimental-features" "ca-derivations"
-                ]
-              } | complete)
-              print --stderr $rebuilt.stdout
-              print --stderr $rebuilt.stderr
-              let tail = (
-                $"($rebuilt.stdout)\n($rebuilt.stderr)"
-                | lines | where {|l| ($l | str trim) | is-not-empty }
-                | last 10 | str join " | " | str substring 0..600
-              )
-              print $"::error title=($f.attr) build log tail::($tail)"
-            }
-            print --stderr "::endgroup::"
-          }
-          # One workflow error annotation per failed attr (EVAL and BUILD),
-          # carrying the recorded error text. check.yml cats this log to the
-          # step's stdout on failure, where the runner parses `::error::`
-          # lines into check-run annotations -- the only failure surface
-          # reachable when raw log downloads are blocked (annotations ride
-          # the checks API). Harmless plain text in a local run.
-          let annotated = (
-            open check-results.json
-            | get results
-            | where success == false
-          )
-          for f in $annotated {
-            let err = (
-              ($f | get -o error | default "")
-              | str replace --all "\n" " | "
-              | str substring 0..500
-            )
-            print $"::error title=($f.attr) ($f.type)::($err)"
-          }
-        }
-
-        if $build_failed {
-          exit 1
-        }
-      }
-
-      def main [] {
-        build-gate ".#ciChecks.x86_64-linux"
-
-        let tmp = (mktemp --directory --tmpdir "ix-check.XXXXXX")
-        let report = ($tmp | path join "flake-schema-eval.jsonl")
-        do --capture-errors {
-          ^$eval_jobs ...[
-            "--flake" ".#packages.x86_64-linux"
-            "--workers" "16"
-            "--gc-roots-dir" ($tmp | path join "flake-schema-eval-gc")
-            "--option" "eval-cache" "false"
-            # See the ca-derivations note above: the package set also resolves
-            # content-addressed rust units, so this eval needs the feature too.
-            "--option" "extra-experimental-features" "ca-derivations"
-          ]
-        } | tee { save --raw --force $report }
-
-        # nix-eval-jobs exits 0 even when an attribute fails to evaluate, so this
-        # error-line check is the gate; a nonzero exit already aborted above. The
-        # report is left in place on failure for inspection.
-        if (open --raw $report | lines | any {|line| $line | str contains '"error":' }) {
-          print --stderr "flake schema evaluation failed; see the error lines above"
-          exit 1
-        }
-        rm --recursive --force $tmp
-      }
-
-      # Pre-merge closure gate (closure-gate.yml, #1873): the same build gate
-      # over the roots the post-merge cache-push linux lane publishes, darwin
-      # cross closure included -- the set #2690 broke while flake-check stayed
-      # green (packages are eval-gated only). --skip-cached keeps it
-      # O(changed): on the warm-store pool only drvs new relative to main's
-      # already-built closure realise.
-      def "main closure" [] {
-        build-gate ".#cachePushRoots.x86_64-linux"
-      }
-    '';
-  };
-
   updateMods = ix.writePythonApplication pkgs {
     name = "update-mods";
     src = paths.tools.updateMods;
@@ -795,14 +257,20 @@
   updatablePackages = lib.genAttrs' (
     lib.filter (entry: entry.updateScript) (packageRegistry.flakeEntriesFor system)
   ) (entry: lib.nameValuePair "packages/${entry.relativePath}" entry.flake.attrName);
-  update = ix.writeNushellApplication pkgs {
+  update = ix.writeRustApplication pkgs {
     name = "update";
     meta.description = "Refresh every repo content source (Minecraft catalogs + pinned binaries) in parallel via dag-runner";
-    runtimeInputs = [repoPackages.dag-runner];
     text = ''
-      # nu
-      def --wrapped main [...args] {
-        exec dag-runner ...$args ${updateSpec}
+      //! Exec dag-runner over the generated update DAG spec.
+      use std::os::unix::process::CommandExt;
+
+      fn main() {
+          let err = std::process::Command::new("${lib.getExe repoPackages.dag-runner}")
+              .args(std::env::args_os().skip(1))
+              .arg("${updateSpec}")
+              .exec();
+          eprintln!("update: exec dag-runner failed: {err}");
+          std::process::exit(1);
       }
     '';
   };
@@ -1438,7 +906,7 @@
             cp -R ${lintSource} source
             chmod -R u+w source
             cd source
-            ${lib.getExe lint}
+            ${lib.getExe repoPackages.lint}
             mkdir -p "$out"
           '';
           filename-policy =
@@ -1450,7 +918,7 @@
               mkdir source
               cd source
               touch repository-config.json zellij-layout.kdl
-              if ${lib.getExe lintStage} filenames >output 2>&1; then
+              if ${lib.getExe repoPackages.lint.passthru.lintStage} filenames >output 2>&1; then
                 echo "filename policy accepted repository-config.json" >&2
                 exit 1
               fi
@@ -1470,7 +938,7 @@
               cd source
               mkdir -p packages/foo/foo packages/bar/bar
               touch packages/bar/bar/package.nix
-              if ${lib.getExe lintStage} dirnames >output 2>&1; then
+              if ${lib.getExe repoPackages.lint.passthru.lintStage} dirnames >output 2>&1; then
                 echo "dirname policy accepted packages/foo/foo" >&2
                 exit 1
               fi
@@ -1569,7 +1037,7 @@
     // {
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
-      inherit lint site;
+      inherit site;
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
@@ -1603,7 +1071,6 @@
         nodejs
         ;
     }
-    // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
     // repoFlakePackages
     // examplePackages
     // nonNixExampleImages

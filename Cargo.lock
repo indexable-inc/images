@@ -1679,6 +1679,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "check"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6216,6 +6227,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lint"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ignore",
+ "regex",
+ "serde",
+ "serde_json",
+ "strip-ansi-escapes",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9312,6 +9336,14 @@ name = "pure-rust-locales"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "869675ad2d7541aea90c6d88c81f46a7f4ea9af8cd0395d38f11a95126998a0d"
+
+[[package]]
+name = "push-cache"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+]
 
 [[package]]
 name = "pwd"
@@ -14543,6 +14575,17 @@ dependencies = [
  "lazy_static",
  "serde",
  "wezterm-dynamic",
+]
+
+[[package]]
+name = "whence"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "lazy-regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

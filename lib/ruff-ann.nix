@@ -26,10 +26,24 @@
   policy = lib.importTOML ruffToml;
   banMessage = policy.lint.flake8-tidy-imports.banned-api."typing.cast".msg;
   banConfig = ''lint.flake8-tidy-imports.banned-api."typing.cast".msg = "${banMessage}"'';
+  # The policy as a structured argv, the single source both renderings derive
+  # from: the shell form below for script interpolation, and JSON
+  # (packages/lint wires it through IX_RUFF_ARGV) for exec without a shell.
+  argv = [
+    "--target-version"
+    policy.target-version
+    "--select"
+    (lib.concatStringsSep "," policy.lint.select)
+    "--ignore"
+    (lib.concatStringsSep "," policy.lint.ignore)
+    "--config"
+    banConfig
+  ];
 in {
   inherit (policy.lint) select ignore;
   inherit banMessage banConfig;
+  ruffAnnArgv = argv;
   # Drop-in replacement for the old bare `--select ANN`:
   #   ruff check ${ruffAnnArgs} <targets>
-  ruffAnnArgs = "--target-version ${policy.target-version} --select ${lib.concatStringsSep "," policy.lint.select} --ignore ${lib.concatStringsSep "," policy.lint.ignore} --config ${lib.escapeShellArg banConfig}";
+  ruffAnnArgs = lib.escapeShellArgs argv;
 }

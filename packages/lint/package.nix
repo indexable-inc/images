@@ -1,5 +1,5 @@
 {
-  id = "whence";
+  id = "lint";
   packageSet = true;
   flake = true;
   overlay = false;
