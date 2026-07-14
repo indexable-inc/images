@@ -21,6 +21,22 @@
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
   repoRoot = configRoot;
   repoFile = rel: repoRoot + "/${rel}";
+  nushellRoot = repoFile "nushell";
+  nushellFiles = lib.filesystem.listFilesRecursive nushellRoot;
+  nushellRelativePath = file:
+    lib.removePrefix "${toString nushellRoot}/" (toString file);
+  nushellMutableFiles = lib.genAttrs' nushellFiles (
+    source: let
+      relativePath = nushellRelativePath source;
+    in
+      lib.nameValuePair "Library/Application Support/nushell/${relativePath}" {
+        inherit source;
+        format = "text";
+        persistence = "durable";
+        sourceFile = "users/andrewgazelka/config/nushell/${relativePath}";
+        declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
+      }
+  );
   structured = import (configRoot + "/settings/structured.nix");
   jsonFormat = pkgs.formats.json {};
   tomlFormat = pkgs.formats.toml {};
@@ -399,74 +415,76 @@ in {
   # replaces the old mutable-json last-applied merge). Durable — app edits
   # survive, base-vs-drift conflicts queue in `index-delta status` — and a
   # pre-existing file is kept as day-one drift, never clobbered.
-  mutable.files = {
-    "Library/Application Support/Claude/claude_desktop_config.json" = {
-      source = jsonFormat.generate "andrewgazelka-claude-desktop.json" {
-        globalShortcut = "";
-        mcpServers.ix = {
-          type = "http";
-          url = "https://mcp.ix.dev/mcp";
-          headers = {};
+  mutable.files =
+    {
+      "Library/Application Support/Claude/claude_desktop_config.json" = {
+        source = jsonFormat.generate "andrewgazelka-claude-desktop.json" {
+          globalShortcut = "";
+          mcpServers.ix = {
+            type = "http";
+            url = "https://mcp.ix.dev/mcp";
+            headers = {};
+          };
+          preferences = {
+            quickEntryShortcut = "off";
+            quickEntryDictationShortcut = "off";
+            localAgentModeTrustedFolders = [cfg.paths.ixCheckout];
+            coworkScheduledTasksEnabled = true;
+            ccdScheduledTasksEnabled = true;
+            sidebarMode = "code";
+            bypassPermissionsModeEnabled = true;
+            coworkWebSearchEnabled = true;
+            coworkOnboardingResumeStep = null;
+            keepAwakeEnabled = true;
+            dispatchCodeTasksPermissionMode = "bypassPermissions";
+          };
         };
-        preferences = {
-          quickEntryShortcut = "off";
-          quickEntryDictationShortcut = "off";
-          localAgentModeTrustedFolders = [cfg.paths.ixCheckout];
-          coworkScheduledTasksEnabled = true;
-          ccdScheduledTasksEnabled = true;
-          sidebarMode = "code";
-          bypassPermissionsModeEnabled = true;
-          coworkWebSearchEnabled = true;
-          coworkOnboardingResumeStep = null;
-          keepAwakeEnabled = true;
-          dispatchCodeTasksPermissionMode = "bypassPermissions";
+        persistence = "durable";
+        declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
+      };
+      "Library/Application Support/Cursor/User/settings.json" = {
+        source = jsonFormat.generate "andrewgazelka-cursor-settings.json" cursorSettings;
+        persistence = "durable";
+        declaredAt = "users/andrewgazelka/config/settings/structured.nix";
+      };
+      "Library/Application Support/Code/User/settings.json" = {
+        source = jsonFormat.generate "andrewgazelka-vscode-settings.json" cursorSettings;
+        persistence = "durable";
+        declaredAt = "users/andrewgazelka/config/settings/structured.nix";
+      };
+      "Library/Application Support/rbw/config.json" = {
+        source = jsonFormat.generate "andrewgazelka-rbw-config.json" {
+          email = cfg.rbw.email;
+          base_url = cfg.rbw.baseUrl;
+          pinentry = "${cfg.paths.privateConfigDirectory}/rbw/op-pinentry.sh";
+          lock_timeout = 3600;
+          sync_interval = 3600;
         };
+        persistence = "durable";
+        declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
       };
-      persistence = "durable";
-      declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
-    };
-    "Library/Application Support/Cursor/User/settings.json" = {
-      source = jsonFormat.generate "andrewgazelka-cursor-settings.json" cursorSettings;
-      persistence = "durable";
-      declaredAt = "users/andrewgazelka/config/settings/structured.nix";
-    };
-    "Library/Application Support/Code/User/settings.json" = {
-      source = jsonFormat.generate "andrewgazelka-vscode-settings.json" cursorSettings;
-      persistence = "durable";
-      declaredAt = "users/andrewgazelka/config/settings/structured.nix";
-    };
-    "Library/Application Support/rbw/config.json" = {
-      source = jsonFormat.generate "andrewgazelka-rbw-config.json" {
-        email = cfg.rbw.email;
-        base_url = cfg.rbw.baseUrl;
-        pinentry = "${cfg.paths.privateConfigDirectory}/rbw/op-pinentry.sh";
-        lock_timeout = 3600;
-        sync_interval = 3600;
+      "Library/Application Support/Cursor/User/keybindings.json" = {
+        source =
+          jsonFormat.generate "andrewgazelka-cursor-keybindings.json"
+          (import (configRoot + "/cursor/keybindings.nix"));
+        persistence = "durable";
+        declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
       };
-      persistence = "durable";
-      declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
-    };
-    "Library/Application Support/Cursor/User/keybindings.json" = {
-      source =
-        jsonFormat.generate "andrewgazelka-cursor-keybindings.json"
-        (import (configRoot + "/cursor/keybindings.nix"));
-      persistence = "durable";
-      declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
-    };
-    "Library/Application Support/Code/User/keybindings.json" = {
-      source =
-        jsonFormat.generate "andrewgazelka-vscode-keybindings.json"
-        (import (configRoot + "/cursor/keybindings.nix"));
-      persistence = "durable";
-      declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
-    };
-    # Bacon persists preference edits (`bacon --prefs`) into this file.
-    "Library/Application Support/org.dystroy.bacon/prefs.toml" = {
-      source = tomlFormat.generate "andrewgazelka-bacon-prefs.toml" structured.bacon-prefs.value;
-      persistence = "durable";
-      declaredAt = "users/andrewgazelka/config/settings/structured.nix";
-    };
-  };
+      "Library/Application Support/Code/User/keybindings.json" = {
+        source =
+          jsonFormat.generate "andrewgazelka-vscode-keybindings.json"
+          (import (configRoot + "/cursor/keybindings.nix"));
+        persistence = "durable";
+        declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
+      };
+      # Bacon persists preference edits (`bacon --prefs`) into this file.
+      "Library/Application Support/org.dystroy.bacon/prefs.toml" = {
+        source = tomlFormat.generate "andrewgazelka-bacon-prefs.toml" structured.bacon-prefs.value;
+        persistence = "durable";
+        declaredAt = "users/andrewgazelka/config/settings/structured.nix";
+      };
+    }
+    // nushellMutableFiles;
 
   # Zen browser
   home.file."Library/Application Support/zen/Profiles/nu2gused.Default (release)/chrome".source =
@@ -475,23 +493,6 @@ in {
   # Beeper
   home.file."Library/Application Support/BeeperTexts/custom.css".source =
     repoFile "beeper/custom.css";
-
-  # Nushell writes runtime state beside its config on macOS. Link the managed
-  # files recursively so Library/Application Support/nushell stays writable.
-  home.file."Library/Application Support/nushell" = {
-    source = repoFile "nushell";
-    recursive = true;
-  };
-
-  # Home Manager does not replace a managed directory symlink when its source
-  # changes to recursive leaf links. Remove that legacy link before collision
-  # checks so linkGeneration can create the writable parent directory.
-  home.activation.migrateNushellDataDirectory = config.lib.dag.entryBefore ["checkLinkTargets"] ''
-    dataDir=${lib.escapeShellArg "${config.home.homeDirectory}/Library/Application Support/nushell"}
-    if [[ -L "$dataDir" ]] && [[ $(readlink "$dataDir") == /nix/store/*-home-manager-files/* ]]; then
-      run rm "$dataDir"
-    fi
-  '';
 
   # rbw (Vaultwarden CLI). On macOS rbw reads its config from
   # Library/Application Support, not XDG, so the upstream programs.rbw module
