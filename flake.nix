@@ -450,6 +450,11 @@
     # consumer combines, but there is no reason to make them re-apply the
     # walker.
     provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+    # Declarative in-guest state push for vmkit macOS guest VMs (launchd
+    # agents from structured attrs, pinned binaries, idempotent ssh apply).
+    # One instance shared by homeModules.macos-guests and the personal darwin
+    # profile. See modules/home/macos-guests.nix.
+    macosGuestsHomeModule = import ./modules/home/macos-guests.nix {inherit ix;};
     claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
       inherit indexPackages;
       promptModule = ./packages/agent/prompt;
@@ -480,6 +485,8 @@
       ghosttyModule = ./users/andrewgazelka/config/home/ghostty.nix;
       raycastModule = ./modules/home/raycast.nix;
       optionsModule = personalOptionsModule;
+      macosGuestsModule = macosGuestsHomeModule;
+      guestsModule = import ./users/andrewgazelka/guests {inherit indexPackages;};
     };
     personalLightProfile = system:
       home-manager.lib.homeManagerConfiguration {
@@ -576,6 +583,13 @@
       # absorb-into-Nix via `index-delta apply-ops`. See
       # modules/home/mutable-files.nix and packages/index-delta.
       mutable-files = mutableFilesHomeModule;
+      # Reusable workstation module (macOS): declare vmkit macOS guest VMs
+      # (ssh endpoint, launchd agents from structured attrs, pinned binaries)
+      # and get an idempotent `macos-guest-<name>` push command per guest.
+      # Import it and set `macosGuests.<name> = { ssh = ...; ... }`. Manual
+      # TCC bootstrap: modules/home/macos-guests/tcc-bootstrap.md. See
+      # modules/home/macos-guests.nix (index#3206, toward index#2682).
+      macos-guests = macosGuestsHomeModule;
       # Reusable workstation module (macOS): declare Raycast Focus session
       # defaults (title, filter mode, duration) and have them written to the
       # com.raycast.macos defaults domain at switch time. Import it and set
