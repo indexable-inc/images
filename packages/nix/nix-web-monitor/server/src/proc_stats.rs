@@ -139,7 +139,10 @@ impl BuildStatSampler {
                 .filter_map(|p| table.get(p))
                 .map(|stat| stat.cpu_ticks)
                 .sum();
-            let rss = aggregate_rss(&subtree, read_rss_bytes);
+            let rss = aggregate_rss(&subtree, |pid| {
+                let expected = table.get(&pid)?.identity;
+                verified_rss(expected, read_rss_bytes, read_stat_identity)
+            });
 
             build.rss_bytes = rss;
             build.cpu_percent = self.cpu_percent_for(&key, ticks, now);
@@ -309,6 +312,33 @@ fn parse_stat_line(pid: i64, line: &str) -> Option<ProcStat> {
         ppid: parent,
         cpu_ticks: utime + stime + child_ticks,
     })
+}
+
+/// A subtree member's RSS, accepted only when the pid still names the
+/// process the stat sweep saw. Procfs paths address processes by pid alone,
+/// so between the sweep and the status read the process can exit and the
+/// kernel can hand its pid to an unrelated successor -- whose memory would
+/// then be attributed to the old build (the cpu and generation paths are
+/// immune: they use the sweep's own snapshot). Re-reading the identity
+/// *after* the status read closes that window: start ticks only grow across
+/// reuses of a pid, so an identity that still matches the sweep proves a
+/// single process spanned the whole interval and owns the RSS just read. A
+/// mismatch or vanished entry drops the sample, exactly like a process that
+/// is simply gone.
+fn verified_rss(
+    expected: ProcessIdentity,
+    read_rss: impl Fn(i64) -> Option<u64>,
+    read_identity: impl Fn(i64) -> Option<ProcessIdentity>,
+) -> Option<u64> {
+    let rss = read_rss(expected.pid)?;
+    (read_identity(expected.pid)? == expected).then_some(rss)
+}
+
+/// The current identity of `pid` straight from `/proc/<pid>/stat`; `None`
+/// when the process is gone or the entry is unreadable.
+fn read_stat_identity(pid: i64) -> Option<ProcessIdentity> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    Some(parse_stat_line(pid, &stat)?.identity)
 }
 
 /// `VmRSS` from `/proc/<pid>/status`, in bytes. `None` when the process is
@@ -515,6 +545,47 @@ mod tests {
         sampler.annotate(&mut pidless);
 
         assert!(sampler.previous.is_empty());
+    }
+
+    /// RSS counts toward a build only while the pid still names the process
+    /// the stat sweep saw: a recycled pid (same number, later start ticks) or
+    /// a process gone by the identity re-check drops the sample instead of
+    /// charging the successor's memory to the old build.
+    #[test]
+    fn rss_sample_requires_matching_identity() {
+        let expected = ProcessIdentity {
+            pid: 42,
+            start_ticks: 100,
+        };
+        let recycled = ProcessIdentity {
+            pid: 42,
+            start_ticks: 900,
+        };
+        // (status read, identity after the read) -> accepted sample.
+        let cases: [(Option<u64>, Option<ProcessIdentity>, Option<u64>); 4] = [
+            // Same process alive across the whole read: sample stands.
+            (Some(4096), Some(expected), Some(4096)),
+            // Pid handed to a successor mid-read: successor's RSS dropped.
+            (Some(4096), Some(recycled), None),
+            // Process exited right after the status read: dropped.
+            (Some(4096), None, None),
+            // Status unreadable in the first place: nothing to verify.
+            (None, Some(expected), None),
+        ];
+        for (rss, identity, accepted) in cases {
+            let sample = verified_rss(
+                expected,
+                |pid| {
+                    assert_eq!(pid, expected.pid, "status read targets the sweep's pid");
+                    rss
+                },
+                |pid| {
+                    assert_eq!(pid, expected.pid, "identity re-check targets the sweep's pid");
+                    identity
+                },
+            );
+            assert_eq!(sample, accepted, "rss {rss:?}, identity {identity:?}");
+        }
     }
 
     #[test]

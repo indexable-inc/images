@@ -69,13 +69,15 @@
   /// children when a hidden sibling lies between them. Deltas arrive in
   /// pixels; the state layer works in fractions of the whole split, so scale
   /// by the currently distributed share (hidden siblings keep their stored
-  /// fractions and regain them when they reappear).
+  /// fractions and regain them when they reappear). The share also rides
+  /// along so the state layer's minimum-size clamp guards the rendered pane
+  /// size rather than the absolute fraction.
   function dragBetween(position: number, deltaPx: number): void {
     const left = visible.at(position);
     const right = visible.at(position + 1);
     if (left === undefined || right === undefined) return;
     const fraction = (deltaPx / extentPx()) * expandedShare;
-    dock.state.resizeSplit(split, left.index, right.index, fraction);
+    dock.state.resizeSplit(split, left.index, right.index, fraction, expandedShare);
   }
 
   function keyStep(position: number, sign: -1 | 1, big: boolean): void {

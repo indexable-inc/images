@@ -181,13 +181,17 @@ export class DockState {
   /// neither vanishes. The two indices are the *visible* neighbors of the
   /// dragged splitter; hidden siblings between them keep their stored
   /// fractions untouched, so they regain their old size when they reappear.
-  resizeSplit(split: SplitNode, leftIndex: number, rightIndex: number, delta: number): void {
-    const left = split.sizes.at(leftIndex);
-    const right = split.sizes.at(rightIndex);
-    if (left === undefined || right === undefined) return;
-    const applied = Math.max(MIN_FRACTION - left, Math.min(delta, right - MIN_FRACTION));
-    split.sizes[leftIndex] = left + applied;
-    split.sizes[rightIndex] = right - applied;
+  /// `visibleShare` is the fraction of the split the browser is actually
+  /// distributing (the caller's expanded visible children); the minimum-size
+  /// clamp scales by it so the floor guards the *rendered* pane size.
+  resizeSplit(
+    split: SplitNode,
+    leftIndex: number,
+    rightIndex: number,
+    delta: number,
+    visibleShare = 1
+  ): void {
+    resizeSizes(split.sizes, leftIndex, rightIndex, delta, visibleShare);
   }
 
   /// Find the group currently holding `id`, or null when it floats/is absent.
@@ -252,6 +256,34 @@ export class DockState {
   private normalize(): void {
     this.layout.root = normalizeNode(this.layout.root) ?? emptyGroup();
   }
+}
+
+/// Pure core of [`DockState.resizeSplit`], exported for tests: move `delta`
+/// from `sizes[rightIndex]` to `sizes[leftIndex]`, clamped so neither pane
+/// renders below `MIN_FRACTION`. Sizes are fractions of the *whole* split,
+/// but the browser renormalizes the visible children to fill it, so the
+/// rendered size of a pane is its fraction of `visibleShare`, not of 1 --
+/// with a large hidden sibling (say sizes `[0.1, 0.8, 0.1]` with the middle
+/// hidden) an absolute `MIN_FRACTION` floor would pin both visible panes
+/// inside the sliver `[0.08, 0.12]`. Scaling the floor by `visibleShare`
+/// keeps it a floor on what the user actually sees. The floor is additionally
+/// capped at the pair's midpoint so the clamp range can never invert when the
+/// pair's combined share is already below two floors (a drag then only
+/// equalizes the pair, never pushes a pane further down).
+export function resizeSizes(
+  sizes: number[],
+  leftIndex: number,
+  rightIndex: number,
+  delta: number,
+  visibleShare: number
+): void {
+  const left = sizes.at(leftIndex);
+  const right = sizes.at(rightIndex);
+  if (left === undefined || right === undefined) return;
+  const floor = Math.min(MIN_FRACTION * visibleShare, (left + right) / 2);
+  const applied = Math.max(floor - left, Math.min(delta, right - floor));
+  sizes[leftIndex] = left + applied;
+  sizes[rightIndex] = right - applied;
 }
 
 /// Whether a subtree has anything to show given the host's hidden-pane
