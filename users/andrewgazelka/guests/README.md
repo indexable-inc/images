@@ -17,6 +17,8 @@ vmkit guest at `~/.local/share/vmkit/guests/macos-primary`, auto-login user
 ```sh
 macos-guest-macos-primary          # idempotent apply
 macos-guest-macos-primary status   # read-only drift report, exit 1 on drift
+macos-guest-macos-primary ssh      # interactive guest shell
+macos-guest-macos-primary ssh -- sw_vers  # run one guest command
 ```
 
 ### One-time bootstrap (stateful / GUI-gated, deliberately not applied)

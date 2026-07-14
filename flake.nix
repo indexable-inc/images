@@ -589,7 +589,7 @@
       mutable-files = mutableFilesHomeModule;
       # Reusable workstation module (macOS): declare vmkit macOS guest VMs
       # (ssh endpoint, launchd agents from structured attrs, pinned binaries)
-      # and get an idempotent `macos-guest-<name>` push command per guest.
+      # and get a `macos-guest-<name>` apply/status/ssh command per guest.
       # Import it and set `macosGuests.<name> = { ssh = ...; ... }`. Manual
       # TCC bootstrap: modules/home/macos-guests/tcc-bootstrap.md. See
       # modules/home/macos-guests.nix (index#3206, toward index#2682).
