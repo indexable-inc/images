@@ -1,0 +1,22 @@
+[package]
+name = "unibind-conformance-engine"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Conformance engine cdylib proving the unibind Rust backend end to end"
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+futures-core.workspace = true
+stabby.workspace = true
+unibind = { workspace = true, features = ["rs"] }
+# `UniStream` (the phase 2 stream return type) plus the dynptr protocol the
+# generated glue boxes it into. Deliberately NOT unibind-runtime: feature
+# unification would py-enable the runtime rlib and drag Python's C symbols
+# into this cdylib's link.
+unibind-stream.workspace = true

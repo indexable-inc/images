@@ -9,4 +9,9 @@ description = "Language-free boundary types exported code references at runtime:
 workspace = true
 
 [dependencies]
+# `UniStream` itself lives in unibind-stream (see its crate docs for why)
+# and is re-exported here.
+unibind-stream.workspace = true
+
+[dev-dependencies]
 futures.workspace = true

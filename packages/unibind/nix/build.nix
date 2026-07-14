@@ -15,6 +15,10 @@
     inherit lib pkgs packageRegistry rustWorkspace buildPyStrictCheck wheelBuilder;
   };
 
+  buildRs = import ./rs.nix {
+    inherit lib pkgs rustWorkspace;
+  };
+
   buildTs = import ./ts.nix {
     inherit lib pkgs rustWorkspace;
   };
@@ -29,6 +33,7 @@
 
   supportedTargets = [
     "py"
+    "rust"
     "ts"
     "ex"
     "jvm"
@@ -45,14 +50,16 @@ in {
     an `ex` crate carries the same darwin flags in its own build.rs (see
     packages/unibind/conformance-ex/build.rs).
   - `targets.<language>`: selects and configures each language target: `py`
-    (see [./py.nix](./py.nix) for its arguments), `ts` (see
-    [./ts.nix](./ts.nix)), `ex` (see [./ex.nix](./ex.nix)), and `jvm` (see
-    [./jvm.nix](./jvm.nix)).
+    (see [./py.nix](./py.nix) for its arguments), `rust` (see
+    [./rs.nix](./rs.nix)), `ts` (see [./ts.nix](./ts.nix)), `ex` (see
+    [./ex.nix](./ex.nix)), and `jvm` (see [./jvm.nix](./jvm.nix)).
 
   Returns one attrset per requested target; `py` is
   `{ wheel; module; pythonSite; library; tests.pyStrict; }` (`wheel` is
   Linux-only and throws when forced on darwin), `ts` is `{ npm; library; }`
-  (`npm` is Linux-only, same policy as the wheel), `ex` is
+  (`npm` is Linux-only, same policy as the wheel), `rust` is
+  `{ generated; library; }` (`generated` is the emitted client crate's
+  source tree), `ex` is
   `{ mixPackage; generated; library; soname; }` (`mixPackage` is the
   mix-importable tree: generated `lib/`, `priv/native/<soname>`, and the
   caller's mix project overlaid), and `jvm` is
@@ -71,6 +78,9 @@ in {
       Supported: ${lib.concatStringsSep ", " supportedTargets}.'';
       lib.optionalAttrs (targets ? py) {
         py = buildPy ({inherit crate;} // targets.py);
+      }
+      // lib.optionalAttrs (targets ? rust) {
+        rust = buildRs ({inherit crate;} // targets.rust);
       }
       // lib.optionalAttrs (targets ? ts) {
         ts = buildTs ({inherit crate;} // targets.ts);

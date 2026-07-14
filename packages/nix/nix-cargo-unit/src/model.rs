@@ -576,6 +576,16 @@ impl Unit {
         !self.is_benchmark() && (self.mode == UnitMode::Test || self.target.has_kind("test"))
     }
 
+    /// Test units the manifest can actually list and run. A proc-macro's
+    /// test binary dynamically links rustc's own libstd (the compiler hands
+    /// proc-macro crates the dylib prelude), which the unit graph's runtime
+    /// environment does not carry, so running `--list` on it aborts at dyld
+    /// time. Skip it the same way [`Self::has_doctests`] skips proc-macro
+    /// doctests.
+    pub fn is_runnable_test(&self) -> bool {
+        self.is_test() && !self.is_proc_macro()
+    }
+
     pub fn is_benchmark(&self) -> bool {
         self.target.has_kind("bench")
     }

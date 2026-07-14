@@ -19,6 +19,7 @@ workspace = true
 ex = ["dep:unibind-backend-ex"]
 jvm = ["dep:unibind-backend-jvm"]
 py = ["dep:unibind-backend-py"]
+rs = ["dep:unibind-backend-rs"]
 ts = ["dep:unibind-backend-ts"]
 
 [dependencies]
@@ -28,5 +29,6 @@ syn.workspace = true
 unibind-backend-ex = { workspace = true, optional = true }
 unibind-backend-jvm = { workspace = true, optional = true }
 unibind-backend-py = { workspace = true, optional = true }
+unibind-backend-rs = { workspace = true, optional = true }
 unibind-backend-ts = { workspace = true, optional = true }
 unibind-core.workspace = true

@@ -252,6 +252,8 @@ impl UnibindMeta {
         for path in &entries {
             let backend = if path.is_ident("py") {
                 Backend::Py
+            } else if path.is_ident("rs") {
+                Backend::Rs
             } else if path.is_ident("ts") {
                 Backend::Ts
             } else if path.is_ident("ex") {
@@ -261,7 +263,7 @@ impl UnibindMeta {
             } else {
                 return Err(LowerError::new(
                     path.span(),
-                    "unknown backend; expected `py`, `ts`, `ex`, or `jvm`",
+                    "unknown backend; expected `py`, `rs`, `ts`, `ex`, or `jvm`",
                 ));
             };
             if backends.contains(&backend) {

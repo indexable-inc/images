@@ -64,6 +64,9 @@ fn backends(
     if selects(unibind_core::Backend::Py) {
         glue.extend(backend_py(interface, module, selected.is_some())?);
     }
+    if selects(unibind_core::Backend::Rs) {
+        glue.extend(backend_rs(interface, selected.is_some())?);
+    }
     if selects(unibind_core::Backend::Ts) {
         glue.extend(backend_ts(interface, module, selected.is_some())?);
     }
@@ -163,6 +166,35 @@ fn backend_ex(
 }
 
 disabled_backend!(backend_ex, "ex");
+
+// The rs backend renders no record attributes (mirror structs live in the
+// generated client crate), so it takes no module and skips the splice; the
+// `enabled_backend!`/`disabled_backend!` shapes don't fit.
+#[cfg(feature = "rs")]
+fn backend_rs(
+    interface: &unibind_core::ir::Interface,
+    _explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    let rendered = unibind_backend_rs::render(interface).map_err(|error| LowerError {
+        span: proc_macro2::Span::call_site(),
+        message: error.message,
+    })?;
+    Ok(rendered.glue)
+}
+
+#[cfg(not(feature = "rs"))]
+fn backend_rs(
+    _interface: &unibind_core::ir::Interface,
+    explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    if explicit {
+        return Err(LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: "backends(rs) needs the `rs` cargo feature of unibind".to_owned(),
+        });
+    }
+    Ok(TokenStream::new())
+}
 
 /// One record's backend-rendered attributes, index-aligned with the
 /// record's fields.

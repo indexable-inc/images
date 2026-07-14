@@ -11,8 +11,8 @@
 /// the built cdylib imports as `_conformance`.
 // `backends(py)`: a whole-workspace build unifies unibind's backend
 // features across consumers (the ts and ex conformance crates enable `ts`
-// and `ex`), so pin this crate's glue to the backend whose runtime deps it
-// declares.
+// and `ex`, the conformance engine enables `rs`), so pin this crate's glue
+// to the backend whose runtime deps it declares.
 #[unibind::export(backends(py))]
 mod _conformance {
     use std::collections::HashMap;

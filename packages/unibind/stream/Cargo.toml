@@ -1,0 +1,13 @@
+[package]
+name = "unibind-stream"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "ABI-stable stream protocol shared by unibind engines and generated Rust clients"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures-core.workspace = true
+stabby.workspace = true
