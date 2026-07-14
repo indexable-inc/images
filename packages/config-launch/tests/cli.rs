@@ -231,8 +231,8 @@ fn env_always_set_and_defaults_only_when_unset() {
         &tmp,
         &serde_json::json!({
             "target": stub.to_str().unwrap(),
-            "env": [{ "key": "ALWAYS", "value": "a" }],
-            "env_defaults": [{ "key": "DEF", "value": "d" }],
+            "env": { "ALWAYS": "a" },
+            "env_defaults": { "DEF": "d" },
         }),
     );
 
