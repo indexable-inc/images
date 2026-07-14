@@ -47,6 +47,17 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// session is picked up.
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How often the parked probe re-checks for a first dashboard client. Same
+/// cadence as the daemon probe's park loop.
+const CLIENT_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// View status while the probe is parked with no dashboard client connected.
+/// The parked view keeps the detection flag but clears the build rows: a late
+/// joiner is seeded from the monitor snapshot, so it must not carry rows from
+/// whenever the last client left. Their arrival un-parks the probe within a
+/// poll interval and the next poll replaces this.
+const UNWATCHED_STATUS: &str = "machine-wide polling idle -- resumes while the dashboard is open";
+
 /// Cap on the decompressed log tail `/api/global-log` returns. A build log can
 /// run to hundreds of megabytes; the panel's inline drawer only ever shows the
 /// live tail, so everything older is dropped at a line boundary.
@@ -68,13 +79,38 @@ const LOG_TAIL_MAX_ENTRIES: usize = 8;
 /// Never returns: like [`run_daemon_probe`](crate::daemon::run_daemon_probe),
 /// the global view is a best-effort overlay, so any failure becomes a status the
 /// panel shows (or a hidden panel) and the loop retries.
+///
+/// Like the daemon probe, the poller runs only while at least one dashboard
+/// client is subscribed to the delta feed: every tick shells out to `nix` and
+/// (on a busy machine) sweeps procfs, for a view consumed nowhere else, so an
+/// unwatched poller is pure subprocess churn. Unlike the daemon probe the gate
+/// sits *after* the poll, not before it: detection -- does the patched
+/// subcommand exist, i.e. should the UI show the pane at all -- is derived
+/// from this loop, so one pass must complete before the first park for a later
+/// client's seeded snapshot to know whether the pane exists.
 pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadcast::Sender<Bytes>) {
     // Between polls, the sampler turns each build's pid into live cpu/rss
     // figures from procfs (see `proc_stats`); the two-second poll interval is
     // also the cpu averaging window.
     let mut sampler = BuildStatSampler::new();
     loop {
-        let Some(builds) = poll_builds().await else {
+        let polled = poll_builds().await;
+        // What this poll found: the parked view republishes it so the pane's
+        // existence survives a park (the UI hides the pane on `false`).
+        let detected = polled.is_some();
+        let pause = if let Some(builds) = polled {
+            let AnnotatedPoll { sampler: returned_sampler, builds } =
+                annotate_off_runtime(sampler, builds).await;
+            sampler = returned_sampler;
+            let status = format!("{} active", builds.len());
+            let global = GlobalBuilds {
+                detected: true,
+                builds,
+                status,
+            };
+            publish(&monitor, &deltas, global).await;
+            POLL_INTERVAL
+        } else {
             // Undetected: publish the undetected view once (its `Default` carries
             // the "not available" status) so a later detection can flip the panel
             // on, then back off before re-probing. Drop the cpu baselines with
@@ -85,20 +121,31 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
             // sample: rss only, cpu% from the next poll.
             sampler = BuildStatSampler::new();
             publish(&monitor, &deltas, GlobalBuilds::default()).await;
-            tokio::time::sleep(RETRY_INTERVAL).await;
-            continue;
+            RETRY_INTERVAL
         };
-        let AnnotatedPoll { sampler: returned_sampler, builds } =
-            annotate_off_runtime(sampler, builds).await;
-        sampler = returned_sampler;
-        let status = format!("{} active", builds.len());
-        let global = GlobalBuilds {
-            detected: true,
-            builds,
-            status,
-        };
-        publish(&monitor, &deltas, global).await;
-        tokio::time::sleep(POLL_INTERVAL).await;
+        if deltas.receiver_count() == 0 {
+            // Park until a dashboard client subscribes, mirroring
+            // `run_daemon_probe`'s gate. Drop the cpu baselines for the same
+            // reason as the undetected branch: kept across a park, a row's
+            // first cpu% after resuming would average the whole parked stretch
+            // instead of the poll window.
+            sampler = BuildStatSampler::new();
+            publish(
+                &monitor,
+                &deltas,
+                GlobalBuilds {
+                    detected,
+                    builds: Vec::new(),
+                    status: UNWATCHED_STATUS.to_owned(),
+                },
+            )
+            .await;
+            while deltas.receiver_count() == 0 {
+                tokio::time::sleep(CLIENT_POLL_INTERVAL).await;
+            }
+        } else {
+            tokio::time::sleep(pause).await;
+        }
     }
 }
 
@@ -631,6 +678,72 @@ mod tests {
         // Re-setting the identical view is a no-op (no redundant frame).
         state.set_global(global);
         assert!(state.drain_deltas().is_empty());
+    }
+
+    /// Poll the monitor until its global status satisfies `accept`, panicking
+    /// after a generous deadline (the probe's first pass shells out to
+    /// whatever `nix` the host has, so timing is not deterministic).
+    async fn wait_for_global_status(
+        monitor: &Arc<RwLock<MonitorState>>,
+        accept: impl Fn(&str) -> bool,
+        what: &str,
+    ) -> GlobalBuilds {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let global = monitor.read().await.global.clone();
+            if accept(&global.status) {
+                return global;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}; last status: {:?}",
+                global.status
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// With no dashboard client subscribed, the probe parks after its single
+    /// detection pass instead of polling `nix` forever (the daemon probe's
+    /// gate, mirrored): the parked view carries the unwatched status and no
+    /// build rows, so a late joiner is never seeded with rows from whenever
+    /// the last client left.
+    #[tokio::test]
+    async fn probe_parks_without_clients() {
+        let monitor = Arc::new(RwLock::new(MonitorState::default()));
+        let (deltas, _) = broadcast::channel(8);
+        let probe = tokio::spawn(run_global_probe(Arc::clone(&monitor), deltas));
+        let parked = wait_for_global_status(
+            &monitor,
+            |status| status == UNWATCHED_STATUS,
+            "the probe to park",
+        )
+        .await;
+        probe.abort();
+        assert!(parked.builds.is_empty(), "the parked view carries no stale rows");
+    }
+
+    /// A first client subscribing un-parks the probe within a client-poll
+    /// tick: the next poll replaces the parked view (with "N active" on a
+    /// patched nix or the undetected default on stock -- either way the
+    /// unwatched status goes away).
+    #[tokio::test]
+    async fn probe_resumes_when_a_client_subscribes() {
+        let monitor = Arc::new(RwLock::new(MonitorState::default()));
+        let (deltas, _) = broadcast::channel(8);
+        let probe = tokio::spawn(run_global_probe(Arc::clone(&monitor), deltas.clone()));
+        wait_for_global_status(&monitor, |status| status == UNWATCHED_STATUS, "the probe to park")
+            .await;
+
+        let client = deltas.subscribe();
+        wait_for_global_status(
+            &monitor,
+            |status| status != UNWATCHED_STATUS,
+            "the probe to resume polling",
+        )
+        .await;
+        probe.abort();
+        drop(client);
     }
 
     /// Run `compressed` through a fresh persistent decoder in `pieces` roughly
