@@ -3163,6 +3163,21 @@
         message = "ix-ray launcher must exec `ray start` (the `start` subcommand ahead of --head/--address), never `ray --head`";
       }
       {
+        # The fabric labels declared as data in lib/fabric.nix must reach the
+        # daemon's argv: the rendered launcher carries `--resources` JSON with
+        # the host label, the os label, and the env-handshake resource
+        # (index#3192). Guards the option -> nodeResources -> argv wiring, not
+        # the literal values.
+        assertion = let
+          workerScript = builtins.readFile ixRayWorker.systemd.services.ix-ray.serviceConfig.ExecStart;
+        in
+          lib.hasInfix "--resources" workerScript
+          && lib.hasInfix "host_" workerScript
+          && lib.hasInfix "fabric_env:" workerScript
+          && lib.hasInfix "linux" workerScript;
+        message = "ix-ray must advertise the fabric labels (host_<name>, os, fabric_env:<tag>) via --resources";
+      }
+      {
         # A worker with no headAddress cannot know where to join: fail eval.
         assertion = let
           failures = failedAssertionsFor [
