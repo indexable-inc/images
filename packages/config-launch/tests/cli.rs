@@ -304,7 +304,7 @@ fn path_prepend_rides_ahead_of_caller_path() {
 }
 
 #[test]
-fn static_and_conditional_flags_prepend_before_argv() {
+fn static_flags_prepend_before_argv() {
     let tmp = TempDir::new().unwrap();
     let stub = write_stub(&tmp);
     let spec = write_json_spec(
@@ -312,13 +312,9 @@ fn static_and_conditional_flags_prepend_before_argv() {
         &serde_json::json!({
             "target": stub.to_str().unwrap(),
             "flags": ["--debug", "--thinking-display=summarized"],
-            "conditional_flags": [
-                { "unless_present": ["--settings"], "flags": ["--settings=/def.json"] }
-            ],
         }),
     );
 
-    // No user --settings: defaults inject, before the subcommand argv.
     let out = Command::new(BIN)
         .env("IX_LAUNCH_SPEC", &spec)
         .args(["mcp", "list"])
@@ -331,17 +327,12 @@ fn static_and_conditional_flags_prepend_before_argv() {
         .collect();
     assert_eq!(
         lines,
-        vec![
-            "--debug",
-            "--thinking-display=summarized",
-            "--settings=/def.json",
-            "mcp",
-            "list"
-        ],
+        vec!["--debug", "--thinking-display=summarized", "mcp", "list"],
         "flags must prepend before the user argv"
     );
 
-    // User passes their own --settings: the conditional block is withheld.
+    // A caller option the wrapper knows nothing about rides through untouched,
+    // after the static flags (#3180: the launcher injects no settings).
     let out2 = Command::new(BIN)
         .env("IX_LAUNCH_SPEC", &spec)
         .args(["--settings=/user.json", "-p", "hi"])
@@ -352,54 +343,17 @@ fn static_and_conditional_flags_prepend_before_argv() {
         .lines()
         .map(str::to_owned)
         .collect();
-    assert!(
-        !lines2.iter().any(|l| l == "--settings=/def.json"),
-        "package --settings must defer to the caller's; got: {lines2:?}"
-    );
-    assert!(lines2.contains(&"--settings=/user.json".to_owned()));
-}
-
-#[test]
-fn introspection_prints_value_and_never_execs_target() {
-    let tmp = TempDir::new().unwrap();
-    let stub = write_stub(&tmp);
-    let spec = write_json_spec(
-        &tmp,
-        &serde_json::json!({
-            "target": stub.to_str().unwrap(),
-            "flags": ["--debug"],
-            "introspection": [
-                { "flag": "--which-settings", "value": "/nix/store/settings.json" }
-            ],
-        }),
-    );
-
-    // Flag present: the launcher answers itself; the stub's argv echo (which
-    // would start with --debug) must not appear.
-    let out = Command::new(BIN)
-        .env("IX_LAUNCH_SPEC", &spec)
-        .arg("--which-settings")
-        .output()
-        .expect("run");
-    assert!(out.status.success(), "introspection should exit 0");
     assert_eq!(
-        String::from_utf8(out.stdout).unwrap(),
-        "/nix/store/settings.json\n",
-        "introspection must print exactly the paired value"
+        lines2,
+        vec![
+            "--debug",
+            "--thinking-display=summarized",
+            "--settings=/user.json",
+            "-p",
+            "hi"
+        ],
+        "caller argv must pass through untouched"
     );
-
-    // Flag absent: normal launch, argv passthrough via the stub.
-    let out2 = Command::new(BIN)
-        .env("IX_LAUNCH_SPEC", &spec)
-        .args(["mcp", "list"])
-        .output()
-        .expect("run");
-    let lines2: Vec<String> = String::from_utf8(out2.stdout)
-        .unwrap()
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    assert_eq!(lines2, vec!["--debug", "mcp", "list"]);
 }
 
 #[test]

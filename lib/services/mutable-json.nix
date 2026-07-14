@@ -39,7 +39,7 @@
 {lib}: let
   inherit (lib) types mkOption;
 
-  homeModule = {
+  moduleBody = {
     config,
     lib,
     pkgs,
@@ -122,7 +122,14 @@
     };
   };
 in {
-  inherit homeModule;
+  # Keyed so a consumer module can embed this one (the agent Home Manager
+  # module imports it to materialize settings) while a downstream config also
+  # imports `homeModules.mutable-json`: the module system deduplicates by key,
+  # so the option is declared once.
+  homeModule = {
+    key = "index/lib/services/mutable-json.nix";
+    imports = [moduleBody];
+  };
   # The merge program, exposed so tests can exercise it directly on fixtures.
   mergeProgram = ./mutable-json-merge.jq;
 }
