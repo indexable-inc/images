@@ -1288,6 +1288,12 @@
       # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
       # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
       ps.httpx
+      # githubkit: typed async GitHub API client generated from GitHub's OpenAPI
+      # spec, so a session does GitHub reads/writes as direct API calls instead
+      # of `gh` subprocesses (index#3258: a REST call answers in under a second
+      # where each `gh` fork costs several; `gh` stays for auth bootstrap via
+      # `gh auth token`).
+      ps.githubkit
       # pydantic (v2): the boundary parser for untrusted/JSON data. The bundled
       # `linear` and `google_auth` modules parse their GraphQL/CLI JSON responses
       # into typed models with it instead of threading untyped dicts. (The MCP SDK
