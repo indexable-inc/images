@@ -18,6 +18,7 @@
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
 in {
   macosGuests.macos-primary = {
+    lifecycle.macAddress = "0e:c9:c7:6c:25:a8";
     ssh = {
       host = "192.168.64.6";
       user = "ix";

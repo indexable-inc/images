@@ -250,6 +250,51 @@
         }
       ];
     }).config;
+  macosGuestsConfig =
+    (lib.evalModules {
+      specialArgs.pkgs = homeAgentPkgs;
+      modules = [
+        (import (paths.root + "/modules/home/macos-guests.nix") {
+          inherit ix;
+          indexPackages = homeAgentIndexPackages;
+        })
+        ({lib, ...}: {
+          options = {
+            assertions = lib.mkOption {
+              type = lib.types.listOf lib.types.anything;
+              default = [];
+            };
+            home = {
+              homeDirectory = lib.mkOption {type = lib.types.str;};
+              packages = lib.mkOption {
+                type = lib.types.listOf lib.types.package;
+                default = [];
+              };
+            };
+            launchd.agents = lib.mkOption {
+              type = lib.types.attrsOf (lib.types.submodule {
+                options = {
+                  enable = lib.mkOption {type = lib.types.bool;};
+                  config = lib.mkOption {type = lib.types.attrsOf lib.types.anything;};
+                };
+              });
+              default = {};
+            };
+          };
+          config = {
+            home.homeDirectory = "/Users/agent";
+            macosGuests.test = {
+              lifecycle.macAddress = "0e:c9:c7:6c:25:a8";
+              ssh = {
+                host = "192.168.64.6";
+                user = "ix";
+              };
+            };
+          };
+        })
+      ];
+    }).config;
+  macosGuestAgent = macosGuestsConfig.launchd.agents.test;
 
   minecraft = let
     config = evalConfig [
@@ -2793,6 +2838,27 @@
   );
 
   groups = {
+    macos-guests = [
+      {
+        assertion = macosGuestAgent.enable;
+        message = "declared macOS guests should enable their host launchd agent";
+      }
+      {
+        assertion =
+          builtins.elemAt macosGuestAgent.config.ProgramArguments 1
+          == "run-macos"
+          && builtins.elemAt macosGuestAgent.config.ProgramArguments 3 == "/Users/agent/.local/share/vmkit/guests/test"
+          && builtins.elemAt macosGuestAgent.config.ProgramArguments 5 == "0e:c9:c7:6c:25:a8";
+        message = "the host launchd agent should pass the declared bundle and MAC to vmkit run-macos";
+      }
+      {
+        assertion =
+          macosGuestAgent.config.KeepAlive
+          && macosGuestAgent.config.RunAtLoad
+          && macosGuestAgent.config.ExitTimeOut == 120;
+        message = "launchd should keep the guest alive while allowing a clean shutdown window";
+      }
+    ];
     security-roots = [
       {
         assertion =
