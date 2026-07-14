@@ -4,7 +4,8 @@
 # structured Nix attrs and pinned binaries — and get one idempotent
 # `macos-guest-<name>` command that pushes only drift over ssh and bootstraps
 # launchd (bootout + bootstrap in the gui domain) only for changed or
-# unloaded agents. `macos-guest-<name> status` reports drift read-only.
+# unloaded agents. `macos-guest-<name> ssh` opens a shell, while `status`
+# reports drift read-only.
 #
 # The guest bundle itself stays a stateful pet until #2683's mkMacGuest lands:
 # VM creation, Apple ID sign-in, and the GUI-only TCC grants are manual
@@ -158,7 +159,7 @@
   applyFor = name: guest:
     ix.writeNushellApplication pkgs {
       name = "macos-guest-${name}";
-      meta.description = "Push declared state to the ${name} macOS guest and bootstrap launchd";
+      meta.description = "Manage declared state and open an ssh shell for the ${name} macOS guest";
       text = ''
         # nu
         const manifest_file = "${guestManifest name guest}"
@@ -172,6 +173,10 @@
           ^/usr/bin/ssh -o BatchMode=yes $tgt $cmd
         }
 
+        def ssh-target [spec: record] {
+          $"($spec.ssh.user)@($spec.ssh.host)"
+        }
+
         # null when the file is absent on the guest.
         def remote-hash [tgt: string, path: string] {
           let probe = do { ^/usr/bin/ssh -o BatchMode=yes $tgt $"shasum -a 256 '($path)'" } | complete
@@ -181,7 +186,7 @@
         # One row per resource: local vs guest content hash.
         def drift-table [] {
           let spec = open $manifest_file
-          let tgt = $"($spec.ssh.user)@($spec.ssh.host)"
+          let tgt = ssh-target $spec
           $spec.resources | each {|r|
             let remote_path = $"($spec.home)/($r.target)"
             let local = open --raw $r.source | hash sha256
@@ -202,7 +207,7 @@
         # the terminal check reads each agent's live launchd state.
         def main [] {
           let spec = open $manifest_file
-          let tgt = $"($spec.ssh.user)@($spec.ssh.host)"
+          let tgt = ssh-target $spec
           let uid = ssh-run $tgt "id -u" | str trim
           for row in (drift-table) {
             if $row.in_sync {
@@ -258,6 +263,12 @@
             exit 1
           }
         }
+
+        # Open an interactive guest shell or run one command.
+        def --wrapped "main ssh" [...command: string] {
+          let spec = open $manifest_file
+          exec /usr/bin/ssh -o BatchMode=yes (ssh-target $spec) ...$command
+        }
       '';
     };
 
@@ -276,7 +287,7 @@ in {
     default = {};
     description = ''
       vmkit macOS guest VMs whose in-guest state (launchd agents, pinned
-      binaries) is declared here and pushed over ssh by the generated
+      binaries) is declared here and managed over ssh by the generated
       `macos-guest-<name>` command. See modules/home/macos-guests/tcc-bootstrap.md
       for the manual TCC bootstrap a fresh guest still needs.
     '';
