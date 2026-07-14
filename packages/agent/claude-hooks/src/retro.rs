@@ -1,9 +1,10 @@
 //! Always-on session-retrospective trigger, a sibling of the `review-gate` Stop
 //! hook (`review.rs`). On Stop of a substantive session it dispatches a retro
 //! OUT-OF-BAND: a detached worker ships the finished transcript to the ix-mcp
-//! HTTP kernel and `weave.delegate()`s a fleet agent that walks it and files
-//! GitHub issues for everything improvable (the `session-retro` skill, run by
-//! the weave app as its own live session). Stop itself is NEVER blocked: the
+//! HTTP kernel and opens a `fabric.claude.session` agent there that walks it
+//! and files GitHub issues for everything improvable (the `session-retro`
+//! skill, run as a journal-recorded, interruptible Claude Agent SDK session
+//! in the kernel process). Stop itself is NEVER blocked: the
 //! foreground half only gates, writes the once-per-session marker, re-spawns
 //! this binary detached (`claude-hooks retro-gate --dispatch`, friction-report
 //! pattern), and returns immediately. It used to block once with an in-session
@@ -17,16 +18,14 @@
 //! threshold. A per-session marker makes it fire at most once per session,
 //! mirroring how `review-gate` tracks its state.
 //!
-//! Transcript shipping: the kernel behind `IX_MCP_URL` cannot read this
-//! machine's `transcript_path`, and the weave app that fulfills the delegated
-//! task runs on a DIFFERENT fleet host than the public kernel (weave on its
-//! host's `/var/lib/weave`, ix-mcp-public on the leader's
-//! `/var/lib/ix-mcp-public`), so a file written in the kernel cwd never reaches
-//! the fulfilled agent. The one data plane both ends verifiably share is the
-//! weave journal itself: the dispatch uploads the gzipped transcript in chunked
-//! base64 `python_exec` calls (one MCP session = one kernel namespace), the
-//! kernel stores it in weave CAS (`weave.put_blob`), and the delegate prompt
-//! tells the spawned agent to `weave.get_blob` it back out in its own kernel.
+//! Transcript shipping: the kernel behind `IX_MCP_URL` runs on a fleet host
+//! that cannot read this machine's `transcript_path`, and the spawned agent's
+//! working context is its own, not this filesystem. The one data plane both
+//! ends verifiably share is the weave journal itself: the dispatch uploads the
+//! gzipped transcript in chunked base64 `python_exec` calls (one MCP session =
+//! one kernel namespace), the kernel stores it in weave CAS
+//! (`weave.put_blob`), and the session prompt tells the spawned agent to
+//! `weave.get_blob` it back out in its own kernel.
 //!
 //! Like every hook in this crate it fails OPEN and SILENT: any missing input,
 //! parse error, missing API key, or network failure exits quietly and never
@@ -62,18 +61,18 @@ const CHUNK_B64_CHARS: usize = 2_000_000;
 /// Absurdity guard: a transcript past this size is not a session, it is a bug.
 const MAX_TRANSCRIPT_BYTES: u64 = 256 * 1024 * 1024;
 
-/// Whole-request timeout. The final `python_exec` (CAS upload + delegate) runs
+/// Whole-request timeout. The final `python_exec` (CAS upload + session open) runs
 /// inside the POST with a kernel budget of [`FINAL_BUDGET_SECS`] plus the
 /// server's wedge grace, so the HTTP timeout must sit above both.
 const HTTP_TIMEOUT: Duration = Duration::from_mins(3);
 
 /// Kernel budget for a chunk-append call (string append: fast).
 const CHUNK_BUDGET_SECS: f64 = 30.0;
-/// Kernel budget for the finalize call (CAS put + delegate); the server clamps
+/// Kernel budget for the finalize call (CAS put + session open); the server clamps
 /// to its `max_budget` (120s) anyway.
 const FINAL_BUDGET_SECS: f64 = 120.0;
 
-/// In the delegate prompt this placeholder stands for the CAS hash, which only
+/// In the session prompt this placeholder stands for the CAS hash, which only
 /// exists once the kernel has run `put_blob`; the finalize cell substitutes it
 /// server-side.
 const BLOB_HASH_PLACEHOLDER: &str = "__RETRO_BLOB_HASH__";
@@ -351,7 +350,7 @@ fn detach_dispatch(payload: &Value) {
 
 // --- detached dispatch half ---
 
-/// Ship the transcript to the ix-mcp kernel and delegate the retro. Every
+/// Ship the transcript to the ix-mcp kernel and open the retro session. Every
 /// failure logs and returns: the marker is already written, Stop already
 /// returned, nothing here can affect the finished session.
 fn dispatch(payload: &Value) {
@@ -446,10 +445,10 @@ fn dispatch(payload: &Value) {
         &json!({
             "code": code,
             "budget": FINAL_BUDGET_SECS,
-            "intent": "session-retro: store transcript blob and delegate retro agent",
+            "intent": "session-retro: store transcript blob and open retro agent session",
         }),
     ) else {
-        log(&format!("{session}: finalize (put_blob + delegate) failed"));
+        log(&format!("{session}: finalize (put_blob + session open) failed"));
         return;
     };
     let summary = serde_json::to_string(&result).unwrap_or_default();
@@ -512,24 +511,37 @@ fn chunk_code(var: &str, chunk: &str, first: bool) -> String {
 }
 
 /// The finalize cell: decode the accumulated base64, store the gzipped
-/// transcript in weave CAS, and delegate the retro with the CAS hash
-/// substituted into the prompt. The prompt itself travels base64-encoded so no
-/// escaping of its prose is ever needed.
+/// transcript in weave CAS, and open the retro agent as a
+/// `fabric.claude.session` with the CAS hash substituted into the prompt (the
+/// call creates the work; the journal records it -- no dispatcher). The
+/// session lives in the kernel process: a spawned kernel job awaits its
+/// result and closes it, so the run settles to a terminal fact without
+/// anyone attached. The prompt itself travels base64-encoded so no escaping
+/// of its prose is ever needed.
 fn finalize_code(var: &str, prompt: &str) -> String {
     let prompt_b64 = B64.encode(prompt);
     format!(
         r#"import base64 as _b64
 import weave
+import fabric
 _gz = _b64.b64decode("".join({var}))
 del {var}
 _hash = await weave.put_blob(_gz)
 _prompt = _b64.b64decode("{prompt_b64}").decode("utf-8").replace("{BLOB_HASH_PLACEHOLDER}", _hash)
-_task = await weave.delegate(_prompt, name="session-retro", topic="session-retro")
-print("session-retro dispatched: blob=" + _hash + " task=" + _task + " gz_bytes=" + str(len(_gz)))"#
+_s = await fabric.claude.session(_prompt)
+
+async def _retro_finish() -> str:
+    try:
+        return await _s.result()
+    finally:
+        await _s.close()
+
+jobs.spawn(_retro_finish(), name="session-retro")
+print("session-retro dispatched: blob=" + _hash + " task=" + _s.task + " gz_bytes=" + str(len(_gz)))"#
     )
 }
 
-/// The prompt the delegated fleet agent receives: fetch the shipped transcript
+/// The prompt the retro agent receives: fetch the shipped transcript
 /// from weave CAS, then run the `session-retro` skill's walk/route/dedupe/file
 /// loop over it. Adapted from the old in-session block reason plus
 /// `packages/agent/skills/session-retro/SKILL.md`.
@@ -853,13 +865,15 @@ mod tests {
     }
 
     #[test]
-    fn finalize_code_ships_prompt_base64_and_delegates() {
+    fn finalize_code_ships_prompt_base64_and_opens_session() {
         let prompt = format!("walk the transcript at {BLOB_HASH_PLACEHOLDER} \"quoted\" text");
         let code = finalize_code("__retro_b64_s1", &prompt);
-        // decodes to CAS put + delegate on the accumulated chunks
+        // decodes to CAS put + a fabric claude session on the accumulated chunks
         assert!(code.contains("\"\".join(__retro_b64_s1)"), "{code}");
         assert!(code.contains("weave.put_blob"), "{code}");
-        assert!(code.contains("weave.delegate"), "{code}");
+        assert!(code.contains("fabric.claude.session"), "{code}");
+        // the session settles unattended: a kernel job awaits and closes it
+        assert!(code.contains("jobs.spawn"), "{code}");
         assert!(code.contains("name=\"session-retro\""), "{code}");
         // the prompt rides base64 so its quotes never need escaping
         assert!(!code.contains("\"quoted\""), "{code}");

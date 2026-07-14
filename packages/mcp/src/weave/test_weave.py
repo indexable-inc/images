@@ -120,85 +120,6 @@ def test_watch_diffs_rows_keyed_by_first_column(monkeypatch: pytest.MonkeyPatch)
     assert batches[1] == {"added": [["b", 1]], "removed": [], "updated": [["a", 2]]}
 
 
-def test_delegate_fact_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    writes: list[Any] = []
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        batch = weave.json.loads(req.read())
-        writes.append(batch)
-        return httpx.Response(200, json=[{"seq": i, "id": f"f{i}"} for i in range(len(batch))])
-
-    seen = install_transport(monkeypatch, handler)
-    monkeypatch.setenv("IX_WEAVE_AGENT", "agent:parent")
-    task = run(weave.delegate("summarize the weave cutover plan today", name="reviewer", model="opus"))
-    assert re.fullmatch(r"task-[0-9a-f]{8}", task)
-    # No prefab validation: the only request is the one facts batch.
-    assert [r.url.path for r in seen] == ["/api/facts"]
-    facts = [(f["fact"]["entity"]["v"], f["fact"]["attr"], f["fact"]["value"]["v"]) for f in writes[0]]
-    # Exact batch order: agent facts, then task facts, state pending LAST --
-    # the pending fact dispatches, so a half-written task must never dispatch.
-    assert facts == [
-        ("agent-reviewer", "type", "agent"),
-        ("agent-reviewer", "name", "reviewer"),
-        ("agent-reviewer", "harness", "claude"),
-        ("agent-reviewer", "model", "opus"),
-        (task, "type", "task"),
-        (task, "agent", "agent-reviewer"),
-        (task, "harness", "claude"),
-        (task, "model", "opus"),
-        (task, "prompt", "summarize the weave cutover plan today"),
-        (task, "name", "summarize the weave cutover plan"),
-        (task, "thread", "thread.main"),
-        (task, "requested_by", "agent:parent"),
-        (task, "state", "pending"),
-    ]
-
-
-def test_delegate_codex_fact_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    writes: list[Any] = []
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        batch = weave.json.loads(req.read())
-        writes.append(batch)
-        return httpx.Response(200, json=[{"seq": i, "id": f"f{i}"} for i in range(len(batch))])
-
-    install_transport(monkeypatch, handler)
-    monkeypatch.setenv("IX_WEAVE_AGENT", "agent:parent")
-    task = run(weave.delegate("port the harness", name="porter", harness="codex", model="gpt-5.6-sol", effort="xhigh"))
-    facts = [(f["fact"]["entity"]["v"], f["fact"]["attr"], f["fact"]["value"]["v"]) for f in writes[0]]
-    # harness/model/effort mirror on BOTH the agent and the task entity; the
-    # per-dispatch task facts are authoritative for the fulfiller.
-    assert ("agent-porter", "harness", "codex") in facts
-    assert ("agent-porter", "effort", "xhigh") in facts
-    assert (task, "harness", "codex") in facts
-    assert (task, "model", "gpt-5.6-sol") in facts
-    assert (task, "effort", "xhigh") in facts
-    assert facts[-1] == (task, "state", "pending")
-
-
-def test_delegate_omp_not_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen = install_transport(monkeypatch, lambda req: httpx.Response(200, json=[]))
-    with pytest.raises(NotImplementedError, match="omp"):
-        run(weave.delegate("do a thing", harness="omp"))
-    # Rejected before any fact is written: nothing reached the transport.
-    assert seen == []
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "match"),
-    [
-        ({"harness": "gemini"}, "unknown harness"),
-        ({"harness": "codex", "effort": "extreme"}, "unknown effort"),
-        ({"effort": "high"}, "codex-only"),
-    ],
-)
-def test_delegate_rejects_bad_config(monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, Any], match: str) -> None:
-    seen = install_transport(monkeypatch, lambda req: httpx.Response(200, json=[]))
-    with pytest.raises(ValueError, match=match):
-        run(weave.delegate("do a thing", **kwargs))
-    assert seen == []
-
-
 def test_result_returns_on_done(monkeypatch: pytest.MonkeyPatch) -> None:
     states = iter(["pending", "done"])
     programs: list[str] = []
@@ -224,7 +145,9 @@ def test_result_returns_on_done(monkeypatch: pytest.MonkeyPatch) -> None:
     ("state", "attr", "detail", "error"),
     [
         ("failed", "error", "worker process exited", weave.TaskFailedError),
+        ("lost", "error", "reconciler: runner:hc1 died without a terminal fact", weave.TaskFailedError),
         ("cancelled", "result", "stopped by user", weave.TaskCancelledError),
+        ("interrupted", "result", "stopped via interrupt fact", weave.TaskCancelledError),
     ],
 )
 def test_result_raises_terminal_failure(

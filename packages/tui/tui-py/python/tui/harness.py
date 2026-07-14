@@ -731,7 +731,7 @@ async def delegate(
     `WaitTimeout` raised; pass a larger value or `timeout=None` (no cap) when
     the task genuinely needs longer. A real delegated task (issue + PR + CI)
     does not belong here at any timeout: it gets no live view and dies with the
-    kernel. Use `weave.delegate` or `claude --bg` for those (#3184).
+    kernel. Use `fabric.claude.session` or `claude --bg` for those (#3184).
 
     For an observable, interruptible session (a task a human may watch or
     stop), launch the TUI harness instead: `agent = await Claude.launch();

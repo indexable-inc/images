@@ -26,10 +26,6 @@ if TYPE_CHECKING:
 
 __all__ = ["Session", "session"]
 
-# How often the journal is polled for an externally asserted
-# interrupt=requested fact. Module-level so tests can shrink it.
-INTERRUPT_POLL_S = 0.5
-
 
 class SdkClient(Protocol):
     """The slice of ``claude_agent_sdk.ClaudeSDKClient`` a session drives.
@@ -129,12 +125,9 @@ class Session:
             raise
 
     async def _watch_interrupt(self) -> None:
-        while not self._interrupted:
-            rows = (await weave.query(f'?- latest("{self.task}", interrupt, I).'))["rows"]
-            if rows and rows[0][0] == "requested":
-                await self._do_interrupt()
-                return
-            await asyncio.sleep(INTERRUPT_POLL_S)
+        from . import watch_interrupt
+
+        await watch_interrupt(self.task, self._do_interrupt)
 
     async def _write_terminal(self, state: str, *, error: str | None = None) -> None:
         if self._terminal_written:

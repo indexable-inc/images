@@ -5763,7 +5763,7 @@
       cat stdout
       mkdir -p "$out"
     '';
-  # Network-free tests for the call-first fabric (index#3191, #3192): the run
+  # Network-free tests for the call-first fabric (index#3191, #3192, #3193): the run
   # record contract against an httpx.MockTransport weave double (ask facts at
   # submit with state strictly last, started/terminal facts from the worker
   # side, a fn that raises before its first line still leaving ask + failed),
@@ -5779,12 +5779,20 @@
     ps.httpx
     ps.claude-agent-sdk
     ps.ray
+    # fabric.activity.frame returns a polars frame.
+    ps.polars
     fabricModule
     weaveModule
   ]);
   fabricTestSource = builtins.path {
     name = "ix-mcp-fabric-test";
     path = ./src/fabric/test_fabric.py;
+  };
+  # The weave client's unit tests share this env (httpx.MockTransport fakes);
+  # no other derivation runs them.
+  weaveTestSource = builtins.path {
+    name = "ix-mcp-weave-test";
+    path = ./src/weave/test_weave.py;
   };
   fabricTests =
     pkgs.runCommand "ix-mcp-fabric-tests"
@@ -5800,7 +5808,8 @@
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
       cp ${fabricTestSource} "$TMPDIR/test_fabric.py"
-      ${lib.getExe fabricTestPython} -m pytest "$TMPDIR/test_fabric.py" -q -p no:cacheprovider >stdout 2>stderr || {
+      cp ${weaveTestSource} "$TMPDIR/test_weave.py"
+      ${lib.getExe fabricTestPython} -m pytest "$TMPDIR/test_fabric.py" "$TMPDIR/test_weave.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp fabric tests failed:" >&2
         cat stdout stderr >&2
         exit 1
