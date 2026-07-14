@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write as _;
+use std::os::unix::fs::{MetadataExt as _, chown};
 use std::path::{Path, PathBuf};
 use std::str;
 
@@ -635,11 +636,10 @@ pub fn pull(store: &Store, repo_root: &Path, path: Option<&str>) -> Result<PullR
 
     let mut staged = Vec::with_capacity(plans.len());
     for plan in plans {
-        let permissions = fs::metadata(&plan.source_path)
-            .with_context(|| format!("reading metadata for {}", plan.source_path.display()))?
-            .permissions();
-        let output = stage_source(&plan.source_path, &plan.upper, permissions.clone())?;
-        let rollback = stage_source(&plan.source_path, &plan.base, permissions)?;
+        let metadata = fs::metadata(&plan.source_path)
+            .with_context(|| format!("reading metadata for {}", plan.source_path.display()))?;
+        let output = stage_source(&plan.source_path, &plan.upper, &metadata)?;
+        let rollback = stage_source(&plan.source_path, &plan.base, &metadata)?;
         staged.push(StagedPull {
             plan,
             output,
@@ -648,41 +648,15 @@ pub fn pull(store: &Store, repo_root: &Path, path: Option<&str>) -> Result<PullR
     }
 
     // The state lock keeps the tracked bases and staged-conflict markers fixed.
-    // Recheck every source after staging before replacing any of them.
+    // Recheck every input after staging before replacing any source.
     for staged_file in &staged {
-        let plan = &staged_file.plan;
-        if store.staged_bytes(&plan.path)?.is_some() || store.base_bytes(&plan.path)? != plan.base {
-            bail!(
-                "{} changed in index-delta state while pull was staging",
-                plan.path
-            );
-        }
-        let current = fs::read(&plan.source_path).with_context(|| {
-            format!(
-                "rechecking repository source {}",
-                plan.source_path.display()
-            )
-        })?;
-        if current != plan.base {
-            bail!(
-                "repository source {} changed while pull was staging; no files were written",
-                plan.source_file
-            );
-        }
+        recheck_pull_plan(store, &staged_file.plan)?;
     }
 
     let mut committed = Vec::with_capacity(staged.len());
     for staged_file in staged {
         let plan = &staged_file.plan;
-        let current = fs::read(&plan.source_path).with_context(|| {
-            format!(
-                "rechecking repository source {}",
-                plan.source_path.display()
-            )
-        })?;
-        if current != plan.base {
-            let error =
-                anyhow::anyhow!("repository source {} changed during pull", plan.source_file);
+        if let Err(error) = recheck_pull_plan(store, plan) {
             return Err(rollback_after_error(error, committed));
         }
         if let Err(error) = staged_file.output.persist(&plan.source_path) {
@@ -703,6 +677,36 @@ pub fn pull(store: &Store, repo_root: &Path, path: Option<&str>) -> Result<PullR
         });
     }
     Ok(PullReport { pulled })
+}
+
+fn recheck_pull_plan(store: &Store, plan: &PullPlan) -> Result<()> {
+    if store.staged_bytes(&plan.path)?.is_some() || store.base_bytes(&plan.path)? != plan.base {
+        bail!(
+            "{} changed in index-delta state while pull was staging",
+            plan.path
+        );
+    }
+    let target =
+        fs::read(&plan.path).with_context(|| format!("rechecking managed target {}", plan.path))?;
+    if target != plan.upper {
+        bail!(
+            "managed target {} changed while pull was staging",
+            plan.path
+        );
+    }
+    let source = fs::read(&plan.source_path).with_context(|| {
+        format!(
+            "rechecking repository source {}",
+            plan.source_path.display()
+        )
+    })?;
+    if source != plan.base {
+        bail!(
+            "repository source {} changed while pull was staging",
+            plan.source_file
+        );
+    }
+    Ok(())
 }
 
 fn plan_pull(
@@ -800,16 +804,24 @@ fn plan_pull_file(
 fn stage_source(
     source_path: &Path,
     bytes: &[u8],
-    permissions: fs::Permissions,
+    metadata: &fs::Metadata,
 ) -> Result<tempfile::NamedTempFile> {
     let parent = source_path
         .parent()
         .context("repository source has no parent directory")?;
     let mut staged = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("staging repository source {}", source_path.display()))?;
+    let staged_metadata = staged
+        .as_file()
+        .metadata()
+        .with_context(|| format!("reading staged metadata for {}", source_path.display()))?;
+    if staged_metadata.uid() != metadata.uid() || staged_metadata.gid() != metadata.gid() {
+        chown(staged.path(), Some(metadata.uid()), Some(metadata.gid()))
+            .with_context(|| format!("preserving ownership for {}", source_path.display()))?;
+    }
     staged
         .as_file()
-        .set_permissions(permissions)
+        .set_permissions(metadata.permissions())
         .with_context(|| format!("preserving permissions for {}", source_path.display()))?;
     staged
         .write_all(bytes)
@@ -1076,9 +1088,13 @@ mod tests {
         let repo = fixture.text_repo();
         fixture.activate();
         fs::write(&fixture.target, "let value = 2\n").expect("drift");
+        let original_metadata = fs::metadata(&repo.source).expect("source metadata");
 
         let report = pull(&fixture.store, &repo.root, Some(&fixture.target)).expect("pull");
 
+        let pulled_metadata = fs::metadata(&repo.source).expect("pulled metadata");
+        assert_eq!(pulled_metadata.uid(), original_metadata.uid());
+        assert_eq!(pulled_metadata.gid(), original_metadata.gid());
         assert_eq!(
             fs::read_to_string(repo.source).expect("read repo source"),
             "let value = 2\n"
@@ -1091,6 +1107,31 @@ mod tests {
                     "sourceFile": "config.nu",
                 }],
             })
+        );
+    }
+
+    #[test]
+    fn pull_recheck_rejects_a_managed_target_that_changed_while_staging() {
+        let fixture = Fixture::new("durable");
+        let repo = fixture.text_repo();
+        fixture.activate();
+        fs::write(&fixture.target, "let value = 2\n").expect("drift");
+        let mut plans = plan_pull(
+            &fixture.store,
+            &repo.root.canonicalize().expect("canonical repo"),
+            fixture.store.all_metas().expect("metas"),
+            false,
+        )
+        .expect("plan pull");
+        let plan = plans.pop().expect("pull plan");
+        fs::write(&fixture.target, "let value = 3\n").expect("change target");
+
+        let error = recheck_pull_plan(&fixture.store, &plan).expect_err("reject changed target");
+
+        assert!(error.to_string().contains("managed target"));
+        assert_eq!(
+            fs::read_to_string(repo.source).expect("read repo source"),
+            "let value = 1\n"
         );
     }
 
