@@ -102,7 +102,22 @@ export const globalBuildSchema = v.object({
   user: v.nullable(v.string()),
   uid: v.nullable(v.number()),
   logFile: v.nullable(v.string()),
-  why: globalWhySchema
+  why: globalWhySchema,
+  /// Server-sampled cpu usage of the builder's process tree, in whole percent
+  /// of one core (can exceed 100 on a parallel build). Null until the server
+  /// has two procfs samples for the pid, and always null on platforms
+  /// without procfs.
+  cpuPercent: v.nullable(v.number()),
+  /// Server-sampled resident set size of the builder's process tree, bytes.
+  rssBytes: v.nullable(v.number()),
+  /// The worker process's kernel start time, sampled by the server: clock
+  /// ticks since boot from procfs on Linux, the sysctl start timestamp in
+  /// microseconds on macOS. This is the worker's true generation: `startTime`
+  /// is whole seconds, so a pid recycled for the same drv within one second is
+  /// only told apart by this value. Opaque -- folded into `goalKey` and echoed
+  /// back to `/api/global-log` verbatim. Null when the pid is missing or the
+  /// process was gone at sampling time.
+  startTicks: v.nullable(v.number())
 });
 
 /// Machine-wide build view. `detected` is false on stock nix (the subcommand is

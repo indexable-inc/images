@@ -1,6 +1,5 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity';
-  import PanelHeader from '$lib/PanelHeader.svelte';
   import { formatDuration } from '$lib/format';
   import { useNow } from '$lib/now.svelte';
   import type { Activation, ActivationStep } from '$lib/types';
@@ -33,11 +32,11 @@
 </script>
 
 <section class="panel activation-panel">
-  <PanelHeader title="activation">
-    {#if activation.steps.length > 0}
+  {#if activation.steps.length > 0}
+    <div class="pane-toolbar">
       <span class="panel-meta">{doneCount}/{activation.steps.length}</span>
-    {/if}
-  </PanelHeader>
+    </div>
+  {/if}
 
   <div class="activation-body">
     {#if activation.steps.length === 0}

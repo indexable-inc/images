@@ -24,5 +24,10 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync"] }
 tower-http = { workspace = true, features = ["fs"] }
 
+# For the no-procfs worker-generation source (`sysctl(KERN_PROC_PID)`); see
+# `proc_stats::start_generation_without_procfs`.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

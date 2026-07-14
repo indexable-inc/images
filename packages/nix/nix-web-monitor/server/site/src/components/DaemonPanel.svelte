@@ -1,5 +1,4 @@
 <script lang="ts">
-  import PanelHeader from '$lib/PanelHeader.svelte';
   import type { DaemonInfo, DaemonOps } from '$lib/types';
 
   type Props = {
@@ -41,13 +40,13 @@
 </script>
 
 <section class="panel daemon-panel">
-  <PanelHeader title="daemon">
-    {#if daemon.tracing}
+  {#if daemon.tracing}
+    <div class="pane-toolbar">
       <span class="panel-meta"
         >{daemon.workers.length} worker{daemon.workers.length === 1 ? '' : 's'} &middot; {daemon.opsPerSec}/s</span
       >
-    {/if}
-  </PanelHeader>
+    </div>
+  {/if}
 
   <div class="daemon-body">
     {#if !daemon.tracing}

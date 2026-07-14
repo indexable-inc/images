@@ -29,6 +29,7 @@ mod daemon;
 mod dependencies;
 mod emit;
 mod global;
+mod proc_stats;
 mod reasons;
 use daemon::run_daemon_probe;
 use dependencies::resolve_dependencies;
@@ -169,13 +170,15 @@ enum TerminalOutput {
 }
 
 /// Shared state for the HTTP handlers: the monitor for one-shot JSON snapshots,
-/// the broadcast sender each WebSocket subscribes to for the live feed, and the
-/// cached `index.html` bytes served with cache-busting headers.
+/// the broadcast sender each WebSocket subscribes to for the live feed, the
+/// cached `index.html` bytes served with cache-busting headers, and the
+/// per-worker incremental decode state behind `/api/global-log`.
 #[derive(Clone)]
 struct AppState {
     monitor: Arc<RwLock<MonitorState>>,
     deltas: broadcast::Sender<Bytes>,
     index_html: Bytes,
+    log_tails: global::LogTailCache,
 }
 
 #[tokio::main]
@@ -354,6 +357,7 @@ async fn start_ui(
         monitor: Arc::clone(&monitor),
         deltas: deltas.clone(),
         index_html,
+        log_tails: global::LogTailCache::new(),
     };
     let http_server = serve(listener, site_dir, state);
 
@@ -446,10 +450,19 @@ async fn state_snapshot(State(state): State<AppState>) -> Json<MonitorSnapshot> 
     Json(state.monitor.read().await.snapshot())
 }
 
-/// Which machine build's log `/api/global-log` should tail, by derivation path.
+/// Which machine build's log `/api/global-log` should tail, by exact worker.
 #[derive(serde::Deserialize)]
 struct GlobalLogQuery {
     drv: String,
+    pid: i64,
+    start: i64,
+    /// The worker's kernel start-time generation as the UI last saw it in the
+    /// status payload (`start` is whole seconds, so this is what pins a pid
+    /// recycled within one second). Matched exactly, `None` included: a
+    /// request omitting it only resolves a worker the sampler could not see
+    /// (already gone when sampled), never a sampled one.
+    #[serde(rename = "startTicks")]
+    start_ticks: Option<u64>,
 }
 
 /// Tail of one machine build's on-disk log, as plain text.
@@ -464,14 +477,30 @@ async fn global_log(
     State(state): State<AppState>,
     Query(query): Query<GlobalLogQuery>,
 ) -> Response {
-    let Some(log_file) = global::log_file_for(&state.monitor, &query.drv).await else {
+    let Some(log_file) = global::log_file_for(
+        &state.monitor,
+        &query.drv,
+        query.pid,
+        query.start,
+        query.start_ticks,
+    )
+    .await
+    else {
         return (
             StatusCode::NOT_FOUND,
             "not an active machine build with a recorded log",
         )
             .into_response();
     };
-    match global::read_log_tail(log_file).await {
+    // The tail read resumes this worker's cached incremental decode (compressed
+    // logs only), keyed by the same exact identity the lookup above gated on.
+    let key = global::LogWorkerKey {
+        drv_path: query.drv,
+        pid: query.pid,
+        start_time: query.start,
+        start_ticks: query.start_ticks,
+    };
+    match state.log_tails.read_log_tail(key, log_file).await {
         Ok(text) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             (StatusCode::NOT_FOUND, "log not written yet").into_response()
@@ -1440,6 +1469,7 @@ mod tests {
             monitor: Arc::new(RwLock::new(MonitorState::default())),
             deltas,
             index_html: Bytes::from_static(b"<!doctype html><title>test</title>"),
+            log_tails: global::LogTailCache::new(),
         }
     }
 
@@ -1550,6 +1580,9 @@ mod tests {
                 detected: true,
                 builds: vec![nix_web_monitor_parser::GlobalBuild {
                     drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
+                    pid: Some(42),
+                    start_time: Some(1_720_200_000),
+                    start_ticks: Some(777_000),
                     log_file: Some(log_path.to_string_lossy().into_owned()),
                     ..nix_web_monitor_parser::GlobalBuild::default()
                 }],
@@ -1557,36 +1590,55 @@ mod tests {
             });
         let app = router(Path::new("/nonexistent-site"), state);
 
-        let found = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
+        // The full worker identity is (drv, pid, start second, startTicks
+        // generation); each refusal case below breaks exactly one component.
+        let hit = "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000&startTicks=777000";
+        let misses = [
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=43&start=1720200000&startTicks=777000",
+                "a different worker for the same drv must not resolve to this log",
+            ),
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200001&startTicks=777000",
+                "a reused pid must not resolve the previous worker's log",
+            ),
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000&startTicks=777001",
+                "a pid reused within the same second is a new generation, not this log",
+            ),
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000",
+                "omitting the generation must not wildcard onto a sampled worker",
+            ),
+            (
+                "/api/global-log?drv=%2Fetc%2Fpasswd&pid=42&start=1720200000&startTicks=777000",
+                "a drv the machine view does not list must not resolve to a file",
+            ),
+        ];
+
+        let request_status = |uri: &str| {
+            let request = Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request builds");
+            let app = app.clone();
+            async move { app.oneshot(request).await.expect("router responds") }
+        };
+
+        let found = request_status(hit).await;
         assert_eq!(found.status(), StatusCode::OK);
         let body = axum::body::to_bytes(found.into_body(), 1 << 20)
             .await
             .expect("body collects");
         assert_eq!(&body[..], b"builder says hi\n");
 
-        let unknown = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/global-log?drv=%2Fetc%2Fpasswd")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
-        assert_eq!(
-            unknown.status(),
-            StatusCode::NOT_FOUND,
-            "a drv the machine view does not list must not resolve to a file"
-        );
+        for (uri, reason) in misses {
+            assert_eq!(
+                request_status(uri).await.status(),
+                StatusCode::NOT_FOUND,
+                "{reason}"
+            );
+        }
 
         std::fs::remove_dir_all(&dir).expect("clean scratch dir");
     }
