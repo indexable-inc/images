@@ -22,7 +22,7 @@ import weave
 from claude_agent_sdk import AssistantMessage, Message, ResultMessage, TextBlock
 
 import fabric
-from fabric import claude, remote
+from fabric import activity, claude, reconcile, remote
 
 _T = TypeVar("_T")
 
@@ -40,6 +40,9 @@ class Journal:
     facts: list[tuple[object, str, object]] = field(default_factory=list)
     blobs: dict[str, bytes] = field(default_factory=dict)
     interrupt: str | None = None
+    #: canned response per exact datalog program (reconcile/activity queries);
+    #: anything else is answered as a per-entity interrupt watch.
+    queries: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
@@ -57,6 +60,9 @@ class Journal:
                 self.facts.append((fact["entity"]["v"], fact["attr"], fact["value"]["v"]))
             return httpx.Response(200, json=[{"seq": i, "id": f"f{i}"} for i in range(len(batch))])
         if path == "/api/query":
+            program = json.loads(req.read())["program"]
+            if program in self.queries:
+                return httpx.Response(200, json=self.queries[program])
             rows = [] if self.interrupt is None else [[{"t": "str", "v": self.interrupt}]]
             return httpx.Response(200, json={"vars": ["I"], "rows": rows, "as_of": 1})
         raise AssertionError(f"unexpected weave call: {path}")
@@ -122,7 +128,7 @@ class FakeClient:
 
 def use_fake(monkeypatch: pytest.MonkeyPatch, fake: FakeClient) -> None:
     monkeypatch.setattr(claude, "_sdk_client", lambda **kw: fake)
-    monkeypatch.setattr(claude, "INTERRUPT_POLL_S", 0.01)
+    monkeypatch.setattr(fabric, "INTERRUPT_POLL_S", 0.01)
 
 
 def result_message(text: str) -> ResultMessage:
@@ -273,8 +279,10 @@ def test_run_remote_records_target_node_and_done(monkeypatch: pytest.MonkeyPatch
     assert value == 7
     assert shipped
     assert shipped[0][0] is placement
-    # The ask's node fact names the TARGET, not the submitting host.
+    # The ask's node fact names the TARGET, not the submitting host, and the
+    # runner fact names the actor the reconciler diffs against live actors.
     assert (handle.task, "node", "hc1") in journal.facts
+    assert (handle.task, "runner", "runner:hc1") in journal.facts
     assert journal.states(handle.task) == ["submitted", "running", "done"]
 
 
@@ -406,6 +414,30 @@ def test_run_interrupt_records_interrupted(monkeypatch: pytest.MonkeyPatch) -> N
 
     handle = run(main())
     assert journal.states(handle.task) == ["submitted", "running", "interrupted"]
+    assert (handle.task, "interrupt", "requested") in journal.facts
+
+
+def test_run_interrupt_fact_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+    monkeypatch.setattr(fabric, "INTERRUPT_POLL_S", 0.01)
+
+    async def forever() -> None:
+        await asyncio.sleep(60)
+
+    async def main() -> fabric.RunHandle:
+        handle = await fabric.run(forever)
+        await asyncio.sleep(0)  # let the worker publish running
+        # Someone else asserts interrupt=requested on the run entity; the
+        # run's own watcher routes it into asyncio cancellation (no
+        # dispatcher loop anywhere).
+        journal.interrupt = "requested"
+        with pytest.raises(asyncio.CancelledError):
+            async with asyncio.timeout(5):
+                await handle.wait()
+        return handle
+
+    handle = run(main())
+    assert journal.states(handle.task) == ["submitted", "running", "interrupted"]
 
 
 # --- claude.session -----------------------------------------------------------
@@ -519,3 +551,90 @@ def test_session_connect_failure_leaves_ask_and_failed(monkeypatch: pytest.Monke
     assert journal.states(task) == ["submitted", "failed"]
     assert journal.blob_for(task, "prompt") == b"never starts"
     assert journal.facts[-1] == (task, "state", "failed")
+
+
+# --- fabric.reconcile -----------------------------------------------------------
+
+
+def _wrap_rows(rows: list[list[object]]) -> dict[str, Any]:
+    def wrap(v: object) -> dict[str, object]:
+        return {"t": "int", "v": v} if isinstance(v, int) else {"t": "str", "v": str(v)}
+
+    return {"vars": [], "rows": [[wrap(v) for v in row] for row in rows], "as_of": 1}
+
+
+def test_reconcile_parse_grace_and_open_states() -> None:
+    rows = [
+        # Same state fact twice: the newest write time wins, and 70s old is
+        # past the 60s grace window.
+        ["task:aaaa0001", "runner:hc1", "running", "f1", 0],
+        ["task:aaaa0001", "runner:hc1", "running", "f2", 30_000],
+        # Terminal: settled runs are never reconciled.
+        ["task:aaaa0002", "runner:hc1", "done", "f3", 0],
+        # Open but inside the grace window: Ray may not have created the
+        # actor yet, so hands off.
+        ["task:aaaa0003", "runner:hc2", "submitted", "f4", 99_000],
+    ]
+    assert reconcile._parse(rows, now_ms=100_000) == [("task:aaaa0001", "runner:hc1")]
+
+
+def test_reconcile_once_marks_dead_runner_lost(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+    journal.queries[reconcile.QUERY] = _wrap_rows([
+        ["task:aaaa0001", "runner:hc1", "running", "f1", 0],
+        ["task:aaaa0002", "runner:hc2", "running", "f2", 0],
+        ["task:aaaa0003", "runner:hc1", "done", "f3", 0],
+    ])
+    probed: list[set[str]] = []
+
+    def fake_alive(candidates: set[str]) -> set[str]:
+        probed.append(set(candidates))
+        return {"runner:hc2"}
+
+    monkeypatch.setattr(reconcile, "_alive_runners", fake_alive)
+
+    assert run(reconcile.once()) == ["task:aaaa0001"]
+    # Only the open runs' runners are probed; the settled run is not.
+    assert probed == [{"runner:hc1", "runner:hc2"}]
+    # The lost record: an error fact naming the dead runner, state strictly
+    # last. It NEVER restarts: the only journal write is the terminal fact.
+    assert journal.facts == [
+        ("task:aaaa0001", "error", "reconciler: runner:hc1 died without a terminal fact"),
+        ("task:aaaa0001", "state", "lost"),
+    ]
+
+
+def test_reconcile_nothing_stale_skips_ray(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+    journal.queries[reconcile.QUERY] = _wrap_rows([
+        ["task:aaaa0001", "runner:hc1", "done", "f1", 0],
+    ])
+
+    def boom(candidates: set[str]) -> set[str]:
+        raise AssertionError("no open runs: the cluster must not be probed")
+
+    monkeypatch.setattr(reconcile, "_alive_runners", boom)
+    assert run(reconcile.once()) == []
+    assert journal.facts == []
+
+
+# --- fabric.activity ------------------------------------------------------------
+
+
+def test_activity_frame_is_the_per_node_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+    journal.queries[activity.QUERY] = _wrap_rows([
+        ["task:aaaa0001", "hydra", "build_index", "running"],
+        ["task:aaaa0002", "hc1", "scrape", "done"],
+        ["task:aaaa0003", "hc1", "scrape", "submitted"],
+        ["task:aaaa0004", "hc2", "train", "lost"],
+    ])
+
+    open_df = run(activity.frame())
+    assert open_df.columns == ["task", "node", "fn", "state"]
+    assert open_df.rows() == [
+        ("task:aaaa0003", "hc1", "scrape", "submitted"),
+        ("task:aaaa0001", "hydra", "build_index", "running"),
+    ]
+    history = run(activity.frame(open_only=False))
+    assert history.height == 4

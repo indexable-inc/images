@@ -1,4 +1,4 @@
-"""Call-first delegation recorded to the weave journal (index#3191, #3192).
+"""Call-first delegation recorded to the weave journal (index#3191, #3192, #3193).
 
 Calls create work; facts record it. ``await fabric.run(fn, *args)`` executes
 ``fn`` on this node; ``await fabric.run(fn, *args, node="hc1")`` ships it to
@@ -6,12 +6,19 @@ that fleet node's runner actor over Ray (phase 2 of index#3190). Either way
 the record lands on the shared weave journal via the bundled :mod:`weave`
 client: the ask-fact at submit (so the intent is never invisible), started and
 terminal facts from the worker side, and the function's source text in CAS.
-The journal never dispatches: the ask state is ``submitted``, distinct from
-the ``pending`` state that the weave app fulfills.
+The journal never dispatches: the ask state is ``submitted``, and there is no
+dispatcher loop anywhere -- the call that created the work owns it.
 
 Remote placement (:mod:`fabric.remote`) fails loud at submit: no reachable
 cluster, an env-hash mismatch with the target node, or a host label no node
 advertises each raise from the ``run`` call itself, before any journal fact.
+
+Phase 3 (index#3193) closes the loop journal-side: anyone can stop a run by
+asserting one ``interrupt=requested`` fact on its entity (the owner watches
+via :func:`watch_interrupt`); :mod:`fabric.reconcile` appends ``state=lost``
+for runs whose runner actor died without a terminal fact, and NEVER restarts
+them; :mod:`fabric.activity` is the "what is happening on every node" view,
+one datalog query over the journal instead of Ray's dashboard.
 
 ``fabric.claude`` holds the Claude Agent SDK session helper: an agent is a
 library call (``await claude.session(prompt)``), not a task type.
@@ -24,12 +31,12 @@ import inspect
 import os
 import platform
 import textwrap
-from collections.abc import Callable, Generator
+from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass
 
 import weave
 
-from . import claude, remote
+from . import activity, claude, reconcile, remote
 from .remote import EnvSkewError, FabricError, Workspace
 
 __all__ = [
@@ -37,21 +44,47 @@ __all__ = [
     "FabricError",
     "RunHandle",
     "Workspace",
+    "activity",
     "claude",
+    "reconcile",
     "remote",
     "run",
+    "watch_interrupt",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
-# The ask state. Deliberately NOT the weave app's "pending": pending is what
-# its fulfiller loop dispatches, and fabric's model is that the call already
-# created the work -- the journal only records it (index#3190).
+# The ask state. Deliberately NOT "pending" (the state a dispatcher loop
+# would fulfill): fabric's model is that the call already created the work --
+# the journal only records it (index#3190).
 ASK_STATE = "submitted"
+
+# How often a run's owner polls its journal entity for an externally asserted
+# interrupt=requested fact. Module-level so tests can shrink it.
+INTERRUPT_POLL_S = 0.5
 
 
 def _requested_by() -> str:
     return os.environ.get("IX_WEAVE_AGENT") or "agent:main"
+
+
+async def watch_interrupt(task: str, on_requested: Callable[[], Awaitable[None]]) -> None:
+    """Fire ``on_requested`` once when ``task`` gains an ``interrupt=requested`` fact.
+
+    The interrupt bridge (index#3193): anyone watching the journal stops a run
+    by asserting one fact on its entity; the process that owns the run polls
+    its own entity and routes the request into its own interrupt path (the
+    phase 1 contract: the SDK ``interrupt()`` for claude sessions, asyncio
+    cancellation otherwise). No dispatcher loop: each run watches only itself,
+    from wherever it lives.
+    """
+
+    while True:
+        rows = (await weave.query(f'?- latest("{task}", interrupt, I).'))["rows"]
+        if rows and rows[0][0] == "requested":
+            await on_requested()
+            return
+        await asyncio.sleep(INTERRUPT_POLL_S)
 
 
 @dataclass
@@ -60,6 +93,7 @@ class RunHandle:
 
     task: str
     _work: asyncio.Task[object]
+    _watcher: asyncio.Task[None]
 
     async def wait(self) -> object:
         """Wait for the run and return the function's value (re-raises its error)."""
@@ -70,15 +104,18 @@ class RunHandle:
         return self._work.__await__()
 
     async def interrupt(self) -> None:
-        """Cancel the run; the worker wrapper records ``state=interrupted``.
+        """Record ``interrupt=requested``, cancel the run, wait for it to settle.
 
-        Returns once the run has settled, so the interrupted fact is on the
-        journal when this returns. A remote run's Ray task is cancelled on the
-        node too (see :func:`fabric.remote.execute`). The run's own outcome
-        (the cancellation, or an error it already failed with) surfaces via
+        The worker wrapper records ``state=interrupted``, so the terminal fact
+        is on the journal when this returns; the request fact makes the handle
+        path and the journal-fact path (:func:`watch_interrupt`) leave the
+        same record. A remote run's Ray task is cancelled on the node too
+        (see :func:`fabric.remote.execute`). The run's own outcome (the
+        cancellation, or an error it already failed with) surfaces via
         :meth:`wait`, not here.
         """
 
+        await weave.assert_fact(self.task, "interrupt", "requested")
         self._work.cancel()
         await asyncio.gather(self._work, return_exceptions=True)
 
@@ -127,8 +164,10 @@ async def run(
     in a per-run temp dir and pass its path as the function's first argument.
 
     At submit, one ask-facts batch describes the task entity: type,
-    requested_by, node, the function's qualname, and its source text stored in
-    CAS (``put_blob``) with the hash on the ``source`` fact -- with
+    requested_by, node, the function's qualname, its source text stored in
+    CAS (``put_blob``) with the hash on the ``source`` fact, and -- for remote
+    placement -- the ``runner:<host>`` actor that owns the execution (what
+    :mod:`fabric.reconcile` diffs against live actors) -- with
     ``state=submitted`` written strictly last, so a half-written record is
     never read as a live task. The worker wrapper then appends ``running`` and
     the terminal fact: ``done`` (result repr in CAS), ``failed`` (with the
@@ -149,14 +188,17 @@ async def run(
     source = textwrap.dedent(inspect.getsource(fn))
     task = weave.mint("task")
     source_hash = await weave.put_blob(source.encode())
-    await weave.assert_facts([
+    facts: list[tuple[str, str, object]] = [
         (task, "type", "task"),
         (task, "fn", fn.__qualname__),
         (task, "node", node if node is not None else platform.node()),
         (task, "requested_by", _requested_by()),
         (task, "source", weave.hashref(source_hash)),
-        (task, "state", ASK_STATE),
-    ])
+    ]
+    if node is not None:
+        facts.append((task, "runner", f"runner:{node}"))
+    facts.append((task, "state", ASK_STATE))
+    await weave.assert_facts(facts)
 
     async def _invoke() -> object:
         if placement is not None:
@@ -187,4 +229,12 @@ async def run(
         ])
         return result
 
-    return RunHandle(task, asyncio.create_task(_work(), name=f"fabric:{task}"))
+    work = asyncio.create_task(_work(), name=f"fabric:{task}")
+
+    async def _cancel() -> None:
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+
+    watcher = asyncio.create_task(watch_interrupt(task, _cancel), name=f"fabric:watch:{task}")
+    work.add_done_callback(lambda _t: watcher.cancel())
+    return RunHandle(task, work, watcher)

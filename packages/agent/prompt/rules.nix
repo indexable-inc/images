@@ -459,9 +459,10 @@
       text = ''
         Delegate independent work to agents spawned through the index kernel:
         the harness subagent and task tools are absent by design, so delegation
-        means `await weave.delegate('prompt')` in a kernel cell, then
-        `jobs.spawn(weave.result(task), name='delegate: <name>')` so the main
-        thread stays free. The durable task result is authoritative; its
+        means `s = await fabric.claude.session('prompt')` in a kernel cell,
+        then `jobs.spawn(s.result(), name='delegate: <name>')` so the main
+        thread stays free (`await fabric.run(fn, node=...)` for plain Python
+        on a fleet node). The durable journal record is authoritative; its
         addressed channel wake is best-effort, so do not add a manual
         notification. Split implementation by phase, fan independent questions
         out in parallel, give each editing agent its own worktree, and keep the

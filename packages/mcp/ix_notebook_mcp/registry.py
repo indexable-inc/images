@@ -106,10 +106,10 @@ MODULES: tuple[Module, ...] = (
     ),
     Module(
         "weave",
-        "one shared world - facts, queries, verbs against the weave journal; "
-        "`await weave.delegate('prompt')` is THE delegation verb: the weave app "
-        "runs each task as a live session, and `harness='codex'` dispatches the "
-        "OpenAI Codex CLI instead of Claude",
+        "one shared world - facts, queries, blobs against the weave journal "
+        "(the system of record; it never dispatches): `weave.query(datalog)`, "
+        "`assert_facts`, `put_blob`/`get_blob`, and `await weave.result(task)` "
+        "to wait on any task entity's terminal state",
     ),
     Module(
         "fabric",
@@ -118,7 +118,10 @@ MODULES: tuple[Module, ...] = (
         "actor over Ray (env handshake + host label checked at submit; `cpus=` for a "
         "dedicated CPU reservation, `repo=`/`rev=` for a per-run workspace clone), with "
         "ask/started/terminal facts and source + result in CAS; `fabric.claude.session("
-        "prompt)` opens a self-recording, interruptible Claude Agent SDK session",
+        "prompt)` opens a self-recording, interruptible Claude Agent SDK session; an "
+        "`interrupt=requested` fact on any run entity stops it; `fabric.activity.frame()` "
+        "is the what-runs-where view and `fabric.reconcile.loop()` marks runs whose "
+        "runner died as lost (never restarts)",
     ),
     Module(
         "search",

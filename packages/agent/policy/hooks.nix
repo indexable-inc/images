@@ -112,8 +112,8 @@
       # Retrospect a substantive session once per session (own marker), like
       # the review gate above — but out-of-band: the hook detaches a worker
       # that ships the transcript to the ix-mcp HTTP kernel (weave CAS blob)
-      # and `weave.delegate`s a fleet agent to file GitHub issues for what was
-      # improvable. Stop is never blocked; without fleet creds
+      # and opens a `fabric.claude.session` agent there to file GitHub issues
+      # for what was improvable. Stop is never blocked; without fleet creds
       # (IX_MCP_API_KEY[_FILE]) it fails open and does nothing.
       {
         command = hookCommands.stopRetroGate;
