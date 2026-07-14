@@ -68,7 +68,7 @@
   <span class="activity-dur">{elapsed}</span>
 </div>
 
-{#if goal.drvPath !== null && goal.pid !== null && goal.startTime !== null && goal.startTicks !== null && openLog === key}
+{#if goal.drvPath !== null && goal.pid !== null && goal.startTime !== null && goal.startTicks !== null && goal.logFile !== null && openLog === key}
   <GlobalLogView
     drvPath={goal.drvPath}
     pid={goal.pid}

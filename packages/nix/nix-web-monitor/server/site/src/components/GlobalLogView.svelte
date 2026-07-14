@@ -67,9 +67,22 @@
 
   $effect(() => {
     // Fetch on mount / re-target, then poll. The interval dies with the
-    // component, so collapsing the row stops the traffic.
-    void fetchTail(drvPath, pid, startTime, startTicks);
-    const timer = setInterval(() => void fetchTail(drvPath, pid, startTime, startTicks), POLL_MS);
+    // component, so collapsing the row stops the traffic. A tick that lands
+    // while the previous fetch is still in flight is skipped: tailing a big
+    // log (large `.drv.bz2`, slow disk) can outlast the poll period, and
+    // stacking another expensive server read on top only makes it slower.
+    let inFlight = false;
+    const tick = (): void => {
+      if (inFlight) return;
+      inFlight = true;
+      // `fetchTail` never rejects (it catches internally), so `finally` is
+      // just the settle hook.
+      void fetchTail(drvPath, pid, startTime, startTicks).finally(() => {
+        inFlight = false;
+      });
+    };
+    tick();
+    const timer = setInterval(tick, POLL_MS);
     return () => {
       clearInterval(timer);
     };

@@ -381,9 +381,21 @@ function loadLayout(storageKey: string): DockLayout | null {
   } catch {
     return null;
   }
-  if (!isRecord(parsed) || parsed['version'] !== STORAGE_VERSION) return null;
-  const root = parseNode(parsed['root']);
-  const floating = parseFloating(parsed['floating']);
+  return parseLayout(parsed);
+}
+
+/// Pure schema check for a persisted layout blob, exported for tests.
+/// Duplicate pane ids (a stale or hand-edited blob) are deduped *here*,
+/// first mention wins, mirroring `pruneUnknown`: the loaded layout renders
+/// once before the dock's first `reconcile` pass, and pane ids key the
+/// render's `{#each}` blocks, so a duplicate id must never survive parsing.
+export function parseLayout(value: unknown): DockLayout | null {
+  if (!isRecord(value) || value['version'] !== STORAGE_VERSION) return null;
+  // Plain Set on purpose: parse-time scratch, never observed reactively.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  const seen = new Set<string>();
+  const root = parseNode(value['root'], seen);
+  const floating = parseFloating(value['floating'], seen);
   if (root === null || floating === null) return null;
   return { root, floating };
 }
@@ -396,17 +408,24 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function parseNode(value: unknown): LayoutNode | null {
+function parseNode(value: unknown, seen: Set<string>): LayoutNode | null {
   if (!isRecord(value)) return null;
   if (value['kind'] === 'group') {
-    const tabs = value['tabs'];
-    if (!Array.isArray(tabs) || !tabs.every((tab) => typeof tab === 'string')) return null;
+    const rawTabs = value['tabs'];
+    if (!Array.isArray(rawTabs) || !rawTabs.every((tab) => typeof tab === 'string')) return null;
     const active = value['active'];
     if (active !== null && typeof active !== 'string') return null;
+    // Drop repeat mentions of a pane across the whole layout (first mention
+    // wins), and repoint `active` when its tab was such a repeat.
+    const tabs = rawTabs.filter((tab) => {
+      if (seen.has(tab)) return false;
+      seen.add(tab);
+      return true;
+    });
     return {
       kind: 'group',
       tabs,
-      active,
+      active: active !== null && tabs.includes(active) ? active : (tabs.at(0) ?? null),
       collapsed: value['collapsed'] === true
     };
   }
@@ -419,7 +438,7 @@ function parseNode(value: unknown): LayoutNode | null {
     if (!Array.isArray(children) || children.length !== sizes.length) return null;
     const parsedChildren: LayoutNode[] = [];
     for (const child of children) {
-      const parsedChild = parseNode(child);
+      const parsedChild = parseNode(child, seen);
       if (parsedChild === null) return null;
       parsedChildren.push(parsedChild);
     }
@@ -428,7 +447,7 @@ function parseNode(value: unknown): LayoutNode | null {
   return null;
 }
 
-function parseFloating(value: unknown): FloatingPane[] | null {
+function parseFloating(value: unknown, seen: Set<string>): FloatingPane[] | null {
   if (!Array.isArray(value)) return null;
   const parsed: FloatingPane[] = [];
   for (const entry of value) {
@@ -442,6 +461,10 @@ function parseFloating(value: unknown): FloatingPane[] | null {
     if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(width) || !isFiniteNumber(height)) {
       return null;
     }
+    // Same dedupe as docked tabs: a window repeating a pane id (or shadowing
+    // a docked tab) is dropped, first mention wins.
+    if (seen.has(id)) continue;
+    seen.add(id);
     parsed.push({ id, x, y, width, height });
   }
   return parsed;

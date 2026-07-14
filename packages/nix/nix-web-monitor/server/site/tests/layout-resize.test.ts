@@ -7,7 +7,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { resizeSizes } from '../src/lib/panes/layout.svelte.ts';
+import { parseLayout, resizeSizes } from '../src/lib/panes/layout.svelte.ts';
+import type { DockLayout } from '../src/lib/panes/types.ts';
 
 describe('resizeSizes', () => {
   const cases: {
@@ -107,6 +108,124 @@ describe('resizeSizes', () => {
       // Redistribution is zero-sum: the split's total never drifts.
       const total = (values: number[]): number => values.reduce((sum, size) => sum + size, 0);
       assert.ok(Math.abs(total(mutated) - total(sizes)) < 1e-9, 'total is preserved');
+    });
+  }
+});
+
+// Duplicate-id hygiene in `parseLayout`, the persisted-blob parser: pane ids
+// key the render's `{#each}` blocks and the loaded layout paints once before
+// the dock's first `reconcile` pass, so a stale or hand-edited blob repeating
+// an id must be deduped synchronously at load (first mention wins).
+describe('parseLayout', () => {
+  const group = (
+    tabs: string[],
+    active: string | null = tabs.at(0) ?? null
+  ): { kind: 'group'; tabs: string[]; active: string | null; collapsed: boolean } => ({
+    kind: 'group',
+    tabs,
+    active,
+    collapsed: false
+  });
+  const float = (id: string): { id: string; x: number; y: number; width: number; height: number } => ({
+    id,
+    x: 10,
+    y: 20,
+    width: 300,
+    height: 200
+  });
+
+  const cases: { name: string; stored: unknown; expected: DockLayout | null }[] = [
+    {
+      name: 'passes a well-formed layout through unchanged',
+      stored: {
+        version: 1,
+        root: {
+          kind: 'split',
+          direction: 'row',
+          sizes: [0.5, 0.5],
+          children: [group(['logs']), group(['builds'])]
+        },
+        floating: [float('summary')]
+      },
+      expected: {
+        root: {
+          kind: 'split',
+          direction: 'row',
+          sizes: [0.5, 0.5],
+          children: [group(['logs']), group(['builds'])]
+        },
+        floating: [float('summary')]
+      }
+    },
+    {
+      name: 'dedupes a tab repeated within one group',
+      stored: { version: 1, root: group(['logs', 'logs']), floating: [] },
+      expected: { root: group(['logs']), floating: [] }
+    },
+    {
+      name: 'dedupes a tab repeated across split children, first mention wins',
+      stored: {
+        version: 1,
+        root: {
+          kind: 'split',
+          direction: 'column',
+          sizes: [0.5, 0.5],
+          children: [group(['logs']), group(['logs', 'builds'])]
+        },
+        floating: []
+      },
+      expected: {
+        root: {
+          kind: 'split',
+          direction: 'column',
+          sizes: [0.5, 0.5],
+          children: [group(['logs']), group(['builds'])]
+        },
+        floating: []
+      }
+    },
+    {
+      name: 'repoints active when its tab was a dropped duplicate',
+      stored: {
+        version: 1,
+        root: {
+          kind: 'split',
+          direction: 'row',
+          sizes: [0.5, 0.5],
+          children: [group(['logs']), group(['logs', 'builds'], 'logs')]
+        },
+        floating: []
+      },
+      expected: {
+        root: {
+          kind: 'split',
+          direction: 'row',
+          sizes: [0.5, 0.5],
+          children: [group(['logs']), group(['builds'], 'builds')]
+        },
+        floating: []
+      }
+    },
+    {
+      name: 'drops a floating window shadowing a docked tab',
+      stored: { version: 1, root: group(['logs']), floating: [float('logs'), float('summary')] },
+      expected: { root: group(['logs']), floating: [float('summary')] }
+    },
+    {
+      name: 'dedupes floating windows repeating an id',
+      stored: { version: 1, root: group(['logs']), floating: [float('summary'), float('summary')] },
+      expected: { root: group(['logs']), floating: [float('summary')] }
+    },
+    {
+      name: 'still rejects a version mismatch outright',
+      stored: { version: 0, root: group(['logs']), floating: [] },
+      expected: null
+    }
+  ];
+
+  for (const { name, stored, expected } of cases) {
+    it(name, () => {
+      assert.deepEqual(parseLayout(stored), expected);
     });
   }
 });

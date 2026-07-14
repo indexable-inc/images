@@ -164,7 +164,7 @@
   <span class="activity-dur">{primary === undefined ? '' : elapsed(primary)}</span>
 </div>
 
-{#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && primary.startTicks !== null && openLog === goalKey(primary)}
+{#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && primary.startTicks !== null && primary.logFile !== null && openLog === goalKey(primary)}
   <GlobalLogView
     drvPath={primary.drvPath}
     pid={primary.pid}
