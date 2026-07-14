@@ -427,7 +427,7 @@ import ../util/writers.nix { inherit lib; }
 
 String interpolation coerces a repository-root binding such as `root`, `workspaceRoot`, or `ix.paths.root` into a whole-tree store dependency. Select the file or subtree as a path before interpolation.
 
-*Matches:* `string_expression` · *predicates:* `text-match` · *1 pattern variant*
+*Matches:* `string_expression`, `indented_string_expression` · *predicates:* `text-match` · *2 pattern variants*
 
 <table><tr><th>flagged</th><th>ok</th></tr><tr><td>
 
@@ -435,6 +435,7 @@ String interpolation coerces a repository-root binding such as `root`, `workspac
 { ix, root }: [
   "${root}/nix/file.cmake"
   "${ix.paths.root}/lib/build/helper.py"
+  ''${ix.paths.root}/lib/build/helper.py''
 ]
 ```
 
@@ -444,6 +445,7 @@ String interpolation coerces a repository-root binding such as `root`, `workspac
 { ix, root }: [
   (root + "/nix/file.cmake")
   (ix.paths.root + "/lib/build/helper.py")
+  ''${ix.paths.root + "/lib/build/helper.py"}''
 ]
 ```
 

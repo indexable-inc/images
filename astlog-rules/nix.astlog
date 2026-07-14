@@ -619,7 +619,13 @@
     (string_expression
       (interpolation
         expression: (_) @v)) @n")
-  (text-match v "^([^[:space:]]+\\.)*(root|workspaceRoot|repoRoot)$"))
+  (text-match v "^(([^[:space:]]+\\.)*paths\\.root|root|workspaceRoot|repoRoot)$"))
+(rule (no-root-string-interp n)
+  (match nix "
+    (indented_string_expression
+      (interpolation
+        expression: (_) @v)) @n")
+  (text-match v "^(([^[:space:]]+\\.)*paths\\.root|root|workspaceRoot|repoRoot)$"))
 (lint no-root-string-interp error
   "string interpolation coerces a repository root into a whole-tree store dependency; select the file or subtree as a path before interpolation")
 

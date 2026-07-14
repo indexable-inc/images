@@ -18,13 +18,13 @@
         else "<${builtins.typeOf path}>"
       )
     ); path;
-  shellPath = root: path: ''"${root}"/${lib.escapeShellArg (assertSafe path)}'';
-  shellParent = root: path: let
+  shellPath = base: path: ''"${base}"/${lib.escapeShellArg (assertSafe path)}'';
+  shellParent = base: path: let
     parent = dirOf (assertSafe path);
   in
     if parent == "."
-    then ''"${root}"''
-    else shellPath root parent;
+    then ''"${base}"''
+    else shellPath base parent;
 in {
   inherit
     isSafe

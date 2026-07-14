@@ -4,4 +4,7 @@
   "${repoRoot}/flake.nix"
   "${paths.root}/lib/build/helper.py"
   "${ix.paths.root}/lib/build/pyo3-wheel.py"
+  ''
+    python3 ${ix.paths.root}/lib/build/pyo3-wheel.py
+  ''
 ]
