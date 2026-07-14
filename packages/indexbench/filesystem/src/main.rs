@@ -9,6 +9,7 @@
 //! unchanged: `--json` prints one pretty-printed JSON document; the default
 //! human report prints the same `Results` block.
 
+use std::fmt;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
@@ -135,8 +136,8 @@ enum Error {
     /// A metadata-phase filesystem operation failed.
     #[snafu(display("metadata {phase} failed at {}", path.display()))]
     Metadata {
-        /// The phase that failed (`create`, `stat`, `delete`).
-        phase: &'static str,
+        /// The phase that failed.
+        phase: MetadataPhase,
         /// The path the operation touched.
         path: PathBuf,
         /// Underlying I/O error.
@@ -213,6 +214,40 @@ struct FioWorkload {
     /// Timed measurement (`--time_based` + runtime/ramp) vs a plain
     /// write-the-whole-size pass (the read-source prefill).
     time_based: bool,
+}
+
+impl FioWorkload {
+    /// A workload measured over a timed window (`--time_based` plus the
+    /// runtime/ramp parameters).
+    const fn timed(
+        name: &'static str,
+        filename: &'static str,
+        rw: &'static str,
+        bs: &'static str,
+        end_fsync: bool,
+    ) -> Self {
+        Self {
+            name,
+            filename,
+            rw,
+            bs,
+            end_fsync,
+            time_based: true,
+        }
+    }
+
+    /// The untimed pass that writes `read-source.dat` to its full size so
+    /// the read workloads consume real data.
+    const fn prefill() -> Self {
+        Self {
+            name: "prefill-read-source",
+            filename: "read-source.dat",
+            rw: "write",
+            bs: "1m",
+            end_fsync: true,
+            time_based: false,
+        }
+    }
 }
 
 /// The one renderer for fio's `--key=value` argv format.
@@ -355,13 +390,13 @@ enum MetadataPhase {
     Delete,
 }
 
-impl MetadataPhase {
-    const fn name(self) -> &'static str {
-        match self {
+impl fmt::Display for MetadataPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
             Self::Create => "create",
             Self::Stat => "stat",
             Self::Delete => "delete",
-        }
+        })
     }
 }
 
@@ -388,7 +423,7 @@ fn sync_path(path: &Path) {
 fn metadata_bench(scratch: &Path, phase: MetadataPhase, files: u32) -> Result<MetadataSummary> {
     let dir = scratch.join("metadata");
     let context = |path: &Path| MetadataSnafu {
-        phase: phase.name(),
+        phase,
         path: path.to_path_buf(),
     };
     fs::create_dir_all(&dir).context(context(&dir))?;
@@ -420,7 +455,7 @@ fn metadata_bench(scratch: &Path, phase: MetadataPhase, files: u32) -> Result<Me
     }
     let seconds = start.elapsed().as_secs_f64();
     Ok(MetadataSummary {
-        name: format!("metadata-{}", phase.name()),
+        name: format!("metadata-{phase}"),
         files,
         seconds,
         files_per_second: if seconds == 0.0 {
@@ -579,67 +614,29 @@ fn print_human(report: &Report) {
 /// Run the five fio invocations in order, announcing each on stdout unless
 /// `--json` silences the human narration.
 fn run_workloads(scratch: &Path, parameters: &Parameters, json: bool) -> Result<()> {
-    let announce = |line: &str| {
+    let workloads = [
+        (
+            "running seq-write...",
+            FioWorkload::timed("seq-write", "seq-write.dat", "write", "1m", true),
+        ),
+        (
+            "running rand-write...",
+            FioWorkload::timed("rand-write", "rand-write.dat", "randwrite", "4k", true),
+        ),
+        ("prefilling read source...", FioWorkload::prefill()),
+        (
+            "running seq-read...",
+            FioWorkload::timed("seq-read", "read-source.dat", "read", "1m", false),
+        ),
+        (
+            "running rand-read...",
+            FioWorkload::timed("rand-read", "read-source.dat", "randread", "4k", false),
+        ),
+    ];
+    for (message, workload) in workloads {
         if !json {
-            println!("{line}");
+            println!("{message}");
         }
-    };
-
-    for workload in [
-        FioWorkload {
-            name: "seq-write",
-            filename: "seq-write.dat",
-            rw: "write",
-            bs: "1m",
-            end_fsync: true,
-            time_based: true,
-        },
-        FioWorkload {
-            name: "rand-write",
-            filename: "rand-write.dat",
-            rw: "randwrite",
-            bs: "4k",
-            end_fsync: true,
-            time_based: true,
-        },
-    ] {
-        announce(&format!("running {}...", workload.name));
-        run_fio(scratch, parameters, &workload)?;
-    }
-
-    announce("prefilling read source...");
-    run_fio(
-        scratch,
-        parameters,
-        &FioWorkload {
-            name: "prefill-read-source",
-            filename: "read-source.dat",
-            rw: "write",
-            bs: "1m",
-            end_fsync: true,
-            time_based: false,
-        },
-    )?;
-
-    for workload in [
-        FioWorkload {
-            name: "seq-read",
-            filename: "read-source.dat",
-            rw: "read",
-            bs: "1m",
-            end_fsync: false,
-            time_based: true,
-        },
-        FioWorkload {
-            name: "rand-read",
-            filename: "read-source.dat",
-            rw: "randread",
-            bs: "4k",
-            end_fsync: false,
-            time_based: true,
-        },
-    ] {
-        announce(&format!("running {}...", workload.name));
         run_fio(scratch, parameters, &workload)?;
     }
     Ok(())
@@ -696,7 +693,7 @@ fn run(cli: &Cli) -> Result<()> {
         MetadataPhase::Delete,
     ] {
         if !cli.json {
-            println!("running metadata-{}...", phase.name());
+            println!("running metadata-{phase}...");
         }
         metadata.push(metadata_bench(&scratch, phase, parameters.files)?);
     }
@@ -759,6 +756,13 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    /// Assert `value` exposes every key in `keys`.
+    fn assert_keys(value: &serde_json::Value, keys: &[&str]) {
+        for key in keys {
+            assert!(value.get(key).is_some(), "missing key {key}");
+        }
+    }
+
     fn parameters() -> Parameters {
         Parameters {
             runtime: 8,
@@ -774,14 +778,7 @@ mod tests {
         let args = fio_args(
             Path::new("/scratch"),
             &parameters(),
-            &FioWorkload {
-                name: "seq-write",
-                filename: "seq-write.dat",
-                rw: "write",
-                bs: "1m",
-                end_fsync: true,
-                time_based: true,
-            },
+            &FioWorkload::timed("seq-write", "seq-write.dat", "write", "1m", true),
         );
         assert_eq!(
             args,
@@ -812,14 +809,7 @@ mod tests {
         let args = fio_args(
             Path::new("/scratch"),
             &parameters(),
-            &FioWorkload {
-                name: "prefill-read-source",
-                filename: "read-source.dat",
-                rw: "write",
-                bs: "1m",
-                end_fsync: true,
-                time_based: false,
-            },
+            &FioWorkload::prefill(),
         );
         assert!(!args.iter().any(|arg| arg.starts_with("--time_based")));
         assert!(!args.iter().any(|arg| arg.starts_with("--runtime")));
@@ -906,41 +896,42 @@ mod tests {
             }],
         };
         let value = serde_json::to_value(&report).expect("serialize");
-        for key in [
-            "generatedAt",
-            "target",
-            "scratch",
-            "filesystem",
-            "system",
-            "parameters",
-            "fio",
-            "metadata",
-        ] {
-            assert!(value.get(key).is_some(), "missing top-level key {key}");
-        }
-        let parameters = &value["parameters"];
-        for key in [
-            "size",
-            "runtimeSeconds",
-            "rampTimeSeconds",
-            "iodepth",
-            "metadataFiles",
-        ] {
-            assert!(parameters.get(key).is_some(), "missing parameter key {key}");
-        }
-        let side = &value["fio"][0]["write"];
-        for key in [
-            "iops",
-            "bandwidthBytesPerSecond",
-            "meanLatencyNs",
-            "p99LatencyNs",
-        ] {
-            assert!(side.get(key).is_some(), "missing fio side key {key}");
-        }
-        let phase = &value["metadata"][0];
-        for key in ["name", "files", "seconds", "filesPerSecond"] {
-            assert!(phase.get(key).is_some(), "missing metadata key {key}");
-        }
+        assert_keys(
+            &value,
+            &[
+                "generatedAt",
+                "target",
+                "scratch",
+                "filesystem",
+                "system",
+                "parameters",
+                "fio",
+                "metadata",
+            ],
+        );
+        assert_keys(
+            &value["parameters"],
+            &[
+                "size",
+                "runtimeSeconds",
+                "rampTimeSeconds",
+                "iodepth",
+                "metadataFiles",
+            ],
+        );
+        assert_keys(
+            &value["fio"][0]["write"],
+            &[
+                "iops",
+                "bandwidthBytesPerSecond",
+                "meanLatencyNs",
+                "p99LatencyNs",
+            ],
+        );
+        assert_keys(
+            &value["metadata"][0],
+            &["name", "files", "seconds", "filesPerSecond"],
+        );
     }
 
     #[test]
