@@ -284,8 +284,10 @@ nu-protocol = "0.114.0"
 numpy = "0.28"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
+objc2-core-foundation = "0.3"
 objc2-foundation = "0.3"
 objc2-quartz-core = "0.3"
+objc2-security = "0.3"
 objc2-web-kit = "0.3"
 object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }

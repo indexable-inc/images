@@ -247,6 +247,35 @@ enum Command {
         /// flag (or no `--autologin`) the password is empty.
         #[arg(long)]
         password_stdin: bool,
+        /// Host path to the app or executable to pre-authorize in the guest TCC
+        /// databases (e.g. `/System/Applications/Utilities/Terminal.app`).
+        /// Required to grant any `--tcc-*` service; for an Apple system app the
+        /// host and guest builds match, so its designated requirement lines up.
+        #[arg(long)]
+        tcc_binary: Option<std::path::PathBuf>,
+        /// Grant `--tcc-binary` Full Disk Access.
+        #[arg(long)]
+        tcc_full_disk_access: bool,
+        /// Grant `--tcc-binary` Accessibility.
+        #[arg(long)]
+        tcc_accessibility: bool,
+        /// Grant `--tcc-binary` Screen Recording.
+        #[arg(long)]
+        tcc_screen_recording: bool,
+        /// Grant `--tcc-binary` Contacts.
+        #[arg(long)]
+        tcc_contacts: bool,
+        /// Grant `--tcc-binary` Automation (`AppleEvents`) control of the app
+        /// bundle at each path (repeatable), e.g.
+        /// `--tcc-automation /System/Applications/Messages.app`.
+        #[arg(long)]
+        tcc_automation: Vec<std::path::PathBuf>,
+        /// Enable Remote Login (ssh) so the guest is reachable the moment it boots.
+        #[arg(long)]
+        remote_login: bool,
+        /// Enable Screen Sharing (the built-in VNC server).
+        #[arg(long)]
+        screen_sharing: bool,
     },
 }
 
@@ -696,6 +725,14 @@ mod imp {
                 user,
                 autologin,
                 password_stdin,
+                tcc_binary,
+                tcc_full_disk_access,
+                tcc_accessibility,
+                tcc_screen_recording,
+                tcc_contacts,
+                tcc_automation,
+                remote_login,
+                screen_sharing,
             } => {
                 // Read the autologin password from stdin (never an argument, so it
                 // stays out of the process table). Only when both --autologin and
@@ -705,14 +742,70 @@ mod imp {
                 } else {
                     String::new()
                 };
+                let tcc = build_tcc_targets(
+                    tcc_binary,
+                    tcc_full_disk_access,
+                    tcc_accessibility,
+                    tcc_screen_recording,
+                    tcc_contacts,
+                    tcc_automation,
+                )?;
                 crate::provision::provision(crate::provision::Provision {
                     bundle,
                     user,
                     autologin,
                     password,
+                    tcc,
+                    remote_login,
+                    screen_sharing,
                 })
                 .map_err(|source| Error::Provision { source })
             }
+        }
+    }
+
+    /// Assemble the TCC pre-seed target from the `--tcc-*` flags: at most one
+    /// target binary carrying the selected services. A binary with no service,
+    /// or a service with no binary, is a loud error rather than a silent no-op.
+    // Each bool is one independent `--tcc-<service>` CLI flag; they mirror the
+    // parsed command fields 1:1, so a wrapper struct would only add ceremony.
+    #[allow(clippy::fn_params_excessive_bools)]
+    fn build_tcc_targets(
+        binary: Option<std::path::PathBuf>,
+        full_disk_access: bool,
+        accessibility: bool,
+        screen_recording: bool,
+        contacts: bool,
+        automation: Vec<std::path::PathBuf>,
+    ) -> Result<Vec<crate::provision::TccTarget>, Error> {
+        use crate::provision::{TccService, TccTarget};
+
+        let mut services = Vec::new();
+        if full_disk_access {
+            services.push(TccService::FullDiskAccess);
+        }
+        if accessibility {
+            services.push(TccService::Accessibility);
+        }
+        if screen_recording {
+            services.push(TccService::ScreenRecording);
+        }
+        if contacts {
+            services.push(TccService::Contacts);
+        }
+        for controlled in automation {
+            services.push(TccService::Automation { controlled });
+        }
+
+        match binary {
+            Some(binary) if !services.is_empty() => Ok(vec![TccTarget { binary, services }]),
+            Some(_) => Err(Error::Bundle {
+                message: "--tcc-binary given but no --tcc-* service selected".to_owned(),
+            }),
+            None if services.is_empty() => Ok(Vec::new()),
+            None => Err(Error::Bundle {
+                message: "a --tcc-* service was selected but no --tcc-binary was given".to_owned(),
+            }),
         }
     }
 
