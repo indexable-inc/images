@@ -10,6 +10,7 @@ crossing, the df -> nu -> df roundtrip, the NuError diagnostic surface,
 import asyncio
 import datetime
 import inspect
+import os
 import pathlib
 
 import polars as pl
@@ -566,3 +567,115 @@ def test_check_false_multiline_external_llm_text_keeps_real_newlines() -> None:
     assert isinstance(res, nu.NuResult)
     assert res.exit_code == 3
     assert res.__ix_llm__() == "alpha\nbeta\n[exit 3]"
+
+
+def _spawner_script(pid_file: pathlib.Path) -> str:
+    """An external that spawns a grandchild, publishes both pids, and sleeps
+    forever: the issue #3183 shape (a never-exiting external holding the
+    engine), with a grandchild to prove the kill hits the process GROUP."""
+    return (
+        "import os, subprocess, sys, time\n"
+        "grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'])\n"
+        f"tmp = {str(pid_file)!r} + '.tmp'\n"
+        "with open(tmp, 'w') as handle:\n"
+        "    handle.write(f'{os.getpid()} {grandchild.pid}')\n"
+        f"os.rename(tmp, {str(pid_file)!r})\n"
+        "time.sleep(600)\n"
+    )
+
+
+async def _published_pids(pid_file: pathlib.Path) -> list[int]:
+    """Wait for the external to publish its pid pair (the rename is atomic)."""
+    deadline = asyncio.get_running_loop().time() + 30
+    while not await asyncio.to_thread(pid_file.exists):
+        assert asyncio.get_running_loop().time() < deadline, "external never started"
+        await asyncio.sleep(0.05)
+    text = await asyncio.to_thread(pid_file.read_text)
+    return [int(token) for token in text.split()]
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+async def _wait_dead(pids: list[int]) -> None:
+    deadline = asyncio.get_running_loop().time() + 10
+    while any(_alive(pid) for pid in pids):
+        assert asyncio.get_running_loop().time() < deadline, (
+            f"externals survived the kill: {[pid for pid in pids if _alive(pid)]}"
+        )
+        await asyncio.sleep(0.05)
+
+
+def test_cancel_kills_in_flight_external_group_and_engine_survives(
+    tmp_path: pathlib.Path,
+) -> None:
+    # Issue #3183: cancelling the awaiting task must kill the eval's running
+    # external (its whole process group), or the orphan holds the shared
+    # engine and every later nu() call queues behind it forever.
+    import sys
+
+    pid_file = tmp_path / "pids"
+    script = tmp_path / "spawn_and_sleep.py"
+    script.write_text(_spawner_script(pid_file))
+
+    async def scenario() -> None:
+        await nu("let canary = 7")
+        task = asyncio.ensure_future(nu(f"^{sys.executable} {script}"))
+        pids = await _published_pids(pid_file)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await _wait_dead(pids)
+        # Cancel keeps the engine AND the engine is immediately usable: the
+        # kill freed the evaluator thread, so this does not queue behind an
+        # orphan.
+        assert await asyncio.wait_for(nu.value("$canary"), timeout=30) == 7
+
+    run(scenario())
+
+
+def test_timeout_kills_in_flight_external(tmp_path: pathlib.Path) -> None:
+    # The timeout path already discarded the engine (state loss is
+    # documented); issue #3183 adds the kill, so the abandoned engine's
+    # external no longer lingers as an orphan process.
+    import sys
+
+    pid_file = tmp_path / "pids"
+    script = tmp_path / "spawn_and_sleep.py"
+    script.write_text(_spawner_script(pid_file))
+
+    async def scenario() -> None:
+        with pytest.raises(TimeoutError):
+            # The child publishes its pids within milliseconds of spawning;
+            # 5s keeps the deadline comfortably after the spawn even on a
+            # loaded CI machine.
+            await nu(f"^{sys.executable} {script}", timeout=5)
+        pids = await _published_pids(pid_file)
+        await _wait_dead(pids)
+
+    run(scenario())
+
+
+def test_external_stderr_still_reaches_process_stderr(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    # Every eval now runs under a ThreadJob (issue #3183), and nushell nulls
+    # a background job's Inherit/Print stdio in run_external; the engine's
+    # dup'd-fd fallback must keep un-redirected external stderr flowing to
+    # the process stderr (the kernel captures that fd into the job output).
+    import sys
+
+    nu.reset()
+    try:
+        script = "import sys; sys.stderr.write('tostderr-3183')"
+        run(nu(f'^{sys.executable} -c "{script}"'))
+        assert "tostderr-3183" in capfd.readouterr().err
+    finally:
+        # The engine dup'd capfd's temporary fds; discard it so later tests
+        # re-dup the restored process stderr.
+        nu.reset()

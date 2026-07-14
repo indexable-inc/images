@@ -1007,26 +1007,6 @@ in {
     source = config.lib.file.mkOutOfStoreSymlink "${configDir}/mitmproxy";
   };
 
-  # Claude CLI binary on PATH at a stable path. The package itself is installed
-  # via programs.claude-code below (as finalPackage); this is just a fixed
-  # location some tooling expects.
-  home.file.".local/bin/claude" = {
-    # finalPackage, not the raw claudeCode: the module wraps it with the
-    # declarative MCP plugin dir (see programs.claude-code.mcpServers), so this
-    # stable-path binary carries the same MCP set as the one on the home profile
-    # PATH instead of silently bypassing it.
-    source = "${config.programs.claude-code.finalPackage}/bin/claude";
-    force = true;
-  };
-
-  # Our own Codex on PATH at a stable path, same pattern as claude above. This
-  # is the MCP-injecting wrapper (see the `codex` let-binding), so the declared
-  # MCP set rides every invocation.
-  home.file.".local/bin/codex" = {
-    source = "${codex}/bin/codex";
-    force = true;
-  };
-
   # Agents, commands, and skills are managed declaratively by the upstream
   # home-manager programs.claude-code module: each is written as an in-store
   # path under ~/.claude (no out-of-store symlink, no SessionStart hook).

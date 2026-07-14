@@ -36,7 +36,7 @@
     sed "s|@helper@|$stub|" ${launchSpec} > "$PWD/test-spec.json"
 
     spec_env() {
-      ${lib.getExe jq} -r --arg key "$1" '.env[] | select(.key == $key) | .value' \
+      ${lib.getExe jq} -r --arg key "$1" '.env[$key]' \
         "$PWD/test-spec.json"
     }
 
@@ -61,7 +61,7 @@
     check_env_default() {
       local key="$1" got
       got="$(${lib.getExe jq} -r --arg key "$key" \
-        '.env_defaults[] | select(.key == $key) | .value' \
+        '.env_defaults[$key]' \
         "$PWD/test-spec.json")"
       if [ "$got" != 1 ]; then
         printf 'claude launcher env check failed: %s env_default is %s, want 1\n' \
@@ -86,7 +86,7 @@
     done
 
     if ${lib.getExe jq} -e --argjson names ${lib.escapeShellArg (builtins.toJSON (builtins.attrNames wrapperEnvDefaults))} \
-      '.env[] | select(.key as $k | $names | index($k))' \
+      '.env | keys[] | select(. as $k | $names | index($k))' \
       "$PWD/test-spec.json"; then
       printf 'claude launcher env check failed: disabled-feature vars must be env_defaults, not env\n' >&2
       exit 1
