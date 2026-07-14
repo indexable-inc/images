@@ -150,8 +150,7 @@
   # device-level IX_MCP_HOST session var (see home.sessionVariables), so Claude
   # and Codex match.
   claudeCode = indexPkgs.claude-code.override {
-    # Shared registry rendered to Claude's MCP JSON, filtered below for local
-    # tool policy.
+    # Shared registry rendered to Claude's MCP JSON.
     mcpServers = ixMcp.toClaudeJson agentMcpServers;
     # Skills no longer ride a baked `--plugin-dir` plugin: they are delivered
     # bare to ~/.claude/skills by the upstream programs.claude-code module's
@@ -176,14 +175,12 @@
   };
 
   # House MCP registry, index/lib/util/mcp.nix, is the SINGLE source both
-  # agents render from. Keep the local policy as a filter over the shared
-  # registry so transport details cannot drift between Claude and Codex.
+  # agents render from, so transport details cannot drift between Claude and
+  # Codex.
   ixMcp = ix.mcp;
-  agentMcpServers = lib.removeAttrs (
-    ixMcp.defaultServers {
-      indexCommand = lib.getExe indexPkgs.mcp;
-    }
-  ) ["exa"];
+  agentMcpServers = ixMcp.defaultServers {
+    indexCommand = lib.getExe indexPkgs.mcp;
+  };
   codexMcpServers = lib.mapAttrs (_: def:
     if (def.transport or "stdio") == "stdio"
     then
