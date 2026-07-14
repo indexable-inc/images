@@ -364,9 +364,14 @@
   # and aborts the run (Nushell propagates external failures like bash
   # `set -o pipefail`). Uses the repo-built nix-eval-jobs directly by store path
   # rather than `nix run`.
+  #
+  # `check closure` (the closure-gate.yml required check, #1873) reuses step 1's
+  # build gate over `.#cachePushRoots.x86_64-linux`: the exact set the
+  # post-merge cache-push linux lane publishes, so a package whose build broke
+  # (not just its eval) goes red at the PR instead of on every consumer.
   check = ix.writeNushellApplication pkgs {
     name = "check";
-    meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux";
+    meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux (`closure` subcommand: build .#cachePushRoots.x86_64-linux)";
     text = ''
       # Patched nix-fast-build (packages/nix/nix-fast-build): stock --skip-cached
       # only skips a job whose nix-eval-jobs cacheStatus is `cached` (in a remote
@@ -382,10 +387,14 @@
       # is x86_64-linux-only.
       const eval_jobs = "${lib.getExe repoPackages.nix-eval-jobs}"
 
-      def main [] {
+      # Shared build gate: build every derivation under $flake with
+      # nix-fast-build and exit 1 on any failure, after replaying each failed
+      # build's log. `main` runs it over ciChecks; `main closure` over the
+      # cache-push roots.
+      def build-gate [flake: string] {
         # ca-derivations: the rust workspace units default to
         # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating
-        # `.#ciChecks.x86_64-linux` resolves floating content-addressed drvs. The
+        # the target set resolves floating content-addressed drvs. The
         # evaluator (nix-eval-jobs, which nix-fast-build wraps) needs the
         # `ca-derivations` experimental feature, or it aborts with
         # "experimental Nix feature 'ca-derivations' is disabled". The caller
@@ -410,7 +419,7 @@
         let build_failed = (
           try {
             ^$fast_build ...[
-              "--flake" ".#ciChecks.x86_64-linux"
+              "--flake" $flake
               # Drive nix-fast-build with the daemon-family-compatible
               # evaluator rather than its nixpkgs default.
               "--nix-eval-jobs" $eval_jobs
@@ -447,7 +456,7 @@
             # GitHub Actions log group so a long clippy dump stays collapsible;
             # harmless plain text in a local `nix run .#check`.
             print --stderr $"::group::build log: ($f.attr)"
-            let inst = $".#ciChecks.x86_64-linux.($f.attr)"
+            let inst = $"($flake).($f.attr)"
             # Fast path: replay the retained build log via `nix log` (works for
             # input-addressed checks like the browser smoke test).
             let drv = (
@@ -518,6 +527,10 @@
         if $build_failed {
           exit 1
         }
+      }
+
+      def main [] {
+        build-gate ".#ciChecks.x86_64-linux"
 
         let tmp = (mktemp --directory --tmpdir "ix-check.XXXXXX")
         let report = ($tmp | path join "flake-schema-eval.jsonl")
@@ -541,6 +554,16 @@
           exit 1
         }
         rm --recursive --force $tmp
+      }
+
+      # Pre-merge closure gate (closure-gate.yml, #1873): the same build gate
+      # over the roots the post-merge cache-push linux lane publishes, darwin
+      # cross closure included -- the set #2690 broke while flake-check stayed
+      # green (packages are eval-gated only). --skip-cached keeps it
+      # O(changed): on the warm-store pool only drvs new relative to main's
+      # already-built closure realise.
+      def "main closure" [] {
+        build-gate ".#cachePushRoots.x86_64-linux"
       }
     '';
   };
