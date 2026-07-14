@@ -479,8 +479,10 @@
   # preserving argv0. No settings ride argv: the computed defaults materialize
   # into the writable user settings layer via `passthru.settings` (#3180),
   # where they stay overridable and readable. The store output is read-only so
-  # the bundled self-updater could never write: DISABLE_AUTOUPDATER turns it off,
-  # the install checks are skipped, and USE_BUILTIN_RIPGREP=0 pins search to the
+  # the bundled self-updater must never mutate it. DISABLE_UPDATES blocks every
+  # update path, including `claude update` and `claude install`:
+  # https://code.claude.com/docs/en/getting-started#disable-auto-updates
+  # The install checks are skipped, and USE_BUILTIN_RIPGREP=0 pins search to the
   # Nix ripgrep on PATH so the wrapper owns the version pin. `target` is an
   # `@helper@` placeholder substituted at install time (the real binary lives
   # under `$out/libexec`, unknowable here). Covered by the installCheck argv
@@ -489,7 +491,7 @@
     target = "@helper@";
     env =
       {
-        DISABLE_AUTOUPDATER = "1";
+        DISABLE_UPDATES = "1";
         DISABLE_INSTALLATION_CHECKS = "1";
         USE_BUILTIN_RIPGREP = "0";
         IX_CLAUDE_SKILLS_DIR = "${agentSkillsDir}";

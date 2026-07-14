@@ -40,6 +40,13 @@
         "$PWD/test-spec.json"
     }
 
+    if ! ${lib.getExe jq} -e \
+      '.env.DISABLE_UPDATES == "1" and (.env | has("DISABLE_AUTOUPDATER") | not)' \
+      "$PWD/test-spec.json" >/dev/null; then
+      printf 'claude launcher env check failed: strict update disable is missing or legacy background-only disable remains\n' >&2
+      exit 1
+    fi
+
     skills_dir="$(spec_env IX_CLAUDE_SKILLS_DIR)"
     if [ ! -d "$skills_dir" ]; then
       printf 'claude launcher env check failed: IX_CLAUDE_SKILLS_DIR is not a directory: %s\n' \
