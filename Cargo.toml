@@ -69,6 +69,7 @@ members = [
   "packages/google/py",
   "packages/index-delta",
   "packages/indexbench",
+  "packages/indexbench/filesystem",
   "packages/ix-dev-diagnose",
   "packages/ix-windows",
   "packages/terminal/kitty",

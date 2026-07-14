@@ -644,8 +644,6 @@
     meta.description = "Refresh the pinned Minecraft sound pack in packages/minecraft/sound";
   };
 
-  benchFilesystem = import (paths.bench.filesystem + "/build.nix") {inherit ix pkgs;};
-
   # The indexbench CLI built for this system, fed to `mkBenchSuite` and the
   # `apps.bench` perf job. Also surfaced as `packages.indexbench` through the
   # registry; this binding just avoids re-resolving the package set here.
@@ -1571,7 +1569,6 @@
       health-checks-zellij = healthChecks.zellij;
       inherit lint site;
       site-dev = site.passthru.devServer;
-      bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-loaders = updateLoaders;
       inherit update;
