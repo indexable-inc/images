@@ -221,6 +221,21 @@
               if (not $row.in_sync) or (not $loaded) {
                 if $loaded {
                   ssh-run $tgt $"launchctl bootout ($service)"
+                  # bootout is asynchronous: an immediate bootstrap races the
+                  # teardown and fails with "Bootstrap failed: 5: Input/output
+                  # error" (hit live on this guest), so poll until launchd
+                  # reports the service gone.
+                  mut gone = false
+                  for _ in 1..20 {
+                    if (do { ^ssh -o BatchMode=yes $tgt $"launchctl print ($service)" } | complete | get exit_code) != 0 {
+                      $gone = true
+                      break
+                    }
+                    sleep 250ms
+                  }
+                  if not $gone {
+                    error make {msg: $"($service) still loaded 5s after bootout"}
+                  }
                 }
                 ssh-run $tgt $"launchctl bootstrap gui/($uid) '($row.remote_path)'"
               }
