@@ -2855,7 +2855,7 @@
         assertion =
           macosGuestAgent.config.KeepAlive
           && macosGuestAgent.config.RunAtLoad
-          && macosGuestAgent.config.ExitTimeOut == 120;
+          && macosGuestAgent.config.ExitTimeOut == 60;
         message = "launchd should keep the guest alive while allowing a clean shutdown window";
       }
     ];

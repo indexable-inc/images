@@ -310,7 +310,7 @@
       RunAtLoad = true;
       ProcessType = "Background";
       ThrottleInterval = 10;
-      ExitTimeOut = 120;
+      ExitTimeOut = 60;
       StandardOutPath = guest.lifecycle.logPath;
       StandardErrorPath = guest.lifecycle.logPath;
     };
