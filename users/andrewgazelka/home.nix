@@ -179,11 +179,16 @@
     {
       inherit indexPackages portableServicesModule ix;
     };
+
+  # Declarative half of the vmkit macOS guest's iMessage bridge (ENG-7746):
+  # options + the `imessage-guest-apply` pusher live in guests/imessage.
+  imessageGuestModule = import ./guests/imessage {inherit indexPackages ix;};
 in {
   imports = [
     portableServicesModule
     ciBarsModule
     claudeCodeModule
+    imessageGuestModule
   ];
 
   options.users.andrewgazelka = {
