@@ -156,11 +156,23 @@
       </button>
     </div>
   </header>
-  {#if !group.collapsed && activeSpec !== undefined}
-    <div class="pane-content">
-      {@render activeSpec.content()}
-    </div>
-  {/if}
+  <!-- Every visible tab's pane stays mounted; switching tabs or collapsing
+       the group only toggles CSS visibility. Pane-local operator state (the
+       log pane's level/search filters, the build table's tree/flat choice and
+       collapsed nodes) survives exactly as it did in the old fixed layout,
+       which kept every panel mounted for the whole session -- and so does
+       that layout's render cost: a hidden pane's effects (e.g. an expanded
+       machine-build log drawer's poll) keep running, as they always did.
+       Keyed by pane id like the tab bar; a tab dragged to *another* group
+       still remounts there, since it moves between two keyed lists. -->
+  {#each visibleTabs as id (id)}
+    {@const spec = dock.spec(id)}
+    {#if spec !== undefined}
+      <div class="pane-content" hidden={group.collapsed || id !== activeId}>
+        {@render spec.content()}
+      </div>
+    {/if}
+  {/each}
 </section>
 
 <style>
@@ -259,6 +271,14 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  /* An inactive tab's pane stays in the DOM (state survives tab switches and
+   * collapse) but must not paint or take layout. Explicit because the
+   * author-level `display: flex` above would otherwise override the UA
+   * stylesheet's `[hidden] { display: none }`. */
+  .pane-content[hidden] {
+    display: none;
   }
 
   /* Collapsed inside a row split: the group narrows to a vertical strip and

@@ -52,6 +52,12 @@ beyond Svelte itself).
   `controls` (rendered on the tab bar's right while the pane is active — the
   slot for filter chips, sort selects, counters) and `visible` (set false to
   hide the tab everywhere without losing its layout slot).
+- **Panes stay mounted.** A group renders every visible tab's snippet and
+  hides the inactive ones (and all of them while collapsed) with CSS, so
+  pane-local state — filters, expanded rows, scroll positions — survives tab
+  switches and collapse, like a fixed layout that never unmounts panels. The
+  flip side: a hidden pane's effects keep running. Dragging a tab to another
+  group (or popping it out) still remounts it.
 - **Layout is a tree.** Internal nodes are `split` (row/column, fractional
   sizes); leaves are `group` (tabs sharing a region). `types.ts` has `split()`
   / `group()` constructors.

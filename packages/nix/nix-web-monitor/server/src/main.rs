@@ -166,13 +166,15 @@ enum TerminalOutput {
 }
 
 /// Shared state for the HTTP handlers: the monitor for one-shot JSON snapshots,
-/// the broadcast sender each WebSocket subscribes to for the live feed, and the
-/// cached `index.html` bytes served with cache-busting headers.
+/// the broadcast sender each WebSocket subscribes to for the live feed, the
+/// cached `index.html` bytes served with cache-busting headers, and the
+/// per-worker incremental decode state behind `/api/global-log`.
 #[derive(Clone)]
 struct AppState {
     monitor: Arc<RwLock<MonitorState>>,
     deltas: broadcast::Sender<Bytes>,
     index_html: Bytes,
+    log_tails: global::LogTailCache,
 }
 
 #[tokio::main]
@@ -298,6 +300,7 @@ async fn start_ui(
         monitor: Arc::clone(&monitor),
         deltas: deltas.clone(),
         index_html,
+        log_tails: global::LogTailCache::new(),
     };
     let http_server = serve(http_addr, site_dir, state).await?;
 
@@ -417,7 +420,15 @@ async fn global_log(
         )
             .into_response();
     };
-    match global::read_log_tail(log_file).await {
+    // The tail read resumes this worker's cached incremental decode (compressed
+    // logs only), keyed by the same exact identity the lookup above gated on.
+    let key = global::LogWorkerKey {
+        drv_path: query.drv,
+        pid: query.pid,
+        start_time: query.start,
+        start_ticks: query.start_ticks,
+    };
+    match state.log_tails.read_log_tail(key, log_file).await {
         Ok(text) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             (StatusCode::NOT_FOUND, "log not written yet").into_response()
@@ -1386,6 +1397,7 @@ mod tests {
             monitor: Arc::new(RwLock::new(MonitorState::default())),
             deltas,
             index_html: Bytes::from_static(b"<!doctype html><title>test</title>"),
+            log_tails: global::LogTailCache::new(),
         }
     }
 

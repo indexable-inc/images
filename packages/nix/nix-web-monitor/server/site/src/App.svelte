@@ -59,9 +59,10 @@
     if (id !== null) dock?.reveal('logs');
   }
 
-  /// Reveal first: a logs pane hidden behind another tab or a collapsed group
-  /// is unmounted (`logPanel` is null), so surface it and wait for the mount
-  /// to flush before driving the filter.
+  /// Reveal first so the filtered lines are actually visible. A pane hidden
+  /// behind another tab or a collapsed group stays mounted, but wait a tick
+  /// anyway: a pane freshly slotted into the layout (first reconcile) mounts
+  /// asynchronously, and `logPanel` is null until that flush.
   async function inspectError(text: string): Promise<void> {
     dock?.reveal('logs');
     await tick();
