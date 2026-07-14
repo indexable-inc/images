@@ -20,8 +20,8 @@
   # config, or settings.
   stockBinary,
   # The wrapped launcher (`bin/claude`): the config-launch wrapper that applies
-  # the house --system-prompt-file (full prompt replacement), --mcp-config, and
-  # --settings. Probing this shows what our daily-driver prompt collapses to.
+  # the house --system-prompt-file (full prompt replacement) and --mcp-config.
+  # Probing this shows what our daily-driver prompt collapses to.
   wrappedBinary ? "claude",
 }:
 ix.writePythonApplication pkgs {
