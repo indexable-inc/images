@@ -1,0 +1,77 @@
+---
+title: "Postmortem: the codex darwin cross closure that merged green and broke every switch"
+date: 2026-07-14
+---
+
+On 2026-07-13, `home-manager switch` on hydra started failing while
+building
+`/nix/store/rljk1k1d1il7f0wapqcbmh8m8aqx6kkn-libsqlite3-sys-build-script-output-0.37.0.drv`
+on `ssh-ng://andrew@vc1-nix` with
+`gcc: error: unrecognized command-line option '-iframework'`, and the
+failure cascaded through every codex crate. Nothing in CI had gone red.
+Master issue #3196; one sub-issue and one fix per layer.
+
+## Root cause chain
+
+PR #2690 put codex-rs on the cargo-unit cross DAG (darwin binaries
+cross-compiled on x86_64-linux). `lib/darwin/apple-sdk-toolchain.nix`
+exported the darwin toolchain in unsuffixed variables too:
+`CFLAGS`/`CXXFLAGS` carrying darwin-only flags (`-iframework`,
+`-isysroot` into a `MacOSX*.sdk`) landed in every unit's environment.
+cc-rs picks its *tool* first-match across suffixed and plain variables,
+but gathers `*FLAGS` cumulatively from every matching variable for
+every target, so the linux gcc compiling host build-script units
+received clang/darwin flags even with the target-suffixed linux flags
+set. The host libsqlite3-sys build-script unit was broken by
+construction (#3188).
+
+Derivation identity settled the "cache publish lag?" question: the
+failing drv hashed identically across flake pins, so no pin was ever
+going to substitute it. A deterministic drv that cannot build is a
+permanent cache hole, not a slow publisher.
+
+## Why nothing went red
+
+- The only required check on main was `flake-check`, which
+  eval-validates `packages` and never builds them; it passed #2690 in
+  under six minutes.
+- `cache-push.yml` does build the closure, but post-merge and
+  non-gating. Its realise loop recorded each failed root and exited 0:
+  run 29295767529 concluded success while its own log recorded the
+  whole codex closure failing to realise.
+- `advance-cache-ready` then moved the consumer pin over the hole, onto
+  every darwin consumer.
+
+## Fixes, one per layer
+
+- **The bug** (#3188, fixed by #3197, `6785ed72`): the apple SDK
+  toolchain env is target-suffixed only, and the codex host-triple pin
+  is gone. Suffixed-only is the invariant that survives cc-rs's
+  cumulative flag lookup.
+- **The lying publisher** (#3195, fixed by #3200, `dc37a246`): the push
+  lanes still stay green over individual failed roots, so partial
+  publishes land, but each lane now reports a failed-roots count and
+  `advance-cache-ready` fails the run before any pin move. A publish
+  hole can no longer conclude success.
+- **The missing gate** (#1873, advanced by #3202, `96e05909`): a
+  pre-merge `closure-gate` workflow realises exactly the roots the
+  linux cache-push lane publishes, `.#cachePushRoots.x86_64-linux`, via
+  `nix run .#check -- closure` (nix-fast-build with `--skip-cached` on
+  the warm-store runner pool: an average PR pays eval plus cache
+  probes, a package-changing PR builds its delta). The main ruleset now
+  requires the `closure-gate` status next to `flake-check`. A shared
+  `.github/actions/check-logged` action keeps the Actions log quiet:
+  it prints the runner host and a runner-local log path, and cats the
+  full log only on failure.
+
+## Lessons
+
+- Eval-green is not build-green. A gate that never builds cannot
+  protect consumers of builds; gate exactly the roots you publish.
+- A green publisher that records failures and exits 0 is worse than a
+  red one: red at least alarms, green advances the pin.
+- When a substitution is missing, check drv identity across pins first.
+  Same hash everywhere means broken by construction, and no amount of
+  waiting on the cache will fix it.
+
+*Written by an AI agent via Claude Code (Claude Opus 4.5).*

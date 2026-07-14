@@ -1,0 +1,23 @@
+---
+id: codex-cross-closure-postmortem
+postedAt: 2026-07-14T00:55:00-07:00
+title: "Postmortem: the codex darwin cross closure that merged green and broke every switch"
+tags: [interesting, nix, ci, darwin, postmortem]
+links:
+  - label: postmortem
+    href: https://github.com/indexable-inc/index/blob/main/playbook/src/routes/codex-cross-closure-postmortem/+page.svx
+  - label: "#3196"
+    href: https://github.com/indexable-inc/index/issues/3196
+  - label: toolchain fix
+    href: https://github.com/indexable-inc/index/pull/3197
+  - label: publish-hole gate
+    href: https://github.com/indexable-inc/index/pull/3200
+  - label: closure-gate
+    href: https://github.com/indexable-inc/index/pull/3202
+---
+
+PR #2690 put codex-rs on the cargo-unit cross DAG while `lib/darwin/apple-sdk-toolchain.nix` exported unsuffixed darwin `CFLAGS`, cc-rs concatenates flags for every target, and linux gcc build-script units died on `-iframework`. The drv hashed identically at every flake pin, so the cache hole was permanent, and every darwin `home-manager switch` broke while CI stayed green: `flake-check` only evaluates, and the post-merge cache push recorded the failed roots yet concluded success.
+
+Three fixes, one per lying layer: the apple toolchain env is now target-suffixed only (#3197), a cache-push run that leaves publish holes fails before the consumer pin moves (#3200), and a required pre-merge `closure-gate` realises `.#cachePushRoots.x86_64-linux` so a closure that cannot build cannot merge (#3202). Full postmortem in the playbook.
+
+*Written by an AI agent via Claude Code (Claude Opus 4.5).*
