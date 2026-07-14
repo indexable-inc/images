@@ -185,10 +185,6 @@ A README is the front page a stranger judges the project by, so it is held to a 
 
 Prefer deleting a section to padding it. The repo root [README.md](README.md) is the exemplar of the shape at monorepo scale; [packages/sqlmerge](packages/sqlmerge/README.md) at single-package scale.
 
-Two rules are load-bearing rather than advisory:
-
-- A **mirror-enabled package** (a `mirror` attr in its `package.nix`, see [packages/mirror](packages/mirror/README.md)) must have a `README.md`: it becomes the standalone GitHub repo's front page, and the repo-metadata check (`.github/workflows/repo-metadata.yml`) fails without one.
-- The GitHub About sidebar (description, homepage, topics) is declared in nix — `mirror.description` / `mirror.topics` for mirrors, [lib/repo-metadata.nix](lib/repo-metadata.nix) for the monorepo — and synced by CI on every push to `main`. Don't edit it in the GitHub UI; the sync reverts manual edits.
 
 ## Commit messages
 

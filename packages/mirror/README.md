@@ -103,28 +103,21 @@ patch DAG.
    ```nix
    mirror = {
      repo = "indexable-inc/<name>";
+     # Optional values used when the repository is created:
      description = "One-line GitHub repo description";
      topics = ["rust" "cli"];
-     # optional; defaults to the package's tree in this monorepo:
-     # homepage = "https://example.dev";
    };
    ```
 
-   `description` and `topics` are required: they are the mirror repo's public
-   About sidebar, and `packages/registry.nix` fails evaluation without them
-   (the repo-metadata check, `.github/workflows/repo-metadata.yml`, turns
-   that into a red PR status). (`mirror publish` itself still falls back to
-   the crate's `[package] description` when a hand-written manifest entry
-   omits one, but registry entries must be explicit.) The package also needs
-   a `README.md`: it becomes the mirror repo's front page (see
-   CONTRIBUTING.md, READMEs). The entry surfaces in
+   `description` also supplies the generated README pitch, with the crate's
+   `[package] description` as its fallback. The package also needs a
+   `README.md`: it becomes the mirror repo's front page (see CONTRIBUTING.md,
+   READMEs). The entry surfaces in
    `nix eval --json '.#lib.mirrorPackages'`.
 
 2. That's it. The mirror-sync workflow (`.github/workflows/mirror-sync.yml`)
    publishes on the next push to `main` touching `packages/**` (plus a daily
-   cron and `workflow_dispatch`), creating the repo on first run. The
-   repo-metadata workflow keeps the description/homepage/topics of every
-   covered repo equal to the declared values on every push to `main`.
+   cron and `workflow_dispatch`), creating the repo on first run.
 
 To maintain a fork repo for a de-forked package instead, add
 `forkRepo = "indexable-inc/<name>";` to its entry in lib/fork-packages.nix.
