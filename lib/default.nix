@@ -144,8 +144,11 @@
   # patch bytes owned by index so fleet configurations consume one source of
   # truth instead of copying the fix into each repository.
   nixPatches = {
-    autoGcRecheckAfterLock = paths.packagesRoot + "/nix/nix/patches/0017-fix-libstore-recheck-free-space-after-GC-lock.patch";
-    opaqueTemporaryRootFilenames = paths.packagesRoot + "/nix/nix/patches/0016-fix-libstore-accept-opaque-temporary-root-filenames.patch";
+    autoGcRecheckAfterLock =
+      paths.packagesRoot + "/nix/nix/patches/0017-fix-libstore-recheck-free-space-after-GC-lock.patch";
+    opaqueTemporaryRootFilenames =
+      paths.packagesRoot
+      + "/nix/nix/patches/0016-fix-libstore-accept-opaque-temporary-root-filenames.patch";
   };
   secretRefs = import ./util/secret-refs.nix {inherit lib;};
   selfVersionFor = self: import ./util/self-version.nix {inherit lib self;};
@@ -245,6 +248,7 @@
   # typed wrappers that generate small `.md` files with parseable metadata.
   markdown = import ./util/markdown.nix {inherit lib;};
   skills = import ./skills.nix {inherit lib paths;};
+  users = import ./users.nix {inherit lib paths;};
   agents = import ./agents.nix {inherit lib markdown;};
   hermes = import ./hermes {};
   claudePlugin = import ./claude-plugin.nix {inherit lib skills;};
@@ -615,7 +619,13 @@
     };
   in {
     package = bin;
-    wrap = label: args: ["${bin}/bin/with-lock" label "--"] ++ args;
+    wrap = label: args:
+      [
+        "${bin}/bin/with-lock"
+        label
+        "--"
+      ]
+      ++ args;
   };
 
   /**
@@ -705,6 +715,7 @@
       toml
       unibind
       unibindFor
+      users
       withLockFor
       writeBashApplication
       writeNushellApplication
