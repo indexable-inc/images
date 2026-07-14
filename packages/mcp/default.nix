@@ -528,6 +528,27 @@
       cp -r ${weavePythonSource}/weave/. "$site/"
     ''
   );
+  # Call-first local delegation on the weave journal (index#3191): `await
+  # fabric.run(fn, *args)` executes fn on this node with the ask/started/
+  # terminal facts recorded via the bundled weave client, and `fabric.claude`
+  # opens self-recording, interruptible Claude Agent SDK sessions. Pure Python
+  # over the bundled weave + claude-agent-sdk.
+  fabricPythonSource = builtins.path {
+    name = "ix-mcp-fabric-python-source";
+    path = ./src/fabric;
+  };
+  fabricModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-fabric-python-module"
+    {
+      strictDeps = true;
+      meta.description = "Call-first fabric delegation bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/fabric"
+      mkdir -p "$site"
+      cp -r ${fabricPythonSource}/fabric/. "$site/"
+    ''
+  );
   # The kernel's process runner. The public `sh()`/`zsh()` are RETIRED (agents
   # shell out through `await nu(...)`); they stay importable as disabled shims
   # that raise a migration hint. The private `sh._exec` runs on the kernel's loop
@@ -1352,6 +1373,10 @@
       # read/searched without shelling out or falling back to a host tool. Pure
       # Python, small (`from pypdf import PdfReader`).
       ps.pypdf
+      # claude-agent-sdk: the Claude Agent SDK the `fabric.claude` session
+      # helper drives (streaming input + native interrupt over the Claude Code
+      # CLI subprocess), replacing PTY scraping for programmatic claudes.
+      ps.claude-agent-sdk
       tuiModule
       searchModule
       nuPyModule
@@ -1369,6 +1394,7 @@
       fleetModule
       meshModule
       weaveModule
+      fabricModule
       shModule
       svelteModule
       worktreeModule
@@ -1534,6 +1560,7 @@
     "view"
     "worktree"
     "mesh"
+    "fabric"
     "claude_history"
   ];
   # The `ix_notebook_mcp` server package is migrated file-by-file (the package
@@ -5391,6 +5418,7 @@
   ghosttyBundled = importTest "ghostty" "import ghostty; print('ghostty-ok', all(callable(getattr(ghostty, n)) for n in ('surfaces', 'my_tty', 'my_surface', 'close', 'close_me', 'focus', 'activate', 'is_running')), ghostty.__version__)";
   xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
   meshBundled = importTest "mesh" "import mesh, asyncio; print('mesh-ok', all(asyncio.iscoroutinefunction(getattr(mesh, n)) for n in ('peers', 'sessions')), mesh.__version__)";
+  fabricBundled = importTest "fabric" "import fabric, asyncio; print('fabric-ok', asyncio.iscoroutinefunction(fabric.run), asyncio.iscoroutinefunction(fabric.claude.session), fabric.__version__)";
   linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
   notionBundled = importTest "notion" "import notion, asyncio; print('notion-ok', all(asyncio.iscoroutinefunction(getattr(notion, n)) for n in ('search', 'page', 'blocks', 'db_query', 'page_create', 'blocks_append', 'page_update')), notion.__version__)";
   notionTestPython = pkgs.python3.withPackages (ps: [
@@ -5715,6 +5743,41 @@
       cat stdout
       mkdir -p "$out"
     '';
+  # Network-free tests for the call-first fabric (index#3191): the run record
+  # contract against an httpx.MockTransport weave double (ask facts at submit
+  # with state strictly last, started/terminal facts from the worker side, a
+  # fn that raises before its first line still leaving ask + failed), and
+  # claude.session's CAS-pointer turn facts plus both interrupt paths (handle
+  # and journal fact) converging on the SDK interrupt as state=interrupted.
+  fabricTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.httpx
+    ps.claude-agent-sdk
+    fabricModule
+    weaveModule
+  ]);
+  fabricTestSource = builtins.path {
+    name = "ix-mcp-fabric-test";
+    path = ./src/fabric/test_fabric.py;
+  };
+  fabricTests =
+    pkgs.runCommand "ix-mcp-fabric-tests"
+    {
+      nativeBuildInputs = [fabricTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${fabricTestSource} "$TMPDIR/test_fabric.py"
+      ${lib.getExe fabricTestPython} -m pytest "$TMPDIR/test_fabric.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp fabric tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
 in
   package.overrideAttrs (old: {
     passthru =
@@ -5741,6 +5804,8 @@ in
               resourcesBridgeTests
               meshBundled
               meshTests
+              fabricBundled
+              fabricTests
               beeperBundled
               requirementsSmoke
               engineBundled
