@@ -4361,7 +4361,7 @@
           entry = homeAgentConfig.home.mutableJsonFiles.claude-code-settings;
         in
           entry.target
-          == ".claude/settings.json"
+          == "/home/agent/.claude/settings.json"
           && entry.value == homeAgentConfig.programs.claude-code.package.passthru.settings
           && entry.value ? hooks
           && entry.value ? statusLine;
