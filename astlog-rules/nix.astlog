@@ -611,17 +611,17 @@
 (lint no-recursive-update error
   "lib.recursiveUpdate silently replaces at leaf collisions; use ix.deepMerge.strict (throws on collision) or ix.deepMerge.rhs (rhs wins) from `lib/util/deep-merge.nix`")
 
-;; no-root-string-interp: `"${root}/..."` string-interpolates the workspace
-;; tree into a string, leaking full-tree context. Use `root + "/..."` (path
-;; concat) or `builtins.path { name = "..."; path = root + "/..."; }`.
+;; no-root-string-interp: coercing a repository root inside a string records
+;; the whole tree as a derivation input. Select the file or subtree as a path
+;; before interpolation so unrelated repository edits preserve the dependency.
 (rule (no-root-string-interp n)
   (match nix "
     (string_expression
-      . (interpolation
-          expression: (variable_expression) @v)) @n")
-  (text-match v "^(root|workspaceRoot)$"))
+      (interpolation
+        expression: (_) @v)) @n")
+  (text-match v "^([^[:space:]]+\\.)*(root|workspaceRoot|repoRoot)$"))
 (lint no-root-string-interp error
-  "`\"${{root}}/...\"` string-interpolates the workspace tree, leaking full-tree context; use `root + \"/...\"` (path concat) or `builtins.path {{ name; path; }}`")
+  "string interpolation coerces a repository root into a whole-tree store dependency; select the file or subtree as a path before interpolation")
 
 ;; no-stringly-flags: Build flag attrs are list-of-string, not one string
 ;; with spaces. Whitespace inside flag values breaks paths-with-spaces and

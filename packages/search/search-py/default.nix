@@ -88,7 +88,7 @@ in
       "$sanitized"
 
     mkdir -p "$out"
-    python3 ${ix.paths.root}/lib/build/pyo3-wheel.py \
+    python3 ${ix.paths.root + "/lib/build/pyo3-wheel.py"} \
       --package search \
       --dist-name ix-search \
       --so-name _search.abi3.so \

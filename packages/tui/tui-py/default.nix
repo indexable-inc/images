@@ -88,7 +88,7 @@ in
       "$sanitized"
 
     mkdir -p "$out"
-    python3 ${ix.paths.root}/lib/build/pyo3-wheel.py \
+    python3 ${ix.paths.root + "/lib/build/pyo3-wheel.py"} \
       --package tui \
       --dist-name ix-tui \
       --so-name _tui.abi3.so \
