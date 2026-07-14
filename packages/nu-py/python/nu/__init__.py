@@ -91,16 +91,19 @@ Contract:
   errors raise either way. A signal-terminated external reports the
   negative signal number, like subprocess.
 - ``timeout=`` REQUESTS a stop the way ctrl-c would (nushell checks the
-  flag between pipeline elements), raises ``TimeoutError``, and abandons
-  the shared engine for a fresh one: a single stuck element (a hung
-  ``http get``, an external that ignores the flag) may hold the old engine
-  arbitrarily long, and abandoning it keeps later ``nu()`` calls from
-  queueing behind the runaway. Persistent state is therefore LOST on a
-  timeout. Cancelling the awaiting task interrupts the same way but keeps
-  the engine (state survives); after cancelling a truly stuck pipeline,
-  ``nu.reset()`` unwedges. An external the pipeline already spawned
-  finishes on its own; run a genuinely long external as a background job
-  you poll, or in its own ``nu.Engine()`` so a stuck one is isolated.
+  flag between pipeline elements), SIGKILLs the eval's in-flight
+  externals' process groups (each external leads its own group, so a
+  never-exiting ``^sleep`` or a log follower dies now instead of holding
+  the engine as an orphan, issue #3183), raises ``TimeoutError``, and
+  abandons the shared engine for a fresh one: a stuck INTERNAL element (a
+  hung ``http get``) may still hold the old engine arbitrarily long, and
+  abandoning it keeps later ``nu()`` calls from queueing behind the
+  runaway. Persistent state is therefore LOST on a timeout. Cancelling
+  the awaiting task interrupts and kills the same way but keeps the
+  engine (state survives), so the engine is usable immediately after the
+  cancel; after cancelling a truly stuck internal pipeline, ``nu.reset()``
+  unwedges. Run a genuinely long external as a background job you poll,
+  or in its own ``nu.Engine()`` so a stuck one is isolated.
 - Calls against the shared engine run one at a time (REPL state needs
   ordered evaluation); for parallel pipelines, construct separate
   ``nu.Engine()`` instances.
@@ -557,8 +560,9 @@ async def nu(
     the call raises :class:`NuCwdError` instead of silently running elsewhere
     and discards the stale engine so a retry starts fresh.
     ``env`` adds environment variables;
-    ``timeout`` interrupts the evaluation and discards the engine state (see
-    the module docstring); ``name`` labels the running job in the dashboard.
+    ``timeout`` interrupts the evaluation, kills its in-flight externals, and
+    discards the engine state (see the module docstring); ``name`` labels the
+    running job in the dashboard.
 
     Shape normalization: table -> frame; record -> plain ``dict`` (a struct,
     not a table: ``(await nu("do -i { ^cmd } | complete"))['exit_code']``

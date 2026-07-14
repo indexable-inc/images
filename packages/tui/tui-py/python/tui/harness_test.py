@@ -10,13 +10,16 @@ from __future__ import annotations
 import re
 import unittest
 
+from . import WaitTimeout
 from .harness import (
+    Agent,
     Claude,
     Codex,
     Cursor,
     _gate_matches,
     _parse_claude_reply,
     _parse_cursor_reply,
+    _run_oneshot,
     _shquote,
     _submit_probe,
     _tail_delta,
@@ -82,7 +85,7 @@ class OneshotArgvTests(unittest.TestCase):
         ]
 
     def test_codex_reply_goes_to_last_message_file(self) -> None:
-        argv = Codex._oneshot_argv("q", "/scratch/last.txt")
+        argv = Codex._exec_argv("q", "/scratch/last.txt")
         assert argv[:2] == ["codex", "exec"]
         assert argv[-1] == "q"
         assert argv[argv.index("--output-last-message") + 1] == "/scratch/last.txt"
@@ -92,6 +95,34 @@ class OneshotArgvTests(unittest.TestCase):
         assert argv[:2] == ["cursor-agent", "-p"]
         assert "--force" in argv
         assert argv[-1] == "q"
+
+
+class OneshotSharedTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_without_headless_mode_raises(self) -> None:
+        try:
+            await Agent.oneshot("q")
+        except NotImplementedError:
+            return
+        self.fail("expected NotImplementedError")
+
+
+class RunOneshotTests(unittest.IsolatedAsyncioTestCase):
+    # #3184: the timeout is a parameter, not a hardcoded cap, and None disables
+    # it entirely (the caller owns the deadline).
+    async def test_returns_stripped_stdout(self) -> None:
+        assert await _run_oneshot(["echo", " hi "], cwd=None, timeout=10.0) == "hi"
+
+    async def test_timeout_none_means_no_cap(self) -> None:
+        assert await _run_oneshot(["echo", "hi"], cwd=None, timeout=None) == "hi"
+
+    async def test_past_timeout_raises_wait_timeout(self) -> None:
+        # Not assertRaises/pytest.raises: the file stays runnable by bare
+        # `python -m unittest` (no pytest dep) and lint-clean (PT027).
+        try:
+            await _run_oneshot(["sleep", "60"], cwd=None, timeout=0.1)
+        except WaitTimeout:
+            return
+        self.fail("expected WaitTimeout")
 
 
 class ClaudeGateTests(unittest.TestCase):

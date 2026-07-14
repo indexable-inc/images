@@ -7539,6 +7539,7 @@ name = "nu-py"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "nix 0.31.3",
  "nu-cmd-extra",
  "nu-cmd-lang",
  "nu-command",

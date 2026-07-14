@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -56,11 +57,11 @@ struct Spec {
     // --- generic launcher layers ---
     /// Environment variables set unconditionally.
     #[serde(default)]
-    env: Vec<Entry>,
+    env: BTreeMap<String, String>,
     /// Environment variables set only when not already present in the caller's
     /// environment (the old `export NAME="${NAME-default}"`).
     #[serde(default)]
-    env_defaults: Vec<Entry>,
+    env_defaults: BTreeMap<String, String>,
     /// Directories prepended to `PATH` (ahead of the caller's PATH).
     #[serde(default)]
     path_prepend: Vec<String>,
@@ -207,12 +208,12 @@ fn main() -> ExitCode {
 
     let mut cmd = Command::new(&spec.target);
     cmd.arg0(&argv0);
-    for entry in &spec.env {
-        cmd.env(&entry.key, &entry.value);
+    for (key, value) in &spec.env {
+        cmd.env(key, value);
     }
-    for entry in &spec.env_defaults {
-        if std::env::var_os(&entry.key).is_none() {
-            cmd.env(&entry.key, &entry.value);
+    for (key, value) in &spec.env_defaults {
+        if std::env::var_os(key).is_none() {
+            cmd.env(key, value);
         }
     }
     if !spec.path_prepend.is_empty() {
@@ -229,6 +230,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::ffi::OsString;
 
     use super::{
@@ -263,8 +265,8 @@ mod tests {
             config_file: "config.toml".to_owned(),
             forced: entries(b.forced),
             soft: entries(b.soft),
-            env: Vec::new(),
-            env_defaults: Vec::new(),
+            env: BTreeMap::new(),
+            env_defaults: BTreeMap::new(),
             path_prepend: Vec::new(),
             flags: b.flags.into_iter().map(str::to_owned).collect(),
             conditional_flags: b

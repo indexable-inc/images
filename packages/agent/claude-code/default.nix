@@ -468,8 +468,6 @@
     # Plugins carry namespaced skills, agents, hooks, and MCP declarations.
     ++ map (d: "--plugin-dir=${d}") pluginDirs;
 
-  envEntries = attrs: lib.mapAttrsToList (key: value: {inherit key value;}) attrs;
-
   # The launch spec consumed by the shared Rust launcher (packages/config-launch):
   # it sets env/PATH, prepends `wrapperFlags`, injects `--settings` only when the
   # caller passed none (the CLI is first-wins between two `--settings` flags),
@@ -482,7 +480,7 @@
   # tests below.
   launchSpec = (formats.json {}).generate "claude-code-launch-spec.json" {
     target = "@helper@";
-    env = envEntries (
+    env =
       {
         DISABLE_AUTOUPDATER = "1";
         DISABLE_INSTALLATION_CHECKS = "1";
@@ -491,9 +489,8 @@
       }
       // lib.optionalAttrs (agentAgentsDir != null) {
         IX_CLAUDE_AGENTS_DIR = "${agentAgentsDir}";
-      }
-    );
-    env_defaults = envEntries (lib.mapAttrs (_: toString) wrapperEnvDefaults);
+      };
+    env_defaults = lib.mapAttrs (_: toString) wrapperEnvDefaults;
     path_prepend = pathPrepend;
     flags = wrapperFlags;
     conditional_flags = [
