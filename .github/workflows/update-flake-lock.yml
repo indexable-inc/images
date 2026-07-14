@@ -106,7 +106,7 @@ jobs:
   #
   #   - RED PR: the rolling bump PR's latest head has failing checks.
   #   - STUCK PR: the PR has been open past the threshold without merging
-  #     (hourly branch updates reset checks to pending, so an episode can
+  #     (each scheduled branch update resets checks to pending, so an episode can
   #     look pending at every observation; age is the churn-proof signal).
   #   - ORPHANED BUMP: the bump branch is ahead of main with no open PR
   #     (closed unmerged, or PR creation failed).
@@ -367,7 +367,7 @@ jobs:
                 echo "Input revisions waiting to land: \`${rev_range}\`"
                 echo
               fi
-              echo "Maintained by the \`escalate\` job of the reusable update-flake-lock workflow (indexable-inc/index): refreshed hourly while the episode persists, closed automatically once a bump lands cleanly. Motivating incident: indexable-inc/ix#7235."
+              echo "Maintained by the \`escalate\` job of the reusable update-flake-lock workflow (indexable-inc/index): refreshed each scheduled run while the episode persists, closed automatically once a bump lands cleanly. Motivating incident: indexable-inc/ix#7235."
               echo
               echo "_Made with Claude Opus 4.5._"
             } > /tmp/tracking-body.md
