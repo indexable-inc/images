@@ -307,7 +307,7 @@ fn read_tail_blocking(
     key: LogWorkerKey,
     path: PathBuf,
 ) -> std::io::Result<String> {
-    if !path.extension().is_some_and(|extension| extension == "bz2") {
+    if path.extension().is_none_or(|extension| extension != "bz2") {
         let decoded = read_plain_tail(File::open(&path)?)?;
         return Ok(tail_lines(
             &decoded.bytes,
@@ -351,6 +351,7 @@ fn store(entries: &LogTailEntries, key: LogWorkerKey, entry: LogTailEntry) {
         };
         map.remove(&oldest);
     }
+    drop(map);
 }
 
 fn lock(entries: &LogTailEntries) -> MutexGuard<'_, HashMap<LogWorkerKey, LogTailEntry>> {
@@ -970,7 +971,7 @@ mod tests {
         }
 
         // Overflow the cap with distinct workers: the map stays bounded.
-        let keys: Vec<LogWorkerKey> = (10..10 + i64::try_from(LOG_TAIL_MAX_ENTRIES).expect("small cap") + 1)
+        let keys: Vec<LogWorkerKey> = (10..=(10 + i64::try_from(LOG_TAIL_MAX_ENTRIES).expect("small cap")))
             .map(worker_key)
             .collect();
         for key in &keys {
