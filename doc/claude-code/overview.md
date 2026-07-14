@@ -4,9 +4,10 @@
 [Claude Code](https://www.anthropic.com/claude-code), Anthropic's agentic coding
 CLI, as a prebuilt-binary install with a thick layer of baked-in fleet defaults.
 The upstream artifact is a Bun single-file executable pinned per platform; this
-package wraps it so every session starts with the repo's flags, env, settings,
-MCP servers, system prompt, and hooks already applied, while keeping the store
-binary itself read-only and pristine. It is the richest wrapper in this domain.
+package wraps it so every session starts with the repo's flags, env, MCP
+servers, and system prompt already applied (and its settings render, hooks
+included, materialized into the user settings layer by the Home Manager
+module), while keeping the store binary itself read-only and pristine. It is the richest wrapper in this domain.
 
 The injection is done through the shared `config-launch` launcher
 (`packages/config-launch`), the same mechanism [codex](../codex/overview.md)
@@ -37,8 +38,9 @@ mirror (`packages/agent/claude-code/default.nix:402-408`).
 
 ## Baked defaults
 
-All flag/env/PATH/settings injection is declared as data in `launchSpec`
-(`packages/agent/claude-code/default.nix:375-391`) and applied by `config-launch`.
+All flag/env/PATH injection is declared as data in `launchSpec`
+(`packages/agent/claude-code/default.nix:375-391`) and applied by
+`config-launch`; the settings render travels separately (see below).
 
 ### Forced env (always set)
 
@@ -66,17 +68,16 @@ One cosmetic residual: server-pushed model options
 valued `claude-fable-5[1m]`) can still appear in the picker — selecting one
 still runs at the standard window when the disable flag is active.
 
-The wrapper also bakes the same knobs into the read-only `--settings` `env`
-layer (`CLAUDE_CODE_DISABLE_1M_CONTEXT=1`,
-`CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000`) so `/context` and autocompact stay
-on the ~300K working window even if launch-time `env_defaults` are missing.
-Install checks assert both paths. Re-enable 1M per machine with
-`export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
+The wrapper also bakes the same knobs into the settings render's `env` map
+(`CLAUDE_CODE_DISABLE_1M_CONTEXT=1`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000`)
+so `/context` and autocompact stay on the ~300K working window even if
+launch-time `env_defaults` are missing. Install checks assert both paths.
+Re-enable 1M per machine with `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
 
 ### Prepended flags (`wrapperFlags`, `default.nix:353-361`)
 
 Flags ride BEFORE the user argv (so root options parse before subcommand
-dispatch, e.g. `claude --settings=F mcp list`), and every option-argument uses
+dispatch, e.g. `claude --debug mcp list`), and every option-argument uses
 the `=` form (one self-contained token, so a variadic flag cannot swallow a
 positional). Both rules are learned from real breakage; see the long comment at
 `default.nix:315-352`.
@@ -101,13 +102,22 @@ positional). Both rules are learned from real breakage; see the long comment at
   rather than appending to it.
 - `--mcp-config=<file>`: the baked MCP server set (below).
 
-### Conditional `--settings` (injected only when the caller passes none)
+### Computed settings render (`passthru.settings`, materialized, not injected)
 
-The CLI is first-wins between two `--settings` flags (they do not merge), so the
-wrapper injects its defaults file only `unless_present` a caller `--settings`
-(`default.nix:385-390`, `conditional_flags`). The file is a deep-merge of caller
-`extraSettings` UNDER the computed defaults so package-owned keys always win
-(`default.nix:226-293`):
+The wrapper computes a settings render but injects no `--settings` flag: a CLI
+arg outranks the local/project/user settings files, so an injected file
+silently shadowed the user's own writable settings (#3180). Instead the render
+is exposed as `passthru.settings` (and `passthru.settingsFile`, the same value
+as a store JSON file) and delivered at the USER layer: the Home Manager module
+(`packages/agent/home-manager/claude-code.nix`, `materializeSettings`, default
+on) reconciles it into the writable `~/.claude/settings.json` on activation
+with the mutable-json last-applied 3-way merge, so declared keys are enforced,
+dropped keys are pruned, and Claude Code's runtime writes survive. Bare
+consumers (`nix run`, no Home Manager) get the wrapper flags/env but no
+settings defaults; they can seed from `passthru.settingsFile` or enforce it
+via Claude's managed layer (`/etc/claude-code/managed-settings.json`, see
+`lib/dev/agents.nix`). The render is a deep-merge of caller `extraSettings`
+UNDER the computed defaults so package-owned keys always win:
 
 - `cleanupPeriodDays = 365`: keep transcripts and `--debug` logs ~1yr.
 - `skipDangerousModePermissionPrompt = true` (when
@@ -192,9 +202,9 @@ and on Linux the sandbox helpers `bubblewrap` and `socat`.
   appended trailer (`default.nix:425-427`); `autoPatchelfHook` runs on ELF
   hosts.
 - Install checks (`install-check.nix`): an offline argv regression net driven
-  through the real launcher against a stub target (flags prepend, `=` form,
-  `--settings` defers to the caller) plus behavioral nets for all three hooks
-  (`default.nix:464-480`).
+  through the real launcher against a stub target (flags prepend, `=` form, no
+  injected settings, caller `--settings` passes through) plus behavioral nets
+  for all three hooks (`default.nix:464-480`).
 - Flake output: `nix run .#claude-code` / `nix build .#claude-code`, plus
   `pkgs.claude-code` (overlay). `package.nix` sets `packageSet`, `flake`,
   `overlay`, `updateScript` all `true` (`packages/agent/claude-code/package.nix`).

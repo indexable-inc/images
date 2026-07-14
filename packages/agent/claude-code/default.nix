@@ -29,16 +29,17 @@
   # managed-settings layer) or turn this off with
   # `claude-code.override { dangerouslySkipPermissions = false; }`.
   dangerouslySkipPermissions ? true,
-  # Extra settings.json keys to ship through the read-only flagSettings layer
-  # (the `--settings` file below), deep-merged UNDER the controlled keys this
-  # package owns (so those always win on a conflict) and OVER the house posture
+  # Extra settings.json keys folded into the computed settings render
+  # (`passthru.settings`), deep-merged UNDER the controlled keys this package
+  # owns (so those always win on a conflict) and OVER the house posture
   # defaults (`houseSettingsDefaults` in the let-block, so any of those can be
-  # overridden per consumer). Lets a consumer keep its whole
-  # static Claude config (hooks, statusLine, enabledPlugins, marketplaces, ...)
-  # in Nix and out of a hand-maintained ~/.claude/settings.json: flagSettings
-  # merges per-key ABOVE user settings and is a separate read-only layer, so it
-  # never occupies (or symlinks) the writable settings.json the CLI churns at
-  # runtime. `{ }` (default) ships the house defaults plus the controlled keys.
+  # overridden per consumer). Lets a consumer keep its whole static Claude
+  # config (hooks, statusLine, enabledPlugins, marketplaces, ...) in Nix. The
+  # wrapper itself injects no settings flag (#3180): a consumer materializes
+  # the render into the writable user layer (the Home Manager module seeds
+  # ~/.claude/settings.json through a mutable-json merge) or enforces it via
+  # Claude's managed layer (lib/dev/agents.nix). `{ }` (default) ships the
+  # house defaults plus the controlled keys.
   extraSettings ? {},
   # Typed Claude Code feature posture, rendered to the CLAUDE_CODE_* env vars
   # so no consumer has to spell (or misspell) the raw names. Booleans gate
@@ -307,8 +308,12 @@
     else defaultSystemTools // systemTools;
   disabledSystemTools = builtins.attrNames (lib.filterAttrs (_: enabled: !enabled) effectiveSystemTools);
 
-  # Settings defaults are injected only when the caller passed no `--settings`;
-  # Claude treats repeated settings flags as first-wins.
+  # The computed settings render leaves this package only through
+  # `passthru.settings` / the rendered file below; nothing rides argv. Per
+  # Claude Code's precedence, CLI args outrank the local/project/user settings
+  # files, so the old injected `--settings` flag silently shadowed the user's
+  # own writable settings (#3180). Materializing into the user layer keeps
+  # every default overridable and the live config explainable from disk.
 
   # House posture defaults every wrapped session starts from: agent-neutral
   # preferences that used to live in per-machine extraSettings. They form the
@@ -334,9 +339,10 @@
     skipAutoPermissionPrompt = true;
     # House statusline (./statusline.nu): context bar, model, effort, and the
     # running CLI version with an update marker against Anthropic's `latest`
-    # release pointer. The house effortLevel rides argv because the script
-    # cannot read this read-only settings layer back from disk; the writable
-    # settings files still win when a user overrides per machine.
+    # release pointer. The house effortLevel also rides argv as the script's
+    # last resort for a settings.json that does not carry the key (nothing
+    # materialized this render, or the user pruned it); the writable settings
+    # files win whenever they answer.
     statusLine = {
       type = "command";
       command = "${lib.getExe pkgs.nushell} ${./statusline.nu} --default-effort ${houseEffortLevel}";
@@ -469,9 +475,10 @@
     ++ map (d: "--plugin-dir=${d}") pluginDirs;
 
   # The launch spec consumed by the shared Rust launcher (packages/config-launch):
-  # it sets env/PATH, prepends `wrapperFlags`, injects `--settings` only when the
-  # caller passed none (the CLI is first-wins between two `--settings` flags),
-  # then execs the real binary preserving argv0. The store output is read-only so
+  # it sets env/PATH, prepends `wrapperFlags`, then execs the real binary
+  # preserving argv0. No settings ride argv: the computed defaults materialize
+  # into the writable user settings layer via `passthru.settings` (#3180),
+  # where they stay overridable and readable. The store output is read-only so
   # the bundled self-updater could never write: DISABLE_AUTOUPDATER turns it off,
   # the install checks are skipped, and USE_BUILTIN_RIPGREP=0 pins search to the
   # Nix ripgrep on PATH so the wrapper owns the version pin. `target` is an
@@ -493,23 +500,6 @@
     env_defaults = lib.mapAttrs (_: toString) wrapperEnvDefaults;
     path_prepend = pathPrepend;
     flags = wrapperFlags;
-    conditional_flags = [
-      {
-        unless_present = ["--settings"];
-        flags = ["--settings=${settingsDefaultsFile}"];
-      }
-    ];
-    # `claude --which-settings` prints the store path of the read-only
-    # settings layer this package injects, then exits (answered by the
-    # launcher; the real CLI never sees the flag). The wrapper passes settings
-    # by flag, so nothing on disk under ~/.claude explains the live config:
-    # this is the introspection that does.
-    introspection = [
-      {
-        flag = "--which-settings";
-        value = "${settingsDefaultsFile}";
-      }
-    ];
   };
 
   inherit (stdenv.hostPlatform) system;
@@ -637,6 +627,15 @@ in
 
     passthru =
       {
+        # The computed settings render (house posture defaults, then the
+        # caller's extraSettings, then the controlled keys), exposed for
+        # consumers to materialize into the writable user layer (#3180): the
+        # Home Manager module seeds ~/.claude/settings.json from this via a
+        # mutable-json merge. `settingsFile` is the same render as a store
+        # JSON file for non-HM consumers and the install checks.
+        settings = settingsDefaults;
+        settingsFile = settingsDefaultsFile;
+
         # Same capture path as extractSystemPrompt, but depends only on the fetched
         # upstream binary so prompt snapshots do not rebuild the wrapped package.
         extractStockSystemPrompt = import ./extract-system-prompt.nix {

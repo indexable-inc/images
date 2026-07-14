@@ -12,30 +12,10 @@ struct Entry {
     value: String,
 }
 
-/// A flag block injected only when the user did not already pass an equivalent
-/// option: withheld if any user arg (scanning until the first `--`) equals a
-/// name in `unless_present` or starts with `"<name>="`.
-#[derive(Deserialize)]
-struct ConditionalFlags {
-    unless_present: Vec<String>,
-    flags: Vec<String>,
-}
-
-/// A flag the launcher answers itself instead of launching: when the user
-/// argv contains `flag` (scanning until the first `--`, same as
-/// `unless_present`), print `value` and exit 0. Lets a wrapper expose what it
-/// bakes (e.g. claude-code's `--which-settings` printing the injected
-/// settings store path) without the real binary ever seeing the flag.
-#[derive(Deserialize)]
-struct Introspection {
-    flag: String,
-    value: String,
-}
-
 /// The launch spec, read as JSON from `IX_LAUNCH_SPEC`. Every field beyond
 /// `target` is optional so each consumer uses only the layers it needs: codex
 /// sets the `forced`/`soft` `--config` layer; claude-code sets
-/// `env`/`env_defaults`/`path_prepend`/`flags`/`conditional_flags`.
+/// `env`/`env_defaults`/`path_prepend`/`flags`.
 #[derive(Deserialize)]
 struct Spec {
     /// Real binary to exec.
@@ -68,12 +48,6 @@ struct Spec {
     /// Flags prepended before the user argv, unconditionally.
     #[serde(default)]
     flags: Vec<String>,
-    /// Flag blocks prepended only when the user passed no equivalent option.
-    #[serde(default)]
-    conditional_flags: Vec<ConditionalFlags>,
-    /// Flags answered by the launcher itself: print the paired value, exit 0.
-    #[serde(default)]
-    introspection: Vec<Introspection>,
 }
 
 fn expand_tilde(path: &str) -> String {
@@ -118,46 +92,6 @@ fn build_config_flags(spec: &Spec, cfg: Option<&toml::Value>) -> Vec<String> {
     out
 }
 
-/// True if any user arg (up to the first `--`) is `name` or `name=...` for some
-/// name in `names`.
-fn arg_present(user_args: &[OsString], names: &[String]) -> bool {
-    for arg in user_args {
-        let Some(s) = arg.to_str() else { continue };
-        if s == "--" {
-            break;
-        }
-        for name in names {
-            if s == name
-                || s.strip_prefix(name)
-                    .is_some_and(|rest| rest.starts_with('='))
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// `flags` plus each conditional block whose options the user did not supply.
-fn build_arg_flags(spec: &Spec, user_args: &[OsString]) -> Vec<String> {
-    let mut out = spec.flags.clone();
-    for block in &spec.conditional_flags {
-        if !arg_present(user_args, &block.unless_present) {
-            out.extend(block.flags.iter().cloned());
-        }
-    }
-    out
-}
-
-/// The value to print (instead of launching) for the first introspection flag
-/// present in the user argv, if any.
-fn introspect<'a>(spec: &'a Spec, user_args: &[OsString]) -> Option<&'a str> {
-    spec.introspection
-        .iter()
-        .find(|intro| arg_present(user_args, std::slice::from_ref(&intro.flag)))
-        .map(|intro| intro.value.as_str())
-}
-
 /// `path_prepend` joined ahead of the current `PATH` (or alone if PATH is unset).
 fn build_path(prepend: &[String], current: Option<&str>) -> String {
     let mut p = prepend.join(":");
@@ -187,12 +121,6 @@ fn main() -> ExitCode {
     let argv0 = argv.next().unwrap_or_else(|| spec.target.clone().into());
     let user_args: Vec<OsString> = argv.collect();
 
-    // Introspection short-circuits the launch entirely: the target never runs.
-    if let Some(value) = introspect(&spec, &user_args) {
-        println!("{value}");
-        return ExitCode::SUCCESS;
-    }
-
     // Read the config file only when there are soft keys whose presence it
     // gates (claude-code sets no soft keys, so it never needs a config dir).
     let cfg = if spec.soft.is_empty() {
@@ -203,7 +131,7 @@ fn main() -> ExitCode {
             .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
     };
 
-    let mut prepended = build_arg_flags(&spec, &user_args);
+    let mut prepended = spec.flags.clone();
     prepended.extend(build_config_flags(&spec, cfg.as_ref()));
 
     let mut cmd = Command::new(&spec.target);
@@ -231,20 +159,13 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::ffi::OsString;
 
-    use super::{
-        ConditionalFlags, Entry, Introspection, Spec, arg_present, build_arg_flags,
-        build_config_flags, build_path, introspect, is_set,
-    };
+    use super::{Entry, Spec, build_config_flags, build_path, is_set};
 
     #[derive(Default)]
     struct SpecBuilder {
         forced: Vec<(&'static str, &'static str)>,
         soft: Vec<(&'static str, &'static str)>,
-        flags: Vec<&'static str>,
-        conditional: Vec<(Vec<&'static str>, Vec<&'static str>)>,
-        introspection: Vec<(&'static str, &'static str)>,
     }
 
     fn entries(pairs: Vec<(&str, &str)>) -> Vec<Entry> {
@@ -268,23 +189,7 @@ mod tests {
             env: BTreeMap::new(),
             env_defaults: BTreeMap::new(),
             path_prepend: Vec::new(),
-            flags: b.flags.into_iter().map(str::to_owned).collect(),
-            conditional_flags: b
-                .conditional
-                .into_iter()
-                .map(|(unless, flags)| ConditionalFlags {
-                    unless_present: unless.into_iter().map(str::to_owned).collect(),
-                    flags: flags.into_iter().map(str::to_owned).collect(),
-                })
-                .collect(),
-            introspection: b
-                .introspection
-                .into_iter()
-                .map(|(flag, value)| Introspection {
-                    flag: flag.to_owned(),
-                    value: value.to_owned(),
-                })
-                .collect(),
+            flags: Vec::new(),
         }
     }
 
@@ -311,10 +216,6 @@ mod tests {
 
     fn parse_toml(s: &str) -> toml::Value {
         toml::from_str(s).expect("valid toml")
-    }
-
-    fn os(args: &[&str]) -> Vec<OsString> {
-        args.iter().map(OsString::from).collect()
     }
 
     #[test]
@@ -446,87 +347,6 @@ mod tests {
         assert!(
             flags.is_empty(),
             "no soft flags should be injected when all keys present; got: {flags:?}"
-        );
-    }
-
-    #[test]
-    fn static_flags_prepend() {
-        let spec = make_spec(SpecBuilder {
-            flags: vec!["--debug", "--thinking-display=summarized"],
-            ..SpecBuilder::default()
-        });
-        let flags = build_arg_flags(&spec, &os(&["mcp", "list"]));
-        assert_eq!(flags, vec!["--debug", "--thinking-display=summarized"]);
-    }
-
-    #[test]
-    fn conditional_flag_injected_when_option_absent() {
-        let spec = make_spec(SpecBuilder {
-            conditional: vec![(vec!["--settings"], vec!["--settings=/def.json"])],
-            ..SpecBuilder::default()
-        });
-        let flags = build_arg_flags(&spec, &os(&["-p", "hi"]));
-        assert_eq!(flags, vec!["--settings=/def.json"]);
-    }
-
-    #[test]
-    fn conditional_flag_withheld_for_every_option_spelling() {
-        let spec = make_spec(SpecBuilder {
-            conditional: vec![(vec!["--settings"], vec!["--settings=/def.json"])],
-            ..SpecBuilder::default()
-        });
-        for args in [
-            &["--settings", "/user.json"][..],
-            &["--settings=/user.json"][..],
-        ] {
-            let flags = build_arg_flags(&spec, &os(args));
-            assert!(flags.is_empty(), "conditional leaked for {args:?}: {flags:?}");
-        }
-    }
-
-    #[test]
-    fn arg_present_stops_at_double_dash() {
-        // a `--settings` after `--` is a positional, not our option.
-        assert!(!arg_present(
-            &os(&["--", "--settings", "x"]),
-            &["--settings".to_owned()]
-        ));
-        assert!(arg_present(
-            &os(&["--settings", "x"]),
-            &["--settings".to_owned()]
-        ));
-    }
-
-    #[test]
-    fn introspection_answers_when_flag_present() {
-        let spec = make_spec(SpecBuilder {
-            introspection: vec![("--which-settings", "/nix/store/settings.json")],
-            ..SpecBuilder::default()
-        });
-        assert_eq!(
-            introspect(&spec, &os(&["--which-settings"])),
-            Some("/nix/store/settings.json")
-        );
-        // Position-independent, like the rest of the flag scan.
-        assert_eq!(
-            introspect(&spec, &os(&["-p", "hi", "--which-settings"])),
-            Some("/nix/store/settings.json")
-        );
-    }
-
-    #[test]
-    fn introspection_ignores_absent_and_positional_flags() {
-        let spec = make_spec(SpecBuilder {
-            introspection: vec![("--which-settings", "/nix/store/settings.json")],
-            ..SpecBuilder::default()
-        });
-        assert_eq!(introspect(&spec, &os(&["mcp", "list"])), None);
-        // After `--` the token is a positional for the target, not our flag.
-        assert_eq!(introspect(&spec, &os(&["--", "--which-settings"])), None);
-        // `=` form parity with `arg_present`: still recognized as the flag.
-        assert_eq!(
-            introspect(&spec, &os(&["--which-settings=x"])),
-            Some("/nix/store/settings.json")
         );
     }
 

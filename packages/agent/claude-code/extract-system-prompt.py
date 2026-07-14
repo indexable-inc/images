@@ -12,8 +12,8 @@ It can probe two binaries and compare them (`--mode`):
   - stock: the unwrapped upstream binary (the package's `libexec` helper), which
     is the plain download with no house overrides.
   - wrapped: this package's launcher (`bin/claude`), which bakes the house
-    --system-prompt-file (a full replacement of the stock prompt), --mcp-config,
-    and --settings.
+    --system-prompt-file (a full replacement of the stock prompt) and
+    --mcp-config.
   - diff: a unified diff of the two, plus which tools the wrapper adds/removes.
 
 Every capture runs from a fresh temp HOME and an empty temp cwd, so no
@@ -45,8 +45,8 @@ from typing import Any
 # (`--stock-binary <libexec helper>` / `--wrapped-binary <bin/claude>`); a
 # user-supplied value on the CLI lands later in argv and wins, so these are only
 # defaults. "stock" is the unwrapped upstream binary; "wrapped" is the Nix
-# launcher that bakes this package's --system-prompt-file / --mcp-config /
-# --settings overrides.
+# launcher that bakes this package's --system-prompt-file / --mcp-config
+# overrides.
 DEFAULT_STOCK_BINARY = "claude"
 DEFAULT_WRAPPED_BINARY = "claude"
 
