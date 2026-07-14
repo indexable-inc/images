@@ -4,6 +4,8 @@
   /// Polls while mounted: the panel mounts one of these per *expanded* row, so
   /// a collapsed log costs nothing.
 
+  import { getPaneVisibility } from '$lib/panes/context';
+
   type Props = {
     /// Exact active worker generation whose log to tail. The server resolves
     /// this identity to the path recorded in the machine-wide build view.
@@ -21,6 +23,11 @@
   };
 
   const { drvPath, pid, startTime, startTicks }: Props = $props();
+
+  /// Whether the pane hosting this drawer is currently shown. The poll keeps
+  /// running while hidden (the drawer stays mounted), but the tail-follow
+  /// scroll must wait for layout to exist -- see the follow effect below.
+  const paneVisible = getPaneVisibility();
 
   /// Refetch cadence while open; matches the global probe's two-second poll,
   /// so the tail is as live as the row it belongs to.
@@ -92,7 +99,13 @@
     // Pin to the newest lines on every update: this is a tail view, not a
     // scrollback browser (the full log stays available via `nix log` later).
     void text;
-    if (stream !== null) stream.scrollTop = stream.scrollHeight;
+    // Reading `paneVisible()` both skips the scroll while the hosting pane is
+    // hidden -- with `display: none` the stream has no layout, so scrollHeight
+    // is 0 and the write would record scrollTop 0 -- and re-runs this effect
+    // when the pane is shown again, snapping to the live tail even if the
+    // build quieted (no new `text`) while it was hidden.
+    if (stream === null || !paneVisible()) return;
+    stream.scrollTop = stream.scrollHeight;
   });
 </script>
 
