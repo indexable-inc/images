@@ -520,6 +520,13 @@
     lib = ix;
     inherit (ix) nixosModules;
     darwinModules = {
+      # Cross-platform DNS sinkhole, darwin branch: set
+      # `networking.blockedHosts = [ "tiktok.com" ]` and the apex + `www.`
+      # hosts are hard-routed to 127.0.0.1 via the /etc/hosts activation
+      # script (macOS has no extraHosts module). The NixOS branch of the same
+      # option is `nixosModules.blocklist`. Ships no blocklist data; the
+      # domain list is consumer policy. See modules/networking/blocklist.
+      blocklist = ./modules/networking/blocklist/darwin.nix;
       # Personal-but-shareable nix-darwin module for github:andrewgazelka: the
       # Homebrew package set (GUI casks, the `mas` brew, Mac App Store apps).
       # Companion to homeModules.andrewgazelka (which owns the home-manager

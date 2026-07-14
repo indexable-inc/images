@@ -2792,7 +2792,63 @@
     builtins.deepSeq (patchedSrcFixture {}).patches true
   );
 
+  # --- Cross-platform blocklist (modules/networking/blocklist) --------------
+  # NixOS branch through the real image eval path; darwin branch through a
+  # stub option set (nix-darwin is not an input), a la portable-services.
+  blocklistNixos = evalConfig [
+    {networking.blockedHosts = ["example.com"];}
+  ];
+  evalBlocklistDarwin = hosts:
+    (lib.evalModules {
+      modules = [
+        (paths.modules + "/networking/blocklist/darwin.nix")
+        {
+          # Stub of the nix-darwin option the branch writes; just enough
+          # surface to observe the rendered /etc/hosts content.
+          options.system.activationScripts = lib.genAttrs ["extraActivation" "postActivation"] (_: {
+            text = lib.mkOption {
+              type = lib.types.lines;
+              default = "";
+            };
+          });
+        }
+        {networking.blockedHosts = hosts;}
+      ];
+    }).config;
+  blocklistDarwin = evalBlocklistDarwin ["example.com"];
+  blocklistDarwinEmpty = evalBlocklistDarwin [];
+
   groups = {
+    blocklist = [
+      {
+        assertion =
+          blocklistNixos.networking.blockedHostsText
+          == "127.0.0.1\texample.com\n127.0.0.1\twww.example.com\n";
+        message = "blocklist should render apex + www sinkhole lines, one per line";
+      }
+      {
+        assertion = lib.hasInfix "127.0.0.1\twww.example.com" blocklistNixos.networking.extraHosts;
+        message = "NixOS branch should apply the rendered sinkhole via networking.extraHosts";
+      }
+      {
+        assertion =
+          lib.hasInfix "127.0.0.1\twww.example.com"
+          blocklistDarwin.system.activationScripts.postActivation.text;
+        message = "darwin branch should write the sinkhole lines after networking activation";
+      }
+      {
+        assertion = blocklistDarwin.system.activationScripts.extraActivation.text == "";
+        message = "darwin branch should not write /etc/hosts before networking activation";
+      }
+      {
+        assertion = lib.hasInfix "127.0.0.1\tlocalhost" blocklistDarwin.system.activationScripts.postActivation.text;
+        message = "darwin branch should keep the localhost block when rewriting /etc/hosts";
+      }
+      {
+        assertion = blocklistDarwinEmpty.system.activationScripts.postActivation.text == "";
+        message = "darwin branch should be a no-op when networking.blockedHosts is empty";
+      }
+    ];
     security-roots = [
       {
         assertion =
