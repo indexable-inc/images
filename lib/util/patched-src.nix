@@ -92,9 +92,36 @@
           The selection must name existing `NNNN-*.patch` files of the series.
         ''
       else lib.filter (f: lib.elem f patchNames) discovered;
-in
-  evalTimeSubstitutable (applyPatches {
+  patchFiles =
+    map (fileName: {
+      inherit fileName;
+      path = assertCanonical fileName (patchDir + "/${fileName}");
+    })
+    selected;
+  # This digest identifies the ordered downstream delta. Consumers combine it
+  # with their pinned upstream revision when they need a full source identity.
+  patches =
+    map (patch: {
+      name = patch.fileName;
+      digest = builtins.hashString "sha256" (builtins.readFile patch.path);
+    })
+    patchFiles;
+  patchSet = {
+    count = builtins.length patches;
+    algorithm = "sha256";
+    digest = builtins.hashString "sha256" (builtins.toJSON patches);
+    inherit patches;
+  };
+  patched = evalTimeSubstitutable (applyPatches {
     name = "${name}-patched";
     inherit src;
-    patches = map (f: assertCanonical f (patchDir + "/${f}")) selected;
+    patches = map (patch: patch.path) patchFiles;
+  });
+in
+  patched.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        inherit patchSet;
+      };
   })
