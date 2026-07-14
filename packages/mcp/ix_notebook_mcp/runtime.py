@@ -2042,6 +2042,25 @@ _MERGEABILITY_POLL_S: float = 2.0
 _MERGEABILITY_TIMEOUT_S: float = 30.0
 
 
+def _nu_record(value: Any, *, source: str) -> dict[str, Any]:
+    """One nu pipeline result as a plain record dict.
+
+    nu() hands a single record back as a plain dict (#2394), but a kernel
+    running a pre-#2394 nu build returns a 1-row polars DataFrame instead,
+    and `.get` on a frame killed the watch with AttributeError (#3175).
+    Normalize at the boundary; anything else fails loudly.
+    """
+    if isinstance(value, dict):
+        return value
+    to_dicts = getattr(value, "to_dicts", None)
+    if callable(to_dicts):
+        rows = to_dicts()
+        if len(rows) == 1:
+            return dict(rows[0])
+        raise TypeError(f"{source}: expected one record, got a {len(rows)}-row frame")
+    raise TypeError(f"{source}: expected a record, got {type(value).__name__}")
+
+
 async def watch_pr(
     pr: str | int,
     *,
@@ -2090,11 +2109,12 @@ async def watch_pr(
         )
 
     async def refresh() -> dict[str, Any]:
-        # `from json` on a gh object yields a nu record, which nu() returns as
-        # a plain dict (issue #2390).
-        row: dict[str, Any] = await run_nu(
-            'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
-            'url,autoMergeRequest,isDraft,reviewDecision | complete | get stdout | from json'
+        row = _nu_record(
+            await run_nu(
+                'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
+                'url,autoMergeRequest,isDraft,reviewDecision | complete | get stdout | from json'
+            ),
+            source="gh pr view",
         )
         checks = row.get("statusCheckRollup") or []
         title = row.get("title") or f"PR {row.get('number') or clean_pr}"
@@ -2146,10 +2166,9 @@ async def watch_pr(
         else:
             flag = f"--{merge_method}"
             delete = "--delete-branch" if delete_branch else ""
-            # `| complete` yields a nu record: a plain dict, not a 1-row frame
-            # (issue #2390).
-            merge: dict[str, Any] = await run_nu(
-                f"gh pr merge $env.PR --auto {flag} {delete} | complete"
+            merge = _nu_record(
+                await run_nu(f"gh pr merge $env.PR --auto {flag} {delete} | complete"),
+                source="gh pr merge",
             )
             if int(merge["exit_code"]) != 0:
                 state["error"] = str(merge["stderr"] or merge["stdout"])
