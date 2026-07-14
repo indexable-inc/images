@@ -214,7 +214,7 @@ async fn main() -> Result<()> {
     // no command whose exit could end the run, so it serves until interrupted.
     if matches!(args.command, NwmCommand::Serve) {
         let monitor = Arc::new(RwLock::new(MonitorState::default()));
-        let UiStart::Bound(ui) = start_ui(&args.host, args.port, site_dir, monitor).await? else {
+        let UiStart::Bound(ui) = start_ui(&args.host, args.port, &site_dir, monitor).await? else {
             bail!(
                 "port {} is already in use; a second serve daemon is a configuration error, \
                  stop the other monitor or pass --port",
@@ -235,7 +235,7 @@ async fn main() -> Result<()> {
 
     let job = build_job(args.command).await.context("planning job")?;
     let monitor = Arc::new(RwLock::new(MonitorState::new(job.command_label.clone())));
-    let ui = match start_ui(&args.host, args.port, site_dir, Arc::clone(&monitor)).await? {
+    let ui = match start_ui(&args.host, args.port, &site_dir, Arc::clone(&monitor)).await? {
         UiStart::Bound(ui) => ui,
         // A sibling monitor (an always-on `nwm serve`) already owns the port:
         // run the job headless beside it instead of failing the switch. Its
@@ -329,7 +329,7 @@ enum UiStart {
 async fn start_ui(
     host: &str,
     port: u16,
-    site_dir: PathBuf,
+    site_dir: &Path,
     monitor: Arc<RwLock<MonitorState>>,
 ) -> Result<UiStart> {
     let index_html =
@@ -391,10 +391,10 @@ async fn sibling_monitor(port: u16) -> bool {
 
 fn serve(
     listener: tokio::net::TcpListener,
-    site_dir: PathBuf,
+    site_dir: &Path,
     state: AppState,
 ) -> tokio::task::JoinHandle<()> {
-    let app = router(&site_dir, state);
+    let app = router(site_dir, state);
 
     tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, app).await {
