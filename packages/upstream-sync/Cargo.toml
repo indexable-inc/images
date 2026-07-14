@@ -1,0 +1,30 @@
+[package]
+name = "upstream-sync"
+description = "De-fork upstreaming loop: track, dedupe, and open upstream PRs for fork patches"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anstream = { workspace = true }
+anstyle = { workspace = true }
+chrono = { workspace = true, features = ["clock"] }
+clap = { workspace = true, features = ["derive"] }
+color-eyre = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+lazy-regex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+ureq = { workspace = true, features = ["json"] }
+
+[[bin]]
+name = "upstream-sync"
+path = "src/main.rs"
+
+[[bin]]
+name = "upstream-pr"
+path = "src/bin/upstream_pr.rs"

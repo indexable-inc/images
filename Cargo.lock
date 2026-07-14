@@ -13520,6 +13520,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "upstream-sync"
+version = "0.1.0"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "chrono",
+ "clap",
+ "color-eyre",
+ "indexmap 2.14.0",
+ "lazy-regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
+]
+
+[[package]]
 name = "ureq"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
