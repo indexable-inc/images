@@ -1809,6 +1809,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-statusline"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "claude-stories"
 version = "0.1.0"
 dependencies = [

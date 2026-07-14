@@ -3,6 +3,7 @@ members = [
   "modules/services/resource-monitor/stats-writer",
   "packages/blast-radius",
   "packages/build-version",
+  "packages/agent/claude-code/statusline",
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
   "packages/agent/subagent-cache",

@@ -13,7 +13,6 @@
   ix,
   git,
   jq,
-  nushell,
   repoPackages,
   hookRunner,
   launchSpec,
@@ -145,10 +144,6 @@
     # guards the numeric per-segment compare a string compare would get
     # backwards.
     statusline_cmd=${lib.escapeShellArg statuslineCommand}
-    if [ "$(${lib.getExe nushell} --no-config-file -c "nu-check '${./statusline.nu}'")" != true ]; then
-      printf 'statusline check failed: nu-check rejected statusline.nu\n' >&2
-      exit 1
-    fi
     statusline_payload='{"version":"1.2.3","model":{"display_name":"TestModel"},"context_window":{"context_window_size":200000,"current_usage":{"input_tokens":100000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}'
     mkdir -p sl-home/.cache/ix-claude-statusline sl-cold-home
     printf '1.2.10' > sl-home/.cache/ix-claude-statusline/latest
