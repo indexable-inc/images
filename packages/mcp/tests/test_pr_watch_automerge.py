@@ -107,3 +107,41 @@ def test_blocked_pr_still_arms_auto_merge(monkeypatch: pytest.MonkeyPatch) -> No
     assert len(fake.merges) == 1
     assert "--auto" in fake.merges[0]
     assert "auto_merge" not in result
+
+
+class _FrameNu(_ScriptedNu):
+    """A pre-#2394 nu build: a single record arrives as a 1-row polars
+    DataFrame instead of a plain dict (#3175)."""
+
+    async def __call__(self, code: str, **kwargs: object) -> object:
+        import polars as pl
+
+        value = await super().__call__(code, **kwargs)
+        return pl.DataFrame([value])
+
+
+def test_one_row_frame_from_stale_nu_still_watches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3175: `refresh()` died with AttributeError DataFrame.get when nu
+    returned a 1-row frame for the gh pr view record; the boundary now
+    normalizes it and the watch survives to the terminal state."""
+    fake = _FrameNu([_view(9104, "OPEN", "BLOCKED"), _view(9104, "MERGED", "BLOCKED")])
+    monkeypatch.setitem(sys.modules, "nu", fake)
+
+    async def fake_notify(content: str, **meta: object) -> None:
+        pass
+
+    monkeypatch.setattr(runtime, "notify", fake_notify)
+    result = asyncio.run(runtime.watch_pr(9104, auto_merge=True, interval=0.01))
+    assert result["state"] == "MERGED"
+    assert len(fake.merges) == 1
+
+
+def test_nu_record_rejects_unexpected_shapes() -> None:
+    import polars as pl
+
+    assert runtime._nu_record({"a": 1}, source="t") == {"a": 1}
+    assert runtime._nu_record(pl.DataFrame([{"a": 1}]), source="t") == {"a": 1}
+    with pytest.raises(TypeError, match="2-row frame"):
+        runtime._nu_record(pl.DataFrame([{"a": 1}, {"a": 2}]), source="t")
+    with pytest.raises(TypeError, match="expected a record"):
+        runtime._nu_record("text", source="t")

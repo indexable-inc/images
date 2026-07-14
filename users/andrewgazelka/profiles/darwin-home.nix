@@ -2,8 +2,13 @@
 {
   configRoot,
   ghosttyModule,
+  # Personal macOS guest specs (data only; see users/andrewgazelka/guests).
+  guestsModule,
   indexPackages,
   ix,
+  # General vmkit guest-state module the specs above configure
+  # (modules/home/macos-guests.nix).
+  macosGuestsModule,
   optionsModule,
   raycastModule,
 }: {
@@ -105,6 +110,10 @@ in {
     # Ghostty config, generated from Nix (home/ghostty.nix). Replaces the former
     # out-of-store symlink to ghostty/config.
     ghosttyModule
+    # vmkit macOS guests: general push machinery + the personal guest specs
+    # (macos-primary / the Beeper iMessage bridge, ENG-7746).
+    macosGuestsModule
+    guestsModule
   ];
 
   home.sessionPath = ["$HOME/.lmstudio/bin"];
@@ -654,6 +663,36 @@ in {
       RunAtLoad = true;
       StandardOutPath = "${config.home.homeDirectory}/Library/Logs/room-server.log";
       StandardErrorPath = "${config.home.homeDirectory}/Library/Logs/room-server.log";
+    };
+  };
+
+  # Weave fact server (indexable-inc/weave): the ix-mcp kernel store's
+  # write-behind flusher POSTs facts to 127.0.0.1:7677; with no listener every
+  # kernel cell logs connection-refused retries and drops facts (index#3203).
+  # No --agents: the in-process agent host wedges POST /api/facts
+  # (indexable-inc/weave#240). Binary + ui are gc-rooted out-links (this
+  # config has no weave input); refresh with
+  #   nix build ~/Projects/indexable-inc/weave#default --out-link ~/.local/share/weave/app
+  #   nix build ~/Projects/indexable-inc/weave#ui --out-link ~/.local/share/weave/ui
+  # Log stays at ~/.local/share/weave/serve.log next to the store: the path
+  # existing tooling and memories already reference.
+  launchd.agents.weave-serve = {
+    enable = true;
+    config = {
+      ProgramArguments = lockArgs "weave-serve" [
+        "${config.home.homeDirectory}/.local/share/weave/app/bin/weave"
+        "--store"
+        "${config.home.homeDirectory}/.local/share/weave/store"
+        "serve"
+        "--addr"
+        "127.0.0.1:7677"
+        "--ui"
+        "${config.home.homeDirectory}/.local/share/weave/ui"
+      ];
+      KeepAlive = true;
+      RunAtLoad = true;
+      StandardOutPath = "${config.home.homeDirectory}/.local/share/weave/serve.log";
+      StandardErrorPath = "${config.home.homeDirectory}/.local/share/weave/serve.log";
     };
   };
 

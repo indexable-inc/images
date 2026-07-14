@@ -40,6 +40,11 @@ name: Cache push watchdog
 # health or closing the issue. There is no success-only path. Alerts use the
 # find-or-update tracking-issue channel (as cve-scan.yml / blast-radius.yml);
 # this repo has no Slack webhook secret.
+#
+# "Ran green" vs "published every root": since #3195 those coincide. A
+# cache-push run whose lanes recorded failed realise roots concludes failure
+# (advance-cache-ready refuses the pin move), so chronic root failures show
+# as red runs plus pin drift (signal 3), never as silent green.
 
 on:
   schedule:
