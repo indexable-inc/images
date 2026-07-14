@@ -1,0 +1,7 @@
+{
+  "bbctl": {
+    "hash": "sha256-sG4JTkofHiEthS21EvEGpacHrl4lcfs1JqBB0vysCWs=",
+    "url": "https://github.com/beeper/bridge-manager/releases/download/v0.14.0/bbctl-macos-arm64",
+    "version": "0.14.0"
+  }
+}
