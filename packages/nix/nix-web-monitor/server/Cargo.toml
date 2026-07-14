@@ -17,6 +17,7 @@ bzip2.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 ignore.workspace = true
 nix-web-monitor-parser.workspace = true
+reqwest.workspace = true
 rmp-serde.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
