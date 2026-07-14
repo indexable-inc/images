@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { splitDerivation } from '$lib/format';
+  import { getPaneVisibility } from '$lib/panes/context';
   import { LOG_LEVEL_FILTERS, type LogEntry, type LogLevelFilter } from '$lib/types';
 
   type Props = {
@@ -15,6 +16,12 @@
   const RECENT_LOG_LIMIT = 500;
 
   const { logs, selectedActivityId, selectedDrv, onclearselection }: Props = $props();
+
+  /// Whether this pane is currently shown. Hidden panes stay mounted, so the
+  /// window keydown handler below keeps firing and must stand down -- a hidden
+  /// log pane must not swallow `/`, focus its invisible search input, or let
+  /// Esc clear filters behind the operator's back.
+  const paneVisible = getPaneVisibility();
 
   /// Package name of the pinned build, for the selection chip.
   const selectedName = $derived(selectedDrv === null ? null : splitDerivation(selectedDrv).name);
@@ -102,6 +109,7 @@
   /// (jump to the live tail stays a button), so the two window handlers never
   /// contend for the same key. Typing in a field is left alone except for `Esc`.
   function onWindowKeydown(event: KeyboardEvent): void {
+    if (!paneVisible()) return;
     const target = event.target;
     const typing =
       target instanceof HTMLElement &&

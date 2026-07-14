@@ -58,6 +58,13 @@ beyond Svelte itself).
   switches and collapse, like a fixed layout that never unmounts panels. The
   flip side: a hidden pane's effects keep running. Dragging a tab to another
   group (or popping it out) still remounts it.
+- **Hidden panes must not grab global input.** Because hidden panes stay
+  mounted, a `<svelte:window onkeydown>` in pane content keeps firing while
+  its tab is inactive or its group collapsed. Content that owns window-level
+  shortcuts should call `getPaneVisibility()` (from `context.ts`) and
+  early-return in the handler while hidden. Floating windows always count as
+  visible, and so does content rendered outside a dock (the context defaults
+  to visible).
 - **Layout is a tree.** Internal nodes are `split` (row/column, fractional
   sizes); leaves are `group` (tabs sharing a region). `types.ts` has `split()`
   / `group()` constructors.
@@ -93,7 +100,9 @@ with neutral fallbacks: `--bg`, `--panel`, `--panel-soft`, `--ink`, `--muted`,
 - `layout.svelte.ts` — `DockState`: every mutation, normalization
   (no empty groups, no single-child splits), reconciliation against the
   registered pane set, and localStorage load/validate/persist.
-- `context.ts` — dock-scoped context plumbing.
+- `context.ts` — dock-scoped context plumbing, plus the per-pane visibility
+  context (`getPaneVisibility`) that pane content gates global shortcuts on.
+- `PaneVisibility.svelte` — per-slot bridge that feeds that context.
 - `PaneDock.svelte` — root component; imperative `resetLayout()` / `reveal()`.
 - `PaneSplit.svelte` — recursive split renderer + resize math.
 - `PaneSplitter.svelte` — the draggable boundary (pointer capture + ARIA).

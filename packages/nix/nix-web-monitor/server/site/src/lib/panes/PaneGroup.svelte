@@ -5,6 +5,7 @@
   /// for moving tabs between groups.
 
   import { getDockContext } from '$lib/panes/context';
+  import PaneVisibility from '$lib/panes/PaneVisibility.svelte';
   import type { GroupNode, PaneId, SplitDirection } from '$lib/panes/types';
 
   type Props = {
@@ -163,13 +164,19 @@
        which kept every panel mounted for the whole session -- and so does
        that layout's render cost: a hidden pane's effects (e.g. an expanded
        machine-build log drawer's poll) keep running, as they always did.
+       Global *input*, though, must not: a mounted-but-hidden pane's
+       window-level shortcuts would steal keystrokes from the visible pane, so
+       each slot bridges its shown/hidden state into the content via
+       PaneVisibility for the content's handlers to gate on.
        Keyed by pane id like the tab bar; a tab dragged to *another* group
        still remounts there, since it moves between two keyed lists. -->
   {#each visibleTabs as id (id)}
     {@const spec = dock.spec(id)}
     {#if spec !== undefined}
       <div class="pane-content" hidden={group.collapsed || id !== activeId}>
-        {@render spec.content()}
+        <PaneVisibility visible={!group.collapsed && id === activeId}>
+          {@render spec.content()}
+        </PaneVisibility>
       </div>
     {/if}
   {/each}

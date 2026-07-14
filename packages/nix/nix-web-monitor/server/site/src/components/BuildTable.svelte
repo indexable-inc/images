@@ -5,6 +5,7 @@
   import { durationLabel, isRemote, whereLabel } from '$lib/build-row';
   import { buildDependencyTree, flattenVisible, hasChildren, ROOT_SENTINEL } from '$lib/build-tree';
   import { useNow } from '$lib/now.svelte';
+  import { getPaneVisibility } from '$lib/panes/context';
   import {
     ACTIVITY_NAME_BUILD,
     type BuildNode,
@@ -50,6 +51,11 @@
   }: Props = $props();
 
   const now = useNow();
+
+  /// Whether this pane is currently shown. Hidden panes stay mounted (inactive
+  /// tab, collapsed group), so the window keydown handler below keeps firing
+  /// and must stand down or it would steal keys from the visible pane.
+  const paneVisible = getPaneVisibility();
 
   /// Root-cause derivations as a set for O(1) per-row lookup.
   const rootCauseSet = $derived(new Set(rootCauses));
@@ -172,6 +178,7 @@
   }
 
   function onWindowKeydown(event: KeyboardEvent): void {
+    if (!paneVisible()) return;
     const target = event.target;
     const typing =
       target instanceof HTMLElement &&

@@ -6,6 +6,7 @@
 
   import { untrack } from 'svelte';
   import { getDockContext } from '$lib/panes/context';
+  import PaneVisibility from '$lib/panes/PaneVisibility.svelte';
   import type { FloatingPane } from '$lib/panes/types';
 
   type Props = {
@@ -146,8 +147,14 @@
         ⇲
       </button>
     </header>
+    <!-- A floating window is always shown (it only renders while spec.visible
+         allows), so its content keeps its global shortcuts. Explicit rather
+         than leaning on getPaneVisibility's default, so the guarantee survives
+         the window ever being rendered inside another pane's subtree. -->
     <div class="pane-content">
-      {@render spec.content()}
+      <PaneVisibility visible={true}>
+        {@render spec.content()}
+      </PaneVisibility>
     </div>
     <div
       class="pane-window-resize"
