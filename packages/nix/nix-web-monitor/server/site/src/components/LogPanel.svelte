@@ -50,7 +50,13 @@
   $effect(() => {
     void visible.length;
     const target = stream;
-    if (!follow || target === null) return;
+    // Reading `paneVisible()` (after the `follow` check, so it's only tracked
+    // while following) both skips the scroll while the pane is hidden -- with
+    // `display: none` the stream has no layout, so scrollHeight is 0 and the
+    // write would be a no-op anyway -- and re-runs this effect when the tab is
+    // shown again, snapping back to the live tail entries appended while it
+    // was hidden.
+    if (!follow || target === null || !paneVisible()) return;
     void tick().then(() => {
       target.scrollTop = target.scrollHeight;
     });
