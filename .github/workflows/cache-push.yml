@@ -5,7 +5,9 @@ name: Cache push
 # Linux->Darwin cross packages) on the self-hosted pool (#1639), and
 # `darwin-build`/`darwin-push` relay the native aarch64-darwin variants from a
 # GitHub-hosted mac (#1890). `advance-cache-ready` moves the consumer pin only
-# after BOTH lanes land. Non-gating for merges.
+# after BOTH lanes land with every root realised: a lane with failed roots
+# still publishes what did realise, but the run concludes failure and the pin
+# holds (#3195). Non-gating for merges.
 
 on:
   push:
@@ -52,6 +54,9 @@ jobs:
     # systemd credential (spawn.rs ix_public_push_eligible).
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-cache-push', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 180
+    outputs:
+      # Realise-failure count for advance-cache-ready's publish-hole gate (#3195).
+      failed-roots: ${{ steps.publish.outputs.failed-roots }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -62,6 +67,7 @@ jobs:
         uses: ./.github/actions/bootstrap-patched-nix
 
       - name: Publish all packages to cache.ix.dev
+        id: publish
         shell: bash
         env:
           FULL_PASS: ${{ inputs.full_pass && '1' || '' }}
@@ -185,6 +191,12 @@ jobs:
             echo "::error::cache-push: $(wc -l < "$failed_roots") root(s) failed to realise (rebuilt and re-failed on every merge until fixed):$names"
           fi
 
+          # Recorded for advance-cache-ready rather than failing here: an exit
+          # before the push below would lose the partial publish, and one
+          # after it would skip the darwin lane (`needs: push`). The gate
+          # downstream fails the run so a hole never concludes success (#3195).
+          echo "failed-roots=$(( $(wc -l < "$failed_roots") ))" >> "$GITHUB_OUTPUT"
+
           # `fallback = true` engages silently: nix rebuilds a failed
           # substitute from source with no distinct log line, so a degraded
           # cache would surface only as slower runs. Every substitution
@@ -252,6 +264,9 @@ jobs:
     # 3 cores, and run 28772327218 showed a timeout here silently freezes
     # cache-ready. 330 leaves margin under GitHub's 360-minute job hard cap.
     timeout-minutes: 330
+    outputs:
+      # Realise-failure count for advance-cache-ready's publish-hole gate (#3195).
+      failed-roots: ${{ steps.realise.outputs.failed-roots }}
     env:
       # Replaces the workflow-level NIX_CONFIG: `cores = 1` there fits the
       # shared self-hosted pool, but this runner is dedicated, so each build
@@ -289,6 +304,7 @@ jobs:
         uses: ./.github/actions/bootstrap-patched-nix
 
       - name: Realise darwin roots and stage the relay cache
+        id: realise
         shell: bash
         env:
           FULL_PASS: ${{ inputs.full_pass && '1' || '' }}
@@ -379,9 +395,11 @@ jobs:
           # -n1 per-drv realise, same reasoning as the linux lane: a batched
           # realise prints no paths at all if any single drv fails, and the
           # wrapper records WHICH root failed so a chronic failure is loud
-          # (#1863). Individual root failures warn without failing the job,
-          # matching the linux lane's temperament; job-level failures (empty
-          # eval, relay upload) are what block `cache-ready`.
+          # (#1863). Individual root failures keep the job green, matching
+          # the linux lane: a red job here would skip `darwin-push` and lose
+          # the relay of everything that DID realise. The failed-roots output
+          # instead fails the run at advance-cache-ready (#3195); job-level
+          # failures (empty eval, relay upload) block `cache-ready` outright.
           #
           # Each root is realised, copied into the relay cache, and then the
           # store is GC'd when scratch runs low, so closures do not
@@ -454,6 +472,9 @@ jobs:
             done < "$failed_roots"
             echo "::error::darwin-build: $(wc -l < "$failed_roots") root(s) failed to realise (rebuilt and re-failed on every merge until fixed):$names"
           fi
+
+          # Same publish-then-gate contract as the linux lane (#3195).
+          echo "failed-roots=$(( $(wc -l < "$failed_roots") ))" >> "$GITHUB_OUTPUT"
 
           # Same silent-fallback detection as the linux lane (ix#6139).
           fallback_hits=0
@@ -593,12 +614,13 @@ jobs:
   # consumers pinning `cache-ready` rely on the native artifacts having been
   # relayed, so a darwin lane failure must hold the pin back exactly like a
   # linux one. Downstream of the lanes, so a failure here never gates the
-  # cache publish itself.
+  # cache publish itself. Also the run's truth gate (#3195): the lanes stay
+  # green over individual failed roots so their partial publishes land, and
+  # this job fails instead, holding the pin and turning the run red.
   advance-cache-ready:
-    needs: [push, darwin-push]
-    # workflow_dispatch can target any ref; only main commits may move the
-    # consumer pin.
-    if: github.ref == 'refs/heads/main'
+    # darwin-build is already an ancestor through darwin-push; naming it here
+    # makes its failed-roots output addressable.
+    needs: [push, darwin-build, darwin-push]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -608,8 +630,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          LINUX_FAILED_ROOTS: ${{ needs.push.outputs.failed-roots }}
+          DARWIN_FAILED_ROOTS: ${{ needs.darwin-build.outputs.failed-roots }}
         run: |
           set -euo pipefail
+
+          # Publish-hole gate: run 29295767529 concluded success while its own
+          # log recorded the whole codex closure failing to realise, and the
+          # pin advanced over the hole onto every darwin consumer (#3195,
+          # #3188). Fail before any ref move so consumers keep the last
+          # fully-published rev and the run cannot conclude success.
+          if [ "$(( ${LINUX_FAILED_ROOTS:-0} ))" -gt 0 ] || [ "$(( ${DARWIN_FAILED_ROOTS:-0} ))" -gt 0 ]; then
+            echo "::error::not advancing cache-ready over a publish hole: ${LINUX_FAILED_ROOTS:-0} linux and ${DARWIN_FAILED_ROOTS:-0} darwin root(s) failed to realise (named in the lane annotations above) (#3195)"
+            exit 1
+          fi
+
+          # workflow_dispatch can target any ref; only main commits may move
+          # the consumer pin. A script check rather than a job-level `if` so
+          # the gate above fails a non-main dispatch's run too.
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::notice::not on main ($GITHUB_REF); leaving cache-ready alone"
+            exit 0
+          fi
 
           # Stderr stays on the job log: a 404 here is the expected first-run
           # path, anything else explains itself in the log.

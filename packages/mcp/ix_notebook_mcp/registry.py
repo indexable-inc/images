@@ -112,6 +112,13 @@ MODULES: tuple[Module, ...] = (
         "OpenAI Codex CLI instead of Claude",
     ),
     Module(
+        "fabric",
+        "call-first delegation recorded to the weave journal: `await fabric.run(fn, *args)` "
+        "executes fn on this node (ask fact at submit, started/terminal facts from the "
+        "worker, source + result in CAS), and `fabric.claude.session(prompt)` opens a "
+        "self-recording, interruptible Claude Agent SDK session",
+    ),
+    Module(
         "search",
         "meaning-based recall across the fleet corpus (code + agent/shell history): "
         "`await search.semantic(q, since='7d', compact=True)` / `grep(pattern)` / "
