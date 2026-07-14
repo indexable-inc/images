@@ -46,6 +46,7 @@ the same check exercises the real resolution path on every system CI evaluates.
   };
 
   scopedSample = buildNpmDist pkgs {
+    # astlog-ignore: pname-with-version (npm package coordinate data, not a derivation)
     name = "@npm-dist-smoke/demo";
     version = "1.2.3";
     description = "buildNpmDist smoke-test sample";
@@ -54,13 +55,14 @@ the same check exercises the real resolution path on every system CI evaluates.
     repository = "https://github.com/indexable-inc/index";
     platforms = {
       "${hostKey}".binary = lib.getExe stub;
-      "win32-x64".binary = lib.getExe stub;
+      win32-x64.binary = lib.getExe stub;
     };
   };
 
   # Unscoped variant: only the naming scheme differs, so only the layout is
   # asserted for it.
   unscopedSample = buildNpmDist pkgs {
+    # astlog-ignore: pname-with-version (npm package coordinate data, not a derivation)
     name = "demo-cli";
     version = "1.2.3";
     description = "buildNpmDist smoke-test sample (unscoped)";
