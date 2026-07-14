@@ -9,17 +9,17 @@
   ix,
   lib,
   pkgs,
-  # Writer for `passthru.updateScript` (flake-package path only; the package
-  # is not registered in the overlay). Same nullable-writer pattern as
-  # vector-bin / wasm-bindgen-cli.
-  updateScriptWriter ? null,
+  # Pin-update engine for `passthru.updateScript` (flake-package path only;
+  # the package is not registered in the overlay). Same nullable-engine
+  # pattern as vector-bin / wasm-bindgen-cli.
+  pinUpdate ? null,
 }: let
   # Rev + SRI hash live in the sibling pins.json, never inline here (repo
   # policy: no `hash = "sha256-..."` literals in tracked .nix). Bump the
   # rev/url in pins.json, then `nix run .#update` re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "blender-mcp";
   updateScript = ix.pins.mkOptionalUpdater {
-    writeNushellApplication = updateScriptWriter;
+    inherit pinUpdate;
     inherit (pkgs) nix;
     pname = "blender-mcp";
     relPath = "packages/blender-mcp/pins.json";

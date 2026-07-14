@@ -5,9 +5,9 @@
   # Sibling package set (flake path only), for the `rebase-patches` binary the
   # fork updater invokes. `{ }` on the overlay path.
   repoPackages ? {},
-  # Nushell writer for `passthru.updateScript`, pre-bound on the flake path
+  # Pin-update engine for `passthru.updateScript`, pre-bound on the flake path
   # (lib/packages.nix); `null` on the overlay path -> omit the fork updater.
-  updateScriptWriter ? null,
+  pinUpdate ? null,
 }: let
   source = ix.patchedSrc {
     name = "nushell";
@@ -44,11 +44,10 @@ in
       // {
         inherit workspace;
       }
-      // lib.optionalAttrs (updateScriptWriter != null && repoPackages ? rebase-patches) {
+      // lib.optionalAttrs (pinUpdate != null && repoPackages ? rebase-patches) {
         updateScript =
           ix.mkForkUpdater {
-            writeNushellApplication = updateScriptWriter;
-            inherit nix;
+            inherit pinUpdate nix;
             rebasePatches = repoPackages.rebase-patches;
           } {
             name = "nushell";

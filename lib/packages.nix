@@ -64,5 +64,11 @@ in
       // context
       // {
         inherit entry repoPackages;
+        # The repo's pin/updater engine for nullable `passthru.updateScript`
+        # builders (lib/util/pins.nix, lib/fork-updater.nix, mcp,
+        # claude-code), bound only on this registry path: the overlay path
+        # leaves each consumer's `pinUpdate ? null` unset, which is the
+        # signal to omit the updater.
+        pinUpdate = repoPackages.pin-update or null;
       };
   }

@@ -854,6 +854,9 @@
         ix = crossIxFor target;
         writeNushellApplication = ix.writeNushellApplication pkgs;
         updateScriptWriter = ix.writeNushellApplication pkgs;
+        # Native engine on purpose: a cross updater still runs on the build
+        # host and rewrites the same repo files.
+        pinUpdate = repoPackages.pin-update or null;
       }
     )
     entry.path {};

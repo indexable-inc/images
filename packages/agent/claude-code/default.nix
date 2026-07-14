@@ -183,11 +183,11 @@
       inherit lib ix repoPackages;
       promptOmitRules = omitRules;
     }).systemPrompt,
-  # Writer used to build `passthru.updateScript`. Only the flake package set
-  # supplies it (lib/packages.nix); the overlay eval context leaves it null. The
-  # updater is a maintainer-facing flake output, so the overlay build of
-  # `pkgs.claude-code` simply omits `passthru.updateScript`.
-  updateScriptWriter ? null,
+  # Pin-update engine used to build `passthru.updateScript`. Only the flake
+  # package set supplies it (lib/packages.nix); the overlay eval context leaves
+  # it null. The updater is a maintainer-facing flake output, so the overlay
+  # build of `pkgs.claude-code` simply omits `passthru.updateScript`.
+  pinUpdate ? null,
 }: let
   # Read the package set from `ix`, not a `pkgs` callPackage formal: a `pkgs`
   # arg in the formal set breaks `.override` (astlog no-pkgs-in-callpackage),
@@ -538,17 +538,13 @@
 
   # Maintainer-facing updater that refreshes manifest.json from Anthropic's
   # signed per-version manifest (fails closed on a bad GPG signature); see
-  # ./update.nix. Built only when this eval context supplied a writer (the flake
-  # package set), so the overlay build of `pkgs.claude-code` omits
-  # `passthru.updateScript`.
+  # ./update.nix. Built only when this eval context supplied the pin-update
+  # engine (the flake package set), so the overlay build of `pkgs.claude-code`
+  # omits `passthru.updateScript`.
   updateScript =
-    if updateScriptWriter == null
+    if pinUpdate == null
     then null
-    else
-      import ./update.nix {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix gnupg;
-      };
+    else import ./update.nix {inherit pinUpdate nix gnupg;};
 in
   # `allowVendoredUnfree` strips the honest `meta.license` tag below so the
   # per-system flake package set (evaluated without `allowUnfree`) can build

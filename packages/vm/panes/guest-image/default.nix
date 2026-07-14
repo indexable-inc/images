@@ -13,10 +13,10 @@
   repoPackages,
   ix,
   nix,
-  # Writer for `passthru.updateScript`, bound only on the flake-package path
-  # (lib/packages.nix); the overlay path leaves it null so `pkgs.*` carries no
-  # updater. Same nullable-writer pattern as vector-bin.
-  updateScriptWriter ? null,
+  # Pin-update engine for `passthru.updateScript`, bound only on the
+  # flake-package path (lib/packages.nix); the overlay path leaves it null so
+  # `pkgs.*` carries no updater. Same nullable-engine pattern as vector-bin.
+  pinUpdate ? null,
   # Public ssh key authorized for root in the guest, enabling the ssh
   # switch-in-place loop (README, "Iterating on the guest"). Deliberately null
   # by default: the image is repo-built and cacheable, so any default key
@@ -95,8 +95,7 @@
   # Mechanically re-pins the ./pins.json jar hashes from their URLs
   # (`nix run .#update`); bumping the LWJGL version is the human edit.
   updateScript = ix.pins.mkOptionalUpdater {
-    writeNushellApplication = updateScriptWriter;
-    inherit nix;
+    inherit pinUpdate nix;
     pname = "panes-guest-image";
     relPath = "packages/vm/panes/guest-image/pins.json";
   };

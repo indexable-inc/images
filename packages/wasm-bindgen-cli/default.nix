@@ -10,9 +10,9 @@
   lib,
   nix,
   rustPlatform,
-  # Writer for `passthru.updateScript` (flake-package path only); null on the
-  # overlay path.
-  updateScriptWriter ? null,
+  # Pin-update engine for `passthru.updateScript` (flake-package path only);
+  # null on the overlay path.
+  pinUpdate ? null,
 }: let
   # Version + crate URL and SRI hash live in the sibling pins.json, never inline
   # (repo policy). Keep in sync with the `wasm-bindgen` Cargo dep; bump the
@@ -20,8 +20,7 @@
   pin = ix.pins.loadPin ./pins.json "wasm-bindgen-cli";
   inherit (pin) version;
   updateScript = ix.pins.mkOptionalUpdater {
-    writeNushellApplication = updateScriptWriter;
-    inherit nix;
+    inherit pinUpdate nix;
     pname = "wasm-bindgen-cli";
     relPath = "packages/wasm-bindgen-cli/pins.json";
   };

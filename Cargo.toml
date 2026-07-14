@@ -88,6 +88,7 @@ members = [
   "packages/nix/nix-web-monitor/parser",
   "packages/nix/nix-web-monitor/server",
   "packages/nix/oci-image-builder",
+  "packages/nix/pin-update",
   "packages/search/polars-mixedbread",
   "packages/progress-style",
   "packages/tui/reel",
@@ -254,6 +255,7 @@ iceberg = "0.9"
 iceberg-catalog-rest = "0.9"
 iceberg-storage-opendal = { version = "0.9", features = ["opendal-s3"] }
 ignore = "0.4"
+indexmap = "2"
 indicatif = "0.18"
 insta = { version = "1.42", features = ["json"] }
 lazy-regex = "3.4"

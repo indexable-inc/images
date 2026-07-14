@@ -30,9 +30,9 @@
   python3,
   procps,
   tzdata,
-  # Writer for `passthru.updateScript` (flake-package path only); null on the
-  # overlay path.
-  updateScriptWriter ? null,
+  # Pin-update engine for `passthru.updateScript` (flake-package path only);
+  # null on the overlay path.
+  pinUpdate ? null,
   # Pinned, not a parameter: a `jdk ? jdk17_headless` arg collides with the
   # `pkgs.jdk` callPackage auto-fills (currently openjdk 21, which Spark 3.5 does
   # not support), silently overriding the default. Spark 3.5 and Gluten 1.6 both
@@ -45,8 +45,7 @@
   # re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "spark";
   updateScript = ix.pins.mkOptionalUpdater {
-    writeNushellApplication = updateScriptWriter;
-    inherit nix;
+    inherit pinUpdate nix;
     pname = "spark-hive";
     relPath = "packages/spark/spark-hive/pins.json";
   };

@@ -111,7 +111,8 @@
     is worse than asking the human.
 
   Arguments:
-  - `writeNushellApplication`: the caller's `updateScriptWriter`.
+  - `pinUpdate`: the repo's pin-update engine package
+    (`packages/nix/pin-update`), whose `pins` mode implements this contract.
   - `nix`: the nix package (for `nix store prefetch-file`, `nix-prefetch-url`
     and `nix hash convert`).
   - `pname`: package name, for the script name and messages.
@@ -124,59 +125,26 @@
   leaves such entries untouched and reports them.
   */
   mkUpdater = {
-    writeNushellApplication,
+    pinUpdate,
     nix,
     pname,
     relPath,
   }:
-    writeNushellApplication {
+    pinUpdate.mkUpdateScript {
       name = "${pname}-update";
+      description = "Re-pin the SRI hashes in ${relPath} from their pinned URLs";
       runtimeInputs = [nix];
-      meta.description = "Re-pin the SRI hashes in ${relPath} from their pinned URLs";
-      text = ''
-        # nu
-        # Run from the repo root: `nix run .#${pname}.updateScript`.
-        def main [] {
-          const out = "${relPath}"
-          let pins = (open $out)
-          let updated = (
-            $pins
-            | transpose name entry
-            | reduce --fold {} {|row acc|
-                let entry = $row.entry
-                let mode = (if ("prefetch" in ($entry | columns)) { $entry.prefetch } else { "file" })
-                if ($mode == "manual") {
-                  print $"(ansi yellow)skipping ($row.name): prefetch=manual; refresh by building with the new url and copying the got: hash(ansi reset)"
-                  $acc | insert $row.name $entry
-                } else if not ("url" in ($entry | columns)) {
-                  print $"(ansi yellow)skipping ($row.name): no `url` to re-fetch(ansi reset)"
-                  $acc | insert $row.name $entry
-                } else if ($mode == "unpack") {
-                  # fetchzip/fetchCrate validate the UNPACKED tree, not the
-                  # archive bytes; `nix-prefetch-url --unpack` reproduces that
-                  # hash (fetchTarball semantics: single root dir stripped).
-                  let b32 = (^nix-prefetch-url --unpack $entry.url | str trim)
-                  let sri = (^nix hash convert --hash-algo sha256 --to sri $b32 | str trim)
-                  $acc | insert $row.name ($entry | upsert hash $sri)
-                } else if ($mode == "file") {
-                  let sri = (^nix store prefetch-file --json $entry.url | from json | get hash)
-                  $acc | insert $row.name ($entry | upsert hash $sri)
-                } else {
-                  error make { msg: $"($out): pin ($row.name) has unknown prefetch mode ($mode); expected file, unpack, or manual" }
-                }
-              }
-          )
-          $updated | to json --indent 2 | save --force $out
-          print $"re-pinned ($out)"
-        }
-      '';
+      spec = {
+        mode = "pins";
+        pins = relPath;
+      };
     };
 
   # Overlay consumers do not receive update tooling. Keep that nullable
   # package boundary here so every pinned package cannot drift into its own
   # copy of the same conditional wrapper.
-  mkOptionalUpdater = args @ {writeNushellApplication, ...}:
-    if writeNushellApplication == null
+  mkOptionalUpdater = args @ {pinUpdate, ...}:
+    if pinUpdate == null
     then null
     else mkUpdater args;
 in {
