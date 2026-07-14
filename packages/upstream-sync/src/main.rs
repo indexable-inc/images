@@ -153,7 +153,12 @@ fn run_sync(args: &SyncArgs) -> Result<()> {
 /// Repo-level gates: a non-github host has no gh path; PRs unwelcome or AI
 /// banned means we never open here. We still LOAD + report status, but skip
 /// any outward act.
-fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool) -> (bool, String) {
+struct RepoGate {
+    blocked: bool,
+    reason: String,
+}
+
+fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool) -> RepoGate {
     let policy = fork.policy();
     let blocked = !policy.prs_welcome || policy.ai_prs_allowed == "false" || !gh_ok;
     let reason = if !gh_ok {
@@ -165,7 +170,7 @@ fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool) -> (bool, String) {
     } else {
         String::new()
     };
-    (blocked, reason)
+    RepoGate { blocked, reason }
 }
 
 fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Result<()> {
@@ -173,7 +178,10 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     let patch_dir = fork.patch_dir_abs();
     let policy = fork.policy();
     let gh_ok = mapping::is_github(&fork.url);
-    let (repo_blocked, repo_block_reason) = repo_gate(fork, &slug, gh_ok);
+    let RepoGate {
+        blocked: repo_blocked,
+        reason: repo_block_reason,
+    } = repo_gate(fork, &slug, gh_ok);
 
     println!("{}", paint(CYAN, &format!("== {} [{}/{}] ==", fork.name, slug.owner, slug.repo)));
     if repo_blocked {
@@ -425,8 +433,7 @@ fn open_one(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mut Vec<PlanE
     let pr_url = opened
         .stdout
         .lines()
-        .filter(|l| l.contains("github.com") && l.contains("/pull/"))
-        .next_back()
+        .rfind(|l| l.contains("github.com") && l.contains("/pull/"))
         .map(str::to_owned);
     if let Some(url) = &pr_url {
         let number = regex!(r"/pull/([0-9]+)")

@@ -93,9 +93,10 @@ fn main() -> Result<()> {
     println!("{}", paint(CYAN, &format!("upstream-pr: {}: target patch {target}", cli.pkg)));
 
     // Ancestor closure from the DAG, in NNNN order, plus the target last.
-    let closure = doc.closure(&target);
+    let mut closure = doc.closure(&target);
     let pos: HashMap<&str, usize> = all_patches.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
     let by_series = |p: &String| pos.get(p.as_str()).copied().unwrap_or(usize::MAX);
+    closure.sort_by_key(by_series);
     let mut ordered = closure.clone();
     ordered.push(target.clone());
     ordered.sort_by_key(by_series);
@@ -107,9 +108,7 @@ fn main() -> Result<()> {
             "{}",
             paint(YELLOW, &format!("upstream-pr: {}: {target} is NOT independent; its upstream contribution drags {} ancestor patch(es):", cli.pkg, closure.len()))
         );
-        let mut sorted = closure.clone();
-        sorted.sort_by_key(by_series);
-        for c in &sorted {
+        for c in &closure {
             println!("  - {c}");
         }
         println!("{}", paint(YELLOW, "upstream-pr: consider splitting, or send the closure as one PR."));
@@ -126,7 +125,7 @@ fn main() -> Result<()> {
         .tempdir()
         .wrap_err("cannot create scratch dir")?
         .keep();
-    let (head_ref, tip) = prepare_branch(&scratch, &fork, &slug, &branch, &cli.pkg)?;
+    let PreparedBranch { head_ref, tip } = prepare_branch(&scratch, &fork, &slug, &branch, &cli.pkg)?;
     apply_closure(&scratch, &patch_dir, &ordered, &tip, &cli.pkg)?;
 
     let n_commits = cmd::run_in(&scratch, "git", &["rev-list", "--count", &format!("{tip}..HEAD")])?;
@@ -186,8 +185,13 @@ fn neutralize_config(scratch: &Path) -> Result<()> {
 }
 
 /// Init the scratch repo, discover + fetch the upstream default branch, and
-/// check out the contribution branch at its tip. Returns (head_ref, tip).
-fn prepare_branch(scratch: &Path, fork: &Fork, slug: &Slug, branch: &str, pkg: &str) -> Result<(String, String)> {
+/// check out the contribution branch at its tip.
+struct PreparedBranch {
+    head_ref: String,
+    tip: String,
+}
+
+fn prepare_branch(scratch: &Path, fork: &Fork, slug: &Slug, branch: &str, pkg: &str) -> Result<PreparedBranch> {
     cmd::run_in(scratch, "git", &["init", "--quiet"])?;
     neutralize_config(scratch)?;
     println!("upstream-pr: fetching {}/{} default branch tip...", slug.owner, slug.repo);
@@ -206,7 +210,7 @@ fn prepare_branch(scratch: &Path, fork: &Fork, slug: &Slug, branch: &str, pkg: &
     cmd::run_in(scratch, "git", &["fetch", "--quiet", "upstream", &head_ref])?;
     let tip = cmd::run_in(scratch, "git", &["rev-parse", "FETCH_HEAD"])?;
     cmd::run_in(scratch, "git", &["checkout", "--quiet", "-b", branch, &tip])?;
-    Ok((head_ref, tip))
+    Ok(PreparedBranch { head_ref, tip })
 }
 
 /// Apply the closure onto the tip with 3-way. On conflict, fail loudly: this

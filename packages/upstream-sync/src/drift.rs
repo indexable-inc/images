@@ -165,7 +165,13 @@ fn age_days(date: &str) -> Result<i64> {
 
 /// Patch stances walk dag.json node order (the canonical series, same as the
 /// sync loop); an unclassified patch defaults to hold (fail-safe).
-fn stance_counts(fork: &Fork) -> Result<(usize, usize, usize)> {
+struct StanceCounts {
+    attempt: usize,
+    hold: usize,
+    never: usize,
+}
+
+fn stance_counts(fork: &Fork) -> Result<StanceCounts> {
     let dag_file = fork.patch_dir_abs().join("dag.json");
     let series: Vec<String> = if dag_file.exists() {
         dag::Doc::load(&dag_file)?.patch_names()
@@ -174,7 +180,11 @@ fn stance_counts(fork: &Fork) -> Result<(usize, usize, usize)> {
     };
     let stances: Vec<String> = series.iter().map(|p| fork.stance(p)).collect();
     let count = |wanted: &str| stances.iter().filter(|s| *s == wanted).count();
-    Ok((count("attempt"), count("hold"), count("never")))
+    Ok(StanceCounts {
+        attempt: count("attempt"),
+        hold: count("hold"),
+        never: count("never"),
+    })
 }
 
 fn row(fork: &Fork) -> Result<Row> {
@@ -201,7 +211,7 @@ fn row(fork: &Fork) -> Result<Row> {
     let base_date = base_date(fork, forge, &slug, rev.as_deref())?;
     let age_days = base_date.as_deref().map(age_days).transpose()?;
 
-    let (attempt, hold, never) = stance_counts(fork)?;
+    let stances = stance_counts(fork)?;
     let retired = status::Doc::load(&status::path(fork))?
         .patches
         .values()
@@ -240,9 +250,9 @@ fn row(fork: &Fork) -> Result<Row> {
         behind,
         base_date,
         age_days,
-        attempt,
-        hold,
-        never,
+        attempt: stances.attempt,
+        hold: stances.hold,
+        never: stances.never,
         retired,
         action: action.to_owned(),
         note: note.to_owned(),
