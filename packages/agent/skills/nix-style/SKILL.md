@@ -50,8 +50,9 @@ line above it, with a comment naming the reason. The common hard rules are:
 - `builtins.path { path = ./.; }` must set `name = "<stable>"` so the store
   path is reproducible across clones.
 - Prefer `lib.fileset.toSource` over `lib.cleanSource`/`lib.sources.cleanSourceWith`.
-- No `"${root}/..."` string interpolation of the workspace tree at the root
-  level; use `root + "/..."` or `builtins.path { name; path; }`.
+- Do not interpolate a repository-root binding such as `root`, `workspaceRoot`,
+  or `ix.paths.root`. Select the file or subtree with path concatenation before
+  interpolation so derivations do not depend on the whole repository.
 
 ### Migration / deprecated APIs
 

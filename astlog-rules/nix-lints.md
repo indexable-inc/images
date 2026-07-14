@@ -33,7 +33,7 @@ truth. **102 lints total: 98 `error`, 4 `warning`.**
 | 9 | [`no-nixpkgs-channel-ref`](#no-nixpkgs-channel-ref) | err | `<nixpkgs>` channel reference is banned; use flake inputs |
 | 10 | [`no-path-flake-ref`](#no-path-flake-ref) | err | whole-tree `path:` flake refs copy the working tree byte-for-byte; use `.#...`, `git+file:///abs/path`, a relative `path:./<subtree>` input, or a proper flake input |
 | 11 | [`no-parent-path`](#no-parent-path) | err | relative parent path `../` reaches across a directory; use ix.<helper> / index.lib, ix.paths.<root> + a relative string, or the package registry instead of a `../` literal |
-| 12 | [`no-root-string-interp`](#no-root-string-interp) | err | `"${root}/..."` string-interpolates the workspace tree, leaking full-tree context; use `root + "/..."` (path concat) or `builtins.path { name; path; }` |
+| 12 | [`no-root-string-interp`](#no-root-string-interp) | err | interpolating a repository-root binding such as `ix.paths.root` records the whole tree as a derivation input; select the file or subtree as a path before interpolation |
 | 13 | [`no-fake-hash`](#no-fake-hash) | err | fake hashes are banned; compute the real SRI hash before editing tracked Nix files |
 | 14 | [`no-fetchfromgithub-fixed-hash`](#no-fetchfromgithub-fixed-hash) | err | do not pin GitHub source with `fetchFromGitHub { ... hash = ...; }`; add it as a flake input with `flake = false` and consume that source instead |
 | 15 | [`prefer-sri-hash`](#prefer-sri-hash) | err | legacy `sha256`-flavored hash attr; use the SRI `hash` slot: `hash` in fetchers, `cargoHash` / `vendorHash` / `npmDepsHash` in the language builders (or the typed `cargoLock` block for Rust) |
@@ -425,20 +425,26 @@ import ../util/writers.nix { inherit lib; }
 
 **🔴 error**
 
-`"${root}/..."` string-interpolates the workspace tree into a string, leaking full-tree context. Use `root + "/..."` (path concat) or `builtins.path { name = "..."; path = root + "/..."; }`.
+String interpolation coerces a repository-root binding such as `root`, `workspaceRoot`, or `ix.paths.root` into a whole-tree store dependency. Select the file or subtree as a path before interpolation.
 
 *Matches:* `string_expression` · *predicates:* `text-match` · *1 pattern variant*
 
 <table><tr><th>flagged</th><th>ok</th></tr><tr><td>
 
 ```nix
-{ root }: "${root}/nix/file.cmake"
+{ ix, root }: [
+  "${root}/nix/file.cmake"
+  "${ix.paths.root}/lib/build/helper.py"
+]
 ```
 
 </td><td>
 
 ```nix
-{ root }: root + "/nix/file.cmake"
+{ ix, root }: [
+  (root + "/nix/file.cmake")
+  (ix.paths.root + "/lib/build/helper.py")
+]
 ```
 
 </td></tr></table>
