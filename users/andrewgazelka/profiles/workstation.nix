@@ -1010,13 +1010,6 @@ in {
     source = config.lib.file.mkOutOfStoreSymlink "${configDir}/mitmproxy";
   };
 
-  # Claude's self-managed updater writes here, ahead of the Home Manager
-  # profile on PATH. Keep that path pinned to the declarative wrapper (#3222).
-  home.file.".local/bin/claude" = {
-    source = "${config.programs.claude-code.finalPackage}/bin/claude";
-    force = true;
-  };
-
   # Agents, commands, and skills are managed declaratively by the upstream
   # home-manager programs.claude-code module: each is written as an in-store
   # path under ~/.claude (no out-of-store symlink, no SessionStart hook).
