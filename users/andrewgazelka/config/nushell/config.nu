@@ -1856,6 +1856,23 @@ def packages [] {
 
 
 
+def commits [] {
+    ^git log --format="%H%x00%aN%x00%aE%x00%aI%x00%s%x00"
+    | split row (char nul)
+    | drop
+    | chunks 5
+    | each {|row|
+        {
+            hash: ($row.0 | str trim)
+            author: $row.1
+            email: $row.2
+            authored_at: ($row.3 | into datetime)
+            subject: $row.4
+        }
+    }
+}
+
+
 def git-files [
     dir: string = ''       # Directory path or prefix filter
     --glob: glob           # Optional glob pattern to filter files (e.g., '*.rs', '**/*.toml')
