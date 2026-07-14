@@ -327,6 +327,7 @@
       skills = skills.outPath;
       modules = ./modules;
       examples = examples.outPath;
+      users = ./users;
       tests = tests.outPath;
       bench.filesystem = bench-filesystem.outPath;
       site = site.outPath;
@@ -428,15 +429,12 @@
               // {
                 attr = "packages.aarch64-darwin.${name}";
               }
-          )
-          (linuxDarwinAliases.aarch64-darwin or {});
+          ) (linuxDarwinAliases.aarch64-darwin or {});
       };
     securityRootPaths =
       rawSecurityRootPaths
       // {
-        aarch64-darwin =
-          rawSecurityRootPaths.aarch64-darwin
-          // (linuxDarwinAliases.aarch64-darwin or {});
+        aarch64-darwin = rawSecurityRootPaths.aarch64-darwin // (linuxDarwinAliases.aarch64-darwin or {});
       };
     indexPackages = system: packages.${system};
     personalConfigRoot = ./users/andrewgazelka/config;
