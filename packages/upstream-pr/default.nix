@@ -48,11 +48,12 @@
   git,
   gh,
   coreutils,
+  # Sibling package set, for the `rebase-patches` binary: the one owner of the
+  # DAG closure + config-neutralizing logic, consumed via its plumbing
+  # subcommands (`dag-closure`, `neutralize-config`).
+  repoPackages,
 }: let
   forkData = (formats.json {}).generate "fork-packages.json" ix.forkPackages;
-  # Reuse the DAG closure logic from the one owner of that code (rebase-patches),
-  # referenced through the package registry root rather than a `../` literal.
-  dagLib = ix.paths.packagesRoot + "/rebase-patches/dag-lib.nu";
 in
   writeNushellApplication {
     name = "upstream-pr";
@@ -64,12 +65,11 @@ in
       git
       gh
       coreutils
+      repoPackages.rebase-patches
     ];
     text = ''
       # nu
       # Run from the repo root: `nix run .#upstream-pr -- <pkg> <patch> [--open] [--dry-run]`.
-      use ${dagLib} *
-
       const fork_data = "${forkData}"
       const org = "indexable-inc"
 
@@ -151,9 +151,9 @@ in
         let target = (resolve patch $patch $all_patches)
         print $"(ansi cyan)upstream-pr: ($pkg): target patch ($target)(ansi reset)"
 
-        # Ancestor closure from the DAG, in NNNN order, plus the target last.
-        let deps_of = ($doc.nodes | reduce --fold {} {|nd, acc| $acc | insert $nd.patch $nd.deps })
-        let closure = (dag closure $deps_of $target)
+        # Ancestor closure from the DAG (rebase-patches owns the closure
+        # logic), already in NNNN order, plus the target last.
+        let closure = (rebase-patches dag-closure $dag_file $target | lines | where {|l| $l != "" })
         let pos = ($all_patches | enumerate | reduce --fold {} {|it, acc| $acc | insert $it.item $it.index })
         let ordered = (($closure | append $target) | uniq | sort-by {|p| $pos | get $p })
         if ($closure | is-not-empty) {
@@ -172,7 +172,7 @@ in
         # global git settings do not perturb the apply.
         let scratch = (mktemp --directory --tmpdir $"upstream-pr-($pkg).XXXXXX")
         git -C $scratch init --quiet
-        dag neutralize-config $scratch
+        rebase-patches neutralize-config $scratch
         print $"upstream-pr: fetching (($slug.owner)/($slug.repo)) default branch tip..."
         git -C $scratch remote add upstream $fork.url
         # Discover the default branch (HEAD) of upstream, then fetch just it.

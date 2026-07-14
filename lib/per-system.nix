@@ -716,7 +716,7 @@
     inherit pkgs;
     patchedSrcFor = ix.patchedSrcFor pkgs;
     inherit (ix) forkPackages;
-    dagCheckSrc = ix.forkDagCheckSrc;
+    rebasePatches = repoPackages.rebase-patches;
     forkSrcInputs = lib.genAttrs (map (fork: fork.name) ix.forkPackages) (
       name: ix."${name}Src"
     );

@@ -16,8 +16,9 @@
 #   patchesRoot  : repo root the `fork.patchDir` (repo-relative) resolves against.
 #   flakeLock    : the repo's parsed `flake.lock` (for the pinned base rev per
 #                  input, validated against the committed dag.json base).
-#   dagCheckSrc  : a directory holding `dag-check.nu` + `dag-lib.nu` (index's
-#                  `packages/rebase-patches`), the shared DAG driver + verifier.
+#   rebasePatches: the built `packages/rebase-patches` tool (index's
+#                  `packages.<system>.rebase-patches`), whose `dag-check`
+#                  subcommand is the shared DAG driver + verifier.
 {
   lib,
   pkgs,
@@ -26,7 +27,7 @@
   forkSrcInputs,
   patchesRoot,
   flakeLock,
-  dagCheckSrc,
+  rebasePatches,
 }: let
   # `patched-src-<name>`: the seconds-fast "does the series still apply" gate.
   # Built from the same `patchedSrcFor` the packages consume against the same raw
@@ -53,8 +54,9 @@
   # the body is the reason of record for every fork patch and, for
   # attempt-marked ones, the upstream PR description (see packages/upstream-pr). Pure text work on the
   # fetched src tree in the sandbox, so it stays seconds-fast. The derivation and
-  # verification logic is owned by `dagCheckSrc` (dag-{lib,check}.nu); the check
-  # just wires the src, patch dir, pinned rev, and intent into that driver.
+  # verification logic is owned by `rebasePatches` (packages/rebase-patches
+  # src/{dag,check}.rs); the check just wires the src, patch dir, pinned rev,
+  # and intent into that driver.
   patchDagChecks = lib.genAttrs' forkPackages (
     fork: let
       expectedBase = flakeLock.nodes.${fork.input}.locked.rev;
@@ -68,22 +70,16 @@
       lib.nameValuePair "patch-dag-${fork.name}" (
         pkgs.runCommand "patch-dag-${fork.name}-check"
         {
+          # git for the apply-tests (the wrapper's PATH prefix serves `nix run`,
+          # not this sandbox); the driver seeds its own throwaway identity.
           nativeBuildInputs = [
-            pkgs.nushell
+            rebasePatches
             pkgs.git
-            # `chmod` (external) to make the read-only store src writable before
-            # the apply-tests, since git must write files during `am`.
-            pkgs.coreutils
           ];
         }
         ''
-          # nushell's `use` resolves modules relative to the script file, so run
-          # the driver from a dir holding both it and dag-lib.nu.
-          workdir=$(mktemp -d)
-          cp ${dagCheckSrc}/dag-check.nu ${dagCheckSrc}/dag-lib.nu "$workdir/"
-          # git needs an identity even for the throwaway base commit.
-          export HOME="$workdir"
-          nu "$workdir/dag-check.nu" \
+          # shell
+          rebase-patches dag-check \
             ${lib.escapeShellArg (toString forkSrcInputs.${fork.name})} \
             ${patchDirStore} \
             ${lib.escapeShellArg expectedBase} \

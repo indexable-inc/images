@@ -135,11 +135,6 @@
   # downstream consumer (ix) for its forks via `inputs.index.lib.mkForkChecks`.
   # See lib/mk-fork-checks.nix.
   mkForkChecks = args: import ./mk-fork-checks.nix ({inherit lib;} // args);
-  # The directory holding the shared DAG driver + verifier (`dag-check.nu` +
-  # `dag-lib.nu`) that `mkForkChecks` stages into each `patch-dag-<name>` build.
-  # Exposed so a downstream consumer passes it straight through to `mkForkChecks`
-  # rather than reaching into index's package layout by path.
-  forkDagCheckSrc = paths.packagesRoot + "/rebase-patches";
   # Public patch data for consumers whose system Nix is not `nix-ix`. Keep the
   # patch bytes owned by index so fleet configurations consume one source of
   # truth instead of copying the fix into each repository.
@@ -664,7 +659,6 @@
       fabric
       forkClosureGates
       forkPackages
-      forkDagCheckSrc
       formatProvenance
       gitDefaults
       goUnit

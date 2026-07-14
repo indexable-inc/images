@@ -325,6 +325,9 @@
           # stub via CLOUDFLARE_API_BASE in the integration tests). The test
           # sandbox has no curl otherwise, so the executors fail spawning it.
           efx = [workspacePkgs.curl];
+          # rebase-patches' DAG tests derive/verify against real throwaway git
+          # repos; the test sandbox has no git otherwise.
+          rebase-patches = [workspacePkgs.git];
         };
         # `rodio` (packages/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
         # script needs ALSA's pkg-config metadata to link `libasound` on Linux.

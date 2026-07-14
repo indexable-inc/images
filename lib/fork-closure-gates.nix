@@ -19,8 +19,8 @@
 #
 # Enumeration coherence (every intent key, hence every attempt patch, names a
 # real patch file, and dag.json's node set equals the patch files) is already
-# enforced by the `patch-dag-<name>` check (packages/rebase-patches/
-# dag-check.nu); `closureOf` only adds a loud eval error for a missing node so
+# enforced by the `patch-dag-<name>` check (packages/rebase-patches
+# src/check.rs); `closureOf` only adds a loud eval error for a missing node so
 # a stale dag.json fails with the patch name, not an attribute error.
 {lib}: let
   # The patch plus its transitive dag.json ancestors, in NNNN order. NNNN

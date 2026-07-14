@@ -44,6 +44,7 @@ members = [
   "packages/search/code-tokenizer",
   "packages/dag-runner",
   "packages/darwin-deploy",
+  "packages/rebase-patches",
   "packages/code/edit-applier",
   "packages/code/error-chain",
   "packages/efx/cli",
