@@ -1,0 +1,72 @@
+name: Closure gate
+
+# Build the publishable closure before merge (#1873). flake-check only
+# eval-validates `packages`, so a package whose *build* breaks -- #2690's
+# codex darwin cross closure (root cause #3188) -- merged green and broke
+# every consumer. This job realises, pre-merge on the warm-store pool, exactly
+# the roots the post-merge Cache push linux lane publishes: `nix run .#check
+# -- closure` builds `.#cachePushRoots.x86_64-linux` with nix-fast-build
+# --skip-cached, so an average PR is eval plus cache probe only and a
+# package-changing PR builds just its delta.
+#
+# Build-only, no publish: the ci-dispatcher attaches the ix-public push token
+# only to `-cache-push` jobs on main pushes (spawn.rs ix_public_push_eligible);
+# PR contexts run unmerged code and must never hold it. The post-merge Cache
+# push remains the publisher, but after a gated merge its realise phase is
+# ~free (this run already built the closure into the shared warm store), so
+# the unpublished window shrinks to roughly upload time. True
+# publish-before-merge (retiring cache-ready) stays open on #1873.
+#
+# The native aarch64-darwin cache lane (GitHub-hosted mac, cold codex is
+# 40-80 min) is not gated here; it stays a post-merge cache-push concern.
+
+on:
+  pull_request:
+    branches:
+      - main
+  # Same rationale as check.yml: the main ruleset demands this status inside
+  # the merge queue too, should one be enabled.
+  merge_group:
+  # Manual run against any ref, e.g. probing main's closure health.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: closure-gate-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Client-side eval knobs only, same set and rationale as check.yml: the
+  # self-hosted daemon owns substituters, trusted keys, and system features.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations
+    accept-flake-config = false
+    max-jobs = auto
+    cores = 1
+
+jobs:
+  # Branch protection requires a status named `closure-gate`; this job is it.
+  # Separate from flake-check on purpose: it runs in parallel on its own
+  # ephemeral runner, so the existing gate's latency is untouched.
+  closure-gate:
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-closure-gate', github.run_id, github.run_attempt) }}"]
+    # A relock-class PR realises a near-full closure; match the cache-push
+    # linux lane budget, which fits that worst case.
+    timeout-minutes: 180
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
+      # Output goes to a runner-local log (the action prints the host and
+      # path); the Actions log stays quiet unless the build fails.
+      - name: Build the cache-push closure
+        uses: ./.github/actions/check-logged
+        with:
+          subcommand: closure
