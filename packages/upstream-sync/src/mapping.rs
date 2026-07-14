@@ -203,12 +203,13 @@ mod tests {
 
     #[test]
     fn slug_strips_git_suffix_and_trailing_slash() {
-        let s = Slug::parse("https://github.com/openai/codex.git").unwrap();
-        assert_eq!(s.owner, "openai");
-        assert_eq!(s.repo, "codex");
-        let s = Slug::parse("https://gitlab.freedesktop.org/mesa/mesa/").unwrap();
-        assert_eq!(s.owner, "mesa");
-        assert_eq!(s.repo, "mesa");
+        for (url, owner, repo) in [
+            ("https://github.com/openai/codex.git", "openai", "codex"),
+            ("https://gitlab.freedesktop.org/mesa/mesa/", "mesa", "mesa"),
+        ] {
+            let s = Slug::parse(url).unwrap();
+            assert_eq!((s.owner.as_str(), s.repo.as_str()), (owner, repo), "{url}");
+        }
     }
 
     #[test]
