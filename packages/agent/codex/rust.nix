@@ -42,10 +42,6 @@
 
   prebuilt = import ./prebuilt.nix {inherit (pkgs) fetchurl runCommand unzip;} targetSystem;
 
-  # The build host's Rust triple in env-var spelling (x86_64_unknown_linux_gnu),
-  # for the host-side cc-rs overrides below.
-  hostEnvName = lib.replaceStrings ["-"] ["_"] pkgs.stdenv.hostPlatform.rust.rustcTarget;
-
   # The Apple cross toolchain (zig cc + macOS SDK), or null for a native build.
   # Same wiring as lib/rust/workspace.nix `mkUnits`.
   appleToolchain =
@@ -137,24 +133,11 @@
             ++ lib.optional stdenv.cc.isClang "-Wno-error=character-conversion"
           );
         }
-        // lib.optionalAttrs (appleToolchain != null) appleToolchain.env
-        // lib.optionalAttrs (appleToolchain != null) {
-          # appleToolchain.env's *unqualified* CC/CXX/CFLAGS/CXXFLAGS are the
-          # Darwin cross wrappers and `-isysroot <appleSdk>` flags, and cc-rs
-          # falls back to them for host units too (CC_<triple> > HOST_CC > CC).
-          # The cross graph builds proc-macro deps for the host (sqlx-macros ->
-          # sqlx-sqlite -> libsqlite3-sys), where a Darwin-targeting zig cc
-          # with Apple headers cannot compile the bundled sqlite3.c
-          # (`__linux__` turns on mremap/pread64 paths the macOS SDK lacks).
-          # Triple-qualified vars outrank the unqualified fallback in cc-rs, so
-          # pin the host triple back to the host stdenv toolchain and empty
-          # flags. AR/RANLIB stay the bare llvm ones: llvm-ar is
-          # object-format-agnostic, so it archives host ELF objects fine.
-          "CC_${hostEnvName}" = "${pkgs.stdenv.cc}/bin/cc";
-          "CXX_${hostEnvName}" = "${pkgs.stdenv.cc}/bin/c++";
-          "CFLAGS_${hostEnvName}" = "";
-          "CXXFLAGS_${hostEnvName}" = "";
-        };
+        # appleToolchain.env carries the Darwin toolchain in target-suffixed
+        # vars only, so host units (the cross graph builds proc-macro deps for
+        # the host: sqlx-macros -> sqlx-sqlite -> libsqlite3-sys) fall through
+        # to the ordinary host toolchain on PATH; no host-triple pins needed.
+        // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
       # Build scripts emit `-l` flags that reach the final link, but their
       # `rustc-link-search` paths do not cross cargoUnit's per-unit boundary, so
       # the native libs the codex binary links (openssl, libcap on Linux) need
