@@ -22,27 +22,28 @@ in {
   # it with the config so index-free hosts (builder VM) get it too (#3165).
   home.packages = [pkgs.vivid];
 
-  home.file = {
-    ".config/nushell-hm-session-vars.nu".text =
-      lib.concatStringsSep "\n" (
-        lib.mapAttrsToList (
-          name: value: "$env.${name} = ${builtins.toJSON (toString value)}"
+  home.file =
+    {
+      ".config/nushell-hm-session-vars.nu".text =
+        lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            name: value: "$env.${name} = ${builtins.toJSON (toString value)}"
+          )
+          config.home.sessionVariables
         )
-        config.home.sessionVariables
-      )
-      + "\n";
-  }
-  # Link nushell config children individually rather than the whole dir:
-  # nushell creates history.sqlite3 inside its config dir on Linux, so a
-  # single read-only store symlink breaks interactive login (#3165).
-  // lib.optionalAttrs pkgs.stdenv.isLinux (
-    lib.mapAttrs' (
-      name: _:
-        lib.nameValuePair ".config/nushell/${name}" {
-          source = configRoot + "/nushell/${name}";
-        }
-    ) (builtins.readDir (configRoot + "/nushell"))
-  );
+        + "\n";
+    }
+    # Link nushell config children individually rather than the whole dir:
+    # nushell creates history.sqlite3 inside its config dir on Linux, so a
+    # single read-only store symlink breaks interactive login (#3165).
+    // lib.optionalAttrs pkgs.stdenv.isLinux (
+      lib.mapAttrs' (
+        name: _:
+          lib.nameValuePair ".config/nushell/${name}" {
+            source = configRoot + "/nushell/${name}";
+          }
+      ) (builtins.readDir (configRoot + "/nushell"))
+    );
 
   programs = {
     bash.enable = true;
