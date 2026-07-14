@@ -392,7 +392,7 @@ fn rebase_one(fork: &Fork, old: &str, new: &str) -> Result<()> {
 /// Continue a stopped rebase in place, then publish the same artifacts as a
 /// conflict-free run. The state file binds the temporary repo to the fork and
 /// target revision.
-pub(crate) fn resume(name: &str, scratch: &Path, mapping: Option<&Path>) -> Result<()> {
+pub fn resume(name: &str, scratch: &Path, mapping: Option<&Path>) -> Result<()> {
     let fork = fork::select(Some(name), mapping)?.remove(0);
     let state_path = state_file(scratch);
     if !state_path.exists() {
@@ -427,7 +427,7 @@ pub(crate) fn resume(name: &str, scratch: &Path, mapping: Option<&Path>) -> Resu
 
 /// `dag` subcommand: regenerate dag.json for one or all fork packages against
 /// the currently-pinned base (working-tree flake.lock), without a rebase.
-pub(crate) fn dag_all(name: Option<&str>, mapping: Option<&Path>) -> Result<()> {
+pub fn dag_all(name: Option<&str>, mapping: Option<&Path>) -> Result<()> {
     let forks = fork::select(name, mapping)?;
     let lock = working_lock()?;
     for fork in &forks {
@@ -439,7 +439,7 @@ pub(crate) fn dag_all(name: Option<&str>, mapping: Option<&Path>) -> Result<()> 
 
 /// Default run: rebase every selected fork whose base moved between the
 /// committed flake.lock (HEAD) and the working tree.
-pub(crate) fn run(name: Option<&str>, mapping: Option<&Path>) -> Result<()> {
+pub fn run(name: Option<&str>, mapping: Option<&Path>) -> Result<()> {
     let selected = fork::select(name, mapping)?;
 
     let cwd = std::env::current_dir()?;

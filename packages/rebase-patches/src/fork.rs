@@ -13,11 +13,11 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// Env var the nix wrapper points at the baked-in fork mapping JSON.
-pub(crate) const MAPPING_ENV: &str = "REBASE_PATCHES_FORK_MAPPING";
+pub const MAPPING_ENV: &str = "REBASE_PATCHES_FORK_MAPPING";
 
 /// One fork package from the mapping JSON (lib/fork-packages.nix shape).
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct Fork {
+pub struct Fork {
     pub name: String,
     /// Flake input whose `locked.rev` pins the upstream base.
     pub input: String,
@@ -32,7 +32,7 @@ pub(crate) struct Fork {
 impl Fork {
     /// The patch dir pinned to an absolute path up front, since the tool works
     /// inside scratch repos elsewhere on disk.
-    pub(crate) fn patch_dir_abs(&self) -> Result<PathBuf> {
+    pub fn patch_dir_abs(&self) -> Result<PathBuf> {
         std::path::absolute(&self.patch_dir)
             .with_context(|| format!("resolve patch dir {}", self.patch_dir))
     }
@@ -51,7 +51,7 @@ fn mapping_path(mapping: Option<&Path>) -> Result<PathBuf> {
 }
 
 /// Resolve the selected fork records from an optional name against the mapping.
-pub(crate) fn select(name: Option<&str>, mapping: Option<&Path>) -> Result<Vec<Fork>> {
+pub fn select(name: Option<&str>, mapping: Option<&Path>) -> Result<Vec<Fork>> {
     let path = mapping_path(mapping)?;
     let text = fs::read_to_string(&path)
         .with_context(|| format!("read fork mapping {}", path.display()))?;
@@ -71,7 +71,7 @@ pub(crate) fn select(name: Option<&str>, mapping: Option<&Path>) -> Result<Vec<F
 }
 
 /// The pinned base rev of a flake input from a parsed `flake.lock`.
-pub(crate) fn locked_rev(lock: &Value, input: &str) -> Result<String> {
+pub fn locked_rev(lock: &Value, input: &str) -> Result<String> {
     lock["nodes"][input]["locked"]["rev"]
         .as_str()
         .map(str::to_owned)

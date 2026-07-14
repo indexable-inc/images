@@ -39,7 +39,7 @@ use crate::dag;
 /// ignores removal errors on drop): git marks pack/object files read-only, so
 /// removal can fail, the OS reaps the tempdir regardless, and cleanup failure
 /// must not mask the check result.
-pub(crate) fn run(src_dir: &Path, patch_dir: &Path, expected_base: &str, intent_json: &str) -> Result<bool> {
+pub fn run(src_dir: &Path, patch_dir: &Path, expected_base: &str, intent_json: &str) -> Result<bool> {
     let patches = dag::patches_in(patch_dir)?;
     if patches.is_empty() {
         println!("patch-dag check: no *.patch files in {}", patch_dir.display());
@@ -63,17 +63,17 @@ pub(crate) fn run(src_dir: &Path, patch_dir: &Path, expected_base: &str, intent_
     let scratch = TempDir::with_prefix("patch-dag-check.")?;
     let base = dag::seed_base_repo(src_dir, scratch.path())?;
 
-    let mut failed = false;
-
     // (c-base) The committed dag.json base must match the pinned upstream rev,
     // so a flake.lock bump that skipped `rebase-patches dag` fails loudly.
-    if doc.base != expected_base {
+    let mut failed = if doc.base == expected_base {
+        false
+    } else {
         println!(
             "patch-dag check: dag.json base ({}) does not match the pinned upstream rev ({expected_base}); run `nix run .#rebase-patches -- dag` and commit.",
             doc.base
         );
-        failed = true;
-    }
+        true
+    };
 
     // (c-sync) Regenerating the DAG from the same patches + base must
     // reproduce the committed graph exactly, so a stale committed DAG fails
@@ -155,10 +155,15 @@ mod tests {
     use super::*;
     use crate::git;
 
-    /// Build a plain src tree (no `.git`), a one-patch series derived from it,
-    /// and the matching dag.json; returns (src, patches). Mirrors what the
-    /// flake check receives: a store-path src plus the committed patch dir.
-    fn check_fixture(dir: &Path, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    /// A plain src tree (no `.git`) plus a one-patch series derived from it
+    /// and the matching dag.json. Mirrors what the flake check receives: a
+    /// store-path src plus the committed patch dir.
+    struct CheckFixture {
+        src: std::path::PathBuf,
+        patch_dir: std::path::PathBuf,
+    }
+
+    fn check_fixture(dir: &Path, body: &str) -> CheckFixture {
         let src = dir.join("src");
         let patch_dir = dir.join("patches");
         fs::create_dir_all(&src).unwrap();
@@ -188,20 +193,20 @@ mod tests {
             .collect();
         let doc = dag::document("pinned-rev", nodes);
         fs::write(patch_dir.join("dag.json"), dag::to_json(&doc).unwrap()).unwrap();
-        (src, patch_dir)
+        CheckFixture { src, patch_dir }
     }
 
     #[test]
     fn passes_a_coherent_series() {
         let dir = tempfile::TempDir::new().unwrap();
-        let (src, patch_dir) = check_fixture(dir.path(), "Reason: exercises the check driver.");
+        let CheckFixture { src, patch_dir } = check_fixture(dir.path(), "Reason: exercises the check driver.");
         assert!(run(&src, &patch_dir, "pinned-rev", "{}").unwrap());
     }
 
     #[test]
     fn fails_on_base_mismatch_orphan_intent_and_mute_body() {
         let dir = tempfile::TempDir::new().unwrap();
-        let (src, patch_dir) = check_fixture(dir.path(), "Refs #1");
+        let CheckFixture { src, patch_dir } = check_fixture(dir.path(), "Refs #1");
         // Wrong pin, an intent key naming no patch, and a body with no reason:
         // each alone must fail the check; together they must too.
         let intent = r#"{"0009-nonexistent.patch": {"kind": "attempt"}}"#;
@@ -211,7 +216,7 @@ mod tests {
     #[test]
     fn fails_on_stale_committed_dag() {
         let dir = tempfile::TempDir::new().unwrap();
-        let (src, patch_dir) = check_fixture(dir.path(), "Reason: exercises staleness.");
+        let CheckFixture { src, patch_dir } = check_fixture(dir.path(), "Reason: exercises staleness.");
         // Corrupt the committed graph with a bogus extra node: regeneration
         // cannot reproduce it.
         let dag_file = patch_dir.join("dag.json");

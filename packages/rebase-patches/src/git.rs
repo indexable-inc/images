@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 /// Run `git -C <repo> <args>`, returning the raw `Output` whatever the exit
 /// status. For callers where a failing exit is a signal (apply-tests), not an
 /// error.
-pub(crate) fn output(repo: &Path, args: &[&str]) -> Result<Output> {
+pub fn output(repo: &Path, args: &[&str]) -> Result<Output> {
     Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -22,7 +22,7 @@ pub(crate) fn output(repo: &Path, args: &[&str]) -> Result<Output> {
 
 /// Run `git -C <repo> <args>`, failing loudly (with the captured stderr) on a
 /// non-zero exit.
-pub(crate) fn run(repo: &Path, args: &[&str]) -> Result<Output> {
+pub fn run(repo: &Path, args: &[&str]) -> Result<Output> {
     let out = output(repo, args)?;
     if !out.status.success() {
         bail!(
@@ -36,7 +36,7 @@ pub(crate) fn run(repo: &Path, args: &[&str]) -> Result<Output> {
 }
 
 /// Run a checked git command and return its trimmed stdout.
-pub(crate) fn stdout(repo: &Path, args: &[&str]) -> Result<String> {
+pub fn stdout(repo: &Path, args: &[&str]) -> Result<String> {
     let out = run(repo, args)?;
     let text = String::from_utf8(out.stdout)
         .with_context(|| format!("git {args:?} stdout was not UTF-8"))?;
@@ -46,7 +46,7 @@ pub(crate) fn stdout(repo: &Path, args: &[&str]) -> Result<String> {
 /// A path as `&str` for a git argv slot. Scratch repos and patch dirs are
 /// tempdirs and store paths, always UTF-8; a non-UTF-8 path is a loud error,
 /// not a lossy mangle.
-pub(crate) fn utf8(path: &Path) -> Result<&str> {
+pub fn utf8(path: &Path) -> Result<&str> {
     path.to_str()
         .with_context(|| format!("non-UTF-8 path {}", path.display()))
 }
