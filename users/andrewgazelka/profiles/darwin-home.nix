@@ -2,8 +2,13 @@
 {
   configRoot,
   ghosttyModule,
+  # Personal macOS guest specs (data only; see users/andrewgazelka/guests).
+  guestsModule,
   indexPackages,
   ix,
+  # General vmkit guest-state module the specs above configure
+  # (modules/home/macos-guests.nix).
+  macosGuestsModule,
   optionsModule,
   raycastModule,
 }: {
@@ -105,6 +110,10 @@ in {
     # Ghostty config, generated from Nix (home/ghostty.nix). Replaces the former
     # out-of-store symlink to ghostty/config.
     ghosttyModule
+    # vmkit macOS guests: general push machinery + the personal guest specs
+    # (macos-primary / the Beeper iMessage bridge, ENG-7746).
+    macosGuestsModule
+    guestsModule
   ];
 
   home.sessionPath = ["$HOME/.lmstudio/bin"];
