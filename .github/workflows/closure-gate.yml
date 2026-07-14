@@ -64,5 +64,9 @@ jobs:
       - name: Bootstrap patched Nix client
         uses: ./.github/actions/bootstrap-patched-nix
 
+      # Output goes to a runner-local log (the action prints the host and
+      # path); the Actions log stays quiet unless the build fails.
       - name: Build the cache-push closure
-        run: nix run .#check -- closure
+        uses: ./.github/actions/check-logged
+        with:
+          subcommand: closure
