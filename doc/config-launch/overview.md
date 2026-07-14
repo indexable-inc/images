@@ -23,9 +23,9 @@ consumer uses only the layers it needs (`src/main.rs:23-26`):
 
 - `target` (`:30`): the real binary to `exec`.
 - **Generic launcher layers**:
-  - `env` (`:48`): variables set unconditionally.
-  - `env_defaults` (`:52`): set only when not already present in the caller's
-    environment (the `export NAME="${NAME-default}"` idiom).
+  - `env` (`:60`): a name-to-value object of variables set unconditionally.
+  - `env_defaults` (`:64`): same shape, set only when not already present in the
+    caller's environment (the `export NAME="${NAME-default}"` idiom).
   - `path_prepend` (`:55`): directories prepended ahead of the caller's `PATH`.
   - `flags` (`:58`): flags prepended before the user argv, unconditionally.
   - `conditional_flags` (`:61`): flag blocks (`ConditionalFlags`, `:18`) prepended
