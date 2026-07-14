@@ -116,13 +116,6 @@
       inherit (entry) id;
       path = "packages/${entry.relativePath}";
       inherit (entry.mirror) repo description topics;
-      # The About-sidebar website: the package's own `mirror.homepage` when
-      # set, else its tree in the monorepo (the source of truth a mirror
-      # visitor should land on).
-      homepage =
-        if entry.mirror.homepage != null
-        then entry.mirror.homepage
-        else "https://github.com/${repoMetadataConfig.monorepo.repo}/tree/main/packages/${entry.relativePath}";
       # The monorepo flake output attr (`nix run .#<attr>`) when the package
       # is flake-exposed, so the generated mirror README can print a real run
       # command instead of guessing.
@@ -132,22 +125,6 @@
         else null;
     })
     packageRegistry.mirrorEntries;
-  # Declarative GitHub About-sidebar metadata (description / homepage /
-  # topics) for every repo this monorepo owns: the monorepo itself
-  # (lib/repo-metadata.nix) plus one entry per package mirror. `nix eval
-  # --json '.#lib.repoMetadata'` is what the repo-metadata workflow
-  # (.github/workflows/repo-metadata.yml) renders: its sync job PATCHes the
-  # fields to GitHub on every push to main, and its check job fails when a
-  # covered repo is missing a description or topics (packages/registry.nix
-  # throws during this eval), so no owned repo regresses to GitHub's "No
-  # description, website, or topics provided."
-  repoMetadataConfig = import ./repo-metadata.nix;
-  repoMetadata =
-    [(repoMetadataConfig.monorepo // {path = ".";})]
-    ++ map (entry: {
-      inherit (entry) repo description homepage topics path;
-    })
-    mirrorPackages;
   # Build a fork package's `passthru.updateScript` (flake update base ->
   # rebase-patches), so it joins the registry-discovered `.#update` DAG. See
   # lib/fork-updater.nix.
@@ -708,7 +685,6 @@
       provenance
       publicArtifactsFor
       relativePath
-      repoMetadata
       rnixDigitSeparators
       ruffAnnArgs
       rustWorkspace
