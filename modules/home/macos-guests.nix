@@ -12,13 +12,19 @@
 # bootstrap (see ./macos-guests/tcc-bootstrap.md). Consumers hold only data:
 # the guest spec, plist attrs, and pinned binary packages (hashes live in the
 # owning package's pins.json, never inline — see e.g. packages/bbctl).
-{ix}: {
+{
+  indexPackages,
+  ix,
+}: {
   config,
   lib,
   pkgs,
   ...
 }: let
   cfg = config.macosGuests;
+  homeDirectory = config.home.homeDirectory;
+  indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
+  inherit (indexPkgs) vmkit;
   jsonFormat = pkgs.formats.json {};
 
   # The one plist renderer: structured attrs in, XML out. User config never
@@ -78,8 +84,25 @@
 
       vmkitGuestDir = lib.mkOption {
         type = lib.types.str;
-        default = "~/.local/share/vmkit/guests/${name}";
+        default = "${homeDirectory}/.local/share/vmkit/guests/${name}";
         description = "Host-side vmkit bundle directory for this guest.";
+      };
+
+      lifecycle = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Whether launchd keeps this guest running on the host.";
+        };
+        macAddress = lib.mkOption {
+          type = lib.types.strMatching "[0-9a-f][26ae](:[0-9a-f]{2}){5}";
+          description = "Stable locally administered unicast MAC address for the guest.";
+        };
+        logPath = lib.mkOption {
+          type = lib.types.str;
+          default = "${homeDirectory}/Library/Logs/macos-guest-${name}.log";
+          description = "Host path receiving vmkit stdout and stderr.";
+        };
       };
 
       launchAgents = lib.mkOption {
@@ -272,6 +295,27 @@
       '';
     };
 
+  lifecycleAgent = _: guest: {
+    enable = guest.lifecycle.enable;
+    config = {
+      ProgramArguments = [
+        (lib.getExe vmkit)
+        "run-macos"
+        "--bundle"
+        guest.vmkitGuestDir
+        "--mac-address"
+        guest.lifecycle.macAddress
+      ];
+      KeepAlive = true;
+      RunAtLoad = true;
+      ProcessType = "Background";
+      ThrottleInterval = 10;
+      ExitTimeOut = 60;
+      StandardOutPath = guest.lifecycle.logPath;
+      StandardErrorPath = guest.lifecycle.logPath;
+    };
+  };
+
   labelAssertions = lib.concatLists (lib.mapAttrsToList (
       name: guest:
         lib.mapAttrsToList (label: agent: {
@@ -296,5 +340,6 @@ in {
   config = lib.mkIf (cfg != {}) {
     assertions = labelAssertions;
     home.packages = lib.mapAttrsToList applyFor cfg;
+    launchd.agents = lib.mapAttrs lifecycleAgent cfg;
   };
 }

@@ -95,6 +95,10 @@ What works today:
   screenshots its display to PNGs, with no visible window, no
   ScreenCaptureKit, and no Screen-Recording permission (see
   [Off-screen capture](#off-screen-capture)).
+- `run-macos` runs an installed macOS guest as a headless foreground process
+  for launchd or another supervisor. A stable locally administered MAC keeps
+  the guest's network identity across restarts. SIGTERM and SIGINT request a
+  clean guest shutdown.
 - `drive-macos` boots the guest off-screen and reads newline commands from
   stdin to drive it: synthetic keyboard (`key`/`down`/`up`/`type`), mouse
   (`click`), `wait`, and on-demand `shot`, with a one-line ack per command (see
@@ -222,6 +226,7 @@ nix run .#vmkit -- install-macos --ipsw ./UniversalMac_26.5_Restore.ipsw --bundl
 # omit --password-stdin for an empty password.
 printf '%s' "$PASSWORD" | nix run .#vmkit -- provision --bundle ./guest --user ix --autologin --password-stdin
 nix run .#vmkit -- drive-macos --bundle ./guest   # lands on the desktop, no Setup Assistant
+nix run .#vmkit -- run-macos --bundle ./guest --mac-address 0e:c9:c7:6c:25:a8
 ```
 
 It attaches the bundle's `disk.img` read-write with no auto-mount, finds the
