@@ -114,9 +114,11 @@ MODULES: tuple[Module, ...] = (
     Module(
         "fabric",
         "call-first delegation recorded to the weave journal: `await fabric.run(fn, *args)` "
-        "executes fn on this node (ask fact at submit, started/terminal facts from the "
-        "worker, source + result in CAS), and `fabric.claude.session(prompt)` opens a "
-        "self-recording, interruptible Claude Agent SDK session",
+        "executes fn on this node, or with `node='<host>'` on that fleet node's runner "
+        "actor over Ray (env handshake + host label checked at submit; `cpus=` for a "
+        "dedicated CPU reservation, `repo=`/`rev=` for a per-run workspace clone), with "
+        "ask/started/terminal facts and source + result in CAS; `fabric.claude.session("
+        "prompt)` opens a self-recording, interruptible Claude Agent SDK session",
     ),
     Module(
         "search",

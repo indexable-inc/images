@@ -315,6 +315,13 @@
   systemdHardening = import ./services/systemd-hardening.nix;
 
   /**
+  The pinned fabric/Ray execution environment as data: env tag, node
+  resources, cluster env vars, wrapped `ray` CLI. One owner shared by the
+  ray modules and the mcp wrappers. See [`lib/fabric.nix`](lib/fabric.nix).
+  */
+  fabric = import ./fabric.nix {inherit lib;};
+
+  /**
   Helpers that throw with a fixable error message instead of a deep-eval
   crash. See [`lib/util/errors.nix`](lib/util/errors.nix) for the full surface:
   `assertEnum`, `requireArg`, `requireAttr`.
@@ -654,6 +661,7 @@
       deepMerge
       efx
       evalTimeSubstitutable
+      fabric
       forkClosureGates
       forkPackages
       forkDagCheckSrc

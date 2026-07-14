@@ -22,7 +22,7 @@ import weave
 from claude_agent_sdk import AssistantMessage, Message, ResultMessage, TextBlock
 
 import fabric
-from fabric import claude
+from fabric import claude, remote
 
 _T = TypeVar("_T")
 
@@ -224,15 +224,170 @@ def test_run_failure_still_leaves_ask_and_failed(
     assert b"def boom() -> None:" in journal.blob_for(handle.task, "source")
 
 
-def test_run_remote_placement_not_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"local": False}, "requires node="),
+        ({"node": "hc1", "local": True}, "contradicts"),
+        ({"cpus": 2.0}, "remote placement"),
+        ({"node": "hc1", "repo": "r"}, "come together"),
+    ],
+)
+def test_run_rejects_contradictory_placement(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, object], match: str
+) -> None:
     journal = install(monkeypatch)
 
     async def main() -> None:
-        await fabric.run(int, local=False)
+        await fabric.run(int, **kwargs)
 
-    with pytest.raises(NotImplementedError, match="local-only"):
+    with pytest.raises(ValueError, match=match):
         run(main())
     assert journal.facts == []  # rejected before any journal write
+
+
+def test_run_remote_records_target_node_and_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+    placement = remote.Placement(node="hc1", label="host_hc1")
+    shipped: list[tuple[object, ...]] = []
+
+    async def fake_prepare(node: str) -> remote.Placement:
+        assert node == "hc1"
+        return placement
+
+    async def fake_execute(*args: object, **kwargs: object) -> object:
+        shipped.append(args)
+        return 7
+
+    monkeypatch.setattr(remote, "prepare", fake_prepare)
+    monkeypatch.setattr(remote, "execute", fake_execute)
+
+    def seven() -> int:
+        return 7
+
+    async def main() -> tuple[fabric.RunHandle, object]:
+        handle = await fabric.run(seven, node="hc1")
+        return handle, await handle.wait()
+
+    handle, value = run(main())
+    assert value == 7
+    assert shipped
+    assert shipped[0][0] is placement
+    # The ask's node fact names the TARGET, not the submitting host.
+    assert (handle.task, "node", "hc1") in journal.facts
+    assert journal.states(handle.task) == ["submitted", "running", "done"]
+
+
+def test_run_remote_bad_target_raises_before_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+
+    async def fake_prepare(node: str) -> remote.Placement:
+        raise remote.FabricError(f"no live Ray node advertises 'host_{node}'")
+
+    monkeypatch.setattr(remote, "prepare", fake_prepare)
+
+    async def main() -> None:
+        await fabric.run(int, node="ghost")
+
+    with pytest.raises(remote.FabricError, match="host_ghost"):
+        run(main())
+    assert journal.facts == []  # a bad target fails the run() call itself
+
+
+# --- fabric.remote submit-time checks ------------------------------------------
+
+
+def test_local_env_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(remote.ENV_VAR, raising=False)
+    with pytest.raises(remote.FabricError, match="IX_FABRIC_ENV"):
+        remote.local_env()
+
+
+def test_check_host_label_names_known_hosts() -> None:
+    resources = {"host_hc1": 1.0, "host_hydra": 1.0, "CPU": 8.0}
+    assert remote.check_host_label("hc1", resources) == "host_hc1"
+    with pytest.raises(remote.FabricError, match=r"host_ghost.*hc1.*hydra"):
+        remote.check_host_label("ghost", resources)
+
+
+def test_check_env_skew_names_both_sides() -> None:
+    local = "fabric_env:py3.13-ray2.56.0"
+    remote.check_env("hc1", {local: 1.0, "CPU": 8.0}, local)
+    with pytest.raises(remote.EnvSkewError, match=r"py3\.13-ray2\.56\.0.*py3\.12-ray2\.44\.0"):
+        remote.check_env("hc1", {"fabric_env:py3.12-ray2.44.0": 1.0}, local)
+    with pytest.raises(remote.EnvSkewError, match="no fabric_env resource"):
+        remote.check_env("hc1", {"CPU": 8.0}, local)
+
+
+def test_zero_restart_policy_everywhere() -> None:
+    # Policy, not a default: no caller input reaches these, so this is the
+    # one place a restarted-runner path could sneak back in.
+    actor = remote.actor_options("hc1")
+    assert actor["max_restarts"] == 0
+    assert actor["lifetime"] == "detached"
+    assert actor["name"] == "runner:hc1"
+    assert remote.task_options("hc1", cpus=4)["max_retries"] == 0
+
+
+def test_runner_payload_roundtrip_through_ray_cloudpickle() -> None:
+    from ray import cloudpickle
+
+    offset = 100
+
+    def work(a: int, b: int) -> int:  # a closure: travels by value
+        return a + b + offset
+
+    payload = cloudpickle.dumps(
+        remote._Task(fn=work, args=(2, 3), kwargs={}, workspace=None)
+    )
+    out = run(remote.Runner().run(payload))
+    assert cloudpickle.loads(out) == 105
+
+
+def _git_fixture(root: Path) -> tuple[str, str]:
+    """A two-commit repo; returns (repo path, first rev)."""
+    import subprocess
+
+    repo = root / "fixture"
+    repo.mkdir()
+    env_git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*env_git[:3], "init", "-q", "-b", "main"], check=True)
+    (repo / "data.txt").write_text("one")
+    subprocess.run([*env_git, "add", "data.txt"], check=True)
+    subprocess.run([*env_git, "commit", "-qm", "one"], check=True)
+    first = subprocess.run(
+        [*env_git[:3], "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / "data.txt").write_text("two")
+    subprocess.run([*env_git, "commit", "-qam", "two"], check=True)
+    return str(repo), first
+
+
+def test_workspace_materializes_exact_rev(tmp_path: Path) -> None:
+    repo, first = _git_fixture(tmp_path)
+    checkout = remote.materialize(remote.Workspace(repo=repo, rev=first))
+    assert (checkout / "data.txt").read_text() == "one"  # the pinned rev, not HEAD
+    with pytest.raises(remote.FabricError, match="checkout"):
+        remote.materialize(remote.Workspace(repo=repo, rev="0" * 40))
+
+
+def test_runner_hands_workspace_path_and_cleans_up(tmp_path: Path) -> None:
+    from ray import cloudpickle
+
+    repo, first = _git_fixture(tmp_path)
+
+    # cloudpickle ships closures by value, so report the workdir through the
+    # return value rather than a captured list.
+    def read(workdir: Path) -> tuple[str, str]:
+        return str(workdir), (workdir / "data.txt").read_text()
+
+    payload = cloudpickle.dumps(
+        remote._Task(fn=read, args=(), kwargs={}, workspace=remote.Workspace(repo=repo, rev=first))
+    )
+    out = run(remote.Runner().run(payload))
+    workdir, content = cloudpickle.loads(out)
+    assert content == "one"
+    assert not Path(workdir).exists()  # per-run scratch removed after the run
 
 
 def test_run_interrupt_records_interrupted(monkeypatch: pytest.MonkeyPatch) -> None:

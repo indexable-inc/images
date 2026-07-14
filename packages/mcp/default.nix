@@ -528,11 +528,13 @@
       cp -r ${weavePythonSource}/weave/. "$site/"
     ''
   );
-  # Call-first local delegation on the weave journal (index#3191): `await
-  # fabric.run(fn, *args)` executes fn on this node with the ask/started/
-  # terminal facts recorded via the bundled weave client, and `fabric.claude`
-  # opens self-recording, interruptible Claude Agent SDK sessions. Pure Python
-  # over the bundled weave + claude-agent-sdk.
+  # Call-first delegation on the weave journal (index#3191, #3192): `await
+  # fabric.run(fn, *args)` executes fn on this node -- or, with node='<host>',
+  # on that fleet node's runner actor over Ray, env-handshake-checked at
+  # submit -- with the ask/started/terminal facts recorded via the bundled
+  # weave client, and `fabric.claude` opens self-recording, interruptible
+  # Claude Agent SDK sessions. Pure Python over the bundled weave +
+  # claude-agent-sdk + ray (+ fleet for cluster discovery).
   fabricPythonSource = builtins.path {
     name = "ix-mcp-fabric-python-source";
     path = ./src/fabric;
@@ -1416,6 +1418,11 @@
       pymobiledevice3_927
       iphoneModule
     ]
+    # Ray's `client` extra (grpcio): `fabric.remote` attaches to the fleet head
+    # over `ray://` (Ray Client), which plain ps.ray refuses without it. Derived
+    # from ray's own extra rather than named: pysparkConnect happens to carry
+    # grpcio today, but reaching the cluster must not hinge on spark.
+    ++ ps.ray.optional-dependencies.client
     ++ darwinExtraPackages ps;
   mcpPython = mcpPythonInterp.withPackages mcpPythonPackages;
 
@@ -1452,6 +1459,17 @@
   # bundle (a corporate CA) must still win.
   caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
+  # The fabric env handshake + Ray darwin-cluster gates (index#3192), baked
+  # onto both wrappers from the one owner of the format (lib/fabric.nix):
+  # IX_FABRIC_ENV names this driver's `fabric_env:<tag>` resource, which
+  # fabric.remote compares against the target node's advertised resource at
+  # submit, and the RAY_ENABLE_* darwin gates live ONLY on these wrappers and
+  # the node daemons, never in user shells.
+  fabricWrapperFlags = lib.concatStringsSep " " (
+    lib.mapAttrsToList (name: value: "--set ${name} ${lib.escapeShellArg value}")
+    (ix.fabric.kernelEnv mcpPythonInterp)
+  );
+
   package =
     pkgs.runCommand "ix-mcp"
     {
@@ -1468,6 +1486,7 @@
         --add-flags "-m ix_notebook_mcp" \
         --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
         --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
+        ${fabricWrapperFlags} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -1491,6 +1510,7 @@
         --add-flags "-m ix_notebook_mcp notebook" \
         --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
         --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
+        ${fabricWrapperFlags} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -5743,16 +5763,22 @@
       cat stdout
       mkdir -p "$out"
     '';
-  # Network-free tests for the call-first fabric (index#3191): the run record
-  # contract against an httpx.MockTransport weave double (ask facts at submit
-  # with state strictly last, started/terminal facts from the worker side, a
-  # fn that raises before its first line still leaving ask + failed), and
+  # Network-free tests for the call-first fabric (index#3191, #3192): the run
+  # record contract against an httpx.MockTransport weave double (ask facts at
+  # submit with state strictly last, started/terminal facts from the worker
+  # side, a fn that raises before its first line still leaving ask + failed),
   # claude.session's CAS-pointer turn facts plus both interrupt paths (handle
-  # and journal fact) converging on the SDK interrupt as state=interrupted.
+  # and journal fact) converging on the SDK interrupt as state=interrupted,
+  # and the remote-placement submit contract with fakes (env handshake, host
+  # label existence, zero-restart runner policy, cloudpickle payload round
+  # trip through the real ray.cloudpickle, workspace materialization against
+  # a local git fixture). Live-cluster behavior is validated manually
+  # (index#3192 PR body); the sandbox proves everything submit-side.
   fabricTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
     ps.httpx
     ps.claude-agent-sdk
+    ps.ray
     fabricModule
     weaveModule
   ]);
@@ -5763,7 +5789,11 @@
   fabricTests =
     pkgs.runCommand "ix-mcp-fabric-tests"
     {
-      nativeBuildInputs = [fabricTestPython];
+      nativeBuildInputs = [
+        fabricTestPython
+        # The workspace tests build and clone a local git fixture.
+        pkgs.git
+      ];
       strictDeps = true;
     }
     ''
