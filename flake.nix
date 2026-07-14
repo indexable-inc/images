@@ -453,6 +453,7 @@
     claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
       inherit indexPackages;
       promptModule = ./packages/agent/prompt;
+      mutableJsonModule = ix.mutableJson.homeModule;
     };
     codexHomeModule = import ./packages/agent/home-manager/codex.nix {
       inherit indexPackages;

@@ -92,10 +92,12 @@
     doCheck = false;
   });
 
-  # Personal-only Claude config, seeded into ~/.claude/settings.json as a
-  # writable mutable file (see `mutable.files` below): the app's native
-  # default layer, which Claude itself edits at runtime (/config, plugin
-  # toggles), so it must not be a read-only store symlink.
+  # Personal-only Claude config, folded into the wrapper's settings render
+  # via `extraSettings` (see the claudeCode override below): the index
+  # claude-code Home Manager module materializes the full render into the
+  # writable ~/.claude/settings.json with a last-applied 3-way merge, so
+  # Claude's own runtime edits (/config, plugin toggles) survive and these
+  # keys still land in the app's native default layer (#3180).
   # House posture lives in the index wrapper itself now: attribution, worktree
   # baseRef, effort/fast/theme runtime-toggle defaults, auto-updates channel,
   # the version-aware statusline, the 1M/cron/autocompact clamps (typed
@@ -163,6 +165,11 @@
       "/Users/*/Projects/*/index"
       "/Users/*/Projects/*/ix"
     ];
+    # Personal settings keys (memory dir, plugins, marketplaces), merged into
+    # the wrapper's computed render between the house defaults and the
+    # controlled keys; the module materializes the result into the writable
+    # ~/.claude/settings.json.
+    extraSettings = claudeSettings;
     # appendSystemPrompt (house rules appended to the stock prompt) comes from
     # the package default. Set `appendSystemPrompt = null;` here to ship the
     # stock prompt alone on this machine.
@@ -390,9 +397,8 @@ in {
       #    (CronCreate/CronDelete/CronList).
       # Agent teams follow the index claude-code wrapper's env_defaults
       # (index#1786 bakes CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1); the context
-      # window is clamped to ~300K via claudeSettings.env above (and index#2167
-      # bakes the same into the wrapper). No per-machine override for either
-      # here.
+      # window clamp is baked into the wrapper's settings render (index#2167).
+      # No per-machine override for either here.
       ENABLE_TOOL_SEARCH = "false";
       CLAUDE_CODE_DISABLE_CRON = "1";
     }
@@ -1014,9 +1020,11 @@ in {
   # dir), delivered bare to ~/.claude/skills/<name> and invoked as `/<skill>`
   # (no `index:` namespace): the same source Codex gets via programs.codex
   # below. This replaces the old baked `--plugin-dir` plugin.
-  # settings.json is NOT declared here (the module would render it as a
-  # read-only store symlink): it is seeded writable from claudeSettings via
-  # `mutable.files` below, because Claude edits it at runtime. .claude.json
+  # settings.json is NOT declared through the module's native `settings`
+  # option (it would render as a read-only store symlink): the index module's
+  # materializeSettings default reconciles the wrapper's full render
+  # (house posture + claudeSettings via extraSettings + controlled keys) into
+  # the writable file, because Claude edits it at runtime. .claude.json
   # remains app-owned runtime state because Claude stores account and session
   # metadata beside user choices there. CLAUDE.md is generation-owned and
   # module-rendered: the house context render (packages/agent/prompt) plus the
@@ -1064,16 +1072,16 @@ in {
     installHooks = false;
   };
 
-  # Both agents edit their own config at runtime, so neither file can be a
-  # read-only store render. Durable: in-app changes survive activation and
-  # login; when the declared base moves under local edits, the file queues in
+  # Codex edits its own config at runtime, so the file cannot be a read-only
+  # store render. Durable: in-app changes survive activation and login; when
+  # the declared base moves under local edits, the file queues in
   # `index-delta status --json` (both diffs as addressed ops) for an explicit
   # discard / adopt / absorb-into-Nix via `index-delta apply-ops`.
-  mutable.files.".claude/settings.json" = {
-    source = jsonFormat.generate "andrewgazelka-claude-settings.json" claudeSettings;
-    persistence = "durable";
-    declaredAt = "users/andrewgazelka/profiles/workstation.nix";
-  };
+  # ~/.claude/settings.json moved off this mechanism (#3180): its declared
+  # base carries store paths that move on every index bump (hooks, statusline),
+  # so durable drift queued a conflict per bump; the claude-code module's
+  # mutable-json 3-way merge updates those keys mechanically while preserving
+  # Claude's runtime writes.
   mutable.files.".codex/config.toml" = {
     source = tomlFormat.generate "andrewgazelka-codex-config.toml" codexSettings;
     persistence = "durable";

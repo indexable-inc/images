@@ -223,6 +223,7 @@
         (import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
           indexPackages = homeAgentIndexPackages;
           promptModule = paths.packagesRoot + "/agent/prompt";
+          mutableJsonModule = ix.mutableJson.homeModule;
         })
         (import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
           indexPackages = homeAgentIndexPackages;
@@ -4349,6 +4350,22 @@
           homeAgentConfig.home.file.".config/codex-test/hooks.json".source
           == homeAgentConfig.programs.codex.finalPackage.hooksJson;
         message = "Codex Home Manager module should install the shared hook policy under the configured Codex home";
+      }
+      {
+        # #3180: the wrapper injects no --settings flag; the Home Manager
+        # module materializes the package's computed render into the writable
+        # user settings.json through the mutable-json 3-way merge. Pin the
+        # target and that the render actually carries the controlled hook
+        # policy, so a refactor can't silently drop settings delivery.
+        assertion = let
+          entry = homeAgentConfig.home.mutableJsonFiles.claude-code-settings;
+        in
+          entry.target
+          == ".claude/settings.json"
+          && entry.value == homeAgentConfig.programs.claude-code.package.passthru.settings
+          && entry.value ? hooks
+          && entry.value ? statusLine;
+        message = "Claude Code Home Manager module should materialize the wrapper's settings render into the writable user settings.json";
       }
       {
         assertion =

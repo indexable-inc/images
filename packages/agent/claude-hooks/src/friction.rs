@@ -344,13 +344,13 @@ fn ask_model(delta: &str, cwd: Option<&str>) -> Vec<Item> {
         "",
         "--setting-sources",
         "",
-        // The index claude-code wrapper injects `--settings <default-settings>`
-        // (Stop hooks included) whenever the caller passes no --settings, and
-        // --setting-sources does not filter that injected file. Without this
-        // override every extractor run is itself sliced by the Stop hooks and
-        // spawns another extractor: 84k recursive transcripts on hydra
-        // (index#2275). An explicit empty hooks object keeps the extractor
-        // session hook-free.
+        // The house Stop hooks live in the materialized ~/.claude/settings.json
+        // (#3180); `--setting-sources ""` above drops that file, and this
+        // explicit empty hooks object pins the session hook-free even if some
+        // other layer (a CLI flag, a managed file) carries hooks. Without a
+        // hook-free session every extractor run is itself sliced by the Stop
+        // hooks and spawns another extractor: 84k recursive transcripts on
+        // hydra (index#2275).
         "--settings",
         "{\"hooks\":{}}",
         "--strict-mcp-config",
