@@ -337,7 +337,8 @@
     fileCheckpointingEnabled = false;
     autoUpdatesChannel = "latest";
     skipAutoPermissionPrompt = true;
-    # House statusline (./statusline.nu): context bar, model, effort, and the
+    # House statusline (./statusline, the claude-statusline workspace crate):
+    # context bar, model, effort, and the
     # running CLI version with an update marker against Anthropic's `latest`
     # release pointer. The house effortLevel also rides argv as the script's
     # last resort for a settings.json that does not carry the key (nothing
@@ -345,7 +346,7 @@
     # files win whenever they answer.
     statusLine = {
       type = "command";
-      command = "${lib.getExe pkgs.nushell} ${./statusline.nu} --default-effort ${houseEffortLevel}";
+      command = "${ix.rustWorkspace.units.binaries.claude-statusline}/bin/claude-statusline --default-effort ${houseEffortLevel}";
     };
   };
 
@@ -605,7 +606,6 @@ in
     # against a stub target; see ./install-check.nix for what each check guards.
     doInstallCheck = true;
     installCheckPhase = import ./install-check.nix {
-      inherit (pkgs) nushell;
       statuslineCommand = houseSettingsDefaults.statusLine.command;
       inherit
         lib

@@ -1,0 +1,25 @@
+[package]
+name = "claude-statusline"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "House Claude Code statusline: identity mark, context-window bar, model, effort level, and CLI version with an update marker against Anthropic's latest release pointer"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+# The one network call (the `latest` release pointer) runs only when the
+# mtime-TTL cache is stale; blocking keeps this per-render process a plain
+# synchronous program (no async runtime), same as claude-hooks.
+reqwest = { workspace = true, features = ["blocking"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "claude-statusline"
+path = "src/main.rs"
