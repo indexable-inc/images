@@ -6,12 +6,15 @@
 //! pyo3-async-runtimes); the synchronous nushell evaluation runs on tokio's
 //! blocking pool, never on the caller's event loop.
 //!
-//! Cancellation: the engine's `Signals` share one `AtomicBool` with
-//! [`Engine::interrupt`]; flipping it makes the evaluator stop between
-//! pipeline elements, so a Python-side timeout can end a runaway pipeline
-//! without killing the process. (An external command the pipeline already
-//! spawned still runs to completion; nushell only checks the flag between
-//! elements.)
+//! Cancellation: each eval gets its own interrupt flag (shared with its
+//! `Signals`) plus a [`ThreadJob`] installed as the engine's current thread
+//! job for the block run, so every external the eval spawns registers its
+//! pid there and, per nushell's background-job spawn path, leads its own
+//! process group. [`EvalHandle::interrupt`] flips the flag (the evaluator
+//! stops between pipeline elements, ctrl-c semantics) AND SIGKILLs each
+//! registered pid's process group: an in-flight external dies immediately
+//! instead of running to completion while it holds the engine lock and
+//! wedges every later eval (issue #3183).
 //!
 //! Values cross the boundary natively, not as JSON: date -> `datetime`
 //! (normalized to UTC so a column mixes no offsets), duration -> `timedelta`,
@@ -20,6 +23,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::fs::File;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
 use nu_protocol::ast::{Block, Expr, Expression, ListItem, Pipeline, RecordItem};
 use nu_protocol::debugger::WithoutDebug;
-use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
+use nu_protocol::engine::{EngineState, Stack, StateWorkingSet, ThreadJob};
 use nu_protocol::{
     ByteStreamSource, ErrorStyle, PipelineData, Record, ShellError, Signals, Span, Type, Value,
     report_error::format_cli_error,
@@ -148,6 +152,45 @@ fn initial_engine_state() -> EngineState {
     engine_state
 }
 
+/// The persistent stack a fresh [`Engine`] starts from.
+///
+/// `collect_value` marks the trailing command's stdout as `OutDest::Value`:
+/// an external in trailing position collects into the pipeline's value
+/// instead of writing to the host process stdio, which under MCP stdio
+/// transport IS the protocol stream. `run_block` evaluates every top-level
+/// pipeline in trailing position, so this applies to intermediate
+/// statements too (issue #2391).
+///
+/// The stdout/stderr fallbacks are dups of the process's own fds, not
+/// `OutDest::Inherit`: every eval runs under a [`ThreadJob`] (see
+/// [`EvalHandle`]), and nushell's run_external nulls a background job's
+/// `Inherit`/`Print` stdio. The dup'd-fd `OutDest::File` passes that branch
+/// while writing to the very same place `Inherit` would, so an external's
+/// un-redirected stderr keeps reaching the embedding process's stderr
+/// (issue #3183).
+fn initial_stack() -> std::io::Result<Stack> {
+    use std::os::fd::AsFd;
+
+    let stdout = std::io::stdout().as_fd().try_clone_to_owned()?;
+    let stderr = std::io::stderr().as_fd().try_clone_to_owned()?;
+    Ok(Stack::new()
+        .collect_value()
+        .stdout_file(File::from(stdout))
+        .stderr_file(File::from(stderr)))
+}
+
+/// One eval's interrupt state: a flag (wired into the engine's `Signals`)
+/// and a [`ThreadJob`] sharing that same flag, installed as the engine's
+/// current thread job for the block run so spawned externals register their
+/// pids on it. The mailbox receiver is dropped on purpose: this job never
+/// enters the jobs table, so nothing can send to it.
+fn eval_interrupt_state() -> (Arc<AtomicBool>, ThreadJob) {
+    let flag = Arc::new(AtomicBool::new(false));
+    let (sender, _) = std::sync::mpsc::channel();
+    let job = ThreadJob::new(Signals::new(Arc::clone(&flag)), None, sender);
+    (flag, job)
+}
+
 /// The mutable half of an [`Engine`], locked for the duration of one eval.
 struct EngineInner {
     engine_state: EngineState,
@@ -175,6 +218,7 @@ impl EngineInner {
         cwd: Option<String>,
         env: Option<HashMap<String, String>>,
         interrupt: &Arc<AtomicBool>,
+        thread_job: &ThreadJob,
         check: bool,
     ) -> Result<(Vec<Value>, Value, i64), EvalError> {
         let Self {
@@ -251,7 +295,15 @@ impl EngineInner {
         // the mistake, and the downstream error ("ls: cannot access
         // '2>/dev/null'") never names it (issue #2111).
         let bash_redirections = bash_redirection_args(engine_state, &block);
+        // Run under this eval's ThreadJob so every spawned external registers
+        // its pid there (run_external's try_add_pid) and leads a dedicated
+        // process group (the background-job spawn path): EvalHandle::interrupt
+        // can then kill the in-flight external instead of waiting it out
+        // (issue #3183). Cleared right after so the job's lifetime is exactly
+        // the block run.
+        engine_state.current_job.background_thread_job = Some(thread_job.clone());
         let mut result = run_block(engine_state, stack, &block, input, check);
+        engine_state.current_job.background_thread_job = None;
         if let (Err(diagnostic), Some(token)) = (result.as_mut(), bash_redirections.first()) {
             diagnostic.push('\n');
             diagnostic.push_str(&bash_redirection_hint(token));
@@ -751,21 +803,39 @@ fn py_to_value(object: &Bound<'_, PyAny>) -> PyResult<Value> {
 }
 
 /// One eval's interrupt token, returned by [`Engine::eval`] next to the
-/// awaitable. Flipping it stops THAT eval (at its next pipeline-element
+/// awaitable. Interrupting stops THAT eval (at its next pipeline-element
 /// boundary, ctrl-c semantics) and no other: an engine-wide flag could hit a
 /// different eval than the one that timed out, or be erased by a queued one.
 #[pyclass]
 struct EvalHandle {
     flag: Arc<AtomicBool>,
+    job: ThreadJob,
 }
 
 #[pymethods]
 impl EvalHandle {
-    /// Ask this eval to stop at its next pipeline-element boundary. Safe to
-    /// call before the eval has started (it will stop immediately once it
-    /// acquires the engine).
+    /// Ask this eval to stop at its next pipeline-element boundary, and
+    /// SIGKILL its in-flight externals' process groups. Without the kill an
+    /// external that never exits held the engine lock past the interrupt (the
+    /// flag is only checked between pipeline elements), so a cancelled job's
+    /// orphan wedged every later eval on the shared engine (issue #3183).
+    /// SIGKILL, not SIGTERM, mirrors nushell's own `job kill` and guarantees
+    /// the engine actually frees; the group covers grandchildren, since the
+    /// external leads a dedicated process group under this eval's ThreadJob.
+    ///
+    /// Safe to call before the eval has started: the flag is set first, so a
+    /// racing spawn is refused by `try_add_pid` and killed by run_external.
     fn interrupt(&self) {
         self.flag.store(true, Ordering::Relaxed);
+        for pid in self.job.collect_pids() {
+            let pid = nix::unistd::Pid::from_raw(pid as i32);
+            // Group first; direct pid as the fallback for the narrow window
+            // where the child has not yet moved into its own group (setpgid
+            // runs in both parent and child precisely because of this race).
+            if nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL).is_err() {
+                let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+            }
+        }
     }
 }
 
@@ -778,20 +848,15 @@ struct Engine {
 #[pymethods]
 impl Engine {
     #[new]
-    fn new() -> Self {
-        Self {
+    fn new() -> PyResult<Self> {
+        let stack = initial_stack()
+            .map_err(|error| PyRuntimeError::new_err(format!("cannot dup stdio: {error}")))?;
+        Ok(Self {
             inner: Arc::new(Mutex::new(EngineInner {
                 engine_state: initial_engine_state(),
-                // collect_value marks the trailing command's stdout as
-                // OutDest::Value: an external in trailing position collects
-                // into the pipeline's value instead of writing to the host
-                // process stdio, which under MCP stdio transport IS the
-                // protocol stream. run_block evaluates every top-level
-                // pipeline in trailing position, so this applies to
-                // intermediate statements too (issue #2391).
-                stack: Stack::new().collect_value(),
+                stack,
             })),
-        }
+        })
     }
 
     /// Evaluate nushell source against the persistent state.
@@ -801,7 +866,9 @@ impl Engine {
     /// `intermediates` holds each non-final pipeline's collected output (for
     /// the wrapper to print, issue #2391) and `value` is the final
     /// pipeline's output; `handle.interrupt()` stops this eval (and only
-    /// this eval) the way ctrl-c would. `input` becomes the
+    /// this eval) the way ctrl-c would, and SIGKILLs its in-flight
+    /// externals' process groups so the engine frees immediately (issue
+    /// #3183). `input` becomes the
     /// pipeline's `$in`, delivered to the first pipeline that can accept
     /// pipeline input (a leading `cd`/`def` declares `nothing` input and is
     /// skipped; undeliverable input raises instead of dropping, issue
@@ -827,14 +894,15 @@ impl Engine {
         // Convert under the GIL now; the blocking task must not touch Python.
         let input = input.as_ref().map(py_to_value).transpose()?;
         let inner = Arc::clone(&self.inner);
-        let flag = Arc::new(AtomicBool::new(false));
+        let (flag, thread_job) = eval_interrupt_state();
         let interrupt = Arc::clone(&flag);
+        let eval_job = thread_job.clone();
         let future = pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = tokio::task::spawn_blocking(move || {
                 let mut guard = inner
                     .lock()
                     .map_err(|_| "a previous eval panicked; create a fresh Engine".to_owned())?;
-                guard.eval(&code, input, cwd, env, &interrupt, check)
+                guard.eval(&code, input, cwd, env, &interrupt, &eval_job, check)
             })
             .await
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
@@ -856,7 +924,7 @@ impl Engine {
                 Err(EvalError::RemovedCwd(diagnostic)) => Err(NuCwdError::new_err(diagnostic)),
             }
         })?;
-        Ok((future, EvalHandle { flag }))
+        Ok((future, EvalHandle { flag, job: thread_job }))
     }
 }
 
@@ -964,11 +1032,7 @@ mod tests {
 
     #[test]
     fn eval_failure_with_redirection_argv_appends_the_hint() {
-        let mut inner = EngineInner {
-            engine_state: initial_engine_state(),
-            stack: Stack::new().collect_value(),
-        };
-        let interrupt = Arc::new(AtomicBool::new(false));
+        let (mut inner, interrupt, job) = test_inner();
         // `error make` fails before the external ever runs, so the test needs
         // no subprocess; the hint keys off the parsed argv, not the failing
         // span (see the comment in `EngineInner::eval`).
@@ -979,6 +1043,7 @@ mod tests {
                 None,
                 None,
                 &interrupt,
+                &job,
                 true,
             )
             .expect_err("error make must fail the eval");
@@ -992,22 +1057,24 @@ mod tests {
         );
     }
 
-    /// A fresh inner engine + interrupt flag for behavior tests.
-    fn test_inner() -> (EngineInner, Arc<AtomicBool>) {
+    /// A fresh inner engine + interrupt state for behavior tests.
+    fn test_inner() -> (EngineInner, Arc<AtomicBool>, ThreadJob) {
+        let (flag, job) = eval_interrupt_state();
         (
             EngineInner {
                 engine_state: initial_engine_state(),
-                stack: Stack::new().collect_value(),
+                stack: initial_stack().expect("dup stdio"),
             },
-            Arc::new(AtomicBool::new(false)),
+            flag,
+            job,
         )
     }
 
     #[test]
     fn intermediate_pipeline_values_are_returned_not_dropped() {
-        let (mut inner, interrupt) = test_inner();
+        let (mut inner, interrupt, job) = test_inner();
         let (intermediates, value, exit_code) = inner
-            .eval("'a'; 'b' | str upcase; 'final'", None, None, None, &interrupt, true)
+            .eval("'a'; 'b' | str upcase; 'final'", None, None, None, &interrupt, &job, true)
             .expect("multi-statement eval");
         assert_eq!(intermediates.len(), 2, "one value per non-final pipeline");
         assert!(matches!(&intermediates[0], Value::String { val, .. } if val == "a"));
@@ -1018,9 +1085,9 @@ mod tests {
 
     #[test]
     fn single_pipeline_has_no_intermediates() {
-        let (mut inner, interrupt) = test_inner();
+        let (mut inner, interrupt, job) = test_inner();
         let (intermediates, value, _) = inner
-            .eval("'only'", None, None, None, &interrupt, true)
+            .eval("'only'", None, None, None, &interrupt, &job, true)
             .expect("single-statement eval");
         assert!(intermediates.is_empty());
         assert!(matches!(&value, Value::String { val, .. } if val == "only"));
@@ -1028,7 +1095,7 @@ mod tests {
 
     #[test]
     fn bindings_and_defs_span_pipelines_within_one_eval() {
-        let (mut inner, interrupt) = test_inner();
+        let (mut inner, interrupt, job) = test_inner();
         let (intermediates, value, _) = inner
             .eval(
                 "def double [x: int] { $x * 2 }; let n = 5; double $n",
@@ -1036,6 +1103,7 @@ mod tests {
                 None,
                 None,
                 &interrupt,
+                &job,
                 true,
             )
             .expect("def + let + call in one eval");
@@ -1047,7 +1115,7 @@ mod tests {
 
     #[test]
     fn input_feeds_the_first_accepting_pipeline() {
-        let (mut inner, interrupt) = test_inner();
+        let (mut inner, interrupt, job) = test_inner();
         let (intermediates, value, _) = inner
             .eval(
                 "str upcase; 'done'",
@@ -1055,6 +1123,7 @@ mod tests {
                 None,
                 None,
                 &interrupt,
+                &job,
                 true,
             )
             .expect("input piped into the first pipeline");
@@ -1071,7 +1140,7 @@ mod tests {
         // rejects an internal command mid-block unless it accepts `nothing`
         // input (nu::parser::input_type_mismatch), so externals are the
         // consumers this routing exists for.
-        let (mut inner, interrupt) = test_inner();
+        let (mut inner, interrupt, job) = test_inner();
         let (intermediates, value, _) = inner
             .eval(
                 &format!("cd {}; ^cat", std::env::temp_dir().display()),
@@ -1079,6 +1148,7 @@ mod tests {
                 None,
                 None,
                 &interrupt,
+                &job,
                 true,
             )
             .expect("input routed past cd (issue #2540)");
@@ -1089,7 +1159,7 @@ mod tests {
     #[test]
     fn undeliverable_input_fails_loudly() {
         for source in ["def noop [] {}", "def noop [] {}; def still-no-input [] {}"] {
-            let (mut inner, interrupt) = test_inner();
+            let (mut inner, interrupt, job) = test_inner();
             let diagnostic = inner
                 .eval(
                     source,
@@ -1097,6 +1167,7 @@ mod tests {
                     None,
                     None,
                     &interrupt,
+                    &job,
                     true,
                 )
                 .expect_err("input nothing can consume must error, not drop (issue #2540)");
@@ -1111,7 +1182,7 @@ mod tests {
     /// so the limitation is a decision, not an accident.
     #[test]
     fn dollar_in_source_is_block_collected_without_intermediates() {
-        let (mut inner, interrupt) = test_inner();
+        let (mut inner, interrupt, job) = test_inner();
         let (intermediates, value, _) = inner
             .eval(
                 "$in | str upcase; 'done'",
@@ -1119,6 +1190,7 @@ mod tests {
                 None,
                 None,
                 &interrupt,
+                &job,
                 true,
             )
             .expect("$in source evals");
@@ -1128,20 +1200,16 @@ mod tests {
 
     #[test]
     fn intermediate_failure_aborts_the_eval() {
-        let (mut inner, interrupt) = test_inner();
+        let (mut inner, interrupt, job) = test_inner();
         let diagnostic = inner
-            .eval("error make {msg: 'boom'}; 'after'", None, None, None, &interrupt, true)
+            .eval("error make {msg: 'boom'}; 'after'", None, None, None, &interrupt, &job, true)
             .expect_err("an intermediate failure must abort");
         assert!(diagnostic.contains("boom"), "diagnostic: {diagnostic}");
     }
 
     #[test]
     fn eval_failure_without_redirection_argv_stays_unannotated() {
-        let mut inner = EngineInner {
-            engine_state: initial_engine_state(),
-            stack: Stack::new().collect_value(),
-        };
-        let interrupt = Arc::new(AtomicBool::new(false));
+        let (mut inner, interrupt, job) = test_inner();
         let diagnostic = inner
             .eval(
                 "error make {msg: 'boom'}",
@@ -1149,6 +1217,7 @@ mod tests {
                 None,
                 None,
                 &interrupt,
+                &job,
                 true,
             )
             .expect_err("error make must fail the eval");
