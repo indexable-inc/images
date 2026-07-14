@@ -64,6 +64,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.SESSION,
     guide.NAMESPACE,
     guide.DISCOVER,
+    guide.PYTHON_FIRST,
     guide.NO_SHELL,
     guide.NU,
     guide.NIX,
