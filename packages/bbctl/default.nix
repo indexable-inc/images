@@ -4,10 +4,10 @@
   lib,
   nix,
   stdenvNoCC,
-  # Writer for `passthru.updateScript`, bound only on the flake-package path
-  # (lib/packages.nix); the overlay path leaves it null so `pkgs.*` carries no
-  # updater. Same nullable-writer pattern as vector-bin / claude-code.
-  updateScriptWriter ? null,
+  # Pin-update engine for `passthru.updateScript`, bound only on the
+  # flake-package path (lib/packages.nix); the overlay path leaves it null so
+  # `pkgs.*` carries no updater. Same nullable-engine pattern as vector-bin / claude-code.
+  pinUpdate ? null,
 }: let
   # Prebuilt upstream release binary, aarch64-darwin only: the motivating
   # consumer is the vmkit macOS guest's iMessage bridge (ENG-7746), which needs
@@ -16,8 +16,7 @@
   # the version/url in pins.json, then `nix run .#update` re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "bbctl";
   updateScript = ix.pins.mkOptionalUpdater {
-    writeNushellApplication = updateScriptWriter;
-    inherit nix;
+    inherit pinUpdate nix;
     pname = "bbctl";
     relPath = "packages/bbctl/pins.json";
   };

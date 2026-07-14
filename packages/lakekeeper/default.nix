@@ -7,9 +7,9 @@
   lib,
   nix,
   stdenv,
-  # Writer for `passthru.updateScript` (flake-package path only); null on the
-  # overlay path. Same nullable-writer pattern as claude-code / yc.
-  updateScriptWriter ? null,
+  # Pin-update engine for `passthru.updateScript` (flake-package path only);
+  # null on the overlay path. Same nullable-engine pattern as claude-code / yc.
+  pinUpdate ? null,
 }: let
   # Add a target here, with its own release hash, before building on another
   # arch. The package-set/flake targets and meta.platforms below gate the arch.
@@ -25,8 +25,7 @@
   # wrong hash.
   pin = ix.pins.loadPin ./pins.json "lakekeeper";
   updateScript = ix.pins.mkOptionalUpdater {
-    writeNushellApplication = updateScriptWriter;
-    inherit nix;
+    inherit pinUpdate nix;
     pname = "lakekeeper";
     relPath = "packages/lakekeeper/pins.json";
   };

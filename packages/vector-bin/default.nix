@@ -5,10 +5,10 @@
   lib,
   nix,
   stdenv,
-  # Writer for `passthru.updateScript`, bound only on the flake-package path
-  # (lib/packages.nix); the overlay path leaves it null so `pkgs.*` carries no
-  # updater. Same nullable-writer pattern as claude-code / yc.
-  updateScriptWriter ? null,
+  # Pin-update engine for `passthru.updateScript`, bound only on the
+  # flake-package path (lib/packages.nix); the overlay path leaves it null so
+  # `pkgs.*` carries no updater. Same nullable-engine pattern as claude-code / yc.
+  pinUpdate ? null,
 }: let
   # Prebuilt binary is x86_64-linux only; the package-set/flake targets and
   # meta.platforms below gate that, so the unsupported-system throw is redundant.
@@ -20,8 +20,7 @@
   # Bump the version/url in pins.json, then `nix run .#update` re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "vector";
   updateScript = ix.pins.mkOptionalUpdater {
-    writeNushellApplication = updateScriptWriter;
-    inherit nix;
+    inherit pinUpdate nix;
     pname = "vector-bin";
     relPath = "packages/vector-bin/pins.json";
   };

@@ -27,9 +27,9 @@
   patchelf,
   unzip,
   zip,
-  # Writer for `passthru.updateScript` (flake-package path only); null on the
-  # overlay path.
-  updateScriptWriter ? null,
+  # Pin-update engine for `passthru.updateScript` (flake-package path only);
+  # null on the overlay path.
+  pinUpdate ? null,
 }: let
   # Version + URL and SRI hash live in the sibling pins.json, never inline
   # (repo policy). Bump the version/url in pins.json, then `nix run .#update`
@@ -37,8 +37,7 @@
   pin = ix.pins.loadPin ./pins.json "gluten";
   inherit (pin) version;
   updateScript = ix.pins.mkOptionalUpdater {
-    writeNushellApplication = updateScriptWriter;
-    inherit nix;
+    inherit pinUpdate nix;
     pname = "spark-gluten";
     relPath = "packages/spark/spark-gluten/pins.json";
   };

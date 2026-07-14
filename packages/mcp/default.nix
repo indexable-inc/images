@@ -1,8 +1,7 @@
 {
   ix,
   lib,
-  nix,
-  updateScriptWriter ? null,
+  pinUpdate ? null,
 }: let
   # The headless Nix build-tree emitter. The `nix` module's live-pane path spawns
   # it (`nix-web-monitor --emit ndjson`) so the parser stays the single owner of
@@ -26,13 +25,9 @@
   # loudly instead of guessing.
   pypiPins = ix.pins.loadPins ./pins.json;
   updateScript =
-    if updateScriptWriter == null
+    if pinUpdate == null
     then null
-    else
-      import ./update.nix {
-        inherit nix;
-        writeNushellApplication = updateScriptWriter;
-      };
+    else import ./update.nix {inherit pinUpdate;};
   # The PTY-driving `tui` package, baked into the pinned interpreter so every
   # session can `import tui` with no setup. The PyO3 cdylib comes from the same
   # shared workspace graph the binary is selected from, dropped next to the

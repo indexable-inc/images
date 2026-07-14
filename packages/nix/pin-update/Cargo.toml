@@ -1,0 +1,21 @@
+[package]
+name = "pin-update"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Registry update-DAG updaters: re-pin pins.json hashes, refresh PyPI sdist pins, bump fork bases, refresh the signed Claude Code manifest"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+clap = { workspace = true, features = ["derive"] }
+hex.workspace = true
+indexmap = { workspace = true, features = ["serde"] }
+lazy-regex.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tempfile.workspace = true
