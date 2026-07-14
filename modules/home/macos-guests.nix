@@ -158,19 +158,23 @@
   applyFor = name: guest:
     ix.writeNushellApplication pkgs {
       name = "macos-guest-${name}";
-      runtimeInputs = [pkgs.openssh];
       meta.description = "Push declared state to the ${name} macOS guest and bootstrap launchd";
       text = ''
         # nu
         const manifest_file = "${guestManifest name guest}"
 
+        # Platform ssh only: macOS's Local Network privacy gate returns
+        # EHOSTUNREACH ("No route to host") to the vmnet guest subnet for
+        # non-platform binaries when the responsible process lacks the Local
+        # Network grant, while /usr/bin/ssh is exempt (hit live: nix openssh
+        # failed, /usr/bin/ssh connected, same process, same target).
         def ssh-run [tgt: string, cmd: string] {
-          ^ssh -o BatchMode=yes $tgt $cmd
+          ^/usr/bin/ssh -o BatchMode=yes $tgt $cmd
         }
 
         # null when the file is absent on the guest.
         def remote-hash [tgt: string, path: string] {
-          let probe = do { ^ssh -o BatchMode=yes $tgt $"shasum -a 256 '($path)'" } | complete
+          let probe = do { ^/usr/bin/ssh -o BatchMode=yes $tgt $"shasum -a 256 '($path)'" } | complete
           if $probe.exit_code == 0 { $probe.stdout | split row ' ' | first } else { null }
         }
 
@@ -209,7 +213,7 @@
               let staged = $"($row.remote_path).staged"
               let mode = if $row.kind == "binary" { "755" } else { "644" }
               ssh-run $tgt $"mkdir -p '($row.remote_path | path dirname)'"
-              ^scp -q $row.source $"($tgt):($staged)"
+              ^/usr/bin/scp -q $row.source $"($tgt):($staged)"
               ssh-run $tgt $"chmod ($mode) '($staged)' && mv -f '($staged)' '($row.remote_path)'"
               print $"pushed: ($row.target)"
             }
@@ -217,7 +221,7 @@
               let service = $"gui/($uid)/($row.label)"
               # `launchctl bootout` of an absent service is an error, not
               # idempotence, so probe with `print` instead of swallowing it.
-              let loaded = (do { ^ssh -o BatchMode=yes $tgt $"launchctl print ($service)" } | complete | get exit_code) == 0
+              let loaded = (do { ^/usr/bin/ssh -o BatchMode=yes $tgt $"launchctl print ($service)" } | complete | get exit_code) == 0
               if (not $row.in_sync) or (not $loaded) {
                 if $loaded {
                   ssh-run $tgt $"launchctl bootout ($service)"
@@ -227,7 +231,7 @@
                   # reports the service gone.
                   mut gone = false
                   for _ in 1..20 {
-                    if (do { ^ssh -o BatchMode=yes $tgt $"launchctl print ($service)" } | complete | get exit_code) != 0 {
+                    if (do { ^/usr/bin/ssh -o BatchMode=yes $tgt $"launchctl print ($service)" } | complete | get exit_code) != 0 {
                       $gone = true
                       break
                     }
