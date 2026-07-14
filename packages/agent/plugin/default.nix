@@ -9,7 +9,7 @@
 #
 # Deliberately skills-only:
 #  - hooks: both wrappers already deliver the shared hook policy (Claude
-#    through the settings flagSettings layer, Codex through
+#    through the materialized settings render, Codex through
 #    ~/.codex/hooks.json); plugin-carried hooks would double-fire it, the two
 #    runtimes want different hook schemas, and Codex trust-gates plugin hooks
 #    per content hash (a re-approval on every store-path bump).
