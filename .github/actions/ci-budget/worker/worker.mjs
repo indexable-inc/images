@@ -51,9 +51,17 @@ export function loadPolicy(
   path = resolve(actionDirectory, "..", "policy.json"),
 ) {
   const parsed = JSON.parse(readFileSync(path, "utf8"));
-  const expected = [
+  const numeric = [
     "extended_setup_allowance_seconds",
     "extended_validation_seconds",
+    "standard_seconds",
+    "termination_grace_seconds",
+  ];
+  const expected = [
+    "big_change_label",
+    "extended_setup_allowance_seconds",
+    "extended_validation_seconds",
+    "repositories",
     "standard_seconds",
     "termination_grace_seconds",
   ];
@@ -61,12 +69,17 @@ export function loadPolicy(
     parsed === null ||
     Array.isArray(parsed) ||
     typeof parsed !== "object" ||
-    JSON.stringify(Object.keys(parsed).sort()) !== JSON.stringify(expected)
+    JSON.stringify(Object.keys(parsed).sort()) !== JSON.stringify(expected) ||
+    typeof parsed.big_change_label !== "string" ||
+    parsed.big_change_label === "" ||
+    parsed.repositories === null ||
+    Array.isArray(parsed.repositories) ||
+    typeof parsed.repositories !== "object"
   ) {
     throw new Error(`CI budget policy keys must be ${expected.join(", ")}`);
   }
   return Object.fromEntries(
-    expected.map((name) => [name, parsePositiveInteger(parsed[name], name)]),
+    numeric.map((name) => [name, parsePositiveInteger(parsed[name], name)]),
   );
 }
 

@@ -17,9 +17,6 @@ inputs:
   token:
     description: Token with actions and pull request read, plus issues write when publishing
     required: true
-  extra-costly-paths:
-    description: JSON array of repository-specific costly path globs
-    default: "[]"
   force-big-change:
     description: Grant the extended budget without a path or label match
     default: "false"
@@ -70,7 +67,6 @@ runs:
       if: inputs.mode == 'classify'
       shell: bash
       env:
-        CI_BUDGET_EXTRA_COSTLY_PATHS: ${{ inputs.extra-costly-paths }}
         CI_BUDGET_BASE_SHA: ${{ inputs.base-sha }}
         CI_BUDGET_SNAPSHOT_PATH: ${{ runner.temp }}/ci-budget-snapshot.json
         CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}

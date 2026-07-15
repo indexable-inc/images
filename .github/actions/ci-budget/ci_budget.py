@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
 import re
@@ -16,9 +15,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ci_policy import standard_deadline, standard_minutes, worker_timeout_minutes
+from ci_policy import (
+    POLICY,
+    Classification,
+    classify,
+    standard_deadline,
+    standard_minutes,
+    worker_timeout_minutes,
+)
 
-BIG_CHANGE_LABEL = "ci/big-change"
 COMMENT_MARKER = "<!-- ci-budget -->"
 MAX_PULL_REQUEST_FILES = 3000
 CI_BUDGET_SNAPSHOT_PREFIX = "ci-budget-snapshot"
@@ -45,12 +50,6 @@ query MergeQueueEntries(
 """
 JsonObject = dict[str, Any]
 Transport = Callable[[urllib.request.Request], tuple[Any, Mapping[str, str]]]
-
-
-@dataclass(frozen=True)
-class Classification:
-    big_change: bool
-    reason: JsonObject
 
 
 @dataclass(frozen=True)
@@ -99,48 +98,6 @@ def parse_positive_int(value: str, name: str) -> int:
     if parsed <= 0:
         raise ValueError(f"{name} must be positive")
     return parsed
-
-
-def parse_globs(value: str, name: str) -> list[str]:
-    decoded = json.loads(value)
-    if not isinstance(decoded, list) or not all(
-        isinstance(item, str) and item for item in decoded
-    ):
-        raise ValueError(f"{name} must be a JSON array of non-empty strings")
-    return decoded
-
-
-def load_canonical_globs(path: Path) -> list[str]:
-    globs = [line for line in path.read_text().splitlines() if line]
-    if not globs:
-        raise ValueError(f"{path} must contain at least one glob")
-    return globs
-
-
-def classify(
-    paths: Sequence[str],
-    labels: Sequence[str],
-    globs: Sequence[str],
-    *,
-    force_big_change: bool,
-) -> Classification:
-    matches = [
-        {"path": path, "pattern": pattern}
-        for path in paths
-        for pattern in globs
-        if fnmatch.fnmatchcase(path, pattern)
-    ]
-    sources: list[str] = []
-    if force_big_change:
-        sources.append("forced")
-    if BIG_CHANGE_LABEL in labels:
-        sources.append("label")
-    if matches:
-        sources.append("costly_path")
-    return Classification(
-        big_change=bool(sources),
-        reason={"sources": sources, "matches": matches},
-    )
 
 
 def default_transport(request: urllib.request.Request) -> tuple[Any, Mapping[str, str]]:
@@ -640,7 +597,7 @@ def pull_requests_for_attempt(
 def classify_workflow_attempt(
     client: GitHubClient,
     attempt: JsonObject,
-    globs: Sequence[str],
+    repository: str,
     *,
     force_big_change: bool,
     merge_queue_branch: str,
@@ -648,7 +605,7 @@ def classify_workflow_attempt(
     event_pull_request_number: int | None = None,
 ) -> Classification:
     if force_big_change:
-        return classify([], [], globs, force_big_change=True)
+        return classify([], [], repository, force_big_change=True)
     if attempt.get("event") == "push":
         head_sha = attempt.get("head_sha")
         if not isinstance(head_sha, str):
@@ -672,7 +629,7 @@ def classify_workflow_attempt(
         return classify_pull_requests(
             client,
             associations.pull_requests,
-            globs,
+            repository,
             force_big_change=False,
         )
     pull_requests = pull_requests_for_attempt(
@@ -682,25 +639,27 @@ def classify_workflow_attempt(
         event_base_sha=event_base_sha,
         event_pull_request_number=event_pull_request_number,
     )
-    return classify_pull_requests(client, pull_requests, globs, force_big_change=False)
+    return classify_pull_requests(
+        client, pull_requests, repository, force_big_change=False
+    )
 
 
 def classify_pull_request(
     client: GitHubClient,
     pull_request: JsonObject,
-    globs: Sequence[str],
+    repository: str,
     *,
     force_big_change: bool,
 ) -> Classification:
     return classify_pull_requests(
-        client, [pull_request], globs, force_big_change=force_big_change
+        client, [pull_request], repository, force_big_change=force_big_change
     )
 
 
 def classify_pull_requests(
     client: GitHubClient,
     pull_requests: Sequence[JsonObject],
-    globs: Sequence[str],
+    repository: str,
     *,
     force_big_change: bool,
 ) -> Classification:
@@ -710,8 +669,8 @@ def classify_pull_requests(
     for pull_request in pull_requests:
         labels.extend(labels_from_pull_request(pull_request))
     labels = list(dict.fromkeys(labels))
-    if force_big_change or BIG_CHANGE_LABEL in labels:
-        return classify([], labels, globs, force_big_change=force_big_change)
+    if force_big_change or POLICY.big_change_label in labels:
+        return classify([], labels, repository, force_big_change=force_big_change)
     paths: list[str] = []
     for pull_request in pull_requests:
         number = pull_request_number(pull_request, "pull request")
@@ -724,7 +683,7 @@ def classify_pull_requests(
     return classify(
         list(dict.fromkeys(paths)),
         labels,
-        globs,
+        repository,
         force_big_change=force_big_change,
     )
 
@@ -736,14 +695,16 @@ def render_comment(classification: Classification) -> str:
         if matches:
             detail = f"Extended budget: matched `{matches[0]['path']}`."
         elif "label" in classification.reason["sources"]:
-            detail = "Extended budget: the `ci/big-change` label is present."
+            detail = (
+                f"Extended budget: the `{POLICY.big_change_label}` label is present."
+            )
         else:
             detail = "Extended budget: this run was explicitly classified as large."
     else:
         detail = f"Standard budget: this change has {minutes} minutes."
     policy_text = (
         f"CI is limited to {minutes} minutes unless this is a legitimate "
-        "big change. Add the `ci/big-change` label for an extended budget. "
+        f"big change. Add the `{POLICY.big_change_label}` label for an extended budget. "
         "Lockfile and Rust toolchain changes are labeled automatically."
     )
     return f"{COMMENT_MARKER}\n{policy_text}\n\n{detail}"
@@ -787,11 +748,6 @@ def main() -> int:
         os.environ["CI_BUDGET_FORCE_BIG_CHANGE"], "force-big-change"
     )
     publish = parse_bool(os.environ["CI_BUDGET_PUBLISH"], "publish")
-    globs = load_canonical_globs(Path(__file__).with_name("costly-paths"))
-    globs.extend(
-        parse_globs(os.environ["CI_BUDGET_EXTRA_COSTLY_PATHS"], "extra-costly-paths")
-    )
-
     client = GitHubClient(repository, token)
     run_id = parse_positive_int(os.environ["CI_BUDGET_RUN_ID"], "run-id")
     run_attempt = parse_positive_int(os.environ["CI_BUDGET_RUN_ATTEMPT"], "run-attempt")
@@ -811,7 +767,7 @@ def main() -> int:
         classification = classify_pull_request(
             client,
             pull_request,
-            globs,
+            repository,
             force_big_change=force_big_change,
         )
     else:
@@ -824,18 +780,18 @@ def main() -> int:
             classification = classify_workflow_attempt(
                 client,
                 attempt,
-                globs,
+                repository,
                 force_big_change=force_big_change,
                 merge_queue_branch=os.environ["CI_BUDGET_MERGE_QUEUE_BRANCH"],
                 event_base_sha=os.environ["CI_BUDGET_BASE_SHA"] or None,
             )
         elif force_big_change:
-            classification = classify([], [], globs, force_big_change=True)
+            classification = classify([], [], repository, force_big_change=True)
         else:
             raise ValueError("a routine non-pull-request change requires head-sha")
     if publish and pull_request_number:
-        if classification.reason["matches"] and BIG_CHANGE_LABEL not in labels:
-            client.add_label(pull_request_number, BIG_CHANGE_LABEL)
+        if classification.reason["matches"] and POLICY.big_change_label not in labels:
+            client.add_label(pull_request_number, POLICY.big_change_label)
         client.upsert_comment(pull_request_number, render_comment(classification))
 
     reason = json.dumps(classification.reason, separators=(",", ":"), sort_keys=True)

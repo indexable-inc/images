@@ -43,13 +43,11 @@ def runtime_error(call: Callable[[], object]) -> RuntimeError:
 
 class ClassificationTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.globs = ci_budget.load_canonical_globs(
-            MODULE_PATH.with_name("costly-paths")
-        )
+        self.repository = "indexable-inc/index"
 
     def test_routine_change_uses_standard_budget(self) -> None:
         result = ci_budget.classify(
-            ["src/main.rs"], [], self.globs, force_big_change=False
+            ["src/main.rs"], [], self.repository, force_big_change=False
         )
         assert not result.big_change
         assert result.reason == {"sources": [], "matches": []}
@@ -58,7 +56,7 @@ class ClassificationTests(unittest.TestCase):
         result = ci_budget.classify(
             ["flake.lock", "guest/rust-toolchain.toml", "vendor/Cargo.lock"],
             [],
-            self.globs,
+            self.repository,
             force_big_change=False,
         )
         assert result.big_change
@@ -73,7 +71,7 @@ class ClassificationTests(unittest.TestCase):
         result = ci_budget.classify(
             ["rust-toolchain", "vendored/fuser/rust-toolchain"],
             [],
-            self.globs,
+            self.repository,
             force_big_change=False,
         )
         assert result.big_change
@@ -83,20 +81,23 @@ class ClassificationTests(unittest.TestCase):
             "vendored/fuser/rust-toolchain",
         }
 
-    def test_label_and_extra_glob_are_structured_sources(self) -> None:
+    def test_label_and_repository_glob_are_structured_sources(self) -> None:
         result = ci_budget.classify(
-            ["images/base.nix"],
-            [ci_budget.BIG_CHANGE_LABEL],
-            ["images/**"],
+            ["lib/workspace-cargo-unit.nix"],
+            [ci_budget.POLICY.big_change_label],
+            "indexable-inc/ix",
             force_big_change=False,
         )
         assert result.reason["sources"] == ["label", "costly_path"]
         assert result.reason["matches"] == [
-            {"path": "images/base.nix", "pattern": "images/**"}
+            {
+                "path": "lib/workspace-cargo-unit.nix",
+                "pattern": "lib/workspace-cargo-unit.nix",
+            }
         ]
 
     def test_forced_run_uses_extended_budget(self) -> None:
-        result = ci_budget.classify([], [], self.globs, force_big_change=True)
+        result = ci_budget.classify([], [], self.repository, force_big_change=True)
         assert result.big_change
         assert result.reason["sources"] == ["forced"]
 
@@ -154,10 +155,10 @@ class GitHubClientTests(unittest.TestCase):
             client,
             {
                 "number": 42,
-                "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}],
+                "labels": [{"name": ci_budget.POLICY.big_change_label}],
                 "changed_files": 3001,
             },
-            ["flake.lock"],
+            "indexable-inc/index",
             force_big_change=False,
         )
 
@@ -307,7 +308,7 @@ class GitHubClientTests(unittest.TestCase):
                 },
                 {
                     "number": 42,
-                    "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}],
+                    "labels": [{"name": ci_budget.POLICY.big_change_label}],
                     "changed_files": 1,
                 },
             ]
@@ -397,9 +398,7 @@ class GitHubClientTests(unittest.TestCase):
 
 class WorkflowAssociationTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.globs = ci_budget.load_canonical_globs(
-            MODULE_PATH.with_name("costly-paths")
-        )
+        self.repository = "indexable-inc/index"
 
     def test_labeled_main_push_uses_associated_pull_request(self) -> None:
         transport = FakeTransport(
@@ -408,14 +407,14 @@ class WorkflowAssociationTests(unittest.TestCase):
                     {
                         "number": 42,
                         "base": {"ref": "main"},
-                        "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}],
+                        "labels": [{"name": ci_budget.POLICY.big_change_label}],
                         "merge_commit_sha": "b" * 40,
                         "merged_at": "2026-07-15T10:00:00Z",
                     }
                 ],
                 {
                     "number": 42,
-                    "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}],
+                    "labels": [{"name": ci_budget.POLICY.big_change_label}],
                     "changed_files": 1,
                 },
                 {"parents": [{"sha": "a" * 40}]},
@@ -432,7 +431,7 @@ class WorkflowAssociationTests(unittest.TestCase):
         result = ci_budget.classify_workflow_attempt(
             client,
             attempt,
-            self.globs,
+            self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha="a" * 40,
@@ -467,7 +466,7 @@ class WorkflowAssociationTests(unittest.TestCase):
                 },
                 {
                     "number": 42,
-                    "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}],
+                    "labels": [{"name": ci_budget.POLICY.big_change_label}],
                     "changed_files": 1,
                 },
                 [{"filename": "src/main.rs"}],
@@ -483,7 +482,7 @@ class WorkflowAssociationTests(unittest.TestCase):
         result = ci_budget.classify_workflow_attempt(
             client,
             attempt,
-            self.globs,
+            self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha="a" * 40,
@@ -524,7 +523,7 @@ class WorkflowAssociationTests(unittest.TestCase):
             lambda: ci_budget.classify_workflow_attempt(
                 client,
                 attempt,
-                self.globs,
+                self.repository,
                 force_big_change=False,
                 merge_queue_branch="main",
                 event_base_sha="a" * 40,
@@ -550,7 +549,7 @@ class WorkflowAssociationTests(unittest.TestCase):
         result = ci_budget.classify_workflow_attempt(
             client,
             attempt,
-            self.globs,
+            self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha="a" * 40,
@@ -587,7 +586,7 @@ class WorkflowAssociationTests(unittest.TestCase):
         result = ci_budget.classify_workflow_attempt(
             client,
             {"event": "push", "head_sha": direct_sha, "pull_requests": []},
-            self.globs,
+            self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha=base_sha,
@@ -641,7 +640,7 @@ class WorkflowAssociationTests(unittest.TestCase):
         result = ci_budget.classify_workflow_attempt(
             client,
             attempt,
-            self.globs,
+            self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha=base_sha,

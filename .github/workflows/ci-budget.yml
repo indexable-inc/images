@@ -7,10 +7,6 @@ on:
         description: Pull request number, or 0 outside a pull request
         type: number
         default: 0
-      extra-costly-paths:
-        description: JSON array of repository-specific costly path globs
-        type: string
-        default: "[]"
       force-big-change:
         description: Grant the extended budget without a path or label match
         type: boolean
@@ -74,7 +70,6 @@ jobs:
           repository: ${{ github.repository }}
           pull-request-number: ${{ inputs.pull-request-number }}
           token: ${{ github.token }}
-          extra-costly-paths: ${{ inputs.extra-costly-paths }}
           force-big-change: ${{ inputs.force-big-change }}
           base-sha: ${{ inputs.base-sha }}
           head-sha: ${{ inputs.head-sha }}
