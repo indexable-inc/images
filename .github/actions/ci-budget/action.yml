@@ -83,11 +83,11 @@ runs:
         CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
         CI_BUDGET_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/ci_budget.py"
-    - name: Preserve authoritative event range
-      if: inputs.mode == 'classify' && inputs.base-sha != ''
+    - name: Preserve authoritative event context
+      if: inputs.mode == 'classify' && steps.classify.outputs.context_key != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: ci-budget-context-${{ inputs.run-id }}-${{ inputs.run-attempt }}-${{ inputs.base-sha }}
+        name: ci-budget-context-${{ inputs.run-id }}-${{ inputs.run-attempt }}-${{ steps.classify.outputs.context_key }}
         path: ${{ steps.classify.outputs.context_path }}
         if-no-files-found: error
     - name: Enforce total CI deadline

@@ -66,6 +66,29 @@ class PushAssociations:
     unassociated_commits: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class WorkflowContext:
+    base_sha: str | None = None
+    pull_request_number: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.base_sha is None) == (self.pull_request_number is None):
+            raise ValueError(
+                "workflow context requires exactly one event base or pull request"
+            )
+        if self.base_sha is not None:
+            validate_sha(self.base_sha, "workflow context base SHA")
+        if self.pull_request_number is not None and self.pull_request_number <= 0:
+            raise ValueError("workflow context pull request must be positive")
+
+    @property
+    def artifact_key(self) -> str:
+        if self.base_sha is not None:
+            return f"base-{self.base_sha}"
+        assert self.pull_request_number is not None
+        return f"pr-{self.pull_request_number}"
+
+
 def parse_bool(value: str, name: str) -> bool:
     if value == "true":
         return True
@@ -435,7 +458,9 @@ class GitHubClient:
             raise RuntimeError("GitHub API returned duplicate changed filenames")
         return paths
 
-    def ci_budget_context_base_sha(self, run_id: int, run_attempt: int) -> str | None:
+    def ci_budget_context(
+        self, run_id: int, run_attempt: int
+    ) -> WorkflowContext | None:
         prefix = f"{CI_BUDGET_CONTEXT_PREFIX}-{run_id}-"
         artifacts: list[JsonObject] = []
         page = 1
@@ -456,10 +481,10 @@ class GitHubClient:
             if len(page_artifacts) < 100:
                 break
             page += 1
-        contexts: list[tuple[int, str]] = []
+        contexts: list[tuple[int, WorkflowContext]] = []
         pattern = re.compile(
             rf"{re.escape(prefix)}(?P<attempt>[1-9][0-9]*)-"
-            r"(?P<base>[0-9a-f]{40})"
+            r"(?:base-(?P<base>[0-9a-f]{40})|pr-(?P<pr>[1-9][0-9]*))"
         )
         for artifact in artifacts:
             name = artifact.get("name")
@@ -470,8 +495,16 @@ class GitHubClient:
                 continue
             artifact_attempt = int(match.group("attempt"))
             if artifact_attempt <= run_attempt:
-                contexts.append((artifact_attempt, match.group("base")))
-        exact = [base_sha for attempt, base_sha in contexts if attempt == run_attempt]
+                base_sha = match.group("base")
+                pull_request = match.group("pr")
+                context = WorkflowContext(
+                    base_sha=base_sha,
+                    pull_request_number=(
+                        int(pull_request) if pull_request is not None else None
+                    ),
+                )
+                contexts.append((artifact_attempt, context))
+        exact = [context for attempt, context in contexts if attempt == run_attempt]
         if len(exact) > 1:
             raise RuntimeError(
                 f"workflow attempt has {len(exact)} CI budget context artifacts; "
@@ -479,14 +512,12 @@ class GitHubClient:
             )
         if exact:
             return exact[0]
-        inherited = {
-            base_sha for attempt, base_sha in contexts if attempt < run_attempt
-        }
+        inherited = {context for attempt, context in contexts if attempt < run_attempt}
         if not inherited:
             return None
         if len(inherited) != 1:
             raise RuntimeError(
-                "earlier workflow attempts disagree on the CI budget context base SHA"
+                "earlier workflow attempts disagree on the CI budget event context"
             )
         return inherited.pop()
 
@@ -576,6 +607,7 @@ def pull_requests_for_attempt(
     *,
     merge_queue_branch: str,
     event_base_sha: str | None,
+    event_pull_request_number: int | None,
 ) -> list[JsonObject]:
     event = attempt.get("event")
     head_sha = attempt.get("head_sha")
@@ -596,6 +628,16 @@ def pull_requests_for_attempt(
         raise RuntimeError("GitHub API workflow attempt has malformed pull requests")
     if len(raw_pull_requests) > 1:
         raise RuntimeError("workflow attempt identifies multiple pull requests")
+    if event_pull_request_number is not None:
+        if raw_pull_requests:
+            payload_number = pull_request_number(
+                raw_pull_requests[0], "workflow attempt"
+            )
+            if payload_number != event_pull_request_number:
+                raise RuntimeError(
+                    "workflow attempt pull request disagrees with source context"
+                )
+        return [client.pull_request(event_pull_request_number)]
     if raw_pull_requests:
         number = pull_request_number(raw_pull_requests[0], "workflow attempt")
         return [client.pull_request(number)]
@@ -611,6 +653,7 @@ def classify_workflow_attempt(
     force_big_change: bool,
     merge_queue_branch: str,
     event_base_sha: str | None = None,
+    event_pull_request_number: int | None = None,
 ) -> Classification:
     if force_big_change:
         return classify([], [], globs, force_big_change=True)
@@ -645,6 +688,7 @@ def classify_workflow_attempt(
         attempt,
         merge_queue_branch=merge_queue_branch,
         event_base_sha=event_base_sha,
+        event_pull_request_number=event_pull_request_number,
     )
     return classify_pull_requests(client, pull_requests, globs, force_big_change=False)
 
@@ -721,12 +765,16 @@ def write_output(name: str, value: str) -> None:
         output.write(f"{name}={value}\n")
 
 
-def write_context(path: Path, base_sha: str, head_sha: str) -> None:
-    validate_sha(base_sha, "classification base SHA")
-    validate_sha(head_sha, "classification head SHA")
+def write_context(path: Path, context: WorkflowContext, head_sha: str) -> None:
+    if context.base_sha is not None:
+        validate_sha(head_sha, "classification head SHA")
     path.write_text(
         json.dumps(
-            {"base_sha": base_sha, "head_sha": head_sha},
+            {
+                "base_sha": context.base_sha,
+                "head_sha": head_sha or None,
+                "pull_request_number": context.pull_request_number,
+            },
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -797,13 +845,24 @@ def main() -> int:
         str(worker_timeout_minutes(big_change=classification.big_change)),
     )
     base_sha = os.environ["CI_BUDGET_BASE_SHA"]
+    workflow_context: WorkflowContext | None = None
+    if pull_request_number:
+        workflow_context = WorkflowContext(pull_request_number=pull_request_number)
+    elif base_sha:
+        workflow_context = WorkflowContext(base_sha=base_sha)
     context_path = ""
-    if base_sha:
-        head_sha = os.environ["CI_BUDGET_HEAD_SHA"]
-        context = Path(os.environ["CI_BUDGET_CONTEXT_PATH"])
-        write_context(context, base_sha, head_sha)
-        context_path = str(context)
+    context_key = ""
+    if workflow_context is not None:
+        context_file = Path(os.environ["CI_BUDGET_CONTEXT_PATH"])
+        write_context(
+            context_file,
+            workflow_context,
+            os.environ["CI_BUDGET_HEAD_SHA"],
+        )
+        context_path = str(context_file)
+        context_key = workflow_context.artifact_key
     write_output("context_path", context_path)
+    write_output("context_key", context_key)
     print(reason)
     return 0
 

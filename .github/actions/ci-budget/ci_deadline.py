@@ -14,6 +14,7 @@ from pathlib import Path
 from ci_budget import (
     GitHubClient,
     JsonObject,
+    WorkflowContext,
     classify_workflow_attempt,
     load_canonical_globs,
     parse_bool,
@@ -99,17 +100,20 @@ def cancel_at_deadline(
     attempt = client.workflow_attempt(run_id, run_attempt)
     started_at = parse_timestamp(attempt.get("run_started_at"), "run_started_at")
     deadline = started_at + budget
-    event_base_sha = None
-    if not force_big_change and attempt.get("event") in {"merge_group", "push"}:
-        while event_base_sha is None:
-            event_base_sha = client.ci_budget_context_base_sha(run_id, run_attempt)
+    event_context = None
+    if not force_big_change:
+        while event_context is None:
+            event_context = client.ci_budget_context(run_id, run_attempt)
             remaining = (deadline - now()).total_seconds()
-            if event_base_sha is None and remaining <= 0:
-                raise RuntimeError(
-                    "source workflow did not publish its event base SHA before "
+            if event_context is None and remaining <= 0:
+                print(
+                    "::error title=CI total deadline exceeded::"
+                    "source workflow did not publish its event context before "
                     f"{deadline.isoformat()}"
                 )
-            if event_base_sha is None:
+                client.cancel_workflow_run(run_id)
+                return True
+            if event_context is None:
                 sleep(min(2, remaining))
     classification = classify_workflow_attempt(
         client,
@@ -117,7 +121,10 @@ def cancel_at_deadline(
         globs,
         force_big_change=force_big_change,
         merge_queue_branch=merge_queue_branch,
-        event_base_sha=event_base_sha,
+        event_base_sha=event_context.base_sha if event_context else None,
+        event_pull_request_number=(
+            event_context.pull_request_number if event_context else None
+        ),
     )
     if classification.big_change:
         print(json.dumps(classification.reason, separators=(",", ":")))
