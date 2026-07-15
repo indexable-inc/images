@@ -365,13 +365,14 @@
   # `set -o pipefail`). Uses the repo-built nix-eval-jobs directly by store path
   # rather than `nix run`.
   #
-  # `check closure` (the closure-gate.yml required check, #1873) reuses step 1's
-  # build gate over `.#cachePushRoots.x86_64-linux`: the exact set the
-  # post-merge cache-push linux lane publishes, so a package whose build broke
-  # (not just its eval) goes red at the PR instead of on every consumer.
+  # `check required` is the required PR path. It builds the namespaced union of
+  # ciChecks and cachePushRoots through one 16-worker evaluator pool, then runs
+  # the package schema gate. This replaces two competing self-hosted claims
+  # without running two 16-worker clients side by side (which has OOM-killed a
+  # 96 GiB runner before). `check closure` remains the manual closure probe.
   check = ix.writeNushellApplication pkgs {
     name = "check";
-    meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux (`closure` subcommand: build .#cachePushRoots.x86_64-linux)";
+    meta.description = "Run CI gates: default checks, `required` checks plus publishable closure, or `closure` only";
     text = ''
       # Patched nix-fast-build (packages/nix/nix-fast-build): stock --skip-cached
       # only skips a job whose nix-eval-jobs cacheStatus is `cached` (in a remote
@@ -389,8 +390,9 @@
 
       # Shared build gate: build every derivation under $flake with
       # nix-fast-build and exit 1 on any failure, after replaying each failed
-      # build's log. `main` runs it over ciChecks; `main closure` over the
-      # cache-push roots.
+      # build's log. `main` runs it over ciChecks, `main required` over the
+      # namespaced union of checks and cache-push roots, and `main closure` over
+      # cache-push roots alone.
       def build-gate [flake: string] {
         # ca-derivations: the rust workspace units default to
         # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating
@@ -529,9 +531,7 @@
         }
       }
 
-      def main [] {
-        build-gate ".#ciChecks.x86_64-linux"
-
+      def eval-package-schema [] {
         let tmp = (mktemp --directory --tmpdir "ix-check.XXXXXX")
         let report = ($tmp | path join "flake-schema-eval.jsonl")
         do --capture-errors {
@@ -554,6 +554,19 @@
           exit 1
         }
         rm --recursive --force $tmp
+      }
+
+      def main [] {
+        build-gate ".#ciChecks.x86_64-linux"
+        eval-package-schema
+      }
+
+      # Required PR/merge-group gate. One nix-fast-build invocation evaluates
+      # and builds both check roots and publishable closure roots with the same
+      # bounded pool; a second package-schema pass retains the broader eval gate.
+      def "main required" [] {
+        build-gate ".#requiredGateRoots.x86_64-linux"
+        eval-package-schema
       }
 
       # Pre-merge closure gate (closure-gate.yml, #1873): the same build gate
