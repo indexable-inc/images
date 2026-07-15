@@ -40,13 +40,13 @@ while the dashboard pane shows the tree growing live as it builds.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
 import html as _html
 import json as _json
 import os
 import re
 import shutil
-import signal
 import sys
 import time
 from collections.abc import Iterable
@@ -105,6 +105,7 @@ RESULT_TYPES = {
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _REAP_TIMEOUT = 10.0
+_SUPERVISOR = str(Path(__file__).with_name("_supervise.py"))
 
 
 @dataclass(slots=True)
@@ -113,8 +114,7 @@ class _OwnedProcess:
     owner_fd: int
 
     def release_owner(self) -> None:
-        """Close the lifetime pipe once; its EOF tells the child-side watcher
-        that no kernel owns this process tree anymore."""
+        """Tell the external supervisor that no kernel owns its target tree."""
         owner_fd, self.owner_fd = self.owner_fd, -1
         if owner_fd >= 0:
             os.close(owner_fd)
@@ -143,48 +143,72 @@ async def _finish_cleanup(
     await asyncio.shield(wait)
 
 
-def _report_late_reap(proc: _OwnedProcess, terminal: asyncio.Task[None]) -> None:
-    try:
-        terminal.result()
-    except BaseException as exc:
-        outcome = f"failed after its deadline: {type(exc).__name__}: {exc}"
-    else:
-        outcome = f"finished after its deadline with status {proc.process.returncode}"
-    print(
-        f"[nix] cleanup watcher for process group {proc.process.pid} {outcome}",
-        file=sys.__stderr__,
-        flush=True,
-    )
-
-
-def _kill_group(proc: _OwnedProcess) -> None:
-    """Kill the isolated process group led by ``proc``.
-
-    Every process this module owns starts a new session, so the stable group id
-    is the direct child's pid even if that child has already exited while one of
-    its descendants still holds a captured pipe open.
-    """
-    try:
-        os.killpg(proc.process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        if proc.process.returncode is None:
-            try:
-                proc.process.kill()
-            except ProcessLookupError:
-                pass
-            except PermissionError as exc:
-                raise RuntimeError(f"could not kill nix process {proc.process.pid}: {exc}") from exc
-    except PermissionError as exc:
-        raise RuntimeError(f"could not kill nix process group {proc.process.pid}: {exc}") from exc
-
-
 async def _wait_and_release(proc: _OwnedProcess) -> int:
     try:
         return await proc.process.wait()
     finally:
-        # Direct-child exit is terminal ownership too. Closing the pipe lets the
-        # watcher kill any descendant that retained a captured output fd.
+        # The supervisor exits only after its target identity set is empty.
         proc.release_owner()
+
+
+def _close_process_pipes(process: asyncio.subprocess.Process) -> None:
+    """Close captured transports after the hard cleanup deadline."""
+    transport = getattr(process, "_transport", None)
+    get_pipe_transport = getattr(transport, "get_pipe_transport", None)
+    if not callable(get_pipe_transport):
+        return
+    for fd in (1, 2):
+        pipe = get_pipe_transport(fd)
+        if pipe is not None:
+            pipe.close()
+
+
+async def _settle_tasks(*tasks: asyncio.Task[Any]) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _force_stop_supervisor(process: asyncio.subprocess.Process) -> None:
+    kill_error: PermissionError | None = None
+    wait_timed_out = False
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    except PermissionError as exc:
+        kill_error = exc
+    _close_process_pipes(process)
+    waiter = asyncio.create_task(process.wait())
+    bounded = asyncio.create_task(_bounded(waiter, 1.0))
+    try:
+        await _defer_cancellation(bounded)
+    except TimeoutError:
+        wait_timed_out = True
+    finally:
+        await _defer_cancellation(asyncio.create_task(_settle_tasks(bounded, waiter)))
+    if kill_error is not None:
+        raise RuntimeError(
+            f"could not kill nix supervisor {process.pid}: {kill_error}"
+        ) from kill_error
+    if wait_timed_out:
+        raise RuntimeError(f"could not reap nix supervisor {process.pid} after SIGKILL")
+
+
+async def _stop_cleanup(
+    process: asyncio.subprocess.Process,
+    *tasks: asyncio.Task[Any],
+) -> BaseException | None:
+    force_error: BaseException | None = None
+    try:
+        await _force_stop_supervisor(process)
+    except BaseException as exc:
+        force_error = exc
+    finally:
+        await _defer_cancellation(asyncio.create_task(_settle_tasks(*tasks)))
+    return force_error
 
 
 async def _kill_and_reap(
@@ -195,32 +219,38 @@ async def _kill_and_reap(
     timeout: float = _REAP_TIMEOUT,
 ) -> int:
     drain = drain or asyncio.create_task(proc.process.communicate())
-    wait = wait or asyncio.create_task(_wait_and_release(proc))
-    kill_error: RuntimeError | None = None
-    try:
-        _kill_group(proc)
-    except RuntimeError as exc:
-        kill_error = exc
-    finally:
-        # The child-side watcher is an independent second signal path. It fires
-        # on kernel death as well as on an exception in the explicit kill path.
-        proc.release_owner()
-    # Keep draining while SIGKILL settles. A cancelled reader may have paused its
-    # transport at the high-water mark, in which case wait() alone never observes
-    # every inherited pipe closing.
+    wait = wait or asyncio.create_task(proc.process.wait())
+    # The supervisor is a stable direct child. Its owner pipe is the only kill
+    # request: the kernel never signals a reusable PID or process-group number.
+    proc.release_owner()
     terminal = asyncio.create_task(_finish_cleanup(drain, wait))
+    bounded = asyncio.create_task(_bounded(terminal, timeout))
     try:
-        await _defer_cancellation(asyncio.create_task(_bounded(terminal, timeout)))
+        await _defer_cancellation(bounded)
     except TimeoutError as exc:
-        terminal.add_done_callback(lambda task: _report_late_reap(proc, task))
+        force_error = await _stop_cleanup(proc.process, bounded, terminal, drain, wait)
+        if force_error is not None:
+            raise RuntimeError(
+                f"nix supervisor {proc.process.pid} exceeded its cleanup deadline "
+                "and could not be force-stopped"
+            ) from force_error
         raise RuntimeError(
-            f"nix process group {proc.process.pid} did not exit within {timeout:g}s "
-            "after SIGKILL; its cleanup watcher remains active"
+            f"nix supervisor {proc.process.pid} did not empty its target tree "
+            f"within {timeout:g}s"
         ) from exc
+    except BaseException as exc:
+        force_error = await _stop_cleanup(proc.process, bounded, terminal, drain, wait)
+        if force_error is not None:
+            exc.add_note(
+                f"nix supervisor force-stop also failed: "
+                f"{type(force_error).__name__}: {force_error}"
+            )
+        raise
+    finally:
+        if bounded.done():
+            await _defer_cancellation(asyncio.create_task(_settle_tasks(bounded)))
     if proc.process.returncode is None:
-        raise RuntimeError(f"nix process group {proc.process.pid} survived SIGKILL")
-    if kill_error is not None:
-        raise kill_error
+        raise RuntimeError(f"nix supervisor {proc.process.pid} exited without a status")
     return proc.process.returncode
 
 
@@ -229,7 +259,8 @@ def _resolve_executable(command: str, cwd: str | None) -> str:
     if path.is_absolute():
         candidate = path
     elif os.sep in command:
-        candidate = Path(cwd) / path if cwd is not None else Path.cwd() / path
+        base = Path(cwd).resolve() if cwd is not None else Path.cwd()
+        candidate = base / path
     else:
         found = shutil.which(command)
         candidate = Path(found) if found is not None else None
@@ -249,49 +280,82 @@ async def _spawn(
     owner_read, owner_write = os.pipe()
 
     async def launch() -> _OwnedProcess:
+        process: asyncio.subprocess.Process | None = None
         try:
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
-                "-m",
-                "nix._owner_exec",
+                _SUPERVISOR,
                 str(owner_read),
                 *argv,
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=stderr,
-                start_new_session=True,
                 pass_fds=(owner_read,),
             )
-        except BaseException:
             os.close(owner_read)
-            os.close(owner_write)
+            return _OwnedProcess(process=process, owner_fd=owner_write)
+        except BaseException as exc:
+            with contextlib.suppress(OSError):
+                os.close(owner_read)
+            if process is None:
+                os.close(owner_write)
+            else:
+                try:
+                    await _kill_and_reap(
+                        _OwnedProcess(process=process, owner_fd=owner_write)
+                    )
+                except BaseException as cleanup_error:
+                    exc.add_note(
+                        "nix supervisor launch cleanup also failed: "
+                        f"{type(cleanup_error).__name__}: {cleanup_error}"
+                    )
             raise
-        os.close(owner_read)
-        return _OwnedProcess(process=process, owner_fd=owner_write)
 
-    pending = asyncio.create_task(launch())
+    launch_coroutine = launch()
+    try:
+        pending = asyncio.create_task(launch_coroutine)
+    except BaseException:
+        launch_coroutine.close()
+        os.close(owner_read)
+        os.close(owner_write)
+        raise
     try:
         return await asyncio.shield(pending)
-    except asyncio.CancelledError:
-        # Process creation can yield after fork but before returning the handle.
-        # Recover that handle before propagating cancellation, then own its tree.
-        proc = await _defer_cancellation(pending)
-        await _kill_and_reap(proc)
+    except BaseException as exc:
+        # Any base exception can arrive after fork but before asyncio returns the
+        # handle. Recover it, then close the owner and reap the supervisor.
+        try:
+            proc = await _defer_cancellation(pending)
+        except BaseException:
+            raise
+        try:
+            await _kill_and_reap(proc)
+        except BaseException as cleanup_error:
+            exc.add_note(
+                f"nix supervisor cleanup also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
         raise
 
 
 async def _communicate(proc: _OwnedProcess) -> tuple[bytes, bytes]:
     drain = asyncio.create_task(proc.process.communicate())
-    wait = asyncio.create_task(_wait_and_release(proc))
     try:
-        await asyncio.shield(wait)
         out, err = await asyncio.shield(drain)
-    except BaseException:
-        await _kill_and_reap(proc, drain=drain, wait=wait)
+    except BaseException as exc:
+        try:
+            await _kill_and_reap(proc, drain=drain)
+        except BaseException as cleanup_error:
+            exc.add_note(
+                f"nix supervisor cleanup also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
         raise
+    proc.release_owner()
     assert out is not None
     assert err is not None
     return out, err
+
 
 # Stable schema so `.events` is a well-typed frame even with zero rows.
 _EVENT_SCHEMA = {
@@ -780,10 +844,14 @@ async def run(
         if buf:
             run_state.feed(buf.decode(errors="replace"))
         run_state.returncode = await asyncio.shield(wait)
-    except BaseException:
-        # The monitor owns the nix child beneath it. Kill their isolated group so
-        # cancellation cannot reap only the monitor and orphan the real build.
-        run_state.returncode = await _kill_and_reap(proc, wait=wait)
+    except BaseException as exc:
+        try:
+            run_state.returncode = await _kill_and_reap(proc, wait=wait)
+        except BaseException as cleanup_error:
+            exc.add_note(
+                f"nix supervisor cleanup also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
         raise
     finally:
         run_state.done = True

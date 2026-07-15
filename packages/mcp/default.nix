@@ -1270,6 +1270,9 @@
       ps.asyncssh
       ps.numpy
       ps.polars
+      # The Nix command supervisor tracks each descendant by PID plus creation
+      # time, and by pidfd on Linux, so cancellation never signals a reused PID.
+      ps.psutil
       # psycopg (v3) + SQLAlchemy so `polars.read_database` reaches Postgres out
       # of the box: `pl.read_database(sql, create_engine("postgresql+psycopg://…"))`.
       # connectorx and the ADBC drivers (what `read_database_uri` wants) are not

@@ -1,10 +1,4 @@
-"""A terminal kernel job must not leave a blocked Nix process tree behind.
-
-Issue #3326 reproduced a Nix client blocked in ``writeToStderr`` after its job
-had ended. The fake executable below fills stderr while a descendant holds a
-file lock. Cancellation must drain the pipe, kill the isolated process group,
-and reap the direct child before the job reports its typed terminal state.
-"""
+"""Terminal kernel jobs must leave no Nix process identity or pipe reader."""
 
 from __future__ import annotations
 
@@ -13,10 +7,13 @@ import contextlib
 import fcntl
 import os
 import pathlib
-import signal
 import sys
+import textwrap
 import time
+from collections.abc import Awaitable
+from dataclasses import dataclass
 
+import psutil
 import pytest
 
 import nix
@@ -30,150 +27,167 @@ def _wire(monkeypatch: pytest.MonkeyPatch, ns: dict[str, object]) -> None:
     monkeypatch.setattr(runtime, "_typecheck_enabled", lambda: False)
 
 
-def _pid_exists(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def _wait_until_ready(pid_file: pathlib.Path, ready_file: pathlib.Path) -> None:
-    deadline = time.monotonic() + 10
-    while not (pid_file.exists() and ready_file.exists()):
+def _wait_for(*paths: pathlib.Path, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not all(path.exists() for path in paths):
         if time.monotonic() >= deadline:
-            raise TimeoutError("fake nix process tree did not start")
+            missing = ", ".join(str(path) for path in paths if not path.exists())
+            raise TimeoutError(f"process fixture did not create {missing}")
         time.sleep(0.01)
 
 
-def _wait_until_paused(stream: object) -> None:
-    transport = getattr(stream, "_transport", None)
-    is_reading = getattr(transport, "is_reading", None)
-    if not callable(is_reading):
-        raise TypeError("subprocess stream has no readable transport")
-    deadline = time.monotonic() + 10
-    while is_reading():
-        if time.monotonic() >= deadline:
-            raise TimeoutError("subprocess pipe transport did not pause")
-        time.sleep(0.01)
+def _write_executable(path: pathlib.Path, source: str) -> pathlib.Path:
+    path.write_text(textwrap.dedent(source))
+    path.chmod(0o700)
+    return path
 
 
-def _fake_tree(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pathlib.Path,
-) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]:
-    pid_file = tmp_path / "pids"
-    ready_file = tmp_path / "ready"
-    lock_file = tmp_path / "child.lock"
-    fake_nix = tmp_path / "nix"
-    fake_nix.write_text(
-        f"""#!{sys.executable}
-import fcntl
-import os
-import pathlib
-import time
+@dataclass(frozen=True, slots=True)
+class _Identity:
+    pid: int
+    created: float
 
-child = os.fork()
-if child == 0:
-    with open(os.environ["LOCK_FILE"], "w") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        pathlib.Path(os.environ["READY_FILE"]).write_text("ready")
-        while True:
-            time.sleep(60)
+    @classmethod
+    def capture(cls, pid: int) -> _Identity:
+        process = psutil.Process(pid)
+        return cls(pid=pid, created=process.create_time())
 
-pathlib.Path(os.environ["PID_FILE"]).write_text(f"{{os.getpid()}} {{child}}")
-chunk = b"x" * 65536
-while True:
-    os.write(2, chunk)
-"""
+    def process(self) -> psutil.Process | None:
+        try:
+            process = psutil.Process(self.pid)
+            if process.create_time() != self.created:
+                return None
+            return process
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return None
+
+    def running(self) -> bool:
+        process = self.process()
+        if process is None:
+            return False
+        try:
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return False
+
+
+def _identities(pid_file: pathlib.Path) -> tuple[_Identity, ...]:
+    return tuple(
+        _Identity.capture(int(value)) for value in pid_file.read_text().split()
     )
-    fake_nix.chmod(0o700)
-    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("PID_FILE", str(pid_file))
-    monkeypatch.setenv("READY_FILE", str(ready_file))
-    monkeypatch.setenv("LOCK_FILE", str(lock_file))
-    return fake_nix, pid_file, ready_file, lock_file
 
 
-def _assert_tree_stopped(pid_file: pathlib.Path, lock_file: pathlib.Path) -> None:
-    parent = int(pid_file.read_text().split()[0])
-    assert not _pid_exists(parent), "the direct nix process was not reaped"
+def _cleanup_identities(identities: tuple[_Identity, ...]) -> None:
+    processes = [
+        process for identity in reversed(identities) if (process := identity.process())
+    ]
+    for process in processes:
+        with contextlib.suppress(psutil.NoSuchProcess, psutil.ZombieProcess):
+            process.kill()
+    psutil.wait_procs(processes, timeout=2)
+
+
+def _assert_stopped(identities: tuple[_Identity, ...], lock_file: pathlib.Path) -> None:
+    deadline = time.monotonic() + 3
+    while any(identity.running() for identity in identities):
+        if time.monotonic() >= deadline:
+            alive = [str(identity.pid) for identity in identities if identity.running()]
+            raise AssertionError(
+                f"process identities survived cleanup: {', '.join(alive)}"
+            )
+        time.sleep(0.01)
     with lock_file.open("a") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-def _kill_tree(pid_file: pathlib.Path) -> None:
-    if pid_file.exists():
-        for value in reversed(pid_file.read_text().split()):
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(int(value), signal.SIGKILL)
+def _blocked_tree(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]:
+    pid_file = tmp_path / "pids"
+    ready_file = tmp_path / "ready"
+    blocked_file = tmp_path / "write-blocked"
+    lock_file = tmp_path / "child.lock"
+    fake_nix = _write_executable(
+        tmp_path / "nix",
+        f"""\
+        #!{sys.executable}
+        import fcntl
+        import os
+        import pathlib
+        import time
+
+        child = os.fork()
+        if child == 0:
+            os.setsid()
+            with open(os.environ["LOCK_FILE"], "w") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                pathlib.Path(os.environ["READY_FILE"]).write_text("ready")
+                while True:
+                    time.sleep(60)
+
+        pathlib.Path(os.environ["PID_FILE"]).write_text(f"{{os.getpid()}} {{child}}")
+        flags = fcntl.fcntl(2, fcntl.F_GETFL)
+        fcntl.fcntl(2, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        chunk = b"x" * 65536
+        while True:
+            try:
+                os.write(2, chunk)
+            except BlockingIOError:
+                break
+        pathlib.Path(os.environ["BLOCKED_FILE"]).write_text("stderr pipe saturated")
+        fcntl.fcntl(2, fcntl.F_SETFL, flags)
+        while True:
+            os.write(2, chunk)
+        """,
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("PID_FILE", str(pid_file))
+    monkeypatch.setenv("READY_FILE", str(ready_file))
+    monkeypatch.setenv("BLOCKED_FILE", str(blocked_file))
+    monkeypatch.setenv("LOCK_FILE", str(lock_file))
+    return fake_nix, pid_file, ready_file, blocked_file, lock_file
 
 
-class _EofStream:
-    async def read(self, _size: int) -> bytes:
-        return b""
+def _stream_is_paused(stream: asyncio.StreamReader) -> bool:
+    transport = getattr(stream, "_transport", None)
+    is_reading = getattr(transport, "is_reading", None)
+    if not callable(is_reading):
+        raise TypeError("subprocess stream has no readable transport")
+    return not is_reading()
 
 
-class _WaitProcess:
-    def __init__(self) -> None:
-        self.pid = 424242
-        self.returncode: int | None = None
-        self.stdout = _EofStream()
-        self.wait_calls = 0
-        self.waiting = asyncio.Event()
-        self.reaping = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def wait(self) -> int:
-        self.wait_calls += 1
-        self.waiting.set()
-        await self.release.wait()
-        self.returncode = -signal.SIGKILL
-        return self.returncode
-
-    async def communicate(self) -> tuple[bytes, None]:
-        self.reaping.set()
-        await self.release.wait()
-        self.returncode = -signal.SIGKILL
-        return b"", None
+async def _wait_until_stream_paused(stream: asyncio.StreamReader) -> None:
+    deadline = asyncio.get_running_loop().time() + 2
+    while not _stream_is_paused(stream):
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError("stderr transport did not reach backpressure")
+        await asyncio.sleep(0.01)
 
 
-def test_job_cancel_drains_stderr_and_reaps_nix_eval_tree(
+async def _reap_direct(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(process.wait(), 2)
+
+
+def test_job_cancel_reaps_a_setsid_tree_blocked_in_stderr_write(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ) -> None:
-    _fake_nix, pid_file, ready_file, lock_file = _fake_tree(monkeypatch, tmp_path)
+    _fake, pid_file, ready_file, blocked_file, lock_file = _blocked_tree(
+        monkeypatch, tmp_path
+    )
     _wire(monkeypatch, {"nix": nix})
+    original_spawn = asyncio.create_subprocess_exec
+    identities: tuple[_Identity, ...] = ()
 
     async def scenario() -> runtime.Job:
-        job = await runtime.__ix_run(
-            "await nix.eval('.#slow')",
-            budget=0.01,
-            session="agent-a",
-        )
-        await asyncio.to_thread(_wait_until_ready, pid_file, ready_file)
-        job.cancel()
-        await job.wait(10)
-        return job
-
-    try:
-        job = asyncio.run(scenario())
-        assert job.status == "cancelled"
-        _assert_tree_stopped(pid_file, lock_file)
-    finally:
-        _kill_tree(pid_file)
-
-
-def test_cancel_during_spawn_setup_recovers_and_kills_tree(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pathlib.Path,
-) -> None:
-    fake_nix, pid_file, ready_file, lock_file = _fake_tree(monkeypatch, tmp_path)
-    original_spawn = asyncio.create_subprocess_exec
-
-    async def scenario() -> None:
         created = asyncio.Event()
         release = asyncio.Event()
+        spawned: list[asyncio.subprocess.Process] = []
 
         async def delayed_spawn(
             program: str,
@@ -181,10 +195,10 @@ def test_cancel_during_spawn_setup_recovers_and_kills_tree(
             cwd: str | None,
             stdout: int,
             stderr: int | None,
-            start_new_session: bool,
-            pass_fds: tuple[int, ...],
+            start_new_session: bool = False,
+            pass_fds: tuple[int, ...] = (),
         ) -> asyncio.subprocess.Process:
-            proc = await original_spawn(
+            process = await original_spawn(
                 program,
                 *args,
                 cwd=cwd,
@@ -193,135 +207,333 @@ def test_cancel_during_spawn_setup_recovers_and_kills_tree(
                 start_new_session=start_new_session,
                 pass_fds=pass_fds,
             )
+            spawned.append(process)
             created.set()
             await release.wait()
-            return proc
+            return process
 
         monkeypatch.setattr(nix.asyncio, "create_subprocess_exec", delayed_spawn)
-        task = asyncio.create_task(
-            nix._spawn(str(fake_nix), cwd=None, stderr=asyncio.subprocess.PIPE)
+        job = await runtime.__ix_run(
+            "await nix.eval('.#slow')",
+            budget=0.01,
+            session="agent-a",
         )
         try:
-            await asyncio.wait_for(created.wait(), 5)
-            await asyncio.to_thread(_wait_until_ready, pid_file, ready_file)
-            task.cancel()
+            await asyncio.to_thread(_wait_for, pid_file, ready_file, blocked_file)
+            await asyncio.wait_for(created.wait(), 1)
+            assert spawned[0].stderr is not None
+            await _wait_until_stream_paused(spawned[0].stderr)
+            nonlocal identities
+            identities = _identities(pid_file)
+            job.cancel()
             release.set()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+            await asyncio.sleep(0)
+            job.cancel()
+            await job.wait(10)
+            return job
         finally:
             release.set()
-            if not task.done():
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+            for process in spawned:
+                await _reap_direct(process)
 
     try:
-        asyncio.run(scenario())
-        _assert_tree_stopped(pid_file, lock_file)
+        job = asyncio.run(scenario())
+        assert job.status == "cancelled"
+        _assert_stopped(identities, lock_file)
     finally:
-        _kill_tree(pid_file)
+        _cleanup_identities(identities)
 
 
-def test_run_cancel_during_wait_reaps_despite_repeated_cancel(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def scenario() -> tuple[_WaitProcess, list[int]]:
-        proc = _WaitProcess()
-        killed: list[int] = []
+def test_supervisor_is_the_target_parent_not_its_child(tmp_path: pathlib.Path) -> None:
+    identity_file = tmp_path / "identity"
+    no_child_file = tmp_path / "no-child"
+    target = _write_executable(
+        tmp_path / "target",
+        f"""\
+        #!{sys.executable}
+        import os
+        import pathlib
+        import time
 
-        async def spawn(*_args: object, **_kwargs: object) -> _WaitProcess:
-            return proc
-
-        def kill_group(target: nix._OwnedProcess) -> None:
-            killed.append(target.process.pid)
-
-        monkeypatch.setattr(nix.asyncio, "create_subprocess_exec", spawn)
-        monkeypatch.setattr(nix, "_kill_group", kill_group)
-
-        task = asyncio.create_task(nix.run(["build", ".#slow"], live=False))
+        pathlib.Path({str(identity_file)!r}).write_text(f"{{os.getpid()}} {{os.getppid()}}")
         try:
-            await asyncio.wait_for(proc.waiting.wait(), 1)
-            task.cancel()
-            await asyncio.wait_for(proc.reaping.wait(), 1)
-            task.cancel()
-            await asyncio.sleep(0)
-            assert not task.done(), "a repeated cancel bypassed process reaping"
-            proc.release.set()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-        finally:
-            proc.release.set()
-            if not task.done():
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-        return proc, killed
+            os.waitpid(-1, 0)
+        except ChildProcessError:
+            pathlib.Path({str(no_child_file)!r}).write_text("no child supervisor")
+        while True:
+            time.sleep(60)
+        """,
+    )
 
-    proc, killed = asyncio.run(scenario())
-    assert killed == [proc.pid]
-    assert proc.returncode == -signal.SIGKILL
-
-
-def test_kill_and_reap_drains_a_paused_stderr_pipe() -> None:
-    async def scenario() -> int:
-        proc = await nix._spawn(
-            sys.executable,
-            "-c",
-            "import os\nchunk = b'x' * 65536\nwhile True: os.write(2, chunk)",
-            cwd=None,
-            stderr=asyncio.subprocess.PIPE,
+    async def scenario() -> tuple[int, int, int]:
+        process = await nix._spawn(
+            str(target), cwd=None, stderr=asyncio.subprocess.PIPE
         )
-        assert proc.process.stderr is not None
         try:
-            await asyncio.to_thread(_wait_until_paused, proc.process.stderr)
-            cleanup = asyncio.create_task(nix._kill_and_reap(proc))
-            done, _ = await asyncio.wait({cleanup}, timeout=5)
-            if not done:
-                await proc.process.stderr.read()
-                await cleanup
-                raise AssertionError("reaping waited forever on the paused pipe")
-            return cleanup.result()
+            await asyncio.to_thread(_wait_for, identity_file, no_child_file, timeout=2)
+            target_pid, parent_pid = map(int, identity_file.read_text().split())
+            return process.process.pid, target_pid, parent_pid
         finally:
-            if proc.process.returncode is None:
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(proc.process.pid, signal.SIGKILL)
-                proc.release_owner()
-                await proc.process.communicate()
+            await nix._kill_and_reap(process)
 
-    assert asyncio.run(scenario()) == -signal.SIGKILL
+    supervisor_pid, target_pid, parent_pid = asyncio.run(scenario())
+    assert target_pid != supervisor_pid
+    assert parent_pid == supervisor_pid
 
 
-def test_owner_pipe_eof_kills_the_process_tree(
+def test_normal_exit_reaps_a_tracked_setsid_descendant(tmp_path: pathlib.Path) -> None:
+    pid_file = tmp_path / "pids"
+    ready_file = tmp_path / "ready"
+    lock_file = tmp_path / "child.lock"
+    target = _write_executable(
+        tmp_path / "target",
+        f"""\
+        #!{sys.executable}
+        import fcntl
+        import os
+        import pathlib
+        import time
+
+        child = os.fork()
+        if child == 0:
+            os.setsid()
+            with open({str(lock_file)!r}, "w") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                pathlib.Path({str(ready_file)!r}).write_text("ready")
+                while True:
+                    time.sleep(60)
+        pathlib.Path({str(pid_file)!r}).write_text(f"{{os.getpid()}} {{child}}")
+        while not pathlib.Path({str(ready_file)!r}).exists():
+            time.sleep(0.01)
+        time.sleep(0.2)
+        """,
+    )
+    identities: tuple[_Identity, ...] = ()
+
+    async def scenario() -> tuple[bytes, bytes]:
+        process = await nix._spawn(
+            str(target), cwd=None, stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.to_thread(_wait_for, pid_file, ready_file)
+        nonlocal identities
+        identities = _identities(pid_file)
+        return await asyncio.wait_for(nix._communicate(process), 3)
+
+    try:
+        out, err = asyncio.run(scenario())
+        assert (out, err) == (b"", b"")
+        _assert_stopped(identities, lock_file)
+    finally:
+        _cleanup_identities(identities)
+
+
+class _LaunchAbort(BaseException):
+    pass
+
+
+def _open_fds() -> set[int]:
+    root = (
+        pathlib.Path("/proc/self/fd")
+        if pathlib.Path("/proc/self/fd").exists()
+        else pathlib.Path("/dev/fd")
+    )
+    return {int(path.name) for path in root.iterdir() if path.name.isdigit()}
+
+
+def test_base_exception_during_launch_closes_owner_and_reaps(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ) -> None:
-    fake_nix, pid_file, ready_file, lock_file = _fake_tree(monkeypatch, tmp_path)
+    ready_file = tmp_path / "ready"
+    target = _write_executable(
+        tmp_path / "target",
+        f"""\
+        #!{sys.executable}
+        import pathlib
+        import time
+        pathlib.Path({str(ready_file)!r}).write_text("ready")
+        while True:
+            time.sleep(60)
+        """,
+    )
+    original_spawn = asyncio.create_subprocess_exec
+    original_shield = asyncio.shield
+    before = _open_fds()
 
-    async def scenario() -> int:
-        proc = await nix._spawn(str(fake_nix), cwd=None, stderr=asyncio.subprocess.PIPE)
-        await asyncio.to_thread(_wait_until_ready, pid_file, ready_file)
-        proc.release_owner()
-        await asyncio.wait_for(proc.process.communicate(), 5)
-        assert proc.process.returncode is not None
-        return proc.process.returncode
+    async def scenario() -> asyncio.subprocess.Process:
+        created = asyncio.Event()
+        release = asyncio.Event()
+        spawned: list[asyncio.subprocess.Process] = []
+        shield_calls = 0
 
+        async def delayed_spawn(
+            program: str,
+            *args: str,
+            cwd: str | None,
+            stdout: int,
+            stderr: int | None,
+            start_new_session: bool = False,
+            pass_fds: tuple[int, ...] = (),
+        ) -> asyncio.subprocess.Process:
+            process = await original_spawn(
+                program,
+                *args,
+                cwd=cwd,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=start_new_session,
+                pass_fds=pass_fds,
+            )
+            spawned.append(process)
+            created.set()
+            await release.wait()
+            return process
+
+        def abort_first_shield(awaitable: Awaitable[object]) -> Awaitable[object]:
+            nonlocal shield_calls
+            shield_calls += 1
+            if shield_calls != 1:
+                return original_shield(awaitable)
+
+            async def abort() -> None:
+                await created.wait()
+                await asyncio.to_thread(_wait_for, ready_file)
+                release.set()
+                raise _LaunchAbort
+
+            return abort()
+
+        monkeypatch.setattr(nix.asyncio, "create_subprocess_exec", delayed_spawn)
+        monkeypatch.setattr(nix.asyncio, "shield", abort_first_shield)
+        try:
+            with pytest.raises(_LaunchAbort):
+                await nix._spawn(str(target), cwd=None, stderr=asyncio.subprocess.PIPE)
+            assert spawned[0].returncode is not None
+            return spawned[0]
+        finally:
+            release.set()
+            for process in spawned:
+                await _reap_direct(process)
+
+    asyncio.run(scenario())
+    leaked = _open_fds() - before
     try:
-        assert asyncio.run(scenario()) == -signal.SIGKILL
-        _assert_tree_stopped(pid_file, lock_file)
+        assert not leaked, f"launch leaked file descriptors: {sorted(leaked)}"
     finally:
-        _kill_tree(pid_file)
+        for fd in leaked:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+class _NeverProcess:
+    def __init__(self) -> None:
+        self.pid = 424242
+        self.returncode: int | None = None
+        self.stdout = None
+        self.stderr = None
+        self.drain_started = asyncio.Event()
+        self.wait_started = asyncio.Event()
+        self.drain_stopped = asyncio.Event()
+        self.wait_stopped = asyncio.Event()
+        self.killed = False
+
+    async def communicate(self) -> tuple[bytes, None]:
+        self.drain_started.set()
+        try:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+        finally:
+            self.drain_stopped.set()
+
+    async def wait(self) -> int:
+        self.wait_started.set()
+        try:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+        finally:
+            self.wait_stopped.set()
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def test_reap_deadline_stops_every_cleanup_task() -> None:
+    async def scenario() -> _NeverProcess:
+        raw = _NeverProcess()
+        owner_read, owner_write = os.pipe()
+        os.close(owner_read)
+        process = nix._OwnedProcess(
+            process=raw,  # ty: ignore[invalid-argument-type] controllable process double
+            owner_fd=owner_write,
+        )
+        current = asyncio.current_task()
+        before = {task for task in asyncio.all_tasks() if task is not current}
+        with pytest.raises(RuntimeError, match="could not be force-stopped"):
+            await nix._kill_and_reap(process, timeout=0.01)
+        await asyncio.sleep(0)
+        after = {task for task in asyncio.all_tasks() if task is not current}
+        assert after <= before, "cleanup left an unbounded reader or waiter task"
+        assert raw.killed
+        assert raw.drain_started.is_set()
+        assert raw.wait_started.is_set()
+        assert raw.drain_stopped.is_set()
+        assert raw.wait_stopped.is_set()
+        return raw
+
+    asyncio.run(scenario())
+
+
+def test_worktree_cannot_shadow_the_supervisor_helper(tmp_path: pathlib.Path) -> None:
+    marker = tmp_path / "shadow-imported"
+    (tmp_path / "nix.py").write_text(
+        f"import pathlib\npathlib.Path({str(marker)!r}).write_text('imported')\n"
+    )
+
+    async def scenario() -> tuple[bytes, bytes]:
+        process = await nix._spawn(
+            sys.executable,
+            "-c",
+            "import sys; print('out'); print('err', file=sys.stderr)",
+            cwd=str(tmp_path),
+            stderr=asyncio.subprocess.PIPE,
+        )
+        return await asyncio.wait_for(nix._communicate(process), 5)
+
+    assert asyncio.run(scenario()) == (b"out\n", b"err\n")
+    assert not marker.exists()
+
+
+def test_supervisor_preserves_an_owner_pipe_allocated_as_stdin() -> None:
+    from nix import _supervise
+
+    saved_stdin = os.dup(0)
+    os.close(0)
+    owner_read, owner_write = os.pipe()
+    assert owner_read == 0
+    prepared = -1
+    try:
+        prepared = _supervise._prepare_owner_fd(owner_read)
+        assert prepared > 2
+        os.write(owner_write, b"x")
+        assert os.read(prepared, 1) == b"x"
+    finally:
+        if prepared >= 0:
+            os.close(prepared)
+        os.close(owner_write)
+        os.dup2(saved_stdin, 0)
+        os.close(saved_stdin)
 
 
 def test_normal_completion_drains_both_pipes() -> None:
     async def scenario() -> tuple[bytes, bytes]:
-        proc = await nix._spawn(
+        process = await nix._spawn(
             sys.executable,
             "-c",
             "import sys; print('out'); print('err', file=sys.stderr)",
             cwd=None,
             stderr=asyncio.subprocess.PIPE,
         )
-        return await asyncio.wait_for(nix._communicate(proc), 5)
+        return await asyncio.wait_for(nix._communicate(process), 5)
 
     assert asyncio.run(scenario()) == (b"out\n", b"err\n")
 
@@ -336,39 +548,3 @@ def test_spawn_reports_a_missing_executable_before_backgrounding() -> None:
             )
 
     asyncio.run(scenario())
-
-
-def test_reap_deadline_leaves_a_reporting_watcher(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def scenario() -> tuple[_WaitProcess, list[int]]:
-        raw = _WaitProcess()
-        owner_read, owner_write = os.pipe()
-        os.close(owner_read)
-        proc = nix._OwnedProcess(
-            process=raw,  # ty: ignore[invalid-argument-type] -- controllable process test double
-            owner_fd=owner_write,
-        )
-        reported: list[int] = []
-
-        monkeypatch.setattr(nix, "_kill_group", lambda _proc: None)
-        monkeypatch.setattr(
-            nix,
-            "_report_late_reap",
-            lambda target, _task: reported.append(target.process.pid),
-        )
-
-        with pytest.raises(RuntimeError, match="cleanup watcher remains active"):
-            await nix._kill_and_reap(proc, timeout=0.01)
-
-        raw.release.set()
-        deadline = asyncio.get_running_loop().time() + 1
-        while not reported:
-            if asyncio.get_running_loop().time() >= deadline:
-                raise TimeoutError("late cleanup watcher did not report")
-            await asyncio.sleep(0)
-        return raw, reported
-
-    raw, reported = asyncio.run(scenario())
-    assert raw.returncode == -signal.SIGKILL
-    assert reported == [raw.pid]
