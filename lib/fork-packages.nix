@@ -518,6 +518,10 @@
           upstream = "hold";
           reason = "Fleet CI policy for indexable-inc/index#3317. Validate the process-aware deadline before proposing a general Nix interface; humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        "0022-libstore-persist-delete-traversal-across-bounded-slices.patch" = {
+          upstream = "hold";
+          reason = "Persists bounded LocalStore deletion traversal across processes and bounds gc.lock acquisition (indexable-inc/index#3338, indexable-inc/ix#7448). Hold: general GC scan, deletion queue, and .links state remain in the reviewed stack; humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];
