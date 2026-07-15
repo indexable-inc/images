@@ -23,6 +23,9 @@ inputs:
   script:
     description: Repository-relative Bash script to execute in run mode
     default: ""
+  arguments:
+    description: JSON array of arguments passed to the repository script
+    default: "[]"
 
 runs:
   using: node24

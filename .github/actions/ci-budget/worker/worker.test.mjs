@@ -9,6 +9,7 @@ import test from "node:test";
 import {
   DeadlineExceeded,
   loadPolicy,
+  parseArguments,
   runBudgetedScript,
   validationSeconds,
   workflowAttemptStartedAt,
@@ -122,6 +123,32 @@ test("elapsed routine attempt fails before starting work", () => {
       }),
     DeadlineExceeded,
   );
+});
+
+test("script arguments cross the JSON boundary as distinct values", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ci-budget-worker-arguments-"));
+  try {
+    const script = join(directory, "arguments.sh");
+    const output = join(directory, "arguments.json");
+    await writeFile(
+      script,
+      "printf '[\"%s\",\"%s\"]\\n' \"$1\" \"$2\" >arguments.json\n",
+    );
+
+    const status = await runBudgetedScript({
+      graceSeconds: 0.05,
+      scriptArguments: parseArguments('["one value","two"]'),
+      scriptPath: "arguments.sh",
+      validationSeconds: 1,
+      workspace: directory,
+    });
+
+    assert.equal(status, 0);
+    assert.equal(await readFile(output, "utf8"), '["one value","two"]\n');
+    assert.throws(() => parseArguments('["valid", 3]'), /array of strings/);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });
 
 test("timeout kills a TERM-resistant descendant after its leader exits", async () => {
