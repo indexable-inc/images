@@ -73,13 +73,18 @@ class FakeClient:
 
 
 def attempt(
-    *, status: str = "in_progress", event: str = "pull_request"
+    *,
+    status: str = "in_progress",
+    event: str = "pull_request",
+    created_at: str = "2026-07-15T10:00:00Z",
+    run_started_at: str = "2026-07-15T10:00:00Z",
 ) -> dict[str, Any]:
     return {
+        "created_at": created_at,
         "event": event,
         "head_sha": "a" * 40,
         "pull_requests": [] if event == "push" else [{"number": 42}],
-        "run_started_at": "2026-07-15T10:00:00Z",
+        "run_started_at": run_started_at,
         "status": status,
     }
 
@@ -111,6 +116,30 @@ class RequiredGateTests(unittest.TestCase):
             timedelta(minutes=5),
             big_change=False,
         )
+
+    def test_retry_does_not_reset_the_workflow_creation_deadline(self) -> None:
+        client = FakeClient(
+            [
+                attempt(
+                    created_at="2026-07-15T09:55:00Z",
+                    run_started_at="2026-07-15T10:00:00Z",
+                )
+            ],
+            [target(completed_at="2026-07-15T10:00:01Z")],
+        )
+
+        error = runtime_error(
+            lambda: ci_deadline.verify_required_gate(
+                client,
+                12,
+                2,
+                "flake-build",
+                timedelta(minutes=5),
+                big_change=False,
+            )
+        )
+
+        assert "after 2026-07-15T10:00:00" in str(error)
 
     def test_failed_target_fails_required_gate(self) -> None:
         client = FakeClient([attempt()], [target(conclusion="failure")])
@@ -232,6 +261,29 @@ class RequiredGateTests(unittest.TestCase):
 
 
 class CancellationControllerTests(unittest.TestCase):
+    def test_stale_retry_is_cancelled_without_a_fresh_budget(self) -> None:
+        client = FakeClient(
+            [
+                attempt(
+                    created_at="2026-07-15T09:00:00Z",
+                    run_started_at="2026-07-15T10:00:00Z",
+                )
+            ]
+        )
+
+        cancelled = ci_deadline.cancel_at_deadline(
+            client,
+            12,
+            2,
+            timedelta(minutes=5),
+            force_big_change=False,
+            now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
+            sleep=lambda _: self.fail("stale retry must not receive a fresh budget"),
+        )
+
+        assert cancelled
+        assert client.cancelled == [12]
+
     def test_controller_exits_when_attempt_already_completed(self) -> None:
         client = FakeClient([attempt(status="completed")], snapshots=[None])
 

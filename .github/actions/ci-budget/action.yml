@@ -56,7 +56,7 @@ outputs:
     description: Standard total CI budget in whole minutes
     value: ${{ steps.classify.outputs.standard_minutes }}
   standard_deadline:
-    description: Absolute deadline for an ordinary workflow attempt
+    description: Absolute deadline measured from ordinary workflow creation
     value: ${{ steps.classify.outputs.standard_deadline }}
   worker_timeout_minutes:
     description: Assignment-relative worker backstop for the classified tier
