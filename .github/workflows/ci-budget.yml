@@ -15,12 +15,8 @@ on:
         description: Grant the extended budget without a path or label match
         type: boolean
         default: false
-      base-sha:
-        description: Base commit for a non-pull-request change
-        type: string
-        default: ""
       head-sha:
-        description: Head commit for a non-pull-request change
+        description: Head commit for a non-pull-request change association
         type: string
         default: ""
     outputs:
@@ -58,6 +54,7 @@ jobs:
           token: ${{ github.token }}
           extra-costly-paths: ${{ inputs.extra-costly-paths }}
           force-big-change: ${{ inputs.force-big-change }}
-          base-sha: ${{ inputs.base-sha }}
           head-sha: ${{ inputs.head-sha }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
           publish: true

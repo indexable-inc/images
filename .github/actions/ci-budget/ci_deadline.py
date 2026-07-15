@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cancel ordinary CI that exceeds its total workflow-start budget."""
+"""Verify required CI results and cancel ordinary runs at their deadline."""
 
 from __future__ import annotations
 
@@ -8,129 +8,179 @@ import os
 import sys
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-from ci_budget import GitHubClient, JsonObject
+from ci_budget import (
+    GitHubClient,
+    JsonObject,
+    classify_workflow_attempt,
+    load_canonical_globs,
+    parse_bool,
+    parse_globs,
+    parse_positive_int,
+)
 from ci_policy import STANDARD_BUDGET
-
-POLL_SECONDS = 10
-
-
-@dataclass(frozen=True)
-class TargetState:
-    complete: bool
-    late: tuple[str, ...]
-    missing: tuple[str, ...]
-    pending: tuple[str, ...]
-
-
-def parse_positive_int(value: str, name: str) -> int:
-    parsed = int(value)
-    if parsed <= 0:
-        raise ValueError(f"{name} must be positive")
-    return parsed
-
-
-def parse_job_names(value: str) -> list[str]:
-    decoded = json.loads(value)
-    if (
-        not isinstance(decoded, list)
-        or not decoded
-        or not all(isinstance(item, str) and item for item in decoded)
-    ):
-        raise ValueError("target-job-names must be a non-empty JSON array of strings")
-    if len(set(decoded)) != len(decoded):
-        raise ValueError("target-job-names must not contain duplicates")
-    return decoded
 
 
 def parse_timestamp(value: object, name: str) -> datetime:
     if not isinstance(value, str):
-        raise RuntimeError(f"GitHub API workflow attempt has no {name}")
+        raise RuntimeError(f"GitHub API result has no {name}")
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        raise RuntimeError(f"GitHub API workflow attempt {name} has no timezone")
+        raise RuntimeError(f"GitHub API result {name} has no timezone")
     return parsed
 
 
-def target_state(
-    jobs: Sequence[JsonObject], target_names: Sequence[str], deadline: datetime
-) -> TargetState:
-    statuses: dict[str, str] = {}
-    late: list[str] = []
-    for job in jobs:
-        name = job.get("name")
-        status = job.get("status")
-        if name in target_names:
-            if name in statuses:
-                raise RuntimeError(
-                    f"workflow attempt has duplicate target job {name!r}"
-                )
-            if not isinstance(status, str):
-                raise RuntimeError(f"target job {name!r} has no status")
-            statuses[name] = status
-            if status == "completed":
-                completed_at = parse_timestamp(
-                    job.get("completed_at"), f"{name} completed_at"
-                )
-                if completed_at > deadline:
-                    late.append(name)
-    missing = tuple(name for name in target_names if name not in statuses)
-    pending = tuple(name for name, status in statuses.items() if status != "completed")
-    return TargetState(
-        complete=not late and not missing and not pending,
-        late=tuple(late),
-        missing=missing,
-        pending=pending,
-    )
+def target_job(jobs: Sequence[JsonObject], target_name: str) -> JsonObject:
+    matches = [job for job in jobs if job.get("name") == target_name]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"workflow attempt has {len(matches)} jobs named {target_name!r}; "
+            "expected exactly one"
+        )
+    return matches[0]
 
 
-def enforce(
+def verify_required_gate(
     client: GitHubClient,
     run_id: int,
     run_attempt: int,
-    target_names: Sequence[str],
+    target_name: str,
     budget: timedelta,
     *,
+    big_change: bool,
+) -> None:
+    attempt = client.workflow_attempt(run_id, run_attempt)
+    started_at = parse_timestamp(attempt.get("run_started_at"), "run_started_at")
+    deadline = started_at + budget
+    target = target_job(client.workflow_jobs(run_id, run_attempt), target_name)
+    status = target.get("status")
+    conclusion = target.get("conclusion")
+    if status != "completed" or conclusion != "success":
+        raise RuntimeError(
+            f"required target {target_name!r} ended with "
+            f"status={status!r}, conclusion={conclusion!r}"
+        )
+    target_started_at = parse_timestamp(
+        target.get("started_at"), f"{target_name} started_at"
+    )
+    if target_started_at < started_at:
+        raise RuntimeError(
+            f"required target {target_name!r} was reused from an earlier attempt; "
+            f"target started at {target_started_at.isoformat()}, "
+            f"attempt started at {started_at.isoformat()}"
+        )
+    completed_at = parse_timestamp(
+        target.get("completed_at"), f"{target_name} completed_at"
+    )
+    if not big_change and completed_at > deadline:
+        raise RuntimeError(
+            f"required target {target_name!r} completed at "
+            f"{completed_at.isoformat()}, after {deadline.isoformat()}"
+        )
+    print(
+        json.dumps(
+            {
+                "big_change": big_change,
+                "completed_at": completed_at.isoformat(),
+                "deadline": deadline.isoformat(),
+                "target": target_name,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+
+
+def cancel_at_deadline(
+    client: GitHubClient,
+    run_id: int,
+    run_attempt: int,
+    globs: Sequence[str],
+    budget: timedelta,
+    *,
+    force_big_change: bool,
+    merge_queue_branch: str,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
     attempt = client.workflow_attempt(run_id, run_attempt)
+    classification = classify_workflow_attempt(
+        client,
+        attempt,
+        globs,
+        force_big_change=force_big_change,
+        merge_queue_branch=merge_queue_branch,
+    )
+    if classification.big_change:
+        print(json.dumps(classification.reason, separators=(",", ":")))
+        return False
+
     started_at = parse_timestamp(attempt.get("run_started_at"), "run_started_at")
     deadline = started_at + budget
-    while True:
-        state = target_state(
-            client.workflow_jobs(run_id, run_attempt), target_names, deadline
+    remaining = (deadline - now()).total_seconds()
+    if remaining > 0:
+        sleep(remaining)
+
+    refreshed = client.workflow_attempt(run_id, run_attempt)
+    status = refreshed.get("status")
+    if not isinstance(status, str):
+        raise RuntimeError("GitHub API workflow attempt has no status")
+    if status == "completed":
+        print(
+            f"workflow attempt completed before cancellation at {deadline.isoformat()}"
         )
-        if state.complete:
-            print(f"CI targets completed before {deadline.isoformat()}")
-            return False
-        remaining = (deadline - now()).total_seconds()
-        if remaining <= 0:
-            detail = {
-                "late": state.late,
-                "missing": state.missing,
-                "pending": state.pending,
-            }
-            print(f"::error title=CI total deadline exceeded::{json.dumps(detail)}")
-            client.cancel_workflow_run(run_id)
-            return True
-        sleep(min(POLL_SECONDS, remaining))
+        return False
+
+    print(
+        f"::error title=CI total deadline exceeded::"
+        f"cancelling run {run_id} attempt {run_attempt} at {deadline.isoformat()}"
+    )
+    client.cancel_workflow_run(run_id)
+    return True
 
 
 def main() -> int:
     client = GitHubClient(
         os.environ["CI_BUDGET_REPOSITORY"], os.environ["CI_BUDGET_TOKEN"]
     )
-    cancelled = enforce(
-        client,
-        parse_positive_int(os.environ["CI_BUDGET_RUN_ID"], "run-id"),
-        parse_positive_int(os.environ["CI_BUDGET_RUN_ATTEMPT"], "run-attempt"),
-        parse_job_names(os.environ["CI_BUDGET_TARGET_JOB_NAMES"]),
-        STANDARD_BUDGET,
-    )
-    return int(cancelled)
+    mode = os.environ["CI_BUDGET_DEADLINE_MODE"]
+    run_id = parse_positive_int(os.environ["CI_BUDGET_RUN_ID"], "run-id")
+    run_attempt = parse_positive_int(os.environ["CI_BUDGET_RUN_ATTEMPT"], "run-attempt")
+    if mode == "gate":
+        target_name = os.environ["CI_BUDGET_TARGET_JOB_NAME"]
+        if not target_name:
+            raise ValueError("target-job-name must not be empty")
+        verify_required_gate(
+            client,
+            run_id,
+            run_attempt,
+            target_name,
+            STANDARD_BUDGET,
+            big_change=parse_bool(os.environ["CI_BUDGET_BIG_CHANGE"], "big-change"),
+        )
+        return 0
+    if mode == "cancel":
+        globs = load_canonical_globs(Path(__file__).with_name("costly-paths"))
+        globs.extend(
+            parse_globs(
+                os.environ["CI_BUDGET_EXTRA_COSTLY_PATHS"], "extra-costly-paths"
+            )
+        )
+        cancel_at_deadline(
+            client,
+            run_id,
+            run_attempt,
+            globs,
+            STANDARD_BUDGET,
+            force_big_change=parse_bool(
+                os.environ["CI_BUDGET_FORCE_BIG_CHANGE"], "force-big-change"
+            ),
+            merge_queue_branch=os.environ["CI_BUDGET_MERGE_QUEUE_BRANCH"],
+        )
+        return 0
+    raise ValueError(f"unknown deadline mode {mode!r}")
 
 
 if __name__ == "__main__":
