@@ -149,7 +149,7 @@
     autoGcRecheckAfterLock =
       paths.packagesRoot + "/nix/nix/patches/0017-fix-libstore-recheck-free-space-after-GC-lock.patch";
     autoGcShutdownLifetime =
-      paths.packagesRoot + "/nix/nix/patches/0021-fix-finish-auto-GC-before-store-teardown.patch";
+      paths.packagesRoot + "/nix/nix/patches/0022-fix-finish-auto-GC-before-store-teardown.patch";
     opaqueTemporaryRootFilenames =
       paths.packagesRoot
       + "/nix/nix/patches/0016-fix-libstore-accept-opaque-temporary-root-filenames.patch";

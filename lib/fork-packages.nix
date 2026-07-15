@@ -512,10 +512,10 @@
           upstream = "hold";
           reason = "Preserves actionable floating-CA leaf failures through resolution (indexable-inc/index#3279, indexable-inc/ix#7357). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
-        # 0021: auto-GC can finish its future before its worker exits. Join at
+        # 0022: auto-GC can finish its future before its worker exits. Join at
         # the Store ownership boundary while the complete dynamic object is
         # intact, and release process-static owners before global teardown.
-        "0021-fix-finish-auto-GC-before-store-teardown.patch" = {
+        "0022-fix-finish-auto-GC-before-store-teardown.patch" = {
           upstream = "hold";
           reason = "Backports NixOS/nix@4a09c1f and closes the Store ownership gaps behind the post-fix teardown crash in NixOS/nix#15614 (indexable-inc/index#3313, indexable-inc/ix#7400). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
