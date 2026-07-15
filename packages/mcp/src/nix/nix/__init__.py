@@ -106,8 +106,8 @@ RESULT_TYPES = {
 }
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-# This must stay longer than Darwin's bounded launch plus its one shared cleanup
-# deadline. The lifecycle regression asserts the cross-process relationship.
+# This must stay longer than Darwin's bounded bootstrap, readiness, and cleanup.
+# The lifecycle regression asserts the cross-process relationship.
 _REAP_TIMEOUT = 10.0
 _SUPERVISOR = str(Path(__file__).with_name("_supervise.py"))
 _OWNER_FDS: set[int] = set()

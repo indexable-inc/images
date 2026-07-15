@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from dataclasses import dataclass
 from dataclasses import field
@@ -36,15 +37,43 @@ _PROC_PIDCOALITIONINFO = 20
 _LISTCOALITIONS_SINGLE_TYPE = 2
 _COALITION_TYPE_RESOURCE = 0
 _DARWIN_LAUNCH_SECONDS = 3.0
+_DARWIN_READINESS_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
 class _CleanupDeadline:
+    bootstrap_expires: float
+    readiness_expires: float
     expires: float
 
     @classmethod
-    def start(cls) -> _CleanupDeadline:
-        return cls(expires=time.monotonic() + _SHUTDOWN_SECONDS)
+    def for_startup(cls) -> _CleanupDeadline:
+        started = time.monotonic()
+        bootstrap_expires = started + _DARWIN_LAUNCH_SECONDS
+        readiness_expires = bootstrap_expires + _DARWIN_READINESS_SECONDS
+        return cls(
+            bootstrap_expires=bootstrap_expires,
+            readiness_expires=readiness_expires,
+            expires=readiness_expires + _SHUTDOWN_SECONDS,
+        )
+
+    @classmethod
+    def for_cleanup(cls) -> _CleanupDeadline:
+        started = time.monotonic()
+        return cls(
+            bootstrap_expires=started,
+            readiness_expires=started,
+            expires=started + _SHUTDOWN_SECONDS,
+        )
+
+    def bootstrap_remaining(self) -> float:
+        remaining = self.bootstrap_expires - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("nix supervisor bootstrap deadline expired")
+        return remaining
+
+    def readiness_expired(self) -> bool:
+        return time.monotonic() >= self.readiness_expires
 
     def remaining(self) -> float:
         remaining = self.expires - time.monotonic()
@@ -396,7 +425,7 @@ class _DarwinJob:
     def target(self) -> str:
         return f"{self.domain}/{self.label}"
 
-    def start(self, owner_fd: int) -> None:
+    def start(self, owner_fd: int, deadline: _CleanupDeadline) -> None:
         self.relays.append(_start_relay(owner_fd, self.stdout_path, 1))
         self.relays.append(_start_relay(owner_fd, self.stderr_path, 2))
         self.bootstrap_attempted = True
@@ -405,7 +434,7 @@ class _DarwinJob:
             check=False,
             capture_output=True,
             text=True,
-            timeout=_DARWIN_LAUNCH_SECONDS,
+            timeout=deadline.bootstrap_remaining(),
         )
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or "no detail"
@@ -725,12 +754,13 @@ def _kill_relays(
     relays: list[int],
     statuses: dict[int, int],
     deadline: _CleanupDeadline,
-) -> None:
-    _signal_relays(relays, statuses)
+) -> set[int]:
+    _reap_children(statuses)
+    forced = _signal_relays(relays, statuses)
     while any(relay not in statuses for relay in relays):
         _reap_children(statuses)
         if all(relay in statuses for relay in relays):
-            return
+            return forced
         if deadline.expired():
             pending = [str(relay) for relay in relays if relay not in statuses]
             raise RuntimeError(
@@ -738,6 +768,7 @@ def _kill_relays(
                 + ", ".join(pending)
             )
         time.sleep(min(_SHUTDOWN_POLL_SECONDS, deadline.remaining()))
+    return forced
 
 
 def _relay_failed(status: int, *, forced: bool) -> bool:
@@ -746,12 +777,39 @@ def _relay_failed(status: int, *, forced: bool) -> bool:
     )
 
 
+def _failed_relays(
+    relays: list[int],
+    statuses: dict[int, int],
+    forced: set[int],
+) -> list[str]:
+    return [
+        str(relay)
+        for relay in relays
+        if _relay_failed(statuses.get(relay, 0), forced=relay in forced)
+    ]
+
+
+def _raise_relay_failures(
+    failed_relays: list[str],
+    remove_error: BaseException | None,
+) -> None:
+    if not failed_relays:
+        return
+    relay_error = RuntimeError(
+        "nix supervisor output relays failed: " + ", ".join(failed_relays)
+    )
+    if remove_error is not None:
+        remove_error.add_note(_exception_detail(relay_error))
+        raise remove_error
+    raise relay_error
+
+
 def _terminate_darwin_job(
     job: _DarwinJob,
     members: dict[tuple[int, float], _Member],
     statuses: dict[int, int],
+    deadline: _CleanupDeadline,
 ) -> None:
-    deadline = _CleanupDeadline.start()
     try:
         remove_error: BaseException | None = None
         try:
@@ -761,7 +819,9 @@ def _terminate_darwin_job(
 
         job.load_coalitions()
         if job.coalitions is None:
-            _kill_relays(job.relays, statuses, deadline)
+            forced_relays = _kill_relays(job.relays, statuses, deadline)
+            failed_relays = _failed_relays(job.relays, statuses, forced_relays)
+            _raise_relay_failures(failed_relays, remove_error)
             if remove_error is not None:
                 raise remove_error
             return
@@ -776,19 +836,12 @@ def _terminate_darwin_job(
             task_count = job.task_count()
             running_relays = [relay for relay in job.relays if relay not in statuses]
             if task_count == 0 and not running_relays:
-                failed_relays = [
-                    str(relay)
-                    for relay in job.relays
-                    if _relay_failed(
-                        statuses.get(relay, 0),
-                        forced=relay in forced_relays,
-                    )
-                ]
-                if failed_relays:
-                    raise RuntimeError(
-                        "nix supervisor output relays failed: "
-                        + ", ".join(failed_relays)
-                    )
+                failed_relays = _failed_relays(
+                    job.relays,
+                    statuses,
+                    forced_relays,
+                )
+                _raise_relay_failures(failed_relays, remove_error)
                 if remove_error is not None:
                     raise remove_error
                 return
@@ -801,8 +854,8 @@ def _terminate_darwin_job(
                     if member.running()
                 ]
                 raise RuntimeError(
-                    "nix supervisor could not empty launchd coalition "
-                    f"{job.coalitions} within {_SHUTDOWN_SECONDS:g}s: "
+                    "nix supervisor could not empty launchd coalition before its "
+                    f"deadline {job.coalitions}: "
                     f"{task_count} tasks, {', '.join(alive) or 'no visible member'}, "
                     f"{len(running_relays)} output relays"
                 )
@@ -815,14 +868,14 @@ def _terminate_darwin_job(
             except BaseException as cleanup_error:
                 exc.add_note(
                     "nix supervisor member cleanup also failed: "
-                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                    f"{_exception_detail(cleanup_error)}"
                 )
         try:
             _kill_relays(job.relays, statuses, deadline)
         except BaseException as cleanup_error:
             exc.add_note(
                 "nix supervisor relay cleanup also failed: "
-                f"{type(cleanup_error).__name__}: {cleanup_error}"
+                f"{_exception_detail(cleanup_error)}"
             )
         raise
 
@@ -832,10 +885,17 @@ def _exit_code(status: int) -> int:
     return code if code >= 0 else 128 - code
 
 
+def _exception_detail(exc: BaseException) -> str:
+    return "".join(traceback.format_exception_only(type(exc), exc)).rstrip()
+
+
 def main() -> NoReturn:
     if len(sys.argv) < 3:
         raise SystemExit("usage: _supervise.py OWNER_FD COMMAND [ARG ...]")
 
+    darwin_deadline = (
+        _CleanupDeadline.for_startup() if sys.platform == "darwin" else None
+    )
     owner_fd = _prepare_owner_fd(int(sys.argv[1]))
     argv = sys.argv[2:]
     _become_subreaper()
@@ -849,23 +909,26 @@ def main() -> NoReturn:
     target_status: int | None = None
     job: _DarwinJob | None = None
     failure: BaseException | None = None
+    startup_complete = False
 
     try:
         if sys.platform == "darwin":
+            assert darwin_deadline is not None
             job = _DarwinJob.allocate(argv)
-            job.start(owner_fd)
-            ready_deadline = time.monotonic() + _DARWIN_LAUNCH_SECONDS
+            job.start(owner_fd, darwin_deadline)
             while target_status is None and not owner_lost:
                 _reap_children(statuses)
                 job.load_coalitions()
                 target_status = job.terminal_status()
                 if target_status is not None:
                     break
-                if job.coalitions is None and time.monotonic() >= ready_deadline:
+                if job.coalitions is None and darwin_deadline.readiness_expired():
                     raise RuntimeError("launchd target did not publish its coalition")
                 if selector.select(_WATCH_SECONDS):
                     with contextlib.suppress(BlockingIOError):
                         owner_lost = not os.read(owner_fd, 1)
+                elif job.coalitions is not None:
+                    startup_complete = True
         else:
             target = _start_target(owner_fd, argv)
             while target not in statuses and not owner_lost:
@@ -879,15 +942,20 @@ def main() -> NoReturn:
         failure = exc
     finally:
         if job is not None:
+            assert darwin_deadline is not None
+            if startup_complete:
+                # Readiness was observed while the owner was still open, so any
+                # later cancellation starts a new parent timeout window.
+                darwin_deadline = _CleanupDeadline.for_cleanup()
             try:
-                _terminate_darwin_job(job, members, statuses)
+                _terminate_darwin_job(job, members, statuses, darwin_deadline)
             except BaseException as cleanup_error:
                 if failure is None:
                     failure = cleanup_error
                 else:
                     failure.add_note(
                         "nix supervisor cleanup also failed: "
-                        f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        f"{_exception_detail(cleanup_error)}"
                     )
             try:
                 if target_status is None:
@@ -899,7 +967,7 @@ def main() -> NoReturn:
                 else:
                     failure.add_note(
                         "nix supervisor launchd cleanup also failed: "
-                        f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        f"{_exception_detail(cleanup_error)}"
                     )
         elif target is not None:
             try:
@@ -910,7 +978,7 @@ def main() -> NoReturn:
                 else:
                     failure.add_note(
                         "nix supervisor cleanup also failed: "
-                        f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        f"{_exception_detail(cleanup_error)}"
                     )
         selector.close()
         os.close(owner_fd)
@@ -918,8 +986,9 @@ def main() -> NoReturn:
             member.close()
 
     if failure is not None:
+        detail = _exception_detail(failure)
         print(
-            f"nix supervisor failed: {type(failure).__name__}: {failure}",
+            f"nix supervisor failed: {detail}",
             file=sys.stderr,
             flush=True,
         )

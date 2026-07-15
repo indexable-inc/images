@@ -476,29 +476,116 @@ def test_unready_darwin_job_reaps_relays_within_shared_deadline(
         relays: list[int],
         statuses: dict[int, int],
         deadline: _supervise._CleanupDeadline,
-    ) -> None:
+    ) -> set[int]:
         assert relays == [101, 102]
         deadlines.append(deadline)
         statuses.update({101: 0, 102: 0})
         events.append("reaped relays")
+        return set()
 
     deadlines: list[_supervise._CleanupDeadline] = []
+    deadline = _supervise._CleanupDeadline.for_cleanup()
     monkeypatch.setattr(_supervise, "_kill_relays", kill_relays)
     _supervise._terminate_darwin_job(
         UnreadyJob(),  # ty: ignore[invalid-argument-type] pre-readiness job double
         {},
         {},
+        deadline,
     )
 
     assert events == ["removed", "checked readiness", "reaped relays"]
     assert deadlines[0] is deadlines[1]
 
 
-def test_parent_reap_deadline_exceeds_darwin_launch_and_cleanup() -> None:
+def test_unready_darwin_job_reports_an_exited_relay() -> None:
     from nix import _supervise
 
-    inner_bound = _supervise._DARWIN_LAUNCH_SECONDS + _supervise._SHUTDOWN_SECONDS
+    class UnreadyJob:
+        def __init__(self) -> None:
+            self.coalitions = None
+            self.relays = [101]
+
+        def remove(self, deadline: _supervise._CleanupDeadline) -> None:
+            pass
+
+        def load_coalitions(self) -> None:
+            pass
+
+    with pytest.raises(RuntimeError, match="output relays failed: 101"):
+        _supervise._terminate_darwin_job(
+            UnreadyJob(),  # ty: ignore[invalid-argument-type] pre-readiness job double
+            {},
+            {101: 7 << 8},
+            _supervise._CleanupDeadline.for_cleanup(),
+        )
+
+
+def test_ready_darwin_job_keeps_remove_failure_primary() -> None:
+    from nix import _supervise
+
+    class ReadyJob:
+        def __init__(self) -> None:
+            self.coalitions = (101, 102)
+            self.relays = [101]
+
+        def remove(self, deadline: _supervise._CleanupDeadline) -> None:
+            raise RuntimeError("bootout failed")
+
+        def load_coalitions(self) -> None:
+            pass
+
+        def remember_members(
+            self,
+            members: dict[tuple[int, float], _supervise._Member],
+        ) -> None:
+            pass
+
+        def task_count(self) -> int:
+            return 0
+
+    with pytest.raises(RuntimeError, match="bootout failed") as exc_info:
+        _supervise._terminate_darwin_job(
+            ReadyJob(),  # ty: ignore[invalid-argument-type] ready job double
+            {},
+            {101: 7 << 8},
+            _supervise._CleanupDeadline.for_cleanup(),
+        )
+
+    assert exc_info.value.__notes__ == [
+        "RuntimeError: nix supervisor output relays failed: 101"
+    ]
+
+
+def test_parent_reap_deadline_exceeds_every_darwin_startup_phase() -> None:
+    from nix import _supervise
+
+    inner_bound = (
+        _supervise._DARWIN_LAUNCH_SECONDS
+        + _supervise._DARWIN_READINESS_SECONDS
+        + _supervise._SHUTDOWN_SECONDS
+    )
     assert inner_bound + 1 <= nix._REAP_TIMEOUT
+
+
+def test_darwin_startup_phases_share_one_absolute_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nix import _supervise
+
+    clock = [10.0]
+    monkeypatch.setattr(_supervise.time, "monotonic", lambda: clock[0])
+    deadline = _supervise._CleanupDeadline.for_startup()
+
+    assert deadline.bootstrap_expires == 13
+    assert deadline.readiness_expires == 14
+    assert deadline.expires == 19
+    clock[0] = deadline.bootstrap_expires
+    with pytest.raises(TimeoutError, match="bootstrap deadline"):
+        deadline.bootstrap_remaining()
+    assert not deadline.readiness_expired()
+    clock[0] = deadline.readiness_expires
+    assert deadline.readiness_expired()
+    assert deadline.remaining() == _supervise._SHUTDOWN_SECONDS
 
 
 def test_stuck_bootstrap_and_ready_coalition_finish_inside_parent_bound(
@@ -549,13 +636,18 @@ def test_stuck_bootstrap_and_ready_coalition_finish_inside_parent_bound(
             self.members: dict[tuple[int, float], _supervise._Member] | None = None
             self.task_count_calls = 0
 
-        def start(self, owner_fd: int) -> None:
+        def start(
+            self,
+            owner_fd: int,
+            deadline: _supervise._CleanupDeadline,
+        ) -> None:
             assert owner_fd == owner_read
+            self.deadline = deadline
             clock[0] += _supervise._DARWIN_LAUNCH_SECONDS
             raise RuntimeError("launchctl bootstrap timeout sentinel")
 
         def remove(self, deadline: _supervise._CleanupDeadline) -> None:
-            self.deadline = deadline
+            assert deadline is self.deadline
             clock[0] += _supervise._DARWIN_LAUNCH_SECONDS
 
         def load_coalitions(self) -> None:
@@ -589,6 +681,7 @@ def test_stuck_bootstrap_and_ready_coalition_finish_inside_parent_bound(
             os.close(job_read)
             os.close(job_write)
             root.rmdir()
+            raise RuntimeError("launchd temp cleanup sentinel")
 
     job = ReadyJob()
     monkeypatch.setattr(
@@ -607,6 +700,8 @@ def test_stuck_bootstrap_and_ready_coalition_finish_inside_parent_bound(
         assert capsys.readouterr().err == (
             "nix supervisor failed: RuntimeError: "
             "launchctl bootstrap timeout sentinel\n"
+            "nix supervisor launchd cleanup also failed: "
+            "RuntimeError: launchd temp cleanup sentinel\n"
         )
         assert clock[0] < parent_deadline
         assert job.task_count_calls >= 2
