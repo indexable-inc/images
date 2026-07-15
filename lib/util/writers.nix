@@ -22,7 +22,8 @@
   - `check`, `pyChecker`, `pythonPlatform`: type-check knobs. `pyChecker` is
     "zuban" (default), "ty" (legacy), or "mypy"; "zuban"/"mypy" run that checker
     `--strict` plus `ruff check --select ANN`.
-  - `extraPaths`: extra import roots for the checker.
+  - `runtimeImportRoots`: import roots added at runtime and during checks.
+  - `extraPaths`: additional import roots used only by the checker.
   - `meta`: standard derivation meta, with `mainProgram` defaulted.
   */
   writePythonApplication = pkgs: {
@@ -36,18 +37,20 @@
     # checker `--strict` plus `ruff check --select ANN`. See buildUvApplication.
     pyChecker ? "zuban",
     pythonPlatform ? "linux",
+    runtimeImportRoots ? [],
     extraPaths ? ["${python}/${python.sitePackages}"],
     meta ? {},
   }: let
     runtimePath = lib.makeBinPath ([python] ++ runtimeInputs);
     srcPath = src;
     argv = builtins.toJSON (["${srcPath}"] ++ args);
+    checkImportRoots = lib.unique (runtimeImportRoots ++ extraPaths);
     extraSearchPathArgs =
       lib.concatMap (path: [
         "--extra-search-path"
         path
       ])
-      extraPaths;
+      checkImportRoots;
     tyCheckArgs =
       [
         "check"
@@ -72,7 +75,7 @@
     # site-packages dir makes zuban drop the stdlib typeshed, so e.g.
     # `Path.__truediv__` widens to `Any` and trips `no-any-return`. Drop the
     # default site-packages; keep any caller-added roots.
-    strictMypyPaths = lib.filter (p: p != "${python}/${python.sitePackages}") extraPaths;
+    strictMypyPaths = lib.filter (p: p != "${python}/${python.sitePackages}") checkImportRoots;
     mypyPathPrefix = lib.optionalString (
       strictMypyPaths != []
     ) "MYPYPATH=${lib.escapeShellArg (lib.concatStringsSep ":" strictMypyPaths)} ";
@@ -119,6 +122,7 @@
         ca_bundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
         os.environ.setdefault("SSL_CERT_FILE", ca_bundle)
         os.environ.setdefault("REQUESTS_CA_BUNDLE", os.environ["SSL_CERT_FILE"])
+        sys.path[:0] = ${builtins.toJSON runtimeImportRoots}
         sys.argv = ${argv} + sys.argv[1:]
         runpy.run_path("${srcPath}", run_name="__main__")
       '';

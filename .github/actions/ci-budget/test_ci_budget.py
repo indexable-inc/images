@@ -5,11 +5,13 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 MODULE_PATH = Path(__file__).with_name("ci_budget.py")
 sys.path.insert(0, str(MODULE_PATH.parent))
@@ -25,11 +27,13 @@ class FakeTransport:
     def __init__(self, responses: list[Any]) -> None:
         self.responses = responses
         self.requests: list[urllib.request.Request] = []
+        self.timeouts: list[float] = []
 
     def __call__(
-        self, request: urllib.request.Request
+        self, request: urllib.request.Request, timeout_seconds: float
     ) -> tuple[Any, Mapping[str, str]]:
         self.requests.append(request)
+        self.timeouts.append(timeout_seconds)
         return self.responses.pop(0), {}
 
 
@@ -114,6 +118,78 @@ class ClassificationTests(unittest.TestCase):
 
 
 class GitHubClientTests(unittest.TestCase):
+    def test_default_transport_normalizes_network_timeouts(self) -> None:
+        request = urllib.request.Request("https://api.github.com/repos/example/test")
+        failures = (
+            TimeoutError("request timed out"),
+            urllib.error.URLError(TimeoutError("request timed out")),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                with mock.patch.object(
+                    urllib.request,
+                    "urlopen",
+                    side_effect=failure,
+                ):
+                    error = runtime_error(
+                        lambda: ci_budget.default_transport(request, 1)
+                    )
+
+                assert isinstance(error, ci_budget.GitHubTransportError)
+                assert "transport failed" in str(error)
+
+    def test_cancellation_accepts_an_already_completed_run(self) -> None:
+        for status in (404, 409):
+            with self.subTest(status=status):
+
+                def completed(
+                    request: urllib.request.Request,
+                    timeout_seconds: float,
+                    response_status: int = status,
+                ) -> tuple[Any, dict[str, str]]:
+                    assert timeout_seconds == ci_budget.DEFAULT_REQUEST_TIMEOUT_SECONDS
+                    raise ci_budget.GitHubHttpError(
+                        request.method,
+                        request.full_url,
+                        response_status,
+                        "already completed",
+                    )
+
+                client = ci_budget.GitHubClient(
+                    "indexable-inc/index", "token", completed
+                )
+                client.force_cancel_workflow_run(42)
+
+    def test_cancellation_uses_the_force_cancel_endpoint(self) -> None:
+        transport = FakeTransport([None])
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        client.force_cancel_workflow_run(42)
+
+        assert transport.requests[0].full_url.endswith("/actions/runs/42/force-cancel")
+
+    def test_snapshot_pagination_stops_when_its_request_window_expires(
+        self,
+    ) -> None:
+        transport = FakeTransport([{"artifacts": [{} for _ in range(100)]}])
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+        calls = 0
+
+        def request_timeout() -> float:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise ci_budget.RequestWindowExpired("classification window ended")
+            return 2
+
+        error = runtime_error(
+            lambda: client.ci_budget_snapshot(12, 2, request_timeout=request_timeout)
+        )
+
+        assert isinstance(error, ci_budget.RequestWindowExpired)
+        assert len(transport.requests) == 1
+        assert transport.timeouts == [2]
+
     def test_changed_files_are_paginated(self) -> None:
         first = [{"filename": f"src/{index}.rs"} for index in range(100)]
         transport = FakeTransport([first, [{"filename": "flake.lock"}]])
@@ -151,19 +227,40 @@ class GitHubClientTests(unittest.TestCase):
         transport = FakeTransport([])
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
 
-        result = ci_budget.classify_pull_request(
+        result = ci_budget.classify_pull_requests(
             client,
-            {
-                "number": 42,
-                "labels": [{"name": ci_budget.POLICY.big_change_label}],
-                "changed_files": 3001,
-            },
+            [
+                {
+                    "number": 42,
+                    "labels": [{"name": ci_budget.POLICY.big_change_label}],
+                    "changed_files": 3001,
+                }
+            ],
             "indexable-inc/index",
             force_big_change=False,
         )
 
         assert result.big_change
         assert result.reason["sources"] == ["label"]
+        assert not transport.requests
+
+    def test_truncated_changed_files_are_automatically_extended(self) -> None:
+        transport = FakeTransport([])
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        result = ci_budget.classify_pull_requests(
+            client,
+            [{"number": 42, "labels": [], "changed_files": 3001}],
+            "indexable-inc/index",
+            force_big_change=False,
+        )
+
+        assert result.big_change
+        assert result.reason == {
+            "sources": ["files_truncated"],
+            "matches": [{"pull_request": 42, "changed_files": 3001}],
+        }
+        assert "GitHub truncated the file list" in ci_budget.render_comment(result)
         assert not transport.requests
 
     def test_snapshot_artifact_carries_standard_decision(self) -> None:
@@ -428,14 +525,14 @@ class WorkflowAssociationTests(unittest.TestCase):
             "pull_requests": [],
         }
 
-        result = ci_budget.classify_workflow_attempt(
+        result = ci_budget.resolve_workflow_attempt(
             client,
             attempt,
             self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha="a" * 40,
-        )
+        ).classification
 
         assert result.big_change
         assert result.reason["sources"] == ["label"]
@@ -479,14 +576,14 @@ class WorkflowAssociationTests(unittest.TestCase):
             "pull_requests": [{"number": 999}],
         }
 
-        result = ci_budget.classify_workflow_attempt(
+        result = ci_budget.resolve_workflow_attempt(
             client,
             attempt,
             self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha="a" * 40,
-        )
+        ).classification
 
         assert result.big_change
         assert result.reason["sources"] == ["label"]
@@ -520,7 +617,7 @@ class WorkflowAssociationTests(unittest.TestCase):
         }
 
         error = runtime_error(
-            lambda: ci_budget.classify_workflow_attempt(
+            lambda: ci_budget.resolve_workflow_attempt(
                 client,
                 attempt,
                 self.repository,
@@ -546,14 +643,14 @@ class WorkflowAssociationTests(unittest.TestCase):
             "pull_requests": [],
         }
 
-        result = ci_budget.classify_workflow_attempt(
+        result = ci_budget.resolve_workflow_attempt(
             client,
             attempt,
             self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha="a" * 40,
-        )
+        ).classification
 
         assert result.big_change
         assert result.reason == {
@@ -583,14 +680,14 @@ class WorkflowAssociationTests(unittest.TestCase):
         )
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
 
-        result = ci_budget.classify_workflow_attempt(
+        result = ci_budget.resolve_workflow_attempt(
             client,
             {"event": "push", "head_sha": direct_sha, "pull_requests": []},
             self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha=base_sha,
-        )
+        ).classification
 
         assert result.big_change
         assert result.reason == {
@@ -637,14 +734,14 @@ class WorkflowAssociationTests(unittest.TestCase):
             "pull_requests": [{"number": 1372}],
         }
 
-        result = ci_budget.classify_workflow_attempt(
+        result = ci_budget.resolve_workflow_attempt(
             client,
             attempt,
             self.repository,
             force_big_change=False,
             merge_queue_branch="main",
             event_base_sha=base_sha,
-        )
+        ).classification
 
         assert result.big_change
         assert result.reason["matches"] == [
@@ -661,6 +758,151 @@ class RenderingTests(unittest.TestCase):
         assert comment.startswith(ci_budget.COMMENT_MARKER)
         assert "CI is limited to 5 minutes" in comment
         assert "Standard budget" in comment
+
+
+class ResolverTests(unittest.TestCase):
+    def test_off_main_push_is_forced_without_main_history_lookup(self) -> None:
+        attempt = {
+            "id": 12,
+            "run_attempt": 1,
+            "created_at": "2026-07-15T10:00:00Z",
+            "event": "push",
+            "head_branch": "release",
+            "head_sha": "b" * 40,
+            "path": ".github/workflows/check.yml",
+            "pull_requests": [],
+        }
+        transport = FakeTransport([attempt])
+
+        resolved = ci_budget.resolve_budget(
+            ci_budget.GitHubClient("indexable-inc/index", "token", transport),
+            ci_budget.ResolutionRequest(
+                repository="indexable-inc/index",
+                run_id=12,
+                run_attempt=1,
+            ),
+        )
+
+        assert resolved.classification.reason == {
+            "sources": ["forced"],
+            "matches": [],
+        }
+        assert len(transport.requests) == 1
+
+    def test_schedule_is_extended_by_the_owner_without_caller_discretion(self) -> None:
+        attempt = {
+            "id": 12,
+            "run_attempt": 1,
+            "created_at": "2026-07-15T10:00:00Z",
+            "event": "schedule",
+            "head_branch": "main",
+            "head_sha": "b" * 40,
+            "path": ".github/workflows/check.yml",
+            "pull_requests": [],
+        }
+        transport = FakeTransport([attempt])
+
+        resolved = ci_budget.resolve_budget(
+            ci_budget.GitHubClient("indexable-inc/index", "token", transport),
+            ci_budget.ResolutionRequest(
+                repository="indexable-inc/index",
+                run_id=12,
+                run_attempt=1,
+            ),
+        )
+
+        assert resolved.classification.big_change
+        assert resolved.classification.reason == {
+            "sources": ["forced"],
+            "matches": [],
+        }
+        assert len(transport.requests) == 1
+
+    def test_main_push_uses_the_previous_same_workflow_run_as_its_base(self) -> None:
+        head_sha = "b" * 40
+        base_sha = "a" * 40
+        attempt = {
+            "id": 12,
+            "run_attempt": 1,
+            "created_at": "2026-07-15T10:00:00Z",
+            "event": "push",
+            "head_branch": "main",
+            "head_sha": head_sha,
+            "path": ".github/workflows/check.yml",
+            "pull_requests": [],
+        }
+        transport = FakeTransport(
+            [
+                attempt,
+                {
+                    "workflow_runs": [
+                        attempt,
+                        {
+                            "id": 11,
+                            "head_sha": base_sha,
+                            "path": ".github/workflows/check.yml",
+                        },
+                    ]
+                },
+                [],
+                {"parents": [{"sha": base_sha}]},
+            ]
+        )
+        resolved = ci_budget.resolve_budget(
+            ci_budget.GitHubClient("indexable-inc/index", "token", transport),
+            ci_budget.ResolutionRequest(
+                repository="indexable-inc/index",
+                run_id=12,
+                run_attempt=1,
+            ),
+        )
+
+        assert resolved.classification.big_change
+        assert resolved.classification.reason == {
+            "sources": ["unassociated_push_commit"],
+            "matches": [{"commit": head_sha}],
+        }
+        assert "branch=main" in transport.requests[1].full_url
+        assert "event=push" in transport.requests[1].full_url
+
+    def test_fork_pull_request_is_resolved_from_its_head_association(self) -> None:
+        head_sha = "b" * 40
+        attempt = {
+            "id": 12,
+            "run_attempt": 1,
+            "created_at": "2026-07-15T10:00:00Z",
+            "event": "pull_request",
+            "head_branch": "feature",
+            "head_sha": head_sha,
+            "path": ".github/workflows/check.yml",
+            "pull_requests": [],
+        }
+        association = {
+            "number": 42,
+            "state": "open",
+            "head": {"sha": head_sha},
+            "base": {"ref": "main"},
+        }
+        pull_request = {
+            **association,
+            "labels": [],
+            "changed_files": 1,
+        }
+        transport = FakeTransport(
+            [attempt, [association], pull_request, [{"filename": "src/main.rs"}]]
+        )
+        resolved = ci_budget.resolve_budget(
+            ci_budget.GitHubClient("indexable-inc/index", "token", transport),
+            ci_budget.ResolutionRequest(
+                repository="indexable-inc/index",
+                run_id=12,
+                run_attempt=1,
+            ),
+        )
+
+        assert not resolved.classification.big_change
+        assert resolved.pull_request_number == 42
+        assert resolved.labels == ()
 
 
 if __name__ == "__main__":

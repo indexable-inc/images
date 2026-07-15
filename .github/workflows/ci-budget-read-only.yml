@@ -4,19 +4,23 @@ on:
   workflow_call:
     inputs:
       pull-request-number:
-        description: Pull request number, or 0 outside a pull request
+        description: Temporary compatibility input; GitHub context owns pull request identity
         type: number
         default: 0
+      extra-costly-paths:
+        description: Temporary compatibility input; the shared policy owns these paths
+        type: string
+        default: "[]"
       force-big-change:
-        description: Grant the extended budget without a path or label match
+        description: Temporary compatibility input; the owner policy controls extension
         type: boolean
         default: false
       head-sha:
-        description: Head commit for a non-pull-request change association
+        description: Temporary compatibility input; GitHub context owns the head commit
         type: string
         default: ""
       base-sha:
-        description: Push base commit that bounds a main-branch change
+        description: Temporary compatibility input; GitHub history owns the change range
         type: string
         default: ""
     outputs:
@@ -66,11 +70,8 @@ jobs:
         uses: ./.ci-budget-owner/.github/actions/ci-budget
         with:
           repository: ${{ github.repository }}
-          pull-request-number: ${{ inputs.pull-request-number }}
           token: ${{ github.token }}
-          force-big-change: ${{ inputs.force-big-change }}
-          base-sha: ${{ inputs.base-sha }}
-          head-sha: ${{ inputs.head-sha }}
+          extra-costly-paths: ${{ inputs.extra-costly-paths }}
           run-id: ${{ github.run_id }}
           run-attempt: ${{ github.run_attempt }}
           publish: false

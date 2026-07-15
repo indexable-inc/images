@@ -66,12 +66,6 @@ jobs:
       issues: write
       pull-requests: write
     uses: indexable-inc/index/.github/workflows/ci-budget.yml@main
-    with:
-      pull-request-number: ${{ github.event.pull_request.number || 0 }}
-      # Labels exist only on pull requests. Preserve the existing limit for
-      # main, tag, and merge-queue validation rather than silently shrinking
-      # those non-PR operational gates.
-      force-big-change: ${{ github.event_name != 'pull_request' }}
 
   # One job on one runner, on purpose. Every check shares a single
   # znver5-tuned nixpkgs base, so fanning the checks across several runners

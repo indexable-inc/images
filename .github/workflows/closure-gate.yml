@@ -56,11 +56,6 @@ jobs:
       contents: read
       pull-requests: read
     uses: indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main
-    with:
-      pull-request-number: ${{ github.event.pull_request.number || 0 }}
-      # Manual and merge-queue runs have no pull request label. Keep their
-      # existing extended budget.
-      force-big-change: ${{ github.event_name != 'pull_request' }}
 
   # Branch protection requires a status named `closure-gate`; this job is it.
   # Separate from flake-check on purpose: it runs in parallel on its own

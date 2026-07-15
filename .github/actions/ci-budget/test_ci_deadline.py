@@ -33,17 +33,31 @@ class FakeClient:
         jobs: list[dict[str, Any]] | None = None,
         *,
         cancel_error: RuntimeError | None = None,
+        complete_on_cancel: bool = True,
+        runs: list[dict[str, Any]] | None = None,
         snapshots: list[ci_deadline.BudgetSnapshot | None] | None = None,
     ) -> None:
         self.attempts = attempts
+        self.runs = [run.copy() for run in (runs or [attempts[0]])]
         self.jobs = jobs or []
         self.cancel_error = cancel_error
+        self.complete_on_cancel = complete_on_cancel
         self.snapshots = (
             snapshots
             if snapshots is not None
             else [ci_deadline.BudgetSnapshot(big_change=False)]
         )
         self.cancelled: list[int] = []
+        self.request_timeouts: list[float] = []
+
+    def workflow_run(
+        self, run_id: int, *, timeout_seconds: float = 30.0
+    ) -> dict[str, Any]:
+        assert run_id == 12
+        self.request_timeouts.append(timeout_seconds)
+        if len(self.runs) > 1:
+            return self.runs.pop(0)
+        return self.runs[0]
 
     def workflow_attempt(self, run_id: int, run_attempt: int) -> dict[str, Any]:
         assert run_id == 12
@@ -58,18 +72,84 @@ class FakeClient:
         return self.jobs
 
     def ci_budget_snapshot(
-        self, run_id: int, run_attempt: int
+        self,
+        run_id: int,
+        run_attempt: int,
+        *,
+        request_timeout: Callable[[], float] = lambda: 30.0,
     ) -> ci_deadline.BudgetSnapshot | None:
         assert run_id == 12
         assert run_attempt == 2
+        self.request_timeouts.append(request_timeout())
         if not self.snapshots:
             return None
         return self.snapshots.pop(0)
 
-    def cancel_workflow_run(self, run_id: int) -> None:
+    def force_cancel_workflow_run(
+        self, run_id: int, *, timeout_seconds: float = 30.0
+    ) -> None:
         if self.cancel_error:
             raise self.cancel_error
+        self.request_timeouts.append(timeout_seconds)
         self.cancelled.append(run_id)
+        if self.complete_on_cancel:
+            completed = self.runs[-1].copy()
+            completed["status"] = "completed"
+            self.runs = [completed]
+
+
+class FakeClock:
+    def __init__(self, current: datetime) -> None:
+        self.current = current
+        self.sleeps: list[float] = []
+
+    def now(self) -> datetime:
+        return self.current
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.current += timedelta(seconds=seconds)
+
+
+class TimingOutSnapshotClient(FakeClient):
+    def __init__(self, attempts: list[dict[str, Any]], clock: FakeClock) -> None:
+        super().__init__(attempts)
+        self.clock = clock
+
+    def ci_budget_snapshot(
+        self,
+        run_id: int,
+        run_attempt: int,
+        *,
+        request_timeout: Callable[[], float] = lambda: 30.0,
+    ) -> ci_deadline.BudgetSnapshot | None:
+        assert run_id == 12
+        assert run_attempt == 2
+        timeout_seconds = request_timeout()
+        self.request_timeouts.append(timeout_seconds)
+        self.clock.sleep(timeout_seconds)
+        raise ci_deadline.GitHubTransportError("snapshot request timed out")
+
+
+class FirstForceTimeoutClient(FakeClient):
+    def __init__(
+        self,
+        attempts: list[dict[str, Any]],
+        clock: FakeClock,
+    ) -> None:
+        super().__init__(attempts)
+        self.clock = clock
+        self.force_attempts = 0
+
+    def force_cancel_workflow_run(
+        self, run_id: int, *, timeout_seconds: float = 30.0
+    ) -> None:
+        self.force_attempts += 1
+        if self.force_attempts == 1:
+            self.request_timeouts.append(timeout_seconds)
+            self.clock.sleep(timeout_seconds)
+            raise ci_deadline.GitHubTransportError("force cancellation timed out")
+        super().force_cancel_workflow_run(run_id, timeout_seconds=timeout_seconds)
 
 
 def attempt(
@@ -139,11 +219,12 @@ class RequiredGateTests(unittest.TestCase):
         client = FakeClient(
             [
                 attempt(
-                    created_at="2026-07-15T09:55:00Z",
+                    created_at="2026-07-15T10:00:00Z",
                     run_started_at="2026-07-15T10:00:00Z",
                 )
             ],
             [target(completed_at="2026-07-15T10:00:01Z")],
+            runs=[attempt(created_at="2026-07-15T09:55:00Z")],
         )
 
         error = runtime_error(
@@ -279,7 +360,27 @@ class RequiredGateTests(unittest.TestCase):
 
 
 class CancellationControllerTests(unittest.TestCase):
-    def test_stale_retry_is_cancelled_without_a_fresh_budget(self) -> None:
+    def test_deadline_crossed_between_checks_continues_cancellation(self) -> None:
+        deadline = datetime(2026, 7, 15, 10, 5, tzinfo=UTC)
+        instants = iter([deadline - timedelta(microseconds=1), deadline])
+        client = FakeClient([attempt()])
+
+        error = runtime_error(
+            lambda: ci_deadline.cancel_and_wait_for_terminal(
+                client,
+                12,
+                deadline,
+                now=lambda: next(instants, deadline),
+                sleep=lambda _: self.fail("terminal fake must not sleep"),
+            )
+        )
+
+        assert "first confirmed terminal" in str(error)
+        assert client.cancelled == [12]
+
+    def test_stale_retry_is_cancelled_but_cannot_claim_timely_termination(
+        self,
+    ) -> None:
         client = FakeClient(
             [
                 attempt(
@@ -289,17 +390,20 @@ class CancellationControllerTests(unittest.TestCase):
             ]
         )
 
-        cancelled = ci_deadline.cancel_at_deadline(
-            client,
-            12,
-            2,
-            timedelta(minutes=5),
-            force_big_change=False,
-            now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
-            sleep=lambda _: self.fail("stale retry must not receive a fresh budget"),
+        error = runtime_error(
+            lambda: ci_deadline.cancel_at_deadline(
+                client,
+                12,
+                2,
+                timedelta(minutes=5),
+                now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
+                sleep=lambda _: self.fail(
+                    "stale retry must not receive a fresh budget"
+                ),
+            )
         )
 
-        assert cancelled
+        assert "first confirmed terminal" in str(error)
         assert client.cancelled == [12]
 
     def test_controller_exits_when_attempt_already_completed(self) -> None:
@@ -310,7 +414,6 @@ class CancellationControllerTests(unittest.TestCase):
             12,
             2,
             timedelta(minutes=5),
-            force_big_change=False,
             sleep=lambda _: self.fail("completed attempt must not sleep"),
         )
 
@@ -324,58 +427,84 @@ class CancellationControllerTests(unittest.TestCase):
         completed["pull_requests"] = []
         client = FakeClient(
             [fork_attempt, completed],
+            runs=[fork_attempt, completed],
             snapshots=[ci_deadline.BudgetSnapshot(big_change=False)],
         )
-        sleeps: list[float] = []
+        clock = FakeClock(datetime(2026, 7, 15, 10, 0, tzinfo=UTC))
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
             12,
             2,
             timedelta(minutes=5),
-            force_big_change=False,
-            now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
-            sleep=sleeps.append,
+            now=clock.now,
+            sleep=clock.sleep,
         )
 
-        assert not cancelled
-        assert sleeps == [300]
+        assert cancelled
+        assert clock.sleeps == [240]
+        assert client.cancelled == [12]
+        assert client.request_timeouts[-2:] == [10, 10]
 
     def test_missing_source_snapshot_cancels_at_deadline(self) -> None:
         client = FakeClient([attempt(), attempt()], snapshots=[None])
 
+        error = runtime_error(
+            lambda: ci_deadline.cancel_at_deadline(
+                client,
+                12,
+                2,
+                timedelta(minutes=5),
+                now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
+                sleep=lambda _: self.fail("elapsed deadline must not sleep"),
+            )
+        )
+
+        assert "first confirmed terminal" in str(error)
+        assert client.cancelled == [12]
+
+    def test_extended_snapshot_observed_after_cancellation_start_is_too_late(
+        self,
+    ) -> None:
+        client = FakeClient(
+            [attempt()],
+            snapshots=[ci_deadline.BudgetSnapshot(big_change=True)],
+        )
+        clock = FakeClock(datetime(2026, 7, 15, 10, 4, 1, tzinfo=UTC))
+
         cancelled = ci_deadline.cancel_at_deadline(
             client,
             12,
             2,
             timedelta(minutes=5),
-            force_big_change=False,
-            now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
-            sleep=lambda _: self.fail("elapsed deadline must not sleep"),
+            now=clock.now,
+            sleep=clock.sleep,
         )
 
         assert cancelled
         assert client.cancelled == [12]
+        assert client.request_timeouts == [10, 10, 10]
 
     def test_main_push_waits_for_classified_snapshot(self) -> None:
         client = FakeClient(
             [attempt(event="push"), attempt(status="completed", event="push")],
+            runs=[attempt(event="push"), attempt(status="completed", event="push")],
             snapshots=[None, ci_deadline.BudgetSnapshot(big_change=False)],
         )
-        sleeps: list[float] = []
+        clock = FakeClock(datetime(2026, 7, 15, 10, 0, tzinfo=UTC))
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
             12,
             2,
             timedelta(minutes=5),
-            force_big_change=False,
-            now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
-            sleep=sleeps.append,
+            now=clock.now,
+            sleep=clock.sleep,
         )
 
-        assert not cancelled
-        assert sleeps == [2, 300]
+        assert cancelled
+        assert clock.sleeps == [2, 238]
+        assert client.cancelled == [12]
 
     def test_merge_group_waits_for_classified_snapshot(self) -> None:
         client = FakeClient(
@@ -383,68 +512,104 @@ class CancellationControllerTests(unittest.TestCase):
                 attempt(event="merge_group"),
                 attempt(status="completed", event="merge_group"),
             ],
+            runs=[
+                attempt(event="merge_group"),
+                attempt(status="completed", event="merge_group"),
+            ],
             snapshots=[None, ci_deadline.BudgetSnapshot(big_change=False)],
         )
-        sleeps: list[float] = []
+        clock = FakeClock(datetime(2026, 7, 15, 10, 0, tzinfo=UTC))
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
             12,
             2,
             timedelta(minutes=5),
-            force_big_change=False,
-            now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
-            sleep=sleeps.append,
+            now=clock.now,
+            sleep=clock.sleep,
         )
 
-        assert not cancelled
-        assert sleeps == [2, 300]
+        assert cancelled
+        assert clock.sleeps == [2, 238]
+        assert client.cancelled == [12]
 
     def test_queue_time_counts_toward_cancellation(self) -> None:
         client = FakeClient([attempt(), attempt()])
 
+        error = runtime_error(
+            lambda: ci_deadline.cancel_at_deadline(
+                client,
+                12,
+                2,
+                timedelta(minutes=5),
+                now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
+                sleep=lambda _: self.fail("elapsed deadline must not sleep"),
+            )
+        )
+
+        assert "first confirmed terminal" in str(error)
+        assert client.cancelled == [12]
+
+    def test_snapshot_timeout_falls_through_to_force_cancellation(self) -> None:
+        clock = FakeClock(datetime(2026, 7, 15, 10, 3, 55, tzinfo=UTC))
+        client = TimingOutSnapshotClient([attempt()], clock)
+
         cancelled = ci_deadline.cancel_at_deadline(
             client,
             12,
             2,
             timedelta(minutes=5),
-            force_big_change=False,
-            now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
-            sleep=lambda _: self.fail("elapsed deadline must not sleep"),
+            now=clock.now,
+            sleep=clock.sleep,
         )
 
         assert cancelled
         assert client.cancelled == [12]
+        assert client.request_timeouts == [10, 5, 10, 10]
+        assert clock.current == datetime(2026, 7, 15, 10, 4, tzinfo=UTC)
 
-    def test_completed_attempt_is_not_cancelled(self) -> None:
-        client = FakeClient([attempt(), attempt(status="completed")])
-
-        cancelled = ci_deadline.cancel_at_deadline(
-            client,
-            12,
-            2,
-            timedelta(minutes=5),
-            force_big_change=False,
-            now=lambda: datetime(2026, 7, 15, 10, 5, tzinfo=UTC),
-            sleep=lambda _: self.fail("elapsed deadline must not sleep"),
+    def test_deadline_race_still_requests_idempotent_cancellation(self) -> None:
+        client = FakeClient(
+            [attempt(), attempt(status="completed")],
+            runs=[attempt(), attempt(status="completed")],
         )
 
-        assert not cancelled
-        assert not client.cancelled
-
-    def test_big_change_is_exempt(self) -> None:
-        client = FakeClient([attempt()])
-
-        cancelled = ci_deadline.cancel_at_deadline(
-            client,
-            12,
-            2,
-            timedelta(minutes=5),
-            force_big_change=True,
-            sleep=lambda _: self.fail("big change must not sleep"),
+        error = runtime_error(
+            lambda: ci_deadline.cancel_at_deadline(
+                client,
+                12,
+                2,
+                timedelta(minutes=5),
+                now=lambda: datetime(2026, 7, 15, 10, 5, tzinfo=UTC),
+                sleep=lambda _: self.fail("elapsed deadline must not sleep"),
+            )
         )
 
-        assert not cancelled
+        assert "first confirmed terminal" in str(error)
+        assert client.cancelled == [12]
+
+    def test_active_run_must_be_confirmed_terminal_by_the_absolute_deadline(
+        self,
+    ) -> None:
+        clock = FakeClock(datetime(2026, 7, 15, 10, 4, 50, tzinfo=UTC))
+        client = FirstForceTimeoutClient([attempt()], clock)
+
+        error = runtime_error(
+            lambda: ci_deadline.cancel_at_deadline(
+                client,
+                12,
+                2,
+                timedelta(minutes=5),
+                now=clock.now,
+                sleep=clock.sleep,
+            )
+        )
+
+        assert "first confirmed terminal" in str(error)
+        assert client.force_attempts == 2
+        assert client.cancelled == [12]
+        assert clock.current == datetime(2026, 7, 15, 10, 5, tzinfo=UTC)
+        assert all(timeout <= 10 for timeout in client.request_timeouts[1:])
 
     def test_source_snapshot_freezes_big_change_exemption(self) -> None:
         client = FakeClient(
@@ -457,7 +622,7 @@ class CancellationControllerTests(unittest.TestCase):
             12,
             2,
             timedelta(minutes=5),
-            force_big_change=False,
+            now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
             sleep=lambda _: self.fail("extended snapshot must not sleep"),
         )
 
@@ -472,7 +637,6 @@ class CancellationControllerTests(unittest.TestCase):
                 12,
                 2,
                 timedelta(minutes=5),
-                force_big_change=False,
                 now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
                 sleep=lambda _: self.fail("elapsed deadline must not sleep"),
             )

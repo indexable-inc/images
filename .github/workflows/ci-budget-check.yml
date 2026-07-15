@@ -18,8 +18,6 @@ jobs:
       contents: read
       pull-requests: read
     uses: ./.github/workflows/ci-budget-read-only.yml
-    with:
-      force-big-change: true
 
   test:
     needs: classify
@@ -30,7 +28,7 @@ jobs:
       - name: Check read-only workflow output
         env:
           BIG_CHANGE: ${{ needs.classify.outputs.big_change }}
-        run: test "$BIG_CHANGE" = true
+        run: test "$BIG_CHANGE" = false
       - name: Test classifier behavior
         run: >-
           python3 -m unittest discover

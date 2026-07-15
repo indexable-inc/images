@@ -17,7 +17,8 @@
       "managed_workflows": [
         ".github/workflows/check.yml",
         ".github/workflows/closure-gate.yml"
-      ]
+      ],
+      "merge_queue_branch": "main"
     },
     "indexable-inc/ix": {
       "costly_paths": [
@@ -35,9 +36,10 @@
       ],
       "managed_workflows": [
         ".github/workflows/ci.yml"
-      ]
+      ],
+      "merge_queue_branch": "main"
     }
   },
   "standard_seconds": 300,
-  "termination_grace_seconds": 10
+  "termination_grace_seconds": 60
 }

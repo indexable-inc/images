@@ -23,6 +23,10 @@ on:
         description: "Client id of a GitHub App (contents + pull-requests write) that authors the bump PR; empty falls back to GITHUB_TOKEN, whose PRs never get pull_request CI on private repos."
         type: string
         default: ""
+      sync-ci-budget-owner-revision:
+        description: "Render CI budget workflow references from the updated root index lock input."
+        type: boolean
+        default: false
     secrets:
       app-private-key:
         description: "Private key for app-client-id."
@@ -61,6 +65,40 @@ jobs:
       # workflow checks out the caller's repository.
       - name: Bootstrap patched Nix client
         uses: indexable-inc/index/.github/actions/bootstrap-patched-nix@main
+
+      - name: Update index before rendering CI budget references
+        if: ${{ inputs.sync-ci-budget-owner-revision }}
+        shell: bash
+        env:
+          FLAKE_INPUTS: ${{ inputs.flake-inputs }}
+        run: |
+          set -euo pipefail
+          if [[ "$FLAKE_INPUTS" != "index" ]]; then
+            printf 'sync-ci-budget-owner-revision requires flake-inputs=index\n' >&2
+            exit 1
+          fi
+          nix flake update index
+
+      - name: Checkout this updater version
+        if: ${{ inputs.sync-ci-budget-owner-revision }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-budget-owner
+          persist-credentials: false
+
+      - name: Render CI budget references from flake.lock
+        if: ${{ inputs.sync-ci-budget-owner-revision }}
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 .ci-budget-owner/.github/actions/ci-budget/resolver.py \
+            --sync-consumer-root "$GITHUB_WORKSPACE" \
+            --repository "$REPOSITORY"
+          rm -rf .ci-budget-owner
 
       # PRs authored by the default GITHUB_TOKEN never get pull_request CI on
       # private repos: GitHub parks every run in action_required and the

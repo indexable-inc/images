@@ -72,7 +72,7 @@ test("policy is shared with the classifier", () => {
   const policy = loadPolicy();
   assert.equal(policy.standard_seconds, 300);
   assert.equal(policy.extended_validation_seconds, 10_800);
-  assert.equal(policy.termination_grace_seconds, 10);
+  assert.equal(policy.termination_grace_seconds, 60);
 });
 
 test("ordinary retries keep the original workflow creation deadline", async () => {
@@ -129,7 +129,7 @@ test("routine validation consumes only the workflow creation remainder", () => {
     validationSeconds({
       bigChange: false,
       createdAtMilliseconds: 0,
-      nowMilliseconds: 289_000,
+      nowMilliseconds: 239_000,
       policy,
     }),
     1,
@@ -143,7 +143,7 @@ test("retry after the workflow deadline fails before starting work", () => {
       validationSeconds({
         bigChange: false,
         createdAtMilliseconds: 0,
-        nowMilliseconds: 291_001,
+        nowMilliseconds: 301_000,
         policy,
       }),
     DeadlineExceeded,
@@ -183,7 +183,7 @@ test("timeout kills a TERM-resistant descendant after its leader exits", async (
     const status = await runBudgetedScript({
       graceSeconds: 0.05,
       scriptPath: "spawn-tree.sh",
-      validationSeconds: 0.05,
+      validationSeconds: 0.5,
       workspace: directory,
     });
     assert.equal(status, 124);

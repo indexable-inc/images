@@ -13,11 +13,101 @@ from datetime import UTC, datetime, timedelta
 from ci_budget import (
     BudgetSnapshot,
     GitHubClient,
+    GitHubTransportError,
     JsonObject,
+    RequestWindowExpired,
     parse_bool,
     parse_positive_int,
 )
-from ci_policy import STANDARD_BUDGET, parse_timestamp
+from ci_policy import STANDARD_BUDGET, TERMINATION_GRACE, parse_timestamp
+
+CANCELLATION_REQUEST_TIMEOUT_SECONDS = 10.0
+TERMINAL_POLL_SECONDS = 1.0
+
+
+def request_timeout_before(
+    cutoff: datetime,
+    now: Callable[[], datetime],
+) -> float:
+    remaining = (cutoff - now()).total_seconds()
+    if remaining <= 0:
+        raise RequestWindowExpired(
+            f"GitHub API request window ended at {cutoff.isoformat()}"
+        )
+    return min(CANCELLATION_REQUEST_TIMEOUT_SECONDS, remaining)
+
+
+def cancel_and_wait_for_terminal(
+    client: GitHubClient,
+    run_id: int,
+    deadline: datetime,
+    *,
+    now: Callable[[], datetime],
+    sleep: Callable[[float], None],
+) -> None:
+    missed_deadline = False
+    cancellation_accepted = False
+    while True:
+        if now() >= deadline and not missed_deadline:
+            missed_deadline = True
+            cancellation_accepted = False
+            print(
+                "::error title=CI terminal deadline missed::"
+                f"workflow run {run_id} was not confirmed terminal by "
+                f"{deadline.isoformat()}; continuing force cancellation"
+            )
+        try:
+            timeout_seconds = (
+                CANCELLATION_REQUEST_TIMEOUT_SECONDS
+                if missed_deadline
+                else request_timeout_before(deadline, now)
+            )
+        except RequestWindowExpired:
+            continue
+        if not cancellation_accepted:
+            try:
+                client.force_cancel_workflow_run(
+                    run_id,
+                    timeout_seconds=timeout_seconds,
+                )
+                cancellation_accepted = True
+            except GitHubTransportError as error:
+                print(
+                    f"::warning title=CI force cancellation transport failed::{error}"
+                )
+        if now() >= deadline and not missed_deadline:
+            continue
+        try:
+            timeout_seconds = (
+                CANCELLATION_REQUEST_TIMEOUT_SECONDS
+                if missed_deadline
+                else request_timeout_before(deadline, now)
+            )
+        except RequestWindowExpired:
+            continue
+        try:
+            run = client.workflow_run(run_id, timeout_seconds=timeout_seconds)
+        except GitHubTransportError as error:
+            print(f"::warning title=CI terminal check transport failed::{error}")
+        else:
+            observed_at = now()
+            status = run.get("status")
+            if not isinstance(status, str):
+                raise RuntimeError("GitHub API workflow run has no status")
+            if status == "completed":
+                if missed_deadline or observed_at > deadline:
+                    raise RuntimeError(
+                        f"workflow run {run_id} was first confirmed terminal at "
+                        f"{observed_at.isoformat()}, after {deadline.isoformat()}"
+                    )
+                return
+        if missed_deadline:
+            cancellation_accepted = False
+            sleep(TERMINAL_POLL_SECONDS)
+            continue
+        remaining = (deadline - now()).total_seconds()
+        if remaining > 0:
+            sleep(min(TERMINAL_POLL_SECONDS, remaining))
 
 
 def target_job(jobs: Sequence[JsonObject], target_name: str) -> JsonObject:
@@ -40,8 +130,9 @@ def verify_required_gate(
     big_change: bool,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
+    run = client.workflow_run(run_id)
     attempt = client.workflow_attempt(run_id, run_attempt)
-    created_at = parse_timestamp(attempt.get("created_at"), "created_at")
+    created_at = parse_timestamp(run.get("created_at"), "created_at")
     attempt_started_at = parse_timestamp(
         attempt.get("run_started_at"), "run_started_at"
     )
@@ -97,16 +188,17 @@ def cancel_at_deadline(
     run_attempt: int,
     budget: timedelta,
     *,
-    force_big_change: bool,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
-    attempt = client.workflow_attempt(run_id, run_attempt)
-    created_at = parse_timestamp(attempt.get("created_at"), "created_at")
+    run = client.workflow_run(
+        run_id,
+        timeout_seconds=CANCELLATION_REQUEST_TIMEOUT_SECONDS,
+    )
+    created_at = parse_timestamp(run.get("created_at"), "created_at")
     deadline = created_at + budget
-    if force_big_change:
-        return False
-    status = attempt.get("status")
+    cancel_at = deadline - TERMINATION_GRACE
+    status = run.get("status")
     if not isinstance(status, str):
         raise RuntimeError("GitHub API workflow attempt has no status")
     if status == "completed":
@@ -115,19 +207,25 @@ def cancel_at_deadline(
 
     snapshot = None
     while snapshot is None:
-        snapshot = client.ci_budget_snapshot(run_id, run_attempt)
-        remaining = (deadline - now()).total_seconds()
-        if snapshot is None and remaining <= 0:
-            refreshed = client.workflow_attempt(run_id, run_attempt)
-            if refreshed.get("status") == "completed":
-                print("workflow attempt completed before its budget snapshot")
-                return False
+        try:
+            snapshot = client.ci_budget_snapshot(
+                run_id,
+                run_attempt,
+                request_timeout=lambda: request_timeout_before(cancel_at, now),
+            )
+        except RequestWindowExpired:
+            snapshot = None
+        except GitHubTransportError as error:
+            print(f"::warning title=CI budget snapshot transport failed::{error}")
+            snapshot = None
+        remaining = (cancel_at - now()).total_seconds()
+        if remaining <= 0:
             print(
                 "::error title=CI total deadline exceeded::"
-                "source workflow did not publish its budget snapshot before "
-                f"{deadline.isoformat()}"
+                "source workflow budget was not confirmed before "
+                f"cancellation started at {cancel_at.isoformat()}"
             )
-            client.cancel_workflow_run(run_id)
+            cancel_and_wait_for_terminal(client, run_id, deadline, now=now, sleep=sleep)
             return True
         if snapshot is None:
             sleep(min(2, remaining))
@@ -135,25 +233,16 @@ def cancel_at_deadline(
         print('{"big_change":true,"source":"attempt_snapshot"}')
         return False
 
-    remaining = (deadline - now()).total_seconds()
+    remaining = (cancel_at - now()).total_seconds()
     if remaining > 0:
         sleep(remaining)
 
-    refreshed = client.workflow_attempt(run_id, run_attempt)
-    status = refreshed.get("status")
-    if not isinstance(status, str):
-        raise RuntimeError("GitHub API workflow attempt has no status")
-    if status == "completed":
-        print(
-            f"workflow attempt completed before cancellation at {deadline.isoformat()}"
-        )
-        return False
-
     print(
         f"::error title=CI total deadline exceeded::"
-        f"cancelling run {run_id} attempt {run_attempt} at {deadline.isoformat()}"
+        f"cancelling run {run_id} attempt {run_attempt} at {cancel_at.isoformat()} "
+        f"to reserve termination through {deadline.isoformat()}"
     )
-    client.cancel_workflow_run(run_id)
+    cancel_and_wait_for_terminal(client, run_id, deadline, now=now, sleep=sleep)
     return True
 
 
@@ -183,9 +272,6 @@ def main() -> int:
             run_id,
             run_attempt,
             STANDARD_BUDGET,
-            force_big_change=parse_bool(
-                os.environ["CI_BUDGET_FORCE_BIG_CHANGE"], "force-big-change"
-            ),
         )
         return 0
     raise ValueError(f"unknown deadline mode {mode!r}")

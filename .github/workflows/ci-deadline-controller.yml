@@ -1,0 +1,38 @@
+name: CI deadline controller
+
+# `requested` covers initial runs. GitHub emits only `in_progress` for a rerun,
+# whose original workflow creation time still owns the deadline.
+on:
+  workflow_run:
+    workflows: [Check, Closure gate]
+    types: [requested, in_progress]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-deadline-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: true
+
+jobs:
+  deadline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout this controller version
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+      - name: Force cancel ordinary CI within its total deadline
+        uses: ./.github/actions/ci-budget
+        with:
+          mode: cancel
+          repository: ${{ github.repository }}
+          token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          run-attempt: ${{ github.event.workflow_run.run_attempt }}

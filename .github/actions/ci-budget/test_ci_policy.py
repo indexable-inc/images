@@ -8,11 +8,13 @@ from pathlib import Path
 
 from ci_policy import (
     POLICY,
+    check_consumer,
     cli_decision,
     decide,
     load_policy,
     standard_deadline,
     standard_minutes,
+    sync_owner_revision,
     worker_timeout_minutes,
 )
 
@@ -26,10 +28,11 @@ def valid_policy() -> dict[str, object]:
             "indexable-inc/index": {
                 "costly_paths": ["flake.lock"],
                 "managed_workflows": [".github/workflows/check.yml"],
+                "merge_queue_branch": "main",
             }
         },
         "standard_seconds": 300,
-        "termination_grace_seconds": 10,
+        "termination_grace_seconds": 60,
     }
 
 
@@ -79,7 +82,72 @@ class PolicyTests(unittest.TestCase):
 
         assert decision.managed_workflow
         assert decision.classification.big_change
+        assert decision.big_change_label == "ci/big-change"
         assert decision.classification.reason["sources"] == ["costly_path"]
+
+    def test_owner_repository_does_not_reimplement_total_deadline_enforcement(
+        self,
+    ) -> None:
+        repository = Path(__file__).resolve().parents[3]
+
+        check_consumer(repository, "indexable-inc/index")
+
+    def test_consumer_contract_requires_pinned_independent_controller(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = "a" * 40
+            (root / "flake.lock").write_text(
+                json.dumps(
+                    {
+                        "root": "root",
+                        "nodes": {
+                            "root": {"inputs": {"index": "index"}},
+                            "index": {
+                                "locked": {
+                                    "owner": "indexable-inc",
+                                    "repo": "index",
+                                    "rev": revision,
+                                }
+                            },
+                        },
+                    }
+                )
+            )
+            workflows = root / ".github" / "workflows"
+            workflows.mkdir(parents=True)
+            controller = workflows / "ci-deadline-controller.yml"
+            controller.write_text(
+                "workflow_run:\n"
+                "  types: [requested, in_progress]\n"
+                "runs-on: ubuntu-latest\n"
+                "actions: write\n"
+                "uses: indexable-inc/index/.github/actions/ci-budget@main\n"
+                "mode: cancel\n"
+            )
+
+            with self.assertRaisesRegex(  # noqa: PT027  # plain unittest suite
+                RuntimeError, "root index input revision"
+            ):
+                check_consumer(root, "indexable-inc/ix")
+
+            changed = sync_owner_revision(root, "indexable-inc/ix")
+            assert changed == (Path(".github/workflows/ci-deadline-controller.yml"),)
+            assert f"ci-budget@{revision}" in controller.read_text()
+            check_consumer(root, "indexable-inc/ix")
+
+    def test_consumer_contract_rejects_deadline_arithmetic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "scripts" / "ci" / "deadline.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("deadline = created_at + budget\n")
+
+            with self.assertRaisesRegex(  # noqa: PT027  # plain unittest suite
+                RuntimeError, "deadline arithmetic"
+            ):
+                check_consumer(root, "indexable-inc/index")
 
     def test_cli_contract_rejects_unmanaged_workflow_without_reclassifying(
         self,
