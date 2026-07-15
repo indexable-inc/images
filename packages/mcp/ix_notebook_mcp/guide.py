@@ -292,6 +292,23 @@ VERIFY = (
     "'the tab switches on screen'."
 )
 
+CONTROL = (
+    "When a system has no programmatic integration (no bundled module, API, or CLI for it, or the "
+    "one you have is too scope-limited to do the job), you can usually still drive it through a "
+    "control surface rather than giving up. Three are bundled: a Chromium browser over CDP "
+    "(`import browser`, then `await browser.goto(url)` / `await browser.vdom()` / "
+    "`await browser.read()` / `await browser.shot()`), the iPhone over WebDriverAgent "
+    "(`import iphone`: `iphone.tap`, `iphone.swipe`, `iphone.screenshot` — async, so await "
+    "them too), and the Mac itself by screen capture plus synthetic "
+    "input (`import screen`: `screen.capture`, `screen.click`, `screen.write`, `screen.press`). "
+    "Prefer CDP first: it reads the structured DOM (`browser.vdom`/`browser.read`) and clicks "
+    "elements by selector instead of guessing pixel coordinates, so it is by far the most "
+    "reliable. Reach for `screen` or `iphone` only when the target is a native app with no usable "
+    "web surface. Driving `screen` means mapping Retina capture pixels to screen points and "
+    "racing the lock screen, so treat it as the last resort. See the module index for each "
+    "surface's full API."
+)
+
 AUTOMERGE = (
     "By default, merge a pull request you open yourself rather than handing it back: once its "
     "required checks are green, resolve your own review threads and merge it (through the merge "

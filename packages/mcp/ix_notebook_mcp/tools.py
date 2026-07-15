@@ -80,6 +80,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.HTML,
     guide.OUTPUT_HTML,
     guide.VERIFY,
+    guide.CONTROL,
     guide.AUTOMERGE,
     guide.RESULT_SPLIT,
     guide.RESULT_VARIANTS,
