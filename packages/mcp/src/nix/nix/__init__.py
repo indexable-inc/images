@@ -290,6 +290,7 @@ async def _spawn(
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=stderr,
+                start_new_session=True,
                 pass_fds=(owner_read,),
             )
             os.close(owner_read)

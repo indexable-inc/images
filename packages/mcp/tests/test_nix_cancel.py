@@ -265,18 +265,20 @@ def test_supervisor_is_the_target_parent_not_its_child(tmp_path: pathlib.Path) -
         """,
     )
 
-    async def scenario() -> tuple[int, int, int]:
+    async def scenario() -> tuple[int, int, int, int]:
         process = await nix._spawn(
             str(target), cwd=None, stderr=asyncio.subprocess.PIPE
         )
         try:
             await asyncio.to_thread(_wait_for, identity_file, no_child_file, timeout=2)
             target_pid, parent_pid = map(int, identity_file.read_text().split())
-            return process.process.pid, target_pid, parent_pid
+            supervisor_pid = process.process.pid
+            return supervisor_pid, os.getsid(supervisor_pid), target_pid, parent_pid
         finally:
             await nix._kill_and_reap(process)
 
-    supervisor_pid, target_pid, parent_pid = asyncio.run(scenario())
+    supervisor_pid, supervisor_session, target_pid, parent_pid = asyncio.run(scenario())
+    assert supervisor_session == supervisor_pid
     assert target_pid != supervisor_pid
     assert parent_pid == supervisor_pid
 
