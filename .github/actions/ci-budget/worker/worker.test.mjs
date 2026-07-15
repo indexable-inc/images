@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -103,6 +105,108 @@ test("policy exposes independent queue, setup, validation, and cleanup clocks", 
   assert.equal(policy.routine_validation_seconds, 300);
   assert.equal(policy.extended_validation_seconds, 10_800);
   assert.equal(policy.termination_grace_seconds, 10);
+});
+
+test("GitHub action entrypoint invokes the worker under a distinct argv path", async () => {
+  const entrypoint = join(import.meta.dirname, "worker-entrypoint.mjs");
+  const child = spawn(process.execPath, [entrypoint], {
+    env: Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => !name.startsWith("INPUT_")),
+    ),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+
+  const result = await waitForExit(child);
+  assert.deepEqual(result, { code: 1, signal: null });
+  assert.match(stderr, /input big-change is required/);
+});
+
+test("GitHub action entrypoint runs validation and preserves script outputs", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ci-budget-entrypoint-"));
+  const startedAt = new Date().toISOString();
+  const createdAt = new Date(Date.now() - 1000).toISOString();
+  const server = createServer((request, responseStream) => {
+    assert.equal(
+      request.url,
+      "/repos/indexable-inc/ix/actions/runs/42/attempts/1/jobs?per_page=100&page=1",
+    );
+    responseStream.writeHead(200, { "content-type": "application/json" });
+    responseStream.end(
+      JSON.stringify({
+        jobs: [
+          workerJob({
+            attempt: 1,
+            createdAt,
+            runnerName: "runner-entrypoint",
+            startedAt,
+          }),
+        ],
+        total_count: 1,
+      }),
+    );
+  });
+
+  try {
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.notEqual(address, null);
+    assert.equal(typeof address, "object");
+
+    const script = join(directory, "validate.sh");
+    const output = join(directory, "github-output");
+    await writeFile(
+      script,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf 'ran\\n' >validation-ran",
+        "printf 'probe_result=success\\n' >>\"$GITHUB_OUTPUT\"",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(output, "");
+
+    const entrypoint = join(import.meta.dirname, "worker-entrypoint.mjs");
+    const child = spawn(process.execPath, [entrypoint], {
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([name]) => !name.startsWith("INPUT_")),
+        ),
+        GITHUB_API_URL: `http://127.0.0.1:${address.port}`,
+        GITHUB_OUTPUT: output,
+        GITHUB_WORKSPACE: directory,
+        "INPUT_BIG-CHANGE": "false",
+        INPUT_MODE: "run",
+        INPUT_REPOSITORY: "indexable-inc/ix",
+        "INPUT_RUN-ATTEMPT": "1",
+        "INPUT_RUN-ID": "42",
+        INPUT_SCRIPT: "validate.sh",
+        INPUT_TOKEN: "test-token",
+        RUNNER_NAME: "runner-entrypoint",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+
+    const result = await waitForExit(child);
+    assert.deepEqual(result, { code: 0, signal: null }, stderr);
+    assert.equal(await readFile(join(directory, "validation-ran"), "utf8"), "ran\n");
+    assert.equal(await readFile(output, "utf8"), "probe_result=success\n");
+  } finally {
+    server.close();
+    await once(server, "close");
+    await rm(directory, { force: true, recursive: true });
+  }
 });
 
 test("worker selects the exact current attempt runner job", async () => {
