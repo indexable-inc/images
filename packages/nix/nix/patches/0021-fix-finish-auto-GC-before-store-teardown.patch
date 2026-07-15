@@ -1,0 +1,565 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Wed, 15 Jul 2026 01:40:50 -0700
+Subject: [PATCH] fix: finish auto-GC before store teardown
+
+A detached auto-GC worker can outlive LocalStore. Owning the thread alone
+still lets deletion begin while the worker dispatches through the derived
+object, and process owners can bypass timely Store destruction entirely.
+That allows global library state to be destroyed while GC still uses it.
+
+Construct and publish the worker transactionally, then join it from the
+shared_ptr deleter before delete starts. Route both LocalStore variants
+through that ownership boundary. Scope daemon Stores before exit, reset the
+legacy nix-store owner before static teardown, and remove the redundant
+function-static Store retained by the Perl binding.
+
+The regression holds each worker after its future becomes ready. It proves
+daemon, legacy, and derived overlay owners join before process or derived
+teardown, with cleanup that releases every barrier on failure.
+
+This backports NixOS/nix@4a09c1f and completes the remaining lifetime race
+documented in NixOS/nix#15614.
+
+Refs indexable-inc/index#3313 and indexable-inc/ix#7400.
+
+Co-authored-by: Eelco Dolstra <edolstra@gmail.com>
+Assisted-by: Codex
+
+diff --git a/src/libstore/gc.cc b/src/libstore/gc.cc
+index 432dbd853..653b0d08c 100644
+--- a/src/libstore/gc.cc
++++ b/src/libstore/gc.cc
+@@ -878,8 +878,11 @@ void LocalStore::autoGC(bool sync)
+ 
+-        state->gcRunning = true;
++        /* Since gcRunning is false, the previous worker has finished its
++           observable work. Join its remaining teardown before replacing it. */
++        if (state->gcThread.joinable())
++            state->gcThread.join();
+ 
+         std::promise<void> promise;
+-        future = state->gcFuture = promise.get_future().share();
++        future = promise.get_future().share();
+ 
+-        std::thread([promise{std::move(promise)}, this]() mutable {
++        auto thread = std::thread([promise{std::move(promise)}, this]() mutable {
+             try {
+@@ -887,6 +890,24 @@ void LocalStore::autoGC(bool sync)
+                 Finally wakeup([&]() {
+-                    auto state(_state->lock());
+-                    state->gcRunning = false;
+-                    state->lastGCCheck = std::chrono::steady_clock::now();
++                    {
++                        auto state(_state->lock());
++                        state->gcRunning = false;
++                        state->lastGCCheck = std::chrono::steady_clock::now();
++                    }
+                     promise.set_value();
++
++                    try {
++                        if (auto testDir = getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN")) {
++                            auto dir = std::filesystem::path(*testDir);
++                            writeFile(dir / "worker-ready", "");
++                            auto releasePath = dir / "release";
++                            AutoCloseFD release{toDescriptor(open(releasePath.c_str(), O_RDONLY | O_CLOEXEC))};
++                            if (!release)
++                                throw SysError("opening automatic GC test barrier %1%", PathFmt(releasePath));
++                            char command;
++                            readFull(release.get(), &command, 1);
++                            writeFile(dir / "worker-finished", "");
++                        }
++                    } catch (...) {
++                        ignoreExceptionInDestructor();
++                    }
+                 });
+@@ -911,3 +932,6 @@ void LocalStore::autoGC(bool sync)
+             }
+-        }).detach();
++        });
++        state->gcFuture = future;
++        state->gcThread = std::move(thread);
++        state->gcRunning = true;
+     }
+diff --git a/src/libstore/include/nix/store/local-overlay-store.hh b/src/libstore/include/nix/store/local-overlay-store.hh
+index 5d8ec1b45..f2d5fd7f0 100644
+--- a/src/libstore/include/nix/store/local-overlay-store.hh
++++ b/src/libstore/include/nix/store/local-overlay-store.hh
+@@ -112,3 +112,3 @@ protected:
+  */
+-struct LocalOverlayStore : virtual LocalStore
++struct LocalOverlayStore final : virtual LocalStore
+ {
+@@ -118,5 +118,7 @@ struct LocalOverlayStore : virtual LocalStore
+ 
+-    LocalOverlayStore(ref<const Config>);
+-
+ private:
++    friend class LocalStore;
++
++    LocalOverlayStore(ref<const Config>);
++    ~LocalOverlayStore() override;
+     /**
+diff --git a/src/libstore/include/nix/store/local-store.hh b/src/libstore/include/nix/store/local-store.hh
+index 60fed64ae..24e93bd55 100644
+--- a/src/libstore/include/nix/store/local-store.hh
++++ b/src/libstore/include/nix/store/local-store.hh
+@@ -12,3 +12,7 @@
+ #include <future>
++#include <memory>
+ #include <string>
++#include <thread>
++#include <type_traits>
++#include <utility>
+ #include <boost/unordered/unordered_flat_set.hpp>
+@@ -17,2 +21,4 @@ namespace nix {
+ 
++struct LocalOverlayStore;
++
+ /**
+@@ -210,2 +216,3 @@ private:
+         std::shared_future<void> gcFuture;
++        std::thread gcThread;
+ 
+@@ -228,4 +235,26 @@ private:
+ 
++private:
++
++    friend struct LocalOverlayStore;
++
++    LocalStore(ref<const Config> params);
++
++    /**
++     * Wait for automatic GC while the complete dynamic object is intact.
++     */
++    void waitForAutoGC() noexcept;
++
+ public:
+ 
++    template<typename T, typename... Args>
++    static ref<T> make(Args &&... args)
++    {
++        static_assert(std::is_convertible_v<T *, LocalStore *>);
++        auto ptr = std::shared_ptr<T>(new T(std::forward<Args>(args)...), [](T * store) noexcept {
++            static_cast<LocalStore *>(store)->waitForAutoGC();
++            delete store;
++        });
++        return ref<T>{std::move(ptr)};
++    }
++
+     const std::filesystem::path dbDir;
+@@ -252,4 +281,2 @@ public:
+      */
+-    LocalStore(ref<const Config> params);
+-
+     ~LocalStore();
+diff --git a/src/libstore/local-overlay-store.cc b/src/libstore/local-overlay-store.cc
+index 705e9ddf7..189437492 100644
+--- a/src/libstore/local-overlay-store.cc
++++ b/src/libstore/local-overlay-store.cc
+@@ -22,3 +22,3 @@ ref<Store> LocalOverlayStoreConfig::openStore() const
+ {
+-    return make_ref<LocalOverlayStore>(
++    return LocalStore::make<LocalOverlayStore>(
+         ref{std::dynamic_pointer_cast<const LocalOverlayStoreConfig>(shared_from_this())});
+@@ -75,2 +75,12 @@ LocalOverlayStore::LocalOverlayStore(ref<const Config> config)
+ 
++LocalOverlayStore::~LocalOverlayStore()
++{
++    try {
++        if (auto testDir = getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN"))
++            writeFile(std::filesystem::path(*testDir) / "derived-destructor", "");
++    } catch (...) {
++        ignoreExceptionInDestructor();
++    }
++}
++
+ void LocalOverlayStore::registerDrvOutput(const Realisation & info)
+diff --git a/src/libstore/local-store.cc b/src/libstore/local-store.cc
+index 686e9988e..3acca84c0 100644
+--- a/src/libstore/local-store.cc
++++ b/src/libstore/local-store.cc
+@@ -87,3 +87,3 @@ ref<Store> LocalStore::Config::openStore() const
+ {
+-    return make_ref<LocalStore>(ref{shared_from_this()});
++    return LocalStore::make<LocalStore>(ref{shared_from_this()});
+ }
+@@ -430,5 +430,5 @@ void LocalStore::deleteStorePath(const std::filesystem::path & path, uint64_t &
+ 
+-LocalStore::~LocalStore()
++void LocalStore::waitForAutoGC() noexcept
+ {
+-    std::shared_future<void> future;
++    std::thread thread;
+ 
+@@ -436,10 +436,32 @@ LocalStore::~LocalStore()
+         auto state(_state->lock());
+-        if (state->gcRunning)
+-            future = state->gcFuture;
++        if (state->gcThread.joinable()) {
++            if (state->gcThread.get_id() == std::this_thread::get_id())
++                panic("LocalStore cannot be destroyed from its automatic GC worker");
++            thread = std::move(state->gcThread);
++        }
+     }
+ 
+-    if (future.valid()) {
++    if (thread.joinable()) {
+         printInfo("waiting for auto-GC to finish on exit...");
+-        future.get();
++        auto mark = [](std::string_view name) noexcept {
++            try {
++                if (auto testDir = getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN"))
++                    writeFile(std::filesystem::path(*testDir) / name, "");
++            } catch (...) {
++                ignoreExceptionInDestructor();
++            }
++        };
++        mark("destructor-ready");
++        try {
++            thread.join();
++        } catch (...) {
++            panic("failed to join the automatic GC worker");
++        }
++        mark("joined");
+     }
++}
++
++LocalStore::~LocalStore()
++{
++    waitForAutoGC();
+ 
+diff --git a/src/nix/nix-store/nix-store.cc b/src/nix/nix-store/nix-store.cc
+index fb2018cff..05fc23127 100644
+--- a/src/nix/nix-store/nix-store.cc
++++ b/src/nix/nix-store/nix-store.cc
+@@ -29,2 +29,3 @@
+ 
++#include <cstdlib>
+ #include <iostream>
+@@ -53,2 +54,12 @@ static std::shared_ptr<Store> store;
+ 
++static void markLegacyStaticTeardown()
++{
++    try {
++        if (auto testDir = getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN"))
++            writeFile(std::filesystem::path(*testDir) / "static-teardown", "");
++    } catch (...) {
++        ignoreExceptionInDestructor();
++    }
++}
++
+ ref<LocalStore> ensureLocalStore()
+@@ -1120,2 +1131,5 @@ static int main_nix_store(int argc, char ** argv)
+     {
++        if (getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN") && std::atexit(markLegacyStaticTeardown) != 0)
++            throw Error("failed to register the legacy store teardown test hook");
++
+         Strings opFlags, opArgs;
+@@ -1125,2 +1139,3 @@ static int main_nix_store(int argc, char ** argv)
+         bool showHelp = false;
++        Finally closeStore([] { store.reset(); });
+ 
+diff --git a/src/nix/unix/daemon.cc b/src/nix/unix/daemon.cc
+index 1337985c8..756f73299 100644
+--- a/src/nix/unix/daemon.cc
++++ b/src/nix/unix/daemon.cc
+@@ -334,3 +334,3 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                 options.allowVfork = false;
+-                startProcess(
++                auto connectionPid = startProcess(
+                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
+@@ -361,5 +361,10 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                         // Handle the connection.
+-                        auto store = storeConfig->openStore();
+-                        store->init();
+-                        processConnection(store, FdSource(remote.get()), FdSink(remote.get()), trusted, NotRecursive);
++                        {
++                            auto store = storeConfig->openStore();
++                            store->init();
++                            processConnection(
++                                store, FdSource(remote.get()), FdSink(remote.get()), trusted, NotRecursive);
++                        }
++                        if (auto testDir = getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN"))
++                            writeFile(std::filesystem::path(*testDir) / "connection-finished", "");
+ 
+@@ -368,2 +373,9 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                     options);
++                if (auto testDir = getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN")) {
++                    auto pidPath = std::filesystem::path(*testDir) / "connection-pid";
++                    auto temporaryPath = pidPath;
++                    temporaryPath += ".tmp";
++                    writeFile(temporaryPath, std::to_string(connectionPid));
++                    std::filesystem::rename(temporaryPath, pidPath);
++                }
+             });
+diff --git a/src/perl/lib/Nix/Store.xs b/src/perl/lib/Nix/Store.xs
+index 6c4bf2e70..ac61ca30e 100644
+--- a/src/perl/lib/Nix/Store.xs
++++ b/src/perl/lib/Nix/Store.xs
+@@ -57,3 +57,2 @@ StoreWrapper::new(char * s = nullptr)
+     CODE:
+-        static std::shared_ptr<Store> _store;
+         try {
+@@ -64,5 +63,4 @@ StoreWrapper::new(char * s = nullptr)
+             if (items == 1) {
+-                _store = openStore();
+                 RETVAL = new StoreWrapper {
+-                    .store = ref<Store>{_store}
++                    .store = openStore()
+                 };
+diff --git a/tests/functional/gc-auto-shutdown.sh b/tests/functional/gc-auto-shutdown.sh
+new file mode 100755
+index 000000000..020d5059b
+--- /dev/null
++++ b/tests/functional/gc-auto-shutdown.sh
+@@ -0,0 +1,232 @@
++#!/usr/bin/env bash
++
++daemonPackage=${NIX_DAEMON_PACKAGE:-}
++unset NIX_DAEMON_PACKAGE
++
++source common.sh
++
++if [[ -z $daemonPackage ]]; then
++    skipTest "auto-GC shutdown test requires a test daemon"
++fi
++
++export NIX_DAEMON_PACKAGE=$daemonPackage
++DAEMON_PATH="$NIX_DAEMON_PACKAGE/bin:$PATH"
++
++fakeFree=$TEST_ROOT/fake-free
++echo 0 > "$fakeFree"
++export _NIX_TEST_FREE_SPACE_FILE=$fakeFree
++
++cat >> "$NIX_CONF_DIR/nix.conf.extra" <<EOF
++extra-experimental-features = local-overlay-store
++min-free = 1
++max-free = 2
++min-free-check-interval = 0
++EOF
++
++syncDir=
++releaseFd=
++clientPid=
++daemonClientStarted=
++daemonConnectionPid=
++
++waitForExit() {
++    local pid=$1
++    local attempts=$2
++    local i
++    for ((i = 0; i < attempts; i++)); do
++        ! kill -0 "$pid" 2>/dev/null && return
++        sleep 0.05
++    done
++    return 1
++}
++
++terminateProcess() {
++    local pid=$1
++    kill -TERM "$pid" 2>/dev/null || true
++    if ! waitForExit "$pid" 200; then
++        kill -KILL "$pid" 2>/dev/null || true
++        waitForExit "$pid" 200 || true
++    fi
++    if ! kill -0 "$pid" 2>/dev/null; then
++        wait "$pid" 2>/dev/null || true
++    fi
++}
++
++terminatePid() {
++    local pid=$1
++    kill -TERM "$pid" 2>/dev/null || true
++    if ! waitForExit "$pid" 200; then
++        kill -KILL "$pid" 2>/dev/null || true
++        waitForExit "$pid" 200 || true
++    fi
++}
++
++readConnectionPid() {
++    daemonConnectionPid=$(< "$syncDir/connection-pid")
++    [[ $daemonConnectionPid =~ ^[1-9][0-9]*$ ]] || fail "invalid daemon connection PID"
++}
++
++cleanup() {
++    local status=$?
++    trap - EXIT
++
++    if [[ -n $releaseFd ]]; then
++        printf released >&"$releaseFd" || true
++        exec {releaseFd}>&-
++        releaseFd=
++    fi
++    if [[ -n $clientPid ]]; then
++        terminateProcess "$clientPid"
++        clientPid=
++    fi
++    if [[ -n ${_NIX_TEST_DAEMON_PID:-} ]]; then
++        if [[ -n $daemonClientStarted ]]; then
++            if [[ -z $daemonConnectionPid ]]; then
++                for _ in {1..200}; do
++                    [[ -e $syncDir/connection-pid ]] && break
++                    kill -0 "$_NIX_TEST_DAEMON_PID" 2>/dev/null || break
++                    sleep 0.05
++                done
++                if [[ -e $syncDir/connection-pid ]]; then
++                    daemonConnectionPid=$(< "$syncDir/connection-pid")
++                fi
++            fi
++            if [[ $daemonConnectionPid =~ ^[1-9][0-9]*$ && ! -e $syncDir/connection-finished ]]; then
++                for _ in {1..200}; do
++                    [[ -e $syncDir/connection-finished ]] && break
++                    kill -0 "$daemonConnectionPid" 2>/dev/null || break
++                    sleep 0.05
++                done
++                if [[ ! -e $syncDir/connection-finished ]] && kill -0 "$daemonConnectionPid" 2>/dev/null; then
++                    terminatePid "$daemonConnectionPid"
++                fi
++            fi
++        fi
++        if [[ -n ${_NIX_TEST_DAEMON_PID:-} ]]; then
++            killDaemon
++        fi
++    fi
++
++    exit "$status"
++}
++
++waitForProcess() {
++    local pid=$1
++    local description=$2
++    if ! waitForExit "$pid" 400; then
++        fail "timed out waiting for $description"
++    fi
++    wait "$pid"
++}
++
++waitForMarker() {
++    local marker=$1
++    local ownerPid=$2
++    for _ in {1..400}; do
++        [[ -e $syncDir/$marker ]] && return
++        if ! kill -0 "$ownerPid" 2>/dev/null; then
++            fail "process exited before $marker"
++        fi
++        sleep 0.05
++    done
++    fail "timed out waiting for $marker"
++}
++
++openBarrier() {
++    syncDir=$1
++    mkdir -p "$syncDir"
++    mkfifo "$syncDir/release"
++    exec {releaseFd}<>"$syncDir/release"
++    export _NIX_TEST_AUTO_GC_SHUTDOWN=$syncDir
++}
++
++releaseWorker() {
++    printf released >&"$releaseFd"
++    exec {releaseFd}>&-
++    releaseFd=
++}
++
++daemonInput=$TEST_ROOT/daemon-input
++echo daemon-auto-gc-shutdown > "$daemonInput"
++daemonLog=$TEST_ROOT/daemon-client.log
++
++openBarrier "$TEST_ROOT/auto-gc-shutdown/daemon"
++startDaemon
++trap cleanup EXIT
++
++daemonClientStarted=1
++nix store add-file "$daemonInput" > "$daemonLog" 2>&1 &
++clientPid=$!
++
++waitForMarker connection-pid "$_NIX_TEST_DAEMON_PID"
++readConnectionPid
++waitForMarker worker-ready "$daemonConnectionPid"
++waitForMarker destructor-ready "$daemonConnectionPid"
++[[ ! -e $syncDir/joined ]]
++
++releaseWorker
++waitForProcess "$clientPid" "daemon client"
++clientPid=
++waitForMarker worker-finished "$daemonConnectionPid"
++waitForMarker joined "$daemonConnectionPid"
++waitForMarker connection-finished "$daemonConnectionPid"
++[[ -s $daemonLog ]]
++
++daemonClientStarted=
++daemonConnectionPid=
++killDaemon
++trap cleanup EXIT
++
++legacyInput=$TEST_ROOT/legacy-input
++echo legacy-auto-gc-shutdown > "$legacyInput"
++legacyLog=$TEST_ROOT/legacy-client.log
++
++openBarrier "$TEST_ROOT/auto-gc-shutdown/legacy"
++export NIX_REMOTE=local
++
++nix-store --add "$legacyInput" > "$legacyLog" 2>&1 &
++clientPid=$!
++
++waitForMarker worker-ready "$clientPid"
++waitForMarker destructor-ready "$clientPid"
++[[ ! -e $syncDir/joined ]]
++[[ ! -e $syncDir/static-teardown ]] || fail "legacy store reached static teardown before destruction"
++
++releaseWorker
++waitForMarker worker-finished "$clientPid"
++waitForMarker joined "$clientPid"
++waitForProcess "$clientPid" "legacy client"
++clientPid=
++
++[[ -e $syncDir/static-teardown ]]
++[[ -s $legacyLog ]]
++
++overlayInput=$TEST_ROOT/overlay-input
++echo overlay-auto-gc-shutdown > "$overlayInput"
++overlayLog=$TEST_ROOT/overlay-client.log
++overlayLower=$TEST_ROOT/overlay-lower
++overlayRoot=$TEST_ROOT/overlay-root
++overlayUpper=$TEST_ROOT/overlay-upper
++mkdir -p "$overlayLower/nix/store" "$overlayRoot/nix/store" "$overlayUpper"
++overlayStore="local-overlay://?root=$overlayRoot&lower-store=$overlayLower&upper-layer=$overlayUpper&check-mount=false"
++
++openBarrier "$TEST_ROOT/auto-gc-shutdown/overlay"
++
++nix-store --store "$overlayStore" --add "$overlayInput" > "$overlayLog" 2>&1 &
++clientPid=$!
++
++waitForMarker worker-ready "$clientPid"
++waitForMarker destructor-ready "$clientPid"
++[[ ! -e $syncDir/joined ]]
++[[ ! -e $syncDir/derived-destructor ]]
++[[ ! -e $syncDir/static-teardown ]] || fail "overlay store reached static teardown before destruction"
++
++releaseWorker
++waitForMarker worker-finished "$clientPid"
++waitForMarker joined "$clientPid"
++waitForProcess "$clientPid" "overlay client"
++clientPid=
++
++[[ -e $syncDir/derived-destructor ]]
++[[ -e $syncDir/static-teardown ]]
++[[ -s $overlayLog ]]
+diff --git a/tests/functional/gc-auto.sh b/tests/functional/gc-auto.sh
+index 74f9970af..c08175559 100755
+--- a/tests/functional/gc-auto.sh
++++ b/tests/functional/gc-auto.sh
+@@ -145,3 +145,3 @@ grepQuietInverse -F "running auto-GC to free" "$secondLog"
+ 
+-# A synchronous auto-GC caller waits on a detached collector thread. When the
++# A synchronous auto-GC caller waits on its owned collector thread. When the
+ # process is interrupted, the collector must leave a blocked gc.lock wait so it
+diff --git a/tests/functional/meson.build b/tests/functional/meson.build
+index 034011634..e5b6e133f 100644
+--- a/tests/functional/meson.build
++++ b/tests/functional/meson.build
+@@ -65,2 +65,3 @@ suites = [
+       'gc-auto.sh',
++      'gc-auto-shutdown.sh',
+       'user-envs.sh',

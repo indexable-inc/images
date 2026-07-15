@@ -87,6 +87,12 @@
     {
       "patch": "0020-libstore-preserve-content-addressed-leaf-failures.patch",
       "deps": []
+    },
+    {
+      "patch": "0021-fix-finish-auto-GC-before-store-teardown.patch",
+      "deps": [
+        "0018-fix-libstore-interrupt-blocked-automatic-GC.patch"
+      ]
     }
   ]
 }

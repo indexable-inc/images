@@ -263,6 +263,10 @@ let
     });
 
   autoGcInterrupt = focusedFunctionalTest {name = "gc-auto";};
+  autoGcShutdown = focusedFunctionalTest {
+    name = "gc-auto-shutdown";
+    testDaemon = package.components.nix-cli;
+  };
   daemonSignal = focusedFunctionalTest {
     name = "daemon-signal";
     testDaemon = package.components.nix-cli;
@@ -276,7 +280,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // {
-            inherit autoGcInterrupt daemonSignal smoke;
+            inherit autoGcInterrupt autoGcShutdown daemonSignal smoke;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {
