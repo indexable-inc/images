@@ -1,0 +1,20 @@
+name: CI budget checks
+
+on:
+  pull_request:
+    paths:
+      - .github/actions/ci-budget/**
+      - .github/workflows/ci-budget.yml
+      - .github/workflows/ci-budget-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Test classifier behavior
+        run: python3 -m unittest .github/actions/ci-budget/test_ci_budget.py

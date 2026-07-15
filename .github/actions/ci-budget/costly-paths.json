@@ -1,0 +1,8 @@
+[
+  "Cargo.lock",
+  "**/Cargo.lock",
+  "flake.lock",
+  "**/flake.lock",
+  "rust-toolchain.toml",
+  "**/rust-toolchain.toml"
+]

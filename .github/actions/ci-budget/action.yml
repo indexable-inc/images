@@ -1,0 +1,45 @@
+name: Classify CI budget
+description: Classify a pull request and publish its shared CI budget policy
+
+inputs:
+  repository:
+    description: GitHub repository in owner/name form
+    required: true
+  pull-request-number:
+    description: Pull request number, or 0 outside a pull request
+    required: true
+  token:
+    description: Token with pull request read and, when publishing, issues write
+    required: true
+  extra-costly-paths:
+    description: JSON array of repository-specific costly path globs
+    default: "[]"
+  force-big-change:
+    description: Grant the extended budget without a path or label match
+    default: "false"
+  publish:
+    description: Add the automatic label and publish the sticky comment
+    default: "true"
+
+outputs:
+  big_change:
+    description: Whether the extended CI budget applies
+    value: ${{ steps.classify.outputs.big_change }}
+  reason:
+    description: JSON object describing every source of the decision
+    value: ${{ steps.classify.outputs.reason }}
+
+runs:
+  using: composite
+  steps:
+    - name: Classify CI budget
+      id: classify
+      shell: bash
+      env:
+        CI_BUDGET_EXTRA_COSTLY_PATHS: ${{ inputs.extra-costly-paths }}
+        CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}
+        CI_BUDGET_PUBLISH: ${{ inputs.publish }}
+        CI_BUDGET_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
+        CI_BUDGET_REPOSITORY: ${{ inputs.repository }}
+        CI_BUDGET_TOKEN: ${{ inputs.token }}
+      run: python3 "$GITHUB_ACTION_PATH/ci_budget.py"

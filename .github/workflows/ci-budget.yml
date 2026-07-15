@@ -1,0 +1,53 @@
+name: Shared CI budget
+
+on:
+  workflow_call:
+    inputs:
+      pull-request-number:
+        description: Pull request number, or 0 outside a pull request
+        type: number
+        default: 0
+      extra-costly-paths:
+        description: JSON array of repository-specific costly path globs
+        type: string
+        default: "[]"
+      force-big-change:
+        description: Grant the extended budget without a path or label match
+        type: boolean
+        default: false
+      publish:
+        description: Add the automatic label and publish the sticky comment
+        type: boolean
+        default: true
+    outputs:
+      big_change:
+        description: Whether the extended CI budget applies
+        value: ${{ jobs.classify.outputs.big_change }}
+      reason:
+        description: JSON object describing every source of the decision
+        value: ${{ jobs.classify.outputs.reason }}
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    outputs:
+      big_change: ${{ steps.budget.outputs.big_change }}
+      reason: ${{ steps.budget.outputs.reason }}
+    steps:
+      # Fully qualified because a cross-repository workflow call keeps the
+      # caller's workspace. A local action path would resolve inside ix.
+      - name: Classify CI budget
+        id: budget
+        uses: indexable-inc/index/.github/actions/ci-budget@main
+        with:
+          repository: ${{ github.repository }}
+          pull-request-number: ${{ inputs.pull-request-number }}
+          token: ${{ github.token }}
+          extra-costly-paths: ${{ inputs.extra-costly-paths }}
+          force-big-change: ${{ inputs.force-big-change }}
+          publish: ${{ inputs.publish }}
