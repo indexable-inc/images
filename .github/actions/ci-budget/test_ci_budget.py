@@ -92,7 +92,7 @@ class GitHubClientTests(unittest.TestCase):
         transport = FakeTransport([first, [{"filename": "flake.lock"}]])
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
 
-        paths = client.changed_paths(42)
+        paths = client.changed_paths(42, 101)
 
         assert len(paths) == 101
         assert paths[-1] == "flake.lock"
@@ -102,6 +102,40 @@ class GitHubClientTests(unittest.TestCase):
         ]
         assert queries[0]["page"] == ["1"]
         assert queries[1]["page"] == ["2"]
+
+    def test_changed_file_count_mismatch_fails_closed(self) -> None:
+        transport = FakeTransport([[{"filename": "src/main.rs"}]])
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        error = runtime_error(lambda: client.changed_paths(42, 2))
+
+        assert "reports 2 changed files but GitHub returned 1" in str(error)
+
+    def test_changed_file_api_cap_fails_closed(self) -> None:
+        transport = FakeTransport([])
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        error = runtime_error(lambda: client.changed_paths(42, 3001))
+
+        assert "GitHub exposes at most 3000" in str(error)
+        assert not transport.requests
+
+    def test_context_artifact_carries_push_base_sha(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "artifacts": [
+                        {
+                            "name": "ci-budget-context-12-2-" + "a" * 40,
+                            "expired": False,
+                        }
+                    ]
+                }
+            ]
+        )
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        assert client.ci_budget_context_base_sha(12, 2) == "a" * 40
 
     def test_owned_sticky_comment_is_updated(self) -> None:
         transport = FakeTransport(
@@ -169,7 +203,11 @@ class GitHubClientTests(unittest.TestCase):
                         }
                     }
                 },
-                {"number": 42, "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}]},
+                {
+                    "number": 42,
+                    "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}],
+                    "changed_files": 1,
+                },
             ]
         )
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
@@ -244,8 +282,8 @@ class GitHubClientTests(unittest.TestCase):
                         }
                     }
                 },
-                {"number": 42, "labels": []},
-                {"number": 41, "labels": []},
+                {"number": 42, "labels": [], "changed_files": 1},
+                {"number": 41, "labels": [], "changed_files": 1},
             ]
         )
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
@@ -273,6 +311,12 @@ class WorkflowAssociationTests(unittest.TestCase):
                         "merged_at": "2026-07-15T10:00:00Z",
                     }
                 ],
+                {
+                    "number": 42,
+                    "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}],
+                    "changed_files": 1,
+                },
+                {"parents": [{"sha": "a" * 40}]},
                 [{"filename": "src/main.rs"}],
             ]
         )
@@ -289,6 +333,7 @@ class WorkflowAssociationTests(unittest.TestCase):
             self.globs,
             force_big_change=False,
             merge_queue_branch="main",
+            push_base_sha="a" * 40,
         )
 
         assert result.big_change
@@ -319,7 +364,11 @@ class WorkflowAssociationTests(unittest.TestCase):
                         }
                     }
                 },
-                {"number": 42, "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}]},
+                {
+                    "number": 42,
+                    "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}],
+                    "changed_files": 1,
+                },
                 [{"filename": "src/main.rs"}],
             ]
         )
@@ -376,10 +425,64 @@ class WorkflowAssociationTests(unittest.TestCase):
                 self.globs,
                 force_big_change=False,
                 merge_queue_branch="main",
+                push_base_sha="a" * 40,
             )
         )
 
         assert "has 2 exact merged pull requests" in str(error)
+
+    def test_batched_main_push_classifies_every_exact_merged_pull_request(
+        self,
+    ) -> None:
+        base_sha = "0ba20f303a61d3df2f4b6edcc8a35370bc37cedb"
+        first_sha = "504e1fe17dd3f6529f9b7ca328cbdbb0cacdcd3e"
+        head_sha = "a09397fb5407b63fb1db0b8602891ce15facfa41"
+        transport = FakeTransport(
+            [
+                [
+                    {
+                        "number": 1372,
+                        "base": {"ref": "main"},
+                        "merge_commit_sha": head_sha,
+                        "merged_at": "2026-06-19T03:38:40Z",
+                    }
+                ],
+                {"number": 1372, "labels": [], "changed_files": 1},
+                {"parents": [{"sha": first_sha}]},
+                [
+                    {
+                        "number": 1371,
+                        "base": {"ref": "main"},
+                        "merge_commit_sha": first_sha,
+                        "merged_at": "2026-06-19T03:38:40Z",
+                    }
+                ],
+                {"number": 1371, "labels": [], "changed_files": 1},
+                {"parents": [{"sha": base_sha}]},
+                [{"filename": "src/main.rs"}],
+                [{"filename": "flake.lock"}],
+            ]
+        )
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+        attempt = {
+            "event": "push",
+            "head_sha": head_sha,
+            "pull_requests": [],
+        }
+
+        result = ci_budget.classify_workflow_attempt(
+            client,
+            attempt,
+            self.globs,
+            force_big_change=False,
+            merge_queue_branch="main",
+            push_base_sha=base_sha,
+        )
+
+        assert result.big_change
+        assert result.reason["matches"] == [
+            {"path": "flake.lock", "pattern": "flake.lock"}
+        ]
 
 
 class RenderingTests(unittest.TestCase):
