@@ -6,6 +6,7 @@ import unittest
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 MODULE_PATH = Path(__file__).with_name("ci_deadline.py")
@@ -62,7 +63,18 @@ class FakeClient:
         assert expected_count == 1
         return ["src/main.rs"]
 
-    def main_push_pull_requests(
+    def main_push_associations(
+        self, branch: str, base_sha: str, head_sha: str
+    ) -> SimpleNamespace:
+        assert branch == "main"
+        assert base_sha == "b" * 40
+        assert head_sha == "a" * 40
+        return SimpleNamespace(
+            pull_requests=(self.pull_request(42),),
+            unassociated_commits=(),
+        )
+
+    def merge_queue_pull_requests(
         self, branch: str, base_sha: str, head_sha: str
     ) -> list[dict[str, Any]]:
         assert branch == "main"
@@ -246,6 +258,31 @@ class CancellationControllerTests(unittest.TestCase):
     def test_main_push_waits_for_authoritative_range_context(self) -> None:
         client = FakeClient(
             [attempt(event="push"), attempt(status="completed", event="push")],
+            context_base_shas=[None, "b" * 40],
+        )
+        sleeps: list[float] = []
+
+        cancelled = ci_deadline.cancel_at_deadline(
+            client,
+            12,
+            2,
+            ["flake.lock"],
+            timedelta(minutes=5),
+            force_big_change=False,
+            merge_queue_branch="main",
+            now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
+            sleep=sleeps.append,
+        )
+
+        assert not cancelled
+        assert sleeps == [2, 300]
+
+    def test_merge_group_waits_for_authoritative_range_context(self) -> None:
+        client = FakeClient(
+            [
+                attempt(event="merge_group"),
+                attempt(status="completed", event="merge_group"),
+            ],
             context_base_shas=[None, "b" * 40],
         )
         sleeps: list[float] = []
