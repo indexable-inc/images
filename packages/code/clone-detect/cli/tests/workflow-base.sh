@@ -28,7 +28,7 @@ git -C "$repo" merge --quiet --no-ff --message synthetic-merge pull-request
 # Run the exact workflow body so the test covers its YAML wiring as well as the
 # git history. The nix stub observes which base reaches the clone CLI boundary.
 workflow_step=$(
-  yq '.jobs.flake-check.steps[] | select(.name == "Reject duplication on changed lines").run' "$workflow"
+  yq '.jobs.flake-build.steps[] | select(.name == "Reject duplication on changed lines").run' "$workflow"
 )
 if [[ -z "$workflow_step" || "$workflow_step" == "null" ]]; then
   printf 'clone diff workflow step is missing\n' >&2

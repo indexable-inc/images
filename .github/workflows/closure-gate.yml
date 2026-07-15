@@ -58,6 +58,10 @@ jobs:
     uses: indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main
     with:
       pull-request-number: ${{ github.event.pull_request.number || 0 }}
+      base-sha: >-
+        ${{ github.event_name == 'merge_group'
+            && github.event.merge_group.base_sha
+            || '' }}
       head-sha: >-
         ${{ github.event_name == 'merge_group'
             && github.event.merge_group.head_sha

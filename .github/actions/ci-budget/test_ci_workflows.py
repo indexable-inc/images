@@ -137,12 +137,22 @@ class RequiredWorkflowTests(unittest.TestCase):
                     permissions = child_object(job, "permissions")
                     assert "write" not in permissions.values()
 
+    def test_clone_diff_step_stays_on_the_build_job(self) -> None:
+        jobs = child_object(load_workflow("check.yml"), "jobs")
+        build_steps = child_list(child_object(jobs, "flake-build"), "steps")
+        assert any(
+            isinstance(step, dict)
+            and step.get("name") == "Reject duplication on changed lines"
+            for step in build_steps
+        )
+
     def test_non_pull_request_classification_keeps_labels(self) -> None:
         check_inputs = child_object(
             child_object(child_object(load_workflow("check.yml"), "jobs"), "ci-budget"),
             "with",
         )
         assert "event.before" in expression(check_inputs, "base-sha")
+        assert "merge_group.base_sha" in expression(check_inputs, "base-sha")
         assert "github.sha" in expression(check_inputs, "head-sha")
         assert "merge_group.head_sha" in expression(check_inputs, "head-sha")
         assert "refs/tags/" in expression(check_inputs, "force-big-change")
@@ -153,7 +163,7 @@ class RequiredWorkflowTests(unittest.TestCase):
             ),
             "with",
         )
-        assert "base-sha" not in closure_inputs
+        assert "merge_group.base_sha" in expression(closure_inputs, "base-sha")
         assert "merge_group.head_sha" in expression(closure_inputs, "head-sha")
         assert "workflow_dispatch" in expression(closure_inputs, "force-big-change")
 
@@ -188,6 +198,9 @@ class TrustedWorkflowTests(unittest.TestCase):
     def test_publisher_uses_trusted_base_code_without_checkout(self) -> None:
         workflow = load_workflow("ci-budget-publish.yml")
         assert "pull_request_target" in events(workflow)
+        concurrency = child_object(workflow, "concurrency")
+        assert "pull_request.number" in expression(concurrency, "group")
+        assert concurrency["cancel-in-progress"] is False
         publish = child_object(child_object(workflow, "jobs"), "publish")
         assert (
             publish["uses"]

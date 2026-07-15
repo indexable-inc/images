@@ -1,5 +1,9 @@
 name: CI deadline controller
 
+# GitHub omits `requested` for reruns, so `in_progress` anchors those at the
+# workflow attempt start. The source workflows run their GitHub-hosted budget
+# job before any self-hosted build, which keeps the scarce-runner queue inside
+# the deadline even on a partial rerun.
 on:
   workflow_run:
     workflows: [Check, Closure gate]
