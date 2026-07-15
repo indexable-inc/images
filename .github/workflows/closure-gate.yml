@@ -53,9 +53,8 @@ jobs:
   ci-budget:
     permissions:
       contents: read
-      issues: write
       pull-requests: read
-    uses: indexable-inc/index/.github/workflows/ci-budget.yml@main
+    uses: indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main
     with:
       pull-request-number: ${{ github.event.pull_request.number || 0 }}
       # Manual and merge-queue runs have no pull request label. Keep their
