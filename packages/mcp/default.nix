@@ -795,6 +795,27 @@
       cp -r ${notionPythonSource}/notion/. "$site/"
     ''
   );
+  # Mercury bank REST client: `import mercury`, then `await mercury.accounts()` /
+  # `transactions(...)` / `transaction(id)` / `attach_receipt(tx_id, file)`. Pure
+  # Python over the already-bundled httpx + polars + pydantic; per-user credential
+  # (MERCURY_API_TOKEN env or ~/.config/mercury/token, mode 0600, written by
+  # mercury.login(token)). Cross-platform.
+  mercuryPythonSource = builtins.path {
+    name = "ix-mcp-mercury-python-source";
+    path = ./src/mercury;
+  };
+  mercuryModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-mercury-python-module"
+    {
+      strictDeps = true;
+      meta.description = "Mercury bank REST client bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/mercury"
+      mkdir -p "$site"
+      cp -r ${mercuryPythonSource}/mercury/. "$site/"
+    ''
+  );
   # `nox_autotriage`: nox-aware adapter that converts a nox conformance report
   # into linear.triage Findings and files them to Linear.  Depends on
   # linearModule (for linear.triage).  Entry point: python -m nox_autotriage.
@@ -1414,6 +1435,7 @@
       beeperModule
       linearModule
       notionModule
+      mercuryModule
       noxAutotriageModule
       mcpClientModule
       # pymobiledevice3 9.27.0 (defined above) + the `iphone` wrapper that drives
@@ -1580,6 +1602,7 @@
     "nox_autotriage"
     "linear"
     "notion"
+    "mercury"
     "google_auth"
     "slack"
     "beeper"
@@ -2015,6 +2038,7 @@
     from pathlib import Path
 
     import beeper
+    import mercury
     import slack
     from ix_notebook_mcp import registry, requirements
 
@@ -2023,6 +2047,8 @@
     assert Path(creds["slack"].token_path).expanduser() == slack._TOKEN_FILE, creds["slack"].token_path
     assert creds["beeper"].env == tuple(beeper._TOKEN_ENV_VARS), creds["beeper"].env
     assert Path(creds["beeper"].token_path).expanduser() == beeper._TOKEN_FILE, creds["beeper"].token_path
+    assert creds["mercury"].env == tuple(mercury._TOKEN_ENV_VARS), creds["mercury"].env
+    assert Path(creds["mercury"].token_path).expanduser() == mercury._TOKEN_FILE, creds["mercury"].token_path
 
     by_name = {s.name: s for s in requirements.statuses()}
     assert set(by_name) == set(creds), sorted(by_name)
@@ -5509,6 +5535,104 @@
       cat stdout
       mkdir -p "$out"
     '';
+  # The `mercury` helper imports and exposes its public surface. A real API call
+  # needs a token, so the sandbox-safe assertions are: the module imports, the
+  # public callables exist, an unconfigured session raises MercuryError naming the
+  # token, IX_MCP_SHARED=1 refuses access, status() answers configured=False
+  # instead of raising, and the typed empty-frame schema holds.
+  mercuryBundled = importTest "mercury" ''
+    import os
+
+    import polars as pl
+
+    import mercury
+
+    assert callable(mercury.login) and callable(mercury.logout)
+    import asyncio as _asyncio
+
+    assert _asyncio.iscoroutinefunction(mercury.status)
+    assert _asyncio.iscoroutinefunction(mercury.attach_receipt)
+
+    # Every Mercury resource is reachable as a polars frame: each list endpoint is
+    # an async function, and the dict-returning single-item gets are async too.
+    # These names ARE the contract (the registry tagline + module surface), so pin
+    # them here so a rename or a dropped resource fails the build.
+    list_fns = (
+        "accounts", "transactions", "all_transactions", "cards", "statements",
+        "recipients", "recipient_attachments", "categories", "credit", "treasury",
+        "treasury_transactions", "treasury_statements", "users", "events",
+        "customers", "invoices", "safes", "send_money_approval_requests",
+        "webhooks", "transaction", "card",
+    )
+    get_fns = (
+        "account", "recipient", "user", "organization", "event", "customer", "invoice",
+    )
+    for name in (*list_fns, *get_fns):
+        fn = getattr(mercury, name)
+        assert _asyncio.iscoroutinefunction(fn), name
+    # __all__ stays in sync with the implemented surface (no stale exports).
+    assert set(mercury.__all__) >= set(list_fns) | set(get_fns) | {"login", "logout", "status", "MercuryError"}, mercury.__all__
+
+    # The generic record-to-frame builder returns a real polars frame and parses
+    # timestamp-named columns to UTC datetimes; nested objects become JSON text.
+    rf = mercury._records_frame([
+        {"id": "1", "createdAt": "2026-01-02T03:04:05Z", "meta": {"k": "v"}},
+        {"id": "2", "createdAt": ""},
+    ])
+    assert isinstance(rf, pl.DataFrame) and rf.height == 2, rf
+    assert rf.schema["createdAt"] == mercury._TS, rf.schema
+    assert rf.schema["meta"] == pl.Utf8, rf.schema  # nested object flattened to JSON text
+    assert mercury._records_frame([]).height == 0
+    # Regression: a timestamp-named column whose every value is empty must not
+    # raise (polars format inference has no sample) -- it becomes a typed null
+    # column instead, mirroring _frame.
+    blank = mercury._records_frame([{"id": "1", "paidAt": ""}, {"id": "2", "paidAt": ""}])
+    assert blank.schema["paidAt"] == mercury._TS, blank.schema
+    assert blank.get_column("paidAt").to_list() == [None, None], blank
+    # The list envelope unwraps both the bare-array and the wrapped-object shapes.
+    assert mercury._envelope_items({"recipients": [{"id": "r"}]}, "recipients") == [{"id": "r"}]
+    assert mercury._envelope_items([{"id": "x"}]) == [{"id": "x"}]
+
+    # In a shared (multiplayer) room Mercury is refused before the token is read
+    # or any network call is made, so bank data never reaches state other
+    # participants can see.
+    os.environ["IX_MCP_SHARED"] = "1"
+    try:
+        _asyncio.run(mercury.accounts())
+    except mercury.MercuryError as exc:
+        assert "shared" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected MercuryError in a shared room")
+
+    # Incognito is the default: with IX_MCP_SHARED unset the shared guard passes,
+    # so the next failure is a missing token -- proving the guard was the only
+    # thing that blocked it above. Unconfigured (no env token, no token file):
+    # data calls raise MercuryError naming the token, the same not-configured UX
+    # as the other modules.
+    os.environ.pop("IX_MCP_SHARED", None)
+    os.environ.pop("MERCURY_API_TOKEN", None)
+    os.environ.pop("MERCURY_TOKEN", None)
+    try:
+        _asyncio.run(mercury.accounts())
+    except mercury.MercuryError as exc:
+        assert "token" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected MercuryError when no token is configured")
+
+    # status() answers instead of raising when not configured.
+    state = _asyncio.run(mercury.status())
+    assert state["configured"] is False, state
+
+    # Empty results stay typed: the schema is the contract even with no rows, and
+    # `amount` is the signed float column callers filter on.
+    empty = mercury._frame([], mercury._TRANSACTIONS_SCHEMA)
+    assert empty.height == 0, empty
+    assert empty.schema["amount"] == pl.Float64, empty.schema
+    assert {"id", "amount", "status", "counterparty", "bank_description",
+            "created_at", "posted_at", "attachments", "dashboard_link"} <= set(empty.columns), empty.columns
+
+    print("mercury-ok")
+  '';
   noxAutotriageBundled = importTest "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
   linearTriageTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
@@ -5890,6 +6014,7 @@ in
               nuBundled
               nuTests
               linearBundled
+              mercuryBundled
               linearTriageTests
               notionBundled
               notionTests
