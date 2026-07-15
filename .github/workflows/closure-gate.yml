@@ -70,7 +70,7 @@ jobs:
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-closure-gate', github.run_id, github.run_attempt) }}"]
     # A relock-class PR realises a near-full closure; match the cache-push
     # linux lane budget, which fits that worst case.
-    timeout-minutes: ${{ needs.ci-budget.outputs.big_change == 'true' && 180 || 5 }}
+    timeout-minutes: ${{ fromJSON(needs.ci-budget.outputs.worker_timeout_minutes) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

@@ -36,3 +36,5 @@ jobs:
           python3 -m unittest discover
           -s .github/actions/ci-budget
           -p 'test_*.py'
+      - name: Test worker deadline and process cleanup
+        run: node --test .github/actions/ci-budget/worker/worker.test.mjs

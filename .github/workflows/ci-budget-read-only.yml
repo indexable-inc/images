@@ -36,6 +36,9 @@ on:
       standard_deadline:
         description: Absolute deadline for an ordinary workflow attempt
         value: ${{ jobs.classify.outputs.standard_deadline }}
+      worker_timeout_minutes:
+        description: Assignment-relative worker backstop for the classified tier
+        value: ${{ jobs.classify.outputs.worker_timeout_minutes }}
 
 jobs:
   classify:
@@ -50,6 +53,7 @@ jobs:
       reason: ${{ steps.budget.outputs.reason }}
       standard_minutes: ${{ steps.budget.outputs.standard_minutes }}
       standard_deadline: ${{ steps.budget.outputs.standard_deadline }}
+      worker_timeout_minutes: ${{ steps.budget.outputs.worker_timeout_minutes }}
     steps:
       # Fully qualified because a cross-repository workflow call keeps the
       # caller's workspace. A local action path would resolve inside ix.

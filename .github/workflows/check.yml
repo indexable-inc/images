@@ -88,7 +88,7 @@ jobs:
     # with a warm, persistent /nix/store. See the ix repo's ci.yml for the
     # label scheme.
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-flake-check', github.run_id, github.run_attempt) }}"]
-    timeout-minutes: ${{ needs.ci-budget.outputs.big_change == 'true' && 60 || 5 }}
+    timeout-minutes: ${{ fromJSON(needs.ci-budget.outputs.worker_timeout_minutes) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
