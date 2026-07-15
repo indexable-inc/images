@@ -150,11 +150,21 @@ const delay = (milliseconds) =>
 
 export async function terminateGroup(pid, graceMilliseconds) {
   if (!signalGroup(pid, "SIGTERM")) return;
-  const deadline = Date.now() + graceMilliseconds;
-  while (groupExists(pid) && Date.now() < deadline) {
-    await delay(Math.min(50, Math.max(1, deadline - Date.now())));
+  const startedAt = Date.now();
+  const killWaitMilliseconds = Math.min(1000, graceMilliseconds / 2);
+  const termDeadline = startedAt + graceMilliseconds - killWaitMilliseconds;
+  while (groupExists(pid) && Date.now() < termDeadline) {
+    await delay(Math.min(50, Math.max(1, termDeadline - Date.now())));
   }
-  if (groupExists(pid)) signalGroup(pid, "SIGKILL");
+  if (!groupExists(pid)) return;
+  signalGroup(pid, "SIGKILL");
+  const cleanupDeadline = startedAt + graceMilliseconds;
+  while (groupExists(pid) && Date.now() < cleanupDeadline) {
+    await delay(Math.min(25, Math.max(1, cleanupDeadline - Date.now())));
+  }
+  if (groupExists(pid)) {
+    throw new Error(`process group ${pid} survived SIGKILL cleanup`);
+  }
 }
 
 function signalExitCode(signal) {

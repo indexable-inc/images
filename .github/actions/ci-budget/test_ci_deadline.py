@@ -6,7 +6,6 @@ import unittest
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 MODULE_PATH = Path(__file__).with_name("ci_deadline.py")
@@ -34,15 +33,15 @@ class FakeClient:
         jobs: list[dict[str, Any]] | None = None,
         *,
         cancel_error: RuntimeError | None = None,
-        contexts: list[ci_deadline.WorkflowContext | None] | None = None,
+        snapshots: list[ci_deadline.BudgetSnapshot | None] | None = None,
     ) -> None:
         self.attempts = attempts
         self.jobs = jobs or []
         self.cancel_error = cancel_error
-        self.contexts = (
-            contexts
-            if contexts is not None
-            else [ci_deadline.WorkflowContext(pull_request_number=42)]
+        self.snapshots = (
+            snapshots
+            if snapshots is not None
+            else [ci_deadline.BudgetSnapshot(big_change=False)]
         )
         self.cancelled: list[int] = []
 
@@ -58,42 +57,14 @@ class FakeClient:
         assert run_attempt == 2
         return self.jobs
 
-    def pull_request(self, number: int) -> dict[str, Any]:
-        assert number == 42
-        return {"number": 42, "labels": [], "changed_files": 1}
-
-    def changed_paths(self, number: int, expected_count: int) -> list[str]:
-        assert number == 42
-        assert expected_count == 1
-        return ["src/main.rs"]
-
-    def main_push_associations(
-        self, branch: str, base_sha: str, head_sha: str
-    ) -> SimpleNamespace:
-        assert branch == "main"
-        assert base_sha == "b" * 40
-        assert head_sha == "a" * 40
-        return SimpleNamespace(
-            pull_requests=(self.pull_request(42),),
-            unassociated_commits=(),
-        )
-
-    def merge_queue_pull_requests(
-        self, branch: str, base_sha: str, head_sha: str
-    ) -> list[dict[str, Any]]:
-        assert branch == "main"
-        assert base_sha == "b" * 40
-        assert head_sha == "a" * 40
-        return [self.pull_request(42)]
-
-    def ci_budget_context(
+    def ci_budget_snapshot(
         self, run_id: int, run_attempt: int
-    ) -> ci_deadline.WorkflowContext | None:
+    ) -> ci_deadline.BudgetSnapshot | None:
         assert run_id == 12
         assert run_attempt == 2
-        if not self.contexts:
+        if not self.snapshots:
             return None
-        return self.contexts.pop(0)
+        return self.snapshots.pop(0)
 
     def cancel_workflow_run(self, run_id: int) -> None:
         if self.cancel_error:
@@ -261,14 +232,29 @@ class RequiredGateTests(unittest.TestCase):
 
 
 class CancellationControllerTests(unittest.TestCase):
-    def test_fork_pull_request_uses_source_context_when_payload_is_empty(self) -> None:
+    def test_controller_exits_when_attempt_already_completed(self) -> None:
+        client = FakeClient([attempt(status="completed")], snapshots=[None])
+
+        cancelled = ci_deadline.cancel_at_deadline(
+            client,
+            12,
+            2,
+            timedelta(minutes=5),
+            force_big_change=False,
+            sleep=lambda _: self.fail("completed attempt must not sleep"),
+        )
+
+        assert not cancelled
+        assert not client.cancelled
+
+    def test_fork_pull_request_uses_source_snapshot_when_payload_is_empty(self) -> None:
         fork_attempt = attempt()
         fork_attempt["pull_requests"] = []
         completed = attempt(status="completed")
         completed["pull_requests"] = []
         client = FakeClient(
             [fork_attempt, completed],
-            contexts=[ci_deadline.WorkflowContext(pull_request_number=42)],
+            snapshots=[ci_deadline.BudgetSnapshot(big_change=False)],
         )
         sleeps: list[float] = []
 
@@ -276,10 +262,8 @@ class CancellationControllerTests(unittest.TestCase):
             client,
             12,
             2,
-            ["flake.lock"],
             timedelta(minutes=5),
             force_big_change=False,
-            merge_queue_branch="main",
             now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
             sleep=sleeps.append,
         )
@@ -287,17 +271,15 @@ class CancellationControllerTests(unittest.TestCase):
         assert not cancelled
         assert sleeps == [300]
 
-    def test_missing_source_context_cancels_at_deadline(self) -> None:
-        client = FakeClient([attempt()], contexts=[None])
+    def test_missing_source_snapshot_cancels_at_deadline(self) -> None:
+        client = FakeClient([attempt(), attempt()], snapshots=[None])
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
             12,
             2,
-            ["flake.lock"],
             timedelta(minutes=5),
             force_big_change=False,
-            merge_queue_branch="main",
             now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
             sleep=lambda _: self.fail("elapsed deadline must not sleep"),
         )
@@ -305,10 +287,10 @@ class CancellationControllerTests(unittest.TestCase):
         assert cancelled
         assert client.cancelled == [12]
 
-    def test_main_push_waits_for_authoritative_range_context(self) -> None:
+    def test_main_push_waits_for_classified_snapshot(self) -> None:
         client = FakeClient(
             [attempt(event="push"), attempt(status="completed", event="push")],
-            contexts=[None, ci_deadline.WorkflowContext(base_sha="b" * 40)],
+            snapshots=[None, ci_deadline.BudgetSnapshot(big_change=False)],
         )
         sleeps: list[float] = []
 
@@ -316,10 +298,8 @@ class CancellationControllerTests(unittest.TestCase):
             client,
             12,
             2,
-            ["flake.lock"],
             timedelta(minutes=5),
             force_big_change=False,
-            merge_queue_branch="main",
             now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
             sleep=sleeps.append,
         )
@@ -327,13 +307,13 @@ class CancellationControllerTests(unittest.TestCase):
         assert not cancelled
         assert sleeps == [2, 300]
 
-    def test_merge_group_waits_for_authoritative_range_context(self) -> None:
+    def test_merge_group_waits_for_classified_snapshot(self) -> None:
         client = FakeClient(
             [
                 attempt(event="merge_group"),
                 attempt(status="completed", event="merge_group"),
             ],
-            contexts=[None, ci_deadline.WorkflowContext(base_sha="b" * 40)],
+            snapshots=[None, ci_deadline.BudgetSnapshot(big_change=False)],
         )
         sleeps: list[float] = []
 
@@ -341,10 +321,8 @@ class CancellationControllerTests(unittest.TestCase):
             client,
             12,
             2,
-            ["flake.lock"],
             timedelta(minutes=5),
             force_big_change=False,
-            merge_queue_branch="main",
             now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
             sleep=sleeps.append,
         )
@@ -359,10 +337,8 @@ class CancellationControllerTests(unittest.TestCase):
             client,
             12,
             2,
-            ["flake.lock"],
             timedelta(minutes=5),
             force_big_change=False,
-            merge_queue_branch="main",
             now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
             sleep=lambda _: self.fail("elapsed deadline must not sleep"),
         )
@@ -377,10 +353,8 @@ class CancellationControllerTests(unittest.TestCase):
             client,
             12,
             2,
-            ["flake.lock"],
             timedelta(minutes=5),
             force_big_change=False,
-            merge_queue_branch="main",
             now=lambda: datetime(2026, 7, 15, 10, 5, tzinfo=UTC),
             sleep=lambda _: self.fail("elapsed deadline must not sleep"),
         )
@@ -395,11 +369,26 @@ class CancellationControllerTests(unittest.TestCase):
             client,
             12,
             2,
-            ["flake.lock"],
             timedelta(minutes=5),
             force_big_change=True,
-            merge_queue_branch="main",
             sleep=lambda _: self.fail("big change must not sleep"),
+        )
+
+        assert not cancelled
+
+    def test_source_snapshot_freezes_big_change_exemption(self) -> None:
+        client = FakeClient(
+            [attempt()],
+            snapshots=[ci_deadline.BudgetSnapshot(big_change=True)],
+        )
+
+        cancelled = ci_deadline.cancel_at_deadline(
+            client,
+            12,
+            2,
+            timedelta(minutes=5),
+            force_big_change=False,
+            sleep=lambda _: self.fail("extended snapshot must not sleep"),
         )
 
         assert not cancelled
@@ -412,10 +401,8 @@ class CancellationControllerTests(unittest.TestCase):
                 controller,
                 12,
                 2,
-                ["flake.lock"],
                 timedelta(minutes=5),
                 force_big_change=False,
-                merge_queue_branch="main",
                 now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
                 sleep=lambda _: self.fail("elapsed deadline must not sleep"),
             )

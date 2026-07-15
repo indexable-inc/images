@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import tempfile
 import unittest
 import urllib.parse
 import urllib.request
@@ -153,13 +154,13 @@ class GitHubClientTests(unittest.TestCase):
         assert result.reason["sources"] == ["label"]
         assert not transport.requests
 
-    def test_context_artifact_carries_push_base_sha(self) -> None:
+    def test_snapshot_artifact_carries_standard_decision(self) -> None:
         transport = FakeTransport(
             [
                 {
                     "artifacts": [
                         {
-                            "name": "ci-budget-context-12-2-base-" + "a" * 40,
+                            "name": "ci-budget-snapshot-12-2-standard",
                             "expired": False,
                         }
                     ]
@@ -168,17 +169,17 @@ class GitHubClientTests(unittest.TestCase):
         )
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
 
-        assert client.ci_budget_context(12, 2) == ci_budget.WorkflowContext(
-            base_sha="a" * 40
+        assert client.ci_budget_snapshot(12, 2) == ci_budget.BudgetSnapshot(
+            big_change=False
         )
 
-    def test_partial_rerun_inherits_consistent_context(self) -> None:
+    def test_partial_rerun_inherits_consistent_snapshot(self) -> None:
         transport = FakeTransport(
             [
                 {
                     "artifacts": [
                         {
-                            "name": "ci-budget-context-12-1-base-" + "a" * 40,
+                            "name": "ci-budget-snapshot-12-1-standard",
                             "expired": False,
                         }
                     ]
@@ -187,17 +188,17 @@ class GitHubClientTests(unittest.TestCase):
         )
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
 
-        assert client.ci_budget_context(12, 2) == ci_budget.WorkflowContext(
-            base_sha="a" * 40
+        assert client.ci_budget_snapshot(12, 2) == ci_budget.BudgetSnapshot(
+            big_change=False
         )
 
-    def test_context_artifact_preserves_fork_pull_request_identity(self) -> None:
+    def test_snapshot_artifact_preserves_fork_budget_decision(self) -> None:
         transport = FakeTransport(
             [
                 {
                     "artifacts": [
                         {
-                            "name": "ci-budget-context-12-2-pr-42",
+                            "name": "ci-budget-snapshot-12-2-extended",
                             "expired": False,
                         }
                     ]
@@ -206,9 +207,26 @@ class GitHubClientTests(unittest.TestCase):
         )
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
 
-        assert client.ci_budget_context(12, 2) == ci_budget.WorkflowContext(
-            pull_request_number=42
+        assert client.ci_budget_snapshot(12, 2) == ci_budget.BudgetSnapshot(
+            big_change=True
         )
+
+    def test_snapshot_file_freezes_head_and_classification(self) -> None:
+        classification = ci_budget.Classification(
+            big_change=True,
+            reason={"sources": ["label"], "matches": []},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "snapshot.json"
+
+            snapshot = ci_budget.write_snapshot(path, classification, "a" * 40)
+
+            assert snapshot == ci_budget.BudgetSnapshot(big_change=True)
+            assert json.loads(path.read_text()) == {
+                "big_change": True,
+                "head_sha": "a" * 40,
+                "reason": {"sources": ["label"], "matches": []},
+            }
 
     def test_owned_sticky_comment_is_updated(self) -> None:
         transport = FakeTransport(
