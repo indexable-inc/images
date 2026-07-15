@@ -39,6 +39,14 @@ export function parseBoolean(value, name) {
   throw new Error(`${name} must be true or false`);
 }
 
+export function parseArguments(value) {
+  const parsed = JSON.parse(value);
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
+    throw new Error("arguments must be a JSON array of strings");
+  }
+  return parsed;
+}
+
 export function loadPolicy(
   path = resolve(actionDirectory, "..", "policy.json"),
 ) {
@@ -174,6 +182,7 @@ function signalExitCode(signal) {
 
 export async function runBudgetedScript({
   graceSeconds,
+  scriptArguments = [],
   scriptPath,
   validationSeconds: allowedSeconds,
   workspace,
@@ -186,7 +195,7 @@ export async function runBudgetedScript({
     throw new Error("script must stay inside GITHUB_WORKSPACE");
   }
 
-  const child = spawn("bash", [absoluteScript], {
+  const child = spawn("bash", [absoluteScript, ...scriptArguments], {
     cwd: workspace,
     detached: true,
     env: process.env,
@@ -275,6 +284,7 @@ export async function main() {
   });
   return runBudgetedScript({
     graceSeconds: policy.termination_grace_seconds,
+    scriptArguments: parseArguments(input("arguments") || "[]"),
     scriptPath,
     validationSeconds: allowedSeconds,
     workspace: process.env.GITHUB_WORKSPACE ?? "",
