@@ -21,22 +21,6 @@
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
   repoRoot = configRoot;
   repoFile = rel: repoRoot + "/${rel}";
-  nushellRoot = repoFile "nushell";
-  nushellFiles = lib.filesystem.listFilesRecursive nushellRoot;
-  nushellRelativePath = file:
-    lib.removePrefix "${toString nushellRoot}/" (toString file);
-  nushellMutableFiles = lib.genAttrs' nushellFiles (
-    source: let
-      relativePath = nushellRelativePath source;
-    in
-      lib.nameValuePair "Library/Application Support/nushell/${relativePath}" {
-        inherit source;
-        format = "text";
-        persistence = "durable";
-        sourceFile = "users/andrewgazelka/config/nushell/${relativePath}";
-        declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
-      }
-  );
   structured = import (configRoot + "/settings/structured.nix");
   jsonFormat = pkgs.formats.json {};
   tomlFormat = pkgs.formats.toml {};
@@ -121,6 +105,7 @@ in {
   # General Raycast Focus module lives in index (homeModules.raycast); this is
   # the personal config consuming it. Mechanism in index, values here.
   imports = [
+    (import ./nushell.nix {inherit configRoot;})
     optionsModule
     raycastModule
     # Ghostty config, generated from Nix (home/ghostty.nix). Replaces the former
@@ -415,76 +400,74 @@ in {
   # replaces the old mutable-json last-applied merge). Durable — app edits
   # survive, base-vs-drift conflicts queue in `index-delta status` — and a
   # pre-existing file is kept as day-one drift, never clobbered.
-  mutable.files =
-    {
-      "Library/Application Support/Claude/claude_desktop_config.json" = {
-        source = jsonFormat.generate "andrewgazelka-claude-desktop.json" {
-          globalShortcut = "";
-          mcpServers.ix = {
-            type = "http";
-            url = "https://mcp.ix.dev/mcp";
-            headers = {};
-          };
-          preferences = {
-            quickEntryShortcut = "off";
-            quickEntryDictationShortcut = "off";
-            localAgentModeTrustedFolders = [cfg.paths.ixCheckout];
-            coworkScheduledTasksEnabled = true;
-            ccdScheduledTasksEnabled = true;
-            sidebarMode = "code";
-            bypassPermissionsModeEnabled = true;
-            coworkWebSearchEnabled = true;
-            coworkOnboardingResumeStep = null;
-            keepAwakeEnabled = true;
-            dispatchCodeTasksPermissionMode = "bypassPermissions";
-          };
+  mutable.files = {
+    "Library/Application Support/Claude/claude_desktop_config.json" = {
+      source = jsonFormat.generate "andrewgazelka-claude-desktop.json" {
+        globalShortcut = "";
+        mcpServers.ix = {
+          type = "http";
+          url = "https://mcp.ix.dev/mcp";
+          headers = {};
         };
-        persistence = "durable";
-        declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
-      };
-      "Library/Application Support/Cursor/User/settings.json" = {
-        source = jsonFormat.generate "andrewgazelka-cursor-settings.json" cursorSettings;
-        persistence = "durable";
-        declaredAt = "users/andrewgazelka/config/settings/structured.nix";
-      };
-      "Library/Application Support/Code/User/settings.json" = {
-        source = jsonFormat.generate "andrewgazelka-vscode-settings.json" cursorSettings;
-        persistence = "durable";
-        declaredAt = "users/andrewgazelka/config/settings/structured.nix";
-      };
-      "Library/Application Support/rbw/config.json" = {
-        source = jsonFormat.generate "andrewgazelka-rbw-config.json" {
-          email = cfg.rbw.email;
-          base_url = cfg.rbw.baseUrl;
-          pinentry = "${cfg.paths.privateConfigDirectory}/rbw/op-pinentry.sh";
-          lock_timeout = 3600;
-          sync_interval = 3600;
+        preferences = {
+          quickEntryShortcut = "off";
+          quickEntryDictationShortcut = "off";
+          localAgentModeTrustedFolders = [cfg.paths.ixCheckout];
+          coworkScheduledTasksEnabled = true;
+          ccdScheduledTasksEnabled = true;
+          sidebarMode = "code";
+          bypassPermissionsModeEnabled = true;
+          coworkWebSearchEnabled = true;
+          coworkOnboardingResumeStep = null;
+          keepAwakeEnabled = true;
+          dispatchCodeTasksPermissionMode = "bypassPermissions";
         };
-        persistence = "durable";
-        declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
       };
-      "Library/Application Support/Cursor/User/keybindings.json" = {
-        source =
-          jsonFormat.generate "andrewgazelka-cursor-keybindings.json"
-          (import (configRoot + "/cursor/keybindings.nix"));
-        persistence = "durable";
-        declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
+    };
+    "Library/Application Support/Cursor/User/settings.json" = {
+      source = jsonFormat.generate "andrewgazelka-cursor-settings.json" cursorSettings;
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/settings/structured.nix";
+    };
+    "Library/Application Support/Code/User/settings.json" = {
+      source = jsonFormat.generate "andrewgazelka-vscode-settings.json" cursorSettings;
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/settings/structured.nix";
+    };
+    "Library/Application Support/rbw/config.json" = {
+      source = jsonFormat.generate "andrewgazelka-rbw-config.json" {
+        email = cfg.rbw.email;
+        base_url = cfg.rbw.baseUrl;
+        pinentry = "${cfg.paths.privateConfigDirectory}/rbw/op-pinentry.sh";
+        lock_timeout = 3600;
+        sync_interval = 3600;
       };
-      "Library/Application Support/Code/User/keybindings.json" = {
-        source =
-          jsonFormat.generate "andrewgazelka-vscode-keybindings.json"
-          (import (configRoot + "/cursor/keybindings.nix"));
-        persistence = "durable";
-        declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
-      };
-      # Bacon persists preference edits (`bacon --prefs`) into this file.
-      "Library/Application Support/org.dystroy.bacon/prefs.toml" = {
-        source = tomlFormat.generate "andrewgazelka-bacon-prefs.toml" structured.bacon-prefs.value;
-        persistence = "durable";
-        declaredAt = "users/andrewgazelka/config/settings/structured.nix";
-      };
-    }
-    // nushellMutableFiles;
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
+    };
+    "Library/Application Support/Cursor/User/keybindings.json" = {
+      source =
+        jsonFormat.generate "andrewgazelka-cursor-keybindings.json"
+        (import (configRoot + "/cursor/keybindings.nix"));
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
+    };
+    "Library/Application Support/Code/User/keybindings.json" = {
+      source =
+        jsonFormat.generate "andrewgazelka-vscode-keybindings.json"
+        (import (configRoot + "/cursor/keybindings.nix"));
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
+    };
+    # Bacon persists preference edits (`bacon --prefs`) into this file.
+    "Library/Application Support/org.dystroy.bacon/prefs.toml" = {
+      source = tomlFormat.generate "andrewgazelka-bacon-prefs.toml" structured.bacon-prefs.value;
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/settings/structured.nix";
+    };
+  };
 
   # Zen browser
   home.file."Library/Application Support/zen/Profiles/nu2gused.Default (release)/chrome".source =
