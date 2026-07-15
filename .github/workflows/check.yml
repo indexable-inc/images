@@ -88,8 +88,24 @@ jobs:
     # with a warm, persistent /nix/store. See the ix repo's ci.yml for the
     # label scheme.
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-flake-check', github.run_id, github.run_attempt) }}"]
-    timeout-minutes: ${{ needs.ci-budget.outputs.big_change == 'true' && 60 || 5 }}
+    # Assignment-relative backstop. The worker action below owns independent
+    # queue, setup, validation, and cleanup clocks; this job timeout is only a
+    # final runner-level guard.
+    timeout-minutes: ${{ fromJSON(needs.ci-budget.outputs.worker_timeout_minutes) }}
+    permissions:
+      actions: read
+      contents: read
     steps:
+      - name: Enforce runner queue admission
+        uses: indexable-inc/index/.github/actions/ci-budget/worker@main
+        with:
+          mode: check
+          repository: ${{ github.repository }}
+          token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          big-change: ${{ needs.ci-budget.outputs.big_change }}
+
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -101,43 +117,22 @@ jobs:
       - name: Bootstrap patched Nix client
         uses: ./.github/actions/bootstrap-patched-nix
 
-      # The global clone budget also runs inside `.#check`, but that derivation
-      # intentionally has no `.git`. Run the zero-tolerance changed-line gate
-      # in the checkout so a PR cannot add duplication while staying under the
-      # repository-wide percentage ratchet.
-      - name: Reject duplication on changed lines
-        # Warm runs finish in minutes; the only way this step reaches double
-        # digits is a wedged nix daemon (index#2750 ate the whole 60-minute job
-        # limit across every PR). Fail fast and loudly instead.
-        timeout-minutes: 15
+      # One budgeted process group owns both the changed-line clone gate and the
+      # required-root Nix gate. The worker action starts a fresh validation clock
+      # after setup, terminates the whole descendant group on timeout or cancel,
+      # and leaves queue time out of the build budget.
+      - name: Run required gate within its validation clock
+        uses: indexable-inc/index/.github/actions/ci-budget/worker@main
+        with:
+          mode: run
+          repository: ${{ github.repository }}
+          token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          big-change: ${{ needs.ci-budget.outputs.big_change }}
+          script: .github/scripts/run-required-gate.sh
         env:
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            # index#3038: the event base can predate the synthetic merge that
-            # checkout regenerates after main advances. Its first parent is the
-            # base whose tree the checked-out PR contribution was merged into.
-            base_sha="$(git rev-parse --verify HEAD^1)"
-          else
-            base_sha="${EVENT_BASE_SHA}"
-          fi
-          nix run .#clone -- . --diff "${base_sha}" > /dev/null
-
-      # Run the required gate through the repo-owned `check` app
-      # (lib/per-system.nix): one bounded nix-fast-build evaluator owns the
-      # namespaced union of ciChecks and cachePushRoots, then nix-eval-jobs
-      # validates packages with the JSON error-line gate. The
-      # command-specific rationale (tool choice, the worker/memory tuning, why the
-      # eval cache is off, the error-line gate) and the pinned tool revisions live
-      # next to that wrapper. The job inherits NIX_CONFIG (above), so the inner
-      # builds still see `gccarch-znver5` and the eval knobs. Branch protection
-      # requires a status named `flake-check`; this job is it, and it fails iff a
-      # check fails to build or the flake stops evaluating.
-      - name: Build all flake checks
-        uses: ./.github/actions/check-logged
-        with:
-          subcommand: required
 
       # The `check` app writes nix-fast-build per-attr durations to
       # check-results.json in the workspace (see lib/per-system.nix). Upload it
