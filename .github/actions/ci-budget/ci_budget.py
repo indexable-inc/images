@@ -555,6 +555,29 @@ def pull_requests_for_attempt(
     merge_queue_branch: str,
     push_base_sha: str | None,
 ) -> list[JsonObject]:
+    event = attempt.get("event")
+    head_sha = attempt.get("head_sha")
+    if event in {"merge_group", "push"} and not isinstance(head_sha, str):
+        raise RuntimeError("GitHub API workflow attempt has no head SHA")
+    if event == "merge_group":
+        assert isinstance(head_sha, str)
+        parents = client.commit_parents(head_sha)
+        if len(parents) != 1:
+            raise RuntimeError(
+                f"merge group head {head_sha} has {len(parents)} parents; "
+                "expected exactly one"
+            )
+        return client.merge_queue_pull_requests(
+            merge_queue_branch, parents[0], head_sha
+        )
+    if event == "push":
+        assert isinstance(head_sha, str)
+        if push_base_sha is None:
+            raise RuntimeError("push workflow classification requires its base SHA")
+        return client.main_push_pull_requests(
+            merge_queue_branch, push_base_sha, head_sha
+        )
+
     raw_pull_requests = attempt.get("pull_requests")
     if not isinstance(raw_pull_requests, list) or not all(
         isinstance(item, dict) for item in raw_pull_requests
@@ -566,25 +589,7 @@ def pull_requests_for_attempt(
         number = pull_request_number(raw_pull_requests[0], "workflow attempt")
         return [client.pull_request(number)]
 
-    event = attempt.get("event")
-    if event not in {"merge_group", "push"}:
-        raise RuntimeError(f"{event!r} workflow attempt identifies no pull request")
-    head_sha = attempt.get("head_sha")
-    if not isinstance(head_sha, str):
-        raise RuntimeError("GitHub API workflow attempt has no head SHA")
-    if event == "merge_group":
-        parents = client.commit_parents(head_sha)
-        if len(parents) != 1:
-            raise RuntimeError(
-                f"merge group head {head_sha} has {len(parents)} parents; "
-                "expected exactly one"
-            )
-        return client.merge_queue_pull_requests(
-            merge_queue_branch, parents[0], head_sha
-        )
-    if push_base_sha is None:
-        raise RuntimeError("push workflow classification requires its base SHA")
-    return client.main_push_pull_requests(merge_queue_branch, push_base_sha, head_sha)
+    raise RuntimeError(f"{event!r} workflow attempt identifies no pull request")
 
 
 def classify_workflow_attempt(
