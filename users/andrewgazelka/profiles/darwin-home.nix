@@ -105,6 +105,7 @@ in {
   # General Raycast Focus module lives in index (homeModules.raycast); this is
   # the personal config consuming it. Mechanism in index, values here.
   imports = [
+    (import ./nushell.nix {inherit configRoot;})
     optionsModule
     raycastModule
     # Ghostty config, generated from Nix (home/ghostty.nix). Replaces the former
@@ -475,23 +476,6 @@ in {
   # Beeper
   home.file."Library/Application Support/BeeperTexts/custom.css".source =
     repoFile "beeper/custom.css";
-
-  # Nushell writes runtime state beside its config on macOS. Link the managed
-  # files recursively so Library/Application Support/nushell stays writable.
-  home.file."Library/Application Support/nushell" = {
-    source = repoFile "nushell";
-    recursive = true;
-  };
-
-  # Home Manager does not replace a managed directory symlink when its source
-  # changes to recursive leaf links. Remove that legacy link before collision
-  # checks so linkGeneration can create the writable parent directory.
-  home.activation.migrateNushellDataDirectory = config.lib.dag.entryBefore ["checkLinkTargets"] ''
-    dataDir=${lib.escapeShellArg "${config.home.homeDirectory}/Library/Application Support/nushell"}
-    if [[ -L "$dataDir" ]] && [[ $(readlink "$dataDir") == /nix/store/*-home-manager-files/* ]]; then
-      run rm "$dataDir"
-    fi
-  '';
 
   # rbw (Vaultwarden CLI). On macOS rbw reads its config from
   # Library/Application Support, not XDG, so the upstream programs.rbw module
