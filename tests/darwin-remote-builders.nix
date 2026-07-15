@@ -1,8 +1,12 @@
 {
+  ix,
   lib,
   pkgs,
   paths,
 }: let
+  renderBuildMachine = import (paths.root + "/lib/nix/build-machine.nix") {
+    inherit lib;
+  };
   assertionsType = lib.types.listOf (lib.types.submodule {
     options = {
       assertion = lib.mkOption {type = lib.types.bool;};
@@ -24,6 +28,10 @@
         type = lib.types.attrsOf etcFileType;
         default = {};
       };
+      environment.systemPackages = lib.mkOption {
+        type = lib.types.listOf lib.types.package;
+        default = [];
+      };
       nix = {
         buildMachines = lib.mkOption {
           type = lib.types.listOf lib.types.raw;
@@ -37,6 +45,10 @@
           type = lib.types.attrsOf lib.types.str;
           default = {};
         };
+        package = lib.mkOption {
+          type = lib.types.nullOr lib.types.package;
+          default = pkgs.nix;
+        };
       };
     };
   };
@@ -45,7 +57,10 @@
     (lib.evalModules {
       modules = [
         optionStubs
-        (paths.root + "/modules/darwin/remote-builders.nix")
+        (import (paths.root + "/modules/darwin/remote-builders") {
+          inherit renderBuildMachine;
+          inherit (ix) writePythonApplication;
+        })
         extraModule
       ];
     }).config;
@@ -71,6 +86,7 @@
       }
       {
         name = "cluster-builder";
+        access = "protected";
         hostName = "cluster-builder.example.com";
         user = "builder";
         sshKey = "/etc/nix/cluster_ed25519";
@@ -87,6 +103,30 @@
         };
       }
     ];
+  };
+  protectedOnly = eval {
+    nix.remoteBuilders = [
+      {
+        name = "cluster-builder";
+        access = "protected";
+        hostName = "cluster-builder.example.com";
+        sshKey = "/etc/nix/cluster_ed25519";
+        systems = ["x86_64-linux"];
+      }
+    ];
+  };
+  missingNix = eval {
+    nix = {
+      package = null;
+      remoteBuilders = [
+        {
+          name = "cluster-builder";
+          access = "protected";
+          hostName = "cluster-builder.example.com";
+          systems = ["x86_64-linux"];
+        }
+      ];
+    };
   };
 
   duplicate = eval {
@@ -115,6 +155,7 @@
   };
 
   sshConfig = configured.environment.etc."ssh/ssh_config.d/000-index-remote-builders.conf".text;
+  policy = builtins.fromJSON configured.environment.etc."nix/protected-builders.json".text;
 
   assertions = [
     {
@@ -148,20 +189,60 @@
             ];
             systems = ["aarch64-linux"];
           }
-          {
-            hostName = "cluster-builder";
-            mandatoryFeatures = ["benchmark"];
-            maxJobs = 32;
-            protocol = "ssh-ng";
-            publicHostKey = "c3NoLWVkMjU1MTkgQUFBQQ==";
-            speedFactor = 4;
-            sshKey = "/etc/nix/cluster_ed25519";
-            sshUser = "builder";
-            supportedFeatures = ["benchmark"];
-            systems = ["x86_64-linux"];
-          }
         ];
-      message = "structured builder records must map losslessly to nix.buildMachines";
+      message = "only ambient builder records must map to nix.buildMachines";
+    }
+    {
+      assertion =
+        policy
+        == {
+          version = 1;
+          maxTtlSeconds = 3600;
+          cancelGraceSeconds = 5;
+          verifyTimeoutSeconds = 30;
+          builders.cluster-builder = {
+            name = "cluster-builder";
+            machine = "ssh-ng://builder@cluster-builder x86_64-linux /etc/nix/cluster_ed25519 32 4 benchmark benchmark c3NoLWVkMjU1MTkgQUFBQQ==";
+          };
+        };
+      message = "protected builder records must render into the checked authorization policy";
+    }
+    {
+      assertion =
+        renderBuildMachine {
+          hostName = "builder";
+          mandatoryFeatures = [];
+          maxJobs = 1;
+          protocol = "ssh-ng";
+          publicHostKey = null;
+          speedFactor = 1;
+          sshKey = null;
+          sshUser = "root";
+          supportedFeatures = [];
+          systems = ["aarch64-linux"];
+        }
+        == "ssh-ng://root@builder aarch64-linux - 1 1 - - -";
+      message = "the Nix build-machine renderer must preserve empty optional columns";
+    }
+    {
+      assertion = builtins.length configured.environment.systemPackages == 1;
+      message = "a protected builder must install exactly one authorization command";
+    }
+    {
+      assertion =
+        !protectedOnly.nix.distributedBuilds
+        && protectedOnly.nix.buildMachines == []
+        && protectedOnly.environment.etc ? "nix/protected-builders.json";
+      message = "a protected-only configuration must fail closed for ambient Nix commands";
+    }
+    {
+      assertion =
+        missingNix.environment.systemPackages == []
+        && lib.any (
+          item: !item.assertion && item.message == "protected nix.remoteBuilders require nix.package"
+        )
+        missingNix.assertions;
+      message = "protected builders without a Nix package must produce a failing module assertion";
     }
     {
       assertion =
@@ -216,6 +297,10 @@ in
   assert lib.assertMsg (failures == []) (
     "darwin-remote-builders:\n  " + lib.concatStringsSep "\n  " failures
   );
-    pkgs.runCommand "ix-test-darwin-remote-builders" {__structuredAttrs = true;} ''
+    pkgs.runCommand "ix-test-darwin-remote-builders" {
+      __structuredAttrs = true;
+      nativeBuildInputs = [pkgs.python3];
+    } ''
+      python ${paths.root + "/modules/darwin/remote-builders/test_protected_build.py"}
       mkdir -p "$out"
     ''

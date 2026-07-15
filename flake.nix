@@ -547,10 +547,14 @@
       # direct-map line, /etc/auto_master gains the include idempotently, and
       # activation reloads automountd. See modules/darwin/nfs.nix.
       nfs = ./modules/darwin/nfs.nix;
-      # One typed source for nix.buildMachines and matching system OpenSSH
-      # stanzas, with connection multiplexing disabled for Nix's ssh-ng
-      # protocol. See modules/darwin/remote-builders.nix.
-      remote-builders = ./modules/darwin/remote-builders.nix;
+      # One typed source for ambient and explicitly authorized remote builders,
+      # plus matching hardened OpenSSH stanzas. See modules/darwin/remote-builders.
+      remote-builders = import ./modules/darwin/remote-builders {
+        inherit (ix) writePythonApplication;
+        renderBuildMachine = import ./lib/nix/build-machine.nix {
+          inherit lib;
+        };
+      };
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a

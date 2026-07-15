@@ -1,9 +1,14 @@
 {
+  renderBuildMachine,
+  writePythonApplication,
+}: {
   config,
   lib,
+  pkgs,
   ...
 }: let
   cfg = config.nix.remoteBuilders;
+  protectedCfg = config.nix.protectedBuilders;
 
   tokenType = lib.types.strMatching "[^ \t\r\n]+";
   commandType = lib.types.strMatching "[^\r\n]+";
@@ -29,6 +34,18 @@
         type = userType;
         default = "root";
         description = "Remote SSH user.";
+      };
+
+      access = lib.mkOption {
+        type = lib.types.enum [
+          "ambient"
+          "protected"
+        ];
+        default = "ambient";
+        description = ''
+          Whether ordinary Nix commands may schedule this builder. Protected
+          builders are available only through protected-nix-build.
+        '';
       };
 
       sshKey = lib.mkOption {
@@ -230,27 +247,62 @@
     + "\n";
 
   builderNames = map (builder: builder.name) cfg;
+  ambientBuilders = lib.filter (builder: builder.access == "ambient") cfg;
+  protectedBuilders = lib.filter (builder: builder.access == "protected") cfg;
+  policyPath = "/etc/nix/protected-builders.json";
+  protectedNixBuild = writePythonApplication pkgs {
+    name = "protected-nix-build";
+    src = ./protected_build.py;
+    args = [
+      policyPath
+      (lib.getExe config.nix.package)
+      "/usr/bin/logger"
+    ];
+    meta.description = "Run a time-bounded Nix build on explicit protected builders";
+  };
 in {
-  options.nix.remoteBuilders = lib.mkOption {
-    type = lib.types.listOf builderType;
-    default = [];
-    example = lib.literalExpression ''
-      [
-        {
-          name = "linux-builder";
-          hostName = "builder.example.com";
-          user = "root";
-          sshKey = "/etc/nix/builder_ed25519";
-          systems = [ "aarch64-linux" ];
-          maxJobs = 8;
-          supportedFeatures = [ "big-parallel" "kvm" ];
-        }
-      ]
-    '';
-    description = ''
-      Remote Nix builders. Each record produces both a nix.buildMachines
-      entry and a protocol-safe system OpenSSH stanza. Empty by default.
-    '';
+  options.nix = {
+    remoteBuilders = lib.mkOption {
+      type = lib.types.listOf builderType;
+      default = [];
+      example = lib.literalExpression ''
+        [
+          {
+            name = "linux-builder";
+            hostName = "builder.example.com";
+            user = "root";
+            sshKey = "/etc/nix/builder_ed25519";
+            systems = [ "aarch64-linux" ];
+            maxJobs = 8;
+            supportedFeatures = [ "big-parallel" "kvm" ];
+          }
+        ]
+      '';
+      description = ''
+        Remote Nix builders. Ambient records produce nix.buildMachines
+        entries. Every record produces a protocol-safe system OpenSSH stanza.
+      '';
+    };
+
+    protectedBuilders = {
+      maxTtlSeconds = lib.mkOption {
+        type = lib.types.ints.between 1 86400;
+        default = 3600;
+        description = "Maximum duration of one protected build authorization.";
+      };
+
+      cancelGraceSeconds = lib.mkOption {
+        type = lib.types.ints.between 1 60;
+        default = 5;
+        description = "Grace period between terminating and killing the Nix client process group.";
+      };
+
+      verifyTimeoutSeconds = lib.mkOption {
+        type = lib.types.ints.between 1 300;
+        default = 30;
+        description = "Time allowed for cancelled work to disappear from the daemon build status.";
+      };
+    };
   };
 
   config = lib.mkIf (cfg != []) {
@@ -267,11 +319,15 @@ in {
         assertion = lib.all (builder: builder.sshKey == null || !lib.hasPrefix "${builtins.storeDir}/" builder.sshKey) cfg;
         message = "nix.remoteBuilders sshKey values must not point into the Nix store";
       }
+      {
+        assertion = protectedBuilders == [] || config.nix.package != null;
+        message = "protected nix.remoteBuilders require nix.package";
+      }
     ];
 
     nix = {
-      buildMachines = map machineFor cfg;
-      distributedBuilds = true;
+      buildMachines = map machineFor ambientBuilders;
+      distributedBuilds = ambientBuilders != [];
       envVars.NIX_SSHOPTS = lib.escapeShellArgs [
         "-F"
         "/etc/ssh/ssh_config"
@@ -283,5 +339,29 @@ in {
     # cannot silently re-enable multiplexing for Nix protocol streams.
     environment.etc."ssh/ssh_config.d/000-index-remote-builders.conf".text =
       lib.concatMapStrings renderSshConfig cfg;
+
+    environment.etc."nix/protected-builders.json" = lib.mkIf (protectedBuilders != []) {
+      text = builtins.toJSON {
+        version = 1;
+        inherit
+          (protectedCfg)
+          cancelGraceSeconds
+          maxTtlSeconds
+          verifyTimeoutSeconds
+          ;
+        builders = lib.listToAttrs (
+          map (builder:
+            lib.nameValuePair builder.name {
+              inherit (builder) name;
+              machine = renderBuildMachine (machineFor builder);
+            })
+          protectedBuilders
+        );
+      };
+    };
+
+    environment.systemPackages = lib.optional (
+      protectedBuilders != [] && config.nix.package != null
+    ) protectedNixBuild;
   };
 }

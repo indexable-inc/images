@@ -29,6 +29,7 @@
   };
   darwinRemoteBuildersTest = import ./darwin-remote-builders.nix {
     inherit
+      ix
       lib
       pkgs
       paths
