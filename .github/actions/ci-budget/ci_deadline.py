@@ -9,16 +9,12 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from ci_budget import (
+    BudgetSnapshot,
     GitHubClient,
     JsonObject,
-    WorkflowContext,
-    classify_workflow_attempt,
-    load_canonical_globs,
     parse_bool,
-    parse_globs,
     parse_positive_int,
 )
 from ci_policy import STANDARD_BUDGET, parse_timestamp
@@ -89,45 +85,44 @@ def cancel_at_deadline(
     client: GitHubClient,
     run_id: int,
     run_attempt: int,
-    globs: Sequence[str],
     budget: timedelta,
     *,
     force_big_change: bool,
-    merge_queue_branch: str,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
     attempt = client.workflow_attempt(run_id, run_attempt)
     started_at = parse_timestamp(attempt.get("run_started_at"), "run_started_at")
     deadline = started_at + budget
-    event_context = None
-    if not force_big_change:
-        while event_context is None:
-            event_context = client.ci_budget_context(run_id, run_attempt)
-            remaining = (deadline - now()).total_seconds()
-            if event_context is None and remaining <= 0:
-                print(
-                    "::error title=CI total deadline exceeded::"
-                    "source workflow did not publish its event context before "
-                    f"{deadline.isoformat()}"
-                )
-                client.cancel_workflow_run(run_id)
-                return True
-            if event_context is None:
-                sleep(min(2, remaining))
-    classification = classify_workflow_attempt(
-        client,
-        attempt,
-        globs,
-        force_big_change=force_big_change,
-        merge_queue_branch=merge_queue_branch,
-        event_base_sha=event_context.base_sha if event_context else None,
-        event_pull_request_number=(
-            event_context.pull_request_number if event_context else None
-        ),
-    )
-    if classification.big_change:
-        print(json.dumps(classification.reason, separators=(",", ":")))
+    if force_big_change:
+        return False
+    status = attempt.get("status")
+    if not isinstance(status, str):
+        raise RuntimeError("GitHub API workflow attempt has no status")
+    if status == "completed":
+        print("workflow attempt completed before its budget controller started")
+        return False
+
+    snapshot = None
+    while snapshot is None:
+        snapshot = client.ci_budget_snapshot(run_id, run_attempt)
+        remaining = (deadline - now()).total_seconds()
+        if snapshot is None and remaining <= 0:
+            refreshed = client.workflow_attempt(run_id, run_attempt)
+            if refreshed.get("status") == "completed":
+                print("workflow attempt completed before its budget snapshot")
+                return False
+            print(
+                "::error title=CI total deadline exceeded::"
+                "source workflow did not publish its budget snapshot before "
+                f"{deadline.isoformat()}"
+            )
+            client.cancel_workflow_run(run_id)
+            return True
+        if snapshot is None:
+            sleep(min(2, remaining))
+    if snapshot.big_change:
+        print('{"big_change":true,"source":"attempt_snapshot"}')
         return False
 
     remaining = (deadline - now()).total_seconds()
@@ -173,22 +168,14 @@ def main() -> int:
         )
         return 0
     if mode == "cancel":
-        globs = load_canonical_globs(Path(__file__).with_name("costly-paths"))
-        globs.extend(
-            parse_globs(
-                os.environ["CI_BUDGET_EXTRA_COSTLY_PATHS"], "extra-costly-paths"
-            )
-        )
         cancel_at_deadline(
             client,
             run_id,
             run_attempt,
-            globs,
             STANDARD_BUDGET,
             force_big_change=parse_bool(
                 os.environ["CI_BUDGET_FORCE_BIG_CHANGE"], "force-big-change"
             ),
-            merge_queue_branch=os.environ["CI_BUDGET_MERGE_QUEUE_BRANCH"],
         )
         return 0
     raise ValueError(f"unknown deadline mode {mode!r}")

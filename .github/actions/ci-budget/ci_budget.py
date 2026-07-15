@@ -21,7 +21,7 @@ from ci_policy import standard_deadline, standard_minutes, worker_timeout_minute
 BIG_CHANGE_LABEL = "ci/big-change"
 COMMENT_MARKER = "<!-- ci-budget -->"
 MAX_PULL_REQUEST_FILES = 3000
-CI_BUDGET_CONTEXT_PREFIX = "ci-budget-context"
+CI_BUDGET_SNAPSHOT_PREFIX = "ci-budget-snapshot"
 MERGE_QUEUE_ENTRIES_QUERY = """
 query MergeQueueEntries(
   $owner: String!
@@ -67,26 +67,16 @@ class PushAssociations:
 
 
 @dataclass(frozen=True)
-class WorkflowContext:
-    base_sha: str | None = None
-    pull_request_number: int | None = None
+class BudgetSnapshot:
+    big_change: bool
 
     def __post_init__(self) -> None:
-        if (self.base_sha is None) == (self.pull_request_number is None):
-            raise ValueError(
-                "workflow context requires exactly one event base or pull request"
-            )
-        if self.base_sha is not None:
-            validate_sha(self.base_sha, "workflow context base SHA")
-        if self.pull_request_number is not None and self.pull_request_number <= 0:
-            raise ValueError("workflow context pull request must be positive")
+        if not isinstance(self.big_change, bool):
+            raise ValueError("budget snapshot big_change must be boolean")
 
     @property
     def artifact_key(self) -> str:
-        if self.base_sha is not None:
-            return f"base-{self.base_sha}"
-        assert self.pull_request_number is not None
-        return f"pr-{self.pull_request_number}"
+        return "extended" if self.big_change else "standard"
 
 
 def parse_bool(value: str, name: str) -> bool:
@@ -458,10 +448,10 @@ class GitHubClient:
             raise RuntimeError("GitHub API returned duplicate changed filenames")
         return paths
 
-    def ci_budget_context(
+    def ci_budget_snapshot(
         self, run_id: int, run_attempt: int
-    ) -> WorkflowContext | None:
-        prefix = f"{CI_BUDGET_CONTEXT_PREFIX}-{run_id}-"
+    ) -> BudgetSnapshot | None:
+        prefix = f"{CI_BUDGET_SNAPSHOT_PREFIX}-{run_id}-"
         artifacts: list[JsonObject] = []
         page = 1
         while True:
@@ -481,10 +471,10 @@ class GitHubClient:
             if len(page_artifacts) < 100:
                 break
             page += 1
-        contexts: list[tuple[int, WorkflowContext]] = []
+        snapshots: list[tuple[int, BudgetSnapshot]] = []
         pattern = re.compile(
             rf"{re.escape(prefix)}(?P<attempt>[1-9][0-9]*)-"
-            r"(?:base-(?P<base>[0-9a-f]{40})|pr-(?P<pr>[1-9][0-9]*))"
+            r"(?P<tier>standard|extended)"
         )
         for artifact in artifacts:
             name = artifact.get("name")
@@ -495,29 +485,24 @@ class GitHubClient:
                 continue
             artifact_attempt = int(match.group("attempt"))
             if artifact_attempt <= run_attempt:
-                base_sha = match.group("base")
-                pull_request = match.group("pr")
-                context = WorkflowContext(
-                    base_sha=base_sha,
-                    pull_request_number=(
-                        int(pull_request) if pull_request is not None else None
-                    ),
-                )
-                contexts.append((artifact_attempt, context))
-        exact = [context for attempt, context in contexts if attempt == run_attempt]
+                snapshot = BudgetSnapshot(big_change=match.group("tier") == "extended")
+                snapshots.append((artifact_attempt, snapshot))
+        exact = [snapshot for attempt, snapshot in snapshots if attempt == run_attempt]
         if len(exact) > 1:
             raise RuntimeError(
-                f"workflow attempt has {len(exact)} CI budget context artifacts; "
+                f"workflow attempt has {len(exact)} CI budget snapshot artifacts; "
                 "expected exactly one"
             )
         if exact:
             return exact[0]
-        inherited = {context for attempt, context in contexts if attempt < run_attempt}
+        inherited = {
+            snapshot for attempt, snapshot in snapshots if attempt < run_attempt
+        }
         if not inherited:
             return None
         if len(inherited) != 1:
             raise RuntimeError(
-                "earlier workflow attempts disagree on the CI budget event context"
+                "earlier workflow attempts disagree on the CI budget snapshot"
             )
         return inherited.pop()
 
@@ -765,21 +750,24 @@ def write_output(name: str, value: str) -> None:
         output.write(f"{name}={value}\n")
 
 
-def write_context(path: Path, context: WorkflowContext, head_sha: str) -> None:
-    if context.base_sha is not None:
-        validate_sha(head_sha, "classification head SHA")
+def write_snapshot(
+    path: Path, classification: Classification, head_sha: str
+) -> BudgetSnapshot:
+    validate_sha(head_sha, "classification head SHA")
+    snapshot = BudgetSnapshot(big_change=classification.big_change)
     path.write_text(
         json.dumps(
             {
-                "base_sha": context.base_sha,
-                "head_sha": head_sha or None,
-                "pull_request_number": context.pull_request_number,
+                "big_change": snapshot.big_change,
+                "head_sha": head_sha,
+                "reason": classification.reason,
             },
             separators=(",", ":"),
             sort_keys=True,
         )
         + "\n"
     )
+    return snapshot
 
 
 def main() -> int:
@@ -844,25 +832,13 @@ def main() -> int:
         "worker_timeout_minutes",
         str(worker_timeout_minutes(big_change=classification.big_change)),
     )
-    base_sha = os.environ["CI_BUDGET_BASE_SHA"]
-    workflow_context: WorkflowContext | None = None
-    if pull_request_number:
-        workflow_context = WorkflowContext(pull_request_number=pull_request_number)
-    elif base_sha:
-        workflow_context = WorkflowContext(base_sha=base_sha)
-    context_path = ""
-    context_key = ""
-    if workflow_context is not None:
-        context_file = Path(os.environ["CI_BUDGET_CONTEXT_PATH"])
-        write_context(
-            context_file,
-            workflow_context,
-            os.environ["CI_BUDGET_HEAD_SHA"],
-        )
-        context_path = str(context_file)
-        context_key = workflow_context.artifact_key
-    write_output("context_path", context_path)
-    write_output("context_key", context_key)
+    attempt_head_sha = attempt.get("head_sha")
+    if not isinstance(attempt_head_sha, str):
+        raise RuntimeError("GitHub API workflow attempt has no head SHA")
+    snapshot_file = Path(os.environ["CI_BUDGET_SNAPSHOT_PATH"])
+    snapshot = write_snapshot(snapshot_file, classification, attempt_head_sha)
+    write_output("snapshot_path", str(snapshot_file))
+    write_output("snapshot_key", snapshot.artifact_key)
     print(reason)
     return 0
 
