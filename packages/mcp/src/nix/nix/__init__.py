@@ -40,13 +40,18 @@ while the dashboard pane shows the tree growing live as it builds.
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import errno
 import html as _html
 import json as _json
 import os
 import re
+import shutil
+import signal
+import sys
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import polars as pl
@@ -99,6 +104,194 @@ RESULT_TYPES = {
 }
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_REAP_TIMEOUT = 10.0
+
+
+@dataclass(slots=True)
+class _OwnedProcess:
+    process: asyncio.subprocess.Process
+    owner_fd: int
+
+    def release_owner(self) -> None:
+        """Close the lifetime pipe once; its EOF tells the child-side watcher
+        that no kernel owns this process tree anymore."""
+        owner_fd, self.owner_fd = self.owner_fd, -1
+        if owner_fd >= 0:
+            os.close(owner_fd)
+
+
+async def _defer_cancellation[T](task: asyncio.Task[T]) -> T:
+    """Await ``task`` while deferring cancellation of the current task."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    return task.result()
+
+
+async def _bounded[T](task: asyncio.Task[T], timeout: float) -> T:
+    async with asyncio.timeout(timeout):
+        return await asyncio.shield(task)
+
+
+async def _finish_cleanup(
+    drain: asyncio.Task[tuple[bytes, bytes | None]],
+    wait: asyncio.Task[int],
+) -> None:
+    await asyncio.shield(drain)
+    await asyncio.shield(wait)
+
+
+def _report_late_reap(proc: _OwnedProcess, terminal: asyncio.Task[None]) -> None:
+    try:
+        terminal.result()
+    except BaseException as exc:
+        outcome = f"failed after its deadline: {type(exc).__name__}: {exc}"
+    else:
+        outcome = f"finished after its deadline with status {proc.process.returncode}"
+    print(
+        f"[nix] cleanup watcher for process group {proc.process.pid} {outcome}",
+        file=sys.__stderr__,
+        flush=True,
+    )
+
+
+def _kill_group(proc: _OwnedProcess) -> None:
+    """Kill the isolated process group led by ``proc``.
+
+    Every process this module owns starts a new session, so the stable group id
+    is the direct child's pid even if that child has already exited while one of
+    its descendants still holds a captured pipe open.
+    """
+    try:
+        os.killpg(proc.process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        if proc.process.returncode is None:
+            try:
+                proc.process.kill()
+            except ProcessLookupError:
+                pass
+            except PermissionError as exc:
+                raise RuntimeError(f"could not kill nix process {proc.process.pid}: {exc}") from exc
+    except PermissionError as exc:
+        raise RuntimeError(f"could not kill nix process group {proc.process.pid}: {exc}") from exc
+
+
+async def _wait_and_release(proc: _OwnedProcess) -> int:
+    try:
+        return await proc.process.wait()
+    finally:
+        # Direct-child exit is terminal ownership too. Closing the pipe lets the
+        # watcher kill any descendant that retained a captured output fd.
+        proc.release_owner()
+
+
+async def _kill_and_reap(
+    proc: _OwnedProcess,
+    *,
+    drain: asyncio.Task[tuple[bytes, bytes | None]] | None = None,
+    wait: asyncio.Task[int] | None = None,
+    timeout: float = _REAP_TIMEOUT,
+) -> int:
+    drain = drain or asyncio.create_task(proc.process.communicate())
+    wait = wait or asyncio.create_task(_wait_and_release(proc))
+    kill_error: RuntimeError | None = None
+    try:
+        _kill_group(proc)
+    except RuntimeError as exc:
+        kill_error = exc
+    finally:
+        # The child-side watcher is an independent second signal path. It fires
+        # on kernel death as well as on an exception in the explicit kill path.
+        proc.release_owner()
+    # Keep draining while SIGKILL settles. A cancelled reader may have paused its
+    # transport at the high-water mark, in which case wait() alone never observes
+    # every inherited pipe closing.
+    terminal = asyncio.create_task(_finish_cleanup(drain, wait))
+    try:
+        await _defer_cancellation(asyncio.create_task(_bounded(terminal, timeout)))
+    except TimeoutError as exc:
+        terminal.add_done_callback(lambda task: _report_late_reap(proc, task))
+        raise RuntimeError(
+            f"nix process group {proc.process.pid} did not exit within {timeout:g}s "
+            "after SIGKILL; its cleanup watcher remains active"
+        ) from exc
+    if proc.process.returncode is None:
+        raise RuntimeError(f"nix process group {proc.process.pid} survived SIGKILL")
+    if kill_error is not None:
+        raise kill_error
+    return proc.process.returncode
+
+
+def _resolve_executable(command: str, cwd: str | None) -> str:
+    path = Path(command)
+    if path.is_absolute():
+        candidate = path
+    elif os.sep in command:
+        candidate = Path(cwd) / path if cwd is not None else Path.cwd() / path
+    else:
+        found = shutil.which(command)
+        candidate = Path(found) if found is not None else None
+    if candidate is None or not candidate.exists():
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), command)
+    if not os.access(candidate, os.X_OK):
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), command)
+    return str(candidate)
+
+
+async def _spawn(
+    *argv: str,
+    cwd: str | None,
+    stderr: int | None,
+) -> _OwnedProcess:
+    argv = (_resolve_executable(argv[0], cwd), *argv[1:])
+    owner_read, owner_write = os.pipe()
+
+    async def launch() -> _OwnedProcess:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "nix._owner_exec",
+                str(owner_read),
+                *argv,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=stderr,
+                start_new_session=True,
+                pass_fds=(owner_read,),
+            )
+        except BaseException:
+            os.close(owner_read)
+            os.close(owner_write)
+            raise
+        os.close(owner_read)
+        return _OwnedProcess(process=process, owner_fd=owner_write)
+
+    pending = asyncio.create_task(launch())
+    try:
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        # Process creation can yield after fork but before returning the handle.
+        # Recover that handle before propagating cancellation, then own its tree.
+        proc = await _defer_cancellation(pending)
+        await _kill_and_reap(proc)
+        raise
+
+
+async def _communicate(proc: _OwnedProcess) -> tuple[bytes, bytes]:
+    drain = asyncio.create_task(proc.process.communicate())
+    wait = asyncio.create_task(_wait_and_release(proc))
+    try:
+        await asyncio.shield(wait)
+        out, err = await asyncio.shield(drain)
+    except BaseException:
+        await _kill_and_reap(proc, drain=drain, wait=wait)
+        raise
+    assert out is not None
+    assert err is not None
+    return out, err
 
 # Stable schema so `.events` is a well-typed frame even with zero rows.
 _EVENT_SCHEMA = {
@@ -542,14 +735,13 @@ async def run(
     """
     run_state = BuildRun(label=label or (args[1] if len(args) > 1 else args[0] if args else "nix"))
     try:
-        proc = await asyncio.create_subprocess_exec(
+        proc = await _spawn(
             _nix_web_monitor_bin(),
             "--emit",
             "ndjson",
             "--",
             *args,
             cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
             # The emitter routes nix's own stdout to its stderr; keep it out of our
             # NDJSON parse by draining it to the parent's stderr (not merged into
             # stdout, which carries the BuildView lines).
@@ -569,15 +761,16 @@ async def run(
     # above returns early, so `alive` (keyed off `done`) can never pin a pane open.
     if live:
         _register_live(run_state)
-    assert proc.stdout is not None
+    wait = asyncio.create_task(_wait_and_release(proc))
+    assert proc.process.stdout is not None
     # Read raw chunks and split on newlines ourselves: a build-log line folded
     # into a BuildView can exceed asyncio's default 64 KiB StreamReader limit,
-    # which would make `readline` raise and abort mid-stream. `finally` reaps the
-    # process and lets the live resource self-close (`alive` keys off `done`).
+    # which would make `readline` raise and abort mid-stream. The protected wait
+    # below reaps the process before `done` lets the live resource self-close.
     buf = b""
     try:
         while True:
-            chunk = await proc.stdout.read(65536)
+            chunk = await proc.process.stdout.read(65536)
             if not chunk:
                 break
             buf += chunk
@@ -586,15 +779,13 @@ async def run(
                 run_state.feed(line.decode(errors="replace"))
         if buf:
             run_state.feed(buf.decode(errors="replace"))
+        run_state.returncode = await asyncio.shield(wait)
+    except BaseException:
+        # The monitor owns the nix child beneath it. Kill their isolated group so
+        # cancellation cannot reap only the monitor and orphan the real build.
+        run_state.returncode = await _kill_and_reap(proc, wait=wait)
+        raise
     finally:
-        # On cancellation (or any early exit) the child must be signaled, not just
-        # awaited: a bare `await proc.wait()` would let a cancelled build keep
-        # running to completion while this coroutine parks in the finally. Kill it
-        # if it has not already exited, then reap.
-        if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.terminate()
-        run_state.returncode = await proc.wait()
         run_state.done = True
     return run_state
 
@@ -674,7 +865,7 @@ async def attrs(flake: str = ".", *, system: str | None = None, cwd: str | None 
     sub-attributes.
     """
     system = system or _current_system()
-    proc = await asyncio.create_subprocess_exec(
+    proc = await _spawn(
         "nix",
         "flake",
         "show",
@@ -682,11 +873,10 @@ async def attrs(flake: str = ".", *, system: str | None = None, cwd: str | None 
         "--no-warn-dirty",
         flake,
         cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    out, err = await proc.communicate()
-    if proc.returncode != 0:
+    out, err = await _communicate(proc)
+    if proc.process.returncode != 0:
         raise RuntimeError(f"nix flake show failed: {err.decode('utf-8', 'replace').strip()}")
     return pl.DataFrame(
         _flake_show_rows(_json.loads(out), system),
@@ -741,15 +931,14 @@ async def eval(
     exit with nix's own stderr.
     """
     args = _eval_args(installable, apply=apply, system=system, raw=raw)
-    proc = await asyncio.create_subprocess_exec(
+    proc = await _spawn(
         "nix",
         *args,
         cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    out, err = await proc.communicate()
-    if proc.returncode != 0:
+    out, err = await _communicate(proc)
+    if proc.process.returncode != 0:
         raise RuntimeError(f"nix eval failed: {err.decode('utf-8', 'replace').strip()}")
     text = out.decode("utf-8", "replace")
     return text if raw else _json.loads(text)
