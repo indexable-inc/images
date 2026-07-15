@@ -17,4 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Test classifier behavior
-        run: python3 -m unittest .github/actions/ci-budget/test_ci_budget.py
+        run: >-
+          python3 -m unittest discover
+          -s .github/actions/ci-budget
+          -p 'test_*.py'
