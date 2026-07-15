@@ -134,6 +134,25 @@ class GitHubClientTests(unittest.TestCase):
         assert "GitHub exposes at most 3000" in str(error)
         assert not transport.requests
 
+    def test_label_bypasses_changed_file_api_cap(self) -> None:
+        transport = FakeTransport([])
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        result = ci_budget.classify_pull_request(
+            client,
+            {
+                "number": 42,
+                "labels": [{"name": ci_budget.BIG_CHANGE_LABEL}],
+                "changed_files": 3001,
+            },
+            ["flake.lock"],
+            force_big_change=False,
+        )
+
+        assert result.big_change
+        assert result.reason["sources"] == ["label"]
+        assert not transport.requests
+
     def test_context_artifact_carries_push_base_sha(self) -> None:
         transport = FakeTransport(
             [
@@ -141,6 +160,23 @@ class GitHubClientTests(unittest.TestCase):
                     "artifacts": [
                         {
                             "name": "ci-budget-context-12-2-" + "a" * 40,
+                            "expired": False,
+                        }
+                    ]
+                }
+            ]
+        )
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        assert client.ci_budget_context_base_sha(12, 2) == "a" * 40
+
+    def test_partial_rerun_inherits_consistent_context(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "artifacts": [
+                        {
+                            "name": "ci-budget-context-12-1-" + "a" * 40,
                             "expired": False,
                         }
                     ]
@@ -347,7 +383,7 @@ class WorkflowAssociationTests(unittest.TestCase):
             self.globs,
             force_big_change=False,
             merge_queue_branch="main",
-            push_base_sha="a" * 40,
+            event_base_sha="a" * 40,
         )
 
         assert result.big_change
@@ -356,7 +392,6 @@ class WorkflowAssociationTests(unittest.TestCase):
     def test_labeled_merge_group_uses_current_queue_entry(self) -> None:
         transport = FakeTransport(
             [
-                {"parents": [{"sha": "a" * 40}]},
                 {
                     "data": {
                         "repository": {
@@ -399,6 +434,7 @@ class WorkflowAssociationTests(unittest.TestCase):
             self.globs,
             force_big_change=False,
             merge_queue_branch="main",
+            event_base_sha="a" * 40,
         )
 
         assert result.big_change
@@ -439,11 +475,77 @@ class WorkflowAssociationTests(unittest.TestCase):
                 self.globs,
                 force_big_change=False,
                 merge_queue_branch="main",
-                push_base_sha="a" * 40,
+                event_base_sha="a" * 40,
             )
         )
 
         assert "has 2 exact merged pull requests" in str(error)
+
+    def test_unassociated_main_push_commit_forces_extended_budget(self) -> None:
+        transport = FakeTransport(
+            [
+                [],
+                {"parents": [{"sha": "a" * 40}]},
+            ]
+        )
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+        attempt = {
+            "event": "push",
+            "head_sha": "b" * 40,
+            "pull_requests": [],
+        }
+
+        result = ci_budget.classify_workflow_attempt(
+            client,
+            attempt,
+            self.globs,
+            force_big_change=False,
+            merge_queue_branch="main",
+            event_base_sha="a" * 40,
+        )
+
+        assert result.big_change
+        assert result.reason == {
+            "sources": ["unassociated_push_commit"],
+            "matches": [{"commit": "b" * 40}],
+        }
+
+    def test_partially_associated_push_batch_fails_closed_to_extended(self) -> None:
+        base_sha = "a" * 40
+        merged_sha = "b" * 40
+        direct_sha = "c" * 40
+        transport = FakeTransport(
+            [
+                [],
+                {"parents": [{"sha": merged_sha}]},
+                [
+                    {
+                        "number": 42,
+                        "base": {"ref": "main"},
+                        "merge_commit_sha": merged_sha,
+                        "merged_at": "2026-07-15T10:00:00Z",
+                    }
+                ],
+                {"number": 42, "labels": [], "changed_files": 1},
+                {"parents": [{"sha": base_sha}]},
+            ]
+        )
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        result = ci_budget.classify_workflow_attempt(
+            client,
+            {"event": "push", "head_sha": direct_sha, "pull_requests": []},
+            self.globs,
+            force_big_change=False,
+            merge_queue_branch="main",
+            event_base_sha=base_sha,
+        )
+
+        assert result.big_change
+        assert result.reason == {
+            "sources": ["unassociated_push_commit"],
+            "matches": [{"commit": direct_sha}],
+        }
 
     def test_batched_main_push_classifies_every_exact_merged_pull_request(
         self,
@@ -490,7 +592,7 @@ class WorkflowAssociationTests(unittest.TestCase):
             self.globs,
             force_big_change=False,
             merge_queue_branch="main",
-            push_base_sha=base_sha,
+            event_base_sha=base_sha,
         )
 
         assert result.big_change
