@@ -1059,6 +1059,7 @@
     xdgConfigHome = "/Users/andrewgazelka/.config";
   };
   andrewZellijConfig = pkgs.writeText "andrewgazelka-zellij.kdl" (ix.kdl.render andrewZellij.settings);
+  andrewNushellConfig = paths.root + "/users/andrewgazelka/config/nushell";
 
   tests = import paths.tests {
     inherit
@@ -1499,6 +1500,28 @@
             mkdir -p "$HOME" "$out"
             zellij --config ${andrewZellijConfig} setup --check >"$out/check.txt"
           '';
+          nushell-config =
+            pkgs.runCommand "nushell-config-check"
+            {
+              nativeBuildInputs = [
+                pkgs.jq
+                pkgs.nushell
+              ];
+            }
+            ''
+              export HOME="$TMPDIR/home"
+              config_dir=$(nu --no-config-file -c '$nu.default-config-dir')
+              mkdir -p "$(dirname "$config_dir")"
+              cp -R ${andrewNushellConfig} "$config_dir"
+              cd "$config_dir"
+              diagnostics="$TMPDIR/diagnostics.jsonl"
+              nu --no-config-file --ide-check 100 config.nu > "$diagnostics"
+              if ! jq -s -e 'map(select(.type == "diagnostic")) | length == 0' "$diagnostics" >/dev/null; then
+                jq -s 'map(select(.type == "diagnostic"))' "$diagnostics" >&2
+                exit 1
+              fi
+              touch "$out"
+            '';
           # Exercises the trusted half of the blast-radius PR comment: the
           # validate/render jq embedded in its workflow, extracted from the YAML so
           # the test can't drift from what the trusted comment job runs. The

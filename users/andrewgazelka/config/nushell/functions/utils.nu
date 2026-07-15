@@ -155,7 +155,7 @@ export def prefixes [] {
 export def lowercase-columns [] {
     let input = $in
     let cols = $input | columns
-    let new_cols = $cols | each { |col| $col | str lowercase }
+    let new_cols = $cols | each { |col| $col | str downcase }
     $input | rename ...$new_cols
 }
 
