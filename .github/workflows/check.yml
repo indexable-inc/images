@@ -22,8 +22,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: check-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # First attempts are latest-wins. A retry gets its run ID as an isolated
+  # group so an old retry cannot cancel a newer event for the same pull request.
+  group: check-${{ github.ref }}-${{ github.run_attempt == 1 && 'latest' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 env:
   # The self-hosted runner's Nix daemon owns substituters (cache.ix.dev plus the

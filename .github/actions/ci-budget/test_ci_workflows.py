@@ -180,6 +180,22 @@ class RequiredWorkflowTests(unittest.TestCase):
                     permissions = child_object(job, "permissions")
                     assert "write" not in permissions.values()
 
+    def test_retry_cannot_cancel_a_newer_source_run(self) -> None:
+        for workflow_name in ("check.yml", "closure-gate.yml"):
+            with self.subTest(workflow=workflow_name):
+                workflow = load_workflow(workflow_name)
+                concurrency = child_object(workflow, "concurrency")
+                group = expression(concurrency, "group")
+                cancellation = expression(concurrency, "cancel-in-progress")
+
+                assert "github.run_attempt == 1" in group
+                assert "'latest'" in group
+                assert "github.run_id" in group
+                assert cancellation == (
+                    "${{ github.event_name == 'pull_request' "
+                    "&& github.run_attempt == 1 }}"
+                )
+
     def test_clone_diff_step_stays_on_the_build_job(self) -> None:
         jobs = child_object(load_workflow("check.yml"), "jobs")
         build_steps = child_list(child_object(jobs, "flake-build"), "steps")
