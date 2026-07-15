@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
+import fcntl
 import html as _html
 import json as _json
 import os
@@ -271,13 +272,30 @@ def _resolve_executable(command: str, cwd: str | None) -> str:
     return str(candidate)
 
 
+def _owner_pipe() -> tuple[int, int]:
+    """Allocate ownership FDs before subprocess stdio can reuse their numbers."""
+    owner_read, owner_write = os.pipe()
+    fds = [owner_read, owner_write]
+    try:
+        for index, fd in enumerate(fds):
+            if fd <= 2:
+                fds[index] = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
+                os.close(fd)
+    except BaseException:
+        for fd in fds:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        raise
+    return fds[0], fds[1]
+
+
 async def _spawn(
     *argv: str,
     cwd: str | None,
     stderr: int | None,
 ) -> _OwnedProcess:
     argv = (_resolve_executable(argv[0], cwd), *argv[1:])
-    owner_read, owner_write = os.pipe()
+    owner_read, owner_write = _owner_pipe()
 
     async def launch() -> _OwnedProcess:
         process: asyncio.subprocess.Process | None = None

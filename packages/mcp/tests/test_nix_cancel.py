@@ -505,25 +505,24 @@ def test_worktree_cannot_shadow_the_supervisor_helper(tmp_path: pathlib.Path) ->
     assert not marker.exists()
 
 
-def test_supervisor_preserves_an_owner_pipe_allocated_as_stdin() -> None:
-    from nix import _supervise
+def test_spawn_preserves_an_owner_pipe_allocated_as_stdin() -> None:
+    async def scenario() -> tuple[bytes, bytes]:
+        saved_stdin = os.dup(0)
+        os.close(0)
+        try:
+            process = await nix._spawn(
+                sys.executable,
+                "-c",
+                "import sys; print('out'); print('err', file=sys.stderr)",
+                cwd=None,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            return await asyncio.wait_for(nix._communicate(process), 5)
+        finally:
+            os.dup2(saved_stdin, 0)
+            os.close(saved_stdin)
 
-    saved_stdin = os.dup(0)
-    os.close(0)
-    owner_read, owner_write = os.pipe()
-    assert owner_read == 0
-    prepared = -1
-    try:
-        prepared = _supervise._prepare_owner_fd(owner_read)
-        assert prepared > 2
-        os.write(owner_write, b"x")
-        assert os.read(prepared, 1) == b"x"
-    finally:
-        if prepared >= 0:
-            os.close(prepared)
-        os.close(owner_write)
-        os.dup2(saved_stdin, 0)
-        os.close(saved_stdin)
+    assert asyncio.run(scenario()) == (b"out\n", b"err\n")
 
 
 def test_normal_completion_drains_both_pipes() -> None:
