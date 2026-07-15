@@ -23,7 +23,10 @@ permissions:
 
 concurrency:
   group: check-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A newer PR synchronization or main push makes the older revision's result
+  # unusable. Cancel it immediately so obsolete work never waits in front of,
+  # or consumes a runner after, the current head. Tag refs remain independent.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 env:
   # The self-hosted runner's Nix daemon owns substituters (cache.ix.dev plus the
