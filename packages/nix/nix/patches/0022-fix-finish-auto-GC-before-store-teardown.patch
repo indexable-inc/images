@@ -330,7 +330,7 @@ index fb2018cff..05fc23127 100644
          parseCmdLine(argc, argv, [&](Strings::iterator & arg, const Strings::iterator & end) {
              Operation oldOp = op;
 diff --git a/src/nix/unix/daemon.cc b/src/nix/unix/daemon.cc
-index 1337985c8..756f73299 100644
+index dc2b0a5fe..4ae9edae8 100644
 --- a/src/nix/unix/daemon.cc
 +++ b/src/nix/unix/daemon.cc
 @@ -332,7 +332,7 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
@@ -343,7 +343,7 @@ index 1337985c8..756f73299 100644
                          closeListeners();
  
 @@ -359,13 +359,25 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
-                         setBuildStatusClientInfo({.uid = peer.uid, .user = userName});
+                         setBuildStatusClientInfo({.clientPid = peer.pid, .uid = peer.uid, .user = userName});
  
                          // Handle the connection.
 -                        auto store = storeConfig->openStore();
