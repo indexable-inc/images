@@ -512,6 +512,12 @@
           upstream = "hold";
           reason = "Preserves actionable floating-CA leaf failures through resolution (indexable-inc/index#3279, indexable-inc/ix#7357). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # 0021: CPU, I/O, and build-log activity distinguish a silent active
+        # compiler from an idle builder before the daemon cancels its goal.
+        "0021-libstore-enforce-derivation-no-progress-deadlines.patch" = {
+          upstream = "hold";
+          reason = "Fleet CI policy for indexable-inc/index#3317. Validate the process-aware deadline before proposing a general Nix interface; humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];

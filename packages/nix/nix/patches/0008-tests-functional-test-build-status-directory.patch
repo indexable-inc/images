@@ -29,10 +29,10 @@ index 0000000..bfce0df
 +}
 diff --git a/tests/functional/build-status.sh b/tests/functional/build-status.sh
 new file mode 100644
-index 0000000..2001ab0
+index 0000000..c2d6b00
 --- /dev/null
 +++ b/tests/functional/build-status.sh
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,98 @@
 +#!/usr/bin/env bash
 +
 +source common.sh
@@ -86,10 +86,12 @@ index 0000000..2001ab0
 +# The why-chain must be non-empty and end at this derivation.
 +[[ $(echo "$entry" | jq '.why.chain | length') -ge 1 ]]
 +[[ $(echo "$entry" | jq -r '.why.chain | last') == *build-status-sleeper.drv ]]
-+# The pid must be set and refer to a live process.
++# The worker pid must be set and refer to a live process. The direct local
++# store has no daemon peer, so it has no client pid to report.
 +pid=$(echo "$entry" | jq -r '.pid')
 +[[ -n $pid && $pid != null ]]
 +kill -0 "$pid"
++[[ $(echo "$entry" | jq -r '.clientPid') == null ]]
 +
 +# Stop the build; the status directory must drain.
 +cleanup
@@ -106,6 +108,27 @@ index 0000000..2001ab0
 +    sleep 0.2
 +done
 +[[ -n $empty ]]
++
++# A daemon connection records the requesting client pid. This is the stable
++# correlation key used by per-derivation liveness monitors when many clients
++# owned by the same uid build concurrently.
++if ! isTestOnNixOS; then
++    startDaemon
++    nix build --file "$nixExpr" --no-link &
++    buildPid=$!
++    found=
++    for _ in $(seq 1 100); do
++        if nix store builds --json | jq -e --argjson clientPid "$buildPid" \
++            'any(.[]; .clientPid == $clientPid)' > /dev/null; then
++            found=1
++            break
++        fi
++        sleep 0.2
++    done
++    [[ -n $found ]]
++    cleanup
++    stopDaemon
++fi
 +
 +echo "build-status.sh: OK"
 diff --git a/tests/functional/meson.build b/tests/functional/meson.build

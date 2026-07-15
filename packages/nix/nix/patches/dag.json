@@ -87,6 +87,15 @@
     {
       "patch": "0020-libstore-preserve-content-addressed-leaf-failures.patch",
       "deps": []
+    },
+    {
+      "patch": "0021-libstore-enforce-derivation-no-progress-deadlines.patch",
+      "deps": [
+        "0003-libutil-add-build-status-dir-experimental-feature.patch",
+        "0004-libstore-add-build-status-directory-writer.patch",
+        "0005-libstore-write-status-files-from-build-and-substitut.patch",
+        "0008-tests-functional-test-build-status-directory.patch"
+      ]
     }
   ]
 }
