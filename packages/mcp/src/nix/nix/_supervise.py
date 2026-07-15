@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
-import fcntl
 import os
 import selectors
 import signal
@@ -80,9 +79,7 @@ def _pidfd_exited(pidfd: int) -> bool:
 def _prepare_owner_fd(owner_fd: int) -> int:
     """Keep the lifetime pipe distinct from target stdio."""
     if owner_fd <= 2:
-        replacement = fcntl.fcntl(owner_fd, fcntl.F_DUPFD_CLOEXEC, 3)
-        os.close(owner_fd)
-        owner_fd = replacement
+        raise ValueError("the nix supervisor owner fd must be above stderr")
     os.set_blocking(owner_fd, False)
     os.set_inheritable(owner_fd, False)  # noqa: FBT003 -- positional-only stdlib API
     return owner_fd
