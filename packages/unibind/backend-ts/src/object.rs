@@ -17,7 +17,7 @@ use crate::ty::{self, TyCtx};
 use crate::RenderError;
 
 pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
-    let user = ctx.user;
+    let alias = ty::user_alias();
     let name = ty::name_ident(&object.name)?;
     let handle = ty::object_handle_ident(object);
     let js_name = object.names.ts.clone().unwrap_or_else(|| object.name.clone());
@@ -65,12 +65,12 @@ pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream
         #docs
         #[::napi_derive::napi(js_name = #js_name)]
         pub struct #handle {
-            inner: ::std::sync::Arc<super::#user::#name>,
+            inner: ::std::sync::Arc<#alias::#name>,
             #closed_field
         }
 
         impl #handle {
-            fn __unibind_from(value: super::#user::#name) -> Self {
+            fn __unibind_from(value: #alias::#name) -> Self {
                 Self {
                     inner: ::std::sync::Arc::new(value),
                     #closed_init
@@ -116,14 +116,14 @@ fn render_constructor(
     object: &ir::Object,
     ctx: &TyCtx<'_>,
 ) -> Result<TokenStream, RenderError> {
-    let user = ctx.user;
+    let alias = ty::user_alias();
     let object_ident = ty::name_ident(&object.name)?;
     let ctor_name = ty::name_ident(&ctor.name)?;
     let docs = doc_attrs(&ctor.docs);
     let wrapper = wrapper_parts(ctor, ctx)?;
     let params = &wrapper.params;
     let exprs = &wrapper.exprs;
-    let call = quote!(super::#user::#object_ident::#ctor_name(#(#exprs),*));
+    let call = quote!(#alias::#object_ident::#ctor_name(#(#exprs),*));
     let body = if ctor.throws.is_some() {
         quote! {
             match #call {

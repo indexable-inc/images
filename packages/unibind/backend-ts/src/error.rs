@@ -10,25 +10,26 @@
 //! subclasses named by the IR's ts renames; the glue only guarantees the
 //! channel.
 
-use proc_macro2::{Ident, TokenStream};
+use proc_macro2::TokenStream;
 use quote::quote;
 use unibind_core::ir;
 
 use crate::function::doc_attrs;
-use crate::ty::name_ident;
+use crate::ty::{name_ident, user_alias};
 use crate::RenderError;
 
 /// The reason prefix of every error the glue raises on purpose.
 pub const REASON_PREFIX: &str = "__unibind__";
 
-pub fn render_error(error: &ir::ErrorType, user: &Ident) -> Result<TokenStream, RenderError> {
+pub fn render_error(error: &ir::ErrorType) -> Result<TokenStream, RenderError> {
+    let alias = user_alias();
     let rust_name = name_ident(&error.name)?;
     let mut arms = Vec::new();
     for variant in &error.variants {
         let variant_ident = name_ident(&variant.name)?;
         let reason = format!("{REASON_PREFIX}:err:{}:{}:", error.name, variant.name);
         arms.push(quote! {
-            super::#user::#rust_name::#variant_ident { .. } => {
+            #alias::#rust_name::#variant_ident { .. } => {
                 ::napi::Error::from_reason(::std::format!("{}{}", #reason, message))
             }
         });
@@ -40,8 +41,8 @@ pub fn render_error(error: &ir::ErrorType, user: &Ident) -> Result<TokenStream, 
     )]);
     Ok(quote! {
         #from_docs
-        impl ::std::convert::From<super::#user::#rust_name> for ::napi::Error {
-            fn from(error: super::#user::#rust_name) -> Self {
+        impl ::std::convert::From<#alias::#rust_name> for ::napi::Error {
+            fn from(error: #alias::#rust_name) -> Self {
                 let message = ::std::string::ToString::to_string(&error);
                 match error {
                     #(#arms)*

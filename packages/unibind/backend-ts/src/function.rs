@@ -51,11 +51,11 @@ pub fn wrapper_parts(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<Wrapper
 /// occupies the event loop either way.
 pub fn render_fn(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
     let name = ty::name_ident(&function.name)?;
-    let user = ctx.user;
     let wrapper = wrapper_parts(function, ctx)?;
     let call = {
         let exprs = &wrapper.exprs;
-        quote!(super::#user::#name(#(#exprs),*))
+        let alias = ty::user_alias();
+        quote!(#alias::#name(#(#exprs),*))
     };
     render_callable(function, ctx, &wrapper, &call, None)
 }

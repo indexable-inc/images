@@ -235,6 +235,18 @@ mod conformance {
         unibind_runtime::UniStream::new(futures::stream::iter(0..n.max(0)))
     }
 
+    /// Stream `count` occurrences of `symbol`: records as stream items
+    /// exercise the generated stream class's record-typed `next`
+    /// (regression for issue #2220).
+    pub fn occurrence_stream(
+        symbol: String,
+        count: i64,
+    ) -> unibind_runtime::UniStream<Occurrence> {
+        unibind_runtime::UniStream::new(futures::stream::iter(make_occurrences(
+            symbol, count, None,
+        )))
+    }
+
     /// Items `count_stream` producers pushed so far, across every stream.
     pub fn stream_items_produced() -> i64 {
         STREAM_ITEMS_PRODUCED.load(Ordering::SeqCst)
@@ -278,6 +290,19 @@ mod conformance {
         pub async fn query(&self, query: String) -> String {
             tokio::time::sleep(Duration::from_millis(1)).await;
             format!("{}: {query}", self.name)
+        }
+
+        /// The session as an occurrence record: records in method
+        /// signatures exercise napi's nested impl helper module
+        /// (regression for issue #2220).
+        pub fn describe(&self) -> Occurrence {
+            Occurrence {
+                symbol: self.name.clone(),
+                path: "session".to_owned(),
+                start: 0,
+                end: 0,
+                role: "session".to_owned(),
+            }
         }
 
         /// Release the session; the generated wrapper guarantees at most
