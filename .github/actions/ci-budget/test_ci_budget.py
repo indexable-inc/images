@@ -102,13 +102,22 @@ class ClassificationTests(unittest.TestCase):
         assert result.reason["sources"] == ["forced"]
 
     def test_retry_classification_uses_only_the_frozen_snapshot(self) -> None:
-        result = ci_budget.classification_from_snapshot(
+        result = ci_budget.classification_for_retry(
             ci_budget.BudgetSnapshot(big_change=True)
         )
 
         assert result.big_change
         assert result.reason == {
             "sources": ["attempt_snapshot"],
+            "matches": [],
+        }
+
+    def test_retry_without_retained_artifact_gets_conservative_budget(self) -> None:
+        result = ci_budget.classification_for_retry(None)
+
+        assert result.big_change
+        assert result.reason == {
+            "sources": ["retry_snapshot_unavailable"],
             "matches": [],
         }
 

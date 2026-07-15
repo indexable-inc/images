@@ -85,6 +85,22 @@ def classification_from_snapshot(snapshot: BudgetSnapshot) -> Classification:
     )
 
 
+def classification_for_retry(snapshot: BudgetSnapshot | None) -> Classification:
+    if snapshot is not None:
+        return classification_from_snapshot(snapshot)
+
+    # GitHub removes artifacts produced by the previous attempt before a
+    # workflow rerun starts. The artifact is still useful for partial job
+    # reruns on platforms that retain it, but its absence must not make the
+    # policy job itself impossible to retry. Fall back to the conservative
+    # tier: a retry is an explicit maintainer operation, and extending its
+    # timeout cannot turn a failing validation green.
+    return Classification(
+        big_change=True,
+        reason={"sources": ["retry_snapshot_unavailable"], "matches": []},
+    )
+
+
 def parse_bool(value: str, name: str) -> bool:
     if value == "true":
         return True
@@ -758,11 +774,10 @@ def main() -> int:
     labels: list[str] = []
     if run_attempt > 1:
         snapshot = client.ci_budget_snapshot(run_id, run_attempt)
-        if snapshot is None:
-            raise RuntimeError("workflow retry has no earlier CI budget snapshot")
-        classification = classification_from_snapshot(snapshot)
+        classification = classification_for_retry(snapshot)
         # The attempt-one publisher owns the human-facing reason. A retry must
-        # consume that frozen tier without rewriting it from live PR state.
+        # consume the frozen tier when GitHub retained it, or the conservative
+        # fallback above, without rewriting the decision from live PR state.
         publish = False
     elif pull_request_number:
         pull_request = client.pull_request(pull_request_number)
