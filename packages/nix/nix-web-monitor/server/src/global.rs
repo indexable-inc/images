@@ -10,8 +10,8 @@
 //! The subcommand exists only on a patched nix, so the probe auto-detects: it
 //! runs the command and, if the output does not parse as a JSON build array
 //! (stock nix prints an "unknown command" error instead), marks the view
-//! undetected and the UI hides the panel. Like the daemon tracer, it never
-//! returns and never panics: every failure becomes a status string, and the
+//! undetected and the UI hides the panel. It never returns and never panics:
+//! every failure becomes a status string, and the
 //! loop backs off and retries so a mid-session nix upgrade is eventually picked
 //! up.
 //!
@@ -36,9 +36,9 @@ use tokio::sync::{RwLock, broadcast};
 use crate::broadcast_deltas;
 use crate::proc_stats::BuildStatSampler;
 
-/// How often the machine-wide build view is re-polled once detected. Slower than
-/// the daemon tracer's one-second sample: this shells out to `nix` each tick, so
-/// a couple of seconds keeps the panel live without a constant subprocess churn.
+/// How often the machine-wide build view is re-polled once detected. This
+/// shells out to `nix` each tick, so a couple of seconds keeps the panel live
+/// without a constant subprocess churn.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Back-off before re-probing after the subcommand comes back undetected (stock
@@ -47,8 +47,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// session is picked up.
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
-/// How often the parked probe re-checks for a first dashboard client. Same
-/// cadence as the daemon probe's park loop.
+/// How often the parked probe re-checks for a first dashboard client.
 const CLIENT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// View status while the probe is parked with no dashboard client connected.
@@ -76,18 +75,17 @@ const LOG_TAIL_MAX_ENTRIES: usize = 8;
 
 /// Run the machine-wide build probe until the task is aborted.
 ///
-/// Never returns: like [`run_daemon_probe`](crate::daemon::run_daemon_probe),
-/// the global view is a best-effort overlay, so any failure becomes a status the
-/// panel shows (or a hidden panel) and the loop retries.
+/// Never returns: the global view is a best-effort overlay, so any failure
+/// becomes a status the panel shows (or a hidden panel) and the loop retries.
 ///
-/// Like the daemon probe, the poller runs only while at least one dashboard
-/// client is subscribed to the delta feed: every tick shells out to `nix` and
-/// (on a busy machine) sweeps procfs, for a view consumed nowhere else, so an
-/// unwatched poller is pure subprocess churn. Unlike the daemon probe the gate
-/// sits *after* the poll, not before it: detection -- does the patched
-/// subcommand exist, i.e. should the UI show the pane at all -- is derived
-/// from this loop, so one pass must complete before the first park for a later
-/// client's seeded snapshot to know whether the pane exists.
+/// The poller runs only while at least one dashboard client is subscribed to
+/// the delta feed: every tick shells out to `nix` and (on a busy machine)
+/// sweeps procfs, for a view consumed nowhere else, so an unwatched poller is
+/// pure subprocess churn. The gate sits *after* the poll, not before it:
+/// detection -- does the patched subcommand exist, i.e. should the UI show the
+/// pane at all -- is derived from this loop, so one pass must complete before
+/// the first park for a later client's seeded snapshot to know whether the
+/// pane exists.
 pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadcast::Sender<Bytes>) {
     // Between polls, the sampler turns each build's pid into live cpu/rss
     // figures from procfs (see `proc_stats`); the two-second poll interval is
@@ -124,9 +122,9 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
             RETRY_INTERVAL
         };
         if deltas.receiver_count() == 0 {
-            // Park until a dashboard client subscribes, mirroring
-            // `run_daemon_probe`'s gate. Drop the cpu baselines for the same
-            // reason as the undetected branch: kept across a park, a row's
+            // Park until a dashboard client subscribes. Drop the cpu
+            // baselines for the same reason as the undetected branch: kept
+            // across a park, a row's
             // first cpu% after resuming would average the whole parked stretch
             // instead of the poll window.
             sampler = BuildStatSampler::new();
@@ -234,8 +232,7 @@ async fn try_builds(args: &[&str]) -> Option<Vec<GlobalBuild>> {
 }
 
 /// Push a machine-wide build view to the monitor and broadcast the change.
-/// Mirrors the daemon probe's `publish_status`: `set_global` skips a no-op, so an
-/// unchanged view puts no frame on the wire.
+/// `set_global` skips a no-op, so an unchanged view puts no frame on the wire.
 async fn publish(
     monitor: &Arc<RwLock<MonitorState>>,
     deltas: &broadcast::Sender<Bytes>,
@@ -704,10 +701,9 @@ mod tests {
     }
 
     /// With no dashboard client subscribed, the probe parks after its single
-    /// detection pass instead of polling `nix` forever (the daemon probe's
-    /// gate, mirrored): the parked view carries the unwatched status and no
-    /// build rows, so a late joiner is never seeded with rows from whenever
-    /// the last client left.
+    /// detection pass instead of polling `nix` forever: the parked view
+    /// carries the unwatched status and no build rows, so a late joiner is
+    /// never seeded with rows from whenever the last client left.
     #[tokio::test]
     async fn probe_parks_without_clients() {
         let monitor = Arc::new(RwLock::new(MonitorState::default()));

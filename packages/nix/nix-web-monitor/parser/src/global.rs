@@ -1,7 +1,7 @@
 //! Machine-wide build view (all active `nix` builds on the host).
 //!
-//! The rest of the monitor watches one `nix` invocation: its own build tree and
-//! the daemon syscalls that invocation drives. But a machine can be building for
+//! The rest of the monitor watches one `nix` invocation: its own build tree.
+//! But a machine can be building for
 //! many reasons at once (a CI job, an editor's `nix develop`, another operator's
 //! switch), and none of that shows up in a single invocation's tree. This module
 //! owns the wire types for a *global* view fed by a patched-nix subcommand,
@@ -119,8 +119,7 @@ pub struct GlobalBuild {
 
 /// Wire-friendly snapshot of the machine-wide build view.
 ///
-/// Mirrors [`DaemonInfo`](crate::DaemonInfo): `detected` is the analog of
-/// `tracing` (false when the subcommand is unavailable, i.e. stock nix), and
+/// `detected` is false when the subcommand is unavailable (stock nix), and
 /// `status` is the human line the UI shows ("not available (stock nix)",
 /// "12 active", or an error). The default is the undetected state, so a fresh
 /// `MonitorState` carries an empty view the UI hides until the probe flips it on.
@@ -132,8 +131,7 @@ pub struct GlobalBuilds {
     pub detected: bool,
     /// Active build/substitution goals on the machine, as last polled.
     pub builds: Vec<GlobalBuild>,
-    /// Human state line, like [`DaemonInfo.status`](crate::DaemonInfo::status):
-    /// the availability note, the active count, or an error.
+    /// Human state line: the availability note, the active count, or an error.
     pub status: String,
 }
 

@@ -13,9 +13,9 @@
 //! giving a real step tree. nix-darwin's `activate` is unstructured, so the
 //! server seeds a single step up front and every line lands under it.
 //!
-//! Kept pure and `now_ms`-injected (like [`crate::daemon::DaemonTrace`]) so the
-//! classifier is unit-testable without a clock; the server stamps the time and
-//! drives it through [`crate::MonitorState`].
+//! Kept pure and `now_ms`-injected so the classifier is unit-testable without
+//! a clock; the server stamps the time and drives it through
+//! [`crate::MonitorState`].
 
 use serde::{Deserialize, Serialize};
 
@@ -51,9 +51,9 @@ pub struct ActivationStep {
 
 /// Wire-friendly snapshot of the activation phase.
 ///
-/// `active` mirrors `DaemonInfo::tracing` (the panel greys out until a switch
-/// starts); `status` mirrors `DaemonInfo::status` (a human line explaining the
-/// current phase, e.g. "running", "skipped (build failed)", "failed").
+/// `active` is false until a switch's activation phase begins (the panel greys
+/// out until then); `status` is a human line explaining the current phase,
+/// e.g. "running", "skipped (build failed)", "failed".
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Activation {

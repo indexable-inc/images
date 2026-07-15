@@ -9,11 +9,9 @@ use snafu::Snafu;
 
 pub mod activation;
 pub mod build_view;
-pub mod daemon;
 pub mod global;
 pub use activation::{Activation, ActivationStatus, ActivationStep};
 pub use build_view::{ActivityRow, BuildCounts, BuildRow, BuildView};
-pub use daemon::{DaemonInfo, DaemonOps, OpClass};
 pub use global::{GlobalBuild, GlobalBuildKind, GlobalBuilds, GlobalWhy};
 
 const NIX_JSON_PREFIX: &str = "@nix ";
@@ -268,15 +266,13 @@ pub enum Delta {
     ProgressSet { progress: ActivityProgress },
     /// Run-wide store-optimisation totals moved (a file was hard-linked).
     OptimiseSet { optimise: OptimiseStats },
-    /// The live nix-daemon syscall view changed (new counts, path, or status).
-    DaemonSet { daemon: DaemonInfo },
     /// The machine-wide build view changed: the set of active builds/substitutions
-    /// on the host, or the detection/status line, moved. Carries the whole view,
-    /// like [`DaemonSet`](Delta::DaemonSet): the build list is small and polled.
+    /// on the host, or the detection/status line, moved. Carries the whole view:
+    /// the build list is small and polled.
     GlobalSet { global: GlobalBuilds },
     /// The activation phase (a `switch`'s `activate` run) changed: a step opened
     /// or closed, a line landed, or the phase status moved. Carries the whole
-    /// subtree, like [`DaemonSet`](Delta::DaemonSet): the step list is small.
+    /// subtree, like [`GlobalSet`](Delta::GlobalSet): the step list is small.
     ActivationSet { activation: Activation },
     /// The generation diff (`nvd diff <old> <new>`) became available at the end
     /// of a switch. A whole-string replace; produced once.
@@ -309,8 +305,6 @@ pub struct MonitorState {
     pub progress: Option<ActivityProgress>,
     /// Run-wide store-optimisation totals, summed from `FileLinked` events.
     pub optimise: OptimiseStats,
-    /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
-    pub daemon: DaemonInfo,
     /// Machine-wide build view, fed out-of-band by the server's global probe.
     /// `detected: false` on stock nix (the subcommand is unavailable).
     pub global: GlobalBuilds,
@@ -402,7 +396,6 @@ impl MonitorState {
             errors: self.errors.clone(),
             progress: self.progress,
             optimise: self.optimise,
-            daemon: self.daemon.clone(),
             global: self.global.clone(),
             activation: self.activation.clone(),
             diff: self.diff.clone(),
@@ -482,22 +475,6 @@ impl MonitorState {
         };
         activity.size_bytes = Some(size_bytes);
         self.emit_activity(id);
-    }
-
-    /// Replace the live nix-daemon syscall view and broadcast the change.
-    ///
-    /// Called by the server's tracer on its sampling timer. Skips the broadcast
-    /// when nothing changed so an idle daemon (or a tracer that cannot attach)
-    /// does not put a frame on the wire every tick; the snapshot still carries
-    /// the latest value for a freshly-connected client.
-    pub fn set_daemon(&mut self, daemon: DaemonInfo) {
-        if self.daemon == daemon {
-            return;
-        }
-        self.daemon = daemon;
-        self.emit(Delta::DaemonSet {
-            daemon: self.daemon.clone(),
-        });
     }
 
     /// Replace the machine-wide build view and broadcast the change.
@@ -1160,8 +1137,6 @@ pub struct MonitorSnapshot {
     pub progress: Option<ActivityProgress>,
     /// Run-wide store-optimisation totals, summed from `FileLinked` events.
     pub optimise: OptimiseStats,
-    /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
-    pub daemon: DaemonInfo,
     /// Machine-wide build view, fed out-of-band by the server's global probe.
     /// `detected: false` on stock nix (the subcommand is unavailable).
     pub global: GlobalBuilds,
