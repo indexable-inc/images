@@ -1,0 +1,331 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Tue, 14 Jul 2026 21:57:03 -0700
+Subject: [PATCH] fix(libstore): interrupt blocked automatic GC
+
+A synchronous automatic collector can block forever on gc.lock after its caller is interrupted because the detached thread does not receive the process interrupt. Register that thread with the interrupt fanout so it fulfills the caller future and lets abandoned daemon requests release their locks.
+
+Restore the daemon worker signal lifecycle after fork so SIGTERM is handled by a live child signal thread instead of staying blocked behind the vanished parent thread. This ports the signal mask design from Lix dccde943690b2a4af8e1730c6da45f91a01ab318.
+
+Serialize ReceiveInterrupts shutdown with in-flight callbacks. triggerInterrupt copies callbacks before invoking them outside the registry lock, so a callback must not use an expired or reused pthread identifier.
+
+Fixes indexable-inc/index#3300
+Refs indexable-inc/ix#7145
+
+Assisted-by: Codex <noreply@openai.com>
+
+diff --git a/src/libstore/gc.cc b/src/libstore/gc.cc
+index f3616d42e..432dbd853 100644
+--- a/src/libstore/gc.cc
++++ b/src/libstore/gc.cc
+@@ -883,7 +883,6 @@ void LocalStore::autoGC(bool sync)
+ 
+         std::thread([promise{std::move(promise)}, this]() mutable {
+             try {
+-
+                 /* Wake up any threads waiting for the auto-GC to finish. */
+                 Finally wakeup([&]() {
+                     auto state(_state->lock());
+@@ -892,6 +891,12 @@ void LocalStore::autoGC(bool sync)
+                     promise.set_value();
+                 });
+ 
++                // The synchronous caller cannot observe interruption until
++                // this thread fulfills its future, including while gc.lock is
++                // busy.
++                ReceiveInterrupts receiveInterrupts;
++                checkInterrupt();
++
+                 GCOptions options;
+                 GCResults results;
+ 
+@@ -909,8 +914,10 @@ void LocalStore::autoGC(bool sync)
+ 
+ sync:
+     // Wait for the future outside of the state lock.
+-    if (sync)
++    if (sync) {
+         future.get();
++        checkInterrupt();
++    }
+ #endif
+ }
+ 
+diff --git a/src/libutil/unix/include/nix/util/signals-impl.hh b/src/libutil/unix/include/nix/util/signals-impl.hh
+index e51ce082a..d5d46016b 100644
+--- a/src/libutil/unix/include/nix/util/signals-impl.hh
++++ b/src/libutil/unix/include/nix/util/signals-impl.hh
+@@ -26,8 +26,10 @@
+ #include <atomic>
+ #include <functional>
+ #include <map>
+-#include <sstream>
++#include <memory>
++#include <mutex>
+ #include <optional>
++#include <sstream>
+ 
+ namespace nix {
+ 
+@@ -41,13 +43,26 @@ extern thread_local std::function<bool()> interruptCheck;
+ 
+ void _interrupted();
+ 
++/**
++ * Whether startSignalHandlerThread() should replace the saved pre-handler
++ * signal mask. A forked daemon worker inherits that saved mask but loses the
++ * signal thread, so replacing it with the already blocked mask would prevent
++ * its children from restoring normal signal delivery.
++ */
++enum class SignalMaskSave
++{
++    Save,
++    Keep,
++};
++
+ /**
+  * Start a thread that handles various signals. Also block those signals
+  * on the current thread (and thus any threads created by it).
+- * Saves the signal mask before changing the mask to block those signals.
++ * Optionally saves the signal mask before changing the mask to block those
++ * signals.
+  * See saveSignalMask().
+  */
+-void startSignalHandlerThread();
++void startSignalHandlerThread(SignalMaskSave save = SignalMaskSave::Save);
+ 
+ /**
+  * Saves the signal mask, which is the signal mask that nix will restore
+@@ -97,17 +112,37 @@ inline void checkInterrupt()
+  * A RAII class that causes the current thread to receive SIGUSR1 when
+  * the signal handler thread receives SIGINT. That is, this allows
+  * SIGINT to be multiplexed to multiple threads.
++ *
++ * Callback invocation is serialized with destruction because
++ * triggerInterrupt() invokes a copied callback after releasing the registry
++ * lock.
+  */
+ struct ReceiveInterrupts
+ {
+-    pthread_t target;
++    struct State
++    {
++        std::mutex mutex;
++        std::optional<pthread_t> target = pthread_self();
++    };
++
++    std::shared_ptr<State> state;
+     std::unique_ptr<InterruptCallback> callback;
+ 
+     ReceiveInterrupts()
+-        : target(pthread_self())
+-        , callback(createInterruptCallback([&]() { pthread_kill(target, SIGUSR1); }))
++        : state(std::make_shared<State>())
++        , callback(createInterruptCallback([state = state]() {
++            std::lock_guard lock(state->mutex);
++            if (state->target)
++                pthread_kill(*state->target, SIGUSR1);
++        }))
+     {
+     }
++
++    ~ReceiveInterrupts()
++    {
++        std::lock_guard lock(state->mutex);
++        state->target.reset();
++    }
+ };
+ 
+ } // namespace nix
+diff --git a/src/libutil/unix/signals.cc b/src/libutil/unix/signals.cc
+index 6f1101058..ce2a528d2 100644
+--- a/src/libutil/unix/signals.cc
++++ b/src/libutil/unix/signals.cc
+@@ -98,11 +98,12 @@ void unix::saveSignalMask()
+     savedSignalMaskIsSet = true;
+ }
+ 
+-void unix::startSignalHandlerThread()
++void unix::startSignalHandlerThread(SignalMaskSave save)
+ {
+     updateWindowSize();
+ 
+-    saveSignalMask();
++    if (save == SignalMaskSave::Save)
++        saveSignalMask();
+ 
+     sigset_t set;
+     sigemptyset(&set);
+diff --git a/src/nix/unix/daemon.cc b/src/nix/unix/daemon.cc
+index a5e102315..1337985c8 100644
+--- a/src/nix/unix/daemon.cc
++++ b/src/nix/unix/daemon.cc
+@@ -336,6 +336,11 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                     [&, storeConfig, closeListeners = std::move(closeListeners)]() {
+                         closeListeners();
+ 
++                        // fork() retains the blocked signal mask, but not the
++                        // parent signal thread that services that mask. Keep
++                        // the original saved mask for children that exec.
++                        unix::startSignalHandlerThread(unix::SignalMaskSave::Keep);
++
+                         // Background the daemon.
+                         if (setsid() == -1)
+                             throw SysError("creating a new session");
+diff --git a/tests/functional/daemon-signal.sh b/tests/functional/daemon-signal.sh
+new file mode 100644
+index 000000000..9a7125c82
+--- /dev/null
++++ b/tests/functional/daemon-signal.sh
+@@ -0,0 +1,69 @@
++#!/usr/bin/env bash
++
++source common.sh
++
++if [[ $(uname) != Linux ]]; then
++    skipTest "daemon worker signal test requires procfs"
++fi
++
++if [[ -z ${NIX_DAEMON_PACKAGE:-} ]]; then
++    skipTest "daemon worker signal test requires a test daemon"
++fi
++
++clientPid=
++workerPid=
++
++cleanup() {
++    if [[ -n $workerPid && -e /proc/$workerPid ]]; then
++        kill -KILL "$workerPid" || true
++    fi
++    if [[ -n $clientPid ]] && kill -0 "$clientPid" 2> /dev/null; then
++        kill -KILL "$clientPid" || true
++    fi
++    killDaemon
++}
++trap cleanup EXIT
++
++clientLog=$TEST_ROOT/daemon-signal-client.log
++expr=$(cat <<EOF
++with import ${config_nix}; mkDerivation {
++  name = "daemon-signal";
++  buildCommand = ''
++    echo daemon-signal-ready >&2
++    sleep 300
++  '';
++}
++EOF
++)
++
++nix build --impure --no-link -L --expr "$expr" > "$clientLog" 2>&1 &
++clientPid=$!
++
++for _ in {1..100}; do
++    if grepQuiet -F "daemon-signal-ready" "$clientLog"; then
++        break
++    fi
++    kill -0 "$clientPid" || fail "client exited before its build started"
++    sleep 0.1
++done
++grepQuiet -F "daemon-signal-ready" "$clientLog"
++
++workerPids=$(<"/proc/$_NIX_TEST_DAEMON_PID/task/$_NIX_TEST_DAEMON_PID/children")
++read -r -a workers <<< "$workerPids"
++if [[ ${#workers[@]} -ne 1 ]]; then
++    fail "expected one daemon worker, found: ${workers[*]}"
++fi
++workerPid=${workers[0]}
++
++kill -TERM "$workerPid"
++for _ in {1..100}; do
++    if [[ ! -e /proc/$workerPid ]]; then
++        break
++    fi
++    sleep 0.1
++done
++
++[[ ! -e /proc/$workerPid ]] || fail "daemon worker ignored SIGTERM"
++workerPid=
++wait "$clientPid" || true
++clientPid=
+diff --git a/tests/functional/gc-auto.sh b/tests/functional/gc-auto.sh
+index 36e4ebd5f..74f9970af 100755
+--- a/tests/functional/gc-auto.sh
++++ b/tests/functional/gc-auto.sh
+@@ -142,3 +142,65 @@ test -e "$(cat "$firstResult")"
+ test -e "$(cat "$secondResult")"
+ grepQuiet -F "skipping auto-GC because" "$secondLog"
+ grepQuietInverse -F "running auto-GC to free" "$secondLog"
++
++# A synchronous auto-GC caller waits on a detached collector thread. When the
++# process is interrupted, the collector must leave a blocked gc.lock wait so it
++# can fulfill that future and let the caller release any locks it already owns.
++clearStore
++echo 3000 > "$fake_free"
++interruptGarbage=$(nix store add-path --name interrupt-garbage ./nar-access.sh)
++test -e "$interruptGarbage"
++
++echo 100 > "$fake_free"
++interruptLock=$TEST_ROOT/interrupt-gc-lock.fifo
++mkfifo "$interruptLock"
++holderInput=$TEST_ROOT/interrupt-holder
++victimInput=$TEST_ROOT/interrupt-victim
++echo holder > "$holderInput"
++echo victim > "$victimInput"
++holderLog=$TEST_ROOT/interrupt-holder.log
++victimLog=$TEST_ROOT/interrupt-victim.log
++
++_NIX_TEST_GC_SYNC_2=$interruptLock nix store add-path --name interrupt-holder "$holderInput" -v \
++    --min-free 1K --max-free 2K --min-free-check-interval 0 \
++    > "$TEST_ROOT/interrupt-holder.result" 2> "$holderLog" &
++holderPid=$!
++
++# Opening the writer proves the holder has acquired gc.lock and reached the
++# synchronization point inside collectGarbage().
++exec 4> "$interruptLock"
++nix store add-path --name interrupt-victim "$victimInput" -v \
++    --min-free 1K --max-free 2K --min-free-check-interval 0 \
++    > "$TEST_ROOT/interrupt-victim.result" 2> "$victimLog" &
++victimPid=$!
++
++for _ in {1..100}; do
++    if grepQuiet -F "waiting for the big garbage collector lock" "$victimLog"; then
++        break
++    fi
++    kill -0 "$victimPid" || fail "victim exited before waiting for gc.lock"
++    sleep 0.1
++done
++grepQuiet -F "waiting for the big garbage collector lock" "$victimLog"
++
++kill -TERM "$victimPid"
++for _ in {1..100}; do
++    if ! kill -0 "$victimPid" 2> /dev/null; then
++        break
++    fi
++    sleep 0.1
++done
++
++if kill -0 "$victimPid" 2> /dev/null; then
++    kill -KILL "$victimPid"
++    wait "$victimPid" || true
++    exec 4>&-
++    wait "$holderPid"
++    fail "interrupted auto-GC stayed blocked on gc.lock"
++fi
++
++if wait "$victimPid"; then
++    fail "interrupted auto-GC exited successfully"
++fi
++exec 4>&-
++wait "$holderPid"
+diff --git a/tests/functional/meson.build b/tests/functional/meson.build
+index 08e346ef4..034011634 100644
+--- a/tests/functional/meson.build
++++ b/tests/functional/meson.build
+@@ -55,6 +55,7 @@ suites = [
+       'gc.sh',
+       'nix-collect-garbage-d.sh',
+       'remote-store.sh',
++      'daemon-signal.sh',
+       'legacy-ssh-store.sh',
+       'lang.sh',
+       'lang-gc.sh',

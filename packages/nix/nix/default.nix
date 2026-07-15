@@ -249,6 +249,24 @@ let
 
       mkdir -p "$out"
     '';
+
+  focusedFunctionalTest = {
+    name,
+    testDaemon ? null,
+  }: let
+    tests = package.components.nix-functional-tests.override (
+      lib.optionalAttrs (testDaemon != null) {test-daemon = testDaemon;}
+    );
+  in
+    tests.overrideAttrs (old: {
+      mesonCheckFlags = (old.mesonCheckFlags or []) ++ [name];
+    });
+
+  autoGcInterrupt = focusedFunctionalTest {name = "gc-auto";};
+  daemonSignal = focusedFunctionalTest {
+    name = "daemon-signal";
+    testDaemon = package.components.nix-cli;
+  };
 in
   package.overrideAttrs (old: {
     passthru =
@@ -258,7 +276,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // {
-            inherit smoke;
+            inherit autoGcInterrupt daemonSignal smoke;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {
