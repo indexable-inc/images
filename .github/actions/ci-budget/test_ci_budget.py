@@ -376,7 +376,7 @@ class WorkflowAssociationTests(unittest.TestCase):
         attempt = {
             "event": "merge_group",
             "head_sha": "b" * 40,
-            "pull_requests": [],
+            "pull_requests": [{"number": 999}],
         }
 
         result = ci_budget.classify_workflow_attempt(
@@ -467,7 +467,7 @@ class WorkflowAssociationTests(unittest.TestCase):
         attempt = {
             "event": "push",
             "head_sha": head_sha,
-            "pull_requests": [],
+            "pull_requests": [{"number": 1372}],
         }
 
         result = ci_budget.classify_workflow_attempt(
