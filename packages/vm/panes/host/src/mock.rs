@@ -7,7 +7,7 @@
 //! capture end to end; the `PointerRelative` deltas it produces land in the
 //! same input log as everything else.
 //!
-//! Pacing mirrors the real compositor: exactly one frame in flight, the next
+//! Pacing keeps exactly one frame in flight, the next
 //! render starts when the host acks the previous seq. On a `ProMotion` panel
 //! the ack loop should settle at ~120 acks/s; the rate is logged every
 //! second.

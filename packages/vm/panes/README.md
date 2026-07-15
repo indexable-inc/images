@@ -14,7 +14,7 @@ issue: [index#1686](https://github.com/indexable-inc/index/issues/1686).
 - [`protocol/`](protocol/) (`panes-protocol`): the wire format. One duplex
   byte stream (guest vsock port 7100 to a host unix socket) carrying
   length-prefixed postcard frames: damage-tiled window contents up, input and
-  configure events down, ack-driven pacing genlocked to the host display. The
+  configure events down, acks up as backpressure on the in-flight window. The
   crate doc comments are the protocol spec. Minor 1 (v1.1) adds pointer lock
   for mouse-look apps (index#1724): `ToHost::PointerLock` when a surface's
   `zwp_locked_pointer_v1` (de)activates, `ToGuest::PointerRelative` for the

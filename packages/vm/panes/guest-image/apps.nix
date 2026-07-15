@@ -211,15 +211,15 @@ in {
       #
       # Beyond the Vulkan backend, these are latency-opinionated defaults
       # (index#1686): MC's frames reach glass through the compositor's
-      # ack-paced stream plus the host's display link, so anything that adds
+      # ack-backpressured stream plus the host's display link, so anything that adds
       # in-game frame time or a second pacing loop stacks straight onto
       # mouse-look latency.
       # - enableVsync:false -- the dominant term, validated live by A/B:
       #   MC's vsync waits on the swapchain, stacking a second frame of
-      #   pacing on top of the compositor's ack genlock (double vsync).
+      #   pacing on top of the compositor's frame pacing (double vsync).
       # - maxFps:260 -- the slider's "Unlimited" stop (valid range 10-260).
       #   Uncapped, the frame the compositor ships is always the freshest
-      #   sample; the ack pacing is what actually bounds the shipped rate.
+      #   sample; the in-flight cap is what actually bounds the shipped rate.
       # - rawMouseInput:true -- GLFW raw relative motion (the default,
       #   pinned against stale instance state): pairs with
       #   zwp_relative_pointer fed by the host's uncoalesced deltas.

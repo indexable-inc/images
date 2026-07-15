@@ -4,8 +4,9 @@
 //! Presentation pacing: the display link ticks at the panel's rate (up to
 //! 120Hz on `ProMotion`) and hands us the drawable; we only encode/present when
 //! a new guest frame (or a resize) made the window dirty, and the frame's
-//! `seq` is acked right after the present is scheduled. The guest renders its
-//! next frame off that ack, genlocking it to the display. A fully occluded
+//! `seq` is acked right after the present is scheduled. The guest paces its
+//! sends off that ack (a capped in-flight window; its clients render on
+//! send-time frame callbacks). A fully occluded
 //! window downshifts to slow ack-only ticks instead (see
 //! [`PaneWindow::set_occluded`]): presents would be invisible, but a
 //! withheld ack would wedge the guest.
@@ -493,7 +494,7 @@ impl PaneWindow {
     /// Returns true when the frame will be presented (its ack rides the next
     /// display-link tick). Returns false when the host cannot take the frame
     /// at all (zero size, texture allocation failure): the caller must ack
-    /// `seq` immediately, because with one-frame-in-flight guest pacing a
+    /// `seq` immediately, because with capped-in-flight guest pacing a
     /// withheld ack wedges that window's frame loop forever. Malformed tiles
     /// inside an otherwise valid frame are logged and skipped, never stall.
     pub fn apply_frame(
@@ -619,7 +620,7 @@ impl PaneWindow {
     }
 
     /// Occlusion change from the window delegate. The link must never be
-    /// paused here outright: with one-frame-in-flight guest pacing the tick
+    /// paused here outright: with capped-in-flight guest pacing the tick
     /// is what releases the pending ack, and a withheld ack wedges the guest
     /// window (its compositor watchdog then resends full frames forever). So
     /// occlusion only downshifts the tick rate; the occluded branch of
