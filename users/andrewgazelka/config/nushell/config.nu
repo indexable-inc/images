@@ -1947,6 +1947,37 @@ def group-max [group_field: string, max_field: string]: list<record> -> list<rec
     }
 }
 
+# launchctl only reports loaded jobs, so discover installed jobs from their plists.
+def "launchctl installed" [] {
+    let locations = [
+        {
+            scope: "user"
+            kind: "agent"
+            path: ($env.HOME | path join "Library" "LaunchAgents")
+        }
+        { scope: "system", kind: "agent", path: "/Library/LaunchAgents" }
+        { scope: "system", kind: "daemon", path: "/Library/LaunchDaemons" }
+    ]
+
+    $locations
+    | each { |location|
+        glob ($location.path | path join "*.plist")
+        | par-each { |path|
+            let plist = ^plutil -convert json -o - $path | from json
+            {
+                # Empty vendor placeholder plists are not launchd jobs.
+                label: $plist.Label?
+                scope: $location.scope
+                kind: $location.kind
+                path: $path
+            }
+        }
+    }
+    | flatten
+    | where label != null
+    | sort-by label
+}
+
 def tui-ports [] {
     open ~/.superglide/tui/*.port | lines  | flatten | into int
 }
