@@ -99,8 +99,21 @@
     {
       "patch": "0022-fix-finish-auto-GC-before-store-teardown.patch",
       "deps": [
+        "0001-fix-libstore-don-t-crash-the-daemon-when-a-GC-roots-.patch",
+        "0002-fix-libexpr-treat-inaccessible-default-lookup-path-e.patch",
         "0006-libstore-daemon-record-client-identity-for-build.patch",
-        "0018-fix-libstore-interrupt-blocked-automatic-GC.patch"
+        "0007-nix-add-nix-store-builds-command.patch",
+        "0009-doc-release-note-for-build-status-directory-and-nix-.patch",
+        "0010-libfetchers-add-opt-in-structured-commit-history-exp.patch",
+        "0012-fix-libstore-add-temp-root-for-floating-CA-scratch-o.patch",
+        "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch",
+        "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch",
+        "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch",
+        "0016-fix-libstore-accept-opaque-temporary-root-filenames.patch",
+        "0018-fix-libstore-interrupt-blocked-automatic-GC.patch",
+        "0019-Get-rid-of-duplicated-Build-failed-due-to-failed-dep.patch",
+        "0020-libstore-preserve-content-addressed-leaf-failures.patch",
+        "0021-libstore-enforce-derivation-no-progress-deadlines.patch"
       ]
     }
   ]
