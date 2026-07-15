@@ -3,34 +3,44 @@ name: Shared total CI deadline
 on:
   workflow_call:
     inputs:
-      target-job-names:
-        description: JSON array of job names covered by the standard budget
-        type: string
-        required: true
       run-id:
-        description: Caller workflow run ID
+        description: Workflow run ID to cancel at the ordinary deadline
         type: number
         required: true
       run-attempt:
-        description: Caller workflow attempt
+        description: Workflow attempt to cancel at the ordinary deadline
         type: number
         required: true
+      extra-costly-paths:
+        description: JSON array of repository-specific costly path globs
+        type: string
+        default: "[]"
+      force-big-change:
+        description: Grant the extended budget without a path or label match
+        type: boolean
+        default: false
+      merge-queue-branch:
+        description: Branch whose queue owns a merge-group workflow
+        type: string
+        default: main
 
 jobs:
-  enforce:
+  cancel:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       actions: write
       contents: read
+      pull-requests: read
     steps:
-      - name: Enforce total CI deadline
+      - name: Cancel ordinary CI at its total deadline
         uses: indexable-inc/index/.github/actions/ci-budget@main
         with:
-          mode: deadline
+          mode: cancel
           repository: ${{ github.repository }}
-          pull-request-number: 0
           run-id: ${{ inputs.run-id }}
           run-attempt: ${{ inputs.run-attempt }}
-          target-job-names: ${{ inputs.target-job-names }}
+          extra-costly-paths: ${{ inputs.extra-costly-paths }}
+          force-big-change: ${{ inputs.force-big-change }}
+          merge-queue-branch: ${{ inputs.merge-queue-branch }}
           token: ${{ github.token }}
