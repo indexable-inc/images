@@ -639,6 +639,28 @@
       cp -r ${xPythonSource}/x/. "$site/"
     ''
   );
+  # Search and cross-compare hotels across Expedia/Google/Booking/Kayak into
+  # polars by driving the running browser: `import hotels`, then
+  # `await hotels.search(...)` / `hotels.compare(...)`. Each backend parses its
+  # site's rendered cards into the same pydantic Hotel. Pure Python over the
+  # bundled httpx/websockets/polars/pydantic (raw CDP, since hotel sites
+  # challenge fresh/headless browsers); cross-platform.
+  hotelsPythonSource = builtins.path {
+    name = "ix-mcp-hotels-python-source";
+    path = ./src/hotels;
+  };
+  hotelsModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-hotels-python-module"
+    {
+      strictDeps = true;
+      meta.description = "Cross-site hotel search to polars via the running browser, bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/hotels"
+      mkdir -p "$site"
+      cp -r ${hotelsPythonSource}/hotels/. "$site/"
+    ''
+  );
   # Slack: read channels, messages, threads; send messages; search -- all per-user
   # with a self-service token flow. Pure Python over stdlib urllib + polars.
   # Per-user credential: SLACK_USER_TOKEN/SLACK_TOKEN env or ~/.config/slack/token
@@ -1300,6 +1322,12 @@
       # pulls it transitively too, but linear/google_auth depend on it directly,
       # so declare it explicitly.)
       ps.pydantic
+      # websockets: the raw Chrome DevTools Protocol transport the `hotels` module
+      # speaks (httpx for the /json handshake, then a websocket to the devtools
+      # endpoint). Playwright cannot currently handshake with very recent Chrome
+      # builds, so `hotels` drives the running browser over raw CDP instead; it
+      # depends on websockets directly, so declare it explicitly.
+      ps.websockets
       # htpy: compose HTML in Python with automatic escaping (see the module
       # definition above). The preferred way to build any dashboard markup.
       htpyModule
@@ -1410,6 +1438,7 @@
       distillerModule
       browserModule
       xModule
+      hotelsModule
       slackModule
       beeperModule
       linearModule
@@ -5443,6 +5472,7 @@
   imessageBundled = importTest "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
   ghosttyBundled = importTest "ghostty" "import ghostty; print('ghostty-ok', all(callable(getattr(ghostty, n)) for n in ('surfaces', 'my_tty', 'my_surface', 'close', 'close_me', 'focus', 'activate', 'is_running')), ghostty.__version__)";
   xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
+  hotelsBundled = importTest "hotels" "import hotels; print('hotels-ok', all(callable(getattr(hotels, n)) for n in ('search', 'compare', 'amenities')), len(hotels.ALL_SITES), hotels.__version__)";
   meshBundled = importTest "mesh" "import mesh, asyncio; print('mesh-ok', all(asyncio.iscoroutinefunction(getattr(mesh, n)) for n in ('peers', 'sessions')), mesh.__version__)";
   fabricBundled = importTest "fabric" "import fabric, asyncio; print('fabric-ok', asyncio.iscoroutinefunction(fabric.run), asyncio.iscoroutinefunction(fabric.claude.session), fabric.__version__)";
   linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
@@ -5537,6 +5567,38 @@
       cp ${linearTestSupport} "$TMPDIR/linear_test_support.py"
       ${lib.getExe linearTriageTestPython} -m pytest "$TMPDIR/test_linear_triage.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp linear triage tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+  hotelsTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.polars
+    ps.pydantic
+    # `hotels` imports httpx + websockets at import time (the raw-CDP transport),
+    # so the test interpreter needs them even though the unit tests are offline.
+    ps.httpx
+    ps.websockets
+    hotelsModule
+  ]);
+  hotelsTestSource = builtins.path {
+    name = "ix-mcp-hotels-test";
+    path = ./tests/test_hotels.py;
+  };
+  hotelsTests =
+    pkgs.runCommand "ix-mcp-hotels-tests"
+    {
+      nativeBuildInputs = [hotelsTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${hotelsTestSource} "$TMPDIR/test_hotels.py"
+      ${lib.getExe hotelsTestPython} -m pytest "$TMPDIR/test_hotels.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp hotels tests failed:" >&2
         cat stdout stderr >&2
         exit 1
       }
@@ -5887,6 +5949,8 @@ in
               browserVdomSmoke
               vdomPropertiesSmoke
               xBundled
+              hotelsBundled
+              hotelsTests
               nuBundled
               nuTests
               linearBundled

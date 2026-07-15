@@ -239,6 +239,16 @@ MODULES: tuple[Module, ...] = (
         "text-first readout and `browser.shot()` renders a screenshot inline",
     ),
     Module(
+        "hotels",
+        "search and cross-compare hotels across Expedia / Google / Booking / Kayak into polars by "
+        "driving your running browser over CDP: "
+        "`await hotels.search('San Francisco', check_in='YYYY-MM-DD', check_out='YYYY-MM-DD', "
+        "amenities=['washer'], sort='price')` returns one row per hotel (name, nightly/total price, "
+        "rating, url); `await hotels.compare(...)` fans out across every site at once and aligns the "
+        "same hotel to show the cheapest; `await hotels.amenities(...)` lists Expedia's filterable "
+        "amenities. Reads public listings (no personal account), so no incognito gate",
+    ),
+    Module(
         "google_auth",
         "Google for your own account: read and send Gmail, and manage Calendar, over the "
         "official googleapiclient (`google_auth.gmail()` / `.calendar()`); `await "
