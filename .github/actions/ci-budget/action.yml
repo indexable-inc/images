@@ -7,12 +7,9 @@ inputs:
     required: true
   pull-request-number:
     description: Pull request number, or 0 outside a pull request
-    required: true
-  base-sha:
-    description: Base commit for a non-pull-request change
-    default: ""
+    default: "0"
   head-sha:
-    description: Head commit for a non-pull-request change
+    description: Head commit for a non-pull-request change association
     default: ""
   token:
     description: Token with pull request read and, when publishing, issues write
@@ -27,17 +24,23 @@ inputs:
     description: Add the automatic label and publish the sticky comment
     default: "true"
   mode:
-    description: Policy operation, either classify or deadline
+    description: Policy operation, one of classify, gate, or cancel
     default: classify
   run-id:
-    description: Workflow run to enforce in deadline mode
+    description: Workflow run used by every non-pull-request policy operation
     default: "0"
   run-attempt:
-    description: Workflow attempt to enforce in deadline mode
+    description: Workflow attempt used by every non-pull-request policy operation
     default: "0"
-  target-job-names:
-    description: JSON array of job names covered by the total deadline
-    default: "[]"
+  target-job-name:
+    description: Required target verified in gate mode
+    default: ""
+  big-change:
+    description: Whether gate mode should skip the standard deadline
+    default: "false"
+  merge-queue-branch:
+    description: Branch whose queue owns a merge-group workflow
+    default: main
 
 outputs:
   big_change:
@@ -59,26 +62,33 @@ runs:
       shell: bash
       env:
         CI_BUDGET_EXTRA_COSTLY_PATHS: ${{ inputs.extra-costly-paths }}
-        CI_BUDGET_BASE_SHA: ${{ inputs.base-sha }}
         CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}
         CI_BUDGET_PUBLISH: ${{ inputs.publish }}
         CI_BUDGET_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
         CI_BUDGET_REPOSITORY: ${{ inputs.repository }}
         CI_BUDGET_HEAD_SHA: ${{ inputs.head-sha }}
+        CI_BUDGET_MERGE_QUEUE_BRANCH: ${{ inputs.merge-queue-branch }}
+        CI_BUDGET_RUN_ATTEMPT: ${{ inputs.run-attempt }}
+        CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
         CI_BUDGET_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/ci_budget.py"
     - name: Enforce total CI deadline
-      if: inputs.mode == 'deadline'
+      if: inputs.mode == 'gate' || inputs.mode == 'cancel'
       shell: bash
       env:
+        CI_BUDGET_BIG_CHANGE: ${{ inputs.big-change }}
+        CI_BUDGET_DEADLINE_MODE: ${{ inputs.mode }}
+        CI_BUDGET_EXTRA_COSTLY_PATHS: ${{ inputs.extra-costly-paths }}
+        CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}
+        CI_BUDGET_MERGE_QUEUE_BRANCH: ${{ inputs.merge-queue-branch }}
         CI_BUDGET_REPOSITORY: ${{ inputs.repository }}
         CI_BUDGET_RUN_ATTEMPT: ${{ inputs.run-attempt }}
         CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
-        CI_BUDGET_TARGET_JOB_NAMES: ${{ inputs.target-job-names }}
+        CI_BUDGET_TARGET_JOB_NAME: ${{ inputs.target-job-name }}
         CI_BUDGET_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/ci_deadline.py"
     - name: Reject unknown CI budget mode
-      if: inputs.mode != 'classify' && inputs.mode != 'deadline'
+      if: inputs.mode != 'classify' && inputs.mode != 'gate' && inputs.mode != 'cancel'
       shell: bash
       env:
         MODE: ${{ inputs.mode }}
