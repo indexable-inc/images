@@ -235,6 +235,7 @@ def main() -> int:
         )
         canceller = WorkflowCanceller(
             client.request,
+            repository,
             Path(os.environ["WORKFLOW_CANCELLATION_RECORD_DIRECTORY"]),
             Path(os.environ["GITHUB_STEP_SUMMARY"]),
         )

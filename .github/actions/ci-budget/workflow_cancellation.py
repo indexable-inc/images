@@ -123,6 +123,10 @@ class WorkflowCancellation:
         repository_name(self.repository, "cancellation target repository")
         positive(self.run_id, "cancellation target run ID")
         positive(self.run_attempt, "cancellation target run attempt")
+        if self.repository != self.source.repository:
+            raise ValueError(
+                "workflow cancellation source and target repositories must match"
+            )
         allowed = ALLOWED_REASONS[self.source.kind]
         if self.reason.code not in allowed:
             raise ValueError(
@@ -185,12 +189,14 @@ class WorkflowCanceller:
     def __init__(
         self,
         request: Request,
+        repository: str,
         record_directory: Path,
         summary_path: Path,
         *,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._request = request
+        self._repository = repository_name(repository, "GitHub client repository")
         self._record_directory = record_directory
         self._summary_path = summary_path
         self._now = now
@@ -215,6 +221,10 @@ class WorkflowCanceller:
             summary.write(f"`workflow-cancellation {compact}`\n\n")
 
     def cancel(self, cancellation: WorkflowCancellation) -> Path:
+        if cancellation.repository != self._repository:
+            raise ValueError(
+                "workflow cancellation target does not match the GitHub client"
+            )
         path = self._path(cancellation)
         self._write(
             path,
@@ -274,6 +284,7 @@ def main() -> int:
     )
     WorkflowCanceller(
         client.request,
+        cancellation.repository,
         Path(environment["WORKFLOW_CANCELLATION_RECORD_DIRECTORY"]),
         Path(environment["GITHUB_STEP_SUMMARY"]),
     ).cancel(cancellation)

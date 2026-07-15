@@ -83,7 +83,7 @@ def cancellation(
     detail: str = "ordinary CI exceeded its 300 second total budget",
 ) -> workflow_cancellation.WorkflowCancellation:
     return workflow_cancellation.WorkflowCancellation(
-        repository="indexable-inc/ix",
+        repository="indexable-inc/index",
         run_id=12,
         run_attempt=3,
         reason=workflow_cancellation.CancellationReason(
@@ -131,6 +131,24 @@ class WorkflowCancellationTests(unittest.TestCase):
 
         assert "reason code must be typed" in str(error)
 
+    def test_source_cannot_cancel_another_repository(self) -> None:
+        error = value_error(
+            lambda: workflow_cancellation.WorkflowCancellation(
+                repository="indexable-inc/ix",
+                run_id=12,
+                run_attempt=1,
+                reason=workflow_cancellation.CancellationReason(
+                    code=(
+                        workflow_cancellation.CancellationReasonCode.CI_TOTAL_DEADLINE_EXCEEDED
+                    ),
+                    detail="ordinary CI exceeded its budget",
+                ),
+                source=source(),
+            )
+        )
+
+        assert "source and target repositories must match" in str(error)
+
     def test_accepted_cancellation_has_a_durable_structured_record(self) -> None:
         request = FakeRequest()
         recorded_at = datetime(2026, 7, 15, 16, 7, 43, tzinfo=UTC)
@@ -139,6 +157,7 @@ class WorkflowCancellationTests(unittest.TestCase):
             summary = root / "summary.md"
             path = workflow_cancellation.WorkflowCanceller(
                 request,
+                "indexable-inc/index",
                 root / "records",
                 summary,
                 now=lambda: recorded_at,
@@ -166,7 +185,7 @@ class WorkflowCancellationTests(unittest.TestCase):
                     ),
                 },
                 "target": {
-                    "repository": "indexable-inc/ix",
+                    "repository": "indexable-inc/index",
                     "run_attempt": 3,
                     "run_id": 12,
                 },
@@ -183,6 +202,7 @@ class WorkflowCancellationTests(unittest.TestCase):
             root = Path(temporary)
             canceller = workflow_cancellation.WorkflowCanceller(
                 request,
+                "indexable-inc/index",
                 root / "records",
                 root / "summary.md",
             )
@@ -196,6 +216,23 @@ class WorkflowCancellationTests(unittest.TestCase):
             assert record["outcome"] == "rejected"
             assert record["reason"]["code"] == "ci_total_deadline_exceeded"
             assert record["error"] == "RuntimeError: HTTP 403"
+
+    def test_github_client_repository_must_match_the_target(self) -> None:
+        request = FakeRequest()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            canceller = workflow_cancellation.WorkflowCanceller(
+                request,
+                "indexable-inc/ix",
+                root / "records",
+                root / "summary.md",
+            )
+
+            error = value_error(lambda: canceller.cancel(cancellation()))
+
+            assert "target does not match the GitHub client" in str(error)
+            assert request.calls == []
+            assert not (root / "records").exists()
 
     def test_source_identity_comes_from_github_environment(self) -> None:
         result = workflow_cancellation.source_from_environment(
