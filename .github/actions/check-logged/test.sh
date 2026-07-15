@@ -16,6 +16,11 @@ check_log="${log_root}/${commit}/${workflow}/${run_id}-${run_attempt}.stdout"
 summary="${scratch}/summary"
 stdout="${scratch}/stdout"
 stderr="${scratch}/stderr"
+missing_identity_stdout="${scratch}/missing-identity-stdout"
+missing_identity_stderr="${scratch}/missing-identity-stderr"
+missing_identity_summary="${scratch}/missing-identity-summary"
+missing_identity_run="${scratch}/missing-identity-run"
+nix_run="${scratch}/nix-run"
 bash_bin="$(command -v bash)"
 env_bin="$(command -v env)"
 
@@ -38,6 +43,11 @@ case "$1" in
     printf '{"trusted":false}\n'
     ;;
   run)
+    if [[ "$#" -ne 4 || "$2" != ".#check" || "$3" != "--" || "$4" != "closure" ]]; then
+      printf 'unexpected nix arguments' >&2
+      exit 65
+    fi
+    : >"${NIX_RUN_SENTINEL:?NIX_RUN_SENTINEL is required}"
     printf 'check passed\n'
     ;;
   *)
@@ -47,16 +57,21 @@ esac
 EOF
 chmod +x "${bin_dir}/git" "${bin_dir}/nix"
 
+action_env=(
+  PATH="${bin_dir}"
+  CHECK_SUBCOMMAND=closure
+  GITHUB_RUN_ATTEMPT="${run_attempt}"
+  GITHUB_RUN_ID="${run_id}"
+  GITHUB_WORKFLOW="${workflow}"
+  IX_CI_RUN_LOG_ROOT="${log_root}"
+  RUNNER_TEMP="${scratch}/runner-temp"
+)
+
 "${env_bin}" -i \
-  PATH="${bin_dir}" \
-  CHECK_SUBCOMMAND=closure \
-  GITHUB_RUN_ATTEMPT="${run_attempt}" \
-  GITHUB_RUN_ID="${run_id}" \
+  "${action_env[@]}" \
   GITHUB_STEP_SUMMARY="${summary}" \
-  GITHUB_WORKFLOW="${workflow}" \
-  IX_CI_RUN_LOG_ROOT="${log_root}" \
+  NIX_RUN_SENTINEL="${nix_run}" \
   RUNNER_IDENTITY="${runner_identity}" \
-  RUNNER_TEMP="${scratch}/runner-temp" \
   "${bash_bin}" "${action_dir}/run.sh" >"${stdout}" 2>"${stderr}"
 
 if [[ -s "${stderr}" ]]; then
@@ -73,5 +88,28 @@ if [[ "$(<"${summary}")" != *"log: \`${check_log}\` on \`${runner_identity}\`"* 
 fi
 if [[ "$(<"${check_log}")" != "check passed" ]]; then
   printf 'check output was not written to %s\n' "${check_log}" >&2
+  exit 1
+fi
+
+if "${env_bin}" -i \
+  "${action_env[@]}" \
+  GITHUB_STEP_SUMMARY="${missing_identity_summary}" \
+  NIX_RUN_SENTINEL="${missing_identity_run}" \
+  "${bash_bin}" "${action_dir}/run.sh" \
+  >"${missing_identity_stdout}" 2>"${missing_identity_stderr}"; then
+  printf 'action accepted a missing RUNNER_IDENTITY\n' >&2
+  exit 1
+fi
+if [[ -e "${missing_identity_run}" ]]; then
+  printf 'check ran without a RUNNER_IDENTITY\n' >&2
+  exit 1
+fi
+if [[ -s "${missing_identity_stdout}" || -e "${missing_identity_summary}" ]]; then
+  printf 'action emitted a guessed runner identity\n' >&2
+  exit 1
+fi
+if [[ "$(<"${missing_identity_stderr}")" != *RUNNER_IDENTITY* ]]; then
+  printf 'missing identity failure did not name RUNNER_IDENTITY:\n%s\n' \
+    "$(<"${missing_identity_stderr}")" >&2
   exit 1
 fi

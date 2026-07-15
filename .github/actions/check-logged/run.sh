@@ -6,6 +6,10 @@ workflow="${GITHUB_WORKFLOW:-local}"
 run_tag="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
 log_root="${IX_CI_RUN_LOG_ROOT:-/var/log/ix-ci/runs}"
 log_dir="${log_root}/${commit}/${workflow}"
+check_args=(run .#check)
+if [[ -n "${CHECK_SUBCOMMAND}" ]]; then
+  check_args+=(-- "${CHECK_SUBCOMMAND}")
+fi
 if install -d -m 0755 "${log_dir}" 2>/tmp/index-ci-log-dir.err && [[ -w "${log_dir}" ]]; then
   check_log="${log_dir}/${run_tag}.stdout"
 else
@@ -23,7 +27,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   } >>"${GITHUB_STEP_SUMMARY}"
 fi
 
-if ! nix run .#check ${CHECK_SUBCOMMAND:+-- "${CHECK_SUBCOMMAND}"} >"${check_log}" 2>&1; then
+if ! nix "${check_args[@]}" >"${check_log}" 2>&1; then
   cat "${check_log}"
   exit 1
 fi
