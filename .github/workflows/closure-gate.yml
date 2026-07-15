@@ -24,6 +24,9 @@ on:
   pull_request:
     branches:
       - main
+    # A manual budget override must start a fresh run. A job's timeout is fixed
+    # when it starts, so changing the label cannot extend an in-flight job.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   # Same rationale as check.yml: the main ruleset demands this status inside
   # the merge queue too, should one be enabled.
   merge_group:
@@ -47,14 +50,30 @@ env:
     cores = 1
 
 jobs:
+  ci-budget:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: indexable-inc/index/.github/workflows/ci-budget.yml@main
+    with:
+      pull-request-number: ${{ github.event.pull_request.number || 0 }}
+      # Manual and merge-queue runs have no pull request label. Keep their
+      # existing extended budget.
+      force-big-change: ${{ github.event_name != 'pull_request' }}
+      # check.yml owns the single sticky comment and automatic label. This
+      # invocation only supplies the same decision to the parallel gate.
+      publish: false
+
   # Branch protection requires a status named `closure-gate`; this job is it.
   # Separate from flake-check on purpose: it runs in parallel on its own
   # ephemeral runner, so the existing gate's latency is untouched.
   closure-gate:
+    needs: ci-budget
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-closure-gate', github.run_id, github.run_attempt) }}"]
     # A relock-class PR realises a near-full closure; match the cache-push
     # linux lane budget, which fits that worst case.
-    timeout-minutes: 180
+    timeout-minutes: ${{ needs.ci-budget.outputs.big_change == 'true' && 180 || 5 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
