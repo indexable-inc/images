@@ -2061,6 +2061,50 @@ def _nu_record(value: Any, *, source: str) -> dict[str, Any]:
     raise TypeError(f"{source}: expected a record, got {type(value).__name__}")
 
 
+@dataclasses.dataclass(frozen=True)
+class _NuCompletion:
+    stdout: str
+    stderr: str
+    exit_code: int
+
+
+def _nu_completion(value: Any, *, source: str) -> _NuCompletion:
+    """Validate one Nushell `complete` record at the command boundary."""
+    record = _nu_record(value, source=source)
+    missing = {"stdout", "stderr", "exit_code"} - record.keys()
+    if missing:
+        raise TypeError(f"{source}: complete record missing {', '.join(sorted(missing))}")
+    stdout = record["stdout"]
+    stderr = record["stderr"]
+    exit_code = record["exit_code"]
+    if not isinstance(stdout, str):
+        raise TypeError(f"{source}: expected stdout to be str, got {type(stdout).__name__}")
+    if not isinstance(stderr, str):
+        raise TypeError(f"{source}: expected stderr to be str, got {type(stderr).__name__}")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        raise TypeError(f"{source}: expected exit_code to be int, got {type(exit_code).__name__}")
+    return _NuCompletion(stdout=stdout, stderr=stderr, exit_code=exit_code)
+
+
+def _nu_failure(source: str, completion: _NuCompletion) -> str:
+    detail = completion.stderr.strip() or completion.stdout.strip() or "no error text"
+    return f"{source} failed with exit code {completion.exit_code}: {detail}"
+
+
+def _nu_json_record(value: Any, *, source: str) -> dict[str, Any]:
+    """Validate a completed command, then decode its stdout as one JSON record."""
+    completion = _nu_completion(value, source=source)
+    if completion.exit_code != 0:
+        raise RuntimeError(_nu_failure(source, completion))
+    try:
+        parsed = json.loads(completion.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{source} returned invalid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise TypeError(f"{source}: expected a JSON record, got {type(parsed).__name__}")
+    return parsed
+
+
 async def watch_pr(
     pr: str | int,
     *,
@@ -2098,6 +2142,26 @@ async def watch_pr(
         kind="pr",
         alive=lambda: state.get("status") not in {"merged", "closed", "failed", "timed out"},
     )
+
+    async def fail_watch(error: Exception) -> None:
+        state.update(
+            {
+                "status": "failed",
+                "error": str(error),
+                "elapsed": _format_duration(time.time() - started),
+            }
+        )
+        resource.close()
+        try:
+            await notify(
+                f"PR {clean_pr} watch failed: {error}", resource=resource.id, pr=clean_pr
+            )
+        except Exception as notify_error:
+            error.add_note(
+                "pr_watch failure notification also raised "
+                f"{type(notify_error).__name__}: {notify_error}"
+            )
+
     import nu as nu_call
 
     async def run_nu(code: str) -> Any:
@@ -2109,13 +2173,17 @@ async def watch_pr(
         )
 
     async def refresh() -> dict[str, Any]:
-        row = _nu_record(
-            await run_nu(
-                'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
-                'url,autoMergeRequest,isDraft,reviewDecision | complete | get stdout | from json'
-            ),
-            source="gh pr view",
-        )
+        try:
+            row = _nu_json_record(
+                await run_nu(
+                    'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
+                    'url,autoMergeRequest,isDraft,reviewDecision | complete'
+                ),
+                source="gh pr view",
+            )
+        except Exception as exc:
+            await fail_watch(exc)
+            raise
         checks = row.get("statusCheckRollup") or []
         title = row.get("title") or f"PR {row.get('number') or clean_pr}"
         state.update(
@@ -2166,12 +2234,16 @@ async def watch_pr(
         else:
             flag = f"--{merge_method}"
             delete = "--delete-branch" if delete_branch else ""
-            merge = _nu_record(
-                await run_nu(f"gh pr merge $env.PR --auto {flag} {delete} | complete"),
-                source="gh pr merge",
-            )
-            if int(merge["exit_code"]) != 0:
-                state["error"] = str(merge["stderr"] or merge["stdout"])
+            try:
+                merge = _nu_completion(
+                    await run_nu(f"gh pr merge $env.PR --auto {flag} {delete} | complete"),
+                    source="gh pr merge",
+                )
+                if merge.exit_code != 0:
+                    raise RuntimeError(_nu_failure("gh pr merge", merge))
+            except Exception as exc:
+                await fail_watch(exc)
+                raise
 
     def finished(result: dict[str, Any]) -> dict[str, Any]:
         """Carry the skipped-auto-merge note onto the returned summary."""
