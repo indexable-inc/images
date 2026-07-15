@@ -34,12 +34,16 @@ class FakeClient:
         jobs: list[dict[str, Any]] | None = None,
         *,
         cancel_error: RuntimeError | None = None,
-        context_base_shas: list[str | None] | None = None,
+        contexts: list[ci_deadline.WorkflowContext | None] | None = None,
     ) -> None:
         self.attempts = attempts
         self.jobs = jobs or []
         self.cancel_error = cancel_error
-        self.context_base_shas = context_base_shas or []
+        self.contexts = (
+            contexts
+            if contexts is not None
+            else [ci_deadline.WorkflowContext(pull_request_number=42)]
+        )
         self.cancelled: list[int] = []
 
     def workflow_attempt(self, run_id: int, run_attempt: int) -> dict[str, Any]:
@@ -82,12 +86,14 @@ class FakeClient:
         assert head_sha == "a" * 40
         return [self.pull_request(42)]
 
-    def ci_budget_context_base_sha(self, run_id: int, run_attempt: int) -> str | None:
+    def ci_budget_context(
+        self, run_id: int, run_attempt: int
+    ) -> ci_deadline.WorkflowContext | None:
         assert run_id == 12
         assert run_attempt == 2
-        if not self.context_base_shas:
+        if not self.contexts:
             return None
-        return self.context_base_shas.pop(0)
+        return self.contexts.pop(0)
 
     def cancel_workflow_run(self, run_id: int) -> None:
         if self.cancel_error:
@@ -255,10 +261,54 @@ class RequiredGateTests(unittest.TestCase):
 
 
 class CancellationControllerTests(unittest.TestCase):
+    def test_fork_pull_request_uses_source_context_when_payload_is_empty(self) -> None:
+        fork_attempt = attempt()
+        fork_attempt["pull_requests"] = []
+        completed = attempt(status="completed")
+        completed["pull_requests"] = []
+        client = FakeClient(
+            [fork_attempt, completed],
+            contexts=[ci_deadline.WorkflowContext(pull_request_number=42)],
+        )
+        sleeps: list[float] = []
+
+        cancelled = ci_deadline.cancel_at_deadline(
+            client,
+            12,
+            2,
+            ["flake.lock"],
+            timedelta(minutes=5),
+            force_big_change=False,
+            merge_queue_branch="main",
+            now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
+            sleep=sleeps.append,
+        )
+
+        assert not cancelled
+        assert sleeps == [300]
+
+    def test_missing_source_context_cancels_at_deadline(self) -> None:
+        client = FakeClient([attempt()], contexts=[None])
+
+        cancelled = ci_deadline.cancel_at_deadline(
+            client,
+            12,
+            2,
+            ["flake.lock"],
+            timedelta(minutes=5),
+            force_big_change=False,
+            merge_queue_branch="main",
+            now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
+            sleep=lambda _: self.fail("elapsed deadline must not sleep"),
+        )
+
+        assert cancelled
+        assert client.cancelled == [12]
+
     def test_main_push_waits_for_authoritative_range_context(self) -> None:
         client = FakeClient(
             [attempt(event="push"), attempt(status="completed", event="push")],
-            context_base_shas=[None, "b" * 40],
+            contexts=[None, ci_deadline.WorkflowContext(base_sha="b" * 40)],
         )
         sleeps: list[float] = []
 
@@ -283,7 +333,7 @@ class CancellationControllerTests(unittest.TestCase):
                 attempt(event="merge_group"),
                 attempt(status="completed", event="merge_group"),
             ],
-            context_base_shas=[None, "b" * 40],
+            contexts=[None, ci_deadline.WorkflowContext(base_sha="b" * 40)],
         )
         sleeps: list[float] = []
 
