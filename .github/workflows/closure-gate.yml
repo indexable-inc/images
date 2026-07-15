@@ -38,6 +38,7 @@ env:
 jobs:
   ci-budget:
     permissions:
+      actions: read
       contents: read
       pull-requests: read
     uses: indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main

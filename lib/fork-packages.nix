@@ -415,7 +415,7 @@
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        "0006-libstore-daemon-record-client-uid-and-user-for-build.patch" = {
+        "0006-libstore-daemon-record-client-identity-for-build.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
@@ -511,6 +511,12 @@
         "0020-libstore-preserve-content-addressed-leaf-failures.patch" = {
           upstream = "hold";
           reason = "Preserves actionable floating-CA leaf failures through resolution (indexable-inc/index#3279, indexable-inc/ix#7357). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0021: CPU, I/O, and build-log activity distinguish a silent active
+        # compiler from an idle builder before the daemon cancels its goal.
+        "0021-libstore-enforce-derivation-no-progress-deadlines.patch" = {
+          upstream = "hold";
+          reason = "Fleet CI policy for indexable-inc/index#3317. Validate the process-aware deadline before proposing a general Nix interface; humans submit Nix patches upstream per NixOS/nix#15984.";
         };
       };
     }

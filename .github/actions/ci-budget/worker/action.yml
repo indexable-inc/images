@@ -1,0 +1,32 @@
+name: Enforce a CI worker budget
+description: Enforce queue and setup admission or run one validation with cleanup
+
+inputs:
+  mode:
+    description: Check admission before setup or run validation after setup
+    default: check
+  repository:
+    description: GitHub repository in owner/name form
+    required: true
+  token:
+    description: Token with actions read permission
+    required: true
+  run-id:
+    description: Workflow run containing the worker
+    required: true
+  run-attempt:
+    description: Current workflow attempt containing the worker
+    required: true
+  big-change:
+    description: Whether the shared classifier granted the extended tier
+    required: true
+  script:
+    description: Repository-relative Bash script to execute in run mode
+    default: ""
+  arguments:
+    description: JSON array of arguments passed to the repository script
+    default: "[]"
+
+runs:
+  using: node24
+  main: worker.mjs

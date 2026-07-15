@@ -23,10 +23,10 @@ enabled.
 
 diff --git a/src/libstore/build/build-status.cc b/src/libstore/build/build-status.cc
 new file mode 100644
-index 0000000..329a9c9
+index 0000000..bd04740
 --- /dev/null
 +++ b/src/libstore/build/build-status.cc
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,233 @@
 +#include "nix/store/build/build-status.hh"
 +#include "nix/store/build/derivation-building-goal.hh"
 +#include "nix/store/build/derivation-goal.hh"
@@ -188,6 +188,8 @@ index 0000000..329a9c9
 +        j["outputs"] = outputs;
 +        j["type"] = "build";
 +        j["pid"] = getpid();
++        j["clientPid"] =
++            currentClientInfo.clientPid ? nlohmann::json(*currentClientInfo.clientPid) : nlohmann::json(nullptr);
 +        j["startTime"] = time(nullptr);
 +        j["user"] = currentClientInfo.user ? nlohmann::json(*currentClientInfo.user) : nlohmann::json(nullptr);
 +        j["uid"] = currentClientInfo.uid ? nlohmann::json(*currentClientInfo.uid) : nlohmann::json(nullptr);
@@ -217,14 +219,15 @@ index 0000000..329a9c9
 +        j["outputs"] = nlohmann::json::array();
 +        j["type"] = "substitution";
 +        j["pid"] = getpid();
++        j["clientPid"] =
++            currentClientInfo.clientPid ? nlohmann::json(*currentClientInfo.clientPid) : nlohmann::json(nullptr);
 +        j["startTime"] = time(nullptr);
 +        j["user"] = currentClientInfo.user ? nlohmann::json(*currentClientInfo.user) : nlohmann::json(nullptr);
 +        j["uid"] = currentClientInfo.uid ? nlohmann::json(*currentClientInfo.uid) : nlohmann::json(nullptr);
 +        j["logFile"] = nullptr;
 +        j["why"] = whyJSON(goal, store, isTopGoal(goal) ? "requested" : "outputInvalid");
 +
-+        self->path =
-+            buildStatusDir() / (std::string(storePath.to_string()) + "-" + std::to_string(getpid()) + ".json");
++        self->path = buildStatusDir() / (std::string(storePath.to_string()) + "-" + std::to_string(getpid()) + ".json");
 +        self->write(j.dump());
 +    } catch (...) {
 +        ignoreExceptionExceptInterrupt();
@@ -259,10 +262,10 @@ index 0000000..329a9c9
 +} // namespace nix
 diff --git a/src/libstore/include/nix/store/build/build-status.hh b/src/libstore/include/nix/store/build/build-status.hh
 new file mode 100644
-index 0000000..a1855ed
+index 0000000..18cc983
 --- /dev/null
 +++ b/src/libstore/include/nix/store/build/build-status.hh
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,103 @@
 +#pragma once
 +///@file
 +
@@ -287,6 +290,7 @@ index 0000000..a1855ed
 + */
 +struct BuildStatusClientInfo
 +{
++    std::optional<pid_t> clientPid;
 +    std::optional<uid_t> uid;
 +    std::optional<std::string> user;
 +};
@@ -294,7 +298,8 @@ index 0000000..a1855ed
 +/**
 + * Record the identity of the client for the current process. Called once per
 + * connection in the forked daemon worker. Safe to leave unset (e.g. for a
-+ * local store with no daemon), in which case the recorded uid/user are null.
++ * local store with no daemon), in which case the recorded client pid, uid,
++ * and user are null.
 + */
 +void setBuildStatusClientInfo(BuildStatusClientInfo info);
 +

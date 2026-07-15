@@ -19,7 +19,28 @@
   # needs (re)building. nix-eval-jobs#403 / nix#12128 fixed the *status*; this
   # fixes what --skip-cached does with it.
   package = pkgs.nix-fast-build.overrideAttrs (old: {
-    patches = (old.patches or []) ++ [./skip-local.patch];
+    patches =
+      (old.patches or [])
+      ++ [
+        ./skip-local.patch
+        ./liveness.patch
+      ];
+    doCheck = true;
+    nativeCheckInputs =
+      (old.nativeCheckInputs or [])
+      ++ [
+        pkgs.mypy
+        pkgs.python3Packages.pytest
+        pkgs.ruff
+      ];
+    checkPhase = ''
+      # shell
+      runHook preCheck
+      pytest -q tests/test_liveness.py
+      ruff check nix_fast_build
+      mypy nix_fast_build
+      runHook postCheck
+    '';
   });
 
   # The patch only touches Python control flow, so the real risk is that the
@@ -55,6 +76,14 @@
           exit 1
           ;;
       esac
+      case "$help" in
+        *"--max-no-progress-seconds"*) ;;
+        *)
+          echo "nix-fast-build --help lacks the per-derivation liveness policy" >&2
+          printf '%s\n' "$help" >&2
+          exit 1
+          ;;
+      esac
       mkdir -p "$out"
     '';
 in
@@ -71,7 +100,7 @@ in
     meta =
       (old.meta or {})
       // {
-        description = "nix-fast-build patched so --skip-cached also skips locally-realized (floating-CA) outputs, not just remotely-cached ones";
+        description = "nix-fast-build with local-cache skipping and typed per-derivation liveness deadlines";
         mainProgram = "nix-fast-build";
       };
   })
