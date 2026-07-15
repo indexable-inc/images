@@ -61,11 +61,17 @@ env:
 jobs:
   ci-budget:
     permissions:
+      actions: read
       contents: read
       pull-requests: read
     uses: indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main
     with:
       pull-request-number: ${{ github.event.pull_request.number || 0 }}
+      base-sha: >-
+        ${{ github.event_name == 'push'
+            && github.ref == 'refs/heads/main'
+            && github.event.before
+            || '' }}
       head-sha: >-
         ${{ github.event_name == 'push'
             && github.ref == 'refs/heads/main'

@@ -19,6 +19,7 @@ permissions:
 jobs:
   classify:
     permissions:
+      actions: read
       contents: read
       pull-requests: read
     uses: ./.github/workflows/ci-budget-read-only.yml

@@ -20,16 +20,7 @@ from ci_budget import (
     parse_globs,
     parse_positive_int,
 )
-from ci_policy import STANDARD_BUDGET
-
-
-def parse_timestamp(value: object, name: str) -> datetime:
-    if not isinstance(value, str):
-        raise RuntimeError(f"GitHub API result has no {name}")
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        raise RuntimeError(f"GitHub API result {name} has no timezone")
-    return parsed
+from ci_policy import STANDARD_BUDGET, parse_timestamp
 
 
 def target_job(jobs: Sequence[JsonObject], target_name: str) -> JsonObject:
@@ -106,19 +97,32 @@ def cancel_at_deadline(
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
     attempt = client.workflow_attempt(run_id, run_attempt)
+    started_at = parse_timestamp(attempt.get("run_started_at"), "run_started_at")
+    deadline = started_at + budget
+    push_base_sha = None
+    if not force_big_change and attempt.get("event") == "push":
+        while push_base_sha is None:
+            push_base_sha = client.ci_budget_context_base_sha(run_id, run_attempt)
+            remaining = (deadline - now()).total_seconds()
+            if push_base_sha is None and remaining <= 0:
+                raise RuntimeError(
+                    "source workflow did not publish its push base SHA before "
+                    f"{deadline.isoformat()}"
+                )
+            if push_base_sha is None:
+                sleep(min(2, remaining))
     classification = classify_workflow_attempt(
         client,
         attempt,
         globs,
         force_big_change=force_big_change,
         merge_queue_branch=merge_queue_branch,
+        push_base_sha=push_base_sha,
     )
     if classification.big_change:
         print(json.dumps(classification.reason, separators=(",", ":")))
         return False
 
-    started_at = parse_timestamp(attempt.get("run_started_at"), "run_started_at")
-    deadline = started_at + budget
     remaining = (deadline - now()).total_seconds()
     if remaining > 0:
         sleep(remaining)

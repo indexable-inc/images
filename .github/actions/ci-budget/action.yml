@@ -11,8 +11,11 @@ inputs:
   head-sha:
     description: Head commit for a non-pull-request change association
     default: ""
+  base-sha:
+    description: Push base commit that bounds a main-branch change
+    default: ""
   token:
-    description: Token with pull request read and, when publishing, issues write
+    description: Token with actions and pull request read, plus issues write when publishing
     required: true
   extra-costly-paths:
     description: JSON array of repository-specific costly path globs
@@ -52,6 +55,9 @@ outputs:
   standard_minutes:
     description: Standard total CI budget in whole minutes
     value: ${{ steps.classify.outputs.standard_minutes }}
+  standard_deadline:
+    description: Absolute deadline for an ordinary workflow attempt
+    value: ${{ steps.classify.outputs.standard_deadline }}
 
 runs:
   using: composite
@@ -62,6 +68,8 @@ runs:
       shell: bash
       env:
         CI_BUDGET_EXTRA_COSTLY_PATHS: ${{ inputs.extra-costly-paths }}
+        CI_BUDGET_BASE_SHA: ${{ inputs.base-sha }}
+        CI_BUDGET_CONTEXT_PATH: ${{ runner.temp }}/ci-budget-context.json
         CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}
         CI_BUDGET_PUBLISH: ${{ inputs.publish }}
         CI_BUDGET_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
@@ -72,6 +80,13 @@ runs:
         CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
         CI_BUDGET_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/ci_budget.py"
+    - name: Preserve authoritative push range
+      if: inputs.mode == 'classify' && inputs.base-sha != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ci-budget-context-${{ inputs.run-id }}-${{ inputs.run-attempt }}-${{ inputs.base-sha }}
+        path: ${{ steps.classify.outputs.context_path }}
+        if-no-files-found: error
     - name: Enforce total CI deadline
       if: inputs.mode == 'gate' || inputs.mode == 'cancel'
       shell: bash

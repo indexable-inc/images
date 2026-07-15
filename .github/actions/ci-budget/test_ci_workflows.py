@@ -85,6 +85,7 @@ class RequiredWorkflowTests(unittest.TestCase):
                 workflow = load_workflow(workflow_name)
                 jobs = child_object(workflow, "jobs")
                 budget = child_object(jobs, "ci-budget")
+                budget_permissions = child_object(budget, "permissions")
                 target = child_object(jobs, target_name)
                 gate = child_object(jobs, gate_name)
                 gate_permissions = child_object(gate, "permissions")
@@ -97,6 +98,11 @@ class RequiredWorkflowTests(unittest.TestCase):
                     budget["uses"]
                     == "indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main"
                 )
+                assert budget_permissions == {
+                    "actions": "read",
+                    "contents": "read",
+                    "pull-requests": "read",
+                }
                 assert target["name"] == target_name
                 assert target["needs"] == "ci-budget"
                 assert gate["name"] == gate_name
@@ -136,7 +142,7 @@ class RequiredWorkflowTests(unittest.TestCase):
             child_object(child_object(load_workflow("check.yml"), "jobs"), "ci-budget"),
             "with",
         )
-        assert "base-sha" not in check_inputs
+        assert "event.before" in expression(check_inputs, "base-sha")
         assert "github.sha" in expression(check_inputs, "head-sha")
         assert "merge_group.head_sha" in expression(check_inputs, "head-sha")
         assert "refs/tags/" in expression(check_inputs, "force-big-change")
@@ -188,6 +194,7 @@ class TrustedWorkflowTests(unittest.TestCase):
             == "indexable-inc/index/.github/workflows/ci-budget.yml@main"
         )
         assert child_object(publish, "permissions") == {
+            "actions": "read",
             "contents": "read",
             "issues": "write",
             "pull-requests": "write",
