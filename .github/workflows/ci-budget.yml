@@ -15,6 +15,14 @@ on:
         description: Grant the extended budget without a path or label match
         type: boolean
         default: false
+      base-sha:
+        description: Base commit for a non-pull-request change
+        type: string
+        default: ""
+      head-sha:
+        description: Head commit for a non-pull-request change
+        type: string
+        default: ""
     outputs:
       big_change:
         description: Whether the extended CI budget applies
@@ -22,6 +30,9 @@ on:
       reason:
         description: JSON object describing every source of the decision
         value: ${{ jobs.publish.outputs.reason }}
+      standard_minutes:
+        description: Standard total CI budget in whole minutes
+        value: ${{ jobs.publish.outputs.standard_minutes }}
 
 jobs:
   publish:
@@ -36,6 +47,7 @@ jobs:
     outputs:
       big_change: ${{ steps.budget.outputs.big_change }}
       reason: ${{ steps.budget.outputs.reason }}
+      standard_minutes: ${{ steps.budget.outputs.standard_minutes }}
     steps:
       - name: Classify and publish CI budget
         id: budget
@@ -46,4 +58,6 @@ jobs:
           token: ${{ github.token }}
           extra-costly-paths: ${{ inputs.extra-costly-paths }}
           force-big-change: ${{ inputs.force-big-change }}
+          base-sha: ${{ inputs.base-sha }}
+          head-sha: ${{ inputs.head-sha }}
           publish: true

@@ -6,6 +6,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -15,14 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ci_policy import standard_minutes
+
 BIG_CHANGE_LABEL = "ci/big-change"
 COMMENT_MARKER = "<!-- ci-budget -->"
-COMMENT_POLICY = (
-    "CI is limited to 5 minutes unless this is a legitimate big change. "
-    "Add the `ci/big-change` label for an extended budget. Lockfile and Rust "
-    "toolchain changes are labeled automatically."
-)
-
 JsonObject = dict[str, Any]
 Transport = Callable[[urllib.request.Request], tuple[Any, Mapping[str, str]]]
 
@@ -63,6 +60,7 @@ def classify(
     globs: Sequence[str],
     *,
     force_big_change: bool,
+    comparison_limited: bool = False,
 ) -> Classification:
     matches = [
         {"path": path, "pattern": pattern}
@@ -77,6 +75,8 @@ def classify(
         sources.append("label")
     if matches:
         sources.append("costly_path")
+    if comparison_limited:
+        sources.append("comparison_limit")
     return Classification(
         big_change=bool(sources),
         reason={"sources": sources, "matches": matches},
@@ -171,8 +171,60 @@ class GitHubClient:
             raise RuntimeError("GitHub API returned a changed file without a filename")
         return paths
 
+    def compared_paths(self, base_sha: str, head_sha: str) -> tuple[list[str], bool]:
+        sha_pattern = re.compile(r"[0-9a-f]{40}")
+        for name, value in (("base-sha", base_sha), ("head-sha", head_sha)):
+            if not sha_pattern.fullmatch(value):
+                raise ValueError(f"{name} must be a lowercase 40-character SHA")
+        payload, _ = self.request("GET", f"compare/{base_sha}...{head_sha}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("GitHub API returned a malformed commit comparison")
+        files = payload.get("files")
+        if not isinstance(files, list):
+            raise RuntimeError("GitHub API comparison has no files array")
+        paths = [item.get("filename") for item in files if isinstance(item, dict)]
+        if len(paths) != len(files) or not all(
+            isinstance(path, str) and path for path in paths
+        ):
+            raise RuntimeError("GitHub API comparison has a malformed filename")
+        # GitHub caps this endpoint at 300 files. Treat a saturated response as
+        # large because silently missing a costly path would grant too little time.
+        return paths, len(paths) == 300
+
     def add_label(self, number: int, label: str) -> None:
         self.request("POST", f"issues/{number}/labels", {"labels": [label]})
+
+    def workflow_attempt(self, run_id: int, run_attempt: int) -> JsonObject:
+        payload, _ = self.request(
+            "GET", f"actions/runs/{run_id}/attempts/{run_attempt}"
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("GitHub API returned a malformed workflow attempt")
+        return payload
+
+    def workflow_jobs(self, run_id: int, run_attempt: int) -> list[JsonObject]:
+        jobs: list[JsonObject] = []
+        page = 1
+        while True:
+            payload, _ = self.request(
+                "GET",
+                f"actions/runs/{run_id}/attempts/{run_attempt}/jobs",
+                query={"per_page": 100, "page": page},
+            )
+            if not isinstance(payload, dict) or not isinstance(
+                payload.get("jobs"), list
+            ):
+                raise RuntimeError("GitHub API returned malformed workflow jobs")
+            page_jobs = payload["jobs"]
+            if not all(isinstance(job, dict) for job in page_jobs):
+                raise RuntimeError("GitHub API returned a malformed workflow job")
+            jobs.extend(page_jobs)
+            if len(page_jobs) < 100:
+                return jobs
+            page += 1
+
+    def cancel_workflow_run(self, run_id: int) -> None:
+        self.request("POST", f"actions/runs/{run_id}/cancel")
 
     def upsert_comment(self, number: int, body: str) -> None:
         comments = self.paginated(f"issues/{number}/comments")
@@ -208,6 +260,7 @@ def labels_from_pull_request(pull_request: JsonObject) -> list[str]:
 
 
 def render_comment(classification: Classification) -> str:
+    minutes = standard_minutes()
     if classification.big_change:
         matches = classification.reason["matches"]
         if matches:
@@ -217,8 +270,13 @@ def render_comment(classification: Classification) -> str:
         else:
             detail = "Extended budget: this run was explicitly classified as large."
     else:
-        detail = "Standard budget: this change has 5 minutes."
-    return f"{COMMENT_MARKER}\n{COMMENT_POLICY}\n\n{detail}"
+        detail = f"Standard budget: this change has {minutes} minutes."
+    policy_text = (
+        f"CI is limited to {minutes} minutes unless this is a legitimate "
+        "big change. Add the `ci/big-change` label for an extended budget. "
+        "Lockfile and Rust toolchain changes are labeled automatically."
+    )
+    return f"{COMMENT_MARKER}\n{policy_text}\n\n{detail}"
 
 
 def write_output(name: str, value: str) -> None:
@@ -247,11 +305,29 @@ def main() -> int:
     client = GitHubClient(repository, token)
     paths: list[str] = []
     labels: list[str] = []
+    comparison_limited = False
     if pull_request_number:
         paths = client.changed_paths(pull_request_number)
         labels = labels_from_pull_request(client.pull_request(pull_request_number))
+    else:
+        base_sha = os.environ["CI_BUDGET_BASE_SHA"]
+        head_sha = os.environ["CI_BUDGET_HEAD_SHA"]
+        if base_sha or head_sha:
+            if not base_sha or not head_sha:
+                raise ValueError("base-sha and head-sha must be provided together")
+            paths, comparison_limited = client.compared_paths(base_sha, head_sha)
+        elif not force_big_change:
+            raise ValueError(
+                "a routine non-pull-request change requires base-sha and head-sha"
+            )
 
-    classification = classify(paths, labels, globs, force_big_change=force_big_change)
+    classification = classify(
+        paths,
+        labels,
+        globs,
+        force_big_change=force_big_change,
+        comparison_limited=comparison_limited,
+    )
     if publish and pull_request_number:
         if classification.reason["matches"] and BIG_CHANGE_LABEL not in labels:
             client.add_label(pull_request_number, BIG_CHANGE_LABEL)
@@ -260,6 +336,7 @@ def main() -> int:
     reason = json.dumps(classification.reason, separators=(",", ":"), sort_keys=True)
     write_output("big_change", str(classification.big_change).lower())
     write_output("reason", reason)
+    write_output("standard_minutes", str(standard_minutes()))
     print(reason)
     return 0
 

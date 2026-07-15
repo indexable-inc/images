@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 MODULE_PATH = Path(__file__).with_name("ci_budget.py")
+sys.path.insert(0, str(MODULE_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("ci_budget", MODULE_PATH)
 assert SPEC is not None
 assert SPEC.loader is not None
@@ -76,6 +77,17 @@ class ClassificationTests(unittest.TestCase):
         assert result.big_change
         assert result.reason["sources"] == ["forced"]
 
+    def test_saturated_comparison_uses_extended_budget(self) -> None:
+        result = ci_budget.classify(
+            ["src/main.rs"],
+            [],
+            self.globs,
+            force_big_change=False,
+            comparison_limited=True,
+        )
+        assert result.big_change
+        assert result.reason["sources"] == ["comparison_limit"]
+
 
 class GitHubClientTests(unittest.TestCase):
     def test_changed_files_are_paginated(self) -> None:
@@ -116,6 +128,17 @@ class GitHubClientTests(unittest.TestCase):
         assert request.full_url.endswith("/issues/comments/7")
         assert json.loads(request.data or b"{}") == {"body": "new"}
 
+    def test_compared_paths_report_api_limit(self) -> None:
+        transport = FakeTransport(
+            [{"files": [{"filename": f"src/{index}.rs"} for index in range(300)]}]
+        )
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        paths, limited = client.compared_paths("a" * 40, "b" * 40)
+
+        assert len(paths) == 300
+        assert limited
+
     def test_user_marker_is_not_claimed(self) -> None:
         transport = FakeTransport(
             [
@@ -144,7 +167,7 @@ class RenderingTests(unittest.TestCase):
         )
         comment = ci_budget.render_comment(result)
         assert comment.startswith(ci_budget.COMMENT_MARKER)
-        assert ci_budget.COMMENT_POLICY in comment
+        assert "CI is limited to 5 minutes" in comment
         assert "Standard budget" in comment
 
 

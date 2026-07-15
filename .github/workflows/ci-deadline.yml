@@ -1,0 +1,36 @@
+name: Shared total CI deadline
+
+on:
+  workflow_call:
+    inputs:
+      target-job-names:
+        description: JSON array of job names covered by the standard budget
+        type: string
+        required: true
+      run-id:
+        description: Caller workflow run ID
+        type: number
+        required: true
+      run-attempt:
+        description: Caller workflow attempt
+        type: number
+        required: true
+
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Enforce total CI deadline
+        uses: indexable-inc/index/.github/actions/ci-budget@main
+        with:
+          mode: deadline
+          repository: ${{ github.repository }}
+          pull-request-number: 0
+          run-id: ${{ inputs.run-id }}
+          run-attempt: ${{ inputs.run-attempt }}
+          target-job-names: ${{ inputs.target-job-names }}
+          token: ${{ github.token }}
