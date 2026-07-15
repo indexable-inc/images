@@ -1,0 +1,29 @@
+name: Enforce a CI worker budget
+description: Reject expired work or run one repository script inside the shared budget
+
+inputs:
+  mode:
+    description: Worker operation, either check or run
+    default: check
+  repository:
+    description: GitHub repository in owner/name form
+    required: true
+  token:
+    description: Token with actions read permission
+    required: true
+  run-id:
+    description: Workflow run containing the worker
+    required: true
+  run-attempt:
+    description: Current workflow attempt containing the worker
+    required: true
+  big-change:
+    description: Whether the shared classifier granted the extended tier
+    required: true
+  script:
+    description: Repository-relative Bash script to execute in run mode
+    default: ""
+
+runs:
+  using: node24
+  main: worker.mjs
