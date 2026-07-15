@@ -291,14 +291,15 @@ in {
           enableZshIntegration = true;
           enableFishIntegration = true;
         };
-        # Fuzzy finder. Closes the loop with atuin (Ctrl+R history) and
-        # zoxide (z foo) so the same interaction model picks files,
-        # processes, branches, anything the operator pipes into fzf.
+        # Fuzzy finder for files, processes, branches, and anything else the
+        # operator pipes into fzf. Atuin owns Ctrl-R history search above, so
+        # leave fzf's overlapping history widget disabled.
         fzf = {
           enable = true;
           enableBashIntegration = true;
           enableZshIntegration = true;
           enableFishIntegration = true;
+          historyWidget.command = "";
         };
         # AST-aware merge driver. Parses 30+ languages (Nix, Rust,
         # Python, TS/JS, Go, Java, ...) and resolves structural conflicts
