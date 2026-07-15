@@ -62,18 +62,10 @@ jobs:
   ci-budget:
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
-    uses: indexable-inc/index/.github/workflows/ci-budget.yml@main
+      pull-requests: read
+    uses: indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main
     with:
       pull-request-number: ${{ github.event.pull_request.number || 0 }}
-      base-sha: >-
-        ${{ github.event_name == 'push'
-            && github.ref == 'refs/heads/main'
-            && github.event.before
-            || github.event_name == 'merge_group'
-            && github.event.merge_group.base_sha
-            || '' }}
       head-sha: >-
         ${{ github.event_name == 'push'
             && github.ref == 'refs/heads/main'
@@ -84,26 +76,14 @@ jobs:
       # A tag validates a release point rather than a bounded changed range.
       force-big-change: ${{ startsWith(github.ref, 'refs/tags/') }}
 
-  ci-deadline:
-    needs: ci-budget
-    if: needs.ci-budget.outputs.big_change != 'true'
-    permissions:
-      actions: write
-      contents: read
-    uses: indexable-inc/index/.github/workflows/ci-deadline.yml@main
-    with:
-      target-job-names: '["flake-check"]'
-      run-id: ${{ github.run_id }}
-      run-attempt: ${{ github.run_attempt }}
-
   # One job on one runner, on purpose. Every check shares a single
   # znver5-tuned nixpkgs base, so fanning the checks across several runners
   # would rebuild that shared base on each cold runner (a thundering herd). We
   # keep one runner and get parallelism *inside* it from nix-fast-build plus
-  # `max-jobs = auto`. Branch protection requires a status named `flake-check`;
-  # this job is it, and it fails iff a check fails to build or the flake stops
-  # evaluating.
-  flake-check:
+  # `max-jobs = auto`. The terminal gate owns the required `flake-check` status
+  # and mirrors this build result plus the total deadline.
+  flake-build:
+    name: flake-build
     needs: ci-budget
     # Dispatched to the org-wide ix-ci-dispatcher (vin-compute-1), the same
     # self-hosted runner the ix repo uses. The `ix-ci-run-*` label is claimed
@@ -112,7 +92,7 @@ jobs:
     # label scheme.
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-flake-check', github.run_id, github.run_attempt) }}"]
     # GitHub starts this timer only after runner assignment. It bounds extended
-    # runs; the sibling deadline owns the ordinary queue-inclusive budget.
+    # runs; the trusted controller owns ordinary queue-inclusive cancellation.
     timeout-minutes: 60
     steps:
       - name: Checkout repository
@@ -156,9 +136,8 @@ jobs:
       # command-specific rationale (tool choice, the worker/memory tuning, why the
       # eval cache is off, the error-line gate) and the pinned tool revisions live
       # next to that wrapper. The job inherits NIX_CONFIG (above), so the inner
-      # builds still see `gccarch-znver5` and the eval knobs. Branch protection
-      # requires a status named `flake-check`; this job is it, and it fails iff a
-      # check fails to build or the flake stops evaluating.
+      # builds still see `gccarch-znver5` and the eval knobs. The terminal gate
+      # below reports this build's result under the required status name.
       - name: Build all flake checks
         uses: ./.github/actions/check-logged
 
@@ -176,3 +155,24 @@ jobs:
           path: check-results.json
           if-no-files-found: warn
           retention-days: 30
+
+  flake-check:
+    name: flake-check
+    needs: [ci-budget, flake-build]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Verify required result and total deadline
+        uses: indexable-inc/index/.github/actions/ci-budget@main
+        with:
+          mode: gate
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          target-job-name: flake-build
+          big-change: ${{ needs.ci-budget.outputs.big_change }}
+          token: ${{ github.token }}

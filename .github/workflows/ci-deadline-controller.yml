@@ -1,0 +1,30 @@
+name: CI deadline controller
+
+on:
+  workflow_run:
+    workflows: [Check, Closure gate]
+    types: [requested, in_progress]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-deadline-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: true
+
+jobs:
+  deadline:
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    uses: indexable-inc/index/.github/workflows/ci-deadline.yml@main
+    with:
+      run-id: ${{ github.event.workflow_run.id }}
+      run-attempt: ${{ github.event.workflow_run.run_attempt }}
+      force-big-change: >-
+        ${{ github.event.workflow_run.event == 'schedule'
+            || github.event.workflow_run.event == 'workflow_dispatch'
+            || github.event.workflow_run.event == 'push'
+            && github.event.workflow_run.head_branch != 'main' }}
+

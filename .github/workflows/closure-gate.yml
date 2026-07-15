@@ -57,36 +57,20 @@ jobs:
     uses: indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main
     with:
       pull-request-number: ${{ github.event.pull_request.number || 0 }}
-      base-sha: >-
-        ${{ github.event_name == 'merge_group'
-            && github.event.merge_group.base_sha
-            || '' }}
       head-sha: >-
         ${{ github.event_name == 'merge_group'
             && github.event.merge_group.head_sha
             || '' }}
       force-big-change: ${{ github.event_name == 'workflow_dispatch' }}
 
-  ci-deadline:
-    needs: ci-budget
-    if: needs.ci-budget.outputs.big_change != 'true'
-    permissions:
-      actions: write
-      contents: read
-    uses: indexable-inc/index/.github/workflows/ci-deadline.yml@main
-    with:
-      target-job-names: '["closure-gate"]'
-      run-id: ${{ github.run_id }}
-      run-attempt: ${{ github.run_attempt }}
-
-  # Branch protection requires a status named `closure-gate`; this job is it.
-  # Separate from flake-check on purpose: it runs in parallel on its own
-  # ephemeral runner, so the existing gate's latency is untouched.
-  closure-gate:
+  # The terminal gate owns the required `closure-gate` status. This build runs
+  # in parallel with flake-build on its own ephemeral runner.
+  closure-build:
+    name: closure-build
     needs: ci-budget
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-closure-gate', github.run_id, github.run_attempt) }}"]
     # GitHub starts this timer only after runner assignment. It bounds extended
-    # relock runs; the sibling deadline owns the ordinary queue-inclusive budget.
+    # relock runs; the trusted controller owns ordinary queue-inclusive cancellation.
     timeout-minutes: 180
     steps:
       - name: Checkout repository
@@ -103,3 +87,24 @@ jobs:
         uses: ./.github/actions/check-logged
         with:
           subcommand: closure
+
+  closure-gate:
+    name: closure-gate
+    needs: [ci-budget, closure-build]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Verify required result and total deadline
+        uses: indexable-inc/index/.github/actions/ci-budget@main
+        with:
+          mode: gate
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          target-job-name: closure-build
+          big-change: ${{ needs.ci-budget.outputs.big_change }}
+          token: ${{ github.token }}

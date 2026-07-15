@@ -38,6 +38,20 @@ def child_object(parent: JsonObject, key: str) -> JsonObject:
     return child
 
 
+def child_list(parent: JsonObject, key: str) -> list[Any]:
+    child = parent.get(key)
+    if not isinstance(child, list):
+        raise AssertionError(f"{key!r} is not a list")
+    return child
+
+
+def events(workflow: JsonObject) -> JsonObject:
+    value = workflow.get("on", workflow.get("true"))
+    if not isinstance(value, dict):
+        raise AssertionError("workflow has no event object")
+    return value
+
+
 def expression(parent: JsonObject, key: str) -> str:
     value = parent.get(key)
     if not isinstance(value, str):
@@ -45,76 +59,152 @@ def expression(parent: JsonObject, key: str) -> str:
     return " ".join(value.split())
 
 
-class RequiredWorkflowTests(unittest.TestCase):
-    def test_required_jobs_run_beside_shared_deadline(self) -> None:
-        cases = (
-            ("check.yml", "flake-check"),
-            ("closure-gate.yml", "closure-gate"),
-        )
-        for workflow_name, target_name in cases:
-            with self.subTest(workflow=workflow_name):
-                jobs = child_object(load_workflow(workflow_name), "jobs")
-                deadline = child_object(jobs, "ci-deadline")
-                target = child_object(jobs, target_name)
-                inputs = child_object(deadline, "with")
+def all_uses(value: object) -> list[str]:
+    if isinstance(value, dict):
+        own = value.get("uses")
+        result = [own] if isinstance(own, str) else []
+        for child in value.values():
+            result.extend(all_uses(child))
+        return result
+    if isinstance(value, list):
+        result: list[str] = []
+        for child in value:
+            result.extend(all_uses(child))
+        return result
+    return []
 
-                assert deadline["needs"] == target["needs"] == "ci-budget"
+
+class RequiredWorkflowTests(unittest.TestCase):
+    def test_required_context_is_an_unconditional_terminal_gate(self) -> None:
+        cases = (
+            ("check.yml", "flake-build", "flake-check"),
+            ("closure-gate.yml", "closure-build", "closure-gate"),
+        )
+        for workflow_name, target_name, gate_name in cases:
+            with self.subTest(workflow=workflow_name):
+                workflow = load_workflow(workflow_name)
+                jobs = child_object(workflow, "jobs")
+                budget = child_object(jobs, "ci-budget")
+                target = child_object(jobs, target_name)
+                gate = child_object(jobs, gate_name)
+                gate_permissions = child_object(gate, "permissions")
+                step = child_list(gate, "steps")[0]
+                if not isinstance(step, dict):
+                    raise AssertionError("gate step is not an object")
+                inputs = child_object(step, "with")
+
                 assert (
-                    deadline["uses"]
-                    == "indexable-inc/index/.github/workflows/ci-deadline.yml@main"
+                    budget["uses"]
+                    == "indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main"
                 )
+                assert target["name"] == target_name
+                assert target["needs"] == "ci-budget"
+                assert gate["name"] == gate_name
+                assert gate["needs"] == ["ci-budget", target_name]
+                assert expression(gate, "if") == "${{ always() }}"
+                assert gate["runs-on"] == "ubuntu-latest"
+                assert gate["timeout-minutes"] == standard_minutes()
+                assert gate_permissions == {"actions": "read", "contents": "read"}
                 assert (
-                    expression(deadline, "if")
-                    == "needs.ci-budget.outputs.big_change != 'true'"
+                    step["uses"] == "indexable-inc/index/.github/actions/ci-budget@main"
                 )
-                assert child_object(deadline, "permissions")["actions"] == "write"
-                assert json.loads(expression(inputs, "target-job-names")) == [
-                    target_name
-                ]
+                assert inputs["mode"] == "gate"
+                assert inputs["target-job-name"] == target_name
                 assert expression(inputs, "run-id") == "${{ github.run_id }}"
                 assert expression(inputs, "run-attempt") == "${{ github.run_attempt }}"
+                assert "needs.ci-budget.outputs.big_change" in expression(
+                    inputs, "big-change"
+                )
                 assert isinstance(target["timeout-minutes"], int)
                 assert target["timeout-minutes"] > standard_minutes()
 
-    def test_events_classify_ranges_and_preserve_extended_runs(self) -> None:
-        check_jobs = child_object(load_workflow("check.yml"), "jobs")
-        check_budget = child_object(check_jobs, "ci-budget")
-        check_inputs = child_object(check_budget, "with")
-        assert (
-            check_budget["uses"]
-            == "indexable-inc/index/.github/workflows/ci-budget.yml@main"
+    def test_required_workflows_are_read_only_on_pull_requests(self) -> None:
+        for workflow_name in ("check.yml", "closure-gate.yml"):
+            with self.subTest(workflow=workflow_name):
+                workflow = load_workflow(workflow_name)
+                assert "pull_request" in events(workflow)
+                assert "pull_request_target" not in events(workflow)
+                assert child_object(workflow, "permissions") == {"contents": "read"}
+                for job in child_object(workflow, "jobs").values():
+                    if not isinstance(job, dict) or "permissions" not in job:
+                        continue
+                    permissions = child_object(job, "permissions")
+                    assert "write" not in permissions.values()
+
+    def test_non_pull_request_classification_keeps_labels(self) -> None:
+        check_inputs = child_object(
+            child_object(child_object(load_workflow("check.yml"), "jobs"), "ci-budget"),
+            "with",
         )
-        assert "pull_request.number" in expression(check_inputs, "pull-request-number")
-        assert "github.event.before" in expression(check_inputs, "base-sha")
-        assert "merge_group.base_sha" in expression(check_inputs, "base-sha")
+        assert "base-sha" not in check_inputs
         assert "github.sha" in expression(check_inputs, "head-sha")
         assert "merge_group.head_sha" in expression(check_inputs, "head-sha")
         assert "refs/tags/" in expression(check_inputs, "force-big-change")
 
-        closure_jobs = child_object(load_workflow("closure-gate.yml"), "jobs")
-        closure_budget = child_object(closure_jobs, "ci-budget")
-        closure_inputs = child_object(closure_budget, "with")
-        assert (
-            closure_budget["uses"]
-            == "indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main"
+        closure_inputs = child_object(
+            child_object(
+                child_object(load_workflow("closure-gate.yml"), "jobs"), "ci-budget"
+            ),
+            "with",
         )
-        assert "merge_group.base_sha" in expression(closure_inputs, "base-sha")
+        assert "base-sha" not in closure_inputs
         assert "merge_group.head_sha" in expression(closure_inputs, "head-sha")
         assert "workflow_dispatch" in expression(closure_inputs, "force-big-change")
 
-    def test_budget_check_watches_owner_and_consumers(self) -> None:
-        workflow = load_workflow("ci-budget-check.yml")
-        events = workflow.get("on", workflow.get("true"))
-        if not isinstance(events, dict):
-            raise AssertionError("ci-budget-check.yml has no event object")
-        paths = child_object(events, "pull_request").get("paths")
-        if not isinstance(paths, list):
-            raise AssertionError("ci-budget-check.yml has no pull request paths")
 
+class TrustedWorkflowTests(unittest.TestCase):
+    def test_controller_covers_initial_runs_and_reruns(self) -> None:
+        workflow = load_workflow("ci-deadline-controller.yml")
+        trigger = child_object(events(workflow), "workflow_run")
+        assert set(child_list(trigger, "workflows")) == {"Check", "Closure gate"}
+        assert set(child_list(trigger, "types")) == {"requested", "in_progress"}
+
+        concurrency = child_object(workflow, "concurrency")
+        assert concurrency["cancel-in-progress"] is True
+        assert "workflow_run.id" in expression(concurrency, "group")
+        assert "workflow_run.run_attempt" in expression(concurrency, "group")
+
+        deadline = child_object(child_object(workflow, "jobs"), "deadline")
+        assert (
+            deadline["uses"]
+            == "indexable-inc/index/.github/workflows/ci-deadline.yml@main"
+        )
+        assert child_object(deadline, "permissions") == {
+            "actions": "write",
+            "contents": "read",
+            "pull-requests": "read",
+        }
+        inputs = child_object(deadline, "with")
+        assert "workflow_run.id" in expression(inputs, "run-id")
+        assert "workflow_run.run_attempt" in expression(inputs, "run-attempt")
+        assert not any(use.startswith("actions/checkout") for use in all_uses(workflow))
+
+    def test_publisher_uses_trusted_base_code_without_checkout(self) -> None:
+        workflow = load_workflow("ci-budget-publish.yml")
+        assert "pull_request_target" in events(workflow)
+        publish = child_object(child_object(workflow, "jobs"), "publish")
+        assert (
+            publish["uses"]
+            == "indexable-inc/index/.github/workflows/ci-budget.yml@main"
+        )
+        assert child_object(publish, "permissions") == {
+            "contents": "read",
+            "issues": "write",
+            "pull-requests": "write",
+        }
+        assert not any(use.startswith("actions/checkout") for use in all_uses(workflow))
+
+    def test_budget_check_watches_owner_and_consumers(self) -> None:
+        paths = child_list(
+            child_object(events(load_workflow("ci-budget-check.yml")), "pull_request"),
+            "paths",
+        )
         assert {
             ".github/actions/ci-budget/**",
             ".github/workflows/check.yml",
             ".github/workflows/closure-gate.yml",
+            ".github/workflows/ci-budget-publish.yml",
+            ".github/workflows/ci-deadline-controller.yml",
             ".github/workflows/ci-deadline.yml",
         } <= set(paths)
 
