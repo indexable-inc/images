@@ -3464,6 +3464,10 @@
         message = "base profile should make root land in nushell (via platform users.defaultUserShell)";
       }
       {
+        assertion = base.config.home-manager.users.root.programs.fzf.historyWidget.command == "";
+        message = "base profile should leave Ctrl-R history search to Atuin";
+      }
+      {
         assertion =
           lib.any (
             rule: lib.hasPrefix "d ${base.cfg.shellWorkspace.directory} " rule
