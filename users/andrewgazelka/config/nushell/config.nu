@@ -210,25 +210,12 @@ def _store_path_parts [
     }
 }
 
-def _as_path_list [] {
-    let input = $in
-    let kind = ($input | describe)
-
-    if $kind == "nothing" {
-        []
-    } else if ($kind =~ '^(list|table)') {
-        $input
-    } else {
-        [ $input ]
-    }
-}
-
 # Parse Nix store paths or drv paths into readable package/version columns.
 def drv-info [
     path?: string  # Optional store path. If omitted, reads a path or list of paths from stdin.
 ] {
     let paths = if $path == null {
-        $in | _as_path_list
+        $in | path list
     } else {
         [ $path ]
     }
@@ -434,7 +421,7 @@ def "ni why" [
 # Add build-log timing hints to selected `ni` rows or store paths.
 def "ni log-times" [] {
     $in
-    | _as_path_list
+    | path list
     | par-each --keep-order --threads 8 {|item|
         let kind = ($item | describe)
         let row = if ($kind =~ '^record') {
