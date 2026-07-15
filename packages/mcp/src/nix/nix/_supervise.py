@@ -446,9 +446,10 @@ class _DarwinJob:
             return None
         with self.status_path.open() as stream:
             value = json.load(stream)
-        if not isinstance(value, dict) or not isinstance(value.get("status"), int):
+        status = value.get("status") if isinstance(value, dict) else None
+        if not isinstance(status, int):
             raise TypeError("Darwin target status must contain an integer status")
-        return value["status"]
+        return status
 
     def load_coalitions(self) -> None:
         if self.coalitions is not None or not self.ready_path.exists():
@@ -819,6 +820,7 @@ def _terminate_darwin_job(
             remove_error = exc
 
         job.load_coalitions()
+        forced_relays: set[int]
         if job.coalitions is None:
             forced_relays = _kill_relays(job.relays, statuses, deadline)
             failed_relays = _failed_relays(job.relays, statuses, forced_relays)
@@ -827,7 +829,7 @@ def _terminate_darwin_job(
                 raise remove_error
             return
 
-        forced_relays: set[int] = set()
+        forced_relays = set()
         while True:
             job.remember_members(members)
             for member in reversed(tuple(members.values())):
@@ -1011,7 +1013,12 @@ def main() -> NoReturn:
         )
         raise SystemExit(125) from failure
 
-    status = target_status if job is not None else statuses.get(target)
+    if job is not None:
+        status = target_status
+    elif target is not None:
+        status = statuses.get(target)
+    else:
+        status = None
     raise SystemExit(125 if status is None else _exit_code(status))
 
 

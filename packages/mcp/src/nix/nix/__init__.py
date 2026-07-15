@@ -301,6 +301,7 @@ def _executable_search_path(cwd: str | None) -> str:
 
 def _resolve_executable(command: str, cwd: str | None) -> str:
     path = Path(command)
+    candidate: Path | None
     if path.is_absolute():
         candidate = path
     elif os.sep in command:
