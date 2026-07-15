@@ -24,12 +24,11 @@ moved, `git pull --rebase origin main` and push again.
 Open a PR only when you want human review on a change, not as the default path
 to land. When you do, create the branch and worktree from the updated `main`
 checkout. Use the `codex/` branch prefix unless the user asks for a different
-name. Place the worktree as a sibling of the repo root (the `../` prefix) so it
-stays outside the flake source tree and does not slow down Nix source-copy or
-lint walks:
+name. Place the worktree under `/tmp/<username>/` so it stays outside the flake
+source tree and does not slow down Nix source-copy or lint walks:
 
 ```sh
-git worktree add ../<short-name>-<branch> -b codex/<branch> main
+git worktree add /tmp/<username>/<branch> -b codex/<branch> main
 ```
 
 Never place worktrees under the repo root (e.g. `.claude/worktrees/` or
