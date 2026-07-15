@@ -497,6 +497,14 @@
           upstream = "hold";
           reason = "Prevents stale queued auto-GC decisions from serializing CI jobs behind repeated collections (indexable-inc/index#3085, indexable-inc/ix#7145). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        "0018-Get-rid-of-duplicated-Build-failed-due-to-failed-dep.patch" = {
+          upstream = "hold";
+          reason = "Backports NixOS/nix#16040 from 2.34.8; drop when the daemon base reaches 2.34.8 or newer.";
+        };
+        "0019-libstore-preserve-content-addressed-leaf-failures.patch" = {
+          upstream = "hold";
+          reason = "Preserves actionable floating-CA leaf failures through resolution (indexable-inc/index#3279, indexable-inc/ix#7357). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];

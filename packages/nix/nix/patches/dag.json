@@ -73,6 +73,14 @@
     {
       "patch": "0017-fix-libstore-recheck-free-space-after-GC-lock.patch",
       "deps": []
+    },
+    {
+      "patch": "0018-Get-rid-of-duplicated-Build-failed-due-to-failed-dep.patch",
+      "deps": []
+    },
+    {
+      "patch": "0019-libstore-preserve-content-addressed-leaf-failures.patch",
+      "deps": []
     }
   ]
 }
