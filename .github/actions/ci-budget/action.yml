@@ -1,5 +1,5 @@
-name: Classify CI budget
-description: Classify a pull request and publish its shared CI budget policy
+name: Apply CI budget policy
+description: Classify a change or enforce its total CI deadline
 
 inputs:
   repository:
@@ -8,6 +8,12 @@ inputs:
   pull-request-number:
     description: Pull request number, or 0 outside a pull request
     required: true
+  base-sha:
+    description: Base commit for a non-pull-request change
+    default: ""
+  head-sha:
+    description: Head commit for a non-pull-request change
+    default: ""
   token:
     description: Token with pull request read and, when publishing, issues write
     required: true
@@ -20,6 +26,18 @@ inputs:
   publish:
     description: Add the automatic label and publish the sticky comment
     default: "true"
+  mode:
+    description: Policy operation, either classify or deadline
+    default: classify
+  run-id:
+    description: Workflow run to enforce in deadline mode
+    default: "0"
+  run-attempt:
+    description: Workflow attempt to enforce in deadline mode
+    default: "0"
+  target-job-names:
+    description: JSON array of job names covered by the total deadline
+    default: "[]"
 
 outputs:
   big_change:
@@ -28,18 +46,42 @@ outputs:
   reason:
     description: JSON object describing every source of the decision
     value: ${{ steps.classify.outputs.reason }}
+  standard_minutes:
+    description: Standard total CI budget in whole minutes
+    value: ${{ steps.classify.outputs.standard_minutes }}
 
 runs:
   using: composite
   steps:
     - name: Classify CI budget
       id: classify
+      if: inputs.mode == 'classify'
       shell: bash
       env:
         CI_BUDGET_EXTRA_COSTLY_PATHS: ${{ inputs.extra-costly-paths }}
+        CI_BUDGET_BASE_SHA: ${{ inputs.base-sha }}
         CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}
         CI_BUDGET_PUBLISH: ${{ inputs.publish }}
         CI_BUDGET_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
         CI_BUDGET_REPOSITORY: ${{ inputs.repository }}
+        CI_BUDGET_HEAD_SHA: ${{ inputs.head-sha }}
         CI_BUDGET_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/ci_budget.py"
+    - name: Enforce total CI deadline
+      if: inputs.mode == 'deadline'
+      shell: bash
+      env:
+        CI_BUDGET_REPOSITORY: ${{ inputs.repository }}
+        CI_BUDGET_RUN_ATTEMPT: ${{ inputs.run-attempt }}
+        CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
+        CI_BUDGET_TARGET_JOB_NAMES: ${{ inputs.target-job-names }}
+        CI_BUDGET_TOKEN: ${{ inputs.token }}
+      run: python3 "$GITHUB_ACTION_PATH/ci_deadline.py"
+    - name: Reject unknown CI budget mode
+      if: inputs.mode != 'classify' && inputs.mode != 'deadline'
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        printf '::error title=ci-budget::unknown mode %s\n' "$MODE"
+        exit 1
