@@ -34,7 +34,9 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      # Pull request timeline comments require this permission even though the
+      # REST resource is exposed through the issues comments endpoint.
+      pull-requests: write
     outputs:
       big_change: ${{ steps.budget.outputs.big_change }}
       reason: ${{ steps.budget.outputs.reason }}
