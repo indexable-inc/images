@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - .github/actions/ci-budget/**
+      - .github/workflows/ci-budget-read-only.yml
       - .github/workflows/ci-budget.yml
       - .github/workflows/ci-budget-check.yml
 
