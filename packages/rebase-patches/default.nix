@@ -68,6 +68,12 @@
       use ${dagLib} *
 
       const fork_data = "${forkData}"
+      const scratch_identity = {name: "rebase-patches", email: "rebase-patches@indexable.dev"}
+
+      def "scratch configure-identity" [scratch: string] {
+        git -C $scratch config user.name $scratch_identity.name
+        git -C $scratch config user.email $scratch_identity.email
+      }
 
       # Set up a scratch git repo for `fork`: mergiraf merge driver, zdiff3
       # conflict style, and committed rerere seeded from packages/<name>/rerere/.
@@ -83,6 +89,7 @@
         # worktree `.gitattributes`: an untracked worktree file would collide with
         # a tracked `.gitattributes` in the fetched upstream tree on checkout.
         git -C $scratch init --quiet
+        scratch configure-identity $scratch
         git -C $scratch config merge.conflictStyle zdiff3
         # rerere replays a resolution the moment the same conflict recurs. The
         # committed cache (seeded below) makes it earn its keep for conflicts that
@@ -134,7 +141,8 @@
           cp --recursive ($rr_scratch | path join $key) $dest
           # `thisimage` is Git's transient current-conflict snapshot. Replaying a
           # resolution needs only the numbered or unnumbered pre/postimage pairs.
-          rm --force ...(glob ($dest | path join "thisimage*"))
+          let transient = (glob ($dest | path join "thisimage*"))
+          if ($transient | is-not-empty) { rm --force ...$transient }
         }
         print $"(ansi yellow)rebase-patches: ($fork.name): exported (($resolved | length)) rerere resolution\(s\) to ($fork.patchDir)/rerere: (($resolved) | str join ', ')(ansi reset)"
       }
@@ -310,6 +318,7 @@
           error make { msg: $"rebase-patches: resume state does not match ($fork.name) at ($new): ($state | to json)" }
         }
 
+        scratch configure-identity $scratch
         rebase unresolved $fork $scratch $new
         let rebase_dir = ($scratch | path join ".git" "rebase-merge")
         if ($rebase_dir | path exists) {
@@ -400,6 +409,12 @@
       package
     ];
   } (builtins.readFile ./resume-test.sh);
+  identityTest = runCommand "rebase-patches-identity-test" {
+    nativeBuildInputs = [
+      git
+      package
+    ];
+  } (builtins.readFile ./identity-test.sh);
   seedTest = runCommand "rebase-patches-seed-test" {
     nativeBuildInputs = [
       coreutils
@@ -418,6 +433,7 @@ in
           (old.passthru.tests or {})
           // {
             resume = resumeTest;
+            identity = identityTest;
             seed = seedTest;
           };
       };
