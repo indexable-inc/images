@@ -154,15 +154,19 @@ index 60fed64ae..24e93bd55 100644
 -
      ~LocalStore();
 diff --git a/src/libstore/local-overlay-store.cc b/src/libstore/local-overlay-store.cc
-index 705e9ddf7..189437492 100644
+index 705e9ddf7..5e5a44551 100644
 --- a/src/libstore/local-overlay-store.cc
 +++ b/src/libstore/local-overlay-store.cc
-@@ -22,3 +22,3 @@ ref<Store> LocalOverlayStoreConfig::openStore() const
+@@ -4,2 +4,3 @@
+ #include "nix/util/callback.hh"
++#include "nix/util/environment-variables.hh"
+ #include "nix/util/os-string.hh"
+@@ -22,3 +23,3 @@ ref<Store> LocalOverlayStoreConfig::openStore() const
  {
 -    return make_ref<LocalOverlayStore>(
 +    return LocalStore::make<LocalOverlayStore>(
          ref{std::dynamic_pointer_cast<const LocalOverlayStoreConfig>(shared_from_this())});
-@@ -75,2 +75,12 @@ LocalOverlayStore::LocalOverlayStore(ref<const Config> config)
+@@ -75,2 +76,12 @@ LocalOverlayStore::LocalOverlayStore(ref<const Config> config)
  
 +LocalOverlayStore::~LocalOverlayStore()
 +{
