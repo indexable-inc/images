@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+: "${RUNNER_IDENTITY:?RUNNER_IDENTITY is required}"
 
 commit="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
 workflow="${GITHUB_WORKFLOW:-local}"

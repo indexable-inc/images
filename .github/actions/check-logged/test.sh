@@ -16,15 +16,11 @@ check_log="${log_root}/${commit}/${workflow}/${run_id}-${run_attempt}.stdout"
 summary="${scratch}/summary"
 stdout="${scratch}/stdout"
 stderr="${scratch}/stderr"
-missing_identity_stdout="${scratch}/missing-identity-stdout"
-missing_identity_stderr="${scratch}/missing-identity-stderr"
-missing_identity_summary="${scratch}/missing-identity-summary"
-missing_identity_run="${scratch}/missing-identity-run"
 nix_run="${scratch}/nix-run"
 bash_bin="$(command -v bash)"
 env_bin="$(command -v env)"
 
-mkdir -p "${bin_dir}" "$(dirname -- "${check_log}")"
+mkdir -p "${bin_dir}"
 ln -s "$(command -v cat)" "${bin_dir}/cat"
 ln -s "$(command -v install)" "${bin_dir}/install"
 
@@ -63,13 +59,13 @@ action_env=(
   GITHUB_RUN_ATTEMPT="${run_attempt}"
   GITHUB_RUN_ID="${run_id}"
   GITHUB_WORKFLOW="${workflow}"
-  IX_CI_RUN_LOG_ROOT="${log_root}"
   RUNNER_TEMP="${scratch}/runner-temp"
 )
 
 "${env_bin}" -i \
   "${action_env[@]}" \
   GITHUB_STEP_SUMMARY="${summary}" \
+  IX_CI_RUN_LOG_ROOT="${log_root}" \
   NIX_RUN_SENTINEL="${nix_run}" \
   RUNNER_IDENTITY="${runner_identity}" \
   "${bash_bin}" "${action_dir}/run.sh" >"${stdout}" 2>"${stderr}"
@@ -91,25 +87,40 @@ if [[ "$(<"${check_log}")" != "check passed" ]]; then
   exit 1
 fi
 
-if "${env_bin}" -i \
-  "${action_env[@]}" \
-  GITHUB_STEP_SUMMARY="${missing_identity_summary}" \
-  NIX_RUN_SENTINEL="${missing_identity_run}" \
-  "${bash_bin}" "${action_dir}/run.sh" \
-  >"${missing_identity_stdout}" 2>"${missing_identity_stderr}"; then
-  printf 'action accepted a missing RUNNER_IDENTITY\n' >&2
-  exit 1
-fi
-if [[ -e "${missing_identity_run}" ]]; then
-  printf 'check ran without a RUNNER_IDENTITY\n' >&2
-  exit 1
-fi
-if [[ -s "${missing_identity_stdout}" || -e "${missing_identity_summary}" ]]; then
-  printf 'action emitted a guessed runner identity\n' >&2
-  exit 1
-fi
-if [[ "$(<"${missing_identity_stderr}")" != *RUNNER_IDENTITY* ]]; then
-  printf 'missing identity failure did not name RUNNER_IDENTITY:\n%s\n' \
-    "$(<"${missing_identity_stderr}")" >&2
-  exit 1
-fi
+assert_identity_rejected() {
+  local label="$1"
+  shift
+  local rejected_log_root="${scratch}/${label}-logs"
+  local rejected_run="${scratch}/${label}-run"
+  local rejected_stderr="${scratch}/${label}-stderr"
+  local rejected_stdout="${scratch}/${label}-stdout"
+  local rejected_summary="${scratch}/${label}-summary"
+
+  if "${env_bin}" -i \
+    "${action_env[@]}" \
+    GITHUB_STEP_SUMMARY="${rejected_summary}" \
+    IX_CI_RUN_LOG_ROOT="${rejected_log_root}" \
+    NIX_RUN_SENTINEL="${rejected_run}" \
+    "$@" \
+    "${bash_bin}" "${action_dir}/run.sh" \
+    >"${rejected_stdout}" 2>"${rejected_stderr}"; then
+    printf 'action accepted %s RUNNER_IDENTITY\n' "${label}" >&2
+    exit 1
+  fi
+  if [[ -e "${rejected_log_root}" || -e "${rejected_run}" ]]; then
+    printf 'action performed work with %s RUNNER_IDENTITY\n' "${label}" >&2
+    exit 1
+  fi
+  if [[ -s "${rejected_stdout}" || -e "${rejected_summary}" ]]; then
+    printf 'action emitted a guessed runner identity for %s input\n' "${label}" >&2
+    exit 1
+  fi
+  if [[ "$(<"${rejected_stderr}")" != *RUNNER_IDENTITY* ]]; then
+    printf '%s identity failure did not name RUNNER_IDENTITY:\n%s\n' \
+      "${label}" "$(<"${rejected_stderr}")" >&2
+    exit 1
+  fi
+}
+
+assert_identity_rejected missing
+assert_identity_rejected empty RUNNER_IDENTITY=
