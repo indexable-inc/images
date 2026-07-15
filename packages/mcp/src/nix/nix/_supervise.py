@@ -24,6 +24,8 @@ import psutil
 _WATCH_SECONDS = 0.1
 _SHUTDOWN_POLL_SECONDS = 0.01
 _SHUTDOWN_SECONDS = 5.0
+# Relays need time to become waitable after the final SIGKILL.
+_FINAL_REAP_SECONDS = 1.0
 _PR_SET_CHILD_SUBREAPER = 36
 _PIDFD_OPEN = getattr(os, "pidfd_open", None)
 _PIDFD_SEND_SIGNAL = getattr(signal, "pidfd_send_signal", None)
@@ -34,6 +36,33 @@ _PROC_PIDCOALITIONINFO = 20
 _LISTCOALITIONS_SINGLE_TYPE = 2
 _COALITION_TYPE_RESOURCE = 0
 _DARWIN_LAUNCH_SECONDS = 3.0
+
+
+@dataclass(frozen=True, slots=True)
+class _CleanupDeadline:
+    expires: float
+
+    @classmethod
+    def start(cls) -> _CleanupDeadline:
+        return cls(expires=time.monotonic() + _SHUTDOWN_SECONDS)
+
+    def remaining(self) -> float:
+        remaining = self.expires - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("nix supervisor cleanup deadline expired")
+        return remaining
+
+    def remaining_before_final_reap(self) -> float:
+        remaining = self.expires - _FINAL_REAP_SECONDS - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("nix supervisor cleanup entered final reaping")
+        return remaining
+
+    def final_reap_due(self) -> bool:
+        return time.monotonic() >= self.expires - _FINAL_REAP_SECONDS
+
+    def expired(self) -> bool:
+        return time.monotonic() >= self.expires
 
 
 @dataclass(slots=True)
@@ -473,7 +502,7 @@ class _DarwinJob:
             return 0
         return self.proc.task_count(self.coalitions[0])
 
-    def remove(self) -> None:
+    def remove(self, deadline: _CleanupDeadline) -> None:
         if self.removed or not self.bootstrap_attempted:
             return
         result = subprocess.run(
@@ -481,7 +510,10 @@ class _DarwinJob:
             check=False,
             capture_output=True,
             text=True,
-            timeout=_DARWIN_LAUNCH_SECONDS,
+            timeout=min(
+                _DARWIN_LAUNCH_SECONDS,
+                deadline.remaining_before_final_reap(),
+            ),
         )
         self.removed = True
         if result.returncode != 0:
@@ -673,17 +705,45 @@ def _terminate_tree(
         time.sleep(_SHUTDOWN_POLL_SECONDS)
 
 
-def _kill_relays(relays: list[int], statuses: dict[int, int]) -> None:
+def _signal_relays(
+    relays: list[int],
+    statuses: dict[int, int],
+) -> set[int]:
+    signaled: set[int] = set()
     for relay in relays:
         if relay in statuses:
             continue
-        with contextlib.suppress(ProcessLookupError):
+        try:
             os.kill(relay, signal.SIGKILL)
-    for relay in relays:
-        if relay in statuses:
+        except ProcessLookupError:
             continue
-        with contextlib.suppress(ChildProcessError):
-            statuses[relay] = _wait_for_child(relay)
+        signaled.add(relay)
+    return signaled
+
+
+def _kill_relays(
+    relays: list[int],
+    statuses: dict[int, int],
+    deadline: _CleanupDeadline,
+) -> None:
+    _signal_relays(relays, statuses)
+    while any(relay not in statuses for relay in relays):
+        _reap_children(statuses)
+        if all(relay in statuses for relay in relays):
+            return
+        if deadline.expired():
+            pending = [str(relay) for relay in relays if relay not in statuses]
+            raise RuntimeError(
+                "nix supervisor could not reap output relays before its deadline: "
+                + ", ".join(pending)
+            )
+        time.sleep(min(_SHUTDOWN_POLL_SECONDS, deadline.remaining()))
+
+
+def _relay_failed(status: int, *, forced: bool) -> bool:
+    return status != 0 and not (
+        forced and os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+    )
 
 
 def _terminate_darwin_job(
@@ -691,21 +751,22 @@ def _terminate_darwin_job(
     members: dict[tuple[int, float], _Member],
     statuses: dict[int, int],
 ) -> None:
+    deadline = _CleanupDeadline.start()
     try:
         remove_error: BaseException | None = None
         try:
-            job.remove()
+            job.remove(deadline)
         except BaseException as exc:
             remove_error = exc
 
         job.load_coalitions()
         if job.coalitions is None:
-            _kill_relays(job.relays, statuses)
+            _kill_relays(job.relays, statuses, deadline)
             if remove_error is not None:
                 raise remove_error
             return
 
-        deadline = time.monotonic() + _SHUTDOWN_SECONDS
+        forced_relays: set[int] = set()
         while True:
             job.remember_members(members)
             for member in reversed(tuple(members.values())):
@@ -716,7 +777,12 @@ def _terminate_darwin_job(
             running_relays = [relay for relay in job.relays if relay not in statuses]
             if task_count == 0 and not running_relays:
                 failed_relays = [
-                    str(relay) for relay in job.relays if statuses.get(relay, 0) != 0
+                    str(relay)
+                    for relay in job.relays
+                    if _relay_failed(
+                        statuses.get(relay, 0),
+                        forced=relay in forced_relays,
+                    )
                 ]
                 if failed_relays:
                     raise RuntimeError(
@@ -726,8 +792,9 @@ def _terminate_darwin_job(
                 if remove_error is not None:
                     raise remove_error
                 return
-            if time.monotonic() >= deadline:
-                _kill_relays(job.relays, statuses)
+            if deadline.final_reap_due():
+                forced_relays.update(_signal_relays(job.relays, statuses))
+            if deadline.expired():
                 alive = [
                     str(member.process.pid)
                     for member in members.values()
@@ -736,9 +803,10 @@ def _terminate_darwin_job(
                 raise RuntimeError(
                     "nix supervisor could not empty launchd coalition "
                     f"{job.coalitions} within {_SHUTDOWN_SECONDS:g}s: "
-                    f"{task_count} tasks, {', '.join(alive) or 'no visible member'}"
+                    f"{task_count} tasks, {', '.join(alive) or 'no visible member'}, "
+                    f"{len(running_relays)} output relays"
                 )
-            time.sleep(_SHUTDOWN_POLL_SECONDS)
+            time.sleep(min(_SHUTDOWN_POLL_SECONDS, deadline.remaining()))
     except BaseException as exc:
         for member in reversed(tuple(members.values())):
             try:
@@ -750,7 +818,7 @@ def _terminate_darwin_job(
                     f"{type(cleanup_error).__name__}: {cleanup_error}"
                 )
         try:
-            _kill_relays(job.relays, statuses)
+            _kill_relays(job.relays, statuses, deadline)
         except BaseException as cleanup_error:
             exc.add_note(
                 "nix supervisor relay cleanup also failed: "

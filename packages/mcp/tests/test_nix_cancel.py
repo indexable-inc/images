@@ -8,6 +8,7 @@ import fcntl
 import os
 import pathlib
 import plistlib
+import signal
 import sys
 import textwrap
 import time
@@ -451,7 +452,7 @@ def test_darwin_status_is_reread_after_wrapper_exit(
     assert job.terminal_status() == 7 << 8
 
 
-def test_unready_darwin_job_reaps_relays_without_deadline(
+def test_unready_darwin_job_reaps_relays_within_shared_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from nix import _supervise
@@ -464,17 +465,24 @@ def test_unready_darwin_job_reaps_relays_without_deadline(
             self.coalitions = None
             self.relays = [101, 102]
 
-        def remove(self) -> None:
+        def remove(self, deadline: _supervise._CleanupDeadline) -> None:
+            deadlines.append(deadline)
             events.append("removed")
 
         def load_coalitions(self) -> None:
             events.append("checked readiness")
 
-    def kill_relays(relays: list[int], statuses: dict[int, int]) -> None:
+    def kill_relays(
+        relays: list[int],
+        statuses: dict[int, int],
+        deadline: _supervise._CleanupDeadline,
+    ) -> None:
         assert relays == [101, 102]
+        deadlines.append(deadline)
         statuses.update({101: 0, 102: 0})
         events.append("reaped relays")
 
+    deadlines: list[_supervise._CleanupDeadline] = []
     monkeypatch.setattr(_supervise, "_kill_relays", kill_relays)
     _supervise._terminate_darwin_job(
         UnreadyJob(),  # ty: ignore[invalid-argument-type] pre-readiness job double
@@ -483,6 +491,158 @@ def test_unready_darwin_job_reaps_relays_without_deadline(
     )
 
     assert events == ["removed", "checked readiness", "reaped relays"]
+    assert deadlines[0] is deadlines[1]
+
+
+def test_parent_reap_deadline_exceeds_darwin_launch_and_cleanup() -> None:
+    from nix import _supervise
+
+    inner_bound = _supervise._DARWIN_LAUNCH_SECONDS + _supervise._SHUTDOWN_SECONDS
+    assert inner_bound + 1 <= nix._REAP_TIMEOUT
+
+
+def test_stuck_bootstrap_and_ready_coalition_finish_inside_parent_bound(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from nix import _supervise
+
+    real_sleep = time.sleep
+    clock = [0.0]
+    parent_deadline = nix._REAP_TIMEOUT
+    monkeypatch.setattr(_supervise.time, "monotonic", lambda: clock[0])
+
+    def advance(seconds: float) -> None:
+        clock[0] += seconds
+        real_sleep(seconds)
+
+    monkeypatch.setattr(_supervise.time, "sleep", advance)
+    monkeypatch.setattr(_supervise.sys, "platform", "darwin")
+
+    target = os.fork()
+    if target == 0:
+        while True:
+            signal.pause()
+    target_identity = _Identity.capture(target)
+
+    relay_read, relay_write = os.pipe()
+    relay = os.fork()
+    if relay == 0:
+        os.close(relay_write)
+        os.read(relay_read, 1)
+        os._exit(0)
+    os.close(relay_read)
+    relay_identity = _Identity.capture(relay)
+
+    root = tmp_path / "launchd-job"
+    root.mkdir()
+    job_read, job_write = os.pipe()
+    owner_read, owner_write = os.pipe()
+    os.close(owner_write)
+
+    class ReadyJob:
+        def __init__(self) -> None:
+            self.coalitions = (101, 102)
+            self.relays = [relay]
+            self.deadline: _supervise._CleanupDeadline | None = None
+            self.members: dict[tuple[int, float], _supervise._Member] | None = None
+            self.task_count_calls = 0
+
+        def start(self, owner_fd: int) -> None:
+            assert owner_fd == owner_read
+            clock[0] += _supervise._DARWIN_LAUNCH_SECONDS
+            raise RuntimeError("launchctl bootstrap timeout sentinel")
+
+        def remove(self, deadline: _supervise._CleanupDeadline) -> None:
+            self.deadline = deadline
+            clock[0] += _supervise._DARWIN_LAUNCH_SECONDS
+
+        def load_coalitions(self) -> None:
+            pass
+
+        def terminal_status(self) -> int | None:
+            return None
+
+        def read_status(self) -> int | None:
+            return 0
+
+        def remember_members(
+            self,
+            remembered: dict[tuple[int, float], _supervise._Member],
+        ) -> None:
+            self.members = remembered
+            if remembered:
+                return
+            member = _supervise._Member.capture(psutil.Process(target))
+            remembered[member.identity] = member
+
+        def task_count(self) -> int:
+            assert self.deadline is not None
+            assert self.members is not None
+            if self.task_count_calls == 0:
+                clock[0] = self.deadline.expires - _supervise._FINAL_REAP_SECONDS
+            self.task_count_calls += 1
+            return sum(member.running() for member in self.members.values())
+
+        def close(self) -> None:
+            os.close(job_read)
+            os.close(job_write)
+            root.rmdir()
+
+    job = ReadyJob()
+    monkeypatch.setattr(
+        _supervise._DarwinJob,
+        "allocate",
+        staticmethod(lambda argv: job),
+    )
+    monkeypatch.setattr(
+        _supervise.sys, "argv", ["_supervise.py", str(owner_read), "ignored"]
+    )
+
+    try:
+        with pytest.raises(SystemExit) as exit_info:
+            _supervise.main()
+        assert exit_info.value.code == 125
+        assert capsys.readouterr().err == (
+            "nix supervisor failed: RuntimeError: "
+            "launchctl bootstrap timeout sentinel\n"
+        )
+        assert clock[0] < parent_deadline
+        assert job.task_count_calls >= 2
+        assert not target_identity.running()
+        assert not relay_identity.running()
+        assert not root.exists()
+        for child in (target, relay):
+            with pytest.raises(ChildProcessError):
+                os.waitpid(child, os.WNOHANG)
+        for closed_fd in (owner_read, job_read, job_write):
+            with pytest.raises(OSError, match=r"\[Errno 9\]"):
+                os.fstat(closed_fd)
+    finally:
+        _cleanup_identities((target_identity, relay_identity))
+        for child in (target, relay):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child, signal.SIGKILL)
+            with contextlib.suppress(ChildProcessError):
+                os.waitpid(child, 0)
+        with contextlib.suppress(OSError):
+            os.close(relay_write)
+        for fd in (owner_read, job_read, job_write):
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        with contextlib.suppress(OSError):
+            root.rmdir()
+
+
+def test_only_a_forced_sigkill_is_an_expected_relay_status() -> None:
+    from nix import _supervise
+
+    assert _supervise._relay_failed(7 << 8, forced=False)
+    assert _supervise._relay_failed(signal.SIGKILL, forced=False)
+    assert _supervise._relay_failed(7 << 8, forced=True)
+    assert _supervise._relay_failed(signal.SIGTERM, forced=True)
+    assert not _supervise._relay_failed(signal.SIGKILL, forced=True)
 
 
 def test_darwin_job_uses_the_background_user_domain(
