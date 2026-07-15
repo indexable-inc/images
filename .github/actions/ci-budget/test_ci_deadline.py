@@ -60,7 +60,15 @@ class DeadlineTests(unittest.TestCase):
     def test_completed_target_stops_monitor(self) -> None:
         client = FakeClient(
             "2026-07-15T10:00:00Z",
-            [[{"name": "flake-check", "status": "completed"}]],
+            [
+                [
+                    {
+                        "name": "flake-check",
+                        "status": "completed",
+                        "completed_at": "2026-07-15T10:04:59Z",
+                    }
+                ]
+            ],
         )
 
         cancelled = ci_deadline.enforce(
@@ -75,6 +83,33 @@ class DeadlineTests(unittest.TestCase):
 
         assert not cancelled
         assert not client.cancelled
+
+    def test_target_completed_after_deadline_is_cancelled(self) -> None:
+        client = FakeClient(
+            "2026-07-15T10:00:00Z",
+            [
+                [
+                    {
+                        "name": "flake-check",
+                        "status": "completed",
+                        "completed_at": "2026-07-15T10:05:01Z",
+                    }
+                ]
+            ],
+        )
+
+        cancelled = ci_deadline.enforce(
+            client,
+            12,
+            3,
+            ["flake-check"],
+            timedelta(minutes=5),
+            now=lambda: datetime(2026, 7, 15, 10, 6, tzinfo=UTC),
+            sleep=lambda _: self.fail("late target must not sleep"),
+        )
+
+        assert cancelled
+        assert client.cancelled == [12]
 
     def test_missing_target_is_cancelled_at_deadline(self) -> None:
         client = FakeClient("2026-07-15T10:00:00Z", [[]])
