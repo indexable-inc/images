@@ -34,7 +34,7 @@ class FakeTransport:
 class ClassificationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.globs = ci_budget.load_canonical_globs(
-            MODULE_PATH.with_name("costly-paths.json")
+            MODULE_PATH.with_name("costly-paths")
         )
 
     def test_routine_change_uses_standard_budget(self) -> None:

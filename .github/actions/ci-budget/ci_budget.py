@@ -51,7 +51,10 @@ def parse_globs(value: str, name: str) -> list[str]:
 
 
 def load_canonical_globs(path: Path) -> list[str]:
-    return parse_globs(path.read_text(), str(path))
+    globs = [line for line in path.read_text().splitlines() if line]
+    if not globs:
+        raise ValueError(f"{path} must contain at least one glob")
+    return globs
 
 
 def classify(
@@ -236,7 +239,7 @@ def main() -> int:
         os.environ["CI_BUDGET_FORCE_BIG_CHANGE"], "force-big-change"
     )
     publish = parse_bool(os.environ["CI_BUDGET_PUBLISH"], "publish")
-    globs = load_canonical_globs(Path(__file__).with_name("costly-paths.json"))
+    globs = load_canonical_globs(Path(__file__).with_name("costly-paths"))
     globs.extend(
         parse_globs(os.environ["CI_BUDGET_EXTRA_COSTLY_PATHS"], "extra-costly-paths")
     )
