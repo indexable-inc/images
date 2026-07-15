@@ -4,9 +4,12 @@ on:
   pull_request:
     paths:
       - .github/actions/ci-budget/**
+      - .github/workflows/check.yml
+      - .github/workflows/closure-gate.yml
       - .github/workflows/ci-budget-read-only.yml
       - .github/workflows/ci-budget.yml
       - .github/workflows/ci-budget-check.yml
+      - .github/workflows/ci-deadline.yml
 
 permissions:
   contents: read
