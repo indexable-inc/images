@@ -2105,6 +2105,20 @@ def _nu_json_record(value: Any, *, source: str) -> dict[str, Any]:
     return parsed
 
 
+def _nu_json_records(value: Any, *, source: str) -> list[dict[str, Any]]:
+    """Validate a completed command, then decode its stdout as JSON records."""
+    completion = _nu_completion(value, source=source)
+    if completion.exit_code != 0:
+        raise RuntimeError(_nu_failure(source, completion))
+    try:
+        parsed = json.loads(completion.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{source} returned invalid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
+        raise TypeError(f"{source}: expected a JSON list of records")
+    return parsed
+
+
 async def watch_pr(
     pr: str | int,
     *,
@@ -2205,6 +2219,19 @@ async def watch_pr(
         )
         return row
 
+    async def required_checks() -> list[dict[str, Any]]:
+        try:
+            return _nu_json_records(
+                await run_nu(
+                    "gh pr checks $env.PR --required "
+                    "--json bucket,completedAt,link,name,startedAt,state,workflow | complete"
+                ),
+                source="gh pr checks --required",
+            )
+        except Exception as exc:
+            await fail_watch(exc)
+            raise
+
     if auto_merge:
         # Arming auto merge on an already-mergeable PR merges it instantly,
         # before any watching happens (#2532): branch-protection endpoints
@@ -2255,7 +2282,7 @@ async def watch_pr(
     while True:
         last = await refresh()
         checks = last.get("statusCheckRollup") or []
-        failures = [
+        failure_attempts = [
             check
             for check in checks
             if check.get("conclusion") in {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}
@@ -2265,6 +2292,17 @@ async def watch_pr(
             resource.close()
             await notify(f"PR {clean_pr} finished with state {last.get('state')}", resource=resource.id, pr=clean_pr)
             return finished({"state": last.get("state"), "url": last.get("url"), "checks": len(checks)})
+        if failure_attempts:
+            # statusCheckRollup preserves every attempt. Ask GitHub to resolve
+            # required contexts on the current head before making a terminal
+            # verdict, so an older cancelled rerun stays history (#3331).
+            failures = [
+                check
+                for check in await required_checks()
+                if check.get("bucket") in {"fail", "cancel"}
+            ]
+        else:
+            failures = []
         if failures:
             state["status"] = "failed"
             state["error"] = "One or more required actions failed."
