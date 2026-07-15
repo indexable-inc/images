@@ -56,7 +56,7 @@ struct Peer {
 
 async fn spawn_peer(
     id: u64,
-    peers: Vec<std::net::SocketAddr>,
+    peers: Vec<String>,
     time: &Arc<dyn MonotonicTime>,
 ) -> Result<Peer> {
     let dir = tempfile::tempdir()?;
@@ -92,7 +92,7 @@ async fn publish_converges_to_bit_identical_audio() -> Result<()> {
     let time: Arc<dyn MonotonicTime> = Arc::new(ProcessTime::default());
     // Smaller peer id wins leadership: A leads, B follows.
     let a = spawn_peer(1, vec![], &time).await?;
-    let b = spawn_peer(2, vec![a.node.tcp_addr], &time).await?;
+    let b = spawn_peer(2, vec![a.node.tcp_addr.to_string()], &time).await?;
 
     // Publish on A only: module bytes into A's store, hash + controls +
     // scheduled events into A's score.
@@ -101,8 +101,8 @@ async fn publish_converges_to_bit_identical_audio() -> Result<()> {
         let score = a.score.lock().expect("lock");
         score.set_sample_rate(SAMPLE_RATE)?;
         score.set_instrument(&hash, 0)?;
-        score.set_control(0, 0.125)?;
-        score.set_control(1, 0.5)?;
+        score.set_control(0, 0.125, 0)?;
+        score.set_control(1, 0.5, 0)?;
         score.schedule(Event { at_frame: 2_000, control: 1, value: 0.25 })?;
         score.schedule(Event { at_frame: 3_000, control: 0, value: -0.125 })?;
     }
@@ -112,7 +112,7 @@ async fn publish_converges_to_bit_identical_audio() -> Result<()> {
     converge("score to reach B", || {
         let score = b.score.lock().expect("lock");
         score.instrument().ok().flatten().is_some_and(|i| i.hash == hash)
-            && score.events().len() == 2
+            && score.events().len() == 4
     })
     .await;
     converge("module bytes to reach B", || b.store.contains(&hash)).await;
@@ -150,13 +150,13 @@ async fn publish_converges_to_bit_identical_audio() -> Result<()> {
 async fn edits_flow_both_ways() -> Result<()> {
     let time: Arc<dyn MonotonicTime> = Arc::new(ProcessTime::default());
     let a = spawn_peer(1, vec![], &time).await?;
-    let b = spawn_peer(2, vec![a.node.tcp_addr], &time).await?;
+    let b = spawn_peer(2, vec![a.node.tcp_addr.to_string()], &time).await?;
 
-    a.score.lock().expect("lock").set_control(3, 0.75)?;
-    b.score.lock().expect("lock").set_control(4, 0.25)?;
+    a.score.lock().expect("lock").set_control(3, 0.75, 0)?;
+    b.score.lock().expect("lock").set_control(4, 0.25, 0)?;
 
     let both = |score: &Arc<Mutex<Score>>| {
-        let controls = score.lock().expect("lock").controls();
+        let controls = score.lock().expect("lock").controls_at(0);
         controls.contains(&ControlValue { control: 3, value: 0.75 })
             && controls.contains(&ControlValue { control: 4, value: 0.25 })
     };

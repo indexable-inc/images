@@ -42,9 +42,18 @@ enum Command {
         at: Option<u64>,
     },
     /// Set a shared instrument control for everyone.
-    SetControl { control: u16, value: f32 },
+    SetControl {
+        control: u16,
+        #[arg(allow_negative_numbers = true)]
+        value: f32,
+    },
     /// Schedule a shared control change at an exact shared frame.
-    Schedule { at_frame: u64, control: u16, value: f32 },
+    Schedule {
+        at_frame: u64,
+        control: u16,
+        #[arg(allow_negative_numbers = true)]
+        value: f32,
+    },
     /// macOS menu-bar volume item (talks to the local daemon).
     Tray,
 }
@@ -100,4 +109,48 @@ fn main() -> Result<()> {
 
 const fn volume(set: Option<f32>, step: Option<f32>, muted: Option<bool>) -> control::Request {
     control::Request::Volume { set, step, muted }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_commands_accept_negative_values() {
+        let set = Cli::try_parse_from(["shared-audio", "set-control", "3", "-0.5"])
+            .expect("parse set-control");
+        assert!(matches!(
+            set.command,
+            Command::SetControl { control: 3, value } if value == -0.5
+        ));
+
+        let schedule = Cli::try_parse_from([
+            "shared-audio",
+            "schedule",
+            "4800000",
+            "3",
+            "-0.125",
+        ])
+        .expect("parse schedule");
+        assert!(matches!(
+            schedule.command,
+            Command::Schedule { at_frame: 4_800_000, control: 3, value } if value == -0.125
+        ));
+    }
+
+    #[test]
+    fn daemon_accepts_hostname_peers() {
+        let cli = Cli::try_parse_from([
+            "shared-audio",
+            "daemon",
+            "--peer",
+            "studio.local:7648",
+            "--no-audio",
+        ])
+        .expect("parse daemon");
+        let Command::Daemon(opts) = cli.command else {
+            panic!("expected daemon command");
+        };
+        assert_eq!(opts.peers, ["studio.local:7648"]);
+    }
 }

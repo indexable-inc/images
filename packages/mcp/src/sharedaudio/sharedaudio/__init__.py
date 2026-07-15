@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import socket
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +35,15 @@ def socket_path() -> Path:
     override = os.environ.get("SHARED_AUDIO_SOCKET")
     if override:
         return Path(override)
-    state = os.environ.get("XDG_STATE_HOME")
-    base = Path(state) if state else Path.home() / ".local" / "state"
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        state = os.environ.get("XDG_STATE_HOME")
+        base = (
+            Path(state)
+            if state and Path(state).is_absolute()
+            else Path.home() / ".local" / "state"
+        )
     return base / "shared-audio" / "control.sock"
 
 

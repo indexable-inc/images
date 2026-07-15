@@ -13,6 +13,8 @@ description = "Loro CRDT score for shared-audio: instrument reference, controls,
 anyhow.workspace = true
 audio-blob.workspace = true
 loro.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 
 [lints]
 workspace = true

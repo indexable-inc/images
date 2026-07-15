@@ -7,7 +7,7 @@
 
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -100,9 +100,9 @@ impl BlobStore {
     pub fn put(&self, bytes: &[u8]) -> io::Result<BlobHash> {
         let hash = BlobHash::of(bytes);
         let path = self.path_of(&hash);
-        let tmp = self.dir.join(format!("{hash}.tmp"));
-        fs::write(&tmp, bytes)?;
-        fs::rename(&tmp, &path)?;
+        let mut tmp = tempfile::NamedTempFile::new_in(&self.dir)?;
+        tmp.write_all(bytes)?;
+        tmp.persist(&path).map_err(|error| error.error)?;
         Ok(hash)
     }
 
@@ -151,6 +151,35 @@ mod tests {
         assert_eq!(
             store.get(&hash).expect("get"),
             Some(b"instrument bytes".to_vec())
+        );
+    }
+
+    #[test]
+    fn concurrent_puts_of_the_same_blob_all_succeed() {
+        use std::sync::{Arc, Barrier};
+
+        const WRITERS: usize = 16;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(BlobStore::open(dir.path()).expect("open"));
+        let start = Arc::new(Barrier::new(WRITERS));
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|_| {
+                let store = Arc::clone(&store);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    store.put(b"shared instrument")
+                })
+            })
+            .collect();
+
+        let expected = BlobHash::of(b"shared instrument");
+        for writer in writers {
+            assert_eq!(writer.join().expect("writer panicked").expect("put"), expected);
+        }
+        assert_eq!(
+            store.get(&expected).expect("get"),
+            Some(b"shared instrument".to_vec())
         );
     }
 

@@ -11,17 +11,20 @@
 //! (`export_updates` / `import_updates`) and converge to the same score, so
 //! every peer renders identical audio from it.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context as _, Result, anyhow};
 use audio_blob::BlobHash;
 use loro::{ExportMode, LoroDoc, LoroMap, LoroValue};
+use serde::{Deserialize, Serialize};
 pub use loro::VersionVector;
 
 /// Root map holding session-wide settings (currently the sample rate).
 const SESSION: &str = "session";
-/// Root map naming the active instrument module and its switch frame.
+/// Root map holding the active instrument publication.
 const INSTRUMENT: &str = "instrument";
-/// Root map of control values keyed by decimal control index.
-const CONTROLS: &str = "controls";
+/// Root map used by scores written before controls moved into the event log.
+const LEGACY_CONTROLS: &str = "controls";
 /// Root list of schedule-ahead [`Event`]s.
 const EVENTS: &str = "events";
 
@@ -33,6 +36,12 @@ pub struct InstrumentRef {
     pub hash: BlobHash,
     /// Shared-timeline frame at which peers switch to this module.
     pub at_frame: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+struct StoredInstrument {
+    hash: String,
+    at_frame: i64,
 }
 
 /// A scheduled control change.
@@ -52,30 +61,29 @@ pub struct Event {
 
 /// [`Event::sort_key`] result.
 ///
-/// Field order is the derived comparison order: frame, then control, then
-/// value bits.
+/// Field order is the derived comparison order: frame, then control. Equal
+/// keys retain the converged Loro list order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EventKey {
     frame: u64,
     control: u16,
-    value_bits: u32,
 }
 
 impl Event {
-    /// Total order used everywhere so concurrent schedules resolve
-    /// identically on every peer.
+    /// Ordering key used everywhere. Equal keys retain Loro's converged list
+    /// order so later same-frame writes remain later.
     #[must_use]
     pub const fn sort_key(&self) -> EventKey {
-        EventKey { frame: self.at_frame, control: self.control, value_bits: self.value.to_bits() }
+        EventKey { frame: self.at_frame, control: self.control }
     }
 }
 
-/// A control's current value, one element of [`Score::controls`].
+/// A control's value at a requested shared-timeline frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ControlValue {
     /// Instrument control index.
     pub control: u16,
-    /// Current value.
+    /// Value in effect at the requested frame.
     pub value: f32,
 }
 
@@ -123,9 +131,13 @@ impl Score {
     /// # Errors
     /// Fails on a Loro document error or a frame beyond `i64::MAX`.
     pub fn set_instrument(&self, hash: &BlobHash, at_frame: u64) -> Result<()> {
+        let instrument = StoredInstrument {
+            hash: hash.to_string(),
+            at_frame: frame_to_i64(at_frame)?,
+        };
+        let instrument = serde_json::to_string(&instrument)?;
         let map = self.doc.get_map(INSTRUMENT);
-        map.insert("hash", hash.to_string().as_str())?;
-        map.insert("at_frame", frame_to_i64(at_frame)?)?;
+        map.insert("publication", instrument.as_str())?;
         self.doc.commit();
         Ok(())
     }
@@ -133,51 +145,43 @@ impl Score {
     /// The active instrument reference, if one has been published.
     ///
     /// # Errors
-    /// Fails when the stored hash is not valid hex (a malformed document).
+    /// Fails when the stored publication is malformed.
     pub fn instrument(&self) -> Result<Option<InstrumentRef>> {
         let map = self.doc.get_map(INSTRUMENT);
-        let Some(hash) = map.get("hash") else {
+        let Some(instrument) = map.get("publication") else {
             return Ok(None);
         };
-        let hash = hash.get_deep_value();
-        let hash = as_str(&hash).context("instrument hash is not a string")?;
-        let hash = BlobHash::parse_hex(hash)?;
-        let at_frame = map
-            .get("at_frame")
-            .and_then(|value| as_i64(&value.get_deep_value()))
-            .and_then(|frame| u64::try_from(frame).ok())
-            .unwrap_or(0);
+        let instrument = instrument.get_deep_value();
+        let instrument = as_str(&instrument).context("instrument publication is not a string")?;
+        let instrument: StoredInstrument = serde_json::from_str(instrument)?;
+        let hash = BlobHash::parse_hex(&instrument.hash)?;
+        let at_frame = u64::try_from(instrument.at_frame)
+            .context("instrument frame must be nonnegative")?;
         Ok(Some(InstrumentRef { hash, at_frame }))
     }
 
-    /// Set a control to a value, effective immediately. For a change at a
-    /// specific future frame, [`schedule`](Self::schedule) an [`Event`].
+    /// Set a control to a value at the current shared-timeline frame.
+    ///
+    /// Immediate and scheduled changes share one event log so renderers can
+    /// reconstruct control state for any historical range.
     ///
     /// # Errors
-    /// Fails only on a Loro document error.
-    pub fn set_control(&self, control: u16, value: f32) -> Result<()> {
-        self.doc
-            .get_map(CONTROLS)
-            .insert(control.to_string().as_str(), f64::from(value))?;
-        self.doc.commit();
-        Ok(())
+    /// Fails on a Loro document error or a frame beyond `i64::MAX`.
+    pub fn set_control(&self, control: u16, value: f32, at_frame: u64) -> Result<()> {
+        self.schedule(Event { at_frame, control, value })
     }
 
-    /// Current control values, sparse and sorted by control index.
+    /// Control values in effect at `at_frame`, sorted by control index.
     #[must_use]
-    pub fn controls(&self) -> Vec<ControlValue> {
-        let value = self.doc.get_map(CONTROLS).get_deep_value();
-        let LoroValue::Map(map) = value else {
-            return Vec::new();
-        };
-        let mut controls: Vec<ControlValue> = map
-            .iter()
-            .filter_map(|(key, value)| {
-                Some(ControlValue { control: key.parse().ok()?, value: as_f32(value)? })
-            })
-            .collect();
-        controls.sort_unstable_by_key(|control| control.control);
+    pub fn controls_at(&self, at_frame: u64) -> Vec<ControlValue> {
+        let mut controls = BTreeMap::new();
+        for event in self.events().into_iter().take_while(|event| event.at_frame <= at_frame) {
+            controls.insert(event.control, event.value);
+        }
         controls
+            .into_iter()
+            .map(|(control, value)| ControlValue { control, value })
+            .collect()
     }
 
     /// Append a schedule-ahead event.
@@ -185,9 +189,10 @@ impl Score {
     /// # Errors
     /// Fails on a Loro document error or a frame beyond `i64::MAX`.
     pub fn schedule(&self, event: Event) -> Result<()> {
+        let at_frame = frame_to_i64(event.at_frame)?;
         let list = self.doc.get_list(EVENTS);
         let map = list.insert_container(list.len(), LoroMap::new())?;
-        map.insert("at", frame_to_i64(event.at_frame)?)?;
+        map.insert("at", at_frame)?;
         map.insert("control", i64::from(event.control))?;
         map.insert("value", f64::from(event.value))?;
         self.doc.commit();
@@ -203,7 +208,7 @@ impl Score {
             return Vec::new();
         };
         let mut events: Vec<Event> = items.iter().filter_map(event_of).collect();
-        events.sort_unstable_by_key(Event::sort_key);
+        events.sort_by_key(Event::sort_key);
         events
     }
 
@@ -235,6 +240,60 @@ impl Score {
     /// Fails when the bytes are not a valid Loro export.
     pub fn import(&self, bytes: &[u8]) -> Result<()> {
         self.doc.import(bytes)?;
+        self.migrate_legacy()?;
+        Ok(())
+    }
+
+    fn migrate_legacy(&self) -> Result<()> {
+        let instrument = self.doc.get_map(INSTRUMENT);
+        let legacy_hash = instrument.get("hash");
+        if instrument.get("publication").is_none()
+            && let Some(hash) = &legacy_hash
+        {
+            let hash = hash.get_deep_value();
+            let hash = as_str(&hash).context("legacy instrument hash is not a string")?;
+            let at_frame = instrument
+                .get("at_frame")
+                .and_then(|value| as_i64(&value.get_deep_value()))
+                .filter(|frame| *frame >= 0)
+                .unwrap_or(0);
+            let publication = serde_json::to_string(&StoredInstrument {
+                hash: hash.to_owned(),
+                at_frame,
+            })?;
+            instrument.insert("publication", publication.as_str())?;
+        }
+        if legacy_hash.is_some() {
+            instrument.delete("hash")?;
+        }
+        if instrument.get("at_frame").is_some() {
+            instrument.delete("at_frame")?;
+        }
+
+        let controls = self.doc.get_map(LEGACY_CONTROLS);
+        let legacy = controls.get_deep_value();
+        if let LoroValue::Map(legacy) = legacy {
+            for (key, value) in legacy.iter() {
+                let Some(control) = key.parse::<u16>().ok() else {
+                    continue;
+                };
+                if key != &control.to_string() {
+                    continue;
+                }
+                let Some(value) = as_f32(value) else {
+                    continue;
+                };
+                let list = self.doc.get_list(EVENTS);
+                let event = list.insert_container(0, LoroMap::new())?;
+                event.insert("at", 0_i64)?;
+                event.insert("control", i64::from(control))?;
+                event.insert("value", f64::from(value))?;
+            }
+            for key in legacy.keys() {
+                controls.delete(key)?;
+            }
+        }
+        self.doc.commit();
         Ok(())
     }
 }
@@ -252,7 +311,6 @@ const fn as_i64(value: &LoroValue) -> Option<i64> {
     }
 }
 
-/// Controls are `f32` at the instrument ABI; `f64` is the document scalar.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "controls are f32 at the instrument ABI; narrowing is the contract"
@@ -305,8 +363,8 @@ mod tests {
         let score = Score::new();
         score.set_sample_rate(48_000)?;
         score.set_instrument(&hash(), 96_000)?;
-        score.set_control(0, 440.0)?;
-        score.set_control(1, 0.5)?;
+        score.set_control(0, 440.0, 0)?;
+        score.set_control(1, 0.5, 0)?;
         score.schedule(Event { at_frame: 48_000, control: 0, value: 660.0 })?;
 
         assert_eq!(score.sample_rate(), Some(48_000));
@@ -314,15 +372,19 @@ mod tests {
         assert_eq!(instrument.hash, hash());
         assert_eq!(instrument.at_frame, 96_000);
         assert_eq!(
-            score.controls(),
+            score.events(),
+            vec![
+                Event { at_frame: 0, control: 0, value: 440.0 },
+                Event { at_frame: 0, control: 1, value: 0.5 },
+                Event { at_frame: 48_000, control: 0, value: 660.0 }
+            ]
+        );
+        assert_eq!(
+            score.controls_at(0),
             vec![
                 ControlValue { control: 0, value: 440.0 },
                 ControlValue { control: 1, value: 0.5 }
             ]
-        );
-        assert_eq!(
-            score.events(),
-            vec![Event { at_frame: 48_000, control: 0, value: 660.0 }]
         );
         Ok(())
     }
@@ -331,20 +393,149 @@ mod tests {
     fn concurrent_edits_converge() -> Result<()> {
         let a = Score::new();
         let b = Score::new();
-        a.set_control(0, 1.0)?;
+        a.set_control(0, 1.0, 0)?;
         b.schedule(Event { at_frame: 10, control: 2, value: 0.25 })?;
         b.schedule(Event { at_frame: 5, control: 1, value: 0.75 })?;
 
         b.import(&a.export_updates(&VersionVector::new())?)?;
         a.import(&b.export_updates(&VersionVector::new())?)?;
 
-        assert_eq!(a.controls(), b.controls());
         assert_eq!(a.events(), b.events());
         // Deterministic order: sorted by frame regardless of insert order.
         assert_eq!(
             a.events().iter().map(|event| event.at_frame).collect::<Vec<_>>(),
-            vec![5, 10]
+            vec![0, 5, 10]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_instrument_publications_remain_atomic() -> Result<()> {
+        let a = Score::new();
+        let b = Score::new();
+        let a_ref = InstrumentRef { hash: BlobHash::of(b"module a"), at_frame: 1_000 };
+        let b_ref = InstrumentRef { hash: BlobHash::of(b"module b"), at_frame: 2_000 };
+        a.set_instrument(&a_ref.hash, a_ref.at_frame)?;
+        b.set_instrument(&b_ref.hash, b_ref.at_frame)?;
+        let a_update = a.export_updates(&VersionVector::new())?;
+        let b_update = b.export_updates(&VersionVector::new())?;
+
+        a.import(&b_update)?;
+        b.import(&a_update)?;
+
+        let converged = a.instrument()?.expect("instrument set");
+        assert_eq!(b.instrument()?, Some(converged));
+        assert!(converged == a_ref || converged == b_ref);
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_instrument_frame_does_not_edit_the_score() -> Result<()> {
+        let score = Score::new();
+        let original = hash();
+        score.set_instrument(&original, 96_000)?;
+        let version = score.version();
+
+        let rejected = BlobHash::of(b"rejected module");
+        assert!(score.set_instrument(&rejected, i64::MAX as u64 + 1).is_err());
+        assert_eq!(score.version(), version);
+        assert_eq!(
+            score.instrument()?,
+            Some(InstrumentRef { hash: original, at_frame: 96_000 })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn immediate_controls_follow_older_scheduled_events() -> Result<()> {
+        let score = Score::new();
+        score.schedule(Event { at_frame: 100, control: 1, value: 0.25 })?;
+        score.set_control(1, 0.75, 200)?;
+
+        assert_eq!(
+            score.events(),
+            vec![
+                Event { at_frame: 100, control: 1, value: 0.25 },
+                Event { at_frame: 200, control: 1, value: 0.75 }
+            ]
+        );
+        assert_eq!(score.controls_at(150), vec![ControlValue { control: 1, value: 0.25 }]);
+        assert_eq!(score.controls_at(200), vec![ControlValue { control: 1, value: 0.75 }]);
+        Ok(())
+    }
+
+    #[test]
+    fn same_frame_control_updates_follow_write_order() -> Result<()> {
+        let source = Score::new();
+        source.set_control(1, 1.0, 200)?;
+        source.set_control(1, 0.5, 200)?;
+        let restored = Score::new();
+        restored.import(&source.export_snapshot()?)?;
+
+        assert_eq!(
+            restored.events(),
+            vec![
+                Event { at_frame: 200, control: 1, value: 1.0 },
+                Event { at_frame: 200, control: 1, value: 0.5 }
+            ]
+        );
+        assert_eq!(
+            restored.controls_at(200),
+            vec![ControlValue { control: 1, value: 0.5 }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn import_migrates_legacy_instrument_publication() -> Result<()> {
+        let legacy = Score::new();
+        let instrument = legacy.doc.get_map(INSTRUMENT);
+        instrument.insert("hash", hash().to_string().as_str())?;
+        instrument.insert("at_frame", 96_000_i64)?;
+        legacy.doc.commit();
+
+        let restored = Score::new();
+        restored.import(&legacy.export_snapshot()?)?;
+
+        assert_eq!(
+            restored.instrument()?,
+            Some(InstrumentRef { hash: hash(), at_frame: 96_000 })
+        );
+        let instrument = restored.doc.get_map(INSTRUMENT);
+        assert!(instrument.get("publication").is_some());
+        assert!(instrument.get("hash").is_none());
+        assert!(instrument.get("at_frame").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn import_migrates_legacy_controls_before_new_events() -> Result<()> {
+        let legacy = Score::new();
+        legacy.doc.get_map(LEGACY_CONTROLS).insert("1", 0.25_f64)?;
+        legacy.doc.commit();
+        legacy.schedule(Event { at_frame: 100, control: 1, value: 0.5 })?;
+
+        let restored = Score::new();
+        restored.import(&legacy.export_snapshot()?)?;
+        restored.set_control(1, 0.75, 200)?;
+
+        assert_eq!(
+            restored.controls_at(50),
+            vec![ControlValue { control: 1, value: 0.25 }]
+        );
+        assert_eq!(
+            restored.controls_at(100),
+            vec![ControlValue { control: 1, value: 0.5 }]
+        );
+        assert_eq!(
+            restored.controls_at(200),
+            vec![ControlValue { control: 1, value: 0.75 }]
+        );
+        assert!(restored.doc.get_map(LEGACY_CONTROLS).get("1").is_none());
+
+        let reimported = Score::new();
+        reimported.import(&restored.export_snapshot()?)?;
+        assert_eq!(reimported.events(), restored.events());
         Ok(())
     }
 
@@ -352,14 +543,14 @@ mod tests {
     fn delta_export_carries_only_new_operations() -> Result<()> {
         let a = Score::new();
         let b = Score::new();
-        a.set_control(0, 1.0)?;
+        a.set_control(0, 1.0, 0)?;
         b.import(&a.export_updates(&b.version())?)?;
         let synced = b.version();
 
-        a.set_control(1, 2.0)?;
+        a.set_control(1, 2.0, 1)?;
         let delta = a.export_updates(&synced)?;
         b.import(&delta)?;
-        assert_eq!(a.controls(), b.controls());
+        assert_eq!(a.events(), b.events());
         Ok(())
     }
 
@@ -368,7 +559,7 @@ mod tests {
         // Locality by construction: the API simply has no volume surface.
         // Guard the document keys so a future field does not sneak one in.
         let score = Score::new();
-        score.set_control(0, 1.0).expect("set control");
+        score.set_control(0, 1.0, 0).expect("set control");
         let json = format!("{:?}", score.doc.get_deep_value());
         assert!(!json.to_lowercase().contains("volume"));
     }

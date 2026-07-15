@@ -21,13 +21,21 @@ pub struct Hello {
     pub peer_id: u64,
     /// UDP port the sender answers clock pings on.
     pub udp_port: u16,
-    /// The session epoch on the *sender's* local clock. A follower
-    /// translates its leader's epoch (`SharedClock::local_epoch_micros`),
-    /// so a peer that can only reach a follower still converges on the
-    /// session timeline by pinging that follower's clock.
-    pub epoch_micros: i64,
     /// Sample rate the sender's session runs at.
     pub sample_rate: u32,
+    /// The sender's current view of the session clock.
+    pub clock: Clock,
+}
+
+/// A peer's current clock route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clock {
+    /// Identity of the effective leader, propagated through followers.
+    pub leader_id: u64,
+    /// Session epoch translated onto the sender's local clock.
+    pub epoch_micros: i64,
+    /// False until the sender has measured the peer it proxies.
+    pub ready: bool,
 }
 
 /// One TCP frame.
@@ -35,8 +43,10 @@ pub struct Hello {
 pub enum Message {
     /// Session metadata; first frame in each direction.
     Hello(Hello),
-    /// A Loro update delta for the shared score.
-    ScoreUpdate(Vec<u8>),
+    /// Current clock route, resent whenever leadership or offset changes.
+    Clock(Clock),
+    /// One bounded piece of a Loro snapshot or update delta.
+    ScoreChunk { end: bool, bytes: Vec<u8> },
     /// "Send me the blob with this hash."
     BlobRequest(BlobHash),
     /// Blob bytes, preceded by their hash for verification.
@@ -47,17 +57,18 @@ impl PartialEq for Hello {
     fn eq(&self, other: &Self) -> bool {
         self.peer_id == other.peer_id
             && self.udp_port == other.udp_port
-            && self.epoch_micros == other.epoch_micros
             && self.sample_rate == other.sample_rate
+            && self.clock == other.clock
     }
 }
 
 impl Eq for Hello {}
 
 const TAG_HELLO: u8 = 0x01;
-const TAG_SCORE_UPDATE: u8 = 0x02;
-const TAG_BLOB_REQUEST: u8 = 0x03;
-const TAG_BLOB: u8 = 0x04;
+const TAG_CLOCK: u8 = 0x02;
+const TAG_SCORE_CHUNK: u8 = 0x03;
+const TAG_BLOB_REQUEST: u8 = 0x04;
+const TAG_BLOB: u8 = 0x05;
 
 impl Message {
     /// Encode into a self-delimiting frame.
@@ -67,7 +78,13 @@ impl Message {
     pub fn encode(&self) -> Result<Vec<u8>> {
         let (tag, payload): (u8, Vec<u8>) = match self {
             Self::Hello(hello) => (TAG_HELLO, serde_json::to_vec(hello)?),
-            Self::ScoreUpdate(update) => (TAG_SCORE_UPDATE, update.clone()),
+            Self::Clock(clock) => (TAG_CLOCK, serde_json::to_vec(clock)?),
+            Self::ScoreChunk { end, bytes } => {
+                let mut payload = Vec::with_capacity(bytes.len() + 1);
+                payload.push(u8::from(*end));
+                payload.extend_from_slice(bytes);
+                (TAG_SCORE_CHUNK, payload)
+            }
             Self::BlobRequest(hash) => (TAG_BLOB_REQUEST, hash.as_bytes().to_vec()),
             Self::Blob(hash, bytes) => {
                 let mut payload = hash.as_bytes().to_vec();
@@ -93,7 +110,12 @@ impl Message {
         let (&tag, payload) = body.split_first().context("empty frame")?;
         Ok(match tag {
             TAG_HELLO => Self::Hello(serde_json::from_slice(payload)?),
-            TAG_SCORE_UPDATE => Self::ScoreUpdate(payload.to_vec()),
+            TAG_CLOCK => Self::Clock(serde_json::from_slice(payload)?),
+            TAG_SCORE_CHUNK => {
+                let (&end, bytes) = payload.split_first().context("score chunk has no end flag")?;
+                ensure!(end <= 1, "score chunk has invalid end flag {end}");
+                Self::ScoreChunk { end: end == 1, bytes: bytes.to_vec() }
+            }
             TAG_BLOB_REQUEST => Self::BlobRequest(hash_of(payload)?),
             TAG_BLOB => {
                 ensure!(payload.len() >= 32, "blob frame shorter than its hash");
@@ -229,10 +251,12 @@ mod tests {
             Message::Hello(Hello {
                 peer_id: 7,
                 udp_port: 4242,
-                epoch_micros: 1_000_000,
                 sample_rate: 48_000,
+                clock: Clock { leader_id: 7, epoch_micros: 1_000_000, ready: true },
             }),
-            Message::ScoreUpdate(vec![1, 2, 3]),
+            Message::Clock(Clock { leader_id: 3, epoch_micros: 900_000, ready: true }),
+            Message::ScoreChunk { end: false, bytes: vec![1, 2, 3] },
+            Message::ScoreChunk { end: true, bytes: vec![4, 5] },
             Message::BlobRequest(hash),
             Message::Blob(hash, b"module".to_vec()),
         ];
@@ -262,7 +286,7 @@ mod tests {
     #[test]
     fn oversized_frames_are_rejected() {
         let bytes = vec![0_u8; MAX_FRAME_BYTES as usize];
-        let error = Message::ScoreUpdate(bytes).encode().expect_err("over cap");
+        let error = Message::ScoreChunk { end: true, bytes }.encode().expect_err("over cap");
         assert!(error.to_string().contains("exceeds"));
     }
 }
