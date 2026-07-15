@@ -20,9 +20,10 @@
 //! hard-exits immediately.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::IsTerminal;
+use std::fmt::Write as _;
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,7 +34,8 @@ use futures::future::{BoxFuture, Shared};
 use indicatif::{MultiProgress, ProgressBar};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
+use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::Mutex;
 
 #[derive(Parser)]
@@ -156,7 +158,8 @@ async fn main() -> Result<()> {
     let started = Instant::now();
 
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    spawn_cancel_listener(cancel_tx);
+    let sigint = signal(SignalKind::interrupt()).context("installing SIGINT handler")?;
+    spawn_cancel_listener(cancel_tx, sigint);
 
     let records = run(spec, mode, started, cancel_rx.clone()).await?;
 
@@ -176,16 +179,16 @@ async fn main() -> Result<()> {
 }
 
 /// Background task: first Ctrl-C broadcasts cancellation; second hard-exits.
-fn spawn_cancel_listener(cancel_tx: tokio::sync::watch::Sender<bool>) {
+fn spawn_cancel_listener(cancel_tx: tokio::sync::watch::Sender<bool>, mut sigint: Signal) {
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_err() {
+        if sigint.recv().await.is_none() {
             return;
         }
         eprintln!(
             "dag-runner: SIGINT received, cancelling running nodes (Ctrl-C again to hard-exit)"
         );
         let _ = cancel_tx.send(true);
-        if tokio::signal::ctrl_c().await.is_ok() {
+        if sigint.recv().await.is_some() {
             eprintln!("dag-runner: second SIGINT, hard-exiting");
             std::process::exit(130);
         }
@@ -437,6 +440,144 @@ struct CommandOutput {
     stderr: String,
 }
 
+struct CapturedExit {
+    status: io::Result<ExitStatus>,
+    stdout: String,
+    stderr: String,
+}
+
+struct CapturedStreams {
+    stdout: String,
+    stderr: String,
+}
+
+struct PipeCapture {
+    stdout_task: Option<tokio::task::JoinHandle<String>>,
+    stderr_task: Option<tokio::task::JoinHandle<String>>,
+    stdout: Option<String>,
+    stderr: Option<String>,
+}
+
+enum PipeTaskCompletion {
+    Stdout(Result<String, tokio::task::JoinError>),
+    Stderr(Result<String, tokio::task::JoinError>),
+}
+
+impl PipeCapture {
+    const fn new(
+        stdout_task: tokio::task::JoinHandle<String>,
+        stderr_task: tokio::task::JoinHandle<String>,
+    ) -> Self {
+        Self {
+            stdout_task: Some(stdout_task),
+            stderr_task: Some(stderr_task),
+            stdout: None,
+            stderr: None,
+        }
+    }
+
+    async fn finish(&mut self) {
+        loop {
+            let completion = match (&mut self.stdout_task, &mut self.stderr_task) {
+                (Some(stdout_task), Some(stderr_task)) => tokio::select! {
+                    result = stdout_task => PipeTaskCompletion::Stdout(result),
+                    result = stderr_task => PipeTaskCompletion::Stderr(result),
+                },
+                (Some(stdout_task), None) => {
+                    PipeTaskCompletion::Stdout(stdout_task.await)
+                }
+                (None, Some(stderr_task)) => {
+                    PipeTaskCompletion::Stderr(stderr_task.await)
+                }
+                (None, None) => return,
+            };
+            match completion {
+                PipeTaskCompletion::Stdout(result) => {
+                    self.stdout = Some(result.unwrap_or_default());
+                    self.stdout_task = None;
+                }
+                PipeTaskCompletion::Stderr(result) => {
+                    self.stderr = Some(result.unwrap_or_default());
+                    self.stderr_task = None;
+                }
+            }
+        }
+    }
+
+    fn abort(&self) {
+        if let Some(task) = &self.stdout_task {
+            task.abort();
+        }
+        if let Some(task) = &self.stderr_task {
+            task.abort();
+        }
+    }
+
+    fn take(&mut self) -> CapturedStreams {
+        CapturedStreams {
+            stdout: self.stdout.take().unwrap_or_default(),
+            stderr: self.stderr.take().unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ProcessGroupId(libc::pid_t);
+
+impl ProcessGroupId {
+    fn from_child(child: &Child) -> Self {
+        let pid = child.id().expect("spawned child has a PID");
+        Self(pid.cast_signed())
+    }
+
+    fn signal(self, signal: libc::c_int) -> io::Result<()> {
+        // SAFETY: the command was spawned with this PID as its process group,
+        // and `signal` is one of the libc signal constants used below.
+        if unsafe { libc::killpg(self.0, signal) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+}
+
+struct OwnedProcessGroup {
+    id: ProcessGroupId,
+    armed: bool,
+}
+
+impl OwnedProcessGroup {
+    fn new(child: &Child) -> Self {
+        Self {
+            id: ProcessGroupId::from_child(child),
+            armed: true,
+        }
+    }
+
+    const fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    const fn is_armed(&self) -> bool {
+        self.armed
+    }
+}
+
+impl Drop for OwnedProcessGroup {
+    fn drop(&mut self) {
+        if self.armed && let Err(error) = self.id.signal(libc::SIGKILL) {
+            eprintln!(
+                "dag-runner: failed to kill process group {} during cleanup: {error}",
+                self.id.0
+            );
+        }
+    }
+}
+
 async fn run_command(
     node: &NodeSpec,
     pb: Option<&ProgressBar>,
@@ -457,9 +598,9 @@ async fn run_command(
         .envs(&node.env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        // If we panic or drop the future for any reason, don't leak a child
-        // into the surrounding shell.
-        .kill_on_drop(true);
+        // The group ID becomes the child's PID. Descendants inherit it unless
+        // they deliberately leave, so one owned identity covers the node tree.
+        .process_group(0);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -471,57 +612,75 @@ async fn run_command(
             };
         }
     };
+    let mut process_group = OwnedProcessGroup::new(&child);
 
     let stdout_pipe = child.stdout.take().expect("stdout piped");
     let stderr_pipe = child.stderr.take().expect("stderr piped");
-    let stdout_task = tokio::spawn(tee_lines(stdout_pipe, pb.cloned()));
-    let stderr_task = tokio::spawn(tee_lines(stderr_pipe, pb.cloned()));
+    let mut capture = PipeCapture::new(
+        tokio::spawn(tee_lines(stdout_pipe, pb.cloned())),
+        tokio::spawn(tee_lines(stderr_pipe, pb.cloned())),
+    );
 
     let completion = tokio::select! {
         biased;
         () = wait_for_cancel(&mut cancel_rx) => Completion::Cancelled,
-        () = maybe_timeout(node.timeout_secs) => Completion::TimedOut,
-        res = child.wait() => match res {
-            Ok(status) => {
-                if status.success() {
-                    Completion::Succeeded
-                } else {
-                    Completion::Failed(status.code().unwrap_or(1))
-                }
-            }
-            Err(e) => Completion::WaitFailed(e.to_string()),
-        },
+        secs = maybe_timeout(node.timeout_secs) => Completion::TimedOut { secs },
+        exit = capture_exit(&mut child, &mut capture) => Completion::Exited(exit),
     };
 
     let mut extra_stderr = String::new();
     let outcome = match completion {
-        Completion::Succeeded => Outcome::Succeeded,
-        Completion::Failed(code) => Outcome::Failed(code),
-        Completion::WaitFailed(msg) => {
-            use std::fmt::Write;
-            let _ = writeln!(extra_stderr, "wait failed: {msg}");
-            Outcome::Failed(1)
+        Completion::Exited(mut exit) => {
+            let outcome = match exit.status {
+                Ok(status) => {
+                    process_group.disarm();
+                    if status.success() {
+                        Outcome::Succeeded
+                    } else {
+                        Outcome::Failed(status.code().unwrap_or(1))
+                    }
+                }
+                Err(error) => {
+                    let _ = writeln!(exit.stderr, "wait failed: {error}");
+                    record_termination_failure(
+                        &mut exit.stderr,
+                        terminate_process_group(&mut child, &mut process_group).await,
+                    );
+                    Outcome::Failed(1)
+                }
+            };
+            return CommandOutput {
+                outcome,
+                stdout: exit.stdout,
+                stderr: exit.stderr,
+            };
         }
-        Completion::TimedOut => {
-            use std::fmt::Write;
-            // Safe to unwrap: only the timeout arm produces TimedOut, and
-            // maybe_timeout only resolves when timeout_secs is Some.
-            let secs = node
-                .timeout_secs
-                .expect("timeout arm requires timeout_secs");
-            terminate_child(&mut child).await;
+        Completion::TimedOut { secs } => {
+            record_termination_failure(
+                &mut extra_stderr,
+                terminate_process_group(&mut child, &mut process_group).await,
+            );
             let _ = writeln!(extra_stderr, "dag-runner: node timed out after {secs}s");
             Outcome::Failed(124)
         }
         Completion::Cancelled => {
-            terminate_child(&mut child).await;
+            record_termination_failure(
+                &mut extra_stderr,
+                terminate_process_group(&mut child, &mut process_group).await,
+            );
             extra_stderr.push_str("dag-runner: cancelled\n");
             Outcome::Failed(130)
         }
     };
 
-    let stdout = stdout_task.await.unwrap_or_default();
-    let mut stderr = stderr_task.await.unwrap_or_default();
+    if process_group.is_armed() {
+        capture.abort();
+    }
+    capture.finish().await;
+    let CapturedStreams {
+        stdout,
+        mut stderr,
+    } = capture.take();
     stderr.push_str(&extra_stderr);
     CommandOutput {
         outcome,
@@ -530,12 +689,33 @@ async fn run_command(
     }
 }
 
+fn record_termination_failure(stderr: &mut String, result: io::Result<()>) {
+    if let Err(error) = result {
+        let _ = writeln!(
+            stderr,
+            "dag-runner: failed to terminate node process group: {error}"
+        );
+    }
+}
+
 enum Completion {
-    Succeeded,
-    Failed(i32),
-    WaitFailed(String),
-    TimedOut,
+    Exited(CapturedExit),
+    TimedOut { secs: u64 },
     Cancelled,
+}
+
+/// Drain both captured streams before reaping the group leader. If a
+/// descendant keeps either stream open, timeout and cancellation still own a
+/// live leader PID, so the process group identity cannot be reused.
+async fn capture_exit(child: &mut Child, capture: &mut PipeCapture) -> CapturedExit {
+    capture.finish().await;
+    let status = child.wait().await;
+    let CapturedStreams { stdout, stderr } = capture.take();
+    CapturedExit {
+        status,
+        stdout,
+        stderr,
+    }
 }
 
 /// Resolves the first time the cancellation flag flips from false to true.
@@ -557,34 +737,31 @@ async fn wait_for_cancel(rx: &mut tokio::sync::watch::Receiver<bool>) {
 /// Resolves after `secs` seconds when set, otherwise blocks forever. Used as
 /// the timeout arm of a `tokio::select!`: pairing it with `child.wait()`
 /// lets the wait win when no timeout was requested.
-async fn maybe_timeout(secs: Option<u64>) {
+async fn maybe_timeout(secs: Option<u64>) -> u64 {
     match secs {
-        Some(s) => tokio::time::sleep(Duration::from_secs(s)).await,
-        None => std::future::pending::<()>().await,
+        Some(s) => {
+            tokio::time::sleep(Duration::from_secs(s)).await;
+            s
+        }
+        None => std::future::pending::<u64>().await,
     }
 }
 
-/// `SIGTERM` the child, wait a brief grace period for it to exit cleanly,
-/// then `SIGKILL` if it's still alive. `tokio::process::Child::start_kill`
-/// is `SIGKILL` only; sending `SIGTERM` first gives well-behaved children
-/// a chance to flush state.
-async fn terminate_child(child: &mut tokio::process::Child) {
-    if let Some(pid) = child.id() {
-        // Safety: `pid` was just returned by the OS for a child we own and
-        // have not yet reaped, and `SIGTERM` is a valid signal number.
-        unsafe {
-            libc::kill(pid.cast_signed(), libc::SIGTERM);
-        }
-    }
-    let grace = tokio::time::sleep(Duration::from_millis(500));
-    tokio::pin!(grace);
-    tokio::select! {
-        () = &mut grace => {
-            let _ = child.start_kill();
-        }
-        _ = child.wait() => return,
-    }
-    let _ = child.wait().await;
+/// Give the whole owned process group a brief TERM grace period, then KILL it
+/// and reap the direct child. The group leader stays unreaped until after KILL,
+/// which prevents its numeric group ID from being reused during the grace.
+async fn terminate_process_group(
+    child: &mut Child,
+    group: &mut OwnedProcessGroup,
+) -> io::Result<()> {
+    let term_result = group.id.signal(libc::SIGTERM);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    group.id.signal(libc::SIGKILL)?;
+    group.disarm();
+    let wait_result = child.wait().await.map(|_| ());
+
+    term_result?;
+    wait_result
 }
 
 /// Read `stream` line-by-line, returning the full captured text and, when a

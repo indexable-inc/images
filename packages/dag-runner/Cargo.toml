@@ -12,8 +12,8 @@ anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 futures.workspace = true
 indicatif.workspace = true
-# Used for `libc::kill(pid, SIGTERM)`; tokio::process::Child only exposes the
-# SIGKILL escape hatch via `start_kill`, and we want a graceful term first.
+# Used for `libc::killpg`; each node owns a process group so timeout and
+# cancellation terminate descendants as well as the direct child.
 libc.workspace = true
 progress-style.workspace = true
 serde = { workspace = true, features = ["derive"] }

@@ -1,4 +1,9 @@
-use std::process::Command;
+use std::io::Read;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -45,6 +50,199 @@ fn assert_success(output: &std::process::Output) {
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+struct DescendantFixture {
+    _dir: tempfile::TempDir,
+    spec_path: PathBuf,
+    child_pid_path: PathBuf,
+    descendant_pid_path: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+enum LeaderBehavior {
+    Wait,
+    Exit,
+}
+
+#[derive(Clone, Copy)]
+enum DescendantStreams {
+    Both,
+    Stderr,
+}
+
+impl DescendantFixture {
+    fn new(
+        timeout_secs: Option<u64>,
+        leader: LeaderBehavior,
+        streams: DescendantStreams,
+    ) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script_path = dir.path().join("process-tree.sh");
+        let spec_path = dir.path().join("spec.json");
+        let child_pid_path = dir.path().join("child.pid");
+        let descendant_pid_path = dir.path().join("descendant.pid");
+        let final_command = match leader {
+            LeaderBehavior::Wait => "wait",
+            LeaderBehavior::Exit => "exit 0",
+        };
+        let close_stdout = match streams {
+            DescendantStreams::Both => "",
+            DescendantStreams::Stderr => "exec >&-",
+        };
+        let script = format!(
+            r#"trap '' TERM
+printf '%s\n' "$$" > "$DAG_RUNNER_CHILD_PID"
+sh -c '
+  trap "" TERM
+  printf "%s\n" "$$" > "$DAG_RUNNER_DESCENDANT_PID"
+  {close_stdout}
+  exec sleep 10
+' &
+{final_command}
+"#
+        );
+        std::fs::write(&script_path, script).expect("write process tree fixture");
+
+        let mut node = serde_json::json!({
+            "command": ["sh", script_path],
+            "env": {
+                "DAG_RUNNER_CHILD_PID": child_pid_path,
+                "DAG_RUNNER_DESCENDANT_PID": descendant_pid_path,
+            },
+        });
+        if let Some(secs) = timeout_secs {
+            node["timeout_secs"] = serde_json::json!(secs);
+        }
+        let spec = serde_json::json!({"nodes": {"process-tree": node}});
+        std::fs::write(&spec_path, serde_json::to_vec(&spec).expect("serialize spec"))
+            .expect("write spec");
+
+        Self {
+            _dir: dir,
+            spec_path,
+            child_pid_path,
+            descendant_pid_path,
+        }
+    }
+
+    fn spawn(&self) -> RunningFixture {
+        let bin = env!("CARGO_BIN_EXE_dag-runner");
+        let mut command = Command::new(bin);
+        command
+            .args(["--output", "plain"])
+            .arg(&self.spec_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let child = command.spawn().expect("spawn dag-runner");
+        RunningFixture {
+            process_group: child.id().cast_signed(),
+            child,
+            armed: true,
+        }
+    }
+
+    fn wait_until_ready(&self) {
+        wait_for_pid(&self.child_pid_path);
+        wait_for_pid(&self.descendant_pid_path);
+    }
+}
+
+struct RunningFixture {
+    child: Child,
+    process_group: libc::pid_t,
+    armed: bool,
+}
+
+impl RunningFixture {
+    fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    const fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RunningFixture {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // SAFETY: the runner was spawned as the leader of this process group,
+        // and SIGKILL is valid. A live fixture member keeps the group ID owned.
+        unsafe {
+            libc::killpg(self.process_group, libc::SIGKILL);
+        }
+        let _ = self.child.wait();
+    }
+}
+
+fn wait_for_pid(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path)
+            && text.trim().parse::<libc::pid_t>().is_ok()
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "process did not record its PID at {}",
+            path.display()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_output(runner: &mut RunningFixture) -> Output {
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let status = loop {
+        if let Some(status) = runner.child.try_wait().expect("poll dag-runner") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "dag-runner did not return after terminating its node"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    runner.disarm();
+
+    let mut stdout = Vec::new();
+    runner
+        .child
+        .stdout
+        .take()
+        .expect("stdout piped")
+        .read_to_end(&mut stdout)
+        .expect("read stdout");
+    let mut stderr = Vec::new();
+    runner
+        .child
+        .stderr
+        .take()
+        .expect("stderr piped")
+        .read_to_end(&mut stderr)
+        .expect("read stderr");
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
+}
+
+fn send_sigint(pid: u32) {
+    // SAFETY: the runner was just spawned and has not been reaped; SIGINT is
+    // valid and exercises the public cancellation path.
+    let rc = unsafe { libc::kill(pid.cast_signed(), libc::SIGINT) };
+    assert_eq!(
+        rc,
+        0,
+        "kill(SIGINT) failed: errno {}",
+        std::io::Error::last_os_error()
     );
 }
 
@@ -188,6 +386,21 @@ fn node_with_timeout_kills_long_sleeper_and_exits_124() {
 }
 
 #[test]
+fn timeout_terminates_descendants_and_closes_captured_pipes() {
+    let fixture = DescendantFixture::new(
+        Some(1),
+        LeaderBehavior::Wait,
+        DescendantStreams::Both,
+    );
+    let mut runner = fixture.spawn();
+    fixture.wait_until_ready();
+
+    let output = wait_for_output(&mut runner);
+
+    assert_eq!(output.status.code(), Some(124));
+}
+
+#[test]
 fn node_completes_before_timeout_succeeds() {
     let spec = r#"{"nodes":{
         "a":{"command":["true"],"timeout_secs":30}
@@ -231,18 +444,44 @@ fn sigint_cancels_running_nodes_with_exit_130() {
     let pid = child.id();
     // Give the runner time to spawn the sleep child and enter its wait.
     thread::sleep(Duration::from_millis(300));
-    // SAFETY: we just spawned this child and it has not yet been reaped;
-    // SIGINT is a valid signal. libc here avoids any /bin/kill path
-    // assumption inside the Nix sandbox.
-    let rc = unsafe { libc::kill(pid.cast_signed(), libc::SIGINT) };
-    assert_eq!(
-        rc,
-        0,
-        "kill(SIGINT) failed: errno {}",
-        std::io::Error::last_os_error()
-    );
+    send_sigint(pid);
     let exit = child.wait().expect("wait for runner");
     assert_eq!(exit.code(), Some(130), "expected exit 130 after SIGINT");
+}
+
+#[test]
+fn sigint_terminates_descendants_and_closes_captured_pipes() {
+    let fixture = DescendantFixture::new(
+        None,
+        LeaderBehavior::Wait,
+        DescendantStreams::Both,
+    );
+    let mut runner = fixture.spawn();
+    let runner_pid = runner.id();
+    fixture.wait_until_ready();
+    send_sigint(runner_pid);
+
+    let output = wait_for_output(&mut runner);
+
+    assert_eq!(output.status.code(), Some(130));
+}
+
+#[test]
+fn sigint_after_leader_exit_terminates_descendant_and_closes_captured_pipes() {
+    let fixture = DescendantFixture::new(
+        None,
+        LeaderBehavior::Exit,
+        DescendantStreams::Stderr,
+    );
+    let mut runner = fixture.spawn();
+    let runner_pid = runner.id();
+    fixture.wait_until_ready();
+    thread::sleep(Duration::from_millis(200));
+    send_sigint(runner_pid);
+
+    let output = wait_for_output(&mut runner);
+
+    assert_eq!(output.status.code(), Some(130));
 }
 
 #[test]
