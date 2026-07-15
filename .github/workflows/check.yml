@@ -63,7 +63,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      pull-requests: write
     uses: indexable-inc/index/.github/workflows/ci-budget.yml@main
     with:
       pull-request-number: ${{ github.event.pull_request.number || 0 }}
