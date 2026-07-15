@@ -7,6 +7,7 @@ on:
       - .github/scripts/run-check-logged.sh
       - .github/scripts/run-clone-diff.sh
       - .github/workflows/check.yml
+      - .github/workflows/cache-push-watchdog.yml
       - .github/workflows/ci-budget-publish.yml
       - .github/workflows/closure-gate.yml
       - .github/workflows/ci-budget-read-only.yml
