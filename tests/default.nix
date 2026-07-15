@@ -27,6 +27,17 @@
       home-manager
       ;
   };
+  # Builder-vm pair (#2990): darwin host module (evalModules with option
+  # stubs) plus a full nixosSystem eval of the guest appliance module.
+  builderVmTest = import ./builder-vm.nix {
+    inherit
+      lib
+      pkgs
+      ix
+      paths
+      nixpkgs
+      ;
+  };
   # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
   # (`checks.<system>.minecraft-blocks-vm`).
@@ -6307,6 +6318,7 @@ in {
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
   provenance = provenanceTest;
+  builderVm = builderVmTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
   inherit baseImageNixDb;
@@ -6320,6 +6332,7 @@ in {
       helperTest
       portableServicesTest
       provenanceTest
+      builderVmTest
       cargoUnitPrebuiltTest
     ]
   );
