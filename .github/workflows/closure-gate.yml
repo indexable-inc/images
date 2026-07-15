@@ -60,9 +60,6 @@ jobs:
       # Manual and merge-queue runs have no pull request label. Keep their
       # existing extended budget.
       force-big-change: ${{ github.event_name != 'pull_request' }}
-      # check.yml owns the single sticky comment and automatic label. This
-      # invocation only supplies the same decision to the parallel gate.
-      publish: false
 
   # Branch protection requires a status named `closure-gate`; this job is it.
   # Separate from flake-check on purpose: it runs in parallel on its own

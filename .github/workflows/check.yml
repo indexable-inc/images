@@ -71,7 +71,6 @@ jobs:
       # main, tag, and merge-queue validation rather than silently shrinking
       # those non-PR operational gates.
       force-big-change: ${{ github.event_name != 'pull_request' }}
-      publish: ${{ github.event_name == 'pull_request' }}
 
   # One job on one runner, on purpose. Every check shares a single
   # znver5-tuned nixpkgs base, so fanning the checks across several runners
