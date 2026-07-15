@@ -204,7 +204,9 @@ class RequiredWorkflowTests(unittest.TestCase):
                 workflow = load_workflow(workflow_name)
                 scripts: dict[str, list[str]] = {}
                 for job in child_object(workflow, "jobs").values():
-                    if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+                    if not isinstance(job, dict) or not isinstance(
+                        job.get("steps"), list
+                    ):
                         continue
                     for step in job["steps"]:
                         if not isinstance(step, dict):
@@ -230,7 +232,7 @@ class RequiredWorkflowTests(unittest.TestCase):
                         scripts[script] = decoded
                 assert scripts == expected
 
-        assert not (REPOSITORY / ".github/actions/check-logged").exists()
+        assert not (REPOSITORY / ".github/actions/check-logged/action.yml").exists()
 
     def test_non_pull_request_classification_keeps_labels(self) -> None:
         check_inputs = child_object(
