@@ -11,23 +11,6 @@ separate deadline.
 
 Also exercise client disconnect against a live daemon build so canceling the
 client cannot leave daemon-owned compute running.
----
- src/libstore-tests/build-status.cc            |  32 ++++
- src/libstore-tests/meson.build                |   1 +
- src/libstore/build/build-status.cc            | 180 ++++++++++++++++++
- .../build/derivation-building-goal.cc         |  10 +
- src/libstore/build/worker.cc                  |   7 +
- .../include/nix/store/build/build-status.hh   |  48 +++++
- .../nix/store/build/derivation-builder.hh     |   3 +
- .../store/build/derivation-building-goal.hh   |   5 +
- src/libstore/include/nix/store/build/goal.hh  |   7 +
- .../include/nix/store/worker-settings.hh      |  21 ++
- src/libstore/unix/build/derivation-builder.cc |   6 +
- tests/functional/build-status-liveness.nix    |  29 +++
- tests/functional/build-status.sh              |  49 ++++-
- 13 files changed, 397 insertions(+), 1 deletion(-)
- create mode 100644 src/libstore-tests/build-status.cc
- create mode 100644 tests/functional/build-status-liveness.nix
 
 diff --git a/src/libstore-tests/build-status.cc b/src/libstore-tests/build-status.cc
 new file mode 100644
@@ -634,6 +617,3 @@ index c2d6b00..92360e0 100644
 +[[ -z $daemonStarted ]] || killDaemon
 +
  echo "build-status.sh: OK"
--- 
-2.54.0
-
