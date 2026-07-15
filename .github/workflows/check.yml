@@ -123,10 +123,10 @@ jobs:
           fi
           nix run .#clone -- . --diff "${base_sha}" > /dev/null
 
-      # Run the full gate through the repo-owned `check` app (lib/per-system.nix),
-      # so CI and a local `nix run .#check` execute the same two commands from one
-      # definition: nix-fast-build over `.#ciChecks.x86_64-linux`, then nix-eval-jobs
-      # over `.#packages.x86_64-linux` with the JSON error-line gate. The
+      # Run the required gate through the repo-owned `check` app
+      # (lib/per-system.nix): one bounded nix-fast-build evaluator owns the
+      # namespaced union of ciChecks and cachePushRoots, then nix-eval-jobs
+      # validates packages with the JSON error-line gate. The
       # command-specific rationale (tool choice, the worker/memory tuning, why the
       # eval cache is off, the error-line gate) and the pinned tool revisions live
       # next to that wrapper. The job inherits NIX_CONFIG (above), so the inner
@@ -135,6 +135,8 @@ jobs:
       # check fails to build or the flake stops evaluating.
       - name: Build all flake checks
         uses: ./.github/actions/check-logged
+        with:
+          subcommand: required
 
       # The `check` app writes nix-fast-build per-attr durations to
       # check-results.json in the workspace (see lib/per-system.nix). Upload it
@@ -150,3 +152,22 @@ jobs:
           path: check-results.json
           if-no-files-found: warn
           retention-days: 30
+
+  # Keep the existing required context while consuming no second self-hosted
+  # runner. The single gate above builds closure roots and checks together;
+  # this hosted terminal job fails closed for every non-success conclusion,
+  # including cancellation and a missing upstream result.
+  closure-gate:
+    needs: flake-check
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Mirror the required-root gate
+        env:
+          FLAKE_CHECK_RESULT: ${{ needs.flake-check.result }}
+        run: |
+          if [[ "${FLAKE_CHECK_RESULT}" != "success" ]]; then
+            printf 'flake-check result was %s; refusing a false-green closure gate\n' "${FLAKE_CHECK_RESULT}" >&2
+            exit 1
+          fi
