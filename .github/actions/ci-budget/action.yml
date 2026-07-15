@@ -72,7 +72,7 @@ runs:
       env:
         CI_BUDGET_EXTRA_COSTLY_PATHS: ${{ inputs.extra-costly-paths }}
         CI_BUDGET_BASE_SHA: ${{ inputs.base-sha }}
-        CI_BUDGET_CONTEXT_PATH: ${{ runner.temp }}/ci-budget-context.json
+        CI_BUDGET_SNAPSHOT_PATH: ${{ runner.temp }}/ci-budget-snapshot.json
         CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}
         CI_BUDGET_PUBLISH: ${{ inputs.publish }}
         CI_BUDGET_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
@@ -83,12 +83,12 @@ runs:
         CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
         CI_BUDGET_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/ci_budget.py"
-    - name: Preserve authoritative event context
-      if: inputs.mode == 'classify' && steps.classify.outputs.context_key != ''
+    - name: Preserve classified budget
+      if: inputs.mode == 'classify'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: ci-budget-context-${{ inputs.run-id }}-${{ inputs.run-attempt }}-${{ steps.classify.outputs.context_key }}
-        path: ${{ steps.classify.outputs.context_path }}
+        name: ci-budget-snapshot-${{ inputs.run-id }}-${{ inputs.run-attempt }}-${{ steps.classify.outputs.snapshot_key }}
+        path: ${{ steps.classify.outputs.snapshot_path }}
         if-no-files-found: error
     - name: Enforce total CI deadline
       if: inputs.mode == 'gate' || inputs.mode == 'cancel'
@@ -96,9 +96,7 @@ runs:
       env:
         CI_BUDGET_BIG_CHANGE: ${{ inputs.big-change }}
         CI_BUDGET_DEADLINE_MODE: ${{ inputs.mode }}
-        CI_BUDGET_EXTRA_COSTLY_PATHS: ${{ inputs.extra-costly-paths }}
         CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}
-        CI_BUDGET_MERGE_QUEUE_BRANCH: ${{ inputs.merge-queue-branch }}
         CI_BUDGET_REPOSITORY: ${{ inputs.repository }}
         CI_BUDGET_RUN_ATTEMPT: ${{ inputs.run-attempt }}
         CI_BUDGET_RUN_ID: ${{ inputs.run-id }}

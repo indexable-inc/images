@@ -77,7 +77,18 @@ jobs:
     # GitHub starts this timer only after runner assignment. It bounds extended
     # relock runs; the trusted controller owns ordinary queue-inclusive cancellation.
     timeout-minutes: ${{ fromJSON(needs.ci-budget.outputs.worker_timeout_minutes) }}
+    permissions:
+      actions: read
+      contents: read
     steps:
+      - name: Reject work assigned after the total deadline
+        uses: indexable-inc/index/.github/actions/ci-budget/worker@main
+        with:
+          repository: ${{ github.repository }}
+          token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          big-change: ${{ needs.ci-budget.outputs.big_change }}
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -89,9 +100,16 @@ jobs:
       # Output goes to a runner-local log (the action prints the host and
       # path); the Actions log stays quiet unless the build fails.
       - name: Build the cache-push closure
-        uses: ./.github/actions/check-logged
+        uses: indexable-inc/index/.github/actions/ci-budget/worker@main
         with:
-          subcommand: closure
+          mode: run
+          repository: ${{ github.repository }}
+          token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          big-change: ${{ needs.ci-budget.outputs.big_change }}
+          script: .github/scripts/run-check-logged.sh
+          arguments: '["closure"]'
 
   closure-gate:
     name: closure-gate

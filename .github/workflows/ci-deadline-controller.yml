@@ -18,16 +18,22 @@ concurrency:
 
 jobs:
   deadline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       actions: write
       contents: read
-      pull-requests: read
-    uses: indexable-inc/index/.github/workflows/ci-deadline.yml@main
-    with:
-      run-id: ${{ github.event.workflow_run.id }}
-      run-attempt: ${{ github.event.workflow_run.run_attempt }}
-      force-big-change: >-
-        ${{ github.event.workflow_run.event == 'schedule'
-            || github.event.workflow_run.event == 'workflow_dispatch'
-            || github.event.workflow_run.event == 'push'
-            && github.event.workflow_run.head_branch != 'main' }}
+    steps:
+      - name: Cancel ordinary CI at its total deadline
+        uses: indexable-inc/index/.github/actions/ci-budget@main
+        with:
+          mode: cancel
+          repository: ${{ github.repository }}
+          token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          run-attempt: ${{ github.event.workflow_run.run_attempt }}
+          force-big-change: >-
+            ${{ github.event.workflow_run.event == 'schedule'
+                || github.event.workflow_run.event == 'workflow_dispatch'
+                || github.event.workflow_run.event == 'push'
+                && github.event.workflow_run.head_branch != 'main' }}

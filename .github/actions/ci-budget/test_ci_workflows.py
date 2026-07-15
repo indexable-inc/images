@@ -90,6 +90,8 @@ class RequiredWorkflowTests(unittest.TestCase):
                 budget = child_object(jobs, "ci-budget")
                 budget_permissions = child_object(budget, "permissions")
                 target = child_object(jobs, target_name)
+                target_permissions = child_object(target, "permissions")
+                target_steps = child_list(target, "steps")
                 gate = child_object(jobs, gate_name)
                 gate_permissions = child_object(gate, "permissions")
                 step = child_list(gate, "steps")[0]
@@ -108,6 +110,26 @@ class RequiredWorkflowTests(unittest.TestCase):
                 }
                 assert target["name"] == target_name
                 assert target["needs"] == "ci-budget"
+                assert target_permissions == {
+                    "actions": "read",
+                    "contents": "read",
+                }
+                expiry = target_steps[0]
+                if not isinstance(expiry, dict):
+                    raise AssertionError("expiry step is not an object")
+                expiry_inputs = child_object(expiry, "with")
+                assert expiry["name"] == "Reject work assigned after the total deadline"
+                assert (
+                    expiry["uses"]
+                    == "indexable-inc/index/.github/actions/ci-budget/worker@main"
+                )
+                assert expression(expiry_inputs, "run-id") == "${{ github.run_id }}"
+                assert expression(expiry_inputs, "run-attempt") == (
+                    "${{ github.run_attempt }}"
+                )
+                assert "needs.ci-budget.outputs.big_change" in expression(
+                    expiry_inputs, "big-change"
+                )
                 assert gate["name"] == gate_name
                 assert gate["needs"] == ["ci-budget", target_name]
                 assert expression(gate, "if") == "${{ always() }}"
@@ -167,6 +189,49 @@ class RequiredWorkflowTests(unittest.TestCase):
             for step in build_steps
         )
 
+    def test_nix_work_runs_inside_the_shared_worker_boundary(self) -> None:
+        cases = {
+            "check.yml": {
+                ".github/scripts/run-clone-diff.sh": [],
+                ".github/scripts/run-check-logged.sh": [],
+            },
+            "closure-gate.yml": {
+                ".github/scripts/run-check-logged.sh": ["closure"],
+            },
+        }
+        for workflow_name, expected in cases.items():
+            with self.subTest(workflow=workflow_name):
+                workflow = load_workflow(workflow_name)
+                scripts: dict[str, list[str]] = {}
+                for job in child_object(workflow, "jobs").values():
+                    if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+                        continue
+                    for step in job["steps"]:
+                        if not isinstance(step, dict):
+                            continue
+                        if step.get("uses") != (
+                            "indexable-inc/index/.github/actions/ci-budget/worker@main"
+                        ):
+                            continue
+                        inputs = child_object(step, "with")
+                        if inputs.get("mode") != "run":
+                            continue
+                        script = inputs.get("script")
+                        if not isinstance(script, str):
+                            raise AssertionError("worker run step has no script")
+                        arguments = inputs.get("arguments", "[]")
+                        if not isinstance(arguments, str):
+                            raise AssertionError("worker arguments are not JSON text")
+                        decoded = json.loads(arguments)
+                        if not isinstance(decoded, list) or not all(
+                            isinstance(item, str) for item in decoded
+                        ):
+                            raise AssertionError("worker arguments are not strings")
+                        scripts[script] = decoded
+                assert scripts == expected
+
+        assert not (REPOSITORY / ".github/actions/check-logged").exists()
+
     def test_non_pull_request_classification_keeps_labels(self) -> None:
         check_inputs = child_object(
             child_object(child_object(load_workflow("check.yml"), "jobs"), "ci-budget"),
@@ -190,21 +255,21 @@ class RequiredWorkflowTests(unittest.TestCase):
 
 
 class TrustedWorkflowTests(unittest.TestCase):
-    def test_source_context_artifact_preserves_pull_request_identity(self) -> None:
+    def test_source_artifact_snapshots_the_classified_budget(self) -> None:
         action = load_yaml(ACTION_DIR / "action.yml")
         steps = child_list(child_object(action, "runs"), "steps")
         preserve = next(
             step
             for step in steps
             if isinstance(step, dict)
-            and step.get("name") == "Preserve authoritative event context"
+            and step.get("name") == "Preserve classified budget"
         )
         inputs = child_object(preserve, "with")
 
-        assert "context_key" in expression(preserve, "if")
-        assert "steps.classify.outputs.context_key" in expression(inputs, "name")
+        assert expression(preserve, "if") == "inputs.mode == 'classify'"
+        assert "steps.classify.outputs.snapshot_key" in expression(inputs, "name")
         assert (
-            expression(inputs, "path") == "${{ steps.classify.outputs.context_path }}"
+            expression(inputs, "path") == "${{ steps.classify.outputs.snapshot_path }}"
         )
 
     def test_controller_covers_initial_runs_and_reruns(self) -> None:
@@ -219,16 +284,18 @@ class TrustedWorkflowTests(unittest.TestCase):
         assert "workflow_run.run_attempt" in expression(concurrency, "group")
 
         deadline = child_object(child_object(workflow, "jobs"), "deadline")
-        assert (
-            deadline["uses"]
-            == "indexable-inc/index/.github/workflows/ci-deadline.yml@main"
-        )
+        assert deadline["runs-on"] == "ubuntu-latest"
+        assert deadline["timeout-minutes"] == 10
         assert child_object(deadline, "permissions") == {
             "actions": "write",
             "contents": "read",
-            "pull-requests": "read",
         }
-        inputs = child_object(deadline, "with")
+        step = child_list(deadline, "steps")[0]
+        if not isinstance(step, dict):
+            raise AssertionError("deadline step is not an object")
+        assert step["uses"] == "indexable-inc/index/.github/actions/ci-budget@main"
+        inputs = child_object(step, "with")
+        assert inputs["mode"] == "cancel"
         assert "workflow_run.id" in expression(inputs, "run-id")
         assert "workflow_run.run_attempt" in expression(inputs, "run-attempt")
         assert not any(use.startswith("actions/checkout") for use in all_uses(workflow))
@@ -259,11 +326,12 @@ class TrustedWorkflowTests(unittest.TestCase):
         )
         assert {
             ".github/actions/ci-budget/**",
+            ".github/scripts/run-check-logged.sh",
+            ".github/scripts/run-clone-diff.sh",
             ".github/workflows/check.yml",
             ".github/workflows/closure-gate.yml",
             ".github/workflows/ci-budget-publish.yml",
             ".github/workflows/ci-deadline-controller.yml",
-            ".github/workflows/ci-deadline.yml",
         } <= set(paths)
 
 
