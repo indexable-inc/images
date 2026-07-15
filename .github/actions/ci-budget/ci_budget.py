@@ -545,9 +545,6 @@ class GitHubClient:
                 return jobs
             page += 1
 
-    def cancel_workflow_run(self, run_id: int) -> None:
-        self.request("POST", f"actions/runs/{run_id}/cancel")
-
     def upsert_comment(self, number: int, body: str) -> None:
         comments = self.paginated(f"issues/{number}/comments")
         owned = [

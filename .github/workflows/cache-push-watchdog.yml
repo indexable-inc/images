@@ -59,7 +59,7 @@ on:
         default: false
 
 # Read runs/jobs, cancel + redispatch cache-push, and maintain the tracking
-# issue. `actions: write` covers both `gh run cancel` and `gh workflow run`
+# issue. `actions: write` covers both typed run cancellation and `gh workflow run`
 # (workflow_dispatch); issue writes do not need a PAT (unlike PR creation,
 # which the enterprise blocks for GITHUB_TOKEN).
 permissions:
@@ -98,7 +98,11 @@ jobs:
       # dispatched inside this window may still be queued behind the group.
       HEAL_COOLDOWN_MIN: "90"
       DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+      WORKFLOW_CANCELLATION_RECORD_DIRECTORY: ${{ runner.temp }}/workflow-cancellations
+      WORKFLOW_CANCELLATION_SOURCE: cache_push_watchdog
+      WORKFLOW_CANCELLATION_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Detect and heal cache-push wedges
         run: |
           set -euo pipefail
@@ -126,13 +130,26 @@ jobs:
             fi
           }
 
+          cancel_run() {
+            local id="$1"
+            local attempt="$2"
+            local reason_code="$3"
+            local reason_detail="$4"
+            WORKFLOW_CANCELLATION_TARGET_REPOSITORY="${REPOSITORY}" \
+              WORKFLOW_CANCELLATION_TARGET_RUN_ID="${id}" \
+              WORKFLOW_CANCELLATION_TARGET_RUN_ATTEMPT="${attempt}" \
+              WORKFLOW_CANCELLATION_REASON_CODE="${reason_code}" \
+              WORKFLOW_CANCELLATION_REASON_DETAIL="${reason_detail}" \
+              python3 .github/actions/ci-budget/workflow_cancellation.py
+          }
+
           # Every list call lands in a file with an explicit failure branch:
           # `mapfile < <(cmd)` ignores cmd's exit status, which would turn an
           # API outage into an empty array and a false "healthy".
           runs_file=/tmp/active-runs.tsv
           # shellcheck disable=SC2016  # \(...) is jq string interpolation, not shell
           gh api "repos/${REPOSITORY}/actions/workflows/cache-push.yml/runs?per_page=20" \
-            --jq '.workflow_runs[] | select((.status=="queued" or .status=="in_progress" or .status=="pending") and .head_branch=="main") | "\(.id)\t\(.created_at)\t\(.event)"' \
+            --jq '.workflow_runs[] | select((.status=="queued" or .status=="in_progress" or .status=="pending") and .head_branch=="main") | "\(.id)\t\(.created_at)\t\(.event)\t\(.run_attempt)"' \
             > "$runs_file" || fail_loud "listing cache-push runs failed"
 
           # One pass over the active runs: age + job count for each, and
@@ -140,22 +157,27 @@ jobs:
           annotated=/tmp/annotated-runs.tsv
           : > "$annotated"
           holder_exists=""
-          while IFS=$'\t' read -r id created event; do
+          while IFS=$'\t' read -r id created event run_attempt; do
             njobs="$(gh api "repos/${REPOSITORY}/actions/runs/${id}/jobs" --jq '.total_count')" \
               || fail_loud "listing jobs for run ${id} failed"
             created_epoch="$(date -u -d "$created" +%s)"
             age_min=$(( (now_epoch - created_epoch) / 60 ))
             if [ "$njobs" -gt 0 ]; then holder_exists=1; fi
-            printf '%s\t%s\t%s\t%s\n' "$id" "$age_min" "$njobs" "$event" >> "$annotated"
+            printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$age_min" "$njobs" "$event" "$run_attempt" >> "$annotated"
           done < "$runs_file"
 
           # --- Signal 1: zombie holder ----------------------------------------
-          while IFS=$'\t' read -r id age_min njobs event; do
+          while IFS=$'\t' read -r id age_min njobs event run_attempt; do
             if [ "$age_min" -ge "${MAX_RUN_AGE_MIN}" ]; then
               echo "::error::run ${id} active for ${age_min} min (>= ${MAX_RUN_AGE_MIN}): exceeds the sum of cache-push job timeouts; a queued-but-never-assigned job holds the group with no timeout (#1968)"
               add_finding "- **Zombie run**: [${id}](https://github.com/${REPOSITORY}/actions/runs/${id}) active ${age_min} min with ${njobs} job(s)."
               if [ -z "${DRY_RUN}" ]; then
-                gh run cancel "${id}" --repo "${REPOSITORY}" || echo "::warning::could not cancel ${id} (may have just completed)"
+                cancel_run \
+                  "${id}" \
+                  "${run_attempt}" \
+                  cache_push_zombie \
+                  "cache-push run exceeded the ${MAX_RUN_AGE_MIN} minute holder limit at ${age_min} minutes with ${njobs} jobs" \
+                  || fail_loud "typed cancellation of run ${id} failed"
               fi
             fi
           done < "$annotated"
@@ -166,12 +188,17 @@ jobs:
           # keeps one such pending run per group by design. Only a 0-job run
           # with NO holder anywhere means GitHub never scheduled it.
           if [ -z "$holder_exists" ]; then
-            while IFS=$'\t' read -r id age_min njobs event; do
+            while IFS=$'\t' read -r id age_min njobs event run_attempt; do
               if [ "$njobs" -eq 0 ] && [ "$age_min" -ge "${STALL_GRACE_MIN}" ]; then
                 echo "::error::run ${id} pending with 0 jobs for ${age_min} min with no group holder: GitHub never materialized a job (#1968)"
                 add_finding "- **Stalled run**: [${id}](https://github.com/${REPOSITORY}/actions/runs/${id}) pending with 0 jobs for ${age_min} min, no holder."
                 if [ -z "${DRY_RUN}" ]; then
-                  gh run cancel "${id}" --repo "${REPOSITORY}" || echo "::warning::could not cancel ${id} (may have just completed)"
+                  cancel_run \
+                    "${id}" \
+                    "${run_attempt}" \
+                    cache_push_materialization_stall \
+                    "cache-push run had zero jobs after ${age_min} minutes with no concurrency holder" \
+                    || fail_loud "typed cancellation of run ${id} failed"
                 fi
               fi
             done < "$annotated"
@@ -279,3 +306,10 @@ jobs:
               gh issue close "${number}" --repo "${REPOSITORY}"
             fi
           fi
+      - name: Preserve workflow cancellation records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workflow-cancellations-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/workflow-cancellations
+          if-no-files-found: ignore

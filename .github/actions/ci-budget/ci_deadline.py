@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from ci_budget import (
     BudgetSnapshot,
@@ -18,6 +19,16 @@ from ci_budget import (
     parse_positive_int,
 )
 from ci_policy import STANDARD_BUDGET, parse_timestamp
+from workflow_cancellation import (
+    Canceller,
+    CancellationReason,
+    CancellationReasonCode,
+    CancellationSource,
+    CancellationSourceKind,
+    WorkflowCancellation,
+    WorkflowCanceller,
+    source_from_environment,
+)
 
 
 def target_job(jobs: Sequence[JsonObject], target_name: str) -> JsonObject:
@@ -93,10 +104,13 @@ def verify_required_gate(
 
 def cancel_at_deadline(
     client: GitHubClient,
+    canceller: Canceller,
+    repository: str,
     run_id: int,
     run_attempt: int,
     budget: timedelta,
     *,
+    source: CancellationSource,
     force_big_change: bool,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], None] = time.sleep,
@@ -127,7 +141,15 @@ def cancel_at_deadline(
                 "source workflow did not publish its budget snapshot before "
                 f"{deadline.isoformat()}"
             )
-            client.cancel_workflow_run(run_id)
+            canceller.cancel(
+                deadline_cancellation(
+                    repository,
+                    run_id,
+                    run_attempt,
+                    source,
+                    deadline,
+                )
+            )
             return True
         if snapshot is None:
             sleep(min(2, remaining))
@@ -153,14 +175,43 @@ def cancel_at_deadline(
         f"::error title=CI total deadline exceeded::"
         f"cancelling run {run_id} attempt {run_attempt} at {deadline.isoformat()}"
     )
-    client.cancel_workflow_run(run_id)
+    canceller.cancel(
+        deadline_cancellation(
+            repository,
+            run_id,
+            run_attempt,
+            source,
+            deadline,
+        )
+    )
     return True
 
 
-def main() -> int:
-    client = GitHubClient(
-        os.environ["CI_BUDGET_REPOSITORY"], os.environ["CI_BUDGET_TOKEN"]
+def deadline_cancellation(
+    repository: str,
+    run_id: int,
+    run_attempt: int,
+    source: CancellationSource,
+    deadline: datetime,
+) -> WorkflowCancellation:
+    return WorkflowCancellation(
+        repository=repository,
+        run_id=run_id,
+        run_attempt=run_attempt,
+        reason=CancellationReason(
+            code=CancellationReasonCode.CI_TOTAL_DEADLINE_EXCEEDED,
+            detail=(
+                f"ordinary CI exceeded its {int(STANDARD_BUDGET.total_seconds())} "
+                f"second total budget at {deadline.isoformat()}"
+            ),
+        ),
+        source=source,
     )
+
+
+def main() -> int:
+    repository = os.environ["CI_BUDGET_REPOSITORY"]
+    client = GitHubClient(repository, os.environ["CI_BUDGET_TOKEN"])
     mode = os.environ["CI_BUDGET_DEADLINE_MODE"]
     run_id = parse_positive_int(os.environ["CI_BUDGET_RUN_ID"], "run-id")
     run_attempt = parse_positive_int(os.environ["CI_BUDGET_RUN_ATTEMPT"], "run-attempt")
@@ -178,11 +229,24 @@ def main() -> int:
         )
         return 0
     if mode == "cancel":
+        source = source_from_environment(
+            CancellationSourceKind.CI_DEADLINE_CONTROLLER,
+            os.environ,
+        )
+        canceller = WorkflowCanceller(
+            client.request,
+            repository,
+            Path(os.environ["WORKFLOW_CANCELLATION_RECORD_DIRECTORY"]),
+            Path(os.environ["GITHUB_STEP_SUMMARY"]),
+        )
         cancel_at_deadline(
             client,
+            canceller,
+            repository,
             run_id,
             run_attempt,
             STANDARD_BUDGET,
+            source=source,
             force_big_change=parse_bool(
                 os.environ["CI_BUDGET_FORCE_BIG_CHANGE"], "force-big-change"
             ),

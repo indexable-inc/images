@@ -32,18 +32,15 @@ class FakeClient:
         attempts: list[dict[str, Any]],
         jobs: list[dict[str, Any]] | None = None,
         *,
-        cancel_error: RuntimeError | None = None,
         snapshots: list[ci_deadline.BudgetSnapshot | None] | None = None,
     ) -> None:
         self.attempts = attempts
         self.jobs = jobs or []
-        self.cancel_error = cancel_error
         self.snapshots = (
             snapshots
             if snapshots is not None
             else [ci_deadline.BudgetSnapshot(big_change=False)]
         )
-        self.cancelled: list[int] = []
 
     def workflow_attempt(self, run_id: int, run_attempt: int) -> dict[str, Any]:
         assert run_id == 12
@@ -66,10 +63,29 @@ class FakeClient:
             return None
         return self.snapshots.pop(0)
 
-    def cancel_workflow_run(self, run_id: int) -> None:
-        if self.cancel_error:
-            raise self.cancel_error
-        self.cancelled.append(run_id)
+
+class FakeCanceller:
+    def __init__(self, error: RuntimeError | None = None) -> None:
+        self.error = error
+        self.cancellations: list[ci_deadline.WorkflowCancellation] = []
+
+    def cancel(self, cancellation: ci_deadline.WorkflowCancellation) -> Path:
+        if self.error is not None:
+            raise self.error
+        self.cancellations.append(cancellation)
+        return Path("cancellation.json")
+
+
+SOURCE = ci_deadline.CancellationSource(
+    kind=ci_deadline.CancellationSourceKind.CI_DEADLINE_CONTROLLER,
+    actor="github-actions[bot]",
+    repository="indexable-inc/index",
+    run_id=99,
+    run_attempt=1,
+    workflow_ref="indexable-inc/index/.github/workflows/ci-deadline-controller.yml@main",
+    job="deadline",
+)
+REPOSITORY = "indexable-inc/index"
 
 
 def attempt(
@@ -288,34 +304,46 @@ class CancellationControllerTests(unittest.TestCase):
                 )
             ]
         )
+        canceller = FakeCanceller()
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=False,
             now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
             sleep=lambda _: self.fail("stale retry must not receive a fresh budget"),
         )
 
         assert cancelled
-        assert client.cancelled == [12]
+        assert [item.run_id for item in canceller.cancellations] == [12]
+        assert canceller.cancellations[0].reason.code == (
+            ci_deadline.CancellationReasonCode.CI_TOTAL_DEADLINE_EXCEEDED
+        )
+        assert "300 second total budget" in (canceller.cancellations[0].reason.detail)
 
     def test_controller_exits_when_attempt_already_completed(self) -> None:
         client = FakeClient([attempt(status="completed")], snapshots=[None])
+        canceller = FakeCanceller()
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=False,
             sleep=lambda _: self.fail("completed attempt must not sleep"),
         )
 
         assert not cancelled
-        assert not client.cancelled
+        assert not canceller.cancellations
 
     def test_fork_pull_request_uses_source_snapshot_when_payload_is_empty(self) -> None:
         fork_attempt = attempt()
@@ -326,13 +354,17 @@ class CancellationControllerTests(unittest.TestCase):
             [fork_attempt, completed],
             snapshots=[ci_deadline.BudgetSnapshot(big_change=False)],
         )
+        canceller = FakeCanceller()
         sleeps: list[float] = []
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=False,
             now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
             sleep=sleeps.append,
@@ -343,32 +375,40 @@ class CancellationControllerTests(unittest.TestCase):
 
     def test_missing_source_snapshot_cancels_at_deadline(self) -> None:
         client = FakeClient([attempt(), attempt()], snapshots=[None])
+        canceller = FakeCanceller()
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=False,
             now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
             sleep=lambda _: self.fail("elapsed deadline must not sleep"),
         )
 
         assert cancelled
-        assert client.cancelled == [12]
+        assert [item.run_id for item in canceller.cancellations] == [12]
 
     def test_main_push_waits_for_classified_snapshot(self) -> None:
         client = FakeClient(
             [attempt(event="push"), attempt(status="completed", event="push")],
             snapshots=[None, ci_deadline.BudgetSnapshot(big_change=False)],
         )
+        canceller = FakeCanceller()
         sleeps: list[float] = []
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=False,
             now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
             sleep=sleeps.append,
@@ -385,13 +425,17 @@ class CancellationControllerTests(unittest.TestCase):
             ],
             snapshots=[None, ci_deadline.BudgetSnapshot(big_change=False)],
         )
+        canceller = FakeCanceller()
         sleeps: list[float] = []
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=False,
             now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
             sleep=sleeps.append,
@@ -402,44 +446,56 @@ class CancellationControllerTests(unittest.TestCase):
 
     def test_queue_time_counts_toward_cancellation(self) -> None:
         client = FakeClient([attempt(), attempt()])
+        canceller = FakeCanceller()
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=False,
             now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
             sleep=lambda _: self.fail("elapsed deadline must not sleep"),
         )
 
         assert cancelled
-        assert client.cancelled == [12]
+        assert [item.run_id for item in canceller.cancellations] == [12]
 
     def test_completed_attempt_is_not_cancelled(self) -> None:
         client = FakeClient([attempt(), attempt(status="completed")])
+        canceller = FakeCanceller()
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=False,
             now=lambda: datetime(2026, 7, 15, 10, 5, tzinfo=UTC),
             sleep=lambda _: self.fail("elapsed deadline must not sleep"),
         )
 
         assert not cancelled
-        assert not client.cancelled
+        assert not canceller.cancellations
 
     def test_big_change_is_exempt(self) -> None:
         client = FakeClient([attempt()])
+        canceller = FakeCanceller()
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=True,
             sleep=lambda _: self.fail("big change must not sleep"),
         )
@@ -451,12 +507,16 @@ class CancellationControllerTests(unittest.TestCase):
             [attempt()],
             snapshots=[ci_deadline.BudgetSnapshot(big_change=True)],
         )
+        canceller = FakeCanceller()
 
         cancelled = ci_deadline.cancel_at_deadline(
             client,
+            canceller,
+            REPOSITORY,
             12,
             2,
             timedelta(minutes=5),
+            source=SOURCE,
             force_big_change=False,
             sleep=lambda _: self.fail("extended snapshot must not sleep"),
         )
@@ -465,13 +525,17 @@ class CancellationControllerTests(unittest.TestCase):
 
     def test_denied_cancellation_cannot_make_late_target_green(self) -> None:
         denial = RuntimeError("HTTP 403: Resource not accessible by integration")
-        controller = FakeClient([attempt(), attempt()], cancel_error=denial)
+        controller = FakeClient([attempt(), attempt()])
+        canceller = FakeCanceller(denial)
         error = runtime_error(
             lambda: ci_deadline.cancel_at_deadline(
                 controller,
+                canceller,
+                REPOSITORY,
                 12,
                 2,
                 timedelta(minutes=5),
+                source=SOURCE,
                 force_big_change=False,
                 now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
                 sleep=lambda _: self.fail("elapsed deadline must not sleep"),

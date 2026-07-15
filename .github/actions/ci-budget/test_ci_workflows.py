@@ -318,6 +318,53 @@ class TrustedWorkflowTests(unittest.TestCase):
         assert "workflow_run.run_attempt" in expression(inputs, "run-attempt")
         assert not any(use.startswith("actions/checkout") for use in all_uses(workflow))
 
+    def test_cancel_mode_always_uploads_its_audit_record(self) -> None:
+        action = load_yaml(ACTION_DIR / "action.yml")
+        steps = child_list(child_object(action, "runs"), "steps")
+        enforce = next(
+            step
+            for step in steps
+            if isinstance(step, dict)
+            and step.get("name") == "Enforce total CI deadline"
+        )
+        preserve = next(
+            step
+            for step in steps
+            if isinstance(step, dict)
+            and step.get("name") == "Preserve workflow cancellation records"
+        )
+        environment = child_object(enforce, "env")
+        inputs = child_object(preserve, "with")
+
+        assert "workflow-cancellations" in expression(
+            environment, "WORKFLOW_CANCELLATION_RECORD_DIRECTORY"
+        )
+        assert expression(preserve, "if") == "inputs.mode == 'cancel' && always()"
+        assert preserve["uses"].startswith("actions/upload-artifact@")
+        assert "inputs.run-id" in expression(inputs, "name")
+        assert inputs["if-no-files-found"] == "ignore"
+
+    def test_watchdog_routes_cancellation_through_the_typed_owner(self) -> None:
+        workflow = load_workflow("cache-push-watchdog.yml")
+        watch = child_object(child_object(workflow, "jobs"), "watch")
+        environment = child_object(watch, "env")
+        steps = child_list(watch, "steps")
+        checkout, detect, preserve = steps
+        if not all(isinstance(step, dict) for step in steps):
+            raise AssertionError("watchdog step is not an object")
+        script = detect.get("run")
+        if not isinstance(script, str):
+            raise AssertionError("watchdog detection step has no script")
+
+        assert checkout["uses"].startswith("actions/checkout@")
+        assert environment["WORKFLOW_CANCELLATION_SOURCE"] == "cache_push_watchdog"
+        assert "workflow_cancellation.py" in script
+        assert "cache_push_zombie" in script
+        assert "cache_push_materialization_stall" in script
+        assert "gh run" + " cancel" not in script
+        assert expression(preserve, "if") == "always()"
+        assert preserve["uses"].startswith("actions/upload-artifact@")
+
     def test_publisher_uses_trusted_base_code_without_checkout(self) -> None:
         workflow = load_workflow("ci-budget-publish.yml")
         assert "pull_request_target" in events(workflow)
@@ -346,6 +393,7 @@ class TrustedWorkflowTests(unittest.TestCase):
             ".github/actions/ci-budget/**",
             ".github/scripts/run-check-logged.sh",
             ".github/scripts/run-clone-diff.sh",
+            ".github/workflows/cache-push-watchdog.yml",
             ".github/workflows/check.yml",
             ".github/workflows/closure-gate.yml",
             ".github/workflows/ci-budget-publish.yml",

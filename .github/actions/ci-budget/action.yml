@@ -102,7 +102,15 @@ runs:
         CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
         CI_BUDGET_TARGET_JOB_NAME: ${{ inputs.target-job-name }}
         CI_BUDGET_TOKEN: ${{ inputs.token }}
+        WORKFLOW_CANCELLATION_RECORD_DIRECTORY: ${{ runner.temp }}/workflow-cancellations
       run: python3 "$GITHUB_ACTION_PATH/ci_deadline.py"
+    - name: Preserve workflow cancellation records
+      if: inputs.mode == 'cancel' && always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: workflow-cancellations-${{ inputs.run-id }}-${{ inputs.run-attempt }}
+        path: ${{ runner.temp }}/workflow-cancellations
+        if-no-files-found: ignore
     - name: Reject unknown CI budget mode
       if: inputs.mode != 'classify' && inputs.mode != 'gate' && inputs.mode != 'cancel'
       shell: bash
