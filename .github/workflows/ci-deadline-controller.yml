@@ -27,4 +27,3 @@ jobs:
             || github.event.workflow_run.event == 'workflow_dispatch'
             || github.event.workflow_run.event == 'push'
             && github.event.workflow_run.head_branch != 'main' }}
-
