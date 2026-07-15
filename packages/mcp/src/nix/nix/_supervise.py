@@ -189,14 +189,16 @@ def main() -> NoReturn:
     argv = sys.argv[2:]
     _become_subreaper()
     supervisor = psutil.Process()
-    target = _start_target(owner_fd, argv)
     members: dict[tuple[int, float], _Member] = {}
     statuses: dict[int, int] = {}
     selector = selectors.DefaultSelector()
     selector.register(owner_fd, selectors.EVENT_READ)
     owner_lost = False
+    target: int | None = None
+    failure: BaseException | None = None
 
     try:
+        target = _start_target(owner_fd, argv)
         while target not in statuses and not owner_lost:
             if sys.platform != "linux":
                 # Darwin has no subreaper. Capture descendants while their
@@ -208,20 +210,34 @@ def main() -> NoReturn:
             if selector.select(_WATCH_SECONDS):
                 with contextlib.suppress(BlockingIOError):
                     owner_lost = not os.read(owner_fd, 1)
-        _terminate_tree(supervisor, members, statuses)
     except BaseException as exc:
-        print(
-            f"nix supervisor failed: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-            flush=True,
-        )
-        raise SystemExit(125) from exc
+        failure = exc
     finally:
+        if target is not None:
+            try:
+                _terminate_tree(supervisor, members, statuses)
+            except BaseException as cleanup_error:
+                if failure is None:
+                    failure = cleanup_error
+                else:
+                    failure.add_note(
+                        "nix supervisor cleanup also failed: "
+                        f"{type(cleanup_error).__name__}: {cleanup_error}"
+                    )
         selector.close()
         os.close(owner_fd)
         for member in members.values():
             member.close()
 
+    if failure is not None:
+        print(
+            f"nix supervisor failed: {type(failure).__name__}: {failure}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(125) from failure
+
+    assert target is not None
     status = statuses.get(target)
     raise SystemExit(125 if status is None else _exit_code(status))
 
