@@ -115,7 +115,25 @@ class RequiredGateTests(unittest.TestCase):
             "flake-build",
             timedelta(minutes=5),
             big_change=False,
+            now=lambda: datetime(2026, 7, 15, 10, 4, 59, tzinfo=UTC),
         )
+
+    def test_terminal_gate_cannot_turn_green_after_the_deadline(self) -> None:
+        client = FakeClient([attempt()], [target()])
+
+        error = runtime_error(
+            lambda: ci_deadline.verify_required_gate(
+                client,
+                12,
+                2,
+                "flake-build",
+                timedelta(minutes=5),
+                big_change=False,
+                now=lambda: datetime(2026, 7, 15, 10, 5, 1, tzinfo=UTC),
+            )
+        )
+
+        assert "required terminal gate ran" in str(error)
 
     def test_retry_does_not_reset_the_workflow_creation_deadline(self) -> None:
         client = FakeClient(
