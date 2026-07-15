@@ -194,6 +194,10 @@ in {
   };
 
   config = mkIf (cfg.files != {}) {
+    # The resolution CLI rides the module: anyone whose files it tracks can
+    # run `index-delta status`/`tui` without wiring the package themselves.
+    home.packages = [cfg.package];
+
     assertions =
       map (file: {
         assertion = (file.source == null) != (file.text == null);

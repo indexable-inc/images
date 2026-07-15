@@ -120,37 +120,6 @@ def test_watch_diffs_rows_keyed_by_first_column(monkeypatch: pytest.MonkeyPatch)
     assert batches[1] == {"added": [["b", 1]], "removed": [], "updated": [["a", 2]]}
 
 
-def test_delegate_fact_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    writes: list[Any] = []
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        batch = weave.json.loads(req.read())
-        writes.append(batch)
-        return httpx.Response(200, json=[{"seq": i, "id": f"f{i}"} for i in range(len(batch))])
-
-    seen = install_transport(monkeypatch, handler)
-    monkeypatch.setenv("IX_WEAVE_AGENT", "agent:parent")
-    task = run(weave.delegate("summarize the weave cutover plan today", name="reviewer", model="opus"))
-    assert re.fullmatch(r"task-[0-9a-f]{8}", task)
-    # No prefab validation: the only request is the one facts batch.
-    assert [r.url.path for r in seen] == ["/api/facts"]
-    facts = [(f["fact"]["entity"]["v"], f["fact"]["attr"], f["fact"]["value"]["v"]) for f in writes[0]]
-    # Exact batch order: agent facts, then task facts, state pending LAST --
-    # the pending fact dispatches, so a half-written task must never dispatch.
-    assert facts == [
-        ("agent-reviewer", "type", "agent"),
-        ("agent-reviewer", "name", "reviewer"),
-        ("agent-reviewer", "model", "opus"),
-        (task, "type", "task"),
-        (task, "agent", "agent-reviewer"),
-        (task, "prompt", "summarize the weave cutover plan today"),
-        (task, "name", "summarize the weave cutover plan"),
-        (task, "thread", "thread.main"),
-        (task, "requested_by", "agent:parent"),
-        (task, "state", "pending"),
-    ]
-
-
 def test_result_returns_on_done(monkeypatch: pytest.MonkeyPatch) -> None:
     states = iter(["pending", "done"])
     programs: list[str] = []
@@ -176,7 +145,9 @@ def test_result_returns_on_done(monkeypatch: pytest.MonkeyPatch) -> None:
     ("state", "attr", "detail", "error"),
     [
         ("failed", "error", "worker process exited", weave.TaskFailedError),
+        ("lost", "error", "reconciler: runner:hc1 died without a terminal fact", weave.TaskFailedError),
         ("cancelled", "result", "stopped by user", weave.TaskCancelledError),
+        ("interrupted", "result", "stopped via interrupt fact", weave.TaskCancelledError),
     ],
 )
 def test_result_raises_terminal_failure(

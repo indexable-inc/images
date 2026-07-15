@@ -1,5 +1,5 @@
-# House Claude Code statusline (settings `statusLine.command`, baked by
-# package.nix into the wrapper's read-only settings layer). Renders one
+# House Claude Code statusline (settings `statusLine.command`, shipped in the
+# wrapper's computed settings render, see passthru.settings). Renders one
 # dark-gray line: the ix identity mark, context-window bar, model, effort
 # level, and the running CLI version with an "↑<latest>" marker when
 # Anthropic has published a newer release than the wrapper pins.
@@ -57,9 +57,9 @@ def is-newer [latest: string, current: string] {
   } catch { false }
 }
 
-# `--default-effort` carries the house `effortLevel` baked into the wrapper's
-# read-only settings layer, which this script cannot read back from disk; the
-# writable settings files below still win when the user overrides per-machine.
+# `--default-effort` carries the house `effortLevel` as a last resort for a
+# settings.json that does not answer (nothing materialized the render, or the
+# user pruned the key); the writable settings files below win when they do.
 def main [--default-effort: string = ""] {
   let input = (open --raw /dev/stdin | from json)
 

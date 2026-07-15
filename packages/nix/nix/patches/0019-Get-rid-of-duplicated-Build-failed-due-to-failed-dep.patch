@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sergei Zimmerman <sergei@zimmerman.foo>
+Date: Mon, 15 Jun 2026 21:50:36 +0300
+Subject: [PATCH] Get rid of duplicated 'Build failed due to failed dependency'
+ error messages
+
+This was spamming a gazillion duplicated error messages to stderr:
+
+error: Build failed due to failed dependency
+error: Build failed due to failed dependency
+error: Build failed due to failed dependency
+error: Build failed due to failed dependency
+error: Build failed due to failed dependency
+error: Build failed due to failed dependency
+
+Notably, it was just duplicating the more detailed errors above.
+
+(cherry picked from commit d79b5a9f8df5f198a566af9d06a51494c11b4a27)
+
+Assisted-by: Codex <codex@openai.com>
+
+diff --git a/src/libstore/build/derivation-goal.cc b/src/libstore/build/derivation-goal.cc
+index fb545e2a5..6acbf78ca 100644
+--- a/src/libstore/build/derivation-goal.cc
++++ b/src/libstore/build/derivation-goal.cc
+@@ -161,12 +161,16 @@ Goal::Co DerivationGoal::haveDerivation(bool storeDerivation)
+     }
+ 
+     auto resolutionGoal = worker.makeDerivationResolutionGoal(drvPath, *drv, buildMode);
++    /* We'll handle the error below. */
++    resolutionGoal->preserveFailure = true;
+     {
+         Goals waitees{resolutionGoal};
+         co_await await(std::move(waitees));
+     }
+     if (nrFailed != 0) {
+-        co_return doneFailure({BuildResult::Failure::DependencyFailed, "Build failed due to failed dependency"});
++        auto * failure = resolutionGoal->buildResult.tryGetFailure();
++        assert(failure);
++        co_return doneFailure(*failure);
+     }
+ 
+     if (resolutionGoal->resolvedDrv) {
+diff --git a/tests/functional/build.sh b/tests/functional/build.sh
+index 52bf445d7..3d774bb70 100755
+--- a/tests/functional/build.sh
++++ b/tests/functional/build.sh
+@@ -199,13 +199,9 @@ test "$status" = 1
+ # Precise number of errors depends on daemon version / goal refactorings
+ (( "$(<<<"$out" grep -cE '^error:')" >= 2 ))
+ 
+-if isDaemonNewer "2.31"; then
++if isDaemonNewer "2.29pre"; then
+     <<<"$out" grepQuiet -E "error: Cannot build '.*-x4\\.drv'"
+     <<<"$out" grepQuiet -E "Reason: 1 dependency failed."
+-elif isDaemonNewer "2.29pre"; then
+-    <<<"$out" grepQuiet -E "error: Cannot build '.*-x4\\.drv'"
+-    <<<"$out" grepQuiet -E "Reason: 1 dependency failed."
+-    <<<"$out" grepQuiet -E "Build failed due to failed dependency"
+ else
+     <<<"$out" grepQuiet -E "error: 1 dependencies of derivation '.*-x4\\.drv' failed to build"
+ fi

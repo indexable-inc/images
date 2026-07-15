@@ -113,25 +113,51 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server: str, tmp_path: 
     asyncio.run(check())
 
 
-def test_delegate_writes_task_shape(weave_server: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fabric_reconcile_and_activity_queries_against_real_weave(
+    weave_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("WEAVE_URL", weave_server)
     monkeypatch.setenv("IX_WEAVE_AGENT", "agent:e2e")
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "weave"))
+    src = Path(__file__).resolve().parents[1] / "src"
+    sys.path.insert(0, str(src / "weave"))
+    sys.path.insert(0, str(src / "fabric"))
     import weave
+    from fabric import activity, reconcile
 
     async def main() -> None:
-        task = await weave.delegate("say hello to the weave world", name="greeter", model="haiku")
-        # The task shape any fulfiller (the weave app) dispatches on, straight
-        # datalog against the real server: latest-wins attrs on the task entity.
+        # A runner-placed run's exact fact shape (fabric.run with node=), as
+        # if the runner died right after state=running.
+        task = weave.mint("task")
+        await weave.assert_facts([
+            (task, "type", "task"),
+            (task, "fn", "build_index"),
+            (task, "node", "hc9"),
+            (task, "requested_by", "agent:e2e"),
+            (task, "runner", "runner:hc9"),
+            (task, "state", "submitted"),
+        ])
+        await weave.assert_fact(task, "state", "running")
+
+        # The reconciler's datalog against the real derivation: latest state
+        # joined with that fact's write time (fact_id/fact_time).
+        rows = (await weave.query(reconcile.QUERY))["rows"]
+        stale = reconcile._parse(rows, now_ms=time.time() * 1000 + reconcile.GRACE_S * 1000 + 1)
+        assert (task, "runner:hc9") in stale
+        # Inside the grace window the same run is untouchable.
+        assert reconcile._parse(rows, now_ms=time.time() * 1000) == []
+
+        # once() against the real journal, with the Ray probe faked dead.
+        monkeypatch.setattr(reconcile, "GRACE_S", 0.0)
+        monkeypatch.setattr(reconcile, "_alive_runners", lambda candidates: set())
+        assert await reconcile.once() == [task]
         attrs = {r[0]: r[1] for r in (await weave.query(f'?- latest("{task}", A, V).'))["rows"]}
-        assert attrs.get("type") == "task"
-        assert attrs.get("agent") == "agent-greeter"
-        assert attrs.get("prompt") == "say hello to the weave world"
-        assert attrs.get("state") == "pending"
-        assert attrs.get("requested_by") == "agent:e2e"
-        agent_attrs = {r[0]: r[1] for r in (await weave.query('?- latest("agent-greeter", A, V).'))["rows"]}
-        assert agent_attrs.get("type") == "agent"
-        assert agent_attrs.get("name") == "greeter"
-        assert agent_attrs.get("model") == "haiku"
+        assert attrs["state"] == "lost"
+        assert "runner:hc9" in attrs["error"]
+        # A second pass is a no-op: lost is terminal, the run is closed.
+        assert await reconcile.once() == []
+
+        # The activity view sees the run on its node, now in its lost state.
+        history = {tuple(r) for r in (await weave.query(activity.QUERY))["rows"]}
+        assert (task, "hc9", "build_index", "lost") in history
 
     asyncio.run(main())

@@ -194,6 +194,20 @@ enum Command {
         #[arg(long = "share", value_name = "TAG=HOSTDIR")]
         shares: Vec<String>,
     },
+    /// Run an installed macOS guest headlessly until it stops. SIGTERM and
+    /// SIGINT request a clean shutdown from the guest.
+    #[cfg(target_os = "macos")]
+    RunMacos {
+        /// Guest bundle directory.
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Stable locally administered unicast MAC address.
+        #[arg(long, value_parser = parse_mac_address)]
+        mac_address: String,
+        /// Share a host directory into the guest over virtio-fs, repeatable.
+        #[arg(long = "share", value_name = "TAG=HOSTDIR")]
+        shares: Vec<String>,
+    },
     /// Boot an installed macOS guest fully off-screen and drive it from stdin:
     /// synthetic keyboard/mouse input and on-demand framebuffer screenshots, with
     /// no host cursor or visible window. Reads newline commands
@@ -247,6 +261,35 @@ enum Command {
         /// flag (or no `--autologin`) the password is empty.
         #[arg(long)]
         password_stdin: bool,
+        /// Host path to the app or executable to pre-authorize in the guest TCC
+        /// databases (e.g. `/System/Applications/Utilities/Terminal.app`).
+        /// Required to grant any `--tcc-*` service; for an Apple system app the
+        /// host and guest builds match, so its designated requirement lines up.
+        #[arg(long)]
+        tcc_binary: Option<std::path::PathBuf>,
+        /// Grant `--tcc-binary` Full Disk Access.
+        #[arg(long)]
+        tcc_full_disk_access: bool,
+        /// Grant `--tcc-binary` Accessibility.
+        #[arg(long)]
+        tcc_accessibility: bool,
+        /// Grant `--tcc-binary` Screen Recording.
+        #[arg(long)]
+        tcc_screen_recording: bool,
+        /// Grant `--tcc-binary` Contacts.
+        #[arg(long)]
+        tcc_contacts: bool,
+        /// Grant `--tcc-binary` Automation (`AppleEvents`) control of the app
+        /// bundle at each path (repeatable), e.g.
+        /// `--tcc-automation /System/Applications/Messages.app`.
+        #[arg(long)]
+        tcc_automation: Vec<std::path::PathBuf>,
+        /// Enable Remote Login (ssh) so the guest is reachable the moment it boots.
+        #[arg(long)]
+        remote_login: bool,
+        /// Enable Screen Sharing (the built-in VNC server).
+        #[arg(long)]
+        screen_sharing: bool,
     },
 }
 
@@ -485,12 +528,45 @@ fn build_vsock_ports(specs: &[String]) -> Result<Vec<linuxkrun::VsockPort>, Stri
     Ok(ports)
 }
 
+fn parse_mac_address(value: &str) -> Result<String, String> {
+    let octets = value
+        .split(':')
+        .map(|octet| {
+            if octet.len() != 2 || !octet.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(format!(
+                    "{value:?} must contain six two-digit hexadecimal octets"
+                ));
+            }
+            u8::from_str_radix(octet, 16).map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if octets.len() != 6 {
+        return Err(format!(
+            "{value:?} must contain six two-digit hexadecimal octets"
+        ));
+    }
+    if octets[0] & 1 != 0 {
+        return Err(format!("{value:?} must be a unicast MAC address"));
+    }
+    if octets[0] & 2 == 0 {
+        return Err(format!(
+            "{value:?} must be a locally administered MAC address"
+        ));
+    }
+    Ok(octets
+        .iter()
+        .map(|octet| format!("{octet:02x}"))
+        .collect::<Vec<_>>()
+        .join(":"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::build_vsock_ports;
     use super::linuxkrun::VsockPort;
+    use super::parse_mac_address;
 
     #[test]
     fn vsock_port_spec_parses_port_and_path() {
@@ -518,6 +594,26 @@ mod tests {
         for bad in ["7100", "nope:/tmp/x.sock", "7100:", "-1:/tmp/x.sock", "0:/tmp/x.sock", "4294967295:/tmp/x.sock"] {
             let specs = [String::from(bad)];
             assert!(build_vsock_ports(&specs).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn mac_address_is_canonicalized() {
+        assert_eq!(
+            parse_mac_address("0E:C9:C7:6C:25:A8").expect("valid local unicast address"),
+            "0e:c9:c7:6c:25:a8"
+        );
+    }
+
+    #[test]
+    fn mac_address_rejects_invalid_or_unsafe_addresses() {
+        for bad in [
+            "0e:c9:c7:6c:25",
+            "0e:c9:c7:6c:25:xyz",
+            "01:23:45:67:89:ab",
+            "00:23:45:67:89:ab",
+        ] {
+            assert!(parse_mac_address(bad).is_err(), "{bad:?} must be rejected");
         }
     }
 }
@@ -679,6 +775,11 @@ mod imp {
                 seconds,
                 shares: parse_shares(&shares)?,
             }),
+            Command::RunMacos {
+                bundle,
+                mac_address,
+                shares,
+            } => crate::macguest::run_macos(&bundle, &mac_address, &parse_shares(&shares)?),
             Command::DriveMacos { bundle, shares } => {
                 crate::drive::drive_macos(crate::drive::DriveMacos {
                     bundle,
@@ -696,6 +797,14 @@ mod imp {
                 user,
                 autologin,
                 password_stdin,
+                tcc_binary,
+                tcc_full_disk_access,
+                tcc_accessibility,
+                tcc_screen_recording,
+                tcc_contacts,
+                tcc_automation,
+                remote_login,
+                screen_sharing,
             } => {
                 // Read the autologin password from stdin (never an argument, so it
                 // stays out of the process table). Only when both --autologin and
@@ -705,14 +814,70 @@ mod imp {
                 } else {
                     String::new()
                 };
+                let tcc = build_tcc_targets(
+                    tcc_binary,
+                    tcc_full_disk_access,
+                    tcc_accessibility,
+                    tcc_screen_recording,
+                    tcc_contacts,
+                    tcc_automation,
+                )?;
                 crate::provision::provision(crate::provision::Provision {
                     bundle,
                     user,
                     autologin,
                     password,
+                    tcc,
+                    remote_login,
+                    screen_sharing,
                 })
                 .map_err(|source| Error::Provision { source })
             }
+        }
+    }
+
+    /// Assemble the TCC pre-seed target from the `--tcc-*` flags: at most one
+    /// target binary carrying the selected services. A binary with no service,
+    /// or a service with no binary, is a loud error rather than a silent no-op.
+    // Each bool is one independent `--tcc-<service>` CLI flag; they mirror the
+    // parsed command fields 1:1, so a wrapper struct would only add ceremony.
+    #[allow(clippy::fn_params_excessive_bools)]
+    fn build_tcc_targets(
+        binary: Option<std::path::PathBuf>,
+        full_disk_access: bool,
+        accessibility: bool,
+        screen_recording: bool,
+        contacts: bool,
+        automation: Vec<std::path::PathBuf>,
+    ) -> Result<Vec<crate::provision::TccTarget>, Error> {
+        use crate::provision::{TccService, TccTarget};
+
+        let mut services = Vec::new();
+        if full_disk_access {
+            services.push(TccService::FullDiskAccess);
+        }
+        if accessibility {
+            services.push(TccService::Accessibility);
+        }
+        if screen_recording {
+            services.push(TccService::ScreenRecording);
+        }
+        if contacts {
+            services.push(TccService::Contacts);
+        }
+        for controlled in automation {
+            services.push(TccService::Automation { controlled });
+        }
+
+        match binary {
+            Some(binary) if !services.is_empty() => Ok(vec![TccTarget { binary, services }]),
+            Some(_) => Err(Error::Bundle {
+                message: "--tcc-binary given but no --tcc-* service selected".to_owned(),
+            }),
+            None if services.is_empty() => Ok(Vec::new()),
+            None => Err(Error::Bundle {
+                message: "a --tcc-* service was selected but no --tcc-binary was given".to_owned(),
+            }),
         }
     }
 

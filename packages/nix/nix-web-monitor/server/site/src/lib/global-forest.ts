@@ -18,6 +18,53 @@ export function goalPath(build: GlobalBuild): string {
   return build.drvPath ?? build.storePath ?? '(unknown)';
 }
 
+/// Stable per-goal identity for UI state (open log drawers): the status dir
+/// keys entries by `<path>-<pid>`, start time distinguishes a later worker
+/// after the OS recycles the same pid, and the server-sampled kernel start
+/// time (procfs ticks on Linux, the sysctl start timestamp on macOS)
+/// distinguishes a recycle *within* the same start second (startTime is
+/// whole seconds), so an open drawer can never silently retarget to a
+/// successor worker.
+///
+/// The `0` placeholders exist only for keyed-row identity: a goal whose
+/// generation the server could not sample (unreadable procfs, or the worker
+/// gone before the sample) offers no log drawer at all -- the row components
+/// gate the toggle on a non-null `startTicks` -- because a placeholder
+/// generation is exactly what a same-second pid recycle could collide with.
+/// If an open drawer's goal *loses* its generation, its key changes and the
+/// drawer closes rather than tail an unverifiable worker.
+export function goalKey(build: GlobalBuild): string {
+  return `${goalPath(build)}:${String(build.pid ?? 0)}:${String(build.startTime ?? 0)}:${String(build.startTicks ?? 0)}`;
+}
+
+/// Render key for a keyed goal list. A goal with no worker pid keeps no
+/// identity of its own, so same-path pidless goals would collapse to one
+/// `goalKey` and break keyed-each row identity; disambiguate those by their
+/// position in the status list. Goals with a pid keep the plain `goalKey`, so
+/// log-drawer state stays attached across polls.
+export function goalRenderKey(build: GlobalBuild, index: number): string {
+  const key = goalKey(build);
+  return build.pid === null ? `${key}:${String(index)}` : key;
+}
+
+/// Tooltip for one goal row: the full store path plus the identity details
+/// (outputs, worker pid, requesting user/uid, cause) that would crowd the row
+/// itself. Shared by the why-chain tree rows and the flat sorted rows.
+export function goalTitle(build: GlobalBuild): string {
+  const lines = [goalPath(build)];
+  if (build.outputs.length > 0) lines.push(`outputs: ${build.outputs.join(', ')}`);
+  if (build.pid !== null) lines.push(`worker pid ${String(build.pid)}`);
+  if (build.user !== null) {
+    lines.push(
+      build.uid === null
+        ? `requested by ${build.user}`
+        : `requested by ${build.user} (uid ${String(build.uid)})`
+    );
+  }
+  if (build.why.cause !== null) lines.push(`cause: ${build.why.cause}`);
+  return lines.join('\n');
+}
+
 export type GlobalForest = Readonly<{
   /// Active goals per node, oldest first. A path with no entry here is a
   /// skeleton ancestor: a chain hop nothing is actively building.

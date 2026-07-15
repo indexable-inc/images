@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 chrono.workspace = true
+nix = { workspace = true, features = ["signal"] }
 nu-cmd-extra.workspace = true
 nu-cmd-lang.workspace = true
 nu-command.workspace = true

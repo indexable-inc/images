@@ -1,0 +1,24 @@
+name: Run .#check with a runner-local log
+description: >-
+  Run `nix run .#check` with its output redirected to a runner-local file
+  instead of the Actions log: the nix-fast-build stream for a warm run is
+  megabytes of eval warnings and per-drv noise that drowns the signal. The
+  step prints only the runner identity and log path, mirrors both into the
+  step summary, and cats the full log into the Actions log only when the
+  check fails.
+inputs:
+  subcommand:
+    description: >-
+      Optional `check` app subcommand passed after `--`, e.g. `closure` for
+      the cache-push closure gate. Empty runs the full default gate.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Run check with logged output
+      shell: bash
+      env:
+        CHECK_SUBCOMMAND: ${{ inputs.subcommand }}
+        RUNNER_IDENTITY: ${{ runner.name }}
+      run: bash "$GITHUB_ACTION_PATH/run.sh"

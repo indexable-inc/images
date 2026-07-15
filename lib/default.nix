@@ -18,6 +18,8 @@
   snix-src,
   clippy-src,
   codex-src,
+  zed-src,
+  zed-upstream,
   nix-src,
   ghostty,
   mesa-src,
@@ -114,13 +116,6 @@
       inherit (entry) id;
       path = "packages/${entry.relativePath}";
       inherit (entry.mirror) repo description topics;
-      # The About-sidebar website: the package's own `mirror.homepage` when
-      # set, else its tree in the monorepo (the source of truth a mirror
-      # visitor should land on).
-      homepage =
-        if entry.mirror.homepage != null
-        then entry.mirror.homepage
-        else "https://github.com/${repoMetadataConfig.monorepo.repo}/tree/main/packages/${entry.relativePath}";
       # The monorepo flake output attr (`nix run .#<attr>`) when the package
       # is flake-exposed, so the generated mirror README can print a real run
       # command instead of guessing.
@@ -130,22 +125,6 @@
         else null;
     })
     packageRegistry.mirrorEntries;
-  # Declarative GitHub About-sidebar metadata (description / homepage /
-  # topics) for every repo this monorepo owns: the monorepo itself
-  # (lib/repo-metadata.nix) plus one entry per package mirror. `nix eval
-  # --json '.#lib.repoMetadata'` is what the repo-metadata workflow
-  # (.github/workflows/repo-metadata.yml) renders: its sync job PATCHes the
-  # fields to GitHub on every push to main, and its check job fails when a
-  # covered repo is missing a description or topics (packages/registry.nix
-  # throws during this eval), so no owned repo regresses to GitHub's "No
-  # description, website, or topics provided."
-  repoMetadataConfig = import ./repo-metadata.nix;
-  repoMetadata =
-    [(repoMetadataConfig.monorepo // {path = ".";})]
-    ++ map (entry: {
-      inherit (entry) repo description homepage topics path;
-    })
-    mirrorPackages;
   # Build a fork package's `passthru.updateScript` (flake update base ->
   # rebase-patches), so it joins the registry-discovered `.#update` DAG. See
   # lib/fork-updater.nix.
@@ -161,6 +140,18 @@
   # Exposed so a downstream consumer passes it straight through to `mkForkChecks`
   # rather than reaching into index's package layout by path.
   forkDagCheckSrc = paths.packagesRoot + "/rebase-patches";
+  # Public patch data for consumers whose system Nix is not `nix-ix`. Keep the
+  # patch bytes owned by index so fleet configurations consume one source of
+  # truth instead of copying the fix into each repository.
+  nixPatches = {
+    autoGcInterruptibleLockWait =
+      paths.packagesRoot + "/nix/nix/patches/0018-fix-libstore-interrupt-blocked-automatic-GC.patch";
+    autoGcRecheckAfterLock =
+      paths.packagesRoot + "/nix/nix/patches/0017-fix-libstore-recheck-free-space-after-GC-lock.patch";
+    opaqueTemporaryRootFilenames =
+      paths.packagesRoot
+      + "/nix/nix/patches/0016-fix-libstore-accept-opaque-temporary-root-filenames.patch";
+  };
   secretRefs = import ./util/secret-refs.nix {inherit lib;};
   selfVersionFor = self: import ./util/self-version.nix {inherit lib self;};
   checks = import ./checks.nix {inherit lib;};
@@ -259,6 +250,7 @@
   # typed wrappers that generate small `.md` files with parseable metadata.
   markdown = import ./util/markdown.nix {inherit lib;};
   skills = import ./skills.nix {inherit lib paths;};
+  users = import ./users.nix {inherit lib paths;};
   agents = import ./agents.nix {inherit lib markdown;};
   hermes = import ./hermes {};
   claudePlugin = import ./claude-plugin.nix {inherit lib skills;};
@@ -310,10 +302,15 @@
     buildRustPackage
     ;
   cargoUnit = cargoUnitFor pkgs;
+  cargoUnitExternal = import ./rust/external.nix {repoRoot = paths.root;};
   # Default patched-source builder, bound to the top-level x86_64-linux pkgs for
   # image/module eval; `ixForPackages` / the overlay context rebind it to the
   # consuming pkgs so a patched source builds for its own system.
   patchedSrc = patchedSrcFor pkgs;
+  # Patch the vendored rnix inside a rust tool so it lexes underscore digit
+  # separators in nix numeric literals; the alejandra/statix/deadnix package
+  # dirs under packages/nix/ consume this. See its doc comment.
+  rnixDigitSeparators = import ./util/rnix-digit-separators;
   goUnitFor = pkgs:
     import ./build/go-unit.nix {
       inherit lib pkgs;
@@ -322,6 +319,13 @@
   goUnit = goUnitFor pkgs;
 
   systemdHardening = import ./services/systemd-hardening.nix;
+
+  /**
+  The pinned fabric/Ray execution environment as data: env tag, node
+  resources, cluster env vars, wrapped `ray` CLI. One owner shared by the
+  ray modules and the mcp wrappers. See [`lib/fabric.nix`](lib/fabric.nix).
+  */
+  fabric = import ./fabric.nix {inherit lib;};
 
   /**
   Helpers that throw with a fixable error message instead of a deep-eval
@@ -526,6 +530,7 @@
       rustWorkspaceFor
       clippy-src
       ghostty
+      zed-src
       ;
   };
 
@@ -616,7 +621,13 @@
     };
   in {
     package = bin;
-    wrap = label: args: ["${bin}/bin/with-lock" label "--"] ++ args;
+    wrap = label: args:
+      [
+        "${bin}/bin/with-lock"
+        label
+        "--"
+      ]
+      ++ args;
   };
 
   /**
@@ -662,6 +673,7 @@
       deepMerge
       efx
       evalTimeSubstitutable
+      fabric
       forkClosureGates
       forkPackages
       forkDagCheckSrc
@@ -685,6 +697,7 @@
       mkMinecraftSyncManaged
       mutableJson
       netCidr
+      nixPatches
       paths
       patchedSrc
       patchedSrcFor
@@ -692,7 +705,7 @@
       provenance
       publicArtifactsFor
       relativePath
-      repoMetadata
+      rnixDigitSeparators
       ruffAnnArgs
       rustWorkspace
       rustWorkspaceFor
@@ -704,6 +717,7 @@
       toml
       unibind
       unibindFor
+      users
       withLockFor
       writeBashApplication
       writeNushellApplication
@@ -715,6 +729,7 @@
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
+    zedSrc = zed-upstream;
     clippySrc = clippy-src;
     nixSrc = nix-src;
     drgnSrc = drgn-src;
@@ -795,6 +810,7 @@
         appleSdkToolchain
         bunLockFor
         cargoUnitFor
+        cargoUnitExternal
         discoverModules
         discoverTree
         errors

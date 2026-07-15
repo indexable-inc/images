@@ -420,21 +420,33 @@ class Agent:
     # -- headless delegation --------------------------------------------------
 
     @classmethod
+    def _oneshot_argv(cls, prompt: str, *, model: str | None = None) -> list[str]:
+        """argv of this agent's headless one-shot run (`claude -p`-style).
+
+        Subclasses whose CLI has one implement it; the shared `oneshot` runs
+        it. A CLI whose one-shot flow needs more than an argv (e.g. Codex's
+        `--output-last-message` file) overrides `oneshot` itself instead.
+        """
+        raise NotImplementedError(f"{cls.__name__} has no headless one-shot mode")
+
+    @classmethod
     async def oneshot(
         cls,
         prompt: str,
         *,
         model: str | None = None,
         cwd: str | None = None,
-        timeout: float = 300.0,
+        timeout: float | None = 300.0,
     ) -> str:
         """Run one prompt in this agent's headless mode and return the reply.
 
         No PTY, no onboarding gates, no dashboard tile: the cheap path for
-        fire-and-forget delegation (see the module-level `delegate`).
-        Subclasses whose CLI has a headless one-shot mode implement it.
+        fire-and-forget delegation (see the module-level `delegate`, which
+        also documents `timeout`).
         """
-        raise NotImplementedError(f"{cls.__name__} has no headless one-shot mode")
+        return await _run_oneshot(
+            cls._oneshot_argv(prompt, model=model), cwd=cwd, timeout=timeout
+        )
 
     # -- internals ----------------------------------------------------------
 
@@ -517,20 +529,6 @@ class Claude(Agent):
         """argv of a headless one-shot run (`claude -p`)."""
         return [cls.binary, "-p", *(() if model is None else ("--model", model)), prompt]
 
-    @classmethod
-    async def oneshot(
-        cls,
-        prompt: str,
-        *,
-        model: str | None = None,
-        cwd: str | None = None,
-        timeout: float = 300.0,
-    ) -> str:
-        """Run one prompt through headless `claude -p` and return the reply."""
-        return await _run_oneshot(
-            cls._oneshot_argv(prompt, model=model), cwd=cwd, timeout=timeout
-        )
-
 
 class Codex(Agent):
     """OpenAI Codex (`codex`) in a PTY.
@@ -586,7 +584,7 @@ class Codex(Agent):
         return "\n".join(out).strip()
 
     @classmethod
-    def _oneshot_argv(
+    def _exec_argv(
         cls,
         prompt: str,
         last_message_file: str,
@@ -596,7 +594,9 @@ class Codex(Agent):
         """argv of a headless one-shot run (`codex exec`).
 
         `codex exec` interleaves activity logs with the answer on stdout, so
-        the reply is read from `--output-last-message` instead.
+        the reply is read from `--output-last-message` instead; needing that
+        file path makes this not the base `_oneshot_argv` seam, and `oneshot`
+        is overridden wholesale.
         """
         return [
             cls.binary,
@@ -620,13 +620,13 @@ class Codex(Agent):
         *,
         model: str | None = None,
         cwd: str | None = None,
-        timeout: float = 300.0,
+        timeout: float | None = 300.0,
     ) -> str:
         """Run one prompt through headless `codex exec` and return the reply."""
         with tempfile.TemporaryDirectory() as td:
             last = Path(td) / "last-message.txt"
             out = await _run_oneshot(
-                cls._oneshot_argv(prompt, os.fspath(last), model=model),
+                cls._exec_argv(prompt, os.fspath(last), model=model),
                 cwd=cwd,
                 timeout=timeout,
             )
@@ -696,20 +696,6 @@ class Cursor(Agent):
             prompt,
         ]
 
-    @classmethod
-    async def oneshot(
-        cls,
-        prompt: str,
-        *,
-        model: str | None = None,
-        cwd: str | None = None,
-        timeout: float = 300.0,
-    ) -> str:
-        """Run one prompt through headless `cursor-agent -p`, return the reply."""
-        return await _run_oneshot(
-            cls._oneshot_argv(prompt, model=model), cwd=cwd, timeout=timeout
-        )
-
 
 # --------------------------------------------------------------------------- #
 # Delegation (headless one-shots)
@@ -730,15 +716,22 @@ async def delegate(
     agent: str = "claude",
     model: str | None = None,
     cwd: str | None = None,
-    timeout: float = 300.0,
+    timeout: float | None = 300.0,
 ) -> str:
-    """Run one prompt on a coding agent and return its reply, in one call.
+    """Run one short prompt on a coding agent and return its reply, in one call.
 
     Headless by default: `claude -p`, `codex exec`, or `cursor-agent -p`
     (`agent="claude" | "codex" | "cursor"`). No PTY, no onboarding gates, no
     dashboard tile: the cheap path for fire-and-forget delegation.
 
         answer = await delegate("What is 2+2? Reply with just the number.")
+
+    Scope: oneshot-question-sized prompts (a lookup, a small mechanical edit).
+    Past `timeout` seconds (default 300) the agent process is killed and
+    `WaitTimeout` raised; pass a larger value or `timeout=None` (no cap) when
+    the task genuinely needs longer. A real delegated task (issue + PR + CI)
+    does not belong here at any timeout: it gets no live view and dies with the
+    kernel. Use `fabric.claude.session` or `claude --bg` for those (#3184).
 
     For an observable, interruptible session (a task a human may watch or
     stop), launch the TUI harness instead: `agent = await Claude.launch();
@@ -753,12 +746,15 @@ async def delegate(
     return await cls.oneshot(prompt, model=model, cwd=cwd, timeout=timeout)
 
 
-async def _run_oneshot(argv: Sequence[str], *, cwd: str | None, timeout: float) -> str:
+async def _run_oneshot(
+    argv: Sequence[str], *, cwd: str | None, timeout: float | None
+) -> str:
     """Run a headless one-shot agent command; its stripped stdout is the reply.
 
     stdin is closed (`claude -p` would otherwise concatenate anything it reads
-    there into the prompt). Past `timeout` the process is killed and
-    `WaitTimeout` raised; a non-zero exit raises with the command's stderr.
+    there into the prompt). Past `timeout` (`None` = no cap) the process is
+    killed and `WaitTimeout` raised; a non-zero exit raises with the command's
+    stderr.
     """
     proc = await asyncio.create_subprocess_exec(
         *argv,

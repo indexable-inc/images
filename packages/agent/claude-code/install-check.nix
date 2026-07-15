@@ -1,9 +1,9 @@
 # Argv regression net for the launcher spec, run against a stub target so it is
 # offline and instant. Guards the properties the wrapper exists for: injected
 # flags ride BEFORE the user argv (subcommands keep parsing), every injected
-# option-argument is one `=` token (nothing can swallow a positional), and
-# `--settings` defers to a caller-provided one (the CLI is first-wins between
-# two `--settings` flags). Drives the real generated spec with its `@helper@`
+# option-argument is one `=` token (nothing can swallow a positional), and no
+# settings ride argv (#3180: the render materializes into the writable user
+# settings layer). Drives the real generated spec with its `@helper@`
 # target swapped for the stub, through the actual launcher binary (the built
 # `$out/bin/${binName}` forces IX_LAUNCH_SPEC via makeBinaryWrapper `--set`, so
 # the launcher is exercised directly here).
@@ -36,9 +36,16 @@
     sed "s|@helper@|$stub|" ${launchSpec} > "$PWD/test-spec.json"
 
     spec_env() {
-      ${lib.getExe jq} -r --arg key "$1" '.env[] | select(.key == $key) | .value' \
+      ${lib.getExe jq} -r --arg key "$1" '.env[$key]' \
         "$PWD/test-spec.json"
     }
+
+    if ! ${lib.getExe jq} -e \
+      '.env.DISABLE_UPDATES == "1" and (.env | has("DISABLE_AUTOUPDATER") | not)' \
+      "$PWD/test-spec.json" >/dev/null; then
+      printf 'claude launcher env check failed: strict update disable is missing or legacy background-only disable remains\n' >&2
+      exit 1
+    fi
 
     skills_dir="$(spec_env IX_CLAUDE_SKILLS_DIR)"
     if [ ! -d "$skills_dir" ]; then
@@ -61,7 +68,7 @@
     check_env_default() {
       local key="$1" got
       got="$(${lib.getExe jq} -r --arg key "$key" \
-        '.env_defaults[] | select(.key == $key) | .value' \
+        '.env_defaults[$key]' \
         "$PWD/test-spec.json")"
       if [ "$got" != 1 ]; then
         printf 'claude launcher env check failed: %s env_default is %s, want 1\n' \
@@ -86,7 +93,7 @@
     done
 
     if ${lib.getExe jq} -e --argjson names ${lib.escapeShellArg (builtins.toJSON (builtins.attrNames wrapperEnvDefaults))} \
-      '.env[] | select(.key as $k | $names | index($k))' \
+      '.env | keys[] | select(. as $k | $names | index($k))' \
       "$PWD/test-spec.json"; then
       printf 'claude launcher env check failed: disabled-feature vars must be env_defaults, not env\n' >&2
       exit 1
@@ -180,13 +187,15 @@
       fi
     }
 
-    check "flags prepend; settings injected when caller passes none" \
+    # No settings ride argv (#3180: defaults materialize into the writable
+    # user settings layer instead), so the launch is exactly the baked flags
+    # followed by the caller's argv.
+    check "flags prepend; no settings injected" \
       ${
     lib.escapeShellArg (
       lib.concatStringsSep "\n" (
         wrapperFlags
         ++ [
-          "--settings=${settingsDefaultsFile}"
           "mcp"
           "list"
         ]
@@ -195,7 +204,7 @@
   } \
       mcp list
 
-    check "caller --settings wins; package defaults stay out" \
+    check "caller --settings passes through untouched" \
       ${
     lib.escapeShellArg (
       lib.concatStringsSep "\n" (
@@ -210,37 +219,13 @@
   } \
       --settings=/dev/null -p hi
 
-    # `--which-settings` is answered by the launcher itself (exit 0, no exec):
-    # the output is exactly the injected settings store path, with none of the
-    # baked flags the stub would echo on a real launch.
-    check "--which-settings prints the injected settings path" \
-      ${lib.escapeShellArg "${settingsDefaultsFile}"} \
-      --which-settings
-
-    # After `--` the same token is a positional for the CLI, so the launch
-    # proceeds normally (flags, injected settings, then the user argv).
-    check "--which-settings after -- stays a positional" \
-      ${
-    lib.escapeShellArg (
-      lib.concatStringsSep "\n" (
-        wrapperFlags
-        ++ [
-          "--settings=${settingsDefaultsFile}"
-          "--"
-          "--which-settings"
-        ]
-      )
-    )
-  } \
-      -- --which-settings
-
     # addDirs/pluginDirs render as single, prepended `=` tokens. `--add-dir` is
     # variadic in the CLI, so a space-form token would swallow the next positional
     # (proven against the real binary); this guards that the launcher keeps each as
     # one argv entry, ahead of the subcommand. Synthesize a spec with the two flags
     # appended to `flags` (mirrors what `map (d: "--add-dir=${"\${d}"}") addDirs`
     # produces in the wrapper) and assert they land between the baked flags and the
-    # injected `--settings`.
+    # caller argv.
     ${lib.getExe jq} '.flags += ["--add-dir=/nix/store/sample-skills", "--plugin-dir=/nix/store/sample-plugin"]' \
       "$PWD/test-spec.json" > "$PWD/dirs-spec.json"
     dirs_got="$(IX_LAUNCH_SPEC="$PWD/dirs-spec.json" "$launcher" mcp list)"
@@ -251,7 +236,6 @@
         ++ [
           "--add-dir=/nix/store/sample-skills"
           "--plugin-dir=/nix/store/sample-plugin"
-          "--settings=${settingsDefaultsFile}"
           "mcp"
           "list"
         ]

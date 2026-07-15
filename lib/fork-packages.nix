@@ -126,6 +126,30 @@
       };
     }
     {
+      name = "zed";
+      input = "zed-upstream";
+      url = "https://github.com/zed-industries/zed.git";
+      patchDir = "packages/zed/patches";
+      autoUpdate = false;
+      forkRepo = "indexable-inc/zed";
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "false";
+        citation = "https://github.com/zed-industries/zed/blob/main/CONTRIBUTING.md#ai-policy";
+        notes = "Zed permits human-directed LLM assistance but rejects autonomous-agent contributions; keep this patch in the maintained fork unless a human takes it upstream.";
+      };
+      patches = {
+        "0001-editor-optionally-exclude-the-invocation-reference.patch" = {
+          upstream = "never";
+          reason = "Useful general editor behavior, but Zed's contribution policy rejects autonomous-agent submissions.";
+        };
+        "0002-nix-expose-stable-application-package.patch" = {
+          upstream = "never";
+          reason = "Required to install the stable app from Zed's own flake, but Zed's contribution policy rejects autonomous-agent submissions.";
+        };
+      };
+    }
+    {
       name = "btop";
       input = "btop-src";
       url = "https://github.com/aristocratos/btop.git";
@@ -441,6 +465,52 @@
         "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch" = {
           upstream = "hold";
           reason = "Feature-sized fetcher change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/discussion first (touches lock-file-adjacent fetch semantics).";
+        };
+        # 0014: underscore digit separators in numeric literals (`1_000`,
+        # `1_000.000_1`, `2.5e1_0`), Rust-shaped (between digits only; a
+        # leading underscore is still an identifier), stripped before the
+        # value is parsed. Repo `.nix` files stay separator-free until the
+        # whole toolchain (stock nix, alejandra/statix/deadnix, tree-sitter)
+        # accepts the syntax; astlog's digit-grouping lints track that
+        # backlog (astlog-rules/nix.astlog).
+        "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch" = {
+          upstream = "hold";
+          reason = "Language syntax change; must start as an upstream issue/RFC, and humans submit nix patches upstream per NixOS/nix#15984.";
+        };
+        "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch" = {
+          upstream = "hold";
+          reason = "Fixes repeated installables multiplying `nix build --json` results (indexable-inc/index#2633). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0016: a newer Nix uses opaque per-instance temporary-root filenames.
+        # The 2.34 collector parsed every entry as a decimal PID, so one newer
+        # file disabled both scheduled and reactive GC until the store filled
+        # (index#3031). Upstream master already treats the name as opaque in
+        # NixOS/nix#15992; this is the reader-side backport for mixed versions.
+        "0016-fix-libstore-accept-opaque-temporary-root-filenames.patch" = {
+          upstream = "hold";
+          reason = "Backports the mixed-version temporary-root reader from NixOS/nix#15992 (indexable-inc/index#3031). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0017: each daemon process decides whether to auto-GC before waiting
+        # for the store-global gc.lock. Recheck under that lock so queued
+        # callers do not repeat a collection after the first restores space.
+        "0017-fix-libstore-recheck-free-space-after-GC-lock.patch" = {
+          upstream = "hold";
+          reason = "Prevents stale queued auto-GC decisions from serializing CI jobs behind repeated collections (indexable-inc/index#3085, indexable-inc/ix#7145). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0018: a daemon worker loses its signal thread at fork while retaining
+        # the blocked mask, then synchronous auto-GC can wait forever on a
+        # detached collector queued at gc.lock after the client disappears.
+        "0018-fix-libstore-interrupt-blocked-automatic-GC.patch" = {
+          upstream = "hold";
+          reason = "Restarts forked daemon signal handling and makes blocked auto-GC observe cancellation (indexable-inc/index#3300, indexable-inc/ix#7145). Signal handling ports Lix dccde9436; humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        "0019-Get-rid-of-duplicated-Build-failed-due-to-failed-dep.patch" = {
+          upstream = "hold";
+          reason = "Backports NixOS/nix#16040 from 2.34.8; drop when the daemon base reaches 2.34.8 or newer.";
+        };
+        "0020-libstore-preserve-content-addressed-leaf-failures.patch" = {
+          upstream = "hold";
+          reason = "Preserves actionable floating-CA leaf failures through resolution (indexable-inc/index#3279, indexable-inc/ix#7357). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
       };
     }

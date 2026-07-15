@@ -611,17 +611,23 @@
 (lint no-recursive-update error
   "lib.recursiveUpdate silently replaces at leaf collisions; use ix.deepMerge.strict (throws on collision) or ix.deepMerge.rhs (rhs wins) from `lib/util/deep-merge.nix`")
 
-;; no-root-string-interp: `"${root}/..."` string-interpolates the workspace
-;; tree into a string, leaking full-tree context. Use `root + "/..."` (path
-;; concat) or `builtins.path { name = "..."; path = root + "/..."; }`.
+;; no-root-string-interp: coercing a repository root inside a string records
+;; the whole tree as a derivation input. Select the file or subtree as a path
+;; before interpolation so unrelated repository edits preserve the dependency.
 (rule (no-root-string-interp n)
   (match nix "
     (string_expression
-      . (interpolation
-          expression: (variable_expression) @v)) @n")
-  (text-match v "^(root|workspaceRoot)$"))
+      (interpolation
+        expression: (_) @v)) @n")
+  (text-match v "^(([^[:space:]]+\\.)*paths\\.root|root|workspaceRoot|repoRoot)$"))
+(rule (no-root-string-interp n)
+  (match nix "
+    (indented_string_expression
+      (interpolation
+        expression: (_) @v)) @n")
+  (text-match v "^(([^[:space:]]+\\.)*paths\\.root|root|workspaceRoot|repoRoot)$"))
 (lint no-root-string-interp error
-  "`\"${{root}}/...\"` string-interpolates the workspace tree, leaking full-tree context; use `root + \"/...\"` (path concat) or `builtins.path {{ name; path; }}`")
+  "string interpolation coerces a repository root into a whole-tree store dependency; select the file or subtree as a path before interpolation")
 
 ;; no-stringly-flags: Build flag attrs are list-of-string, not one string
 ;; with spaces. Whitespace inside flag values breaks paths-with-spaces and
@@ -1575,3 +1581,41 @@
   (text-match v "\\./configure\\b"))
 (lint prefer-phase-flags error
   "a whole-phase override carrying custom targets/flags should be `makeFlags` / `buildFlags` / `configureFlags` / `installTargets`")
+
+;; Digit grouping in numeric literals (Rust convention): a literal with five
+;; or more consecutive digits is read by counting digits; group them in
+;; threes with underscore separators (`10_000`, `0.000_001`), grouping the
+;; integer part and the exponent from the right and the fraction from the
+;; left of the decimal point. The toolchain speaks this dialect end to end:
+;; the patched nix lexer
+;; (packages/nix/nix/patches/0014-libexpr-accept-underscore-digit-separators)
+;; strips the separators before parsing the value, and the in-repo
+;; tree-sitter-nix fork (packages/code/tree-sitter-nix) lexes an underscore
+;; literal as one integer/float node, so these rules see whole literals.
+;; Two lints share the misgrouped-digits builtin (which binds the canonical
+;; regrouping), each with a rewrite so `astlog fix` repairs the literal:
+;; - no-misgrouped-digit-separators (error): a literal that already carries
+;;   separators must use exactly the canonical grouping (`1_0000` ->
+;;   `10_000`).
+;; - prefer-digit-grouping (error): a bare literal with five or more
+;;   consecutive digits must carry separators (`10000` -> `10_000`). The
+;;   whole CI toolchain speaks the dialect (patched nix client + evaluator,
+;;   rnix-patched alejandra/statix/deadnix, the tree-sitter fork), so the
+;;   repo's literals are grouped and the gate holds the line.
+(rule (misgrouped-number n fixed)
+  (match nix "[(integer_expression) (float_expression)] @n")
+  (misgrouped-digits n fixed))
+(rule (no-misgrouped-digit-separators n fixed)
+  (misgrouped-number n fixed)
+  (text-match n "_"))
+(lint no-misgrouped-digit-separators error
+  "underscore separators must group digits in threes (integer part and exponent from the right, fraction from the left); write `{fixed}`")
+(rewrite regroup-digit-separators (no-misgrouped-digit-separators n fixed)
+  (replace n "{fixed}"))
+(rule (prefer-digit-grouping n fixed)
+  (misgrouped-number n fixed)
+  (text-match n "^[^_]*$"))
+(lint prefer-digit-grouping error
+  "five or more consecutive digits are read by counting; group them in threes with underscore separators: `{fixed}`")
+(rewrite group-digit-literal (prefer-digit-grouping n fixed)
+  (replace n "{fixed}"))

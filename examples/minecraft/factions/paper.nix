@@ -44,7 +44,7 @@
     };
 
     watchdog = {
-      early-warning-delay = 10000;
+      early-warning-delay = 10_000;
       early-warning-every = 5000;
     };
   };

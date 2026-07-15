@@ -528,6 +528,29 @@
       cp -r ${weavePythonSource}/weave/. "$site/"
     ''
   );
+  # Call-first delegation on the weave journal (index#3191, #3192): `await
+  # fabric.run(fn, *args)` executes fn on this node -- or, with node='<host>',
+  # on that fleet node's runner actor over Ray, env-handshake-checked at
+  # submit -- with the ask/started/terminal facts recorded via the bundled
+  # weave client, and `fabric.claude` opens self-recording, interruptible
+  # Claude Agent SDK sessions. Pure Python over the bundled weave +
+  # claude-agent-sdk + ray (+ fleet for cluster discovery).
+  fabricPythonSource = builtins.path {
+    name = "ix-mcp-fabric-python-source";
+    path = ./src/fabric;
+  };
+  fabricModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-fabric-python-module"
+    {
+      strictDeps = true;
+      meta.description = "Call-first fabric delegation bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/fabric"
+      mkdir -p "$site"
+      cp -r ${fabricPythonSource}/fabric/. "$site/"
+    ''
+  );
   # The kernel's process runner. The public `sh()`/`zsh()` are RETIRED (agents
   # shell out through `await nu(...)`); they stay importable as disabled shims
   # that raise a migration hint. The private `sh._exec` runs on the kernel's loop
@@ -1265,6 +1288,12 @@
       # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
       # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
       ps.httpx
+      # githubkit: typed async GitHub API client generated from GitHub's OpenAPI
+      # spec, so a session does GitHub reads/writes as direct API calls instead
+      # of `gh` subprocesses (index#3258: a REST call answers in under a second
+      # where each `gh` fork costs several; `gh` stays for auth bootstrap via
+      # `gh auth token`).
+      ps.githubkit
       # pydantic (v2): the boundary parser for untrusted/JSON data. The bundled
       # `linear` and `google_auth` modules parse their GraphQL/CLI JSON responses
       # into typed models with it instead of threading untyped dicts. (The MCP SDK
@@ -1352,6 +1381,10 @@
       # read/searched without shelling out or falling back to a host tool. Pure
       # Python, small (`from pypdf import PdfReader`).
       ps.pypdf
+      # claude-agent-sdk: the Claude Agent SDK the `fabric.claude` session
+      # helper drives (streaming input + native interrupt over the Claude Code
+      # CLI subprocess), replacing PTY scraping for programmatic claudes.
+      ps.claude-agent-sdk
       tuiModule
       searchModule
       nuPyModule
@@ -1369,6 +1402,7 @@
       fleetModule
       meshModule
       weaveModule
+      fabricModule
       shModule
       svelteModule
       worktreeModule
@@ -1390,6 +1424,11 @@
       pymobiledevice3_927
       iphoneModule
     ]
+    # Ray's `client` extra (grpcio): `fabric.remote` attaches to the fleet head
+    # over `ray://` (Ray Client), which plain ps.ray refuses without it. Derived
+    # from ray's own extra rather than named: pysparkConnect happens to carry
+    # grpcio today, but reaching the cluster must not hinge on spark.
+    ++ ps.ray.optional-dependencies.client
     ++ darwinExtraPackages ps;
   mcpPython = mcpPythonInterp.withPackages mcpPythonPackages;
 
@@ -1426,6 +1465,17 @@
   # bundle (a corporate CA) must still win.
   caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
+  # The fabric env handshake + Ray darwin-cluster gates (index#3192), baked
+  # onto both wrappers from the one owner of the format (lib/fabric.nix):
+  # IX_FABRIC_ENV names this driver's `fabric_env:<tag>` resource, which
+  # fabric.remote compares against the target node's advertised resource at
+  # submit, and the RAY_ENABLE_* darwin gates live ONLY on these wrappers and
+  # the node daemons, never in user shells.
+  fabricWrapperFlags = lib.concatStringsSep " " (
+    lib.mapAttrsToList (name: value: "--set ${name} ${lib.escapeShellArg value}")
+    (ix.fabric.kernelEnv mcpPythonInterp)
+  );
+
   package =
     pkgs.runCommand "ix-mcp"
     {
@@ -1442,6 +1492,7 @@
         --add-flags "-m ix_notebook_mcp" \
         --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
         --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
+        ${fabricWrapperFlags} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -1465,6 +1516,7 @@
         --add-flags "-m ix_notebook_mcp notebook" \
         --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
         --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
+        ${fabricWrapperFlags} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -1534,6 +1586,7 @@
     "view"
     "worktree"
     "mesh"
+    "fabric"
     "claude_history"
   ];
   # The `ix_notebook_mcp` server package is migrated file-by-file (the package
@@ -2033,6 +2086,15 @@
   # The server package imports and registers its full tool surface. Exercises the
   # FastMCP registration (schemas from type hints) without starting a kernel or
   # the Jupyter Server, so it is sandbox-safe.
+  # Every first-party `src/` package (each one becomes a toPythonModule above)
+  # must surface in the `api()` catalog (a `registry.MODULES` row) or carry an
+  # explicit reason in `registry.UNCATALOGED`: `svelte` was bundled but missing
+  # from the catalog for months (index#3091). Derived from the directory
+  # listing so the next module cannot repeat that; the filter drops the lone
+  # `private_session.py` file (a shared guard, not a module dir).
+  srcModules = builtins.attrNames (
+    lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./src)
+  );
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
@@ -2047,6 +2109,12 @@
     + "assert '(query:' not in instr and '(path:' not in instr, 'a signature leaked into the instructions'; "
     + "missing = [m.name for m in registry.MODULES if ('`' + m.name + '`') not in instr]; "
     + "assert not missing, ('registry modules missing from instructions: %r' % (missing,)); "
+    + "import json; bundled = json.loads(${builtins.toJSON (builtins.toJSON srcModules)}); "
+    + "cataloged = set(registry.module_names()) | set(registry.UNCATALOGED); "
+    + "dropped = [n for n in bundled if n not in cataloged]; "
+    + "assert not dropped, ('bundled src/ modules missing from the api() catalog -- add a registry.Module row or a registry.UNCATALOGED reason: %r' % (dropped,)); "
+    + "stale = sorted(set(registry.UNCATALOGED) - set(bundled)); "
+    + "assert not stale, ('registry.UNCATALOGED names modules not under src/: %r' % (stale,)); "
     + "print('server-ok', len(names))"
   );
 
@@ -2618,7 +2686,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540) + kernel host seam: local child vs ray actor";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540) + read target top-level await (#3139) + nu-job line paging (#3131) + kernel host seam: local child vs ray actor";
     }
     ''
       export HOME=$TMPDIR/home
@@ -2670,6 +2738,10 @@
       cp ${./tests/test_pr_watch_automerge.py} test_pr_watch_automerge.py
       # Issue #2540: input= routes past no-input statements (cd /tmp; ^cat) or raises.
       cp ${./tests/test_nu_input_routing.py} test_nu_input_routing.py
+      # Issue #3139: the read tool's target expression allows top-level await.
+      cp ${./tests/test_read_await.py} test_read_await.py
+      # Issue #3131: a job wrapping nu(check=False) pages real stdout lines.
+      cp ${./tests/test_nu_job_output.py} test_nu_job_output.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
@@ -2689,6 +2761,8 @@
         test_unexecuted_note.py \
         test_pr_watch_automerge.py \
         test_nu_input_routing.py \
+        test_read_await.py \
+        test_nu_job_output.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp typecheck smoke failed:" >&2
         cat stdout stderr >&2
@@ -5370,6 +5444,7 @@
   ghosttyBundled = importTest "ghostty" "import ghostty; print('ghostty-ok', all(callable(getattr(ghostty, n)) for n in ('surfaces', 'my_tty', 'my_surface', 'close', 'close_me', 'focus', 'activate', 'is_running')), ghostty.__version__)";
   xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
   meshBundled = importTest "mesh" "import mesh, asyncio; print('mesh-ok', all(asyncio.iscoroutinefunction(getattr(mesh, n)) for n in ('peers', 'sessions')), mesh.__version__)";
+  fabricBundled = importTest "fabric" "import fabric, asyncio; print('fabric-ok', asyncio.iscoroutinefunction(fabric.run), asyncio.iscoroutinefunction(fabric.claude.session), fabric.__version__)";
   linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
   notionBundled = importTest "notion" "import notion, asyncio; print('notion-ok', all(asyncio.iscoroutinefunction(getattr(notion, n)) for n in ('search', 'page', 'blocks', 'db_query', 'page_create', 'blocks_append', 'page_update')), notion.__version__)";
   notionTestPython = pkgs.python3.withPackages (ps: [
@@ -5694,6 +5769,60 @@
       cat stdout
       mkdir -p "$out"
     '';
+  # Network-free tests for the call-first fabric (index#3191, #3192, #3193): the run
+  # record contract against an httpx.MockTransport weave double (ask facts at
+  # submit with state strictly last, started/terminal facts from the worker
+  # side, a fn that raises before its first line still leaving ask + failed),
+  # claude.session's CAS-pointer turn facts plus both interrupt paths (handle
+  # and journal fact) converging on the SDK interrupt as state=interrupted,
+  # and the remote-placement submit contract with fakes (env handshake, host
+  # label existence, zero-restart runner policy, cloudpickle payload round
+  # trip through the real ray.cloudpickle, workspace materialization against
+  # a local git fixture). Live-cluster behavior is validated manually
+  # (index#3192 PR body); the sandbox proves everything submit-side.
+  fabricTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.httpx
+    ps.claude-agent-sdk
+    ps.ray
+    # fabric.activity.frame returns a polars frame.
+    ps.polars
+    fabricModule
+    weaveModule
+  ]);
+  fabricTestSource = builtins.path {
+    name = "ix-mcp-fabric-test";
+    path = ./src/fabric/test_fabric.py;
+  };
+  # The weave client's unit tests share this env (httpx.MockTransport fakes);
+  # no other derivation runs them.
+  weaveTestSource = builtins.path {
+    name = "ix-mcp-weave-test";
+    path = ./src/weave/test_weave.py;
+  };
+  fabricTests =
+    pkgs.runCommand "ix-mcp-fabric-tests"
+    {
+      nativeBuildInputs = [
+        fabricTestPython
+        # The workspace tests build and clone a local git fixture.
+        pkgs.git
+      ];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${fabricTestSource} "$TMPDIR/test_fabric.py"
+      cp ${weaveTestSource} "$TMPDIR/test_weave.py"
+      ${lib.getExe fabricTestPython} -m pytest "$TMPDIR/test_fabric.py" "$TMPDIR/test_weave.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp fabric tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
 in
   package.overrideAttrs (old: {
     passthru =
@@ -5720,6 +5849,8 @@ in
               resourcesBridgeTests
               meshBundled
               meshTests
+              fabricBundled
+              fabricTests
               beeperBundled
               requirementsSmoke
               engineBundled

@@ -1,0 +1,74 @@
+---
+title: "Fabric phase 3: the journal owns the whole run lifecycle"
+date: 2026-07-14
+---
+
+Fabric (index#3190) replaces dispatched delegation with call-first work:
+a call creates work directly, and the weave journal only records facts.
+Phase 3 (index#3193, PR index#3225) closes the loop on failure,
+interruption, and observability, and deletes the last dispatcher.
+
+## What shipped
+
+**Reconciler** (`fabric.reconcile`). A loop diffs live Ray actors
+against open runs in the journal:
+
+```
+?- latest(T, runner, R), latest(T, state, S), fact_id(F, T, state, S), fact_time(F, MS).
+```
+
+Runs open past a 60s wall-clock grace window whose runner actor is gone
+get `error` + `state=lost` facts appended. It never restarts work:
+`max_restarts=0` is policy, and the journal owns retry. Two deliberate
+asymmetries protect against false positives: the grace window covers
+the submit-to-actor-creation race, and an actor that exists but times
+out on ping counts alive (uncertainty is alive). Local runs carry no
+`runner` fact and sit outside reconciliation entirely; they live and
+die with the kernel whose journal lease already sweeps views.
+
+**Interrupt bridge** (`fabric.watch_interrupt`). An
+`interrupt=requested` fact on a run entity routes to the SDK interrupt
+for `fabric.claude.session` and asyncio cancellation for `fabric.run`
+handles. One shared poll loop, no dispatcher. Handle-path interrupts
+assert the same fact, so both paths leave the same journal record.
+
+**Activity view** (`fabric.activity`). "What is happening on every
+node" is one query:
+
+```
+?- type(T, task), node(T, N), latest(T, fn, F), latest(T, state, S).
+```
+
+`fabric.activity.frame()` returns it as a polars frame and
+`fabric.activity.publish()` serves it as a dashboard resource. The
+journal replaces Ray's dashboard for work; Ray's dashboard stays
+substrate debugging.
+
+**Delegate retired.** `weave.delegate` is gone and every call site
+migrated in the same change (retro hook, MCP guide and registry, house
+rules, tui harness); `weave.result` now surfaces the `lost` and
+`interrupted` terminals. The weave half (weave#266) deleted the
+per-machine agent host outright: `crates/host`, the `--agents` flag,
+and the libghostty-vt link chain (16k lines removed). That also closes
+weave#240 by construction: the host that wedged the fact write path no
+longer exists.
+
+## Validation
+
+Hermetic tests (`httpx.MockTransport` fake journal) cover parse, grace,
+ping semantics, idempotent re-marking, both interrupt paths, and the
+activity frame. The datalog shapes are pinned against a real `weave`
+server binary by the `WEAVE_BIN`-gated integration test (2 passed
+locally against a binary built from weave main). The live journal on
+:7677 was query-wedged during development (the weave#240 signature),
+which is exactly the failure mode the retirement removes. One CI gap
+closed on the way: the weave client's unit tests previously ran
+nowhere; `fabricTests` now runs them.
+
+## Handles
+
+- Design: index#3190; phases: index#3199, index#3218, index#3225
+- Weave retirement: weave#266 (closes weave#240)
+- Reconciler: `packages/mcp/src/fabric/fabric/reconcile.py`
+- Activity: `packages/mcp/src/fabric/fabric/activity.py`
+- Interrupt bridge: `fabric.watch_interrupt` in `packages/mcp/src/fabric/fabric/__init__.py`

@@ -64,6 +64,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.SESSION,
     guide.NAMESPACE,
     guide.DISCOVER,
+    guide.PYTHON_FIRST,
     guide.NO_SHELL,
     guide.NU,
     guide.NIX,
@@ -690,8 +691,9 @@ async def read(
         str,
         Field(
             description=(
-                "A file path, or a Python expression evaluated in the kernel "
-                "(e.g. jobs['ab12'].output, or a variable you bound earlier)"
+                "A file path, or a Python expression evaluated in the kernel; "
+                "top-level await is allowed (e.g. jobs['ab12'].output, "
+                "await jobs['ab12'], or a variable you bound earlier)"
             )
         ),
     ],
