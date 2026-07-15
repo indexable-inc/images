@@ -12,7 +12,7 @@ inputs:
     description: Head commit for a non-pull-request change association
     default: ""
   base-sha:
-    description: Push base commit that bounds a main-branch change
+    description: Event base commit that bounds a push or merge group
     default: ""
   token:
     description: Token with actions and pull request read, plus issues write when publishing
@@ -31,10 +31,10 @@ inputs:
     default: classify
   run-id:
     description: Workflow run used by every non-pull-request policy operation
-    default: "0"
+    required: true
   run-attempt:
     description: Workflow attempt used by every non-pull-request policy operation
-    default: "0"
+    required: true
   target-job-name:
     description: Required target verified in gate mode
     default: ""
@@ -80,7 +80,7 @@ runs:
         CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
         CI_BUDGET_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/ci_budget.py"
-    - name: Preserve authoritative push range
+    - name: Preserve authoritative event range
       if: inputs.mode == 'classify' && inputs.base-sha != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
