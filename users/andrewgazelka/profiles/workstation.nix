@@ -133,12 +133,9 @@
     # package, Codex's come from `codexBase.passthru.hooksJson` below.
   };
 
-  # Personal context appended after the house context render (the shared
-  # generator, packages/agent/prompt in index) in BOTH agents' instruction
-  # files: ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md, via each module's
-  # `houseContext.extraText`. The house rules come from the generator; this
-  # tracked file holds only what is personal or additive to them.
-  personalContext = builtins.readFile (repoFile "claude/global/CLAUDE.md");
+  # Andrew deliberately permits direct merge-protection bypasses. The shared
+  # prompt owns the rule text, so suppress its named rule in system prompts.
+  agentPromptOmitRules = ["forceMerge"];
 
   # claude-code from the index FLAKE PACKAGE SET (packages/claude-code in the
   # indexable-inc/index monorepo), not the overlay's pkgs.claude-code: only the
@@ -1029,10 +1026,7 @@ in {
   programs.claude-code = {
     enable = true;
     package = claudeCode;
-    houseContext = {
-      enable = true;
-      extraText = personalContext;
-    };
+    systemPrompt.omitRules = agentPromptOmitRules;
     # All agents, BARE, sourced straight from the index repo (index's agents
     # package now holds my former personal agents too). Bare (not plugin) so
     # `subagent_type code-reviewer` keeps resolving.
@@ -1058,9 +1052,10 @@ in {
     enable = true;
     package = codex;
     skills = skillsSrc;
-    # AGENTS.md rides the module's default house context render plus the same
-    # personal appendix Claude gets, so the two agents cannot drift.
-    houseContext.extraText = personalContext;
+    # Codex otherwise writes a second global context file. The generated system
+    # prompt is the single source of agent instructions.
+    houseContext.enable = false;
+    systemPrompt.omitRules = agentPromptOmitRules;
     # hooks.json stays owned by the manual home.file declaration below (from
     # `codexBase.passthru.hooksJson`, matching the package on PATH). Without
     # this the imported codex module also claims ~/.codex/hooks.json with
