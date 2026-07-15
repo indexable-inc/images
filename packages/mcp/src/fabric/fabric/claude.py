@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Protocol
 
 import weave
 
+from . import resources
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
 
@@ -89,8 +91,14 @@ class Session:
     else ``done`` at :meth:`close` -- always the entity's last state fact.
     """
 
-    def __init__(self, task: str, client: SdkClient) -> None:
+    def __init__(
+        self,
+        task: str,
+        client: SdkClient,
+        resource_claim: resources.ResourceClaim | None,
+    ) -> None:
         self.task = task
+        self.resource_claim = resource_claim
         self._client = client
         self._interrupted = False
         self._terminal_written = False
@@ -197,15 +205,19 @@ async def session(
     allowed_tools: Sequence[str] | None = None,
     permission_mode: PermissionMode | None = None,
     max_turns: int | None = None,
+    resource_key: resources.ResourceKey | None = None,
 ) -> Session:
     """Open a recorded, interruptible Claude session and send ``prompt``.
 
     Ask facts land first (prompt text in CAS, ``state=submitted`` last), so
     the intent is on the journal before the SDK subprocess spawns; a connect
-    or first-send failure still appends the ``failed`` terminal fact. On
-    success the session is live (``state=running``) and returns immediately:
-    ``await s.result()`` waits for the turn, ``s.send()`` streams follow-up
-    input, ``s.interrupt()`` stops it.
+    or first-send failure still appends the ``failed`` terminal fact.
+    ``resource_key`` declares the pull request or worktree the child may
+    mutate. The child task claims it before the SDK starts, so a live parent or
+    sibling owner rejects the session loudly. On success the session is live
+    (``state=running``) and returns immediately: ``await s.result()`` waits
+    for the turn, ``s.send()`` streams follow-up input, and ``s.interrupt()``
+    stops it.
     """
 
     from . import _requested_by
@@ -224,15 +236,27 @@ async def session(
     facts.append((task, "state", "submitted"))
     await weave.assert_facts(facts)
 
-    client = _sdk_client(
-        system_prompt=system_prompt,
-        model=model,
-        cwd=cwd,
-        allowed_tools=allowed_tools,
-        permission_mode=permission_mode,
-        max_turns=max_turns,
-    )
-    live = Session(task, client)
+    try:
+        resource_claim = (
+            None
+            if resource_key is None
+            else await resources.claim(resource_key, owner=task)
+        )
+        client = _sdk_client(
+            system_prompt=system_prompt,
+            model=model,
+            cwd=cwd,
+            allowed_tools=allowed_tools,
+            permission_mode=permission_mode,
+            max_turns=max_turns,
+        )
+    except BaseException as exc:
+        await weave.assert_facts([
+            (task, "error", f"{type(exc).__name__}: {exc}"),
+            (task, "state", "failed"),
+        ])
+        raise
+    live = Session(task, client, resource_claim)
     try:
         await client.connect()
         await client.query(prompt)

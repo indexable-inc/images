@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import os
 import platform
 import textwrap
 from collections.abc import Awaitable, Callable, Generator
@@ -36,7 +35,7 @@ from dataclasses import dataclass
 
 import weave
 
-from . import activity, claude, reconcile, remote
+from . import activity, claude, reconcile, remote, resources
 from .remote import EnvSkewError, FabricError, Workspace
 
 __all__ = [
@@ -48,11 +47,12 @@ __all__ = [
     "claude",
     "reconcile",
     "remote",
+    "resources",
     "run",
     "watch_interrupt",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # The ask state. Deliberately NOT "pending" (the state a dispatcher loop
 # would fulfill): fabric's model is that the call already created the work --
@@ -65,7 +65,7 @@ INTERRUPT_POLL_S = 0.5
 
 
 def _requested_by() -> str:
-    return os.environ.get("IX_WEAVE_AGENT") or "agent:main"
+    return resources.current_owner()
 
 
 async def watch_interrupt(task: str, on_requested: Callable[[], Awaitable[None]]) -> None:
@@ -92,6 +92,7 @@ class RunHandle:
     """One live fabric run: the journal task entity plus the execution."""
 
     task: str
+    resource_claim: resources.ResourceClaim | None
     _work: asyncio.Task[object]
     _watcher: asyncio.Task[None]
 
@@ -150,6 +151,7 @@ async def run(
     cpus: float | None = None,
     repo: str | None = None,
     rev: str | None = None,
+    resource_key: resources.ResourceKey | None = None,
     **kwargs: object,
 ) -> RunHandle:
     """Execute ``fn(*args, **kwargs)``, recorded on the journal.
@@ -175,6 +177,11 @@ async def run(
     line (a bad signature bind, a first-statement raise) still leaves the ask
     and ``failed`` facts.
 
+    ``resource_key`` declares the pull request or worktree this task may
+    mutate. Fabric claims it atomically after recording the ask and before
+    starting the worker. A live second owner raises ``ResourceOwnedError`` and
+    leaves this task failed; a terminal owner's claim can be reclaimed.
+
     Locally, sync functions run in ``asyncio.to_thread`` so the kernel loop
     never blocks; async functions are awaited natively (the runner actor does
     the same on the node). Note a cancelled sync ``fn`` settles the run (and
@@ -199,6 +206,18 @@ async def run(
         facts.append((task, "runner", f"runner:{node}"))
     facts.append((task, "state", ASK_STATE))
     await weave.assert_facts(facts)
+    try:
+        resource_claim = (
+            None
+            if resource_key is None
+            else await resources.claim(resource_key, owner=task)
+        )
+    except BaseException as exc:
+        await weave.assert_facts([
+            (task, "error", f"{type(exc).__name__}: {exc}"),
+            (task, "state", "failed"),
+        ])
+        raise
 
     async def _invoke() -> object:
         if placement is not None:
@@ -237,4 +256,9 @@ async def run(
 
     watcher = asyncio.create_task(watch_interrupt(task, _cancel), name=f"fabric:watch:{task}")
     work.add_done_callback(lambda _t: watcher.cancel())
-    return RunHandle(task, work, watcher)
+    return RunHandle(
+        task=task,
+        resource_claim=resource_claim,
+        _work=work,
+        _watcher=watcher,
+    )

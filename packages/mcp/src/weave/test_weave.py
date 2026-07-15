@@ -77,6 +77,66 @@ def test_assert_facts_batches_500(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(out) == 1200
 
 
+def test_append_operation_sends_one_atomic_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads: list[object] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        payload = weave.json.loads(req.read())
+        payloads.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "operation_id": "claim-resource",
+                "acks": [{"seq": 41, "id": "f41"}, {"seq": 42, "id": "f42"}],
+            },
+        )
+
+    install_transport(monkeypatch, handler)
+    acknowledgements = run(
+        weave.append_operation(
+            "claim-resource",
+            [("resource:1", "owner", "task:1"), ("resource:1", "generation", 1)],
+        )
+    )
+
+    assert acknowledgements == [{"seq": 41, "id": "f41"}, {"seq": 42, "id": "f42"}]
+    assert payloads == [
+        {
+            "operation_id": "claim-resource",
+            "writes": [
+                {
+                    "fact": {
+                        "entity": {"t": "str", "v": "resource:1"},
+                        "attr": "owner",
+                        "value": {"t": "str", "v": "task:1"},
+                    }
+                },
+                {
+                    "fact": {
+                        "entity": {"t": "str", "v": "resource:1"},
+                        "attr": "generation",
+                        "value": {"t": "int", "v": 1},
+                    }
+                },
+            ],
+        }
+    ]
+
+
+def test_append_operation_reports_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, text="operation content differs")
+
+    install_transport(monkeypatch, handler)
+    with pytest.raises(
+        weave.OperationConflictError,
+        match=r"claim-resource.*operation content differs",
+    ):
+        run(weave.append_operation("claim-resource", [("resource:1", "owner", "task:2")]))
+
+
 def test_query_unwrap_and_frame(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
