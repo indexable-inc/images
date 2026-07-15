@@ -6,7 +6,10 @@ reads mergeStateStatus first and skips arming with a loud note instead.
 """
 
 import asyncio
+import json
+import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -19,8 +22,11 @@ class _ScriptedNu:
     `__call__`. Serves scripted `gh pr view` rows (the last row repeats) and
     records every `gh pr merge` invocation."""
 
-    def __init__(self, views: list[dict[str, object]]) -> None:
+    def __init__(
+        self, views: list[dict[str, object]], *, merge_error: str | None = None
+    ) -> None:
         self._views = list(views)
+        self._merge_error = merge_error
         self.merges: list[str] = []
 
     async def __call__(
@@ -33,9 +39,12 @@ class _ScriptedNu:
     ) -> dict[str, object]:
         if "gh pr merge" in code:
             self.merges.append(code)
+            if self._merge_error is not None:
+                return {"exit_code": 1, "stdout": "", "stderr": self._merge_error}
             return {"exit_code": 0, "stdout": "", "stderr": ""}
         assert "gh pr view" in code
-        return self._views.pop(0) if len(self._views) > 1 else self._views[0]
+        view = self._views.pop(0) if len(self._views) > 1 else self._views[0]
+        return {"exit_code": 0, "stdout": json.dumps(view), "stderr": ""}
 
 
 def _view(pr: int, state: str, merge_state: str) -> dict[str, object]:
@@ -120,6 +129,33 @@ class _FrameNu(_ScriptedNu):
         return pl.DataFrame([value])
 
 
+class _TrackedResource:
+    id = "pr-test"
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _capture_terminal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[_TrackedResource, list[str]]:
+    resource = _TrackedResource()
+    notifications: list[str] = []
+
+    def register_resource(**kwargs: object) -> _TrackedResource:
+        return resource
+
+    async def fake_notify(content: str, **meta: object) -> None:
+        notifications.append(content)
+
+    monkeypatch.setattr(runtime, "register_resource", register_resource)
+    monkeypatch.setattr(runtime, "notify", fake_notify)
+    return resource, notifications
+
+
 def test_one_row_frame_from_stale_nu_still_watches(monkeypatch: pytest.MonkeyPatch) -> None:
     """#3175: `refresh()` died with AttributeError DataFrame.get when nu
     returned a 1-row frame for the gh pr view record; the boundary now
@@ -145,3 +181,72 @@ def test_nu_record_rejects_unexpected_shapes() -> None:
         runtime._nu_record(pl.DataFrame([{"a": 1}, {"a": 2}]), source="t")
     with pytest.raises(TypeError, match="expected a record"):
         runtime._nu_record("text", source="t")
+
+
+def test_failed_view_preserves_completion_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#2637: validate `complete` before parsing stdout, so a failed gh call
+    keeps its real diagnostic instead of becoming an empty DataFrame."""
+    gh = tmp_path / "gh"
+    gh.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'GraphQL: API rate limit already exceeded' >&2\nexit 1\n"
+    )
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(tmp_path), os.environ["PATH"])))
+    resource, notifications = _capture_terminal_failure(monkeypatch)
+    import nu
+
+    nu.reset()
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="gh pr view failed with exit code 1: GraphQL: API rate limit already exceeded",
+        ):
+            asyncio.run(runtime.watch_pr(9105, auto_merge=False))
+    finally:
+        nu.reset()
+
+    assert resource.closed
+    assert notifications == [
+        "PR 9105 watch failed: gh pr view failed with exit code 1: "
+        "GraphQL: API rate limit already exceeded"
+    ]
+
+
+def test_failed_auto_merge_is_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _ScriptedNu([_view(9106, "OPEN", "BLOCKED")], merge_error="merge denied")
+    monkeypatch.setitem(sys.modules, "nu", fake)
+    resource, notifications = _capture_terminal_failure(monkeypatch)
+
+    with pytest.raises(
+        RuntimeError, match="gh pr merge failed with exit code 1: merge denied"
+    ):
+        asyncio.run(runtime.watch_pr(9106, auto_merge=True, interval=0.01))
+
+    assert resource.closed
+    assert notifications == [
+        "PR 9106 watch failed: gh pr merge failed with exit code 1: merge denied"
+    ]
+
+
+def test_notification_error_does_not_mask_command_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _ScriptedNu([_view(9107, "OPEN", "BLOCKED")], merge_error="merge denied")
+    monkeypatch.setitem(sys.modules, "nu", fake)
+    resource, _notifications = _capture_terminal_failure(monkeypatch)
+
+    async def failing_notify(content: str, **meta: object) -> None:
+        raise RuntimeError("outbox unavailable")
+
+    monkeypatch.setattr(runtime, "notify", failing_notify)
+    with pytest.raises(
+        RuntimeError, match="gh pr merge failed with exit code 1: merge denied"
+    ) as caught:
+        asyncio.run(runtime.watch_pr(9107, auto_merge=True, interval=0.01))
+
+    assert resource.closed
+    assert caught.value.__notes__ == [
+        "pr_watch failure notification also raised RuntimeError: outbox unavailable"
+    ]
