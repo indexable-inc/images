@@ -7,6 +7,7 @@ import contextlib
 import fcntl
 import os
 import pathlib
+import plistlib
 import sys
 import textwrap
 import time
@@ -448,6 +449,59 @@ def test_darwin_status_is_reread_after_wrapper_exit(
     )
 
     assert job.terminal_status() == 7 << 8
+
+
+def test_unready_darwin_job_reaps_relays_without_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nix import _supervise
+
+    events: list[str] = []
+
+    class UnreadyJob:
+        def __init__(self) -> None:
+            self.loaded = True
+            self.coalitions = None
+            self.relays = [101, 102]
+
+        def remove(self) -> None:
+            events.append("removed")
+
+        def load_coalitions(self) -> None:
+            events.append("checked readiness")
+
+    def kill_relays(relays: list[int], statuses: dict[int, int]) -> None:
+        assert relays == [101, 102]
+        statuses.update({101: 0, 102: 0})
+        events.append("reaped relays")
+
+    monkeypatch.setattr(_supervise, "_kill_relays", kill_relays)
+    _supervise._terminate_darwin_job(
+        UnreadyJob(),  # ty: ignore[invalid-argument-type] pre-readiness job double
+        {},
+        {},
+    )
+
+    assert events == ["removed", "checked readiness", "reaped relays"]
+
+
+def test_darwin_job_uses_the_background_user_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nix import _supervise
+
+    monkeypatch.setattr(
+        _supervise._DarwinProc,
+        "create",
+        classmethod(lambda _cls: None),
+    )
+    job = _supervise._DarwinJob.allocate([sys.executable, "-c", "pass"])
+    try:
+        plist = plistlib.loads(job.plist_path.read_bytes())
+        assert job.domain == f"user/{os.getuid()}"
+        assert plist["LimitLoadToSessionType"] == "Background"
+    finally:
+        job.close()
 
 
 def test_pidfd_capture_revalidates_identity_after_open(

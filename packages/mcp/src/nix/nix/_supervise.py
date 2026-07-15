@@ -304,7 +304,6 @@ class _DarwinJob:
     coalitions: tuple[int, int] | None = None
     leader: tuple[int, float] | None = None
     bootstrap_attempted: bool = False
-    loaded: bool = False
     removed: bool = False
 
     @classmethod
@@ -315,7 +314,7 @@ class _DarwinJob:
         job = cls(
             root=root,
             label=label,
-            domain=f"gui/{os.getuid()}",
+            domain=f"user/{os.getuid()}",
             config_path=root / "target.json",
             ready_path=root / "ready.json",
             status_path=root / "status.json",
@@ -334,12 +333,15 @@ class _DarwinJob:
                 ready=job.ready_path,
                 status=job.status_path,
             ).write(job.config_path)
+            # launchd.plist(5): Background avoids the default Aqua constraint,
+            # so the user domain works without a GUI login session.
             job.plist_path.write_bytes(
                 plistlib.dumps(
                     {
                         "AbandonProcessGroup": True,
                         "KeepAlive": False,
                         "Label": job.label,
+                        "LimitLoadToSessionType": "Background",
                         "ProgramArguments": [
                             sys.executable,
                             str(Path(__file__).resolve()),
@@ -379,7 +381,6 @@ class _DarwinJob:
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or "no detail"
             raise RuntimeError(f"launchctl could not bootstrap {self.label}: {detail}")
-        self.loaded = True
 
     def read_status(self) -> int | None:
         if not self.status_path.exists():
@@ -476,7 +477,7 @@ class _DarwinJob:
         if self.removed or not self.bootstrap_attempted:
             return
         result = subprocess.run(
-            ["/bin/launchctl", "bootout", self.target],
+            ["/bin/launchctl", "bootout", "--wait", self.target],
             check=False,
             capture_output=True,
             text=True,
@@ -698,7 +699,7 @@ def _terminate_darwin_job(
             remove_error = exc
 
         job.load_coalitions()
-        if not job.loaded and job.coalitions is None:
+        if job.coalitions is None:
             _kill_relays(job.relays, statuses)
             if remove_error is not None:
                 raise remove_error
