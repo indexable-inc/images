@@ -26,12 +26,18 @@ on:
       reason:
         description: JSON object describing every source of the decision
         value: ${{ jobs.classify.outputs.reason }}
-      standard_minutes:
-        description: Standard total CI budget in whole minutes
-        value: ${{ jobs.classify.outputs.standard_minutes }}
-      standard_deadline:
-        description: Absolute deadline measured from ordinary workflow creation
-        value: ${{ jobs.classify.outputs.standard_deadline }}
+      queue_start_seconds:
+        description: Maximum wait from worker creation to runner assignment
+        value: ${{ jobs.classify.outputs.queue_start_seconds }}
+      setup_allowance_seconds:
+        description: Maximum setup time after runner assignment
+        value: ${{ jobs.classify.outputs.setup_allowance_seconds }}
+      validation_seconds:
+        description: Validation allowance for the classified tier
+        value: ${{ jobs.classify.outputs.validation_seconds }}
+      termination_grace_seconds:
+        description: Cleanup allowance after validation
+        value: ${{ jobs.classify.outputs.termination_grace_seconds }}
       worker_timeout_minutes:
         description: Assignment-relative worker backstop for the classified tier
         value: ${{ jobs.classify.outputs.worker_timeout_minutes }}
@@ -47,8 +53,10 @@ jobs:
     outputs:
       big_change: ${{ steps.budget.outputs.big_change }}
       reason: ${{ steps.budget.outputs.reason }}
-      standard_minutes: ${{ steps.budget.outputs.standard_minutes }}
-      standard_deadline: ${{ steps.budget.outputs.standard_deadline }}
+      queue_start_seconds: ${{ steps.budget.outputs.queue_start_seconds }}
+      setup_allowance_seconds: ${{ steps.budget.outputs.setup_allowance_seconds }}
+      validation_seconds: ${{ steps.budget.outputs.validation_seconds }}
+      termination_grace_seconds: ${{ steps.budget.outputs.termination_grace_seconds }}
       worker_timeout_minutes: ${{ steps.budget.outputs.worker_timeout_minutes }}
     steps:
       # job.workflow_sha identifies this called workflow, not untrusted caller

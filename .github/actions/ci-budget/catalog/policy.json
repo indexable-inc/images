@@ -1,7 +1,7 @@
 {
   "big_change_label": "ci/big-change",
-  "extended_setup_allowance_seconds": 120,
   "extended_validation_seconds": 10800,
+  "queue_start_seconds": 300,
   "repositories": {
     "indexable-inc/index": {
       "costly_paths": [
@@ -38,6 +38,7 @@
       ]
     }
   },
-  "standard_seconds": 300,
+  "routine_validation_seconds": 300,
+  "setup_allowance_seconds": 120,
   "termination_grace_seconds": 10
 }

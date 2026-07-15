@@ -1,9 +1,9 @@
 name: Enforce a CI worker budget
-description: Reject expired work or run one repository script inside the shared budget
+description: Enforce queue and setup admission or run one validation with cleanup
 
 inputs:
   mode:
-    description: Worker operation, either check or run
+    description: Check admission before setup or run validation after setup
     default: check
   repository:
     description: GitHub repository in owner/name form

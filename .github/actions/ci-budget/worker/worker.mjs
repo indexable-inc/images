@@ -48,21 +48,23 @@ export function parseArguments(value) {
 }
 
 export function loadPolicy(
-  path = resolve(actionDirectory, "..", "policy.json"),
+  path = resolve(actionDirectory, "..", "catalog", "policy.json"),
 ) {
   const parsed = JSON.parse(readFileSync(path, "utf8"));
   const numeric = [
-    "extended_setup_allowance_seconds",
     "extended_validation_seconds",
-    "standard_seconds",
+    "queue_start_seconds",
+    "routine_validation_seconds",
+    "setup_allowance_seconds",
     "termination_grace_seconds",
   ];
   const expected = [
     "big_change_label",
-    "extended_setup_allowance_seconds",
     "extended_validation_seconds",
+    "queue_start_seconds",
     "repositories",
-    "standard_seconds",
+    "routine_validation_seconds",
+    "setup_allowance_seconds",
     "termination_grace_seconds",
   ];
   if (
@@ -94,7 +96,22 @@ function repositoryPath(repository) {
   return parts.map(encodeURIComponent).join("/");
 }
 
-export async function workflowRunCreatedAt({
+function workflowJobsUrl({
+  apiUrl,
+  page,
+  repository,
+  runAttempt,
+  runId,
+}) {
+  const url = new URL(apiUrl);
+  const basePath = url.pathname.replace(/\/$/, "");
+  url.pathname = `${basePath}/repos/${repositoryPath(repository)}/actions/runs/${runId}/attempts/${runAttempt}/jobs`;
+  url.searchParams.set("per_page", "100");
+  url.searchParams.set("page", String(page));
+  return url;
+}
+
+async function workflowJobs({
   apiUrl = "https://api.github.com",
   fetchImpl = fetch,
   repository,
@@ -102,51 +119,130 @@ export async function workflowRunCreatedAt({
   runId,
   token,
 }) {
-  const url = `${apiUrl}/repos/${repositoryPath(repository)}/actions/runs/${runId}`;
-  const response = await fetchImpl(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(`GitHub workflow run request failed with ${response.status}`);
+  const jobs = [];
+  for (let page = 1; ; page += 1) {
+    const url = workflowJobsUrl({
+      apiUrl,
+      page,
+      repository,
+      runAttempt,
+      runId,
+    });
+    const response = await fetchImpl(url, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`GitHub workflow jobs request failed with ${response.status}`);
+    }
+    const payload = JSON.parse(body);
+    if (
+      payload === null ||
+      Array.isArray(payload) ||
+      typeof payload !== "object" ||
+      !Array.isArray(payload.jobs) ||
+      !payload.jobs.every(
+        (job) => job !== null && !Array.isArray(job) && typeof job === "object",
+      )
+    ) {
+      throw new Error("GitHub workflow jobs response is malformed");
+    }
+    jobs.push(...payload.jobs);
+    if (payload.jobs.length < 100) return jobs;
   }
-  const run = JSON.parse(body);
-  if (run.run_attempt !== runAttempt) {
-    throw new Error(
-      `GitHub workflow run is on attempt ${run.run_attempt}, expected ${runAttempt}`,
-    );
-  }
-  if (typeof run.created_at !== "string") {
-    throw new Error("GitHub workflow run has no created_at");
-  }
-  const createdAt = Date.parse(run.created_at);
-  if (!Number.isFinite(createdAt)) {
-    throw new Error("GitHub workflow run has an invalid created_at");
-  }
-  return createdAt;
 }
 
-export function validationSeconds({
-  bigChange,
-  createdAtMilliseconds,
-  nowMilliseconds,
-  policy,
+export async function currentWorkerJob({
+  apiUrl = "https://api.github.com",
+  fetchImpl = fetch,
+  repository,
+  runAttempt,
+  runId,
+  runnerName,
+  token,
 }) {
-  if (bigChange) return policy.extended_validation_seconds;
-  const deadline = createdAtMilliseconds + policy.standard_seconds * 1000;
-  const remaining =
-    Math.floor((deadline - nowMilliseconds) / 1000) -
-    policy.termination_grace_seconds;
-  if (remaining <= 0) {
-    throw new DeadlineExceeded(
-      "no time remains for validation and process termination",
+  if (typeof runnerName !== "string" || runnerName === "") {
+    throw new Error("RUNNER_NAME is required");
+  }
+  const jobs = await workflowJobs({
+    apiUrl,
+    fetchImpl,
+    repository,
+    runAttempt,
+    runId,
+    token,
+  });
+  // An ephemeral runner executes one job. Its RUNNER_NAME is the same exact
+  // value exposed by the attempt jobs endpoint, so no workflow job-name guess
+  // or matrix-name serialization is needed.
+  const matches = jobs.filter(
+    (job) => job.runner_name === runnerName && job.status === "in_progress",
+  );
+  if (matches.length !== 1) {
+    throw new Error(
+      `workflow attempt has ${matches.length} active workers on runner ${JSON.stringify(runnerName)}; expected exactly one`,
     );
   }
-  return remaining;
+  const [job] = matches;
+  if (job.run_attempt !== runAttempt) {
+    throw new Error(
+      `GitHub worker job has attempt ${job.run_attempt}, expected ${runAttempt}`,
+    );
+  }
+  return job;
+}
+
+function timestamp(value, name) {
+  if (typeof value !== "string") {
+    throw new Error(`GitHub worker job has no ${name}`);
+  }
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds)) {
+    throw new Error(`GitHub worker job has invalid ${name}`);
+  }
+  return milliseconds;
+}
+
+export function workerTiming(job) {
+  return {
+    createdAtMilliseconds: timestamp(job.created_at, "created_at"),
+    startedAtMilliseconds: timestamp(job.started_at, "started_at"),
+  };
+}
+
+export function assertQueueAdmission({ job, policy }) {
+  const timing = workerTiming(job);
+  const deadline =
+    timing.createdAtMilliseconds + policy.queue_start_seconds * 1000;
+  if (timing.startedAtMilliseconds > deadline) {
+    throw new DeadlineExceeded(
+      `worker started after its queue admission deadline (${job.started_at} > ${new Date(deadline).toISOString()})`,
+    );
+  }
+  return timing;
+}
+
+export function assertSetupAllowance({
+  nowMilliseconds,
+  policy,
+  startedAtMilliseconds,
+}) {
+  const deadline =
+    startedAtMilliseconds + policy.setup_allowance_seconds * 1000;
+  if (nowMilliseconds > deadline) {
+    throw new DeadlineExceeded(
+      `worker setup exceeded ${policy.setup_allowance_seconds} seconds`,
+    );
+  }
+}
+
+export function validationSeconds({ bigChange, policy }) {
+  if (bigChange) return policy.extended_validation_seconds;
+  return policy.routine_validation_seconds;
 }
 
 function groupExists(pid) {
@@ -272,32 +368,37 @@ export async function main() {
     throw new Error(`unknown worker mode ${mode}`);
   }
   const policy = loadPolicy();
-  const bigChange = parseBoolean(input("big-change", { required: true }), "big-change");
-  const createdAtMilliseconds = await workflowRunCreatedAt({
+  const bigChange = parseBoolean(
+    input("big-change", { required: true }),
+    "big-change",
+  );
+  const repository = input("repository", { required: true });
+  const runAttempt = parsePositiveInteger(
+    input("run-attempt", { required: true }),
+    "run-attempt",
+  );
+  const runId = parsePositiveInteger(
+    input("run-id", { required: true }),
+    "run-id",
+  );
+  const token = input("token", { required: true });
+  const job = await currentWorkerJob({
     apiUrl: process.env.GITHUB_API_URL,
-    repository: input("repository", { required: true }),
-    runAttempt: parsePositiveInteger(
-      input("run-attempt", { required: true }),
-      "run-attempt",
-    ),
-    runId: parsePositiveInteger(input("run-id", { required: true }), "run-id"),
-    token: input("token", { required: true }),
+    repository,
+    runAttempt,
+    runId,
+    runnerName: process.env.RUNNER_NAME,
+    token,
   });
-  const nowMilliseconds = Date.now();
-  if (
-    !bigChange &&
-    nowMilliseconds >= createdAtMilliseconds + policy.standard_seconds * 1000
-  ) {
-    throw new DeadlineExceeded("worker started after the total deadline");
-  }
+  const timing = assertQueueAdmission({ job, policy });
   if (mode === "check") return 0;
-  const scriptPath = input("script", { required: true });
-  const allowedSeconds = validationSeconds({
-    bigChange,
-    createdAtMilliseconds,
-    nowMilliseconds,
+  assertSetupAllowance({
+    nowMilliseconds: Date.now(),
     policy,
+    startedAtMilliseconds: timing.startedAtMilliseconds,
   });
+  const scriptPath = input("script", { required: true });
+  const allowedSeconds = validationSeconds({ bigChange, policy });
   return runBudgetedScript({
     graceSeconds: policy.termination_grace_seconds,
     scriptArguments: parseArguments(input("arguments") || "[]"),
@@ -313,7 +414,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   } catch (error) {
     const title =
       error instanceof DeadlineExceeded
-        ? "CI total deadline exceeded"
+        ? "CI worker budget exceeded"
         : "ci-budget-worker";
     console.error(`::error title=${title}::${error.message}`);
     process.exitCode = error instanceof DeadlineExceeded ? 124 : 1;

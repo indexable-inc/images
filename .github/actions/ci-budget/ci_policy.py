@@ -6,11 +6,11 @@ import json
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from math import ceil
 from pathlib import Path
 
-POLICY_PATH = Path(__file__).with_name("policy.json")
+POLICY_PATH = Path(__file__).with_name("catalog") / "policy.json"
 
 
 @dataclass(frozen=True)
@@ -22,17 +22,22 @@ class RepositoryPolicy:
 @dataclass(frozen=True)
 class Policy:
     big_change_label: str
-    standard_seconds: int
+    queue_start_seconds: int
+    setup_allowance_seconds: int
+    routine_validation_seconds: int
     extended_validation_seconds: int
-    extended_setup_allowance_seconds: int
     termination_grace_seconds: int
     repositories: Mapping[str, RepositoryPolicy]
 
-    @property
-    def extended_worker_minutes(self) -> int:
+    def validation_seconds(self, *, big_change: bool) -> int:
+        if big_change:
+            return self.extended_validation_seconds
+        return self.routine_validation_seconds
+
+    def worker_timeout_minutes(self, *, big_change: bool) -> int:
         seconds = (
-            self.extended_validation_seconds
-            + self.extended_setup_allowance_seconds
+            self.setup_allowance_seconds
+            + self.validation_seconds(big_change=big_change)
             + self.termination_grace_seconds
         )
         return ceil(seconds / 60)
@@ -47,19 +52,23 @@ class Classification:
 @dataclass(frozen=True)
 class PolicyDecision:
     classification: Classification
-    budget_seconds: int
     managed_workflow: bool
-    standard_seconds: int
+    queue_start_seconds: int
+    setup_allowance_seconds: int
+    validation_seconds: int
     termination_grace_seconds: int
+    worker_timeout_minutes: int
 
     def to_json(self) -> dict[str, object]:
         return {
             "big_change": self.classification.big_change,
-            "budget_seconds": self.budget_seconds,
             "managed_workflow": self.managed_workflow,
+            "queue_start_seconds": self.queue_start_seconds,
             "reason": self.classification.reason,
-            "standard_seconds": self.standard_seconds,
+            "setup_allowance_seconds": self.setup_allowance_seconds,
             "termination_grace_seconds": self.termination_grace_seconds,
+            "validation_seconds": self.validation_seconds,
+            "worker_timeout_minutes": self.worker_timeout_minutes,
         }
 
 
@@ -102,9 +111,10 @@ def load_policy(path: Path = POLICY_PATH) -> Policy:
     root = object_mapping(parsed, "root")
     expected = {
         "big_change_label",
-        "standard_seconds",
+        "queue_start_seconds",
+        "setup_allowance_seconds",
+        "routine_validation_seconds",
         "extended_validation_seconds",
-        "extended_setup_allowance_seconds",
         "termination_grace_seconds",
         "repositories",
     }
@@ -132,13 +142,17 @@ def load_policy(path: Path = POLICY_PATH) -> Policy:
         )
     return Policy(
         big_change_label=non_empty_string(root["big_change_label"], "big_change_label"),
-        standard_seconds=positive_int(root["standard_seconds"], "standard_seconds"),
+        queue_start_seconds=positive_int(
+            root["queue_start_seconds"], "queue_start_seconds"
+        ),
+        setup_allowance_seconds=positive_int(
+            root["setup_allowance_seconds"], "setup_allowance_seconds"
+        ),
+        routine_validation_seconds=positive_int(
+            root["routine_validation_seconds"], "routine_validation_seconds"
+        ),
         extended_validation_seconds=positive_int(
             root["extended_validation_seconds"], "extended_validation_seconds"
-        ),
-        extended_setup_allowance_seconds=positive_int(
-            root["extended_setup_allowance_seconds"],
-            "extended_setup_allowance_seconds",
         ),
         termination_grace_seconds=positive_int(
             root["termination_grace_seconds"], "termination_grace_seconds"
@@ -148,17 +162,18 @@ def load_policy(path: Path = POLICY_PATH) -> Policy:
 
 
 POLICY = load_policy()
-STANDARD_BUDGET = timedelta(seconds=POLICY.standard_seconds)
 
 
-def standard_minutes() -> int:
-    return int(STANDARD_BUDGET.total_seconds() // 60)
+def queue_start_minutes() -> int:
+    return ceil(POLICY.queue_start_seconds / 60)
+
+
+def validation_seconds(*, big_change: bool) -> int:
+    return POLICY.validation_seconds(big_change=big_change)
 
 
 def worker_timeout_minutes(*, big_change: bool) -> int:
-    if big_change:
-        return POLICY.extended_worker_minutes
-    return standard_minutes()
+    return POLICY.worker_timeout_minutes(big_change=big_change)
 
 
 def repository_policy(repository: str, policy: Policy = POLICY) -> RepositoryPolicy:
@@ -217,14 +232,16 @@ def decide(
     )
     return PolicyDecision(
         classification=classification,
-        budget_seconds=(
-            policy.extended_validation_seconds + policy.extended_setup_allowance_seconds
-            if classification.big_change
-            else policy.standard_seconds
-        ),
         managed_workflow=workflow_path in repo_policy.managed_workflows,
-        standard_seconds=policy.standard_seconds,
+        queue_start_seconds=policy.queue_start_seconds,
+        setup_allowance_seconds=policy.setup_allowance_seconds,
+        validation_seconds=policy.validation_seconds(
+            big_change=classification.big_change
+        ),
         termination_grace_seconds=policy.termination_grace_seconds,
+        worker_timeout_minutes=policy.worker_timeout_minutes(
+            big_change=classification.big_change
+        ),
     )
 
 
@@ -235,10 +252,6 @@ def parse_timestamp(value: object, name: str) -> datetime:
     if parsed.tzinfo is None:
         raise RuntimeError(f"GitHub API result {name} has no timezone")
     return parsed
-
-
-def standard_deadline(run: Mapping[str, object]) -> datetime:
-    return parse_timestamp(run.get("created_at"), "created_at") + STANDARD_BUDGET
 
 
 def input_string_list(value: object, name: str) -> tuple[str, ...]:

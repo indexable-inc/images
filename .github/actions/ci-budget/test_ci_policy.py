@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import UTC, datetime
 from pathlib import Path
 
 from ci_policy import (
@@ -11,8 +10,8 @@ from ci_policy import (
     cli_decision,
     decide,
     load_policy,
-    standard_deadline,
-    standard_minutes,
+    queue_start_minutes,
+    validation_seconds,
     worker_timeout_minutes,
 )
 
@@ -20,15 +19,16 @@ from ci_policy import (
 def valid_policy() -> dict[str, object]:
     return {
         "big_change_label": "ci/big-change",
-        "extended_setup_allowance_seconds": 120,
         "extended_validation_seconds": 10_800,
+        "queue_start_seconds": 300,
         "repositories": {
             "indexable-inc/index": {
                 "costly_paths": ["flake.lock"],
                 "managed_workflows": [".github/workflows/check.yml"],
             }
         },
-        "standard_seconds": 300,
+        "routine_validation_seconds": 300,
+        "setup_allowance_seconds": 120,
         "termination_grace_seconds": 10,
     }
 
@@ -42,18 +42,12 @@ def policy_error(path: Path) -> RuntimeError:
 
 
 class PolicyTests(unittest.TestCase):
-    def test_shared_worker_envelopes(self) -> None:
-        assert standard_minutes() == 5
-        assert worker_timeout_minutes(big_change=False) == 5
+    def test_shared_phase_clocks_and_worker_envelopes(self) -> None:
+        assert queue_start_minutes() == 5
+        assert validation_seconds(big_change=False) == 300
+        assert validation_seconds(big_change=True) == 10_800
+        assert worker_timeout_minutes(big_change=False) == 8
         assert worker_timeout_minutes(big_change=True) == 183
-
-    def test_standard_deadline_uses_workflow_creation_not_retry_start(self) -> None:
-        run = {
-            "created_at": "2026-07-15T10:00:00+00:00",
-            "run_started_at": "2026-07-15T11:00:00+00:00",
-        }
-
-        assert standard_deadline(run) == datetime(2026, 7, 15, 10, 5, tzinfo=UTC)
 
     def test_reusable_workflows_load_the_action_from_their_exact_version(self) -> None:
         workflows = Path(__file__).resolve().parents[2] / "workflows"
@@ -97,12 +91,16 @@ class PolicyTests(unittest.TestCase):
 
         assert not decision.managed_workflow
         assert decision.classification.big_change
-        assert decision.standard_seconds == 300
+        assert decision.queue_start_seconds == 300
+        assert decision.setup_allowance_seconds == 120
+        assert decision.validation_seconds == 10_800
+        assert decision.termination_grace_seconds == 10
+        assert decision.worker_timeout_minutes == 183
 
     def test_policy_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.json"
-            path.write_text(json.dumps({"standard_seconds": 300}))
+            path.write_text(json.dumps({"queue_start_seconds": 300}))
 
             assert "policy root keys" in str(policy_error(path))
 
@@ -110,7 +108,7 @@ class PolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.json"
             policy = valid_policy()
-            policy["standard_seconds"] = True
+            policy["queue_start_seconds"] = True
             path.write_text(json.dumps(policy))
 
             assert "positive integer" in str(policy_error(path))

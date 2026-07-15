@@ -8,11 +8,13 @@ import test from "node:test";
 
 import {
   DeadlineExceeded,
+  assertQueueAdmission,
+  assertSetupAllowance,
+  currentWorkerJob,
   loadPolicy,
   parseArguments,
   runBudgetedScript,
   validationSeconds,
-  workflowRunCreatedAt,
 } from "./worker.mjs";
 
 const pause = (milliseconds) =>
@@ -60,7 +62,7 @@ async function processTreeFixture(directory) {
       "set -euo pipefail",
       "trap 'exit 143' TERM",
       "(trap '' TERM; sleep 60) &",
-      "printf '%s\\n' \"$!\" >descendant-pid",
+      'printf \'%s\\n\' "$!" >descendant-pid',
       "wait",
       "",
     ].join("\n"),
@@ -68,86 +70,160 @@ async function processTreeFixture(directory) {
   return { descendant, script };
 }
 
-test("policy is shared with the classifier", () => {
+function workerJob({
+  attempt = 2,
+  createdAt = "2026-07-15T10:00:00Z",
+  labels = ["ix-ci-run-42-2-nix"],
+  name = "nix-build",
+  runnerName = "runner-42",
+  startedAt = "2026-07-15T10:05:00Z",
+  status = "in_progress",
+} = {}) {
+  return {
+    created_at: createdAt,
+    labels,
+    name,
+    run_attempt: attempt,
+    runner_name: runnerName,
+    started_at: startedAt,
+    status,
+  };
+}
+
+function response(jobs) {
+  return new Response(JSON.stringify({ jobs, total_count: jobs.length }), {
+    status: 200,
+  });
+}
+
+test("policy exposes independent queue, setup, validation, and cleanup clocks", () => {
   const policy = loadPolicy();
-  assert.equal(policy.standard_seconds, 300);
+  assert.equal(policy.queue_start_seconds, 300);
+  assert.equal(policy.setup_allowance_seconds, 120);
+  assert.equal(policy.routine_validation_seconds, 300);
   assert.equal(policy.extended_validation_seconds, 10_800);
   assert.equal(policy.termination_grace_seconds, 10);
 });
 
-test("ordinary retries keep the original workflow creation deadline", async () => {
+test("worker selects the exact current attempt runner job", async () => {
   let requestedUrl;
-  const createdAt = await workflowRunCreatedAt({
+  const job = await currentWorkerJob({
     apiUrl: "https://api.example.test",
     fetchImpl: async (url) => {
       requestedUrl = url;
-      return new Response(
-        JSON.stringify({
-          created_at: "2026-07-15T12:00:00Z",
-          run_attempt: 2,
-          run_started_at: "2026-07-15T13:00:00Z",
-        }),
-        { status: 200 },
-      );
+      return response([
+        workerJob({ name: "lint-build", runnerName: "runner-other" }),
+        workerJob(),
+      ]);
     },
     repository: "indexable-inc/ix",
     runAttempt: 2,
     runId: 42,
+    runnerName: "runner-42",
     token: "secret",
   });
+
+  assert.equal(job.name, "nix-build");
   assert.equal(
-    requestedUrl,
-    "https://api.example.test/repos/indexable-inc/ix/actions/runs/42",
+    requestedUrl.toString(),
+    "https://api.example.test/repos/indexable-inc/ix/actions/runs/42/attempts/2/jobs?per_page=100&page=1",
   );
-  assert.equal(createdAt, Date.parse("2026-07-15T12:00:00Z"));
 });
 
-test("worker rejects a different current retry attempt", async () => {
+test("worker rejects an inconsistent retry identity", async () => {
   await assert.rejects(
-    workflowRunCreatedAt({
-      apiUrl: "https://api.example.test",
-      fetchImpl: async () =>
-        new Response(
-          JSON.stringify({
-            created_at: "2026-07-15T12:00:00Z",
-            run_attempt: 3,
-          }),
-          { status: 200 },
-        ),
+    currentWorkerJob({
+      fetchImpl: async () => response([workerJob({ attempt: 3 })]),
       repository: "indexable-inc/ix",
       runAttempt: 2,
       runId: 42,
+      runnerName: "runner-42",
       token: "secret",
     }),
     /attempt 3, expected 2/,
   );
 });
 
-test("routine validation consumes only the workflow creation remainder", () => {
-  const policy = loadPolicy();
-  assert.equal(
-    validationSeconds({
-      bigChange: false,
-      createdAtMilliseconds: 0,
-      nowMilliseconds: 289_000,
-      policy,
-    }),
-    1,
-  );
+test("worker identity fails closed on missing and duplicate runner matches", async () => {
+  for (const jobs of [
+    [workerJob({ runnerName: "runner-other" })],
+    [workerJob(), workerJob({ name: "lint-build" })],
+  ]) {
+    await assert.rejects(
+      currentWorkerJob({
+        fetchImpl: async () => response(jobs),
+        repository: "indexable-inc/ix",
+        runAttempt: 2,
+        runId: 42,
+        runnerName: "runner-42",
+        token: "secret",
+      }),
+      /expected exactly one/,
+    );
+  }
 });
 
-test("retry after the workflow deadline fails before starting work", () => {
+test("queue admission accepts the boundary and rejects one millisecond late", () => {
   const policy = loadPolicy();
+  assert.doesNotThrow(() =>
+    assertQueueAdmission({ job: workerJob(), policy }),
+  );
   assert.throws(
     () =>
-      validationSeconds({
-        bigChange: false,
-        createdAtMilliseconds: 0,
-        nowMilliseconds: 291_001,
+      assertQueueAdmission({
+        job: workerJob({ startedAt: "2026-07-15T10:05:00.001Z" }),
         policy,
       }),
     DeadlineExceeded,
   );
+});
+
+test("late sibling fails even when another worker started on time", async () => {
+  const policy = loadPolicy();
+  const late = await currentWorkerJob({
+    fetchImpl: async () =>
+      response([
+        workerJob({
+          name: "lint-build",
+          runnerName: "runner-timely",
+          startedAt: "2026-07-15T10:00:30Z",
+        }),
+        workerJob({ startedAt: "2026-07-15T10:05:01Z" }),
+      ]),
+    repository: "indexable-inc/ix",
+    runAttempt: 2,
+    runId: 42,
+    runnerName: "runner-42",
+    token: "secret",
+  });
+
+  assert.throws(() => assertQueueAdmission({ job: late, policy }), DeadlineExceeded);
+});
+
+test("setup has its own 120 second allowance", () => {
+  const policy = loadPolicy();
+  assert.doesNotThrow(() =>
+    assertSetupAllowance({
+      nowMilliseconds: 120_000,
+      policy,
+      startedAtMilliseconds: 0,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertSetupAllowance({
+        nowMilliseconds: 120_001,
+        policy,
+        startedAtMilliseconds: 0,
+      }),
+    DeadlineExceeded,
+  );
+});
+
+test("validation starts with the complete tier allowance after setup", () => {
+  const policy = loadPolicy();
+  assert.equal(validationSeconds({ bigChange: false, policy }), 300);
+  assert.equal(validationSeconds({ bigChange: true, policy }), 10_800);
 });
 
 test("script arguments cross the JSON boundary as distinct values", async () => {
@@ -157,7 +233,7 @@ test("script arguments cross the JSON boundary as distinct values", async () => 
     const output = join(directory, "arguments.json");
     await writeFile(
       script,
-      "printf '[\"%s\",\"%s\"]\\n' \"$1\" \"$2\" >arguments.json\n",
+      'printf \'["%s","%s"]\\n\' "$1" "$2" >arguments.json\n',
     );
 
     const status = await runBudgetedScript({

@@ -19,8 +19,8 @@ from ci_policy import (
     POLICY,
     Classification,
     classify,
-    standard_deadline,
-    standard_minutes,
+    queue_start_minutes,
+    validation_seconds,
     worker_timeout_minutes,
 )
 
@@ -75,7 +75,7 @@ class BudgetSnapshot:
 
     @property
     def artifact_key(self) -> str:
-        return "extended" if self.big_change else "standard"
+        return "extended" if self.big_change else "routine"
 
 
 def classification_from_snapshot(snapshot: BudgetSnapshot) -> Classification:
@@ -438,7 +438,7 @@ class GitHubClient:
         snapshots: list[tuple[int, BudgetSnapshot]] = []
         pattern = re.compile(
             rf"{re.escape(prefix)}(?P<attempt>[1-9][0-9]*)-"
-            r"(?P<tier>standard|extended)"
+            r"(?P<tier>routine|extended)"
         )
         for artifact in artifacts:
             name = artifact.get("name")
@@ -689,22 +689,25 @@ def classify_pull_requests(
 
 
 def render_comment(classification: Classification) -> str:
-    minutes = standard_minutes()
+    queue_minutes = queue_start_minutes()
     if classification.big_change:
         matches = classification.reason["matches"]
         if matches:
-            detail = f"Extended budget: matched `{matches[0]['path']}`."
+            detail = f"Extended validation: matched `{matches[0]['path']}`."
         elif "label" in classification.reason["sources"]:
             detail = (
-                f"Extended budget: the `{POLICY.big_change_label}` label is present."
+                f"Extended validation: the `{POLICY.big_change_label}` label is present."
             )
         else:
-            detail = "Extended budget: this run was explicitly classified as large."
+            detail = "Extended validation: this run was explicitly classified as large."
     else:
-        detail = f"Standard budget: this change has {minutes} minutes."
+        detail = "Routine validation applies."
     policy_text = (
-        f"CI is limited to {minutes} minutes unless this is a legitimate "
-        f"big change. Add the `{POLICY.big_change_label}` label for an extended budget. "
+        f"Required workers must start within {queue_minutes} minutes after GitHub "
+        f"marks them ready. Once assigned, each has {POLICY.setup_allowance_seconds} "
+        f"seconds for setup, then {validation_seconds(big_change=classification.big_change)} "
+        f"seconds for validation, then {POLICY.termination_grace_seconds} seconds for "
+        f"cleanup. Add the `{POLICY.big_change_label}` label for extended validation. "
         "Lockfile and Rust toolchain changes are labeled automatically."
     )
     return f"{COMMENT_MARKER}\n{policy_text}\n\n{detail}"
@@ -797,8 +800,15 @@ def main() -> int:
     reason = json.dumps(classification.reason, separators=(",", ":"), sort_keys=True)
     write_output("big_change", str(classification.big_change).lower())
     write_output("reason", reason)
-    write_output("standard_minutes", str(standard_minutes()))
-    write_output("standard_deadline", standard_deadline(attempt).isoformat())
+    write_output("queue_start_seconds", str(POLICY.queue_start_seconds))
+    write_output("setup_allowance_seconds", str(POLICY.setup_allowance_seconds))
+    write_output(
+        "validation_seconds",
+        str(validation_seconds(big_change=classification.big_change)),
+    )
+    write_output(
+        "termination_grace_seconds", str(POLICY.termination_grace_seconds)
+    )
     write_output(
         "worker_timeout_minutes",
         str(worker_timeout_minutes(big_change=classification.big_change)),

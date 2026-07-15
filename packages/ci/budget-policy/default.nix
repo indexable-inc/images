@@ -3,7 +3,7 @@
   pkgs ? ix.pkgs,
 }: let
   policyRoot = ix.paths.root + "/.github/actions/ci-budget";
-  policy = policyRoot + "/policy.json";
+  policy = policyRoot + "/catalog/policy.json";
   application = ix.writePythonApplication pkgs {
     name = "ci-budget-policy";
     src = policyRoot + "/ci_policy.py";

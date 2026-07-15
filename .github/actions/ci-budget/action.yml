@@ -1,5 +1,5 @@
 name: Apply CI budget policy
-description: Classify a change or enforce its total CI deadline
+description: Classify a change or enforce worker queue admission
 
 inputs:
   repository:
@@ -35,9 +35,6 @@ inputs:
   target-job-name:
     description: Required target verified in gate mode
     default: ""
-  big-change:
-    description: Whether gate mode should skip the standard deadline
-    default: "false"
   merge-queue-branch:
     description: Branch whose queue owns a merge-group workflow
     default: main
@@ -49,12 +46,18 @@ outputs:
   reason:
     description: JSON object describing every source of the decision
     value: ${{ steps.classify.outputs.reason }}
-  standard_minutes:
-    description: Standard total CI budget in whole minutes
-    value: ${{ steps.classify.outputs.standard_minutes }}
-  standard_deadline:
-    description: Absolute deadline measured from ordinary workflow creation
-    value: ${{ steps.classify.outputs.standard_deadline }}
+  queue_start_seconds:
+    description: Maximum wait from worker creation to runner assignment
+    value: ${{ steps.classify.outputs.queue_start_seconds }}
+  setup_allowance_seconds:
+    description: Maximum setup time after runner assignment
+    value: ${{ steps.classify.outputs.setup_allowance_seconds }}
+  validation_seconds:
+    description: Validation allowance for the classified tier
+    value: ${{ steps.classify.outputs.validation_seconds }}
+  termination_grace_seconds:
+    description: Cleanup allowance after validation
+    value: ${{ steps.classify.outputs.termination_grace_seconds }}
   worker_timeout_minutes:
     description: Assignment-relative worker backstop for the classified tier
     value: ${{ steps.classify.outputs.worker_timeout_minutes }}
@@ -86,13 +89,11 @@ runs:
         name: ci-budget-snapshot-${{ inputs.run-id }}-${{ inputs.run-attempt }}-${{ steps.classify.outputs.snapshot_key }}
         path: ${{ steps.classify.outputs.snapshot_path }}
         if-no-files-found: error
-    - name: Enforce total CI deadline
+    - name: Enforce worker queue admission
       if: inputs.mode == 'gate' || inputs.mode == 'cancel'
       shell: bash
       env:
-        CI_BUDGET_BIG_CHANGE: ${{ inputs.big-change }}
         CI_BUDGET_DEADLINE_MODE: ${{ inputs.mode }}
-        CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}
         CI_BUDGET_REPOSITORY: ${{ inputs.repository }}
         CI_BUDGET_RUN_ATTEMPT: ${{ inputs.run-attempt }}
         CI_BUDGET_RUN_ID: ${{ inputs.run-id }}

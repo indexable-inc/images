@@ -45,7 +45,7 @@ class ClassificationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repository = "indexable-inc/index"
 
-    def test_routine_change_uses_standard_budget(self) -> None:
+    def test_routine_change_uses_routine_budget(self) -> None:
         result = ci_budget.classify(
             ["src/main.rs"], [], self.repository, force_big_change=False
         )
@@ -166,13 +166,13 @@ class GitHubClientTests(unittest.TestCase):
         assert result.reason["sources"] == ["label"]
         assert not transport.requests
 
-    def test_snapshot_artifact_carries_standard_decision(self) -> None:
+    def test_snapshot_artifact_carries_routine_decision(self) -> None:
         transport = FakeTransport(
             [
                 {
                     "artifacts": [
                         {
-                            "name": "ci-budget-snapshot-12-2-standard",
+                            "name": "ci-budget-snapshot-12-2-routine",
                             "expired": False,
                         }
                     ]
@@ -191,7 +191,7 @@ class GitHubClientTests(unittest.TestCase):
                 {
                     "artifacts": [
                         {
-                            "name": "ci-budget-snapshot-12-1-standard",
+                            "name": "ci-budget-snapshot-12-1-routine",
                             "expired": False,
                         }
                     ]
@@ -653,14 +653,17 @@ class WorkflowAssociationTests(unittest.TestCase):
 
 
 class RenderingTests(unittest.TestCase):
-    def test_standard_comment_contains_policy_and_budget(self) -> None:
+    def test_routine_comment_names_each_phase_clock(self) -> None:
         result = ci_budget.Classification(
             big_change=False, reason={"sources": [], "matches": []}
         )
         comment = ci_budget.render_comment(result)
         assert comment.startswith(ci_budget.COMMENT_MARKER)
-        assert "CI is limited to 5 minutes" in comment
-        assert "Standard budget" in comment
+        assert "start within 5 minutes" in comment
+        assert "120 seconds for setup" in comment
+        assert "300 seconds for validation" in comment
+        assert "10 seconds for cleanup" in comment
+        assert "Routine validation applies" in comment
 
 
 if __name__ == "__main__":
