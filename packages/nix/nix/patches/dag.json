@@ -91,6 +91,7 @@
     {
       "patch": "0021-fix-finish-auto-GC-before-store-teardown.patch",
       "deps": [
+        "0006-libstore-daemon-record-client-uid-and-user-for-build.patch",
         "0018-fix-libstore-interrupt-blocked-automatic-GC.patch"
       ]
     }

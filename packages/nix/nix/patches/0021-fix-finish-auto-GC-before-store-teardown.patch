@@ -30,7 +30,9 @@ diff --git a/src/libstore/gc.cc b/src/libstore/gc.cc
 index 432dbd853..653b0d08c 100644
 --- a/src/libstore/gc.cc
 +++ b/src/libstore/gc.cc
-@@ -878,8 +878,11 @@ void LocalStore::autoGC(bool sync)
+@@ -876,19 +876,40 @@ void LocalStore::autoGC(bool sync)
+         if (avail > state->availAfterGC * 0.97)
+             return;
  
 -        state->gcRunning = true;
 +        /* Since gcRunning is false, the previous worker has finished its
@@ -45,7 +47,7 @@ index 432dbd853..653b0d08c 100644
 -        std::thread([promise{std::move(promise)}, this]() mutable {
 +        auto thread = std::thread([promise{std::move(promise)}, this]() mutable {
              try {
-@@ -887,6 +890,24 @@ void LocalStore::autoGC(bool sync)
+                 /* Wake up any threads waiting for the auto-GC to finish. */
                  Finally wakeup([&]() {
 -                    auto state(_state->lock());
 -                    state->gcRunning = false;
@@ -73,7 +75,11 @@ index 432dbd853..653b0d08c 100644
 +                        ignoreExceptionInDestructor();
 +                    }
                  });
-@@ -911,3 +932,6 @@ void LocalStore::autoGC(bool sync)
+ 
+                 // The synchronous caller cannot observe interruption until
+@@ -909,7 +930,10 @@ void LocalStore::autoGC(bool sync)
+                 // future, but we don't really care. (what??)
+                 ignoreExceptionInDestructor();
              }
 -        }).detach();
 +        });
@@ -81,16 +87,22 @@ index 432dbd853..653b0d08c 100644
 +        state->gcThread = std::move(thread);
 +        state->gcRunning = true;
      }
+ 
+ sync:
 diff --git a/src/libstore/include/nix/store/local-overlay-store.hh b/src/libstore/include/nix/store/local-overlay-store.hh
 index 5d8ec1b45..f2d5fd7f0 100644
 --- a/src/libstore/include/nix/store/local-overlay-store.hh
 +++ b/src/libstore/include/nix/store/local-overlay-store.hh
-@@ -112,3 +112,3 @@ protected:
+@@ -110,15 +110,17 @@ protected:
+  * Documentation on overridden methods states how they differ from their
+  * `LocalStore` counterparts.
   */
 -struct LocalOverlayStore : virtual LocalStore
 +struct LocalOverlayStore final : virtual LocalStore
  {
-@@ -118,5 +118,7 @@ struct LocalOverlayStore : virtual LocalStore
+     using Config = LocalOverlayStoreConfig;
+ 
+     ref<const Config> config;
  
 -    LocalOverlayStore(ref<const Config>);
 -
@@ -100,11 +112,15 @@ index 5d8ec1b45..f2d5fd7f0 100644
 +    LocalOverlayStore(ref<const Config>);
 +    ~LocalOverlayStore() override;
      /**
+      * The store beneath us.
+      *
 diff --git a/src/libstore/include/nix/store/local-store.hh b/src/libstore/include/nix/store/local-store.hh
 index 60fed64ae..24e93bd55 100644
 --- a/src/libstore/include/nix/store/local-store.hh
 +++ b/src/libstore/include/nix/store/local-store.hh
-@@ -12,3 +12,7 @@
+@@ -10,11 +10,17 @@
+ 
+ #include <chrono>
  #include <future>
 +#include <memory>
  #include <string>
@@ -112,16 +128,25 @@ index 60fed64ae..24e93bd55 100644
 +#include <type_traits>
 +#include <utility>
  #include <boost/unordered/unordered_flat_set.hpp>
-@@ -17,2 +21,4 @@ namespace nix {
+ 
+ namespace nix {
  
 +struct LocalOverlayStore;
 +
  /**
-@@ -210,2 +216,3 @@ private:
+  * Nix store and database schema version.
+  *
+@@ -208,6 +214,7 @@ private:
+          */
+         bool gcRunning = false;
          std::shared_future<void> gcFuture;
 +        std::thread gcThread;
  
-@@ -228,4 +235,26 @@ private:
+         /**
+          * How much disk space was available after the previous
+@@ -226,8 +233,30 @@ private:
+      */
+     ref<Sync<State>> _state;
  
 +private:
 +
@@ -148,25 +173,41 @@ index 60fed64ae..24e93bd55 100644
 +    }
 +
      const std::filesystem::path dbDir;
-@@ -252,4 +281,2 @@ public:
+     const std::filesystem::path linksDir;
+     const std::filesystem::path reservedPath;
+@@ -250,8 +279,6 @@ public:
+      * Initialise the local store, upgrading the schema if
+      * necessary.
       */
 -    LocalStore(ref<const Config> params);
 -
      ~LocalStore();
+ 
+     /**
 diff --git a/src/libstore/local-overlay-store.cc b/src/libstore/local-overlay-store.cc
 index 705e9ddf7..5e5a44551 100644
 --- a/src/libstore/local-overlay-store.cc
 +++ b/src/libstore/local-overlay-store.cc
-@@ -4,2 +4,3 @@
+@@ -2,6 +2,7 @@
+ 
+ #include "nix/store/local-overlay-store.hh"
  #include "nix/util/callback.hh"
 +#include "nix/util/environment-variables.hh"
  #include "nix/util/os-string.hh"
-@@ -22,3 +23,3 @@ ref<Store> LocalOverlayStoreConfig::openStore() const
+ #include "nix/store/realisation.hh"
+ #include "nix/util/processes.hh"
+@@ -20,7 +21,7 @@ std::string LocalOverlayStoreConfig::doc()
+ 
+ ref<Store> LocalOverlayStoreConfig::openStore() const
  {
 -    return make_ref<LocalOverlayStore>(
 +    return LocalStore::make<LocalOverlayStore>(
          ref{std::dynamic_pointer_cast<const LocalOverlayStoreConfig>(shared_from_this())});
-@@ -75,2 +76,12 @@ LocalOverlayStore::LocalOverlayStore(ref<const Config> config)
+ }
+ 
+@@ -73,6 +74,16 @@ LocalOverlayStore::LocalOverlayStore(ref<const Config> config)
+     }
+ }
  
 +LocalOverlayStore::~LocalOverlayStore()
 +{
@@ -179,16 +220,24 @@ index 705e9ddf7..5e5a44551 100644
 +}
 +
  void LocalOverlayStore::registerDrvOutput(const Realisation & info)
+ {
+     // First do queryRealisation on lower layer to populate DB
 diff --git a/src/libstore/local-store.cc b/src/libstore/local-store.cc
 index 686e9988e..3acca84c0 100644
 --- a/src/libstore/local-store.cc
 +++ b/src/libstore/local-store.cc
-@@ -87,3 +87,3 @@ ref<Store> LocalStore::Config::openStore() const
+@@ -85,7 +85,7 @@ std::filesystem::path LocalBuildStoreConfig::getBuildDir() const
+ 
+ ref<Store> LocalStore::Config::openStore() const
  {
 -    return make_ref<LocalStore>(ref{shared_from_this()});
 +    return LocalStore::make<LocalStore>(ref{shared_from_this()});
  }
-@@ -430,5 +430,5 @@ void LocalStore::deleteStorePath(const std::filesystem::path & path, uint64_t &
+ 
+ bool LocalStoreConfig::getDefaultRequireSigs()
+@@ -428,20 +428,42 @@ void LocalStore::deleteStorePath(const std::filesystem::path & path, uint64_t &
+     }
+ }
  
 -LocalStore::~LocalStore()
 +void LocalStore::waitForAutoGC() noexcept
@@ -196,7 +245,7 @@ index 686e9988e..3acca84c0 100644
 -    std::shared_future<void> future;
 +    std::thread thread;
  
-@@ -436,10 +436,32 @@ LocalStore::~LocalStore()
+     {
          auto state(_state->lock());
 -        if (state->gcRunning)
 -            future = state->gcFuture;
@@ -233,15 +282,23 @@ index 686e9988e..3acca84c0 100644
 +{
 +    waitForAutoGC();
  
+     try {
+         auto fdTempRoots(_fdTempRoots.lock());
 diff --git a/src/nix/nix-store/nix-store.cc b/src/nix/nix-store/nix-store.cc
 index fb2018cff..05fc23127 100644
 --- a/src/nix/nix-store/nix-store.cc
 +++ b/src/nix/nix-store/nix-store.cc
-@@ -29,2 +29,3 @@
+@@ -27,6 +27,7 @@
+ #  include "nix/util/monitor-fd.hh"
+ #endif
  
 +#include <cstdlib>
  #include <iostream>
-@@ -53,2 +54,12 @@ static std::shared_ptr<Store> store;
+ #include <algorithm>
+ 
+@@ -51,6 +52,16 @@ static int rootNr = 0;
+ static bool noOutput = false;
+ static std::shared_ptr<Store> store;
  
 +static void markLegacyStaticTeardown()
 +{
@@ -254,26 +311,40 @@ index fb2018cff..05fc23127 100644
 +}
 +
  ref<LocalStore> ensureLocalStore()
-@@ -1120,2 +1131,5 @@ static int main_nix_store(int argc, char ** argv)
+ {
+     auto store2 = std::dynamic_pointer_cast<LocalStore>(store);
+@@ -1118,11 +1129,15 @@ static void opVersion(Strings opFlags, Strings opArgs)
+ static int main_nix_store(int argc, char ** argv)
+ {
      {
 +        if (getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN") && std::atexit(markLegacyStaticTeardown) != 0)
 +            throw Error("failed to register the legacy store teardown test hook");
 +
          Strings opFlags, opArgs;
-@@ -1125,2 +1139,3 @@ static int main_nix_store(int argc, char ** argv)
+         Operation op = 0;
+         bool readFromStdIn = false;
+         std::string opName;
          bool showHelp = false;
 +        Finally closeStore([] { store.reset(); });
  
+         parseCmdLine(argc, argv, [&](Strings::iterator & arg, const Strings::iterator & end) {
+             Operation oldOp = op;
 diff --git a/src/nix/unix/daemon.cc b/src/nix/unix/daemon.cc
 index 1337985c8..756f73299 100644
 --- a/src/nix/unix/daemon.cc
 +++ b/src/nix/unix/daemon.cc
-@@ -334,3 +334,3 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+@@ -332,7 +332,7 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                 options.dieWithParent = false;
+                 options.runExitHandlers = true;
                  options.allowVfork = false;
 -                startProcess(
 +                auto connectionPid = startProcess(
                      [&, storeConfig, closeListeners = std::move(closeListeners)]() {
-@@ -361,5 +361,10 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                         closeListeners();
+ 
+@@ -359,13 +359,25 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                         setBuildStatusClientInfo({.uid = peer.uid, .user = userName});
+ 
                          // Handle the connection.
 -                        auto store = storeConfig->openStore();
 -                        store->init();
@@ -287,7 +358,8 @@ index 1337985c8..756f73299 100644
 +                        if (auto testDir = getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN"))
 +                            writeFile(std::filesystem::path(*testDir) / "connection-finished", "");
  
-@@ -368,2 +373,9 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                         exit(0);
+                     },
                      options);
 +                if (auto testDir = getEnv("_NIX_TEST_AUTO_GC_SHUTDOWN")) {
 +                    auto pidPath = std::filesystem::path(*testDir) / "connection-pid";
@@ -297,21 +369,30 @@ index 1337985c8..756f73299 100644
 +                    std::filesystem::rename(temporaryPath, pidPath);
 +                }
              });
+     } catch (Interrupted & e) {
+         return;
 diff --git a/src/perl/lib/Nix/Store.xs b/src/perl/lib/Nix/Store.xs
 index 6c4bf2e70..ac61ca30e 100644
 --- a/src/perl/lib/Nix/Store.xs
 +++ b/src/perl/lib/Nix/Store.xs
-@@ -57,3 +57,2 @@ StoreWrapper::new(char * s = nullptr)
+@@ -55,16 +55,14 @@ StoreWrapper::DESTROY()
+ StoreWrapper *
+ StoreWrapper::new(char * s = nullptr)
      CODE:
 -        static std::shared_ptr<Store> _store;
          try {
-@@ -64,5 +63,4 @@ StoreWrapper::new(char * s = nullptr)
+             if (!libStoreInitialized) {
+                 initLibStore();
+                 libStoreInitialized = true;
+             }
              if (items == 1) {
 -                _store = openStore();
                  RETVAL = new StoreWrapper {
 -                    .store = ref<Store>{_store}
 +                    .store = openStore()
                  };
+             } else {
+                 RETVAL = new StoreWrapper {
 diff --git a/tests/functional/gc-auto-shutdown.sh b/tests/functional/gc-auto-shutdown.sh
 new file mode 100755
 index 000000000..020d5059b
@@ -554,16 +635,24 @@ diff --git a/tests/functional/gc-auto.sh b/tests/functional/gc-auto.sh
 index 74f9970af..c08175559 100755
 --- a/tests/functional/gc-auto.sh
 +++ b/tests/functional/gc-auto.sh
-@@ -145,3 +145,3 @@ grepQuietInverse -F "running auto-GC to free" "$secondLog"
+@@ -143,7 +143,7 @@ test -e "$(cat "$secondResult")"
+ grepQuiet -F "skipping auto-GC because" "$secondLog"
+ grepQuietInverse -F "running auto-GC to free" "$secondLog"
  
 -# A synchronous auto-GC caller waits on a detached collector thread. When the
 +# A synchronous auto-GC caller waits on its owned collector thread. When the
  # process is interrupted, the collector must leave a blocked gc.lock wait so it
+ # can fulfill that future and let the caller release any locks it already owns.
+ clearStore
 diff --git a/tests/functional/meson.build b/tests/functional/meson.build
 index 034011634..e5b6e133f 100644
 --- a/tests/functional/meson.build
 +++ b/tests/functional/meson.build
-@@ -65,2 +65,3 @@ suites = [
+@@ -63,6 +63,7 @@ suites = [
+       'experimental-features.sh',
+       'fetchMercurial.sh',
        'gc-auto.sh',
 +      'gc-auto-shutdown.sh',
        'user-envs.sh',
+       'user-envs-migration.sh',
+       'cli-characterisation.sh',
