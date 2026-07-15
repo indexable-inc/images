@@ -25,13 +25,11 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio::time::timeout;
 use tower_http::services::ServeDir;
 
-mod daemon;
 mod dependencies;
 mod emit;
 mod global;
 mod proc_stats;
 mod reasons;
-use daemon::run_daemon_probe;
 use dependencies::resolve_dependencies;
 use global::run_global_probe;
 
@@ -117,8 +115,8 @@ enum NwmCommand {
     /// mirroring `darwin-rebuild switch`. Activation runs under `sudo`.
     Os(SwitchSpec),
 
-    /// Serve the web UI and the machine-wide panels (the nix-daemon probe and
-    /// the machine-builds view) without wrapping any Nix command, until
+    /// Serve the web UI and the machine-wide machine-builds panel without
+    /// wrapping any Nix command, until
     /// interrupted. For running the monitor as a long-lived service
     /// (launchd/systemd). The flags that shape a wrapped command
     /// (`--exit-when-done`, `--terminal-output`, `--nix-verbose`, `--emit`)
@@ -204,7 +202,7 @@ async fn main() -> Result<()> {
         .get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
 
-    // Headless emitter: no UI, no daemon probe -- spawn nix, stream the build
+    // Headless emitter: no UI, no machine probe -- spawn nix, stream the build
     // tree as NDJSON, exit with nix's status. Only the passthrough `nix …`
     // subcommand has a headless form; a switch or a bare `serve` is a UI-only
     // mode.
@@ -224,7 +222,7 @@ async fn main() -> Result<()> {
     // Serve mode: no wrapped command at all. The monitor state starts (and
     // stays) empty -- its empty command label is what tells the UI to show the
     // no-wrapped-command placeholder instead of a build tree -- while the
-    // machine-wide probes feed the daemon and machine-builds panels. There is
+    // machine-wide probe feeds the machine-builds panel. There is
     // no command whose exit could end the run, so it serves until interrupted.
     if matches!(args.command, NwmCommand::Serve) {
         let monitor = Arc::new(RwLock::new(MonitorState::default()));
@@ -311,15 +309,13 @@ struct Ui {
     monitor: Arc<RwLock<MonitorState>>,
     deltas: broadcast::Sender<Bytes>,
     http_server: tokio::task::JoinHandle<()>,
-    daemon_probe: tokio::task::JoinHandle<()>,
     global_probe: tokio::task::JoinHandle<()>,
 }
 
 impl Ui {
-    /// Stop the server and both probes. They are best-effort background tasks
+    /// Stop the server and the probe. They are best-effort background tasks
     /// with no state to flush, so aborting is a clean shutdown.
     fn abort(&self) {
-        self.daemon_probe.abort();
         self.global_probe.abort();
         self.http_server.abort();
     }
@@ -334,12 +330,11 @@ enum UiStart {
     PortBusy,
 }
 
-/// Bind the web server on `host:port` and start the machine-wide probes: the
+/// Bind the web server on `host:port` and start the machine-wide probe: the
 /// UI, the `/api/state` snapshot, and the `/ws` delta feed on one port, plus
-/// the two best-effort overlays that live for the whole life of the UI --
-/// the nix-daemon syscall tracer for the daemon panel, and the machine-builds
-/// poller (`nix store builds --json`, patched nix only, self-hides on stock
-/// nix) for the machine panel.
+/// one best-effort overlay that lives for the whole life of the UI -- the
+/// machine-builds poller (`nix store builds --json`, patched nix only,
+/// self-hides on stock nix) for the machine panel.
 async fn start_ui(
     host: &str,
     port: u16,
@@ -374,14 +369,12 @@ async fn start_ui(
 
     eprintln!("nix-web-monitor: http://{http_addr}");
 
-    let daemon_probe = tokio::spawn(run_daemon_probe(Arc::clone(&monitor), deltas.clone()));
     let global_probe = tokio::spawn(run_global_probe(Arc::clone(&monitor), deltas.clone()));
 
     Ok(UiStart::Bound(Ui {
         monitor,
         deltas,
         http_server,
-        daemon_probe,
         global_probe,
     }))
 }

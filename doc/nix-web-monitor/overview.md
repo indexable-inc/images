@@ -1,20 +1,19 @@
 # nix-web-monitor
 
 `packages/nix-web-monitor` runs a Nix command with quiet terminal output and a
-live browser monitor: a build tree, log tail, activity DAG, store-optimisation
-totals, and a `nix-daemon` syscall panel, all on one HTTP port. It is two Rust
+live browser monitor: a build tree, log tail, activity DAG, and
+store-optimisation totals, all on one HTTP port. It is two Rust
 workspace crates:
 
 - **`parser`** (`nix-web-monitor-parser`): the pure, testable parser and state
-  model for Nix's `internal-json` event stream. No I/O. Also exports the
-  per-tracer syscall line parsers in its `daemon` module.
+  model for Nix's `internal-json` event stream. No I/O.
 - **`server`** (`nix-web-monitor`): the `axum` binary that spawns `nix`, feeds
-  stderr through the parser, resolves dependency edges, samples daemon syscall
-  hot paths, and streams deltas to browsers over a WebSocket. Wrapped with a
+  stderr through the parser, resolves dependency edges, and streams deltas to
+  browsers over a WebSocket. Wrapped with a
   built Svelte site.
 
-The state-machine, transport, dependency-resolution, and daemon-tracing mechanics
-are in [internals](internals.md).
+The state-machine, transport, and dependency-resolution mechanics are in
+[internals](internals.md).
 
 ## Why it exists
 
@@ -23,9 +22,8 @@ derivation built but carries no dependency edges, no per-activity success marker
 and goes silent inside a single long `addToStore` (writing a path, or
 hard-linking every file under `auto-optimise-store`), which is exactly when a
 build looks hung. nix-web-monitor reconstructs the build DAG out-of-band, folds
-content-addressed `resolved derivation` pairs into one row, measures the
-otherwise-unsized "copying to the store" source, and taps the daemon's syscalls
-so the silent phase is visible. The browser feed is plain `ws://` on the page's
+content-addressed `resolved derivation` pairs into one row, and measures the
+otherwise-unsized "copying to the store" source. The browser feed is plain `ws://` on the page's
 own origin, so off-host access (LAN/Tailscale) needs no certificate.
 
 ## CLI surface (`server/src/main.rs:42`)
@@ -39,9 +37,8 @@ nix-web-monitor serve [--host H] [--port N]
 ```
 
 - `serve`: run the monitor as a standalone server with no wrapped Nix command,
-  until interrupted. The machine-wide panels (the nix-daemon syscall probe and
-  the machine-builds view fed by the patched-nix `nix store builds --json`
-  poller) are the content; the build tree shows a "no wrapped command"
+  until interrupted. The machine-wide machine-builds panel (fed by the
+  patched-nix `nix store builds --json` poller) is the content; the build tree shows a "no wrapped command"
   placeholder instead of a fake command. This is the mode for a long-lived
   login service (launchd/systemd) serving the machine build dashboard on
   `:7532`. The per-command flags (`--exit-when-done`, `--terminal-output`,
@@ -86,15 +83,11 @@ rather than serving HTML for the wrong MIME type).
 - `MonitorState` (`:276`): the accumulating state machine. `new(command)`,
   `apply_line` / `apply_parsed_line`, `snapshot() -> MonitorSnapshot`,
   `drain_deltas() -> Vec<Delta>`, `finish(exit_code)`, plus out-of-band setters
-  `record_closure`, `set_daemon`, `set_activity_size`.
+  `record_closure`, `set_activity_size`.
 - `MonitorSnapshot` (`:958`) and `Delta` (`:248`): the seed-once / stream-deltas
   wire model the browser consumes. `BuildNode`/`BuildStatus` (`:1025`),
   `ActivityNode` (`:991`), `LogEntry` (`:1058`), `DerivationEdge` (`:984`),
-  `OptimiseStats` (`:229`), `DaemonInfo` (`daemon::DaemonInfo`, including
-  daemon syscall rates and hot paths).
-- `daemon` module (`parser/src/daemon.rs`): `OpClass::classify`,
-  `parse_fs_usage_line` (macOS), `parse_strace_line` (Linux), and the rolling
-  `DaemonTrace` -> `DaemonInfo` aggregator.
+  `OptimiseStats` (`:229`).
 
 ## Build and packaging
 

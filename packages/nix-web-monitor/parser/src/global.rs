@@ -119,8 +119,7 @@ pub struct GlobalBuild {
 
 /// Wire-friendly snapshot of the machine-wide build view.
 ///
-/// Mirrors [`DaemonInfo`](crate::DaemonInfo): `detected` is the analog of
-/// `tracing` (false when the subcommand is unavailable, i.e. stock nix), and
+/// `detected` is false when the subcommand is unavailable (i.e. stock nix), and
 /// `status` is the human line the UI shows ("not available (stock nix)",
 /// "12 active", or an error). The default is the undetected state, so a fresh
 /// `MonitorState` carries an empty view the UI hides until the probe flips it on.
@@ -132,8 +131,7 @@ pub struct GlobalBuilds {
     pub detected: bool,
     /// Active build/substitution goals on the machine, as last polled.
     pub builds: Vec<GlobalBuild>,
-    /// Human state line, like [`DaemonInfo.status`](crate::DaemonInfo::status):
-    /// the availability note, the active count, or an error.
+    /// Human state line: the availability note, the active count, or an error.
     pub status: String,
 }
 

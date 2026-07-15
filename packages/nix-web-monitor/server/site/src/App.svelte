@@ -3,7 +3,6 @@
   import ActivationPanel from '$components/ActivationPanel.svelte';
   import ActivityGraph from '$components/ActivityGraph.svelte';
   import BuildTable from '$components/BuildTable.svelte';
-  import DaemonPanel from '$components/DaemonPanel.svelte';
   import DiffPanel from '$components/DiffPanel.svelte';
   import ErrorPanel from '$components/ErrorPanel.svelte';
   import GlobalPanel from '$components/GlobalPanel.svelte';
@@ -107,7 +106,7 @@
 
   /// Default arrangement: the build DAG is the primary surface, the machine /
   /// activation / changes views share a tab group top-right over the
-  /// activities/daemon group, and logs ride a full-width drawer along the
+  /// activities group, and logs ride a full-width drawer along the
   /// bottom. Only used until the operator rearranges (persisted per browser),
   /// or after "reset layout".
   function defaultLayout(): DockLayout {
@@ -124,7 +123,7 @@
               split(
                 'column',
                 [0.45, 0.55],
-                [group(['machine', 'activation', 'changes']), group(['activities', 'daemon'])]
+                [group(['machine', 'activation', 'changes']), group(['activities'])]
               )
             ]
           ),
@@ -144,7 +143,6 @@
     activation: Snippet,
     changes: Snippet,
     activities: Snippet,
-    daemon: Snippet,
     logs: Snippet
   ): PaneSpec[] {
     return [
@@ -158,7 +156,6 @@
       },
       { id: 'changes', title: 'changes', content: changes, visible: snapshot.diff !== null },
       { id: 'activities', title: 'activities', content: activities },
-      { id: 'daemon', title: 'daemon', content: daemon },
       { id: 'logs', title: 'logs', content: logs }
     ];
   }
@@ -193,10 +190,6 @@
 
 {#snippet activitiesPane()}
   <ActivityGraph activities={snapshot.activities} builds={snapshot.builds} />
-{/snippet}
-
-{#snippet daemonPane()}
-  <DaemonPanel daemon={snapshot.daemon} />
 {/snippet}
 
 {#snippet logsPane()}
@@ -239,7 +232,6 @@
       activationPane,
       changesPane,
       activitiesPane,
-      daemonPane,
       logsPane
     )}
   />
