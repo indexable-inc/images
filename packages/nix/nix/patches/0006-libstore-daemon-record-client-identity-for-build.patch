@@ -3,6 +3,14 @@ From: Andrew Gazelka <andrew@ix.dev>
 Date: Sun, 5 Jul 2026 20:12:38 -0700
 Subject: [PATCH] libstore: daemon record client identity for build status
 
+Record the daemon peer PID, UID, and user before opening its store so every
+build and substitution status file can identify the requesting client.
+
+The worker is forked once per daemon connection, making this process-global
+identity stable for every goal served by that connection.
+---
+ src/nix/unix/daemon.cc | 5 +++++
+ 1 file changed, 5 insertions(+)
 
 diff --git a/src/nix/unix/daemon.cc b/src/nix/unix/daemon.cc
 index 5b41d42..31f6cc1 100644
@@ -27,3 +35,6 @@ index 5b41d42..31f6cc1 100644
                          // Handle the connection.
                          auto store = storeConfig->openStore();
                          store->init();
+-- 
+2.54.0
+

@@ -415,7 +415,7 @@
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        "0006-libstore-daemon-record-client-uid-and-user-for-build.patch" = {
+        "0006-libstore-daemon-record-client-identity-for-build.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
