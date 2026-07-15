@@ -15,6 +15,7 @@ import tempfile
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
@@ -889,6 +890,29 @@ def _exception_detail(exc: BaseException) -> str:
     return "".join(traceback.format_exception_only(type(exc), exc)).rstrip()
 
 
+def _record_cleanup_error(
+    failure: BaseException | None,
+    cleanup_error: BaseException,
+    note: str,
+) -> BaseException:
+    if failure is None:
+        return cleanup_error
+    failure.add_note(f"{note}: {_exception_detail(cleanup_error)}")
+    return failure
+
+
+def _attempt_cleanup(
+    action: Callable[[], None],
+    failure: BaseException | None,
+    note: str,
+) -> BaseException | None:
+    try:
+        action()
+    except BaseException as cleanup_error:
+        return _record_cleanup_error(failure, cleanup_error, note)
+    return failure
+
+
 def main() -> NoReturn:
     if len(sys.argv) < 3:
         raise SystemExit("usage: _supervise.py OWNER_FD COMMAND [ARG ...]")
@@ -947,39 +971,32 @@ def main() -> NoReturn:
                 # Readiness was observed while the owner was still open, so any
                 # later cancellation starts a new parent timeout window.
                 darwin_deadline = _CleanupDeadline.for_cleanup()
-            try:
-                _terminate_darwin_job(job, members, statuses, darwin_deadline)
-            except BaseException as cleanup_error:
-                if failure is None:
-                    failure = cleanup_error
-                else:
-                    failure.add_note(
-                        "nix supervisor cleanup also failed: "
-                        f"{_exception_detail(cleanup_error)}"
-                    )
+            failure = _attempt_cleanup(
+                lambda: _terminate_darwin_job(
+                    job,
+                    members,
+                    statuses,
+                    darwin_deadline,
+                ),
+                failure,
+                "nix supervisor cleanup also failed",
+            )
             try:
                 if target_status is None:
                     target_status = job.read_status()
                 job.close()
             except BaseException as cleanup_error:
-                if failure is None:
-                    failure = cleanup_error
-                else:
-                    failure.add_note(
-                        "nix supervisor launchd cleanup also failed: "
-                        f"{_exception_detail(cleanup_error)}"
-                    )
+                failure = _record_cleanup_error(
+                    failure,
+                    cleanup_error,
+                    "nix supervisor launchd cleanup also failed",
+                )
         elif target is not None:
-            try:
-                _terminate_tree(supervisor, members, statuses)
-            except BaseException as cleanup_error:
-                if failure is None:
-                    failure = cleanup_error
-                else:
-                    failure.add_note(
-                        "nix supervisor cleanup also failed: "
-                        f"{_exception_detail(cleanup_error)}"
-                    )
+            failure = _attempt_cleanup(
+                lambda: _terminate_tree(supervisor, members, statuses),
+                failure,
+                "nix supervisor cleanup also failed",
+            )
         selector.close()
         os.close(owner_fd)
         for member in members.values():

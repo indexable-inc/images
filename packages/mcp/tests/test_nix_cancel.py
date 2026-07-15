@@ -13,8 +13,8 @@ import sys
 import textwrap
 import time
 import warnings
-from collections.abc import Awaitable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 
 import psutil
 import pytest
@@ -176,6 +176,52 @@ async def _reap_direct(process: asyncio.subprocess.Process) -> None:
         await asyncio.wait_for(process.wait(), 2)
 
 
+@dataclass(slots=True)
+class _DelayedSpawn:
+    original: Callable[..., Awaitable[asyncio.subprocess.Process]]
+    created: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+    processes: list[asyncio.subprocess.Process] = field(default_factory=list)
+
+    async def __call__(
+        self,
+        program: str,
+        *args: str,
+        cwd: str | None,
+        stdout: int,
+        stderr: int | None,
+        start_new_session: bool = False,
+        pass_fds: tuple[int, ...] = (),
+    ) -> asyncio.subprocess.Process:
+        process = await self.original(
+            program,
+            *args,
+            cwd=cwd,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=start_new_session,
+            pass_fds=pass_fds,
+        )
+        self.processes.append(process)
+        self.created.set()
+        await self.release.wait()
+        return process
+
+
+async def _spawn_and_collect(
+    program: str,
+    *args: str,
+    cwd: str | None,
+) -> tuple[bytes, bytes]:
+    process = await nix._spawn(
+        program,
+        *args,
+        cwd=cwd,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    return await asyncio.wait_for(nix._communicate(process), 5)
+
+
 def test_job_cancel_reaps_a_setsid_tree_blocked_in_stderr_write(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
@@ -184,37 +230,10 @@ def test_job_cancel_reaps_a_setsid_tree_blocked_in_stderr_write(
         monkeypatch, tmp_path
     )
     _wire(monkeypatch, {"nix": nix})
-    original_spawn = asyncio.create_subprocess_exec
     identities: tuple[_Identity, ...] = ()
 
     async def scenario() -> runtime.Job:
-        created = asyncio.Event()
-        release = asyncio.Event()
-        spawned: list[asyncio.subprocess.Process] = []
-
-        async def delayed_spawn(
-            program: str,
-            *args: str,
-            cwd: str | None,
-            stdout: int,
-            stderr: int | None,
-            start_new_session: bool = False,
-            pass_fds: tuple[int, ...] = (),
-        ) -> asyncio.subprocess.Process:
-            process = await original_spawn(
-                program,
-                *args,
-                cwd=cwd,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=start_new_session,
-                pass_fds=pass_fds,
-            )
-            spawned.append(process)
-            created.set()
-            await release.wait()
-            return process
-
+        delayed_spawn = _DelayedSpawn(asyncio.create_subprocess_exec)
         monkeypatch.setattr(nix.asyncio, "create_subprocess_exec", delayed_spawn)
         job = await runtime.__ix_run(
             "await nix.eval('.#slow')",
@@ -223,20 +242,20 @@ def test_job_cancel_reaps_a_setsid_tree_blocked_in_stderr_write(
         )
         try:
             await asyncio.to_thread(_wait_for, pid_file, ready_file, blocked_file)
-            await asyncio.wait_for(created.wait(), 1)
-            assert spawned[0].stderr is not None
-            await _wait_until_stream_paused(spawned[0].stderr)
+            await asyncio.wait_for(delayed_spawn.created.wait(), 1)
+            assert delayed_spawn.processes[0].stderr is not None
+            await _wait_until_stream_paused(delayed_spawn.processes[0].stderr)
             nonlocal identities
             identities = _identities(pid_file)
             job.cancel()
-            release.set()
+            delayed_spawn.release.set()
             await asyncio.sleep(0)
             job.cancel()
             await job.wait(10)
             return job
         finally:
-            release.set()
-            for process in spawned:
+            delayed_spawn.release.set()
+            for process in delayed_spawn.processes:
                 await _reap_direct(process)
 
     try:
@@ -827,38 +846,12 @@ def test_base_exception_during_launch_closes_owner_and_reaps(
             time.sleep(60)
         """,
     )
-    original_spawn = asyncio.create_subprocess_exec
     original_shield = asyncio.shield
     before = _open_fds()
 
     async def scenario() -> asyncio.subprocess.Process:
-        created = asyncio.Event()
-        release = asyncio.Event()
-        spawned: list[asyncio.subprocess.Process] = []
+        delayed_spawn = _DelayedSpawn(asyncio.create_subprocess_exec)
         shield_calls = 0
-
-        async def delayed_spawn(
-            program: str,
-            *args: str,
-            cwd: str | None,
-            stdout: int,
-            stderr: int | None,
-            start_new_session: bool = False,
-            pass_fds: tuple[int, ...] = (),
-        ) -> asyncio.subprocess.Process:
-            process = await original_spawn(
-                program,
-                *args,
-                cwd=cwd,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=start_new_session,
-                pass_fds=pass_fds,
-            )
-            spawned.append(process)
-            created.set()
-            await release.wait()
-            return process
 
         def abort_first_shield(awaitable: Awaitable[object]) -> Awaitable[object]:
             nonlocal shield_calls
@@ -867,9 +860,9 @@ def test_base_exception_during_launch_closes_owner_and_reaps(
                 return original_shield(awaitable)
 
             async def abort() -> None:
-                await created.wait()
+                await delayed_spawn.created.wait()
                 await asyncio.to_thread(_wait_for, ready_file)
-                release.set()
+                delayed_spawn.release.set()
                 raise _LaunchAbort
 
             return abort()
@@ -879,11 +872,11 @@ def test_base_exception_during_launch_closes_owner_and_reaps(
         try:
             with pytest.raises(_LaunchAbort):
                 await nix._spawn(str(target), cwd=None, stderr=asyncio.subprocess.PIPE)
-            assert spawned[0].returncode is not None
-            return spawned[0]
+            assert delayed_spawn.processes[0].returncode is not None
+            return delayed_spawn.processes[0]
         finally:
-            release.set()
-            for process in spawned:
+            delayed_spawn.release.set()
+            for process in delayed_spawn.processes:
                 await _reap_direct(process)
 
     asyncio.run(scenario())
@@ -961,14 +954,12 @@ def test_worktree_cannot_shadow_the_supervisor_helper(tmp_path: pathlib.Path) ->
     )
 
     async def scenario() -> tuple[bytes, bytes]:
-        process = await nix._spawn(
+        return await _spawn_and_collect(
             sys.executable,
             "-c",
             "import sys; print('out'); print('err', file=sys.stderr)",
             cwd=str(tmp_path),
-            stderr=asyncio.subprocess.PIPE,
         )
-        return await asyncio.wait_for(nix._communicate(process), 5)
 
     assert asyncio.run(scenario()) == (b"out\n", b"err\n")
     assert not marker.exists()
@@ -1002,14 +993,12 @@ def test_spawn_preserves_an_owner_pipe_allocated_as_stdin() -> None:
         saved_stdin = os.dup(0)
         os.close(0)
         try:
-            process = await nix._spawn(
+            return await _spawn_and_collect(
                 sys.executable,
                 "-c",
                 "import sys; print('out'); print('err', file=sys.stderr)",
                 cwd=None,
-                stderr=asyncio.subprocess.PIPE,
             )
-            return await asyncio.wait_for(nix._communicate(process), 5)
         finally:
             os.dup2(saved_stdin, 0)
             os.close(saved_stdin)
@@ -1101,14 +1090,12 @@ def test_unrelated_fork_cannot_extend_owner_lifetime(
 
 def test_normal_completion_drains_both_pipes() -> None:
     async def scenario() -> tuple[bytes, bytes]:
-        process = await nix._spawn(
+        return await _spawn_and_collect(
             sys.executable,
             "-c",
             "import sys; print('out'); print('err', file=sys.stderr)",
             cwd=None,
-            stderr=asyncio.subprocess.PIPE,
         )
-        return await asyncio.wait_for(nix._communicate(process), 5)
 
     assert asyncio.run(scenario()) == (b"out\n", b"err\n")
 
