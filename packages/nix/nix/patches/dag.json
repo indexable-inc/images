@@ -73,6 +73,12 @@
     {
       "patch": "0017-fix-libstore-recheck-free-space-after-GC-lock.patch",
       "deps": []
+    },
+    {
+      "patch": "0018-fix-libstore-interrupt-blocked-automatic-GC.patch",
+      "deps": [
+        "0017-fix-libstore-recheck-free-space-after-GC-lock.patch"
+      ]
     }
   ]
 }

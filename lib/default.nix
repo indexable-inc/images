@@ -144,6 +144,8 @@
   # patch bytes owned by index so fleet configurations consume one source of
   # truth instead of copying the fix into each repository.
   nixPatches = {
+    autoGcInterruptibleLockWait =
+      paths.packagesRoot + "/nix/nix/patches/0018-fix-libstore-interrupt-blocked-automatic-GC.patch";
     autoGcRecheckAfterLock =
       paths.packagesRoot + "/nix/nix/patches/0017-fix-libstore-recheck-free-space-after-GC-lock.patch";
     opaqueTemporaryRootFilenames =
