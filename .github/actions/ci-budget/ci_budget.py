@@ -79,6 +79,13 @@ class BudgetSnapshot:
         return "extended" if self.big_change else "standard"
 
 
+def classification_from_snapshot(snapshot: BudgetSnapshot) -> Classification:
+    return Classification(
+        big_change=snapshot.big_change,
+        reason={"sources": ["attempt_snapshot"], "matches": []},
+    )
+
+
 def parse_bool(value: str, name: str) -> bool:
     if value == "true":
         return True
@@ -790,7 +797,15 @@ def main() -> int:
     run_attempt = parse_positive_int(os.environ["CI_BUDGET_RUN_ATTEMPT"], "run-attempt")
     attempt = client.workflow_attempt(run_id, run_attempt)
     labels: list[str] = []
-    if pull_request_number:
+    if run_attempt > 1:
+        snapshot = client.ci_budget_snapshot(run_id, run_attempt)
+        if snapshot is None:
+            raise RuntimeError("workflow retry has no earlier CI budget snapshot")
+        classification = classification_from_snapshot(snapshot)
+        # The attempt-one publisher owns the human-facing reason. A retry must
+        # consume that frozen tier without rewriting it from live PR state.
+        publish = False
+    elif pull_request_number:
         pull_request = client.pull_request(pull_request_number)
         labels = labels_from_pull_request(pull_request)
         classification = classify_pull_request(

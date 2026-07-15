@@ -36,6 +36,19 @@ class PolicyTests(unittest.TestCase):
 
         assert standard_deadline(run) == datetime(2026, 7, 15, 10, 5, tzinfo=UTC)
 
+    def test_reusable_workflows_load_the_action_from_their_exact_version(self) -> None:
+        workflows = Path(__file__).resolve().parents[2] / "workflows"
+        for name in ("ci-budget.yml", "ci-budget-read-only.yml"):
+            with self.subTest(workflow=name):
+                source = (workflows / name).read_text()
+                assert "repository: ${{ job.workflow_repository }}" in source
+                assert "ref: ${{ job.workflow_sha }}" in source
+                assert "uses: ./.ci-budget-owner/.github/actions/ci-budget" in source
+                assert (
+                    "uses: indexable-inc/index/.github/actions/ci-budget@main"
+                    not in source
+                )
+
     def test_policy_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.json"

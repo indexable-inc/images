@@ -99,7 +99,7 @@ export async function workflowRunCreatedAt({
   });
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`GitHub workflow attempt request failed with ${response.status}`);
+    throw new Error(`GitHub workflow run request failed with ${response.status}`);
   }
   const run = JSON.parse(body);
   if (run.run_attempt !== runAttempt) {
