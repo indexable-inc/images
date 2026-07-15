@@ -159,7 +159,7 @@ class GitHubClientTests(unittest.TestCase):
                 {
                     "artifacts": [
                         {
-                            "name": "ci-budget-context-12-2-" + "a" * 40,
+                            "name": "ci-budget-context-12-2-base-" + "a" * 40,
                             "expired": False,
                         }
                     ]
@@ -168,7 +168,9 @@ class GitHubClientTests(unittest.TestCase):
         )
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
 
-        assert client.ci_budget_context_base_sha(12, 2) == "a" * 40
+        assert client.ci_budget_context(12, 2) == ci_budget.WorkflowContext(
+            base_sha="a" * 40
+        )
 
     def test_partial_rerun_inherits_consistent_context(self) -> None:
         transport = FakeTransport(
@@ -176,7 +178,7 @@ class GitHubClientTests(unittest.TestCase):
                 {
                     "artifacts": [
                         {
-                            "name": "ci-budget-context-12-1-" + "a" * 40,
+                            "name": "ci-budget-context-12-1-base-" + "a" * 40,
                             "expired": False,
                         }
                     ]
@@ -185,7 +187,28 @@ class GitHubClientTests(unittest.TestCase):
         )
         client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
 
-        assert client.ci_budget_context_base_sha(12, 2) == "a" * 40
+        assert client.ci_budget_context(12, 2) == ci_budget.WorkflowContext(
+            base_sha="a" * 40
+        )
+
+    def test_context_artifact_preserves_fork_pull_request_identity(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "artifacts": [
+                        {
+                            "name": "ci-budget-context-12-2-pr-42",
+                            "expired": False,
+                        }
+                    ]
+                }
+            ]
+        )
+        client = ci_budget.GitHubClient("indexable-inc/index", "token", transport)
+
+        assert client.ci_budget_context(12, 2) == ci_budget.WorkflowContext(
+            pull_request_number=42
+        )
 
     def test_owned_sticky_comment_is_updated(self) -> None:
         transport = FakeTransport(
