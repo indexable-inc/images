@@ -1,0 +1,1066 @@
+From 1510e4c344331e37d69fff1685a631f9b78a3225 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Wed, 15 Jul 2026 04:49:35 -0700
+Subject: [PATCH] libstore: persist delete traversal across bounded slices
+
+Add a versioned, fsynced LocalStore checkpoint for bounded gcDeleteSpecific referrer traversal. Each process refreshes roots before resuming, and deletion begins only after traversal completes.
+
+Bound checkpointed collectors while they wait for gc.lock without constraining an active slice.
+
+Cover a three-path cross-process resume, a root introduced between slices, and lock contention versus active work.
+
+(sent by an AI agent via Codex)
+---
+ src/libstore/gc-checkpoint.cc               | 185 ++++++++++++++
+ src/libstore/gc-checkpoint.hh               |  36 +++
+ src/libstore/gc.cc                          | 260 +++++++++++++++-----
+ src/libstore/include/nix/store/gc-store.hh  |  22 ++
+ src/libstore/include/nix/store/pathlocks.hh |   3 +
+ src/libstore/meson.build                    |   1 +
+ src/libstore/pathlocks.cc                   |  18 ++
+ src/libstore/remote-store.cc                |   3 +
+ src/nix/store-delete.cc                     |  49 ++++
+ src/nix/store-delete.md                     |  18 ++
+ tests/functional/gc-checkpoint.sh           | 148 +++++++++++
+ tests/functional/meson.build                |   1 +
+ 12 files changed, 682 insertions(+), 62 deletions(-)
+ create mode 100644 src/libstore/gc-checkpoint.cc
+ create mode 100644 src/libstore/gc-checkpoint.hh
+ create mode 100644 tests/functional/gc-checkpoint.sh
+
+diff --git a/src/libstore/gc-checkpoint.cc b/src/libstore/gc-checkpoint.cc
+new file mode 100644
+index 0000000..2b0e743
+--- /dev/null
++++ b/src/libstore/gc-checkpoint.cc
+@@ -0,0 +1,185 @@
++#include "gc-checkpoint.hh"
++
++#include "nix/store/store-dir-config.hh"
++#include "nix/util/file-system.hh"
++
++#include <nlohmann/json.hpp>
++
++#include <system_error>
++
++namespace nix {
++
++namespace {
++
++constexpr uint64_t checkpointVersion = 1;
++constexpr std::string_view checkpointOperation = "delete-specific";
++
++template<typename Paths>
++nlohmann::json renderPaths(const StoreDirConfig & store, const Paths & paths)
++{
++    auto result = nlohmann::json::array();
++    for (const auto & path : paths)
++        result.push_back(store.printStorePath(path));
++    return result;
++}
++
++StorePath parsePath(
++    const StoreDirConfig & store,
++    const nlohmann::json & value,
++    std::string_view field,
++    const std::filesystem::path & checkpointPath)
++{
++    if (!value.is_string())
++        throw Error("GC checkpoint '%s' field '%s' must be a string", PathFmt(checkpointPath), field);
++    return store.parseStorePath(value.get_ref<const std::string &>());
++}
++
++StorePathSet parsePathSet(
++    const StoreDirConfig & store,
++    const nlohmann::json & value,
++    std::string_view field,
++    const std::filesystem::path & checkpointPath)
++{
++    if (!value.is_array())
++        throw Error("GC checkpoint '%s' field '%s' must be an array", PathFmt(checkpointPath), field);
++
++    StorePathSet result;
++    for (const auto & item : value) {
++        auto path = parsePath(store, item, field, checkpointPath);
++        if (!result.insert(path).second)
++            throw Error("GC checkpoint '%s' field '%s' contains a duplicate path", PathFmt(checkpointPath), field);
++    }
++    return result;
++}
++
++std::deque<StorePath> parsePathQueue(
++    const StoreDirConfig & store,
++    const nlohmann::json & value,
++    std::string_view field,
++    const std::filesystem::path & checkpointPath)
++{
++    if (!value.is_array())
++        throw Error("GC checkpoint '%s' field '%s' must be an array", PathFmt(checkpointPath), field);
++
++    std::deque<StorePath> result;
++    StorePathSet seen;
++    for (const auto & item : value) {
++        auto path = parsePath(store, item, field, checkpointPath);
++        if (!seen.insert(path).second)
++            throw Error("GC checkpoint '%s' field '%s' contains a duplicate path", PathFmt(checkpointPath), field);
++        result.push_back(std::move(path));
++    }
++    return result;
++}
++
++} // namespace
++
++std::optional<GCTraversalCheckpointState> loadGCTraversalCheckpoint(
++    const std::filesystem::path & path, const StoreDirConfig & store, const GCTraversalCheckpointSpec & expected)
++{
++    if (!pathExists(path))
++        return std::nullopt;
++
++    try {
++        auto json = nlohmann::json::parse(readFile(path));
++
++        auto version = json.at("version").get<uint64_t>();
++        if (version != checkpointVersion)
++            throw Error(
++                "GC checkpoint '%s' has version %d, but this Nix supports version %d",
++                PathFmt(path),
++                version,
++                checkpointVersion);
++
++        auto operation = json.at("operation").get<std::string>();
++        if (operation != checkpointOperation)
++            throw Error("GC checkpoint '%s' has unsupported operation '%s'", PathFmt(path), operation);
++
++        auto storeDir = json.at("storeDir").get<std::string>();
++        if (storeDir != store.storeDir)
++            throw Error("GC checkpoint '%s' belongs to store '%s', not '%s'", PathFmt(path), storeDir, store.storeDir);
++
++        auto pathsToDelete = parsePathSet(store, json.at("pathsToDelete"), "pathsToDelete", path);
++        if (pathsToDelete != expected.pathsToDelete)
++            throw Error("GC checkpoint '%s' was created for a different path set", PathFmt(path));
++
++        auto start = parsePath(store, json.at("start"), "start", path);
++        if (start != expected.start)
++            throw Error("GC checkpoint '%s' was created with a different traversal start", PathFmt(path));
++
++        auto keepOutputs = json.at("keepOutputs").get<bool>();
++        auto keepDerivations = json.at("keepDerivations").get<bool>();
++        if (keepOutputs != expected.keepOutputs || keepDerivations != expected.keepDerivations)
++            throw Error("GC checkpoint '%s' was created with different GC graph settings", PathFmt(path));
++
++        GCTraversalCheckpointState state{
++            .visited = parsePathSet(store, json.at("visited"), "visited", path),
++            .todo = parsePathQueue(store, json.at("todo"), "todo", path),
++        };
++
++        if (!state.visited.contains(expected.start))
++            throw Error("GC checkpoint '%s' does not contain its traversal start", PathFmt(path));
++        if (state.todo.empty())
++            throw Error("GC checkpoint '%s' has no remaining traversal work", PathFmt(path));
++
++        StorePathSet queued(state.todo.begin(), state.todo.end());
++        for (const auto & queuedPath : queued)
++            if (!state.visited.contains(queuedPath))
++                throw Error("GC checkpoint '%s' has an unvisited queued path", PathFmt(path));
++
++        for (const auto & visitedPath : state.visited)
++            if (!expected.pathsToDelete.contains(visitedPath) && !queued.contains(visitedPath))
++                throw Error("GC checkpoint '%s' has an unselected processed path", PathFmt(path));
++
++        return state;
++    } catch (const nlohmann::json::exception & error) {
++        throw Error("cannot parse GC checkpoint '%s': %s", PathFmt(path), error.what());
++    }
++}
++
++void saveGCTraversalCheckpoint(
++    const std::filesystem::path & path,
++    const StoreDirConfig & store,
++    const GCTraversalCheckpointSpec & spec,
++    const GCTraversalCheckpointState & state)
++{
++    if (!path.has_parent_path())
++        throw Error("GC checkpoint path '%s' must have a parent directory", PathFmt(path));
++    if (state.todo.empty())
++        throw Error("refusing to save completed GC traversal checkpoint '%s'", PathFmt(path));
++
++    nlohmann::json json{
++        {"version", checkpointVersion},
++        {"operation", checkpointOperation},
++        {"storeDir", store.storeDir},
++        {"pathsToDelete", renderPaths(store, spec.pathsToDelete)},
++        {"start", store.printStorePath(spec.start)},
++        {"keepOutputs", spec.keepOutputs},
++        {"keepDerivations", spec.keepDerivations},
++        {"visited", renderPaths(store, state.visited)},
++        {"todo", renderPaths(store, state.todo)},
++    };
++
++    auto temporaryPath = path;
++    temporaryPath += ".tmp";
++    writeFile(temporaryPath, json.dump(2) + "\n", 0600, FsSync::Yes);
++
++    try {
++        std::filesystem::rename(temporaryPath, path);
++    } catch (const std::filesystem::filesystem_error & error) {
++        throw Error("cannot replace GC checkpoint '%s': %s", PathFmt(path), error.what());
++    }
++    syncParent(path);
++}
++
++void clearGCTraversalCheckpoint(const std::filesystem::path & path)
++{
++    std::error_code error;
++    auto removed = std::filesystem::remove(path, error);
++    if (error)
++        throw Error("cannot remove GC checkpoint '%s': %s", PathFmt(path), error.message());
++    if (removed)
++        syncParent(path);
++}
++
++} // namespace nix
+diff --git a/src/libstore/gc-checkpoint.hh b/src/libstore/gc-checkpoint.hh
+new file mode 100644
+index 0000000..8a50999
+--- /dev/null
++++ b/src/libstore/gc-checkpoint.hh
+@@ -0,0 +1,36 @@
++#pragma once
++
++#include "nix/store/store-api.hh"
++
++#include <deque>
++#include <filesystem>
++#include <optional>
++
++namespace nix {
++
++struct GCTraversalCheckpointSpec
++{
++    StorePathSet pathsToDelete;
++    StorePath start;
++    bool keepOutputs;
++    bool keepDerivations;
++};
++
++struct GCTraversalCheckpointState
++{
++    StorePathSet visited;
++    std::deque<StorePath> todo;
++};
++
++std::optional<GCTraversalCheckpointState> loadGCTraversalCheckpoint(
++    const std::filesystem::path & path, const StoreDirConfig & store, const GCTraversalCheckpointSpec & expected);
++
++void saveGCTraversalCheckpoint(
++    const std::filesystem::path & path,
++    const StoreDirConfig & store,
++    const GCTraversalCheckpointSpec & spec,
++    const GCTraversalCheckpointState & state);
++
++void clearGCTraversalCheckpoint(const std::filesystem::path & path);
++
++} // namespace nix
+diff --git a/src/libstore/gc.cc b/src/libstore/gc.cc
+index 432dbd8..29422e6 100644
+--- a/src/libstore/gc.cc
++++ b/src/libstore/gc.cc
+@@ -12,12 +12,13 @@
+ #include "nix/util/file-system.hh"
+ #include "nix/store/posix-fs-canonicalise.hh"
+ 
++#include "gc-checkpoint.hh"
+ #include "store-config-private.hh"
+ 
+ #include <boost/unordered/unordered_flat_map.hpp>
+ #include <boost/unordered/unordered_flat_set.hpp>
+ #include <boost/regex.hpp>
+-#include <queue>
++#include <deque>
+ #include <thread>
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -370,9 +371,9 @@ void LocalStore::collectGarbageImpl(const GCOptions & options, GCResults & resul
+         // ignore suffixes like '.lock', '.chroot' and '.check'.
+         boost::unordered_flat_set<std::string, StringViewHash, std::equal_to<>> tempRoots;
+ 
+-        // Hash part of the store path currently being deleted, if
+-        // any.
+-        std::optional<std::string> pending;
++        // Hash parts of store paths currently being traversed or
++        // deleted.
++        boost::unordered_flat_set<std::string, StringViewHash, std::equal_to<>> pending;
+     };
+ 
+     Sync<Shared> _shared;
+@@ -388,6 +389,30 @@ void LocalStore::collectGarbageImpl(const GCOptions & options, GCResults & resul
+         keepDerivations = false;
+     }
+ 
++    std::optional<GCTraversalCheckpointSpec> checkpointSpec;
++    if (const auto & checkpoint = options.traversalCheckpoint) {
++        if (options.action != GCOptions::gcDeleteSpecific)
++            throw UsageError("GC traversal checkpoints require gcDeleteSpecific");
++        if (options.ignoreLiveness)
++            throw UsageError("GC traversal checkpoints cannot ignore liveness");
++        if (!options.pathsToDelete.contains(checkpoint->start))
++            throw UsageError("GC traversal checkpoint start is not in pathsToDelete");
++        if (checkpoint->maxTraversalSteps == 0)
++            throw UsageError("GC traversal checkpoint step limit must be greater than zero");
++        if (checkpoint->maxLockWait <= std::chrono::milliseconds::zero())
++            throw UsageError("GC traversal checkpoint lock wait must be greater than zero");
++        if (!checkpoint->path.is_absolute())
++            throw UsageError("GC traversal checkpoint path must be absolute");
++
++        checkpointSpec.emplace(
++            GCTraversalCheckpointSpec{
++                .pathsToDelete = options.pathsToDelete,
++                .start = checkpoint->start,
++                .keepOutputs = keepOutputs,
++                .keepDerivations = keepDerivations,
++            });
++    }
++
+     if (shouldDelete)
+         deletePath(reservedPath);
+ 
+@@ -395,7 +420,20 @@ void LocalStore::collectGarbageImpl(const GCOptions & options, GCResults & resul
+        here because then in auto-gc mode, another thread could
+        downgrade our exclusive lock. */
+     auto fdGCLock = openGCLock();
+-    FdLock gcLock(fdGCLock.get(), ltWrite, true, "waiting for the big garbage collector lock...");
++    std::optional<std::chrono::steady_clock::time_point> lockDeadline;
++    if (const auto & checkpoint = options.traversalCheckpoint)
++        lockDeadline.emplace(std::chrono::steady_clock::now() + checkpoint->maxLockWait);
++
++    FdLock gcLock(fdGCLock.get(), ltWrite, !lockDeadline.has_value(), "waiting for the big garbage collector lock...");
++
++    if (lockDeadline && !gcLock.acquired) {
++        printInfo("waiting for the big garbage collector lock...");
++        gcLock.acquired = lockFileUntil(fdGCLock.get(), ltWrite, *lockDeadline);
++        if (!gcLock.acquired)
++            throw Error(
++                "timed out after %d ms waiting for the big garbage collector lock",
++                options.traversalCheckpoint->maxLockWait.count());
++    }
+ 
+     if (trigger == GCTrigger::Auto) {
+         auto avail = availableStoreSpace();
+@@ -502,7 +540,7 @@ void LocalStore::collectGarbageImpl(const GCOptions & options, GCResults & resul
+                                    done. FIXME: ideally we would use a
+                                    FD for this so we don't block the
+                                    poll loop. */
+-                                while (shared->pending == hashPart) {
++                                while (shared->pending.count(hashPart)) {
+                                     debug("synchronising with deletion of path '%s'", path);
+                                     shared.wait(wakeup);
+                                 }
+@@ -592,111 +630,193 @@ void LocalStore::collectGarbageImpl(const GCOptions & options, GCResults & resul
+     };
+ 
+     boost::unordered_flat_map<StorePath, StorePathSet, std::hash<StorePath>> referrersCache;
++    uint64_t traversalSteps = 0;
+ 
+-    /* Helper function that visits all paths reachable from `start`
++    /* Helper function that visits all paths reachable from start
+        via the referrers edges and optionally derivers and derivation
+        output edges. If none of those paths are roots, then all
+-       visited paths are garbage and are deleted. */
+-    auto deleteReferrersClosure = [&](const StorePath & start) {
++       visited paths are garbage and are deleted. Returns false after
++       saving a bounded traversal checkpoint. */
++    auto deleteReferrersClosure = [&](const StorePath & start) -> bool {
+         StorePathSet visited;
+-        std::queue<StorePath> todo;
++        std::deque<StorePath> todo;
++        bool resumed = false;
++
++        const bool checkpointed = checkpointSpec && start == checkpointSpec->start;
++        if (checkpointed) {
++            if (auto state = loadGCTraversalCheckpoint(options.traversalCheckpoint->path, *this, *checkpointSpec)) {
++                visited = std::move(state->visited);
++                todo = std::move(state->todo);
++                resumed = true;
++            }
++        }
+ 
+         /* Wake up any GC client waiting for deletion of the paths in
+            'visited' to finish. */
+         Finally releasePending([&]() {
+             auto shared(_shared.lock());
+-            shared->pending.reset();
++            shared->pending.clear();
+             wakeup.notify_all();
+         });
+ 
+-        auto enqueue = [&](const StorePath & path) {
+-            if (visited.insert(path).second)
+-                todo.push(path);
++        auto completeCheckpoint = [&]() {
++            if (checkpointed)
++                clearGCTraversalCheckpoint(options.traversalCheckpoint->path);
+         };
+ 
+-        enqueue(start);
++        auto enqueue = [&](const StorePath & path) {
++            if (visited.insert(path).second)
++                todo.push_back(path);
++        };
+ 
+-        while (auto path = pop(todo)) {
++        if (!resumed)
++            enqueue(start);
++
++        auto markAlive = [&](const StorePath & path) {
++            alive.insert(path);
++            alive.insert(start);
++            try {
++                StorePathSet closure;
++                computeFSClosure(
++                    path,
++                    closure,
++                    /* flipDirection */ false,
++                    keepOutputs,
++                    keepDerivations);
++                for (auto & p : closure)
++                    alive.insert(p);
++            } catch (InvalidPath &) {
++            }
++        };
++
++        auto findRootedVisitedPath = [&]() -> std::optional<StorePath> {
++            for (const auto & path : visited)
++                if (roots.contains(path))
++                    return path;
++
++            auto shared(_shared.lock());
++            for (const auto & path : visited)
++                if (shared->tempRoots.contains(path.hashPart()))
++                    return path;
++
++            return std::nullopt;
++        };
++
++        auto stopForRoot = [&](const StorePath & root) {
++            debug(
++                "cannot resume deletion of '%s' because '%s' became a root",
++                printStorePath(start),
++                printStorePath(root));
++            markAlive(root);
++            completeCheckpoint();
++            return true;
++        };
++
++        if (resumed)
++            if (auto newlyRooted = findRootedVisitedPath())
++                return stopForRoot(*newlyRooted);
++
++        while (!todo.empty()) {
++            if (checkpointed && traversalSteps >= options.traversalCheckpoint->maxTraversalSteps) {
++                saveGCTraversalCheckpoint(
++                    options.traversalCheckpoint->path,
++                    *this,
++                    *checkpointSpec,
++                    GCTraversalCheckpointState{
++                        .visited = visited,
++                        .todo = todo,
++                    });
++                results.paused = true;
++                printInfo("saved GC traversal checkpoint to %s", PathFmt(options.traversalCheckpoint->path));
++                return false;
++            }
++
++            auto path = std::move(todo.front());
++            todo.pop_front();
++            traversalSteps++;
+             checkInterrupt();
+ 
+             /* Bail out if we've previously discovered that this path
+                is alive. */
+-            if (alive.count(*path)) {
++            if (alive.count(path)) {
+                 alive.insert(start);
+-                return;
++                completeCheckpoint();
++                return true;
+             }
+ 
+             /* If we've previously deleted this path, we don't have to
+                handle it again. */
+-            if (dead.count(*path))
++            if (dead.count(path))
+                 continue;
+ 
+-            auto markAlive = [&]() {
+-                alive.insert(*path);
+-                alive.insert(start);
+-                try {
+-                    StorePathSet closure;
+-                    computeFSClosure(
+-                        *path,
+-                        closure,
+-                        /* flipDirection */ false,
+-                        keepOutputs,
+-                        keepDerivations);
+-                    for (auto & p : closure)
+-                        alive.insert(p);
+-                } catch (InvalidPath &) {
+-                }
+-            };
+-
+             /* If this is a root, bail out. */
+-            if (roots.count(*path)) {
+-                debug("cannot delete '%s' because it's a root", printStorePath(*path));
+-                return markAlive();
++            if (roots.count(path)) {
++                debug("cannot delete '%s' because it's a root", printStorePath(path));
++                markAlive(path);
++                completeCheckpoint();
++                return true;
+             }
+ 
+-            if (options.action == GCOptions::gcDeleteSpecific && !options.pathsToDelete.count(*path))
+-                return;
++            if (options.action == GCOptions::gcDeleteSpecific && !options.pathsToDelete.count(path)) {
++                completeCheckpoint();
++                return true;
++            }
+ 
+             {
+-                auto hashPart = path->hashPart();
++                auto hashPart = path.hashPart();
+                 auto shared(_shared.lock());
+                 if (shared->tempRoots.count(hashPart)) {
+-                    debug("cannot delete '%s' because it's a temporary root", printStorePath(*path));
+-                    return markAlive();
++                    debug("cannot delete '%s' because it's a temporary root", printStorePath(path));
++                    markAlive(path);
++                    completeCheckpoint();
++                    return true;
+                 }
+-                shared->pending = hashPart;
++                shared->pending.clear();
++                shared->pending.emplace(std::move(hashPart));
+             }
+ 
+-            if (isValidPath(*path)) {
++            if (isValidPath(path)) {
+ 
+                 /* Visit the referrers of this path. */
+-                auto i = referrersCache.find(*path);
++                auto i = referrersCache.find(path);
+                 if (i == referrersCache.end()) {
+                     StorePathSet referrers;
+-                    queryGCReferrers(*path, referrers);
+-                    referrersCache.emplace(*path, std::move(referrers));
+-                    i = referrersCache.find(*path);
++                    queryGCReferrers(path, referrers);
++                    referrersCache.emplace(path, std::move(referrers));
++                    i = referrersCache.find(path);
+                 }
+                 for (auto & p : i->second)
+                     enqueue(p);
+ 
+                 /* If keep-derivations is set and this is a
+                    derivation, then visit the derivation outputs. */
+-                if (keepDerivations && path->isDerivation()) {
+-                    for (auto & [name, maybeOutPath] : queryPartialDerivationOutputMap(*path))
+-                        if (maybeOutPath && isValidPath(*maybeOutPath)
+-                            && queryPathInfo(*maybeOutPath)->deriver == *path)
++                if (keepDerivations && path.isDerivation()) {
++                    for (auto & [name, maybeOutPath] : queryPartialDerivationOutputMap(path))
++                        if (maybeOutPath && isValidPath(*maybeOutPath) && queryPathInfo(*maybeOutPath)->deriver == path)
+                             enqueue(*maybeOutPath);
+                 }
+ 
+                 /* If keep-outputs is set, then visit the derivers. */
+                 if (keepOutputs) {
+-                    auto derivers = queryValidDerivers(*path);
++                    auto derivers = queryValidDerivers(path);
+                     for (auto & i : derivers)
+                         enqueue(i);
+                 }
+             }
+         }
++
++        if (checkpointed) {
++            {
++                auto shared(_shared.lock());
++                shared->pending.clear();
++                for (const auto & path : visited)
++                    shared->pending.emplace(path.hashPart());
++            }
++
++            if (auto newlyRooted = findRootedVisitedPath())
++                return stopForRoot(*newlyRooted);
++        }
++
+         for (auto & path : topoSortPaths(visited)) {
+             if (!dead.insert(path).second)
+                 continue;
+@@ -712,20 +832,35 @@ void LocalStore::collectGarbageImpl(const GCOptions & options, GCResults & resul
+                 }
+             }
+         }
++
++        completeCheckpoint();
++        return true;
+     };
+ 
+     /* Either delete all garbage paths, or just the specified
+        paths (for gcDeleteSpecific). */
+     if (options.action == GCOptions::gcDeleteSpecific) {
+ 
+-        for (auto & i : options.pathsToDelete) {
+-            deleteReferrersClosure(i);
+-            if (!dead.count(i))
++        auto deleteRequestedPath = [&](const StorePath & path) {
++            if (!deleteReferrersClosure(path))
++                return false;
++            if (!dead.count(path))
+                 throw Error(
+                     "Cannot delete path '%1%' since it is still alive. "
+                     "To find out why, use: "
+                     "nix-store --query --roots and nix-store --query --referrers",
+-                    printStorePath(i));
++                    printStorePath(path));
++            return true;
++        };
++
++        if (options.traversalCheckpoint && !deleteRequestedPath(options.traversalCheckpoint->start))
++            return;
++
++        for (auto & path : options.pathsToDelete) {
++            if (options.traversalCheckpoint && path == options.traversalCheckpoint->start)
++                continue;
++            if (!deleteRequestedPath(path))
++                return;
+         }
+ 
+     } else if (maxFreed > 0) {
+@@ -751,9 +886,10 @@ void LocalStore::collectGarbageImpl(const GCOptions & options, GCResults & resul
+                 if (name == "." || name == ".." || name == linksName)
+                     continue;
+ 
+-                if (auto storePath = maybeParseStorePath(storeDir + "/" + name))
+-                    deleteReferrersClosure(*storePath);
+-                else
++                if (auto storePath = maybeParseStorePath(storeDir + "/" + name)) {
++                    if (!deleteReferrersClosure(*storePath))
++                        return;
++                } else
+                     deleteFromStore(name, false);
+             }
+         } catch (GCLimitReached & e) {
+diff --git a/src/libstore/include/nix/store/gc-store.hh b/src/libstore/include/nix/store/gc-store.hh
+index de016e2..806a7ae 100644
+--- a/src/libstore/include/nix/store/gc-store.hh
++++ b/src/libstore/include/nix/store/gc-store.hh
+@@ -5,6 +5,10 @@
+ #include <boost/unordered/unordered_flat_map.hpp>
+ #include <boost/unordered/unordered_flat_set.hpp>
+ 
++#include <chrono>
++#include <filesystem>
++#include <optional>
++
+ namespace nix {
+ 
+ typedef boost::unordered_flat_map<
+@@ -34,6 +38,14 @@ enum class GCAction {
+     gcDeleteSpecific,
+ };
+ 
++struct GCTraversalCheckpointOptions
++{
++    std::filesystem::path path;
++    StorePath start;
++    uint64_t maxTraversalSteps;
++    std::chrono::milliseconds maxLockWait;
++};
++
+ struct GCOptions
+ {
+     using GCAction = nix::GCAction;
+@@ -58,6 +70,11 @@ struct GCOptions
+      * Stop after at least `maxFreed` bytes have been freed.
+      */
+     uint64_t maxFreed{std::numeric_limits<uint64_t>::max()};
++
++    /**
++     * Persist and resume a bounded `gcDeleteSpecific` referrer traversal.
++     */
++    std::optional<GCTraversalCheckpointOptions> traversalCheckpoint;
+ };
+ 
+ struct GCResults
+@@ -72,6 +89,11 @@ struct GCResults
+      * For `gcDeleteDead` and `gcDeleteSpecific`, the number of bytes that were freed.
+      */
+     uint64_t bytesFreed = 0;
++
++    /**
++     * Whether bounded traversal saved a checkpoint before completing.
++     */
++    bool paused = false;
+ };
+ 
+ /**
+diff --git a/src/libstore/include/nix/store/pathlocks.hh b/src/libstore/include/nix/store/pathlocks.hh
+index dbb75a6..e0bbedd 100644
+--- a/src/libstore/include/nix/store/pathlocks.hh
++++ b/src/libstore/include/nix/store/pathlocks.hh
+@@ -1,6 +1,7 @@
+ #pragma once
+ ///@file
+ 
++#include <chrono>
+ #include <filesystem>
+ 
+ #include "nix/util/file-descriptor.hh"
+@@ -23,6 +24,8 @@ enum LockType { ltRead, ltWrite, ltNone };
+ 
+ bool lockFile(Descriptor desc, LockType lockType, bool wait);
+ 
++bool lockFileUntil(Descriptor desc, LockType lockType, std::chrono::steady_clock::time_point deadline);
++
+ class PathLocks
+ {
+ private:
+diff --git a/src/libstore/meson.build b/src/libstore/meson.build
+index 1439fc1..b72820e 100644
+--- a/src/libstore/meson.build
++++ b/src/libstore/meson.build
+@@ -304,6 +304,7 @@ sources = files(
+   'dummy-store.cc',
+   'export-import.cc',
+   'filetransfer.cc',
++  'gc-checkpoint.cc',
+   'gc.cc',
+   'globals.cc',
+   'http-binary-cache-store.cc',
+diff --git a/src/libstore/pathlocks.cc b/src/libstore/pathlocks.cc
+index a8e8286..27db2ef 100644
+--- a/src/libstore/pathlocks.cc
++++ b/src/libstore/pathlocks.cc
+@@ -3,11 +3,29 @@
+ #include "nix/util/sync.hh"
+ #include "nix/util/signals.hh"
+ 
++#include <algorithm>
+ #include <cerrno>
++#include <chrono>
+ #include <cstdlib>
++#include <thread>
+ 
+ namespace nix {
+ 
++bool lockFileUntil(Descriptor desc, LockType lockType, std::chrono::steady_clock::time_point deadline)
++{
++    using namespace std::chrono_literals;
++
++    while (!lockFile(desc, lockType, false)) {
++        auto now = std::chrono::steady_clock::now();
++        if (now >= deadline)
++            return false;
++
++        std::this_thread::sleep_until(std::min(deadline, now + 100ms));
++    }
++
++    return true;
++}
++
+ PathLocks::PathLocks()
+     : deletePaths(false)
+ {
+diff --git a/src/libstore/remote-store.cc b/src/libstore/remote-store.cc
+index 05dd5cf..06a92df 100644
+--- a/src/libstore/remote-store.cc
++++ b/src/libstore/remote-store.cc
+@@ -703,6 +703,9 @@ Roots RemoteStore::findRoots(bool censor)
+ 
+ void RemoteStore::collectGarbage(const GCOptions & options, GCResults & results)
+ {
++    if (options.traversalCheckpoint)
++        throw Error("GC traversal checkpoints are only supported by local stores");
++
+     auto conn(getConnection());
+ 
+     conn->to << WorkerProto::Op::CollectGarbage;
+diff --git a/src/nix/store-delete.cc b/src/nix/store-delete.cc
+index 3e2e0f2..b9df169 100644
+--- a/src/nix/store-delete.cc
++++ b/src/nix/store-delete.cc
+@@ -10,6 +10,9 @@ using namespace nix;
+ struct CmdStoreDelete : StorePathsCommand
+ {
+     GCOptions options{.action = GCOptions::gcDeleteSpecific};
++    std::optional<std::filesystem::path> checkpointFile;
++    std::optional<uint64_t> maxTraversalSteps;
++    std::optional<int64_t> maxLockWaitMilliseconds;
+ 
+     CmdStoreDelete()
+     {
+@@ -18,6 +21,28 @@ struct CmdStoreDelete : StorePathsCommand
+             .description = "Do not check whether the paths are reachable from a root.",
+             .handler = {&options.ignoreLiveness, true},
+         });
++
++        addFlag({
++            .longName = "checkpoint-file",
++            .description = "Persist and resume bounded referrer traversal in *path*.",
++            .labels = {"path"},
++            .handler = {&checkpointFile},
++            .completer = completePath,
++        });
++
++        addFlag({
++            .longName = "max-traversal-steps",
++            .description = "Visit at most *n* paths before saving the traversal checkpoint.",
++            .labels = {"n"},
++            .handler = {&maxTraversalSteps},
++        });
++
++        addFlag({
++            .longName = "max-lock-wait-milliseconds",
++            .description = "Wait at most *milliseconds* to acquire gc.lock before failing.",
++            .labels = {"milliseconds"},
++            .handler = {&maxLockWaitMilliseconds},
++        });
+     }
+ 
+     std::string description() override
+@@ -39,6 +64,30 @@ struct CmdStoreDelete : StorePathsCommand
+         for (auto & path : storePaths)
+             options.pathsToDelete.insert(path);
+ 
++        if (checkpointFile.has_value() != maxTraversalSteps.has_value()
++            || checkpointFile.has_value() != maxLockWaitMilliseconds.has_value())
++            throw UsageError(
++                "options --checkpoint-file, --max-traversal-steps, and --max-lock-wait-milliseconds must be used "
++                "together");
++
++        if (checkpointFile) {
++            if (storePaths.empty())
++                throw UsageError("--checkpoint-file requires at least one store path");
++            if (*maxTraversalSteps == 0)
++                throw UsageError("--max-traversal-steps must be greater than zero");
++            if (*maxLockWaitMilliseconds <= 0)
++                throw UsageError("--max-lock-wait-milliseconds must be greater than zero");
++            if (options.ignoreLiveness)
++                throw UsageError("--checkpoint-file cannot be combined with --ignore-liveness");
++
++            options.traversalCheckpoint = GCTraversalCheckpointOptions{
++                .path = std::filesystem::absolute(*checkpointFile),
++                .start = storePaths.front(),
++                .maxTraversalSteps = *maxTraversalSteps,
++                .maxLockWait = std::chrono::milliseconds{*maxLockWaitMilliseconds},
++            };
++        }
++
+         GCResults results;
+         Finally printer([&] { printFreed(false, results); });
+         gcStore.collectGarbage(options, results);
+diff --git a/src/nix/store-delete.md b/src/nix/store-delete.md
+index 026dccd..63d49f0 100644
+--- a/src/nix/store-delete.md
++++ b/src/nix/store-delete.md
+@@ -8,6 +8,16 @@ R""(
+   # nix store delete /nix/store/fdhrijyv3670djsgprx596nn89iwlj2s-hello-2.10
+   ```
+ 
++* Delete a referrer closure in bounded slices:
++
++  ```console
++  # nix store delete --checkpoint-file /var/lib/nix/gc-delete.json \
++      --max-traversal-steps 10000 \
++      --max-lock-wait-milliseconds 30000 /nix/store/...
++  ```
++
++  Repeat the same command until the checkpoint file is removed.
++
+ # Description
+ 
+ This command deletes the store paths specified by [*installables*](./nix.md#installables),
+@@ -21,4 +31,12 @@ With the option `--ignore-liveness`, reachability from the roots is
+ ignored. However, the path still won't be deleted if there are other
+ paths in the store that refer to it (i.e., depend on it).
+ 
++`--checkpoint-file`, `--max-traversal-steps`, and
++`--max-lock-wait-milliseconds` must be used together. The lock wait limit
++applies only while acquiring `gc.lock`; it does not limit an active slice.
++The checkpoint is versioned JSON that records the selected paths, traversal
++start, graph settings, visited paths, and remaining queue. Each invocation
++refreshes garbage collector roots before resuming. Checkpoints are currently
++supported only for local stores.
++
+ )""
+diff --git a/tests/functional/gc-checkpoint.sh b/tests/functional/gc-checkpoint.sh
+new file mode 100644
+index 0000000..eb6c6e4
+--- /dev/null
++++ b/tests/functional/gc-checkpoint.sh
+@@ -0,0 +1,148 @@
++#!/usr/bin/env bash
++
++source common.sh
++
++needLocalStore "GC traversal checkpoints are local store state"
++
++clearStore
++
++makeChain() {
++    local name=$1
++    local sourceDir="$TEST_ROOT/$name"
++    mkdir -p "$sourceDir"
++
++    printf 'leaf %s\n' "$name" > "$sourceDir/leaf"
++    local leaf
++    leaf=$(nix-store --add "$sourceDir/leaf")
++
++    printf '%s\n' "$leaf" > "$sourceDir/middle"
++    local middle
++    middle=$(nix-store --add "$sourceDir/middle")
++
++    printf '%s\n' "$middle" > "$sourceDir/top"
++    local top
++    top=$(nix-store --add "$sourceDir/top")
++
++    [[ $(nix-store -q --references "$middle") == "$leaf" ]]
++    [[ $(nix-store -q --references "$top") == "$middle" ]]
++
++    printf '%s\n' "$leaf" "$middle" "$top"
++}
++
++runSlice() {
++    local checkpoint=$1
++    local leaf=$2
++    local middle=$3
++    local top=$4
++    local maxLockWaitMilliseconds=${5:-1000}
++
++    nix store delete \
++        --checkpoint-file "$checkpoint" \
++        --max-traversal-steps 2 \
++        --max-lock-wait-milliseconds "$maxLockWaitMilliseconds" \
++        "$leaf" "$middle" "$top"
++}
++
++readarray -t resumeChain < <(makeChain resume)
++resumeLeaf=${resumeChain[0]}
++resumeMiddle=${resumeChain[1]}
++resumeTop=${resumeChain[2]}
++resumeCheckpoint="$TEST_ROOT/resume-checkpoint.json"
++
++printf 'lock holder\n' > "$TEST_ROOT/lock-holder"
++lockHolder=$(nix-store --add "$TEST_ROOT/lock-holder")
++lockHolderSync="$TEST_ROOT/lock-holder.fifo"
++lockHolderLog="$TEST_ROOT/lock-holder.log"
++mkfifo "$lockHolderSync"
++
++_NIX_TEST_GC_SYNC_1="$lockHolderSync" \
++    nix store delete "$lockHolder" > "$lockHolderLog" 2>&1 &
++lockHolderPid=$!
++
++# Opening the writer proves that the holder owns gc.lock and has reached the
++# synchronization point inside collectGarbage().
++exec 3> "$lockHolderSync"
++
++expectStderr 1 runSlice \
++    "$resumeCheckpoint" \
++    "$resumeLeaf" \
++    "$resumeMiddle" \
++    "$resumeTop" \
++    50 |
++    grepQuiet -F "timed out after 50 ms waiting for the big garbage collector lock"
++
++test ! -e "$resumeCheckpoint"
++test -e "$resumeLeaf"
++test -e "$resumeMiddle"
++test -e "$resumeTop"
++
++exec 3>&-
++wait "$lockHolderPid"
++test ! -e "$lockHolder"
++
++activeSliceSync="$TEST_ROOT/active-slice.fifo"
++activeSliceLog="$TEST_ROOT/active-slice.log"
++mkfifo "$activeSliceSync"
++
++_NIX_TEST_GC_SYNC_1="$activeSliceSync" \
++    runSlice "$resumeCheckpoint" "$resumeLeaf" "$resumeMiddle" "$resumeTop" 50 \
++    > "$activeSliceLog" 2>&1 &
++activeSlicePid=$!
++
++# The lock deadline stops only acquisition. Once this slice owns gc.lock,
++# work may continue past that deadline and checkpoint normally.
++exec 4> "$activeSliceSync"
++sleep 0.2
++exec 4>&-
++wait "$activeSlicePid"
++
++test -e "$resumeLeaf"
++test -e "$resumeMiddle"
++test -e "$resumeTop"
++jq -e \
++    --arg storeDir "$NIX_STORE_DIR" \
++    --arg leaf "$resumeLeaf" \
++    --arg middle "$resumeMiddle" \
++    --arg top "$resumeTop" \
++    '
++      .version == 1
++      and .operation == "delete-specific"
++      and .storeDir == $storeDir
++      and .start == $leaf
++      and (.pathsToDelete | sort) == ([$leaf, $middle, $top] | sort)
++      and (.visited | sort) == ([$leaf, $middle, $top] | sort)
++      and .todo == [$top]
++    ' \
++    "$resumeCheckpoint"
++
++runSlice "$resumeCheckpoint" "$resumeLeaf" "$resumeMiddle" "$resumeTop"
++
++test ! -e "$resumeCheckpoint"
++test ! -e "$resumeLeaf"
++test ! -e "$resumeMiddle"
++test ! -e "$resumeTop"
++
++readarray -t rootedChain < <(makeChain rooted)
++rootedLeaf=${rootedChain[0]}
++rootedMiddle=${rootedChain[1]}
++rootedTop=${rootedChain[2]}
++rootedCheckpoint="$TEST_ROOT/rooted-checkpoint.json"
++rootLink="$NIX_STATE_DIR/gcroots/checkpoint-root"
++
++runSlice "$rootedCheckpoint" "$rootedLeaf" "$rootedMiddle" "$rootedTop"
++ln -s "$rootedTop" "$rootLink"
++
++expectStderr 1 runSlice \
++    "$rootedCheckpoint" \
++    "$rootedLeaf" \
++    "$rootedMiddle" \
++    "$rootedTop" |
++    grepQuiet "is still alive"
++
++test ! -e "$rootedCheckpoint"
++test -e "$rootedLeaf"
++test -e "$rootedMiddle"
++test -e "$rootedTop"
++
++rm "$rootLink"
++nix store delete "$rootedLeaf" "$rootedMiddle" "$rootedTop"
+diff --git a/tests/functional/meson.build b/tests/functional/meson.build
+index 0340116..f7ebd00 100644
+--- a/tests/functional/meson.build
++++ b/tests/functional/meson.build
+@@ -53,6 +53,7 @@ suites = [
+     'tests' : [
+       'test-infra.sh',
+       'gc.sh',
++      'gc-checkpoint.sh',
+       'nix-collect-garbage-d.sh',
+       'remote-store.sh',
+       'daemon-signal.sh',
+-- 
+2.54.0
+
