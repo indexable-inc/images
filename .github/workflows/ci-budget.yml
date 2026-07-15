@@ -22,21 +22,19 @@ on:
     outputs:
       big_change:
         description: Whether the extended CI budget applies
-        value: ${{ jobs.classify.outputs.big_change }}
+        value: ${{ jobs.classify.outputs.big_change || jobs.publish.outputs.big_change }}
       reason:
         description: JSON object describing every source of the decision
-        value: ${{ jobs.classify.outputs.reason }}
+        value: ${{ jobs.classify.outputs.reason || jobs.publish.outputs.reason }}
 
 jobs:
   classify:
+    if: ${{ !inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
-      issues: write
-      # Pull request timeline comments require this permission even though the
-      # REST resource is exposed through the issues comments endpoint.
-      pull-requests: write
+      pull-requests: read
     outputs:
       big_change: ${{ steps.budget.outputs.big_change }}
       reason: ${{ steps.budget.outputs.reason }}
@@ -52,4 +50,29 @@ jobs:
           token: ${{ github.token }}
           extra-costly-paths: ${{ inputs.extra-costly-paths }}
           force-big-change: ${{ inputs.force-big-change }}
-          publish: ${{ inputs.publish }}
+          publish: false
+
+  publish:
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      # Pull request timeline comments require this permission even though the
+      # REST resource is exposed through the issues comments endpoint.
+      pull-requests: write
+    outputs:
+      big_change: ${{ steps.budget.outputs.big_change }}
+      reason: ${{ steps.budget.outputs.reason }}
+    steps:
+      - name: Classify and publish CI budget
+        id: budget
+        uses: indexable-inc/index/.github/actions/ci-budget@main
+        with:
+          repository: ${{ github.repository }}
+          pull-request-number: ${{ inputs.pull-request-number }}
+          token: ${{ github.token }}
+          extra-costly-paths: ${{ inputs.extra-costly-paths }}
+          force-big-change: ${{ inputs.force-big-change }}
+          publish: true
