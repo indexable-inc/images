@@ -10,6 +10,7 @@ import pathlib
 import sys
 import textwrap
 import time
+import warnings
 from collections.abc import Awaitable
 from dataclasses import dataclass
 
@@ -244,7 +245,7 @@ def test_job_cancel_reaps_a_setsid_tree_blocked_in_stderr_write(
         _cleanup_identities(identities)
 
 
-def test_supervisor_is_the_target_parent_not_its_child(tmp_path: pathlib.Path) -> None:
+def test_target_has_no_supervisor_child(tmp_path: pathlib.Path) -> None:
     identity_file = tmp_path / "identity"
     no_child_file = tmp_path / "no-child"
     target = _write_executable(
@@ -280,7 +281,10 @@ def test_supervisor_is_the_target_parent_not_its_child(tmp_path: pathlib.Path) -
     supervisor_pid, supervisor_session, target_pid, parent_pid = asyncio.run(scenario())
     assert supervisor_session == supervisor_pid
     assert target_pid != supervisor_pid
-    assert parent_pid == supervisor_pid
+    if sys.platform == "linux":
+        assert parent_pid == supervisor_pid
+    else:
+        assert parent_pid != supervisor_pid
 
 
 def test_normal_exit_reaps_a_tracked_setsid_descendant(tmp_path: pathlib.Path) -> None:
@@ -327,6 +331,162 @@ def test_normal_exit_reaps_a_tracked_setsid_descendant(tmp_path: pathlib.Path) -
         _assert_stopped(identities, lock_file)
     finally:
         _cleanup_identities(identities)
+
+
+def test_darwin_coalition_reaps_a_fast_closerange_double_fork(
+    tmp_path: pathlib.Path,
+) -> None:
+    if sys.platform != "darwin":
+        pytest.skip("Darwin uses launchd coalition containment instead of a subreaper")
+
+    identity_file = tmp_path / "identity"
+    lock_file = tmp_path / "grandchild.lock"
+    target = _write_executable(
+        tmp_path / "target",
+        f"""\
+        #!{sys.executable}
+        import fcntl
+        import os
+        import pathlib
+        import psutil
+        import time
+
+        time.sleep(0.03)
+        child = os.fork()
+        if child == 0:
+            os.setsid()
+            grandchild = os.fork()
+            if grandchild == 0:
+                os.closerange(3, 1024)
+                process = psutil.Process()
+                with open({str(lock_file)!r}, "w") as lock:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                    pathlib.Path({str(identity_file)!r}).write_text(
+                        f"{{process.pid}} {{process.create_time()}}"
+                    )
+                    while True:
+                        time.sleep(60)
+            os._exit(0)
+        os._exit(0)
+        """,
+    )
+    identity: _Identity | None = None
+
+    async def scenario() -> tuple[bytes, bytes]:
+        process = await nix._spawn(
+            str(target), cwd=None, stderr=asyncio.subprocess.PIPE
+        )
+        return await asyncio.wait_for(nix._communicate(process), 3)
+
+    try:
+        assert asyncio.run(scenario()) == (b"", b"")
+        pid, created = identity_file.read_text().split()
+        identity = _Identity(pid=int(pid), created=float(created))
+        _assert_stopped((identity,), lock_file)
+    finally:
+        if identity is not None:
+            _cleanup_identities((identity,))
+
+
+def test_darwin_supervisor_waits_after_target_closes_output(
+    tmp_path: pathlib.Path,
+) -> None:
+    if sys.platform != "darwin":
+        pytest.skip("Darwin relays launchd-owned output pipes")
+
+    ready_file = tmp_path / "ready"
+    target = _write_executable(
+        tmp_path / "target",
+        f"""\
+        #!{sys.executable}
+        import os
+        import pathlib
+        import time
+
+        os.close(1)
+        os.close(2)
+        pathlib.Path({str(ready_file)!r}).write_text("ready")
+        time.sleep(0.3)
+        raise SystemExit(7)
+        """,
+    )
+
+    async def scenario() -> tuple[tuple[bytes, bytes], int, float]:
+        process = await nix._spawn(
+            str(target), cwd=None, stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.to_thread(_wait_for, ready_file)
+        started = time.monotonic()
+        output = await asyncio.wait_for(nix._communicate(process), 3)
+        elapsed = time.monotonic() - started
+        assert process.process.returncode is not None
+        return output, process.process.returncode, elapsed
+
+    output, returncode, elapsed = asyncio.run(scenario())
+    assert output == (b"", b"")
+    assert returncode == 7
+    assert elapsed >= 0.2
+
+
+def test_darwin_status_is_reread_after_wrapper_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nix import _supervise
+
+    statuses = iter((None, 7 << 8))
+    job = object.__new__(_supervise._DarwinJob)
+    job.leader = (424242, 1.0)
+    monkeypatch.setattr(
+        _supervise._DarwinJob,
+        "read_status",
+        lambda _job: next(statuses),
+    )
+    monkeypatch.setattr(
+        _supervise._DarwinJob,
+        "leader_running",
+        lambda _job: False,
+    )
+
+    assert job.terminal_status() == 7 << 8
+
+
+def test_pidfd_capture_revalidates_identity_after_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nix import _supervise
+
+    pidfd, peer = os.pipe()
+    events: list[str] = []
+
+    class ChangedProcess:
+        pid = 424242
+
+        def create_time(self) -> float:
+            events.append("identity")
+            return float(events.count("identity"))
+
+        def is_running(self) -> bool:
+            events.append("running")
+            return True
+
+    def open_pidfd(pid: int) -> int:
+        assert pid == ChangedProcess.pid
+        events.append("pidfd")
+        return pidfd
+
+    monkeypatch.setattr(_supervise, "_PIDFD_OPEN", open_pidfd)
+    try:
+        with pytest.raises(psutil.NoSuchProcess):
+            _supervise._Member.capture(
+                ChangedProcess(),  # ty: ignore[invalid-argument-type] identity race double
+            )
+        with pytest.raises(OSError, match=r"\[Errno 9\]"):
+            os.fstat(pidfd)
+        assert events == ["identity", "pidfd", "running", "identity"]
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(pidfd)
+        os.close(peer)
 
 
 class _LaunchAbort(BaseException):
@@ -462,7 +622,7 @@ class _NeverProcess:
 def test_reap_deadline_stops_every_cleanup_task() -> None:
     async def scenario() -> _NeverProcess:
         raw = _NeverProcess()
-        owner_read, owner_write = os.pipe()
+        owner_read, owner_write = nix._owner_pipe()
         os.close(owner_read)
         process = nix._OwnedProcess(
             process=raw,  # ty: ignore[invalid-argument-type] controllable process double
@@ -505,6 +665,29 @@ def test_worktree_cannot_shadow_the_supervisor_helper(tmp_path: pathlib.Path) ->
     assert not marker.exists()
 
 
+def test_relative_path_entry_resolves_from_target_cwd(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "worktree-command",
+        f"#!{sys.executable}\nprint('worktree executable')\n",
+    )
+    monkeypatch.setenv("PATH", "bin")
+
+    async def scenario() -> tuple[bytes, bytes]:
+        process = await nix._spawn(
+            "worktree-command",
+            cwd=str(tmp_path),
+            stderr=asyncio.subprocess.PIPE,
+        )
+        return await asyncio.wait_for(nix._communicate(process), 5)
+
+    assert asyncio.run(scenario()) == (b"worktree executable\n", b"")
+
+
 def test_spawn_preserves_an_owner_pipe_allocated_as_stdin() -> None:
     async def scenario() -> tuple[bytes, bytes]:
         saved_stdin = os.dup(0)
@@ -523,6 +706,88 @@ def test_spawn_preserves_an_owner_pipe_allocated_as_stdin() -> None:
             os.close(saved_stdin)
 
     assert asyncio.run(scenario()) == (b"out\n", b"err\n")
+
+
+def test_unrelated_fork_cannot_extend_owner_lifetime(
+    tmp_path: pathlib.Path,
+) -> None:
+    pid_file = tmp_path / "pid"
+    ready_file = tmp_path / "ready"
+    lock_file = tmp_path / "target.lock"
+    target = _write_executable(
+        tmp_path / "target",
+        f"""\
+        #!{sys.executable}
+        import fcntl
+        import os
+        import pathlib
+        import time
+
+        pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))
+        with open({str(lock_file)!r}, "w") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            pathlib.Path({str(ready_file)!r}).write_text("ready")
+            while True:
+                time.sleep(60)
+        """,
+    )
+    identities: tuple[_Identity, ...] = ()
+
+    async def scenario() -> int:
+        process = await nix._spawn(
+            str(target), cwd=None, stderr=asyncio.subprocess.PIPE
+        )
+        holder = -1
+        holder_ready_read, holder_ready_write = os.pipe()
+        holder_release_read, holder_release_write = os.pipe()
+        try:
+            await asyncio.to_thread(_wait_for, pid_file, ready_file)
+            nonlocal identities
+            identities = (_Identity.capture(int(pid_file.read_text())),)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"This process .* is multi-threaded, use of fork\(\) may lead to deadlocks in the child\.",
+                    category=DeprecationWarning,
+                )
+                holder = os.fork()
+            if holder == 0:
+                os.close(holder_ready_read)
+                os.close(holder_release_write)
+                os.write(holder_ready_write, b"ready")
+                os.close(holder_ready_write)
+                os.read(holder_release_read, 1)
+                os._exit(0)
+            os.close(holder_ready_write)
+            os.close(holder_release_read)
+            await asyncio.to_thread(os.read, holder_ready_read, 5)
+            holder_identity = _Identity.capture(holder)
+            result = await asyncio.wait_for(
+                nix._kill_and_reap(process, timeout=1),
+                3,
+            )
+            assert holder_identity.running(), "unrelated fork exited with the target"
+            return result
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(holder_ready_read)
+            if holder > 0:
+                with contextlib.suppress(BrokenPipeError):
+                    os.write(holder_release_write, b"stop")
+                os.close(holder_release_write)
+                await asyncio.to_thread(os.waitpid, holder, 0)
+            else:
+                os.close(holder_ready_write)
+                os.close(holder_release_read)
+                os.close(holder_release_write)
+            if process.process.returncode is None:
+                await nix._kill_and_reap(process)
+
+    try:
+        assert asyncio.run(scenario()) != 0
+        _assert_stopped(identities, lock_file)
+    finally:
+        _cleanup_identities(identities)
 
 
 def test_normal_completion_drains_both_pipes() -> None:

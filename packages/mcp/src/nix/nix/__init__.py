@@ -49,6 +49,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -107,6 +108,34 @@ RESULT_TYPES = {
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _REAP_TIMEOUT = 10.0
 _SUPERVISOR = str(Path(__file__).with_name("_supervise.py"))
+_OWNER_FDS: set[int] = set()
+_OWNER_FDS_LOCK = threading.Lock()
+
+
+def _close_owner_fds_after_fork() -> None:
+    """Prevent unrelated fork children from extending job ownership."""
+    try:
+        for owner_fd in _OWNER_FDS:
+            with contextlib.suppress(OSError):
+                os.close(owner_fd)
+        _OWNER_FDS.clear()
+    finally:
+        _OWNER_FDS_LOCK.release()
+
+
+os.register_at_fork(
+    before=_OWNER_FDS_LOCK.acquire,
+    after_in_parent=_OWNER_FDS_LOCK.release,
+    after_in_child=_close_owner_fds_after_fork,
+)
+
+
+def _release_owner_fd(owner_fd: int) -> None:
+    with _OWNER_FDS_LOCK:
+        if owner_fd not in _OWNER_FDS:
+            raise RuntimeError(f"nix owner fd {owner_fd} is not registered")
+        _OWNER_FDS.remove(owner_fd)
+        os.close(owner_fd)
 
 
 @dataclass(slots=True)
@@ -118,7 +147,7 @@ class _OwnedProcess:
         """Tell the external supervisor that no kernel owns its target tree."""
         owner_fd, self.owner_fd = self.owner_fd, -1
         if owner_fd >= 0:
-            os.close(owner_fd)
+            _release_owner_fd(owner_fd)
 
 
 async def _defer_cancellation[T](task: asyncio.Task[T]) -> T:
@@ -255,15 +284,27 @@ async def _kill_and_reap(
     return proc.process.returncode
 
 
+def _resolved_cwd(cwd: str | None) -> Path:
+    return Path(cwd).resolve() if cwd is not None else Path.cwd()
+
+
+def _executable_search_path(cwd: str | None) -> str:
+    base = _resolved_cwd(cwd)
+    entries: list[str] = []
+    for entry in os.get_exec_path():
+        directory = Path(entry)
+        entries.append(str(directory if directory.is_absolute() else base / directory))
+    return os.pathsep.join(entries)
+
+
 def _resolve_executable(command: str, cwd: str | None) -> str:
     path = Path(command)
     if path.is_absolute():
         candidate = path
     elif os.sep in command:
-        base = Path(cwd).resolve() if cwd is not None else Path.cwd()
-        candidate = base / path
+        candidate = _resolved_cwd(cwd) / path
     else:
-        found = shutil.which(command)
+        found = shutil.which(command, path=_executable_search_path(cwd))
         candidate = Path(found) if found is not None else None
     if candidate is None or not candidate.exists():
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), command)
@@ -274,19 +315,21 @@ def _resolve_executable(command: str, cwd: str | None) -> str:
 
 def _owner_pipe() -> tuple[int, int]:
     """Allocate ownership FDs before subprocess stdio can reuse their numbers."""
-    owner_read, owner_write = os.pipe()
-    fds = [owner_read, owner_write]
-    try:
-        for index, fd in enumerate(fds):
-            if fd <= 2:
-                fds[index] = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
-                os.close(fd)
-    except BaseException:
-        for fd in fds:
-            with contextlib.suppress(OSError):
-                os.close(fd)
-        raise
-    return fds[0], fds[1]
+    with _OWNER_FDS_LOCK:
+        owner_read, owner_write = os.pipe()
+        fds = [owner_read, owner_write]
+        try:
+            for index, fd in enumerate(fds):
+                if fd <= 2:
+                    fds[index] = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
+                    os.close(fd)
+            _OWNER_FDS.add(fds[1])
+        except BaseException:
+            for fd in fds:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            raise
+        return fds[0], fds[1]
 
 
 async def _spawn(
@@ -317,7 +360,7 @@ async def _spawn(
             with contextlib.suppress(OSError):
                 os.close(owner_read)
             if process is None:
-                os.close(owner_write)
+                _release_owner_fd(owner_write)
             else:
                 try:
                     await _kill_and_reap(
@@ -334,9 +377,13 @@ async def _spawn(
     try:
         pending = asyncio.create_task(launch_coroutine)
     except BaseException:
-        launch_coroutine.close()
-        os.close(owner_read)
-        os.close(owner_write)
+        try:
+            launch_coroutine.close()
+        finally:
+            try:
+                os.close(owner_read)
+            finally:
+                _release_owner_fd(owner_write)
         raise
     try:
         return await asyncio.shield(pending)
@@ -539,7 +586,9 @@ class NixLog:
                     "text": _strip(o.get("text")),
                     "msg": _strip(o.get("msg") or o.get("raw_msg")),
                     "fields": (
-                        _json.dumps(o["fields"]) if o.get("fields") is not None else None
+                        _json.dumps(o["fields"])
+                        if o.get("fields") is not None
+                        else None
                     ),
                 }
             )
@@ -552,7 +601,8 @@ class NixLog:
             return pl.DataFrame(schema=_ACTIVITY_SCHEMA)
         depth = self._depths()
         rows = [
-            {k: a.get(k) for k in _ACTIVITY_SCHEMA if k != "depth"} | {"depth": depth[a["id"]]}
+            {k: a.get(k) for k in _ACTIVITY_SCHEMA if k != "depth"}
+            | {"depth": depth[a["id"]]}
             for a in (self._acts[i] for i in self._order)
         ]
         return pl.DataFrame(rows, schema=_ACTIVITY_SCHEMA)
@@ -721,7 +771,9 @@ class BuildRun:
             "logCount": pl.Int64,
             "contentAddressed": pl.Boolean,
         }
-        return pl.DataFrame([{k: r.get(k) for k in schema} for r in rows], schema=schema)
+        return pl.DataFrame(
+            [{k: r.get(k) for k in schema} for r in rows], schema=schema
+        )
 
     @property
     def errors(self) -> list[str]:
@@ -736,7 +788,13 @@ class BuildRun:
             "command": f"nix {self.label}" if self.label else "nix",
             "builds": [],
             "activities": [],
-            "counts": {"planned": 0, "running": 0, "stopped": 0, "succeeded": 0, "failed": 0},
+            "counts": {
+                "planned": 0,
+                "running": 0,
+                "stopped": 0,
+                "succeeded": 0,
+                "failed": 0,
+            },
             "errors": [],
             "finished": self.done,
             "exitCode": self.returncode,
@@ -760,7 +818,9 @@ class BuildRun:
         )
         lines = [head or "(starting…)"]
         for build in view.get("builds") or []:
-            mark = {"succeeded": "✓", "failed": "✗", "running": "▶"}.get(build.get("status"), "·")
+            mark = {"succeeded": "✓", "failed": "✗", "running": "▶"}.get(
+                build.get("status"), "·"
+            )
             phase = f" [{build['phase']}]" if build.get("phase") else ""
             lines.append(f"  {mark} {build.get('name', '?')}{phase}")
         return "\n".join(lines)
@@ -816,7 +876,9 @@ async def run(
     ``cwd`` defaults to the kernel process's working directory; pass ``cwd=`` to
     resolve a flake ref (``.#foo``) against a specific worktree.
     """
-    run_state = BuildRun(label=label or (args[1] if len(args) > 1 else args[0] if args else "nix"))
+    run_state = BuildRun(
+        label=label or (args[1] if len(args) > 1 else args[0] if args else "nix")
+    )
     try:
         proc = await _spawn(
             _nix_web_monitor_bin(),
@@ -877,7 +939,9 @@ async def run(
     return run_state
 
 
-async def build(attr: str, *flags: str, cwd: str | None = None, live: bool = True) -> BuildRun:
+async def build(
+    attr: str, *flags: str, cwd: str | None = None, live: bool = True
+) -> BuildRun:
     """Convenience for :func:`run` of ``nix build <attr> [flags]``."""
     return await run(["build", attr, *flags], cwd=cwd, live=live, label=attr)
 
@@ -885,7 +949,15 @@ async def build(attr: str, *flags: str, cwd: str | None = None, live: bool = Tru
 # Kinds of flake output that are keyed by system (`<kind>.<system>.<name>`); the
 # rest (nixosConfigurations, overlays, ...) are keyed by name directly.
 _SYSTEMED = frozenset(
-    {"packages", "legacyPackages", "apps", "checks", "devShells", "bundlers", "formatter"}
+    {
+        "packages",
+        "legacyPackages",
+        "apps",
+        "checks",
+        "devShells",
+        "bundlers",
+        "formatter",
+    }
 )
 
 
@@ -940,7 +1012,9 @@ def _flake_show_rows(data: dict[str, Any], system: str) -> list[dict[str, Any]]:
     return rows
 
 
-async def attrs(flake: str = ".", *, system: str | None = None, cwd: str | None = None) -> pl.DataFrame:
+async def attrs(
+    flake: str = ".", *, system: str | None = None, cwd: str | None = None
+) -> pl.DataFrame:
     """Catalog a flake's buildable attributes as a ``polars.DataFrame``
     (``kind``, ``attr``, ``type``, ``description``).
 
@@ -964,15 +1038,26 @@ async def attrs(flake: str = ".", *, system: str | None = None, cwd: str | None 
     )
     out, err = await _communicate(proc)
     if proc.process.returncode != 0:
-        raise RuntimeError(f"nix flake show failed: {err.decode('utf-8', 'replace').strip()}")
+        raise RuntimeError(
+            f"nix flake show failed: {err.decode('utf-8', 'replace').strip()}"
+        )
     return pl.DataFrame(
         _flake_show_rows(_json.loads(out), system),
-        schema={"kind": pl.Utf8, "attr": pl.Utf8, "type": pl.Utf8, "description": pl.Utf8},
+        schema={
+            "kind": pl.Utf8,
+            "attr": pl.Utf8,
+            "type": pl.Utf8,
+            "description": pl.Utf8,
+        },
     )
 
 
 def _eval_args(
-    installable: str, *, apply: str | None = None, system: str | None = None, raw: bool = False
+    installable: str,
+    *,
+    apply: str | None = None,
+    system: str | None = None,
+    raw: bool = False,
 ) -> list[str]:
     """Build the ``nix eval`` argv (pure, so the quoting is testable).
 

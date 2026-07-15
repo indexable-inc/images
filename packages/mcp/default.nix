@@ -1270,8 +1270,9 @@
       ps.asyncssh
       ps.numpy
       ps.polars
-      # The Nix command supervisor tracks each descendant by PID plus creation
-      # time, and by pidfd on Linux, so cancellation never signals a reused PID.
+      # The Nix command supervisor tracks stable process identities: pidfds on
+      # Linux and immutable launchd coalitions on Darwin. Cancellation therefore
+      # never signals a reused PID or process group.
       ps.psutil
       # psycopg (v3) + SQLAlchemy so `polars.read_database` reaches Postgres out
       # of the box: `pl.read_database(sql, create_engine("postgresql+psycopg://…"))`.
