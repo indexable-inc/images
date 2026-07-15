@@ -163,6 +163,20 @@ DISCOVER = (
     "cannot drift from the code and the catalog remains the source of truth."
 )
 
+PYTHON_FIRST = (
+    "HIGHLY recommended: solve tasks in plain Python, not shell. Shell traps live in the glue "
+    "between programs (pipes, redirects, quoting, builtin shadowing), never in the programs "
+    "themselves, so skip the glue: `psutil` for process questions instead of `ps`/`lsof`, "
+    "`pathlib`/`os.stat` instead of `find`/`stat`, `datetime` instead of `date`, `httpx` "
+    "instead of `curl`, and `githubkit` instead of the `gh` CLI (typed async GitHub client; "
+    "mint it once per session with `from githubkit import GitHub; gh = GitHub((await "
+    "nu('^gh auth token')).strip())` and reuse it: a direct API call returns structured data "
+    "in well under a second where every `gh` fork costs several). Reach for `nu(...)` ONLY "
+    "when a real external program is genuinely needed (git plumbing, `gh auth token`, a CLI "
+    "with no Python-native equivalent), and even then prefer one program per call with a "
+    "`--json` flag over multi-stage pipelines."
+)
+
 NO_SHELL = (
     "Do NOT hand-roll shell through Python: never `subprocess.run`, `os.system`, or "
     "`asyncio.create_subprocess_exec` for `ls`/`cat`/`grep`/`find`/`rg`/`fd` or any command whose "
@@ -179,9 +193,12 @@ NO_SHELL = (
 )
 
 NU = (
-    "`nu` is the ONE shell-out path: running a command, a pipeline, "
-    "listing/filtering/transforming, reaching into files or the web all go through it (the old "
-    "`sh()`/`zsh()` are retired and now raise a migration hint). `await nu(\"ls | where size > "
+    "`nu` is the ONE shell-out path, reserved for when an external program is genuinely "
+    "needed (Python-first rule above; the old `sh()`/`zsh()` are retired and now raise a "
+    "migration hint). It runs NUSHELL, not bash: bash reflexes are traps here (`ps aux` is a "
+    "parse error against the `ps` builtin, `2>/dev/null` is passed to an external as a "
+    "literal argument, `&&` does not chain, GNU coreutils shadow the BSD flags), so write "
+    "actual nushell or stay in Python. `await nu(\"ls | where size > "
     "1kb | sort-by size\")` runs a real nushell pipeline and every tabular result comes back as a Polars "
     "DataFrame, structured end to end (`ls`, `ps`, `sys`, `open Cargo.toml`, `from csv`, `http "
     "get`, `where`, `group-by`, `select`) — no jq/awk/sed/cut text munging and no scraping "

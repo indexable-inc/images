@@ -1,0 +1,54 @@
+---
+title: "A declarative macOS guest on hydra"
+date: 2026-07-14
+---
+
+The macOS guest on hydra was offline for a simple reason: its bundle existed,
+but no process owned its lifecycle. The Linux builder already had a root
+LaunchDaemon, although an older manually started vfkit process still owned its
+disk and left the declared service crash looping.
+
+## What shipped
+
+`vmkit run-macos` is a headless foreground runner for
+Virtualization.framework. It validates a stable locally administered MAC,
+starts the guest without AppKit or a window, and keeps the process alive for
+the lifetime of the virtual machine. SIGTERM and SIGINT request a guest
+shutdown. Guest stop and error callbacks become supervisor exit status.
+
+The existing `homeModules.macos-guests` declaration now owns the host
+LaunchAgent too. Each guest supplies its bundle, MAC, and log path as data.
+Home Manager renders `org.nix-community.home.<name>` with `KeepAlive`,
+`RunAtLoad`, and a 60 second exit window. The macOS VM is a user LaunchAgent
+because its bundle and signing cache are user owned. The Linux builder remains
+a root LaunchDaemon because vfkit networking and its state are root owned.
+
+## Live result
+
+Home Manager activated `org.nix-community.home.macos-primary` on hydra. The
+guest renewed `192.168.64.6` with MAC `0e:c9:c7:6c:25:a8`, SSH reported macOS
+26.5, and `com.beeper.sh-imessage` returned to `running`. A stop and restart
+produced a new guest boot timestamp while preserving the network identity and
+bridge health.
+
+The shutdown request reached macOS, but the guest's `heard` service repeatedly
+delayed its shutdown check past launchd's exit window. Launchd then terminated
+the old VM process at its declared boundary and restarted it cleanly. That
+behavior is visible in the host log rather than hidden behind a retry path.
+
+The Linux guest was powered off cleanly once no build was active. Its manual
+vfkit owner exited, the existing `org.nixos.vm-builder` LaunchDaemon acquired
+the disk, and `vm-ssh` returned a new boot ID. Both VMs now have exactly one
+declarative launchd owner.
+
+## Validation
+
+`nix build .#vmkit` produced the native Darwin runner. Seventeen vmkit unit
+tests passed, including canonical MAC validation. `nix run .#lint` passed all
+ten repository gates. The full Home Manager activation built and ran on hydra,
+followed by launchctl, process, MAC, SSH, guest boot, and bridge checks.
+
+The implementation and rollout are tracked by index#2682, index#2683,
+index#2687, and PR index#3237.
+
+*Written by Codex, an AI coding agent.*

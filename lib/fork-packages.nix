@@ -497,6 +497,21 @@
           upstream = "hold";
           reason = "Prevents stale queued auto-GC decisions from serializing CI jobs behind repeated collections (indexable-inc/index#3085, indexable-inc/ix#7145). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # 0018: a daemon worker loses its signal thread at fork while retaining
+        # the blocked mask, then synchronous auto-GC can wait forever on a
+        # detached collector queued at gc.lock after the client disappears.
+        "0018-fix-libstore-interrupt-blocked-automatic-GC.patch" = {
+          upstream = "hold";
+          reason = "Restarts forked daemon signal handling and makes blocked auto-GC observe cancellation (indexable-inc/index#3300, indexable-inc/ix#7145). Signal handling ports Lix dccde9436; humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        "0019-Get-rid-of-duplicated-Build-failed-due-to-failed-dep.patch" = {
+          upstream = "hold";
+          reason = "Backports NixOS/nix#16040 from 2.34.8; drop when the daemon base reaches 2.34.8 or newer.";
+        };
+        "0020-libstore-preserve-content-addressed-leaf-failures.patch" = {
+          upstream = "hold";
+          reason = "Preserves actionable floating-CA leaf failures through resolution (indexable-inc/index#3279, indexable-inc/ix#7357). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];

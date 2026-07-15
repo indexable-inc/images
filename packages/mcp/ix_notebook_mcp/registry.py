@@ -414,6 +414,14 @@ LIBRARIES: tuple[Library, ...] = (
     Library("polars"),
     Library("duckdb"),
     Library("httpx"),
+    Library(
+        "githubkit",
+        # index#3258: steer GitHub work off `gh` subprocesses; a direct typed
+        # API call is faster and returns structured data, no JSON flag scraping.
+        note="preferred over the `gh` CLI for GitHub API work: "
+        "`from githubkit import GitHub`, mint once with the token from "
+        "`gh auth token`, reuse all session",
+    ),
     Library("matplotlib"),
     Library("pypdf"),
     Library(

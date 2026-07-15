@@ -194,6 +194,20 @@ enum Command {
         #[arg(long = "share", value_name = "TAG=HOSTDIR")]
         shares: Vec<String>,
     },
+    /// Run an installed macOS guest headlessly until it stops. SIGTERM and
+    /// SIGINT request a clean shutdown from the guest.
+    #[cfg(target_os = "macos")]
+    RunMacos {
+        /// Guest bundle directory.
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Stable locally administered unicast MAC address.
+        #[arg(long, value_parser = parse_mac_address)]
+        mac_address: String,
+        /// Share a host directory into the guest over virtio-fs, repeatable.
+        #[arg(long = "share", value_name = "TAG=HOSTDIR")]
+        shares: Vec<String>,
+    },
     /// Boot an installed macOS guest fully off-screen and drive it from stdin:
     /// synthetic keyboard/mouse input and on-demand framebuffer screenshots, with
     /// no host cursor or visible window. Reads newline commands
@@ -514,12 +528,45 @@ fn build_vsock_ports(specs: &[String]) -> Result<Vec<linuxkrun::VsockPort>, Stri
     Ok(ports)
 }
 
+fn parse_mac_address(value: &str) -> Result<String, String> {
+    let octets = value
+        .split(':')
+        .map(|octet| {
+            if octet.len() != 2 || !octet.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(format!(
+                    "{value:?} must contain six two-digit hexadecimal octets"
+                ));
+            }
+            u8::from_str_radix(octet, 16).map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if octets.len() != 6 {
+        return Err(format!(
+            "{value:?} must contain six two-digit hexadecimal octets"
+        ));
+    }
+    if octets[0] & 1 != 0 {
+        return Err(format!("{value:?} must be a unicast MAC address"));
+    }
+    if octets[0] & 2 == 0 {
+        return Err(format!(
+            "{value:?} must be a locally administered MAC address"
+        ));
+    }
+    Ok(octets
+        .iter()
+        .map(|octet| format!("{octet:02x}"))
+        .collect::<Vec<_>>()
+        .join(":"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::build_vsock_ports;
     use super::linuxkrun::VsockPort;
+    use super::parse_mac_address;
 
     #[test]
     fn vsock_port_spec_parses_port_and_path() {
@@ -547,6 +594,26 @@ mod tests {
         for bad in ["7100", "nope:/tmp/x.sock", "7100:", "-1:/tmp/x.sock", "0:/tmp/x.sock", "4294967295:/tmp/x.sock"] {
             let specs = [String::from(bad)];
             assert!(build_vsock_ports(&specs).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn mac_address_is_canonicalized() {
+        assert_eq!(
+            parse_mac_address("0E:C9:C7:6C:25:A8").expect("valid local unicast address"),
+            "0e:c9:c7:6c:25:a8"
+        );
+    }
+
+    #[test]
+    fn mac_address_rejects_invalid_or_unsafe_addresses() {
+        for bad in [
+            "0e:c9:c7:6c:25",
+            "0e:c9:c7:6c:25:xyz",
+            "01:23:45:67:89:ab",
+            "00:23:45:67:89:ab",
+        ] {
+            assert!(parse_mac_address(bad).is_err(), "{bad:?} must be rejected");
         }
     }
 }
@@ -708,6 +775,11 @@ mod imp {
                 seconds,
                 shares: parse_shares(&shares)?,
             }),
+            Command::RunMacos {
+                bundle,
+                mac_address,
+                shares,
+            } => crate::macguest::run_macos(&bundle, &mac_address, &parse_shares(&shares)?),
             Command::DriveMacos { bundle, shares } => {
                 crate::drive::drive_macos(crate::drive::DriveMacos {
                     bundle,
