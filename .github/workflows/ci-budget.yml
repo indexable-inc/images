@@ -19,6 +19,10 @@ on:
         description: Head commit for a non-pull-request change association
         type: string
         default: ""
+      base-sha:
+        description: Push base commit that bounds a main-branch change
+        type: string
+        default: ""
     outputs:
       big_change:
         description: Whether the extended CI budget applies
@@ -29,12 +33,16 @@ on:
       standard_minutes:
         description: Standard total CI budget in whole minutes
         value: ${{ jobs.publish.outputs.standard_minutes }}
+      standard_deadline:
+        description: Absolute deadline for an ordinary workflow attempt
+        value: ${{ jobs.publish.outputs.standard_deadline }}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
       issues: write
       # Pull request timeline comments require this permission even though the
@@ -44,6 +52,7 @@ jobs:
       big_change: ${{ steps.budget.outputs.big_change }}
       reason: ${{ steps.budget.outputs.reason }}
       standard_minutes: ${{ steps.budget.outputs.standard_minutes }}
+      standard_deadline: ${{ steps.budget.outputs.standard_deadline }}
     steps:
       - name: Classify and publish CI budget
         id: budget
@@ -54,6 +63,7 @@ jobs:
           token: ${{ github.token }}
           extra-costly-paths: ${{ inputs.extra-costly-paths }}
           force-big-change: ${{ inputs.force-big-change }}
+          base-sha: ${{ inputs.base-sha }}
           head-sha: ${{ inputs.head-sha }}
           run-id: ${{ github.run_id }}
           run-attempt: ${{ github.run_attempt }}

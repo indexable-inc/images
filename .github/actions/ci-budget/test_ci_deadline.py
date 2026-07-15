@@ -33,10 +33,12 @@ class FakeClient:
         jobs: list[dict[str, Any]] | None = None,
         *,
         cancel_error: RuntimeError | None = None,
+        context_base_shas: list[str | None] | None = None,
     ) -> None:
         self.attempts = attempts
         self.jobs = jobs or []
         self.cancel_error = cancel_error
+        self.context_base_shas = context_base_shas or []
         self.cancelled: list[int] = []
 
     def workflow_attempt(self, run_id: int, run_attempt: int) -> dict[str, Any]:
@@ -53,11 +55,27 @@ class FakeClient:
 
     def pull_request(self, number: int) -> dict[str, Any]:
         assert number == 42
-        return {"number": 42, "labels": []}
+        return {"number": 42, "labels": [], "changed_files": 1}
 
-    def changed_paths(self, number: int) -> list[str]:
+    def changed_paths(self, number: int, expected_count: int) -> list[str]:
         assert number == 42
+        assert expected_count == 1
         return ["src/main.rs"]
+
+    def main_push_pull_requests(
+        self, branch: str, base_sha: str, head_sha: str
+    ) -> list[dict[str, Any]]:
+        assert branch == "main"
+        assert base_sha == "b" * 40
+        assert head_sha == "a" * 40
+        return [self.pull_request(42)]
+
+    def ci_budget_context_base_sha(self, run_id: int, run_attempt: int) -> str | None:
+        assert run_id == 12
+        assert run_attempt == 2
+        if not self.context_base_shas:
+            return None
+        return self.context_base_shas.pop(0)
 
     def cancel_workflow_run(self, run_id: int) -> None:
         if self.cancel_error:
@@ -65,11 +83,13 @@ class FakeClient:
         self.cancelled.append(run_id)
 
 
-def attempt(*, status: str = "in_progress") -> dict[str, Any]:
+def attempt(
+    *, status: str = "in_progress", event: str = "pull_request"
+) -> dict[str, Any]:
     return {
-        "event": "pull_request",
+        "event": event,
         "head_sha": "a" * 40,
-        "pull_requests": [{"number": 42}],
+        "pull_requests": [] if event == "push" else [{"number": 42}],
         "run_started_at": "2026-07-15T10:00:00Z",
         "status": status,
     }
@@ -223,6 +243,28 @@ class RequiredGateTests(unittest.TestCase):
 
 
 class CancellationControllerTests(unittest.TestCase):
+    def test_main_push_waits_for_authoritative_range_context(self) -> None:
+        client = FakeClient(
+            [attempt(event="push"), attempt(status="completed", event="push")],
+            context_base_shas=[None, "b" * 40],
+        )
+        sleeps: list[float] = []
+
+        cancelled = ci_deadline.cancel_at_deadline(
+            client,
+            12,
+            2,
+            ["flake.lock"],
+            timedelta(minutes=5),
+            force_big_change=False,
+            merge_queue_branch="main",
+            now=lambda: datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
+            sleep=sleeps.append,
+        )
+
+        assert not cancelled
+        assert sleeps == [2, 300]
+
     def test_queue_time_counts_toward_cancellation(self) -> None:
         client = FakeClient([attempt(), attempt()])
 

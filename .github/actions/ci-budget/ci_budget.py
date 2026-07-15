@@ -16,10 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ci_policy import standard_minutes
+from ci_policy import standard_deadline, standard_minutes
 
 BIG_CHANGE_LABEL = "ci/big-change"
 COMMENT_MARKER = "<!-- ci-budget -->"
+MAX_PULL_REQUEST_FILES = 3000
+CI_BUDGET_CONTEXT_PREFIX = "ci-budget-context"
 MERGE_QUEUE_ENTRIES_QUERY = """
 query MergeQueueEntries(
   $owner: String!
@@ -149,7 +151,7 @@ class GitHubClient:
         self._token = token
         self._transport = transport
 
-    def _url(self, path: str, query: Mapping[str, int] | None = None) -> str:
+    def _url(self, path: str, query: Mapping[str, int | str] | None = None) -> str:
         url = f"https://api.github.com/repos/{self._repository}/{path}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
@@ -160,7 +162,7 @@ class GitHubClient:
         method: str,
         path: str,
         body: JsonObject | None = None,
-        query: Mapping[str, int] | None = None,
+        query: Mapping[str, int | str] | None = None,
     ) -> tuple[Any, Mapping[str, str]]:
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(  # noqa: S310
@@ -224,6 +226,51 @@ class GitHubClient:
     def associated_pull_requests(self, commit_sha: str) -> list[JsonObject]:
         validate_sha(commit_sha, "workflow head SHA")
         return self.paginated(f"commits/{commit_sha}/pulls")
+
+    def main_push_pull_requests(
+        self, branch: str, base_sha: str, head_sha: str
+    ) -> list[JsonObject]:
+        if not branch:
+            raise ValueError("push branch must not be empty")
+        validate_sha(base_sha, "push base SHA")
+        validate_sha(head_sha, "push head SHA")
+        current = head_sha
+        seen: set[str] = set()
+        pull_requests: list[JsonObject] = []
+        while current != base_sha:
+            if current in seen:
+                raise RuntimeError("push first-parent range contains a cycle")
+            seen.add(current)
+            associated = self.associated_pull_requests(current)
+            exact = [
+                pull_request
+                for pull_request in associated
+                if pull_request.get("merge_commit_sha") == current
+                and isinstance(pull_request.get("merged_at"), str)
+                and isinstance(pull_request.get("base"), dict)
+                and pull_request["base"].get("ref") == branch
+            ]
+            if len(exact) > 1:
+                raise RuntimeError(
+                    f"push commit {current} has {len(exact)} exact merged pull "
+                    f"requests for {branch!r}; expected at most one"
+                )
+            if exact:
+                number = pull_request_number(exact[0], "push commit association")
+                pull_requests.append(self.pull_request(number))
+            parents = self.commit_parents(current)
+            if not parents:
+                raise RuntimeError(
+                    f"push base {base_sha} is not on the first-parent history "
+                    f"of {head_sha}"
+                )
+            current = parents[0]
+        if not pull_requests:
+            raise RuntimeError(
+                f"push range {base_sha}..{head_sha} has no exact merged pull "
+                f"requests for {branch!r}"
+            )
+        return pull_requests
 
     def commit_parents(self, commit_sha: str) -> list[str]:
         validate_sha(commit_sha, "commit SHA")
@@ -345,12 +392,81 @@ class GitHubClient:
             chain.append(predecessor)
         return [self.pull_request(edge.pull_request_number) for edge in chain]
 
-    def changed_paths(self, number: int) -> list[str]:
-        files = self.paginated(f"pulls/{number}/files")
+    def changed_paths(self, number: int, expected_count: int) -> list[str]:
+        if expected_count < 0:
+            raise RuntimeError("pull request changed_files must not be negative")
+        if expected_count > MAX_PULL_REQUEST_FILES:
+            raise RuntimeError(
+                f"pull request {number} has {expected_count} changed files; "
+                f"GitHub exposes at most {MAX_PULL_REQUEST_FILES}"
+            )
+        files: list[JsonObject] = []
+        page = 1
+        while len(files) < expected_count:
+            payload, _ = self.request(
+                "GET",
+                f"pulls/{number}/files",
+                query={"per_page": 100, "page": page},
+            )
+            if not isinstance(payload, list) or not all(
+                isinstance(item, dict) for item in payload
+            ):
+                raise RuntimeError("GitHub API returned malformed changed files")
+            files.extend(payload)
+            if len(payload) < 100:
+                break
+            page += 1
+        if len(files) != expected_count:
+            raise RuntimeError(
+                f"pull request {number} reports {expected_count} changed files "
+                f"but GitHub returned {len(files)}"
+            )
         paths = [item.get("filename") for item in files]
         if not all(isinstance(path, str) and path for path in paths):
             raise RuntimeError("GitHub API returned a changed file without a filename")
+        if len(set(paths)) != len(paths):
+            raise RuntimeError("GitHub API returned duplicate changed filenames")
         return paths
+
+    def ci_budget_context_base_sha(self, run_id: int, run_attempt: int) -> str | None:
+        prefix = f"{CI_BUDGET_CONTEXT_PREFIX}-{run_id}-{run_attempt}-"
+        artifacts: list[JsonObject] = []
+        page = 1
+        while True:
+            payload, _ = self.request(
+                "GET",
+                f"actions/runs/{run_id}/artifacts",
+                query={"per_page": 100, "page": page},
+            )
+            if not isinstance(payload, dict) or not isinstance(
+                payload.get("artifacts"), list
+            ):
+                raise RuntimeError("GitHub API returned malformed workflow artifacts")
+            page_artifacts = payload["artifacts"]
+            if not all(isinstance(artifact, dict) for artifact in page_artifacts):
+                raise RuntimeError("GitHub API returned a malformed workflow artifact")
+            artifacts.extend(page_artifacts)
+            if len(page_artifacts) < 100:
+                break
+            page += 1
+        matches = [
+            artifact
+            for artifact in artifacts
+            if isinstance(artifact.get("name"), str)
+            and artifact["name"].startswith(prefix)
+            and artifact.get("expired") is False
+        ]
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"workflow attempt has {len(matches)} CI budget context artifacts; "
+                "expected exactly one"
+            )
+        name = matches[0]["name"]
+        base_sha = name.removeprefix(prefix)
+        validate_sha(base_sha, "CI budget context base SHA")
+        return base_sha
 
     def add_label(self, number: int, label: str) -> None:
         self.request("POST", f"issues/{number}/labels", {"labels": [label]})
@@ -437,6 +553,7 @@ def pull_requests_for_attempt(
     attempt: JsonObject,
     *,
     merge_queue_branch: str,
+    push_base_sha: str | None,
 ) -> list[JsonObject]:
     raw_pull_requests = attempt.get("pull_requests")
     if not isinstance(raw_pull_requests, list) or not all(
@@ -465,21 +582,9 @@ def pull_requests_for_attempt(
         return client.merge_queue_pull_requests(
             merge_queue_branch, parents[0], head_sha
         )
-    associated = client.associated_pull_requests(head_sha)
-    exact = [
-        pull_request
-        for pull_request in associated
-        if pull_request.get("merge_commit_sha") == head_sha
-        and isinstance(pull_request.get("merged_at"), str)
-        and isinstance(pull_request.get("base"), dict)
-        and pull_request["base"].get("ref") == merge_queue_branch
-    ]
-    if len(exact) != 1:
-        raise RuntimeError(
-            f"{event} workflow head {head_sha} has {len(exact)} exact merged "
-            f"pull requests for {merge_queue_branch!r}; expected exactly one"
-        )
-    return exact
+    if push_base_sha is None:
+        raise RuntimeError("push workflow classification requires its base SHA")
+    return client.main_push_pull_requests(merge_queue_branch, push_base_sha, head_sha)
 
 
 def classify_workflow_attempt(
@@ -489,11 +594,15 @@ def classify_workflow_attempt(
     *,
     force_big_change: bool,
     merge_queue_branch: str,
+    push_base_sha: str | None = None,
 ) -> Classification:
     if force_big_change:
         return classify([], [], globs, force_big_change=True)
     pull_requests = pull_requests_for_attempt(
-        client, attempt, merge_queue_branch=merge_queue_branch
+        client,
+        attempt,
+        merge_queue_branch=merge_queue_branch,
+        push_base_sha=push_base_sha,
     )
     return classify_pull_requests(client, pull_requests, globs, force_big_change=False)
 
@@ -523,7 +632,12 @@ def classify_pull_requests(
     labels: list[str] = []
     for pull_request in pull_requests:
         number = pull_request_number(pull_request, "pull request")
-        paths.extend(client.changed_paths(number))
+        changed_files = pull_request.get("changed_files")
+        if not isinstance(changed_files, int):
+            raise RuntimeError(
+                "GitHub API returned a pull request without changed_files"
+            )
+        paths.extend(client.changed_paths(number, changed_files))
         labels.extend(labels_from_pull_request(pull_request))
     return classify(
         list(dict.fromkeys(paths)),
@@ -561,6 +675,19 @@ def write_output(name: str, value: str) -> None:
         output.write(f"{name}={value}\n")
 
 
+def write_context(path: Path, base_sha: str, head_sha: str) -> None:
+    validate_sha(base_sha, "classification base SHA")
+    validate_sha(head_sha, "classification head SHA")
+    path.write_text(
+        json.dumps(
+            {"base_sha": base_sha, "head_sha": head_sha},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
 def main() -> int:
     repository = os.environ["CI_BUDGET_REPOSITORY"]
     token = os.environ["CI_BUDGET_TOKEN"]
@@ -577,6 +704,9 @@ def main() -> int:
     )
 
     client = GitHubClient(repository, token)
+    run_id = parse_positive_int(os.environ["CI_BUDGET_RUN_ID"], "run-id")
+    run_attempt = parse_positive_int(os.environ["CI_BUDGET_RUN_ATTEMPT"], "run-attempt")
+    attempt = client.workflow_attempt(run_id, run_attempt)
     labels: list[str] = []
     if pull_request_number:
         pull_request = client.pull_request(pull_request_number)
@@ -590,11 +720,6 @@ def main() -> int:
     else:
         head_sha = os.environ["CI_BUDGET_HEAD_SHA"]
         if head_sha:
-            run_id = parse_positive_int(os.environ["CI_BUDGET_RUN_ID"], "run-id")
-            run_attempt = parse_positive_int(
-                os.environ["CI_BUDGET_RUN_ATTEMPT"], "run-attempt"
-            )
-            attempt = client.workflow_attempt(run_id, run_attempt)
             if attempt.get("head_sha") != head_sha:
                 raise RuntimeError(
                     "workflow attempt head SHA does not match classification head-sha"
@@ -605,6 +730,7 @@ def main() -> int:
                 globs,
                 force_big_change=force_big_change,
                 merge_queue_branch=os.environ["CI_BUDGET_MERGE_QUEUE_BRANCH"],
+                push_base_sha=os.environ["CI_BUDGET_BASE_SHA"] or None,
             )
         elif force_big_change:
             classification = classify([], [], globs, force_big_change=True)
@@ -619,6 +745,15 @@ def main() -> int:
     write_output("big_change", str(classification.big_change).lower())
     write_output("reason", reason)
     write_output("standard_minutes", str(standard_minutes()))
+    write_output("standard_deadline", standard_deadline(attempt).isoformat())
+    base_sha = os.environ["CI_BUDGET_BASE_SHA"]
+    context_path = ""
+    if base_sha:
+        head_sha = os.environ["CI_BUDGET_HEAD_SHA"]
+        context = Path(os.environ["CI_BUDGET_CONTEXT_PATH"])
+        write_context(context, base_sha, head_sha)
+        context_path = str(context)
+    write_output("context_path", context_path)
     print(reason)
     return 0
 

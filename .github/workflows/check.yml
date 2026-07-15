@@ -61,6 +61,7 @@ env:
 jobs:
   ci-budget:
     permissions:
+      actions: read
       contents: read
       issues: write
       pull-requests: write
