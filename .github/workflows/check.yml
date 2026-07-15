@@ -9,6 +9,9 @@ on:
   pull_request:
     branches:
       - main
+    # A manual budget override must start a fresh run. A job's timeout is fixed
+    # when it starts, so changing the label cannot extend an in-flight job.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   # Required status for the merge queue: GitHub fires `merge_group` against a
   # temporary `gh-readonly-queue/main/...` ref, and the `main` ruleset demands a
   # `flake-check` status on it. Without this trigger the check never runs in the
@@ -56,6 +59,19 @@ env:
     cores = 1
 
 jobs:
+  ci-budget:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: indexable-inc/index/.github/workflows/ci-budget.yml@main
+    with:
+      pull-request-number: ${{ github.event.pull_request.number || 0 }}
+      # Labels exist only on pull requests. Preserve the existing limit for
+      # main, tag, and merge-queue validation rather than silently shrinking
+      # those non-PR operational gates.
+      force-big-change: ${{ github.event_name != 'pull_request' }}
+
   # One job on one runner, on purpose. Every check shares a single
   # znver5-tuned nixpkgs base, so fanning the checks across several runners
   # would rebuild that shared base on each cold runner (a thundering herd). We
@@ -64,13 +80,14 @@ jobs:
   # this job is it, and it fails iff a check fails to build or the flake stops
   # evaluating.
   flake-check:
+    needs: ci-budget
     # Dispatched to the org-wide ix-ci-dispatcher (vin-compute-1), the same
     # self-hosted runner the ix repo uses. The `ix-ci-run-*` label is claimed
     # by that dispatcher, which mints an ephemeral runner per job on a host
     # with a warm, persistent /nix/store. See the ix repo's ci.yml for the
     # label scheme.
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-flake-check', github.run_id, github.run_attempt) }}"]
-    timeout-minutes: 60
+    timeout-minutes: ${{ needs.ci-budget.outputs.big_change == 'true' && 60 || 5 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
