@@ -20,6 +20,7 @@ POLL_SECONDS = 10
 @dataclass(frozen=True)
 class TargetState:
     complete: bool
+    late: tuple[str, ...]
     missing: tuple[str, ...]
     pending: tuple[str, ...]
 
@@ -54,9 +55,10 @@ def parse_timestamp(value: object, name: str) -> datetime:
 
 
 def target_state(
-    jobs: Sequence[JsonObject], target_names: Sequence[str]
+    jobs: Sequence[JsonObject], target_names: Sequence[str], deadline: datetime
 ) -> TargetState:
     statuses: dict[str, str] = {}
+    late: list[str] = []
     for job in jobs:
         name = job.get("name")
         status = job.get("status")
@@ -68,10 +70,19 @@ def target_state(
             if not isinstance(status, str):
                 raise RuntimeError(f"target job {name!r} has no status")
             statuses[name] = status
+            if status == "completed":
+                completed_at = parse_timestamp(
+                    job.get("completed_at"), f"{name} completed_at"
+                )
+                if completed_at > deadline:
+                    late.append(name)
     missing = tuple(name for name in target_names if name not in statuses)
     pending = tuple(name for name, status in statuses.items() if status != "completed")
     return TargetState(
-        complete=not missing and not pending, missing=missing, pending=pending
+        complete=not late and not missing and not pending,
+        late=tuple(late),
+        missing=missing,
+        pending=pending,
     )
 
 
@@ -89,13 +100,19 @@ def enforce(
     started_at = parse_timestamp(attempt.get("run_started_at"), "run_started_at")
     deadline = started_at + budget
     while True:
-        state = target_state(client.workflow_jobs(run_id, run_attempt), target_names)
+        state = target_state(
+            client.workflow_jobs(run_id, run_attempt), target_names, deadline
+        )
         if state.complete:
             print(f"CI targets completed before {deadline.isoformat()}")
             return False
         remaining = (deadline - now()).total_seconds()
         if remaining <= 0:
-            detail = {"missing": state.missing, "pending": state.pending}
+            detail = {
+                "late": state.late,
+                "missing": state.missing,
+                "pending": state.pending,
+            }
             print(f"::error title=CI total deadline exceeded::{json.dumps(detail)}")
             client.cancel_workflow_run(run_id)
             return True
