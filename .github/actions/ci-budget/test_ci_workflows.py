@@ -121,8 +121,26 @@ class RequiredWorkflowTests(unittest.TestCase):
                 assert "needs.ci-budget.outputs.big_change" in expression(
                     inputs, "big-change"
                 )
-                assert isinstance(target["timeout-minutes"], int)
-                assert target["timeout-minutes"] > standard_minutes()
+                assert expression(target, "timeout-minutes") == (
+                    "${{ fromJSON(needs.ci-budget.outputs.worker_timeout_minutes) }}"
+                )
+
+    def test_shared_workflows_publish_the_worker_envelope(self) -> None:
+        for workflow_name, job_name in (
+            ("ci-budget-read-only.yml", "classify"),
+            ("ci-budget.yml", "publish"),
+        ):
+            with self.subTest(workflow=workflow_name):
+                workflow = load_workflow(workflow_name)
+                workflow_call = child_object(events(workflow), "workflow_call")
+                call_outputs = child_object(workflow_call, "outputs")
+                job = child_object(child_object(workflow, "jobs"), job_name)
+                job_outputs = child_object(job, "outputs")
+
+                assert "worker_timeout_minutes" in call_outputs
+                assert expression(job_outputs, "worker_timeout_minutes") == (
+                    "${{ steps.budget.outputs.worker_timeout_minutes }}"
+                )
 
     def test_required_workflows_are_read_only_on_pull_requests(self) -> None:
         for workflow_name in ("check.yml", "closure-gate.yml"):

@@ -101,7 +101,7 @@ jobs:
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-flake-check', github.run_id, github.run_attempt) }}"]
     # GitHub starts this timer only after runner assignment. It bounds extended
     # runs; the trusted controller owns ordinary queue-inclusive cancellation.
-    timeout-minutes: 60
+    timeout-minutes: ${{ fromJSON(needs.ci-budget.outputs.worker_timeout_minutes) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

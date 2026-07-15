@@ -1,0 +1,6 @@
+{
+  "extended_setup_allowance_seconds": 120,
+  "extended_validation_seconds": 10800,
+  "standard_seconds": 300,
+  "termination_grace_seconds": 10
+}

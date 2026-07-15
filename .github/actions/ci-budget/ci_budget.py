@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ci_policy import standard_deadline, standard_minutes
+from ci_policy import standard_deadline, standard_minutes, worker_timeout_minutes
 
 BIG_CHANGE_LABEL = "ci/big-change"
 COMMENT_MARKER = "<!-- ci-budget -->"
@@ -792,6 +792,10 @@ def main() -> int:
     write_output("reason", reason)
     write_output("standard_minutes", str(standard_minutes()))
     write_output("standard_deadline", standard_deadline(attempt).isoformat())
+    write_output(
+        "worker_timeout_minutes",
+        str(worker_timeout_minutes(big_change=classification.big_change)),
+    )
     base_sha = os.environ["CI_BUDGET_BASE_SHA"]
     context_path = ""
     if base_sha:
