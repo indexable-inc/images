@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Sat, 11 Jul 2026 20:20:49 -0700
+Subject: [PATCH] editor: optionally exclude the invocation reference
+
+Find All References currently includes the location used to invoke the action, which adds a redundant result when the caller wants only the other occurrences. Add a checked setting that filters exactly that source location while preserving the existing default.
+
+Refs indexable-inc/index#2893.
+
+(authored by an AI agent via Codex)
+
+diff --git a/assets/settings/default.json b/assets/settings/default.json
+index 74560dd49b..235cd4c479 100644
+--- a/assets/settings/default.json
++++ b/assets/settings/default.json
+@@ -389,6 +389,8 @@
+   // 1. Do nothing: `none`
+   // 2. Find references for the same symbol: `find_all_references` (default)
+   "go_to_definition_fallback": "find_all_references",
++  // Whether Find All References includes the reference under the invocation cursor.
++  "find_all_references_include_current": true,
+   // How to scroll the target into view when navigating to a definition or reference
+   // (e.g. Go to Definition, Go to Type Definition, Find All References).
+   //
+diff --git a/crates/editor/src/editor_settings.rs b/crates/editor/src/editor_settings.rs
+index 05a89a5907..87b99c312f 100644
+--- a/crates/editor/src/editor_settings.rs
++++ b/crates/editor/src/editor_settings.rs
+@@ -53,6 +53,7 @@ pub struct EditorSettings {
+     pub auto_signature_help: bool,
+     pub show_signature_help_after_edits: bool,
+     pub go_to_definition_fallback: GoToDefinitionFallback,
++    pub find_all_references_include_current: bool,
+     pub go_to_definition_scroll_strategy: GoToDefinitionScrollStrategy,
+     pub jupyter: Jupyter,
+     pub snippet_sort_order: SnippetSortOrder,
+@@ -288,6 +289,9 @@ impl Settings for EditorSettings {
+             auto_signature_help: editor.auto_signature_help.unwrap(),
+             show_signature_help_after_edits: editor.show_signature_help_after_edits.unwrap(),
+             go_to_definition_fallback: editor.go_to_definition_fallback.unwrap(),
++            find_all_references_include_current: editor
++                .find_all_references_include_current
++                .unwrap(),
+             go_to_definition_scroll_strategy: editor.go_to_definition_scroll_strategy.unwrap(),
+             jupyter: Jupyter {
+                 enabled: editor.jupyter.unwrap().enabled.unwrap(),
+diff --git a/crates/editor/src/editor_tests.rs b/crates/editor/src/editor_tests.rs
+index de1d690520..b08c9865d1 100644
+--- a/crates/editor/src/editor_tests.rs
++++ b/crates/editor/src/editor_tests.rs
+@@ -27236,6 +27236,71 @@ async fn test_find_all_references_editor_reuse(cx: &mut TestAppContext) {
+         );
+     });
+ }
++
++#[gpui::test]
++async fn test_find_all_references_excludes_invocation_reference(cx: &mut TestAppContext) {
++    init_test(cx, |_| {});
++    update_test_editor_settings(cx, &|settings| {
++        settings.find_all_references_include_current = Some(false);
++    });
++    let mut cx = EditorLspTestContext::new_rust(
++        lsp::ServerCapabilities {
++            references_provider: Some(lsp::OneOf::Left(true)),
++            ..lsp::ServerCapabilities::default()
++        },
++        cx,
++    )
++    .await;
++
++    cx.set_state(
++        &r#"fn one() {
++            let value = ˇtwo();
++        }
++
++
++
++
++
++
++        fn two() {}"#
++            .unindent(),
++    );
++    cx.lsp
++        .set_request_handler::<lsp::request::References, _, _>(move |params, _| async move {
++            Ok(Some(vec![
++                lsp::Location {
++                    uri: params.text_document_position.text_document.uri.clone(),
++                    range: lsp::Range::new(lsp::Position::new(1, 16), lsp::Position::new(1, 19)),
++                },
++                lsp::Location {
++                    uri: params.text_document_position.text_document.uri,
++                    range: lsp::Range::new(lsp::Position::new(9, 4), lsp::Position::new(9, 7)),
++                },
++            ]))
++        });
++
++    cx.update_editor(|editor, window, cx| {
++        editor.find_all_references(&FindAllReferences::default(), window, cx)
++    })
++    .expect("should have spawned a task")
++    .await
++    .expect("failed to find references");
++
++    let (editor_count, excerpt_count) = cx.update_workspace(|workspace, _, cx| {
++        let editors = workspace.items_of_type::<Editor>(cx).collect::<Vec<_>>();
++        let excerpt_count = editors[1]
++            .read(cx)
++            .buffer
++            .read(cx)
++            .snapshot(cx)
++            .excerpts()
++            .count();
++        (editors.len(), excerpt_count)
++    });
++    assert_eq!(editor_count, 2);
++    assert_eq!(excerpt_count, 1);
++}
++
+ #[gpui::test]
+ async fn test_find_enclosing_node_with_task(cx: &mut TestAppContext) {
+     init_test(cx, |_| {});
+diff --git a/crates/editor/src/navigation.rs b/crates/editor/src/navigation.rs
+index 4f9880c438..0a614593d6 100644
+--- a/crates/editor/src/navigation.rs
++++ b/crates/editor/src/navigation.rs
+@@ -1243,6 +1243,8 @@ impl Editor {
+         cx: &mut Context<Self>,
+     ) -> Option<Task<Result<Navigated>>> {
+         let always_open_multibuffer = action.always_open_multibuffer;
++        let include_current_reference =
++            EditorSettings::get_global(cx).find_all_references_include_current;
+         let selection = self.selections.newest_anchor();
+         let multi_buffer = self.buffer.read(cx);
+         let multi_buffer_snapshot = multi_buffer.snapshot(cx);
+@@ -1292,6 +1294,7 @@ impl Editor {
+                 return anyhow::Ok(Navigated::No);
+             };
+             let mut locations = cx.update(|_, cx| {
++                let invocation_point = head.to_point(buffer.read(cx));
+                 locations
+                     .into_iter()
+                     .map(|location| {
+@@ -1301,6 +1304,13 @@ impl Editor {
+                     // if special-casing the single-match case, remove ranges
+                     // that intersect current selection
+                     .filter(|(location_buffer, location)| {
++                        if !include_current_reference
++                            && &buffer == location_buffer
++                            && location.contains_inclusive(&(invocation_point..invocation_point))
++                        {
++                            return false;
++                        }
++
+                         if always_open_multibuffer || &buffer != location_buffer {
+                             return true;
+                         }
+diff --git a/crates/settings/src/vscode_import.rs b/crates/settings/src/vscode_import.rs
+index 75b953e7cb..2237af7c2b 100644
+--- a/crates/settings/src/vscode_import.rs
++++ b/crates/settings/src/vscode_import.rs
+@@ -267,6 +267,7 @@ impl VsCodeSettings {
+             fast_scroll_sensitivity: self.read_f32("editor.fastScrollSensitivity"),
+             sticky_scroll: self.sticky_scroll_content(),
+             go_to_definition_fallback: None,
++            find_all_references_include_current: None,
+             go_to_definition_scroll_strategy: None,
+             gutter: self.gutter_content(),
+             horizontal_scroll_margin: None,
+diff --git a/crates/settings_content/src/editor.rs b/crates/settings_content/src/editor.rs
+index 499fb10e3b..9f8d04525b 100644
+--- a/crates/settings_content/src/editor.rs
++++ b/crates/settings_content/src/editor.rs
+@@ -188,6 +188,11 @@ pub struct EditorSettingsContent {
+     /// Default: FindAllReferences
+     pub go_to_definition_fallback: Option<GoToDefinitionFallback>,
+ 
++    /// Whether Find All References includes the reference under the invocation cursor.
++    ///
++    /// Default: true
++    pub find_all_references_include_current: Option<bool>,
++
+     /// How to scroll the target into view when navigating to a definition or reference
+     /// (e.g. Go to Definition, Go to Type Definition, Find All References).
+     ///

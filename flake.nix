@@ -126,6 +126,17 @@
       flake = false;
     };
 
+    # The maintained fork is the application source. Its own flake owns the
+    # Rust lock, toolchain, and platform build.
+    zed-src.url = "github:indexable-inc/zed/ix-patched";
+
+    # Unmodified upstream base for validating and regenerating the patch series
+    # that produces zed-src's ix-patched branch.
+    zed-upstream = {
+      url = "github:zed-industries/zed/v1.10.x";
+      flake = false;
+    };
+
     # Upstream NixOS/nix, patched in-repo (packages/nix/nix/patches). Pinned BY
     # REV at tag 2.34.7, the version the hydra daemon runs (`nix store info` ->
     # `Version: 2.34.7`): nix is our daemon toolchain, so the patched package
@@ -274,6 +285,8 @@
     snix-src,
     clippy-src,
     codex-src,
+    zed-src,
+    zed-upstream,
     nix-src,
     ghostty,
     mesa-src,
@@ -314,6 +327,7 @@
       skills = skills.outPath;
       modules = ./modules;
       examples = examples.outPath;
+      users = ./users;
       tests = tests.outPath;
       bench.filesystem = bench-filesystem.outPath;
       site = site.outPath;
@@ -361,6 +375,8 @@
         snix-src
         clippy-src
         codex-src
+        zed-src
+        zed-upstream
         nix-src
         ghostty
         mesa-src
@@ -413,15 +429,12 @@
               // {
                 attr = "packages.aarch64-darwin.${name}";
               }
-          )
-          (linuxDarwinAliases.aarch64-darwin or {});
+          ) (linuxDarwinAliases.aarch64-darwin or {});
       };
     securityRootPaths =
       rawSecurityRootPaths
       // {
-        aarch64-darwin =
-          rawSecurityRootPaths.aarch64-darwin
-          // (linuxDarwinAliases.aarch64-darwin or {});
+        aarch64-darwin = rawSecurityRootPaths.aarch64-darwin // (linuxDarwinAliases.aarch64-darwin or {});
       };
     indexPackages = system: packages.${system};
     personalConfigRoot = ./users/andrewgazelka/config;
@@ -435,9 +448,17 @@
     # consumer combines, but there is no reason to make them re-apply the
     # walker.
     provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+    # Declarative in-guest state push for vmkit macOS guest VMs (launchd
+    # agents from structured attrs, pinned binaries, idempotent ssh apply).
+    # One instance shared by homeModules.macos-guests and the personal darwin
+    # profile. See modules/home/macos-guests.nix.
+    macosGuestsHomeModule = import ./modules/home/macos-guests.nix {
+      inherit indexPackages ix;
+    };
     claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
       inherit indexPackages;
       promptModule = ./packages/agent/prompt;
+      mutableJsonModule = ix.mutableJson.homeModule;
     };
     codexHomeModule = import ./packages/agent/home-manager/codex.nix {
       inherit indexPackages;
@@ -447,14 +468,6 @@
       inherit indexPackages ix;
       claudeCodeModule = claudeCodeHomeModule;
       portableServicesModule = ix.portableServices.homeModule;
-    };
-    symphonyHomeModule = import ./packages/agent/symphony/home-module.nix {
-      inherit indexPackages ix;
-      portableServicesModule = ix.portableServices.homeModule;
-      beamvmModule = import ./packages/beamvm/home-module.nix {
-        inherit indexPackages ix;
-        portableServicesModule = ix.portableServices.homeModule;
-      };
     };
     personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
       inherit indexPackages personalServicesModule ix;
@@ -472,7 +485,8 @@
       ghosttyModule = ./users/andrewgazelka/config/home/ghostty.nix;
       raycastModule = ./modules/home/raycast.nix;
       optionsModule = personalOptionsModule;
-      symphonyModule = symphonyHomeModule;
+      macosGuestsModule = macosGuestsHomeModule;
+      guestsModule = import ./users/andrewgazelka/guests {inherit indexPackages;};
     };
     personalLightProfile = system:
       home-manager.lib.homeManagerConfiguration {
@@ -525,6 +539,10 @@
       mutable-files = import ./modules/darwin/mutable-files.nix {
         indexPackages = system: packages.${system};
       };
+      # Fabric Ray worker for macs (index#3192): join the fleet cluster as a
+      # worker behind `services.ix-ray.enable`, same pinned ports and env as
+      # the NixOS module. See modules/darwin/ray.nix.
+      ray = import ./modules/darwin/ray.nix {indexLib = ix;};
       # Declarative NFS automounts via macOS autofs: each entry renders a
       # direct-map line, /etc/auto_master gains the include idempotently, and
       # activation reloads automountd. See modules/darwin/nfs.nix.
@@ -569,6 +587,13 @@
       # absorb-into-Nix via `index-delta apply-ops`. See
       # modules/home/mutable-files.nix and packages/index-delta.
       mutable-files = mutableFilesHomeModule;
+      # Reusable workstation module (macOS): declare vmkit macOS guest VMs
+      # (ssh endpoint, launchd agents from structured attrs, pinned binaries)
+      # and get a `macos-guest-<name>` apply/status/ssh command per guest.
+      # Import it and set `macosGuests.<name> = { ssh = ...; ... }`. Manual
+      # TCC bootstrap: modules/home/macos-guests/tcc-bootstrap.md. See
+      # modules/home/macos-guests.nix (index#3206, toward index#2682).
+      macos-guests = macosGuestsHomeModule;
       # Reusable workstation module (macOS): declare Raycast Focus session
       # defaults (title, filter mode, duration) and have them written to the
       # com.raycast.macos defaults domain at switch time. Import it and set
@@ -624,22 +649,6 @@
       indexer = import ./packages/search/indexer/home-module.nix {
         indexPackages = system: packages.${system};
         portableServicesModule = ix.portableServices.homeModule;
-      };
-      # Workstation-facing module: run the Symphony BEAM runtime as a user
-      # service (native launchd agent on macOS, systemd user unit on Linux)
-      # by composing portable-services. Mirrors the NixOS module's option
-      # vocabulary; point `packDir` at a mutable checkout for hot-reloaded
-      # workflows and skills. See packages/agent/symphony/home-module.nix.
-      symphony = symphonyHomeModule;
-      # Workstation-facing module: persistent BEAM VMs as user services with
-      # the OTP applications they host declared in Nix. Updating an app
-      # hot-swaps its code in the running VM (no restart, no dropped
-      # connections); only a beamvm/toolchain update restarts. See
-      # packages/beamvm/home-module.nix and packages/beamvm/harness.ex.
-      beamvm = import ./packages/beamvm/home-module.nix {
-        indexPackages = system: packages.${system};
-        portableServicesModule = ix.portableServices.homeModule;
-        inherit ix;
       };
     };
     overlays.default = ix.overlay;

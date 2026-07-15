@@ -57,6 +57,36 @@
     {
       "patch": "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch",
       "deps": []
+    },
+    {
+      "patch": "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch",
+      "deps": []
+    },
+    {
+      "patch": "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch",
+      "deps": []
+    },
+    {
+      "patch": "0016-fix-libstore-accept-opaque-temporary-root-filenames.patch",
+      "deps": []
+    },
+    {
+      "patch": "0017-fix-libstore-recheck-free-space-after-GC-lock.patch",
+      "deps": []
+    },
+    {
+      "patch": "0018-fix-libstore-interrupt-blocked-automatic-GC.patch",
+      "deps": [
+        "0017-fix-libstore-recheck-free-space-after-GC-lock.patch"
+      ]
+    },
+    {
+      "patch": "0019-Get-rid-of-duplicated-Build-failed-due-to-failed-dep.patch",
+      "deps": []
+    },
+    {
+      "patch": "0020-libstore-preserve-content-addressed-leaf-failures.patch",
+      "deps": []
     }
   ]
 }

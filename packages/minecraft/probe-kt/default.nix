@@ -1,9 +1,11 @@
 {
   ix,
+  # Threaded whole into the toolchain helpers (`ix.languages.java.jdk pkgs`,
+  # `ix.languages.kotlin.compiler pkgs`), so there is no fixed dep list to
+  # enumerate and nothing for `override` to reach past.
+  # astlog-ignore: no-pkgs-in-callpackage
   pkgs ? ix.pkgs,
 }: let
-  inherit (pkgs) lib;
-
   # mc-probe-kt calls `McProtocolJvm`, the unibind-rendered Java class over
   # the Rust mc-protocol crate, so the Python probe, this probe, and the
   # servers' tests speak the wire format through one implementation. The

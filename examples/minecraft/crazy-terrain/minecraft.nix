@@ -52,7 +52,7 @@ in {
       };
       validate_model = true;
       explorer = {
-        port = 19801;
+        port = 19_801;
       };
       spawn_search = {
         initial_size = 16;

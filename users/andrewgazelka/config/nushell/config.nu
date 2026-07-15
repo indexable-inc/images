@@ -69,7 +69,7 @@ def maybe-unix-time [field: string] {
         return $value
     }
 
-    let lower = ($field | str downcase)
+    let lower = ($field | str lowercase)
     let text = ($value | into string)
 
     if (not ($lower | str contains "time")) or (not ($text =~ '^-?\d+$')) {
@@ -1731,10 +1731,10 @@ def "nu-complete c" [context: string] {
     }
 
     # cwd's own dirs, substring-filtered by the token ourselves (filter is off).
-    let lc = ($token | str downcase)
+    let lc = ($token | str lowercase)
     let local = (
         ls --short-names | where type == dir
-        | where {|row| ($lc | is-empty) or ($row.name | str downcase | str contains $lc) }
+        | where {|row| ($lc | is-empty) or ($row.name | str lowercase | str contains $lc) }
         | each {|row| { value: ($row.name + '/'), description: dir } }
     )
     let local_names = ($local | get value)
@@ -1854,6 +1854,23 @@ def packages [] {
 }
 
 
+
+
+def commits [] {
+    ^git log --format="%H%x00%aN%x00%aE%x00%aI%x00%s%x00"
+    | split row (char nul)
+    | drop
+    | chunks 5
+    | each {|row|
+        {
+            hash: ($row.0 | str trim)
+            author: $row.1
+            email: $row.2
+            authored_at: ($row.3 | into datetime)
+            subject: $row.4
+        }
+    }
+}
 
 
 def git-files [

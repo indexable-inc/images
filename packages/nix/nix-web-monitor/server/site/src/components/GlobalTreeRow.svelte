@@ -2,9 +2,9 @@
   import type { SvelteSet } from 'svelte/reactivity';
   import Self from '$components/GlobalTreeRow.svelte';
   import GlobalLogView from '$components/GlobalLogView.svelte';
-  import { formatDuration, shortHash, splitDerivation } from '$lib/format';
-  import { goalPath, type GlobalForest } from '$lib/global-forest';
-  import type { GlobalBuild, GlobalBuildKind } from '$lib/types';
+  import { formatBytes, formatDuration, shortHash, splitDerivation } from '$lib/format';
+  import { goalKey, goalTitle, type GlobalForest } from '$lib/global-forest';
+  import type { GlobalBuildKind } from '$lib/types';
 
   type Props = {
     path: string;
@@ -12,7 +12,8 @@
     collapsed: SvelteSet<string>;
     ontoggle: (path: string) => void;
     now: number;
-    /// Which goal's log drawer is open, keyed `<path>:<pid>`. One at a time
+    /// Which goal's log drawer is open, keyed
+    /// `<path>:<pid>:<startTime>:<startTicks>` (see `goalKey`). One at a time
     /// across the whole panel keeps it compact.
     openLog: string | null;
     ontogglelog: (key: string) => void;
@@ -50,10 +51,26 @@
   };
 
   const goals = $derived(forest.goalsByPath.get(path) ?? []);
-  /// The goal whose affordances the row carries. The rare extra goals for the
-  /// same path (the status dir keys entries by `<path>-<pid>`, one per daemon
-  /// worker) fold into a ×N marker. Undefined on a skeleton ancestor.
+  /// The goal whose affordances (badge, log toggle, elapsed) the row carries:
+  /// the oldest one. The rare extra goals for the same path (the status dir
+  /// keys entries by `<path>-<pid>`, one per daemon worker) fold into a ×N
+  /// marker. Undefined on a skeleton ancestor.
   const primary = $derived(goals.at(0));
+  /// Row cpu/rss cover *every* worker folded into the ×N marker, not just
+  /// `primary`: the flat views give each worker its own figures and the
+  /// header's machine totals sum them all, so a per-`primary` readout would
+  /// under-report the path. `null` (column omitted) when no worker was
+  /// sampled, mirroring the per-goal columns.
+  const cpuPercent = $derived(sumSampled(goals.map((goal) => goal.cpuPercent)));
+  const rssBytes = $derived(sumSampled(goals.map((goal) => goal.rssBytes)));
+
+  /// Sum of the sampled values, or `null` when none were sampled (so a wholly
+  /// unmeasured row omits the column rather than showing a fabricated 0).
+  function sumSampled(values: readonly (number | null)[]): number | null {
+    const sampled = values.filter((value): value is number => value !== null);
+    if (sampled.length === 0) return null;
+    return sampled.reduce((total, value) => total + value, 0);
+  }
   const parts = $derived(splitDerivation(path));
   const children = $derived(
     (forest.childrenByPath.get(path) ?? []).filter((child) => !ancestors.has(child))
@@ -62,39 +79,21 @@
   const childGuideLines = $derived(isRoot ? [] : [...guideLines, !isLast]);
   const childAncestors = $derived(new Set([...ancestors, path]));
 
-  /// Stable per-goal key for the log drawer: the status dir keys entries by
-  /// `<path>-<pid>`, so the path alone would collide across workers.
-  function goalKey(goal: GlobalBuild): string {
-    return `${goalPath(goal)}:${String(goal.pid ?? 0)}`;
-  }
-
   /// Live elapsed label from the goal's start. `startTime` is unix *seconds*
   /// (unlike the rest of the monitor's ms timestamps), so scale to ms before
   /// diffing against the reactive clock. Empty when the source gave no start.
-  function elapsed(goal: GlobalBuild): string {
+  function elapsed(goal: { startTime: number | null }): string {
     if (goal.startTime === null) return '';
     return formatDuration(now - goal.startTime * 1000);
   }
 
-  /// Row tooltip: the full store path plus the identity details (outputs,
-  /// worker pid, requesting user/uid, cause) that would crowd the row itself.
-  /// A skeleton hop instead explains why it has no affordances.
+  /// Row tooltip: goal identity details, or -- for a skeleton hop -- why the
+  /// row has no affordances.
   function rowTitle(): string {
     if (primary === undefined) {
       return `${path}\nancestor of an active goal below, not itself active`;
     }
-    const lines = [path];
-    if (primary.outputs.length > 0) lines.push(`outputs: ${primary.outputs.join(', ')}`);
-    if (primary.pid !== null) lines.push(`worker pid ${String(primary.pid)}`);
-    if (primary.user !== null) {
-      lines.push(
-        primary.uid === null
-          ? `requested by ${primary.user}`
-          : `requested by ${primary.user} (uid ${String(primary.uid)})`
-      );
-    }
-    if (primary.why.cause !== null) lines.push(`cause: ${primary.why.cause}`);
-    return lines.join('\n');
+    return goalTitle(primary);
   }
 </script>
 
@@ -136,7 +135,17 @@
   {#if primary !== undefined && primary.user !== null}
     <span class="global-user" title="requested by {primary.user}">{primary.user}</span>
   {/if}
-  {#if primary !== undefined && primary.drvPath !== null && primary.logFile !== null}
+  {#if cpuPercent !== null}
+    <span class="global-stat" title="cpu across every worker's process tree"
+      >{String(cpuPercent)}%</span
+    >
+  {/if}
+  {#if rssBytes !== null}
+    <span class="global-stat" title="resident memory across every worker's process tree"
+      >{formatBytes(rssBytes)}</span
+    >
+  {/if}
+  {#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && primary.startTicks !== null && primary.logFile !== null}
     <button
       type="button"
       class="global-log-toggle"
@@ -155,8 +164,13 @@
   <span class="activity-dur">{primary === undefined ? '' : elapsed(primary)}</span>
 </div>
 
-{#if primary !== undefined && primary.drvPath !== null && openLog === goalKey(primary)}
-  <GlobalLogView drvPath={primary.drvPath} />
+{#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && primary.startTicks !== null && primary.logFile !== null && openLog === goalKey(primary)}
+  <GlobalLogView
+    drvPath={primary.drvPath}
+    pid={primary.pid}
+    startTime={primary.startTime}
+    startTicks={primary.startTicks}
+  />
 {/if}
 
 {#if !isCollapsed}

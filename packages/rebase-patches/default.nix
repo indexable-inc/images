@@ -34,11 +34,13 @@
 # there. One tool, parameterized by data, never copied per repo.
 {
   ix,
+  coreutils,
   formats,
   writeNushellApplication,
   runCommand,
   git,
   mergiraf,
+  nushell,
 }: let
   # Fork-package mapping from the single source of truth (lib/fork-packages.nix,
   # surfaced as `ix.forkPackages`), rendered to JSON and baked in as a store
@@ -398,11 +400,25 @@
       package
     ];
   } (builtins.readFile ./resume-test.sh);
+  seedTest = runCommand "rebase-patches-seed-test" {
+    nativeBuildInputs = [
+      coreutils
+      git
+      nushell
+    ];
+    dagLib = ./dag-lib.nu;
+    seedTestScript = ./seed-test.nu;
+  } (builtins.readFile ./seed-test.sh);
 in
   package.overrideAttrs (old: {
     passthru =
       (old.passthru or {})
       // {
-        tests = (old.passthru.tests or {}) // {resume = resumeTest;};
+        tests =
+          (old.passthru.tests or {})
+          // {
+            resume = resumeTest;
+            seed = seedTest;
+          };
       };
   })

@@ -106,9 +106,22 @@ MODULES: tuple[Module, ...] = (
     ),
     Module(
         "weave",
-        "one shared world - facts, queries, verbs against the weave journal; "
-        "`await weave.delegate('prompt')` is THE delegation verb: the weave app "
-        "runs each task as a live session",
+        "one shared world - facts, queries, blobs against the weave journal "
+        "(the system of record; it never dispatches): `weave.query(datalog)`, "
+        "`assert_facts`, `put_blob`/`get_blob`, and `await weave.result(task)` "
+        "to wait on any task entity's terminal state",
+    ),
+    Module(
+        "fabric",
+        "call-first delegation recorded to the weave journal: `await fabric.run(fn, *args)` "
+        "executes fn on this node, or with `node='<host>'` on that fleet node's runner "
+        "actor over Ray (env handshake + host label checked at submit; `cpus=` for a "
+        "dedicated CPU reservation, `repo=`/`rev=` for a per-run workspace clone), with "
+        "ask/started/terminal facts and source + result in CAS; `fabric.claude.session("
+        "prompt)` opens a self-recording, interruptible Claude Agent SDK session; an "
+        "`interrupt=requested` fact on any run entity stops it; `fabric.activity.frame()` "
+        "is the what-runs-where view and `fabric.reconcile.loop()` marks runs whose "
+        "runner died as lost (never restarts)",
     ),
     Module(
         "search",
@@ -149,6 +162,22 @@ MODULES: tuple[Module, ...] = (
         "canonical form, syntax verdicts (`flecs_query.parse` / `canonicalize` / `validate`)",
     ),
     Module("tui", "drive and snapshot a terminal program; renders as HTML"),
+    Module(
+        "svelte",
+        "author live interactive dashboard resources as real Svelte 5 components instead of "
+        'hand-rolled HTML/JS strings: `await svelte.component("Board.svelte", id=..., '
+        "state=..., actions=...)` compiles via the bundled svelte-bundle CLI into one "
+        "self-contained no-network bundle and registers the resource, with the virtual `ix` "
+        "module (`$data` / `act` / `replies`) wired to kernel state; `await svelte.bundle(src)` "
+        "returns just the compiled JS. THE path for any non-trivial UI",
+    ),
+    Module(
+        "sharedaudio",
+        "drive the local shared-audio daemon (packages/audio) over its control socket: "
+        "`sharedaudio.status()` / `volume()` / `mute()`, and `publish()` / `set_control()` / "
+        "`schedule()` push WASM instruments and control changes to every peer in the session "
+        "(needs a running `shared-audio daemon`)",
+    ),
     Module(
         "screen",
         "native macOS desktop control: capture the screen, a region, or one app's window "
@@ -235,6 +264,7 @@ MODULES: tuple[Module, ...] = (
         "slack",
         "read Slack channels, messages, and threads into polars, send messages, and search "
         "(`await slack.channels()` / `messages(channel)` / `thread(channel, ts)` / `send(channel, text)` / `search(query)`); "
+        "`watch_channel(channel)` streams new channel messages (mentions only, by default) back to the agent; "
         "`slack.login(token)` stores your user token (mode 0600); `status()` / `logout()` manage it. "
         "Incognito sessions only (personal Slack data never reaches a shared room)",
         # Mirrors slack._token()'s documented resolution order; the smoke test
@@ -289,6 +319,18 @@ MODULES: tuple[Module, ...] = (
         ),
     ),
 )
+
+# Bundled `src/` packages deliberately absent from the catalog, each with the
+# reason it stays out. The packaging check (`serverTools` in
+# packages/mcp/default.nix) reads the real `src/` directory listing and fails
+# when a bundled module is neither a `Module` row above nor named here, so a
+# new module cannot silently drop out of `api()` the way `svelte` did
+# (index#3091).
+UNCATALOGED: dict[str, str] = {
+    "fsearch": "internal engine behind the `grep` / `find` / `spotlight` builtins",
+    "sh": "retired shim that raises a migration hint; shell-out is `nu`",
+    "nox_autotriage": "nox conformance -> linear.triage adapter driven by CI automation, not cells",
+}
 
 # Always-present namespace builtins (installed by runtime.install; no import).
 BUILTINS: tuple[Builtin, ...] = (
@@ -372,6 +414,14 @@ LIBRARIES: tuple[Library, ...] = (
     Library("polars"),
     Library("duckdb"),
     Library("httpx"),
+    Library(
+        "githubkit",
+        # index#3258: steer GitHub work off `gh` subprocesses; a direct typed
+        # API call is faster and returns structured data, no JSON flag scraping.
+        note="preferred over the `gh` CLI for GitHub API work: "
+        "`from githubkit import GitHub`, mint once with the token from "
+        "`gh auth token`, reuse all session",
+    ),
     Library("matplotlib"),
     Library("pypdf"),
     Library(

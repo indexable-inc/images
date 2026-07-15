@@ -53,7 +53,7 @@
   buffer_font_size = 10;
   buffer_font_weight = 200;
   buffer_line_height = {
-    custom = 1.100000023841858;
+    custom = 1.100_000_023_841_858;
   };
   centered_layout = {
     left_padding = 0;
@@ -90,6 +90,7 @@
   diff_view_style = "split";
   excerpt_context_lines = 2;
   expand_excerpt_lines = 5;
+  find_all_references_include_current = false;
   file_types = {
     Nu = ["nu"];
     Scheme = ["astlog"];

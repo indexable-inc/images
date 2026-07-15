@@ -257,15 +257,18 @@ in
       pkgs.llvmPackages.bintools-unwrapped
     ];
 
+    # Target-suffixed vars only. cc-rs resolves tools first-match
+    # (CC_<triple> > HOST_CC/TARGET_CC > CC) but gathers *FLAGS from every
+    # matching var cumulatively (CFLAGS_<triple> AND plain CFLAGS), so an
+    # unqualified CFLAGS carrying clang-only Darwin flags (-iframework,
+    # -isysroot <macOS SDK>) reaches the gcc compile of host (Linux)
+    # build-script units in the same graph and fails it (#3188). The same
+    # first-match lookup makes an unqualified CC/CMAKE_TOOLCHAIN_FILE point
+    # host units at the Darwin toolchain, so no unqualified tool vars either.
+    # MACOSX_DEPLOYMENT_TARGET and SDKROOT stay unqualified: they have
+    # Apple-target semantics only, so host compiles never read them.
     env = {
-      AR = appleAr;
-      CC = appleCc;
-      CFLAGS = targetFlags;
-      CMAKE_TOOLCHAIN_FILE = appleCmakeToolchain;
-      CXX = appleCxx;
-      CXXFLAGS = targetFlags;
       MACOSX_DEPLOYMENT_TARGET = "11.0";
-      RANLIB = appleRanlib;
       SDKROOT = appleSdk;
       "AR_${targetEnvName}" = appleAr;
       "CC_${targetEnvName}" = appleCc;

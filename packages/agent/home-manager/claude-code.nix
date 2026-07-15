@@ -3,6 +3,13 @@
   # Path to the house prompt module (packages/agent/prompt), injected by the
   # importing flake so this module never climbs the tree with `../`.
   promptModule,
+  # The mutable-json home module (lib/services/mutable-json.nix), injected by
+  # the importing flake; carries the last-applied 3-way merge that
+  # materializes the wrapper's settings render into the writable user
+  # settings.json (#3180). Keyed, so a config importing
+  # `homeModules.mutable-json` alongside this module still declares the
+  # option once.
+  mutableJsonModule,
 }: {
   config,
   lib,
@@ -54,6 +61,8 @@
     // optionalOverride (cfg.systemPrompt.source == "stock") "systemPrompt" null;
   defaultedPackage = cfg.basePackage.override packageOverrides;
 in {
+  imports = [mutableJsonModule];
+
   options.programs.claude-code = {
     basePackage = lib.mkOption {
       type = lib.types.package;
@@ -66,12 +75,29 @@ in {
       inherit (jsonFormat) type;
       default = {};
       description = ''
-        Lower-priority Claude Code settings passed through the wrapper's
-        read-only default layer. Runtime user settings are still managed by
-        Home Manager's native {option}`programs.claude-code.settings` option.
-        The wrapper answers {command}`claude --which-settings` with the store
-        path of the rendered layer, since no file under {file}`~/.claude`
-        explains it.
+        Claude Code settings folded into the wrapper's computed render
+        (between the house posture defaults and the controlled keys the
+        package owns). With {option}`programs.claude-code.materializeSettings`
+        the merged render lands in the writable
+        {file}`~/.claude/settings.json`, so these stay user-overridable at
+        runtime and the live config is explainable from disk.
+      '';
+    };
+
+    materializeSettings = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Materialize the wrapper package's computed settings render
+        (`passthru.settings`: house posture defaults, {option}`defaults`,
+        then the controlled hooks/permissions/env keys) into the writable
+        {file}`settings.json` under {option}`programs.claude-code.configDir`.
+        Reconciled on activation with a last-applied 3-way merge
+        (`homeModules.mutable-json`): declared keys are enforced, keys the
+        render stops declaring are pruned, and Claude Code's own runtime
+        writes (`/config` toggles, plugin state) survive. Requires
+        {option}`programs.claude-code.package` to be the index wrapper (or
+        any package exposing `passthru.settings`).
       '';
     };
 
@@ -249,11 +275,37 @@ in {
         assertion = cfg.systemPrompt.source == "house" || cfg.systemPrompt.omitRules == [];
         message = "programs.claude-code.systemPrompt.omitRules only applies when source = \"house\".";
       }
+      {
+        # The upstream module renders settings.json as a read-only store
+        # symlink whenever these options are set (settings, marketplaces, or
+        # any disabled MCP server); the materialized file needs a single
+        # declarative owner (see lib/services/mutable-json.nix).
+        assertion =
+          !(cfg.enable && cfg.materializeSettings)
+          || (
+            cfg.settings
+            == {}
+            && cfg.marketplaces == {}
+            && lib.all (server: (server.enabled or null) != false && (server.disabled or false) != true) (
+              lib.attrValues cfg.mcpServers
+            )
+          );
+        message = "programs.claude-code.materializeSettings owns settings.json; move settings/marketplaces/disabled MCP servers into programs.claude-code.defaults (or disable materializeSettings).";
+      }
     ];
 
     programs.claude-code = {
       package = lib.mkDefault defaultedPackage;
       context = lib.mkIf cfg.houseContext.enable (lib.mkDefault houseContextText);
+    };
+
+    # The wrapper injects no `--settings` flag (#3180): its computed render is
+    # seeded into the writable user settings.json instead, where Claude Code's
+    # own runtime writes survive the merge and every key stays overridable by
+    # a project/local scope or a runtime toggle.
+    home.mutableJsonFiles.claude-code-settings = lib.mkIf (cfg.enable && cfg.materializeSettings) {
+      target = "${cfg.configDir}/settings.json";
+      value = cfg.package.passthru.settings;
     };
   };
 }

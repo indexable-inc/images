@@ -72,6 +72,14 @@ let
       )
     );
 
+  renderCargoEncodedRustflags =
+    packageName: platform:
+    "cargo_encoded_rustflags+=( ${pkgs.lib.escapeShellArgs (
+      extraRustcArgs
+      ++ (packageRustcArgs.${packageName} or [ ])
+      ++ extraRustcArgsForPlatform platform
+    )} )";
+
   renderExtraLinkRustcArgs =
     platform:
     pkgs.lib.concatStringsSep "\n" (map renderRustcArg (extraLinkRustcArgsForPlatform platform));

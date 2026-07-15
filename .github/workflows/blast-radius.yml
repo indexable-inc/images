@@ -72,6 +72,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
       # Best-effort: download the most recent successful main Check run's
       # check-timings artifact (the nix-fast-build --result-file the `check` gate
       # uploads; see lib/per-system.nix). blast-radius --timings annotates each

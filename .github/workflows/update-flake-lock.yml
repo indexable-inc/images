@@ -54,6 +54,14 @@ jobs:
       - name: Install Determinate Nix
         uses: indexable-inc/index/.github/actions/install-nix@main
 
+      # Underscore digit separators require the patched client in index and in
+      # downstream callers such as ix. The action reads its source lock from
+      # index and fetches that source independently when the checkout belongs
+      # to a caller. Fully qualified like install-nix above because a reusable
+      # workflow checks out the caller's repository.
+      - name: Bootstrap patched Nix client
+        uses: indexable-inc/index/.github/actions/bootstrap-patched-nix@main
+
       # PRs authored by the default GITHUB_TOKEN never get pull_request CI on
       # private repos: GitHub parks every run in action_required and the
       # fork-approval API cannot clear them (ix#6566). When the caller supplies

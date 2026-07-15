@@ -14,9 +14,12 @@
 # Detection:
 #   - macOS `ps` reports pcpu 0.0 for Finder, so real CPU comes from the SECOND
 #     sample of `top -l 2` (the first sample is a since-boot average).
-#   - CPU > 50% alone is not enough (a big copy also spikes Finder): the fix
+#   - High CPU alone is not enough (a big copy also spikes Finder): the fix
 #     only fires when `sample <pid> 3` shows SynchronizeChildren
-#     (DesktopServicesPriv) on a stack.
+#     (DesktopServicesPriv) on a stack. That sample check is the real
+#     false-positive guard, so the CPU threshold is only a cheap pre-filter:
+#     25 not 50 because on 2026-07-14 a just-relaunched Finder respun at
+#     35-50% CPU for 9.5h undetected at threshold 50 (nix#66).
 #
 # Remediation (order matters, validated live 2026-07-07):
 #   1. `defaults delete com.apple.finder FXRecentFolders` FIRST: prevents the
@@ -29,7 +32,7 @@
 # with the sample excerpt (stdout/stderr land in
 # ~/Library/Logs/finder-spin-watchdog.log via launchd). No silent activations.
 
-threshold=50
+threshold=25
 
 log() {
   printf '%s finder-spin-watchdog: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"

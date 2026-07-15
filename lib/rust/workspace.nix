@@ -325,6 +325,9 @@
           # stub via CLOUDFLARE_API_BASE in the integration tests). The test
           # sandbox has no curl otherwise, so the executors fail spawning it.
           efx = [workspacePkgs.curl];
+          # upstream-sync's upstream-pr integration test builds a local git
+          # upstream and runs the real fetch/am/branch mechanism against it.
+          upstream-sync = [workspacePkgs.git];
         };
         # `rodio` (packages/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
         # script needs ALSA's pkg-config metadata to link `libasound` on Linux.

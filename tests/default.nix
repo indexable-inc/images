@@ -15,14 +15,6 @@
   # (repo policy: no hash literals in tracked .nix).
   pins = ix.pins.loadPins ./pins.json;
   portableServicesTest = import ./portable-services.nix {inherit lib pkgs ix;};
-  symphonyHomeModuleTest = import ./symphony-home-module.nix {
-    inherit
-      lib
-      pkgs
-      ix
-      paths
-      ;
-  };
   # Provenance walker + home module (whence, #2413): asserts the manifest of
   # a real home-manager eval links deployed paths to their defining sites,
   # so it takes the home-manager flake input rather than option stubs.
@@ -231,6 +223,7 @@
         (import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
           indexPackages = homeAgentIndexPackages;
           promptModule = paths.packagesRoot + "/agent/prompt";
+          mutableJsonModule = ix.mutableJson.homeModule;
         })
         (import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
           indexPackages = homeAgentIndexPackages;
@@ -257,6 +250,51 @@
         }
       ];
     }).config;
+  macosGuestsConfig =
+    (lib.evalModules {
+      specialArgs.pkgs = homeAgentPkgs;
+      modules = [
+        (import (paths.root + "/modules/home/macos-guests.nix") {
+          inherit ix;
+          indexPackages = homeAgentIndexPackages;
+        })
+        ({lib, ...}: {
+          options = {
+            assertions = lib.mkOption {
+              type = lib.types.listOf lib.types.anything;
+              default = [];
+            };
+            home = {
+              homeDirectory = lib.mkOption {type = lib.types.str;};
+              packages = lib.mkOption {
+                type = lib.types.listOf lib.types.package;
+                default = [];
+              };
+            };
+            launchd.agents = lib.mkOption {
+              type = lib.types.attrsOf (lib.types.submodule {
+                options = {
+                  enable = lib.mkOption {type = lib.types.bool;};
+                  config = lib.mkOption {type = lib.types.attrsOf lib.types.anything;};
+                };
+              });
+              default = {};
+            };
+          };
+          config = {
+            home.homeDirectory = "/Users/agent";
+            macosGuests.test = {
+              lifecycle.macAddress = "0e:c9:c7:6c:25:a8";
+              ssh = {
+                host = "192.168.64.6";
+                user = "ix";
+              };
+            };
+          };
+        })
+      ];
+    }).config;
+  macosGuestAgent = macosGuestsConfig.launchd.agents.test;
 
   minecraft = let
     config = evalConfig [
@@ -313,7 +351,7 @@
           {
             services.minecraft.rcon = {
               enable = true;
-              port = 25576;
+              port = 25_576;
               openFirewall = true;
             };
           }
@@ -352,7 +390,7 @@
         {
           services.minecraft.plugins = {
             pvpindex-factions = {};
-            simple-voice-chat.port = 24455;
+            simple-voice-chat.port = 24_455;
             terraformgenerator.worlds = [
               "factions"
               "factions_nether"
@@ -375,10 +413,10 @@
         {
           services.minecraft.properties = {
             query = {
-              port = 25565;
+              port = 25_565;
             };
             rcon = {
-              port = 25575;
+              port = 25_575;
             };
           };
         }
@@ -674,26 +712,6 @@
     # Outer pkgs has no allowUnfree, so forcing pkgs.claude-code here would
     # throw at eval; use lib.getName over the rendered systemPackages list.
     packageNames = map lib.getName config.environment.systemPackages;
-  };
-
-  # The symphony control-plane module (modules/services/symphony) evaluated
-  # standalone, the way ix's host modules consume it. `package` only needs a
-  # /bin path shape at eval, so hello stands in for the launcher.
-  symphonyService = let
-    config = evalConfig [
-      {
-        ix.image.name = "test/symphony-module";
-        services.symphony = {
-          enable = true;
-          package = pkgs.hello;
-          primaryRepo = "/srv/checkouts/index";
-          environmentFile = "/run/secrets/symphony.env";
-        };
-      }
-    ];
-  in {
-    inherit config;
-    unit = config.systemd.services.symphony;
   };
 
   pythonAppClosureProbe = ix.writePythonApplication pkgs {
@@ -2246,7 +2264,7 @@
       services.velocity = {
         enable = true;
         address = "10.0.0.5";
-        port = 25570;
+        port = 25_570;
         openFirewall = false;
       };
     }
@@ -2278,8 +2296,8 @@
     {
       services.minecraft-bedrock = {
         enable = true;
-        port = 19132;
-        portv6 = 19132;
+        port = 19_132;
+        portv6 = 19_132;
       };
     }
   ];
@@ -2419,6 +2437,10 @@
   # --- Language helpers -----------------------------------------------------
 
   languages = {
+    elixirLatest = ix.languages.elixir.toolchain pkgs {version = "latest";};
+    erlangLatest = ix.languages.erlang.toolchain pkgs {version = "latest";};
+    erlangRebarDefault = ix.languages.erlang.rebar3 pkgs {};
+    erlangRebarExplicit = ix.languages.erlang.rebar3 pkgs {erlang = pkgs.beamPackages.erlang;};
     pythonMissingVersion = builtins.tryEval (
       builtins.deepSeq (ix.languages.python.interpreter pkgs {}).pythonVersion true
     );
@@ -2784,8 +2806,30 @@
       // args);
   # Forcing `.patches` runs the eval-time selection + canonical assertions
   # without building anything.
+  patchedSrcSubset = patchedSrcFixture {patchNames = ["0001-canonical.patch"];};
+  patchedSrcAlternate = ix.patchedSrc {
+    name = "patched-src-alternate-fixture";
+    src = ./fixtures/patched-src;
+    patchDir = ./fixtures/patched-src-alternate;
+    patchNames = [
+      "0002-canonical.patch"
+      "0001-canonical.patch"
+    ];
+  };
   patchedSrcSubsetEval = builtins.tryEval (
-    builtins.deepSeq (patchedSrcFixture {patchNames = ["0001-canonical.patch"];}).patches true
+    builtins.deepSeq patchedSrcSubset.patches true
+  );
+  patchedSrcPatchSetEval = builtins.tryEval (
+    let
+      result = {
+        count = patchedSrcSubset.patchSet.count;
+        names = map (patch: patch.name) patchedSrcSubset.patchSet.patches;
+        hashLength = builtins.stringLength patchedSrcSubset.patchSet.digest;
+        hashChangesWithContent = patchedSrcSubset.patchSet.digest != patchedSrcAlternate.patchSet.digest;
+        alternateNames = map (patch: patch.name) patchedSrcAlternate.patchSet.patches;
+      };
+    in
+      builtins.deepSeq result result
   );
   patchedSrcSubsetNonCanonicalEval = builtins.tryEval (
     builtins.deepSeq (patchedSrcFixture {patchNames = ["0002-noncanonical.patch"];}).patches true
@@ -2798,6 +2842,27 @@
   );
 
   groups = {
+    macos-guests = [
+      {
+        assertion = macosGuestAgent.enable;
+        message = "declared macOS guests should enable their host launchd agent";
+      }
+      {
+        assertion =
+          builtins.elemAt macosGuestAgent.config.ProgramArguments 1
+          == "run-macos"
+          && builtins.elemAt macosGuestAgent.config.ProgramArguments 3 == "/Users/agent/.local/share/vmkit/guests/test"
+          && builtins.elemAt macosGuestAgent.config.ProgramArguments 5 == "0e:c9:c7:6c:25:a8";
+        message = "the host launchd agent should pass the declared bundle and MAC to vmkit run-macos";
+      }
+      {
+        assertion =
+          macosGuestAgent.config.KeepAlive
+          && macosGuestAgent.config.RunAtLoad
+          && macosGuestAgent.config.ExitTimeOut == 60;
+        message = "launchd should keep the guest alive while allowing a clean shutdown window";
+      }
+    ];
     security-roots = [
       {
         assertion =
@@ -2871,6 +2936,22 @@
       {
         assertion = patchedSrcSubsetEval.success;
         message = "patchedSrc should accept a patchNames subset of the discovered series";
+      }
+      {
+        assertion =
+          patchedSrcPatchSetEval.success
+          && patchedSrcPatchSetEval.value
+          == {
+            count = 1;
+            names = ["0001-canonical.patch"];
+            hashLength = 64;
+            hashChangesWithContent = true;
+            alternateNames = [
+              "0001-canonical.patch"
+              "0002-canonical.patch"
+            ];
+          };
+        message = "patchedSrc should expose a content-sensitive SHA-256 identity for the selected series";
       }
       {
         assertion = !patchedSrcSubsetNonCanonicalEval.success;
@@ -3064,7 +3145,7 @@
           ports = ixRayHead.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
           builtins.elem 6379 ports
-          && builtins.elem 10001 ports
+          && builtins.elem 10_001 ports
           && builtins.elem 8799 ports
           && builtins.elem 6380 ports
           && builtins.elem 6381 ports;
@@ -3085,11 +3166,11 @@
             6381
             8798
             8799
-            10001
+            10_001
           ];
         in
           builtins.all (p: !(builtins.elem p globalPorts)) rayPorts
-          && builtins.all (r: !(r.from == 10002 && r.to == 10031)) globalRanges;
+          && builtins.all (r: !(r.from == 10_002 && r.to == 10_031)) globalRanges;
         message = "ix-ray must never open its ports on the global firewall, only on tailscale0";
       }
       {
@@ -3101,7 +3182,7 @@
           builtins.elem 8799 ports
           && builtins.elem 6380 ports
           && !(builtins.elem 6379 ports)
-          && !(builtins.elem 10001 ports);
+          && !(builtins.elem 10_001 ports);
         message = "ix-ray worker should open exec + manager ports but not the GCS/client ports";
       }
       {
@@ -3150,6 +3231,21 @@
           lib.hasInfix "\"start\" \"--head\"" headScript
           && lib.hasInfix "\"start\" \"--address\"" workerScript;
         message = "ix-ray launcher must exec `ray start` (the `start` subcommand ahead of --head/--address), never `ray --head`";
+      }
+      {
+        # The fabric labels declared as data in lib/fabric.nix must reach the
+        # daemon's argv: the rendered launcher carries `--resources` JSON with
+        # the host label, the os label, and the env-handshake resource
+        # (index#3192). Guards the option -> nodeResources -> argv wiring, not
+        # the literal values.
+        assertion = let
+          workerScript = builtins.readFile ixRayWorker.systemd.services.ix-ray.serviceConfig.ExecStart;
+        in
+          lib.hasInfix "--resources" workerScript
+          && lib.hasInfix "host_" workerScript
+          && lib.hasInfix "fabric_env:" workerScript
+          && lib.hasInfix "linux" workerScript;
+        message = "ix-ray must advertise the fabric labels (host_<name>, os, fabric_env:<tag>) via --resources";
       }
       {
         # A worker with no headAddress cannot know where to join: fail eval.
@@ -3202,7 +3298,7 @@
         assertion = let
           ports = ixSparkMaster.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
-          builtins.elem 15002 ports && builtins.elem 7077 ports;
+          builtins.elem 15_002 ports && builtins.elem 7077 ports;
         message = "ix-spark master should open the Connect (15002) and master (7077) ports on tailscale0";
       }
       {
@@ -3217,7 +3313,7 @@
             7078
             7079
             7080
-            15002
+            15_002
           ];
         message = "ix-spark must never open its ports on the global firewall, only on tailscale0";
       }
@@ -3231,7 +3327,7 @@
           && !(ixSparkWorker.systemd.services ? spark-master)
           && !(ixSparkWorker.systemd.services ? spark-connect)
           && !(builtins.elem 7077 ports)
-          && !(builtins.elem 15002 ports);
+          && !(builtins.elem 15_002 ports);
         message = "ix-spark worker should run only a worker and open no master/connect ports";
       }
       {
@@ -3372,6 +3468,10 @@
         message = "base profile should make root land in nushell (via platform users.defaultUserShell)";
       }
       {
+        assertion = base.config.home-manager.users.root.programs.fzf.historyWidget.command == "";
+        message = "base profile should leave Ctrl-R history search to Atuin";
+      }
+      {
         assertion =
           lib.any (
             rule: lib.hasPrefix "d ${base.cfg.shellWorkspace.directory} " rule
@@ -3404,6 +3504,10 @@
         message = "base image should publish from the ix/base repository";
       }
       {
+        assertion = !base.config.networking.resolvconf.enable;
+        message = "image platform should preserve the runtime DNS configuration written by ix-vm-guest";
+      }
+      {
         assertion = lib.elemAt base.config.nix.settings.substituters 0 == "https://cache.ix.dev";
         message = "base profile should route Nix through cache.ix.dev before fallback substituters";
       }
@@ -3424,7 +3528,7 @@
       {
         assertion =
           factionsExample.cfg.worldBorder.enable
-          && factionsExample.cfg.worldBorder.diameter == 12000
+          && factionsExample.cfg.worldBorder.diameter == 12_000
           && factionsExample.cfg.properties.max-world-size == 6000;
         message = "factions example should declare a managed world border";
       }
@@ -3438,7 +3542,7 @@
         message = "factions example should keep RCON private while exposing Minecraft and BlueMap";
       }
       {
-        assertion = builtins.elem 24454 factionsExample.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 24_454 factionsExample.config.networking.firewall.allowedUDPPorts;
         message = "factions example should expose Simple Voice Chat on the default UDP port";
       }
       {
@@ -3452,7 +3556,7 @@
             "simple-voice-chat"
           ]
           && claims.simple-voice-chat.protocol == "udp"
-          && claims.simple-voice-chat.port == 24454;
+          && claims.simple-voice-chat.port == 24_454;
         message = "factions example should register every service listener in ix.networking.portClaims";
       }
       {
@@ -3523,7 +3627,7 @@
         assertion =
           survivalExample.minecraft.paper.enable
           && survivalExample.minecraft.version == "26.1.2"
-          && survivalExample.minecraft.port == 25566
+          && survivalExample.minecraft.port == 25_566
           && !survivalExample.minecraft.openFirewall
           && !survivalExample.minecraft.properties.online-mode;
         message = "survival example should keep Paper behind the proxy";
@@ -3532,13 +3636,13 @@
         assertion = let
           ports = survivalExample.config.networking.firewall.allowedTCPPorts;
         in
-          builtins.elem 25565 ports
-          && !(builtins.elem 25566 ports)
+          builtins.elem 25_565 ports
+          && !(builtins.elem 25_566 ports)
           && !(builtins.elem survivalExample.minecraft.rcon.port ports);
         message = "survival example should expose Velocity while keeping backend and RCON private";
       }
       {
-        assertion = builtins.elem 19132 survivalExample.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 19_132 survivalExample.config.networking.firewall.allowedUDPPorts;
         message = "survival example should expose Geyser's Bedrock UDP listener";
       }
       {
@@ -3551,10 +3655,10 @@
             "minecraft-rcon"
             "geyser"
           ]
-          && claims.velocity.port == 25565
-          && claims.minecraft.port == 25566
+          && claims.velocity.port == 25_565
+          && claims.minecraft.port == 25_566
           && claims.geyser.protocol == "udp"
-          && claims.geyser.port == 19132;
+          && claims.geyser.port == 19_132;
         message = "survival example should register proxy, backend, RCON, and Bedrock listeners";
       }
       {
@@ -4057,7 +4161,7 @@
           inherit (minecraftBlocksExample) schema;
         in
           schema.coordOffset
-          == 1048576
+          == 1_048_576
           && lib.hasInfix "mortonEncode" schema.createTableSql
           && lib.hasInfix "toUInt32(x + 1048576)" schema.mortonExpr
           && builtins.length schema.mortonFields == 3
@@ -4337,6 +4441,22 @@
         message = "Codex Home Manager module should install the shared hook policy under the configured Codex home";
       }
       {
+        # #3180: the wrapper injects no --settings flag; the Home Manager
+        # module materializes the package's computed render into the writable
+        # user settings.json through the mutable-json 3-way merge. Pin the
+        # target and that the render actually carries the controlled hook
+        # policy, so a refactor can't silently drop settings delivery.
+        assertion = let
+          entry = homeAgentConfig.home.mutableJsonFiles.claude-code-settings;
+        in
+          entry.target
+          == "/home/agent/.claude/settings.json"
+          && entry.value == homeAgentConfig.programs.claude-code.package.passthru.settings
+          && entry.value ? hooks
+          && entry.value ? statusLine;
+        message = "Claude Code Home Manager module should materialize the wrapper's settings render into the writable user settings.json";
+      }
+      {
         assertion =
           builtins.elem {
             key = "agents.max_depth";
@@ -4347,7 +4467,7 @@
       }
       {
         assertion =
-          !lib.strings.hasInfix "Publish durable writeups" (
+          !lib.strings.hasInfix "Publish substantial investigations" (
             builtins.readFile homeAgentConfig.programs.codex.finalPackage.passthru.modelInstructionsFile
           );
         message = "Codex Home Manager module should thread systemPrompt.omitRules into the package wrapper";
@@ -4432,41 +4552,13 @@
       }
     ];
 
-    # The control-plane runtime module that moved in-tree with
-    # packages/symphony. These pin the env contract ix's hil deployment and
-    # the worker module read off the unit, so a refactor that renames an
-    # option or drops the EnvironmentFile pass-through fails here instead of
-    # on a host switch.
-    symphony = [
-      {
-        assertion = symphonyService.unit.environment.SYMPHONY_WORKFLOW_PACK == "example";
-        message = "symphony module should default to the bundled example workflow pack";
-      }
-      {
-        assertion = symphonyService.unit.environment.SYMPHONY_PRIMARY_REPO == "/srv/checkouts/index";
-        message = "symphony module should export the primary repo checkout to the runtime";
-      }
-      {
-        assertion = lib.hasSuffix "/bin/symphony" symphonyService.unit.serviceConfig.ExecStart;
-        message = "symphony module should exec /bin/symphony from the configured package";
-      }
-      {
-        assertion = symphonyService.unit.serviceConfig.EnvironmentFile == "/run/secrets/symphony.env";
-        message = "symphony module should pass the secrets EnvironmentFile through to systemd";
-      }
-      {
-        assertion = !(symphonyService.unit.environment ? SYMPHONY_HOST_USER);
-        message = "symphony module should keep host-placement env unset until hostRuntime.enable";
-      }
-    ];
-
     minecraft = [
       {
         assertion = minecraft.cfg.version == "26.1.2";
         message = "default Minecraft module should follow versions.nix default runtime version";
       }
       {
-        assertion = minecraft.cfg.properties.max-players == 100000;
+        assertion = minecraft.cfg.properties.max-players == 100_000;
         message = "default Minecraft module should allow the large ix player ceiling";
       }
       {
@@ -4700,13 +4792,13 @@
         message = "Paper minecraft should seed pluginCatalog from the generated 26.1.2 Paper catalog";
       }
       {
-        assertion = builtins.elem 24455 minecraft.paperPlugins.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 24_455 minecraft.paperPlugins.config.networking.firewall.allowedUDPPorts;
         message = "Simple Voice Chat should open its UDP port when installed as a Paper plugin";
       }
       {
         assertion =
           minecraft.paperPlugins.cfg.serverFiles."plugins/voicechat/voicechat-server.properties".port
-          == 24455;
+          == 24_455;
         message = "Simple Voice Chat should render Paper plugin config under plugins/voicechat";
       }
       {
@@ -5395,6 +5487,18 @@
 
     languages = [
       {
+        assertion = languages.elixirLatest.drvPath == pkgs.beamPackages.elixir.drvPath;
+        message = "ix.languages.elixir latest should follow beamPackages.elixir";
+      }
+      {
+        assertion = languages.erlangLatest.drvPath == pkgs.beamPackages.erlang.drvPath;
+        message = "ix.languages.erlang latest should follow beamPackages.erlang";
+      }
+      {
+        assertion = languages.erlangRebarDefault.drvPath == languages.erlangRebarExplicit.drvPath;
+        message = "ix.languages.erlang rebar3 should default to beamPackages.erlang";
+      }
+      {
         assertion = !languages.pythonMissingVersion.success;
         message = "ix.languages.python should require an explicit interpreter version";
       }
@@ -5447,11 +5551,11 @@
         message = "services.minestom.yourkit.sessionName should appear in the agent options";
       }
       {
-        assertion = builtins.elem 10001 minestomYourkit.firewallTcpPorts;
+        assertion = builtins.elem 10_001 minestomYourkit.firewallTcpPorts;
         message = "services.minestom.yourkit.openFirewall should open the YourKit port in the firewall";
       }
       {
-        assertion = minestomYourkit.portClaim != null && minestomYourkit.portClaim.port == 10001;
+        assertion = minestomYourkit.portClaim != null && minestomYourkit.portClaim.port == 10_001;
         message = "services.minestom.yourkit.enable should register a portClaim for the YourKit port";
       }
       {
@@ -6202,7 +6306,6 @@ in {
   # Strict type + annotation gate over the public ix-sdk Python sources.
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
-  symphonyHomeModule = symphonyHomeModuleTest;
   provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
@@ -6216,7 +6319,6 @@ in {
       fleetTest
       helperTest
       portableServicesTest
-      symphonyHomeModuleTest
       provenanceTest
       cargoUnitPrebuiltTest
     ]

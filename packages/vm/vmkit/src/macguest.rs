@@ -9,17 +9,20 @@
 //! github.com/thecrypticace/vzautomation.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, dispatch_main};
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{AllocAnyThread, MainThreadMarker};
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSData, NSError, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSArray, NSData, NSError, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+};
 use objc2_io_surface::{IOSurface, IOSurfaceLockOptions, IOSurfaceRef};
 // Named explicitly so the dependency is a direct, visible use (the type is
 // otherwise only reachable through `NSView::layer()`'s return type).
@@ -27,7 +30,7 @@ use objc2_quartz_core::CALayer;
 use objc2_virtualization::{
     VZBootLoader, VZDirectoryShare, VZDirectorySharingDeviceConfiguration,
     VZDiskImageStorageDeviceAttachment, VZGraphicsDeviceConfiguration, VZKeyboardConfiguration,
-    VZMacAuxiliaryStorage, VZMacAuxiliaryStorageInitializationOptions,
+    VZMACAddress, VZMacAuxiliaryStorage, VZMacAuxiliaryStorageInitializationOptions,
     VZMacGraphicsDeviceConfiguration, VZMacGraphicsDisplayConfiguration, VZMacHardwareModel,
     VZMacMachineIdentifier, VZMacOSBootLoader, VZMacOSInstaller, VZMacOSRestoreImage,
     VZMacPlatformConfiguration, VZNATNetworkDeviceAttachment, VZNetworkDeviceConfiguration,
@@ -35,13 +38,52 @@ use objc2_virtualization::{
     VZSingleDirectoryShare, VZStorageDeviceConfiguration, VZUSBKeyboardConfiguration,
     VZUSBScreenCoordinatePointingDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
     VZVirtioFileSystemDeviceConfiguration, VZVirtioNetworkDeviceConfiguration, VZVirtualMachine,
-    VZVirtualMachineConfiguration, VZVirtualMachineView,
+    VZVirtualMachineConfiguration, VZVirtualMachineDelegate, VZVirtualMachineView,
 };
 
 use crate::imp::{Error, file_url, ns_error_message};
 
 /// `kCVPixelFormatType_32BGRA` ('BGRA'): the layout the `IOSurface` read assumes.
 const PIXEL_FORMAT_BGRA: u32 = 0x4247_5241;
+
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn request_stop(_signal: libc::c_int) {
+    STOP_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "VmkitVirtualMachineDelegate"]
+    struct VirtualMachineDelegate;
+
+    unsafe impl NSObjectProtocol for VirtualMachineDelegate {}
+
+    unsafe impl VZVirtualMachineDelegate for VirtualMachineDelegate {
+        #[unsafe(method(guestDidStopVirtualMachine:))]
+        fn guest_did_stop(&self, _virtual_machine: &VZVirtualMachine) {
+            eprintln!("vmkit: guest stopped");
+            std::process::exit(0);
+        }
+
+        #[unsafe(method(virtualMachine:didStopWithError:))]
+        fn virtual_machine_did_stop(&self, _virtual_machine: &VZVirtualMachine, error: &NSError) {
+            eprintln!(
+                "vmkit: guest stopped with error: {}",
+                ns_error_message(error)
+            );
+            std::process::exit(1);
+        }
+    }
+);
+
+impl VirtualMachineDelegate {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        unsafe { objc2::msg_send![super(this), init] }
+    }
+}
 
 /// A host directory shared into the guest over virtio-fs (read-write).
 pub struct DirShare {
@@ -74,13 +116,76 @@ pub fn start_guest_offscreen(
     bundle: &Path,
     shares: &[DirShare],
 ) -> Result<Retained<VZVirtualMachineView>, Error> {
-    let config = build_macos_config(bundle, shares)?;
+    let config = build_macos_config(bundle, shares, None)?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
         });
     }
     Ok(start_vm_offscreen(mtm, &config))
+}
+
+/// Run a macOS guest as a supervisor-owned foreground process.
+pub fn run_macos(bundle: &Path, mac_address: &str, shares: &[DirShare]) -> Result<(), Error> {
+    let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
+    let config = build_macos_config(bundle, shares, Some(mac_address))?;
+    if let Err(error) = unsafe { config.validateWithError() } {
+        return Err(Error::InvalidConfiguration {
+            message: ns_error_message(&error),
+        });
+    }
+
+    let vm = unsafe { VZVirtualMachine::initWithConfiguration(VZVirtualMachine::alloc(), &config) };
+    let delegate = VirtualMachineDelegate::new(mtm);
+    unsafe {
+        vm.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+    }
+
+    let completion = RcBlock::new(|error: *mut NSError| {
+        if error.is_null() {
+            eprintln!("vmkit: guest started");
+        } else {
+            eprintln!(
+                "vmkit: guest failed to start: {}",
+                ns_error_message(unsafe { &*error })
+            );
+            std::process::exit(1);
+        }
+    });
+    unsafe { vm.startWithCompletionHandler(&completion) };
+
+    STOP_REQUESTED.store(false, Ordering::Relaxed);
+    unsafe {
+        libc::signal(
+            libc::SIGTERM,
+            request_stop as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            request_stop as *const () as libc::sighandler_t,
+        );
+    }
+    let vm_ptr = Retained::into_raw(vm) as usize;
+    std::thread::spawn(move || {
+        while !STOP_REQUESTED.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        DispatchQueue::main().exec_async(move || {
+            let vm = unsafe { &*(vm_ptr as *const VZVirtualMachine) };
+            eprintln!("vmkit: requesting guest shutdown");
+            if let Err(error) = unsafe { vm.requestStopWithError() } {
+                eprintln!(
+                    "vmkit: guest shutdown request failed: {}",
+                    ns_error_message(&error)
+                );
+                std::process::exit(1);
+            }
+        });
+    });
+
+    std::mem::forget(delegate);
+    std::mem::forget(completion);
+    dispatch_main();
 }
 
 /// Off-screen window + `VZVirtualMachineView` + VM start for any already-built,
@@ -556,7 +661,7 @@ fn start_install(bundle: &Path, ipsw: &Path, hw_data: &[u8], disk_gib: u64) -> R
         message: format!("create aux storage: {}", ns_error_message(&e)),
     })?;
 
-    let config = build_macos_config(bundle, &[])?;
+    let config = build_macos_config(bundle, &[], None)?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
@@ -598,6 +703,7 @@ fn start_install(bundle: &Path, ipsw: &Path, hw_data: &[u8], disk_gib: u64) -> R
 fn build_macos_config(
     bundle: &Path,
     shares: &[DirShare],
+    mac_address: Option<&str>,
 ) -> Result<Retained<VZVirtualMachineConfiguration>, Error> {
     let hw_data = std::fs::read(bundle.join("hardware-model.bin")).map_err(|e| Error::Bundle {
         message: format!("hardware-model.bin: {e}"),
@@ -669,7 +775,17 @@ fn build_macos_config(
 
     let net = unsafe { VZVirtioNetworkDeviceConfiguration::new() };
     let nat = unsafe { VZNATNetworkDeviceAttachment::new() };
-    unsafe { net.setAttachment(Some(&nat)) };
+    unsafe {
+        net.setAttachment(Some(&nat));
+        if let Some(value) = mac_address {
+            let mac =
+                VZMACAddress::initWithString(VZMACAddress::alloc(), &NSString::from_str(value))
+                    .ok_or_else(|| Error::Bundle {
+                        message: format!("invalid MAC address {value:?}"),
+                    })?;
+            net.setMACAddress(&mac);
+        }
+    }
 
     let keyboard = unsafe { VZUSBKeyboardConfiguration::new() };
     let pointing = unsafe { VZUSBScreenCoordinatePointingDeviceConfiguration::new() };

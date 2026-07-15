@@ -1,6 +1,7 @@
 {
   ix,
   lib,
+  updateScriptWriter ? null,
 }:
 # Upstream NixOS/nix pinned at tag 2.34.7 (the `nix-src` input, surfaced as
 # `ix.nixSrc`) with the in-repo patch series (./patches) applied, built through
@@ -30,6 +31,51 @@ let
   # nix/* packages read `pkgs` off their argument the same way.
   inherit (ix) pkgs;
 
+  bootstrapLockPath = ix.paths.root + "/.github/actions/bootstrap-patched-nix/lock.json";
+  bootstrapLock = lib.importJSON bootstrapLockPath;
+  updateScriptArgs = {
+    name = "nix-ix-bootstrap-lock-update";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.git
+    ];
+    meta.description = "Resolve the Nix bootstrap source ref into its generated lock";
+    text = ''
+      # nu
+      const lock_path = ".github/actions/bootstrap-patched-nix/lock.json"
+
+      def main [source_ref?: string] {
+        let current = (open $lock_path)
+        let repository = ($current.repository | into string)
+        let requested = ($source_ref | default $current.revision)
+        let source_repo = (^mktemp -d | str trim)
+        let initialized = (^git init -q $source_repo | complete)
+        if $initialized.exit_code != 0 {
+          ^rm -rf $source_repo
+          error make {msg: $"failed to initialize bootstrap source: ($initialized.stderr | str trim)"}
+        }
+        let fetched = (
+          ^git -C $source_repo fetch --depth 1 $"https://github.com/($repository).git" $requested
+          | complete
+        )
+        if $fetched.exit_code != 0 {
+          ^rm -rf $source_repo
+          error make {msg: $"failed to fetch bootstrap source `($requested)`: ($fetched.stderr | str trim)"}
+        }
+        let resolved = (^git -C $source_repo rev-parse FETCH_HEAD | complete)
+        ^rm -rf $source_repo
+        if $resolved.exit_code != 0 {
+          error make {msg: $"failed to resolve bootstrap source `($requested)`: ($resolved.stderr | str trim)"}
+        }
+        let revision = ($resolved.stdout | str trim)
+        {repository: $repository, revision: $revision}
+        | to json --indent 2
+        | save --force $lock_path
+        print $"updated ($lock_path) to ($revision)"
+      }
+    '';
+  };
+
   # nixpkgs builds `nixVersions.nix_2_34` as
   # `(nixComponents_2_34.overrideSource fetchedSrc).appendPatches patches_common`
   # then takes `.nix-everything` (pkgs/tools/package-management/nix/default.nix).
@@ -38,6 +84,7 @@ let
   # modular `overrideSource` handle rebuilds every component from the patched
   # tree while keeping nixpkgs' interdependency scope and build wiring intact.
   base = pkgs.nixVersions.nixComponents_2_34;
+  upstreamVersion = lib.removeSuffix "\n" (builtins.readFile (ix.nixSrc + "/.version"));
 
   # nixpkgs' own whole-source patches for this version: currently just the
   # aarch64-darwin flaky-test skip (empty on every other system). `overrideSource`
@@ -70,7 +117,7 @@ let
   # `nix-everything` aggregate would only rename the store path. Set it through
   # `overrideAllMesonComponents`, the last layer in the component builder
   # stack, which also wins over the sourceLayer's `+<patch-count>` suffix.
-  # The marker is semver build metadata (`+ix`, like nixpkgs' own `+1`), not
+  # The marker is semver build metadata (`+ix.p<count>.h<hash>`), not
   # `-ix`: meson feeds the version to darwin ld's -current_version, which
   # rejects a `-` suffix as a "malformed 32-bit x.y.z version number" but
   # tolerates `+`.
@@ -81,16 +128,55 @@ let
       patchDir = ./patches;
       inherit patchNames;
     };
+    upstream =
+      {
+        version = upstreamVersion;
+        narHash = ix.nixSrc.narHash;
+      }
+      // lib.optionalAttrs (ix.nixSrc ? rev) {
+        revision = ix.nixSrc.rev;
+      };
+    commonPatches =
+      map (path: {
+        name = baseNameOf path;
+        digest = builtins.hashString "sha256" (builtins.readFile path);
+      })
+      patchesCommon;
+    sourceDigest = builtins.hashString "sha256" (builtins.toJSON {
+      upstreamNarHash = upstream.narHash;
+      patchSetDigest = patchedSrc.patchSet.digest;
+      inherit commonPatches;
+    });
+    shortHash = builtins.substring 0 20 sourceDigest;
+    version = "${upstreamVersion}+ix.p${toString patchedSrc.patchSet.count}.h${shortHash}";
+    provenance = {
+      schema = 1;
+      algorithm = "sha256";
+      inherit commonPatches sourceDigest upstream version;
+      inherit (patchedSrc) patchSet;
+    };
+    provenanceJson = (pkgs.formats.json {}).generate "nix-ix-provenance.json" provenance;
     patchedComponents =
       ((base.overrideSource patchedSrc).appendPatches patchesCommon).overrideAllMesonComponents
-      (_: _: {version = "2.34.7+ix";});
+      (_: _: {inherit version;});
 
     # The aggregate `nix` package (daemon + client + libs), the same attribute
     # `nixVersions.nix_2_34` exposes.
     nixEverything = patchedComponents.nix-everything;
   in
     nixEverything.overrideAttrs (old: {
-      version = "2.34.7+ix";
+      inherit version;
+      passthru =
+        (old.passthru or {})
+        // {
+          # The patched modular component set, for tools that must link the
+          # same patched libexpr this daemon-compatible client uses
+          # (packages/nix/nix-eval-jobs: the CI evaluator has to parse the
+          # same language the client does, underscore digit separators
+          # included).
+          components = patchedComponents;
+          inherit provenance;
+        };
       # The aggregate's `doCheck = true` gates the build on `checkInputs`: the
       # five component unit-test runners plus the entire upstream functional
       # suite. Those dominate a cold build of this closure and re-validate
@@ -101,10 +187,15 @@ let
       # darwin lane (3-core hosted mac) blew its 4 h job budget cold-building
       # this package and froze `cache-ready` (run 28772327218, index#1967).
       doCheck = false;
+      installPhase =
+        (old.installPhase or "")
+        + ''
+          install -Dm444 ${provenanceJson} "$out/share/nix/ix-provenance.json"
+        '';
       meta =
         (old.meta or {})
         // {
-          description = "NixOS/nix 2.34.7 with the index in-repo patch series (GC-roots daemon-crash fix, lookup-path EPERM eval fix)";
+          description = "NixOS/nix ${upstreamVersion} with the index in-repo patch series (${toString provenance.patchSet.count} patches, h${shortHash})";
           mainProgram = "nix";
         };
     });
@@ -128,37 +219,67 @@ let
   };
 
   # The override's real risk is that the whole modular C++ tree still links and
-  # the patched daemon still runs, so the smoke test executes the binary and
-  # asserts the `+ix` marker. `--version` exits 0 without touching a store or
-  # daemon (absent in the sandbox), so it is safe as a build-time check.
+  # the installed binary and provenance file agree with the eval-time identity.
+  # `--version` exits without touching a store or daemon, so it is safe here.
   smoke =
     pkgs.runCommand "nix-ix-smoke"
     {
-      nativeBuildInputs = [package];
+      nativeBuildInputs = [
+        package
+        pkgs.jq
+      ];
       strictDeps = true;
     }
     ''
-      version=$(nix --version)
-      case "$version" in
-        *"2.34.7+ix"*) ;;
-        *)
-          echo "nix --version did not report the patched 2.34.7+ix build" >&2
-          printf '%s\n' "$version" >&2
-          exit 1
-          ;;
-      esac
+      expected=${lib.escapeShellArg "nix (Nix) ${package.version}"}
+      actual=$(nix --version)
+      if [[ "$actual" != "$expected" ]]; then
+        echo "nix --version disagrees with the package version" >&2
+        printf 'expected: %s\nactual:   %s\n' "$expected" "$actual" >&2
+        exit 1
+      fi
+
+      jq -e \
+        --arg version ${lib.escapeShellArg package.version} \
+        --arg sourceDigest ${lib.escapeShellArg package.provenance.sourceDigest} \
+        --arg upstreamNarHash ${lib.escapeShellArg package.provenance.upstream.narHash} \
+        --arg patchSetDigest ${lib.escapeShellArg package.provenance.patchSet.digest} \
+        '.schema == 1 and .algorithm == "sha256" and .version == $version and .sourceDigest == $sourceDigest and .upstream.narHash == $upstreamNarHash and .patchSet.algorithm == "sha256" and .patchSet.digest == $patchSetDigest and .patchSet.count == (.patchSet.patches | length)' \
+        ${package}/share/nix/ix-provenance.json >/dev/null
+
       mkdir -p "$out"
     '';
+
+  focusedFunctionalTest = {
+    name,
+    testDaemon ? null,
+  }: let
+    tests = package.components.nix-functional-tests.override (
+      lib.optionalAttrs (testDaemon != null) {test-daemon = testDaemon;}
+    );
+  in
+    tests.overrideAttrs (old: {
+      mesonCheckFlags = (old.mesonCheckFlags or []) ++ [name];
+    });
+
+  autoGcInterrupt = focusedFunctionalTest {name = "gc-auto";};
+  daemonSignal = focusedFunctionalTest {
+    name = "daemon-signal";
+    testDaemon = package.components.nix-cli;
+  };
 in
   package.overrideAttrs (old: {
     passthru =
       (old.passthru or {})
       // {
-        inherit closureGates;
+        inherit bootstrapLock closureGates;
         tests =
           (old.passthru.tests or old.tests or {})
           // {
-            inherit smoke;
+            inherit autoGcInterrupt daemonSignal smoke;
           };
+      }
+      // lib.optionalAttrs (updateScriptWriter != null) {
+        updateScript = updateScriptWriter updateScriptArgs;
       };
   })

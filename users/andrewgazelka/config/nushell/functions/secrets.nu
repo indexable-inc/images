@@ -63,10 +63,15 @@ def resolve-secret-line [line: string] {
 
 # Generate secrets cache from template.
 def generate-secrets-cache [] {
+    # Hosts without the private config repo (e.g. the builder VM) have no
+    # secrets template; leave the cache absent (indexable-inc/index#3165).
+    let private_dir = $env.NIX_PRIVATE_CONFIG_DIR?
+    if $private_dir == null { return }
+
     let cache_path = $SECRETS_CACHE | path expand
     mkdir ($cache_path | path dirname)
 
-    let template_path = $env.NIX_PRIVATE_CONFIG_DIR | path join "nushell" "secrets.template.nu"
+    let template_path = $private_dir | path join "nushell" "secrets.template.nu"
 
     open $template_path
     | lines

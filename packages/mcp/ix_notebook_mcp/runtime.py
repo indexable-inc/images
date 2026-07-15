@@ -2042,6 +2042,83 @@ _MERGEABILITY_POLL_S: float = 2.0
 _MERGEABILITY_TIMEOUT_S: float = 30.0
 
 
+def _nu_record(value: Any, *, source: str) -> dict[str, Any]:
+    """One nu pipeline result as a plain record dict.
+
+    nu() hands a single record back as a plain dict (#2394), but a kernel
+    running a pre-#2394 nu build returns a 1-row polars DataFrame instead,
+    and `.get` on a frame killed the watch with AttributeError (#3175).
+    Normalize at the boundary; anything else fails loudly.
+    """
+    if isinstance(value, dict):
+        return value
+    to_dicts = getattr(value, "to_dicts", None)
+    if callable(to_dicts):
+        rows = to_dicts()
+        if len(rows) == 1:
+            return dict(rows[0])
+        raise TypeError(f"{source}: expected one record, got a {len(rows)}-row frame")
+    raise TypeError(f"{source}: expected a record, got {type(value).__name__}")
+
+
+@dataclasses.dataclass(frozen=True)
+class _NuCompletion:
+    stdout: str
+    stderr: str
+    exit_code: int
+
+
+def _nu_completion(value: Any, *, source: str) -> _NuCompletion:
+    """Validate one Nushell `complete` record at the command boundary."""
+    record = _nu_record(value, source=source)
+    missing = {"stdout", "stderr", "exit_code"} - record.keys()
+    if missing:
+        raise TypeError(f"{source}: complete record missing {', '.join(sorted(missing))}")
+    stdout = record["stdout"]
+    stderr = record["stderr"]
+    exit_code = record["exit_code"]
+    if not isinstance(stdout, str):
+        raise TypeError(f"{source}: expected stdout to be str, got {type(stdout).__name__}")
+    if not isinstance(stderr, str):
+        raise TypeError(f"{source}: expected stderr to be str, got {type(stderr).__name__}")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        raise TypeError(f"{source}: expected exit_code to be int, got {type(exit_code).__name__}")
+    return _NuCompletion(stdout=stdout, stderr=stderr, exit_code=exit_code)
+
+
+def _nu_failure(source: str, completion: _NuCompletion) -> str:
+    detail = completion.stderr.strip() or completion.stdout.strip() or "no error text"
+    return f"{source} failed with exit code {completion.exit_code}: {detail}"
+
+
+def _nu_json_record(value: Any, *, source: str) -> dict[str, Any]:
+    """Validate a completed command, then decode its stdout as one JSON record."""
+    completion = _nu_completion(value, source=source)
+    if completion.exit_code != 0:
+        raise RuntimeError(_nu_failure(source, completion))
+    try:
+        parsed = json.loads(completion.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{source} returned invalid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise TypeError(f"{source}: expected a JSON record, got {type(parsed).__name__}")
+    return parsed
+
+
+def _nu_json_records(value: Any, *, source: str) -> list[dict[str, Any]]:
+    """Validate a completed command, then decode its stdout as JSON records."""
+    completion = _nu_completion(value, source=source)
+    if completion.exit_code != 0:
+        raise RuntimeError(_nu_failure(source, completion))
+    try:
+        parsed = json.loads(completion.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{source} returned invalid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
+        raise TypeError(f"{source}: expected a JSON list of records")
+    return parsed
+
+
 async def watch_pr(
     pr: str | int,
     *,
@@ -2079,6 +2156,26 @@ async def watch_pr(
         kind="pr",
         alive=lambda: state.get("status") not in {"merged", "closed", "failed", "timed out"},
     )
+
+    async def fail_watch(error: Exception) -> None:
+        state.update(
+            {
+                "status": "failed",
+                "error": str(error),
+                "elapsed": _format_duration(time.time() - started),
+            }
+        )
+        resource.close()
+        try:
+            await notify(
+                f"PR {clean_pr} watch failed: {error}", resource=resource.id, pr=clean_pr
+            )
+        except Exception as notify_error:
+            error.add_note(
+                "pr_watch failure notification also raised "
+                f"{type(notify_error).__name__}: {notify_error}"
+            )
+
     import nu as nu_call
 
     async def run_nu(code: str) -> Any:
@@ -2090,12 +2187,17 @@ async def watch_pr(
         )
 
     async def refresh() -> dict[str, Any]:
-        # `from json` on a gh object yields a nu record, which nu() returns as
-        # a plain dict (issue #2390).
-        row: dict[str, Any] = await run_nu(
-            'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
-            'url,autoMergeRequest,isDraft,reviewDecision | complete | get stdout | from json'
-        )
+        try:
+            row = _nu_json_record(
+                await run_nu(
+                    'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
+                    'url,autoMergeRequest,isDraft,reviewDecision | complete'
+                ),
+                source="gh pr view",
+            )
+        except Exception as exc:
+            await fail_watch(exc)
+            raise
         checks = row.get("statusCheckRollup") or []
         title = row.get("title") or f"PR {row.get('number') or clean_pr}"
         state.update(
@@ -2116,6 +2218,19 @@ async def watch_pr(
             }
         )
         return row
+
+    async def required_checks() -> list[dict[str, Any]]:
+        try:
+            return _nu_json_records(
+                await run_nu(
+                    "gh pr checks $env.PR --required "
+                    "--json bucket,completedAt,link,name,startedAt,state,workflow | complete"
+                ),
+                source="gh pr checks --required",
+            )
+        except Exception as exc:
+            await fail_watch(exc)
+            raise
 
     if auto_merge:
         # Arming auto merge on an already-mergeable PR merges it instantly,
@@ -2146,13 +2261,16 @@ async def watch_pr(
         else:
             flag = f"--{merge_method}"
             delete = "--delete-branch" if delete_branch else ""
-            # `| complete` yields a nu record: a plain dict, not a 1-row frame
-            # (issue #2390).
-            merge: dict[str, Any] = await run_nu(
-                f"gh pr merge $env.PR --auto {flag} {delete} | complete"
-            )
-            if int(merge["exit_code"]) != 0:
-                state["error"] = str(merge["stderr"] or merge["stdout"])
+            try:
+                merge = _nu_completion(
+                    await run_nu(f"gh pr merge $env.PR --auto {flag} {delete} | complete"),
+                    source="gh pr merge",
+                )
+                if merge.exit_code != 0:
+                    raise RuntimeError(_nu_failure("gh pr merge", merge))
+            except Exception as exc:
+                await fail_watch(exc)
+                raise
 
     def finished(result: dict[str, Any]) -> dict[str, Any]:
         """Carry the skipped-auto-merge note onto the returned summary."""
@@ -2164,7 +2282,7 @@ async def watch_pr(
     while True:
         last = await refresh()
         checks = last.get("statusCheckRollup") or []
-        failures = [
+        failure_attempts = [
             check
             for check in checks
             if check.get("conclusion") in {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}
@@ -2174,6 +2292,17 @@ async def watch_pr(
             resource.close()
             await notify(f"PR {clean_pr} finished with state {last.get('state')}", resource=resource.id, pr=clean_pr)
             return finished({"state": last.get("state"), "url": last.get("url"), "checks": len(checks)})
+        if failure_attempts:
+            # statusCheckRollup preserves every attempt. Ask GitHub to resolve
+            # required contexts on the current head before making a terminal
+            # verdict, so an older cancelled rerun stays history (#3331).
+            failures = [
+                check
+                for check in await required_checks()
+                if check.get("bucket") in {"fail", "cancel"}
+            ]
+        else:
+            failures = []
         if failures:
             state["status"] = "failed"
             state["error"] = "One or more required actions failed."
@@ -3930,6 +4059,14 @@ _baseline_names: frozenset[str] = frozenset()
 # checkpoint and the namespace pane -- an untouched proxy is dropped by TYPE, not
 # by name (see _snapshot_candidates / _namespace_candidates).
 _lazy_module_names: frozenset[str] = frozenset()
+# The retired `sh`/`zsh` stubs, keyed to the exact object install() bound. Bound
+# AFTER the baseline snapshot and never protected, so a user's own definition of
+# the name wins for the rest of the session (issue #3215: the per-cell builtin
+# restore used to rebind the disabled stub over a user-defined `sh`) and, like
+# any user name, is checkpointed; an untouched stub is excluded by identity
+# instead (see _snapshot_candidates / _namespace_candidates), the way an
+# untouched lazy proxy is excluded by type.
+_retired_stubs: dict[str, Any] = {}
 # True while __ix_restore is replaying. The debounced checkpoint must not fire
 # then: replayed cells' source rows carry ended_at from the PREVIOUS run, so a
 # mid-restore checkpoint would advance the anchor past the cells not yet
@@ -4021,6 +4158,7 @@ def _snapshot_candidates(ns: dict) -> dict:
         and not _IPYTHON_MACHINERY.fullmatch(name)
         and not isinstance(value, types.ModuleType)
         and not isinstance(value, _LazyModule)  # untouched lazy proxy: not user state
+        and _retired_stubs.get(name) is not value  # untouched retired stub: not user state
     }
 
 
@@ -4036,6 +4174,7 @@ def _namespace_candidates(ns: dict) -> dict:
         and not name.startswith("__")
         and not _IPYTHON_MACHINERY.fullmatch(name)
         and not isinstance(value, _LazyModule)  # untouched lazy proxy: not user state
+        and _retired_stubs.get(name) is not value  # untouched retired stub: not user state
     }
 
 
@@ -4242,6 +4381,11 @@ def _session_ns(session: str | None) -> dict:
         # into every fresh session. A fresh proxy is stateless and correct.
         for name in _lazy_module_names:
             ns[name] = _LazyModule(name)
+        # Seed the retired stubs from their canonical objects, never from
+        # `shared[name]`, for the same reason: the shared binding may be a
+        # user's own `sh` by now.
+        for name, stub in _retired_stubs.items():
+            ns[name] = stub
         _session_namespaces[session] = ns
     return ns
 
@@ -4493,7 +4637,8 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
     natively (highlighted card with the read span), so a large read informs the
     model without flooding the dashboard. ``target`` is read as a file when it
     names an existing file, otherwise evaluated as a Python expression in the user
-    namespace (e.g. ``jobs['ab12'].output``, a variable you bound). ``start`` and
+    namespace (e.g. ``jobs['ab12'].output``, a variable you bound); top-level
+    ``await`` is allowed, exactly as in a cell. ``start`` and
     ``end`` select a 1-based inclusive line range. ``session`` evaluates the
     expression in that MCP session's namespace (the same one its ``python_exec``
     cells run in), so a variable bound there resolves. Backs the ``read`` MCP tool.
@@ -4502,11 +4647,20 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
     value = None
     path = _existing_file(target)
     if path is None:
-        # Not a file on disk: evaluate the expression. If the VALUE is a string
-        # naming an existing file (`os.path.join(...)`, a variable holding a
-        # path), the same file rule applies to it -- an expression yielding a
+        # Not a file on disk: evaluate the expression. Compiled with top-level
+        # await allowed, matching cells (_compile), so `await jobs['ab12']` is a
+        # valid target instead of a SyntaxError (index#3139); an awaited target's
+        # coroutine resolves right here on the kernel loop. If the VALUE is a
+        # string naming an existing file (`os.path.join(...)`, a variable holding
+        # a path), the same file rule applies to it -- an expression yielding a
         # path reads the file, never echoes the path string back.
-        value = eval(target, ns) if isinstance(target, str) else target  # noqa: S307 -- intentional: evaluating user-provided expression in kernel namespace
+        if isinstance(target, str):
+            code_obj = compile(target, "<read>", "eval", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+            value = eval(code_obj, ns)  # noqa: S307 -- intentional: evaluating user-provided expression in kernel namespace
+            if inspect.iscoroutine(value):
+                value = await value
+        else:
+            value = target
         path = _existing_file(value)
     if path is not None:
         # Off the loop: a large file read is blocking I/O, the one thing that
@@ -4797,16 +4951,6 @@ def install(user_ns: dict | None = None) -> None:
     _bind("__ix_snapshot", __ix_snapshot)
     _bind("__ix_restore", __ix_restore)
     _bind("DASHBOARD_URL", os.environ.get("IX_MCP_DASHBOARD_URL", ""))
-    # `sh`/`zsh` are RETIRED (agents shell out through `await nu(...)`; the sh
-    # module's public entry points now raise a migration hint). Bind them anyway
-    # so a stale `await sh(cmd)` in an old transcript fails LOUDLY with that hint
-    # rather than a bare NameError. The kernel's own internals reach the private
-    # runner via `from sh import _exec`, which is never bound into the namespace.
-    with contextlib.suppress(Exception):  # sh may be absent outside the bundled interpreter; skip it
-        import sh as _sh_module
-
-        _bind("sh", _sh_module)
-        _bind("zsh", _sh_module.zsh)
     # Bind the filesystem-search helpers as top-level callables (`await grep(...)`
     # / `find(...)` / `spotlight(...)`) the way `sh` is bound, so the most common
     # search/listing actions need no import. They live in the bundled `fsearch`
@@ -4861,6 +5005,22 @@ def install(user_ns: dict | None = None) -> None:
     _lazy_module_names = frozenset(_lazy_names)
     for _mod_name in _lazy_names:
         target[_mod_name] = _LazyModule(_mod_name)
+    # `sh`/`zsh` are RETIRED (agents shell out through `await nu(...)`; the sh
+    # module's public entry points now raise a migration hint). Bind them anyway
+    # so a stale `await sh(cmd)` in an old transcript fails LOUDLY with that hint
+    # rather than a bare NameError -- but after the baseline snapshot and never
+    # through _bind, so a user's own `sh` wins over the disabled stub for the
+    # rest of the session (issue #3215; see _retired_stubs). The kernel's own
+    # internals reach the private runner via `from sh import _exec`, which is
+    # never bound into the namespace.
+    _retired_stubs.clear()
+    with contextlib.suppress(Exception):  # sh may be absent outside the bundled interpreter; skip it
+        import sh as _sh_module
+
+        _retired_stubs["sh"] = _sh_module
+        _retired_stubs["zsh"] = _sh_module.zsh
+    for _stub_name, _stub in _retired_stubs.items():
+        target[_stub_name] = _stub
     # A fresh session starts with no recorded references (the namespace is empty of
     # user names; refs accumulate as runs touch them).
     _name_refs.clear()

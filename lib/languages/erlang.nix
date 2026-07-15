@@ -1,13 +1,13 @@
 {errors}: let
   /**
-  Erlang/OTP major → nixpkgs attribute mapping. `pkgs.erlang` floats
-  with whatever the channel ships; the OTP-numbered attributes are
-  for builds that need to pin against a specific release line
-  (distribution-protocol compatibility, BEAM JIT availability,
-  `gen_statem` API changes between majors).
+  Erlang/OTP major → nixpkgs attribute mapping.
+  `pkgs.beamPackages.erlang` floats with whatever the channel ships;
+  the OTP-numbered attributes are for builds that need to pin against
+  a specific release line (distribution-protocol compatibility, BEAM
+  JIT availability, `gen_statem` API changes between majors).
   */
   toolchainsFor = pkgs: {
-    latest = pkgs.erlang;
+    latest = pkgs.beamPackages.erlang;
     "26" = pkgs.erlang_26;
     "27" = pkgs.erlang_27;
     "28" = pkgs.beam28Packages.erlang;
@@ -24,7 +24,7 @@ in {
   Arguments:
   - `pkgs`: nixpkgs instance the toolchain comes from.
   - `version`: required, one of `"latest" | "26" | "27" | "28"`. Pass
-    `"latest"` to follow `pkgs.erlang`.
+    `"latest"` to follow `pkgs.beamPackages.erlang`.
 
   Example:
   ```nix
@@ -57,10 +57,10 @@ in {
   Arguments:
   - `pkgs`: nixpkgs instance the rebar3 and Erlang packages come from.
   - `erlang`: optional resolved Erlang toolchain. Defaults to the same
-    `pkgs.erlang` the `toolchain` helper returns when called with no
-    version.
+    `pkgs.beamPackages.erlang` the `toolchain` helper returns for
+    `version = "latest"`.
   */
-  rebar3 = pkgs: {erlang ? pkgs.erlang}:
+  rebar3 = pkgs: {erlang ? pkgs.beamPackages.erlang}:
     pkgs.rebar3.overrideAttrs (_: {
       buildInputs = [erlang];
     });

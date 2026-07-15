@@ -2,11 +2,15 @@
 {
   configRoot,
   ghosttyModule,
+  # Personal macOS guest specs (data only; see users/andrewgazelka/guests).
+  guestsModule,
   indexPackages,
   ix,
+  # General vmkit guest-state module the specs above configure
+  # (modules/home/macos-guests.nix).
+  macosGuestsModule,
   optionsModule,
   raycastModule,
-  symphonyModule,
 }: {
   config,
   pkgs,
@@ -101,64 +105,19 @@ in {
   # General Raycast Focus module lives in index (homeModules.raycast); this is
   # the personal config consuming it. Mechanism in index, values here.
   imports = [
+    (import ./nushell.nix {inherit configRoot;})
     optionsModule
     raycastModule
-    # Symphony BEAM runtime (mechanism in index, values in the
-    # services.symphony block below): scheduled agent workflows with Slack
-    # digests. Renders a launchd agent here via portable-services.
-    symphonyModule
     # Ghostty config, generated from Nix (home/ghostty.nix). Replaces the former
     # out-of-store symlink to ghostty/config.
     ghosttyModule
+    # vmkit macOS guests: general push machinery + the personal guest specs
+    # (macos-primary / the Beeper iMessage bridge, ENG-7746).
+    macosGuestsModule
+    guestsModule
   ];
 
   home.sessionPath = ["$HOME/.lmstudio/bin"];
-
-  # Symphony runtime: the BEAM is the scheduler (cron triggers tick inside
-  # it), so the agent stays resident (restart=always in the home module).
-  # packDir points at the mutable index checkout: editing a .sym or prompt
-  # there applies live, no restart. A lid-closed 9am fire is deferred to at
-  # most one catch-up run on wake (CronState watermark); an always-on linux
-  # host can enable this same module for hard scheduling guarantees.
-  # Secrets (SLACK_BOT_OAUTH_TOKEN) live in the environmentFile, never the
-  # store; seed it from the team vault (see README in that directory).
-  services.symphony = {
-    enable = true;
-    primaryRepo = cfg.paths.indexCheckout;
-    packDir = cfg.paths.symphonyPack;
-    environmentFile = "${config.home.homeDirectory}/.config/symphony/env";
-    extraPath = [
-      # Plain upstream codex, NOT the index wrapper: the wrapper bakes the
-      # ix-mcp/exa MCP servers as argv -c flags that --ignore-user-config
-      # cannot remove, and their bootstrap wedges unattended launchd runs
-      # (verified live 2026-07-06: 0% CPU codex, MCP init never completed).
-      pkgs.codex
-      # Plain upstream claude-code for the same reason: the ~/.local/bin
-      # wrapper's baked ix-mcp bootstrap wedges and chats on stdout in
-      # unattended launchd runs (04:30Z truncated-reply tick). The index
-      # build, not nixpkgs' (whose fetcher needs __noChroot, blocked by
-      # the darwin sandbox).
-      indexPkgs.claude-code
-      pkgs.jq
-      pkgs.gh
-      pkgs.git
-    ];
-    extraEnvironment = {
-      SYMPHONY_SLACK_NOTIFY_CHANNEL = "C0A4TD9G7HR"; # #general
-      SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS = "insights,triage";
-      # Standing local room-server (tmux session `room-server`, gc-rooted
-      # ix#room-server at ~/.local/share/room-server/app) for :local /
-      # {:room, url} placements; agent threads are watchable at this URL.
-      SYMPHONY_ROOM_SERVER_URL = "http://127.0.0.1:3010";
-      # Compiled overseer report app (template.html + bundle.js); the
-      # overseer workflow tick splices its data.json into the template.
-      # TODO(darwin-cache): flip to the declarative reference once the
-      # e9ef6062 cache-ready pin's native darwin codex substitutes (the
-      # 21:56Z switch attempt built codex locally and failed); until then
-      # the env-file bridge carries the gc-rooted store path.
-      # OVERSEER_APP = "${indexPkgs.overseer-report}";
-    };
-  };
 
   # Raycast Focus session defaults, written to the com.raycast.macos defaults
   # domain at switch time. The blocklist itself stays UI-managed: Raycast
@@ -518,23 +477,6 @@ in {
   home.file."Library/Application Support/BeeperTexts/custom.css".source =
     repoFile "beeper/custom.css";
 
-  # Nushell writes runtime state beside its config on macOS. Link the managed
-  # files recursively so Library/Application Support/nushell stays writable.
-  home.file."Library/Application Support/nushell" = {
-    source = repoFile "nushell";
-    recursive = true;
-  };
-
-  # Home Manager does not replace a managed directory symlink when its source
-  # changes to recursive leaf links. Remove that legacy link before collision
-  # checks so linkGeneration can create the writable parent directory.
-  home.activation.migrateNushellDataDirectory = config.lib.dag.entryBefore ["checkLinkTargets"] ''
-    dataDir=${lib.escapeShellArg "${config.home.homeDirectory}/Library/Application Support/nushell"}
-    if [[ -L "$dataDir" ]] && [[ $(readlink "$dataDir") == /nix/store/*-home-manager-files/* ]]; then
-      run rm "$dataDir"
-    fi
-  '';
-
   # rbw (Vaultwarden CLI). On macOS rbw reads its config from
   # Library/Application Support, not XDG, so the upstream programs.rbw module
   # (which writes ~/.config/rbw) does not apply. Symlinked (not store-baked) so
@@ -691,8 +633,7 @@ in {
   # locally so one registry owns the number; WebTransport stays on 4433. The binary is the gc-rooted out-link of
   # ix#room-server (config has no ix input; refresh with
   # `nix build ~/Projects/indexable-inc/ix#room-server --out-link
-  # ~/.local/share/room-server/app`). Symphony reaches it via
-  # SYMPHONY_ROOM_SERVER_URL above.
+  # ~/.local/share/room-server/app`).
   launchd.agents.room-server = {
     enable = true;
     config = {
@@ -706,6 +647,38 @@ in {
       RunAtLoad = true;
       StandardOutPath = "${config.home.homeDirectory}/Library/Logs/room-server.log";
       StandardErrorPath = "${config.home.homeDirectory}/Library/Logs/room-server.log";
+    };
+  };
+
+  # Weave fact server (indexable-inc/weave): the ix-mcp kernel store's
+  # write-behind flusher POSTs facts to 127.0.0.1:7677; with no listener every
+  # kernel cell logs connection-refused retries and drops facts (index#3203).
+  # The agent host (and its --agents flag) was retired outright in
+  # indexable-inc/weave#266 (fabric phase 3, index#3193), which closed the
+  # write-path wedge indexable-inc/weave#240 by construction: the journal
+  # only records facts. Binary + ui are gc-rooted out-links (this
+  # config has no weave input); refresh with
+  #   nix build ~/Projects/indexable-inc/weave#default --out-link ~/.local/share/weave/app
+  #   nix build ~/Projects/indexable-inc/weave#ui --out-link ~/.local/share/weave/ui
+  # Log stays at ~/.local/share/weave/serve.log next to the store: the path
+  # existing tooling and memories already reference.
+  launchd.agents.weave-serve = {
+    enable = true;
+    config = {
+      ProgramArguments = lockArgs "weave-serve" [
+        "${config.home.homeDirectory}/.local/share/weave/app/bin/weave"
+        "--store"
+        "${config.home.homeDirectory}/.local/share/weave/store"
+        "serve"
+        "--addr"
+        "127.0.0.1:7677"
+        "--ui"
+        "${config.home.homeDirectory}/.local/share/weave/ui"
+      ];
+      KeepAlive = true;
+      RunAtLoad = true;
+      StandardOutPath = "${config.home.homeDirectory}/.local/share/weave/serve.log";
+      StandardErrorPath = "${config.home.homeDirectory}/.local/share/weave/serve.log";
     };
   };
 
