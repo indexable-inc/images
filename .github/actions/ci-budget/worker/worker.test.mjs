@@ -12,7 +12,7 @@ import {
   parseArguments,
   runBudgetedScript,
   validationSeconds,
-  workflowAttemptStartedAt,
+  workflowRunCreatedAt,
 } from "./worker.mjs";
 
 const pause = (milliseconds) =>
@@ -75,14 +75,18 @@ test("policy is shared with the classifier", () => {
   assert.equal(policy.termination_grace_seconds, 10);
 });
 
-test("current attempt start comes from the attempt API", async () => {
+test("ordinary retries keep the original workflow creation deadline", async () => {
   let requestedUrl;
-  const startedAt = await workflowAttemptStartedAt({
+  const createdAt = await workflowRunCreatedAt({
     apiUrl: "https://api.example.test",
     fetchImpl: async (url) => {
       requestedUrl = url;
       return new Response(
-        JSON.stringify({ run_started_at: "2026-07-15T12:00:00Z" }),
+        JSON.stringify({
+          created_at: "2026-07-15T12:00:00Z",
+          run_attempt: 2,
+          run_started_at: "2026-07-15T13:00:00Z",
+        }),
         { status: 200 },
       );
     },
@@ -93,33 +97,54 @@ test("current attempt start comes from the attempt API", async () => {
   });
   assert.equal(
     requestedUrl,
-    "https://api.example.test/repos/indexable-inc/ix/actions/runs/42/attempts/2",
+    "https://api.example.test/repos/indexable-inc/ix/actions/runs/42",
   );
-  assert.equal(startedAt, Date.parse("2026-07-15T12:00:00Z"));
+  assert.equal(createdAt, Date.parse("2026-07-15T12:00:00Z"));
 });
 
-test("routine validation consumes only the current attempt remainder", () => {
+test("worker rejects a different current retry attempt", async () => {
+  await assert.rejects(
+    workflowRunCreatedAt({
+      apiUrl: "https://api.example.test",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            created_at: "2026-07-15T12:00:00Z",
+            run_attempt: 3,
+          }),
+          { status: 200 },
+        ),
+      repository: "indexable-inc/ix",
+      runAttempt: 2,
+      runId: 42,
+      token: "secret",
+    }),
+    /attempt 3, expected 2/,
+  );
+});
+
+test("routine validation consumes only the workflow creation remainder", () => {
   const policy = loadPolicy();
   assert.equal(
     validationSeconds({
       bigChange: false,
+      createdAtMilliseconds: 0,
       nowMilliseconds: 289_000,
       policy,
-      startedAtMilliseconds: 0,
     }),
     1,
   );
 });
 
-test("elapsed routine attempt fails before starting work", () => {
+test("retry after the workflow deadline fails before starting work", () => {
   const policy = loadPolicy();
   assert.throws(
     () =>
       validationSeconds({
         bigChange: false,
+        createdAtMilliseconds: 0,
         nowMilliseconds: 291_001,
         policy,
-        startedAtMilliseconds: 0,
       }),
     DeadlineExceeded,
   );
