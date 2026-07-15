@@ -34,16 +34,8 @@
     // optionalPath root "skills" "skills";
 
   reposFor = userName:
-    lib.listToAttrs (
-      map (repoName: {
-        name = repoName;
-        value = repoFor userName repoName;
-      }) (directoryNames (usersRoot + "/${userName}"))
+    lib.genAttrs (directoryNames (usersRoot + "/${userName}")) (
+      repoName: repoFor userName repoName
     );
 in
-  lib.listToAttrs (
-    map (userName: {
-      name = userName;
-      value = reposFor userName;
-    }) (directoryNames usersRoot)
-  )
+  lib.genAttrs (directoryNames usersRoot) reposFor

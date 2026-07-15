@@ -30,17 +30,11 @@ export def "dag neutralize-config" [scratch: string] {
 # Seed a fresh git repo at `dest` from the read-only `src_dir` tree and commit it
 # as a single base commit; returns the base rev. Used by the `patch-dag-<name>`
 # check, whose base is the flake's already-fetched `flake = false` src (a
-# store path with no `.git`), not a network fetch. IMPORTANT: nushell's
-# `cp --recursive src/. dest` nests `src` under `dest` rather than copying its
-# contents (unlike coreutils `cp`), so we copy each top-level entry explicitly,
-# including dotfiles like `.gitattributes` (which affect `git apply`/`am`).
+# store path with no `.git`), not a network fetch.
 export def "dag seed-base-repo" [src_dir: string, dest: string] {
-  # `ls -a` yields dotfiles too; exclude only the `.`/`..` self-links.
-  for entry in (ls -a $src_dir | get name) {
-    let base = ($entry | path basename)
-    if $base == "." or $base == ".." { continue }
-    cp --recursive $entry $dest
-  }
+  # coreutils `cp -a src/. dest` preserves dotfiles, modes, and symlinks. The
+  # latter matters because Nushell's recursive copy chmods symlink targets.
+  ^cp -a ($src_dir | path join ".") $dest
   # Store paths are read-only (0444) and `cp` preserves that, so `git am` would
   # fail with "unable to write file ... Permission denied" mid-apply and be
   # misread as a non-applying patch. Make the working copy writable.
@@ -49,7 +43,9 @@ export def "dag seed-base-repo" [src_dir: string, dest: string] {
   git -C $dest config user.email "check@indexable.dev"
   git -C $dest config user.name "patch-dag check"
   dag neutralize-config $dest
-  git -C $dest add --all
+  # indexable-inc/index#3351: the snapshot can contain upstream-tracked paths
+  # matched by its own .gitignore, which a fresh repo must still retain.
+  git -C $dest add --all --force
   git -C $dest commit --quiet --no-gpg-sign -m base
   (git -C $dest rev-parse HEAD | str trim)
 }

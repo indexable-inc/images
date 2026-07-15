@@ -89,6 +89,12 @@
       };
     };
 
+    weave.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Run the local Weave fact server.";
+    };
+
     sshSigningPublicKey = lib.mkOption {
       type = lib.types.str;
       default = builtins.head (

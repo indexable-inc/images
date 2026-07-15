@@ -23,11 +23,17 @@ class _ScriptedNu:
     records every `gh pr merge` invocation."""
 
     def __init__(
-        self, views: list[dict[str, object]], *, merge_error: str | None = None
+        self,
+        views: list[dict[str, object]],
+        *,
+        required: list[list[dict[str, object]]] | None = None,
+        merge_error: str | None = None,
     ) -> None:
         self._views = list(views)
+        self._required = list(required or [[]])
         self._merge_error = merge_error
         self.merges: list[str] = []
+        self.required_calls = 0
 
     async def __call__(
         self,
@@ -42,6 +48,13 @@ class _ScriptedNu:
             if self._merge_error is not None:
                 return {"exit_code": 1, "stdout": "", "stderr": self._merge_error}
             return {"exit_code": 0, "stdout": "", "stderr": ""}
+        if "gh pr checks" in code:
+            assert "--required" in code
+            self.required_calls += 1
+            checks = (
+                self._required.pop(0) if len(self._required) > 1 else self._required[0]
+            )
+            return {"exit_code": 0, "stdout": json.dumps(checks), "stderr": ""}
         assert "gh pr view" in code
         view = self._views.pop(0) if len(self._views) > 1 else self._views[0]
         return {"exit_code": 0, "stdout": json.dumps(view), "stderr": ""}
@@ -116,6 +129,74 @@ def test_blocked_pr_still_arms_auto_merge(monkeypatch: pytest.MonkeyPatch) -> No
     assert len(fake.merges) == 1
     assert "--auto" in fake.merges[0]
     assert "auto_merge" not in result
+
+
+@pytest.mark.parametrize(
+    ("current_status", "current_conclusion", "current_state", "current_bucket"),
+    [
+        ("COMPLETED", "SUCCESS", "SUCCESS", "pass"),
+        ("QUEUED", "", "QUEUED", "pending"),
+    ],
+)
+def test_stale_cancelled_attempt_does_not_override_current_required_context(
+    monkeypatch: pytest.MonkeyPatch,
+    current_status: str,
+    current_conclusion: str,
+    current_state: str,
+    current_bucket: str,
+) -> None:
+    first = _view(9108, "OPEN", "BLOCKED")
+    attempts = [
+        {
+            "name": "flake-check",
+            "workflowName": "Check",
+            "status": "COMPLETED",
+            "conclusion": "CANCELLED",
+            "startedAt": "2026-07-15T07:08:36Z",
+            "completedAt": "2026-07-15T07:13:46Z",
+        },
+        {
+            "name": "flake-check",
+            "workflowName": "Check",
+            "status": current_status,
+            "conclusion": current_conclusion,
+            "startedAt": "2026-07-15T07:15:00Z",
+            "completedAt": "2026-07-15T07:36:24Z" if current_conclusion else "",
+        },
+    ]
+    first["statusCheckRollup"] = attempts
+    merged = _view(9108, "MERGED", "CLEAN")
+    merged["statusCheckRollup"] = attempts
+    fake = _ScriptedNu(
+        [first, first, merged],
+        required=[
+            [
+                {
+                    "name": "flake-check",
+                    "workflow": "Check",
+                    "state": current_state,
+                    "bucket": current_bucket,
+                    "startedAt": "2026-07-15T07:15:00Z",
+                    "completedAt": "2026-07-15T07:36:24Z" if current_conclusion else "",
+                }
+            ]
+        ],
+    )
+    monkeypatch.setitem(sys.modules, "nu", fake)
+    notified: list[str] = []
+
+    async def fake_notify(content: str, **meta: object) -> None:
+        notified.append(content)
+
+    monkeypatch.setattr(runtime, "notify", fake_notify)
+
+    result = asyncio.run(runtime.watch_pr(9108, auto_merge=True, interval=0.01))
+
+    assert result["state"] == "MERGED"
+    assert fake.required_calls == 1
+    assert not any("failing checks" in message for message in notified)
+    html = asyncio.run(runtime.resources["pr-9108"].render_html())
+    assert html.count("flake-check") == 2
 
 
 class _FrameNu(_ScriptedNu):
