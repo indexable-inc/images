@@ -2437,6 +2437,7 @@
   # --- Language helpers -----------------------------------------------------
 
   languages = {
+    elixirLatest = ix.languages.elixir.toolchain pkgs {version = "latest";};
     pythonMissingVersion = builtins.tryEval (
       builtins.deepSeq (ix.languages.python.interpreter pkgs {}).pythonVersion true
     );
@@ -5482,6 +5483,10 @@
     ];
 
     languages = [
+      {
+        assertion = languages.elixirLatest.drvPath == pkgs.beamPackages.elixir.drvPath;
+        message = "ix.languages.elixir latest should follow beamPackages.elixir";
+      }
       {
         assertion = !languages.pythonMissingVersion.success;
         message = "ix.languages.python should require an explicit interpreter version";
