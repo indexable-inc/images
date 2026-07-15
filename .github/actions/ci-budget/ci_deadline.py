@@ -40,8 +40,11 @@ def verify_required_gate(
     big_change: bool,
 ) -> None:
     attempt = client.workflow_attempt(run_id, run_attempt)
-    started_at = parse_timestamp(attempt.get("run_started_at"), "run_started_at")
-    deadline = started_at + budget
+    created_at = parse_timestamp(attempt.get("created_at"), "created_at")
+    attempt_started_at = parse_timestamp(
+        attempt.get("run_started_at"), "run_started_at"
+    )
+    deadline = created_at + budget
     target = target_job(client.workflow_jobs(run_id, run_attempt), target_name)
     status = target.get("status")
     conclusion = target.get("conclusion")
@@ -53,11 +56,11 @@ def verify_required_gate(
     target_started_at = parse_timestamp(
         target.get("started_at"), f"{target_name} started_at"
     )
-    if target_started_at < started_at:
+    if target_started_at < attempt_started_at:
         raise RuntimeError(
             f"required target {target_name!r} was reused from an earlier attempt; "
             f"target started at {target_started_at.isoformat()}, "
-            f"attempt started at {started_at.isoformat()}"
+            f"attempt started at {attempt_started_at.isoformat()}"
         )
     completed_at = parse_timestamp(
         target.get("completed_at"), f"{target_name} completed_at"
@@ -92,8 +95,8 @@ def cancel_at_deadline(
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
     attempt = client.workflow_attempt(run_id, run_attempt)
-    started_at = parse_timestamp(attempt.get("run_started_at"), "run_started_at")
-    deadline = started_at + budget
+    created_at = parse_timestamp(attempt.get("created_at"), "created_at")
+    deadline = created_at + budget
     if force_big_change:
         return False
     status = attempt.get("status")

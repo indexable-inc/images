@@ -85,8 +85,5 @@ def parse_timestamp(value: object, name: str) -> datetime:
     return parsed
 
 
-def standard_deadline(attempt: Mapping[str, object]) -> datetime:
-    return (
-        parse_timestamp(attempt.get("run_started_at"), "run_started_at")
-        + STANDARD_BUDGET
-    )
+def standard_deadline(run: Mapping[str, object]) -> datetime:
+    return parse_timestamp(run.get("created_at"), "created_at") + STANDARD_BUDGET

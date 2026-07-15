@@ -81,7 +81,7 @@ function repositoryPath(repository) {
   return parts.map(encodeURIComponent).join("/");
 }
 
-export async function workflowAttemptStartedAt({
+export async function workflowRunCreatedAt({
   apiUrl = "https://api.github.com",
   fetchImpl = fetch,
   repository,
@@ -89,9 +89,7 @@ export async function workflowAttemptStartedAt({
   runId,
   token,
 }) {
-  const url =
-    `${apiUrl}/repos/${repositoryPath(repository)}/actions/runs/${runId}` +
-    `/attempts/${runAttempt}`;
+  const url = `${apiUrl}/repos/${repositoryPath(repository)}/actions/runs/${runId}`;
   const response = await fetchImpl(url, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -103,25 +101,30 @@ export async function workflowAttemptStartedAt({
   if (!response.ok) {
     throw new Error(`GitHub workflow attempt request failed with ${response.status}`);
   }
-  const attempt = JSON.parse(body);
-  if (typeof attempt.run_started_at !== "string") {
-    throw new Error("GitHub workflow attempt has no run_started_at");
+  const run = JSON.parse(body);
+  if (run.run_attempt !== runAttempt) {
+    throw new Error(
+      `GitHub workflow run is on attempt ${run.run_attempt}, expected ${runAttempt}`,
+    );
   }
-  const startedAt = Date.parse(attempt.run_started_at);
-  if (!Number.isFinite(startedAt)) {
-    throw new Error("GitHub workflow attempt has an invalid run_started_at");
+  if (typeof run.created_at !== "string") {
+    throw new Error("GitHub workflow run has no created_at");
   }
-  return startedAt;
+  const createdAt = Date.parse(run.created_at);
+  if (!Number.isFinite(createdAt)) {
+    throw new Error("GitHub workflow run has an invalid created_at");
+  }
+  return createdAt;
 }
 
 export function validationSeconds({
   bigChange,
+  createdAtMilliseconds,
   nowMilliseconds,
   policy,
-  startedAtMilliseconds,
 }) {
   if (bigChange) return policy.extended_validation_seconds;
-  const deadline = startedAtMilliseconds + policy.standard_seconds * 1000;
+  const deadline = createdAtMilliseconds + policy.standard_seconds * 1000;
   const remaining =
     Math.floor((deadline - nowMilliseconds) / 1000) -
     policy.termination_grace_seconds;
@@ -257,7 +260,7 @@ export async function main() {
   }
   const policy = loadPolicy();
   const bigChange = parseBoolean(input("big-change", { required: true }), "big-change");
-  const startedAtMilliseconds = await workflowAttemptStartedAt({
+  const createdAtMilliseconds = await workflowRunCreatedAt({
     apiUrl: process.env.GITHUB_API_URL,
     repository: input("repository", { required: true }),
     runAttempt: parsePositiveInteger(
@@ -270,7 +273,7 @@ export async function main() {
   const nowMilliseconds = Date.now();
   if (
     !bigChange &&
-    nowMilliseconds >= startedAtMilliseconds + policy.standard_seconds * 1000
+    nowMilliseconds >= createdAtMilliseconds + policy.standard_seconds * 1000
   ) {
     throw new DeadlineExceeded("worker started after the total deadline");
   }
@@ -278,9 +281,9 @@ export async function main() {
   const scriptPath = input("script", { required: true });
   const allowedSeconds = validationSeconds({
     bigChange,
+    createdAtMilliseconds,
     nowMilliseconds,
     policy,
-    startedAtMilliseconds,
   });
   return runBudgetedScript({
     graceSeconds: policy.termination_grace_seconds,
