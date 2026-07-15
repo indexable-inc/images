@@ -2438,6 +2438,9 @@
 
   languages = {
     elixirLatest = ix.languages.elixir.toolchain pkgs {version = "latest";};
+    erlangLatest = ix.languages.erlang.toolchain pkgs {version = "latest";};
+    erlangRebarDefault = ix.languages.erlang.rebar3 pkgs {};
+    erlangRebarExplicit = ix.languages.erlang.rebar3 pkgs {erlang = pkgs.beamPackages.erlang;};
     pythonMissingVersion = builtins.tryEval (
       builtins.deepSeq (ix.languages.python.interpreter pkgs {}).pythonVersion true
     );
@@ -5486,6 +5489,14 @@
       {
         assertion = languages.elixirLatest.drvPath == pkgs.beamPackages.elixir.drvPath;
         message = "ix.languages.elixir latest should follow beamPackages.elixir";
+      }
+      {
+        assertion = languages.erlangLatest.drvPath == pkgs.beamPackages.erlang.drvPath;
+        message = "ix.languages.erlang latest should follow beamPackages.erlang";
+      }
+      {
+        assertion = languages.erlangRebarDefault.drvPath == languages.erlangRebarExplicit.drvPath;
+        message = "ix.languages.erlang rebar3 should default to beamPackages.erlang";
       }
       {
         assertion = !languages.pythonMissingVersion.success;
