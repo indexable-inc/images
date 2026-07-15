@@ -663,7 +663,7 @@ in {
   # Log stays at ~/.local/share/weave/serve.log next to the store: the path
   # existing tooling and memories already reference.
   launchd.agents.weave-serve = {
-    enable = true;
+    enable = cfg.weave.enable;
     config = {
       ProgramArguments = lockArgs "weave-serve" [
         "${config.home.homeDirectory}/.local/share/weave/app/bin/weave"
