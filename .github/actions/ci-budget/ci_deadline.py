@@ -38,6 +38,7 @@ def verify_required_gate(
     budget: timedelta,
     *,
     big_change: bool,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
     attempt = client.workflow_attempt(run_id, run_attempt)
     created_at = parse_timestamp(attempt.get("created_at"), "created_at")
@@ -69,6 +70,12 @@ def verify_required_gate(
         raise RuntimeError(
             f"required target {target_name!r} completed at "
             f"{completed_at.isoformat()}, after {deadline.isoformat()}"
+        )
+    checked_at = now()
+    if not big_change and checked_at > deadline:
+        raise RuntimeError(
+            f"required terminal gate ran at {checked_at.isoformat()}, "
+            f"after {deadline.isoformat()}"
         )
     print(
         json.dumps(

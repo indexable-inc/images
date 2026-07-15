@@ -100,6 +100,17 @@ class ClassificationTests(unittest.TestCase):
         assert result.big_change
         assert result.reason["sources"] == ["forced"]
 
+    def test_retry_classification_uses_only_the_frozen_snapshot(self) -> None:
+        result = ci_budget.classification_from_snapshot(
+            ci_budget.BudgetSnapshot(big_change=True)
+        )
+
+        assert result.big_change
+        assert result.reason == {
+            "sources": ["attempt_snapshot"],
+            "matches": [],
+        }
+
 
 class GitHubClientTests(unittest.TestCase):
     def test_changed_files_are_paginated(self) -> None:
