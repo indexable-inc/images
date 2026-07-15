@@ -42,6 +42,14 @@ def test_result_guidance_preserves_structured_api_output() -> None:
     assert "``print`` converts it to Polars' terminal representation" in inspect.getdoc(rt.api)
 
 
+def test_nu_guidance_interpolates_compound_external_arguments() -> None:
+    rendered = guide.compose(guide.NU)
+
+    assert "Pass each standalone value as its own token (`^cmd $env.VALUE`)" in rendered
+    assert '$"title=($env.ISSUE_TITLE)"' in rendered
+    assert "`title=$env.ISSUE_TITLE` stays literal" in rendered
+
+
 def test_api_has_one_dataframe_interface() -> None:
     assert not inspect.signature(rt.api).parameters
     frame = rt.api()
