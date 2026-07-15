@@ -4,3 +4,5 @@ flake.lock
 **/flake.lock
 rust-toolchain.toml
 **/rust-toolchain.toml
+rust-toolchain
+**/rust-toolchain
