@@ -68,6 +68,20 @@ class ClassificationTests(unittest.TestCase):
             "vendor/Cargo.lock",
         }
 
+    def test_legacy_rust_toolchain_paths_use_extended_budget(self) -> None:
+        result = ci_budget.classify(
+            ["rust-toolchain", "vendored/fuser/rust-toolchain"],
+            [],
+            self.globs,
+            force_big_change=False,
+        )
+        assert result.big_change
+        assert result.reason["sources"] == ["costly_path"]
+        assert {match["path"] for match in result.reason["matches"]} == {
+            "rust-toolchain",
+            "vendored/fuser/rust-toolchain",
+        }
+
     def test_label_and_extra_glob_are_structured_sources(self) -> None:
         result = ci_budget.classify(
             ["images/base.nix"],
