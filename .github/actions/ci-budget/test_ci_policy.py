@@ -7,11 +7,30 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ci_policy import (
+    POLICY,
+    cli_decision,
+    decide,
     load_policy,
     standard_deadline,
     standard_minutes,
     worker_timeout_minutes,
 )
+
+
+def valid_policy() -> dict[str, object]:
+    return {
+        "big_change_label": "ci/big-change",
+        "extended_setup_allowance_seconds": 120,
+        "extended_validation_seconds": 10_800,
+        "repositories": {
+            "indexable-inc/index": {
+                "costly_paths": ["flake.lock"],
+                "managed_workflows": [".github/workflows/check.yml"],
+            }
+        },
+        "standard_seconds": 300,
+        "termination_grace_seconds": 10,
+    }
 
 
 def policy_error(path: Path) -> RuntimeError:
@@ -49,26 +68,50 @@ class PolicyTests(unittest.TestCase):
                     not in source
                 )
 
+    def test_owner_policy_classifies_repository_data(self) -> None:
+        decision = decide(
+            ["nix/packages/workspace-bins.nix"],
+            [],
+            "indexable-inc/ix",
+            ".github/workflows/ci.yml",
+            force_big_change=False,
+        )
+
+        assert decision.managed_workflow
+        assert decision.classification.big_change
+        assert decision.classification.reason["sources"] == ["costly_path"]
+
+    def test_cli_contract_rejects_unmanaged_workflow_without_reclassifying(
+        self,
+    ) -> None:
+        decision = cli_decision(
+            {
+                "changed_paths": ["flake.lock"],
+                "force_big_change": False,
+                "labels": [],
+                "repository": "indexable-inc/index",
+                "workflow_path": ".github/workflows/pages.yml",
+            },
+            POLICY,
+        )
+
+        assert not decision.managed_workflow
+        assert decision.classification.big_change
+        assert decision.standard_seconds == 300
+
     def test_policy_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.json"
             path.write_text(json.dumps({"standard_seconds": 300}))
 
-            assert "policy keys" in str(policy_error(path))
+            assert "policy root keys" in str(policy_error(path))
 
     def test_policy_rejects_boolean_integer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "extended_setup_allowance_seconds": 120,
-                        "extended_validation_seconds": 10_800,
-                        "standard_seconds": True,
-                        "termination_grace_seconds": 10,
-                    }
-                )
-            )
+            policy = valid_policy()
+            policy["standard_seconds"] = True
+            path.write_text(json.dumps(policy))
 
             assert "positive integer" in str(policy_error(path))
 
