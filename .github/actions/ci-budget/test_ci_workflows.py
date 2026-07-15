@@ -16,8 +16,7 @@ YAML_TO_JSON = ACTION_DIR / "workflow_yaml_to_json.rb"
 JsonObject = dict[str, Any]
 
 
-def load_workflow(name: str) -> JsonObject:
-    path = WORKFLOWS / name
+def load_yaml(path: Path) -> JsonObject:
     result = subprocess.run(
         ["ruby", str(YAML_TO_JSON)],
         input=path.read_text(),
@@ -29,6 +28,10 @@ def load_workflow(name: str) -> JsonObject:
     if not isinstance(decoded, dict):
         raise AssertionError(f"{path} did not decode to an object")
     return decoded
+
+
+def load_workflow(name: str) -> JsonObject:
+    return load_yaml(WORKFLOWS / name)
 
 
 def child_object(parent: JsonObject, key: str) -> JsonObject:
@@ -187,6 +190,23 @@ class RequiredWorkflowTests(unittest.TestCase):
 
 
 class TrustedWorkflowTests(unittest.TestCase):
+    def test_source_context_artifact_preserves_pull_request_identity(self) -> None:
+        action = load_yaml(ACTION_DIR / "action.yml")
+        steps = child_list(child_object(action, "runs"), "steps")
+        preserve = next(
+            step
+            for step in steps
+            if isinstance(step, dict)
+            and step.get("name") == "Preserve authoritative event context"
+        )
+        inputs = child_object(preserve, "with")
+
+        assert "context_key" in expression(preserve, "if")
+        assert "steps.classify.outputs.context_key" in expression(inputs, "name")
+        assert (
+            expression(inputs, "path") == "${{ steps.classify.outputs.context_path }}"
+        )
+
     def test_controller_covers_initial_runs_and_reruns(self) -> None:
         workflow = load_workflow("ci-deadline-controller.yml")
         trigger = child_object(events(workflow), "workflow_run")
