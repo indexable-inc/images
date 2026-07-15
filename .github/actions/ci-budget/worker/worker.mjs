@@ -408,7 +408,7 @@ export async function main() {
   });
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+export async function runAsAction() {
   try {
     process.exitCode = await main();
   } catch (error) {
@@ -419,4 +419,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error(`::error title=${title}::${error.message}`);
     process.exitCode = error instanceof DeadlineExceeded ? 124 : 1;
   }
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  await runAsAction();
 }
