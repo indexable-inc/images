@@ -755,13 +755,23 @@
     reportToPlaybook = {
       text = ''
         Publish substantial investigations, decisions, shipped changes, and eval
-        scorecards to `playbook/src/routes/<slug>/+page.svx`, then post the live link
-        to Slack `#general` (`C0A4TD9G7HR`) with AI attribution. Skip quick or
-        throwaway tasks.
+        scorecards as a site update entry: an `.svx` file at
+        `packages/site/src/lib/updates/<slug>.svx` whose frontmatter carries
+        `id` (the slug), `postedAt` (ISO 8601 with timezone offset), `title`
+        (markdown), `links` (array of `{ label, href }` with absolute https
+        URLs), and `tags` (lowercase slugs; include `interesting` for the
+        front page). The body is mdsvex, so keep every `{` and `<...>` inside
+        code fences or backticks. It renders at
+        `https://indexable-inc.github.io/index/<slug>` once the Pages build
+        ships. Post that live link to Slack `#general` (`C0A4TD9G7HR`) with AI
+        attribution. Skip quick or throwaway tasks.
       '';
       reason = ''
-        Substantial investigations evaporated with the session; publishing to the
-        playbook makes them citable and searchable.
+        Substantial investigations evaporated with the session; publishing them
+        as a site update entry makes them citable and searchable. The path is
+        named exactly because `playbook/src/routes/` does not render on the
+        live site (index#3458), so an earlier writeup landed where it produced
+        no live link.
       '';
     };
   }
