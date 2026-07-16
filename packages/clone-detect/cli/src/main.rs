@@ -1,4 +1,5 @@
 mod badge;
+mod base;
 mod diff;
 mod filter;
 mod gate;
@@ -205,6 +206,9 @@ enum RunError {
 
     #[snafu(display("diff gate could not read git history"))]
     Diff { source: diff::DiffError },
+
+    #[snafu(display("diff gate could not measure the base tree"))]
+    Base { source: base::BaseError },
 }
 
 /// Install a tracing subscriber reading filter directives from `RUST_LOG`
@@ -249,15 +253,6 @@ fn run() -> Result<bool, RunError> {
     let file_config = find_config(&args.path)?;
     let config = resolve_config(&args, file_config);
 
-    let scan_config = Config {
-        min_lines: config.min_lines,
-        min_nodes: config.min_nodes,
-        ..Config::default()
-    };
-
-    let scanner = Scanner::new(scan_config);
-    let scan = scanner.directory(&args.path).context(ScanSnafu)?;
-
     let detect_config = DetectConfig {
         enable_type3: config.type3,
         type3_threshold: config.threshold,
@@ -266,18 +261,34 @@ fn run() -> Result<bool, RunError> {
         sequence_window_size: config.window_size,
     };
 
-    let mut result = instances(&scan, &detect_config);
+    let patterns: Vec<glob::Pattern> = config
+        .ignore
+        .iter()
+        .map(|p| glob::Pattern::new(p).context(BadGlobSnafu { pattern: p.clone() }))
+        .collect::<Result<_, _>>()?;
 
-    if !config.ignore.is_empty() {
-        let patterns: Vec<glob::Pattern> = config
-            .ignore
-            .iter()
-            .map(|p| glob::Pattern::new(p).context(BadGlobSnafu { pattern: p.clone() }))
-            .collect::<Result<_, _>>()?;
-        result = filter::by_patterns(result, &scan, &patterns)?;
-    }
+    // One tree-measurement pipeline shared by the working-tree scan and (when
+    // the diff gate needs the base fragments) the base-tree scan, so both
+    // trees are measured under exactly the same configuration except
+    // `min_lines`, which the base scan relaxes (see [`base`]).
+    let detect_tree = |path: &Path, min_lines: usize| -> Result<DetectionResult, RunError> {
+        let scan_config = Config {
+            min_lines,
+            min_nodes: config.min_nodes,
+            ..Config::default()
+        };
+        let scan = Scanner::new(scan_config)
+            .directory(path)
+            .context(ScanSnafu)?;
+        let mut result = instances(&scan, &detect_config);
+        if !patterns.is_empty() {
+            result = filter::by_patterns(result, &scan, &patterns)?;
+        }
+        Ok(result)
+    };
 
-    let report = evaluate_gates(&result, &config, &args.path)?;
+    let result = detect_tree(&args.path, config.min_lines)?;
+    let report = evaluate_gates(&result, &config, &args.path, &detect_tree)?;
 
     output_json(&result, &report, config.pretty)?;
 
@@ -295,6 +306,7 @@ fn evaluate_gates(
     result: &DetectionResult,
     config: &ResolvedConfig,
     scan_path: &std::path::Path,
+    detect_tree: &dyn Fn(&Path, usize) -> Result<DetectionResult, RunError>,
 ) -> Result<GateReport, RunError> {
     let global = GlobalGate::evaluate(result, config.global_pct);
     log_gate(
@@ -320,12 +332,25 @@ fn evaluate_gates(
         .as_ref()
         .map(|cfg| {
             let diff = diff::changed_lines(&repo_dir, &cfg.base).context(DiffSnafu)?;
+            // Only duplication new relative to the base is charged (#3455).
+            // The base fragments cost a whole second scan, so gather them
+            // only when a changed line actually lands on a clone fragment.
+            let preexisting = if gate::changed_lines_touch_clones(result, &diff.changed) {
+                tracing::info!(
+                    base_sha = diff.base_sha,
+                    "changed lines touch clone fragments; scanning the base tree for pre-existing duplication"
+                );
+                base::preexisting_fragments(&repo_dir, scan_path, &diff.base_sha, detect_tree)?
+            } else {
+                gate::BaseFragments::default()
+            };
             let gate = DiffGate::evaluate(
                 result,
                 &diff.changed,
                 cfg.budget_pct,
                 cfg.base.clone(),
                 diff.base_sha,
+                &preexisting,
             );
             log_diff_gate(&gate);
             Ok(gate)
@@ -356,9 +381,11 @@ fn log_diff_gate(gate: &DiffGate) {
         diff_pct = gate.diff_pct,
         budget_pct = gate.budget_pct,
         duplicated = gate.duplicated_changed_lines,
+        preexisting = gate.preexisting_duplicated_changed_lines,
         changed = gate.changed_lines,
-        "clone diff gate {verdict}: {dup}/{tot} changed lines duplicated = {pct:.4}% <= {budget:.4}%? {pass} (base {base}@{sha})",
+        "clone diff gate {verdict}: {dup}/{tot} changed lines newly duplicated ({pre} pre-existing at base, excused) = {pct:.4}% <= {budget:.4}%? {pass} (base {base}@{sha})",
         dup = gate.duplicated_changed_lines,
+        pre = gate.preexisting_duplicated_changed_lines,
         tot = gate.changed_lines,
         pct = gate.diff_pct,
         budget = gate.budget_pct,

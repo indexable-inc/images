@@ -52,6 +52,7 @@ fn fragment_roundtrip() {
         lines: LineRange { start: 10, end: 20 },
         kind: "function_item".to_owned(),
         generated: false,
+        fingerprint: 0xDEAD_BEEF,
     };
 
     let json = serde_json::to_string(&fragment).unwrap();
@@ -61,6 +62,7 @@ fn fragment_roundtrip() {
     assert_eq!(deserialized.byte_range, fragment.byte_range);
     assert_eq!(deserialized.lines, fragment.lines);
     assert_eq!(deserialized.kind, fragment.kind);
+    assert_eq!(deserialized.fingerprint, fragment.fingerprint);
     assert!(!deserialized.generated);
 }
 
@@ -76,6 +78,7 @@ fn detection_result_roundtrip() {
                     lines: LineRange { start: 0, end: 5 },
                     kind: "function_item".to_owned(),
                     generated: false,
+                    fingerprint: 0,
                 },
                 Fragment {
                     file: PathBuf::from("b.rs"),
@@ -83,6 +86,7 @@ fn detection_result_roundtrip() {
                     lines: LineRange { start: 0, end: 5 },
                     kind: "function_item".to_owned(),
                     generated: false,
+                    fingerprint: 0,
                 },
             ],
         }],
