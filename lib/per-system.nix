@@ -1983,8 +1983,10 @@
 
               # Race: the stale run expected $head but the branch moved; it
               # must skip without touching the remote.
-              out=$(cd stale && "$tool" --patch "$patch" --push-url "$remote" --branch main --expected-head "$head")
-              echo "$out" | grep -q "skipping"
+              # `skip_out`, not `out`: assigning `out` would clobber the
+              # derivation's output path and the build could never produce it.
+              skip_out=$(cd stale && "$tool" --patch "$patch" --push-url "$remote" --branch main --expected-head "$head")
+              echo "$skip_out" | grep -q "skipping"
               [ "$(git -C origin.git rev-parse refs/heads/main)" = "$fixed_head" ]
 
               # Loop guard: head is already `style: autofix`, yet the fixed
