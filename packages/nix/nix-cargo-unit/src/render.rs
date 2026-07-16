@@ -2127,6 +2127,13 @@ src=\"$PWD/fixed-src\"
     // whole downstream (re-verify units, the lint lane patch) into cache
     // hits -- the incrementality #3434 is built on.
     append_content_addressing(&mut attrs, options.content_addressed);
+    // One derivation carries EVERY unit's driver invocation, so the
+    // concatenated buildPhase can exceed Linux's 128 KiB single-env-var cap
+    // ("Argument list too long" at bash exec) for multi-target crates.
+    // Structured attrs move the phases into the attrs file instead of the
+    // builder's environment. Per-unit check derivations stay unstructured:
+    // each carries one unit's phase and never aggregates.
+    attrs.bool("__structuredAttrs", true);
     attrs.multiline("buildPhase", &build_phase);
     attrs.multiline(
         "installPhase",
