@@ -5,6 +5,11 @@
   ix,
   paths,
   home-manager,
+  # A cargoUnit whose pkgs carries rust-overlay: `ix.pkgs` (repo overlay
+  # only) has no `pkgs.rust-bin`, so the default clippy package (llm-clippy,
+  # pinned-nightly fork driver) cannot resolve from `ix.cargoUnit`. Only the
+  # clippy-fix fixture needs the driver; everything else stays on ix.pkgs.
+  cargoUnitWithClippy,
 }: let
   inherit (nixpkgs) lib;
   inherit (ix) pkgs;
@@ -942,7 +947,7 @@
       ./fixtures/cargo-unit-clippy-fix/crates
     ];
   };
-  cargoUnitClippyFixWorkspace = ix.cargoUnit.buildWorkspace {
+  cargoUnitClippyFixWorkspace = cargoUnitWithClippy.buildWorkspace {
     src = cargoUnitClippyFixFixture;
     workspaceRoot = ./fixtures/cargo-unit-clippy-fix;
     cargoArgs = ["--workspace"];

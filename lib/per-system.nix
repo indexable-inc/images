@@ -1362,6 +1362,9 @@
       paths
       home-manager
       ;
+    # This system's pkgs carries rust-overlay, which the clippy-fix fixture
+    # needs to resolve the default llm-clippy driver (see tests/default.nix).
+    cargoUnitWithClippy = ix.cargoUnitFor pkgs;
   };
 
   exampleFleets = ix.exampleFleetsFor {hostSystem = system;};
