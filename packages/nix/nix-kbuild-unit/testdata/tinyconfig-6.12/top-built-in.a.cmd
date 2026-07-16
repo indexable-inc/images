@@ -1,0 +1,1 @@
+savedcmd_built-in.a := rm -f built-in.a;  printf "./%s " init/built-in.a usr/built-in.a arch/x86/built-in.a kernel/built-in.a certs/built-in.a mm/built-in.a fs/built-in.a ipc/built-in.a security/built-in.a crypto/built-in.a lib/built-in.a arch/x86/lib/built-in.a drivers/built-in.a sound/built-in.a virt/built-in.a | xargs ar cDPrST built-in.a

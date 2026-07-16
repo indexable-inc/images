@@ -1,0 +1,42 @@
+[package]
+name = "nix-kbuild-unit"
+version = "0.1.0"
+edition = "2024"
+description = "Render kbuild .cmd command graphs as composable Nix derivations"
+license = "MIT"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+color-eyre = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Standalone workspace, mirroring nix-cargo-unit: this tool is consumed at
+# eval time by lib/kernel/kbuild-unit.nix, so it owns its own Cargo.toml +
+# Cargo.lock and stays out of the root workspace (see root Cargo.toml
+# `exclude`). Its Nix build is invalidated only by changes under
+# packages/nix/nix-kbuild-unit/ itself.
+[workspace]
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+# Group lints need priority below per-lint overrides so allowlist entries
+# (such as `multiple_crate_versions`) can opt out without disabling the group.
+# Cargo emits `lint_groups_priority` errors otherwise.
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+multiple_crate_versions = "allow"
+# Kbuild target names are byte-exact lowercase paths; a case-insensitive
+# extension match would wrongly classify names kbuild itself treats as inert.
+case_sensitive_file_extension_comparisons = "allow"

@@ -146,6 +146,7 @@ members = [
 # bump never recompiles it; its Nix build keys only on its own folder.
 exclude = [
   "packages/nix/nix-cargo-unit",
+  "packages/nix/nix-kbuild-unit",
 ]
 resolver = "3"
 
