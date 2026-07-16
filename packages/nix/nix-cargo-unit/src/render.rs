@@ -2094,6 +2094,18 @@ src=\"$PWD/fixed-src\"
         // check derivations this mirrors.
         writeln!(build_phase, "# unit {}", prepared.names[index])?;
         build_phase.push_str("(\n");
+        // Each unit also gets its own scratch root: units share one
+        // derivation here (unlike the per-unit check gates they mirror), and
+        // both the build-script OUT_DIR copy and build/cargo-metadata land
+        // read-only from the store, so a second target's cp into a shared
+        // scratch dir fails with "Permission denied". Deriving the root from
+        // the unit name keeps it deterministic (no mktemp entropy; see the
+        // out-dir comment in append_build_script_flag_reader's caller).
+        writeln!(
+            build_phase,
+            "NIX_BUILD_TOP=\"$NIX_BUILD_TOP/fix-{}\"\nmkdir -p \"$NIX_BUILD_TOP\"\ncd \"$NIX_BUILD_TOP\"",
+            prepared.names[index]
+        )?;
         build_phase.push_str(&render_driver_build_phase(
             graph,
             options,
