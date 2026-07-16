@@ -87,7 +87,15 @@
     lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg (toString v)}") env
   );
 
-  extBasenames = lib.concatStringsSep " " (map (e: lib.escapeShellArg (baseNameOf e)) extensions);
+  # Provider extensions declared on model aliases (e.g. the moonshot provider
+  # for kimi). Loaded like entry extensions; explicit `-e` survives even the
+  # lockdown posture's --no-extensions, so aliases work in every harness.
+  providerExtensions = lib.unique (
+    lib.filter (e: e != null) (lib.mapAttrsToList (_: m: m.providerExtension or null) models)
+  );
+  allExtensions = extensions ++ providerExtensions;
+
+  extBasenames = lib.concatStringsSep " " (map (e: lib.escapeShellArg (baseNameOf e)) allExtensions);
 
   copyInto = dest: files:
     lib.concatMapStringsSep "\n" (f: ''install -Dm644 ${f} "${dest}/${baseNameOf f}"'') files;
@@ -104,7 +112,7 @@ in
       # shell
       runHook preBuild
       mkdir -p share/${name}/lib
-      ${copyInto "share/${name}" extensions}
+      ${copyInto "share/${name}" allExtensions}
       ${copyInto "share/${name}" auxFiles}
       ${copyInto "share/${name}/lib" libFiles}
 
