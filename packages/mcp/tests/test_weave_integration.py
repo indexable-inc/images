@@ -36,29 +36,33 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture
-def weave_server(tmp_path: Path) -> Iterator[str]:
-    port = _free_port()
-    store_dir = tmp_path / "weave-store"
-    subprocess.run([WEAVE_BIN, "--store", str(store_dir), "init"], check=True, capture_output=True)
+def _start_server(store_dir: Path, port: int) -> subprocess.Popen[bytes]:
+    """Launch `weave serve` on an initialized store and wait until it answers."""
     proc = subprocess.Popen(
         [WEAVE_BIN, "--store", str(store_dir), "serve", "--addr", f"127.0.0.1:{port}"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    url = f"http://127.0.0.1:{port}"
-    try:
-        from urllib.request import urlopen
+    from urllib.request import urlopen
 
-        for _ in range(100):
-            try:
-                urlopen(f"{url}/api/info", timeout=1).read()  # noqa: S310 - fixture-local http url
-                break
-            except Exception:
-                time.sleep(0.1)
-        else:
-            raise RuntimeError("weave serve never came up")
-        yield url
+    for _ in range(100):
+        try:
+            urlopen(f"http://127.0.0.1:{port}/api/info", timeout=1).read()  # noqa: S310 - test-local http url
+            return proc
+        except Exception:
+            time.sleep(0.1)
+    proc.terminate()
+    raise RuntimeError("weave serve never came up")
+
+
+@pytest.fixture
+def weave_server(tmp_path: Path) -> Iterator[str]:
+    port = _free_port()
+    store_dir = tmp_path / "weave-store"
+    subprocess.run([WEAVE_BIN, "--store", str(store_dir), "init"], check=True, capture_output=True)
+    proc = _start_server(store_dir, port)
+    try:
+        yield f"http://127.0.0.1:{port}"
     finally:
         proc.terminate()
         proc.wait(timeout=10)
@@ -195,22 +199,8 @@ def test_server_down_then_restart_drains_spool_in_order(
         assert not asyncio.run(weave.flush(timeout=1.0))
         assert list((tmp_path / "spool").glob("w-*.jsonl")), "record() must be durable on disk"
 
-        proc = subprocess.Popen(
-            [WEAVE_BIN, "--store", str(store_dir), "serve", "--addr", f"127.0.0.1:{port}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        proc = _start_server(store_dir, port)
         try:
-            from urllib.request import urlopen
-
-            for _ in range(100):
-                try:
-                    urlopen(f"{url}/api/info", timeout=1).read()  # noqa: S310 - fixture-local http url
-                    break
-                except Exception:
-                    time.sleep(0.1)
-            else:
-                raise RuntimeError("weave serve never came up")
             assert asyncio.run(weave.flush(timeout=30.0)), "spool failed to drain after restart"
 
             async def check() -> None:
