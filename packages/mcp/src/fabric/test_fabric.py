@@ -553,6 +553,50 @@ def test_session_connect_failure_leaves_ask_and_failed(monkeypatch: pytest.Monke
     assert journal.facts[-1] == (task, "state", "failed")
 
 
+# --- weave unreachable at the fabric boundary (index#3416) ----------------------
+
+
+def install_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Weave double for an absent server: every request fails to connect."""
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 61] Connection refused", request=request)
+
+    transport = httpx.MockTransport(refuse)
+    monkeypatch.setattr(
+        weave,
+        "_client",
+        lambda **kw: httpx.AsyncClient(transport=transport, base_url="http://weave.test", **kw),
+    )
+
+
+def test_run_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_unreachable(monkeypatch)
+
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    with pytest.raises(fabric.FabricError) as excinfo:
+        run(fabric.run(add, 2, 3))
+    message = str(excinfo.value)
+    assert "weave server unreachable" in message
+    assert "curl -s http://weave.test/api/info" in message
+    assert "launchctl kickstart -k gui/501/org.nix-community.home.weave-serve" in message
+    assert isinstance(excinfo.value.__cause__, httpx.ConnectError)
+
+
+def test_session_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_unreachable(monkeypatch)
+    # The SDK client must never spawn when the journal is unreachable.
+    monkeypatch.setattr(claude, "_sdk_client", lambda **kw: pytest.fail("SDK client built"))
+
+    with pytest.raises(fabric.FabricError) as excinfo:
+        run(claude.session("never recorded"))
+    message = str(excinfo.value)
+    assert "curl -s http://weave.test/api/info" in message
+    assert "launchctl kickstart" in message
+
+
 # --- fabric.reconcile -----------------------------------------------------------
 
 

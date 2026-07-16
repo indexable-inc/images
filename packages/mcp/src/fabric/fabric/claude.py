@@ -208,10 +208,10 @@ async def session(
     input, ``s.interrupt()`` stops it.
     """
 
-    from . import _requested_by
+    from . import _journal, _requested_by
 
     task = weave.mint("task")
-    prompt_hash = await weave.put_blob(prompt.encode())
+    prompt_hash = await _journal(weave.put_blob(prompt.encode()))
     facts: list[tuple[str, str, object]] = [
         (task, "type", "task"),
         (task, "fn", "claude.session"),
@@ -222,7 +222,7 @@ async def session(
     if model is not None:
         facts.append((task, "model", model))
     facts.append((task, "state", "submitted"))
-    await weave.assert_facts(facts)
+    await _journal(weave.assert_facts(facts))
 
     client = _sdk_client(
         system_prompt=system_prompt,
