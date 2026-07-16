@@ -677,7 +677,7 @@ in {
       nix-index # find which package provides a given file/binary (`nix-locate`)
       nvd # diff Nix store paths and profile generations after rebuilds
       indexPkgs.nix-output-monitor # `nom` patched so nix-derivation parses content-addressed derivations (index repo builds them); upstream nixpkgs nom spams DerivationParseError. Bump with `nix flake update index`
-      # indexable-inc/index#1711: eval needs the x8664-linux IFD output
+      # indexable-inc/index#1711: eval needs the x86_64-linux IFD output
       # (cargo-units.nix); when cache.ix.dev lacks it, copy it from the fleet:
       # `nix copy --no-check-sigs --from ssh-ng://vin-compute-1 <path from the eval error>`
       indexPkgs.nix-web-monitor # `nwm` web build monitor on :7532

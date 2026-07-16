@@ -203,7 +203,7 @@ in {
       {
         name = "arm64-16k-pages";
         patch = null;
-        structuredExtraConfig.ARM6416K_PAGES = lib.kernel.yes;
+        structuredExtraConfig.ARM64_16K_PAGES = lib.kernel.yes;
       }
     ];
     # Register the shipped closure in the nix database on first boot: repart's
