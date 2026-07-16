@@ -1,0 +1,25 @@
+name: Update flake.lock (index)
+
+on:
+  workflow_dispatch:
+  # Re-enable the hourly schedule only after a manual self-hosted run proves
+  # both the update and always-running escalation jobs end to end.
+
+permissions:
+  contents: read
+
+jobs:
+  update-flake-lock:
+    permissions:
+      checks: read
+      contents: write
+      issues: write
+      pull-requests: write
+      statuses: read
+    uses: ./.github/workflows/update-flake-lock.yml
+    with:
+      app-client-id: ${{ vars.PLAYBOOK_APP_CLIENT_ID }}
+      nix-preinstalled: true
+      runner-label: ${{ format('ix-ci-run-{0}-{1}-index-update-flake-lock', github.run_id, github.run_attempt) }}
+    secrets:
+      app-private-key: ${{ secrets.PLAYBOOK_APP_PRIVATE_KEY }}
