@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Protocol
 
 import weave
 
+from . import tmux as _tmux
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
 
@@ -53,21 +55,33 @@ def _sdk_client(
     allowed_tools: Sequence[str] | None,
     permission_mode: PermissionMode | None,
     max_turns: int | None,
+    tmux_window: str | None,
 ) -> SdkClient:
-    """Build the real SDK client; tests monkeypatch this factory."""
+    """Build the real SDK client; tests monkeypatch this factory.
+
+    ``tmux_window`` re-homes the CLI process into that window of the shared
+    :data:`fabric.tmux.SESSION` session via the :mod:`fabric.tmux` shim; the
+    SDK keeps the stream-json pipe protocol either way.
+    """
 
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
-    return ClaudeSDKClient(
-        ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            model=model,
-            cwd=cwd,
-            allowed_tools=list(allowed_tools or []),
-            permission_mode=permission_mode,
-            max_turns=max_turns,
-        )
+    options = ClaudeAgentOptions(
+        system_prompt=system_prompt,
+        model=model,
+        cwd=cwd,
+        allowed_tools=list(allowed_tools or []),
+        permission_mode=permission_mode,
+        max_turns=max_turns,
     )
+    if tmux_window is not None:
+        options.cli_path = _tmux.shim_path()
+        options.env = {
+            **options.env,
+            _tmux.ENV_CLI: _tmux.real_cli(),
+            _tmux.ENV_WINDOW: tmux_window,
+        }
+    return ClaudeSDKClient(options)
 
 
 def _turn_blob(message: Message) -> bytes:
@@ -193,6 +207,7 @@ async def session(
     allowed_tools: Sequence[str] | None = None,
     permission_mode: PermissionMode | None = None,
     max_turns: int | None = None,
+    tmux: bool | None = None,
 ) -> Session:
     """Open a recorded, interruptible Claude session and send ``prompt``.
 
@@ -204,6 +219,12 @@ async def session(
     success the session is live (``state=running``) and returns immediately:
     ``await s.result()`` waits for the turn, ``s.send()`` streams follow-up
     input, ``s.interrupt()`` stops it.
+
+    By default the CLI process runs inside a window of the shared
+    ``ix-agents`` tmux session named after the task, so a human can watch or
+    kill it (``tmux attach -t ix-agents``); a ``tmux_window`` fact records
+    the window on the task entity. ``tmux=False`` (or ``IX_FABRIC_TMUX=0``
+    globally) runs headless (index#3478).
     """
 
     from . import _requested_by
@@ -216,8 +237,12 @@ async def session(
         (task, "requested_by", _requested_by()),
         (task, "prompt", weave.Blob(prompt.encode())),
     ]
+    in_tmux = _tmux.enabled() if tmux is None else tmux
+    window = _tmux.window_name(task) if in_tmux else None
     if model is not None:
         facts.append((task, "model", model))
+    if window is not None:
+        facts.append((task, "tmux_window", window))
     facts.append((task, "state", "submitted"))
     await weave.record(facts)
 
@@ -228,6 +253,7 @@ async def session(
         allowed_tools=allowed_tools,
         permission_mode=permission_mode,
         max_turns=max_turns,
+        tmux_window=window,
     )
     live = Session(task, client)
     try:
