@@ -89,60 +89,7 @@ fn main() -> Result<()> {
         );
     }
     let doc = dag::Doc::load(&dag_file)?;
-    let all_patches = doc.patch_names();
-
-    // Resolve the requested patch to an exact node name (exact, then prefix,
-    // then unique substring).
-    let target = dag::resolve(&cli.patch, &all_patches)?;
-    println!(
-        "{}",
-        paint(
-            CYAN,
-            &format!("upstream-pr: {}: target patch {target}", cli.pkg)
-        )
-    );
-
-    // Ancestor closure from the DAG, in NNNN order, plus the target last.
-    let mut closure = doc.closure(&target);
-    let pos: HashMap<&str, usize> = all_patches
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.as_str(), i))
-        .collect();
-    let by_series = |p: &String| pos.get(p.as_str()).copied().unwrap_or(usize::MAX);
-    closure.sort_by_key(by_series);
-    let mut ordered = closure.clone();
-    ordered.push(target.clone());
-    ordered.sort_by_key(by_series);
-    ordered.dedup();
-    if closure.is_empty() {
-        println!(
-            "upstream-pr: {}: {target} is independent; contributing it alone.",
-            cli.pkg
-        );
-    } else {
-        println!(
-            "{}",
-            paint(
-                YELLOW,
-                &format!(
-                    "upstream-pr: {}: {target} is NOT independent; its upstream contribution drags {} ancestor patch(es):",
-                    cli.pkg,
-                    closure.len()
-                )
-            )
-        );
-        for c in &closure {
-            println!("  - {c}");
-        }
-        println!(
-            "{}",
-            paint(
-                YELLOW,
-                "upstream-pr: consider splitting, or send the closure as one PR."
-            )
-        );
-    }
+    let Closure { target, ordered } = resolve_closure(&cli.pkg, &cli.patch, &doc)?;
 
     let slug = Slug::parse(&fork.url)?;
     let branch = format!("upstream-pr/{}/{}", cli.pkg, patch::slug(&target));
@@ -177,29 +124,7 @@ fn main() -> Result<()> {
     );
 
     if cli.dry_run {
-        println!(
-            "{}",
-            paint(
-                GREEN,
-                &format!(
-                    "upstream-pr: --dry-run: would push branch {branch} to {ORG}/{} and print a compare URL. Commits:",
-                    slug.repo
-                )
-            )
-        );
-        println!(
-            "{}",
-            cmd::run_in(
-                &scratch,
-                "git",
-                &["log", "--oneline", &format!("{tip}..HEAD")]
-            )?
-        );
-        println!(
-            "upstream-pr: scratch repo left for inspection: {}",
-            scratch.display()
-        );
-        return Ok(());
+        return dry_run_report(&scratch, &tip, &branch, &slug.repo);
     }
 
     // Ensure an indexable-inc fork of the upstream exists, then push.
@@ -245,6 +170,96 @@ fn main() -> Result<()> {
 
     fs::remove_dir_all(&scratch)
         .wrap_err_with(|| format!("cannot remove scratch repo {}", scratch.display()))?;
+    Ok(())
+}
+
+/// A resolved target patch together with its full contribution closure
+/// (ancestors plus the target) in series order.
+struct Closure {
+    target: String,
+    ordered: Vec<String>,
+}
+
+/// Resolve the requested patch and compute its contribution closure in
+/// series (NNNN) order, ancestors first with the target included; split out
+/// of [`main`] to keep it within clippy's function-length budget. Warns when
+/// the patch drags ancestors so the author knows the upstream PR is not
+/// single-commit.
+fn resolve_closure(pkg: &str, requested: &str, doc: &dag::Doc) -> Result<Closure> {
+    let all_patches = doc.patch_names();
+    // Resolve the requested patch to an exact node name (exact, then prefix,
+    // then unique substring).
+    let target = dag::resolve(requested, &all_patches)?;
+    println!(
+        "{}",
+        paint(CYAN, &format!("upstream-pr: {pkg}: target patch {target}"))
+    );
+
+    // Ancestor closure from the DAG, in NNNN order, plus the target last.
+    let mut closure = doc.closure(&target);
+    let pos: HashMap<&str, usize> = all_patches
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    let by_series = |p: &String| pos.get(p.as_str()).copied().unwrap_or(usize::MAX);
+    closure.sort_by_key(by_series);
+    let mut ordered = closure.clone();
+    ordered.push(target.clone());
+    ordered.sort_by_key(by_series);
+    ordered.dedup();
+    if closure.is_empty() {
+        println!("upstream-pr: {pkg}: {target} is independent; contributing it alone.");
+    } else {
+        println!(
+            "{}",
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-pr: {pkg}: {target} is NOT independent; its upstream contribution drags {} ancestor patch(es):",
+                    closure.len()
+                )
+            )
+        );
+        for c in &closure {
+            println!("  - {c}");
+        }
+        println!(
+            "{}",
+            paint(
+                YELLOW,
+                "upstream-pr: consider splitting, or send the closure as one PR."
+            )
+        );
+    }
+    Ok(Closure { target, ordered })
+}
+
+/// Print what `--dry-run` would have pushed (branch, commits, scratch repo
+/// location); split out of [`main`] to keep it within clippy's
+/// function-length budget.
+fn dry_run_report(scratch: &Path, tip: &str, branch: &str, repo: &str) -> Result<()> {
+    println!(
+        "{}",
+        paint(
+            GREEN,
+            &format!(
+                "upstream-pr: --dry-run: would push branch {branch} to {ORG}/{repo} and print a compare URL. Commits:"
+            )
+        )
+    );
+    println!(
+        "{}",
+        cmd::run_in(
+            scratch,
+            "git",
+            &["log", "--oneline", &format!("{tip}..HEAD")]
+        )?
+    );
+    println!(
+        "upstream-pr: scratch repo left for inspection: {}",
+        scratch.display()
+    );
     Ok(())
 }
 

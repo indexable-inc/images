@@ -35,12 +35,10 @@ pub(super) fn lower_fn(func: &syn::ItemFn, declared: &Declared) -> Result<ir::Fu
     lower_callable(&func.attrs, &func.sig, declared, Kind::Free)
 }
 
-pub(super) fn lower_callable(
-    attributes: &[syn::Attribute],
-    signature: &syn::Signature,
-    declared: &Declared,
-    kind: Kind<'_>,
-) -> Result<ir::Function> {
+/// Reject signature shapes that never cross the binding boundary (unsafe,
+/// generic, variadic); split out of [`lower_callable`] to keep it within
+/// clippy's function-length budget.
+fn reject_unsupported(signature: &syn::Signature) -> Result<()> {
     if let Some(unsafety) = signature.unsafety {
         return Err(LowerError::new(
             unsafety.span(),
@@ -60,6 +58,16 @@ pub(super) fn lower_callable(
             "variadic functions do not cross the binding boundary",
         ));
     }
+    Ok(())
+}
+
+pub(super) fn lower_callable(
+    attributes: &[syn::Attribute],
+    signature: &syn::Signature,
+    declared: &Declared,
+    kind: Kind<'_>,
+) -> Result<ir::Function> {
+    reject_unsupported(signature)?;
     let asyncness = match signature.asyncness {
         Some(token) => {
             if matches!(kind, Kind::Constructor { .. }) {

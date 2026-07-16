@@ -137,7 +137,7 @@ fn configure(framed: &mut Framed<TcpStream>, recorder: &mut Recorder) -> anyhow:
         match id {
             cb::SELECT_KNOWN_PACKS => framed.send(&packets::select_known_packs_none())?,
             cb::KEEP_ALIVE => {
-                framed.send(&packets::packet(serverbound::config::KEEP_ALIVE, body))?
+                framed.send(&packets::packet(serverbound::config::KEEP_ALIVE, body))?;
             }
             cb::PING => framed.send(&packets::packet(serverbound::config::PONG, body))?,
             cb::FINISH_CONFIGURATION => {

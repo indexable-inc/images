@@ -40,6 +40,17 @@ fn mapping_json(name: &str, patch_dir: &str, closure_gates: bool) -> String {
     )
 }
 
+/// Run the binary and assert it exited 0, labeled by lifecycle stage; the
+/// stages share this so the test stays within clippy's function-length budget.
+fn run_ok(exe: &str, args: &[&str], cwd: &std::path::Path, envs: &[(&str, String)], stage: u8) {
+    let run = run_bin(exe, args, cwd, envs);
+    assert_eq!(
+        run.status, 0,
+        "stage {stage} failed:\n{}\n{}",
+        run.stdout, run.stderr
+    );
+}
+
 #[test]
 fn pr_lifecycle_open_retire_idempotent_and_gates() {
     let tmp = tempfile::tempdir().unwrap();
@@ -59,16 +70,12 @@ fn pr_lifecycle_open_retire_idempotent_and_gates() {
     let envs = [("PATH", path)];
 
     // stage 1: --open records the created PR.
-    let run = run_bin(
+    run_ok(
         exe,
         &["--open", "--mapping", &mapping_arg, "fake"],
         &work,
         &envs,
-    );
-    assert_eq!(
-        run.status, 0,
-        "stage 1 failed:\n{}\n{}",
-        run.stdout, run.stderr
+        1,
     );
     let entry = &status_json(&work, "repo/patches")["patches"][PATCH];
     assert_eq!(
@@ -92,16 +99,12 @@ fn pr_lifecycle_open_retire_idempotent_and_gates() {
         ("PATH", envs[0].1.clone()),
         ("GH_PR_VIEW_RESPONSE", view.display().to_string()),
     ];
-    let run = run_bin(
+    run_ok(
         exe,
         &["--mapping", &mapping_arg, "fake"],
         &work,
         &envs_merged,
-    );
-    assert_eq!(
-        run.status, 0,
-        "stage 2 failed:\n{}\n{}",
-        run.stdout, run.stderr
+        2,
     );
     let doc = status_json(&work, "repo/patches");
     let entry = &doc["patches"][PATCH];
@@ -118,16 +121,12 @@ fn pr_lifecycle_open_retire_idempotent_and_gates() {
     );
 
     // stage 3: re-run is idempotent (no duplicate transitions).
-    let run = run_bin(
+    run_ok(
         exe,
         &["--mapping", &mapping_arg, "fake"],
         &work,
         &envs_merged,
-    );
-    assert_eq!(
-        run.status, 0,
-        "stage 3 failed:\n{}\n{}",
-        run.stdout, run.stderr
+        3,
     );
     let doc = status_json(&work, "repo/patches");
     assert_eq!(
@@ -137,49 +136,44 @@ fn pr_lifecycle_open_retire_idempotent_and_gates() {
         doc["log"]
     );
 
-    // A closureGates fork: same patch/dag shape, its own patch dir + status
-    // file, exercising the preflight branch (RFC 0010 A3) that otherwise
-    // runs only on a real --open against a real flake.
-    write_series(&work, "gated/patches");
+    closure_gate_stages(exe, &work, &envs[0].1);
+}
+
+/// Stages 4 and 5: a closureGates fork (same patch/dag shape, its own patch
+/// dir + status file) exercising the preflight branch (RFC 0010 A3) that
+/// otherwise runs only on a real --open against a real flake. Split out of
+/// the lifecycle test to keep it within clippy's function-length budget.
+fn closure_gate_stages(exe: &str, work: &std::path::Path, path: &str) {
+    write_series(work, "gated/patches");
     let gated_mapping = work.join("mapping-gated.json");
     fs::write(&gated_mapping, mapping_json("gated", "gated/patches", true)).unwrap();
     let gated_arg = gated_mapping.display().to_string();
 
     // stage 4: a red closure gate aborts the PR-opening.
-    let envs_red = [
-        ("PATH", envs[0].1.clone()),
-        ("NIX_GATE_EXIT", "1".to_owned()),
-    ];
-    let run = run_bin(
+    let envs_red = [("PATH", path.to_owned()), ("NIX_GATE_EXIT", "1".to_owned())];
+    run_ok(
         exe,
         &["--open", "--mapping", &gated_arg, "gated"],
-        &work,
+        work,
         &envs_red,
+        4,
     );
-    assert_eq!(
-        run.status, 0,
-        "stage 4 failed:\n{}\n{}",
-        run.stdout, run.stderr
-    );
-    let entry = &status_json(&work, "gated/patches")["patches"][PATCH];
+    let entry = &status_json(work, "gated/patches")["patches"][PATCH];
     assert!(
         entry["pr"].is_null(),
         "stage 4: PR opened despite a failed gate: {entry}"
     );
 
     // stage 5: a green gate proceeds to open and record the PR.
-    let run = run_bin(
+    let envs = [("PATH", path.to_owned())];
+    run_ok(
         exe,
         &["--open", "--mapping", &gated_arg, "gated"],
-        &work,
+        work,
         &envs,
+        5,
     );
-    assert_eq!(
-        run.status, 0,
-        "stage 5 failed:\n{}\n{}",
-        run.stdout, run.stderr
-    );
-    let entry = &status_json(&work, "gated/patches")["patches"][PATCH];
+    let entry = &status_json(work, "gated/patches")["patches"][PATCH];
     assert_eq!(
         entry["pr"]["number"], 99999,
         "stage 5: PR not recorded after a green gate: {entry}"
