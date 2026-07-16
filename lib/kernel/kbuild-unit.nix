@@ -63,6 +63,8 @@ outputs); per-unit source scoping is #3412.
     srcTree = pkgs.srcOnly {
       name = "kbuild-unit-src";
       inherit src;
+      # Unpack only; omitting stdenv trips this repo's abort-on-warn.
+      stdenv = pkgs.stdenvNoCC;
     };
 
     plan = pkgs.stdenv.mkDerivation ({
