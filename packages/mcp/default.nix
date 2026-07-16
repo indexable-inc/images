@@ -367,6 +367,9 @@
     pkgs.runCommand "ix-notebook-mcp-module"
     {
       strictDeps = true;
+      # store.py rides the durable weave spool (index#3419), so every env
+      # that bundles this package needs the weave client alongside it.
+      propagatedBuildInputs = [weaveModule];
       meta.description = "The ix notebook-first MCP server package";
     }
     ''
