@@ -83,9 +83,7 @@ fn read_text(db: &Path, sql: &str) -> String {
 }
 
 fn assert_policy_conflict(fixture: &Fixture, policy: &str, message: &str) {
-    let error = fixture
-        .run_with(&policies(policy))
-        .expect_err(message);
+    let error = fixture.run_with(&policies(policy)).expect_err(message);
     let MergeError::Conflicts(conflicts) = error else {
         panic!("expected Conflicts, got {error:?}");
     };
@@ -120,9 +118,18 @@ fn non_overlapping_row_edits_merge_clean() {
     f.run().expect("clean merge");
 
     // ours keeps its alice edit and gains theirs's bob edit.
-    assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 1"), 11);
-    assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 2"), 22);
-    assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 3"), 30);
+    assert_eq!(
+        read_int(&f.ours, "SELECT score FROM users WHERE id = 1"),
+        11
+    );
+    assert_eq!(
+        read_int(&f.ours, "SELECT score FROM users WHERE id = 2"),
+        22
+    );
+    assert_eq!(
+        read_int(&f.ours, "SELECT score FROM users WHERE id = 3"),
+        30
+    );
 }
 
 #[test]
@@ -140,7 +147,10 @@ fn same_cell_divergent_edit_conflicts() {
     assert_eq!(conflicts[0].table, "users");
 
     // ours must be left unchanged (aborted apply, no partial write).
-    assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 1"), 111);
+    assert_eq!(
+        read_int(&f.ours, "SELECT score FROM users WHERE id = 1"),
+        111
+    );
 }
 
 #[test]
@@ -152,8 +162,14 @@ fn inserts_with_different_pks_merge() {
     f.run().expect("clean merge");
 
     assert_eq!(read_int(&f.ours, "SELECT count(*) FROM users"), 5);
-    assert_eq!(read_text(&f.ours, "SELECT name FROM users WHERE id = 4"), "dave");
-    assert_eq!(read_text(&f.ours, "SELECT name FROM users WHERE id = 5"), "erin");
+    assert_eq!(
+        read_text(&f.ours, "SELECT name FROM users WHERE id = 4"),
+        "dave"
+    );
+    assert_eq!(
+        read_text(&f.ours, "SELECT name FROM users WHERE id = 5"),
+        "erin"
+    );
 }
 
 #[test]
@@ -165,8 +181,14 @@ fn identical_insert_both_sides_is_not_a_conflict() {
 
     f.run().expect("identical insert should merge clean");
 
-    assert_eq!(read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 6"), 1);
-    assert_eq!(read_text(&f.ours, "SELECT name FROM users WHERE id = 6"), "frank");
+    assert_eq!(
+        read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 6"),
+        1
+    );
+    assert_eq!(
+        read_text(&f.ours, "SELECT name FROM users WHERE id = 6"),
+        "frank"
+    );
 }
 
 #[test]
@@ -179,7 +201,10 @@ fn convergent_delete_merges_clean() {
 
     f.run().expect("convergent delete should merge clean");
 
-    assert_eq!(read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 3"), 0);
+    assert_eq!(
+        read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 3"),
+        0
+    );
     assert_eq!(read_int(&f.ours, "SELECT count(*) FROM users"), 2);
 }
 
@@ -204,7 +229,9 @@ fn delete_update_conflicts_are_symmetric_and_atomic() {
         build(&f.ours, ours);
         build(&f.theirs, theirs);
 
-        let err = f.run().expect_err("delete/update divergence should conflict");
+        let err = f
+            .run()
+            .expect_err("delete/update divergence should conflict");
         let MergeError::Conflicts(conflicts) = err else {
             panic!("expected Conflicts, got {err:?}");
         };
@@ -280,7 +307,8 @@ fn schema_whitespace_difference_is_not_divergence() {
     );
     build(&f.theirs, "UPDATE t SET v = 2 WHERE id = 1;");
 
-    f.run().expect("whitespace-only schema difference should merge");
+    f.run()
+        .expect("whitespace-only schema difference should merge");
     assert_eq!(read_int(&f.ours, "SELECT v FROM t WHERE id = 1"), 2);
 }
 
@@ -299,7 +327,10 @@ fn foreign_key_violation_from_merge_caught() {
     copy_db(&f.base, &f.theirs);
 
     // ours deletes the parent that theirs's new child will reference.
-    build(&f.ours, "PRAGMA foreign_keys=OFF; DELETE FROM parent WHERE id = 1;");
+    build(
+        &f.ours,
+        "PRAGMA foreign_keys=OFF; DELETE FROM parent WHERE id = 1;",
+    );
     // theirs adds a child pointing at parent 1 (still present in theirs).
     build(&f.theirs, "INSERT INTO child VALUES (11, 1);");
 
@@ -358,7 +389,10 @@ fn ours_policy_keeps_our_value_on_data_conflict() {
     f.run_with(&policies("[policies]\n\"users\" = \"ours\"\n"))
         .expect("ours policy resolves the conflict");
 
-    assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 1"), 111);
+    assert_eq!(
+        read_int(&f.ours, "SELECT score FROM users WHERE id = 1"),
+        111
+    );
 }
 
 /// Under `theirs`, a DATA conflict (both edited the same row) is `REPLACEd`
@@ -372,7 +406,10 @@ fn theirs_policy_takes_their_value_on_data_conflict() {
     f.run_with(&policies("[policies]\n\"users\" = \"theirs\"\n"))
         .expect("theirs policy resolves the conflict");
 
-    assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 1"), 222);
+    assert_eq!(
+        read_int(&f.ours, "SELECT score FROM users WHERE id = 1"),
+        222
+    );
 }
 
 /// Under `theirs`, a CONFLICT-type row (both inserted the same PK with
@@ -386,8 +423,14 @@ fn theirs_policy_replaces_conflicting_insert() {
     f.run_with(&policies("[policies]\n\"users\" = \"theirs\"\n"))
         .expect("theirs policy resolves the insert conflict");
 
-    assert_eq!(read_text(&f.ours, "SELECT name FROM users WHERE id = 7"), "theirs");
-    assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 7"), 77);
+    assert_eq!(
+        read_text(&f.ours, "SELECT name FROM users WHERE id = 7"),
+        "theirs"
+    );
+    assert_eq!(
+        read_int(&f.ours, "SELECT score FROM users WHERE id = 7"),
+        77
+    );
 }
 
 #[test]
@@ -428,8 +471,14 @@ fn append_only_keeps_ours_on_conflicting_insert() {
     f.run_with(&policies("[policies]\n\"users\" = \"append-only\"\n"))
         .expect("append-only omits the conflicting insert");
 
-    assert_eq!(read_text(&f.ours, "SELECT name FROM users WHERE id = 8"), "ours");
-    assert_eq!(read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 8"), 1);
+    assert_eq!(
+        read_text(&f.ours, "SELECT name FROM users WHERE id = 8"),
+        "ours"
+    );
+    assert_eq!(
+        read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 8"),
+        1
+    );
 }
 
 /// A glob applies the policy to matching tables and leaves the rest on the
@@ -454,7 +503,10 @@ fn glob_scopes_policy_to_matching_tables() {
     f.run_with(&policies("[policies]\n\"cache_*\" = \"theirs\"\n"))
         .expect("cache_* conflict resolves to theirs");
 
-    assert_eq!(read_int(&f.ours, "SELECT v FROM cache_hot WHERE id = 1"), 222);
+    assert_eq!(
+        read_int(&f.ours, "SELECT v FROM cache_hot WHERE id = 1"),
+        222
+    );
 
     // And a conflict in the unmatched `users` table still aborts.
     let f2 = Fixture::new();

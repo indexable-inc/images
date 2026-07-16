@@ -205,8 +205,9 @@ fn labeled_texts(content: Option<&Value>) -> Vec<Labeled> {
                         if obj.get("is_error").and_then(Value::as_bool) == Some(true) =>
                     {
                         // json.dumps(content)[:400] — serialize even null.
-                        let dumped = serde_json::to_string(obj.get("content").unwrap_or(&Value::Null))
-                            .unwrap_or_else(|_| "null".to_owned());
+                        let dumped =
+                            serde_json::to_string(obj.get("content").unwrap_or(&Value::Null))
+                                .unwrap_or_else(|_| "null".to_owned());
                         out.push(Labeled::Error(dumped.chars().take(400).collect()));
                     }
                     _ => {}
@@ -269,7 +270,11 @@ fn condense(raw: &str) -> String {
                     parts.push(format!("TOOL ERROR: {}", take_chars(&text, 2000)));
                 }
                 Labeled::Text(text) => {
-                    parts.push(format!("{}: {}", role.to_uppercase(), take_chars(&text, 2000)));
+                    parts.push(format!(
+                        "{}: {}",
+                        role.to_uppercase(),
+                        take_chars(&text, 2000)
+                    ));
                 }
             }
         }
@@ -459,7 +464,10 @@ fn parse_items(s: &str) -> Vec<Item> {
         .iter()
         .filter_map(|it| {
             let obj = it.as_object()?;
-            let title = obj.get("title").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+            let title = obj
+                .get("title")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())?;
             let description = obj
                 .get("description")
                 .and_then(Value::as_str)
@@ -486,7 +494,10 @@ fn linear_key() -> Option<String> {
     {
         return Some(key);
     }
-    if let Some(key) = std::env::var("LINEAR_API_KEY").ok().filter(|v| !v.is_empty()) {
+    if let Some(key) = std::env::var("LINEAR_API_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
         return Some(key);
     }
     // Login Keychain entry (same one ci-triage uses).
@@ -585,7 +596,11 @@ pub fn hostname() -> String {
 }
 
 fn normalize_title(title: &str) -> String {
-    title.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+    title
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // --- single-flight slot ---
@@ -643,7 +658,11 @@ fn analyze(payload: &Value) {
     };
     // A rewritten/truncated transcript resets the window to the start; title
     // dedupe below keeps that from double-filing.
-    let seek_to = if state.offset <= size { state.offset } else { 0 };
+    let seek_to = if state.offset <= size {
+        state.offset
+    } else {
+        0
+    };
     if f.seek(SeekFrom::Start(seek_to)).is_err() {
         return;
     }
@@ -806,7 +825,9 @@ pub fn friction_report() {
     if let Some(cwd) = payload.get("cwd").and_then(Value::as_str)
         && is_scratch_cwd(cwd)
     {
-        log(&format!("{session}: scratch cwd {cwd}, skipping meta-session"));
+        log(&format!(
+            "{session}: scratch cwd {cwd}, skipping meta-session"
+        ));
         return;
     }
 
@@ -837,9 +858,7 @@ fn is_plain_component(s: &str) -> bool {
 /// there are headless meta-calls by construction, never mined for friction.
 fn is_scratch_cwd(cwd: &str) -> bool {
     let path = cwd.strip_prefix("/private").unwrap_or(cwd);
-    path == "/tmp"
-        || path.starts_with("/tmp/")
-        || path.starts_with("/var/folders/")
+    path == "/tmp" || path.starts_with("/tmp/") || path.starts_with("/var/folders/")
 }
 
 /// Re-spawn THIS binary as `friction-report --analyze`, detached (new session,

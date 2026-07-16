@@ -35,8 +35,7 @@ fn command_of(payload: &Value) -> String {
 
 /// True when `word` is a shell env-assignment prefix like `FOO=bar`.
 fn is_env_assignment(word: &str) -> bool {
-    regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=")
-        .is_ok_and(|re| re.is_match(word))
+    regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=").is_ok_and(|re| re.is_match(word))
 }
 
 /// `PreToolUse(Bash)`: block bare `cargo <sub>` inside indexable-inc/index|ix
@@ -47,10 +46,13 @@ pub fn cargo_guard() {
     if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
         return;
     }
-    let cwd = payload.get("cwd").and_then(Value::as_str).unwrap_or_default();
+    let cwd = payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     // The `(/|$)` keeps `ix` from also matching `index`.
-    let in_monorepo = regex::Regex::new(r"/indexable-inc/(index|ix)(/|$)")
-        .is_ok_and(|re| re.is_match(cwd));
+    let in_monorepo =
+        regex::Regex::new(r"/indexable-inc/(index|ix)(/|$)").is_ok_and(|re| re.is_match(cwd));
     if !in_monorepo {
         return;
     }

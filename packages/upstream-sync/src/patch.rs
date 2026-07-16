@@ -13,7 +13,8 @@ use lazy_regex::regex;
 /// # Errors
 /// Fails when the patch file is unreadable.
 pub fn subject(file: &Path) -> Result<String> {
-    let raw = fs::read_to_string(file).wrap_err_with(|| format!("cannot read {}", file.display()))?;
+    let raw =
+        fs::read_to_string(file).wrap_err_with(|| format!("cannot read {}", file.display()))?;
     let line = raw
         .lines()
         .find(|l| l.starts_with("Subject:"))
@@ -56,7 +57,10 @@ mod tests {
 
     #[test]
     fn slug_is_branch_safe() {
-        assert_eq!(slug("0003-fix-libstore-don-t-crash.patch"), "fix-libstore-don-t-crash");
+        assert_eq!(
+            slug("0003-fix-libstore-don-t-crash.patch"),
+            "fix-libstore-don-t-crash"
+        );
         assert_eq!(slug("0001-Add.Thing_Now.patch"), "add-thing-now");
     }
 }

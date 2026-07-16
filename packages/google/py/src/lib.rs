@@ -270,8 +270,19 @@ impl GmailClient {
     /// Fetch one message by id. `format` is `full` (default), `minimal`,
     /// `metadata`, or `raw`.
     #[pyo3(signature = (message_id, format = None))]
-    fn get_message<'py>(&self, py: Python<'py>, message_id: String, format: Option<String>) -> PyResult<Bound<'py, PyAny>> {
-        gmail_resource_future(py, Arc::clone(&self.inner), message_id, format, GmailResource::Message)
+    fn get_message<'py>(
+        &self,
+        py: Python<'py>,
+        message_id: String,
+        format: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        gmail_resource_future(
+            py,
+            Arc::clone(&self.inner),
+            message_id,
+            format,
+            GmailResource::Message,
+        )
     }
 
     /// List threads matching `query` (Gmail search syntax).
@@ -302,8 +313,19 @@ impl GmailClient {
 
     /// Fetch one thread (with its messages) by id.
     #[pyo3(signature = (thread_id, format = None))]
-    fn get_thread<'py>(&self, py: Python<'py>, thread_id: String, format: Option<String>) -> PyResult<Bound<'py, PyAny>> {
-        gmail_resource_future(py, Arc::clone(&self.inner), thread_id, format, GmailResource::Thread)
+    fn get_thread<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        format: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        gmail_resource_future(
+            py,
+            Arc::clone(&self.inner),
+            thread_id,
+            format,
+            GmailResource::Thread,
+        )
     }
 
     /// Compose and send a message.
@@ -406,9 +428,7 @@ impl GmailClient {
     /// Archive a message (remove the INBOX label).
     fn archive<'py>(&self, py: Python<'py>, message_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
-        json_future(py, async move {
-            client.archive_message(&message_id).await
-        })
+        json_future(py, async move { client.archive_message(&message_id).await })
     }
 
     /// Move a message to Trash.
@@ -426,17 +446,19 @@ impl GmailClient {
     /// Mark a message read (remove UNREAD).
     fn mark_read<'py>(&self, py: Python<'py>, message_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
-        json_future(py, async move {
-            client.mark_message_read(&message_id).await
-        })
+        json_future(
+            py,
+            async move { client.mark_message_read(&message_id).await },
+        )
     }
 
     /// Mark a message unread (add UNREAD).
     fn mark_unread<'py>(&self, py: Python<'py>, message_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
-        json_future(py, async move {
-            client.mark_message_unread(&message_id).await
-        })
+        json_future(
+            py,
+            async move { client.mark_message_unread(&message_id).await },
+        )
     }
 
     /// List labels (system + user).
@@ -557,7 +579,10 @@ impl CalendarClient {
             text,
             max_events,
         };
-        json_future(py, async move { client.list_events(&calendar, &query).await })
+        json_future(
+            py,
+            async move { client.list_events(&calendar, &query).await },
+        )
     }
 
     /// Fetch one event by id.
@@ -570,7 +595,10 @@ impl CalendarClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
         let calendar = calendar_id.unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
-        json_future(py, async move { client.get_event(&calendar, &event_id).await })
+        json_future(
+            py,
+            async move { client.get_event(&calendar, &event_id).await },
+        )
     }
 
     /// Create an event. `start` and `end` are RFC 3339 (timed) or
@@ -636,7 +664,9 @@ impl CalendarClient {
         let calendar = calendar_id.unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
         let send_updates = parse_send_updates(notify.as_deref())?;
         unit_future(py, async move {
-            client.cancel_event(&calendar, &event_id, send_updates).await
+            client
+                .cancel_event(&calendar, &event_id, send_updates)
+                .await
         })
     }
 }

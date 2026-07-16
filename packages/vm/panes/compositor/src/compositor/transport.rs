@@ -9,14 +9,14 @@
 //! needed. Events carry a connection generation so a stale thread's messages
 //! are ignored after the main loop moved on.
 
-use std::io::{BufReader, BufWriter, Write as _};
 use std::io::Write as _;
+use std::io::{BufReader, BufWriter, Write as _};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use panes_guest_transport::{Acceptor, Conn};
 pub use panes_guest_transport::ListenSpec;
+use panes_guest_transport::{Acceptor, Conn};
 use panes_protocol::{ToGuest, ToHost, read_msg, write_msg};
 use smithay::reexports::calloop::channel::Sender;
 use tracing::{debug, info, warn};

@@ -486,6 +486,9 @@ mod tests {
             select_candidate(std::slice::from_ref(&stale), root, 60_000).outcome,
             "stale"
         );
-        assert_eq!(select_candidate(&[], Path::new("/"), 60_000).outcome, "miss");
+        assert_eq!(
+            select_candidate(&[], Path::new("/"), 60_000).outcome,
+            "miss"
+        );
     }
 }

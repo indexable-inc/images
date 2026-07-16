@@ -76,9 +76,10 @@ pub async fn context(
         return session_from_start(store, &stores, id, span).await;
     };
 
-    if let (Some(session), Some(timestamp)) =
-        (anchor.provenance.session_id.clone(), anchor.provenance.timestamp)
-    {
+    if let (Some(session), Some(timestamp)) = (
+        anchor.provenance.session_id.clone(),
+        anchor.provenance.timestamp,
+    ) {
         return window_around(
             store, &stores, anchor, id, &session, timestamp, before, after,
         )
@@ -286,7 +287,10 @@ mod tests {
     }
 
     fn timestamps(view: &ContextView) -> Vec<i64> {
-        view.turns.iter().filter_map(|turn| turn.timestamp).collect()
+        view.turns
+            .iter()
+            .filter_map(|turn| turn.timestamp)
+            .collect()
     }
 
     /// Upload a sessionless record (a GitHub issue): context for it must fall

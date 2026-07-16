@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
-use panes_protocol::audio::{MAX_FRAME, SampleFormat, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR};
+use panes_protocol::audio::{
+    MAX_FRAME, SampleFormat, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR,
+};
 use panes_protocol::{read_msg_bounded, write_msg};
 
 use crate::jitter::JitterBuffer;
@@ -69,23 +71,37 @@ fn run_connection(stream: Stream) -> anyhow::Result<()> {
     // Both sides send their Hello immediately on connect (audio protocol
     // rule), so writing first cannot deadlock against the guest doing the
     // same.
-    write_msg(&mut write, &ToGuest::Hello { major: VERSION_MAJOR, minor: VERSION_MINOR })
-        .context("send hello")?;
+    write_msg(
+        &mut write,
+        &ToGuest::Hello {
+            major: VERSION_MAJOR,
+            minor: VERSION_MINOR,
+        },
+    )
+    .context("send hello")?;
     write.flush().context("flush hello")?;
 
     let mut reader = BufReader::new(stream.read);
     let first: ToHost = read_msg_bounded(&mut reader, MAX_FRAME).context("read guest hello")?;
-    let ToHost::Hello { major, minor, rate, channels, format } = first else {
+    let ToHost::Hello {
+        major,
+        minor,
+        rate,
+        channels,
+        format,
+    } = first
+    else {
         anyhow::bail!("guest spoke before Hello");
     };
-    anyhow::ensure!(major == VERSION_MAJOR, "guest audio protocol major {major} != {VERSION_MAJOR}");
+    anyhow::ensure!(
+        major == VERSION_MAJOR,
+        "guest audio protocol major {major} != {VERSION_MAJOR}"
+    );
     anyhow::ensure!(channels >= 1, "guest advertised zero channels");
     // Single-variant enum today; matching keeps a future format addition
     // from being silently played as the wrong encoding.
     let SampleFormat::S16le = format;
-    eprintln!(
-        "panes-host: audio: guest speaks {major}.{minor}, {rate} Hz x{channels} s16le"
-    );
+    eprintln!("panes-host: audio: guest speaks {major}.{minor}, {rate} Hz x{channels} s16le");
 
     let per_ms = usize::try_from(rate).context("rate")? * usize::from(channels) / 1000;
     let jitter = Arc::new(JitterBuffer::new(TARGET_MS * per_ms, MAX_MS * per_ms));

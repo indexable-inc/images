@@ -26,11 +26,21 @@ ignore = [
 # lint stage. `global_pct` is the ceiling on whole-scan `duplication_pct`
 # (measured over the gated code, i.e. after the ignore globs above are applied).
 #
-# This is a RATCHET: the measured baseline is 0.4367%, and this ceiling sits just
+# This is a RATCHET: the measured baseline is 0.4468%, and this ceiling sits just
 # above it. Lower it as duplication is removed (re-measure with `nix run .#clone
 # -- . | jq .stats.duplication_pct`). Do NOT raise it without a written reason:
 # raising it silently admits new duplication.
+#
+# 2026-07-16 (#3433): raised 0.44 -> 0.45 by the tree-wide `cargo fmt` the new
+# rust fixer lane applied. The reformat adds no duplicated logic; it expands
+# one-line expressions to multi-line rustfmt shape, so fragments that fell
+# under `min_lines = 8` before now cross it and count (0.4367% -> 0.4468%
+# measured on the same code).
 [budget]
-global_pct = 0.44
-diff_pct = 0.0
+global_pct = 0.45
+# ONE-SHOT EXCEPTION (#3454, revert tracked by #3456): the tree-wide cargo
+# fmt the new rust fixer lane applies touches 239 lines inside PRE-EXISTING
+# clone fragments, and the diff gate is not base-aware (#3455), so it counts
+# them as new duplication (6.34%). Restore 0.0 immediately after #3454 lands.
+diff_pct = 7.0
 diff_base = "origin/main"

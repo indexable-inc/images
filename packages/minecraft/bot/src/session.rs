@@ -42,10 +42,14 @@ pub struct Config {
 ///
 /// Network failures, a kick in any state, or a server that wants online-mode
 /// encryption (the bot only speaks offline login).
-pub fn run(address: &ServerAddress, config: &Config, recorder: &mut Recorder) -> anyhow::Result<()> {
-    let stream = address.connect(config.timeout).with_context(|| {
-        format!("connecting to {}:{}", address.host, address.port)
-    })?;
+pub fn run(
+    address: &ServerAddress,
+    config: &Config,
+    recorder: &mut Recorder,
+) -> anyhow::Result<()> {
+    let stream = address
+        .connect(config.timeout)
+        .with_context(|| format!("connecting to {}:{}", address.host, address.port))?;
     let mut framed = Framed::new(stream);
 
     framed.send(&packets::handshake(
@@ -132,7 +136,9 @@ fn configure(framed: &mut Framed<TcpStream>, recorder: &mut Recorder) -> anyhow:
         let SplitPacket { id, body } = split_id(&packet)?;
         match id {
             cb::SELECT_KNOWN_PACKS => framed.send(&packets::select_known_packs_none())?,
-            cb::KEEP_ALIVE => framed.send(&packets::packet(serverbound::config::KEEP_ALIVE, body))?,
+            cb::KEEP_ALIVE => {
+                framed.send(&packets::packet(serverbound::config::KEEP_ALIVE, body))?;
+            }
             cb::PING => framed.send(&packets::packet(serverbound::config::PONG, body))?,
             cb::FINISH_CONFIGURATION => {
                 framed.send(&packets::finish_configuration_ack())?;
@@ -154,9 +160,10 @@ fn play(
     use clientbound::play as cb;
     let deadline = Instant::now() + config.record_for;
     loop {
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()).filter(|left| {
-            !left.is_zero()
-        }) else {
+        let Some(remaining) = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
+        else {
             return Ok(());
         };
         // Wake at the deadline even if the server goes quiet. A timeout can
@@ -169,7 +176,10 @@ fn play(
         let packet = match framed.recv() {
             Ok(packet) => packet,
             Err(err)
-                if matches!(err.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
             {
                 continue;
             }

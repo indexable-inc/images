@@ -3,7 +3,7 @@
 use proc_macro2::Span;
 use syn::spanned::Spanned as _;
 
-use super::{attrs, func, marker, Declared, LowerError, Result};
+use super::{Declared, LowerError, Result, attrs, func, marker};
 use crate::ir;
 
 /// Objects under construction: struct declarations plus the methods and
@@ -129,7 +129,10 @@ impl Objects {
             declaration.object.methods.extend(block.methods);
             if let Some(constructor) = block.constructor {
                 if declaration.object.constructor.is_some() {
-                    return Err(LowerError::new(constructor.span, "an object takes one constructor"));
+                    return Err(LowerError::new(
+                        constructor.span,
+                        "an object takes one constructor",
+                    ));
                 }
                 declaration.object.constructor = Some(constructor.function);
             }
@@ -204,7 +207,9 @@ fn impl_target(item: &syn::ItemImpl) -> Option<String> {
 
 fn validate_receiver(receiver: &syn::Receiver) -> Result<()> {
     // `&self` is a plain shared reference: no `mut`, no `self: Ty` form.
-    if receiver.reference.is_some() && receiver.mutability.is_none() && receiver.colon_token.is_none()
+    if receiver.reference.is_some()
+        && receiver.mutability.is_none()
+        && receiver.colon_token.is_none()
     {
         return Ok(());
     }

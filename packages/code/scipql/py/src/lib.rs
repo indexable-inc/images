@@ -235,8 +235,7 @@ mod _scipql {
         let loaded =
             scipql_core::load_index(Path::new(index_path)).map_err(|error| classify(&error))?;
         let root = root.map(PathBuf::from);
-        scipql_core::fix(&loaded, root.as_deref(), program, write)
-            .map_err(|error| classify(&error))
+        scipql_core::fix(&loaded, root.as_deref(), program, write).map_err(|error| classify(&error))
     }
 
     /// Rename every occurrence whose SCIP moniker ends with `selector` to

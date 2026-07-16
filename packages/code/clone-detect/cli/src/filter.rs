@@ -32,11 +32,9 @@ pub fn by_patterns(
     }
 
     let matches_ignore = |path: &std::path::Path| -> Result<bool, crate::RunError> {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| crate::RunError::NonUtf8Path {
-                path: path.to_path_buf(),
-            })?;
+        let path_str = path.to_str().ok_or_else(|| crate::RunError::NonUtf8Path {
+            path: path.to_path_buf(),
+        })?;
         Ok(patterns.iter().any(|pattern| pattern.matches(path_str)))
     };
 

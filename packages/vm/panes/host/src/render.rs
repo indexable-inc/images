@@ -18,8 +18,8 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice,
-    MTLDrawable, MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType,
-    MTLRegion, MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
+    MTLDrawable, MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion,
+    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
     MTLRenderPipelineState, MTLSize, MTLStoreAction, MTLTexture, MTLTextureDescriptor,
     MTLTextureUsage,
 };
@@ -63,8 +63,7 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new() -> Result<Self, String> {
-        let device =
-            MTLCreateSystemDefaultDevice().ok_or_else(|| "no Metal device".to_string())?;
+        let device = MTLCreateSystemDefaultDevice().ok_or_else(|| "no Metal device".to_string())?;
         let queue = device
             .newCommandQueue()
             .ok_or_else(|| "newCommandQueue failed".to_string())?;
@@ -89,7 +88,11 @@ impl Renderer {
             .newRenderPipelineStateWithDescriptor_error(&descriptor)
             .map_err(|error| format!("pipeline creation failed: {error}"))?;
 
-        Ok(Self { device, queue, pipeline })
+        Ok(Self {
+            device,
+            queue,
+            pipeline,
+        })
     }
 
     /// One per-window surface texture (a slot of the double buffer).
@@ -118,8 +121,16 @@ impl Renderer {
     pub fn upload(texture: &ProtocolObject<dyn MTLTexture>, rect: Rect, bytes: &[u8]) {
         debug_assert_eq!(bytes.len(), rect.w as usize * rect.h as usize * 4);
         let region = MTLRegion {
-            origin: MTLOrigin { x: rect.x as usize, y: rect.y as usize, z: 0 },
-            size: MTLSize { width: rect.w as usize, height: rect.h as usize, depth: 1 },
+            origin: MTLOrigin {
+                x: rect.x as usize,
+                y: rect.y as usize,
+                z: 0,
+            },
+            size: MTLSize {
+                width: rect.w as usize,
+                height: rect.h as usize,
+                depth: 1,
+            },
         };
         let Some(ptr) = NonNull::new(bytes.as_ptr().cast_mut()) else {
             return;

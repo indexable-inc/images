@@ -2,8 +2,8 @@
 
 use syn::spanned::Spanned as _;
 
-use super::ty::{lower_type, Position};
-use super::{attrs, marker, Declared, LowerError, Result};
+use super::ty::{Position, lower_type};
+use super::{Declared, LowerError, Result, attrs, marker};
 use crate::ir;
 
 pub(super) fn lower_record(

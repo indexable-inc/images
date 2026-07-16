@@ -501,7 +501,7 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Failure, RawBuf, Reader, Writer, STATUS_ERROR, STATUS_OK, STATUS_PANIC};
+    use super::{Failure, RawBuf, Reader, STATUS_ERROR, STATUS_OK, STATUS_PANIC, Writer};
 
     #[test]
     fn round_trips_scalars_and_prefixed_payloads() {

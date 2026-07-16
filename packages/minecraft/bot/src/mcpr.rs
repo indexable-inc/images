@@ -87,11 +87,10 @@ impl Recorder {
     ///
     /// Filesystem and zip-encoding failures, annotated with `path`.
     pub fn write(&self, path: &Path, info: &ReplayInfo) -> anyhow::Result<()> {
-        let file = File::create(path)
-            .with_context(|| format!("creating replay {}", path.display()))?;
+        let file =
+            File::create(path).with_context(|| format!("creating replay {}", path.display()))?;
         let mut archive = ZipWriter::new(file);
-        let options =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
         archive.start_file("metaData.json", options)?;
         archive.write_all(&serde_json::to_vec(&self.metadata(info))?)?;

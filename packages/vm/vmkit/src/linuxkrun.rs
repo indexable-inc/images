@@ -98,12 +98,8 @@ unsafe extern "C" {
     // `krun_disable_implicit_vsock` was called), and virtio-vsock is a mainline
     // guest driver, so this works with the stock EFI-guest kernel that TSI
     // cannot use.
-    fn krun_add_vsock_port2(
-        ctx_id: u32,
-        port: u32,
-        c_filepath: *const c_char,
-        listen: bool,
-    ) -> i32;
+    fn krun_add_vsock_port2(ctx_id: u32, port: u32, c_filepath: *const c_char, listen: bool)
+    -> i32;
 
     // macOS / libkrun-efi: boot an EFI disk under the embedded OVMF firmware.
     #[cfg(target_os = "macos")]
@@ -464,7 +460,11 @@ fn set_vsock_ports(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
     use std::os::unix::fs::FileTypeExt;
 
     let mut keep = Vec::with_capacity(boot.vsock_ports.len());
-    for VsockPort { guest_port, host_path: path } in &boot.vsock_ports {
+    for VsockPort {
+        guest_port,
+        host_path: path,
+    } in &boot.vsock_ports
+    {
         // libkrun binds the socket itself and refuses an existing path with
         // -EEXIST, so clear the stale socket a previous run left behind. Only a
         // socket: refusing to delete anything else catches a mistyped path

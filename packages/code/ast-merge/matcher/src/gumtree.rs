@@ -202,8 +202,14 @@ impl<'a> GumTree<'a> {
     ) {
         siblings::by_position(
             &siblings::Input {
-                a: SiblingNodes { ids: a_ids, nodes: nodes_a },
-                b: SiblingNodes { ids: b_ids, nodes: nodes_b },
+                a: SiblingNodes {
+                    ids: a_ids,
+                    nodes: nodes_a,
+                },
+                b: SiblingNodes {
+                    ids: b_ids,
+                    nodes: nodes_b,
+                },
                 root_a: self.tree_a.root_node(),
                 root_b: self.tree_b.root_node(),
             },

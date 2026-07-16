@@ -82,9 +82,9 @@ fn attr_element(name: &str) -> Result<String> {
         .chars()
         .next()
         .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '\''));
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '\'')
+        });
     if bare {
         return Ok(name.to_owned());
     }
@@ -156,8 +156,10 @@ pub fn remote(target: &Target, run_as: RunAs, argv: &[&str]) -> Result<Invocatio
     words.extend(argv);
     let command = shlex::try_join(words).context("rendering remote command")?;
 
-    let mut ssh_args: Vec<String> =
-        SSH_OPTIONS.iter().map(|option| (*option).to_owned()).collect();
+    let mut ssh_args: Vec<String> = SSH_OPTIONS
+        .iter()
+        .map(|option| (*option).to_owned())
+        .collect();
     ssh_args.push(target.ssh_destination());
     ssh_args.push(command);
     Ok(Invocation {
@@ -201,8 +203,7 @@ mod tests {
 
     #[test]
     fn builds_the_system_closure() {
-        let invocation =
-            build(&Installable::darwin_system(".", "mac1")).expect("renders");
+        let invocation = build(&Installable::darwin_system(".", "mac1")).expect("renders");
         assert_eq!(invocation.program, "nix");
         assert_eq!(
             invocation.args,
@@ -222,7 +223,12 @@ mod tests {
         assert_eq!(invocation.program, "nix");
         assert_eq!(
             invocation.args,
-            ["copy", "--to", "ssh://admin@mac1.local", "/nix/store/abc-system"]
+            [
+                "copy",
+                "--to",
+                "ssh://admin@mac1.local",
+                "/nix/store/abc-system"
+            ]
         );
         assert_eq!(invocation.env.len(), 1);
         assert_eq!(invocation.env[0].name, "NIX_SSHOPTS");
@@ -234,7 +240,13 @@ mod tests {
         let invocation = remote(
             &target("admin@mac1.local"),
             RunAs::Root,
-            &["nix-env", "--profile", "/nix/var/nix/profiles/system", "--set", "/nix/store/abc"],
+            &[
+                "nix-env",
+                "--profile",
+                "/nix/var/nix/profiles/system",
+                "--set",
+                "/nix/store/abc",
+            ],
         )
         .expect("renders");
         assert_eq!(invocation.program, "ssh");
@@ -251,12 +263,20 @@ mod tests {
 
     #[test]
     fn remote_root_commands_skip_sudo_for_root() {
-        let invocation =
-            remote(&target("root@mac1.local"), RunAs::Root, &["/nix/store/abc/activate"])
-                .expect("renders");
+        let invocation = remote(
+            &target("root@mac1.local"),
+            RunAs::Root,
+            &["/nix/store/abc/activate"],
+        )
+        .expect("renders");
         assert_eq!(
             invocation.args,
-            ["-o", "BatchMode=yes", "root@mac1.local", "/nix/store/abc/activate"]
+            [
+                "-o",
+                "BatchMode=yes",
+                "root@mac1.local",
+                "/nix/store/abc/activate"
+            ]
         );
     }
 
@@ -265,7 +285,12 @@ mod tests {
         let invocation = remote(
             &target("mac1.local"),
             RunAs::SshUser,
-            &["grep", "-q", "^# nix-darwin: deprecated$", "/nix/store/abc/activate-user"],
+            &[
+                "grep",
+                "-q",
+                "^# nix-darwin: deprecated$",
+                "/nix/store/abc/activate-user",
+            ],
         )
         .expect("renders");
         assert_eq!(
@@ -281,8 +306,12 @@ mod tests {
 
     #[test]
     fn displays_a_quoted_command_line() {
-        let invocation = remote(&target("mac1.local"), RunAs::SshUser, &["readlink", "/run/current-system"])
-            .expect("renders");
+        let invocation = remote(
+            &target("mac1.local"),
+            RunAs::SshUser,
+            &["readlink", "/run/current-system"],
+        )
+        .expect("renders");
         assert_eq!(
             invocation.to_string(),
             "ssh -o 'BatchMode=yes' mac1.local 'readlink /run/current-system'"

@@ -8,7 +8,7 @@ use quote::{format_ident, quote};
 use unibind_core::ir;
 
 use crate::ctx::Ctx;
-use crate::{stream, ty, RenderError};
+use crate::{RenderError, stream, ty};
 
 /// A wrapper's argument surface, ready to splice into the generated `fn`.
 pub struct Args {
@@ -39,7 +39,8 @@ pub fn lower_args(function: &ir::Function, ctx: &Ctx<'_>) -> Result<Args, Render
     for arg in &function.args {
         let ident = ty::name_ident(arg.names.py.as_ref().unwrap_or(&arg.name))?;
         if matches!(arg.ty, ir::Type::Bytes { owned: false }) {
-            args.params.push(quote!(#ident: ::pyo3::buffer::PyBuffer<u8>));
+            args.params
+                .push(quote!(#ident: ::pyo3::buffer::PyBuffer<u8>));
             args.prologue.extend(buffer_prologue(&ident, arg));
             args.fallible = true;
         } else {

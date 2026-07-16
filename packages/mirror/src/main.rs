@@ -125,7 +125,9 @@ fn main() -> Result<()> {
                     mirror_repo: repo
                         .as_deref()
                         .or_else(|| entry.as_ref().map(|entry| entry.repo.as_str())),
-                    description: entry.as_ref().and_then(|entry| entry.description.as_deref()),
+                    description: entry
+                        .as_ref()
+                        .and_then(|entry| entry.description.as_deref()),
                     flake_attr: entry.as_ref().and_then(|entry| entry.flake_attr.as_deref()),
                 },
             )?;

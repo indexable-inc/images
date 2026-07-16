@@ -68,9 +68,9 @@ pub fn refresh_pr(slug: &Slug, number: u64) -> Result<Option<Pr>> {
 #[must_use]
 pub fn subject_tokens(subject: &str) -> Vec<String> {
     const STOP: &[&str] = &[
-        "add", "fix", "the", "and", "for", "with", "from", "into", "when", "test", "tests",
-        "doc", "docs", "note", "feature", "command", "support", "allow", "make", "use",
-        "libstore", "libutil", "libexpr", "nix", "build", "status",
+        "add", "fix", "the", "and", "for", "with", "from", "into", "when", "test", "tests", "doc",
+        "docs", "note", "feature", "command", "support", "allow", "make", "use", "libstore",
+        "libutil", "libexpr", "nix", "build", "status",
     ];
     let lower = subject.to_lowercase();
     let mut seen: Vec<String> = Vec::new();
@@ -144,7 +144,10 @@ pub fn read(ctx: &str, path: &str, jq: &str) -> Result<Option<String>> {
     if !res.ok() {
         eprintln!(
             "{}",
-            paint(YELLOW, &format!("upstream-sync: drift: {ctx}: gh api {path} failed; cell left unknown"))
+            paint(
+                YELLOW,
+                &format!("upstream-sync: drift: {ctx}: gh api {path} failed; cell left unknown")
+            )
         );
         return Ok(None);
     }
@@ -157,7 +160,9 @@ mod tests {
 
     #[test]
     fn tokens_drop_stopwords_short_words_and_dupes() {
-        let t = subject_tokens("fix libstore: don't crash the daemon when a daemon GC-roots scan races");
+        let t = subject_tokens(
+            "fix libstore: don't crash the daemon when a daemon GC-roots scan races",
+        );
         assert_eq!(t, vec!["crash", "daemon", "roots", "scan", "races"]);
     }
 

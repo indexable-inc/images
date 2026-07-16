@@ -12,15 +12,19 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use unibind_core::ir;
 
+use crate::RenderError;
 use crate::function::{doc_attrs, render_callable, wrapper_parts};
 use crate::ty::{self, TyCtx};
-use crate::RenderError;
 
 pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
     let user = ctx.user;
     let name = ty::name_ident(&object.name)?;
     let handle = ty::object_handle_ident(object);
-    let js_name = object.names.ts.clone().unwrap_or_else(|| object.name.clone());
+    let js_name = object
+        .names
+        .ts
+        .clone()
+        .unwrap_or_else(|| object.name.clone());
 
     // Resources track closedness so close() is idempotent and Drop can
     // warn about leaks; plain objects carry no extra state.
@@ -152,12 +156,16 @@ fn render_constructor(
 /// resolves to a no-op. Async user closes decide the winner at first poll,
 /// which still admits exactly one.
 fn resource_surface(object: &ir::Object) -> Result<TokenStream, RenderError> {
-    let close = object.methods.iter().find(|method| is_close(method)).ok_or_else(|| {
-        RenderError::new(format!(
-            "`{}` is a resource without a close method; lowering guarantees one",
-            object.name
-        ))
-    })?;
+    let close = object
+        .methods
+        .iter()
+        .find(|method| is_close(method))
+        .ok_or_else(|| {
+            RenderError::new(format!(
+                "`{}` is a resource without a close method; lowering guarantees one",
+                object.name
+            ))
+        })?;
     let docs = doc_attrs(&close.docs);
     Ok(match close.asyncness {
         ir::Asyncness::Sync => {

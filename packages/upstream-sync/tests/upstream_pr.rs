@@ -21,7 +21,11 @@ fn git(cwd: &Path, args: &[&str]) {
         .env("GIT_COMMITTER_EMAIL", "t@t")
         .output()
         .unwrap();
-    assert!(out.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -40,12 +44,30 @@ fn dry_run_applies_closure_onto_upstream_tip() {
     git(&upstream, &["commit", "--quiet", "-m", "base"]);
     fs::write(upstream.join("README"), "hello widget\n").unwrap();
     git(&upstream, &["add", "."]);
-    git(&upstream, &["commit", "--quiet", "-m", "fakefix: repair widget\n\nThis explains why."]);
+    git(
+        &upstream,
+        &[
+            "commit",
+            "--quiet",
+            "-m",
+            "fakefix: repair widget\n\nThis explains why.",
+        ],
+    );
     let patches = root.join("patches");
     fs::create_dir(&patches).unwrap();
-    git(&upstream, &["format-patch", "-1", "-o", &patches.display().to_string()]);
+    git(
+        &upstream,
+        &["format-patch", "-1", "-o", &patches.display().to_string()],
+    );
     git(&upstream, &["reset", "--quiet", "--hard", "HEAD~1"]);
-    let patch_name = fs::read_dir(&patches).unwrap().next().unwrap().unwrap().file_name().into_string().unwrap();
+    let patch_name = fs::read_dir(&patches)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .file_name()
+        .into_string()
+        .unwrap();
 
     fs::write(
         patches.join("dag.json"),
@@ -69,15 +91,34 @@ fn dry_run_applies_closure_onto_upstream_tip() {
     ];
     let run = run_bin(
         env!("CARGO_BIN_EXE_upstream-pr"),
-        &["--dry-run", "--mapping", &mapping.display().to_string(), "fake", &patch_name],
+        &[
+            "--dry-run",
+            "--mapping",
+            &mapping.display().to_string(),
+            "fake",
+            &patch_name,
+        ],
         root,
         &envs,
     );
-    assert_eq!(run.status, 0, "dry run failed:\n{}\n{}", run.stdout, run.stderr);
-    assert!(run.stdout.contains("upstream default branch is main"), "{}", run.stdout);
-    assert!(run.stdout.contains("applied 1 commit(s) cleanly"), "{}", run.stdout);
+    assert_eq!(
+        run.status, 0,
+        "dry run failed:\n{}\n{}",
+        run.stdout, run.stderr
+    );
     assert!(
-        run.stdout.contains("--dry-run: would push branch upstream-pr/fake/fakefix-repair-widget"),
+        run.stdout.contains("upstream default branch is main"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("applied 1 commit(s) cleanly"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("--dry-run: would push branch upstream-pr/fake/fakefix-repair-widget"),
         "{}",
         run.stdout
     );
@@ -89,6 +130,9 @@ fn dry_run_applies_closure_onto_upstream_tip() {
         .find_map(|l| l.strip_prefix("upstream-pr: scratch repo left for inspection: "))
         .unwrap()
         .to_owned();
-    assert!(Path::new(&scratch).join(".git").exists(), "scratch repo missing: {scratch}");
+    assert!(
+        Path::new(&scratch).join(".git").exists(),
+        "scratch repo missing: {scratch}"
+    );
     fs::remove_dir_all(&scratch).unwrap();
 }

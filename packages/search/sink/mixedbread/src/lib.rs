@@ -651,7 +651,7 @@ mod tests {
             ) -> search_core::Result<$output> {
                 self.inner
                     .$method(stores, $query, top_k, options, filters)
-                .await
+                    .await
             }
         };
         (chunks) => {

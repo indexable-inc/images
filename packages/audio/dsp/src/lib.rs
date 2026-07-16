@@ -249,7 +249,10 @@ mod tests {
         }
 
         let leading = &misaligned_out[..CHUNK_SAMPLES];
-        assert!(leading.iter().all(|s| *s == 0.0), "expected leading silence");
+        assert!(
+            leading.iter().all(|s| *s == 0.0),
+            "expected leading silence"
+        );
         let shifted = &misaligned_out[CHUNK_SAMPLES..];
         assert_eq!(
             &aligned_out[..shifted.len()],

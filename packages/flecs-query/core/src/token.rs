@@ -123,7 +123,9 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ParseError> {
             b'=' if bytes.get(pos + 1) == Some(&b'=') => {
                 wide_punct(TokenKind::EqEq, start, &mut pos)
             }
-            b'!' if bytes.get(pos + 1) == Some(&b'=') => wide_punct(TokenKind::Neq, start, &mut pos),
+            b'!' if bytes.get(pos + 1) == Some(&b'=') => {
+                wide_punct(TokenKind::Neq, start, &mut pos)
+            }
             b'!' => punct(TokenKind::Bang, start, &mut pos),
             b'~' if bytes.get(pos + 1) == Some(&b'=') => {
                 wide_punct(TokenKind::Match, start, &mut pos)
@@ -195,10 +197,7 @@ const fn punct_width(kind: TokenKind, start: usize, pos: &mut usize, width: usiz
     Token {
         kind,
         text: String::new(),
-        span: Span {
-            start,
-            end: *pos,
-        },
+        span: Span { start, end: *pos },
     }
 }
 
@@ -213,10 +212,7 @@ fn lex_number(src: &str, start: usize, pos: &mut usize) -> Token {
     Token {
         kind: TokenKind::Number,
         text: src[start..*pos].to_owned(),
-        span: Span {
-            start,
-            end: *pos,
-        },
+        span: Span { start, end: *pos },
     }
 }
 
@@ -234,10 +230,7 @@ fn lex_string(src: &str, start: usize, pos: &mut usize) -> Result<Token, ParseEr
                 return Ok(Token {
                     kind: TokenKind::Str,
                     text,
-                    span: Span {
-                        start,
-                        end: *pos,
-                    },
+                    span: Span { start, end: *pos },
                 });
             }
             Some(b'\\') => {
@@ -334,10 +327,7 @@ fn lex_ident(src: &str, start: usize, pos: &mut usize) -> Result<Token, ParseErr
                 break;
             }
             b'>' => {
-                return Err(ParseError::new(
-                    "> without < in identifier",
-                    Span::at(*pos),
-                ));
+                return Err(ParseError::new("> without < in identifier", Span::at(*pos)));
             }
             _ => break,
         }
@@ -346,9 +336,6 @@ fn lex_ident(src: &str, start: usize, pos: &mut usize) -> Result<Token, ParseErr
     Ok(Token {
         kind: TokenKind::Ident,
         text,
-        span: Span {
-            start,
-            end: *pos,
-        },
+        span: Span { start, end: *pos },
     })
 }

@@ -290,11 +290,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &App) {
             Style::new().fg(badge.color).bold(),
         ));
     }
-    if app
-        .entries
-        .iter()
-        .all(|entry| entry.state == State::Clean)
-    {
+    if app.entries.iter().all(|entry| entry.state == State::Clean) {
         spans.push(Span::styled(
             "  ✓ all clean",
             Style::new().fg(Color::Green).bold(),
