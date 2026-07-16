@@ -23,6 +23,14 @@ on:
         description: "Client id of a GitHub App (contents + pull-requests write) that authors the bump PR; empty falls back to GITHUB_TOKEN, whose PRs never get pull_request CI on private repos."
         type: string
         default: ""
+      runner-label:
+        description: Runner label for the update job
+        type: string
+        default: ubuntu-latest
+      nix-preinstalled:
+        description: Whether the selected runner already provides Nix
+        type: boolean
+        default: false
       escalate-after-hours:
         description: "Hours the rolling bump PR may stay failing before the escalate job alerts; see the escalate job below."
         type: number
@@ -46,7 +54,11 @@ permissions:
 
 jobs:
   update-flake-lock:
-    runs-on: ubuntu-latest
+    # Schedule/dispatch have no workflow_call inputs, so retain the hosted
+    # default for index itself and for callers that have not opted into a
+    # Nix-owned runner profile.
+    runs-on: ${{ inputs.runner-label || 'ubuntu-latest' }}
+    timeout-minutes: 15
     permissions:
       contents: write
       id-token: write
@@ -63,6 +75,7 @@ jobs:
       # #2064 introduced the local action). Referencing the action by repo
       # resolves it from index@main regardless of which repo called the job.
       - name: Install Determinate Nix
+        if: ${{ !inputs.nix-preinstalled }}
         uses: indexable-inc/index/.github/actions/install-nix@main
 
       # Underscore digit separators require the patched client in index and in
