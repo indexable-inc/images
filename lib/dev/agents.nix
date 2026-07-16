@@ -95,7 +95,7 @@ in {
         # `cleanupPeriodDays` (default 30), the only on-disk record of a run's
         # prompts, tool calls, and reasoning. Retention is free - local JSONL on
         # the guest disk - so we pay disk rather than lose the audit trail.
-        cleanupPeriodDays = 999_999;
+        cleanupPeriodDays = 999999;
       };
     })
   ];

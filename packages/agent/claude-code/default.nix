@@ -241,7 +241,7 @@
   defaultFeatures = {
     context1M = false;
     cron = false;
-    autoCompactWindow = 300_000;
+    autoCompactWindow = 300000;
   };
   unknownFeatures = lib.subtractLists (builtins.attrNames defaultFeatures) (builtins.attrNames features);
   effectiveFeatures =

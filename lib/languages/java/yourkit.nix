@@ -16,7 +16,7 @@
 
   Refs: https://www.yourkit.com/docs/java/help/startup_options.jsp
   */
-  defaultPort = 10_001;
+  defaultPort = 10001;
 
   /**
   Resolve the YourKit agent's `libyjpagent` path for the host the
@@ -31,10 +31,10 @@
       isLinux
       isDarwin
       isAarch64
-      isx86_64
+      isx8664
       ;
   in
-    if isLinux && isx86_64
+    if isLinux && isx8664
     then "bin/linux-x86-64/libyjpagent.so"
     else if isLinux && isAarch64
     then "bin/linux-arm-64/libyjpagent.so"

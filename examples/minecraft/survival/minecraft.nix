@@ -30,7 +30,7 @@ in {
       enable = true;
       version = "26.1.2";
       paper.enable = true;
-      port = 25_566;
+      port = 25566;
       openFirewall = false;
 
       properties = {

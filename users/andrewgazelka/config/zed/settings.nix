@@ -53,7 +53,7 @@
   buffer_font_size = 10;
   buffer_font_weight = 200;
   buffer_line_height = {
-    custom = 1.100_000_023_841_858;
+    custom = 1.100000023841858;
   };
   centered_layout = {
     left_padding = 0;

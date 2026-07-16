@@ -7,7 +7,7 @@
 }: let
   headHost = nodes.ray-head.config.ix.networking.eastWest.hostName;
   gcsPort = 6379;
-  clientPort = 10_001;
+  clientPort = 10001;
   rayAddress = "${headHost}:${toString gcsPort}";
   rayCli = import ./cli.nix {
     inherit

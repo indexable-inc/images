@@ -27,7 +27,7 @@ telemetry, so it travels the log -> view path, never the OTel collector.
   #
   # This constant is load-bearing: the offset is declared once here and applied
   # identically by the table DDL, the loader query, and the round-trip check.
-  coordOffset = 1_048_576; # 2^20
+  coordOffset = 1048576; # 2^20
 
   # Columns in storage order. `mortonAxis` marks the three columns that are
   # interleaved into the Z-order curve; their order is the axis order passed to

@@ -37,8 +37,8 @@ reached across nodes here, so they are left unexposed.
   ports = {
     nodeManager = 6380;
     objectManager = 6381;
-    workerLow = 10_002;
-    workerHigh = 10_031;
+    workerLow = 10002;
+    workerHigh = 10031;
   };
 
   # A short temp-dir keeps Ray's AF_UNIX socket paths under the 108-byte

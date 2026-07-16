@@ -28,8 +28,8 @@
     syntaxHighlighting.enable = true;
 
     history = {
-      size = 50_000;
-      save = 50_000;
+      size = 50000;
+      save = 50000;
       path = "${config.xdg.stateHome}/zsh_history";
       ignoreDups = true;
       ignoreAllDups = true;

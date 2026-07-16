@@ -90,7 +90,7 @@ in {
     session_serialization = true;
     serialize_pane_viewport = true;
     scrollback_editor = "nvim";
-    scroll_buffer_size = 50_000;
+    scroll_buffer_size = 50000;
     show_startup_tips = false;
     default_layout = "compact";
 

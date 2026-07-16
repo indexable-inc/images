@@ -26,119 +26,119 @@
 # without testing `mas install` with them first.
 {
   # ── Apple: developer tools ─────────────────────────────────────────────
-  Xcode = 497_799_835;
-  TestFlight = 899_247_664;
-  "Apple Developer" = 640_199_958;
-  "Apple Configurator 2" = 1_037_126_344;
-  "Swift Playground" = 1_496_833_156;
-  Transporter = 1_450_874_784;
+  Xcode = 497799835;
+  TestFlight = 899247664;
+  "Apple Developer" = 640199958;
+  "Apple Configurator 2" = 1037126344;
+  "Swift Playground" = 1496833156;
+  Transporter = 1450874784;
 
   # ── Apple: pro/creative apps ───────────────────────────────────────────
-  "Final Cut Pro" = 424_389_933;
-  "Logic Pro" = 634_148_309;
-  MainStage = 634_159_523;
-  Compressor = 424_390_742;
-  Motion = 434_290_957;
-  GarageBand = 682_658_836;
-  iMovie = 408_981_434;
+  "Final Cut Pro" = 424389933;
+  "Logic Pro" = 634148309;
+  MainStage = 634159523;
+  Compressor = 424390742;
+  Motion = 434290957;
+  GarageBand = 682658836;
+  iMovie = 408981434;
 
   # ── Apple: iWork ───────────────────────────────────────────────────────
   # Legacy Mac-specific IDs from `mas list`; the lookup API resolves only the
   # newer universal IDs (361309726/361304891/361285480), but these still
   # install correctly via `mas`. Keep as-is.
-  Pages = 409_201_541;
-  Numbers = 409_203_825;
-  Keynote = 409_183_694;
+  Pages = 409201541;
+  Numbers = 409203825;
+  Keynote = 409183694;
 
   # ── Productivity & task management ─────────────────────────────────────
-  "Things 3" = 904_280_696;
-  "OmniFocus 4" = 1_542_143_627;
-  Todoist = 585_829_637;
-  TickTick = 966_085_870;
-  "Microsoft To Do" = 1_274_495_053;
-  Structured = 1_499_198_946;
-  Fantastical = 975_937_182;
-  "Super Easy Timer" = 1_353_137_878;
+  "Things 3" = 904280696;
+  "OmniFocus 4" = 1542143627;
+  Todoist = 585829637;
+  TickTick = 966085870;
+  "Microsoft To Do" = 1274495053;
+  Structured = 1499198946;
+  Fantastical = 975937182;
+  "Super Easy Timer" = 1353137878;
 
   # ── Notes & writing ────────────────────────────────────────────────────
-  Bear = 1_091_189_122;
-  Ulysses = 1_225_570_693;
-  "iA Writer" = 775_737_590;
-  Drafts = 1_435_957_248;
-  Agenda = 1_287_445_660;
-  "Day One" = 1_055_511_498;
-  Goodnotes = 1_444_383_602;
-  Notability = 360_593_530;
-  Craft = 1_487_937_127;
-  CotEditor = 1_024_640_650;
+  Bear = 1091189122;
+  Ulysses = 1225570693;
+  "iA Writer" = 775737590;
+  Drafts = 1435957248;
+  Agenda = 1287445660;
+  "Day One" = 1055511498;
+  Goodnotes = 1444383602;
+  Notability = 360593530;
+  Craft = 1487937127;
+  CotEditor = 1024640650;
 
   # ── Microsoft Office & services ────────────────────────────────────────
-  "Microsoft Word" = 462_054_704;
-  "Microsoft Excel" = 462_058_435;
-  "Microsoft PowerPoint" = 462_062_816;
-  "Microsoft Outlook" = 985_367_838;
-  "Microsoft OneNote" = 784_801_555;
-  OneDrive = 823_766_827;
-  "Windows App" = 1_295_203_466;
+  "Microsoft Word" = 462054704;
+  "Microsoft Excel" = 462058435;
+  "Microsoft PowerPoint" = 462062816;
+  "Microsoft Outlook" = 985367838;
+  "Microsoft OneNote" = 784801555;
+  OneDrive = 823766827;
+  "Windows App" = 1295203466;
 
   # ── Communication ──────────────────────────────────────────────────────
-  "Slack for Desktop" = 803_453_959;
-  Telegram = 747_648_890;
-  "WhatsApp Messenger" = 310_633_997;
-  LINE = 539_883_307;
+  "Slack for Desktop" = 803453959;
+  Telegram = 747648890;
+  "WhatsApp Messenger" = 310633997;
+  LINE = 539883307;
 
   # ── Safari extensions ──────────────────────────────────────────────────
-  "AdGuard for Safari" = 1_440_147_259;
-  "Wipr 2" = 1_662_217_862;
-  "1Blocker" = 1_365_531_024;
-  Vinegar = 1_591_303_229;
-  "Baking Soda" = 1_601_151_613;
-  Userscripts = 1_463_298_887;
-  Tampermonkey = 6_738_342_400;
-  "1Password for Safari" = 1_569_813_296;
-  "Dark Reader for Safari" = 1_438_243_180;
+  "AdGuard for Safari" = 1440147259;
+  "Wipr 2" = 1662217862;
+  "1Blocker" = 1365531024;
+  Vinegar = 1591303229;
+  "Baking Soda" = 1601151613;
+  Userscripts = 1463298887;
+  Tampermonkey = 6738342400;
+  "1Password for Safari" = 1569813296;
+  "Dark Reader for Safari" = 1438243180;
 
   # ── Security & networking ──────────────────────────────────────────────
-  WireGuard = 1_451_685_025;
-  Tailscale = 1_475_387_142;
-  Bitwarden = 1_352_778_147;
-  "Speedtest by Ookla" = 1_153_157_709;
+  WireGuard = 1451685025;
+  Tailscale = 1475387142;
+  Bitwarden = 1352778147;
+  "Speedtest by Ookla" = 1153157709;
 
   # ── Utilities ──────────────────────────────────────────────────────────
-  Amphetamine = 937_984_704;
-  Magnet = 441_258_766;
-  "Hidden Bar" = 1_452_453_066;
-  "The Unarchiver" = 425_424_353;
-  Keka = 470_158_793;
-  DaisyDisk = 411_643_860;
-  CleanMyMac = 1_339_170_533;
-  Velja = 1_607_635_845;
-  Yoink = 457_622_435;
-  Paste = 967_805_235;
-  Pastebot = 1_179_623_856;
-  "Screens 5" = 1_663_047_912;
-  Actions = 1_586_435_171;
-  Shortery = 1_594_183_810;
-  "Gestimer 2" = 6_447_125_648;
-  Dato = 1_470_584_107;
-  RocketSim = 1_504_940_162;
+  Amphetamine = 937984704;
+  Magnet = 441258766;
+  "Hidden Bar" = 1452453066;
+  "The Unarchiver" = 425424353;
+  Keka = 470158793;
+  DaisyDisk = 411643860;
+  CleanMyMac = 1339170533;
+  Velja = 1607635845;
+  Yoink = 457622435;
+  Paste = 967805235;
+  Pastebot = 1179623856;
+  "Screens 5" = 1663047912;
+  Actions = 1586435171;
+  Shortery = 1594183810;
+  "Gestimer 2" = 6447125648;
+  Dato = 1470584107;
+  RocketSim = 1504940162;
 
   # ── Media & creative (third-party) ─────────────────────────────────────
-  "Pixelmator Pro" = 1_289_583_905;
-  Photomator = 1_444_636_541;
-  Infuse = 1_136_220_934;
-  djay = 450_527_929;
-  Shazam = 897_118_787;
-  Endel = 1_346_247_457;
+  "Pixelmator Pro" = 1289583905;
+  Photomator = 1444636541;
+  Infuse = 1136220934;
+  djay = 450527929;
+  Shazam = 897118787;
+  Endel = 1346247457;
 
   # ── Reading, weather & lifestyle ───────────────────────────────────────
-  "Reeder." = 6_475_002_485;
-  "Reeder Classic." = 1_529_448_980;
-  "Amazon Kindle" = 302_584_613;
-  Parcel = 375_589_283;
-  "CARROT Weather" = 993_487_541;
-  Mela = 1_568_924_476;
-  "Flighty – Live Flight Tracker" = 1_358_823_008;
-  Portal = 1_436_994_560;
-  "Home Assistant" = 1_099_568_401;
+  "Reeder." = 6475002485;
+  "Reeder Classic." = 1529448980;
+  "Amazon Kindle" = 302584613;
+  Parcel = 375589283;
+  "CARROT Weather" = 993487541;
+  Mela = 1568924476;
+  "Flighty – Live Flight Tracker" = 1358823008;
+  Portal = 1436994560;
+  "Home Assistant" = 1099568401;
 }

@@ -22,13 +22,13 @@
       };
       "minecraft:audio/background_music" = {
         creative = {
-          max_delay = 24_000;
-          min_delay = 12_000;
+          max_delay = 24000;
+          min_delay = 12000;
           sound = "minecraft:music.creative";
         };
         default = {
-          max_delay = 24_000;
-          min_delay = 12_000;
+          max_delay = 24000;
+          min_delay = 12000;
           sound = "minecraft:music.game";
         };
       };
@@ -105,7 +105,7 @@
         tick_delay = 6000;
       };
       "minecraft:audio/background_music".default = {
-        max_delay = 24_000;
+        max_delay = 24000;
         min_delay = 6000;
         replace_current_music = true;
         sound = "minecraft:music.end";

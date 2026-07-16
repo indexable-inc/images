@@ -1209,7 +1209,7 @@
   # on 0.24's surface, exercised by the import-smoke check). setuptools-scm reads
   # the version from the sdist's PKG-INFO, pinned so the build never needs a .git.
   # Upstream tests need a device, so checks are off.
-  pymobiledevice3_927 = mcpPythonInterp.pkgs.pymobiledevice3.overridePythonAttrs (old: {
+  pymobiledevice3927 = mcpPythonInterp.pkgs.pymobiledevice3.overridePythonAttrs (old: {
     inherit (pypiPins.pymobiledevice3) version;
     src = pkgs.fetchPypi {
       pname = "pymobiledevice3";
@@ -1368,7 +1368,7 @@
       # under memory pressure) carries args and results. We use Ray rather than
       # reinvent Plasma/Arrow/refcount-GC. It bundles its own cloudpickle, so a
       # function defined in a cell ships by value without a separate serializer.
-      # nixpkgs ray builds on aarch64-darwin + {aarch64,x86_64}-linux, the exact
+      # nixpkgs ray builds on aarch64-darwin + {aarch64,x8664}-linux, the exact
       # platforms the fleet and dev boxes run, so it joins the pinned interpreter
       # like any other module.
       ps.ray
@@ -1421,7 +1421,7 @@
       # the interpreter, so both ride in the same env. Cross-platform: a USB
       # iDevice + a root `tunneld` are what the developer commands need, not macOS,
       # so CI builds the whole closure and import-checks it on Linux too.
-      pymobiledevice3_927
+      pymobiledevice3927
       iphoneModule
     ]
     # Ray's `client` extra (grpcio): `fabric.remote` attaches to the fleet head
@@ -1765,7 +1765,7 @@
         assert "partial" in repr(capped).lower(), "the repr must surface truncation"
 
         # A full scan under the limit is a plain frame with no truncated flag.
-        full = await fsearch.grep("needle", big, limit=100_000)
+        full = await fsearch.grep("needle", big, limit=100000)
         assert full.height == 1000, full.height
         assert not isinstance(full, fsearch.PartialFrame)
         assert not hasattr(full, "truncated")
@@ -1773,7 +1773,7 @@
         # A timeout returns the matches found before the deadline, not nothing.
         # A tiny timeout over the big tree is very likely to trip; if the machine
         # is fast enough to finish, the assertion below tolerates a complete scan.
-        timed = await fsearch.grep("needle", big, limit=10_000_000, timeout=0.001)
+        timed = await fsearch.grep("needle", big, limit=10000000, timeout=0.001)
         if isinstance(timed, fsearch.PartialFrame):
             assert timed.truncated is True
             assert "timed out" in timed.reason, timed.reason
@@ -3181,7 +3181,7 @@
     # A huge llm_result is clipped to the same cap as any other text mime, so it
     # can never bypass the limit into the store / each dashboard poll.
     big = runtime._result_bundle(
-        runtime.Result(user_html="<b>x</b>", llm_result="z" * 500_000, llm_images=[b"\x89PNG\r\n"])
+        runtime.Result(user_html="<b>x</b>", llm_result="z" * 500000, llm_images=[b"\x89PNG\r\n"])
     )
     big_text = json.loads(big["data"][runtime.IX_LLM_MIME])["text"]
     assert big_text.endswith("[truncated]") and len(big_text) <= runtime._MAX_TEXT_BUNDLE + 32, len(big_text)
@@ -3719,7 +3719,7 @@
     apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
     def ns(dt):
-        return int((dt - apple_epoch).total_seconds() * 1_000_000_000)
+        return int((dt - apple_epoch).total_seconds() * 1000000000)
 
     t1 = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
     t2 = datetime(2024, 1, 2, 3, 5, 5, tzinfo=timezone.utc)
@@ -4079,7 +4079,7 @@
     wide = pl.DataFrame({f"c{j}": range(40) for j in range(40)})
     wout = view.df_html(wide)
     assert 'style="color:' not in wout, "cells must be class-styled, not inline"
-    assert len(wout) < 130_000, len(wout)
+    assert len(wout) < 130000, len(wout)
 
     # Nested List(Struct)/Struct cells render as boxed sub-tables, not a
     # truncated str(value): the inner field values must reach the HTML.
@@ -4640,7 +4640,7 @@
     show = {
         "packages": {
             "aarch64-darwin": {"mcp": {"type": "derivation", "description": "the mcp"}},
-            "x86_64-linux": {},
+            "x8664-linux": {},
         },
         "nixosConfigurations": {"host": {"type": "nixos-configuration"}},
     }
@@ -4660,7 +4660,7 @@
     assert nix._eval_args(".#x", raw=True)[2] == "--raw", nix._eval_args(".#x", raw=True)
     sysd = nix._current_system()
     assert nix._eval_args(".#checks.{system}.lint")[1] == f".#checks.{sysd}.lint"
-    assert nix._eval_args(".#checks.{system}", system="x86_64-linux")[1] == ".#checks.x86_64-linux"
+    assert nix._eval_args(".#checks.{system}", system="x8664-linux")[1] == ".#checks.x8664-linux"
 
     print("nix-ok", nix.__version__)
   '';
