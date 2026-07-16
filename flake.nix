@@ -562,6 +562,12 @@
       # direct-map line, /etc/auto_master gains the include idempotently, and
       # activation reloads automountd. See modules/darwin/nfs.nix.
       nfs = ./modules/darwin/nfs.nix;
+      # Loopback service naming: http://<name>.localhost -> 127.0.0.1:<port>,
+      # via a dnsmasq *.localhost wildcard resolver and a Caddy Host-header
+      # vhost registry whose Caddyfile is validated at build time. Optional
+      # Wi-Fi DNS takeover behind `setWifiDns`. See
+      # modules/darwin/localhost-proxy.nix.
+      localhost-proxy = import ./modules/darwin/localhost-proxy.nix {inherit (ix) writeBashApplication;};
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a
