@@ -352,7 +352,7 @@ in {
     objectStoreMemory = mkOption {
       type = types.nullOr types.ints.positive;
       default = null;
-      example = 8_000_000_000;
+      example = 8000000000;
       description = ''
         Bytes of RAM for this node's object store (Plasma). Null lets Ray
         autodetect (~30% of RAM). Either way Ray spills to disk under
