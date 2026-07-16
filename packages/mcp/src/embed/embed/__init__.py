@@ -48,7 +48,7 @@ import polars as pl
 
 if TYPE_CHECKING:
     import numpy.typing as npt
-    from sentence_transformers import SentenceTransformer
+    from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]  # darwin-only optional dep (index#3417); zuban ignores per-module config
 
 __all__ = ["EmbedError", "ensure", "pairs", "similar", "texts"]
 
@@ -77,7 +77,7 @@ def _load_model() -> SentenceTransformer:
     if _model is not None:
         return _model
     try:
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]  # darwin-only optional dep (index#3417); zuban ignores per-module config
     except ImportError as exc:
         raise EmbedError(
             "embed: `sentence-transformers` (with torch) is not importable; it is "
@@ -105,7 +105,7 @@ def _model_rev() -> str:
     ref). Names the cache file, so two revisions never share vectors.
     """
     try:
-        from huggingface_hub import constants
+        from huggingface_hub import constants  # type: ignore[import-not-found]  # darwin-only optional dep (index#3417); zuban ignores per-module config
     except ImportError as exc:
         raise EmbedError(
             "embed: `huggingface_hub` is not importable; it ships with "

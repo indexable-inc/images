@@ -1642,10 +1642,6 @@
     # Pygments builds public re-exports through module __getattr__, and several
     # lexer/highlight helpers remain untyped in its partial stubs.
     "mypy-pygments.*".disallow_untyped_calls = false;
-    # embed's inference runtime is bundled on darwin only (torch/MPS), so on a
-    # Linux check env these imports have no source or stubs to resolve.
-    "mypy-sentence_transformers.*".ignore_missing_imports = true;
-    "mypy-huggingface_hub.*".ignore_missing_imports = true;
   };
   strictTypecheck = let
     # All src module package dirs go on MYPYPATH so first-party cross-imports
