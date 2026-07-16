@@ -1129,15 +1129,15 @@
       rootsForTarget = target: let
         units = crossWorkspace.unitsFor {inherit target;};
       in
-        # These three ARE the whole eval-time closure: the `import unitsNix`
-        # forces `unitsNix`, which references only `unitGraphJson` and `vendorDir`
+        # These three ARE the whole eval-time closure: importing the generated
+        # catalog forces it, and it references only `unitGraphJson` and `vendorDir`
         # (the cargo-lock it also reads is a plain flake source path, always
         # present). `cargo-vendor-config.toml` is not a fourth root: it is a
         # build input of the `unitGraphJson` builder, not on the import path and
         # not in `vendorDir`'s closure, so substituting `unitGraphJson`'s output
         # makes it moot -- the Mac never runs that builder.
         {
-          "cross-ifd-${target}-units-nix" = units.unitsNix;
+          "cross-ifd-${target}-units-nix" = units.generatedUnitCatalog;
           "cross-ifd-${target}-unit-graph" = units.unitGraphJson;
           "cross-ifd-${target}-vendor-dir" = units.vendorDir;
         };
@@ -1296,6 +1296,64 @@
       home-manager
       ;
   };
+  # This is an exec-style toolchain wrapper, so the checked Bash writer keeps
+  # Python's exit and signal behavior instead of interposing another process.
+  bumpRustNightly = ix.writeBashApplication pkgs {
+    name = "bump-rust-nightly";
+    runtimeInputs = [pkgs.python3];
+    text = ''
+      export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+      exec python3 \
+        ${paths.root + "/.github/scripts/bump-rust-nightly.py"} "$@"
+    '';
+  };
+  # The source catalog is canonical Linux data, but the command that installs
+  # it into a checkout must be executable on every supported developer host.
+  # Atomic replacement and symlink refusal are easier to audit as checked
+  # Bash than as a cross-platform sequence of Nushell filesystem operations.
+  updateCargoUnitCatalog = ix.writeBashApplication pkgs {
+    name = "update-cargo-unit-catalog";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gitMinimal
+    ];
+    text = ''
+      repo_root=$(git rev-parse --show-toplevel)
+      destination="$repo_root/tests/fixtures/cargo-unit-hello/unit-catalog"
+      for directory in \
+        "$repo_root/tests" \
+        "$repo_root/tests/fixtures" \
+        "$repo_root/tests/fixtures/cargo-unit-hello"; do
+        if [[ ! -d "$directory" || -L "$directory" ]]; then
+          printf 'refusing unsafe catalog directory: %s\n' "$directory" >&2
+          exit 1
+        fi
+      done
+      if [[ ! -f "$destination" || -L "$destination" ]]; then
+        printf 'refusing unsafe catalog destination: %s\n' "$destination" >&2
+        exit 1
+      fi
+      temporary=$(mktemp "$destination.tmp.XXXXXX")
+      trap 'rm -f "$temporary"' EXIT
+      install -m 0644 ${tests.cargoUnitGeneratedCatalog} "$temporary"
+      mv -fT "$temporary" "$destination"
+      trap - EXIT
+      printf 'updated %s\n' "$destination"
+    '';
+  };
+
+  updateRustNightlyWorkflowCheck =
+    pkgs.runCommandLocal "update-rust-nightly-workflow-check" {
+      nativeBuildInputs = [
+        pkgs.bash
+        pkgs.jq
+        pkgs.yq-go
+      ];
+    } ''
+      bash ${paths.root + "/.github/scripts/update-rust-nightly-test.sh"} \
+        ${paths.root + "/.github/workflows/update-rust-nightly.yml"}
+      touch "$out"
+    '';
 
   exampleFleets = ix.exampleFleetsFor {hostSystem = system;};
 
@@ -1418,6 +1476,7 @@
           // rustPackageSet;
         explicitChecks = {
           inherit (tests) eval;
+          update-rust-nightly-workflow = updateRustNightlyWorkflowCheck;
           # Boots a NixOS VM running the minecraft-blocks producer's Paper
           # server and asserts the BlockEvents plugin's onEnable succeeded
           # with no exception (ENG-2186). Paper's paperclip bootstrap is
@@ -1967,6 +2026,8 @@
       # means the tree is already clean.
       lint-fixed = lintFix.fixed;
       lint-fix-patch = lintFix.patch;
+      bump-rust-nightly = bumpRustNightly;
+      update-cargo-unit-catalog = updateCargoUnitCatalog;
       site-dev = site.passthru.devServer;
       update-mods = updateMods;
       update-loaders = updateLoaders;
@@ -2139,7 +2200,7 @@ in {
     # target override IS the host workspace, so these are exactly the drvs a
     # Darwin consumer's eval of the native wrappers imports.
     nativeIfdRoots = lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-      native-ifd-units-nix = crossWorkspace.units.unitsNix;
+      native-ifd-units-nix = crossWorkspace.units.generatedUnitCatalog;
       native-ifd-unit-graph = crossWorkspace.units.unitGraphJson;
       native-ifd-vendor-dir = crossWorkspace.units.vendorDir;
     };

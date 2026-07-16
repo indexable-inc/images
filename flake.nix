@@ -409,7 +409,14 @@
       // lib.genAttrs [
         "aarch64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
-    packages = withDarwinAliases (collect "packages");
+    uncheckedPackages = withDarwinAliases (collect "packages");
+    updateCatalogWrongSystems =
+      builtins.filter (
+        system: uncheckedPackages.${system}.update-cargo-unit-catalog.system != system
+      )
+      devSystems;
+    packages = assert lib.assertMsg (updateCatalogWrongSystems == [])
+    "update-cargo-unit-catalog must be host-native on: ${builtins.concatStringsSep ", " updateCatalogWrongSystems}"; uncheckedPackages;
     ciChecks = collect "ciChecks";
     cachePushRoots = withDarwinAliases (collect "cachePushRoots");
     # One evaluator pool owns every required Linux build root. Prefix closure

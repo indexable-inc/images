@@ -146,15 +146,16 @@
   Returns the generated attrset with `sourceAudit`, `units`, `roots`, `checkedRoots`,
   `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
   `policyChecks`, plus the intermediate `unitGraphJson`, `generatedUnitCatalog`,
-  `unitsNix`, and `vendorDir` derivations for inspection.
+  and `vendorDir` derivations for inspection. `unitCatalog` and its `unitsNix`
+  compatibility alias name the effective imported catalog path.
 
   `unitCatalog = ./units.nix` imports a source-owned catalog instead of the
   generated catalog. The supplied value must be a Nix path or `null`; `null`
   preserves normal generated-catalog behavior. `generatedUnitCatalog` remains
   available without being imported, so callers can compare it with the
   source-owned catalog in a normal build-time drift check. `unitsNix` remains
-  an alias of the generated derivation for compatibility; `unitCatalog` is the
-  effective import path.
+  the compatibility name for the effective `unitCatalog`; callers that need
+  the renderer output explicitly use `generatedUnitCatalog`.
 
   `testPolicyByPackage.<package>` accepts structured test-runner policy:
   `{ skip = [ "case_name" ]; testThreads = "1"; }`. `buildWorkspace` renders
@@ -722,9 +723,9 @@
         testChecksByTarget
         testChecksAll
         ;
-      # Preserve the established inspection handle while making the effective
-      # imported path explicit through `unitCatalog`.
-      unitsNix = generatedUnitCatalog;
+      # Existing consumers use unitsNix as the workspace's import path, so the
+      # compatibility handle must not bypass a supplied source-owned catalog.
+      unitsNix = unitCatalog;
       cargoConfigScript = context.configScript;
       targetSets = namedTargetSets;
       inherit (args) policy;

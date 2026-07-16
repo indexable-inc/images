@@ -18,6 +18,8 @@ nix run .#clone -- . --diff "${base_sha}" >/dev/null
 # enumerable without building planner metadata inside the evaluator. Keep this
 # as a separate lib-only lookup: the broad checks catalog intentionally still
 # contains legacy IFD consumers and would make this boundary test ambiguous.
+# This proves enumeration only; it does not sandbox evaluator fetches or harden
+# the build daemon. Those controls belong to the coordinator's trusted profile.
 catalog_drv="$(
   nix eval --raw .#lib \
     --apply 'ix: (import (ix.paths.root + "/tests/cargo-unit-catalog.nix") { inherit ix; pkgs = ix.pkgs; }).workspace.binaries.cargo-unit-hello.drvPath' \

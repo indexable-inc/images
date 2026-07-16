@@ -794,7 +794,7 @@
       nativeBuildInputs = [pkgs.coreutils];
     } ''
       if ! cmp -s ${cargoUnitCatalog} ${cargoUnitWorkspace.generatedUnitCatalog}; then
-        echo >&2 "error: cargo-unit catalog drifted; regenerate the committed catalog"
+        echo >&2 "error: cargo-unit catalog drifted; run: nix run .#update-cargo-unit-catalog"
         exit 1
       fi
       mkdir -p "$out"
@@ -4974,8 +4974,8 @@
         message = "cargo-unit workspaces should retain a build-time generated catalog for drift checks";
       }
       {
-        assertion = cargoUnitWorkspace.unitsNix == cargoUnitWorkspace.generatedUnitCatalog;
-        message = "cargo-unit unitsNix should remain the generated-catalog compatibility handle";
+        assertion = cargoUnitWorkspace.unitsNix == cargoUnitCatalog;
+        message = "cargo-unit unitsNix should remain the effective-catalog compatibility handle";
       }
       {
         assertion = !cargoUnitInvalidCatalogEval.success;
@@ -6303,6 +6303,7 @@ in {
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
   cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
   cargoUnitCatalog = cargoUnitCatalogDrift;
+  cargoUnitGeneratedCatalog = cargoUnitWorkspace.generatedUnitCatalog;
   # Validate the current R2 publication and local prebuilt-unit wrapper.
   sdkRustPrebuilt = sdkRust.artifactCheck;
   # Strict type + annotation gate over the public ix-sdk Python sources.

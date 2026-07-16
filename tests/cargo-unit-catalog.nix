@@ -45,14 +45,15 @@
       ]
     ];
   };
+  workspace = ix.cargoUnit.buildWorkspace (
+    workspaceArgs // {inherit unitCatalog;}
+  );
 in {
   inherit
     root
     src
     unitCatalog
+    workspace
     workspaceArgs
     ;
-  workspace = ix.cargoUnit.buildWorkspace (
-    workspaceArgs // {inherit unitCatalog;}
-  );
 }
