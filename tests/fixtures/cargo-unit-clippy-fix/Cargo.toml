@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/clean", "crates/dirty"]
+
+# The fix derivations take their lint set from this manifest table (the same
+# `clippyLintFlagsFromManifest` path the check gates use), so the planted
+# violation below is denied here, not via per-call policy flags.
+[workspace.lints.clippy]
+needless_return = "deny"
+
+[workspace.dependencies]
+dirty = { path = "crates/dirty" }

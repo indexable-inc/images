@@ -444,9 +444,11 @@
       # no Cargo.lock, no network, no dependency sources, so the scoped
       # fileset below suffices. CARGO_HOME points at the build temp dir
       # because cargo wants a writable home even for metadata (cwd is $out,
-      # which must stay free of cargo's cache). Formatting is the
-      # lane's only stage for now; `clippy --fix` (#3434) slots in BEFORE
-      # cargo fmt when it lands, per the formatter-last rule above.
+      # which must stay free of cargo's cache). Formatting is this
+      # transformer's only stage on purpose: `clippy --fix` (#3434) runs
+      # BEFORE it (formatter last) but on the lane's INPUT (`clippyFixed`
+      # below), keeping this function generic over trees so the lint-fix
+      # acceptance fixture can run it on a synthetic one-crate workspace.
       rust = mkLane {
         name = "rust";
         tools = [rustFmtToolchain];
@@ -528,7 +530,72 @@
         done
       '';
 
-    fixed = unite "lint-fixed" (lib.mapAttrsToList (name: lane: lane sources.${name}) lanes);
+    # Per-crate `cargo clippy --fix` (#3434): not a tool run inside a lane
+    # but a set of per-package fixed source trees off the shared workspace
+    # graph (`clippyFixByPackage`, lib/rust/cargo-unit.nix) -- the same fork
+    # clippy driver, manifest-derived lint args, and prebuilt dep rlibs as
+    # the per-crate check gates, one derivation per crate so an edit re-fixes
+    # only that crate and everything else stays a CA cache hit. x86_64-linux
+    # only: that is the one system whose clippy graph CI builds and caches
+    # (darwin has no clippy gates in CI at all), so a darwin `lint --fix`
+    # would otherwise force a CI-cold full-workspace clippy build locally;
+    # the CI autofix (#3435) runs on x86_64-linux and covers those fixes.
+    clippyFixed =
+      if system != "x86_64-linux"
+      then src: src
+      else
+        src: let
+          workspaceUnits = (ix.rustWorkspaceFor pkgs).units;
+          overlayFix = packageName: fix: let
+            audit = workspaceUnits.sourceAudit.${fix.passthru.sourceName};
+          in ''
+            overlay_fix ${lib.escapeShellArg packageName} ${fix} ${fix.src} ${
+              lib.escapeShellArg (
+                # A closure-scoped source is already workspace-root-shaped;
+                # a package-scoped tree overlays at its crate directory.
+                if audit.scope == "closure"
+                then ""
+                else audit.relative
+              )
+            }
+          '';
+        in
+          pkgs.runCommand "lint-fix-rust-clippy" contentAddressed ''
+            cp -R ${src} "$out"
+            chmod -R u+w "$out"
+            # Copy only files clippy actually changed (vs the package's
+            # scoped source): unchanged files may legitimately sit outside
+            # the lane fileset (fixture data, templates), while a CHANGED
+            # file missing from the lane tree means a fix escaped the rust
+            # fileset -- a scoping bug, so fail loudly instead of dropping
+            # the edit.
+            overlay_fix() {
+              local package="$1" fixed="$2" original="$3" prefix="$4"
+              (cd "$fixed" && find . -type f -print0) |
+                while IFS= read -r -d "" file; do
+                  rel="''${file#./}"
+                  if cmp -s "$fixed/$rel" "$original/$rel"; then
+                    continue
+                  fi
+                  dest="$out/''${prefix:+$prefix/}$rel"
+                  if [ ! -e "$dest" ]; then
+                    echo "clippy fix for $package changed ''${prefix:+$prefix/}$rel, which is outside the rust lane fileset" >&2
+                    exit 1
+                  fi
+                  cp "$fixed/$rel" "$dest"
+                done
+            }
+            ${lib.concatStrings (
+              lib.mapAttrsToList overlayFix (workspaceUnits.clippyFixByPackage or {})
+            )}
+          '';
+
+    # The rust lane's input passes through the clippy-fix overlay first, so
+    # cargo fmt formats the fixed code (formatter last) and the lane output
+    # carries both stages' edits in one tree. The patch below still diffs
+    # against the unfixed `sources`, so clippy edits land in it too.
+    laneInputs = sources // {rust = clippyFixed sources.rust;};
+    fixed = unite "lint-fixed" (lib.mapAttrsToList (name: lane: lane laneInputs.${name}) lanes);
 
     # The artifact `lint --fix` consumes: one unified diff from the lanes'
     # input snapshot to the fixed tree. Symlinking the trees as `a`/`b`
@@ -1408,6 +1475,7 @@
           {
             cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
             cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
+            cargo-unit-clippy-fix = tests.cargoUnitClippyFix;
             sdk-rust-prebuilt = tests.sdkRustPrebuilt;
             # Strict zuban + ruff ANN gate over the public ix-sdk Python sources
             # (ENG-3131); the SDK is setuptools-built, so this is its build-time
@@ -1796,6 +1864,28 @@
               diff -r ${fixedPython} ${lintFix.lanes.python fixedPython}
               diff -r ${fixedRust} ${lintFix.lanes.rust fixedRust}
               mkdir -p "$out"
+            '';
+          # Re-verification for the clippy fixers (#3434): the ordinary
+          # per-unit clippy gates re-run over the composed fixed tree
+          # (`clippyFixVerifiedByPackage`, lib/rust/cargo-unit.nix), so a
+          # machine-applied fix that breaks a dependent crate (the fork
+          # lints observe the caller, not the fixed crate) fails here
+          # rather than landing through the autofix patch. Deliberately
+          # separate from patch production: a residual unfixable finding
+          # must not block emitting the fixes that do apply. On a clean
+          # tree every fix is an identity whose content-addressed output
+          # realises to the scoped source's own store path, so these
+          # resolve to the same builds as the primary clippy gates and add
+          # no second clippy pass.
+          lint-fix-clippy-verified = let
+            verified = (ix.rustWorkspaceFor pkgs).units.clippyFixVerifiedByPackage or {};
+          in
+            pkgs.runCommand "lint-fix-clippy-verified" {
+              __structuredAttrs = true;
+              deps = lib.attrValues verified;
+            } ''
+              mkdir -p "$out"
+              printf '%s\n' ${lib.escapeShellArgs (lib.attrNames verified)} > "$out/verified-packages"
             '';
           filename-policy =
             pkgs.runCommand "filename-policy-check"

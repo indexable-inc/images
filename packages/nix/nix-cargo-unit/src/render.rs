@@ -290,6 +290,10 @@ pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<St
             render_clippy_unit_names_by_package(graph, &prepared),
         ),
         (
+            "clippy_fix_entries",
+            render_clippy_fix_entries(graph, options, &prepared)?,
+        ),
+        (
             "panic_object_unit_entries",
             render_panic_object_unit_entries(graph, options, &prepared)?,
         ),
@@ -759,10 +763,15 @@ fn collect_transitive_unit_deps(graph: &UnitGraph, index: usize, deps: &mut BTre
 // `ObjectEmit` runs `rustc` with the same flags but emits relocatable objects
 // only (`--emit obj`, no link), giving the panic-freedom scan the monomorphized
 // objects a linked binary would otherwise hide behind resolved branches.
+// `ClippyFix` is `cargo clippy --fix` in per-unit form: the same clippy
+// invocation with the lint policy capped to warnings and JSON diagnostics,
+// looped with `nix-cargo-unit apply-suggestions` against a writable source
+// copy until no `MachineApplicable` suggestion remains (#3434).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Driver {
     Rustc,
     Clippy,
+    ClippyFix,
     ObjectEmit,
 }
 
@@ -770,7 +779,7 @@ impl Driver {
     const fn binary(self) -> &'static str {
         match self {
             Self::Rustc | Self::ObjectEmit => "rustc",
-            Self::Clippy => "clippy-driver",
+            Self::Clippy | Self::ClippyFix => "clippy-driver",
         }
     }
 }
@@ -968,12 +977,12 @@ fn unit_build_script_run(graph: &UnitGraph, index: usize) -> Option<usize> {
         })
 }
 
-fn render_build_inputs(
+fn build_input_refs(
     graph: &UnitGraph,
     prepared: &PreparedGraph,
     index: usize,
     build_script_run: Option<usize>,
-) -> String {
+) -> Vec<String> {
     let mut refs: Vec<String> = graph.units[index]
         .dependencies
         .iter()
@@ -988,11 +997,24 @@ fn render_build_inputs(
         refs.push(format!("units.{}", nix_attr(&prepared.names[run_index])));
     }
 
+    refs
+}
+
+fn render_build_input_list(refs: &[String]) -> String {
     if refs.is_empty() {
         "[]".to_string()
     } else {
         format!("[ {} ]", refs.join(" "))
     }
+}
+
+fn render_build_inputs(
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+    build_script_run: Option<usize>,
+) -> String {
+    render_build_input_list(&build_input_refs(graph, prepared, index, build_script_run))
 }
 
 // Cargo sets `CARGO_BIN_EXE_<name>` for integration tests and benchmarks.
@@ -1124,7 +1146,7 @@ fn render_driver_build_phase(
                 }
             }
         }
-        Driver::Clippy => {
+        Driver::Clippy | Driver::ClippyFix => {
             // Clippy only needs MIR. Skip codegen and linking entirely.
             script.push_str("rustc_args+=( --out-dir build )\n");
             script.push_str("rustc_args+=( --emit dep-info,metadata )\n");
@@ -1139,10 +1161,18 @@ fn render_driver_build_phase(
     }
 
     script.push_str("rustc_args+=( \"''${build_script_flags[@]}\" )\n");
-    if driver == Driver::Clippy {
+    if matches!(driver, Driver::Clippy | Driver::ClippyFix) {
         // Inject the workspace's clippy lint policy (-D/-W/-A clippy::...)
         // at the rustc-args end so they override any earlier defaults.
         script.push_str("rustc_args+=( ${pkgs.lib.escapeShellArgs extraClippyLintArgs} )\n");
+    }
+    if driver == Driver::ClippyFix {
+        // A fix run treats findings as input, not verdict: cap the policy's
+        // denied lints back to warnings so the driver exits zero while still
+        // emitting every `MachineApplicable` suggestion as JSON. The ordinary
+        // per-unit clippy gate (which keeps deny) stays the verdict on the
+        // fixed tree.
+        script.push_str("rustc_args+=( --cap-lints=warn --error-format=json )\n");
     }
     append_driver_invocation(&mut script, driver, collect_unused_deps);
 
@@ -1170,8 +1200,44 @@ fn append_bin_exe_env(
     Ok(())
 }
 
+// Compile-then-apply loop for `Driver::ClippyFix`, spliced verbatim into the
+// fix derivation's build phase (`''$` keeps `${...}` literal in the rendered
+// Nix indented string). Four passes is cargo fix's own iteration bound
+// (cargo::ops::fix), so a suggestion cascade cannot spin a builder forever;
+// the loop usually breaks on pass one (clean crate) or two (fixes applied,
+// re-run quiet).
+const CLIPPY_FIX_DRIVER_LOOP: &str = "\
+clippy_fix_diagnostics=build/clippy-fix-diagnostics.jsonl
+for _clippy_fix_pass in 1 2 3 4; do
+  set +e
+  set -x
+  env \"''${rustc_env[@]}\" clippy-driver \"''${rustc_args[@]}\" 2> \"$clippy_fix_diagnostics\"
+  clippy_fix_status=$?
+  set +x
+  set -e
+  if [ \"$clippy_fix_status\" -ne 0 ]; then
+    # --cap-lints=warn already demoted every denied lint, so a nonzero driver
+    # is a genuine compile error -- possibly a suggestion applied on an earlier
+    # pass that broke the build. Surface the human-rendered diagnostics (the
+    # raw stream is JSON lines) and fail loudly.
+    jq -Rr 'fromjson? | .rendered // empty' \"$clippy_fix_diagnostics\" >&2
+    exit \"$clippy_fix_status\"
+  fi
+  applied=$(nix-cargo-unit apply-suggestions --source-root \"$src\" --diagnostics \"$clippy_fix_diagnostics\")
+  if [ \"$applied\" -eq 0 ]; then
+    break
+  fi
+done
+";
+
 fn append_driver_invocation(script: &mut String, driver: Driver, collect_unused_deps: bool) {
     let binary = driver.binary();
+    if driver == Driver::ClippyFix {
+        // The fix loop owns its own invocation, capture, and status handling.
+        debug_assert!(!collect_unused_deps);
+        script.push_str(CLIPPY_FIX_DRIVER_LOOP);
+        return;
+    }
     if collect_unused_deps {
         // `collect_unused_deps` is only ever true for the rustc driver; the
         // diagnostics-capture path is rustc-specific and reuses the rustc
@@ -1942,6 +2008,142 @@ fn render_clippy_unit_names_by_package(graph: &UnitGraph, prepared: &PreparedGra
     }
     out.push_str("    }");
     out
+}
+
+// Groups clippy-candidate units per Cargo package for the fix transformer.
+// One derivation per PACKAGE (not per unit): its units run sequentially
+// against a single writable copy of the package source, so the lib unit's
+// fix to a file is already in place when the `--test` unit of that same file
+// compiles. Separate per-unit copies would emit conflicting fixed trees with
+// no principled merge.
+fn render_clippy_fix_entries(
+    graph: &UnitGraph,
+    options: &RenderOptions,
+    prepared: &PreparedGraph,
+) -> Result<String> {
+    let mut by_package: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, unit) in graph.units.iter().enumerate() {
+        if !is_clippy_unit_candidate(unit) {
+            continue;
+        }
+        by_package
+            .entry(unit.package_name().to_string())
+            .or_default()
+            .push(index);
+    }
+    let mut entries = String::new();
+    for (package_name, indexes) in by_package {
+        write!(
+            entries,
+            "        {} = {};\n\n",
+            nix_attr(&package_name),
+            render_clippy_fix_package(graph, options, prepared, &package_name, &indexes)?
+        )?;
+    }
+    Ok(entries)
+}
+
+fn render_clippy_fix_package(
+    graph: &UnitGraph,
+    options: &RenderOptions,
+    prepared: &PreparedGraph,
+    package_name: &str,
+    indexes: &[usize],
+) -> Result<String> {
+    // The fix output is one fixed copy of one scoped source, so every unit of
+    // the package must resolve to the same source entry. The renderer scopes
+    // sources per package (see scopes_local_and_vendor_sources_per_package),
+    // so a mismatch here is a broken invariant, not a configuration.
+    let source_keys: BTreeSet<&String> = indexes
+        .iter()
+        .map(|&index| &prepared.source_refs[index])
+        .collect();
+    let [source_key] = *source_keys.iter().collect::<Vec<_>>().as_slice() else {
+        return Err(eyre!(
+            "clippy fix for package {package_name} spans multiple scoped sources: {}",
+            source_keys
+                .iter()
+                .map(|key| key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+
+    let mut build_phase = String::from(
+        "\
+# Fixes are applied to a writable copy of the scoped source; rebinding $src
+# makes every rendered \"$src/...\" path (manifest dir, crate entrypoint,
+# dep-info inputs) resolve into that copy for the driver runs below.
+cp -R \"$src\" fixed-src
+chmod -R u+w fixed-src
+src=\"$PWD/fixed-src\"
+
+",
+    );
+    let mut input_refs: BTreeSet<String> = BTreeSet::new();
+    for &index in indexes {
+        input_refs.extend(build_input_refs(
+            graph,
+            prepared,
+            index,
+            unit_build_script_run(graph, index),
+        ));
+        // Each unit runs in a subshell so its exported package and dependency
+        // environment (CARGO_*, DEP_*) cannot leak into the next unit's driver
+        // invocation, exactly as it never could across the separate per-unit
+        // check derivations this mirrors.
+        writeln!(build_phase, "# unit {}", prepared.names[index])?;
+        build_phase.push_str("(\n");
+        build_phase.push_str(&render_driver_build_phase(
+            graph,
+            options,
+            prepared,
+            index,
+            Driver::ClippyFix,
+        )?);
+        build_phase.push_str(")\n\n");
+    }
+
+    let mut attrs = Attrs::new();
+    // The store name matches the scoped source's `builtins.path` name on
+    // purpose: with content addressing, a clean package's fixed tree hashes
+    // to the SAME store path as its source (recursive sha256, no references,
+    // same name), so the re-verify graph's resolved derivations coincide
+    // with the ordinary clippy gates and dedup to zero extra builds.
+    attrs.string("name", source_key);
+    attrs.expr("src", &format!("sources.{}", nix_attr(source_key)));
+    // jq renders JSON diagnostics on driver failure; cargoUnit supplies the
+    // apply-suggestions subcommand (asserted non-null below).
+    attrs.expr(
+        "nativeBuildInputs",
+        "[ rustToolchain pkgs.jq cargoUnit ] ++ extraNativeBuildInputs ++ extraClippyNativeBuildInputs",
+    );
+    attrs.expr(
+        "buildInputs",
+        &render_build_input_list(&input_refs.iter().cloned().collect::<Vec<_>>()),
+    );
+    // Content-address the fixed tree: a clean package's output is
+    // byte-identical to its source copy, so CA early cutoff turns the
+    // whole downstream (re-verify units, the lint lane patch) into cache
+    // hits -- the incrementality #3434 is built on.
+    append_content_addressing(&mut attrs, options.content_addressed);
+    attrs.multiline("buildPhase", &build_phase);
+    attrs.multiline(
+        "installPhase",
+        &format!("{ORPHAN_OUTPUT_PRECHECK}cp -R fixed-src \"$out\"\n"),
+    );
+    // Links the fixed tree back to its `sources`/`sourceAudit` entry so
+    // composition (overlaying at the package's workspace-relative root) and
+    // re-verification (packageSourceOverrides) can be keyed without guessing.
+    attrs.expr(
+        "passthru",
+        &format!("{{ sourceName = {}; }}", nix_attr(source_key)),
+    );
+
+    Ok(format!(
+        "assert pkgs.lib.assertMsg (cargoUnit != null) \"nix-cargo-unit: clippyFixByPackage needs the cargoUnit package for apply-suggestions; pass cargoUnit to the rendered units\"; mkUnit {}",
+        attrs.render()
+    ))
 }
 
 fn cargo_package_exports(unit: &Unit) -> Result<String> {
@@ -3451,7 +3653,7 @@ mod tests {
         assert!(rendered.contains("}) // extraUnits;"));
         assert!(rendered.contains("// extraLibraries;"));
         assert!(rendered.contains("--crate-name"));
-        assert!(rendered.contains("sources = {"));
+        assert!(rendered.contains("generatedSources = {"));
         assert!(rendered.contains("scopedWorkspaceSource \"cargo-unit-source-hello-0.1.0-"));
         assert!(rendered.contains("\"\""));
         assert!(rendered.contains("src = sources."));
@@ -3471,6 +3673,95 @@ mod tests {
         assert!(rendered.contains("extraClippyLintArgs"));
         assert!(rendered.contains("clippyByPackage ="));
         assert!(rendered.contains("clippyUnitNamesByPackage ="));
+    }
+
+    #[test]
+    fn clippy_fix_groups_units_per_package_and_loops_apply_suggestions() {
+        // One package, two clippy-candidate units (the lib and its `--test`
+        // compilation): the fix transformer must fold both into ONE
+        // per-package derivation over one writable copy, not two derivations
+        // whose fixed trees would need a merge.
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024",
+                    "test": true
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "test",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: true,
+                toolchain_id: Some("rustc-test".to_string()),
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        assert!(rendered.contains("clippyFixByPackage ="));
+        // One fix derivation for the whole package, both units inside it.
+        // Named after the scoped source (not "<pkg>-clippy-fix") so a clean
+        // package's CA output realises to the source's own store path.
+        assert_eq!(
+            rendered
+                .matches("name = \"cargo-unit-source-hello-0.1.0-")
+                .count(),
+            1
+        );
+        assert_eq!(rendered.matches("# unit hello-0.1.0-").count(), 2);
+        // Writable copy + rebind, fixpoint loop, capped lints, JSON capture.
+        assert!(rendered.contains("cp -R \"$src\" fixed-src"));
+        assert!(rendered.contains("src=\"$PWD/fixed-src\""));
+        assert!(rendered.contains("rustc_args+=( --cap-lints=warn --error-format=json )"));
+        assert!(rendered.contains("nix-cargo-unit apply-suggestions --source-root \"$src\""));
+        assert!(rendered.contains("for _clippy_fix_pass in 1 2 3 4; do"));
+        // The fixed tree is the output, keyed back to its source entry.
+        assert!(rendered.contains("cp -R fixed-src \"$out\""));
+        assert!(rendered.contains("passthru = { sourceName = \"cargo-unit-source-hello-0.1.0-"));
+        // Re-verification seam: overrides replace generated sources, with
+        // unknown keys rejected.
+        assert!(rendered.contains("packageSourceOverrides ? {}"));
+        assert!(rendered.contains("generatedSources // packageSourceOverrides"));
+        assert!(rendered.contains("unknownSourceOverrides == [ ]"));
+        // apply-suggestions comes from the cargoUnit package; a graph built
+        // without it must fail the fix derivation loudly at eval.
+        assert!(rendered.contains("assert pkgs.lib.assertMsg (cargoUnit != null)"));
     }
 
     #[test]
@@ -3623,10 +3914,11 @@ mod tests {
 
         // Sibling clippy-driver units still use `--out-dir` (never `-o`), so
         // they keep extra-filename for both the lib and the bin target; only
-        // the bin's *rustc* link step drops it. Three occurrences total: the
-        // lib's rustc build, the lib's clippy build, and the bin's clippy
-        // build.
-        assert_eq!(rendered.matches("'extra-filename=").count(), 3);
+        // the bin's *rustc* link step drops it. Five occurrences total: the
+        // lib's rustc build, the lib's clippy build, the bin's clippy build,
+        // and the package's clippy-fix passes for both targets (also
+        // `--out-dir` runs).
+        assert_eq!(rendered.matches("'extra-filename=").count(), 5);
     }
 
     #[test]
@@ -3690,12 +3982,13 @@ mod tests {
 
         // The guard fires on a pre-existing, non-writable `$out` (the killed-build
         // orphan) and names the recovery recipe. One occurrence per build unit
-        // (the lib and the bin); it must land before the artifact `cp`.
+        // (the lib and the bin) plus the package's content-addressed clippy-fix
+        // transformer; it must land before the artifact `cp`.
         assert_eq!(
             rendered
                 .matches("refusing to install over a pre-existing, non-writable output path")
                 .count(),
-            2
+            3
         );
         assert!(rendered.contains("nix-store --check-validity"));
         // The guard runs first: it is prepended directly to the installPhase
@@ -4086,11 +4379,12 @@ version = "0.1.0"
         )
         .unwrap();
 
-        // The build unit (rustc) and its sibling clippy unit each set
-        // CARGO_BIN_EXE_<name> for integration tests because clippy needs the
-        // same compilation env as rustc. The count rises with the number of
-        // unit kinds that lint the integration test target.
-        assert_eq!(rendered.matches("CARGO_BIN_EXE_dag-runner=").count(), 2);
+        // The build unit (rustc), its sibling clippy unit, and the package's
+        // clippy-fix pass each set CARGO_BIN_EXE_<name> for integration tests
+        // because clippy needs the same compilation env as rustc. The count
+        // rises with the number of unit kinds that lint the integration test
+        // target.
+        assert_eq!(rendered.matches("CARGO_BIN_EXE_dag-runner=").count(), 3);
         assert!(rendered.contains("rustc_env+=( 'CARGO_BIN_EXE_dag-runner=${units."));
         assert!(!rendered.contains("export CARGO_BIN_EXE_dag-runner"));
         assert!(rendered.contains("env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\""));
@@ -5206,8 +5500,15 @@ version = "4.6.1"
         )
         .unwrap();
 
+        // The per-package clippy-fix transformer stays content-addressed (its
+        // fixed source tree IS consumed downstream, unlike a test leaf), so
+        // scope the assertion to everything before that section: the test
+        // unit itself must carry no CA attributes.
+        let fix_section = rendered
+            .find("clippyFixByPackage =")
+            .expect("rendered units.nix has a clippyFixByPackage section");
         assert!(
-            !rendered.contains("__contentAddressed = true"),
+            !rendered[..fix_section].contains("__contentAddressed = true"),
             "test units must be input-addressed even with content_addressed = true"
         );
     }
