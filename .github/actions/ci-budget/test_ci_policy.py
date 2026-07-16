@@ -65,14 +65,22 @@ class PolicyTests(unittest.TestCase):
                     not in source
                 )
 
-    def test_update_workflow_accepts_a_nix_owned_runner(self) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[2] / "workflows" / "update-flake-lock.yml"
-        ).read_text()
+    def test_update_workflow_requires_the_exact_jit_nix_runner(self) -> None:
+        workflows = Path(__file__).resolve().parents[2] / "workflows"
+        workflow = (workflows / "update-flake-lock.yml").read_text()
+        wrapper = (workflows / "update-flake-lock-index.yml").read_text()
         assert "runner-label:" in workflow
         assert "nix-preinstalled:" in workflow
-        assert "runs-on: ${{ inputs.runner-label || 'ubuntu-latest' }}" in workflow
+        assert workflow.count("runs-on: ${{ inputs.runner-label }}") == 2
+        assert "runs-on: [self-hosted," not in workflow
+        assert "ubuntu-" not in workflow
         assert "if: ${{ !inputs.nix-preinstalled }}" in workflow
+        assert "required: true" in workflow
+        assert "workflow_dispatch:" in wrapper
+        assert "schedule:" not in wrapper
+        assert "ix-ci-run-{0}-{1}-index-update-flake-lock" in wrapper
+        assert "checks: read" in wrapper
+        assert "statuses: read" in wrapper
 
     def test_owner_policy_classifies_repository_data(self) -> None:
         costly_paths = (

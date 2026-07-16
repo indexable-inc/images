@@ -1,18 +1,12 @@
 name: Update flake.lock
 
 on:
-  workflow_dispatch:
-    inputs:
-      flake-inputs:
-        description: "Space-separated flake inputs to update; empty updates all."
-        type: string
-        default: ""
   # Reusable: ix (and any other indexable-inc repo) calls this same job via
   # `uses: indexable-inc/index/.github/workflows/update-flake-lock.yml@main`
   # so the flake-bump mechanics live in one place. The caller supplies the
-  # schedule and the contents/PR permissions. A caller whose flake has private
-  # inputs the GitHub-hosted runner cannot fetch passes `flake-inputs` to
-  # update only the public ones (e.g. ix scopes to `index`).
+  # self-hosted runner label, schedule, and contents/PR permissions. A caller
+  # can scope `flake-inputs` when only selected locks should move (ix updates
+  # `index`).
   workflow_call:
     inputs:
       flake-inputs:
@@ -24,13 +18,13 @@ on:
         type: string
         default: ""
       runner-label:
-        description: Runner label for the update and escalation jobs
+        description: Unique self-hosted runner label provisioned by the caller
         type: string
-        default: ubuntu-latest
+        required: true
       nix-preinstalled:
         description: Whether the selected runner already provides Nix
         type: boolean
-        default: false
+        required: true
       escalate-after-hours:
         description: "Hours the rolling bump PR may stay failing before the escalate job alerts; see the escalate job below."
         type: number
@@ -43,54 +37,147 @@ on:
       app-private-key:
         description: "Private key for app-client-id."
         required: false
+      workflow-owner-read-token:
+        description: "Read token for a private cross-repository workflow owner; public owners and same-repository calls need none."
+        required: false
       slack-bot-token:
         description: "Slack bot token (chat:write) for escalation posts; empty escalates through the tracking issue only."
         required: false
-  schedule:
-    - cron: "17 * * * *"
-
 permissions:
   contents: read
 
+concurrency:
+  group: update-flake-lock-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   update-flake-lock:
-    # Schedule/dispatch have no workflow_call inputs, so retain the hosted
-    # default for index itself and for callers that have not opted into a
-    # Nix-owned runner profile.
-    runs-on: ${{ inputs.runner-label || 'ubuntu-latest' }}
+    # ix JIT runners advertise only their per-job identity label. GitHub
+    # requires every requested label, so adding `self-hosted` would strand
+    # these jobs in the queue.
+    runs-on: ${{ inputs.runner-label }}
     timeout-minutes: 15
     permissions:
       contents: write
-      id-token: write
       pull-requests: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # Fetch into a new private directory, with every inherited Git config
+      # source disabled, before replacing the workspace contents. The exact
+      # owner keeps the called implementation independent of caller state.
+      - name: Materialize exact workflow owner
+        shell: bash
+        env:
+          CHECKOUT_TOKEN: ${{ secrets.workflow-owner-read-token || github.token }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$WORKFLOW_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error title=update-flake-lock::invalid workflow owner repository"
+            exit 65
+          fi
+          if [[ ! "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=update-flake-lock::invalid workflow owner revision"
+            exit 65
+          fi
 
-      # Fully qualified, not `./.github/actions/install-nix`: this workflow is
-      # reusable (`workflow_call`), and for a cross-repo caller (ix) the
-      # `actions/checkout` above checks out the CALLER's repository, which does
-      # not contain index's local composite action. A local-path `uses:` then
-      # fails with "Can't find 'action.yml'" (broke ix's hourly flake bump when
-      # #2064 introduced the local action). Referencing the action by repo
-      # resolves it from index@main regardless of which repo called the job.
-      - name: Install Determinate Nix
-        if: ${{ !inputs.nix-preinstalled }}
-        uses: indexable-inc/index/.github/actions/install-nix@main
+          umask 077
+          owner_root="$(mktemp -d -- "$RUNNER_TEMP/update-flake-owner.XXXXXX")"
+          trap 'rm -rf -- "$owner_root"' EXIT
+          chmod 700 "$owner_root"
+          if [[ ! -d "$owner_root" || -L "$owner_root" || "$(stat -c '%a' "$owner_root")" != 700 ]]; then
+            echo "::error title=update-flake-lock::workflow owner temporary directory is not private"
+            exit 1
+          fi
+          owner_repo="$owner_root/repository"
+          mkdir -- "$owner_repo"
+          owner_auth="$owner_root/git-auth"
+          : > "$owner_auth"
+          chmod 600 "$owner_auth"
 
-      # Underscore digit separators require the patched client in index and in
-      # downstream callers such as ix. The action reads its source lock from
-      # index and fetches that source independently when the checkout belongs
-      # to a caller. Fully qualified like install-nix above because a reusable
-      # workflow checks out the caller's repository.
-      - name: Bootstrap patched Nix client
-        uses: indexable-inc/index/.github/actions/bootstrap-patched-nix@main
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_CONFIG_GLOBAL="$owner_auth"
+          export GIT_CONFIG_COUNT=0
+          trusted_git() {
+            git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
+          }
+          trusted_git init -q --template= "$owner_repo"
+          trusted_git -C "$owner_repo" remote add origin \
+            "${GITHUB_SERVER_URL%/}/${WORKFLOW_REPOSITORY}.git"
+          checkout_token="$CHECKOUT_TOKEN"
+          unset CHECKOUT_TOKEN
+          credential="$(printf 'x-access-token:%s' "$checkout_token" | base64 | tr -d '\n')"
+          unset checkout_token
+          echo "::add-mask::$credential"
+          if [[ ! "$GITHUB_SERVER_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+            echo "::error title=update-flake-lock::invalid GitHub server URL"
+            exit 65
+          fi
+          {
+            printf '[http "%s/"]\n' "${GITHUB_SERVER_URL%/}"
+            printf '\textraheader = AUTHORIZATION: basic %s\n' "$credential"
+          } > "$owner_auth"
+          if ! trusted_git -C "$owner_repo" fetch --no-tags --depth 1 origin \
+            "+$WORKFLOW_SHA:refs/remotes/origin/workflow-owner"; then
+            echo "::error title=update-flake-lock::exact workflow owner fetch failed; private cross-repository owners must pass workflow-owner-read-token"
+            exit 1
+          fi
+          : > "$owner_auth"
+          unset CHECKOUT_TOKEN checkout_token credential
+          trusted_git -C "$owner_repo" checkout -q --detach refs/remotes/origin/workflow-owner
+          if [[ "$(trusted_git -C "$owner_repo" rev-parse HEAD)" != "$WORKFLOW_SHA" ]]; then
+            echo "::error title=update-flake-lock::workflow owner revision mismatch"
+            exit 1
+          fi
+          if [[ -n "$(trusted_git -C "$owner_repo" status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "::error title=update-flake-lock::workflow owner checkout is not clean"
+            exit 1
+          fi
 
-      # PRs authored by the default GITHUB_TOKEN never get pull_request CI on
-      # private repos: GitHub parks every run in action_required and the
-      # fork-approval API cannot clear them (ix#6566). When the caller supplies
-      # a GitHub App with contents + pull-requests write, mint a token scoped
-      # to this repository and author the PR with it so CI triggers normally.
+          reset_script="$owner_repo/.github/scripts/update-flake-reset-workspace.sh"
+          if [[ ! -f "$reset_script" || -L "$reset_script" ]]; then
+            echo "::error title=update-flake-lock::workflow owner workspace reset helper is not a regular file"
+            exit 1
+          fi
+          bash "$reset_script"
+          cp -R -- "$owner_repo"/. "$GITHUB_WORKSPACE"/
+          if [[ "$(trusted_git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" != "$WORKFLOW_SHA" ]] ||
+             [[ -n "$(trusted_git -C "$GITHUB_WORKSPACE" status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "::error title=update-flake-lock::copied workflow owner failed attestation"
+            exit 1
+          fi
+
+      # The caller checkout below replaces GITHUB_WORKSPACE. Preserve only the
+      # exact-revision actions needed afterward in the job-private temp dir.
+      - name: Stage workflow-owner actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          staged="$(mktemp -d -- "$RUNNER_TEMP/update-flake-actions.XXXXXX")"
+          chmod 700 "$staged"
+          if [[ ! -d "$staged" || -L "$staged" || "$(stat -c '%a' "$staged")" != 700 ]]; then
+            echo "::error title=update-flake-lock::staged action directory is not private"
+            exit 1
+          fi
+          for action in install-nix bootstrap-patched-nix update-flake-checkout-auth; do
+            source=".github/actions/$action"
+            if [[ ! -d "$source" || -L "$source" || ! -f "$source/action.yml" || -L "$source/action.yml" ]]; then
+              echo "::error title=update-flake-lock::workflow owner action path is not a regular directory: $action"
+              exit 1
+            fi
+            cp -R -- "$source" "$staged/$action"
+          done
+          reset_source=".github/scripts/update-flake-reset-workspace.sh"
+          if [[ ! -f "$reset_source" || -L "$reset_source" ]]; then
+            echo "::error title=update-flake-lock::workspace reset helper is not a regular file"
+            exit 1
+          fi
+          cp -- "$reset_source" "$staged/reset-workspace.sh"
+          printf 'UPDATE_FLAKE_ACTIONS=%s\n' "$staged" >> "$GITHUB_ENV"
+
+      # Mint before checkout so one identity reads the private repository,
+      # updates its branch, and opens the PR. The fallback is the job token.
       - name: Mint PR token
         id: app-token
         if: ${{ inputs.app-client-id != '' }}
@@ -98,6 +185,64 @@ jobs:
         with:
           client-id: ${{ inputs.app-client-id }}
           private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      # Remove the exact-owner checkout and any content a persistent runner
+      # left behind, while preserving the DynamicUser workspace path itself.
+      - name: Reset caller workspace
+        shell: bash
+        run: bash "$UPDATE_FLAKE_ACTIONS/reset-workspace.sh"
+
+      - name: Prepare alias-safe checkout authentication
+        id: checkout-auth
+        shell: bash
+        env:
+          CHECKOUT_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: bash "$UPDATE_FLAKE_ACTIONS/update-flake-checkout-auth/run.sh" prepare
+
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
+      # Scrub the private global auth file and command-scoped isolation slots
+      # before any updater-controlled process can inherit them.
+      - name: Remove alias-safe checkout authentication
+        if: ${{ always() && steps.checkout-auth.outcome != 'skipped' }}
+        shell: bash
+        run: bash "$UPDATE_FLAKE_ACTIONS/update-flake-checkout-auth/run.sh" cleanup
+
+      - name: Restore workflow-owner actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -e .update-flake-workflow-actions || -L .update-flake-workflow-actions ]]; then
+            echo "::error title=update-flake-lock::caller repository occupies reserved path .update-flake-workflow-actions"
+            exit 1
+          fi
+          cp -R -- "$UPDATE_FLAKE_ACTIONS" .update-flake-workflow-actions
+
+      - name: Install Determinate Nix
+        if: ${{ !inputs.nix-preinstalled }}
+        uses: ./.update-flake-workflow-actions/install-nix
+
+      # Underscore digit separators require the patched client in index and in
+      # downstream callers such as ix. The action reads its source lock from
+      # index and fetches that source independently when the checkout belongs
+      # to a caller.
+      - name: Bootstrap patched Nix client
+        uses: ./.update-flake-workflow-actions/bootstrap-patched-nix
+
+      # create-pull-request commits every untracked path in GITHUB_WORKSPACE.
+      # Remove the staged action code before handing ownership to the updater.
+      - name: Remove workflow-owner actions
+        if: ${{ always() }}
+        shell: bash
+        run: rm -rf -- .update-flake-workflow-actions
 
       - name: Update flake.lock
         uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
@@ -132,314 +277,338 @@ jobs:
   # issue plus a Slack post (when the caller supplies slack-bot-token),
   # recorded as a body marker so later ticks do not re-fire. Watcher-internal
   # failures (API errors) exit loudly without claiming health or closing the
-  # issue. Callers must grant `issues: write` on the calling job.
+  # issue. The update-failure reporter deliberately has no checkout, Nix, or
+  # bootstrap dependency: a broken bootstrap must still report itself. Callers
+  # must grant `issues: write` on the calling job.
   escalate:
     needs: update-flake-lock
     if: ${{ always() }}
-    # Reuse the caller-selected runner for both halves of the transaction. A
-    # hosted escalation tail would make a supposedly self-hosted reusable
-    # workflow silently depend on GitHub capacity after the update job exits.
-    runs-on: ${{ inputs.runner-label || 'ubuntu-latest' }}
-    timeout-minutes: 10
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: 5
     permissions:
+      checks: read
       contents: read
       issues: write
       pull-requests: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPOSITORY: ${{ github.repository }}
-      # Must match the `branch:` given to update-flake-lock above.
-      BUMP_BRANCH: update-flake-lock
-      UPDATE_RESULT: ${{ needs.update-flake-lock.result }}
-      # `inputs.*` is empty on index's own schedule/dispatch runs; the ||
-      # arms mirror the workflow_call defaults for those events.
-      ESCALATE_AFTER_HOURS: ${{ inputs.escalate-after-hours || 6 }}
-      SLACK_CHANNEL: ${{ inputs.slack-channel || 'C0A4TD9G7HR' }}
-      SLACK_BOT_TOKEN: ${{ secrets.slack-bot-token }}
+      statuses: read
     steps:
-      - name: Escalate a stuck flake bump
-        run: |
-          set -euo pipefail
-
-          marker="<!-- update-flake-lock-escalation -->"
-          issue_title="update-flake-lock: rolling bump PR is stuck"
-          label="flake-bump-stuck"
-          now_epoch="$(date -u +%s)"
-          now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          threshold_s=$(( ESCALATE_AFTER_HOURS * 3600 ))
-
-          note() { echo "::notice::escalate: $*"; }
-          # Internal failure is loud and neither claims health nor closes the
-          # tracking issue (same contract as cache-push-watchdog.yml).
-          fail_loud() { echo "::error::flake-bump escalation internal failure: $*"; exit 2; }
-
-          reasons=""
-          add_reason() { reasons="${reasons}$1"$'\n'; }
-
-          # Slack signals rejection in-body (ok:false) with HTTP 200, so parse
-          # the response; non-zero return means the message did NOT post.
-          slack_post() {
-            local text="$1" resp
-            resp="$(jq -n --arg channel "${SLACK_CHANNEL}" --arg text "$text" \
-                '{channel: $channel, text: $text}' \
-              | curl -sS -X POST "https://slack.com/api/chat.postMessage" \
-                  -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-                  -H "Content-Type: application/json; charset=utf-8" \
-                  --data @-)" \
-              || { echo "::error::slack chat.postMessage transport failed"; return 1; }
-            if [ "$(jq -r '.ok' <<<"$resp")" != "true" ]; then
-              echo "::error::slack rejected the escalation post: $(jq -r '.error // "unknown"' <<<"$resp")"
-              return 1
-            fi
-          }
-
-          # --- State: the bump job itself failed ------------------------------
-          if [ "${UPDATE_RESULT}" = "failure" ]; then
-            add_reason "- **Bump job failed**: \`update-flake-lock\` concluded \`failure\` in run [${GITHUB_RUN_ID}](https://github.com/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
-          fi
-
-          # --- State: the rolling PR (red, or stuck past the threshold) -------
-          pr_json=/tmp/bump-pr.json
-          gh pr list --repo "${REPOSITORY}" --head "${BUMP_BRANCH}" --base main \
-              --state open --json number,url,createdAt,statusCheckRollup \
-              --jq '.[0] // empty' > "$pr_json" \
-            || fail_loud "listing the rolling bump PR failed"
-
-          pr_number=""
-          pr_url=""
-          failing_checks=""
-          pending_count=0
-          pr_age_s=0
-          if [ -s "$pr_json" ]; then
-            pr_number="$(jq -r '.number' "$pr_json")"
-            pr_url="$(jq -r '.url' "$pr_json")"
-            pr_age_s=$(( now_epoch - $(date -u -d "$(jq -r '.createdAt' "$pr_json")" +%s) ))
-            # CheckRun rows carry .conclusion ("" until completed), StatusContext
-            # rows carry .state; normalize both shapes before classifying.
-            failing_checks="$(jq -r '[(.statusCheckRollup // [])[]
-                | ((.conclusion // .state // "") | ascii_upcase) as $c
-                | select($c == "FAILURE" or $c == "TIMED_OUT" or $c == "CANCELLED"
-                         or $c == "ERROR" or $c == "STARTUP_FAILURE")
-                | (.name // .context)] | unique | join(", ")' "$pr_json")" \
-              || fail_loud "parsing the PR check rollup failed"
-            pending_count="$(jq -r '[(.statusCheckRollup // [])[]
-                | ((.conclusion // .state // "") | ascii_upcase)
-                | select(. == "" or . == "PENDING" or . == "EXPECTED"
-                         or . == "QUEUED" or . == "IN_PROGRESS")] | length' "$pr_json")" \
-              || fail_loud "counting pending checks failed"
-            # No checks materialized yet (head pushed moments ago) is pending,
-            # not green: reading it as green would flap the tracking issue.
-            if [ "$(jq -r '(.statusCheckRollup // []) | length' "$pr_json")" -eq 0 ]; then
-              pending_count=1
-            fi
-            pr_age_h=$(( pr_age_s / 3600 ))
-            if [ -n "$failing_checks" ]; then
-              add_reason "- **Red bump PR**: [#${pr_number}](${pr_url}) (open ${pr_age_h}h) failing: \`${failing_checks}\`."
-            elif [ "$pending_count" -gt 0 ] && [ "$pr_age_s" -ge "$threshold_s" ]; then
-              add_reason "- **Stuck bump PR**: [#${pr_number}](${pr_url}) open ${pr_age_h}h (>= ${ESCALATE_AFTER_HOURS}h) and unmerged; checks pending on the latest head."
-            fi
-          fi
-
-          # --- State: bump branch ahead of main with no open PR ---------------
-          branch_ref=""
-          if [ -z "$pr_number" ]; then
-            set +e
-            branch_ref="$(gh api "repos/${REPOSITORY}/git/ref/heads/${BUMP_BRANCH}" --jq '.object.sha' 2>/tmp/ref-err)"
-            ref_rc=$?
-            set -e
-            if [ "$ref_rc" -ne 0 ]; then
-              # Only a missing branch reads as clean; any other API failure is
-              # an internal error, never a claim of health.
-              if grep -q "Not Found" /tmp/ref-err; then
-                branch_ref=""
-              else
-                fail_loud "reading the ${BUMP_BRANCH} ref failed: $(cat /tmp/ref-err)"
-              fi
-            fi
-            if [ -n "$branch_ref" ]; then
-              ahead="$(gh api "repos/${REPOSITORY}/compare/main...${branch_ref}" --jq '.ahead_by')" \
-                || fail_loud "comparing ${BUMP_BRANCH} to main failed"
-              if [ "$ahead" -gt 0 ]; then
-                add_reason "- **Bump without a PR**: \`${BUMP_BRANCH}\` is ${ahead} commit(s) ahead of main with no open PR (closed unmerged?)."
-              else
-                branch_ref=""
-              fi
-            fi
-          fi
-
-          # --- Input rev range: locked on main -> candidate on the branch -----
-          rev_range=""
-          if [ -n "$pr_number" ] || [ -n "$branch_ref" ]; then
-            fetch_lock() {
-              gh api -H "Accept: application/vnd.github.raw" \
-                "repos/${REPOSITORY}/contents/flake.lock?ref=$1"
+      - name: Track flake update health
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ESCALATE_AFTER_HOURS: ${{ inputs.escalate-after-hours }}
+          SLACK_BOT_TOKEN: ${{ secrets.slack-bot-token }}
+          SLACK_CHANNEL: ${{ inputs.slack-channel }}
+          UPDATE_RESULT: ${{ needs.update-flake-lock.result }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const result = process.env.UPDATE_RESULT;
+            if (!['success', 'failure', 'cancelled', 'skipped'].includes(result)) {
+              throw new Error(`unexpected update job result: ${result}`);
             }
-            fetch_lock main > /tmp/lock-main.json \
-              || fail_loud "fetching flake.lock at main failed"
-            fetch_lock "refs/heads/${BUMP_BRANCH}" > /tmp/lock-bump.json \
-              || fail_loud "fetching flake.lock at ${BUMP_BRANCH} failed"
-            # Only the root node's direct inputs: internal dedup nodes
-            # (nixpkgs_2, flake-parts_4, ...) are noise in an alert.
-            rev_range="$(jq -rn --slurpfile base /tmp/lock-main.json --slurpfile bump /tmp/lock-bump.json '
-                ($base[0]) as $B | ($bump[0]) as $H |
-                [($H.nodes[$H.root].inputs // {}) | keys[] | . as $name
-                  | ($H.nodes[$H.root].inputs[$name]) as $hk
-                  | select(($hk | type) == "string")
-                  | ($B.nodes[$B.root].inputs[$name]? // null) as $bk
-                  | (if ($bk | type) == "string"
-                     then ($B.nodes[$bk].locked.rev? // "absent") else "absent" end) as $old
-                  | ($H.nodes[$hk].locked.rev? // "absent") as $new
-                  | select($old != $new)
-                  | "\($name) \($old[0:11]) -> \($new[0:11])"]
-                | join(", ")')" \
-              || fail_loud "diffing flake.lock revs failed"
-          fi
 
-          # --- Locate the tracking issue (label filter, not search: the search
-          # index lags minutes to hours and a lagged miss would mint duplicate
-          # episode issues) ----------------------------------------------------
-          issue_json=/tmp/tracking-issue.json
-          gh issue list --repo "${REPOSITORY}" --label "$label" --state all \
-              --json number,url,state,body --jq '.[0] // empty' > "$issue_json" \
-            || fail_loud "listing tracking issues failed"
-          issue_number=""
-          issue_state=""
-          issue_url=""
-          : > /tmp/issue-body.md
-          if [ -s "$issue_json" ]; then
-            issue_number="$(jq -r '.number' "$issue_json")"
-            issue_state="$(jq -r '.state' "$issue_json")"
-            issue_url="$(jq -r '.url' "$issue_json")"
-            jq -r '.body // ""' "$issue_json" > /tmp/issue-body.md
-          fi
+            const thresholdHours = Number(process.env.ESCALATE_AFTER_HOURS);
+            if (!Number.isFinite(thresholdHours) || thresholdHours < 0) {
+              throw new Error('invalid escalation threshold');
+            }
+            const { owner, repo } = context.repo;
+            const bumpBranch = 'update-flake-lock';
+            const label = 'flake-bump-stuck';
+            const issueTitle = 'update-flake-lock: rolling bump PR is stuck';
+            const now = new Date();
+            const nowIso = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const slackToken = process.env.SLACK_BOT_TOKEN || '';
+            delete process.env.SLACK_BOT_TOKEN;
+            const reasons = [];
 
-          # --- Healthy: PR merged/green, branch clean, bump job green ---------
-          healthy=""
-          if [ -z "$reasons" ]; then
-            if [ -z "$pr_number" ] || { [ -z "$failing_checks" ] && [ "$pending_count" -eq 0 ]; }; then
-              healthy=1
-            fi
-          fi
-          if [ -n "$healthy" ]; then
-            note "flake bump healthy (bump job ${UPDATE_RESULT}, no stuck PR, branch clean)"
-            if [ -n "$issue_number" ] && [ "$issue_state" = "OPEN" ]; then
-              if grep -q '<!-- slack-escalated:' /tmp/issue-body.md && [ -n "${SLACK_BOT_TOKEN}" ]; then
-                slack_post "flake bump recovered in ${REPOSITORY}; closing <${issue_url}|the tracking issue>." \
-                  || echo "::warning::recovery note did not post to Slack"
-              fi
-              gh issue comment "$issue_number" --repo "${REPOSITORY}" \
-                  --body "Resolved: flake bump healthy at \`${now_iso}\` (run ${GITHUB_RUN_ID}). Closing." \
-                || fail_loud "commenting the resolution failed"
-              gh issue close "$issue_number" --repo "${REPOSITORY}" \
-                || fail_loud "closing the tracking issue failed"
-            fi
-            exit 0
-          fi
+            const postSlack = async text => {
+              const response = await fetch('https://slack.com/api/chat.postMessage', {
+                method: 'POST',
+                redirect: 'error',
+                headers: {
+                  Authorization: `Bearer ${slackToken}`,
+                  'Content-Type': 'application/json; charset=utf-8',
+                },
+                body: JSON.stringify({ channel: process.env.SLACK_CHANNEL, text }),
+              });
+              const payload = await response.json();
+              if (!response.ok || payload.ok !== true) {
+                throw new Error(payload.error || `HTTP ${response.status}`);
+              }
+            };
 
-          # A young all-pending PR with no episode open is just CI in flight.
-          if [ -z "$reasons" ] && { [ -z "$issue_number" ] || [ "$issue_state" != "OPEN" ]; }; then
-            note "bump PR checks pending and below the ${ESCALATE_AFTER_HOURS}h threshold; nothing to escalate yet"
-            exit 0
-          fi
-          if [ -z "$reasons" ]; then
-            add_reason "- **Episode continuing**: bump PR [#${pr_number}](${pr_url}) checks pending on the latest head."
-          fi
+            if (result !== 'success') {
+              reasons.push(`- **Bump job did not succeed**: \`update-flake-lock\` concluded \`${result}\` in run [${context.runId}](${runUrl}).`);
+            }
 
-          # --- Episode clock: persisted in the issue body; a red PR that
-          # predates the first observation backdates the start to PR creation --
-          first_detected=""
-          escalated_at=""
-          if [ "$issue_state" = "OPEN" ]; then
-            first_detected="$(sed -n 's/.*<!-- first-detected: \([0-9TZ:-]*\) -->.*/\1/p' /tmp/issue-body.md | head -n1)"
-            escalated_at="$(sed -n 's/.*<!-- slack-escalated: \([0-9TZ:-]*\) -->.*/\1/p' /tmp/issue-body.md | head -n1)"
-          fi
-          if [ -z "$first_detected" ]; then first_detected="$now_iso"; fi
-          first_epoch="$(date -u -d "$first_detected" +%s)"
-          if [ -n "$pr_number" ] && [ "$pr_age_s" -gt $(( now_epoch - first_epoch )) ]; then
-            first_epoch=$(( now_epoch - pr_age_s ))
-            first_detected="$(date -u -d "@${first_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
-          fi
-          failing_for_s=$(( now_epoch - first_epoch ))
-          failing_for_h=$(( failing_for_s / 3600 ))
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              head: `${owner}:${bumpBranch}`,
+              base: 'main',
+              state: 'open',
+              per_page: 100,
+            });
+            const pr = pulls[0] || null;
+            const failingChecks = [];
+            let pendingCount = 0;
+            let prAgeMs = 0;
+            let branchSha = '';
 
-          fire=""
-          if [ "$failing_for_s" -ge "$threshold_s" ] && [ -z "$escalated_at" ]; then
-            fire=1
-          fi
+            if (pr) {
+              branchSha = pr.head.sha;
+              prAgeMs = Math.max(0, now.getTime() - Date.parse(pr.created_at));
+              const checkRuns = await github.paginate(
+                github.rest.checks.listForRef,
+                { owner, repo, ref: pr.head.sha, per_page: 100 },
+              );
+              const statuses = await github.paginate(
+                github.rest.repos.listCommitStatusesForRef,
+                { owner, repo, ref: pr.head.sha, per_page: 100 },
+              );
+              const failed = new Set(['ACTION_REQUIRED', 'CANCELLED', 'ERROR', 'FAILURE', 'STALE', 'STARTUP_FAILURE', 'TIMED_OUT']);
+              for (const check of checkRuns) {
+                const conclusion = (check.conclusion || '').toUpperCase();
+                if (check.status !== 'completed' || !conclusion) {
+                  pendingCount += 1;
+                } else if (failed.has(conclusion)) {
+                  failingChecks.push(check.name);
+                }
+              }
+              const latestStatuses = new Map();
+              for (const status of statuses) {
+                if (!latestStatuses.has(status.context)) latestStatuses.set(status.context, status);
+              }
+              for (const status of latestStatuses.values()) {
+                const state = (status.state || '').toUpperCase();
+                if (state === 'PENDING') {
+                  pendingCount += 1;
+                } else if (failed.has(state)) {
+                  failingChecks.push(status.context);
+                }
+              }
+              if (checkRuns.length + statuses.length === 0) pendingCount = 1;
 
-          write_body() {
-            {
-              echo "${marker}"
-              echo "<!-- first-detected: ${first_detected} -->"
-              if [ -n "$escalated_at" ]; then
-                echo "<!-- slack-escalated: ${escalated_at} -->"
-              fi
-              echo "## Rolling flake bump is stuck"
-              echo
-              echo "Failing since \`${first_detected}\` (${failing_for_h}h; escalation threshold ${ESCALATE_AFTER_HOURS}h). Last checked \`${now_iso}\` by run [${GITHUB_RUN_ID}](https://github.com/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
-              echo
-              echo "${reasons}"
-              if [ -n "$rev_range" ]; then
-                echo "Input revisions waiting to land: \`${rev_range}\`"
-                echo
-              fi
-              echo "Maintained by the \`escalate\` job of the reusable update-flake-lock workflow (indexable-inc/index): refreshed each scheduled run while the episode persists, closed automatically once a bump lands cleanly. Motivating incident: indexable-inc/ix#7235."
-              echo
-              echo "_Made with Claude Opus 4.5._"
-            } > /tmp/tracking-body.md
-          }
+              const prAgeHours = Math.floor(prAgeMs / 3_600_000);
+              const uniqueFailures = [...new Set(failingChecks)].sort();
+              failingChecks.splice(0, failingChecks.length, ...uniqueFailures);
+              if (failingChecks.length > 0) {
+                reasons.push(`- **Red bump PR**: [#${pr.number}](${pr.html_url}) (open ${prAgeHours}h) failing: \`${failingChecks.join(', ')}\`.`);
+              } else if (prAgeMs >= thresholdHours * 3_600_000) {
+                const state = pendingCount > 0
+                  ? 'checks pending on the latest head'
+                  : 'checks green but the PR is still unmerged';
+                reasons.push(`- **Stuck bump PR**: [#${pr.number}](${pr.html_url}) open ${prAgeHours}h (>= ${thresholdHours}h); ${state}.`);
+              }
+            } else {
+              try {
+                const ref = await github.rest.git.getRef({ owner, repo, ref: `heads/${bumpBranch}` });
+                branchSha = ref.data.object.sha;
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+              if (branchSha) {
+                const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                  owner,
+                  repo,
+                  basehead: `main...${branchSha}`,
+                });
+                if (comparison.data.ahead_by > 0) {
+                  reasons.push(`- **Bump without a PR**: \`${bumpBranch}\` is ${comparison.data.ahead_by} commit(s) ahead of main with no open PR (closed unmerged?).`);
+                } else {
+                  branchSha = '';
+                }
+              }
+            }
 
-          # --force: create-or-update, so the label pre-existing is fine.
-          gh label create "$label" --repo "${REPOSITORY}" --force \
-              --color D93F0B --description "rolling flake bump failing past its escalation threshold" \
-            || fail_loud "ensuring the ${label} label failed"
+            let revRange = '';
+            if (pr || branchSha) {
+              const readLock = async ref => {
+                const response = await github.rest.repos.getContent({
+                  owner,
+                  repo,
+                  path: 'flake.lock',
+                  ref,
+                });
+                if (Array.isArray(response.data) || !response.data.content) {
+                  throw new Error(`flake.lock at ${ref} is not a file`);
+                }
+                return JSON.parse(Buffer.from(response.data.content, 'base64').toString('utf8'));
+              };
+              const [baseLock, bumpLock] = await Promise.all([
+                readLock('main'),
+                readLock(branchSha || pr.head.sha),
+              ]);
+              const baseInputs = baseLock.nodes?.[baseLock.root]?.inputs || {};
+              const bumpInputs = bumpLock.nodes?.[bumpLock.root]?.inputs || {};
+              const revisions = [];
+              for (const [name, bumpKey] of Object.entries(bumpInputs)) {
+                if (typeof bumpKey !== 'string') continue;
+                const baseKey = baseInputs[name];
+                const oldRev = typeof baseKey === 'string' ? (baseLock.nodes?.[baseKey]?.locked?.rev || 'absent') : 'absent';
+                const newRev = bumpLock.nodes?.[bumpKey]?.locked?.rev || 'absent';
+                if (oldRev !== newRev) revisions.push(`${name} ${oldRev.slice(0, 11)} -> ${newRev.slice(0, 11)}`);
+              }
+              revRange = revisions.join(', ');
+            }
 
-          write_body
-          if [ -z "$issue_number" ]; then
-            issue_url="$(gh issue create --repo "${REPOSITORY}" --title "$issue_title" \
-                --label "$label" --body-file /tmp/tracking-body.md)" \
-              || fail_loud "creating the tracking issue failed"
-            issue_number="${issue_url##*/}"
-          else
-            if [ "$issue_state" = "CLOSED" ]; then
-              gh issue reopen "$issue_number" --repo "${REPOSITORY}" \
-                || fail_loud "reopening the tracking issue failed"
-            fi
-            gh issue edit "$issue_number" --repo "${REPOSITORY}" --body-file /tmp/tracking-body.md \
-              || fail_loud "updating the tracking issue failed"
-          fi
+            try {
+              await github.rest.issues.updateLabel({
+                owner,
+                repo,
+                name: label,
+                new_name: label,
+                color: 'D93F0B',
+                description: 'rolling flake bump failing past its escalation threshold',
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              try {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: label,
+                  color: 'D93F0B',
+                  description: 'rolling flake bump failing past its escalation threshold',
+                });
+              } catch (createError) {
+                if (createError.status !== 422) throw createError;
+              }
+            }
 
-          if [ -n "$fire" ]; then
-            # The comment (unlike body edits) notifies issue subscribers: the
-            # issue channel escalates even when no Slack token is configured.
-            gh issue comment "$issue_number" --repo "${REPOSITORY}" \
-                --body "Failing for ${failing_for_h}h, past the ${ESCALATE_AFTER_HOURS}h threshold: escalating." \
-              || fail_loud "posting the threshold comment failed"
-            slack_ok=1
-            if [ -n "${SLACK_BOT_TOKEN}" ]; then
-              slack_text="flake bump stuck in ${REPOSITORY}: failing for ${failing_for_h}h (threshold ${ESCALATE_AFTER_HOURS}h)."
-              if [ -n "$pr_number" ] && [ -n "$failing_checks" ]; then
-                slack_text="${slack_text} <${pr_url}|#${pr_number}> failing: \`${failing_checks}\`."
-              elif [ -n "$pr_number" ]; then
-                slack_text="${slack_text} <${pr_url}|#${pr_number}> unmerged."
-              fi
-              if [ -n "$rev_range" ]; then
-                slack_text="${slack_text} Waiting revs: \`${rev_range}\`."
-              fi
-              slack_text="${slack_text} Tracking: <${issue_url}|#${issue_number}>."
-              # A rejected post leaves the marker unset so the next tick retries.
-              slack_post "$slack_text" || slack_ok=""
-            else
-              note "no slack-bot-token configured; escalated via the tracking issue only"
-            fi
-            if [ -n "$slack_ok" ]; then
-              escalated_at="$now_iso"
-              write_body
-              gh issue edit "$issue_number" --repo "${REPOSITORY}" --body-file /tmp/tracking-body.md \
-                || fail_loud "recording the escalation marker failed"
-            fi
-          fi
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              labels: label,
+              state: 'all',
+              per_page: 100,
+            });
+            let issue = issues.find(candidate => !candidate.pull_request);
+            const priorBody = issue?.state === 'open' ? (issue.body || '') : '';
+            const healthy = reasons.length === 0 && (!pr || (failingChecks.length === 0 && pendingCount === 0));
+            if (healthy) {
+              core.notice(`flake bump healthy (bump job ${result}, no stuck PR, branch clean)`);
+              if (issue?.state === 'open') {
+                if (priorBody.includes('<!-- slack-escalated:') && slackToken) {
+                  try {
+                    await postSlack(`flake bump recovered in ${owner}/${repo}; closing <${issue.html_url}|the tracking issue>.`);
+                  } catch (error) {
+                    core.warning(`Slack recovery note failed: ${error.message}`);
+                  }
+                }
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  body: `Resolved: flake bump healthy at \`${nowIso}\` (run ${context.runId}). Closing.`,
+                });
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                });
+              }
+              return;
+            }
+            if (reasons.length === 0 && issue?.state !== 'open') {
+              core.notice(`bump PR checks pending and below the ${thresholdHours}h threshold; nothing to escalate yet`);
+              return;
+            }
+            if (reasons.length === 0) {
+              reasons.push(`- **Episode continuing**: bump PR [#${pr.number}](${pr.html_url}) checks pending on the latest head.`);
+            }
 
-          # Red in the Actions tab too, not only in the issue.
-          echo "::error::flake bump stuck for ${failing_for_h}h; see ${issue_url}"
-          exit 1
+            const firstMatch = priorBody.match(/<!-- first-detected: ([0-9TZ:-]+) -->/);
+            const escalatedMatch = priorBody.match(/<!-- slack-escalated: ([0-9TZ:-]+) -->/);
+            let firstDetected = firstMatch?.[1] || nowIso;
+            let firstEpoch = Date.parse(firstDetected);
+            if (!Number.isFinite(firstEpoch)) {
+              firstDetected = nowIso;
+              firstEpoch = now.getTime();
+            }
+            let escalatedAt = escalatedMatch?.[1] || '';
+            if (pr && prAgeMs > now.getTime() - firstEpoch) {
+              firstEpoch = now.getTime() - prAgeMs;
+              firstDetected = new Date(firstEpoch).toISOString().replace(/\.\d{3}Z$/, 'Z');
+            }
+            const failingForMs = Math.max(0, now.getTime() - firstEpoch);
+            const failingForHours = Math.floor(failingForMs / 3_600_000);
+
+            const renderBody = () => [
+              '<!-- update-flake-lock-escalation -->',
+              `<!-- first-detected: ${firstDetected} -->`,
+              ...(escalatedAt ? [`<!-- slack-escalated: ${escalatedAt} -->`] : []),
+              '## Rolling flake bump is stuck',
+              '',
+              `Failing since \`${firstDetected}\` (${failingForHours}h; escalation threshold ${thresholdHours}h). Last checked \`${nowIso}\` by run [${context.runId}](${runUrl}).`,
+              '',
+              reasons.join('\n'),
+              '',
+              ...(revRange ? [`Input revisions waiting to land: \`${revRange}\``, ''] : []),
+              'Maintained by the failure-independent watcher in the reusable update-flake-lock workflow (indexable-inc/index); refreshed each run and closed automatically after recovery. Motivating incident: indexable-inc/ix#7235.',
+              '',
+              '_Made with Claude Opus 4.5._',
+            ].join('\n');
+
+            if (!issue) {
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title: issueTitle,
+                labels: [label],
+                body: renderBody(),
+              });
+              issue = created.data;
+            } else {
+              const updated = await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issue.number,
+                state: 'open',
+                body: renderBody(),
+              });
+              issue = updated.data;
+            }
+
+            const shouldEscalate = failingForMs >= thresholdHours * 3_600_000 && !escalatedAt;
+            if (shouldEscalate) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `Failing for ${failingForHours}h, past the ${thresholdHours}h threshold: escalating.`,
+              });
+
+              let slackOk = true;
+              if (slackToken) {
+                let slackText = `flake bump stuck in ${owner}/${repo}: failing for ${failingForHours}h (threshold ${thresholdHours}h).`;
+                if (pr && failingChecks.length > 0) {
+                  slackText += ` <${pr.html_url}|#${pr.number}> failing: \`${failingChecks.join(', ')}\`.`;
+                } else if (pr) {
+                  slackText += ` <${pr.html_url}|#${pr.number}> unmerged.`;
+                }
+                if (revRange) slackText += ` Waiting revs: \`${revRange}\`.`;
+                slackText += ` Tracking: <${issue.html_url}|#${issue.number}>.`;
+                try {
+                  await postSlack(slackText);
+                } catch (error) {
+                  core.warning(`Slack escalation failed: ${error.message}`);
+                  slackOk = false;
+                }
+              } else {
+                core.notice('no slack-bot-token configured; escalated through the tracking issue only');
+              }
+              if (slackOk) {
+                escalatedAt = nowIso;
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  body: renderBody(),
+                });
+              }
+            }
+
+            core.setFailed(`flake bump unhealthy for ${failingForHours}h; see ${issue.html_url}`);

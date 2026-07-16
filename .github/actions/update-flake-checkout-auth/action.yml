@@ -1,0 +1,18 @@
+name: Prepare alias-safe flake update checkout authentication
+description: >-
+  Preserve private-repository checkout authentication when the runner's
+  logical workspace path resolves to a different canonical git directory.
+
+inputs:
+  token:
+    description: Repository token used only for an aliased checkout fetch
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare alias-safe checkout authentication
+      shell: bash
+      env:
+        CHECKOUT_TOKEN: ${{ inputs.token }}
+      run: bash "$GITHUB_ACTION_PATH/run.sh" prepare

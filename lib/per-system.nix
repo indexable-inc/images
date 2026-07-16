@@ -1272,6 +1272,22 @@
     fileset = fs.gitTracked paths.root;
   };
 
+  # Exercise the shell helpers against one explicit tool set instead of the
+  # ambient developer PATH used to launch the Nix check.
+  updateFlakeWorkflowTestTools = pkgs.buildEnv {
+    name = "update-flake-workflow-test-tools";
+    paths = [
+      pkgs.bash
+      pkgs.coreutils
+      pkgs.git
+      pkgs.gnugrep
+      pkgs.gnused
+      pkgs.gnutar
+    ];
+    pathsToLink = ["/bin"];
+    meta.description = "Pinned test tools for the reusable flake update workflow";
+  };
+
   # Just the astlog rules file plus its fixture pairs, so the rules self-test
   # below only rebuilds when the rules or fixtures change, not on every
   # tracked-file edit the way `lintSource` does.
@@ -1899,6 +1915,35 @@
               export HOME="$TMPDIR/home"
               mkdir -p "$HOME"
               bash packages/blast-radius/tests/blast-radius-test.sh
+              mkdir -p "$out"
+            '';
+          # Crosses both failure boundaries from ix run 29489082838: checkout
+          # auth must survive systemd's logical/canonical workspace aliases,
+          # and watcher state transitions must be proven without live API calls.
+          update-flake-workflow =
+            pkgs.runCommand "update-flake-workflow-check" {
+              nativeBuildInputs = [
+                pkgs.nodejs
+                pkgs.shellcheck
+                updateFlakeWorkflowTestTools
+              ];
+            }
+            ''
+              shellcheck \
+                ${paths.root + "/.github/actions/bootstrap-patched-nix/run.sh"} \
+                ${paths.root + "/.github/actions/bootstrap-patched-nix/test.sh"} \
+                ${paths.root + "/.github/actions/update-flake-checkout-auth/run.sh"} \
+                ${paths.root + "/.github/actions/update-flake-checkout-auth/test.sh"} \
+                ${paths.root + "/.github/scripts/update-flake-reset-workspace.sh"}
+              node \
+                ${paths.root + "/.github/scripts/test-update-flake-watcher.mjs"} \
+                ${paths.root + "/.github/workflows/update-flake-lock.yml"}
+              ${updateFlakeWorkflowTestTools}/bin/bash \
+                ${paths.root + "/.github/actions/bootstrap-patched-nix/test.sh"} \
+                ${updateFlakeWorkflowTestTools}
+              ${updateFlakeWorkflowTestTools}/bin/bash \
+                ${paths.root + "/.github/actions/update-flake-checkout-auth/test.sh"} \
+                ${updateFlakeWorkflowTestTools}
               mkdir -p "$out"
             '';
           # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
