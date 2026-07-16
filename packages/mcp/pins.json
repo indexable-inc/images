@@ -5,9 +5,9 @@
     "hash": "sha256-Q6NlwfxnAJTaeBuSOIMBkznOwDE5fWHV/l+OLyJ4tj4="
   },
   "pyspark": {
-    "version": "3.5.5",
-    "url": "https://pypi.io/packages/source/p/pyspark/pyspark-3.5.5.tar.gz",
-    "hash": "sha256-bv/Jzpjt8jH01oP9FPcnBim/hFjGKNaiYg3tS7NPPLk=",
+    "version": "3.5.9",
+    "url": "https://pypi.io/packages/source/p/pyspark/pyspark-3.5.9.tar.gz",
+    "hash": "sha256-6ietw53ayUE7iVHkWqdIy+1seFlxuBOG78QZOPYkPZM=",
     "track": "3.5"
   },
   "asn1": {
