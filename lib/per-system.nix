@@ -1658,11 +1658,15 @@
                 greeting = ("hello");
               in {   inherit greeting; }
             '';
-            # C408 (dict() -> {}): inside the shared selector's C4 family and
-            # safely fixable by `ruff check --fix`; module-level so the ANN
-            # rules are satisfied without annotations.
+            # UP024 (IOError -> OSError): inside the shared selector's UP
+            # family with a SAFE autofix, so the lane's plain `--fix` applies
+            # it. Not C408 and friends: their fixes are unsafe-gated, the lane
+            # deliberately never passes `--unsafe-fixes`, and an unsafe-only
+            # fixture would survive the lane and fail this check's post-fix
+            # gate. Module-level so the ANN rules are satisfied without
+            # annotations.
             violatingPython = pkgs.writeTextDir "fixture.py" ''
-              values = dict()
+              raise IOError("fixture")
             '';
             fixedNix = lintFix.lanes.nix violatingNix;
             fixedPython = lintFix.lanes.python violatingPython;
