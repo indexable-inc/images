@@ -1,0 +1,16 @@
+[project]
+name = "fabric-agent-run"
+version = "0.1.0"
+description = "Call-owned Claude and Codex runs recorded in the Weave journal"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28,<1",
+    "pydantic>=2,<3",
+]
+
+[project.scripts]
+fabric-agent-run = "fabric_agent_run.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"
