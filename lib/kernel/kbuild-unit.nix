@@ -45,6 +45,10 @@ outputs); per-unit source scoping is #3412.
     KBUILD_BUILD_USER = "nixbld";
     KBUILD_BUILD_HOST = "ix";
     KBUILD_BUILD_VERSION = "1";
+    # The ld-wrapper otherwise injects `-rpath $out/lib` into shared-object
+    # links; the 32-bit vdso is linked as a .so, so the builder's own store
+    # path lands inside vmlinux and plan/unit outputs can never match.
+    NIX_DONT_SET_RPATH = "1";
   };
 
   contentAddressing = {
@@ -90,7 +94,11 @@ outputs); per-unit source scoping is #3412.
           # The dump is build-created and not unit-owned, so harvest sweeps it
           # into the generated snapshot on its own. `export -p` because make
           # runs the script under $(CONFIG_SHELL).
-          sed -i '1a export -p | grep -E "^(declare -x |export )(KBUILD_[A-Za-z0-9_]+|CONFIG_SHELL|CC|LD|NM|AR|OBJCOPY|OBJDUMP|READELF|STRIP|PAHOLE|RESOLVE_BTFIDS|SRCARCH|ARCH|srctree|objtree|LINUXINCLUDE|NOSTDINC_FLAGS|LDFLAGS_vmlinux|CFLAGS_vmlinux|KALLSYMS[A-Za-z0-9_]*|MAKE|HOSTCC)=" > .kbuild-unit-link-env' scripts/link-vmlinux.sh
+          # `|| :` and the muted stderr keep unit replays quiet: there the
+          # dump target is a store symlink from the generated snapshot, the
+          # rewrite fails by design, and the sourced snapshot env is already
+          # identical to what the dump would produce.
+          sed -i '1a { export -p | grep -E "^(declare -x |export )(KBUILD_[A-Za-z0-9_]+|CONFIG_SHELL|CC|LD|NM|AR|OBJCOPY|OBJDUMP|READELF|STRIP|PAHOLE|RESOLVE_BTFIDS|SRCARCH|ARCH|srctree|objtree|LINUXINCLUDE|NOSTDINC_FLAGS|LDFLAGS_vmlinux|CFLAGS_vmlinux|KALLSYMS[A-Za-z0-9_]*|MAKE|HOSTCC)=" > .kbuild-unit-link-env; } 2>/dev/null || :' scripts/link-vmlinux.sh
           make ${configTarget}
           runHook postConfigure
         '';
