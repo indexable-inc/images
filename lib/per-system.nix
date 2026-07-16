@@ -1504,6 +1504,7 @@
             pkgs.runCommand "nushell-config-check"
             {
               nativeBuildInputs = [
+                pkgs.binutils
                 pkgs.jq
                 pkgs.nushell
               ];
@@ -1520,6 +1521,13 @@
                 jq -s 'map(select(.type == "diagnostic"))' "$diagnostics" >&2
                 exit 1
               fi
+              if [[ $(nu --no-config-file -c 'nu-check functions/infra/status.nu') != true ]]; then
+                echo "infra status probe did not parse" >&2
+                exit 1
+              fi
+              for test in tests/test_*.nu; do
+                nu --no-config-file "$test"
+              done
               touch "$out"
             '';
           # Exercises the trusted half of the blast-radius PR comment: the

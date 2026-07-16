@@ -106,6 +106,7 @@ in {
   # the personal config consuming it. Mechanism in index, values here.
   imports = [
     (import ./nushell.nix {inherit configRoot;})
+    ./infra.nix
     optionsModule
     raycastModule
     # Ghostty config, generated from Nix (home/ghostty.nix). Replaces the former

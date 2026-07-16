@@ -43,3 +43,7 @@ export def run-all [] {
     test_depth_and_cycle_deduplication
     test_pipeline_and_input_validation
 }
+
+def main [] {
+    run-all
+}

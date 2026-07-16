@@ -8,3 +8,4 @@ export use share.nu *
 export use abbr.nu
 export use paths.nu *
 export use rstrings.nu *
+export use infra.nu *
