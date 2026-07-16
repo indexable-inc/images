@@ -101,6 +101,8 @@ impl<T> SharedStream<T> {
 
 impl<T> fmt::Debug for SharedStream<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("SharedStream").finish_non_exhaustive()
+        formatter
+            .debug_struct("SharedStream")
+            .finish_non_exhaustive()
     }
 }

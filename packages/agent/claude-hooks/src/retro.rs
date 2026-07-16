@@ -448,7 +448,9 @@ fn dispatch(payload: &Value) {
             "intent": "session-retro: store transcript blob and open retro agent session",
         }),
     ) else {
-        log(&format!("{session}: finalize (put_blob + session open) failed"));
+        log(&format!(
+            "{session}: finalize (put_blob + session open) failed"
+        ));
         return;
     };
     let summary = serde_json::to_string(&result).unwrap_or_default();

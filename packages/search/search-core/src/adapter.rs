@@ -227,7 +227,14 @@ impl Store for MixedbreadStore {
     ) -> Result<Vec<SearchHit>> {
         let chunks = self
             .client
-            .search(stores, query, top_k, to_client_options(options), filters, None)
+            .search(
+                stores,
+                query,
+                top_k,
+                to_client_options(options),
+                filters,
+                None,
+            )
             .await
             .context(BackendSnafu)?;
         Ok(chunks.into_iter().map(hit_from_chunk).collect())

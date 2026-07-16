@@ -4,7 +4,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
 
-use crate::{error, names, ty, RenderError};
+use crate::{RenderError, error, names, ty};
 
 pub fn render_fn(function: &ir::Function, user: &Ident) -> Result<TokenStream, RenderError> {
     if matches!(function.asyncness, ir::Asyncness::Async) {

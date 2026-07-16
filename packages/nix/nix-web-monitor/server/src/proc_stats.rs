@@ -207,7 +207,10 @@ fn start_generation_without_procfs(pid: i64) -> Option<u64> {
     let pid = libc::pid_t::try_from(pid).ok()?;
     let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
     let mut info = KinfoProcPrefix {
-        start_time: libc::timeval { tv_sec: 0, tv_usec: 0 },
+        start_time: libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        },
         _rest: [0; 1024],
     };
     let mut size = std::mem::size_of::<KinfoProcPrefix>();
@@ -243,10 +246,7 @@ const fn start_generation_without_procfs(_pid: i64) -> Option<u64> {
 
 /// Sum the readable resident sizes in a process subtree. `None` distinguishes
 /// an unreadable/restricted procfs snapshot from a measured zero-byte total.
-fn aggregate_rss(
-    subtree: &[i64],
-    mut read_rss: impl FnMut(i64) -> Option<u64>,
-) -> Option<u64> {
+fn aggregate_rss(subtree: &[i64], mut read_rss: impl FnMut(i64) -> Option<u64>) -> Option<u64> {
     subtree
         .iter()
         .filter_map(|pid| read_rss(*pid))
@@ -580,7 +580,10 @@ mod tests {
                     rss
                 },
                 |pid| {
-                    assert_eq!(pid, expected.pid, "identity re-check targets the sweep's pid");
+                    assert_eq!(
+                        pid, expected.pid,
+                        "identity re-check targets the sweep's pid"
+                    );
                     identity
                 },
             );
@@ -640,7 +643,11 @@ mod tests {
         // The fallback asserts it is only ever asked for the goal's own pid,
         // so the pidless row doubles as "no process, no lookup".
         let cases: [(Option<i64>, Option<u64>, Option<u64>); 3] = [
-            (Some(42), Some(1_720_200_000_123_456), Some(1_720_200_000_123_456)),
+            (
+                Some(42),
+                Some(1_720_200_000_123_456),
+                Some(1_720_200_000_123_456),
+            ),
             (Some(43), None, None),
             (None, Some(777), None),
         ];
@@ -654,10 +661,16 @@ mod tests {
                 assert_eq!(Some(asked), pid, "fallback asked for the goal's pid only");
                 generation
             });
-            assert_eq!(builds[0].start_ticks, expected, "generation for pid {pid:?}");
+            assert_eq!(
+                builds[0].start_ticks, expected,
+                "generation for pid {pid:?}"
+            );
             assert_eq!(builds[0].cpu_percent, None);
             assert_eq!(builds[0].rss_bytes, None);
-            assert!(sampler.previous.is_empty(), "no baseline without a proc row");
+            assert!(
+                sampler.previous.is_empty(),
+                "no baseline without a proc row"
+            );
         }
     }
 

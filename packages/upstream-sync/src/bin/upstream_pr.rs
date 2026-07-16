@@ -82,37 +82,14 @@ fn main() -> Result<()> {
     let patch_dir = fork.patch_dir_abs();
     let dag_file = patch_dir.join("dag.json");
     if !dag_file.exists() {
-        bail!("upstream-pr: {}: missing dag.json in {}; run `nix run .#rebase-patches -- dag`", cli.pkg, fork.patch_dir);
+        bail!(
+            "upstream-pr: {}: missing dag.json in {}; run `nix run .#rebase-patches -- dag`",
+            cli.pkg,
+            fork.patch_dir
+        );
     }
     let doc = dag::Doc::load(&dag_file)?;
-    let all_patches = doc.patch_names();
-
-    // Resolve the requested patch to an exact node name (exact, then prefix,
-    // then unique substring).
-    let target = dag::resolve(&cli.patch, &all_patches)?;
-    println!("{}", paint(CYAN, &format!("upstream-pr: {}: target patch {target}", cli.pkg)));
-
-    // Ancestor closure from the DAG, in NNNN order, plus the target last.
-    let mut closure = doc.closure(&target);
-    let pos: HashMap<&str, usize> = all_patches.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
-    let by_series = |p: &String| pos.get(p.as_str()).copied().unwrap_or(usize::MAX);
-    closure.sort_by_key(by_series);
-    let mut ordered = closure.clone();
-    ordered.push(target.clone());
-    ordered.sort_by_key(by_series);
-    ordered.dedup();
-    if closure.is_empty() {
-        println!("upstream-pr: {}: {target} is independent; contributing it alone.", cli.pkg);
-    } else {
-        println!(
-            "{}",
-            paint(YELLOW, &format!("upstream-pr: {}: {target} is NOT independent; its upstream contribution drags {} ancestor patch(es):", cli.pkg, closure.len()))
-        );
-        for c in &closure {
-            println!("  - {c}");
-        }
-        println!("{}", paint(YELLOW, "upstream-pr: consider splitting, or send the closure as one PR."));
-    }
+    let Closure { target, ordered } = resolve_closure(&cli.pkg, &cli.patch, &doc)?;
 
     let slug = Slug::parse(&fork.url)?;
     let branch = format!("upstream-pr/{}/{}", cli.pkg, patch::slug(&target));
@@ -125,46 +102,164 @@ fn main() -> Result<()> {
         .tempdir()
         .wrap_err("cannot create scratch dir")?
         .keep();
-    let PreparedBranch { head_ref, tip } = prepare_branch(&scratch, &fork, &slug, &branch, &cli.pkg)?;
+    let PreparedBranch { head_ref, tip } =
+        prepare_branch(&scratch, &fork, &slug, &branch, &cli.pkg)?;
     apply_closure(&scratch, &patch_dir, &ordered, &tip, &cli.pkg)?;
 
-    let n_commits = cmd::run_in(&scratch, "git", &["rev-list", "--count", &format!("{tip}..HEAD")])?;
+    let n_commits = cmd::run_in(
+        &scratch,
+        "git",
+        &["rev-list", "--count", &format!("{tip}..HEAD")],
+    )?;
     let tip_short: String = tip.chars().take(10).collect();
     println!(
         "{}",
-        paint(GREEN, &format!("upstream-pr: {}: applied {n_commits} commit(s) cleanly onto {}/{}@{head_ref} ({tip_short})", cli.pkg, slug.owner, slug.repo))
+        paint(
+            GREEN,
+            &format!(
+                "upstream-pr: {}: applied {n_commits} commit(s) cleanly onto {}/{}@{head_ref} ({tip_short})",
+                cli.pkg, slug.owner, slug.repo
+            )
+        )
     );
 
     if cli.dry_run {
-        println!(
-            "{}",
-            paint(GREEN, &format!("upstream-pr: --dry-run: would push branch {branch} to {ORG}/{} and print a compare URL. Commits:", slug.repo))
-        );
-        println!("{}", cmd::run_in(&scratch, "git", &["log", "--oneline", &format!("{tip}..HEAD")])?);
-        println!("upstream-pr: scratch repo left for inspection: {}", scratch.display());
-        return Ok(());
+        return dry_run_report(&scratch, &tip, &branch, &slug.repo);
     }
 
     // Ensure an indexable-inc fork of the upstream exists, then push.
     ensure_fork(&slug)?;
     println!("upstream-pr: pushing {branch} to {ORG}/{}...", slug.repo);
-    cmd::run_in(&scratch, "git", &["remote", "add", "fork", &format!("https://github.com/{ORG}/{}.git", slug.repo)])?;
+    cmd::run_in(
+        &scratch,
+        "git",
+        &[
+            "remote",
+            "add",
+            "fork",
+            &format!("https://github.com/{ORG}/{}.git", slug.repo),
+        ],
+    )?;
     cmd::run_in(&scratch, "git", &["push", "--force", "fork", &branch])?;
 
     let compare = format!(
         "https://github.com/{}/{}/compare/{head_ref}...{ORG}:{}:{branch}?expand=1",
         slug.owner, slug.repo, slug.repo
     );
-    println!("{}", paint(GREEN, &format!("upstream-pr: {}: pushed. Ready-to-open compare URL:", cli.pkg)));
+    println!(
+        "{}",
+        paint(
+            GREEN,
+            &format!(
+                "upstream-pr: {}: pushed. Ready-to-open compare URL:",
+                cli.pkg
+            )
+        )
+    );
     println!("  {compare}");
 
     if cli.open {
-        open_draft_pr(&cli.pkg, &fork, &scratch, &slug, &head_ref, &branch, &target)?;
+        open_draft_pr(
+            &cli.pkg, &fork, &scratch, &slug, &head_ref, &branch, &target,
+        )?;
     } else {
-        println!("upstream-pr: prepare-only. Re-run with `--open` to open a DRAFT PR upstream, or open the compare URL by hand.");
+        println!(
+            "upstream-pr: prepare-only. Re-run with `--open` to open a DRAFT PR upstream, or open the compare URL by hand."
+        );
     }
 
-    fs::remove_dir_all(&scratch).wrap_err_with(|| format!("cannot remove scratch repo {}", scratch.display()))?;
+    fs::remove_dir_all(&scratch)
+        .wrap_err_with(|| format!("cannot remove scratch repo {}", scratch.display()))?;
+    Ok(())
+}
+
+/// A resolved target patch together with its full contribution closure
+/// (ancestors plus the target) in series order.
+struct Closure {
+    target: String,
+    ordered: Vec<String>,
+}
+
+/// Resolve the requested patch and compute its contribution closure in
+/// series (NNNN) order, ancestors first with the target included; split out
+/// of [`main`] to keep it within clippy's function-length budget. Warns when
+/// the patch drags ancestors so the author knows the upstream PR is not
+/// single-commit.
+fn resolve_closure(pkg: &str, requested: &str, doc: &dag::Doc) -> Result<Closure> {
+    let all_patches = doc.patch_names();
+    // Resolve the requested patch to an exact node name (exact, then prefix,
+    // then unique substring).
+    let target = dag::resolve(requested, &all_patches)?;
+    println!(
+        "{}",
+        paint(CYAN, &format!("upstream-pr: {pkg}: target patch {target}"))
+    );
+
+    // Ancestor closure from the DAG, in NNNN order, plus the target last.
+    let mut closure = doc.closure(&target);
+    let pos: HashMap<&str, usize> = all_patches
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    let by_series = |p: &String| pos.get(p.as_str()).copied().unwrap_or(usize::MAX);
+    closure.sort_by_key(by_series);
+    let mut ordered = closure.clone();
+    ordered.push(target.clone());
+    ordered.sort_by_key(by_series);
+    ordered.dedup();
+    if closure.is_empty() {
+        println!("upstream-pr: {pkg}: {target} is independent; contributing it alone.");
+    } else {
+        println!(
+            "{}",
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-pr: {pkg}: {target} is NOT independent; its upstream contribution drags {} ancestor patch(es):",
+                    closure.len()
+                )
+            )
+        );
+        for c in &closure {
+            println!("  - {c}");
+        }
+        println!(
+            "{}",
+            paint(
+                YELLOW,
+                "upstream-pr: consider splitting, or send the closure as one PR."
+            )
+        );
+    }
+    Ok(Closure { target, ordered })
+}
+
+/// Print what `--dry-run` would have pushed (branch, commits, scratch repo
+/// location); split out of [`main`] to keep it within clippy's
+/// function-length budget.
+fn dry_run_report(scratch: &Path, tip: &str, branch: &str, repo: &str) -> Result<()> {
+    println!(
+        "{}",
+        paint(
+            GREEN,
+            &format!(
+                "upstream-pr: --dry-run: would push branch {branch} to {ORG}/{repo} and print a compare URL. Commits:"
+            )
+        )
+    );
+    println!(
+        "{}",
+        cmd::run_in(
+            scratch,
+            "git",
+            &["log", "--oneline", &format!("{tip}..HEAD")]
+        )?
+    );
+    println!(
+        "upstream-pr: scratch repo left for inspection: {}",
+        scratch.display()
+    );
     Ok(())
 }
 
@@ -191,20 +286,38 @@ struct PreparedBranch {
     tip: String,
 }
 
-fn prepare_branch(scratch: &Path, fork: &Fork, slug: &Slug, branch: &str, pkg: &str) -> Result<PreparedBranch> {
+fn prepare_branch(
+    scratch: &Path,
+    fork: &Fork,
+    slug: &Slug,
+    branch: &str,
+    pkg: &str,
+) -> Result<PreparedBranch> {
     cmd::run_in(scratch, "git", &["init", "--quiet"])?;
     neutralize_config(scratch)?;
-    println!("upstream-pr: fetching {}/{} default branch tip...", slug.owner, slug.repo);
+    println!(
+        "upstream-pr: fetching {}/{} default branch tip...",
+        slug.owner, slug.repo
+    );
     cmd::run_in(scratch, "git", &["remote", "add", "upstream", &fork.url])?;
 
     // Discover the default branch (HEAD) of upstream, then fetch just it.
-    let symref = cmd::run_in(scratch, "git", &["ls-remote", "--symref", "upstream", "HEAD"])?;
+    let symref = cmd::run_in(
+        scratch,
+        "git",
+        &["ls-remote", "--symref", "upstream", "HEAD"],
+    )?;
     let head_ref = symref
         .lines()
         .find(|l| l.starts_with("ref:"))
         .and_then(|l| regex!(r"ref:\s+refs/heads/(\S+)\s+HEAD").captures(l))
         .map(|c| c[1].to_owned())
-        .ok_or_else(|| eyre!("upstream-pr: {pkg}: cannot discover the default branch of {}", fork.url))?;
+        .ok_or_else(|| {
+            eyre!(
+                "upstream-pr: {pkg}: cannot discover the default branch of {}",
+                fork.url
+            )
+        })?;
     println!("upstream-pr: upstream default branch is {head_ref}");
 
     cmd::run_in(scratch, "git", &["fetch", "--quiet", "upstream", &head_ref])?;
@@ -215,9 +328,19 @@ fn prepare_branch(scratch: &Path, fork: &Fork, slug: &Slug, branch: &str, pkg: &
 
 /// Apply the closure onto the tip with 3-way. On conflict, fail loudly: this
 /// is where our old base drifting from the upstream tip shows up.
-fn apply_closure(scratch: &Path, patch_dir: &Path, ordered: &[String], tip: &str, pkg: &str) -> Result<()> {
+fn apply_closure(
+    scratch: &Path,
+    patch_dir: &Path,
+    ordered: &[String],
+    tip: &str,
+    pkg: &str,
+) -> Result<()> {
     let mut am_args: Vec<String> = vec!["am".to_owned(), "--3way".to_owned()];
-    am_args.extend(ordered.iter().map(|p| patch_dir.join(p).display().to_string()));
+    am_args.extend(
+        ordered
+            .iter()
+            .map(|p| patch_dir.join(p).display().to_string()),
+    );
     let am = cmd::complete_in(scratch, "git", &am_args)?;
     if am.ok() {
         return Ok(());
@@ -233,7 +356,10 @@ fn apply_closure(scratch: &Path, patch_dir: &Path, ordered: &[String], tip: &str
         let tail = &lines[lines.len().saturating_sub(12)..];
         format!("git am output:\n{}", tail.join("\n"))
     } else {
-        format!("conflicting files: [{}]", unmerged.lines().collect::<Vec<_>>().join(", "))
+        format!(
+            "conflicting files: [{}]",
+            unmerged.lines().collect::<Vec<_>>().join(", ")
+        )
     };
     cmd::complete_in(scratch, "git", &["am", "--abort"])?;
     bail!(
@@ -250,18 +376,32 @@ fn apply_closure(scratch: &Path, patch_dir: &Path, ordered: &[String], tip: &str
 fn origin_blob_link(patch_dir_rel: &str, patch: &str) -> Result<Option<String>> {
     let res = cmd::complete("git", &["remote", "get-url", "origin"])?;
     if !res.ok() {
-        println!("{}", paint(YELLOW, "upstream-pr: no `origin` remote here; the PR body will omit the patch-of-record link."));
+        println!(
+            "{}",
+            paint(
+                YELLOW,
+                "upstream-pr: no `origin` remote here; the PR body will omit the patch-of-record link."
+            )
+        );
         return Ok(None);
     }
     let url = res.stdout.trim();
     let Some(caps) = regex!(r"github\.com[:/]([^/]+)/([^/]+?)(\.git)?$").captures(url) else {
         println!(
             "{}",
-            paint(YELLOW, &format!("upstream-pr: origin {url} is not a parseable github URL; the PR body will omit the patch-of-record link."))
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-pr: origin {url} is not a parseable github URL; the PR body will omit the patch-of-record link."
+                )
+            )
         );
         return Ok(None);
     };
-    Ok(Some(format!("https://github.com/{}/{}/blob/main/{patch_dir_rel}/{patch}", &caps[1], &caps[2])))
+    Ok(Some(format!(
+        "https://github.com/{}/{}/blob/main/{patch_dir_rel}/{patch}",
+        &caps[1], &caps[2]
+    )))
 }
 
 /// The outward act, gated behind --open. Draft only. Title and body come
@@ -269,11 +409,21 @@ fn origin_blob_link(patch_dir_rel: &str, patch: &str) -> Result<Option<String>> 
 /// duplicate description field), so a body-less commit is refused loudly;
 /// the `patch-dag-<name>` check enforces the same for attempt-marked patches
 /// before it ever gets here.
-fn open_draft_pr(pkg: &str, fork: &Fork, scratch: &Path, slug: &Slug, head_ref: &str, branch: &str, target: &str) -> Result<()> {
+fn open_draft_pr(
+    pkg: &str,
+    fork: &Fork,
+    scratch: &Path,
+    slug: &Slug,
+    head_ref: &str,
+    branch: &str,
+    target: &str,
+) -> Result<()> {
     let title = cmd::run_in(scratch, "git", &["log", "-1", "--format=%s", "HEAD"])?;
     let commit_body = cmd::run_in(scratch, "git", &["log", "-1", "--format=%b", "HEAD"])?;
     if commit_body.is_empty() {
-        bail!("upstream-pr: {pkg}: {target} has no commit-message body; write the why in the commit body (it becomes the upstream PR description).");
+        bail!(
+            "upstream-pr: {pkg}: {target} has no commit-message body; write the why in the commit body (it becomes the upstream PR description)."
+        );
     }
 
     // Optional upstream-specific PR-template content (issue refs,
@@ -300,7 +450,13 @@ fn open_draft_pr(pkg: &str, fork: &Fork, scratch: &Path, slug: &Slug, head_ref: 
 
     println!(
         "{}",
-        paint(YELLOW, &format!("upstream-pr: opening DRAFT PR upstream {}/{} <- {ORG}:{branch}...", slug.owner, slug.repo))
+        paint(
+            YELLOW,
+            &format!(
+                "upstream-pr: opening DRAFT PR upstream {}/{} <- {ORG}:{branch}...",
+                slug.owner, slug.repo
+            )
+        )
     );
     let created = cmd::run(
         "gh",
@@ -331,7 +487,20 @@ fn ensure_fork(slug: &Slug) -> Result<()> {
     if exists.ok() {
         return Ok(());
     }
-    println!("upstream-pr: forking {}/{} into {ORG} once...", slug.owner, slug.repo);
-    cmd::run("gh", &["repo", "fork", &format!("{}/{}", slug.owner, slug.repo), "--org", ORG, "--clone=false"])?;
+    println!(
+        "upstream-pr: forking {}/{} into {ORG} once...",
+        slug.owner, slug.repo
+    );
+    cmd::run(
+        "gh",
+        &[
+            "repo",
+            "fork",
+            &format!("{}/{}", slug.owner, slug.repo),
+            "--org",
+            ORG,
+            "--clone=false",
+        ],
+    )?;
     Ok(())
 }

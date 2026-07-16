@@ -5,7 +5,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use unibind_core::ir;
 
-use crate::{names, ty, RenderError, RenderedRecord};
+use crate::{RenderError, RenderedRecord, names, ty};
 
 /// Render `__read_<record>` and `__write_<record>` for one record. Fields
 /// travel in declaration order with no framing, mirroring the generated
@@ -27,7 +27,8 @@ pub fn render_codecs(
     let mut reads = Vec::new();
     let mut writes = Vec::new();
     for field in &record.fields {
-        ty::check_boundary(&field.ty, interface).map_err(|error| at_field(record, field, &error))?;
+        ty::check_boundary(&field.ty, interface)
+            .map_err(|error| at_field(record, field, &error))?;
         // Validate the Java side too: one validator for both halves.
         names::component_name(record, field)?;
         let field_ident = names::name_ident(&field.name)?;

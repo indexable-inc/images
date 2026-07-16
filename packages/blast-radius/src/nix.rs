@@ -103,12 +103,7 @@ fn run(command: &mut Command) -> Result<String> {
 fn has_ci_checks(repo: &str, rev: &str) -> bool {
     let flakeref = format!("git+file://{repo}?rev={rev}&allRefs=1#ciChecks");
     Command::new("nix")
-        .args([
-            "eval",
-            &flakeref,
-            "--apply",
-            "builtins.isAttrs",
-        ])
+        .args(["eval", &flakeref, "--apply", "builtins.isAttrs"])
         .output()
         .is_ok_and(|out| out.status.success())
 }

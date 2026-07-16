@@ -1,14 +1,23 @@
 ---
+id: mcp-embed-typecheck-hunt
+postedAt: 2026-07-16T01:51:49-07:00
 title: "The green CI that wasn't: an embed typecheck hidden behind a truncated log"
-date: 2026-07-16
+tags: [interesting, ci, nix, mcp, postmortem]
+links:
+  - label: "#3417"
+    href: https://github.com/indexable-inc/index/issues/3417
+  - label: "#3427"
+    href: https://github.com/indexable-inc/index/pull/3427
+  - label: "#3448"
+    href: https://github.com/indexable-inc/index/issues/3448
 ---
 
 Bundling in-process code embeddings into the MCP server (torch/MPS,
 [#3417](https://github.com/indexable-inc/index/issues/3417)) should have
 been a clean package addition. Instead PR
 [#3427](https://github.com/indexable-inc/index/pull/3427) sat red on the
-required `flake-check` gate for two sessions, behind three separate
-red herrings. The durable lesson is not about embeddings: it is that a
+required `flake-check` gate for two sessions, behind three separate red
+herrings. The durable lesson is not about embeddings: it is that a
 "mystery" CI failure is usually a real error you have not read yet.
 
 ## Symptom

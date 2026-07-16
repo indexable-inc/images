@@ -10,10 +10,11 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
+use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class};
@@ -21,7 +22,6 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSCursor, NSEvent,
     NSEventMask, NSEventModifierFlags, NSScreen, NSWindow,
 };
-use dispatch2::DispatchQueue;
 use objc2_core_graphics::{CGAssociateMouseAndMouseCursorPosition, CGError};
 use objc2_foundation::{NSNotification, NSObjectProtocol};
 use objc2_metal::MTLDrawable as _;
@@ -29,9 +29,9 @@ use objc2_quartz_core::CAMetalDisplayLinkUpdate;
 use panes_protocol::{MINOR_KEY_REPEAT, MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
 
 use crate::conn::{self, Event};
+use crate::render::Renderer;
 use crate::send_queue::{SendQueue, SendQueueError};
 use crate::transport::Target;
-use crate::render::Renderer;
 use crate::window::{PaneWindow, SurfaceSize, WindowParams};
 
 /// Presentation and input policy from the CLI.
@@ -110,7 +110,10 @@ impl Drop for CursorCapture {
         NSEvent::setMouseCoalescingEnabled(true);
         let err = CGAssociateMouseAndMouseCursorPosition(true);
         if err != CGError::Success {
-            eprintln!("panes-host: window {}: cursor re-association failed: {err:?}", self.id);
+            eprintln!(
+                "panes-host: window {}: cursor re-association failed: {err:?}",
+                self.id
+            );
         }
         // NSCursor.hide nests, and the engage-side re-hides
         // (`reassert_capture_cursor`) may have raised the count past one:
@@ -236,7 +239,11 @@ fn log_screens(mtm: MainThreadMarker) {
             frame.origin.y,
             screen.backingScaleFactor(),
             screen.maximumFramesPerSecond(),
-            if main_frame == Some(frame) { " (main)" } else { "" },
+            if main_frame == Some(frame) {
+                " (main)"
+            } else {
+                ""
+            },
         );
     }
 }
@@ -256,8 +263,7 @@ struct ScreenFacts {
 /// are corrected per window by their Configure. Fallback 2.0 (headless / no
 /// screens) errs toward sharp.
 fn read_screen_facts(mtm: MainThreadMarker) -> ScreenFacts {
-    let max_fps =
-        NSScreen::mainScreen(mtm).map_or(60, |screen| screen.maximumFramesPerSecond());
+    let max_fps = NSScreen::mainScreen(mtm).map_or(60, |screen| screen.maximumFramesPerSecond());
     let backing = NSScreen::screens(mtm)
         .iter()
         .map(|screen| screen.backingScaleFactor())
@@ -290,7 +296,9 @@ fn screens_changed() {
     let facts = read_screen_facts(mtm);
     with_app(|app| {
         // Relaxed matches the reader (conn.rs): independent u32 facts.
-        app.host_info.refresh_mhz.store(facts.refresh_mhz, Ordering::Relaxed);
+        app.host_info
+            .refresh_mhz
+            .store(facts.refresh_mhz, Ordering::Relaxed);
         app.host_info.scale.store(facts.scale, Ordering::Relaxed);
         for (id, window) in &mut app.windows {
             window.refresh_stream_rate(mtm);
@@ -315,23 +323,22 @@ fn screens_changed() {
 /// `sendEvent` override routes them on to the view, and the view's held-key
 /// map dedupes if `AppKit` ever delivers the original too.
 fn install_key_up_monitor(mtm: MainThreadMarker) {
-    let block = block2::RcBlock::new(
-        move |event: core::ptr::NonNull<NSEvent>| -> *mut NSEvent {
-            // SAFETY: AppKit passes a valid event; local monitors run on the
-            // main thread.
-            let ev = unsafe { event.as_ref() };
-            if ev.modifierFlags().contains(NSEventModifierFlags::Command)
-                && let Some(window) = NSApplication::sharedApplication(mtm).keyWindow()
-            {
-                window.sendEvent(ev);
-            }
-            // Hand the event back so normal dispatch continues unchanged.
-            event.as_ptr()
-        },
-    );
+    let block = block2::RcBlock::new(move |event: core::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit passes a valid event; local monitors run on the
+        // main thread.
+        let ev = unsafe { event.as_ref() };
+        if ev.modifierFlags().contains(NSEventModifierFlags::Command)
+            && let Some(window) = NSApplication::sharedApplication(mtm).keyWindow()
+        {
+            window.sendEvent(ev);
+        }
+        // Hand the event back so normal dispatch continues unchanged.
+        event.as_ptr()
+    });
     // SAFETY: the block returns the pointer it was handed (valid, non-null).
-    let monitor =
-        unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyUp, &block) };
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyUp, &block)
+    };
     // Intentionally never removed: the monitor must live as long as the app,
     // and dropping the token would not uninstall it anyway.
     std::mem::forget(monitor);
@@ -376,18 +383,27 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
     match msg {
         // The reader consumes Hello during version negotiation.
         ToHost::Hello { .. } | ToHost::Pong { .. } => Deferred::default(),
-        ToHost::WindowNew { id, title, app_id, width, height, scale } => {
+        ToHost::WindowNew {
+            id,
+            title,
+            app_id,
+            width,
+            height,
+            scale,
+        } => {
             if app.windows.contains_key(&id) {
                 eprintln!("panes-host: duplicate WindowNew for {id}, ignoring");
                 return Deferred::default();
             }
-            let params = WindowParams { id, title, app_id, width, height, scale };
-            let window = PaneWindow::new(
-                app.mtm,
-                &app.renderer,
-                &params,
-                &app.options,
-            );
+            let params = WindowParams {
+                id,
+                title,
+                app_id,
+                width,
+                height,
+                scale,
+            };
+            let window = PaneWindow::new(app.mtm, &app.renderer, &params, &app.options);
             app.windows.insert(id, window);
             Deferred::default()
         }
@@ -403,9 +419,20 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
             }
             Deferred::default()
         }
-        ToHost::WindowFrame { id, seq, width, height, full, tiles } => {
-            let trace_bytes = crate::trace::enabled()
-                .then(|| (tiles.len(), tiles.iter().map(|tile| tile.payload.len()).sum::<usize>()));
+        ToHost::WindowFrame {
+            id,
+            seq,
+            width,
+            height,
+            full,
+            tiles,
+        } => {
+            let trace_bytes = crate::trace::enabled().then(|| {
+                (
+                    tiles.len(),
+                    tiles.iter().map(|tile| tile.payload.len()).sum::<usize>(),
+                )
+            });
             let Some(window) = app.windows.get_mut(&id) else {
                 eprintln!("panes-host: frame for unknown window {id}");
                 return Deferred::default();
@@ -439,7 +466,10 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
                 Deferred::default()
             } else {
                 window.shown = true;
-                Deferred { show: Some(window.ns.clone()), close: Vec::new() }
+                Deferred {
+                    show: Some(window.ns.clone()),
+                    close: Vec::new(),
+                }
             }
         }
         ToHost::WindowGone { id } => {
@@ -601,19 +631,17 @@ fn queue_to_guest(out: &SendQueue, msg: ToGuest) {
     }
 }
 
-fn queue_configure(
-    out: &SendQueue,
-    id: WindowId,
-    size: SurfaceSize,
-    activated: bool,
-) {
-    queue_to_guest(out, ToGuest::Configure {
-        id,
-        width: size.width,
-        height: size.height,
-        scale: size.scale,
-        activated,
-    });
+fn queue_configure(out: &SendQueue, id: WindowId, size: SurfaceSize, activated: bool) {
+    queue_to_guest(
+        out,
+        ToGuest::Configure {
+            id,
+            width: size.width,
+            height: size.height,
+            scale: size.scale,
+            activated,
+        },
+    );
 }
 
 /// Queue a message to the guest; silently dropped while disconnected (every
@@ -649,10 +677,10 @@ pub fn display_tick(id: WindowId, update: &CAMetalDisplayLinkUpdate) {
                 );
             }
             queue_to_guest(out, ToGuest::Ack { id, seq });
-            let stat = app
-                .ack_stats
-                .entry(id)
-                .or_insert_with(|| AckStat { count: 0, epoch: Instant::now() });
+            let stat = app.ack_stats.entry(id).or_insert_with(|| AckStat {
+                count: 0,
+                epoch: Instant::now(),
+            });
             stat.count += 1;
             let elapsed = stat.epoch.elapsed();
             if elapsed >= ACK_RATE_REPORT_EVERY {
@@ -712,7 +740,11 @@ pub fn window_occlusion_changed(id: WindowId) {
         let visible = window.occlusion_visible();
         eprintln!(
             "panes-host: window {id}: {}",
-            if visible { "visible; presents resume" } else { "occluded; presents paused" }
+            if visible {
+                "visible; presents resume"
+            } else {
+                "occluded; presents paused"
+            }
         );
         window.set_occluded(!visible);
     });

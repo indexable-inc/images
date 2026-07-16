@@ -185,9 +185,7 @@ pub fn find(
 fn banding_threshold(threshold: f64, metric: Type3Metric) -> f64 {
     match metric {
         Type3Metric::Jaccard => threshold,
-        Type3Metric::Overlap => {
-            threshold / (1.0 + 1.0 / OVERLAP_SIZE_RATIO_FLOOR - threshold)
-        }
+        Type3Metric::Overlap => threshold / (1.0 + 1.0 / OVERLAP_SIZE_RATIO_FLOOR - threshold),
     }
 }
 
@@ -266,10 +264,7 @@ fn try_make_group(
     // Ground-truth enforcement of the overlap size floor (the candidate loop
     // also prunes on it, but only inside the estimate fast path).
     if pair.metric == Type3Metric::Overlap
-        && !size_compatible(
-            node_a.subtree_features.len(),
-            node_b.subtree_features.len(),
-        )
+        && !size_compatible(node_a.subtree_features.len(), node_b.subtree_features.len())
     {
         return None;
     }
@@ -356,7 +351,10 @@ mod tests {
         let t = banding_threshold(0.8, Type3Metric::Overlap);
         let expected = 0.8 / (1.0 + 1.0 / OVERLAP_SIZE_RATIO_FLOOR - 0.8);
         assert!((t - expected).abs() < 1e-9);
-        assert!(t < 0.35, "implied floor must sit far below the raw threshold");
+        assert!(
+            t < 0.35,
+            "implied floor must sit far below the raw threshold"
+        );
     }
 
     /// Distinct counting over sorted runs.

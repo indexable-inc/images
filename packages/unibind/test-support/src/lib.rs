@@ -8,7 +8,9 @@ pub struct RecordAttributes<'a> {
     pub fields: Vec<(&'a str, String)>,
 }
 
-pub fn format_record_attributes<'a>(records: impl IntoIterator<Item = RecordAttributes<'a>>) -> String {
+pub fn format_record_attributes<'a>(
+    records: impl IntoIterator<Item = RecordAttributes<'a>>,
+) -> String {
     let mut shown = String::new();
     for record in records {
         writeln!(shown, "// struct {}: {}", record.name, record.outer).expect("write to string");

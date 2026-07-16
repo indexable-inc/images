@@ -117,12 +117,24 @@ impl Doc {
         if dry_run {
             println!(
                 "{}",
-                paint(CYAN, &format!("upstream-sync: --dry-run: would write {fork_name} status to {}", p.display()))
+                paint(
+                    CYAN,
+                    &format!(
+                        "upstream-sync: --dry-run: would write {fork_name} status to {}",
+                        p.display()
+                    )
+                )
             );
             return Ok(());
         }
         fs::write(p, self.to_bytes()?).wrap_err_with(|| format!("cannot write {}", p.display()))?;
-        println!("{}", paint(GREEN, &format!("upstream-sync: {fork_name}: wrote {}", p.display())));
+        println!(
+            "{}",
+            paint(
+                GREEN,
+                &format!("upstream-sync: {fork_name}: wrote {}", p.display())
+            )
+        );
         Ok(())
     }
 }

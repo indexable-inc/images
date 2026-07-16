@@ -101,17 +101,19 @@ async def once() -> list[str]:
     state, so the record says what happened, not just that it stopped.
     """
 
-    rows = (await weave.query(QUERY))["rows"]
+    from . import _journal
+
+    rows = (await _journal(weave.query(QUERY)))["rows"]
     stale = _parse(rows, now_ms=time.time() * 1000)
     if not stale:
         return []
     alive = await asyncio.to_thread(_alive_runners, {runner for _, runner in stale})
     lost = [(task, runner) for task, runner in stale if runner not in alive]
     for task, runner in lost:
-        await weave.assert_facts([
+        await _journal(weave.assert_facts([
             (task, "error", f"reconciler: {runner} died without a terminal fact"),
             (task, "state", "lost"),
-        ])
+        ]))
     return [task for task, _ in lost]
 
 

@@ -4,14 +4,16 @@
 //! socket, so a stalled guest can never hitch window presentation.
 
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use dispatch2::DispatchQueue;
-use panes_protocol::{Encoding, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR, read_msg, write_msg};
-use crate::transport::{Stream, Target, connect};
 use crate::send_queue::{self, SendQueue, SendQueueReceiver};
+use crate::transport::{Stream, Target, connect};
+use dispatch2::DispatchQueue;
+use panes_protocol::{
+    Encoding, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR, read_msg, write_msg,
+};
 
 /// What the supervisor tells the main thread. `Connected` carries the bounded
 /// queue the main thread pushes outgoing messages into; replacing it on
@@ -21,11 +23,16 @@ pub enum Event {
     /// The guest's major-validated Hello. Its minor gates every 1.x message
     /// we emit (postcard has no unknown-variant tolerance, see the protocol
     /// crate), so the main thread must know it.
-    Hello { minor: u16 },
+    Hello {
+        minor: u16,
+    },
     /// `recv` is the trace clock (`trace::now`) right after the wire decode
     /// on the reader thread, so `PANES_TRACE` frame lines can separate
     /// main-queue wait from ingest work; costs one timestamp per message.
-    Msg { msg: ToHost, recv: f64 },
+    Msg {
+        msg: ToHost,
+        recv: f64,
+    },
     Disconnected,
 }
 
@@ -65,7 +72,11 @@ fn supervise(target: &Target, host: &HostInfo) -> ! {
 }
 
 fn run_connection(stream: Stream, host: &HostInfo) {
-    let Stream { read, write, shutdown } = stream;
+    let Stream {
+        read,
+        write,
+        shutdown,
+    } = stream;
     // Outgoing traffic is bounded in a purpose-built queue: continuous pointer
     // and axis updates plus cumulative acks coalesce in place, while discrete
     // input keeps FIFO order or reports a broken connection instead of growing
@@ -110,7 +121,10 @@ fn read_loop(read: Box<dyn Read + Send>) {
                     return;
                 }
             }
-            Ok(msg) => post(Event::Msg { msg, recv: crate::trace::now() }),
+            Ok(msg) => post(Event::Msg {
+                msg,
+                recv: crate::trace::now(),
+            }),
             Err(error) => {
                 eprintln!("panes-host: connection lost: {error}");
                 return;

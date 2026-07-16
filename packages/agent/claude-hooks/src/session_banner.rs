@@ -85,7 +85,9 @@ fn repo_inventory(out: &mut String) {
             .collect();
         names.sort();
         if !names.is_empty() {
-            let org_name = org.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            let org_name = org
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             let _ = writeln!(out, "  {org_name}: {}", names.join(" "));
         }
     }
@@ -123,7 +125,10 @@ pub fn session_banner() {
         let _ = writeln!(out, "hardware model (sysctl -n hw.model): {model}");
     }
     if let Some(chip) = run("sysctl", &["-n", "machdep.cpu.brand_string"]) {
-        let _ = writeln!(out, "hardware chip (sysctl -n machdep.cpu.brand_string): {chip}");
+        let _ = writeln!(
+            out,
+            "hardware chip (sysctl -n machdep.cpu.brand_string): {chip}"
+        );
     }
 
     repo_inventory(&mut out);

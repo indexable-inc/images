@@ -1526,10 +1526,7 @@ mod tests {
         captured: CapturedRequest,
     }
 
-    async fn post_fixture(
-        path: &'static str,
-        response: &'static str,
-    ) -> PostFixture {
+    async fn post_fixture(path: &'static str, response: &'static str) -> PostFixture {
         let captured: CapturedRequest = Arc::default();
         let app = Router::new().route(
             path,
@@ -1927,10 +1924,7 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].id.as_deref(), Some("f-1"));
         assert_eq!(files[0].external_id.as_deref(), Some("linear:issue:A"));
-        assert_eq!(
-            files[0].created_at.as_deref(),
-            Some("2026-06-11T00:00:00Z")
-        );
+        assert_eq!(files[0].created_at.as_deref(), Some("2026-06-11T00:00:00Z"));
         assert_eq!(
             files[0]
                 .metadata
@@ -2245,13 +2239,22 @@ mod tests {
 
         let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
         let status = |id: &'static str| client.file_status("s", id);
-        assert_eq!(status("queued").await.expect("get"), Some(FileStatus::Pending));
+        assert_eq!(
+            status("queued").await.expect("get"),
+            Some(FileStatus::Pending)
+        );
         assert_eq!(
             status("embedding").await.expect("get"),
             Some(FileStatus::InProgress)
         );
-        assert_eq!(status("done").await.expect("get"), Some(FileStatus::Completed));
-        assert_eq!(status("novel").await.expect("get"), Some(FileStatus::Unknown));
+        assert_eq!(
+            status("done").await.expect("get"),
+            Some(FileStatus::Completed)
+        );
+        assert_eq!(
+            status("novel").await.expect("get"),
+            Some(FileStatus::Unknown)
+        );
         assert_eq!(status("gone").await.expect("get"), None);
 
         // The waiting contract: only the two live states keep a poll loop going.

@@ -46,10 +46,10 @@ __all__ = [
     "assert_fact",
     "assert_facts",
     "chat",
+    "flush",
     "get_blob",
     "hashref",
     "mint",
-    "flush",
     "put_blob",
     "query",
     "record",
@@ -169,7 +169,7 @@ def _spool_dir() -> Path:
     env = os.environ.get("WEAVE_SPOOL")
     if env:
         return Path(env)
-    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    state = os.environ.get("XDG_STATE_HOME") or str(Path("~/.local/state").expanduser())
     return Path(state) / "weave" / "spool"
 
 
@@ -251,9 +251,17 @@ async def record(facts: Sequence[tuple[str, str, object]]) -> None:
 
 
 async def flush(timeout: float = 10.0) -> bool:
-    """Block until every spool in this process drained (or ``timeout``)."""
+    """Block until every live spool in this process drained (or ``timeout``).
+
+    A closed spool never drains here by design -- its undelivered items stay
+    on disk for a future process to adopt -- so it is evicted rather than
+    reported as a permanent failure.
+    """
 
     with _spools_lock:
+        for key, sp in list(_spools.items()):
+            if sp.closed:
+                del _spools[key]
         live = list(_spools.values())
     drained = True
     for sp in live:

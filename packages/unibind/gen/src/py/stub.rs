@@ -101,10 +101,16 @@ fn needs_os_import(interface: &ir::Interface) -> bool {
 fn error_classes(error: &ir::ErrorType, blocks: &mut Vec<String>) {
     let base = types::py_name(&error.names, &error.name);
     let builtin = error.py_base.as_deref().unwrap_or("Exception");
-    blocks.push(class_block(&format!("class {base}({builtin}):"), &error.docs));
+    blocks.push(class_block(
+        &format!("class {base}({builtin}):"),
+        &error.docs,
+    ));
     for variant in &error.variants {
         let class = types::py_name(&variant.names, &variant.name);
-        blocks.push(class_block(&format!("class {class}({base}):"), &variant.docs));
+        blocks.push(class_block(
+            &format!("class {class}({base}):"),
+            &variant.docs,
+        ));
     }
 }
 
@@ -222,7 +228,11 @@ fn close_def(interface: &ir::Interface, close: &ir::Function) -> String {
 /// generated method's.
 fn aenter_def(class: &str) -> String {
     let docs = vec!["Enter `async with`: resolves to the object itself.".to_owned()];
-    def_block(&format!("    async def __aenter__(self) -> {class}:"), &docs, 1)
+    def_block(
+        &format!("    async def __aenter__(self) -> {class}:"),
+        &docs,
+        1,
+    )
 }
 
 /// `__aexit__` closes and resolves to `False`; the generated method takes

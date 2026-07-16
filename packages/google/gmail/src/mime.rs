@@ -377,7 +377,11 @@ mod tests {
     #[test]
     fn header_injection_is_refused_in_every_user_controlled_header() {
         let cases = [
-            ("Subject", vec!["a@example.com"], "Hi\r\nBcc: secret@example.com"),
+            (
+                "Subject",
+                vec!["a@example.com"],
+                "Hi\r\nBcc: secret@example.com",
+            ),
             ("To", vec!["a@example.com\r\nBcc: leak@example.com"], "Hi"),
         ];
         for (expected_header, to, subject) in cases {

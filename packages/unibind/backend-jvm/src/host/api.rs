@@ -8,7 +8,7 @@ use heck::ToLowerCamelCase as _;
 use unibind_core::ir;
 
 use super::java;
-use crate::{names, RenderError};
+use crate::{RenderError, names};
 
 /// Render every public method, primaries first, then their
 /// trailing-default overloads.
@@ -105,10 +105,8 @@ fn overloads(
             .map(|Param { ty, name }| format!("{ty} {name}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let mut forwarded: Vec<String> = all[..kept]
-            .iter()
-            .map(|param| param.name.clone())
-            .collect();
+        let mut forwarded: Vec<String> =
+            all[..kept].iter().map(|param| param.name.clone()).collect();
         for arg in &function.args[kept..] {
             forwarded.push(default_literal(arg)?);
         }

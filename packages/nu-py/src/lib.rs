@@ -422,8 +422,13 @@ fn run_block(
         // `check` governs only the final pipeline's trailing external
         // (documented NuResult semantics); an intermediate external that
         // fails aborts the eval either way.
-        let (value, exit_code) =
-            run_pipeline(engine_state, stack, sub, pipeline_input, if is_last { check } else { true })?;
+        let (value, exit_code) = run_pipeline(
+            engine_state,
+            stack,
+            sub,
+            pipeline_input,
+            if is_last { check } else { true },
+        )?;
         if is_last {
             return Ok((intermediates, value, exit_code));
         }
@@ -924,7 +929,13 @@ impl Engine {
                 Err(EvalError::RemovedCwd(diagnostic)) => Err(NuCwdError::new_err(diagnostic)),
             }
         })?;
-        Ok((future, EvalHandle { flag, job: thread_job }))
+        Ok((
+            future,
+            EvalHandle {
+                flag,
+                job: thread_job,
+            },
+        ))
     }
 }
 
@@ -1074,7 +1085,15 @@ mod tests {
     fn intermediate_pipeline_values_are_returned_not_dropped() {
         let (mut inner, interrupt, job) = test_inner();
         let (intermediates, value, exit_code) = inner
-            .eval("'a'; 'b' | str upcase; 'final'", None, None, None, &interrupt, &job, true)
+            .eval(
+                "'a'; 'b' | str upcase; 'final'",
+                None,
+                None,
+                None,
+                &interrupt,
+                &job,
+                true,
+            )
             .expect("multi-statement eval");
         assert_eq!(intermediates.len(), 2, "one value per non-final pipeline");
         assert!(matches!(&intermediates[0], Value::String { val, .. } if val == "a"));
@@ -1194,7 +1213,10 @@ mod tests {
                 true,
             )
             .expect("$in source evals");
-        assert!(intermediates.is_empty(), "block-collected: no intermediates");
+        assert!(
+            intermediates.is_empty(),
+            "block-collected: no intermediates"
+        );
         assert!(matches!(&value, Value::String { val, .. } if val == "done"));
     }
 
@@ -1202,7 +1224,15 @@ mod tests {
     fn intermediate_failure_aborts_the_eval() {
         let (mut inner, interrupt, job) = test_inner();
         let diagnostic = inner
-            .eval("error make {msg: 'boom'}; 'after'", None, None, None, &interrupt, &job, true)
+            .eval(
+                "error make {msg: 'boom'}; 'after'",
+                None,
+                None,
+                None,
+                &interrupt,
+                &job,
+                true,
+            )
             .expect_err("an intermediate failure must abort");
         assert!(diagnostic.contains("boom"), "diagnostic: {diagnostic}");
     }

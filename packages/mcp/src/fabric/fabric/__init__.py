@@ -36,6 +36,7 @@ import platform
 import textwrap
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass
+from typing import TypeVar
 
 import weave
 
@@ -69,6 +70,32 @@ INTERRUPT_POLL_S = 0.5
 
 def _requested_by() -> str:
     return os.environ.get("IX_WEAVE_AGENT") or "agent:main"
+
+
+_T = TypeVar("_T")
+
+
+async def _journal(call: Awaitable[_T]) -> _T:
+    """Await one weave server call; an unreachable server raises FabricError.
+
+    Spawn-path recording rides the durable local spool (index#3419), so a
+    down server never blocks or loses intent there. This boundary guards the
+    calls that genuinely need the server -- journal reads and read-your-writes
+    asserts (:mod:`fabric.activity`, :mod:`fabric.reconcile`): a connect
+    failure raises with the health check and restart named instead of leaking
+    a raw httpx traceback (index#3416).
+    """
+
+    import httpx
+
+    try:
+        return await call
+    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        info = exc.request.url.copy_with(path="/api/info", query=None)
+        raise FabricError(
+            f"fabric: weave server unreachable ({exc}); health check: `curl -s {info}`; "
+            "restart: `launchctl kickstart -k gui/501/org.nix-community.home.weave-serve`"
+        ) from exc
 
 
 async def watch_interrupt(task: str, on_requested: Callable[[], Awaitable[None]]) -> None:

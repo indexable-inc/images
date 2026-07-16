@@ -82,8 +82,8 @@ impl Acceptor {
                 Ok(Self::Unix(listener))
             }
             ListenSpec::Tcp(address) => {
-                let listener = TcpListener::bind(address)
-                    .with_context(|| format!("bind tcp {address}"))?;
+                let listener =
+                    TcpListener::bind(address).with_context(|| format!("bind tcp {address}"))?;
                 info!(address, "listening on tcp");
                 Ok(Self::Tcp(listener))
             }

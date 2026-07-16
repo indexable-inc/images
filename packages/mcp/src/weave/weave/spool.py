@@ -59,8 +59,9 @@ def _note_down(url: str, directory: Path, exc: BaseException) -> None:
             return
         _down_urls.add(url)
     print(
-        f"weave spool: {url} unreachable ({exc}); writes stay durable in "
-        f"{directory} and drain when it returns (health-check: curl -s {url}/api/info)",
+        f"weave spool: {url} unreachable ({type(exc).__name__}: {exc}); writes stay durable in "
+        f"{directory} and drain when it returns (health check: `curl -s {url}/api/info`; "
+        "restart: `launchctl kickstart -k gui/501/org.nix-community.home.weave-serve`)",
         file=sys.stderr,
     )
 
@@ -135,7 +136,7 @@ class _Segment:
             os.fsync(fd)
         finally:
             os.close(fd)
-        os.replace(tmp, self.cursor_path)
+        tmp.replace(self.cursor_path)
         self.cursor = offset
 
     def compact_if_drained(self) -> None:
@@ -216,7 +217,7 @@ class Spool:
                 orphans.append(seg)
         return orphans
 
-    def append(self, item: Any) -> None:
+    def append(self, item: object) -> None:
         self.append_many([item])
 
     def append_many(self, items: list[Any]) -> None:
@@ -266,7 +267,7 @@ class Spool:
             if items:
                 try:
                     self._sender(items)
-                except Exception as exc:  # noqa: BLE001 - classified: park or retry
+                except Exception as exc:  # classified: park or retry
                     if self._permanent(exc):
                         self._on_permanent(exc)
                         with self._cv:

@@ -47,7 +47,7 @@ def _start_server(store_dir: Path, port: int) -> subprocess.Popen[bytes]:
 
     for _ in range(100):
         try:
-            urlopen(f"http://127.0.0.1:{port}/api/info", timeout=1).read()  # noqa: S310 - test-local http url
+            urlopen(f"http://127.0.0.1:{port}/api/info", timeout=1).read()
             return proc
         except Exception:
             time.sleep(0.1)

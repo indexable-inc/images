@@ -75,17 +75,56 @@ class PolicyTests(unittest.TestCase):
         assert "if: ${{ !inputs.nix-preinstalled }}" in workflow
 
     def test_owner_policy_classifies_repository_data(self) -> None:
-        decision = decide(
-            ["nix/packages/workspace-bins.nix"],
-            [],
-            "indexable-inc/ix",
+        costly_paths = (
+            ".cargo/config.toml",
             ".github/workflows/ci.yml",
-            force_big_change=False,
+            "Cargo.lock",
+            "Cargo.toml",
+            "flake.lock",
+            "flake.nix",
+            "crates/vm/guest/console/terminal/zig/deps.nix",
+            "nix/checks/default.nix",
+            "lib/workspace-cargo-unit.nix",
+            "nix/flake/outputs/default.nix",
+            "nix/flake/outputs/workspace.nix",
+            "nix/packages/workspace-binaries.json",
+            "nix/packages/workspace-bins.nix",
+            "nix/packages/workspace-bins/example.nix",
+            "nix/packages/workspace-rust-ci.nix",
+            "nix/shells/toolchain.nix",
+            "rust-toolchain.toml",
         )
+        for path in costly_paths:
+            with self.subTest(path=path):
+                decision = decide(
+                    [path],
+                    [],
+                    "indexable-inc/ix",
+                    ".github/workflows/ci.yml",
+                    force_big_change=False,
+                )
 
-        assert decision.managed_workflow
-        assert decision.classification.big_change
-        assert decision.classification.reason["sources"] == ["costly_path"]
+                assert decision.managed_workflow
+                assert decision.classification.big_change
+                assert decision.classification.reason["sources"] == ["costly_path"]
+
+        routine_paths = (
+            ".github/actions/ci-setup/action.yml",
+            "docs/operators/ci.md",
+            "nix/checks/workflow-ci-one-claim.jq",
+            "scripts/ci/run-ci-phases.sh",
+        )
+        for path in routine_paths:
+            with self.subTest(routine_path=path):
+                routine = decide(
+                    [path],
+                    [],
+                    "indexable-inc/ix",
+                    ".github/workflows/ci.yml",
+                    force_big_change=False,
+                )
+                assert routine.managed_workflow
+                assert not routine.classification.big_change
 
     def test_cli_contract_rejects_unmanaged_workflow_without_reclassifying(
         self,

@@ -6,7 +6,7 @@ import json
 import re
 import sys
 import threading
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -34,7 +34,7 @@ def run(coro: Coroutine[Any, Any, _T]) -> _T:
 
 
 @pytest.fixture(autouse=True)
-def _spool_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+def _spool_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """weave.record spools under the test's tmp dir; teardown joins flusher
     threads BEFORE monkeypatched transports revert (a live flusher must never
     fall back to a real URL)."""
@@ -666,6 +666,62 @@ def test_activity_frame_is_the_per_node_view(monkeypatch: pytest.MonkeyPatch) ->
     ]
     history = run(activity.frame(open_only=False))
     assert history.height == 4
+
+
+# --- weave unreachable at the fabric boundary (index#3416) ----------------------
+
+
+def install_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Weave double for an absent server: every request fails to connect."""
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 61] Connection refused", request=request)
+
+    transport = httpx.MockTransport(refuse)
+    monkeypatch.setattr(
+        weave,
+        "_client",
+        lambda **kw: httpx.AsyncClient(transport=transport, base_url="http://weave.test", **kw),
+    )
+
+
+def test_activity_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_unreachable(monkeypatch)
+
+    with pytest.raises(fabric.FabricError) as excinfo:
+        run(activity.frame())
+    message = str(excinfo.value)
+    assert "weave server unreachable" in message
+    assert "curl -s http://weave.test/api/info" in message
+    assert "launchctl kickstart -k gui/501/org.nix-community.home.weave-serve" in message
+    assert isinstance(excinfo.value.__cause__, httpx.ConnectError)
+
+
+def test_reconcile_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_unreachable(monkeypatch)
+
+    with pytest.raises(fabric.FabricError, match="weave server unreachable"):
+        run(reconcile.once())
+
+
+def test_run_spawn_survives_unreachable_weave(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The other half of the boundary (index#3419): spawn-path recording rides
+    the durable local spool, so an unreachable server never fails or blocks
+    ``fabric.run`` -- only the server-backed read paths raise FabricError."""
+    install_unreachable(monkeypatch)
+
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    async def main() -> object:
+        handle = await fabric.run(add, 2, 3)
+        return await handle.wait()
+
+    assert run(main()) == 5
+    segments = list((tmp_path / "weave-spool").glob("w-*.jsonl"))
+    assert segments, "intent must be durable on disk while undelivered"
 
 
 # --- outage: intent is durable and the spawn proceeds with weave down ------

@@ -18,7 +18,11 @@ fn interface() -> ir::Interface {
 
 #[test]
 fn ir_json_snapshot() {
-    assert_ir_json_snapshot(&interface(), include_str!("snapshots/sample.ir.json"), "sample.ir.json");
+    assert_ir_json_snapshot(
+        &interface(),
+        include_str!("snapshots/sample.ir.json"),
+        "sample.ir.json",
+    );
 }
 
 #[test]
@@ -31,8 +35,8 @@ fn c_abi_glue_snapshot() {
 
 #[test]
 fn java_class_snapshot() {
-    let host = unibind_backend_jvm::host_class(&interface(), Some("com.example.sample"))
-        .expect("renders");
+    let host =
+        unibind_backend_jvm::host_class(&interface(), Some("com.example.sample")).expect("renders");
     assert_eq!(host.class_name, "Sample");
     assert_eq!(host.file_name, "Sample.java");
     assert_snapshot(
@@ -69,18 +73,12 @@ fn unsupported_surface_is_named() {
              Gone { message: String } } pub fn go() -> Result<(), E> { Ok(()) } }",
             "not a supported Java base exception",
         ),
-        (
-            "mod m { pub fn go(class: bool) {} }",
-            "a Java keyword",
-        ),
+        ("mod m { pub fn go(class: bool) {} }", "a Java keyword"),
         (
             "mod m { pub fn go(status: bool) {} }",
             "the generated method bodies reserve",
         ),
-        (
-            "mod m { pub fn free() {} }",
-            "buffer-free symbol",
-        ),
+        ("mod m { pub fn free() {} }", "buffer-free symbol"),
     ] {
         let interface = lower_module_source(source);
         let ::std::result::Result::Err(error) = unibind_backend_jvm::render(&interface) else {

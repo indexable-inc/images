@@ -61,7 +61,10 @@ fn main() {
         runtime.block_on(async move {
             let mut events = subscribe(dir, rescan, &tokio::runtime::Handle::current());
             while let Some(event) = events.recv().await {
-                if producer_proxy.send_event(UserEvent::Producer(event)).is_err() {
+                if producer_proxy
+                    .send_event(UserEvent::Producer(event))
+                    .is_err()
+                {
                     break; // the event loop has exited; stop forwarding.
                 }
             }

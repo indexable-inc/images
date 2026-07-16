@@ -24,10 +24,11 @@ impl HostEmitter for JvmEmitter {
     }
 
     fn emit(&self, interface: &Interface) -> Result<Vec<HostFile>, EmitError> {
-        let host = unibind_backend_jvm::host_class(interface, self.package.as_deref())
-            .map_err(|error| EmitError {
+        let host = unibind_backend_jvm::host_class(interface, self.package.as_deref()).map_err(
+            |error| EmitError {
                 message: error.message,
-            })?;
+            },
+        )?;
         let path = match &self.package {
             Some(package) => format!("{}/{}", package.replace('.', "/"), host.file_name),
             None => host.file_name,

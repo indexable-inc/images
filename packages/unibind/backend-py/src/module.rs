@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use unibind_core::ir;
 
 use crate::ctx::Ctx;
-use crate::{error, function, object, record, stream, ty, RenderError, RenderedInterface};
+use crate::{RenderError, RenderedInterface, error, function, object, record, stream, ty};
 
 /// Render `pyo3` glue for one interface.
 ///
@@ -23,7 +23,11 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     }
 
     let user = ty::name_ident(&interface.name)?;
-    let module_name = interface.names.py.clone().unwrap_or_else(|| interface.name.clone());
+    let module_name = interface
+        .names
+        .py
+        .clone()
+        .unwrap_or_else(|| interface.name.clone());
     let module_ident = ty::name_ident(&module_name)?;
     let glue_ident = format_ident!("__unibind_py_{}", interface.name.trim_start_matches('_'));
     let ctx = Ctx {

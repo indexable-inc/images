@@ -41,13 +41,20 @@ impl Renderer {
     /// A renderer over a shared score and blob store.
     #[must_use]
     pub const fn new(score: Arc<Mutex<Score>>, blobs: Arc<BlobStore>) -> Self {
-        Self { score, store: blobs, loaded: None, staged: None }
+        Self {
+            score,
+            store: blobs,
+            loaded: None,
+            staged: None,
+        }
     }
 
     /// Channel count of the loaded instrument, or 1 before any loads.
     #[must_use]
     pub fn channels(&self) -> u32 {
-        self.loaded.as_ref().map_or(1, |(_, instrument)| instrument.channels())
+        self.loaded
+            .as_ref()
+            .map_or(1, |(_, instrument)| instrument.channels())
     }
 
     /// (Re)load the instrument when the score names a module whose bytes we
@@ -67,8 +74,14 @@ impl Renderer {
             let score = self.score.lock().expect("score lock");
             score.instrument()?
         };
-        let Some(wanted) = wanted else { return Ok(self.loaded.is_some()) };
-        if self.loaded.as_ref().is_some_and(|(hash, _)| *hash == wanted.hash) {
+        let Some(wanted) = wanted else {
+            return Ok(self.loaded.is_some());
+        };
+        if self
+            .loaded
+            .as_ref()
+            .is_some_and(|(hash, _)| *hash == wanted.hash)
+        {
             self.staged = None;
             return Ok(true);
         }
@@ -82,17 +95,25 @@ impl Renderer {
             // Bytes still in flight; keep playing the previous module.
             return Ok(self.loaded.is_some());
         };
-        let instrument = Instrument::load(&bytes)
-            .with_context(|| format!("load instrument {}", wanted.hash))?;
+        let instrument =
+            Instrument::load(&bytes).with_context(|| format!("load instrument {}", wanted.hash))?;
         info!(hash = %wanted.hash, at_frame = wanted.at_frame, "instrument staged");
-        self.staged = Some(Staged { hash: wanted.hash, instrument, at_frame: wanted.at_frame });
+        self.staged = Some(Staged {
+            hash: wanted.hash,
+            instrument,
+            at_frame: wanted.at_frame,
+        });
         Ok(true)
     }
 
     /// Swap in the staged instrument once `frame` reaches its activation
     /// frame.
     fn promote_due(&mut self, frame: u64) {
-        if self.staged.as_ref().is_some_and(|staged| staged.at_frame <= frame) {
+        if self
+            .staged
+            .as_ref()
+            .is_some_and(|staged| staged.at_frame <= frame)
+        {
             let staged = self.staged.take().expect("staged instrument present");
             info!(hash = %staged.hash, at_frame = staged.at_frame, "instrument activated");
             self.loaded = Some((staged.hash, staged.instrument));
@@ -222,7 +243,10 @@ fn render_block(
     }
     let mut scratch = vec![0.0_f32; block_frames * native];
     instrument.render(frame, block_frames, sample_rate, state, &mut scratch)?;
-    for (chunk, source) in out.chunks_exact_mut(out_channels).zip(scratch.chunks_exact(native)) {
+    for (chunk, source) in out
+        .chunks_exact_mut(out_channels)
+        .zip(scratch.chunks_exact(native))
+    {
         for (index, slot) in chunk.iter_mut().enumerate() {
             *slot = source[index.min(native - 1)];
         }
@@ -245,7 +269,10 @@ struct VolumeState {
 
 impl Default for VolumeState {
     fn default() -> Self {
-        Self { gain_bits: AtomicU32::new(1.0_f32.to_bits()), muted: AtomicBool::new(false) }
+        Self {
+            gain_bits: AtomicU32::new(1.0_f32.to_bits()),
+            muted: AtomicBool::new(false),
+        }
     }
 }
 
@@ -259,7 +286,9 @@ impl Volume {
     /// Set the gain, clamped to `0.0..=2.0`.
     pub fn set_gain(&self, gain: f32) {
         let gain = gain.clamp(0.0, 2.0);
-        self.inner.gain_bits.store(gain.to_bits(), Ordering::Relaxed);
+        self.inner
+            .gain_bits
+            .store(gain.to_bits(), Ordering::Relaxed);
     }
 
     /// Nudge the gain by `delta` (e.g. `0.1` / `-0.1` for menu steps).
@@ -320,7 +349,16 @@ impl Player {
             .name("shared-audio-render".into())
             .spawn({
                 let stop = Arc::clone(&stop);
-                move || render_loop(&mut renderer, &clock, time.as_ref(), sample_rate, &sender, &stop)
+                move || {
+                    render_loop(
+                        &mut renderer,
+                        &clock,
+                        time.as_ref(),
+                        sample_rate,
+                        &sender,
+                        &stop,
+                    );
+                }
             })
             .expect("spawn render thread");
         let source = TimelineSource {
@@ -330,7 +368,13 @@ impl Player {
             sample_rate,
             volume,
         };
-        PlayerSpawn { player: Self { stop, thread: Some(thread) }, source }
+        PlayerSpawn {
+            player: Self {
+                stop,
+                thread: Some(thread),
+            },
+            source,
+        }
     }
 }
 
@@ -369,12 +413,22 @@ fn render_loop(
         let lead = due_micros - i64::try_from(time.now_micros()).expect("monotonic micros fit i64");
         if lead.abs() > RESYNC_MICROS {
             let target = playhead(&now, time, sample_rate);
-            warn!(drift_micros = lead, from = frame, to = target, "resyncing to shared clock");
+            warn!(
+                drift_micros = lead,
+                from = frame,
+                to = target,
+                "resyncing to shared clock"
+            );
             frame = target;
         }
 
         let mut block = vec![0.0_f32; BLOCK_FRAMES * 2];
-        if let Err(error) = render_stereo(renderer, frame.max(0).unsigned_abs(), sample_rate, &mut block) {
+        if let Err(error) = render_stereo(
+            renderer,
+            frame.max(0).unsigned_abs(),
+            sample_rate,
+            &mut block,
+        ) {
             warn!(%error, "render failed; emitting silence");
             block.fill(0.0);
         }
@@ -546,36 +600,63 @@ mod tests {
             score.set_control(0, 0.25)?;
         }
         let renderer = Renderer::new(Arc::clone(&score), blobs);
-        Ok(Fixture { score, renderer, _dir: dir })
+        Ok(Fixture {
+            score,
+            renderer,
+            _dir: dir,
+        })
     }
 
     #[test]
     fn events_apply_at_exact_frames() -> Result<()> {
-        let Fixture { score, mut renderer, _dir } = fixture()?;
-        score
-            .lock()
-            .expect("lock")
-            .schedule(Event { at_frame: 100, control: 0, value: 0.75 })?;
+        let Fixture {
+            score,
+            mut renderer,
+            _dir,
+        } = fixture()?;
+        score.lock().expect("lock").schedule(Event {
+            at_frame: 100,
+            control: 0,
+            value: 0.75,
+        })?;
 
         let mut out = vec![0.0; 200];
         renderer.render_range(0, 200, 48_000, &mut out)?;
-        assert!(out[..100].iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
-        assert!(out[100..].iter().all(|&sample| (sample - 0.75).abs() < f32::EPSILON));
+        assert!(
+            out[..100]
+                .iter()
+                .all(|&sample| (sample - 0.25).abs() < f32::EPSILON)
+        );
+        assert!(
+            out[100..]
+                .iter()
+                .all(|&sample| (sample - 0.75).abs() < f32::EPSILON)
+        );
         Ok(())
     }
 
     #[test]
     fn any_block_split_is_bit_exact() -> Result<()> {
-        let Fixture { score, renderer: mut a, _dir } = fixture()?;
-        score
-            .lock()
-            .expect("lock")
-            .schedule(Event { at_frame: 37, control: 0, value: 0.5 })?;
-        let Fixture { score: score_b, renderer: mut b, _dir: _dir_b } = fixture()?;
-        score_b
-            .lock()
-            .expect("lock")
-            .schedule(Event { at_frame: 37, control: 0, value: 0.5 })?;
+        let Fixture {
+            score,
+            renderer: mut a,
+            _dir,
+        } = fixture()?;
+        score.lock().expect("lock").schedule(Event {
+            at_frame: 37,
+            control: 0,
+            value: 0.5,
+        })?;
+        let Fixture {
+            score: score_b,
+            renderer: mut b,
+            _dir: _dir_b,
+        } = fixture()?;
+        score_b.lock().expect("lock").schedule(Event {
+            at_frame: 37,
+            control: 0,
+            value: 0.5,
+        })?;
 
         let mut whole = vec![0.0; 512];
         a.render_range(0, 512, 48_000, &mut whole)?;
@@ -606,15 +687,26 @@ mod tests {
         let mut renderer = Renderer::new(Arc::clone(&score), Arc::clone(&blobs));
         let mut out = vec![0.0; 8];
         renderer.render_range(0, 8, 48_000, &mut out)?;
-        assert!(out.iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
+        assert!(
+            out.iter()
+                .all(|&sample| (sample - 0.25).abs() < f32::EPSILON)
+        );
 
         // Publish the successor: bytes already held, but it must not sound
         // before its activation frame.
         score.lock().expect("lock").set_instrument(&hash_b, 100)?;
         let mut out = vec![0.0; 200];
         renderer.render_range(0, 200, 48_000, &mut out)?;
-        assert!(out[..100].iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
-        assert!(out[100..].iter().all(|&sample| (sample - 1.25).abs() < f32::EPSILON));
+        assert!(
+            out[..100]
+                .iter()
+                .all(|&sample| (sample - 0.25).abs() < f32::EPSILON)
+        );
+        assert!(
+            out[100..]
+                .iter()
+                .all(|&sample| (sample - 1.25).abs() < f32::EPSILON)
+        );
 
         // A peer that never held the old module stays silent until the
         // shared switch point instead of jumping ahead.
@@ -622,7 +714,11 @@ mod tests {
         let mut out = vec![1.0; 200];
         fresh.render_range(0, 200, 48_000, &mut out)?;
         assert!(out[..100].iter().all(|&sample| sample == 0.0));
-        assert!(out[100..].iter().all(|&sample| (sample - 1.25).abs() < f32::EPSILON));
+        assert!(
+            out[100..]
+                .iter()
+                .all(|&sample| (sample - 1.25).abs() < f32::EPSILON)
+        );
         Ok(())
     }
 
@@ -640,13 +736,20 @@ mod tests {
 
     #[test]
     fn volume_scales_playback_but_never_rendering() -> Result<()> {
-        let Fixture { score: _score, mut renderer, _dir } = fixture()?;
+        let Fixture {
+            score: _score,
+            mut renderer,
+            _dir,
+        } = fixture()?;
         let volume = Volume::default();
         volume.set_gain(0.0);
         let mut out = vec![0.0; 16];
         renderer.render_range(0, 16, 48_000, &mut out)?;
         // Deterministic core ignores volume entirely.
-        assert!(out.iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
+        assert!(
+            out.iter()
+                .all(|&sample| (sample - 0.25).abs() < f32::EPSILON)
+        );
         // The playback edge applies it.
         assert!((volume.effective() - 0.0).abs() < f32::EPSILON);
         volume.set_gain(0.5);

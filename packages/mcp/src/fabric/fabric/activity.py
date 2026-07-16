@@ -42,7 +42,9 @@ async def frame(*, open_only: bool = True) -> polars.DataFrame:
 
     import polars as pl
 
-    rows = (await weave.query(QUERY))["rows"]
+    from . import _journal
+
+    rows = (await _journal(weave.query(QUERY)))["rows"]
     df = pl.DataFrame(
         [[str(v) for v in row] for row in rows],
         schema={"task": pl.String, "node": pl.String, "fn": pl.String, "state": pl.String},

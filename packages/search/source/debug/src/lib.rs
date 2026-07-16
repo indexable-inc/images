@@ -135,7 +135,13 @@ impl DebugLogs {
     }
 }
 
-source_meta::impl_owned_source_adapter!(DebugLogs, Error, SOURCE_TAG, entries, Entry::into_document);
+source_meta::impl_owned_source_adapter!(
+    DebugLogs,
+    Error,
+    SOURCE_TAG,
+    entries,
+    Entry::into_document
+);
 
 /// A file's mtime as epoch seconds, when it is representable.
 fn mtime_secs(meta: &std::fs::Metadata) -> Option<i64> {

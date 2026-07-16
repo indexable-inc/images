@@ -64,7 +64,8 @@ pub fn collect_jsonl_no_follow<E>(
     map_error: impl FnOnce(WalkError) -> E,
 ) -> Result<(), E> {
     collect_no_follow(root, out, |path| {
-        path.extension().is_some_and(|extension| extension == "jsonl")
+        path.extension()
+            .is_some_and(|extension| extension == "jsonl")
     })
     .map_err(map_error)
 }

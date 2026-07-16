@@ -312,7 +312,10 @@ pub fn wl_repeat_info(delay_ms: u32, interval_ms: u32) -> RepeatInfo {
         0 => 0,
         interval => clamp_to_i32((1000 + interval / 2) / interval),
     };
-    RepeatInfo { rate, delay: clamp_to_i32(delay_ms) }
+    RepeatInfo {
+        rate,
+        delay: clamp_to_i32(delay_ms),
+    }
 }
 
 /// Saturate into `wl_keyboard.repeat_info`'s i32 arguments.
@@ -388,7 +391,8 @@ pub fn read_msg_bounded<T: for<'de> Deserialize<'de>>(
     // u32 -> usize only narrows on 16-bit targets the workspace does not
     // support; mapping that impossibility to TooLarge (the same rejection an
     // over-cap prefix gets) keeps this panic-free without a lossy fallback.
-    let len = usize::try_from(u32::from_le_bytes(len)).map_err(|_| WireError::TooLarge(usize::MAX))?;
+    let len =
+        usize::try_from(u32::from_le_bytes(len)).map_err(|_| WireError::TooLarge(usize::MAX))?;
     if len > cap {
         return Err(WireError::TooLarge(len));
     }
@@ -410,7 +414,12 @@ mod tests {
             height: 480,
             full: true,
             tiles: vec![Tile {
-                rect: Rect { x: 0, y: 0, w: 2, h: 1 },
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 2,
+                    h: 1,
+                },
                 encoding: Encoding::Raw,
                 payload: vec![1, 2, 3, 4, 5, 6, 7, 8],
             }],
@@ -418,7 +427,14 @@ mod tests {
         let mut buf = Vec::new();
         write_msg(&mut buf, &msg).unwrap();
         let back: ToHost = read_msg(&mut buf.as_slice()).unwrap();
-        let ToHost::WindowFrame { id: 7, seq: 42, full: true, tiles, .. } = back else {
+        let ToHost::WindowFrame {
+            id: 7,
+            seq: 42,
+            full: true,
+            tiles,
+            ..
+        } = back
+        else {
             panic!("wrong variant");
         };
         assert_eq!(tiles[0].payload.len(), 8);
@@ -435,12 +451,33 @@ mod tests {
     #[test]
     fn pointer_lock_and_relative_roundtrip() {
         let mut buf = Vec::new();
-        write_msg(&mut buf, &ToHost::PointerLock { id: 3, locked: true }).unwrap();
+        write_msg(
+            &mut buf,
+            &ToHost::PointerLock {
+                id: 3,
+                locked: true,
+            },
+        )
+        .unwrap();
         let back: ToHost = read_msg(&mut buf.as_slice()).unwrap();
-        assert!(matches!(back, ToHost::PointerLock { id: 3, locked: true }));
+        assert!(matches!(
+            back,
+            ToHost::PointerLock {
+                id: 3,
+                locked: true
+            }
+        ));
 
         let mut buf = Vec::new();
-        write_msg(&mut buf, &ToGuest::PointerRelative { id: 3, dx: -1.5, dy: 2.25 }).unwrap();
+        write_msg(
+            &mut buf,
+            &ToGuest::PointerRelative {
+                id: 3,
+                dx: -1.5,
+                dy: 2.25,
+            },
+        )
+        .unwrap();
         let back: ToGuest = read_msg(&mut buf.as_slice()).unwrap();
         let ToGuest::PointerRelative { id: 3, dx, dy } = back else {
             panic!("wrong variant");
@@ -459,17 +496,42 @@ mod tests {
     #[test]
     fn key_repeat_roundtrips() {
         let mut buf = Vec::new();
-        write_msg(&mut buf, &ToGuest::KeyRepeat { delay_ms: 375, interval_ms: 90 }).unwrap();
+        write_msg(
+            &mut buf,
+            &ToGuest::KeyRepeat {
+                delay_ms: 375,
+                interval_ms: 90,
+            },
+        )
+        .unwrap();
         let back: ToGuest = read_msg(&mut buf.as_slice()).unwrap();
-        assert!(matches!(back, ToGuest::KeyRepeat { delay_ms: 375, interval_ms: 90 }));
+        assert!(matches!(
+            back,
+            ToGuest::KeyRepeat {
+                delay_ms: 375,
+                interval_ms: 90
+            }
+        ));
     }
 
     #[test]
     fn repeat_info_matches_macos_defaults() {
         // Factory settings: InitialKeyRepeat=25 (375ms), KeyRepeat=6 (90ms).
-        assert_eq!(wl_repeat_info(375, 90), RepeatInfo { rate: 11, delay: 375 });
+        assert_eq!(
+            wl_repeat_info(375, 90),
+            RepeatInfo {
+                rate: 11,
+                delay: 375
+            }
+        );
         // Fastest sliders: InitialKeyRepeat=15 (225ms), KeyRepeat=2 (30ms).
-        assert_eq!(wl_repeat_info(225, 30), RepeatInfo { rate: 33, delay: 225 });
+        assert_eq!(
+            wl_repeat_info(225, 30),
+            RepeatInfo {
+                rate: 33,
+                delay: 225
+            }
+        );
     }
 
     #[test]
@@ -487,14 +549,24 @@ mod tests {
 
     #[test]
     fn repeat_info_saturates_into_i32() {
-        assert_eq!(wl_repeat_info(u32::MAX, 90), RepeatInfo { rate: 11, delay: i32::MAX });
+        assert_eq!(
+            wl_repeat_info(u32::MAX, 90),
+            RepeatInfo {
+                rate: 11,
+                delay: i32::MAX
+            }
+        );
     }
 
     #[test]
     fn read_rejects_oversized_length_prefix() {
         // A hostile 4-GB-ish prefix must fail fast as TooLarge, not allocate.
         let mut buf = Vec::new();
-        buf.extend_from_slice(&u32::try_from(MAX_FRAME + 1).expect("fits u32").to_le_bytes());
+        buf.extend_from_slice(
+            &u32::try_from(MAX_FRAME + 1)
+                .expect("fits u32")
+                .to_le_bytes(),
+        );
         let err = read_msg::<ToHost>(&mut buf.as_slice()).unwrap_err();
         assert!(matches!(err, WireError::TooLarge(n) if n == MAX_FRAME + 1));
     }
@@ -517,7 +589,12 @@ mod tests {
             height: 1,
             full: true,
             tiles: vec![Tile {
-                rect: Rect { x: 0, y: 0, w: 1, h: 1 },
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 1,
+                },
                 encoding: Encoding::Raw,
                 payload: vec![0u8; MAX_FRAME + 1],
             }],
