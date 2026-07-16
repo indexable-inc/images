@@ -1592,16 +1592,16 @@
 ;; strips the separators before parsing the value, and the in-repo
 ;; tree-sitter-nix fork (packages/code/tree-sitter-nix) lexes an underscore
 ;; literal as one integer/float node, so these rules see whole literals.
-;; Two lints share the misgrouped-digits builtin (which binds the canonical
-;; regrouping), each with a rewrite so `astlog fix` repairs the literal:
+;; One lint polices literals that already carry separators, with a rewrite so
+;; `astlog fix` repairs the literal:
 ;; - no-misgrouped-digit-separators (error): a literal that already carries
 ;;   separators must use exactly the canonical grouping (`1_0000` ->
 ;;   `10_000`).
-;; - prefer-digit-grouping (error): a bare literal with five or more
-;;   consecutive digits must carry separators (`10000` -> `10_000`). The
-;;   whole CI toolchain speaks the dialect (patched nix client + evaluator,
-;;   rnix-patched alejandra/statix/deadnix, the tree-sitter fork), so the
-;;   repo's literals are grouped and the gate holds the line.
+;; Bare literals are NOT nudged toward separators: underscore digit literals
+;; are a patched-nix dialect that stock Nix rejects (`25_565` lexes as `25`
+;; then `_565`), so consumer flakes importing this tree must stay
+;; stock-parseable. 0a394ab7 un-grouped the consumer-reachable literals and
+;; #3422 retired the prefer-digit-grouping lint that demanded them.
 (rule (misgrouped-number n fixed)
   (match nix "[(integer_expression) (float_expression)] @n")
   (misgrouped-digits n fixed))
@@ -1611,11 +1611,4 @@
 (lint no-misgrouped-digit-separators error
   "underscore separators must group digits in threes (integer part and exponent from the right, fraction from the left); write `{fixed}`")
 (rewrite regroup-digit-separators (no-misgrouped-digit-separators n fixed)
-  (replace n "{fixed}"))
-(rule (prefer-digit-grouping n fixed)
-  (misgrouped-number n fixed)
-  (text-match n "^[^_]*$"))
-(lint prefer-digit-grouping error
-  "five or more consecutive digits are read by counting; group them in threes with underscore separators: `{fixed}`")
-(rewrite group-digit-literal (prefer-digit-grouping n fixed)
   (replace n "{fixed}"))
