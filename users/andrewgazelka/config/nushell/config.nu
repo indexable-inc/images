@@ -870,7 +870,7 @@ let abbreviations = abbr flatten-abbreviations {
     sor: "sort-by -r"
     sqlp: "SQLX_OFFLINE=false cargo sqlx prepare -- --all-features --tests --all-targets"
     sqlr: "cargo sqlx database reset -y"
-    st: "speedtest-go"
+    st: "strings"
     su: "git submodule update" # actually download the files
     sup: "c superglide"
     t: "trash"
