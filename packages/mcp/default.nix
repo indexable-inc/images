@@ -367,6 +367,9 @@
     pkgs.runCommand "ix-notebook-mcp-module"
     {
       strictDeps = true;
+      # store.py rides the durable weave spool (index#3419), so every env
+      # that bundles this package needs the weave client alongside it.
+      propagatedBuildInputs = [weaveModule];
       meta.description = "The ix notebook-first MCP server package";
     }
     ''
@@ -2784,6 +2787,10 @@
       cp ${./tests/test_read_await.py} test_read_await.py
       # Issue #3131: a job wrapping nu(check=False) pages real stdout lines.
       cp ${./tests/test_nu_job_output.py} test_nu_job_output.py
+      # Durable-local-first store writes (index#3418/#3419): outage-durable
+      # spool, append-order drain, one loud line, no wire wait on the caller.
+      cp ${./tests/weave_stub.py} weave_stub.py
+      cp ${./tests/test_store_spool.py} test_store_spool.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
@@ -2805,6 +2812,7 @@
         test_nu_input_routing.py \
         test_read_await.py \
         test_nu_job_output.py \
+        test_store_spool.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp typecheck smoke failed:" >&2
         cat stdout stderr >&2

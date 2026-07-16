@@ -152,11 +152,15 @@ def test_unreachable_logs_once_per_transition(
         conn.close()
 
     assert len(calls) >= 4, calls
+    # The spool owns the transition logging (index#3419): one loud line per
+    # reachable->unreachable transition, one on recovery, handles included.
     err = capsys.readouterr().err
-    assert err.count("weave write failed") == 1, err
+    # Count the full prefix: the tmp dir path in the message contains this
+    # test's own name, which contains the bare word "unreachable".
+    assert err.count("weave spool: http://weave.test unreachable") == 1, err
     assert "curl -s http://weave.test/api/info" in err
     assert "launchctl kickstart -k gui/501/org.nix-community.home.weave-serve" in err
-    assert err.count("recovered") == 1, err
+    assert err.count("reachable again") == 1, err
 
 
 def test_transient_failures_still_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,7 +6,7 @@ import json
 import re
 import sys
 import threading
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -31,6 +31,24 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 def run(coro: Coroutine[Any, Any, _T]) -> _T:
     return asyncio.run(coro)
+
+
+@pytest.fixture(autouse=True)
+def _spool_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """weave.record spools under the test's tmp dir; teardown joins flusher
+    threads BEFORE monkeypatched transports revert (a live flusher must never
+    fall back to a real URL)."""
+    from weave import spool as weave_spool
+
+    monkeypatch.setenv("WEAVE_SPOOL", str(tmp_path / "weave-spool"))
+    yield tmp_path / "weave-spool"
+    weave_spool.close_all()
+    weave_spool._down_urls.clear()
+
+
+def drain() -> None:
+    """Wait for spooled records to reach the journal double before asserting."""
+    assert run(weave.flush(timeout=10))
 
 
 @dataclass
@@ -157,6 +175,7 @@ def test_run_records_ask_then_started_then_done(monkeypatch: pytest.MonkeyPatch)
         return handle, await handle.wait()
 
     handle, value = run(main())
+    drain()
     assert value == 5
     assert re.fullmatch(r"task:[0-9a-f]{8}", handle.task)
     attrs = [(a, v) for e, a, v in journal.facts if e == handle.task]
@@ -221,6 +240,7 @@ def test_run_failure_still_leaves_ask_and_failed(
         return handle
 
     handle = run(main())
+    drain()
     assert journal.states(handle.task) == ["submitted", "running", "failed"]
     errors = [v for e, a, v in journal.facts if e == handle.task and a == "error"]
     assert len(errors) == 1
@@ -276,6 +296,7 @@ def test_run_remote_records_target_node_and_done(monkeypatch: pytest.MonkeyPatch
         return handle, await handle.wait()
 
     handle, value = run(main())
+    drain()
     assert value == 7
     assert shipped
     assert shipped[0][0] is placement
@@ -413,6 +434,7 @@ def test_run_interrupt_records_interrupted(monkeypatch: pytest.MonkeyPatch) -> N
         return handle
 
     handle = run(main())
+    drain()
     assert journal.states(handle.task) == ["submitted", "running", "interrupted"]
     assert (handle.task, "interrupt", "requested") in journal.facts
 
@@ -437,6 +459,7 @@ def test_run_interrupt_fact_path(monkeypatch: pytest.MonkeyPatch) -> None:
         return handle
 
     handle = run(main())
+    drain()
     assert journal.states(handle.task) == ["submitted", "running", "interrupted"]
 
 
@@ -459,6 +482,7 @@ def test_session_records_turns_result_and_done(monkeypatch: pytest.MonkeyPatch) 
         return live
 
     live = run(main())
+    drain()
     task = live.task
     assert journal.states(task) == ["submitted", "running", "done"]
     assert journal.facts[-1] == (task, "state", "done")
@@ -492,6 +516,7 @@ def test_session_follow_up_input_streams(monkeypatch: pytest.MonkeyPatch) -> Non
         return live
 
     live = run(main())
+    drain()
     assert fake.queries == ["first", "second"]
     turns = [v for e, a, v in journal.facts if e == live.task and a == "turn"]
     assert len(turns) == 3  # result one, the follow-up user turn, result two
@@ -511,6 +536,7 @@ def test_interrupt_handle_path(monkeypatch: pytest.MonkeyPatch) -> None:
         return live
 
     live = run(main())
+    drain()
     assert fake.interrupts == 1  # converged on the SDK interrupt
     assert journal.states(live.task) == ["submitted", "running", "interrupted"]
     assert (live.task, "interrupt", "requested") in journal.facts
@@ -530,6 +556,7 @@ def test_interrupt_fact_path(monkeypatch: pytest.MonkeyPatch) -> None:
         return live
 
     live = run(main())
+    drain()
     assert fake.interrupts == 1  # the journal watcher converged on the SDK interrupt
     assert journal.states(live.task) == ["submitted", "running", "interrupted"]
 
@@ -544,6 +571,7 @@ def test_session_connect_failure_leaves_ask_and_failed(monkeypatch: pytest.Monke
 
     with pytest.raises(OSError, match="claude CLI missing"):
         run(main())
+    drain()
     tasks = {e for e, a, v in journal.facts if a == "type"}
     assert len(tasks) == 1
     task = tasks.pop()
@@ -551,50 +579,6 @@ def test_session_connect_failure_leaves_ask_and_failed(monkeypatch: pytest.Monke
     assert journal.states(task) == ["submitted", "failed"]
     assert journal.blob_for(task, "prompt") == b"never starts"
     assert journal.facts[-1] == (task, "state", "failed")
-
-
-# --- weave unreachable at the fabric boundary (index#3416) ----------------------
-
-
-def install_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Weave double for an absent server: every request fails to connect."""
-
-    def refuse(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("[Errno 61] Connection refused", request=request)
-
-    transport = httpx.MockTransport(refuse)
-    monkeypatch.setattr(
-        weave,
-        "_client",
-        lambda **kw: httpx.AsyncClient(transport=transport, base_url="http://weave.test", **kw),
-    )
-
-
-def test_run_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    install_unreachable(monkeypatch)
-
-    def add(a: int, b: int) -> int:
-        return a + b
-
-    with pytest.raises(fabric.FabricError) as excinfo:
-        run(fabric.run(add, 2, 3))
-    message = str(excinfo.value)
-    assert "weave server unreachable" in message
-    assert "curl -s http://weave.test/api/info" in message
-    assert "launchctl kickstart -k gui/501/org.nix-community.home.weave-serve" in message
-    assert isinstance(excinfo.value.__cause__, httpx.ConnectError)
-
-
-def test_session_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    install_unreachable(monkeypatch)
-    # The SDK client must never spawn when the journal is unreachable.
-    monkeypatch.setattr(claude, "_sdk_client", lambda **kw: pytest.fail("SDK client built"))
-
-    with pytest.raises(fabric.FabricError) as excinfo:
-        run(claude.session("never recorded"))
-    message = str(excinfo.value)
-    assert "curl -s http://weave.test/api/info" in message
-    assert "launchctl kickstart" in message
 
 
 # --- fabric.reconcile -----------------------------------------------------------
@@ -682,3 +666,117 @@ def test_activity_frame_is_the_per_node_view(monkeypatch: pytest.MonkeyPatch) ->
     ]
     history = run(activity.frame(open_only=False))
     assert history.height == 4
+
+
+# --- weave unreachable at the fabric boundary (index#3416) ----------------------
+
+
+def install_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Weave double for an absent server: every request fails to connect."""
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 61] Connection refused", request=request)
+
+    transport = httpx.MockTransport(refuse)
+    monkeypatch.setattr(
+        weave,
+        "_client",
+        lambda **kw: httpx.AsyncClient(transport=transport, base_url="http://weave.test", **kw),
+    )
+
+
+def test_activity_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_unreachable(monkeypatch)
+
+    with pytest.raises(fabric.FabricError) as excinfo:
+        run(activity.frame())
+    message = str(excinfo.value)
+    assert "weave server unreachable" in message
+    assert "curl -s http://weave.test/api/info" in message
+    assert "launchctl kickstart -k gui/501/org.nix-community.home.weave-serve" in message
+    assert isinstance(excinfo.value.__cause__, httpx.ConnectError)
+
+
+def test_reconcile_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_unreachable(monkeypatch)
+
+    with pytest.raises(fabric.FabricError, match="weave server unreachable"):
+        run(reconcile.once())
+
+
+def test_run_spawn_survives_unreachable_weave(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The other half of the boundary (index#3419): spawn-path recording rides
+    the durable local spool, so an unreachable server never fails or blocks
+    ``fabric.run`` -- only the server-backed read paths raise FabricError."""
+    install_unreachable(monkeypatch)
+
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    async def main() -> object:
+        handle = await fabric.run(add, 2, 3)
+        return await handle.wait()
+
+    assert run(main()) == 5
+    segments = list((tmp_path / "weave-spool").glob("w-*.jsonl"))
+    assert segments, "intent must be durable on disk while undelivered"
+
+
+# --- outage: intent is durable and the spawn proceeds with weave down ------
+
+
+def test_session_spawns_and_records_while_weave_down(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """index#3418 invariant: with weave unreachable, the submitted intent is
+    fsync'd to the local spool BEFORE the SDK subprocess spawns, the session
+    completes normally, and after weave returns every fact drains in append
+    order."""
+    journal = Journal()
+    down = {"is": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if down["is"]:
+            raise httpx.ConnectError("weave down")
+        return Journal.handler(journal, request)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        weave,
+        "_client",
+        lambda **kw: httpx.AsyncClient(transport=transport, base_url="http://weave.test", **kw),
+    )
+    monkeypatch.setenv("IX_WEAVE_AGENT", "agent:tester")
+    fake = FakeClient()
+    use_fake(monkeypatch, fake)
+
+    async def main() -> claude.Session:
+        live = await claude.session("do it")
+        assert fake.connected  # the spawn proceeded with weave down
+        fake.feed(result_message("done"))
+        assert await live.result(timeout=5) == "done"
+        await live.close()
+        return live
+
+    live = run(main())
+    # Nothing reached the journal, but every fact is durable on disk in
+    # append order, prompt payload included.
+    assert fake.queries == ["do it"]
+    assert journal.facts == []
+    segments = list((tmp_path / "weave-spool").glob("w-*.jsonl"))
+    assert len(segments) == 1
+    lines = [json.loads(line) for line in segments[0].read_text().splitlines() if line]
+    attrs = [item["fact"]["attr"] for item in lines if "fact" in item]
+    assert attrs[0] == "type"
+    assert "state" in attrs
+    blob_refs = [ref["attr"] for item in lines if "blob_b64" in item for ref in item["refs"]]
+    assert "prompt" in blob_refs
+
+    down["is"] = False
+    drain()
+    task = live.task
+    assert journal.states(task) == ["submitted", "running", "done"]
+    assert journal.blob_for(task, "prompt") == b"do it"
+    assert journal.facts[-1] == (task, "state", "done")

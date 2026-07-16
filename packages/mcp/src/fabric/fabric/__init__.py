@@ -4,8 +4,11 @@ Calls create work; facts record it. ``await fabric.run(fn, *args)`` executes
 ``fn`` on this node; ``await fabric.run(fn, *args, node="hc1")`` ships it to
 that fleet node's runner actor over Ray (phase 2 of index#3190). Either way
 the record lands on the shared weave journal via the bundled :mod:`weave`
-client: the ask-fact at submit (so the intent is never invisible), started and
-terminal facts from the worker side, and the function's source text in CAS.
+client's durable-local-first ``record`` surface (index#3418): the ask-fact at
+submit is fsync'd into a local spool before anything runs (so the intent is
+never invisible and a down weave server never blocks a spawn), then drains to
+the journal in append order - along with started and terminal facts from the
+worker side and the function's source text in CAS.
 The journal never dispatches: the ask state is ``submitted``, and there is no
 dispatcher loop anywhere -- the call that created the work owns it.
 
@@ -73,12 +76,14 @@ _T = TypeVar("_T")
 
 
 async def _journal(call: Awaitable[_T]) -> _T:
-    """Await one weave client call; an unreachable server raises FabricError.
+    """Await one weave server call; an unreachable server raises FabricError.
 
-    The journal is fabric's record, so a connect failure at submit is a
-    fabric-level failure: raise with the health check and restart named
-    instead of leaking a raw httpx traceback (index#3416). Recording still
-    fails loud; nothing is skipped or spooled (that design is index#3419).
+    Spawn-path recording rides the durable local spool (index#3419), so a
+    down server never blocks or loses intent there. This boundary guards the
+    calls that genuinely need the server -- journal reads and read-your-writes
+    asserts (:mod:`fabric.activity`, :mod:`fabric.reconcile`): a connect
+    failure raises with the health check and restart named instead of leaking
+    a raw httpx traceback (index#3416).
     """
 
     import httpx
@@ -104,8 +109,16 @@ async def watch_interrupt(task: str, on_requested: Callable[[], Awaitable[None]]
     from wherever it lives.
     """
 
+    import httpx
+
     while True:
-        rows = (await weave.query(f'?- latest("{task}", interrupt, I).'))["rows"]
+        try:
+            rows = (await weave.query(f'?- latest("{task}", interrupt, I).'))["rows"]
+        except httpx.TransportError:
+            # Weave outage: journal reads lag (the spool already printed the
+            # one loud line); keep polling so an interrupt asserted while the
+            # server was down still lands once it returns.
+            rows = []
         if rows and rows[0][0] == "requested":
             await on_requested()
             return
@@ -140,7 +153,7 @@ class RunHandle:
         :meth:`wait`, not here.
         """
 
-        await weave.assert_fact(self.task, "interrupt", "requested")
+        await weave.record([(self.task, "interrupt", "requested")])
         self._work.cancel()
         await asyncio.gather(self._work, return_exceptions=True)
 
@@ -189,8 +202,8 @@ async def run(
     in a per-run temp dir and pass its path as the function's first argument.
 
     At submit, one ask-facts batch describes the task entity: type,
-    requested_by, node, the function's qualname, its source text stored in
-    CAS (``put_blob``) with the hash on the ``source`` fact, and -- for remote
+    requested_by, node, the function's qualname, its source text bound for
+    CAS (a ``weave.Blob`` on the ``source`` fact), and -- for remote
     placement -- the ``runner:<host>`` actor that owns the execution (what
     :mod:`fabric.reconcile` diffs against live actors) -- with
     ``state=submitted`` written strictly last, so a half-written record is
@@ -212,18 +225,17 @@ async def run(
     workspace = Workspace(repo=repo, rev=rev) if repo is not None and rev is not None else None
     source = textwrap.dedent(inspect.getsource(fn))
     task = weave.mint("task")
-    source_hash = await _journal(weave.put_blob(source.encode()))
     facts: list[tuple[str, str, object]] = [
         (task, "type", "task"),
         (task, "fn", fn.__qualname__),
         (task, "node", node if node is not None else platform.node()),
         (task, "requested_by", _requested_by()),
-        (task, "source", weave.hashref(source_hash)),
+        (task, "source", weave.Blob(source.encode())),
     ]
     if node is not None:
         facts.append((task, "runner", f"runner:{node}"))
     facts.append((task, "state", ASK_STATE))
-    await _journal(weave.assert_facts(facts))
+    await weave.record(facts)
 
     async def _invoke() -> object:
         if placement is not None:
@@ -235,21 +247,23 @@ async def run(
         return await asyncio.to_thread(fn, *args, **kwargs)
 
     async def _work() -> object:
-        await weave.assert_fact(task, "state", "running")
         try:
+            # Inside the try: a cancel landing during this very record must
+            # still leave the interrupted terminal fact (record() guarantees
+            # the append itself survives the cancellation, in order).
+            await weave.record([(task, "state", "running")])
             result = await _invoke()
         except asyncio.CancelledError:
-            await weave.assert_fact(task, "state", "interrupted")
+            await weave.record([(task, "state", "interrupted")])
             raise
         except BaseException as exc:
-            await weave.assert_facts([
+            await weave.record([
                 (task, "error", f"{type(exc).__name__}: {exc}"),
                 (task, "state", "failed"),
             ])
             raise
-        result_hash = await weave.put_blob(repr(result).encode())
-        await weave.assert_facts([
-            (task, "result", weave.hashref(result_hash)),
+        await weave.record([
+            (task, "result", weave.Blob(repr(result).encode())),
             (task, "state", "done"),
         ])
         return result

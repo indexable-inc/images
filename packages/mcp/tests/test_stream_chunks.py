@@ -126,6 +126,5 @@ def test_weave_url_off_is_entirely_inert(tmp_path: Path, monkeypatch: pytest.Mon
     job._stream._snapshot('{"v":1,"cols":80,"rows":24,"cursor":{"x":0,"y":0},"lines":[]}')
     assert job._stream._ent is None  # never minted
     assert job._stream._buf == []  # never even buffered
-    with conn._cv:
-        assert not conn._queue  # nothing queued at all
+    assert conn._spool is None  # off mode creates no spool at all
     conn.close()

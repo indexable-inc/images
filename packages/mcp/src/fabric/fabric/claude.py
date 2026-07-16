@@ -109,12 +109,10 @@ class Session:
 
         try:
             async for message in self._client.receive_messages():
-                turn_hash = await weave.put_blob(_turn_blob(message))
-                await weave.assert_fact(self.task, "turn", weave.hashref(turn_hash))
+                await weave.record([(self.task, "turn", weave.Blob(_turn_blob(message)))])
                 if isinstance(message, ResultMessage):
                     self._result = message.result or ""
-                    result_hash = await weave.put_blob(self._result.encode())
-                    await weave.assert_fact(self.task, "result", weave.hashref(result_hash))
+                    await weave.record([(self.task, "result", weave.Blob(self._result.encode()))])
                     self._turn_done.set()
         except asyncio.CancelledError:
             raise
@@ -134,7 +132,7 @@ class Session:
             return
         self._terminal_written = True
         facts: list[tuple[str, str, object]] = [] if error is None else [(self.task, "error", error)]
-        await weave.assert_facts([*facts, (self.task, "state", state)])
+        await weave.record([*facts, (self.task, "state", state)])
 
     async def _do_interrupt(self) -> None:
         if self._interrupted:
@@ -149,10 +147,8 @@ class Session:
 
         if self._interrupted or self._terminal_written:
             raise RuntimeError(f"session is closed: {self.task}")
-        turn_hash = await weave.put_blob(
-            json.dumps({"type": "UserMessage", "message": {"content": text}}).encode()
-        )
-        await weave.assert_fact(self.task, "turn", weave.hashref(turn_hash))
+        payload = json.dumps({"type": "UserMessage", "message": {"content": text}}).encode()
+        await weave.record([(self.task, "turn", weave.Blob(payload))])
         self._turn_done.clear()
         await self._client.query(text)
 
@@ -168,7 +164,7 @@ class Session:
     async def interrupt(self) -> None:
         """Interrupt natively: record the request, stop the SDK, mark interrupted."""
 
-        await weave.assert_fact(self.task, "interrupt", "requested")
+        await weave.record([(self.task, "interrupt", "requested")])
         await self._do_interrupt()
 
     async def close(self) -> None:
@@ -200,29 +196,30 @@ async def session(
 ) -> Session:
     """Open a recorded, interruptible Claude session and send ``prompt``.
 
-    Ask facts land first (prompt text in CAS, ``state=submitted`` last), so
-    the intent is on the journal before the SDK subprocess spawns; a connect
-    or first-send failure still appends the ``failed`` terminal fact. On
+    Ask facts land first (``state=submitted`` last) through ``weave.record``:
+    durably spooled on local disk before the SDK subprocess spawns, delivered
+    to the journal in that order whenever weave is reachable - a down weave
+    server never blocks or loses the intent (index#3418). A connect or
+    first-send failure still appends the ``failed`` terminal fact. On
     success the session is live (``state=running``) and returns immediately:
     ``await s.result()`` waits for the turn, ``s.send()`` streams follow-up
     input, ``s.interrupt()`` stops it.
     """
 
-    from . import _journal, _requested_by
+    from . import _requested_by
 
     task = weave.mint("task")
-    prompt_hash = await _journal(weave.put_blob(prompt.encode()))
     facts: list[tuple[str, str, object]] = [
         (task, "type", "task"),
         (task, "fn", "claude.session"),
         (task, "node", platform.node()),
         (task, "requested_by", _requested_by()),
-        (task, "prompt", weave.hashref(prompt_hash)),
+        (task, "prompt", weave.Blob(prompt.encode())),
     ]
     if model is not None:
         facts.append((task, "model", model))
     facts.append((task, "state", "submitted"))
-    await _journal(weave.assert_facts(facts))
+    await weave.record(facts)
 
     client = _sdk_client(
         system_prompt=system_prompt,
@@ -239,6 +236,6 @@ async def session(
     except BaseException as exc:
         await live._write_terminal("failed", error=f"{type(exc).__name__}: {exc}")
         raise
-    await weave.assert_fact(task, "state", "running")
+    await weave.record([(task, "state", "running")])
     live._start()
     return live
