@@ -182,3 +182,134 @@ def test_result_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     install_transport(monkeypatch, handler)
     with pytest.raises(TimeoutError):
         run(weave.result("task-abcd1234", timeout=0))
+
+
+# --- record / spool (durable-local-first, index#3418) ---------------------------
+
+
+from weave import spool as weave_spool  # noqa: E402 - after the path shim above
+
+
+@pytest.fixture(autouse=True)
+def _spool_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Every test spools under its own tmp dir; teardown joins flusher
+    threads BEFORE monkeypatched transports revert (a live flusher must
+    never fall back to a real URL)."""
+    monkeypatch.setenv("WEAVE_SPOOL", str(tmp_path / "spool"))
+    yield tmp_path / "spool"
+    weave_spool.close_all()
+    weave_spool._down_urls.clear()
+
+
+def _journal_transport(monkeypatch: pytest.MonkeyPatch, *, down: dict[str, bool]) -> tuple[list[tuple[str, str, Any]], dict[str, bytes]]:
+    """A weave double that can be toggled unreachable via ``down['is']``."""
+    import hashlib
+    import json as jsonlib
+
+    facts: list[tuple[str, str, Any]] = []
+    blobs: dict[str, bytes] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if down["is"]:
+            raise httpx.ConnectError("connection refused")
+        if req.url.path == "/api/blob":
+            body = req.read()
+            digest = hashlib.sha256(body).hexdigest()
+            blobs[digest] = body
+            return httpx.Response(200, json={"hash": digest})
+        assert req.url.path == "/api/facts"
+        for item in jsonlib.loads(req.read()):
+            fact = item["fact"]
+            facts.append((fact["entity"]["v"], fact["attr"], fact["value"]["v"]))
+        return httpx.Response(200, json=[])
+
+    install_transport(monkeypatch, handler)
+    return facts, blobs
+
+
+def test_record_is_durable_before_delivery_and_drains_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    down = {"is": True}
+    facts, blobs = _journal_transport(monkeypatch, down=down)
+
+    run(weave.record([("task:1", "state", "submitted"), ("task:1", "prompt", weave.Blob(b"do it"))]))
+    run(weave.record([("task:1", "state", "running")]))
+
+    # Durable on disk while the server is unreachable; nothing delivered.
+    segments = list((tmp_path / "spool").glob("*.jsonl"))
+    assert len(segments) == 1
+    lines = [weave.json.loads(line) for line in segments[0].read_text().splitlines()]
+    assert [item.get("fact", {}).get("attr", "blob") for item in lines] == ["state", "blob", "state"]
+    assert facts == []
+
+    down["is"] = False
+    assert run(weave.flush(timeout=10))
+    # Delivered in local append order, the blob resolved to a hash-valued fact.
+    assert [(e, a) for e, a, _v in facts] == [
+        ("task:1", "state"),
+        ("task:1", "prompt"),
+        ("task:1", "state"),
+    ]
+    assert facts[0][2] == "submitted"
+    assert facts[2][2] == "running"
+    assert blobs[facts[1][2]] == b"do it"
+
+
+def test_spool_transition_prints_exactly_one_loud_line(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    down = {"is": True}
+    _journal_transport(monkeypatch, down=down)
+    for i in range(5):
+        run(weave.record([("task:2", "n", i)]))
+    assert not run(weave.flush(timeout=1.0))  # unreachable: flush times out, drops nothing
+    err = capsys.readouterr().err
+    assert err.count("unreachable") == 1
+    assert "drain when it returns" in err
+    down["is"] = False
+    assert run(weave.flush(timeout=10))
+    err = capsys.readouterr().err
+    assert err.count("reachable again") == 1
+
+
+def test_spool_orphan_segment_adopted_and_drained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    down = {"is": False}
+    facts, _blobs = _journal_transport(monkeypatch, down=down)
+    orphan = tmp_path / "spool"
+    orphan.mkdir(parents=True)
+    # A crashed writer's segment: two committed lines plus one torn append
+    # (never fsync-completed, so never intent) - no live flock holder.
+    (orphan / "w-999-dead.jsonl").write_text(
+        '{"fact": {"entity": {"t": "str", "v": "task:9"}, "attr": "state", "value": {"t": "str", "v": "submitted"}}}\n'
+        '{"fact": {"entity": {"t": "str", "v": "task:9"}, "attr": "state", "value": {"t": "str", "v": "running"}}}\n'
+        '{"fact": {"entity": {"t": "str", "v": "task:9"}, "att'
+    )
+    run(weave.record([("task:10", "state", "submitted")]))
+    assert run(weave.flush(timeout=10))
+    assert ("task:9", "state", "submitted") in facts
+    assert ("task:9", "state", "running") in facts
+    assert ("task:10", "state", "submitted") in facts
+    # Orphan segments drain before this process's own appends.
+    assert facts.index(("task:9", "state", "running")) < facts.index(("task:10", "state", "submitted"))
+    assert not (orphan / "w-999-dead.jsonl").exists()  # retired once drained
+
+
+def test_spool_auth_denial_parks_after_one_attempt(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    attempts: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        attempts.append(req.url.path)
+        return httpx.Response(401, json={"error": "no"})
+
+    install_transport(monkeypatch, handler)
+    run(weave.record([("task:3", "state", "submitted")]))
+    assert run(weave.flush(timeout=10))  # parked is terminal: flush must not wedge
+    assert attempts == ["/api/facts"]  # exactly one attempt, no retry loop
+    assert "rejected writes permanently" in capsys.readouterr().err
+    # The segment is retained on disk for a future (fixed-credential) process.
+    sp = weave._default_spool()
+    assert sp.parked
+    assert not sp._own.drained

@@ -161,3 +161,68 @@ def test_fabric_reconcile_and_activity_queries_against_real_weave(
         assert (task, "hc9", "build_index", "lost") in history
 
     asyncio.run(main())
+
+
+def test_server_down_then_restart_drains_spool_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """index#3418: with the server down, record() is durable in the local
+    spool and returns; once the server comes up, the flusher delivers in
+    append order (latest-wins lands on the LAST appended state)."""
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    store_dir = tmp_path / "weave-store"
+    subprocess.run([WEAVE_BIN, "--store", str(store_dir), "init"], check=True, capture_output=True)
+    monkeypatch.setenv("WEAVE_URL", url)
+    monkeypatch.setenv("WEAVE_SPOOL", str(tmp_path / "spool"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "weave"))
+    import weave
+    from weave import spool
+
+    async def write() -> str:
+        task = weave.mint("task")
+        await weave.record([
+            (task, "type", "task"),
+            (task, "prompt", weave.Blob(b"restart ordering")),
+            (task, "state", "submitted"),
+        ])
+        await weave.record([(task, "state", "running")])
+        await weave.record([(task, "state", "done")])
+        return task
+
+    try:
+        task = asyncio.run(write())  # no server: everything spools locally
+        assert not asyncio.run(weave.flush(timeout=1.0))
+        assert list((tmp_path / "spool").glob("w-*.jsonl")), "record() must be durable on disk"
+
+        proc = subprocess.Popen(
+            [WEAVE_BIN, "--store", str(store_dir), "serve", "--addr", f"127.0.0.1:{port}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            from urllib.request import urlopen
+
+            for _ in range(100):
+                try:
+                    urlopen(f"{url}/api/info", timeout=1).read()  # noqa: S310 - fixture-local http url
+                    break
+                except Exception:
+                    time.sleep(0.1)
+            else:
+                raise RuntimeError("weave serve never came up")
+            assert asyncio.run(weave.flush(timeout=30.0)), "spool failed to drain after restart"
+
+            async def check() -> None:
+                rows = (await weave.query(f'?- latest("{task}", A, V).'))["rows"]
+                attrs = {r[0]: r[1] for r in rows}
+                # latest-wins: append order preserved means done landed last.
+                assert attrs["state"] == "done", attrs
+                assert await weave.get_blob(str(attrs["prompt"])) == b"restart ordering"
+
+            asyncio.run(check())
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+    finally:
+        spool.close_all()

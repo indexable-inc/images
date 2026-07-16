@@ -3,25 +3,41 @@
 Bundled like ``mesh``/``linear`` so every kernel can ``import weave`` and talk to
 one shared Weave journal. All I/O is async and uses httpx; tests can replace
 ``_client`` with an ``httpx.MockTransport`` factory.
+
+Two write surfaces:
+
+- ``assert_fact``/``assert_facts``/``put_blob``: synchronous RPC, raises if
+  the server is unreachable. For reads-own-writes callers.
+- ``record``/``flush`` (+ :class:`Blob`): durable-local-first (index#3418).
+  ``record`` appends to an fsync'd spool (:mod:`weave.spool`) and returns
+  once the intent is durable on disk; a background flusher delivers to the
+  server in append order whenever it is reachable. Spawn paths (fabric)
+  must use this surface so a down server never blocks or loses intent.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
 import secrets
+import threading
 import time
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from . import spool as _spool
 
 if TYPE_CHECKING:
     import httpx
     import polars
 
 __all__ = [
+    "Blob",
     "HashRef",
     "QueryResult",
     "TaskCancelledError",
@@ -33,8 +49,10 @@ __all__ = [
     "get_blob",
     "hashref",
     "mint",
+    "flush",
     "put_blob",
     "query",
+    "record",
     "result",
     "retract",
     "status",
@@ -128,6 +146,119 @@ def _fact(entity: str, attr: str, value: object) -> dict[str, Any]:
     # WriteRequest wire shape: entity and value are tagged ApiValues, the
     # attr is a plain string (crates/protocol/src/api.rs).
     return {"fact": {"entity": _wrap_value(entity), "attr": attr, "value": _wrap_value(value)}}
+
+
+class Blob:
+    """A byte payload riding a fact value through :func:`record`.
+
+    The bytes are spooled inline (durable before ``record`` returns) and land
+    in CAS at drain time; the fact then carries the server's hash ref.
+    """
+
+    __slots__ = ("data",)
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+
+_spools: dict[Path, _spool.Spool] = {}
+_spools_lock = threading.Lock()
+
+
+def _spool_dir() -> Path:
+    env = os.environ.get("WEAVE_SPOOL")
+    if env:
+        return Path(env)
+    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return Path(state) / "weave" / "spool"
+
+
+def _send_spooled(items: list[Any]) -> None:
+    # Runs on the spool flusher thread (no event loop there); httpx errors
+    # propagate into the spool's retry/park classification.
+    asyncio.run(_deliver(items))
+
+
+async def _deliver(items: list[Any]) -> None:
+    async with _client() as client:
+        facts: list[dict[str, Any]] = []
+        for item in items:
+            blob_b64 = item.get("blob_b64")
+            if blob_b64 is not None:
+                resp = await client.post("/api/blob", content=base64.b64decode(blob_b64))
+                resp.raise_for_status()
+                h = str(resp.json()["hash"]).removeprefix("blake3:")
+                facts.extend(
+                    {"fact": {"entity": ref["entity"], "attr": ref["attr"], "value": {"t": "hash", "v": h}}}
+                    for ref in item["refs"]
+                )
+            else:
+                facts.append(item)
+        for i in range(0, len(facts), _BATCH):
+            resp = await client.post("/api/facts", json=facts[i : i + _BATCH])
+            resp.raise_for_status()
+
+
+def _rejected(exc: BaseException) -> bool:
+    """An auth rejection is permanent for this process: the credential (or
+    its absence) will not change under retry."""
+    import httpx
+
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (401, 403)
+
+
+def _default_spool() -> _spool.Spool:
+    directory = _spool_dir()
+    with _spools_lock:
+        live = _spools.get(directory)
+        if live is None or live.closed:
+            live = _spool.Spool(directory, _send_spooled, url=_url(), permanent=_rejected)
+            _spools[directory] = live
+        return live
+
+
+async def record(facts: Sequence[tuple[str, str, object]]) -> None:
+    """Durably spool facts locally, then return; never a server round trip.
+
+    The spool flusher delivers them to Weave in append order whenever it is
+    reachable (at-least-once). A :class:`Blob` value rides the spool inline
+    and becomes a CAS put plus a hash-valued fact at drain time. Use this on
+    every path where recording is mandatory but the server must not gate the
+    action (fabric spawn paths, index#3418); use ``assert_facts`` only when
+    the caller needs the server ack (read-your-writes).
+    """
+
+    items: list[Any] = []
+    for entity, attr, value in facts:
+        if isinstance(value, Blob):
+            items.append({
+                "blob_b64": base64.b64encode(value.data).decode("ascii"),
+                "refs": [{"entity": _wrap_value(entity), "attr": attr}],
+            })
+        else:
+            items.append(_fact(entity, attr, value))
+    sp = _default_spool()
+    done = asyncio.get_running_loop().run_in_executor(None, sp.append_many, items)
+    try:
+        await asyncio.shield(done)
+    except asyncio.CancelledError:
+        # A cancelled caller (fabric's interrupt path records the terminal
+        # state from `except CancelledError`) still needs THIS append durable
+        # and ordered before any follow-up record: the executor thread cannot
+        # be cancelled, so ride it out, then surface the cancellation.
+        await asyncio.shield(done)
+        raise
+
+
+async def flush(timeout: float = 10.0) -> bool:
+    """Block until every spool in this process drained (or ``timeout``)."""
+
+    with _spools_lock:
+        live = list(_spools.values())
+    drained = True
+    for sp in live:
+        drained = await asyncio.to_thread(sp.flush, timeout) and drained
+    return drained
 
 
 class QueryResult(dict[str, Any]):

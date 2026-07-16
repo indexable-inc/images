@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import time
-
 from ix_notebook_mcp import store
 
 
@@ -23,12 +20,7 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, object]]:
 
 
 def _drain(conn: store.WeaveStore, timeout: float = 2.0) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        with conn._cv:
-            if not conn._queue:
-                return
-        time.sleep(0.02)
+    assert conn.flush(timeout=timeout), "spool did not drain"
 
 
 def test_start_finish_set_session_and_snapshot_emit_fact_shapes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
