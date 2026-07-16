@@ -776,44 +776,29 @@
     zigDepsHash = "sha256-2eURmY4iF5iG5CdYiI7cKbrT3ymqb9UFUxO22LmsZ9s=";
   };
 
-  cargoUnitFixture = fs.toSource {
-    root = ./fixtures/cargo-unit-hello;
-    fileset = fs.unions [
-      ./fixtures/cargo-unit-hello/benches
-      ./fixtures/cargo-unit-hello/build.rs
-      ./fixtures/cargo-unit-hello/Cargo.lock
-      ./fixtures/cargo-unit-hello/Cargo.toml
-      ./fixtures/cargo-unit-hello/src
-    ];
-  };
+  cargoUnitCatalogFixture = import ./cargo-unit-catalog.nix {inherit ix pkgs;};
+  cargoUnitWorkspaceArgs = cargoUnitCatalogFixture.workspaceArgs;
+  cargoUnitCatalog = cargoUnitCatalogFixture.unitCatalog;
+  cargoUnitFixture = cargoUnitCatalogFixture.src;
+  cargoUnitWorkspace = cargoUnitCatalogFixture.workspace;
+  cargoUnitInvalidCatalogEval =
+    builtins.tryEval
+    (ix.cargoUnit.buildWorkspace (cargoUnitWorkspaceArgs // {unitCatalog = "units.nix";})).unitCatalog;
 
-  cargoUnitWorkspace = ix.cargoUnit.buildWorkspace {
-    src = cargoUnitFixture;
-    workspaceRoot = ./fixtures/cargo-unit-hello;
-    cargoTargetNames = [
-      "build"
-      "test"
-      "bench"
-    ];
-    packageTestInputs.cargo-unit-hello = [pkgs.hello];
-    packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
-    # Drive the packageBuildEnv -> build.rs -> rustc-env path: the build script
-    # reads CARGO_UNIT_BUILD_ENV and re-exposes it; the fixture test compares the
-    # baked value against this expected value (passed at test runtime).
-    packageBuildEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV = "build-ok";
-    packageTestEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV_EXPECTED = "build-ok";
-    cargoTargets = [
-      ["--workspace"]
-      [
-        "--workspace"
-        "--tests"
-      ]
-      [
-        "--workspace"
-        "--benches"
-      ]
-    ];
-  };
+  # The generated side stays a derivation, not an evaluator input. Comparing
+  # it here makes catalog freshness normal build work that can fan out and
+  # cache, while selecting any catalog-backed Rust root remains IFD-free.
+  cargoUnitCatalogDrift =
+    pkgs.runCommand "cargo-unit-catalog-drift" {
+      __structuredAttrs = true;
+      nativeBuildInputs = [pkgs.coreutils];
+    } ''
+      if ! cmp -s ${cargoUnitCatalog} ${cargoUnitWorkspace.generatedUnitCatalog}; then
+        echo >&2 "error: cargo-unit catalog drifted; regenerate the committed catalog"
+        exit 1
+      fi
+      mkdir -p "$out"
+    '';
 
   # Same workspace narrowed to the build graph only. Root derivations are
   # per-unit, so this must yield byte-identical roots to lazily selecting from
@@ -4981,6 +4966,22 @@
         message = "cargo-unit workspaces should expose per-crate unused dependency policy checks by default";
       }
       {
+        assertion = cargoUnitWorkspace.unitCatalog == cargoUnitCatalog;
+        message = "cargo-unit workspaces should import the supplied source-owned unit catalog";
+      }
+      {
+        assertion = lib.isDerivation cargoUnitWorkspace.generatedUnitCatalog;
+        message = "cargo-unit workspaces should retain a build-time generated catalog for drift checks";
+      }
+      {
+        assertion = cargoUnitWorkspace.unitsNix == cargoUnitWorkspace.generatedUnitCatalog;
+        message = "cargo-unit unitsNix should remain the generated-catalog compatibility handle";
+      }
+      {
+        assertion = !cargoUnitInvalidCatalogEval.success;
+        message = "cargo-unit workspaces should reject stringly unit catalog inputs";
+      }
+      {
         assertion = lib.hasInfix "--ordered-shutdown" processComposeApplication.passthru.tests.dryRun.buildCommand;
         message = "process-compose dry-run checks should include runtime wrapper arguments";
       }
@@ -6301,6 +6302,7 @@ in {
     ;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
   cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
+  cargoUnitCatalog = cargoUnitCatalogDrift;
   # Validate the current R2 publication and local prebuilt-unit wrapper.
   sdkRustPrebuilt = sdkRust.artifactCheck;
   # Strict type + annotation gate over the public ix-sdk Python sources.

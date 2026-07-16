@@ -1406,6 +1406,7 @@
       let
         rustChecks =
           {
+            cargo-unit-catalog = tests.cargoUnitCatalog;
             cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
             cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
             sdk-rust-prebuilt = tests.sdkRustPrebuilt;

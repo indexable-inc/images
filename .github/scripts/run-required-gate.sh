@@ -14,6 +14,20 @@ fi
 # that derivation intentionally has no .git directory.
 nix run .#clone -- . --diff "${base_sha}" >/dev/null
 
+# A committed cargo-unit catalog must make the selected Rust derivation
+# enumerable without building planner metadata inside the evaluator. Keep this
+# as a separate lib-only lookup: the broad checks catalog intentionally still
+# contains legacy IFD consumers and would make this boundary test ambiguous.
+catalog_drv="$(
+  nix eval --raw .#lib \
+    --apply 'ix: (import (ix.paths.root + "/tests/cargo-unit-catalog.nix") { inherit ix; pkgs = ix.pkgs; }).workspace.binaries.cargo-unit-hello.drvPath' \
+    --option allow-import-from-derivation false \
+    --option builders '' \
+    --option fallback false \
+    --option max-jobs 0
+)"
+printf 'IFD-free cargo-unit catalog selected %s\n' "${catalog_drv}"
+
 # Reuse the repository-owned quiet-log wrapper for the combined required-root
 # gate. The phase-clock worker owns this script's process group, so cancellation
 # and validation timeout terminate both this wrapper and every Nix descendant.

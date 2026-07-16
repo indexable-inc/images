@@ -388,13 +388,12 @@
       '';
 
     suppliedUnitCatalog = rawArgs.unitCatalog or null;
-    unitCatalog =
-      assert lib.assertMsg (
-        suppliedUnitCatalog == null || builtins.isPath suppliedUnitCatalog
-      ) "cargoUnit.buildWorkspace unitCatalog must be a Nix path or null";
-        if suppliedUnitCatalog == null
-        then generatedUnitCatalog
-        else suppliedUnitCatalog;
+    unitCatalog = assert lib.assertMsg (
+      suppliedUnitCatalog == null || builtins.isPath suppliedUnitCatalog
+    ) "cargoUnit.buildWorkspace unitCatalog must be a Nix path or null";
+      if suppliedUnitCatalog == null
+      then generatedUnitCatalog
+      else suppliedUnitCatalog;
 
     perUnitClippyEnabled = args.policy.clippy.enable;
     # Workspace-level policy checks: audit + machete only. Clippy is NOT here;
