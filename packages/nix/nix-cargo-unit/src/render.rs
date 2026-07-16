@@ -2146,6 +2146,11 @@ src=\"$PWD/fixed-src\"
     // builder's environment. Per-unit check derivations stay unstructured:
     // each carries one unit's phase and never aggregates.
     attrs.bool("__structuredAttrs", true);
+    // The output is crate SOURCE, not a build artifact: stdenv's fixup
+    // (patchShebangs above all) would rewrite `#!/usr/bin/env` scripts under
+    // $out to store paths, breaking both the byte-identity that CA dedup
+    // rests on and the fixed tree's fidelity as repo source.
+    attrs.bool("dontFixup", true);
     attrs.multiline("buildPhase", &build_phase);
     attrs.multiline(
         "installPhase",
