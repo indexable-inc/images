@@ -1311,56 +1311,119 @@
   # it into a checkout must be executable on every supported developer host.
   # Atomic replacement and symlink refusal are easier to audit as checked
   # Bash than as a cross-platform sequence of Nushell filesystem operations.
-  updateCargoUnitCatalog = ix.writeBashApplication pkgs {
-    name = "update-cargo-unit-catalog";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.gitMinimal
-      repoPackages.nix-ix
-    ];
-    text = ''
-      if (( $# > 1 )); then
-        printf 'usage: update-cargo-unit-catalog [CHECKOUT]\n' >&2
-        exit 2
-      fi
-      checkout=''${1:-.}
-      # Command substitution strips trailing newlines, which are legal in a
-      # checkout path. The sentinel preserves Git's exact path before removal.
-      repo_root=$(git -C "$checkout" rev-parse --show-toplevel && printf '.')
-      repo_root=''${repo_root%.}
-      repo_root=''${repo_root%$'\n'}
-      destination="$repo_root/tests/fixtures/cargo-unit-hello/unit-catalog"
-      for directory in \
-        "$repo_root/tests" \
-        "$repo_root/tests/fixtures" \
-        "$repo_root/tests/fixtures/cargo-unit-hello"; do
-        if [[ ! -d "$directory" || -L "$directory" ]]; then
-          printf 'refusing unsafe catalog directory: %s\n' "$directory" >&2
+  mkUpdateCargoUnitCatalog = nixPackage:
+    ix.writeBashApplication pkgs {
+      name = "update-cargo-unit-catalog";
+      runtimeInputs = [
+        pkgs.coreutils
+        pkgs.gitMinimal
+        nixPackage
+      ];
+      text = ''
+        if (( $# > 1 )); then
+          printf 'usage: update-cargo-unit-catalog [CHECKOUT]\n' >&2
+          exit 2
+        fi
+        checkout=''${1:-.}
+        # Command substitution strips trailing newlines, which are legal in a
+        # checkout path. The sentinel preserves Git's exact path before removal.
+        repo_root=$(git -C "$checkout" rev-parse --show-toplevel && printf '.')
+        repo_root=''${repo_root%.}
+        repo_root=''${repo_root%$'\n'}
+        destination="$repo_root/tests/fixtures/cargo-unit-hello/unit-catalog"
+        for directory in \
+          "$repo_root/tests" \
+          "$repo_root/tests/fixtures" \
+          "$repo_root/tests/fixtures/cargo-unit-hello"; do
+          if [[ ! -d "$directory" || -L "$directory" ]]; then
+            printf 'refusing unsafe catalog directory: %s\n' "$directory" >&2
+            exit 1
+          fi
+        done
+        if [[ ! -f "$destination" || -L "$destination" ]]; then
+          printf 'refusing unsafe catalog destination: %s\n' "$destination" >&2
           exit 1
         fi
-      done
-      if [[ ! -f "$destination" || -L "$destination" ]]; then
-        printf 'refusing unsafe catalog destination: %s\n' "$destination" >&2
+        temporary=$(mktemp "$destination.tmp.XXXXXX")
+        trap 'rm -f "$temporary"' EXIT
+        # Building inside B prevents an updater launched from A from installing
+        # A's data, and avoids treating a legal `#` in B's path as a fragment.
+        generated_catalog=$(
+          cd -- "$repo_root"
+          nix build --no-link --print-out-paths \
+            '.#packages.x86_64-linux.cargo-unit-generated-catalog'
+        )
+        if [[ $generated_catalog == *$'\n'* \
+          || ! -f $generated_catalog \
+          || -L $generated_catalog ]]; then
+          printf 'catalog build returned an invalid output: %q\n' "$generated_catalog" >&2
+          exit 1
+        fi
+        install -m 0644 "$generated_catalog" "$temporary"
+        mv -fT "$temporary" "$destination"
+        trap - EXIT
+        printf 'updated %s\n' "$destination"
+      '';
+    };
+  updateCargoUnitCatalogBase = mkUpdateCargoUnitCatalog repoPackages.nix-ix;
+  updateCargoUnitCatalogNixProbe = pkgs.writeShellApplication {
+    name = "nix";
+    text = ''
+      expected_ref='.#packages.x86_64-linux.cargo-unit-generated-catalog'
+      if (( $# != 4 )) \
+        || [[ $PWD != "$EXPECTED_CHECKOUT" ]] \
+        || [[ $1 != build || $2 != --no-link || $3 != --print-out-paths || $4 != "$expected_ref" ]]; then
+        printf 'unexpected catalog build invocation:' >&2
+        printf ' %q' "$@" >&2
+        printf '\n' >&2
         exit 1
       fi
-      temporary=$(mktemp "$destination.tmp.XXXXXX")
-      trap 'rm -f "$temporary"' EXIT
-      # Re-evaluate the checkout being modified. Otherwise `nix run A#...`
-      # from checkout B could silently install A's generated catalog into B.
-      generated_catalog=$(
-        nix build --no-link --print-out-paths \
-          "$repo_root#packages.x86_64-linux.cargo-unit-generated-catalog"
-      )
-      if [[ $generated_catalog == *$'\n'* || ! -f $generated_catalog ]]; then
-        printf 'catalog build returned an invalid output: %q\n' "$generated_catalog" >&2
-        exit 1
-      fi
-      install -m 0644 "$generated_catalog" "$temporary"
-      mv -fT "$temporary" "$destination"
-      trap - EXIT
-      printf 'updated %s\n' "$destination"
+      printf '%s\n' "$EXPECTED_CATALOG"
     '';
   };
+  updateCargoUnitCatalogCheckoutTest = let
+    updater = mkUpdateCargoUnitCatalog updateCargoUnitCatalogNixProbe;
+  in
+    pkgs.runCommandLocal "update-cargo-unit-catalog-checkout" {
+      nativeBuildInputs = [
+        pkgs.coreutils
+        pkgs.gitMinimal
+        updater
+      ];
+    } ''
+      # `#` is legal in a checkout path but denotes an output fragment in a
+      # flake reference, so this catches accidental path interpolation there.
+      checkout="$TMPDIR/checkout#b"
+      destination="$checkout/tests/fixtures/cargo-unit-hello/unit-catalog"
+      generated="$TMPDIR/generated-by-b"
+      mkdir -p "$(dirname "$destination")"
+      printf 'old catalog\n' >"$destination"
+      printf 'catalog generated by checkout B\n' >"$generated"
+      git -C "$checkout" init -q
+      expected_checkout=$(git -C "$checkout" rev-parse --show-toplevel)
+
+      (
+        cd "$TMPDIR"
+        EXPECTED_CHECKOUT="$expected_checkout" EXPECTED_CATALOG="$generated" \
+          update-cargo-unit-catalog "$checkout"
+      )
+
+      cmp "$generated" "$destination"
+
+      printf 'old catalog\n' >"$destination"
+      generated_link="$TMPDIR/generated-link"
+      ln -s "$generated" "$generated_link"
+      if EXPECTED_CHECKOUT="$expected_checkout" EXPECTED_CATALOG="$generated_link" \
+        update-cargo-unit-catalog "$checkout" >"$TMPDIR/symlink.log" 2>&1; then
+        printf 'catalog updater admitted a symlink build output\n' >&2
+        exit 1
+      fi
+      cmp <(printf 'old catalog\n') "$destination"
+      touch "$out"
+    '';
+  updateCargoUnitCatalog = updateCargoUnitCatalogBase.overrideAttrs (old: {
+    passthru = (old.passthru or {}) // {tests.checkout = updateCargoUnitCatalogCheckoutTest;};
+  });
 
   updateRustNightlyWorkflowCheck =
     pkgs.runCommandLocal "update-rust-nightly-workflow-check" {
@@ -1499,6 +1562,7 @@
           // rustPackageSet;
         explicitChecks = {
           inherit (tests) eval;
+          update-cargo-unit-catalog-checkout = updateCargoUnitCatalogCheckoutTest;
           update-rust-nightly-workflow = updateRustNightlyWorkflowCheck;
           # Boots a NixOS VM running the minecraft-blocks producer's Paper
           # server and asserts the BlockEvents plugin's onEnable succeeded

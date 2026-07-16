@@ -724,6 +724,10 @@ fn compute_hash(
 
     let unit = &graph.units[index];
     let mut dependency_hashes = Vec::new();
+    // Build-script runs are omitted from the transitive rlib closure below,
+    // but their outputs are still direct Nix inputs. Include them in identity
+    // so merged Cargo target graphs cannot emit two distinct derivations under
+    // the same unit attribute name.
     for dependency in &unit.dependencies {
         dependency_hashes.push(format!(
             "{}:{}:{}:{}",
@@ -4287,6 +4291,12 @@ version = "0.1.0"
                     { "index": 4, "extern_crate_name": "build_script_build" },
                     { "index": 3, "extern_crate_name": "leaf" }
                   ]
+                },
+                {
+                  "pkg_id": "path+file:///workspace/unrelated#unrelated@0.1.0",
+                  "target": { "kind": ["lib"], "crate_types": ["lib"], "name": "unrelated", "src_path": "/workspace/unrelated/src/lib.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [], "mode": "build", "dependencies": []
                 }
               ],
               "roots": [5, 6],
@@ -4310,6 +4320,27 @@ version = "0.1.0"
         .unwrap();
 
         assert_ne!(prepared.names[5], prepared.names[6]);
+
+        let unrelated_graph = UnitGraph {
+            version: graph.version,
+            units: vec![graph.units[7].clone()],
+            roots: vec![0],
+            root_sets: Vec::new(),
+        };
+        let unrelated_prepared = prepare_graph(
+            &unrelated_graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(prepared.names[7], unrelated_prepared.names[0]);
     }
 
     #[test]
