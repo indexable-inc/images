@@ -22,7 +22,7 @@ import weave
 from claude_agent_sdk import AssistantMessage, Message, ResultMessage, TextBlock
 
 import fabric
-from fabric import activity, claude, reconcile, remote
+from fabric import activity, claude, reconcile, remote, tmux
 
 _T = TypeVar("_T")
 
@@ -780,3 +780,145 @@ def test_session_spawns_and_records_while_weave_down(
     assert journal.states(task) == ["submitted", "running", "done"]
     assert journal.blob_for(task, "prompt") == b"do it"
     assert journal.facts[-1] == (task, "state", "done")
+
+# --- fabric.tmux ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "expect"),
+    [(None, True), ("", True), ("1", True), ("yes", True), ("0", False), ("false", False), ("OFF", False)],
+)
+def test_tmux_enabled_knob(monkeypatch: pytest.MonkeyPatch, value: str | None, *, expect: bool) -> None:
+    if value is None:
+        monkeypatch.delenv(tmux.ENV_KNOB, raising=False)
+    else:
+        monkeypatch.setenv(tmux.ENV_KNOB, value)
+    assert tmux.enabled() is expect
+
+
+def use_fake_factory(monkeypatch: pytest.MonkeyPatch, fake: FakeClient) -> dict[str, Any]:
+    """Like ``use_fake`` but also captures the kwargs ``session`` passes."""
+
+    seen: dict[str, Any] = {}
+
+    def factory(**kw: object) -> FakeClient:
+        seen.update(kw)
+        return fake
+
+    monkeypatch.setattr(claude, "_sdk_client", factory)
+    monkeypatch.setattr(fabric, "INTERRUPT_POLL_S", 0.01)
+    return seen
+
+
+def test_session_tmux_on_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+    monkeypatch.delenv(tmux.ENV_KNOB, raising=False)
+    fake = FakeClient()
+    seen = use_fake_factory(monkeypatch, fake)
+
+    async def main() -> claude.Session:
+        live = await claude.session("hi")
+        await live.close()
+        return live
+
+    live = run(main())
+    drain()
+    window = tmux.window_name(live.task)
+    assert seen["tmux_window"] == window
+    assert (live.task, "tmux_window", window) in journal.facts
+
+
+@pytest.mark.parametrize(
+    ("knob", "override", "expect_window"),
+    [("0", None, False), ("1", False, False), ("0", True, True)],
+)
+def test_session_tmux_knob_and_override(
+    monkeypatch: pytest.MonkeyPatch, knob: str, *, override: bool | None, expect_window: bool
+) -> None:
+    journal = install(monkeypatch)
+    monkeypatch.setenv(tmux.ENV_KNOB, knob)
+    fake = FakeClient()
+    seen = use_fake_factory(monkeypatch, fake)
+
+    async def main() -> claude.Session:
+        live = await claude.session("hi", tmux=override)
+        await live.close()
+        return live
+
+    live = run(main())
+    drain()
+    if expect_window:
+        assert seen["tmux_window"] == tmux.window_name(live.task)
+    else:
+        assert seen["tmux_window"] is None
+        assert (live.task, "tmux_window", tmux.window_name(live.task)) not in journal.facts
+
+
+def _fake_tmux(tmp_path: Path) -> Path:
+    """A tmux stand-in: ``new-window`` runs its command arg detached via sh."""
+
+    binary = tmp_path / "tmux"
+    binary.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  has-session) exit 1 ;;\n"
+        "  new-session) exit 0 ;;\n"
+        "  kill-pane) exit 0 ;;\n"
+        "  new-window)\n"
+        '    for arg; do cmd="$arg"; done\n'
+        '    sh -c "$cmd" >/dev/null 2>&1 &\n'
+        '    echo "%99"\n'
+        "    ;;\n"
+        "esac\n"
+    )
+    binary.chmod(0o755)
+    return binary
+
+
+def test_tmux_shim_round_trips_the_pipe_protocol(tmp_path: Path) -> None:
+    """stdin reaches the pane-hosted CLI, its stdout comes back, rc preserved."""
+
+    import os
+    import shutil
+    import subprocess
+
+    _fake_tmux(tmp_path)
+    cat = shutil.which("cat")
+    assert cat is not None
+    pythonpath = f"{ROOT / 'fabric'}:{ROOT / 'weave'}"
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "PYTHONPATH": pythonpath,
+        tmux.ENV_CLI: cat,
+        tmux.ENV_WINDOW: "task-test",
+    }
+    done = subprocess.run(
+        [tmux.shim_path()], input=b"hello\n", capture_output=True, env=env, timeout=60, check=False
+    )
+    assert done.stdout == b"hello\n", done.stderr.decode()
+    assert done.returncode == 0
+
+
+def test_tmux_shim_answers_version_probe_directly(tmp_path: Path) -> None:
+    """The SDK's ``-v`` startup probe never opens a window (no tmux needed)."""
+
+    import os
+    import subprocess
+
+    cli = tmp_path / "fake-claude"
+    cli.write_text("#!/bin/sh\necho fake-claude 1.2.3\n")
+    cli.chmod(0o755)
+    env = {
+        **os.environ,
+        # The shim resolves fabric on its own interpreter; point it at the
+        # worktree source when the installed fabric predates fabric.tmux.
+        "PYTHONPATH": f"{ROOT / 'fabric'}:{ROOT / 'weave'}",
+        tmux.ENV_CLI: str(cli),
+        tmux.ENV_WINDOW: "task-test",
+    }
+    done = subprocess.run(
+        [tmux.shim_path(), "-v"], capture_output=True, env=env, timeout=30, check=False
+    )
+    assert done.stdout == b"fake-claude 1.2.3\n"
+    assert done.returncode == 0
