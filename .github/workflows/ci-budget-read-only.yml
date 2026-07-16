@@ -19,6 +19,10 @@ on:
         description: Push base commit that bounds a main-branch change
         type: string
         default: ""
+      runner-label:
+        description: Runner label for the policy job
+        type: string
+        default: ubuntu-latest
     outputs:
       big_change:
         description: Whether the extended CI budget applies
@@ -44,7 +48,7 @@ on:
 
 jobs:
   classify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner-label }}
     timeout-minutes: 5
     permissions:
       actions: read

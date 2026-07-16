@@ -51,10 +51,6 @@
       url = "path:./tests";
       flake = false;
     };
-    bench-filesystem = {
-      url = "path:./packages/indexbench/filesystem";
-      flake = false;
-    };
     site = {
       url = "path:./packages/site";
       flake = false;
@@ -293,7 +289,6 @@
     skills,
     examples,
     tests,
-    bench-filesystem,
     site,
     ...
   }: let
@@ -329,7 +324,6 @@
       examples = examples.outPath;
       users = ./users;
       tests = tests.outPath;
-      bench.filesystem = bench-filesystem.outPath;
       site = site.outPath;
       pgUint128Src = pg-uint128-src;
       packagesRoot = ./packages;

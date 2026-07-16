@@ -5413,6 +5413,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "indexbench-filesystem"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "libc",
+ "nix 0.31.3",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+]
+
+[[package]]
 name = "indexer"
 version = "0.1.0"
 dependencies = [
