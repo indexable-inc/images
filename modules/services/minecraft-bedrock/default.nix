@@ -69,13 +69,13 @@ in {
 
     port = mkOption {
       type = types.port;
-      default = 19_132;
+      default = 19132;
       description = "IPv4 UDP port for Bedrock clients.";
     };
 
     portv6 = mkOption {
       type = types.port;
-      default = 19_133;
+      default = 19133;
       description = "IPv6 UDP port for Bedrock clients.";
     };
 
