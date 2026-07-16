@@ -57,10 +57,22 @@ class PolicyTests(unittest.TestCase):
                 assert "repository: ${{ job.workflow_repository }}" in source
                 assert "ref: ${{ job.workflow_sha }}" in source
                 assert "uses: ./.ci-budget-owner/.github/actions/ci-budget" in source
+                assert "runner-label:" in source
+                assert "default: ubuntu-latest" in source
+                assert "runs-on: ${{ inputs.runner-label }}" in source
                 assert (
                     "uses: indexable-inc/index/.github/actions/ci-budget@main"
                     not in source
                 )
+
+    def test_update_workflow_accepts_a_nix_owned_runner(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[2] / "workflows" / "update-flake-lock.yml"
+        ).read_text()
+        assert "runner-label:" in workflow
+        assert "nix-preinstalled:" in workflow
+        assert "runs-on: ${{ inputs.runner-label || 'ubuntu-latest' }}" in workflow
+        assert "if: ${{ !inputs.nix-preinstalled }}" in workflow
 
     def test_owner_policy_classifies_repository_data(self) -> None:
         decision = decide(
