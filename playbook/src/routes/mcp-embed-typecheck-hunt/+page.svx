@@ -1,0 +1,117 @@
+---
+title: "The green CI that wasn't: an embed typecheck hidden behind a truncated log"
+date: 2026-07-16
+---
+
+Bundling in-process code embeddings into the MCP server (torch/MPS,
+[#3417](https://github.com/indexable-inc/index/issues/3417)) should have
+been a clean package addition. Instead PR
+[#3427](https://github.com/indexable-inc/index/pull/3427) sat red on the
+required `flake-check` gate for two sessions, behind three separate
+red herrings. The durable lesson is not about embeddings: it is that a
+"mystery" CI failure is usually a real error you have not read yet.
+
+## Symptom
+
+`flake-check` failed on #3427 with no obvious cause. The GitHub Actions
+step log ended mid-stream in a `nix-fast-build` progress dump, with no
+error line at the tail. Three plausible stories competed for the blame.
+
+## The three red herrings
+
+- **Billing lock.** During a GitHub org billing-lock window the required
+  gate had genuinely returned false-green: jobs failed in 2 to 3 seconds
+  with empty steps. Real, but already over by the time #3427 was failing
+  in hundreds of seconds with real work in the log.
+- **Validation clock.** The embed deps balloon the base-image OCI closure,
+  and the ci-budget worker enforces a 300s routine deadline. Adding the
+  `ci/big-change` label (which raises the ceiling to 3h and, via the
+  `labeled` trigger, starts a fresh run) was the obvious fix. The re-run
+  then failed at 261s, *under* 300s, disproving the clock theory outright.
+- **The red-merge chain.** A sibling commit `0a394ab7` had landed a naive
+  digit-underscore text pass that mangled identifiers (`isx86_64` to
+  `isx8664`) during the same billing window. That broke eval on main, but
+  it was a parallel fire, not #3427's failure.
+
+Each was a coherent narrative. None was the cause.
+
+## Root cause
+
+The full error only existed in the runner-side log, not the GitHub step
+log. index CI writes complete stdout per test-merge SHA at
+`/var/log/ix-ci/runs/<merge_sha>/Check/<runid>-<attempt>.stdout` on
+whichever fleet host ran the ephemeral runner (runners are distributed:
+run 1 on vin-compute-2, run 2 on hil-compute-3). The GitHub step log had
+truncated the `nix-fast-build` failure mid-stream; the runner log carried
+it in full:
+
+```
+ix-mcp-strict-typecheck> error: Cannot find implementation or library
+stub for module named "sentence_transformers"  [import-not-found]
+```
+
+embed's inference runtime (torch, sentence-transformers, huggingface_hub)
+is darwin-only (MPS). On `x86_64-linux`, which is exactly what the required
+gate builds, those modules are genuinely absent, so the strict typecheck
+fails to resolve the imports.
+
+The module was already written correctly for runtime: lazy imports inside
+`try/except ImportError`, a `TYPE_CHECKING` guard, a typed `EmbedError`.
+The failure was purely the type checker resolving the imports on a
+platform where they do not exist.
+
+## The zuban trap
+
+The intuitive fix was per-module config in the zuban ini:
+
+```ini
+[mypy-sentence_transformers.*]
+ignore_missing_imports = true
+```
+
+It did nothing. zuban (0.8.0, mypy-compatible) in `zuban check` default
+mode (PyRight-like) does **not** honor per-module
+`ignore_missing_imports` sections. Neither does `zuban mypy` mode nor a
+TOML `[[tool.mypy.overrides]]` block in this setup. Only the global
+`[mypy] ignore_missing_imports = true` takes effect, and that is far too
+broad: it guts strict checking for the whole package.
+
+What zuban does honor is an inline suppression on the import line:
+
+```python
+from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+```
+
+zuban also does not flag an *unused* `# type: ignore`, so the same line
+is harmless on darwin where the module resolves. The fix was three inline
+ignores plus deleting the dead per-module config that never worked.
+
+## Verification
+
+Guessing was the whole problem, so the fix was validated against the real
+artifact: the actual `x86_64-linux` derivation, built on the fleet builder
+`vc1-nix`:
+
+```
+ix-mcp-strict-typecheck> Success: no issues found in 22 source files
+```
+
+#3427 then merged on green. The base-image closure growth that first
+looked like a clock problem is real and tracked separately in
+[#3448](https://github.com/indexable-inc/index/issues/3448): a static
+`costly_paths` list cannot detect closure growth from a heavy dependency,
+so `big_change` was not auto-detected.
+
+## What to carry forward
+
+- A truncated CI log is not a mysterious failure. Read the runner-side log
+  at `/var/log/ix-ci/runs/<merge_sha>/Check/` on the fleet host that ran it.
+- `zuban check` ignores per-module `ignore_missing_imports`. For a
+  genuinely platform-only optional import, suppress inline with
+  `# type: ignore[import-not-found]`, not config.
+- Validate a typecheck fix by building the real target-platform
+  derivation, not by trusting a darwin-local pass.
+- Three coherent narratives competed for the blame and all three were
+  wrong. The evidence that settled it was one log file no one had opened.
+
+*Written by Claude Code, an AI coding agent.*
