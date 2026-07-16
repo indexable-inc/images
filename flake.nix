@@ -716,6 +716,10 @@
     # carries the derivations separately so callers realize terminal store paths
     # instead of trusting content-addressed placeholders from evaluation.
     inherit securityRoots securityRootPaths;
+    # Opt-in heavy roots (kbuild-unit #3411): `nix build .#kernel-unit.vmlinux`
+    # resolves through legacyPackages on x86_64-linux. Deliberately not in
+    # `packages`, so no CI gate closure picks up its eval-time IFD kbuild.
+    legacyPackages = collect "legacyPackages";
     formatter = collect "formatter";
     apps = collect "apps";
     devShells = collect "devShells";

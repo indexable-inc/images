@@ -1832,6 +1832,18 @@ in {
 
   formatter = pkgs.alejandra;
 
+  # Per-TU content-addressed kernel build (kbuild-unit, #3411), exposed under
+  # `legacyPackages` so `nix build .#kernel-unit.vmlinux` resolves while the
+  # two-stage IFD plan (a full monolithic kbuild at eval time) stays out of
+  # `packages` and every gate closure that enumerates it (flake-check,
+  # blast-radius, cache-push). x86_64-linux only: the plan replays gcc/binutils
+  # saved commands, so there is no Darwin or cross lane to offer.
+  legacyPackages = lib.optionalAttrs (system == "x86_64-linux") {
+    kernel-unit = (ix.kernelUnitFor pkgs).buildKernel {
+      inherit (pkgs.linux_6_12) src;
+    };
+  };
+
   # `nix run .#bench` runs the repo's self-demo perf job (timing + RSS + custom
   # metrics, gated on regressions). The flake's package-with-mainProgram
   # convention already gives `nix run .#indexbench` for the bare CLI; this `apps`

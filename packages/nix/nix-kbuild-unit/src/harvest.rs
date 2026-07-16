@@ -1,0 +1,257 @@
+//! Stage 1: walk a completed kbuild objtree, parse every `.cmd` file, and
+//! snapshot build-created non-unit files (the "generated" tree) that unit
+//! replays overlay on top of the pristine source.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use color_eyre::eyre::{WrapErr as _, bail};
+
+use crate::cmd_file;
+use crate::model::{CmdEntry, Plan};
+
+pub fn harvest(
+    objtree: &Path,
+    srctree: &Path,
+    generated_out: Option<&Path>,
+) -> color_eyre::Result<Plan> {
+    let files = walk(objtree)?;
+
+    let mut cmds = Vec::new();
+    for rel in &files {
+        if !is_cmd_file(rel) {
+            continue;
+        }
+        let path = objtree.join(rel);
+        let text = std::fs::read_to_string(&path)
+            .wrap_err_with(|| format!("reading {}", path.display()))?;
+        let parsed = cmd_file::parse(&text).wrap_err_with(|| format!("parsing {rel}"))?;
+        cmds.push(CmdEntry {
+            target: parsed.target,
+            cmd: parsed.cmd,
+            source: parsed.source,
+            deps: parsed.deps,
+            config_deps: parsed.config_deps,
+        });
+    }
+    cmds.sort_by(|a, b| a.target.cmp(&b.target));
+    for pair in cmds.windows(2) {
+        if pair[0].target == pair[1].target {
+            bail!("duplicate .cmd target {}", pair[0].target);
+        }
+    }
+
+    let unit_targets: BTreeSet<&str> = cmds
+        .iter()
+        .filter(|entry| entry.unit_kind().is_some())
+        .map(|entry| entry.target.as_str())
+        .collect();
+
+    let mut generated = Vec::new();
+    for rel in &files {
+        if !in_generated_snapshot(rel, &unit_targets) {
+            continue;
+        }
+        let obj_path = objtree.join(rel);
+        let src_path = srctree.join(rel);
+        // Build-created (absent in src) or modified in place both go into the
+        // snapshot; the unit template overlays it with --remove-destination so
+        // a modified file shadows its source symlink.
+        let in_snapshot = match std::fs::symlink_metadata(&src_path) {
+            Ok(_) => !same_bytes(&obj_path, &src_path)?,
+            Err(_) => true,
+        };
+        if in_snapshot {
+            generated.push(rel.clone());
+        }
+    }
+
+    if let Some(out) = generated_out {
+        for rel in &generated {
+            let dst = out.join(rel);
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent)
+                    .wrap_err_with(|| format!("creating {}", parent.display()))?;
+            }
+            // fs::copy follows symlinks and preserves permission bits, so
+            // snapshotted host tools stay executable.
+            std::fs::copy(objtree.join(rel), &dst)
+                .wrap_err_with(|| format!("snapshotting {rel}"))?;
+        }
+    }
+
+    let release_path = objtree.join("include/config/kernel.release");
+    let kernel_release = std::fs::read_to_string(&release_path)
+        .wrap_err_with(|| {
+            format!(
+                "reading {} (is this a completed kbuild objtree?)",
+                release_path.display()
+            )
+        })?
+        .trim()
+        .to_owned();
+
+    Ok(Plan {
+        kernel_release,
+        cmds,
+        generated,
+    })
+}
+
+/// Collect every regular file (and file symlink) under `root` as sorted
+/// `/`-separated relative paths.
+fn walk(root: &Path) -> color_eyre::Result<Vec<String>> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).wrap_err_with(|| format!("listing {}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.wrap_err_with(|| format!("listing {}", dir.display()))?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(root)
+                .expect("walked path is under its root");
+            let Some(rel) = rel.to_str() else {
+                bail!("non-UTF-8 path in objtree: {}", rel.display());
+            };
+            files.push(rel.to_owned());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// `.cmd` sidecars are dotfiles (`.fork.o.cmd`); `auto.conf.cmd` and friends
+/// are make includes in a different format, not saved commands.
+fn is_cmd_file(rel: &str) -> bool {
+    let name = file_name(rel);
+    name.starts_with('.') && name.ends_with(".cmd")
+}
+
+fn file_name(rel: &str) -> &str {
+    rel.rsplit('/').next().unwrap_or(rel)
+}
+
+/// Whether a build-created file belongs in the generated snapshot units build
+/// against. Everything a unit produces or regenerates must stay out: writing
+/// through a store symlink fails the unit build (loudly, by design).
+fn in_generated_snapshot(rel: &str, unit_targets: &BTreeSet<&str>) -> bool {
+    if unit_targets.contains(rel) {
+        return false;
+    }
+    let name = file_name(rel);
+    // Make bookkeeping, regenerated per build and never read by a unit.
+    if name.ends_with(".cmd") || name.ends_with(".d") || name.starts_with(".tmp_") {
+        return false;
+    }
+    // Objects and archives are unit products; object-shaped files that are
+    // NOT units (host-tool objects, vdso pieces, init/version-timestamp.o
+    // recompiled inside link-vmlinux.sh) are either dead at unit-build time
+    // or rebuilt fresh in the unit tree.
+    if rel.ends_with(".o") || rel.ends_with(".a") {
+        return false;
+    }
+    // Link outputs, regenerated by the link unit.
+    if rel == "System.map" || rel == "vmlinux.map" {
+        return false;
+    }
+    true
+}
+
+fn same_bytes(a: &Path, b: &Path) -> color_eyre::Result<bool> {
+    let meta_a = std::fs::metadata(a).wrap_err_with(|| format!("stat {}", a.display()))?;
+    let meta_b = std::fs::metadata(b).wrap_err_with(|| format!("stat {}", b.display()))?;
+    if meta_a.len() != meta_b.len() {
+        return Ok(false);
+    }
+    let bytes_a = std::fs::read(a).wrap_err_with(|| format!("reading {}", a.display()))?;
+    let bytes_b = std::fs::read(b).wrap_err_with(|| format!("reading {}", b.display()))?;
+    Ok(bytes_a == bytes_b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FORK: &str = include_str!("../testdata/tinyconfig-6.12/kernel-fork.o.cmd");
+    const TOP_BUILT_IN: &str = include_str!("../testdata/tinyconfig-6.12/top-built-in.a.cmd");
+
+    fn write(root: &Path, rel: &str, contents: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().expect("rel path has a parent"))
+            .expect("create parent dir");
+        std::fs::write(path, contents).expect("write fixture file");
+    }
+
+    #[test]
+    fn harvests_cmds_and_generated_snapshot() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let srctree = tmp.path().join("src");
+        let objtree = tmp.path().join("obj");
+        let out = tmp.path().join("generated");
+
+        write(&srctree, "kernel/fork.c", "int x;\n");
+        write(&srctree, "Kconfig", "mainmenu\n");
+
+        // Objtree: pristine copy of src plus build products.
+        write(&objtree, "kernel/fork.c", "int x;\n");
+        write(&objtree, "Kconfig", "mainmenu\n");
+        write(&objtree, "kernel/.fork.o.cmd", FORK);
+        write(&objtree, ".built-in.a.cmd", TOP_BUILT_IN);
+        write(&objtree, "kernel/fork.o", "ELF");
+        write(&objtree, "built-in.a", "!<thin>");
+        write(&objtree, "include/config/kernel.release", "6.12.95\n");
+        write(&objtree, "include/generated/autoconf.h", "#define X 1\n");
+        write(&objtree, ".kbuild-unit-link-env", "declare -x CC=\"gcc\"\n");
+        write(&objtree, "kernel/.fork.o.d", "deps");
+        write(&objtree, ".tmp_vmlinux1", "elf");
+        write(&objtree, "System.map", "map");
+
+        let plan = harvest(&objtree, &srctree, Some(&out)).expect("harvest");
+
+        assert_eq!(plan.kernel_release, "6.12.95");
+        let targets: Vec<&str> = plan.cmds.iter().map(|c| c.target.as_str()).collect();
+        assert_eq!(targets, ["built-in.a", "kernel/fork.o"]);
+
+        // Unit products, make bookkeeping, and link outputs stay out of the
+        // snapshot; kconfig output and the link-env dump flow in.
+        assert_eq!(
+            plan.generated,
+            [
+                ".kbuild-unit-link-env",
+                "include/config/kernel.release",
+                "include/generated/autoconf.h",
+            ]
+        );
+        for rel in &plan.generated {
+            assert!(out.join(rel).is_file(), "snapshot copy missing {rel}");
+        }
+    }
+
+    #[test]
+    fn detects_in_place_modification() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let srctree = tmp.path().join("src");
+        let objtree = tmp.path().join("obj");
+
+        write(&srctree, "scripts/link-vmlinux.sh", "#!/bin/sh\n");
+        write(
+            &objtree,
+            "scripts/link-vmlinux.sh",
+            "#!/bin/sh\nexport -p\n",
+        );
+        write(&objtree, "include/config/kernel.release", "6.12.95\n");
+
+        let plan = harvest(&objtree, &srctree, None).expect("harvest");
+        assert!(
+            plan.generated
+                .contains(&"scripts/link-vmlinux.sh".to_owned())
+        );
+    }
+}
