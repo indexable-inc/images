@@ -21,10 +21,9 @@ cell has wedged the event loop, which is exactly when ``python_exec`` cannot hel
 
 The server ``instructions`` a client reads at ``initialize`` are composed, not
 hand-listed: :func:`_compose_instructions` joins the authored ``_KERNEL_GUIDE``
-with a tool overview derived from the registry (:func:`_tools_overview`) and,
-once the dashboard has a port, its live URL. So each ``@mcp.tool`` describes
-itself once and lists itself in the instructions automatically -- nothing here
-restates a tool by hand.
+with a tool overview derived from the registry (:func:`_tools_overview`). So
+each ``@mcp.tool`` describes itself once and lists itself in the instructions
+automatically. Nothing here restates a tool by hand.
 """
 
 from __future__ import annotations
@@ -361,29 +360,16 @@ def _tools_overview() -> str:
     return "\n".join(lines)
 
 
-def _compose_instructions(dashboard_url: str | None = None) -> str:
-    """The full server instructions: the kernel guide, then the registry-derived
-    tool overview, then (once the dashboard has bound a port) its live URL. Called
-    at import to seed the instructions and again by `set_dashboard_url` to fold the
-    URL in before the transport serves ``initialize``."""
-    parts = [_KERNEL_GUIDE, _tools_overview()]
-    if dashboard_url:
-        parts.append(guide.dashboard_note(dashboard_url))
-    return "\n\n".join(parts)
+def _compose_instructions() -> str:
+    """The full reusable server instructions: the kernel guide followed by the
+    registry-derived tool overview."""
+    return f"{_KERNEL_GUIDE}\n\n{_tools_overview()}"
 
 
 def set_dashboard_url(url: str) -> None:
-    """Bake the live dashboard URL into the server instructions so a client reads
-    it straight out of the ``initialize`` response -- the agent has the URL from
-    the first message, with no tool call to look it up. The CLI calls this once
-    the dashboard has bound its port, before the transport serves ``initialize``.
-    The URL is stashed so a tool call can surface it, never auto-popped in a
-    browser. The human-facing UI is the standalone aggregator (`nix run
-    .#dashboard`), which renders every server at once.
-    """
+    """Store the live URL returned by this connection's required naming call."""
     global _dashboard_url
     _dashboard_url = url
-    mcp._mcp_server.instructions = _compose_instructions(url)
 
 
 # The live dashboard URL (set by `set_dashboard_url`). Module-level because the
@@ -404,7 +390,8 @@ Content = list[outputs.Content]
     description=(
         "Name this MCP connection's dashboard session. Call this before acting "
         "tools such as python_exec, read, kernel_trace, or tui_act; the name "
-        "should be a short human task label, not code or secrets."
+        "should be a short human task label, not code or secrets. The result "
+        "contains this connection's live dashboard URL."
     ),
 )
 async def session_set_name(
@@ -421,6 +408,13 @@ async def session_set_name(
 ) -> Content:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
+    if _dashboard_url is None:
+        raise McpError(
+            ErrorData(
+                code=types.INTERNAL_ERROR,
+                message="Dashboard URL was not initialized before the MCP connection started.",
+            )
+        )
     clean = " ".join((name or "").split())
     if not 3 <= len(clean) <= 80:
         raise McpError(
@@ -431,7 +425,7 @@ async def session_set_name(
         )
     await current_kernel().set_session_name(clean)
     _set_session_label(ctx, clean)
-    return [outputs.text(f"dashboard session named: {clean}")]
+    return [outputs.text(f"dashboard session named: {clean}\ndashboard: {_dashboard_url}")]
 
 
 @mcp.tool(
@@ -951,5 +945,4 @@ async def tui_act(
 
 # Seed the server instructions now that every `@mcp.tool` above is registered, so
 # the tool overview is derived from the registry rather than maintained by hand.
-# `set_dashboard_url` re-composes them with the live dashboard URL before serving.
 mcp._mcp_server.instructions = _compose_instructions()

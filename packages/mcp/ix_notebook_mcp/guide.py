@@ -388,7 +388,9 @@ CELLS = (
     "Three dashboard panes show the session live: every running/finished run under executions, "
     "every live view (a terminal, a widget) under resources, and your curated highlight reel "
     "under cells; its address is the `DASHBOARD_URL` value in the namespace (read the variable — "
-    "there is no `dashboard()` function to call). Answer THROUGH cells by default: the cells pane "
+    "there is no `dashboard()` function to call). The required `session_set_name` call returns "
+    "this connection's live dashboard URL. Give the human that link in your first reply so they "
+    "can watch the work live. Answer THROUGH cells by default: the cells pane "
     "is what the human reads as the answer, so put any result worth seeing there with "
     "`cells.add(value, title=...)` (a DataFrame, a figure, a `view` render, an htpy "
     "element) rather than leaving it only in your tool text. Treat cells as the FINAL "
@@ -482,19 +484,3 @@ REPLY = (
     "reads the page, not this session — anything you want them to see must go through this tool; "
     "your transcript output never reaches them. Fails when the resource is closed or unknown."
 )
-
-
-# --- appended once the dashboard has bound a port ---
-
-_DASHBOARD_URL_NOTE = (
-    "This session's live dashboard (every running job, its output, and your curated cells) is at "
-    "{url} -- ALWAYS give the human this link in your very first reply of the session, before or "
-    "alongside your first answer, so they can watch the work unfold live; never make them ask for "
-    "it. It is also the `DASHBOARD_URL` variable in the kernel namespace."
-)
-
-
-def dashboard_note(url: str) -> str:
-    """The live-dashboard sentence the CLI folds into the instructions once the
-    dashboard has a URL (see tools.set_dashboard_url)."""
-    return _DASHBOARD_URL_NOTE.format(url=url)
