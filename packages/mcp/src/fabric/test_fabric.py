@@ -22,7 +22,7 @@ import weave
 from claude_agent_sdk import AssistantMessage, Message, ResultMessage, TextBlock
 
 import fabric
-from fabric import activity, claude, reconcile, remote
+from fabric import activity, claude, reconcile, remote, resources
 
 _T = TypeVar("_T")
 
@@ -40,9 +40,46 @@ class Journal:
     facts: list[tuple[object, str, object]] = field(default_factory=list)
     blobs: dict[str, bytes] = field(default_factory=dict)
     interrupt: str | None = None
-    #: canned response per exact datalog program (reconcile/activity queries);
-    #: anything else is answered as a per-entity interrupt watch.
+    #: Canned response per exact datalog program for reconcile and activity.
     queries: dict[str, dict[str, Any]] = field(default_factory=dict)
+    operations: dict[str, tuple[object, dict[str, object]]] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def _append_facts(self, writes: list[dict[str, object]]) -> None:
+        for item in writes:
+            fact = item["fact"]
+            assert isinstance(fact, dict)
+            entity = fact["entity"]
+            value = fact["value"]
+            assert isinstance(entity, dict)
+            assert isinstance(value, dict)
+            self.facts.append((entity["v"], str(fact["attr"]), value["v"]))
+
+    def _latest(self, entity: object, attr: str) -> object | None:
+        values = [
+            value
+            for fact_entity, fact_attr, value in self.facts
+            if fact_entity == entity and fact_attr == attr
+        ]
+        return values[-1] if values else None
+
+    @staticmethod
+    def _query_response(rows: list[list[object]]) -> httpx.Response:
+        def wrap(value: object) -> dict[str, object]:
+            if isinstance(value, bool):
+                return {"t": "bool", "v": value}
+            if isinstance(value, int):
+                return {"t": "int", "v": value}
+            return {"t": "str", "v": str(value)}
+
+        return httpx.Response(
+            200,
+            json={
+                "vars": [],
+                "rows": [[wrap(value) for value in row] for row in rows],
+                "as_of": 1,
+            },
+        )
 
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
@@ -54,15 +91,95 @@ class Journal:
             return httpx.Response(200, json={"hash": digest})
         if path == "/api/facts":
             payload = json.loads(req.read())
+            if isinstance(payload, dict) and "operation_id" in payload:
+                operation_id = payload["operation_id"]
+                raw_writes = payload.get("writes")
+                assert isinstance(operation_id, str)
+                assert isinstance(raw_writes, list)
+                writes: list[dict[str, object]] = []
+                for write in raw_writes:
+                    assert isinstance(write, dict)
+                    writes.append(write)
+                with self._lock:
+                    previous = self.operations.get(operation_id)
+                    if previous is not None:
+                        previous_writes, response = previous
+                        if previous_writes != writes:
+                            return httpx.Response(409, text="operation content differs")
+                        return httpx.Response(200, json=response)
+                    first_seq = len(self.facts) + 1
+                    self._append_facts(writes)
+                    response = {
+                        "operation_id": operation_id,
+                        "acks": [
+                            {"seq": first_seq + offset, "id": f"f{first_seq + offset}"}
+                            for offset in range(len(writes))
+                        ],
+                    }
+                    self.operations[operation_id] = (writes, response)
+                return httpx.Response(200, json=response)
+
             batch = payload if isinstance(payload, list) else [payload]
-            for item in batch:
-                fact = item["fact"]
-                self.facts.append((fact["entity"]["v"], fact["attr"], fact["value"]["v"]))
-            return httpx.Response(200, json=[{"seq": i, "id": f"f{i}"} for i in range(len(batch))])
+            writes = []
+            for write in batch:
+                assert isinstance(write, dict)
+                writes.append(write)
+            self._append_facts(writes)
+            return httpx.Response(
+                200,
+                json=[{"seq": i, "id": f"f{i}"} for i in range(len(batch))],
+            )
         if path == "/api/query":
             program = json.loads(req.read())["program"]
             if program in self.queries:
                 return httpx.Response(200, json=self.queries[program])
+
+            current_prefix = "?- latest("
+            current_suffix = (
+                ", current_claim, C), latest(C, claimed_by, O), "
+                "latest(C, state, S)."
+            )
+            if program.startswith(current_prefix) and program.endswith(current_suffix):
+                encoded_entity = program[len(current_prefix) : -len(current_suffix)]
+                entity = json.loads(encoded_entity)
+                claim = self._latest(entity, "current_claim")
+                if claim is None:
+                    return self._query_response([])
+                owner = self._latest(claim, "claimed_by")
+                state = self._latest(claim, "state")
+                assert owner is not None
+                assert state is not None
+                return self._query_response([[claim, owner, state]])
+
+            if 'type(R, "mutation_resource")' in program:
+                entities = sorted({
+                    entity
+                    for entity, attr, value in self.facts
+                    if attr == "type" and value == "mutation_resource"
+                })
+                ledger_rows = []
+                for entity in entities:
+                    claim = self._latest(entity, "current_claim")
+                    assert claim is not None
+                    ledger_rows.append([
+                        entity,
+                        self._latest(entity, "repository"),
+                        self._latest(entity, "selector_kind"),
+                        self._latest(entity, "selector"),
+                        claim,
+                        self._latest(claim, "claimed_by"),
+                        self._latest(claim, "state"),
+                    ])
+                return self._query_response(ledger_rows)
+
+            for attr in ("state", "requested_by"):
+                attr_suffix = f", {attr}, V)."
+                if program.startswith(current_prefix) and program.endswith(attr_suffix):
+                    encoded_entity = program[len(current_prefix) : -len(attr_suffix)]
+                    entity = json.loads(encoded_entity)
+                    value = self._latest(entity, attr)
+                    return self._query_response([] if value is None else [[value]])
+
             rows = [] if self.interrupt is None else [[{"t": "str", "v": self.interrupt}]]
             return httpx.Response(200, json={"vars": ["I"], "rows": rows, "as_of": 1})
         raise AssertionError(f"unexpected weave call: {path}")
@@ -143,6 +260,94 @@ def result_message(text: str) -> ResultMessage:
     )
 
 
+class RacingLedger(resources.ResourceLedger):
+    # Force two claimers to observe the same unclaimed head.
+    def __init__(self, barrier: asyncio.Barrier) -> None:
+        super().__init__()
+        self._barrier = barrier
+
+    async def current(
+        self,
+        key: resources.ResourceKey,
+    ) -> resources.ResourceClaim | None:
+        claim = await super().current(key)
+        if claim is None:
+            await self._barrier.wait()
+        return claim
+
+
+def test_resource_key_canonicalizes_repository_and_worktree(tmp_path: Path) -> None:
+    canonical = resources.ResourceKey.for_pull_request("indexable-inc/ix", 7439)
+    assert resources.ResourceKey.for_pull_request("Indexable-Inc/IX.git", 7439) == canonical
+
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(worktree)
+    assert (
+        resources.ResourceKey.for_worktree("indexable-inc/ix", alias)
+        == resources.ResourceKey.for_worktree("indexable-inc/ix", worktree)
+    )
+
+
+def test_concurrent_resource_claims_admit_exactly_one_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = install(monkeypatch)
+    key = resources.ResourceKey.for_pull_request("indexable-inc/ix", 7439)
+
+    async def main() -> list[object]:
+        barrier = asyncio.Barrier(2)
+        first = RacingLedger(barrier)
+        second = RacingLedger(barrier)
+        return await asyncio.gather(
+            first.claim(key, owner="task:old-owner"),
+            second.claim(key, owner="task:new-owner"),
+            return_exceptions=True,
+        )
+
+    outcomes = run(main())
+    claims = [
+        outcome for outcome in outcomes if isinstance(outcome, resources.ResourceClaim)
+    ]
+    failures = [
+        outcome
+        for outcome in outcomes
+        if isinstance(outcome, resources.ResourceOwnedError)
+    ]
+    assert len(claims) == 1
+    assert len(failures) == 1
+    assert failures[0].claim.owner == claims[0].owner
+    assert len(journal.operations) == 1
+    assert run(resources.ResourceLedger().current(key)) == claims[0]
+
+
+def test_resource_transfer_requires_current_owner_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = install(monkeypatch)
+    ledger = resources.ResourceLedger()
+    key = resources.ResourceKey.for_pull_request("indexable-inc/index", 2973)
+    original = run(ledger.claim(key, owner="task:parent"))
+
+    with pytest.raises(resources.ResourceOwnedError, match="task:parent"):
+        run(ledger.claim(key, owner="task:child"))
+    with pytest.raises(resources.ResourceTransferDenied, match=r"task:parent.*task:child"):
+        run(ledger.transfer(original, "task:child", actor="task:child"))
+
+    transferred = run(ledger.transfer(original, "task:child", actor="task:parent"))
+    assert transferred.owner == "task:child"
+    assert journal._latest(original.id, "acknowledged_by") == "task:parent"
+    assert run(ledger.claim(key, owner="task:child")) == transferred
+    assert run(ledger.ledger()) == [transferred]
+
+    released = run(ledger.release(transferred, actor="task:child"))
+    assert released.available
+    assert journal._latest(transferred.id, "acknowledged_by") == "task:child"
+    replacement = run(ledger.claim(key, owner="task:next"))
+    assert replacement.owner == "task:next"
+
+
 # --- fabric.run ---------------------------------------------------------------
 
 
@@ -178,6 +383,41 @@ def test_run_records_ask_then_started_then_done(monkeypatch: pytest.MonkeyPatch)
     assert journal.states(handle.task) == ["submitted", "running", "done"]
     assert b"def add(a: int, b: int) -> int:" in journal.blob_for(handle.task, "source")
     assert journal.blob_for(handle.task, "result") == b"5"
+
+
+def test_run_rejects_a_second_live_mutator_and_reclaims_terminal_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install(monkeypatch)
+    key = resources.ResourceKey.for_pull_request("indexable-inc/ix", 7439)
+    calls: list[str] = []
+
+    async def main() -> tuple[fabric.RunHandle, fabric.RunHandle]:
+        started = asyncio.Event()
+        finish = asyncio.Event()
+
+        async def mutate() -> None:
+            calls.append("started")
+            started.set()
+            await finish.wait()
+
+        first = await fabric.run(mutate, resource_key=key)
+        await started.wait()
+        with pytest.raises(resources.ResourceOwnedError, match=first.task):
+            await fabric.run(mutate, resource_key=key)
+        finish.set()
+        await first.wait()
+        replacement = await fabric.run(mutate, resource_key=key)
+        await replacement.wait()
+        return first, replacement
+
+    first, replacement = run(main())
+    assert calls == ["started", "started"]
+    assert first.resource_claim is not None
+    assert replacement.resource_claim is not None
+    assert first.resource_claim.owner == first.task
+    assert replacement.resource_claim.owner == replacement.task
+    assert replacement.resource_claim.id != first.resource_claim.id
 
 
 def test_run_sync_off_loop_and_async_native(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -474,6 +714,45 @@ def test_session_records_turns_result_and_done(monkeypatch: pytest.MonkeyPatch) 
     assert first["type"] == "AssistantMessage"
     assert first["message"]["content"] == [{"text": "thinking"}]
     assert json.loads(journal.blobs[str(turns[1])])["type"] == "ResultMessage"
+
+
+def test_session_claims_child_resource_before_starting_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = install(monkeypatch)
+    clients = [FakeClient(), FakeClient()]
+    monkeypatch.setattr(claude, "_sdk_client", lambda **kwargs: clients.pop(0))
+    monkeypatch.setattr(fabric, "INTERRUPT_POLL_S", 0.01)
+    key = resources.ResourceKey.for_worktree(
+        "indexable-inc/index",
+        "/private/tmp/andrewgazelka/2973-resource-ownership",
+    )
+
+    async def main() -> tuple[claude.Session, claude.Session]:
+        first = await claude.session("mutate", resource_key=key)
+        observed = await resources.current(key)
+        assert observed is not None
+        assert observed.owner == first.task
+        assert observed.requested_by == "agent:tester"
+        with pytest.raises(resources.ResourceOwnedError, match=first.task):
+            await claude.session("conflicting mutation", resource_key=key)
+        assert len(clients) == 1
+        await first.close()
+        replacement = await claude.session("continue mutation", resource_key=key)
+        await replacement.close()
+        return first, replacement
+
+    first, replacement = run(main())
+    assert first.resource_claim is not None
+    assert replacement.resource_claim is not None
+    assert first.resource_claim.owner == first.task
+    assert replacement.resource_claim.owner == replacement.task
+    failed = [
+        entity
+        for entity, attr, value in journal.facts
+        if attr == "state" and value == "failed"
+    ]
+    assert len(failed) == 1
 
 
 def test_session_follow_up_input_streams(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -23,10 +23,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "HashRef",
+    "OperationConflictError",
     "QueryResult",
     "TaskCancelledError",
     "TaskFailedError",
     "Weave",
+    "append_operation",
     "assert_fact",
     "assert_facts",
     "chat",
@@ -41,7 +43,7 @@ __all__ = [
     "watch",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 _DEFAULT_URL = "http://127.0.0.1:7677"
 _HASH_RE = re.compile(r"^(?:blake3:)?[0-9a-fA-F]{64}$")
@@ -61,6 +63,14 @@ class TaskFailedError(RuntimeError):
 
 class TaskCancelledError(RuntimeError):
     """A Weave task published a terminal ``cancelled`` or ``interrupted`` state."""
+
+
+class OperationConflictError(RuntimeError):
+    """An operation id was already committed with different writes."""
+
+    def __init__(self, operation_id: str, detail: str) -> None:
+        super().__init__(f"operation {operation_id!r} conflicts: {detail}")
+        self.operation_id = operation_id
 
 
 def hashref(h: str) -> HashRef:
@@ -166,6 +176,48 @@ class Weave:
                 data = resp.json()
                 out.extend(data if isinstance(data, list) else [data])
         return out
+
+    async def append_operation(
+        self,
+        operation_id: str,
+        facts: Sequence[tuple[str, str, object]],
+    ) -> list[dict[str, object]]:
+        """Atomically append an idempotent fact batch.
+
+        The server commits the first write set for ``operation_id``. Repeating
+        the same set returns its original acknowledgements; different writes
+        raise :class:`OperationConflictError` without appending a fact.
+        """
+
+        payload = {
+            "operation_id": operation_id,
+            "writes": [_fact(entity, attr, value) for entity, attr, value in facts],
+        }
+        async with _client() as client:
+            response = await client.post("/api/facts", json=payload)
+            if response.status_code == 409:
+                detail = response.text.strip() or "the operation id is already committed"
+                raise OperationConflictError(operation_id, detail)
+            response.raise_for_status()
+            body: object = response.json()
+
+        if not isinstance(body, dict):
+            raise RuntimeError("operation response must be an object")
+        returned_id = body.get("operation_id")
+        acknowledgements = body.get("acks")
+        if returned_id != operation_id or not isinstance(acknowledgements, list):
+            raise RuntimeError("operation response has an invalid id or acknowledgements")
+
+        parsed: list[dict[str, object]] = []
+        for acknowledgement in acknowledgements:
+            if not isinstance(acknowledgement, dict):
+                raise RuntimeError("operation acknowledgement must be an object")
+            seq = acknowledgement.get("seq")
+            fact_id = acknowledgement.get("id")
+            if isinstance(seq, bool) or not isinstance(seq, int) or not isinstance(fact_id, str):
+                raise RuntimeError("operation acknowledgement has an invalid seq or id")
+            parsed.append({"seq": seq, "id": fact_id})
+        return parsed
 
     async def retract(self, fact_id: str) -> dict[str, Any]:
         """Retract a fact by id."""
@@ -296,6 +348,13 @@ async def assert_fact(entity: str, attr: str, value: object) -> dict[str, Any]:
 
 async def assert_facts(facts: Sequence[tuple[str, str, Any]]) -> list[dict[str, Any]]:
     return await _default.assert_facts(facts)
+
+
+async def append_operation(
+    operation_id: str,
+    facts: Sequence[tuple[str, str, object]],
+) -> list[dict[str, object]]:
+    return await _default.append_operation(operation_id, facts)
 
 
 async def retract(fact_id: str) -> dict[str, Any]:
