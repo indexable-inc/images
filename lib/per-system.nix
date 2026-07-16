@@ -277,8 +277,11 @@
 
   lint = ix.writeNushellApplication pkgs {
     name = "lint";
-    meta.description = "Run all Nix formatting and lint checks in parallel via dag-runner";
-    runtimeInputs = [repoPackages.dag-runner];
+    meta.description = "Run all Nix formatting and lint checks in parallel via dag-runner; `--fix` applies the fixer lanes to the worktree";
+    runtimeInputs = [
+      pkgs.git
+      repoPackages.dag-runner
+    ];
     text = ''
       # nu
       const stages = ${builtins.toJSON lintStages}
@@ -313,9 +316,190 @@
           print ($runs | reject exit_code | to json)
           exit ($runs | get exit_code | math max)
         }
+        # `--fix` (#3432) applies the fixer lanes to the worktree: build
+        # `.#lint-fix-patch` -- the unified diff from the lanes' input
+        # snapshot to the composed fixed tree (see `lintFix` below) -- and
+        # `git apply` it from the repo root. A patch rather than a copy of
+        # the fixed files is a safety property: the snapshot Nix evaluates
+        # can be older than the worktree (a linked git worktree evaluates
+        # the committed state), and `git apply` is all-or-nothing on context
+        # mismatch, so stale fixes refuse loudly instead of clobbering
+        # uncommitted edits. `nix` comes from the ambient PATH for the same
+        # reason as `.#check`: a pinned client could mismatch the host daemon.
+        if "--fix" in $args {
+          if ($args | length) > 1 {
+            error make { msg: "--fix takes no other arguments" }
+          }
+          # Both the flake ref and `git apply` paths are root-relative, so
+          # anchor at the repo root instead of requiring callers to be there.
+          cd (^git rev-parse --show-toplevel | str trim)
+          let patch = (
+            ^nix ...[
+              "build" ".#lint-fix-patch"
+              "--no-link" "--print-out-paths"
+              "--option" "extra-experimental-features" "ca-derivations"
+            ]
+            | str trim
+          )
+          if (open --raw $patch | is-empty) {
+            print "lint --fix: tree already clean, nothing to apply"
+          } else {
+            ^git apply --stat $patch
+            ^git apply $patch
+            print "lint --fix: applied; the verdict-only stages (astlog, filenames, dirnames, clone) and unfixable findings still need `nix run .#lint`"
+          }
+          exit 0
+        }
         exec dag-runner ...$args ${lintSpec}
       }
     '';
+  };
+
+  # Fixer lanes (#3431/#3432): the fixable lint stages recast as pure tree
+  # transformers `src -> src'`. A derivation cannot mutate the repo, so
+  # "apply the fixes" means: emit the fixed tree, and let each consumer diff
+  # it against what it has (`lint --fix` above today, the CI autofix commit
+  # of #3435 later). Lanes split by file domain and build concurrently as
+  # independent derivations (wall clock = slowest lane); within a lane the
+  # stages run sequentially with the formatter LAST, because fix stages emit
+  # unformatted edits -- same-lane fixes computed in parallel against the
+  # original tree could union cleanly and still fail the format check.
+  # Every derivation here is content-addressed, so a no-op fix realises to
+  # its input's content and an already-clean tree is cache hits all the way
+  # down to an empty patch.
+  lintFix = let
+    contentAddressed = {
+      __contentAddressed = true;
+      outputHashAlgo = "sha256";
+      outputHashMode = "recursive";
+    };
+    # One lane: copy the scoped source, run the lane's fixers in place, emit
+    # the tree. The fixers see nothing outside their scoped `src` by
+    # construction, so lane outputs stay as disjoint as lane inputs.
+    mkLane = {
+      name,
+      tools,
+      fix,
+    }: src:
+      pkgs.runCommand "lint-fix-${name}"
+      (contentAddressed // {nativeBuildInputs = tools;})
+      ''
+        cp -R ${src} "$out"
+        chmod -R u+w "$out"
+        cd "$out"
+        ${fix}
+      '';
+    lanes = {
+      # Mirrors the alejandra/statix/deadnix check stages' strictness:
+      # `deadnix --edit` without -L deletes an unused lambda pattern name
+      # outright, and a call site that still passes the attr surfaces in the
+      # eval checks -- exactly the manual migration the check stage's comment
+      # prescribes. statix discovers statix.toml at the tree root (the nix
+      # lane source carries it).
+      nix = mkLane {
+        name = "nix";
+        tools = [
+          pkgs.alejandra
+          pkgs.deadnix
+          pkgs.statix
+        ];
+        fix = ''
+          statix fix .
+          deadnix --edit .
+          alejandra --quiet .
+        '';
+      };
+      # The same pinned ruff and selector as the `ruff` check stage -- the
+      # fix must not widen or narrow the rule set. `--exit-zero` because
+      # findings are this lane's input, not its verdict: an unfixable
+      # violation must not fail the lane (the check path still reports it),
+      # while a real ruff failure (bad config, panic) still exits 2.
+      # `--no-cache` keeps `.ruff_cache` out of the output tree (cwd = $out).
+      python = mkLane {
+        name = "python";
+        tools = [pkgs.ruff];
+        fix = ''
+          ruff check ${ix.ruffAnnArgs} --fix --exit-zero --no-cache .
+        '';
+      };
+    };
+
+    # Scoped lane inputs: only the files a lane's tools read or rewrite,
+    # intersected with the tracked set. An edit outside a lane's fileset
+    # leaves that lane's input (hence, content-addressed, its output)
+    # untouched -- the whole-tree cache invalidation fix from #3431. The
+    # filesets must stay pairwise disjoint: `unite` treats a path emitted by
+    # two lanes as a scoping bug. Unlike the check stages' `fd` walks, these
+    # include tracked files under hidden directories (.github): a deliberate
+    # superset, since hidden-and-tracked is still shipped code.
+    sources = let
+      tracked = fs.gitTracked paths.root;
+      laneSource = fileset:
+        fs.toSource {
+          inherit (paths) root;
+          fileset = fs.intersection tracked fileset;
+        };
+    in {
+      nix = laneSource (
+        fs.union
+        (fs.fileFilter (file: file.hasExt "nix") paths.root)
+        (paths.root + "/statix.toml")
+      );
+      # `.claude` mirrors the ruff check stage's explicit filter (agent
+      # worktrees and assets); ruff.toml rides along so tree-root discovery
+      # inside the lane matches a checkout, though the inline flags already
+      # carry the whole policy.
+      python = laneSource (
+        fs.difference
+        (
+          fs.union
+          (fs.fileFilter (file: file.hasExt "py") paths.root)
+          (paths.root + "/ruff.toml")
+        )
+        (fs.maybeMissing (paths.root + "/.claude"))
+      );
+    };
+
+    # Union lane outputs into one tree. Lane filesets are disjoint, so the
+    # same path arriving from two lanes is a lane-scoping bug, not a merge
+    # to resolve: fail loudly rather than let one lane's fix silently shadow
+    # another's. (#3434's rust lane slots in as one more entry here; that it
+    # will internally fan out per crate is invisible to the union, which
+    # only sees the lane's composed tree.)
+    unite = name: trees:
+      pkgs.runCommand name contentAddressed ''
+        mkdir -p "$out"
+        for tree in ${toString trees}; do
+          (cd "$tree" && find . -type f -print0) |
+            while IFS= read -r -d "" file; do
+              rel="''${file#./}"
+              if [ -e "$out/$rel" ]; then
+                echo "lane union conflict on $rel (from $tree): lane filesets must be disjoint" >&2
+                exit 1
+              fi
+              mkdir -p "$out/$(dirname "$rel")"
+              cp "$tree/$rel" "$out/$rel"
+            done
+        done
+      '';
+
+    fixed = unite "lint-fixed" (lib.mapAttrsToList (name: lane: lane sources.${name}) lanes);
+
+    # The artifact `lint --fix` consumes: one unified diff from the lanes'
+    # input snapshot to the fixed tree. Symlinking the trees as `a`/`b`
+    # makes the hunk headers `a/<path> b/<path>`, exactly what `git apply`'s
+    # default -p1 strips; absolute /nix/store labels would not.
+    patch = pkgs.runCommand "lint-fix.patch" contentAddressed ''
+      ln -s ${unite "lint-fix-input" (lib.attrValues sources)} a
+      ln -s ${fixed} b
+      status=0
+      diff -ruN a b > "$out" || status=$?
+      # 0 = trees identical (empty patch: already clean); 1 = fixes to
+      # apply; anything else is a diff failure.
+      [ "$status" -le 1 ]
+    '';
+  in {
+    inherit lanes unite fixed patch;
   };
 
   # `check` is the full CI gate as one repo-owned command: check.yml runs
@@ -1453,6 +1637,85 @@
             ${lib.getExe lint}
             mkdir -p "$out"
           '';
+          # Acceptance for the fixer lanes (#3432), both halves in one gate: a
+          # deliberately violating tree becomes clean under the same check
+          # stages after one pass through its lane, and fixing the already-
+          # fixed tree is byte-identical (the no-op property that makes a
+          # clean tree a CA cache hit all the way down and `--fix` safe to
+          # re-run). Fixtures are built inline rather than committed:
+          # committed files with these violations would fail the repo's own
+          # lint stages (the same reason the astlog fixtures live as
+          # `.fixture`). Each fixture is first asserted to FAIL its check
+          # stage, so tool or selector drift that stops exercising a fixer
+          # turns this check red instead of silently proving nothing.
+          lint-fix = let
+            # One fixable finding per nix-lane tool: an unused binding
+            # (deadnix --edit), useless parens (statix fix), misformatting
+            # (alejandra).
+            violatingNix = pkgs.writeTextDir "fixture.nix" ''
+              let
+                unused = 1;
+                greeting = ("hello");
+              in {   inherit greeting; }
+            '';
+            # C408 (dict() -> {}): inside the shared selector's C4 family and
+            # safely fixable by `ruff check --fix`; module-level so the ANN
+            # rules are satisfied without annotations.
+            violatingPython = pkgs.writeTextDir "fixture.py" ''
+              values = dict()
+            '';
+            fixedNix = lintFix.lanes.nix violatingNix;
+            fixedPython = lintFix.lanes.python violatingPython;
+            fixedTree = lintFix.unite "lint-fix-fixture-fixed" [
+              fixedNix
+              fixedPython
+            ];
+          in
+            pkgs.runCommand "lint-fix-check"
+            {
+              nativeBuildInputs = [
+                pkgs.alejandra
+                pkgs.deadnix
+                pkgs.ruff
+                pkgs.statix
+              ];
+            }
+            ''
+              # Pre-fix: every tool must find its planted violation.
+              if alejandra --check ${violatingNix}/fixture.nix; then
+                echo "fixture stopped violating alejandra" >&2
+                exit 1
+              fi
+              if statix check ${violatingNix}; then
+                echo "fixture stopped violating statix" >&2
+                exit 1
+              fi
+              if deadnix --fail ${violatingNix}; then
+                echo "fixture stopped violating deadnix" >&2
+                exit 1
+              fi
+              if ruff check ${ix.ruffAnnArgs} --no-cache ${violatingPython}/fixture.py; then
+                echo "fixture stopped violating ruff" >&2
+                exit 1
+              fi
+
+              # Post-fix: the united tree passes the same check stages the
+              # lint gate runs, through the same stage binary.
+              cp -R ${fixedTree} fixed
+              chmod -R u+w fixed
+              cd fixed
+              ${lib.getExe lintStage} alejandra
+              ${lib.getExe lintStage} statix
+              ${lib.getExe lintStage} deadnix
+              ${lib.getExe lintStage} ruff
+              cd ..
+
+              # No-op: a second pass over each already-fixed lane output must
+              # be byte-identical.
+              diff -r ${fixedNix} ${lintFix.lanes.nix fixedNix}
+              diff -r ${fixedPython} ${lintFix.lanes.python fixedPython}
+              mkdir -p "$out"
+            '';
           filename-policy =
             pkgs.runCommand "filename-policy-check"
             {
@@ -1616,6 +1879,12 @@
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
       inherit lint site;
+      # Fixer-lane outputs (#3432): `lint-fixed` is the union of the lanes'
+      # fixed trees; `lint-fix-patch` is diff(snapshot, fixed), the artifact
+      # `nix run .#lint -- --fix` builds and git-applies. An empty patch
+      # means the tree is already clean.
+      lint-fixed = lintFix.fixed;
+      lint-fix-patch = lintFix.patch;
       site-dev = site.passthru.devServer;
       update-mods = updateMods;
       update-loaders = updateLoaders;
