@@ -875,7 +875,23 @@
     policyChecks =
       lib.optionalAttrs (
         workspace.policy.clippy.enable && (workspace.clippyByPackage or {}) ? ${packageName}
-      ) {clippy = workspace.clippyByPackage.${packageName};}
+      ) {
+        clippy = workspace.clippyByPackage.${packageName};
+        # Re-verification for the per-package clippy fixers (#3434): the same
+        # per-unit gate rendered over the composed FIXED tree
+        # (`clippyFixVerifiedByPackage`), so a machine-applied fix in a
+        # dependency that breaks this crate (cross-crate fork lints observe
+        # the caller, not the fixed crate) fails the crate's own enforced
+        # gate instead of landing through the autofix patch. Scoped to the
+        # same packages as `clippy` on purpose: a crate whose gate CI never
+        # enforces can carry live findings on main, and its verify gate
+        # would fail on those pre-existing residuals, not on anything the
+        # fixers changed. On a clean crate the fix is an identity whose
+        # content-addressed output realises to the scoped source's own
+        # store path, so this resolves to the same build as `clippy` and
+        # adds no second clippy pass.
+        clippyFixVerified = workspace.clippyFixVerifiedByPackage.${packageName};
+      }
       // lib.optionalAttrs (
         workspace.policy.denyUnusedCrateDependencies
         && (workspace.unusedCrateDependenciesByPackage or {}) ? ${packageName}

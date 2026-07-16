@@ -1868,28 +1868,6 @@
               diff -r ${fixedRust} ${lintFix.lanes.rust fixedRust}
               mkdir -p "$out"
             '';
-          # Re-verification for the clippy fixers (#3434): the ordinary
-          # per-unit clippy gates re-run over the composed fixed tree
-          # (`clippyFixVerifiedByPackage`, lib/rust/cargo-unit.nix), so a
-          # machine-applied fix that breaks a dependent crate (the fork
-          # lints observe the caller, not the fixed crate) fails here
-          # rather than landing through the autofix patch. Deliberately
-          # separate from patch production: a residual unfixable finding
-          # must not block emitting the fixes that do apply. On a clean
-          # tree every fix is an identity whose content-addressed output
-          # realises to the scoped source's own store path, so these
-          # resolve to the same builds as the primary clippy gates and add
-          # no second clippy pass.
-          lint-fix-clippy-verified = let
-            verified = (ix.rustWorkspaceFor pkgs).units.clippyFixVerifiedByPackage or {};
-          in
-            pkgs.runCommand "lint-fix-clippy-verified" {
-              __structuredAttrs = true;
-              deps = lib.attrValues verified;
-            } ''
-              mkdir -p "$out"
-              printf '%s\n' ${lib.escapeShellArgs (lib.attrNames verified)} > "$out/verified-packages"
-            '';
           filename-policy =
             pkgs.runCommand "filename-policy-check"
             {
