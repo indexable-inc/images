@@ -468,6 +468,10 @@
       '{"tool_name":"Bash","tool_input":{"command":"make >/dev/null"}}'
     pre_guard bash-habits-guard "recursive grep denied" deny \
       '{"tool_name":"Bash","tool_input":{"command":"grep -r foo ."}}'
+    pre_guard bash-habits-guard "multiline GitHub body denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"gh issue comment 12 --body \"first\nsecond\""}}'
+    pre_guard bash-habits-guard "GitHub body file allowed" allow \
+      '{"tool_name":"Bash","tool_input":{"command":"gh pr create --body-file message.md"}}'
     pre_guard bash-habits-guard "no-verify denied" deny \
       '{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify"}}'
     pre_guard bash-habits-guard "quoted mention not a false positive" allow \

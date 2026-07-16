@@ -109,15 +109,105 @@ fn grep_walks_tree(stage: &str) -> bool {
     false
 }
 
+fn quoted_value_is_multiline(value: &str) -> bool {
+    let (quote_offset, quote, honors_escapes, ansi_c) = match value.as_bytes() {
+        [b'$', b'\'', ..] => (1, b'\'', true, true),
+        [b'\'', ..] => (0, b'\'', false, false),
+        [b'"', ..] => (0, b'"', true, false),
+        _ => return false,
+    };
+    let quoted = &value.as_bytes()[quote_offset..];
+    let mut escaped = false;
+    let mut quote_count = 0;
+    for byte in quoted {
+        if escaped {
+            if ansi_c && *byte == b'n' && quote_count == 1 {
+                return true;
+            }
+            escaped = false;
+            continue;
+        }
+        if honors_escapes && *byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        if *byte == quote {
+            quote_count += 1;
+        }
+        if *byte == b'\n' && quote_count == 1 {
+            return true;
+        }
+    }
+
+    // A contraction can close a single-quoted body early and leave the shell
+    // command malformed. Treat an unbalanced quoted tail as multiline when it
+    // spans lines so the guard still catches the command before zsh parses it.
+    value.contains('\n') && quote_count % 2 == 1
+}
+
+fn is_outside_shell_quotes(value: &str) -> bool {
+    let mut quote = None;
+    let mut escaped = false;
+    for byte in value.bytes() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' && quote != Some(b'\'') {
+            escaped = true;
+            continue;
+        }
+        match (quote, byte) {
+            (None, b'\'' | b'"') => quote = Some(byte),
+            (Some(open), close) if open == close => quote = None,
+            _ => {}
+        }
+    }
+    quote.is_none()
+}
+
+fn has_multiline_inline_gh_body(command: &str) -> bool {
+    let Ok(gh_command) = regex::Regex::new(
+        r"(?m)(^|(?:&&|\|\||;)[ \t]*)gh[ \t]+(?:issue|pr)[ \t]+(?:create|comment)\b",
+    ) else {
+        return false;
+    };
+    let Ok(body_option) = regex::Regex::new(r"(^|[ \t\r\n])--body(?:=|[ \t\r\n]+)") else {
+        return false;
+    };
+
+    gh_command.find_iter(command).any(|gh| {
+        if !is_outside_shell_quotes(&command[..gh.start()]) {
+            return false;
+        }
+        let tail = &command[gh.end()..];
+        let Some(body) = body_option
+            .find_iter(tail)
+            .find(|body| is_outside_shell_quotes(&tail[..body.start()]))
+        else {
+            return false;
+        };
+        let before_body = &tail[..body.start()];
+        if ["&&", "||", ";"]
+            .iter()
+            .any(|separator| before_body.contains(separator))
+        {
+            return false;
+        }
+        quoted_value_is_multiline(&tail[body.end()..])
+    })
+}
+
 /// `PreToolUse(Bash)`: block recurring bad command shapes (output-to-/dev/null,
-/// recursive `grep -r`, `--no-verify`). Quote/escape-aware so a literal mention
-/// inside a commit message or `echo` is not a false positive.
+/// recursive `grep -r`, fragile GitHub bodies, `--no-verify`). Quote/escape-aware
+/// so a literal mention inside a commit message or `echo` is not a false positive.
 pub fn bash_habits_guard() {
     let Some(payload) = payload() else { return };
     if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
         return;
     }
     let raw = command_of(&payload);
+    let multiline_inline_gh_body = has_multiline_inline_gh_body(&raw);
 
     // Match operators, not literal text inside a quoted string. Neutralize
     // escaped chars, then drop quoted substrings (a real `2>/dev/null` /
@@ -165,7 +255,18 @@ pub fn bash_habits_guard() {
         return;
     }
 
-    // 3. --no-verify (bypassing git hooks).
+    // 3. Inline multiline GitHub bodies.
+    if multiline_inline_gh_body {
+        deny(
+            "Don't pass a multiline GitHub issue or PR body through `--body`. Shell \
+             quoting makes inline multiline values fragile. Pass the text through \
+             `--body-file -` or a temporary file instead. (bash-habits-guard hook)"
+                .to_owned(),
+        );
+        return;
+    }
+
+    // 4. --no-verify (bypassing git hooks).
     if regex::Regex::new(r"(^|\s)--no-verify(\s|$)").is_ok_and(|re| re.is_match(&cmd)) {
         deny(
             "Don't bypass git hooks with --no-verify. If a hook is too slow or wrong, \
@@ -195,7 +296,7 @@ pub fn search_guard() {
 
 #[cfg(test)]
 mod tests {
-    use super::{grep_walks_tree, is_recursive_flag};
+    use super::{grep_walks_tree, has_multiline_inline_gh_body, is_recursive_flag};
 
     #[test]
     fn recursive_flag_detection() {
@@ -219,5 +320,34 @@ mod tests {
         assert!(!grep_walks_tree("grep foo"));
         // -- ends flags
         assert!(!grep_walks_tree("grep -- -r"));
+    }
+
+    #[test]
+    fn multiline_inline_github_bodies() {
+        for command in [
+            "gh issue create --body 'first\nsecond'",
+            "gh issue comment 12 --body=\"first\nsecond\"",
+            r"gh pr create --body $'first\nsecond'",
+            "gh pr comment 12 --body 'Andrew's change\nlooks good'",
+        ] {
+            assert!(has_multiline_inline_gh_body(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn safe_github_body_inputs() {
+        for command in [
+            "gh issue create --body 'one line'",
+            "gh issue comment 12 --body-file -",
+            "gh pr create --body \"$body\"",
+            "gh pr comment 12 --body-file message.md",
+            "gh issue edit 12 --body 'first\nsecond'",
+            "echo \"gh issue create --body 'first\nsecond'\"",
+            "echo \"quoted command:\ngh issue create --body 'first\nsecond'\"",
+            "gh issue create --title \"literal --body 'first\nsecond'\" --body-file -",
+            "gh issue create --title ok && echo --body 'first\nsecond'",
+        ] {
+            assert!(!has_multiline_inline_gh_body(command), "{command}");
+        }
     }
 }
