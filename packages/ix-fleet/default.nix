@@ -22,10 +22,7 @@
       name = "api";
       baseName = "api";
       system = "/nix/store/api-system";
-      switch = {
-        target = "/nix/store/api-system";
-        sourceInstallable = ".#api";
-      };
+      switch.sourceInstallable = ".#api";
       bootstrapImage = "registry.ix.dev/ix/base:latest";
       replacementImage = {
         imageName = "api";
@@ -66,9 +63,9 @@
       mkdir -p "$out"
     '';
 
-  # Two remote-source nodes that share a build VM, so `switch --dry-run` exercises
-  # the native multi-VM batch path: both must land in one `ix up .#web .#worker
-  # --build-vm builder` command.
+  # Two source nodes in one region, so `switch --dry-run` exercises the native
+  # multi-VM batch path: both must land in one `ix up .#web .#worker` command
+  # (the CLI routes the build to the tenant's managed builder).
   dryRunSwitchPlan = jsonFormat.generate "ix-fleet-dry-run-switch-plan.json" {
     order = [
       "web"
@@ -78,12 +75,7 @@
       inherit name;
       baseName = name;
       system = "/nix/store/${name}-system";
-      switch = {
-        target = "/nix/store/${name}-system.drv";
-        buildOn = "remote";
-        buildVm = "builder";
-        sourceInstallable = ".#${name}";
-      };
+      switch.sourceInstallable = ".#${name}";
       bootstrapImage = "registry.ix.dev/ix/base:latest";
       replacementImage = {
         imageName = name;
@@ -136,10 +128,7 @@
         baseName = "api";
         replicaIndex = index;
         system = "/nix/store/api-system";
-        switch = {
-          target = "/nix/store/api-system";
-          sourceInstallable = ".#api";
-        };
+        switch.sourceInstallable = ".#api";
         bootstrapImage = "registry.ix.dev/ix/base:latest";
         replacementImage = {
           imageName = "api";
@@ -196,8 +185,12 @@
     }
     ''
       ix-fleet --plan ${dryRunSwitchPlan} switch --skip-health --no-snapshot --dry-run | tee switch.log
-      grep -qE '\+ ix up \.#web \.#worker --build-vm builder' switch.log \
-        || { echo "expected a single batched 'ix up .#web .#worker --build-vm builder'" >&2; exit 1; }
+      grep -qE '\+ ix up \.#web \.#worker --workdir' switch.log \
+        || { echo "expected a single batched 'ix up .#web .#worker'" >&2; exit 1; }
+      if grep -qE -- '--build-vm|--build-on' switch.log; then
+        echo "retired placement flags must not be emitted" >&2
+        exit 1
+      fi
       mkdir -p "$out"
     '';
 

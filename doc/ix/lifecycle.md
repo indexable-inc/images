@@ -37,8 +37,9 @@ back, exits with the command's exit code, and leaves the VM running.
 creates the VM from `--base` if it does not exist yet, then activates that system
 in place. Re-running converges the VM to the current config: the same contract as
 `nixos-rebuild switch`, with no separate switch command for an existing VM.
-Default target is `.`;
-several targets in one run (for example `.#web .#worker`) need `--build-vm`.
+Default target is `.`; a run may name several targets (for example
+`.#web .#worker`). Source builds run on the tenant's managed builder VM
+(`ix-builder-<region>`, created on demand).
 
 ## Recreate vs switch: the key distinction
 

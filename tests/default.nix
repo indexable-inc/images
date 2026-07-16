@@ -1843,16 +1843,6 @@
   # rather than falling back to anything.
   fleetMissingCasBuilderEval = builtins.tryEval (builtins.seq prefixedFleetBase.packages.api true);
 
-  # A local-build node: its source switch runs a plain `nix build`, so the
-  # default installable must be the `.#<node>-system` package alias, not the
-  # bare `.#<node>` (which only `ix up`'s resolver expands).
-  localBuildFleet = ix.mkFleet {
-    nodes.svc = {
-      deployment.switch.buildOn = "local";
-      modules = [{}];
-    };
-  };
-
   # An explicit `sourceInstallable` that happens to equal the bare default must
   # survive `withNodePrefix` unchanged: prefixing keys on provenance (user-set
   # vs defaulted), not on the rendered string.
@@ -5636,13 +5626,10 @@
         assertion =
           fleetPlan.web.switch
           == {
-            target = builtins.unsafeDiscardStringContext fleet.nodes.web.system.build.toplevel.drvPath;
-            buildOn = "remote";
-            buildVm = null;
             sourceInstallable = ".#web";
             overrideInputs = {};
           };
-        message = "fleet plans should default to local eval and remote build switch metadata";
+        message = "fleet plans should carry only the flake installable; `ix up` owns build placement";
       }
       {
         assertion = fleetPlan.web.replacementImage.sourceInstallable == ".#web";
@@ -5809,10 +5796,6 @@
           prefixedFleet.nixosConfigurations.tprefix-api.config.system.build.toplevel
           == prefixedFleetBase.nixosConfigurations.api.config.system.build.toplevel;
         message = "withNodePrefix should expose nixosConfigurations under the prefixed name while reusing the base closure (no second eval)";
-      }
-      {
-        assertion = localBuildFleet.planValue.nodes.svc.switch.sourceInstallable == ".#svc-system";
-        message = "a local-build node should default to the `.#<node>-system` package alias, since its plain `nix build` has no `ix up` rewrite";
       }
       {
         assertion =

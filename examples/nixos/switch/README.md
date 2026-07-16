@@ -49,6 +49,6 @@ onto your own VM.
 
 ## Scope
 
-This builds on the target VM itself, the `ix up` default. Building several
-VMs on one shared builder VM is what [`switch-multi`](../switch-multi)
-demonstrates with `--build-vm`.
+This switches a single VM. Switching several VMs in one command, with all
+closures built on the tenant's shared builder, is what
+[`switch-multi`](../switch-multi) demonstrates.
