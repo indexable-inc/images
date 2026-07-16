@@ -280,6 +280,7 @@ class WeaveStore:
 
     def _writer(self) -> None:
         backoff = 0.25
+        failing = False
         next_beat = time.monotonic() + _BEAT_S
         while True:
             with self._cv:
@@ -302,6 +303,9 @@ class WeaveStore:
                 body = [self._resolve_blob_item(item) for item in batch]
                 _http_json("POST", f"{self.weave_url}/api/facts", body=body if len(body) != 1 else body[0], headers=self._auth())
                 backoff = 0.25
+                if failing:
+                    failing = False
+                    print(f"ix-mcp store: weave writes to {self.weave_url} recovered", file=sys.stderr)
                 with self._cv:
                     self._inflight = False
                     self._cv.notify_all()
@@ -309,7 +313,17 @@ class WeaveStore:
                 if _auth_denied(exc):
                     self._disable_on_auth_denial(exc)
                     return
-                print(f"ix-mcp store: weave write failed, retrying: {exc}", file=sys.stderr)
+                if not failing:
+                    # One loud line per reachable->unreachable transition; the
+                    # backoff retry loop is silent until recovery (index#3416).
+                    failing = True
+                    print(
+                        f"ix-mcp store: weave write failed ({type(exc).__name__}: {exc}); "
+                        f"retrying with backoff until it recovers. "
+                        f"Health check: `curl -s {self.weave_url}/api/info`; "
+                        "restart: `launchctl kickstart -k gui/501/org.nix-community.home.weave-serve`",
+                        file=sys.stderr,
+                    )
                 with self._cv:
                     for item in reversed(batch):
                         self._queue.appendleft(item)

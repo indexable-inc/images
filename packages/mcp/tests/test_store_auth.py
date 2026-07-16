@@ -126,6 +126,39 @@ def test_auth_rejection_disables_writes_permanently(
     assert "WEAVE_TOKEN" in err
 
 
+def test_unreachable_logs_once_per_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Repeated write failures log ONE loud line (with the health check and
+    restart handles), then stay silent until the server recovers (index#3416)."""
+    monkeypatch.setenv("WEAVE_URL", "http://weave.test")
+    calls: list[str] = []
+
+    def refusing_then_up(
+        method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None
+    ) -> object:
+        calls.append(url)
+        if len(calls) <= 3:
+            raise ConnectionError("connection refused")
+        return {"seq": 1, "id": "f1"}
+
+    monkeypatch.setattr(store, "_http_json", refusing_then_up)
+
+    conn = store.WeaveStore(tmp_path / "s.ixnb")
+    try:
+        assert conn.flush(timeout=30.0)
+        assert not conn.disabled
+    finally:
+        conn.close()
+
+    assert len(calls) >= 4, calls
+    err = capsys.readouterr().err
+    assert err.count("weave write failed") == 1, err
+    assert "curl -s http://weave.test/api/info" in err
+    assert "launchctl kickstart -k gui/501/org.nix-community.home.weave-serve" in err
+    assert err.count("recovered") == 1, err
+
+
 def test_transient_failures_still_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEAVE_URL", "http://weave.test")
     calls: list[str] = []
