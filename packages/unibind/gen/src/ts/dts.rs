@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 
 use unibind_core::ir;
 
-use super::types::{self, doc_block, resource_close, ts_type, type_name, value_name, Level};
+use super::types::{self, Level, doc_block, resource_close, ts_type, type_name, value_name};
 use crate::host::EmitError;
 
 /// The one stream shape every stream-returning function shares.
@@ -85,7 +85,10 @@ fn record_decl(
             // back as `null`, so `Option` fields are optional in both
             // directions.
             ir::Type::Option(inner) => {
-                format!("{name}?: {} | null", ts_type(interface, inner, Level::Nested)?)
+                format!(
+                    "{name}?: {} | null",
+                    ts_type(interface, inner, Level::Nested)?
+                )
             }
             ty => format!("{name}: {}", ts_type(interface, ty, Level::Nested)?),
         };
@@ -121,8 +124,12 @@ fn object_decl(
     object: &ir::Object,
 ) -> Result<(), EmitError> {
     doc_block(out, "", &object.docs);
-    writeln!(out, "export declare class {} {{", type_name(&object.names, &object.name))
-        .expect("write to string");
+    writeln!(
+        out,
+        "export declare class {} {{",
+        type_name(&object.names, &object.name)
+    )
+    .expect("write to string");
     if let Some(ctor) = &object.constructor {
         doc_block(out, "  ", &ctor.docs);
         writeln!(out, "  constructor({});", params_list(interface, ctor)?)
@@ -185,7 +192,10 @@ fn callable_signature(
     let ret = match &function.ret {
         None => "void".to_owned(),
         Some(ir::Type::Stream(element)) => {
-            format!("UnibindStream<{}>", ts_type(interface, element, Level::Top)?)
+            format!(
+                "UnibindStream<{}>",
+                ts_type(interface, element, Level::Top)?
+            )
         }
         Some(ty) => ts_type(interface, ty, Level::Top)?,
     };

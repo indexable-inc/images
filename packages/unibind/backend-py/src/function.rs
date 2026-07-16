@@ -7,9 +7,9 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
 
+use crate::RenderError;
 use crate::ctx::Ctx;
 use crate::sig::{self, BodyAndRet};
-use crate::RenderError;
 
 /// Who the callable belongs to; the call target and receiver differ.
 enum Target<'a> {
@@ -143,9 +143,8 @@ fn async_item(
         quote!(::pyo3::PyResult::Ok(#wrapped))
     };
     let receiver = matches!(target, Target::Method { .. }).then(|| quote!(&self,));
-    let clone_inner = matches!(target, Target::Method { .. }).then(|| {
-        quote!(let inner = ::std::sync::Arc::clone(&self.inner);)
-    });
+    let clone_inner = matches!(target, Target::Method { .. })
+        .then(|| quote!(let inner = ::std::sync::Arc::clone(&self.inner);));
     let params = &args.params;
     quote! {
         fn #name<'py>(

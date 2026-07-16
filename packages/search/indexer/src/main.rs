@@ -831,7 +831,12 @@ async fn run_sources(
     let scan = resolve_cursor_dir(cli).map(ScanCursor::new);
     let scan = scan.as_ref();
     if let Some(dir) = claude {
-        let spec = GatedSource { label: "claude", user: None, source: "claude", inputs: &[dir.as_path()] };
+        let spec = GatedSource {
+            label: "claude",
+            user: None,
+            source: "claude",
+            inputs: &[dir.as_path()],
+        };
         let open = || {
             source_claude::ClaudeHistoryExport::open(&dir)
                 .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))
@@ -848,7 +853,12 @@ async fn run_sources(
             .chain(codex_sessions.iter())
             .map(PathBuf::as_path)
             .collect();
-        let spec = GatedSource { label: "codex", user: None, source: "codex", inputs: &inputs };
+        let spec = GatedSource {
+            label: "codex",
+            user: None,
+            source: "codex",
+            inputs: &inputs,
+        };
         let open = || {
             source_codex::CodexHistory::open(codex.as_deref(), codex_sessions.as_deref())
                 .with_context(|| {
@@ -1171,7 +1181,11 @@ async fn fold_parquet_into_lake(
                 counts.skipped += 1;
             }
             Ok(report) => {
-                eprintln!("[fold:{}] appended {} upserts", source.as_str(), report.upserts);
+                eprintln!(
+                    "[fold:{}] appended {} upserts",
+                    source.as_str(),
+                    report.upserts
+                );
                 counts.indexed += 1;
             }
             Err(error) => {
@@ -1293,10 +1307,20 @@ async fn index_user(
     let lake = user_lake.as_ref();
     if let Some(claude_dir) = safe_path_under(home, &[".claude", "projects"], true) {
         let label = format!("claude:{name}");
-        let spec = GatedSource { label: &label, user: Some(name), source: "claude", inputs: &[claude_dir.as_path()] };
+        let spec = GatedSource {
+            label: &label,
+            user: Some(name),
+            source: "claude",
+            inputs: &[claude_dir.as_path()],
+        };
         let open = || {
             source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name).with_context(
-                || format!("parsing Claude transcripts for {name} at {}", claude_dir.display()),
+                || {
+                    format!(
+                        "parsing Claude transcripts for {name} at {}",
+                        claude_dir.display()
+                    )
+                },
             )
         };
         run_gated_source(spec, scan, open, mixedbread, parquet, lake, counts).await;
@@ -1313,7 +1337,12 @@ async fn index_user(
             .chain(codex_sessions.iter())
             .map(PathBuf::as_path)
             .collect();
-        let spec = GatedSource { label: &label, user: Some(name), source: "codex", inputs: &inputs };
+        let spec = GatedSource {
+            label: &label,
+            user: Some(name),
+            source: "codex",
+            inputs: &inputs,
+        };
         let open = || {
             source_codex::CodexHistory::open_with(
                 codex_file.as_deref(),
@@ -1368,11 +1397,19 @@ async fn index_user(
     // planted symlink in the debug dir is skipped rather than followed.
     if let Some(debug_dir) = safe_path_under(home, &[".claude", "debug"], true) {
         let label = format!("debug:{name}");
-        let spec = GatedSource { label: &label, user: Some(name), source: "debug", inputs: &[debug_dir.as_path()] };
+        let spec = GatedSource {
+            label: &label,
+            user: Some(name),
+            source: "debug",
+            inputs: &[debug_dir.as_path()],
+        };
         let open = || {
-            source_debug::DebugLogs::open_with(&debug_dir, host, name).with_context(
-                || format!("reading Claude debug logs for {name} at {}", debug_dir.display()),
-            )
+            source_debug::DebugLogs::open_with(&debug_dir, host, name).with_context(|| {
+                format!(
+                    "reading Claude debug logs for {name} at {}",
+                    debug_dir.display()
+                )
+            })
         };
         run_gated_source(spec, scan, open, mixedbread, parquet, lake, counts).await;
     }

@@ -29,8 +29,7 @@ pub fn socket_path() -> PathBuf {
 /// override); `$SHARED_AUDIO_SOCKET` still wins.
 #[must_use]
 pub fn socket_path_in(state_dir: &Path) -> PathBuf {
-    std::env::var_os(SOCKET_ENV)
-        .map_or_else(|| state_dir.join("control.sock"), PathBuf::from)
+    std::env::var_os(SOCKET_ENV).map_or_else(|| state_dir.join("control.sock"), PathBuf::from)
 }
 
 /// A single client request; one JSON object per line.
@@ -58,7 +57,11 @@ pub enum Request {
     /// Set a shared control immediately.
     SetControl { control: u16, value: f32 },
     /// Schedule a shared control change at an exact shared frame.
-    Schedule { at_frame: u64, control: u16, value: f32 },
+    Schedule {
+        at_frame: u64,
+        control: u16,
+        value: f32,
+    },
 }
 
 /// The daemon's one-line JSON reply.
@@ -74,12 +77,20 @@ pub struct Response {
 impl Response {
     #[must_use]
     pub const fn ok() -> Self {
-        Self { ok: true, error: None, status: None }
+        Self {
+            ok: true,
+            error: None,
+            status: None,
+        }
     }
 
     #[must_use]
     pub fn err(error: impl std::fmt::Display) -> Self {
-        Self { ok: false, error: Some(error.to_string()), status: None }
+        Self {
+            ok: false,
+            error: Some(error.to_string()),
+            status: None,
+        }
     }
 }
 

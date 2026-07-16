@@ -68,7 +68,11 @@ fn sample_functions() -> Vec<ir::Function> {
             &["Fetch rows.", "", "Docs become docstrings."],
             vec![
                 arg("store", ir::Type::String { owned: false }, None),
-                arg("limit", ir::Type::Int(ir::IntKind::Usize), Some(ir::Literal::Int(10))),
+                arg(
+                    "limit",
+                    ir::Type::Int(ir::IntKind::Usize),
+                    Some(ir::Literal::Int(10)),
+                ),
             ],
         )
     };
@@ -94,7 +98,11 @@ fn sample_functions() -> Vec<ir::Function> {
             &[],
             vec![
                 arg("pattern", owned_string(), None),
-                arg("root", ir::Type::Option(Box::new(ir::Type::Path { owned: false })), None),
+                arg(
+                    "root",
+                    ir::Type::Option(Box::new(ir::Type::Path { owned: false })),
+                    None,
+                ),
             ],
         )
     };
@@ -105,9 +113,21 @@ fn sample_functions() -> Vec<ir::Function> {
             None,
             &[],
             vec![
-                arg("name", owned_string(), Some(ir::Literal::Str("hello \"world\"\n".to_owned()))),
-                arg("ratio", ir::Type::Float(ir::FloatKind::F64), Some(ir::Literal::Float(1.0))),
-                arg("note", ir::Type::Option(Box::new(owned_string())), Some(ir::Literal::None)),
+                arg(
+                    "name",
+                    owned_string(),
+                    Some(ir::Literal::Str("hello \"world\"\n".to_owned())),
+                ),
+                arg(
+                    "ratio",
+                    ir::Type::Float(ir::FloatKind::F64),
+                    Some(ir::Literal::Float(1.0)),
+                ),
+                arg(
+                    "note",
+                    ir::Type::Option(Box::new(owned_string())),
+                    Some(ir::Literal::None),
+                ),
             ],
         )
     };
@@ -135,7 +155,12 @@ fn sample_records() -> Vec<ir::Record> {
             names: names(None),
             docs: docs(&["One result row."]),
             fields: vec![
-                field("id", None, &["Identifier."], ir::Type::Int(ir::IntKind::U64)),
+                field(
+                    "id",
+                    None,
+                    &["Identifier."],
+                    ir::Type::Int(ir::IntKind::U64),
+                ),
                 field("name", Some("label"), &[], owned_string()),
                 field("tags", None, &[], ir::Type::Vec(Box::new(owned_string()))),
                 field(
@@ -185,7 +210,6 @@ fn sample_errors() -> Vec<ir::ErrorType> {
     }]
 }
 
-
 fn sample_objects() -> Vec<ir::Object> {
     let constructor = ir::Function {
         throws: Some("SampleError".to_owned()),
@@ -206,17 +230,28 @@ fn sample_objects() -> Vec<ir::Object> {
         ..function("head", None, &["The first row."], vec![])
     };
     let watch = ir::Function {
-        ret: Some(ir::Type::Stream(Box::new(ir::Type::Named("Row".to_owned())))),
+        ret: Some(ir::Type::Stream(Box::new(ir::Type::Named(
+            "Row".to_owned(),
+        )))),
         ..function(
             "watch",
             None,
             &["Watch rows as they land."],
-            vec![arg("prefix", owned_string(), Some(ir::Literal::Str(String::new())))],
+            vec![arg(
+                "prefix",
+                owned_string(),
+                Some(ir::Literal::Str(String::new())),
+            )],
         )
     };
     let cursor = ir::Function {
         ret: Some(ir::Type::Named("Cursor".to_owned())),
-        ..function("cursor", Some("open_cursor"), &["Open a cursor over the store."], vec![])
+        ..function(
+            "cursor",
+            Some("open_cursor"),
+            &["Open a cursor over the store."],
+            vec![],
+        )
     };
     let store = ir::Object {
         name: "Store".to_owned(),
@@ -234,7 +269,11 @@ fn sample_objects() -> Vec<ir::Object> {
             "read",
             None,
             &["Read the next chunk."],
-            vec![arg("max_bytes", ir::Type::Int(ir::IntKind::U32), Some(ir::Literal::Int(4096)))],
+            vec![arg(
+                "max_bytes",
+                ir::Type::Int(ir::IntKind::U32),
+                Some(ir::Literal::Int(4096)),
+            )],
         )
     };
     let close = ir::Function {
@@ -335,7 +374,10 @@ fn parse_rejects_a_newer_ir_version() {
 
     let error = parse_ir_bytes(&json).expect_err("version 99 must not parse");
     let message = format!("{error:#}");
-    assert!(message.contains("version 99"), "missing embedded version: {message}");
+    assert!(
+        message.contains("version 99"),
+        "missing embedded version: {message}"
+    );
     assert!(
         message.contains(&format!("version {}", ir::IR_VERSION)),
         "missing supported version: {message}"

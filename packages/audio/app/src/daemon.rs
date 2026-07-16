@@ -107,7 +107,14 @@ async fn run_async(opts: Opts) -> Result<()> {
     let _audio = if opts.no_audio {
         None
     } else {
-        Some(start_audio(&score, &blobs, &node, &time, sample_rate, &volume)?)
+        Some(start_audio(
+            &score,
+            &blobs,
+            &node,
+            &time,
+            sample_rate,
+            &volume,
+        )?)
     };
 
     let state = Arc::new(State {
@@ -180,7 +187,11 @@ fn start_audio(
     device.log_on_drop(false);
     let sink = rodio::Player::connect_new(device.mixer());
     sink.append(source);
-    Ok(AudioStack { _player: player, _device: device, _sink: sink })
+    Ok(AudioStack {
+        _player: player,
+        _device: device,
+        _sink: sink,
+    })
 }
 
 /// Live audio output held by the daemon for its lifetime; dropping it stops
@@ -293,7 +304,10 @@ fn try_handle(state: &State, request: Request) -> Result<Response> {
             }
             Ok(Response::ok())
         }
-        Request::Publish { wasm_base64, at_frame } => {
+        Request::Publish {
+            wasm_base64,
+            at_frame,
+        } => {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(wasm_base64)
                 .context("decode wasm_base64")?;
@@ -310,15 +324,27 @@ fn try_handle(state: &State, request: Request) -> Result<Response> {
             Ok(Response::ok())
         }
         Request::SetControl { control, value } => {
-            state.score.lock().expect("score lock").set_control(control, value)?;
-            Ok(Response::ok())
-        }
-        Request::Schedule { at_frame, control, value } => {
             state
                 .score
                 .lock()
                 .expect("score lock")
-                .schedule(audio_score::Event { at_frame, control, value })?;
+                .set_control(control, value)?;
+            Ok(Response::ok())
+        }
+        Request::Schedule {
+            at_frame,
+            control,
+            value,
+        } => {
+            state
+                .score
+                .lock()
+                .expect("score lock")
+                .schedule(audio_score::Event {
+                    at_frame,
+                    control,
+                    value,
+                })?;
             Ok(Response::ok())
         }
     }
@@ -326,7 +352,10 @@ fn try_handle(state: &State, request: Request) -> Result<Response> {
 
 /// The shared frame one second from now; the default publish switch point.
 fn one_second_out(state: &State) -> u64 {
-    let now = state.node.clock().frame_at(state.time.now_micros(), state.sample_rate);
+    let now = state
+        .node
+        .clock()
+        .frame_at(state.time.now_micros(), state.sample_rate);
     (now + i64::from(state.sample_rate)).max(0).unsigned_abs()
 }
 
@@ -380,7 +409,11 @@ mod tests {
         let before = state.score.lock().expect("lock").version();
         let response = handle(
             &state,
-            Request::Volume { set: Some(0.4), step: Some(-0.1), muted: Some(true) },
+            Request::Volume {
+                set: Some(0.4),
+                step: Some(-0.1),
+                muted: Some(true),
+            },
         );
         assert!(response.ok);
         let after = state.score.lock().expect("lock").version();
@@ -396,7 +429,10 @@ mod tests {
         let bogus = base64::engine::general_purpose::STANDARD.encode(b"not wasm");
         let response = handle(
             &state,
-            Request::Publish { wasm_base64: bogus, at_frame: Some(0) },
+            Request::Publish {
+                wasm_base64: bogus,
+                at_frame: Some(0),
+            },
         );
         assert!(!response.ok);
         assert!(state.score.lock().expect("lock").instrument()?.is_none());

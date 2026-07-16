@@ -158,7 +158,10 @@ mod tests {
 
     fn assert_filter(spec: &FilterSpec, expected: &serde_json::Value) {
         let filter = build_filter(spec).expect("filter");
-        assert_eq!(&serde_json::to_value(filter).expect("serialize filter"), expected);
+        assert_eq!(
+            &serde_json::to_value(filter).expect("serialize filter"),
+            expected
+        );
     }
 
     #[test]
@@ -208,21 +211,30 @@ mod tests {
     fn time_spec_accepts_epoch_and_relative_spans() {
         let now = 1_781_300_000;
         // Bare digits are epoch seconds, passed through untouched.
-        assert_eq!(parse_time_spec("1781200000", now).expect("epoch"), 1_781_200_000);
+        assert_eq!(
+            parse_time_spec("1781200000", now).expect("epoch"),
+            1_781_200_000
+        );
         // Relative spans subtract from `now`.
         assert_eq!(parse_time_spec("90s", now).expect("s"), now - 90);
         assert_eq!(parse_time_spec("30m", now).expect("m"), now - 30 * 60);
         assert_eq!(parse_time_spec("24h", now).expect("h"), now - 24 * 3600);
         assert_eq!(parse_time_spec("7d", now).expect("d"), now - 7 * 86_400);
         assert_eq!(parse_time_spec("2w", now).expect("w"), now - 14 * 86_400);
-        assert_eq!(parse_time_spec(" 24h ", now).expect("trimmed"), now - 24 * 3600);
+        assert_eq!(
+            parse_time_spec(" 24h ", now).expect("trimmed"),
+            now - 24 * 3600
+        );
     }
 
     #[test]
     fn time_spec_rejects_garbage() {
         let now = 1_781_300_000;
         for bad in ["", "yesterday", "7x", "-5d", "d", "1.5h", "24h7d"] {
-            assert!(parse_time_spec(bad, now).is_err(), "{bad:?} must be rejected");
+            assert!(
+                parse_time_spec(bad, now).is_err(),
+                "{bad:?} must be rejected"
+            );
         }
     }
 

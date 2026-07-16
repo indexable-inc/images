@@ -6,11 +6,11 @@ use panes_protocol::ToHost;
 use smithay::input::pointer::{CursorImageStatus, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1;
-use smithay::reexports::wayland_server::{Client, Resource as _};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::{Client, Resource as _};
 use smithay::utils::{Logical, Point, Serial, Size};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
@@ -18,15 +18,15 @@ use smithay::wayland::compositor::{
     get_parent, is_sync_subsurface, with_states,
 };
 use smithay::wayland::pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint};
-use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
-use smithay::wayland::shell::xdg::{
-    PopupSurface, PositionerState, SurfaceCachedState, ToplevelSurface, XdgShellHandler,
-    XdgShellState, XdgToplevelSurfaceData,
-};
 use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
     set_data_device_focus,
+};
+use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
+use smithay::wayland::shell::xdg::{
+    PopupSurface, PositionerState, SurfaceCachedState, ToplevelSurface, XdgShellHandler,
+    XdgShellState, XdgToplevelSurfaceData,
 };
 use smithay::wayland::shm::{BufferData, ShmHandler, ShmState, with_buffer_contents};
 use smithay::{
@@ -214,7 +214,11 @@ impl App {
                         // (mailbox semantics).
                         old.buffer.release();
                     }
-                    pane.pending_gpu = Some(super::HeldGpuBuffer { buffer, dmabuf, scale });
+                    pane.pending_gpu = Some(super::HeldGpuBuffer {
+                        buffer,
+                        dmabuf,
+                        scale,
+                    });
                     return;
                 }
                 if let Some(frame) = self.copy_buffer(&buffer) {
@@ -403,10 +407,9 @@ impl PointerConstraintsHandler for App {
         pointer: &PointerHandle<Self>,
         location: Point<f64, Logical>,
     ) {
-        let active =
-            with_pointer_constraint(surface, pointer, |constraint| {
-                constraint.is_some_and(|constraint| constraint.is_active())
-            });
+        let active = with_pointer_constraint(surface, pointer, |constraint| {
+            constraint.is_some_and(|constraint| constraint.is_active())
+        });
         if active {
             // Surface-local == global here (every surface anchors at the
             // origin), so the hint is where the pointer resumes on unlock.

@@ -52,7 +52,9 @@ pub fn channel() -> (SendQueue, SendQueueReceiver) {
     channel_with_on_close(|| {})
 }
 
-pub fn channel_with_on_close(on_close: impl FnOnce() + Send + 'static) -> (SendQueue, SendQueueReceiver) {
+pub fn channel_with_on_close(
+    on_close: impl FnOnce() + Send + 'static,
+) -> (SendQueue, SendQueueReceiver) {
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
             entries: VecDeque::new(),
@@ -61,13 +63,22 @@ pub fn channel_with_on_close(on_close: impl FnOnce() + Send + 'static) -> (SendQ
         }),
         ready: Condvar::new(),
     });
-    (SendQueue { shared: Arc::clone(&shared) }, SendQueueReceiver { shared })
+    (
+        SendQueue {
+            shared: Arc::clone(&shared),
+        },
+        SendQueueReceiver { shared },
+    )
 }
 
 impl SendQueue {
     pub fn send(&self, msg: ToGuest) -> Result<(), SendQueueError> {
         let key = CoalesceKey::for_msg(&msg);
-        let mut state = self.shared.state.lock().map_err(|_| SendQueueError::Disconnected)?;
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| SendQueueError::Disconnected)?;
         if !state.open {
             return Err(SendQueueError::Disconnected);
         }
@@ -110,7 +121,12 @@ impl SendQueue {
 
 impl Drop for SendQueue {
     fn drop(&mut self) {
-        let on_close = self.shared.state.lock().ok().and_then(|mut state| close_locked(&mut state));
+        let on_close = self
+            .shared
+            .state
+            .lock()
+            .ok()
+            .and_then(|mut state| close_locked(&mut state));
         self.shared.ready.notify_all();
         run_on_close(on_close);
     }
@@ -138,7 +154,12 @@ impl SendQueueReceiver {
 
 impl Drop for SendQueueReceiver {
     fn drop(&mut self) {
-        let on_close = self.shared.state.lock().ok().and_then(|mut state| close_locked(&mut state));
+        let on_close = self
+            .shared
+            .state
+            .lock()
+            .ok()
+            .and_then(|mut state| close_locked(&mut state));
         self.shared.ready.notify_all();
         run_on_close(on_close);
     }
@@ -151,9 +172,15 @@ impl CoalesceKey {
             ToGuest::PointerRelative { id, .. } => Some(Self::PointerRelative { id: *id }),
             // A stop terminates a scroll segment in the compositor, so it is a
             // discrete barrier: later deltas must not merge into or replace it.
-            ToGuest::PointerAxis { id, source, stop: false, .. } => {
-                Some(Self::PointerAxis { id: *id, source: *source })
-            }
+            ToGuest::PointerAxis {
+                id,
+                source,
+                stop: false,
+                ..
+            } => Some(Self::PointerAxis {
+                id: *id,
+                source: *source,
+            }),
             ToGuest::Ack { id, .. } => Some(Self::Ack { id: *id }),
             ToGuest::PointerAxis { stop: true, .. }
             | ToGuest::Hello { .. }
@@ -181,12 +208,24 @@ fn run_on_close(on_close: Option<Box<dyn FnOnce() + Send>>) {
 
 fn coalesce(queued: &mut ToGuest, next: ToGuest) {
     match (queued, next) {
-        (ToGuest::PointerRelative { dx, dy, .. }, ToGuest::PointerRelative { dx: next_dx, dy: next_dy, .. }) => {
+        (
+            ToGuest::PointerRelative { dx, dy, .. },
+            ToGuest::PointerRelative {
+                dx: next_dx,
+                dy: next_dy,
+                ..
+            },
+        ) => {
             *dx += next_dx;
             *dy += next_dy;
         }
         (
-            ToGuest::PointerAxis { horizontal, vertical, v120, .. },
+            ToGuest::PointerAxis {
+                horizontal,
+                vertical,
+                v120,
+                ..
+            },
             ToGuest::PointerAxis {
                 horizontal: next_horizontal,
                 vertical: next_vertical,
@@ -220,8 +259,8 @@ fn coalesce(queued: &mut ToGuest, next: ToGuest) {
 #[cfg(test)]
 mod tests {
     use panes_protocol::ButtonState;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
@@ -230,11 +269,19 @@ mod tests {
     }
 
     fn click(id: WindowId, button: u32) -> ToGuest {
-        ToGuest::PointerButton { id, button, state: ButtonState::Pressed }
+        ToGuest::PointerButton {
+            id,
+            button,
+            state: ButtonState::Pressed,
+        }
     }
 
     fn key(id: WindowId, keycode: u32) -> ToGuest {
-        ToGuest::Key { id, keycode, state: ButtonState::Pressed }
+        ToGuest::Key {
+            id,
+            keycode,
+            state: ButtonState::Pressed,
+        }
     }
 
     fn relative(id: WindowId, dx: f64, dy: f64) -> ToGuest {
@@ -249,7 +296,14 @@ mod tests {
         v120: Option<(i32, i32)>,
         stop: bool,
     ) -> ToGuest {
-        ToGuest::PointerAxis { id, source, horizontal, vertical, v120, stop }
+        ToGuest::PointerAxis {
+            id,
+            source,
+            horizontal,
+            vertical,
+            v120,
+            stop,
+        }
     }
 
     #[test]
@@ -330,9 +384,18 @@ mod tests {
     #[test]
     fn axis_deltas_sum_and_v120_merges_losslessly() {
         let (queue, rx) = channel();
-        assert_eq!(queue.send(axis(7, AxisSource::Wheel, 1.0, 2.0, Some((120, 0)), false)), Ok(()));
-        assert_eq!(queue.send(axis(7, AxisSource::Wheel, 3.0, 4.0, None, false)), Ok(()));
-        assert_eq!(queue.send(axis(7, AxisSource::Wheel, 5.0, 6.0, Some((0, -120)), false)), Ok(()));
+        assert_eq!(
+            queue.send(axis(7, AxisSource::Wheel, 1.0, 2.0, Some((120, 0)), false)),
+            Ok(())
+        );
+        assert_eq!(
+            queue.send(axis(7, AxisSource::Wheel, 3.0, 4.0, None, false)),
+            Ok(())
+        );
+        assert_eq!(
+            queue.send(axis(7, AxisSource::Wheel, 5.0, 6.0, Some((0, -120)), false)),
+            Ok(())
+        );
 
         assert!(matches!(
             rx.try_recv(),
@@ -351,10 +414,22 @@ mod tests {
     #[test]
     fn axis_stop_is_a_discrete_barrier() {
         let (queue, rx) = channel();
-        assert_eq!(queue.send(axis(7, AxisSource::Finger, 1.0, 2.0, None, false)), Ok(()));
-        assert_eq!(queue.send(axis(7, AxisSource::Finger, 0.0, 0.0, None, true)), Ok(()));
-        assert_eq!(queue.send(axis(7, AxisSource::Finger, 3.0, 4.0, None, false)), Ok(()));
-        assert_eq!(queue.send(axis(7, AxisSource::Finger, 5.0, 6.0, None, false)), Ok(()));
+        assert_eq!(
+            queue.send(axis(7, AxisSource::Finger, 1.0, 2.0, None, false)),
+            Ok(())
+        );
+        assert_eq!(
+            queue.send(axis(7, AxisSource::Finger, 0.0, 0.0, None, true)),
+            Ok(())
+        );
+        assert_eq!(
+            queue.send(axis(7, AxisSource::Finger, 3.0, 4.0, None, false)),
+            Ok(())
+        );
+        assert_eq!(
+            queue.send(axis(7, AxisSource::Finger, 5.0, 6.0, None, false)),
+            Ok(())
+        );
 
         assert!(matches!(
             rx.try_recv(),
@@ -381,7 +456,10 @@ mod tests {
         assert_eq!(queue.send(ToGuest::Ack { id: 7, seq: 8 }), Ok(()));
         assert_eq!(queue.send(ToGuest::Ack { id: 7, seq: 12 }), Ok(()));
 
-        assert!(matches!(rx.try_recv(), Some(ToGuest::Ack { id: 7, seq: 12 })));
+        assert!(matches!(
+            rx.try_recv(),
+            Some(ToGuest::Ack { id: 7, seq: 12 })
+        ));
         assert!(rx.try_recv().is_none());
     }
 
@@ -392,9 +470,18 @@ mod tests {
         assert_eq!(queue.send(click(1, 0x110)), Ok(()));
         assert_eq!(queue.send(ToGuest::CloseRequest { id: 1 }), Ok(()));
 
-        assert!(matches!(rx.try_recv(), Some(ToGuest::Key { keycode: 30, .. })));
-        assert!(matches!(rx.try_recv(), Some(ToGuest::PointerButton { button: 0x110, .. })));
-        assert!(matches!(rx.try_recv(), Some(ToGuest::CloseRequest { id: 1 })));
+        assert!(matches!(
+            rx.try_recv(),
+            Some(ToGuest::Key { keycode: 30, .. })
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Some(ToGuest::PointerButton { button: 0x110, .. })
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Some(ToGuest::CloseRequest { id: 1 })
+        ));
         assert!(rx.try_recv().is_none());
     }
 
@@ -422,7 +509,10 @@ mod tests {
         }
 
         assert_eq!(queue.send(click(1, 0x110)), Err(SendQueueError::Full));
-        assert_eq!(queue.send(click(1, 0x111)), Err(SendQueueError::Disconnected));
+        assert_eq!(
+            queue.send(click(1, 0x111)),
+            Err(SendQueueError::Disconnected)
+        );
         drop(queue);
         assert_eq!(closed.load(Ordering::SeqCst), 1);
     }

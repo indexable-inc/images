@@ -9,7 +9,9 @@ use chrono::{DateTime, Utc};
 use deadpool_postgres::Pool;
 use snafu::ResultExt;
 
-use crate::error::{JsonDecodeSnafu, JsonEncodeSnafu, PoolSnafu, PopulateSnafu, RecallSnafu, Result, SchemaSnafu};
+use crate::error::{
+    JsonDecodeSnafu, JsonEncodeSnafu, PoolSnafu, PopulateSnafu, RecallSnafu, Result, SchemaSnafu,
+};
 use crate::types::{FileDep, PopulateRequest};
 
 const SCHEMA: &str = include_str!("../schema.sql");
@@ -73,7 +75,9 @@ pub async fn recall(pool: &Pool, params: RecallParams<'_>) -> Result<Vec<RecallR
             ],
         )
         .await
-        .context(RecallSnafu { agent_type: params.agent_type.to_owned() })?;
+        .context(RecallSnafu {
+            agent_type: params.agent_type.to_owned(),
+        })?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -84,7 +88,8 @@ pub async fn recall(pool: &Pool, params: RecallParams<'_>) -> Result<Vec<RecallR
             continue;
         }
         let file_deps_json: serde_json::Value = row.get("file_deps");
-        let file_deps: Vec<FileDep> = serde_json::from_value(file_deps_json).context(JsonDecodeSnafu)?;
+        let file_deps: Vec<FileDep> =
+            serde_json::from_value(file_deps_json).context(JsonDecodeSnafu)?;
         out.push(RecallRow {
             id: row.get("id"),
             question: row.get("question"),
@@ -128,6 +133,8 @@ pub async fn populate(pool: &Pool, req: &PopulateRequest, ttl_days: i64) -> Resu
             ],
         )
         .await
-        .context(PopulateSnafu { agent_type: req.agent_type.clone() })?;
+        .context(PopulateSnafu {
+            agent_type: req.agent_type.clone(),
+        })?;
     Ok(())
 }

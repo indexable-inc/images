@@ -6,9 +6,7 @@
 //! output is snapshotted directly.)
 
 use unibind_core::ir;
-use unibind_test_support::{
-    assert_ir_json_snapshot, assert_render_snapshot, lower_module_source,
-};
+use unibind_test_support::{assert_ir_json_snapshot, assert_render_snapshot, lower_module_source};
 
 const GLUE_SNAPSHOT: &str = include_str!("snapshots/sample.ex.rs");
 
@@ -18,7 +16,11 @@ fn interface() -> ir::Interface {
 
 #[test]
 fn ir_json_snapshot() {
-    assert_ir_json_snapshot(&interface(), include_str!("snapshots/sample.ir.json"), "sample.ir.json");
+    assert_ir_json_snapshot(
+        &interface(),
+        include_str!("snapshots/sample.ir.json"),
+        "sample.ir.json",
+    );
 }
 
 #[test]

@@ -29,7 +29,10 @@ use serde_json::Value;
 fn state_dir() -> PathBuf {
     std::env::var_os("CLAUDE_WAKEUP_STATE_DIR")
         .filter(|v| !v.is_empty())
-        .map_or_else(|| crate::home().join(".claude/.wakeup-state"), PathBuf::from)
+        .map_or_else(
+            || crate::home().join(".claude/.wakeup-state"),
+            PathBuf::from,
+        )
 }
 
 fn marker_path(session: &str) -> PathBuf {
@@ -187,7 +190,13 @@ pub fn wakeup_gate() {
         }
         GateAction::Block => {}
     }
-    write_marker(&session, &Marker { nagged: true, ..marker });
+    write_marker(
+        &session,
+        &Marker {
+            nagged: true,
+            ..marker
+        },
+    );
     let reason = format!(
         "An armed ScheduleWakeup was dropped before firing: this session armed a wakeup at {} \
          to fire at {} (in {}s), but the harness now reports no pending one-shot wakeup in \
@@ -227,7 +236,11 @@ mod tests {
     #[test]
     fn blocks_when_pending_wakeup_vanished_before_fire_time() {
         assert_eq!(
-            gate_action(&json!({"session_crons": []}), &marker(2_000_000, false), 1_000_000),
+            gate_action(
+                &json!({"session_crons": []}),
+                &marker(2_000_000, false),
+                1_000_000
+            ),
             GateAction::Block,
         );
     }
@@ -237,7 +250,10 @@ mod tests {
         let payload = json!({"session_crons": [
             {"id": "ab12", "schedule": "20 19 * * *", "recurring": false, "prompt": "/loop ..."},
         ]});
-        assert_eq!(gate_action(&payload, &marker(2_000_000, false), 1_000_000), GateAction::Allow);
+        assert_eq!(
+            gate_action(&payload, &marker(2_000_000, false), 1_000_000),
+            GateAction::Allow
+        );
     }
 
     // A recurring cron (CronCreate autonomous loop) is not the one-shot wakeup;
@@ -247,7 +263,10 @@ mod tests {
         let payload = json!({"session_crons": [
             {"id": "cd34", "schedule": "0 9 * * *", "recurring": true, "prompt": "daily"},
         ]});
-        assert_eq!(gate_action(&payload, &marker(2_000_000, false), 1_000_000), GateAction::Block);
+        assert_eq!(
+            gate_action(&payload, &marker(2_000_000, false), 1_000_000),
+            GateAction::Block
+        );
     }
 
     // At or past the fire target the fire itself starts a turn, so the Stop
@@ -255,7 +274,11 @@ mod tests {
     #[test]
     fn clears_once_fire_time_passed() {
         assert_eq!(
-            gate_action(&json!({"session_crons": []}), &marker(2_000_000, false), 2_000_000),
+            gate_action(
+                &json!({"session_crons": []}),
+                &marker(2_000_000, false),
+                2_000_000
+            ),
             GateAction::ClearAndAllow,
         );
     }
@@ -265,7 +288,11 @@ mod tests {
     #[test]
     fn blocks_at_most_once_per_armed_wakeup() {
         assert_eq!(
-            gate_action(&json!({"session_crons": []}), &marker(2_000_000, true), 1_000_000),
+            gate_action(
+                &json!({"session_crons": []}),
+                &marker(2_000_000, true),
+                1_000_000
+            ),
             GateAction::ClearAndAllow,
         );
     }
@@ -274,9 +301,16 @@ mod tests {
     // open and keep the marker (it clears itself once the fire time passes).
     #[test]
     fn missing_session_crons_fails_open() {
-        assert_eq!(gate_action(&json!({}), &marker(2_000_000, false), 1_000_000), GateAction::Allow);
         assert_eq!(
-            gate_action(&json!({"session_crons": "notanarray"}), &marker(2_000_000, false), 1_000_000),
+            gate_action(&json!({}), &marker(2_000_000, false), 1_000_000),
+            GateAction::Allow
+        );
+        assert_eq!(
+            gate_action(
+                &json!({"session_crons": "notanarray"}),
+                &marker(2_000_000, false),
+                1_000_000
+            ),
             GateAction::Allow,
         );
     }

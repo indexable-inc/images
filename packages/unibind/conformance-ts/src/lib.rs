@@ -255,7 +255,9 @@ mod conformance {
         #[unibind(constructor)]
         pub fn new(name: String) -> Result<Self, ConformanceError> {
             if name.is_empty() {
-                return Err(ConformanceError::BadQuery("session name must not be empty".to_owned()));
+                return Err(ConformanceError::BadQuery(
+                    "session name must not be empty".to_owned(),
+                ));
             }
             LIVE_SESSIONS.fetch_add(1, Ordering::SeqCst);
             Ok(Self {

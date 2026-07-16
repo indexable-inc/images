@@ -95,11 +95,7 @@ impl EnhancedQuery {
                 ..
             } => (metadata_filters.as_ref()?, *filter_mode),
         };
-        let mut filters: Vec<Filter> = conditions
-            .iter()
-            .cloned()
-            .map(Filter::Condition)
-            .collect();
+        let mut filters: Vec<Filter> = conditions.iter().cloned().map(Filter::Condition).collect();
         match filters.len() {
             0 => None,
             1 => filters.pop(),

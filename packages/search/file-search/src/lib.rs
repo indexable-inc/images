@@ -63,7 +63,6 @@ impl SearchIndexReader {
             schema,
         })
     }
-
 }
 
 /// Read-write handle to a Tantivy index. Owns a writer (and therefore the
@@ -136,7 +135,6 @@ impl SearchIndex {
     ) -> Result<IndexStats> {
         indexing::index_directory(&mut self.writer, &self.schema, directory, respect_gitignore)
     }
-
 }
 
 macro_rules! impl_search {

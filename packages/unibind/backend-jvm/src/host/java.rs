@@ -52,10 +52,7 @@ const fn int_width_name(kind: ir::IntKind, names: [&'static str; 4]) -> &'static
         ir::IntKind::I8 | ir::IntKind::U8 => names[0],
         ir::IntKind::I16 | ir::IntKind::U16 => names[1],
         ir::IntKind::I32 | ir::IntKind::U32 => names[2],
-        ir::IntKind::I64
-        | ir::IntKind::U64
-        | ir::IntKind::Isize
-        | ir::IntKind::Usize => names[3],
+        ir::IntKind::I64 | ir::IntKind::U64 | ir::IntKind::Isize | ir::IntKind::Usize => names[3],
     }
 }
 

@@ -1509,7 +1509,9 @@ mod tests {
         let sibling_port = sibling.local_addr().expect("sibling addr").port();
         let sibling_router = router(Path::new("/nonexistent-site"), test_state());
         tokio::spawn(async move {
-            axum::serve(sibling, sibling_router).await.expect("sibling serves");
+            axum::serve(sibling, sibling_router)
+                .await
+                .expect("sibling serves");
         });
 
         let foreign = tokio::net::TcpListener::bind("127.0.0.1:0")

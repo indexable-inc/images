@@ -18,16 +18,8 @@ fn structurally_related_trees_have_matches() {
     let cases = [
         ("identical", "fn foo() {}", "fn foo() {}"),
         ("renamed", "fn foo() {}", "fn bar() {}"),
-        (
-            "addition",
-            "fn foo() {}",
-            "fn foo() {} fn bar() {}",
-        ),
-        (
-            "deletion",
-            "fn foo() {} fn bar() {}",
-            "fn foo() {}",
-        ),
+        ("addition", "fn foo() {}", "fn foo() {} fn bar() {}"),
+        ("deletion", "fn foo() {} fn bar() {}", "fn foo() {}"),
         (
             "reordering",
             "fn foo() {} fn bar() {}",

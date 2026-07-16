@@ -8,7 +8,7 @@ use heck::ToLowerCamelCase as _;
 use unibind_core::ir;
 
 use super::java;
-use crate::{names, RenderError};
+use crate::{RenderError, names};
 
 /// Render every record, exception, and factory declaration.
 pub fn render(interface: &ir::Interface) -> Result<String, RenderError> {

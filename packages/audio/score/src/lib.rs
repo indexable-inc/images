@@ -13,8 +13,8 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use audio_blob::BlobHash;
-use loro::{ExportMode, LoroDoc, LoroMap, LoroValue};
 pub use loro::VersionVector;
+use loro::{ExportMode, LoroDoc, LoroMap, LoroValue};
 
 /// Root map holding session-wide settings (currently the sample rate).
 const SESSION: &str = "session";
@@ -66,7 +66,11 @@ impl Event {
     /// identically on every peer.
     #[must_use]
     pub const fn sort_key(&self) -> EventKey {
-        EventKey { frame: self.at_frame, control: self.control, value_bits: self.value.to_bits() }
+        EventKey {
+            frame: self.at_frame,
+            control: self.control,
+            value_bits: self.value.to_bits(),
+        }
     }
 }
 
@@ -96,7 +100,9 @@ impl Score {
     /// An empty score.
     #[must_use]
     pub fn new() -> Self {
-        Self { doc: LoroDoc::new() }
+        Self {
+            doc: LoroDoc::new(),
+        }
     }
 
     /// Record the session sample rate.
@@ -173,7 +179,10 @@ impl Score {
         let mut controls: Vec<ControlValue> = map
             .iter()
             .filter_map(|(key, value)| {
-                Some(ControlValue { control: key.parse().ok()?, value: as_f32(value)? })
+                Some(ControlValue {
+                    control: key.parse().ok()?,
+                    value: as_f32(value)?,
+                })
             })
             .collect();
         controls.sort_unstable_by_key(|control| control.control);
@@ -289,7 +298,11 @@ fn event_of(value: &LoroValue) -> Option<Event> {
         reason = "controls are f32 at the instrument ABI; narrowing is the contract"
     )]
     let value = *value as f32;
-    Some(Event { at_frame, control, value })
+    Some(Event {
+        at_frame,
+        control,
+        value,
+    })
 }
 
 #[cfg(test)]
@@ -307,7 +320,11 @@ mod tests {
         score.set_instrument(&hash(), 96_000)?;
         score.set_control(0, 440.0)?;
         score.set_control(1, 0.5)?;
-        score.schedule(Event { at_frame: 48_000, control: 0, value: 660.0 })?;
+        score.schedule(Event {
+            at_frame: 48_000,
+            control: 0,
+            value: 660.0,
+        })?;
 
         assert_eq!(score.sample_rate(), Some(48_000));
         let instrument = score.instrument()?.expect("instrument set");
@@ -316,13 +333,23 @@ mod tests {
         assert_eq!(
             score.controls(),
             vec![
-                ControlValue { control: 0, value: 440.0 },
-                ControlValue { control: 1, value: 0.5 }
+                ControlValue {
+                    control: 0,
+                    value: 440.0
+                },
+                ControlValue {
+                    control: 1,
+                    value: 0.5
+                }
             ]
         );
         assert_eq!(
             score.events(),
-            vec![Event { at_frame: 48_000, control: 0, value: 660.0 }]
+            vec![Event {
+                at_frame: 48_000,
+                control: 0,
+                value: 660.0
+            }]
         );
         Ok(())
     }
@@ -332,8 +359,16 @@ mod tests {
         let a = Score::new();
         let b = Score::new();
         a.set_control(0, 1.0)?;
-        b.schedule(Event { at_frame: 10, control: 2, value: 0.25 })?;
-        b.schedule(Event { at_frame: 5, control: 1, value: 0.75 })?;
+        b.schedule(Event {
+            at_frame: 10,
+            control: 2,
+            value: 0.25,
+        })?;
+        b.schedule(Event {
+            at_frame: 5,
+            control: 1,
+            value: 0.75,
+        })?;
 
         b.import(&a.export_updates(&VersionVector::new())?)?;
         a.import(&b.export_updates(&VersionVector::new())?)?;
@@ -342,7 +377,10 @@ mod tests {
         assert_eq!(a.events(), b.events());
         // Deterministic order: sorted by frame regardless of insert order.
         assert_eq!(
-            a.events().iter().map(|event| event.at_frame).collect::<Vec<_>>(),
+            a.events()
+                .iter()
+                .map(|event| event.at_frame)
+                .collect::<Vec<_>>(),
             vec![5, 10]
         );
         Ok(())

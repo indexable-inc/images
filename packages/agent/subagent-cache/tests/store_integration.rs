@@ -12,7 +12,10 @@ use subagent_cache::types::{FileDep, PopulateRequest};
 use tokio_postgres::NoTls;
 
 fn dep(path: &str, hash: &str) -> FileDep {
-    FileDep { path: path.to_owned(), hash: hash.to_owned() }
+    FileDep {
+        path: path.to_owned(),
+        hash: hash.to_owned(),
+    }
 }
 
 #[tokio::test]

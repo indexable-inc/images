@@ -106,9 +106,7 @@ fn process(values: &[i32]) -> i32 {
         },
     );
 
-    assert_no_overlapping_fragments(&result, |kind| {
-        matches!(kind, crate::Kind::Sequence { .. })
-    });
+    assert_no_overlapping_fragments(&result, |kind| matches!(kind, crate::Kind::Sequence { .. }));
 }
 
 #[test]
@@ -135,9 +133,16 @@ fn comments_do_not_form_statement_sequences() {
     );
 
     assert!(
-        result.instances.iter().filter(|group| matches!(group.clone_type, crate::Kind::Sequence { .. })).all(|group| {
-            group.fragments.iter().all(|fragment| fragment.lines.end - fragment.lines.start < 3)
-        }),
+        result
+            .instances
+            .iter()
+            .filter(|group| matches!(group.clone_type, crate::Kind::Sequence { .. }))
+            .all(|group| {
+                group
+                    .fragments
+                    .iter()
+                    .all(|fragment| fragment.lines.end - fragment.lines.start < 3)
+            }),
         "comments inflated a sequence fragment: {:#?}",
         result.instances,
     );

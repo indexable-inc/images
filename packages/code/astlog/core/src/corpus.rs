@@ -217,12 +217,10 @@ fn build_node_table(tree: &tree_sitter::Tree) -> NodeTable {
 
 fn build_line_starts(text: &str) -> Vec<usize> {
     let mut starts = vec![0];
-    starts.extend(text.char_indices().filter_map(|(at, c)| {
-        if c == '\n' {
-            Some(at + 1)
-        } else {
-            None
-        }
-    }));
+    starts.extend(text.char_indices().filter_map(
+        |(at, c)| {
+            if c == '\n' { Some(at + 1) } else { None }
+        },
+    ));
     starts
 }

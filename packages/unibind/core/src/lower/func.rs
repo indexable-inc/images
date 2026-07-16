@@ -2,8 +2,8 @@
 
 use syn::spanned::Spanned as _;
 
-use super::ty::{lower_type, Position};
-use super::{attrs, marker, ret, Declared, LowerError, Result};
+use super::ty::{Position, lower_type};
+use super::{Declared, LowerError, Result, attrs, marker, ret};
 use crate::ir;
 
 /// What a signature lowers as; receivers and return conventions differ.
@@ -132,7 +132,9 @@ pub(super) fn lower_callable(
     check_default_order(signature, &args)?;
 
     let returned = match kind {
-        Kind::Constructor { object } => ret::lower_ctor_return(&signature.output, object, declared)?,
+        Kind::Constructor { object } => {
+            ret::lower_ctor_return(&signature.output, object, declared)?
+        }
         Kind::Free | Kind::Method => ret::lower_return(&signature.output, declared)?,
     };
     Ok(ir::Function {

@@ -132,16 +132,23 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::Drift(args)) => {
-            drift::run(args.mapping.as_deref(), args.name.as_deref(), args.json, args.markdown)
-        }
+        Some(Command::Drift(args)) => drift::run(
+            args.mapping.as_deref(),
+            args.name.as_deref(),
+            args.json,
+            args.markdown,
+        ),
         None => run_sync(&cli.sync),
     }
 }
 
 fn run_sync(args: &SyncArgs) -> Result<()> {
     let mapping_path = mapping::path(args.mapping.as_deref())?;
-    let forks = mapping::select(mapping::load(&mapping_path)?, args.pkg.as_deref(), "upstream-sync")?;
+    let forks = mapping::select(
+        mapping::load(&mapping_path)?,
+        args.pkg.as_deref(),
+        "upstream-sync",
+    )?;
     let mut plan: Vec<PlanEntry> = Vec::new();
     for fork in &forks {
         process_fork(fork, args, &mut plan)?;
@@ -162,7 +169,10 @@ fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool) -> RepoGate {
     let policy = fork.policy();
     let blocked = !policy.prs_welcome || policy.ai_prs_allowed == "false" || !gh_ok;
     let reason = if !gh_ok {
-        format!("upstream is not GitHub ({}/{}); gh path N/A", slug.owner, slug.repo)
+        format!(
+            "upstream is not GitHub ({}/{}); gh path N/A",
+            slug.owner, slug.repo
+        )
     } else if !policy.prs_welcome {
         "policy: prsWelcome = false".to_owned()
     } else if policy.ai_prs_allowed == "false" {
@@ -183,17 +193,35 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
         reason: repo_block_reason,
     } = repo_gate(fork, &slug, gh_ok);
 
-    println!("{}", paint(CYAN, &format!("== {} [{}/{}] ==", fork.name, slug.owner, slug.repo)));
+    println!(
+        "{}",
+        paint(
+            CYAN,
+            &format!("== {} [{}/{}] ==", fork.name, slug.owner, slug.repo)
+        )
+    );
     if repo_blocked {
         println!(
             "{}",
-            paint(YELLOW, &format!("upstream-sync: {}: repo-level block: {repo_block_reason}. No PR will be opened here.", fork.name))
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-sync: {}: repo-level block: {repo_block_reason}. No PR will be opened here.",
+                    fork.name
+                )
+            )
         );
     }
     if policy.ai_prs_allowed == "unknown" && gh_ok && policy.prs_welcome {
         println!(
             "{}",
-            paint(YELLOW, &format!("upstream-sync: {}: AI-PR policy is UNSTATED upstream; proceeding for attempt patches with AI attribution in the PR body. Citation: {}", fork.name, policy.citation))
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-sync: {}: AI-PR policy is UNSTATED upstream; proceeding for attempt patches with AI attribution in the PR body. Citation: {}",
+                    fork.name, policy.citation
+                )
+            )
         );
     }
 
@@ -212,7 +240,13 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     if !dag_file.exists() {
         println!(
             "{}",
-            paint(YELLOW, &format!("upstream-sync: {}: no dag.json; run `nix run .#rebase-patches -- dag {}`. Skipping.", fork.name, fork.name))
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-sync: {}: no dag.json; run `nix run .#rebase-patches -- dag {}`. Skipping.",
+                    fork.name, fork.name
+                )
+            )
         );
         return Ok(());
     }
@@ -227,7 +261,16 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     if selected.is_empty()
         && let Some(wanted) = args.patch.as_deref()
     {
-        println!("{}", paint(YELLOW, &format!("upstream-sync: {}: no patch matching '{wanted}'.", fork.name)));
+        println!(
+            "{}",
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-sync: {}: no patch matching '{wanted}'.",
+                    fork.name
+                )
+            )
+        );
     }
 
     let ctx = ForkCtx {
@@ -250,16 +293,24 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     Ok(())
 }
 
-fn handle_patch(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mut Vec<PlanEntry>) -> Result<()> {
+fn handle_patch(
+    ctx: &ForkCtx,
+    pf: &str,
+    doc: &mut status::Doc,
+    plan: &mut Vec<PlanEntry>,
+) -> Result<()> {
     let stance = ctx.fork.stance(pf);
 
     // Ensure a status entry exists (mirror intent for legibility).
-    let entry = doc.patches.entry(pf.to_owned()).or_insert_with(|| status::Entry {
-        upstream: stance.clone(),
-        pr: None,
-        retired: false,
-        duplicates: Vec::new(),
-    });
+    let entry = doc
+        .patches
+        .entry(pf.to_owned())
+        .or_insert_with(|| status::Entry {
+            upstream: stance.clone(),
+            pr: None,
+            retired: false,
+            duplicates: Vec::new(),
+        });
     entry.upstream.clone_from(&stance);
 
     if stance != "attempt" {
@@ -298,7 +349,9 @@ fn handle_patch(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mut Vec<P
         if let Some(entry) = doc.patches.get_mut(pf) {
             entry.duplicates = dupes;
         }
-        doc.append_log(&format!("{pf}: found {count} possible duplicate upstream PRs; NOT opening. First: {first_url}"));
+        doc.append_log(&format!(
+            "{pf}: found {count} possible duplicate upstream PRs; NOT opening. First: {first_url}"
+        ));
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
@@ -316,16 +369,28 @@ fn handle_patch(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mut Vec<P
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
             action: "would-open".to_owned(),
-            detail: format!("run with --open to create: upstream-pr --open {} {pf}", ctx.fork.name),
+            detail: format!(
+                "run with --open to create: upstream-pr --open {} {pf}",
+                ctx.fork.name
+            ),
         });
         return Ok(());
     }
     open_one(ctx, pf, doc, plan)
 }
 
-fn refresh_tracked(ctx: &ForkCtx, pf: &str, tracked: &status::Pr, doc: &mut status::Doc, plan: &mut Vec<PlanEntry>) -> Result<()> {
+fn refresh_tracked(
+    ctx: &ForkCtx,
+    pf: &str,
+    tracked: &status::Pr,
+    doc: &mut status::Doc,
+    plan: &mut Vec<PlanEntry>,
+) -> Result<()> {
     let Some(fresh) = gh::refresh_pr(ctx.slug, tracked.number)? else {
-        doc.append_log(&format!("{pf}: tracked PR #{} no longer readable, deleted or renamed; leaving last-known state", tracked.number));
+        doc.append_log(&format!(
+            "{pf}: tracked PR #{} no longer readable, deleted or renamed; leaving last-known state",
+            tracked.number
+        ));
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
@@ -337,7 +402,10 @@ fn refresh_tracked(ctx: &ForkCtx, pf: &str, tracked: &status::Pr, doc: &mut stat
 
     // Log a state transition when it changed.
     if fresh.state != tracked.state {
-        doc.append_log(&format!("{pf}: PR #{} {} -> {} ({})", fresh.number, tracked.state, fresh.state, fresh.url));
+        doc.append_log(&format!(
+            "{pf}: PR #{} {} -> {} ({})",
+            fresh.number, tracked.state, fresh.state, fresh.url
+        ));
     }
 
     // Merged upstream -> retire. The next base bump's rebase-patches run
@@ -373,12 +441,23 @@ fn refresh_tracked(ctx: &ForkCtx, pf: &str, tracked: &status::Pr, doc: &mut stat
 /// forks opted in via `closureGates = true` prove that closure BUILDS before
 /// the outward act. The gate attr is the current repo flake's (a downstream
 /// --mapping repo gates against its own flake).
-fn closure_gate_passes(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mut Vec<PlanEntry>) -> Result<bool> {
+fn closure_gate_passes(
+    ctx: &ForkCtx,
+    pf: &str,
+    doc: &mut status::Doc,
+    plan: &mut Vec<PlanEntry>,
+) -> Result<bool> {
     let system = cmd::run("nix", &["config", "show", "system"])?;
     let gate = format!(".#forkClosureGates.{system}.{}.\"{pf}\"", ctx.fork.name);
     println!(
         "{}",
-        paint(CYAN, &format!("upstream-sync: {}: building closure gate {gate} before opening (heavy full-package build; cache hit when unchanged)", ctx.fork.name))
+        paint(
+            CYAN,
+            &format!(
+                "upstream-sync: {}: building closure gate {gate} before opening (heavy full-package build; cache hit when unchanged)",
+                ctx.fork.name
+            )
+        )
     );
     let res = cmd::complete("nix", &["build", "--no-link", &gate])?;
     if res.ok() {
@@ -387,9 +466,17 @@ fn closure_gate_passes(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mu
     println!("{}", res.stderr);
     println!(
         "{}",
-        paint(RED, &format!("upstream-sync: {}: closure gate FAILED for {pf}: its dag.json closure does not build standalone, so the upstream PR would ship broken. Fix the series; NOT opening.", ctx.fork.name))
+        paint(
+            RED,
+            &format!(
+                "upstream-sync: {}: closure gate FAILED for {pf}: its dag.json closure does not build standalone, so the upstream PR would ship broken. Fix the series; NOT opening.",
+                ctx.fork.name
+            )
+        )
     );
-    doc.append_log(&format!("{pf}: closure gate build FAILED; PR-opening aborted"));
+    doc.append_log(&format!(
+        "{pf}: closure gate build FAILED; PR-opening aborted"
+    ));
     plan.push(PlanEntry {
         fork: ctx.fork.name.clone(),
         patch: pf.to_owned(),
@@ -402,12 +489,26 @@ fn closure_gate_passes(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mu
 /// The outward act, only for attempt patches on a non-blocked repo, only
 /// when --open was passed. `upstream-pr` owns the branch/am/push/draft-PR
 /// mechanism; --mapping is threaded so a downstream repo's list is used.
-fn open_one(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mut Vec<PlanEntry>) -> Result<()> {
+fn open_one(
+    ctx: &ForkCtx,
+    pf: &str,
+    doc: &mut status::Doc,
+    plan: &mut Vec<PlanEntry>,
+) -> Result<()> {
     if ctx.fork.closure_gates && !closure_gate_passes(ctx, pf, doc, plan)? {
         return Ok(());
     }
 
-    println!("{}", paint(GREEN, &format!("upstream-sync: {}: opening upstream PR for {pf} via upstream-pr --open", ctx.fork.name)));
+    println!(
+        "{}",
+        paint(
+            GREEN,
+            &format!(
+                "upstream-sync: {}: opening upstream PR for {pf} via upstream-pr --open",
+                ctx.fork.name
+            )
+        )
+    );
     let mut argv: Vec<String> = vec!["--open".to_owned()];
     if let Some(m) = ctx.mapping {
         argv.extend(["--mapping".to_owned(), m.display().to_string()]);
@@ -416,9 +517,20 @@ fn open_one(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mut Vec<PlanE
     let opened = cmd::complete("upstream-pr", &argv)?;
     println!("{}", opened.stdout);
     if !opened.ok() {
-        println!("{}", paint(RED, &format!("upstream-sync: {}: upstream-pr failed for {pf}:", ctx.fork.name)));
+        println!(
+            "{}",
+            paint(
+                RED,
+                &format!(
+                    "upstream-sync: {}: upstream-pr failed for {pf}:",
+                    ctx.fork.name
+                )
+            )
+        );
         println!("{}", opened.stderr);
-        doc.append_log(&format!("{pf}: upstream-pr --open FAILED; see output above"));
+        doc.append_log(&format!(
+            "{pf}: upstream-pr --open FAILED; see output above"
+        ));
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
@@ -452,7 +564,9 @@ fn open_one(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, plan: &mut Vec<PlanE
         }
         doc.append_log(&format!("{pf}: opened draft PR {opened_url}"));
     } else {
-        doc.append_log(&format!("{pf}: upstream-pr --open succeeded but PR URL was not parseable from output"));
+        doc.append_log(&format!(
+            "{pf}: upstream-pr --open succeeded but PR URL was not parseable from output"
+        ));
     }
     plan.push(PlanEntry {
         fork: ctx.fork.name.clone(),
@@ -475,14 +589,21 @@ fn check_stale(fork: &Fork, pre_existed: bool, pre_last_checked: Option<&str>) -
     if attempts > 0 && !pre_existed {
         println!(
             "{}",
-            paint(YELLOW, &format!("upstream-sync: {}: STALE: has {attempts} attempt patches but no committed upstream-status.json; run a non-dry-run sync and commit it.", fork.name))
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-sync: {}: STALE: has {attempts} attempt patches but no committed upstream-status.json; run a non-dry-run sync and commit it.",
+                    fork.name
+                )
+            )
         );
         return Ok(());
     }
     let Some(prev) = pre_last_checked else {
         return Ok(());
     };
-    let prev_dt = DateTime::parse_from_rfc3339(prev).wrap_err_with(|| format!("unparseable lastChecked {prev}"))?;
+    let prev_dt = DateTime::parse_from_rfc3339(prev)
+        .wrap_err_with(|| format!("unparseable lastChecked {prev}"))?;
     // 14 days: tracked-PR state and the duplicate landscape move on the
     // scale of weeks; older than that and the committed state is a stale
     // basis for the next upstreaming decision.
@@ -490,7 +611,14 @@ fn check_stale(fork: &Fork, pre_existed: bool, pre_last_checked: Option<&str>) -
     if age > chrono::Duration::days(14) {
         println!(
             "{}",
-            paint(YELLOW, &format!("upstream-sync: {}: STALE: committed upstream-status.json was last checked {prev}, {} days ago; re-run and commit.", fork.name, age.num_days()))
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-sync: {}: STALE: committed upstream-status.json was last checked {prev}, {} days ago; re-run and commit.",
+                    fork.name,
+                    age.num_days()
+                )
+            )
         );
     }
     Ok(())
@@ -500,13 +628,22 @@ fn check_stale(fork: &Fork, pre_existed: bool, pre_last_checked: Option<&str>) -
 /// truncation), so the output pastes straight into a PR body / plan review.
 fn print_plan(plan: &[PlanEntry], args: &SyncArgs) {
     println!();
-    println!("{}", paint(CYAN, &format!("== upstream-sync plan: {} patch decisions ==", plan.len())));
+    println!(
+        "{}",
+        paint(
+            CYAN,
+            &format!("== upstream-sync plan: {} patch decisions ==", plan.len())
+        )
+    );
     if plan.is_empty() {
         println!("  (no patches selected)");
     }
     let mut groups: Vec<(&str, Vec<&PlanEntry>)> = Vec::new();
     for entry in plan {
-        match groups.iter_mut().find(|(action, _)| *action == entry.action) {
+        match groups
+            .iter_mut()
+            .find(|(action, _)| *action == entry.action)
+        {
             Some((_, rows)) => rows.push(entry),
             None => groups.push((&entry.action, vec![entry])),
         }
@@ -525,16 +662,37 @@ fn print_plan(plan: &[PlanEntry], args: &SyncArgs) {
         .collect();
     if !ready.is_empty() {
         println!();
-        println!("{}", paint(GREEN, &format!("attempt-ready patches ({}): these are the outward-PR candidates.", ready.len())));
+        println!(
+            "{}",
+            paint(
+                GREEN,
+                &format!(
+                    "attempt-ready patches ({}): these are the outward-PR candidates.",
+                    ready.len()
+                )
+            )
+        );
         for r in &ready {
             println!("  - {} / {}", r.fork, r.patch);
         }
         if !args.open {
-            println!("{}", paint(YELLOW, "Re-run with --open to create these PRs; opening is the outward act."));
+            println!(
+                "{}",
+                paint(
+                    YELLOW,
+                    "Re-run with --open to create these PRs; opening is the outward act."
+                )
+            );
         }
     }
     if args.dry_run {
         println!();
-        println!("{}", paint(YELLOW, "--dry-run: no status files written. Drop --dry-run to persist the refreshed status; add --open to create PRs."));
+        println!(
+            "{}",
+            paint(
+                YELLOW,
+                "--dry-run: no status files written. Drop --dry-run to persist the refreshed status; add --open to create PRs."
+            )
+        );
     }
 }

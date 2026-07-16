@@ -171,11 +171,11 @@ impl UnibindMeta {
                     format!("`{backend}` takes a list: {hint}"),
                 ));
             };
-            let parser =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone()).map_err(
-                |error| LowerError::new(span, format!("bad `{backend}` options: {error}")),
-            )?;
+            let parser = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
+            let entries =
+                syn::parse::Parser::parse2(parser, list.tokens.clone()).map_err(|error| {
+                    LowerError::new(span, format!("bad `{backend}` options: {error}"))
+                })?;
             for nested in entries {
                 apply_option(self, &nested)?;
             }
@@ -186,7 +186,10 @@ impl UnibindMeta {
         }
         if entry.path().is_ident("default") {
             let syn::Meta::NameValue(pair) = entry else {
-                return Err(LowerError::new(span, "`default` takes a value: default = ..."));
+                return Err(LowerError::new(
+                    span,
+                    "`default` takes a value: default = ...",
+                ));
             };
             self.default = Some(literal(&pair.value)?);
             return Ok(());
@@ -270,7 +273,10 @@ impl UnibindMeta {
             backends.push(backend);
         }
         if backends.is_empty() {
-            return Err(LowerError::new(span, "`backends(...)` names at least one backend"));
+            return Err(LowerError::new(
+                span,
+                "`backends(...)` names at least one backend",
+            ));
         }
         self.backends = Some(backends);
         Ok(())

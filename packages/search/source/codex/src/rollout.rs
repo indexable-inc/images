@@ -315,33 +315,30 @@ fn parse_line(line: &str) -> Parsed {
         return Parsed::Ignored;
     };
     match raw.kind.as_deref() {
-        Some("session_meta") => serde_json::from_value::<SessionMeta>(payload).map_or(
-            Parsed::Malformed,
-            |meta| {
+        Some("session_meta") => {
+            serde_json::from_value::<SessionMeta>(payload).map_or(Parsed::Malformed, |meta| {
                 Parsed::Event(Event::SessionMeta {
                     id: meta.id,
                     cwd: meta.cwd,
                 })
-            },
-        ),
-        Some("turn_context") => serde_json::from_value::<TurnContext>(payload).map_or(
-            Parsed::Malformed,
-            |context| {
+            })
+        }
+        Some("turn_context") => {
+            serde_json::from_value::<TurnContext>(payload).map_or(Parsed::Malformed, |context| {
                 Parsed::Event(Event::TurnContext {
                     cwd: context.cwd,
                     model: context.model,
                 })
-            },
-        ),
-        Some("response_item") => serde_json::from_value::<ResponseItem>(payload).map_or(
-            Parsed::Malformed,
-            |item| {
+            })
+        }
+        Some("response_item") => {
+            serde_json::from_value::<ResponseItem>(payload).map_or(Parsed::Malformed, |item| {
                 Parsed::Event(Event::Item {
                     timestamp: raw.timestamp.as_deref().and_then(parse_epoch_seconds),
                     item,
                 })
-            },
-        ),
+            })
+        }
         _ => Parsed::Ignored,
     }
 }

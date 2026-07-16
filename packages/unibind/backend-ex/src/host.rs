@@ -7,7 +7,7 @@ mod wrapper;
 
 use unibind_core::ir;
 
-use crate::{names, RenderError};
+use crate::{RenderError, names};
 
 /// The rendered Elixir side of the boundary. `unibind-gen`'s `ExEmitter`
 /// decides where the modules land (`lib/<app>/native.ex`, `lib/<app>.ex`).

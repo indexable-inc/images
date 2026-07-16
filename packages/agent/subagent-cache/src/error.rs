@@ -10,10 +10,14 @@ pub enum Error {
     DbConfig { source: tokio_postgres::Error },
 
     #[snafu(display("failed to build the cache database connection pool"))]
-    PoolBuild { source: deadpool_postgres::BuildError },
+    PoolBuild {
+        source: deadpool_postgres::BuildError,
+    },
 
     #[snafu(display("failed to acquire a cache database connection from the pool"))]
-    Pool { source: deadpool_postgres::PoolError },
+    Pool {
+        source: deadpool_postgres::PoolError,
+    },
 
     #[snafu(display("failed to apply the cache schema"))]
     Schema { source: tokio_postgres::Error },

@@ -32,7 +32,8 @@ const FAKE_DAG: &str = r#"{"comment":"t","base":"deadbeef","nodes":[{"patch":"00
 
 const FAKE_STATUS: &str = r#"{"comment":"t","lastChecked":"2026-01-01T00:00:00Z","patches":{"0001-sent.patch":{"upstream":"attempt","pr":{"url":"u","number":1,"state":"merged","checkedAt":"t"},"retired":true,"duplicates":[]}},"log":[]}"#;
 
-const BAD_DAG: &str = r#"{"comment":"t","base":"deadbeef","nodes":[{"patch":"0001-x.patch","deps":[]}]}"#;
+const BAD_DAG: &str =
+    r#"{"comment":"t","base":"deadbeef","nodes":[{"patch":"0001-x.patch","deps":[]}]}"#;
 
 #[test]
 fn drift_json_and_markdown_surfaces() {
@@ -58,33 +59,86 @@ fn drift_json_and_markdown_surfaces() {
     // (warnings go to stderr), the fake row carries the stubbed forge facts
     // plus the retired-driven action, and the bad row (gh failing) is
     // unknown, not fatal.
-    let run = run_bin(exe, &["drift", "--json", "--mapping", &mapping_arg], &work, &envs);
-    assert_eq!(run.status, 0, "drift --json failed:\n{}\n{}", run.stdout, run.stderr);
+    let run = run_bin(
+        exe,
+        &["drift", "--json", "--mapping", &mapping_arg],
+        &work,
+        &envs,
+    );
+    assert_eq!(
+        run.status, 0,
+        "drift --json failed:\n{}\n{}",
+        run.stdout, run.stderr
+    );
     let rows: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
     let rows = rows.as_array().unwrap();
     let fake = rows.iter().find(|r| r["name"] == "fake").unwrap();
-    assert_eq!(fake["rev"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fake drift facts: {fake}");
+    assert_eq!(
+        fake["rev"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fake drift facts: {fake}"
+    );
     assert_eq!(fake["behind"], 123, "fake drift facts: {fake}");
-    assert!(fake["ageDays"].as_i64().unwrap() >= 1, "fake drift facts: {fake}");
+    assert!(
+        fake["ageDays"].as_i64().unwrap() >= 1,
+        "fake drift facts: {fake}"
+    );
     assert_eq!(fake["attempt"], 1, "fake stance counts: {fake}");
     assert_eq!(fake["hold"], 1, "fake stance counts: {fake}");
     assert_eq!(fake["never"], 1, "fake stance counts: {fake}");
     assert_eq!(fake["retired"], 1, "fake stance counts: {fake}");
-    assert_eq!(fake["action"], "rebase-shrinks-series", "fake action: {fake}");
+    assert_eq!(
+        fake["action"], "rebase-shrinks-series",
+        "fake action: {fake}"
+    );
     let bad = rows.iter().find(|r| r["name"] == "bad").unwrap();
-    assert!(bad["behind"].is_null(), "bad row should degrade to unknown: {bad}");
-    assert!(bad["ageDays"].is_null(), "bad row should degrade to unknown: {bad}");
-    assert_eq!(bad["action"], "unknown", "bad row should degrade to unknown: {bad}");
+    assert!(
+        bad["behind"].is_null(),
+        "bad row should degrade to unknown: {bad}"
+    );
+    assert!(
+        bad["ageDays"].is_null(),
+        "bad row should degrade to unknown: {bad}"
+    );
+    assert_eq!(
+        bad["action"], "unknown",
+        "bad row should degrade to unknown: {bad}"
+    );
 
     // The markdown surface renders every fork as a table row, "?" for
     // unknowns.
-    let run = run_bin(exe, &["drift", "--markdown", "--mapping", &mapping_arg], &work, &envs);
-    assert_eq!(run.status, 0, "drift --markdown failed:\n{}\n{}", run.stdout, run.stderr);
-    assert!(run.stdout.contains("| fake"), "markdown table missing rows: {}", run.stdout);
-    assert!(run.stdout.contains("| bad"), "markdown table missing rows: {}", run.stdout);
-    assert!(run.stdout.contains('?'), "markdown table missing rows: {}", run.stdout);
+    let run = run_bin(
+        exe,
+        &["drift", "--markdown", "--mapping", &mapping_arg],
+        &work,
+        &envs,
+    );
+    assert_eq!(
+        run.status, 0,
+        "drift --markdown failed:\n{}\n{}",
+        run.stdout, run.stderr
+    );
+    assert!(
+        run.stdout.contains("| fake"),
+        "markdown table missing rows: {}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("| bad"),
+        "markdown table missing rows: {}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains('?'),
+        "markdown table missing rows: {}",
+        run.stdout
+    );
 
     // --json and --markdown are mutually exclusive.
-    let run = run_bin(exe, &["drift", "--json", "--markdown", "--mapping", &mapping_arg], &work, &envs);
+    let run = run_bin(
+        exe,
+        &["drift", "--json", "--markdown", "--mapping", &mapping_arg],
+        &work,
+        &envs,
+    );
     assert_ne!(run.status, 0, "conflicting flags should fail");
 }

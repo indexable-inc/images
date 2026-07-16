@@ -171,7 +171,10 @@ impl Slug {
     /// # Errors
     /// Fails when the URL has fewer than two path segments.
     pub fn parse(url: &str) -> Result<Self> {
-        let trimmed = url.trim_end_matches('/').trim_end_matches(".git").trim_end_matches('/');
+        let trimmed = url
+            .trim_end_matches('/')
+            .trim_end_matches(".git")
+            .trim_end_matches('/');
         let parts: Vec<&str> = trimmed.split('/').collect();
         let [.., owner, repo] = parts.as_slice() else {
             return Err(eyre!("cannot parse owner/repo from upstream URL {url}"));

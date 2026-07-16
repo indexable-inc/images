@@ -520,7 +520,9 @@ mod tests {
             options: crate::backend::SearchOptions,
             filters: Option<&mixedbread::Filter>,
         ) -> Result<Vec<crate::backend::SearchHit>> {
-            self.inner.search(stores, query, top_k, options, filters).await
+            self.inner
+                .search(stores, query, top_k, options, filters)
+                .await
         }
         async fn grep(
             &self,
@@ -530,7 +532,9 @@ mod tests {
             options: crate::backend::GrepOptions,
             filters: Option<&mixedbread::Filter>,
         ) -> Result<Vec<crate::backend::SearchHit>> {
-            self.inner.grep(stores, pattern, top_k, options, filters).await
+            self.inner
+                .grep(stores, pattern, top_k, options, filters)
+                .await
         }
         async fn list_chunks(
             &self,
@@ -539,7 +543,9 @@ mod tests {
             filters: Option<&mixedbread::Filter>,
             sort_by: Option<&mixedbread::SortBy>,
         ) -> Result<Vec<crate::backend::SearchHit>> {
-            self.inner.list_chunks(stores, top_k, filters, sort_by).await
+            self.inner
+                .list_chunks(stores, top_k, filters, sort_by)
+                .await
         }
         async fn facets(
             &self,
@@ -566,11 +572,7 @@ mod tests {
                 in_progress: 0,
             })
         }
-        async fn file_status(
-            &self,
-            _store: &str,
-            external_id: &str,
-        ) -> Result<Option<FileStatus>> {
+        async fn file_status(&self, _store: &str, external_id: &str) -> Result<Option<FileStatus>> {
             *self
                 .file_status_calls
                 .lock()

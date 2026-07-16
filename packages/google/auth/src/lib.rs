@@ -38,7 +38,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::error::{
-    ConsoleIoSnafu, ConsentDeniedSnafu, HttpSnafu, ListenSnafu, MissingClientIdSnafu,
+    ConsentDeniedSnafu, ConsoleIoSnafu, HttpSnafu, ListenSnafu, MissingClientIdSnafu,
     MissingClientSecretSnafu, MissingCodeSnafu, MissingRefreshTokenSnafu, NoConfigDirSnafu,
     NoTokenSnafu, ParseTokenSnafu, ReadTokenSnafu, RedirectParseSnafu, ScopeMissingSnafu,
     StateMismatchSnafu, TokenExchangeSnafu, TokenRevokedSnafu, WriteTokenSnafu,

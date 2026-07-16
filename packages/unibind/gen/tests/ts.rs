@@ -71,8 +71,16 @@ fn sample_functions() -> Vec<ir::Function> {
             &["Fetch rows.", "", "Docs reach the generated `.d.ts`."],
             vec![
                 arg("store", ir::Type::String { owned: false }, None),
-                arg("limit", ir::Type::Int(ir::IntKind::U32), Some(ir::Literal::Int(10))),
-                arg("root", ir::Type::Option(Box::new(ir::Type::String { owned: false })), None),
+                arg(
+                    "limit",
+                    ir::Type::Int(ir::IntKind::U32),
+                    Some(ir::Literal::Int(10)),
+                ),
+                arg(
+                    "root",
+                    ir::Type::Option(Box::new(ir::Type::String { owned: false })),
+                    None,
+                ),
             ],
         )
     };
@@ -85,7 +93,11 @@ fn sample_functions() -> Vec<ir::Function> {
             vec![
                 arg("path", ir::Type::Path { owned: false }, None),
                 arg("data", ir::Type::Bytes { owned: false }, None),
-                arg("ratio", ir::Type::Float(ir::FloatKind::F64), Some(ir::Literal::Float(0.5))),
+                arg(
+                    "ratio",
+                    ir::Type::Float(ir::FloatKind::F64),
+                    Some(ir::Literal::Float(0.5)),
+                ),
             ],
         )
     };
@@ -106,7 +118,12 @@ fn sample_functions() -> Vec<ir::Function> {
         asyncness: ir::Asyncness::Async,
         ret: Some(named("Row")),
         throws: Some("SampleError".to_owned()),
-        ..function("fetch", None, &["Fetch one row."], vec![arg("store", owned_string(), None)])
+        ..function(
+            "fetch",
+            None,
+            &["Fetch one row."],
+            vec![arg("store", owned_string(), None)],
+        )
     };
     let tail = ir::Function {
         ret: Some(ir::Type::Stream(Box::new(named("Row")))),
@@ -134,7 +151,11 @@ fn sample_functions() -> Vec<ir::Function> {
             "open_counter",
             None,
             &["Open a counter from a free function."],
-            vec![arg("start", ir::Type::Int(ir::IntKind::I64), Some(ir::Literal::Int(0)))],
+            vec![arg(
+                "start",
+                ir::Type::Int(ir::IntKind::I64),
+                Some(ir::Literal::Int(0)),
+            )],
         )
     };
     vec![rows, touch, slow_add, fetch, tail, tail_later, open_counter]
@@ -146,7 +167,12 @@ fn sample_records() -> Vec<ir::Record> {
         names: names(None, Some("SampleRow")),
         docs: docs(&["A row."]),
         fields: vec![
-            field("id", None, &["Identifier."], ir::Type::Int(ir::IntKind::I64)),
+            field(
+                "id",
+                None,
+                &["Identifier."],
+                ir::Type::Int(ir::IntKind::I64),
+            ),
             field("name", Some("rowLabel"), &[], owned_string()),
             field("tags", None, &[], ir::Type::Vec(Box::new(owned_string()))),
             field(
@@ -159,7 +185,12 @@ fn sample_records() -> Vec<ir::Record> {
                 },
             ),
             field("blob", None, &[], ir::Type::Bytes { owned: true }),
-            field("home", None, &[], ir::Type::Option(Box::new(ir::Type::Path { owned: true }))),
+            field(
+                "home",
+                None,
+                &[],
+                ir::Type::Option(Box::new(ir::Type::Path { owned: true })),
+            ),
         ],
     }]
 }
@@ -193,7 +224,11 @@ fn sample_objects() -> Vec<ir::Object> {
             "new",
             None,
             &["Open a counter."],
-            vec![arg("start", ir::Type::Int(ir::IntKind::I64), Some(ir::Literal::Int(0)))],
+            vec![arg(
+                "start",
+                ir::Type::Int(ir::IntKind::I64),
+                Some(ir::Literal::Int(0)),
+            )],
         )
     };
     let value = ir::Function {
@@ -247,8 +282,16 @@ fn ts_host_files_snapshot() {
     let files = emitter.emit(&interface()).expect("emits");
     let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
     assert_eq!(paths, ["index.d.ts", "index.js"]);
-    assert_snapshot(&files[0].contents, include_str!("snapshots/sample.d.ts"), "sample.d.ts");
-    assert_snapshot(&files[1].contents, include_str!("snapshots/sample.js"), "sample.js");
+    assert_snapshot(
+        &files[0].contents,
+        include_str!("snapshots/sample.d.ts"),
+        "sample.d.ts",
+    );
+    assert_snapshot(
+        &files[1].contents,
+        include_str!("snapshots/sample.js"),
+        "sample.js",
+    );
 }
 
 #[test]

@@ -294,7 +294,11 @@ fn render_value(analysis: &Analysis, value: &Value) -> String {
             let at = analysis.corpus.position(node.file, info.start);
             let path = analysis.corpus.files[node.file].path.display();
             let text = one_line(analysis.corpus.node_text(*node));
-            format!("{path}:{line}:{column} `{text}`", line = at.line, column = at.column)
+            format!(
+                "{path}:{line}:{column} `{text}`",
+                line = at.line,
+                column = at.column
+            )
         }
         Value::Text(text) => format!("\"{text}\""),
     }

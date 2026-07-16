@@ -22,7 +22,11 @@ fn interface() -> ir::Interface {
 #[test]
 fn ir_json_snapshot() {
     let json = serde_json::to_string_pretty(&interface()).expect("serializes");
-    assert_snapshot(&json, include_str!("snapshots/sample.ir.json"), "sample.ir.json");
+    assert_snapshot(
+        &json,
+        include_str!("snapshots/sample.ir.json"),
+        "sample.ir.json",
+    );
 }
 
 #[test]

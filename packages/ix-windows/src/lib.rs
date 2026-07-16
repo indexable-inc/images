@@ -108,8 +108,8 @@ impl OpenWindow {
             // emits a valid JS string literal, so the assignment is well-formed for
             // arbitrary producer HTML; the iframe sandbox (not this escaping) is
             // what contains any script in that HTML.
-            let inner = serde_json::to_string(&inner_document(html))
-                .unwrap_or_else(|_| "\"\"".to_owned());
+            let inner =
+                serde_json::to_string(&inner_document(html)).unwrap_or_else(|_| "\"\"".to_owned());
             let js = format!("document.getElementById('ix-frame').srcdoc = {inner};");
             let _ = self.webview.evaluate_script(&js);
             html.clone_into(&mut self.last_html);
@@ -157,7 +157,9 @@ impl WindowManager {
     /// An empty manager that emits resize events through `proxy`.
     #[must_use]
     pub fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
-        let dismissed_keys = dismissed_file().map(|p| load_dismissed(&p)).unwrap_or_default();
+        let dismissed_keys = dismissed_file()
+            .map(|p| load_dismissed(&p))
+            .unwrap_or_default();
         Self {
             proxy,
             windows: HashMap::new(),
@@ -213,8 +215,9 @@ impl WindowManager {
         // Forget build-failure suppressions for this producer's resources that are
         // gone, so a later re-registration of the same id retries. (User
         // dismissals in `dismissed_keys` are intentionally permanent.)
-        self.failed
-            .retain(|(producer, id)| *producer != snapshot.producer || present.contains(id.as_str()));
+        self.failed.retain(|(producer, id)| {
+            *producer != snapshot.producer || present.contains(id.as_str())
+        });
     }
 
     /// Drop every window belonging to a producer that has disconnected.
@@ -273,7 +276,10 @@ impl WindowManager {
         // can be both sized to fit and kept fully on-screen.
         let monitor = open.window.current_monitor();
         let (origin, extent) = monitor.as_ref().map_or(
-            (LogicalPosition::new(0.0, 0.0), LogicalSize::new(1600.0, 1000.0)),
+            (
+                LogicalPosition::new(0.0, 0.0),
+                LogicalSize::new(1600.0, 1000.0),
+            ),
             |m| {
                 let s = m.scale_factor();
                 (
@@ -305,8 +311,12 @@ impl WindowManager {
             let pos = pos.to_logical::<f64>(scale);
             // `.max(origin)` keeps `min <= max` even if a degenerate monitor is
             // narrower than the minimum window size (else `clamp` would panic).
-            let nx = pos.x.clamp(origin.x, (origin.x + extent.width - w).max(origin.x));
-            let ny = pos.y.clamp(origin.y, (origin.y + extent.height - h).max(origin.y));
+            let nx = pos
+                .x
+                .clamp(origin.x, (origin.x + extent.width - w).max(origin.x));
+            let ny = pos
+                .y
+                .clamp(origin.y, (origin.y + extent.height - h).max(origin.y));
             if (nx - pos.x).abs() >= 1.0 || (ny - pos.y).abs() >= 1.0 {
                 open.window.set_outer_position(LogicalPosition::new(nx, ny));
             }
@@ -328,7 +338,11 @@ impl WindowManager {
         if !changed {
             return;
         }
-        let Some(open) = self.by_window.get(&window).and_then(|key| self.windows.get(key)) else {
+        let Some(open) = self
+            .by_window
+            .get(&window)
+            .and_then(|key| self.windows.get(key))
+        else {
             return;
         };
         let js = format!("document.documentElement.classList.toggle('ix-hover', {hovered});");
@@ -369,8 +383,7 @@ impl WindowManager {
                     };
                     // SAFETY: on the main thread `tao` hands back a live NSWindow
                     // pointer; we only read its frame, without retaining.
-                    let frame =
-                        unsafe { (*open.window.ns_window().cast::<NSWindow>()).frame() };
+                    let frame = unsafe { (*open.window.ns_window().cast::<NSWindow>()).frame() };
                     !(cursor.x >= frame.origin.x
                         && cursor.x <= frame.origin.x + frame.size.width
                         && cursor.y >= frame.origin.y
@@ -1008,7 +1021,8 @@ fn install_blur(window: &Window) {
         // defaults on, so this tracks every resize with no explicit handler -
         // the same mechanism that keeps wry's own webview filling the window.
         effect.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
         // Place the blur beneath the webview (added as the content view's first
         // subview), so the rendered HTML paints on top of it.
@@ -1106,7 +1120,10 @@ mod tests {
         // never collide and we never touch a real state dir.
         let dir = std::env::temp_dir().join(format!("ixw-dismiss-{}", close_token()));
         let path = dir.join("dismissed");
-        assert!(load_dismissed(&path).is_empty(), "missing file -> empty set");
+        assert!(
+            load_dismissed(&path).is_empty(),
+            "missing file -> empty set"
+        );
 
         // Faithful round-trip, including keys with embedded newlines, quotes, and
         // surrounding whitespace (a raw-line format would corrupt these), and the
@@ -1127,7 +1144,11 @@ mod tests {
         }
 
         // A stray blank line in the log must not become a phantom key.
-        std::fs::write(&path, "[\"a\",\"resource/x\"]\n\n  \n[\"a\",\"resource/y\"]\n").unwrap();
+        std::fs::write(
+            &path,
+            "[\"a\",\"resource/x\"]\n\n  \n[\"a\",\"resource/y\"]\n",
+        )
+        .unwrap();
         let set = load_dismissed(&path);
         assert_eq!(set.len(), 2);
         assert!(set.contains(&("a".to_owned(), "resource/x".to_owned())));

@@ -108,8 +108,18 @@ mod macos {
 
         let target = Tray::new(mtm);
         let menu = NSMenu::new(mtm);
-        menu.addItem(&item(mtm, ns_string!("Volume Up"), sel!(volumeUp:), &target));
-        menu.addItem(&item(mtm, ns_string!("Volume Down"), sel!(volumeDown:), &target));
+        menu.addItem(&item(
+            mtm,
+            ns_string!("Volume Up"),
+            sel!(volumeUp:),
+            &target,
+        ));
+        menu.addItem(&item(
+            mtm,
+            ns_string!("Volume Down"),
+            sel!(volumeDown:),
+            &target,
+        ));
         menu.addItem(&item(mtm, ns_string!("Mute"), sel!(mute:), &target));
         menu.addItem(&item(mtm, ns_string!("Unmute"), sel!(unmute:), &target));
         menu.addItem(&NSMenuItem::separatorItem(mtm));

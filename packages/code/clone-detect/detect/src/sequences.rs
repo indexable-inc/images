@@ -223,15 +223,14 @@ fn extend_match(scan: &Output, loc_a: &SeqLoc, loc_b: &SeqLoc) -> SeqLocPair {
     }
 }
 
-fn sequence_to_fragment(
-    scan: &Output,
-    generated_files: &[bool],
-    loc: &SeqLoc,
-) -> Option<Fragment> {
+fn sequence_to_fragment(scan: &Output, generated_files: &[bool], loc: &SeqLoc) -> Option<Fragment> {
     let file = scan.files.get(loc.file_id)?;
     let node = file.nodes.get(loc.node_idx)?;
 
-    let mut code_children = node.children.iter().filter(|child| !child.kind.contains("comment"));
+    let mut code_children = node
+        .children
+        .iter()
+        .filter(|child| !child.kind.contains("comment"));
     let first_child = code_children.nth(loc.start)?;
     let last_child = node
         .children
