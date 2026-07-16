@@ -18,23 +18,24 @@ outputs); per-unit source scoping is #3412.
 */
 {
   lib,
+  # astlog-ignore: no-pkgs-in-callpackage
   pkgs,
   nixKbuildUnit,
 }: let
   # Toolset the plan kbuild needs; unit replays get the same set so a saved
   # command never resolves a tool differently than the plan build did.
-  kbuildInputs = with pkgs; [
-    bison
-    flex
-    bc
-    perl
-    python3
-    openssl
-    elfutils
-    zlib
-    pahole
-    kmod
-    cpio
+  kbuildInputs = [
+    pkgs.bison
+    pkgs.flex
+    pkgs.bc
+    pkgs.perl
+    pkgs.python3
+    pkgs.openssl
+    pkgs.elfutils
+    pkgs.zlib
+    pkgs.pahole
+    pkgs.kmod
+    pkgs.cpio
   ];
 
   # Reproducibility pins. #3410 (repro baseline) has no verdict yet, so this
@@ -83,7 +84,12 @@ outputs); per-unit source scoping is #3412.
         # Unit replays must see identical bits: no strip / patchelf over the
         # reference vmlinux or the snapshotted host tools.
         dontFixup = true;
+        # The sed below inserts a brace group after line 1; substituteInPlace
+        # only replaces, and the script has no stable anchor string to
+        # replace, while sed's `1a` address cannot stop matching.
+        # astlog-ignore: prefer-substituteinplace
         configurePhase = ''
+          # shell
           runHook preConfigure
           # kbuild passes -frandom-seed=<objtree hash> per object; the
           # cc-wrapper appends NIX_CFLAGS_COMPILE after user argv, so the last
@@ -106,11 +112,13 @@ outputs); per-unit source scoping is #3412.
           runHook postConfigure
         '';
         buildPhase = ''
+          # shell
           runHook preBuild
           make -j"$NIX_BUILD_CORES" vmlinux
           runHook postBuild
         '';
         installPhase = ''
+          # shell
           runHook preInstall
           mkdir -p $out
           # Monolithic reference for the byte-identity gate below.
@@ -125,12 +133,13 @@ outputs); per-unit source scoping is #3412.
       }
       // lib.optionalAttrs contentAddressed contentAddressing);
 
-    unitsNix = pkgs.runCommand "kbuild-units.nix" {
-      nativeBuildInputs = [nixKbuildUnit];
-    } ''
-      nix-kbuild-unit render ${lib.optionalString contentAddressed "--content-addressed"} \
-        < ${plan}/plan.json > $out
-    '';
+    unitsNix =
+      pkgs.runCommand "kbuild-units.nix" {
+        nativeBuildInputs = [nixKbuildUnit];
+      } ''
+        nix-kbuild-unit render ${lib.optionalString contentAddressed "--content-addressed"} \
+          < ${plan}/plan.json > $out
+      '';
 
     imported = import unitsNix {
       inherit pkgs;
