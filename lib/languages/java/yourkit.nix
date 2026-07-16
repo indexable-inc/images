@@ -31,10 +31,10 @@
       isLinux
       isDarwin
       isAarch64
-      isx8664
+      isx86_64
       ;
   in
-    if isLinux && isx8664
+    if isLinux && isx86_64
     then "bin/linux-x86-64/libyjpagent.so"
     else if isLinux && isAarch64
     then "bin/linux-arm-64/libyjpagent.so"
