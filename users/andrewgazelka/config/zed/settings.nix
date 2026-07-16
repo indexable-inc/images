@@ -230,6 +230,15 @@
         };
       };
     };
+    tombi = {
+      settings = {
+        lint = {
+          rules = {
+            tables-out-of-order = "off";
+          };
+        };
+      };
+    };
   };
   outline_panel = {
     auto_fold_dirs = true;
