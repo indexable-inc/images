@@ -52,6 +52,23 @@ case "${1:-}" in
       exit 65
     fi
     ;;
+  eval)
+    [[ "$#" -eq 17 ]]
+    [[ "${2:-}" == "--raw" ]]
+    [[ "${3:-}" == ".#lib" ]]
+    [[ "${4:-}" == "--apply" ]]
+    [[ "${5:-}" == 'ix: (import (ix.paths.root + "/tests/cargo-unit-catalog.nix") { inherit ix; pkgs = ix.pkgs; }).workspace.binaries.cargo-unit-hello.drvPath' ]]
+    [[ "${6:-}" == "--option" && "${7:-}" == "allow-import-from-derivation" && "${8:-}" == "false" ]]
+    [[ "${9:-}" == "--option" && "${10:-}" == "builders" && "${11+x}" == "x" && "${11}" == "" ]]
+    [[ "${12:-}" == "--option" && "${13:-}" == "fallback" && "${14:-}" == "false" ]]
+    [[ "${15:-}" == "--option" && "${16:-}" == "max-jobs" && "${17:-}" == "0" ]]
+    printf 'catalog\n' >>"${CALLS:?}"
+    if [[ "${CATALOG_EVAL_FAIL:-0}" == 1 ]]; then
+      printf 'catalog evaluation failed\n' >&2
+      exit 67
+    fi
+    printf '/nix/store/test-cargo-unit-hello.drv'
+    ;;
   *)
     printf 'unexpected nix command: %s\n' "$*" >&2
     exit 66
@@ -60,10 +77,9 @@ esac
 EOF
 chmod +x "${bin_dir}/git" "${bin_dir}/nix"
 
-run_gate() {
+invoke_gate() {
   local event_name=$1 expected_base=$2
   shift 2
-  : >"${calls}"
   "${env_bin}" -i \
     PATH="${bin_dir}" \
     CALLS="${calls}" \
@@ -77,11 +93,25 @@ run_gate() {
     RUNNER_TEMP="${scratch}/runner-temp" \
     "$@" \
     "${bash_bin}" "${repo_root}/.github/scripts/run-required-gate.sh"
-  [[ "$(<"${calls}")" == $'clone\ncheck' ]]
+}
+
+run_gate() {
+  : >"${calls}"
+  invoke_gate "$@"
+  [[ "$(<"${calls}")" == $'clone\ncatalog\ncheck' ]]
 }
 
 run_gate pull_request "${pr_base}"
 run_gate push "${push_base}" EVENT_BASE_SHA="${push_base}"
+
+: >"${calls}"
+if invoke_gate pull_request "${pr_base}" CATALOG_EVAL_FAIL=1 \
+  >"${scratch}/catalog-failure.out" 2>"${scratch}/catalog-failure.err"; then
+  echo "required gate ignored a failed strict catalog evaluation" >&2
+  exit 1
+fi
+[[ "$(<"${calls}")" == $'clone\ncatalog' ]]
+grep -q 'catalog evaluation failed' "${scratch}/catalog-failure.err"
 
 if "${env_bin}" -i \
   PATH="${bin_dir}" \
