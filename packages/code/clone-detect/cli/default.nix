@@ -16,7 +16,7 @@
     } ''
       export HOME="$TMPDIR/home"
       mkdir -p "$HOME"
-      bash ${./tests/workflow-base.sh} ${ix.paths.root + "/.github/workflows/check.yml"}
+      bash ${./tests/workflow-base.sh} ${ix.paths.root + "/.github/workflows/check.yml"} ${ix.paths.root + "/.github/scripts/run-required-gate.sh"}
       mkdir -p "$out"
     '';
 in

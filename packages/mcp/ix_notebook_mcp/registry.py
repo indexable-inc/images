@@ -142,6 +142,16 @@ MODULES: tuple[Module, ...] = (
         ),
     ),
     Module(
+        "embed",
+        "code embeddings in-process (Qwen3-Embedding-0.6B on torch/MPS): `embed.ensure(root)` "
+        "chunks a repo at function level, embeds only content-hash misses into a per-model-rev "
+        "parquet cache (~/.cache/index-embed), and returns the full frame; "
+        "`embed.similar(text_or_path, k=)` is semantic code search and `embed.pairs(k=)` mines "
+        "near-duplicate function pairs over the cache; `embed.texts(list[str])` is the raw "
+        "[n,1024] encoder. Calls are synchronous and compute-bound: run the long ones as "
+        "`await asyncio.to_thread(embed.ensure, '.')` (inference is macOS only)",
+    ),
+    Module(
         "claude_history",
         "find past local Claude Code sessions by content: `await claude_history.search(pattern)` "
         "greps every transcript under ~/.claude/projects and returns one polars row per matching "

@@ -289,6 +289,28 @@
     ''
   );
 
+  # `embed`: Python-native code embeddings (chunk / embed / parquet cache /
+  # similarity search) for semantic clone detection and code search
+  # (index#3417). Pure Python over the bundled numpy + polars; the inference
+  # runtime (torch + sentence-transformers on MPS) is darwin-only and gated in
+  # `darwinExtraPackages`, imported lazily inside the functions that need it.
+  embedPythonSource = builtins.path {
+    name = "ix-mcp-embed-python-source";
+    path = ./src/embed;
+  };
+  embedModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-embed-python-module"
+    {
+      strictDeps = true;
+      meta.description = "In-process code-embedding battery (torch/MPS) bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/embed"
+      mkdir -p "$site"
+      cp -r ${embedPythonSource}/embed/. "$site/"
+    ''
+  );
+
   # The `ix_google` package: typed PyO3 bindings for the google-gmail and
   # google-calendar Rust crates, baked into the pinned interpreter as a
   # complement to the (untyped) `google_auth` helper. Notebook users pick
@@ -1013,6 +1035,21 @@
       vmkitModule
       imessageModule
       ghosttyModule
+      # `embed` (code embeddings, index#3417) infers on torch/MPS, so its
+      # heavyweight runtime joins the interpreter only on Darwin; the module
+      # itself is bundled everywhere and imports these lazily with a clear
+      # error where they are absent. `torch` substitutes from the official
+      # cache. `sentence-transformers` is overridden because the stock package
+      # folds every optional-dependencies extra into its nativeCheckInputs and
+      # the `audio` extra carries phonemizer -> dlinfo, which this nixpkgs
+      # marks broken, refusing evaluation outright. The extras are test-only:
+      # drop the test run rather than allowlist a broken leaf; runtime
+      # dependencies are untouched.
+      ps.torch
+      (ps.sentence-transformers.overridePythonAttrs (_: {
+        doCheck = false;
+        nativeCheckInputs = [];
+      }))
     ];
 
   # htpy: build HTML in plain Python (`div(class_="x")[ ... ]`), auto-escaping
@@ -1209,7 +1246,7 @@
   # on 0.24's surface, exercised by the import-smoke check). setuptools-scm reads
   # the version from the sdist's PKG-INFO, pinned so the build never needs a .git.
   # Upstream tests need a device, so checks are off.
-  pymobiledevice3927 = mcpPythonInterp.pkgs.pymobiledevice3.overridePythonAttrs (old: {
+  pymobiledevice3_927 = mcpPythonInterp.pkgs.pymobiledevice3.overridePythonAttrs (old: {
     inherit (pypiPins.pymobiledevice3) version;
     src = pkgs.fetchPypi {
       pname = "pymobiledevice3";
@@ -1368,7 +1405,7 @@
       # under memory pressure) carries args and results. We use Ray rather than
       # reinvent Plasma/Arrow/refcount-GC. It bundles its own cloudpickle, so a
       # function defined in a cell ships by value without a separate serializer.
-      # nixpkgs ray builds on aarch64-darwin + {aarch64,x8664}-linux, the exact
+      # nixpkgs ray builds on aarch64-darwin + {aarch64,x86_64}-linux, the exact
       # platforms the fleet and dev boxes run, so it joins the pinned interpreter
       # like any other module.
       ps.ray
@@ -1392,6 +1429,7 @@
       scipqlModule
       flecsQueryModule
       fsearchModule
+      embedModule
       privateSessionModule
       googleAuthModule
       ixGoogleModule
@@ -1421,7 +1459,7 @@
       # the interpreter, so both ride in the same env. Cross-platform: a USB
       # iDevice + a root `tunneld` are what the developer commands need, not macOS,
       # so CI builds the whole closure and import-checks it on Linux too.
-      pymobiledevice3927
+      pymobiledevice3_927
       iphoneModule
     ]
     # Ray's `client` extra (grpcio): `fabric.remote` attaches to the fleet head
@@ -1588,6 +1626,7 @@
     "mesh"
     "fabric"
     "claude_history"
+    "embed"
   ];
   # The `ix_notebook_mcp` server package is migrated file-by-file (the package
   # as a whole is still ~200 errors from strict-clean, index#1902): each file
@@ -1648,6 +1687,9 @@
     '';
 
   tuiBundled = importTest "tui" "import tui; print('tui-ok', tui.__version__)";
+  # `embed` imports everywhere (its torch/MPS runtime loads lazily inside the
+  # embedding calls), so the import test runs on Linux too.
+  embedBundled = importTest "embed" "import embed; print('embed-ok', embed.__version__)";
   # htpy must import and auto-escape: a `<` in a text node comes out as `&lt;`.
   htpyBundled = importTest "htpy" "import htpy; print('htpy-ok' if '&lt;' in str(htpy.div['<']) else 'htpy-bad')";
   searchBundled = importTest "search" "import search; print('search-ok', search.__version__)";
@@ -4640,7 +4682,7 @@
     show = {
         "packages": {
             "aarch64-darwin": {"mcp": {"type": "derivation", "description": "the mcp"}},
-            "x8664-linux": {},
+            "x86_64-linux": {},
         },
         "nixosConfigurations": {"host": {"type": "nixos-configuration"}},
     }
@@ -4660,7 +4702,7 @@
     assert nix._eval_args(".#x", raw=True)[2] == "--raw", nix._eval_args(".#x", raw=True)
     sysd = nix._current_system()
     assert nix._eval_args(".#checks.{system}.lint")[1] == f".#checks.{sysd}.lint"
-    assert nix._eval_args(".#checks.{system}", system="x8664-linux")[1] == ".#checks.x8664-linux"
+    assert nix._eval_args(".#checks.{system}", system="x86_64-linux")[1] == ".#checks.x86_64-linux"
 
     print("nix-ok", nix.__version__)
   '';
@@ -5837,6 +5879,7 @@ in
               searchBundled
               astlogBundled
               fsearchBundled
+              embedBundled
               dataLibsBundled
               gmailLibsBundled
               exaBundled
