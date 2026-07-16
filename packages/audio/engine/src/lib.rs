@@ -357,7 +357,7 @@ impl Player {
                         sample_rate,
                         &sender,
                         &stop,
-                    )
+                    );
                 }
             })
             .expect("spawn render thread");
