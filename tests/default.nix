@@ -781,6 +781,10 @@
   cargoUnitCatalog = cargoUnitCatalogFixture.unitCatalog;
   cargoUnitFixture = cargoUnitCatalogFixture.src;
   cargoUnitWorkspace = cargoUnitCatalogFixture.workspace;
+  cargoUnitGeneratedCatalog = ix.cargoUnit.generateUnitCatalog cargoUnitWorkspaceArgs;
+  cargoUnitRecoveryGeneratedCatalog = ix.cargoUnit.generateUnitCatalog (
+    cargoUnitWorkspaceArgs // {unitCatalog = "must-not-be-imported";}
+  );
   cargoUnitInvalidCatalogEval =
     builtins.tryEval
     (ix.cargoUnit.buildWorkspace (cargoUnitWorkspaceArgs // {unitCatalog = "units.nix";})).unitCatalog;
@@ -793,7 +797,7 @@
       __structuredAttrs = true;
       nativeBuildInputs = [pkgs.coreutils];
     } ''
-      if ! cmp -s ${cargoUnitCatalog} ${cargoUnitWorkspace.generatedUnitCatalog}; then
+      if ! cmp -s ${cargoUnitCatalog} ${cargoUnitGeneratedCatalog}; then
         echo >&2 "error: cargo-unit catalog drifted; run: nix run .#update-cargo-unit-catalog"
         exit 1
       fi
@@ -4974,6 +4978,10 @@
         message = "cargo-unit workspaces should retain a build-time generated catalog for drift checks";
       }
       {
+        assertion = cargoUnitRecoveryGeneratedCatalog.drvPath == cargoUnitGeneratedCatalog.drvPath;
+        message = "cargo-unit catalog generation should ignore an invalid effective catalog input";
+      }
+      {
         assertion = cargoUnitWorkspace.unitsNix == cargoUnitWorkspace.generatedUnitCatalog;
         message = "cargo-unit unitsNix should remain the generated derivation compatibility handle";
       }
@@ -6303,7 +6311,7 @@ in {
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
   cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
   cargoUnitCatalog = cargoUnitCatalogDrift;
-  cargoUnitGeneratedCatalog = cargoUnitWorkspace.generatedUnitCatalog;
+  inherit cargoUnitGeneratedCatalog;
   # Validate the current R2 publication and local prebuilt-unit wrapper.
   sdkRustPrebuilt = sdkRust.artifactCheck;
   # Strict type + annotation gate over the public ix-sdk Python sources.

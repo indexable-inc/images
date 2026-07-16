@@ -169,7 +169,36 @@ reject_validator_fixture() {
 }
 
 # Exercise the exact privileged inline script as behavior, not variable names.
-prepare_validator_fixture positive
+prepare_validator_fixture scoped-update
+temporary_lock=$(mktemp "$candidate/flake.lock.XXXXXX")
+jq '
+  .nodes["rust-overlay"].locked.lastModified += 1
+  | .nodes["rust-overlay"].locked.rev = "0000000000000000000000000000000000000001"
+  | .nodes["rust-overlay"].locked.narHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+' "$candidate/flake.lock" >"$temporary_lock"
+mv -f "$temporary_lock" "$candidate/flake.lock"
+
+toolchain_text=$(<"$candidate/rust-toolchain.toml")
+if [[ ! $toolchain_text =~ nightly-([0-9]{4})-([0-9]{2})-([0-9]{2}) ]]; then
+  printf 'fixture toolchain has no dated nightly channel\n' >&2
+  exit 1
+fi
+current_channel=${BASH_REMATCH[0]}
+next_channel=$(date -d "${current_channel#nightly-} + 1 day" +nightly-%F)
+toolchain_text=${toolchain_text/$current_channel/$next_channel}
+printf '%s\n' "$toolchain_text" >"$candidate/rust-toolchain.toml"
+
+catalog_text=$(<"$candidate/tests/fixtures/cargo-unit-hello/unit-catalog")
+if [[ ! $catalog_text =~ [0-9a-f]{16} ]]; then
+  printf 'fixture catalog has no unit identity\n' >&2
+  exit 1
+fi
+catalog_identity=${BASH_REMATCH[0]}
+replacement_identity=0000000000000000
+[[ $catalog_identity != "$replacement_identity" ]] || replacement_identity=1111111111111111
+catalog_text=${catalog_text/$catalog_identity/$replacement_identity}
+printf '%s\n' "$catalog_text" \
+  >"$candidate/tests/fixtures/cargo-unit-hello/unit-catalog"
 run_publisher_validator
 
 prepare_validator_fixture structural-lock

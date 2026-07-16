@@ -730,6 +730,18 @@
       inherit (args) policy;
     };
 
+  /**
+  Generate a workspace's catalog without importing its effective catalog.
+
+  Updaters must use this recovery surface: selecting `generatedUnitCatalog`
+  from a normal `buildWorkspace` still merges the imported unit attrset, so a
+  syntactically invalid source catalog could otherwise prevent its own repair.
+  The inert catalog exposes no roots and therefore cannot accidentally become
+  a build surface.
+  */
+  generateUnitCatalog = rawArgs:
+    (buildWorkspace (rawArgs // {unitCatalog = ./empty-unit-catalog.nix;})).generatedUnitCatalog;
+
   # One lookup for every selector that picks a root out of a workspace: fail
   # with the calling selector's name and the full set of available keys, so a
   # typo'd target name reads as a menu instead of a bare missing-attribute
@@ -1053,6 +1065,7 @@ in {
     buildBinary
     buildBinaries
     buildWorkspace
+    generateUnitCatalog
     selectBinaryWithTests
     selectLibraryWithTests
     defaultToolchainId
