@@ -24,7 +24,7 @@ on:
         type: string
         default: ""
       runner-label:
-        description: Runner label for the update job
+        description: Runner label for the update and escalation jobs
         type: string
         default: ubuntu-latest
       nix-preinstalled:
@@ -136,7 +136,10 @@ jobs:
   escalate:
     needs: update-flake-lock
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    # Reuse the caller-selected runner for both halves of the transaction. A
+    # hosted escalation tail would make a supposedly self-hosted reusable
+    # workflow silently depend on GitHub capacity after the update job exits.
+    runs-on: ${{ inputs.runner-label || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
