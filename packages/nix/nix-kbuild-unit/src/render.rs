@@ -2,6 +2,7 @@
 //! prune to what the vmlinux link (and modpost) actually reach, and emit
 //! units.nix from the template.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
@@ -101,9 +102,25 @@ fn unit_deps<'plan>(
             // argv, or the `printf ... | xargs ar` form for the top-level
             // archive). Token-scan for object and archive operands only;
             // interpreting any more shell than that is out of scope.
+            // Nested archives name members relative to their directory, with
+            // the prefix in the printf format: `printf "arch/x86/%s " entry/...`;
+            // the pipe to xargs ends the member list.
+            let mut printf_prefix: Option<&str> = None;
             for token in entry.cmd.split_whitespace() {
-                let cleaned = token.trim_matches('"').trim_end_matches(';');
-                let cleaned = cleaned.strip_prefix("./").unwrap_or(cleaned);
+                if token == "|" {
+                    printf_prefix = None;
+                    continue;
+                }
+                let unquoted = token.trim_matches('"');
+                if let Some(prefix) = unquoted.strip_suffix("%s") {
+                    printf_prefix = Some(prefix);
+                    continue;
+                }
+                let cleaned = unquoted.trim_end_matches(';');
+                let cleaned = printf_prefix.map_or(Cow::Borrowed(cleaned), |prefix| {
+                    Cow::Owned(format!("{prefix}{cleaned}"))
+                });
+                let cleaned = cleaned.strip_prefix("./").unwrap_or(&cleaned);
                 if cleaned == entry.target || !(cleaned.ends_with(".o") || cleaned.ends_with(".a"))
                 {
                     continue;
@@ -366,6 +383,40 @@ mod tests {
             assert!(aggregate.contains(dep), "vmlinux.o closure missing {dep}");
         }
         assert!(rendered.contains("contentAddressed = false;"));
+    }
+
+    #[test]
+    fn resolves_printf_prefixed_archive_members() {
+        let mut plan = sample_plan();
+        // Nested archives carry the directory prefix in the printf format
+        // (real 6.12 form); the xargs target after the pipe must not get it.
+        plan.cmds.push(entry(
+            "arch/x86/entry/built-in.a",
+            "rm -f arch/x86/entry/built-in.a; ar cDPrST arch/x86/entry/built-in.a",
+            None,
+            &[],
+        ));
+        plan.cmds.push(entry(
+            "arch/x86/built-in.a",
+            "rm -f arch/x86/built-in.a;  printf \"arch/x86/%s \" entry/built-in.a | \
+             xargs ar cDPrST arch/x86/built-in.a",
+            None,
+            &[],
+        ));
+        plan.cmds[2].cmd = "rm -f built-in.a;  printf \"./%s \" kernel/built-in.a \
+             arch/x86/built-in.a | xargs ar cDPrST built-in.a"
+            .to_owned();
+
+        let rendered = render_units_nix(&plan, false).expect("render");
+        let top = rendered
+            .split("\"built-in.a\" = mkUnit {")
+            .nth(1)
+            .expect("built-in.a unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        assert!(top.contains("units.\"arch/x86/built-in.a\""));
+        assert!(top.contains("units.\"arch/x86/entry/built-in.a\""));
     }
 
     #[test]
