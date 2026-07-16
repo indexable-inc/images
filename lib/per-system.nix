@@ -1316,9 +1316,19 @@
     runtimeInputs = [
       pkgs.coreutils
       pkgs.gitMinimal
+      repoPackages.nix-ix
     ];
     text = ''
-      repo_root=$(git rev-parse --show-toplevel)
+      if (( $# > 1 )); then
+        printf 'usage: update-cargo-unit-catalog [CHECKOUT]\n' >&2
+        exit 2
+      fi
+      checkout=''${1:-.}
+      # Command substitution strips trailing newlines, which are legal in a
+      # checkout path. The sentinel preserves Git's exact path before removal.
+      repo_root=$(git -C "$checkout" rev-parse --show-toplevel && printf '.')
+      repo_root=''${repo_root%.}
+      repo_root=''${repo_root%$'\n'}
       destination="$repo_root/tests/fixtures/cargo-unit-hello/unit-catalog"
       for directory in \
         "$repo_root/tests" \
@@ -1335,7 +1345,17 @@
       fi
       temporary=$(mktemp "$destination.tmp.XXXXXX")
       trap 'rm -f "$temporary"' EXIT
-      install -m 0644 ${tests.cargoUnitGeneratedCatalog} "$temporary"
+      # Re-evaluate the checkout being modified. Otherwise `nix run A#...`
+      # from checkout B could silently install A's generated catalog into B.
+      generated_catalog=$(
+        nix build --no-link --print-out-paths \
+          "$repo_root#packages.x86_64-linux.cargo-unit-generated-catalog"
+      )
+      if [[ $generated_catalog == *$'\n'* || ! -f $generated_catalog ]]; then
+        printf 'catalog build returned an invalid output: %q\n' "$generated_catalog" >&2
+        exit 1
+      fi
+      install -m 0644 "$generated_catalog" "$temporary"
       mv -fT "$temporary" "$destination"
       trap - EXIT
       printf 'updated %s\n' "$destination"
@@ -1346,7 +1366,10 @@
     pkgs.runCommandLocal "update-rust-nightly-workflow-check" {
       nativeBuildInputs = [
         pkgs.bash
+        pkgs.coreutils
+        pkgs.gitMinimal
         pkgs.jq
+        pkgs.nix
         pkgs.yq-go
       ];
     } ''
@@ -2027,6 +2050,7 @@
       lint-fixed = lintFix.fixed;
       lint-fix-patch = lintFix.patch;
       bump-rust-nightly = bumpRustNightly;
+      cargo-unit-generated-catalog = tests.cargoUnitGeneratedCatalog;
       update-cargo-unit-catalog = updateCargoUnitCatalog;
       site-dev = site.passthru.devServer;
       update-mods = updateMods;

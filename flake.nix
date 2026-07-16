@@ -410,13 +410,7 @@
         "aarch64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     uncheckedPackages = withDarwinAliases (collect "packages");
-    updateCatalogWrongSystems =
-      builtins.filter (
-        system: uncheckedPackages.${system}.update-cargo-unit-catalog.system != system
-      )
-      devSystems;
-    packages = assert lib.assertMsg (updateCatalogWrongSystems == [])
-    "update-cargo-unit-catalog must be host-native on: ${builtins.concatStringsSep ", " updateCatalogWrongSystems}"; uncheckedPackages;
+    packages = uncheckedPackages;
     ciChecks = collect "ciChecks";
     cachePushRoots = withDarwinAliases (collect "cachePushRoots");
     # One evaluator pool owns every required Linux build root. Prefix closure
@@ -677,10 +671,14 @@
     templates = {};
     inherit packages;
     checks = lib.mapAttrs (
-      system: systemChecks:
+      system: systemChecks: let
+        updateCatalog = uncheckedPackages.${system}.update-cargo-unit-catalog;
+      in
         systemChecks
         // {
           personal-light-profile = (personalLightProfile system).activationPackage;
+          update-cargo-unit-catalog-host-native = assert lib.assertMsg (updateCatalog.system == system)
+          "update-cargo-unit-catalog must be host-native on ${system}"; updateCatalog;
         }
     ) (collect "checks");
     # Sharded keying of the same check derivations for the memory-bounded CI

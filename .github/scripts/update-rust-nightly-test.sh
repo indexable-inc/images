@@ -4,12 +4,22 @@ set -euo pipefail
 workflow=${1:?usage: update-rust-nightly-test.sh WORKFLOW}
 model=$(mktemp)
 mutated=$(mktemp)
-trap 'rm -f "$model" "$mutated"' EXIT
+validator_fixtures=$(mktemp -d)
+trap 'rm -f "$model" "$mutated"; rm -rf "$validator_fixtures"' EXIT
 yq -o=json '.' "$workflow" >"$model"
 
 prepare_runner="\${{ format('ix-ci-run-{0}-{1}-update-rust-nightly-prepare', github.run_id, github.run_attempt) }}"
 publish_runner="\${{ format('ix-ci-run-{0}-{1}-update-rust-nightly-publish', github.run_id, github.run_attempt) }}"
+readonly expected_publish_job_sha256=28267bfbcac70e508ce0515ad0c604dbcfb14fdd7eb500dcd73eb315637e04a0
 validate_model() {
+  local publish_job_sha256
+  publish_job_sha256=$(
+    jq -cS '.jobs["publish-update"]' "$1" | sha256sum | cut -d ' ' -f1
+  )
+  # This job owns the PR credential. Fingerprinting its canonical JSON makes
+  # every action, shell command, service, and token-placement change explicit.
+  [[ $publish_job_sha256 == "$expected_publish_job_sha256" ]] || return 1
+
   jq --exit-status \
     --arg prepare_runner "$prepare_runner" \
     --arg publish_runner "$publish_runner" '
@@ -97,7 +107,98 @@ reject_mutation moving-action \
   '.jobs["prepare-update"].steps += [{"uses":"actions/cache@main"}]'
 reject_mutation nix-installer \
   '.jobs["prepare-update"].steps += [{"uses":"example/install-nix@0000000000000000000000000000000000000000"}]'
+reject_mutation publish-pinned-action \
+  '.jobs["publish-update"].steps += [{"uses":"example/exfiltrate@0000000000000000000000000000000000000000"}]'
+reject_mutation publish-credential-shell \
+  '.jobs["publish-update"].steps += [{"env":{"TOKEN":"${{ secrets.AUTOBUMP_TOKEN || github.token }}"},"run":"curl https://example.invalid"}]'
 reject_mutation publish-evaluation \
   '.jobs["publish-update"].steps += [{"run":"nix run .#artifact-code"}]'
 reject_mutation broad-pr-staging \
   '(.jobs["publish-update"].steps[] | select((.uses? // "") | startswith("peter-evans/create-pull-request@")) | .with["add-paths"]) = "."'
+
+publisher_validator=$(jq -er '
+  [.jobs["publish-update"].steps[]
+    | select(.name == "Validate and install candidate data")
+    | .run]
+  | if length == 1 then .[0] else error("expected one publisher validator") end
+' "$model")
+source_root=$(cd -- "$(dirname -- "$workflow")/../.." && pwd -P)
+
+prepare_validator_fixture() {
+  local name=$1
+  case_root="$validator_fixtures/$name"
+  workspace="$case_root/workspace"
+  runner_temp="$case_root/runner"
+  candidate="$runner_temp/rust-nightly-candidate"
+  mkdir -p \
+    "$workspace/tests/fixtures/cargo-unit-hello" \
+    "$candidate/tests/fixtures/cargo-unit-hello"
+  for file in flake.lock rust-toolchain.toml; do
+    cp "$source_root/$file" "$workspace/$file"
+    cp "$source_root/$file" "$candidate/$file"
+  done
+  cp "$source_root/tests/fixtures/cargo-unit-hello/unit-catalog" \
+    "$workspace/tests/fixtures/cargo-unit-hello/unit-catalog"
+  cp "$source_root/tests/fixtures/cargo-unit-hello/unit-catalog" \
+    "$candidate/tests/fixtures/cargo-unit-hello/unit-catalog"
+  git -C "$workspace" init -q
+  git -C "$workspace" add flake.lock rust-toolchain.toml \
+    tests/fixtures/cargo-unit-hello/unit-catalog
+  git -C "$workspace" -c user.name=fixture -c user.email=fixture.invalid \
+    commit -qm base
+  fixture_sha=$(git -C "$workspace" rev-parse HEAD)
+}
+
+run_publisher_validator() {
+  (
+    export GITHUB_SHA="$fixture_sha"
+    export GITHUB_WORKSPACE="$workspace"
+    export RUNNER_TEMP="$runner_temp"
+    cd "$workspace"
+    bash -c "$publisher_validator"
+  )
+}
+
+reject_validator_fixture() {
+  local name=$1 log="$case_root/validator.log"
+  if run_publisher_validator >"$log" 2>&1; then
+    printf 'publisher validator admitted fixture: %s\n' "$name" >&2
+    sed -n '1,120p' "$log" >&2
+    exit 1
+  fi
+}
+
+# Exercise the exact privileged inline script as behavior, not variable names.
+prepare_validator_fixture positive
+run_publisher_validator
+
+prepare_validator_fixture structural-lock
+temporary_lock=$(mktemp "$candidate/flake.lock.XXXXXX")
+jq '.unexpected = true' "$candidate/flake.lock" >"$temporary_lock"
+mv -f "$temporary_lock" "$candidate/flake.lock"
+reject_validator_fixture structural-lock
+
+prepare_validator_fixture invalid-revision
+temporary_lock=$(mktemp "$candidate/flake.lock.XXXXXX")
+jq '.nodes["rust-overlay"].locked.rev = "invalid"' \
+  "$candidate/flake.lock" >"$temporary_lock"
+mv -f "$temporary_lock" "$candidate/flake.lock"
+reject_validator_fixture invalid-revision
+
+prepare_validator_fixture invalid-sri
+temporary_lock=$(mktemp "$candidate/flake.lock.XXXXXX")
+jq '.nodes["rust-overlay"].locked.narHash = "sha256-invalid"' \
+  "$candidate/flake.lock" >"$temporary_lock"
+mv -f "$temporary_lock" "$candidate/flake.lock"
+reject_validator_fixture invalid-sri
+
+prepare_validator_fixture structural-catalog
+catalog_text=$(<"$candidate/tests/fixtures/cargo-unit-hello/unit-catalog")
+catalog_text=${catalog_text/"units = (rec {"/"units = ({"}
+printf '%s\n' "$catalog_text" \
+  >"$candidate/tests/fixtures/cargo-unit-hello/unit-catalog"
+reject_validator_fixture structural-catalog
+
+prepare_validator_fixture untracked-checkout
+touch "$workspace/untracked"
+reject_validator_fixture untracked-checkout

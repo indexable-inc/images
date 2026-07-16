@@ -2164,7 +2164,7 @@ done
   '';
     };
 
-    "cargo_unit_hello-0.1.0-c36ad539085ce09f" = mkUnit {
+    "cargo_unit_hello-0.1.0-81804085a8a2bd21" = mkUnit {
       pname = "cargo_unit_hello";
       packageName = "cargo-unit-hello";
       version = "0.1.0";
@@ -2257,9 +2257,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=c36ad539085ce09f' )
+rustc_args+=( 'metadata=81804085a8a2bd21' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-c36ad539085ce09f' )
+rustc_args+=( 'extra-filename=-81804085a8a2bd21' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 rustc_args+=( --error-format=json --json=unused-externs-silent )
 rustc_args+=( '-W' )
@@ -2305,11 +2305,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libcargo_unit_hello-c36ad539085ce09f.rlib" \
-  "$out/lib/libcargo_unit_hello-c36ad539085ce09f.so" \
-  "$out/lib/libcargo_unit_hello-c36ad539085ce09f.dylib" \
-  "$out/lib/cargo_unit_hello-c36ad539085ce09f.dll" \
-  "$out/lib/libcargo_unit_hello-c36ad539085ce09f.rmeta"; do
+  "$out/lib/libcargo_unit_hello-81804085a8a2bd21.rlib" \
+  "$out/lib/libcargo_unit_hello-81804085a8a2bd21.so" \
+  "$out/lib/libcargo_unit_hello-81804085a8a2bd21.dylib" \
+  "$out/lib/cargo_unit_hello-81804085a8a2bd21.dll" \
+  "$out/lib/libcargo_unit_hello-81804085a8a2bd21.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -2329,13 +2329,13 @@ done
   '';
     };
 
-    "cargo-unit-goodbye-0.1.0-746e4f759fe1714d" = mkUnit {
+    "cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2" = mkUnit {
       pname = "cargo-unit-goodbye";
       packageName = "cargo-unit-hello";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain pkgs.jq ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -2428,14 +2428,14 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=746e4f759fe1714d' )
+rustc_args+=( 'metadata=e138086d6b5a5ac2' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
 rustc_args+=( --error-format=json --json=unused-externs-silent )
 rustc_args+=( '-W' )
 rustc_args+=( 'unused-crate-dependencies' )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/goodbye.rs" )
 rustc_args+=( -o 'build/cargo-unit-goodbye' )
 rustc_args+=( "''${build_script_flags[@]}" )
@@ -2483,13 +2483,13 @@ done
   '';
     };
 
-    "cargo-unit-hello-0.1.0-79c447a9b93bbf11" = mkUnit {
+    "cargo-unit-hello-0.1.0-8195277213ada084" = mkUnit {
       pname = "cargo-unit-hello";
       packageName = "cargo-unit-hello";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain pkgs.jq ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -2582,14 +2582,14 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=79c447a9b93bbf11' )
+rustc_args+=( 'metadata=8195277213ada084' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
 rustc_args+=( --error-format=json --json=unused-externs-silent )
 rustc_args+=( '-W' )
 rustc_args+=( 'unused-crate-dependencies' )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/main.rs" )
 rustc_args+=( -o 'build/cargo-unit-hello' )
 rustc_args+=( "''${build_script_flags[@]}" )
@@ -3071,7 +3071,7 @@ done
   '';
     };
 
-    "alloca-0.4.0-02674b3f942ac799" = mkUnit {
+    "alloca-0.4.0-bb3845ee7ce401a9" = mkUnit {
       pname = "alloca";
       packageName = "alloca";
       version = "0.4.0";
@@ -3164,9 +3164,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=02674b3f942ac799' )
+rustc_args+=( 'metadata=bb3845ee7ce401a9' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-02674b3f942ac799' )
+rustc_args+=( 'extra-filename=-bb3845ee7ce401a9' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "alloca" null}
@@ -3202,11 +3202,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/liballoca-02674b3f942ac799.rlib" \
-  "$out/lib/liballoca-02674b3f942ac799.so" \
-  "$out/lib/liballoca-02674b3f942ac799.dylib" \
-  "$out/lib/alloca-02674b3f942ac799.dll" \
-  "$out/lib/liballoca-02674b3f942ac799.rmeta"; do
+  "$out/lib/liballoca-bb3845ee7ce401a9.rlib" \
+  "$out/lib/liballoca-bb3845ee7ce401a9.so" \
+  "$out/lib/liballoca-bb3845ee7ce401a9.dylib" \
+  "$out/lib/alloca-bb3845ee7ce401a9.dll" \
+  "$out/lib/liballoca-bb3845ee7ce401a9.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -4118,7 +4118,7 @@ done
   '';
     };
 
-    "anyhow-1.0.102-45f8a300e995074a" = mkUnit {
+    "anyhow-1.0.102-e59528c435933cbd" = mkUnit {
       pname = "anyhow";
       packageName = "anyhow";
       version = "1.0.102";
@@ -4211,9 +4211,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=45f8a300e995074a' )
+rustc_args+=( 'metadata=e59528c435933cbd' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-45f8a300e995074a' )
+rustc_args+=( 'extra-filename=-e59528c435933cbd' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="default"' )
 rustc_args+=( '--cfg' )
@@ -4253,11 +4253,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libanyhow-45f8a300e995074a.rlib" \
-  "$out/lib/libanyhow-45f8a300e995074a.so" \
-  "$out/lib/libanyhow-45f8a300e995074a.dylib" \
-  "$out/lib/anyhow-45f8a300e995074a.dll" \
-  "$out/lib/libanyhow-45f8a300e995074a.rmeta"; do
+  "$out/lib/libanyhow-e59528c435933cbd.rlib" \
+  "$out/lib/libanyhow-e59528c435933cbd.so" \
+  "$out/lib/libanyhow-e59528c435933cbd.dylib" \
+  "$out/lib/anyhow-e59528c435933cbd.dll" \
+  "$out/lib/libanyhow-e59528c435933cbd.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -5167,7 +5167,7 @@ done
   '';
     };
 
-    "proc_macro2-1.0.106-724a49d78ffaea7f" = mkUnit {
+    "proc_macro2-1.0.106-530ea3bc82718609" = mkUnit {
       pname = "proc_macro2";
       packageName = "proc-macro2";
       version = "1.0.106";
@@ -5260,9 +5260,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=724a49d78ffaea7f' )
+rustc_args+=( 'metadata=530ea3bc82718609' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-724a49d78ffaea7f' )
+rustc_args+=( 'extra-filename=-530ea3bc82718609' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="default"' )
 rustc_args+=( '--cfg' )
@@ -5304,11 +5304,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libproc_macro2-724a49d78ffaea7f.rlib" \
-  "$out/lib/libproc_macro2-724a49d78ffaea7f.so" \
-  "$out/lib/libproc_macro2-724a49d78ffaea7f.dylib" \
-  "$out/lib/proc_macro2-724a49d78ffaea7f.dll" \
-  "$out/lib/libproc_macro2-724a49d78ffaea7f.rmeta"; do
+  "$out/lib/libproc_macro2-530ea3bc82718609.rlib" \
+  "$out/lib/libproc_macro2-530ea3bc82718609.so" \
+  "$out/lib/libproc_macro2-530ea3bc82718609.dylib" \
+  "$out/lib/proc_macro2-530ea3bc82718609.dll" \
+  "$out/lib/libproc_macro2-530ea3bc82718609.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -5418,13 +5418,13 @@ done
   '';
     };
 
-    "quote-1.0.45-fe4ab4dae126e843" = mkUnit {
+    "quote-1.0.45-042f136ccd8a4446" = mkUnit {
       pname = "quote";
       packageName = "quote";
       version = "1.0.45";
       src = sources."cargo-unit-source-quote-1.0.45-9a9e8c2156bcc0e3";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."proc_macro2-1.0.106-724a49d78ffaea7f" units."quote-build-script-run-1.0.45-f65e0012c6c31a53" ];
+      buildInputs = [ units."proc_macro2-1.0.106-530ea3bc82718609" units."quote-build-script-run-1.0.45-f65e0012c6c31a53" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -5511,9 +5511,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=fe4ab4dae126e843' )
+rustc_args+=( 'metadata=042f136ccd8a4446' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-fe4ab4dae126e843' )
+rustc_args+=( 'extra-filename=-042f136ccd8a4446' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="default"' )
 rustc_args+=( '--cfg' )
@@ -5522,8 +5522,8 @@ rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "quote" null}
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-530ea3bc82718609"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -5556,11 +5556,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libquote-fe4ab4dae126e843.rlib" \
-  "$out/lib/libquote-fe4ab4dae126e843.so" \
-  "$out/lib/libquote-fe4ab4dae126e843.dylib" \
-  "$out/lib/quote-fe4ab4dae126e843.dll" \
-  "$out/lib/libquote-fe4ab4dae126e843.rmeta"; do
+  "$out/lib/libquote-042f136ccd8a4446.rlib" \
+  "$out/lib/libquote-042f136ccd8a4446.so" \
+  "$out/lib/libquote-042f136ccd8a4446.dylib" \
+  "$out/lib/quote-042f136ccd8a4446.dll" \
+  "$out/lib/libquote-042f136ccd8a4446.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -5577,13 +5577,13 @@ done
   '';
     };
 
-    "syn-2.0.117-02db2024cc645b66" = mkUnit {
+    "syn-2.0.117-aabb514aab7dcd8d" = mkUnit {
       pname = "syn";
       packageName = "syn";
       version = "2.0.117";
       src = sources."cargo-unit-source-syn-2.0.117-c0fbb12673b4f9d1";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."proc_macro2-1.0.106-724a49d78ffaea7f" units."quote-1.0.45-fe4ab4dae126e843" units."unicode_ident-1.0.24-acbabc81e6377010" ];
+      buildInputs = [ units."proc_macro2-1.0.106-530ea3bc82718609" units."quote-1.0.45-042f136ccd8a4446" units."unicode_ident-1.0.24-acbabc81e6377010" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -5628,9 +5628,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=02db2024cc645b66' )
+rustc_args+=( 'metadata=aabb514aab7dcd8d' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-02db2024cc645b66' )
+rustc_args+=( 'extra-filename=-aabb514aab7dcd8d' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="clone-impls"' )
 rustc_args+=( '--cfg' )
@@ -5649,10 +5649,10 @@ rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "syn" null}
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "quote=$(cat ${units."quote-1.0.45-fe4ab4dae126e843"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-530ea3bc82718609"}/nix-support/extern-path)" )
+rustc_args+=( --extern "quote=$(cat ${units."quote-1.0.45-042f136ccd8a4446"}/nix-support/extern-path)" )
 rustc_args+=( --extern "unicode_ident=$(cat ${units."unicode_ident-1.0.24-acbabc81e6377010"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
@@ -5686,11 +5686,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libsyn-02db2024cc645b66.rlib" \
-  "$out/lib/libsyn-02db2024cc645b66.so" \
-  "$out/lib/libsyn-02db2024cc645b66.dylib" \
-  "$out/lib/syn-02db2024cc645b66.dll" \
-  "$out/lib/libsyn-02db2024cc645b66.rmeta"; do
+  "$out/lib/libsyn-aabb514aab7dcd8d.rlib" \
+  "$out/lib/libsyn-aabb514aab7dcd8d.so" \
+  "$out/lib/libsyn-aabb514aab7dcd8d.dylib" \
+  "$out/lib/syn-aabb514aab7dcd8d.dll" \
+  "$out/lib/libsyn-aabb514aab7dcd8d.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -5707,13 +5707,13 @@ done
   '';
     };
 
-    "clap_derive-4.6.1-39135dbe4156ffed" = mkUnit {
+    "clap_derive-4.6.1-1ae9e0a4ca36abe3" = mkUnit {
       pname = "clap_derive";
       packageName = "clap_derive";
       version = "4.6.1";
       src = sources."cargo-unit-source-clap_derive-4.6.1-53c7b7756d0bd15c";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."heck-0.5.0-6a53167a0b9cc73c" units."proc_macro2-1.0.106-724a49d78ffaea7f" units."quote-1.0.45-fe4ab4dae126e843" units."syn-2.0.117-02db2024cc645b66" ];
+      buildInputs = [ units."heck-0.5.0-6a53167a0b9cc73c" units."proc_macro2-1.0.106-530ea3bc82718609" units."quote-1.0.45-042f136ccd8a4446" units."syn-2.0.117-aabb514aab7dcd8d" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -5760,9 +5760,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=39135dbe4156ffed' )
+rustc_args+=( 'metadata=1ae9e0a4ca36abe3' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-39135dbe4156ffed' )
+rustc_args+=( 'extra-filename=-1ae9e0a4ca36abe3' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="default"' )
 rustc_args+=( '--cap-lints' )
@@ -5771,14 +5771,14 @@ ${renderExtraRustcArgs "clap_derive" null}
 ${renderExtraLinkRustcArgs null}
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
 rustc_args+=( --extern proc_macro )
 rustc_args+=( --extern "heck=$(cat ${units."heck-0.5.0-6a53167a0b9cc73c"}/nix-support/extern-path)" )
-rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "quote=$(cat ${units."quote-1.0.45-fe4ab4dae126e843"}/nix-support/extern-path)" )
-rustc_args+=( --extern "syn=$(cat ${units."syn-2.0.117-02db2024cc645b66"}/nix-support/extern-path)" )
+rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-530ea3bc82718609"}/nix-support/extern-path)" )
+rustc_args+=( --extern "quote=$(cat ${units."quote-1.0.45-042f136ccd8a4446"}/nix-support/extern-path)" )
+rustc_args+=( --extern "syn=$(cat ${units."syn-2.0.117-aabb514aab7dcd8d"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,link )
@@ -5811,11 +5811,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libclap_derive-39135dbe4156ffed.rlib" \
-  "$out/lib/libclap_derive-39135dbe4156ffed.so" \
-  "$out/lib/libclap_derive-39135dbe4156ffed.dylib" \
-  "$out/lib/clap_derive-39135dbe4156ffed.dll" \
-  "$out/lib/libclap_derive-39135dbe4156ffed.rmeta"; do
+  "$out/lib/libclap_derive-1ae9e0a4ca36abe3.rlib" \
+  "$out/lib/libclap_derive-1ae9e0a4ca36abe3.so" \
+  "$out/lib/libclap_derive-1ae9e0a4ca36abe3.dylib" \
+  "$out/lib/clap_derive-1ae9e0a4ca36abe3.dll" \
+  "$out/lib/libclap_derive-1ae9e0a4ca36abe3.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -5832,13 +5832,13 @@ done
   '';
     };
 
-    "clap-4.6.1-6fdbdedc44756634" = mkUnit {
+    "clap-4.6.1-d06673813069eefd" = mkUnit {
       pname = "clap";
       packageName = "clap";
       version = "4.6.1";
       src = sources."cargo-unit-source-clap-4.6.1-9053793cbdb84bf7";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."clap_builder-4.6.0-c892665bf86bdb19" units."clap_derive-4.6.1-39135dbe4156ffed" ];
+      buildInputs = [ units."clap_builder-4.6.0-c892665bf86bdb19" units."clap_derive-4.6.1-1ae9e0a4ca36abe3" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -5883,9 +5883,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=6fdbdedc44756634' )
+rustc_args+=( 'metadata=d06673813069eefd' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-6fdbdedc44756634' )
+rustc_args+=( 'extra-filename=-d06673813069eefd' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="color"' )
 rustc_args+=( '--cfg' )
@@ -5917,12 +5917,12 @@ rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
 rustc_args+=( --extern "clap_builder=$(cat ${units."clap_builder-4.6.0-c892665bf86bdb19"}/nix-support/extern-path)" )
-rustc_args+=( --extern "clap_derive=$(cat ${units."clap_derive-4.6.1-39135dbe4156ffed"}/nix-support/extern-path)" )
+rustc_args+=( --extern "clap_derive=$(cat ${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -5955,11 +5955,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libclap-6fdbdedc44756634.rlib" \
-  "$out/lib/libclap-6fdbdedc44756634.so" \
-  "$out/lib/libclap-6fdbdedc44756634.dylib" \
-  "$out/lib/clap-6fdbdedc44756634.dll" \
-  "$out/lib/libclap-6fdbdedc44756634.rmeta"; do
+  "$out/lib/libclap-d06673813069eefd.rlib" \
+  "$out/lib/libclap-d06673813069eefd.so" \
+  "$out/lib/libclap-d06673813069eefd.dylib" \
+  "$out/lib/clap-d06673813069eefd.dll" \
+  "$out/lib/libclap-d06673813069eefd.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -6644,13 +6644,13 @@ done
   '';
     };
 
-    "scroll_derive-0.11.1-4d217f2db26c9ac7" = mkUnit {
+    "scroll_derive-0.11.1-66830ce3f77270fc" = mkUnit {
       pname = "scroll_derive";
       packageName = "scroll_derive";
       version = "0.11.1";
       src = sources."cargo-unit-source-scroll_derive-0.11.1-c536c0ee1164df1b";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."proc_macro2-1.0.106-724a49d78ffaea7f" units."quote-1.0.45-fe4ab4dae126e843" units."syn-2.0.117-02db2024cc645b66" ];
+      buildInputs = [ units."proc_macro2-1.0.106-530ea3bc82718609" units."quote-1.0.45-042f136ccd8a4446" units."syn-2.0.117-aabb514aab7dcd8d" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -6697,21 +6697,21 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=4d217f2db26c9ac7' )
+rustc_args+=( 'metadata=66830ce3f77270fc' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-4d217f2db26c9ac7' )
+rustc_args+=( 'extra-filename=-66830ce3f77270fc' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "scroll_derive" null}
 ${renderExtraLinkRustcArgs null}
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
 rustc_args+=( --extern proc_macro )
-rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "quote=$(cat ${units."quote-1.0.45-fe4ab4dae126e843"}/nix-support/extern-path)" )
-rustc_args+=( --extern "syn=$(cat ${units."syn-2.0.117-02db2024cc645b66"}/nix-support/extern-path)" )
+rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-530ea3bc82718609"}/nix-support/extern-path)" )
+rustc_args+=( --extern "quote=$(cat ${units."quote-1.0.45-042f136ccd8a4446"}/nix-support/extern-path)" )
+rustc_args+=( --extern "syn=$(cat ${units."syn-2.0.117-aabb514aab7dcd8d"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,link )
@@ -6744,11 +6744,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libscroll_derive-4d217f2db26c9ac7.rlib" \
-  "$out/lib/libscroll_derive-4d217f2db26c9ac7.so" \
-  "$out/lib/libscroll_derive-4d217f2db26c9ac7.dylib" \
-  "$out/lib/scroll_derive-4d217f2db26c9ac7.dll" \
-  "$out/lib/libscroll_derive-4d217f2db26c9ac7.rmeta"; do
+  "$out/lib/libscroll_derive-66830ce3f77270fc.rlib" \
+  "$out/lib/libscroll_derive-66830ce3f77270fc.so" \
+  "$out/lib/libscroll_derive-66830ce3f77270fc.dylib" \
+  "$out/lib/scroll_derive-66830ce3f77270fc.dll" \
+  "$out/lib/libscroll_derive-66830ce3f77270fc.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -6765,13 +6765,13 @@ done
   '';
     };
 
-    "scroll-0.11.0-7cb7b71a209be056" = mkUnit {
+    "scroll-0.11.0-631897c2b897bf4e" = mkUnit {
       pname = "scroll";
       packageName = "scroll";
       version = "0.11.0";
       src = sources."cargo-unit-source-scroll-0.11.0-9a38c89e5ae81084";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."scroll_derive-0.11.1-4d217f2db26c9ac7" ];
+      buildInputs = [ units."scroll_derive-0.11.1-66830ce3f77270fc" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -6816,9 +6816,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=7cb7b71a209be056' )
+rustc_args+=( 'metadata=631897c2b897bf4e' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-7cb7b71a209be056' )
+rustc_args+=( 'extra-filename=-631897c2b897bf4e' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="default"' )
 rustc_args+=( '--cfg' )
@@ -6831,11 +6831,11 @@ rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "scroll" null}
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( --extern "scroll_derive=$(cat ${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( --extern "scroll_derive=$(cat ${units."scroll_derive-0.11.1-66830ce3f77270fc"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -6868,11 +6868,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libscroll-7cb7b71a209be056.rlib" \
-  "$out/lib/libscroll-7cb7b71a209be056.so" \
-  "$out/lib/libscroll-7cb7b71a209be056.dylib" \
-  "$out/lib/scroll-7cb7b71a209be056.dll" \
-  "$out/lib/libscroll-7cb7b71a209be056.rmeta"; do
+  "$out/lib/libscroll-631897c2b897bf4e.rlib" \
+  "$out/lib/libscroll-631897c2b897bf4e.so" \
+  "$out/lib/libscroll-631897c2b897bf4e.dylib" \
+  "$out/lib/scroll-631897c2b897bf4e.dll" \
+  "$out/lib/libscroll-631897c2b897bf4e.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -6889,13 +6889,13 @@ done
   '';
     };
 
-    "goblin-0.7.1-d5fccc7297a5c32b" = mkUnit {
+    "goblin-0.7.1-86cca37a2f188591" = mkUnit {
       pname = "goblin";
       packageName = "goblin";
       version = "0.7.1";
       src = sources."cargo-unit-source-goblin-0.7.1-45c5a7d1ab190d15";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."log-0.4.29-193e8cf41b47a3d4" units."plain-0.2.3-863a51e90d177902" units."scroll-0.11.0-7cb7b71a209be056" ];
+      buildInputs = [ units."log-0.4.29-193e8cf41b47a3d4" units."plain-0.2.3-863a51e90d177902" units."scroll-0.11.0-631897c2b897bf4e" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -6940,9 +6940,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=d5fccc7297a5c32b' )
+rustc_args+=( 'metadata=86cca37a2f188591' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-d5fccc7297a5c32b' )
+rustc_args+=( 'extra-filename=-86cca37a2f188591' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="alloc"' )
 rustc_args+=( '--cfg' )
@@ -6971,16 +6971,16 @@ rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "goblin" null}
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
 rustc_args+=( --extern "log=$(cat ${units."log-0.4.29-193e8cf41b47a3d4"}/nix-support/extern-path)" )
 rustc_args+=( --extern "plain=$(cat ${units."plain-0.2.3-863a51e90d177902"}/nix-support/extern-path)" )
-rustc_args+=( --extern "scroll=$(cat ${units."scroll-0.11.0-7cb7b71a209be056"}/nix-support/extern-path)" )
+rustc_args+=( --extern "scroll=$(cat ${units."scroll-0.11.0-631897c2b897bf4e"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -7013,11 +7013,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libgoblin-d5fccc7297a5c32b.rlib" \
-  "$out/lib/libgoblin-d5fccc7297a5c32b.so" \
-  "$out/lib/libgoblin-d5fccc7297a5c32b.dylib" \
-  "$out/lib/goblin-d5fccc7297a5c32b.dll" \
-  "$out/lib/libgoblin-d5fccc7297a5c32b.rmeta"; do
+  "$out/lib/libgoblin-86cca37a2f188591.rlib" \
+  "$out/lib/libgoblin-86cca37a2f188591.so" \
+  "$out/lib/libgoblin-86cca37a2f188591.dylib" \
+  "$out/lib/goblin-86cca37a2f188591.dll" \
+  "$out/lib/libgoblin-86cca37a2f188591.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -7127,7 +7127,7 @@ done
   '';
     };
 
-    "libc-0.2.186-f5bac0f1c1742942" = mkUnit {
+    "libc-0.2.186-bd85071c0c1b165c" = mkUnit {
       pname = "libc";
       packageName = "libc";
       version = "0.2.186";
@@ -7220,9 +7220,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=f5bac0f1c1742942' )
+rustc_args+=( 'metadata=bd85071c0c1b165c' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-f5bac0f1c1742942' )
+rustc_args+=( 'extra-filename=-bd85071c0c1b165c' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="default"' )
 rustc_args+=( '--cfg' )
@@ -7262,11 +7262,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/liblibc-f5bac0f1c1742942.rlib" \
-  "$out/lib/liblibc-f5bac0f1c1742942.so" \
-  "$out/lib/liblibc-f5bac0f1c1742942.dylib" \
-  "$out/lib/libc-f5bac0f1c1742942.dll" \
-  "$out/lib/liblibc-f5bac0f1c1742942.rmeta"; do
+  "$out/lib/liblibc-bd85071c0c1b165c.rlib" \
+  "$out/lib/liblibc-bd85071c0c1b165c.so" \
+  "$out/lib/liblibc-bd85071c0c1b165c.dylib" \
+  "$out/lib/libc-bd85071c0c1b165c.dll" \
+  "$out/lib/liblibc-bd85071c0c1b165c.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -7603,7 +7603,7 @@ done
   '';
     };
 
-    "num_traits-0.2.19-e0d678ec0e2cf000" = mkUnit {
+    "num_traits-0.2.19-864d67e44180e2c0" = mkUnit {
       pname = "num_traits";
       packageName = "num-traits";
       version = "0.2.19";
@@ -7696,9 +7696,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=e0d678ec0e2cf000' )
+rustc_args+=( 'metadata=864d67e44180e2c0' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-e0d678ec0e2cf000' )
+rustc_args+=( 'extra-filename=-864d67e44180e2c0' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="default"' )
 rustc_args+=( '--cfg' )
@@ -7738,11 +7738,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libnum_traits-e0d678ec0e2cf000.rlib" \
-  "$out/lib/libnum_traits-e0d678ec0e2cf000.so" \
-  "$out/lib/libnum_traits-e0d678ec0e2cf000.dylib" \
-  "$out/lib/num_traits-e0d678ec0e2cf000.dll" \
-  "$out/lib/libnum_traits-e0d678ec0e2cf000.rmeta"; do
+  "$out/lib/libnum_traits-864d67e44180e2c0.rlib" \
+  "$out/lib/libnum_traits-864d67e44180e2c0.so" \
+  "$out/lib/libnum_traits-864d67e44180e2c0.dylib" \
+  "$out/lib/num_traits-864d67e44180e2c0.dll" \
+  "$out/lib/libnum_traits-864d67e44180e2c0.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -7850,7 +7850,7 @@ done
   '';
     };
 
-    "zerocopy-0.8.48-8899b1469c97e118" = mkUnit {
+    "zerocopy-0.8.48-c59912109a71d629" = mkUnit {
       pname = "zerocopy";
       packageName = "zerocopy";
       version = "0.8.48";
@@ -7943,9 +7943,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=8899b1469c97e118' )
+rustc_args+=( 'metadata=c59912109a71d629' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-8899b1469c97e118' )
+rustc_args+=( 'extra-filename=-c59912109a71d629' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="simd"' )
 rustc_args+=( '--cap-lints' )
@@ -7983,11 +7983,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libzerocopy-8899b1469c97e118.rlib" \
-  "$out/lib/libzerocopy-8899b1469c97e118.so" \
-  "$out/lib/libzerocopy-8899b1469c97e118.dylib" \
-  "$out/lib/zerocopy-8899b1469c97e118.dll" \
-  "$out/lib/libzerocopy-8899b1469c97e118.rmeta"; do
+  "$out/lib/libzerocopy-c59912109a71d629.rlib" \
+  "$out/lib/libzerocopy-c59912109a71d629.so" \
+  "$out/lib/libzerocopy-c59912109a71d629.dylib" \
+  "$out/lib/zerocopy-c59912109a71d629.dll" \
+  "$out/lib/libzerocopy-c59912109a71d629.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -8004,13 +8004,13 @@ done
   '';
     };
 
-    "ppv_lite86-0.2.21-e9e7e38388c97ad8" = mkUnit {
+    "ppv_lite86-0.2.21-2c3b220ec481024d" = mkUnit {
       pname = "ppv_lite86";
       packageName = "ppv-lite86";
       version = "0.2.21";
       src = sources."cargo-unit-source-ppv-lite86-0.2.21-4efc0b57bce025bc";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."zerocopy-0.8.48-8899b1469c97e118" ];
+      buildInputs = [ units."zerocopy-0.8.48-c59912109a71d629" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -8055,9 +8055,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=e9e7e38388c97ad8' )
+rustc_args+=( 'metadata=2c3b220ec481024d' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-e9e7e38388c97ad8' )
+rustc_args+=( 'extra-filename=-2c3b220ec481024d' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="simd"' )
 rustc_args+=( '--cfg' )
@@ -8065,8 +8065,8 @@ rustc_args+=( 'feature="std"' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "ppv-lite86" null}
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( --extern "zerocopy=$(cat ${units."zerocopy-0.8.48-8899b1469c97e118"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( --extern "zerocopy=$(cat ${units."zerocopy-0.8.48-c59912109a71d629"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -8099,11 +8099,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libppv_lite86-e9e7e38388c97ad8.rlib" \
-  "$out/lib/libppv_lite86-e9e7e38388c97ad8.so" \
-  "$out/lib/libppv_lite86-e9e7e38388c97ad8.dylib" \
-  "$out/lib/ppv_lite86-e9e7e38388c97ad8.dll" \
-  "$out/lib/libppv_lite86-e9e7e38388c97ad8.rmeta"; do
+  "$out/lib/libppv_lite86-2c3b220ec481024d.rlib" \
+  "$out/lib/libppv_lite86-2c3b220ec481024d.so" \
+  "$out/lib/libppv_lite86-2c3b220ec481024d.dylib" \
+  "$out/lib/ppv_lite86-2c3b220ec481024d.dll" \
+  "$out/lib/libppv_lite86-2c3b220ec481024d.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -8120,13 +8120,13 @@ done
   '';
     };
 
-    "getrandom-0.2.17-a9dd04d9620dd699" = mkUnit {
+    "getrandom-0.2.17-52301bb43cfd7cbf" = mkUnit {
       pname = "getrandom";
       packageName = "getrandom";
       version = "0.2.17";
       src = sources."cargo-unit-source-getrandom-0.2.17-3b1bddcb52375eb3";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."cfg_if-1.0.4-99d94dab427a7c13" units."libc-0.2.186-f5bac0f1c1742942" ];
+      buildInputs = [ units."cfg_if-1.0.4-99d94dab427a7c13" units."libc-0.2.186-bd85071c0c1b165c" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -8171,18 +8171,18 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=a9dd04d9620dd699' )
+rustc_args+=( 'metadata=52301bb43cfd7cbf' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-a9dd04d9620dd699' )
+rustc_args+=( 'extra-filename=-52301bb43cfd7cbf' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="std"' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "getrandom" null}
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( --extern "cfg_if=$(cat ${units."cfg_if-1.0.4-99d94dab427a7c13"}/nix-support/extern-path)" )
-rustc_args+=( --extern "libc=$(cat ${units."libc-0.2.186-f5bac0f1c1742942"}/nix-support/extern-path)" )
+rustc_args+=( --extern "libc=$(cat ${units."libc-0.2.186-bd85071c0c1b165c"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -8215,11 +8215,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libgetrandom-a9dd04d9620dd699.rlib" \
-  "$out/lib/libgetrandom-a9dd04d9620dd699.so" \
-  "$out/lib/libgetrandom-a9dd04d9620dd699.dylib" \
-  "$out/lib/getrandom-a9dd04d9620dd699.dll" \
-  "$out/lib/libgetrandom-a9dd04d9620dd699.rmeta"; do
+  "$out/lib/libgetrandom-52301bb43cfd7cbf.rlib" \
+  "$out/lib/libgetrandom-52301bb43cfd7cbf.so" \
+  "$out/lib/libgetrandom-52301bb43cfd7cbf.dylib" \
+  "$out/lib/getrandom-52301bb43cfd7cbf.dll" \
+  "$out/lib/libgetrandom-52301bb43cfd7cbf.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -8236,13 +8236,13 @@ done
   '';
     };
 
-    "rand_core-0.6.4-dd2f2a6aa8326af5" = mkUnit {
+    "rand_core-0.6.4-f63904f47a69f8a5" = mkUnit {
       pname = "rand_core";
       packageName = "rand_core";
       version = "0.6.4";
       src = sources."cargo-unit-source-rand_core-0.6.4-c33c18b07b92ae42";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."getrandom-0.2.17-a9dd04d9620dd699" ];
+      buildInputs = [ units."getrandom-0.2.17-52301bb43cfd7cbf" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -8288,9 +8288,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=dd2f2a6aa8326af5' )
+rustc_args+=( 'metadata=f63904f47a69f8a5' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-dd2f2a6aa8326af5' )
+rustc_args+=( 'extra-filename=-f63904f47a69f8a5' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="alloc"' )
 rustc_args+=( '--cfg' )
@@ -8300,10 +8300,10 @@ rustc_args+=( 'feature="std"' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "rand_core" null}
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( --extern "getrandom=$(cat ${units."getrandom-0.2.17-a9dd04d9620dd699"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( --extern "getrandom=$(cat ${units."getrandom-0.2.17-52301bb43cfd7cbf"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -8336,11 +8336,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/librand_core-dd2f2a6aa8326af5.rlib" \
-  "$out/lib/librand_core-dd2f2a6aa8326af5.so" \
-  "$out/lib/librand_core-dd2f2a6aa8326af5.dylib" \
-  "$out/lib/rand_core-dd2f2a6aa8326af5.dll" \
-  "$out/lib/librand_core-dd2f2a6aa8326af5.rmeta"; do
+  "$out/lib/librand_core-f63904f47a69f8a5.rlib" \
+  "$out/lib/librand_core-f63904f47a69f8a5.so" \
+  "$out/lib/librand_core-f63904f47a69f8a5.dylib" \
+  "$out/lib/rand_core-f63904f47a69f8a5.dll" \
+  "$out/lib/librand_core-f63904f47a69f8a5.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -8357,13 +8357,13 @@ done
   '';
     };
 
-    "rand_chacha-0.3.1-f23650caf34d40a7" = mkUnit {
+    "rand_chacha-0.3.1-66a0552f6afa122e" = mkUnit {
       pname = "rand_chacha";
       packageName = "rand_chacha";
       version = "0.3.1";
       src = sources."cargo-unit-source-rand_chacha-0.3.1-f93897cc3cc899bf";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."ppv_lite86-0.2.21-e9e7e38388c97ad8" units."rand_core-0.6.4-dd2f2a6aa8326af5" ];
+      buildInputs = [ units."ppv_lite86-0.2.21-2c3b220ec481024d" units."rand_core-0.6.4-f63904f47a69f8a5" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -8409,22 +8409,22 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=f23650caf34d40a7' )
+rustc_args+=( 'metadata=66a0552f6afa122e' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-f23650caf34d40a7' )
+rustc_args+=( 'extra-filename=-66a0552f6afa122e' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="std"' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "rand_chacha" null}
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( --extern "ppv_lite86=$(cat ${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/nix-support/extern-path)" )
-rustc_args+=( --extern "rand_core=$(cat ${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( --extern "ppv_lite86=$(cat ${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/nix-support/extern-path)" )
+rustc_args+=( --extern "rand_core=$(cat ${units."rand_core-0.6.4-f63904f47a69f8a5"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -8457,11 +8457,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/librand_chacha-f23650caf34d40a7.rlib" \
-  "$out/lib/librand_chacha-f23650caf34d40a7.so" \
-  "$out/lib/librand_chacha-f23650caf34d40a7.dylib" \
-  "$out/lib/rand_chacha-f23650caf34d40a7.dll" \
-  "$out/lib/librand_chacha-f23650caf34d40a7.rmeta"; do
+  "$out/lib/librand_chacha-66a0552f6afa122e.rlib" \
+  "$out/lib/librand_chacha-66a0552f6afa122e.so" \
+  "$out/lib/librand_chacha-66a0552f6afa122e.dylib" \
+  "$out/lib/rand_chacha-66a0552f6afa122e.dll" \
+  "$out/lib/librand_chacha-66a0552f6afa122e.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -8478,13 +8478,13 @@ done
   '';
     };
 
-    "rand-0.8.6-d7612d48b73c6af7" = mkUnit {
+    "rand-0.8.6-6704d0351415be1a" = mkUnit {
       pname = "rand";
       packageName = "rand";
       version = "0.8.6";
       src = sources."cargo-unit-source-rand-0.8.6-7a65c2a653255315";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."libc-0.2.186-f5bac0f1c1742942" units."rand_chacha-0.3.1-f23650caf34d40a7" units."rand_core-0.6.4-dd2f2a6aa8326af5" ];
+      buildInputs = [ units."libc-0.2.186-bd85071c0c1b165c" units."rand_chacha-0.3.1-66a0552f6afa122e" units."rand_core-0.6.4-f63904f47a69f8a5" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -8530,9 +8530,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=d7612d48b73c6af7' )
+rustc_args+=( 'metadata=6704d0351415be1a' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-d7612d48b73c6af7' )
+rustc_args+=( 'extra-filename=-6704d0351415be1a' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="alloc"' )
 rustc_args+=( '--cfg' )
@@ -8552,16 +8552,16 @@ rustc_args+=( 'feature="std_rng"' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "rand" null}
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( --extern "libc=$(cat ${units."libc-0.2.186-f5bac0f1c1742942"}/nix-support/extern-path)" )
-rustc_args+=( --extern "rand_chacha=$(cat ${units."rand_chacha-0.3.1-f23650caf34d40a7"}/nix-support/extern-path)" )
-rustc_args+=( --extern "rand_core=$(cat ${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( --extern "libc=$(cat ${units."libc-0.2.186-bd85071c0c1b165c"}/nix-support/extern-path)" )
+rustc_args+=( --extern "rand_chacha=$(cat ${units."rand_chacha-0.3.1-66a0552f6afa122e"}/nix-support/extern-path)" )
+rustc_args+=( --extern "rand_core=$(cat ${units."rand_core-0.6.4-f63904f47a69f8a5"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -8594,11 +8594,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/librand-d7612d48b73c6af7.rlib" \
-  "$out/lib/librand-d7612d48b73c6af7.so" \
-  "$out/lib/librand-d7612d48b73c6af7.dylib" \
-  "$out/lib/rand-d7612d48b73c6af7.dll" \
-  "$out/lib/librand-d7612d48b73c6af7.rmeta"; do
+  "$out/lib/librand-6704d0351415be1a.rlib" \
+  "$out/lib/librand-6704d0351415be1a.so" \
+  "$out/lib/librand-6704d0351415be1a.dylib" \
+  "$out/lib/rand-6704d0351415be1a.dll" \
+  "$out/lib/librand-6704d0351415be1a.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -8909,13 +8909,13 @@ done
   '';
     };
 
-    "getrandom-0.4.2-091531b93708a5d1" = mkUnit {
+    "getrandom-0.4.2-b2637fccd83a45c0" = mkUnit {
       pname = "getrandom";
       packageName = "getrandom";
       version = "0.4.2";
       src = sources."cargo-unit-source-getrandom-0.4.2-e1649fb7a1b05029";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."cfg_if-1.0.4-99d94dab427a7c13" units."libc-0.2.186-f5bac0f1c1742942" units."getrandom-build-script-run-0.4.2-7fcc05171aa2e6b1" ];
+      buildInputs = [ units."cfg_if-1.0.4-99d94dab427a7c13" units."libc-0.2.186-bd85071c0c1b165c" units."getrandom-build-script-run-0.4.2-7fcc05171aa2e6b1" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -9002,16 +9002,16 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=091531b93708a5d1' )
+rustc_args+=( 'metadata=b2637fccd83a45c0' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-091531b93708a5d1' )
+rustc_args+=( 'extra-filename=-b2637fccd83a45c0' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "getrandom" null}
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( --extern "cfg_if=$(cat ${units."cfg_if-1.0.4-99d94dab427a7c13"}/nix-support/extern-path)" )
-rustc_args+=( --extern "libc=$(cat ${units."libc-0.2.186-f5bac0f1c1742942"}/nix-support/extern-path)" )
+rustc_args+=( --extern "libc=$(cat ${units."libc-0.2.186-bd85071c0c1b165c"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -9044,11 +9044,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libgetrandom-091531b93708a5d1.rlib" \
-  "$out/lib/libgetrandom-091531b93708a5d1.so" \
-  "$out/lib/libgetrandom-091531b93708a5d1.dylib" \
-  "$out/lib/getrandom-091531b93708a5d1.dll" \
-  "$out/lib/libgetrandom-091531b93708a5d1.rmeta"; do
+  "$out/lib/libgetrandom-b2637fccd83a45c0.rlib" \
+  "$out/lib/libgetrandom-b2637fccd83a45c0.so" \
+  "$out/lib/libgetrandom-b2637fccd83a45c0.dylib" \
+  "$out/lib/getrandom-b2637fccd83a45c0.dll" \
+  "$out/lib/libgetrandom-b2637fccd83a45c0.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -9400,7 +9400,7 @@ done
   '';
     };
 
-    "rustix-1.1.4-b68fa66645059bbe" = mkUnit {
+    "rustix-1.1.4-475f3574a4d2a054" = mkUnit {
       pname = "rustix";
       packageName = "rustix";
       version = "1.1.4";
@@ -9493,9 +9493,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=b68fa66645059bbe' )
+rustc_args+=( 'metadata=475f3574a4d2a054' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-b68fa66645059bbe' )
+rustc_args+=( 'extra-filename=-475f3574a4d2a054' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="alloc"' )
 rustc_args+=( '--cfg' )
@@ -9543,11 +9543,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/librustix-b68fa66645059bbe.rlib" \
-  "$out/lib/librustix-b68fa66645059bbe.so" \
-  "$out/lib/librustix-b68fa66645059bbe.dylib" \
-  "$out/lib/rustix-b68fa66645059bbe.dll" \
-  "$out/lib/librustix-b68fa66645059bbe.rmeta"; do
+  "$out/lib/librustix-475f3574a4d2a054.rlib" \
+  "$out/lib/librustix-475f3574a4d2a054.so" \
+  "$out/lib/librustix-475f3574a4d2a054.dylib" \
+  "$out/lib/rustix-475f3574a4d2a054.dll" \
+  "$out/lib/librustix-475f3574a4d2a054.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -9564,13 +9564,13 @@ done
   '';
     };
 
-    "tempfile-3.27.0-4533d3b63e6e5470" = mkUnit {
+    "tempfile-3.27.0-7b163cf99ec9b663" = mkUnit {
       pname = "tempfile";
       packageName = "tempfile";
       version = "3.27.0";
       src = sources."cargo-unit-source-tempfile-3.27.0-08eadb8a1163c66a";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."fastrand-2.4.1-7aca206f3f75cb7e" units."getrandom-0.4.2-091531b93708a5d1" units."once_cell-1.21.4-2939d5b95721125a" units."rustix-1.1.4-b68fa66645059bbe" ];
+      buildInputs = [ units."fastrand-2.4.1-7aca206f3f75cb7e" units."getrandom-0.4.2-b2637fccd83a45c0" units."once_cell-1.21.4-2939d5b95721125a" units."rustix-1.1.4-475f3574a4d2a054" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -9615,9 +9615,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=4533d3b63e6e5470' )
+rustc_args+=( 'metadata=7b163cf99ec9b663' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-4533d3b63e6e5470' )
+rustc_args+=( 'extra-filename=-7b163cf99ec9b663' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'feature="default"' )
 rustc_args+=( '--cfg' )
@@ -9626,17 +9626,17 @@ rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "tempfile" null}
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
 rustc_args+=( --extern "fastrand=$(cat ${units."fastrand-2.4.1-7aca206f3f75cb7e"}/nix-support/extern-path)" )
-rustc_args+=( --extern "getrandom=$(cat ${units."getrandom-0.4.2-091531b93708a5d1"}/nix-support/extern-path)" )
+rustc_args+=( --extern "getrandom=$(cat ${units."getrandom-0.4.2-b2637fccd83a45c0"}/nix-support/extern-path)" )
 rustc_args+=( --extern "once_cell=$(cat ${units."once_cell-1.21.4-2939d5b95721125a"}/nix-support/extern-path)" )
-rustc_args+=( --extern "rustix=$(cat ${units."rustix-1.1.4-b68fa66645059bbe"}/nix-support/extern-path)" )
+rustc_args+=( --extern "rustix=$(cat ${units."rustix-1.1.4-475f3574a4d2a054"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -9669,11 +9669,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libtempfile-4533d3b63e6e5470.rlib" \
-  "$out/lib/libtempfile-4533d3b63e6e5470.so" \
-  "$out/lib/libtempfile-4533d3b63e6e5470.dylib" \
-  "$out/lib/tempfile-4533d3b63e6e5470.dll" \
-  "$out/lib/libtempfile-4533d3b63e6e5470.rmeta"; do
+  "$out/lib/libtempfile-7b163cf99ec9b663.rlib" \
+  "$out/lib/libtempfile-7b163cf99ec9b663.so" \
+  "$out/lib/libtempfile-7b163cf99ec9b663.dylib" \
+  "$out/lib/tempfile-7b163cf99ec9b663.dll" \
+  "$out/lib/libtempfile-7b163cf99ec9b663.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -9779,13 +9779,13 @@ done
   '';
     };
 
-    "thiserror_impl-1.0.69-5bc0b95370195285" = mkUnit {
+    "thiserror_impl-1.0.69-7fa609b27dbde94b" = mkUnit {
       pname = "thiserror_impl";
       packageName = "thiserror-impl";
       version = "1.0.69";
       src = sources."cargo-unit-source-thiserror-impl-1.0.69-f8747022c7fc424a";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."proc_macro2-1.0.106-724a49d78ffaea7f" units."quote-1.0.45-fe4ab4dae126e843" units."syn-2.0.117-02db2024cc645b66" ];
+      buildInputs = [ units."proc_macro2-1.0.106-530ea3bc82718609" units."quote-1.0.45-042f136ccd8a4446" units."syn-2.0.117-aabb514aab7dcd8d" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -9832,21 +9832,21 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=5bc0b95370195285' )
+rustc_args+=( 'metadata=7fa609b27dbde94b' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-5bc0b95370195285' )
+rustc_args+=( 'extra-filename=-7fa609b27dbde94b' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "thiserror-impl" null}
 ${renderExtraLinkRustcArgs null}
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
 rustc_args+=( --extern proc_macro )
-rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "quote=$(cat ${units."quote-1.0.45-fe4ab4dae126e843"}/nix-support/extern-path)" )
-rustc_args+=( --extern "syn=$(cat ${units."syn-2.0.117-02db2024cc645b66"}/nix-support/extern-path)" )
+rustc_args+=( --extern "proc_macro2=$(cat ${units."proc_macro2-1.0.106-530ea3bc82718609"}/nix-support/extern-path)" )
+rustc_args+=( --extern "quote=$(cat ${units."quote-1.0.45-042f136ccd8a4446"}/nix-support/extern-path)" )
+rustc_args+=( --extern "syn=$(cat ${units."syn-2.0.117-aabb514aab7dcd8d"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,link )
@@ -9879,11 +9879,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libthiserror_impl-5bc0b95370195285.rlib" \
-  "$out/lib/libthiserror_impl-5bc0b95370195285.so" \
-  "$out/lib/libthiserror_impl-5bc0b95370195285.dylib" \
-  "$out/lib/thiserror_impl-5bc0b95370195285.dll" \
-  "$out/lib/libthiserror_impl-5bc0b95370195285.rmeta"; do
+  "$out/lib/libthiserror_impl-7fa609b27dbde94b.rlib" \
+  "$out/lib/libthiserror_impl-7fa609b27dbde94b.so" \
+  "$out/lib/libthiserror_impl-7fa609b27dbde94b.dylib" \
+  "$out/lib/thiserror_impl-7fa609b27dbde94b.dll" \
+  "$out/lib/libthiserror_impl-7fa609b27dbde94b.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -9900,13 +9900,13 @@ done
   '';
     };
 
-    "thiserror-1.0.69-a304706ed63f4916" = mkUnit {
+    "thiserror-1.0.69-d7c517f9f19ca3ef" = mkUnit {
       pname = "thiserror";
       packageName = "thiserror";
       version = "1.0.69";
       src = sources."cargo-unit-source-thiserror-1.0.69-c4c8ccc5753c7dab";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."thiserror_impl-1.0.69-5bc0b95370195285" units."thiserror-build-script-run-1.0.69-9a55a8bfadd79c28" ];
+      buildInputs = [ units."thiserror_impl-1.0.69-7fa609b27dbde94b" units."thiserror-build-script-run-1.0.69-9a55a8bfadd79c28" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -9993,18 +9993,18 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=a304706ed63f4916' )
+rustc_args+=( 'metadata=d7c517f9f19ca3ef' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-a304706ed63f4916' )
+rustc_args+=( 'extra-filename=-d7c517f9f19ca3ef' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "thiserror" null}
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( --extern "thiserror_impl=$(cat ${units."thiserror_impl-1.0.69-5bc0b95370195285"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( --extern "thiserror_impl=$(cat ${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -10037,11 +10037,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libthiserror-a304706ed63f4916.rlib" \
-  "$out/lib/libthiserror-a304706ed63f4916.so" \
-  "$out/lib/libthiserror-a304706ed63f4916.dylib" \
-  "$out/lib/thiserror-a304706ed63f4916.dll" \
-  "$out/lib/libthiserror-a304706ed63f4916.rmeta"; do
+  "$out/lib/libthiserror-d7c517f9f19ca3ef.rlib" \
+  "$out/lib/libthiserror-d7c517f9f19ca3ef.so" \
+  "$out/lib/libthiserror-d7c517f9f19ca3ef.dylib" \
+  "$out/lib/thiserror-d7c517f9f19ca3ef.dll" \
+  "$out/lib/libthiserror-d7c517f9f19ca3ef.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -10058,13 +10058,13 @@ done
   '';
     };
 
-    "tango_bench-0.7.2-41a0e8ae94890626" = mkUnit {
+    "tango_bench-0.7.2-163b25e5e7294bf6" = mkUnit {
       pname = "tango_bench";
       packageName = "tango-bench";
       version = "0.7.2";
       src = sources."cargo-unit-source-tango-bench-0.7.2-8da6a36ccd074089";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."alloca-0.4.0-02674b3f942ac799" units."anyhow-1.0.102-45f8a300e995074a" units."clap-4.6.1-6fdbdedc44756634" units."colorz-1.1.4-cb9cd0b9fdb38442" units."glob_match-0.2.1-b3cb21dee83bb7b9" units."goblin-0.7.1-d5fccc7297a5c32b" units."libc-0.2.186-f5bac0f1c1742942" units."libloading-0.8.9-4d3043bd37491640" units."log-0.4.29-193e8cf41b47a3d4" units."num_traits-0.2.19-e0d678ec0e2cf000" units."rand-0.8.6-d7612d48b73c6af7" units."scroll-0.11.0-7cb7b71a209be056" units."tempfile-3.27.0-4533d3b63e6e5470" units."thiserror-1.0.69-a304706ed63f4916" units."tango-bench-build-script-run-0.7.2-28700888c3e0adb5" ];
+      buildInputs = [ units."alloca-0.4.0-bb3845ee7ce401a9" units."anyhow-1.0.102-e59528c435933cbd" units."clap-4.6.1-d06673813069eefd" units."colorz-1.1.4-cb9cd0b9fdb38442" units."glob_match-0.2.1-b3cb21dee83bb7b9" units."goblin-0.7.1-86cca37a2f188591" units."libc-0.2.186-bd85071c0c1b165c" units."libloading-0.8.9-4d3043bd37491640" units."log-0.4.29-193e8cf41b47a3d4" units."num_traits-0.2.19-864d67e44180e2c0" units."rand-0.8.6-6704d0351415be1a" units."scroll-0.11.0-631897c2b897bf4e" units."tempfile-3.27.0-7b163cf99ec9b663" units."thiserror-1.0.69-d7c517f9f19ca3ef" units."tango-bench-build-script-run-0.7.2-28700888c3e0adb5" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -10151,13 +10151,13 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=41a0e8ae94890626' )
+rustc_args+=( 'metadata=163b25e5e7294bf6' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-41a0e8ae94890626' )
+rustc_args+=( 'extra-filename=-163b25e5e7294bf6' )
 rustc_args+=( '--cap-lints' )
 rustc_args+=( 'warn' )
 ${renderExtraRustcArgs "tango-bench" null}
-rustc_args+=( -L "dependency=${units."alloca-0.4.0-02674b3f942ac799"}/lib" )
+rustc_args+=( -L "dependency=${units."alloca-0.4.0-bb3845ee7ce401a9"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle-1.0.14-59b88dfe9741bf5b"}/lib" )
 rustc_args+=( -L "dependency=${units."utf8parse-0.2.2-4047da135efd0687"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle_parse-1.0.0-f9c65782a68494e4"}/lib" )
@@ -10165,59 +10165,59 @@ rustc_args+=( -L "dependency=${units."anstyle_query-1.1.5-891900b545ec5553"}/lib
 rustc_args+=( -L "dependency=${units."colorchoice-1.0.5-6a6b16b673b9cf92"}/lib" )
 rustc_args+=( -L "dependency=${units."is_terminal_polyfill-1.70.2-d951561e0af8e45a"}/lib" )
 rustc_args+=( -L "dependency=${units."anstream-1.0.0-17e5a1bf76e9d8d2"}/lib" )
-rustc_args+=( -L "dependency=${units."anyhow-1.0.102-45f8a300e995074a"}/lib" )
+rustc_args+=( -L "dependency=${units."anyhow-1.0.102-e59528c435933cbd"}/lib" )
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_lex-1.1.0-0cc83627abe74285"}/lib" )
 rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
-rustc_args+=( -L "dependency=${units."clap-4.6.1-6fdbdedc44756634"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
+rustc_args+=( -L "dependency=${units."clap-4.6.1-d06673813069eefd"}/lib" )
 rustc_args+=( -L "dependency=${units."is_ci-1.2.0-0c5eebb051fadec1"}/lib" )
 rustc_args+=( -L "dependency=${units."supports_color-3.0.2-6de8f4c24e05c908"}/lib" )
 rustc_args+=( -L "dependency=${units."colorz-1.1.4-cb9cd0b9fdb38442"}/lib" )
 rustc_args+=( -L "dependency=${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
-rustc_args+=( -L "dependency=${units."goblin-0.7.1-d5fccc7297a5c32b"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
+rustc_args+=( -L "dependency=${units."goblin-0.7.1-86cca37a2f188591"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."libloading-0.8.9-4d3043bd37491640"}/lib" )
-rustc_args+=( -L "dependency=${units."num_traits-0.2.19-e0d678ec0e2cf000"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( -L "dependency=${units."rand-0.8.6-d7612d48b73c6af7"}/lib" )
+rustc_args+=( -L "dependency=${units."num_traits-0.2.19-864d67e44180e2c0"}/lib" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( -L "dependency=${units."rand-0.8.6-6704d0351415be1a"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
-rustc_args+=( -L "dependency=${units."tempfile-3.27.0-4533d3b63e6e5470"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror-1.0.69-a304706ed63f4916"}/lib" )
-rustc_args+=( --extern "alloca=$(cat ${units."alloca-0.4.0-02674b3f942ac799"}/nix-support/extern-path)" )
-rustc_args+=( --extern "anyhow=$(cat ${units."anyhow-1.0.102-45f8a300e995074a"}/nix-support/extern-path)" )
-rustc_args+=( --extern "clap=$(cat ${units."clap-4.6.1-6fdbdedc44756634"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
+rustc_args+=( -L "dependency=${units."tempfile-3.27.0-7b163cf99ec9b663"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/lib" )
+rustc_args+=( --extern "alloca=$(cat ${units."alloca-0.4.0-bb3845ee7ce401a9"}/nix-support/extern-path)" )
+rustc_args+=( --extern "anyhow=$(cat ${units."anyhow-1.0.102-e59528c435933cbd"}/nix-support/extern-path)" )
+rustc_args+=( --extern "clap=$(cat ${units."clap-4.6.1-d06673813069eefd"}/nix-support/extern-path)" )
 rustc_args+=( --extern "colorz=$(cat ${units."colorz-1.1.4-cb9cd0b9fdb38442"}/nix-support/extern-path)" )
 rustc_args+=( --extern "glob_match=$(cat ${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/nix-support/extern-path)" )
-rustc_args+=( --extern "goblin=$(cat ${units."goblin-0.7.1-d5fccc7297a5c32b"}/nix-support/extern-path)" )
-rustc_args+=( --extern "libc=$(cat ${units."libc-0.2.186-f5bac0f1c1742942"}/nix-support/extern-path)" )
+rustc_args+=( --extern "goblin=$(cat ${units."goblin-0.7.1-86cca37a2f188591"}/nix-support/extern-path)" )
+rustc_args+=( --extern "libc=$(cat ${units."libc-0.2.186-bd85071c0c1b165c"}/nix-support/extern-path)" )
 rustc_args+=( --extern "libloading=$(cat ${units."libloading-0.8.9-4d3043bd37491640"}/nix-support/extern-path)" )
 rustc_args+=( --extern "log=$(cat ${units."log-0.4.29-193e8cf41b47a3d4"}/nix-support/extern-path)" )
-rustc_args+=( --extern "num_traits=$(cat ${units."num_traits-0.2.19-e0d678ec0e2cf000"}/nix-support/extern-path)" )
-rustc_args+=( --extern "rand=$(cat ${units."rand-0.8.6-d7612d48b73c6af7"}/nix-support/extern-path)" )
-rustc_args+=( --extern "scroll=$(cat ${units."scroll-0.11.0-7cb7b71a209be056"}/nix-support/extern-path)" )
-rustc_args+=( --extern "tempfile=$(cat ${units."tempfile-3.27.0-4533d3b63e6e5470"}/nix-support/extern-path)" )
-rustc_args+=( --extern "thiserror=$(cat ${units."thiserror-1.0.69-a304706ed63f4916"}/nix-support/extern-path)" )
+rustc_args+=( --extern "num_traits=$(cat ${units."num_traits-0.2.19-864d67e44180e2c0"}/nix-support/extern-path)" )
+rustc_args+=( --extern "rand=$(cat ${units."rand-0.8.6-6704d0351415be1a"}/nix-support/extern-path)" )
+rustc_args+=( --extern "scroll=$(cat ${units."scroll-0.11.0-631897c2b897bf4e"}/nix-support/extern-path)" )
+rustc_args+=( --extern "tempfile=$(cat ${units."tempfile-3.27.0-7b163cf99ec9b663"}/nix-support/extern-path)" )
+rustc_args+=( --extern "thiserror=$(cat ${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata,link )
@@ -10250,11 +10250,11 @@ if [ -f build/cargo-metadata ]; then
 fi
 extern_path=""
 for artifact in \
-  "$out/lib/libtango_bench-41a0e8ae94890626.rlib" \
-  "$out/lib/libtango_bench-41a0e8ae94890626.so" \
-  "$out/lib/libtango_bench-41a0e8ae94890626.dylib" \
-  "$out/lib/tango_bench-41a0e8ae94890626.dll" \
-  "$out/lib/libtango_bench-41a0e8ae94890626.rmeta"; do
+  "$out/lib/libtango_bench-163b25e5e7294bf6.rlib" \
+  "$out/lib/libtango_bench-163b25e5e7294bf6.so" \
+  "$out/lib/libtango_bench-163b25e5e7294bf6.dylib" \
+  "$out/lib/tango_bench-163b25e5e7294bf6.dll" \
+  "$out/lib/libtango_bench-163b25e5e7294bf6.rmeta"; do
   if [ -f "$artifact" ]; then
     extern_path="$artifact"
     break
@@ -10271,13 +10271,13 @@ done
   '';
     };
 
-    "cargo_unit_hello-0.1.0-d4f198ec36ed5d1c" = mkUnit {
+    "cargo_unit_hello-0.1.0-ec97860a035f5729" = mkUnit {
       pname = "cargo_unit_hello";
       packageName = "cargo-unit-hello";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain pkgs.jq ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."tango_bench-0.7.2-41a0e8ae94890626" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."tango_bench-0.7.2-163b25e5e7294bf6" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       buildPhase = ''
 mkdir -p build
@@ -10366,11 +10366,11 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=d4f198ec36ed5d1c' )
+rustc_args+=( 'metadata=ec97860a035f5729' )
 rustc_args+=( '--test' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."alloca-0.4.0-02674b3f942ac799"}/lib" )
+rustc_args+=( -L "dependency=${units."alloca-0.4.0-bb3845ee7ce401a9"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle-1.0.14-59b88dfe9741bf5b"}/lib" )
 rustc_args+=( -L "dependency=${units."utf8parse-0.2.2-4047da135efd0687"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle_parse-1.0.0-f9c65782a68494e4"}/lib" )
@@ -10378,50 +10378,50 @@ rustc_args+=( -L "dependency=${units."anstyle_query-1.1.5-891900b545ec5553"}/lib
 rustc_args+=( -L "dependency=${units."colorchoice-1.0.5-6a6b16b673b9cf92"}/lib" )
 rustc_args+=( -L "dependency=${units."is_terminal_polyfill-1.70.2-d951561e0af8e45a"}/lib" )
 rustc_args+=( -L "dependency=${units."anstream-1.0.0-17e5a1bf76e9d8d2"}/lib" )
-rustc_args+=( -L "dependency=${units."anyhow-1.0.102-45f8a300e995074a"}/lib" )
+rustc_args+=( -L "dependency=${units."anyhow-1.0.102-e59528c435933cbd"}/lib" )
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_lex-1.1.0-0cc83627abe74285"}/lib" )
 rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
-rustc_args+=( -L "dependency=${units."clap-4.6.1-6fdbdedc44756634"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
+rustc_args+=( -L "dependency=${units."clap-4.6.1-d06673813069eefd"}/lib" )
 rustc_args+=( -L "dependency=${units."is_ci-1.2.0-0c5eebb051fadec1"}/lib" )
 rustc_args+=( -L "dependency=${units."supports_color-3.0.2-6de8f4c24e05c908"}/lib" )
 rustc_args+=( -L "dependency=${units."colorz-1.1.4-cb9cd0b9fdb38442"}/lib" )
 rustc_args+=( -L "dependency=${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
-rustc_args+=( -L "dependency=${units."goblin-0.7.1-d5fccc7297a5c32b"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
+rustc_args+=( -L "dependency=${units."goblin-0.7.1-86cca37a2f188591"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."libloading-0.8.9-4d3043bd37491640"}/lib" )
-rustc_args+=( -L "dependency=${units."num_traits-0.2.19-e0d678ec0e2cf000"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( -L "dependency=${units."rand-0.8.6-d7612d48b73c6af7"}/lib" )
+rustc_args+=( -L "dependency=${units."num_traits-0.2.19-864d67e44180e2c0"}/lib" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( -L "dependency=${units."rand-0.8.6-6704d0351415be1a"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
-rustc_args+=( -L "dependency=${units."tempfile-3.27.0-4533d3b63e6e5470"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror-1.0.69-a304706ed63f4916"}/lib" )
-rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-41a0e8ae94890626"}/lib" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
+rustc_args+=( -L "dependency=${units."tempfile-3.27.0-7b163cf99ec9b663"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/lib" )
+rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-163b25e5e7294bf6"}/lib" )
 rustc_args+=( --error-format=json --json=unused-externs-silent )
 rustc_args+=( '-W' )
 rustc_args+=( 'unused-crate-dependencies' )
-rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-41a0e8ae94890626"}/nix-support/extern-path)" )
+rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-163b25e5e7294bf6"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( -o 'build/cargo_unit_hello' )
 rustc_args+=( "''${build_script_flags[@]}" )
@@ -10469,13 +10469,13 @@ done
   '';
     };
 
-    "cargo-unit-goodbye-0.1.0-041f697762e45dc7" = mkUnit {
+    "cargo-unit-goodbye-0.1.0-bd02403bd15eae2e" = mkUnit {
       pname = "cargo-unit-goodbye";
       packageName = "cargo-unit-hello";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain pkgs.jq ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."tango_bench-0.7.2-41a0e8ae94890626" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."tango_bench-0.7.2-163b25e5e7294bf6" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       buildPhase = ''
 mkdir -p build
@@ -10565,12 +10565,12 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=041f697762e45dc7' )
+rustc_args+=( 'metadata=bd02403bd15eae2e' )
 rustc_args+=( '--test' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustc_args+=( -L "dependency=${units."alloca-0.4.0-02674b3f942ac799"}/lib" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustc_args+=( -L "dependency=${units."alloca-0.4.0-bb3845ee7ce401a9"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle-1.0.14-59b88dfe9741bf5b"}/lib" )
 rustc_args+=( -L "dependency=${units."utf8parse-0.2.2-4047da135efd0687"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle_parse-1.0.0-f9c65782a68494e4"}/lib" )
@@ -10578,51 +10578,51 @@ rustc_args+=( -L "dependency=${units."anstyle_query-1.1.5-891900b545ec5553"}/lib
 rustc_args+=( -L "dependency=${units."colorchoice-1.0.5-6a6b16b673b9cf92"}/lib" )
 rustc_args+=( -L "dependency=${units."is_terminal_polyfill-1.70.2-d951561e0af8e45a"}/lib" )
 rustc_args+=( -L "dependency=${units."anstream-1.0.0-17e5a1bf76e9d8d2"}/lib" )
-rustc_args+=( -L "dependency=${units."anyhow-1.0.102-45f8a300e995074a"}/lib" )
+rustc_args+=( -L "dependency=${units."anyhow-1.0.102-e59528c435933cbd"}/lib" )
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_lex-1.1.0-0cc83627abe74285"}/lib" )
 rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
-rustc_args+=( -L "dependency=${units."clap-4.6.1-6fdbdedc44756634"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
+rustc_args+=( -L "dependency=${units."clap-4.6.1-d06673813069eefd"}/lib" )
 rustc_args+=( -L "dependency=${units."is_ci-1.2.0-0c5eebb051fadec1"}/lib" )
 rustc_args+=( -L "dependency=${units."supports_color-3.0.2-6de8f4c24e05c908"}/lib" )
 rustc_args+=( -L "dependency=${units."colorz-1.1.4-cb9cd0b9fdb38442"}/lib" )
 rustc_args+=( -L "dependency=${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
-rustc_args+=( -L "dependency=${units."goblin-0.7.1-d5fccc7297a5c32b"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
+rustc_args+=( -L "dependency=${units."goblin-0.7.1-86cca37a2f188591"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."libloading-0.8.9-4d3043bd37491640"}/lib" )
-rustc_args+=( -L "dependency=${units."num_traits-0.2.19-e0d678ec0e2cf000"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( -L "dependency=${units."rand-0.8.6-d7612d48b73c6af7"}/lib" )
+rustc_args+=( -L "dependency=${units."num_traits-0.2.19-864d67e44180e2c0"}/lib" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( -L "dependency=${units."rand-0.8.6-6704d0351415be1a"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
-rustc_args+=( -L "dependency=${units."tempfile-3.27.0-4533d3b63e6e5470"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror-1.0.69-a304706ed63f4916"}/lib" )
-rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-41a0e8ae94890626"}/lib" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
+rustc_args+=( -L "dependency=${units."tempfile-3.27.0-7b163cf99ec9b663"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/lib" )
+rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-163b25e5e7294bf6"}/lib" )
 rustc_args+=( --error-format=json --json=unused-externs-silent )
 rustc_args+=( '-W' )
 rustc_args+=( 'unused-crate-dependencies' )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-41a0e8ae94890626"}/nix-support/extern-path)" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
+rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-163b25e5e7294bf6"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/goodbye.rs" )
 rustc_args+=( -o 'build/cargo-unit-goodbye' )
 rustc_args+=( "''${build_script_flags[@]}" )
@@ -10670,13 +10670,13 @@ done
   '';
     };
 
-    "cargo-unit-hello-0.1.0-e207c86d484f9678" = mkUnit {
+    "cargo-unit-hello-0.1.0-ecc837c4ce4d8865" = mkUnit {
       pname = "cargo-unit-hello";
       packageName = "cargo-unit-hello";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain pkgs.jq ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."tango_bench-0.7.2-41a0e8ae94890626" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."tango_bench-0.7.2-163b25e5e7294bf6" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       buildPhase = ''
 mkdir -p build
@@ -10766,12 +10766,12 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=e207c86d484f9678' )
+rustc_args+=( 'metadata=ecc837c4ce4d8865' )
 rustc_args+=( '--test' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustc_args+=( -L "dependency=${units."alloca-0.4.0-02674b3f942ac799"}/lib" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustc_args+=( -L "dependency=${units."alloca-0.4.0-bb3845ee7ce401a9"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle-1.0.14-59b88dfe9741bf5b"}/lib" )
 rustc_args+=( -L "dependency=${units."utf8parse-0.2.2-4047da135efd0687"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle_parse-1.0.0-f9c65782a68494e4"}/lib" )
@@ -10779,51 +10779,51 @@ rustc_args+=( -L "dependency=${units."anstyle_query-1.1.5-891900b545ec5553"}/lib
 rustc_args+=( -L "dependency=${units."colorchoice-1.0.5-6a6b16b673b9cf92"}/lib" )
 rustc_args+=( -L "dependency=${units."is_terminal_polyfill-1.70.2-d951561e0af8e45a"}/lib" )
 rustc_args+=( -L "dependency=${units."anstream-1.0.0-17e5a1bf76e9d8d2"}/lib" )
-rustc_args+=( -L "dependency=${units."anyhow-1.0.102-45f8a300e995074a"}/lib" )
+rustc_args+=( -L "dependency=${units."anyhow-1.0.102-e59528c435933cbd"}/lib" )
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_lex-1.1.0-0cc83627abe74285"}/lib" )
 rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
-rustc_args+=( -L "dependency=${units."clap-4.6.1-6fdbdedc44756634"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
+rustc_args+=( -L "dependency=${units."clap-4.6.1-d06673813069eefd"}/lib" )
 rustc_args+=( -L "dependency=${units."is_ci-1.2.0-0c5eebb051fadec1"}/lib" )
 rustc_args+=( -L "dependency=${units."supports_color-3.0.2-6de8f4c24e05c908"}/lib" )
 rustc_args+=( -L "dependency=${units."colorz-1.1.4-cb9cd0b9fdb38442"}/lib" )
 rustc_args+=( -L "dependency=${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
-rustc_args+=( -L "dependency=${units."goblin-0.7.1-d5fccc7297a5c32b"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
+rustc_args+=( -L "dependency=${units."goblin-0.7.1-86cca37a2f188591"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."libloading-0.8.9-4d3043bd37491640"}/lib" )
-rustc_args+=( -L "dependency=${units."num_traits-0.2.19-e0d678ec0e2cf000"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( -L "dependency=${units."rand-0.8.6-d7612d48b73c6af7"}/lib" )
+rustc_args+=( -L "dependency=${units."num_traits-0.2.19-864d67e44180e2c0"}/lib" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( -L "dependency=${units."rand-0.8.6-6704d0351415be1a"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
-rustc_args+=( -L "dependency=${units."tempfile-3.27.0-4533d3b63e6e5470"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror-1.0.69-a304706ed63f4916"}/lib" )
-rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-41a0e8ae94890626"}/lib" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
+rustc_args+=( -L "dependency=${units."tempfile-3.27.0-7b163cf99ec9b663"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/lib" )
+rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-163b25e5e7294bf6"}/lib" )
 rustc_args+=( --error-format=json --json=unused-externs-silent )
 rustc_args+=( '-W' )
 rustc_args+=( 'unused-crate-dependencies' )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-41a0e8ae94890626"}/nix-support/extern-path)" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
+rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-163b25e5e7294bf6"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/main.rs" )
 rustc_args+=( -o 'build/cargo-unit-hello' )
 rustc_args+=( "''${build_script_flags[@]}" )
@@ -10871,13 +10871,13 @@ done
   '';
     };
 
-    "greeting-0.1.0-33dc98e7a8997153" = mkUnit {
+    "greeting-0.1.0-26bdf257c149b1af" = mkUnit {
       pname = "greeting";
       packageName = "cargo-unit-hello";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain pkgs.jq ] ++ extraNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d" units."cargo-unit-hello-0.1.0-79c447a9b93bbf11" units."tango_bench-0.7.2-41a0e8ae94890626" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2" units."cargo-unit-hello-0.1.0-8195277213ada084" units."tango_bench-0.7.2-163b25e5e7294bf6" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       buildPhase = ''
 mkdir -p build
@@ -10900,8 +10900,8 @@ export CARGO_PKG_LICENSE=""
 export CARGO_PKG_LICENSE_FILE=""
 export CARGO_PKG_RUST_VERSION=""
 export CARGO_MANIFEST_DIR="$src"
-rustc_env+=( 'CARGO_BIN_EXE_cargo-unit-goodbye=${units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d"}/bin/cargo-unit-goodbye' )
-rustc_env+=( 'CARGO_BIN_EXE_cargo-unit-hello=${units."cargo-unit-hello-0.1.0-79c447a9b93bbf11"}/bin/cargo-unit-hello' )
+rustc_env+=( 'CARGO_BIN_EXE_cargo-unit-goodbye=${units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2"}/bin/cargo-unit-goodbye' )
+rustc_env+=( 'CARGO_BIN_EXE_cargo-unit-hello=${units."cargo-unit-hello-0.1.0-8195277213ada084"}/bin/cargo-unit-hello' )
 
 if [ -f "${units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d"}"/rustc-cfg ]; then
   while IFS= read -r line; do
@@ -10968,13 +10968,13 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=33dc98e7a8997153' )
+rustc_args+=( 'metadata=26bdf257c149b1af' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'test' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustc_args+=( -L "dependency=${units."alloca-0.4.0-02674b3f942ac799"}/lib" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustc_args+=( -L "dependency=${units."alloca-0.4.0-bb3845ee7ce401a9"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle-1.0.14-59b88dfe9741bf5b"}/lib" )
 rustc_args+=( -L "dependency=${units."utf8parse-0.2.2-4047da135efd0687"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle_parse-1.0.0-f9c65782a68494e4"}/lib" )
@@ -10982,51 +10982,51 @@ rustc_args+=( -L "dependency=${units."anstyle_query-1.1.5-891900b545ec5553"}/lib
 rustc_args+=( -L "dependency=${units."colorchoice-1.0.5-6a6b16b673b9cf92"}/lib" )
 rustc_args+=( -L "dependency=${units."is_terminal_polyfill-1.70.2-d951561e0af8e45a"}/lib" )
 rustc_args+=( -L "dependency=${units."anstream-1.0.0-17e5a1bf76e9d8d2"}/lib" )
-rustc_args+=( -L "dependency=${units."anyhow-1.0.102-45f8a300e995074a"}/lib" )
+rustc_args+=( -L "dependency=${units."anyhow-1.0.102-e59528c435933cbd"}/lib" )
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_lex-1.1.0-0cc83627abe74285"}/lib" )
 rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
-rustc_args+=( -L "dependency=${units."clap-4.6.1-6fdbdedc44756634"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
+rustc_args+=( -L "dependency=${units."clap-4.6.1-d06673813069eefd"}/lib" )
 rustc_args+=( -L "dependency=${units."is_ci-1.2.0-0c5eebb051fadec1"}/lib" )
 rustc_args+=( -L "dependency=${units."supports_color-3.0.2-6de8f4c24e05c908"}/lib" )
 rustc_args+=( -L "dependency=${units."colorz-1.1.4-cb9cd0b9fdb38442"}/lib" )
 rustc_args+=( -L "dependency=${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
-rustc_args+=( -L "dependency=${units."goblin-0.7.1-d5fccc7297a5c32b"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
+rustc_args+=( -L "dependency=${units."goblin-0.7.1-86cca37a2f188591"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."libloading-0.8.9-4d3043bd37491640"}/lib" )
-rustc_args+=( -L "dependency=${units."num_traits-0.2.19-e0d678ec0e2cf000"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( -L "dependency=${units."rand-0.8.6-d7612d48b73c6af7"}/lib" )
+rustc_args+=( -L "dependency=${units."num_traits-0.2.19-864d67e44180e2c0"}/lib" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( -L "dependency=${units."rand-0.8.6-6704d0351415be1a"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
-rustc_args+=( -L "dependency=${units."tempfile-3.27.0-4533d3b63e6e5470"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror-1.0.69-a304706ed63f4916"}/lib" )
-rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-41a0e8ae94890626"}/lib" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
+rustc_args+=( -L "dependency=${units."tempfile-3.27.0-7b163cf99ec9b663"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/lib" )
+rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-163b25e5e7294bf6"}/lib" )
 rustc_args+=( --error-format=json --json=unused-externs-silent )
 rustc_args+=( '-W' )
 rustc_args+=( 'unused-crate-dependencies' )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-41a0e8ae94890626"}/nix-support/extern-path)" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
+rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-163b25e5e7294bf6"}/nix-support/extern-path)" )
 rustc_args+=( "$src/benches/greeting.rs" )
 rustc_args+=( -o 'build/greeting' )
 rustc_args+=( "''${build_script_flags[@]}" )
@@ -11144,7 +11144,7 @@ mkdir -p $out
   '';
     };
 
-    "cargo_unit_hello-0.1.0-c36ad539085ce09f" = mkUnit {
+    "cargo_unit_hello-0.1.0-81804085a8a2bd21" = mkUnit {
       pname = "cargo_unit_hello-clippy";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
@@ -11236,9 +11236,9 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=c36ad539085ce09f' )
+rustc_args+=( 'metadata=81804085a8a2bd21' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-c36ad539085ce09f' )
+rustc_args+=( 'extra-filename=-81804085a8a2bd21' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
@@ -11254,12 +11254,12 @@ mkdir -p $out
   '';
     };
 
-    "cargo-unit-goodbye-0.1.0-746e4f759fe1714d" = mkUnit {
+    "cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2" = mkUnit {
       pname = "cargo-unit-goodbye-clippy";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs ++ extraClippyNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -11352,13 +11352,13 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=746e4f759fe1714d' )
+rustc_args+=( 'metadata=e138086d6b5a5ac2' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-746e4f759fe1714d' )
+rustc_args+=( 'extra-filename=-e138086d6b5a5ac2' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/goodbye.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata )
@@ -11373,12 +11373,12 @@ mkdir -p $out
   '';
     };
 
-    "cargo-unit-hello-0.1.0-79c447a9b93bbf11" = mkUnit {
+    "cargo-unit-hello-0.1.0-8195277213ada084" = mkUnit {
       pname = "cargo-unit-hello-clippy";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs ++ extraClippyNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       __contentAddressed = true;
       outputHashMode = "recursive";
@@ -11471,13 +11471,13 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=79c447a9b93bbf11' )
+rustc_args+=( 'metadata=8195277213ada084' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-79c447a9b93bbf11' )
+rustc_args+=( 'extra-filename=-8195277213ada084' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/main.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata )
@@ -11492,12 +11492,12 @@ mkdir -p $out
   '';
     };
 
-    "cargo_unit_hello-0.1.0-d4f198ec36ed5d1c" = mkUnit {
+    "cargo_unit_hello-0.1.0-ec97860a035f5729" = mkUnit {
       pname = "cargo_unit_hello-clippy";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs ++ extraClippyNativeBuildInputs;
-      buildInputs = [ units."tango_bench-0.7.2-41a0e8ae94890626" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."tango_bench-0.7.2-163b25e5e7294bf6" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       buildPhase = ''
 mkdir -p build
@@ -11586,13 +11586,13 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=d4f198ec36ed5d1c' )
+rustc_args+=( 'metadata=ec97860a035f5729' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-d4f198ec36ed5d1c' )
+rustc_args+=( 'extra-filename=-ec97860a035f5729' )
 rustc_args+=( '--test' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."alloca-0.4.0-02674b3f942ac799"}/lib" )
+rustc_args+=( -L "dependency=${units."alloca-0.4.0-bb3845ee7ce401a9"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle-1.0.14-59b88dfe9741bf5b"}/lib" )
 rustc_args+=( -L "dependency=${units."utf8parse-0.2.2-4047da135efd0687"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle_parse-1.0.0-f9c65782a68494e4"}/lib" )
@@ -11600,47 +11600,47 @@ rustc_args+=( -L "dependency=${units."anstyle_query-1.1.5-891900b545ec5553"}/lib
 rustc_args+=( -L "dependency=${units."colorchoice-1.0.5-6a6b16b673b9cf92"}/lib" )
 rustc_args+=( -L "dependency=${units."is_terminal_polyfill-1.70.2-d951561e0af8e45a"}/lib" )
 rustc_args+=( -L "dependency=${units."anstream-1.0.0-17e5a1bf76e9d8d2"}/lib" )
-rustc_args+=( -L "dependency=${units."anyhow-1.0.102-45f8a300e995074a"}/lib" )
+rustc_args+=( -L "dependency=${units."anyhow-1.0.102-e59528c435933cbd"}/lib" )
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_lex-1.1.0-0cc83627abe74285"}/lib" )
 rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
-rustc_args+=( -L "dependency=${units."clap-4.6.1-6fdbdedc44756634"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
+rustc_args+=( -L "dependency=${units."clap-4.6.1-d06673813069eefd"}/lib" )
 rustc_args+=( -L "dependency=${units."is_ci-1.2.0-0c5eebb051fadec1"}/lib" )
 rustc_args+=( -L "dependency=${units."supports_color-3.0.2-6de8f4c24e05c908"}/lib" )
 rustc_args+=( -L "dependency=${units."colorz-1.1.4-cb9cd0b9fdb38442"}/lib" )
 rustc_args+=( -L "dependency=${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
-rustc_args+=( -L "dependency=${units."goblin-0.7.1-d5fccc7297a5c32b"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
+rustc_args+=( -L "dependency=${units."goblin-0.7.1-86cca37a2f188591"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."libloading-0.8.9-4d3043bd37491640"}/lib" )
-rustc_args+=( -L "dependency=${units."num_traits-0.2.19-e0d678ec0e2cf000"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( -L "dependency=${units."rand-0.8.6-d7612d48b73c6af7"}/lib" )
+rustc_args+=( -L "dependency=${units."num_traits-0.2.19-864d67e44180e2c0"}/lib" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( -L "dependency=${units."rand-0.8.6-6704d0351415be1a"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
-rustc_args+=( -L "dependency=${units."tempfile-3.27.0-4533d3b63e6e5470"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror-1.0.69-a304706ed63f4916"}/lib" )
-rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-41a0e8ae94890626"}/lib" )
-rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-41a0e8ae94890626"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
+rustc_args+=( -L "dependency=${units."tempfile-3.27.0-7b163cf99ec9b663"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/lib" )
+rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-163b25e5e7294bf6"}/lib" )
+rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-163b25e5e7294bf6"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/lib.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata )
@@ -11655,12 +11655,12 @@ mkdir -p $out
   '';
     };
 
-    "cargo-unit-goodbye-0.1.0-041f697762e45dc7" = mkUnit {
+    "cargo-unit-goodbye-0.1.0-bd02403bd15eae2e" = mkUnit {
       pname = "cargo-unit-goodbye-clippy";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs ++ extraClippyNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."tango_bench-0.7.2-41a0e8ae94890626" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."tango_bench-0.7.2-163b25e5e7294bf6" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       buildPhase = ''
 mkdir -p build
@@ -11750,14 +11750,14 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=041f697762e45dc7' )
+rustc_args+=( 'metadata=bd02403bd15eae2e' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-041f697762e45dc7' )
+rustc_args+=( 'extra-filename=-bd02403bd15eae2e' )
 rustc_args+=( '--test' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustc_args+=( -L "dependency=${units."alloca-0.4.0-02674b3f942ac799"}/lib" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustc_args+=( -L "dependency=${units."alloca-0.4.0-bb3845ee7ce401a9"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle-1.0.14-59b88dfe9741bf5b"}/lib" )
 rustc_args+=( -L "dependency=${units."utf8parse-0.2.2-4047da135efd0687"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle_parse-1.0.0-f9c65782a68494e4"}/lib" )
@@ -11765,48 +11765,48 @@ rustc_args+=( -L "dependency=${units."anstyle_query-1.1.5-891900b545ec5553"}/lib
 rustc_args+=( -L "dependency=${units."colorchoice-1.0.5-6a6b16b673b9cf92"}/lib" )
 rustc_args+=( -L "dependency=${units."is_terminal_polyfill-1.70.2-d951561e0af8e45a"}/lib" )
 rustc_args+=( -L "dependency=${units."anstream-1.0.0-17e5a1bf76e9d8d2"}/lib" )
-rustc_args+=( -L "dependency=${units."anyhow-1.0.102-45f8a300e995074a"}/lib" )
+rustc_args+=( -L "dependency=${units."anyhow-1.0.102-e59528c435933cbd"}/lib" )
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_lex-1.1.0-0cc83627abe74285"}/lib" )
 rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
-rustc_args+=( -L "dependency=${units."clap-4.6.1-6fdbdedc44756634"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
+rustc_args+=( -L "dependency=${units."clap-4.6.1-d06673813069eefd"}/lib" )
 rustc_args+=( -L "dependency=${units."is_ci-1.2.0-0c5eebb051fadec1"}/lib" )
 rustc_args+=( -L "dependency=${units."supports_color-3.0.2-6de8f4c24e05c908"}/lib" )
 rustc_args+=( -L "dependency=${units."colorz-1.1.4-cb9cd0b9fdb38442"}/lib" )
 rustc_args+=( -L "dependency=${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
-rustc_args+=( -L "dependency=${units."goblin-0.7.1-d5fccc7297a5c32b"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
+rustc_args+=( -L "dependency=${units."goblin-0.7.1-86cca37a2f188591"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."libloading-0.8.9-4d3043bd37491640"}/lib" )
-rustc_args+=( -L "dependency=${units."num_traits-0.2.19-e0d678ec0e2cf000"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( -L "dependency=${units."rand-0.8.6-d7612d48b73c6af7"}/lib" )
+rustc_args+=( -L "dependency=${units."num_traits-0.2.19-864d67e44180e2c0"}/lib" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( -L "dependency=${units."rand-0.8.6-6704d0351415be1a"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
-rustc_args+=( -L "dependency=${units."tempfile-3.27.0-4533d3b63e6e5470"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror-1.0.69-a304706ed63f4916"}/lib" )
-rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-41a0e8ae94890626"}/lib" )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-41a0e8ae94890626"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
+rustc_args+=( -L "dependency=${units."tempfile-3.27.0-7b163cf99ec9b663"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/lib" )
+rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-163b25e5e7294bf6"}/lib" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
+rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-163b25e5e7294bf6"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/goodbye.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata )
@@ -11821,12 +11821,12 @@ mkdir -p $out
   '';
     };
 
-    "cargo-unit-hello-0.1.0-e207c86d484f9678" = mkUnit {
+    "cargo-unit-hello-0.1.0-ecc837c4ce4d8865" = mkUnit {
       pname = "cargo-unit-hello-clippy";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs ++ extraClippyNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."tango_bench-0.7.2-41a0e8ae94890626" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."tango_bench-0.7.2-163b25e5e7294bf6" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       buildPhase = ''
 mkdir -p build
@@ -11916,14 +11916,14 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=e207c86d484f9678' )
+rustc_args+=( 'metadata=ecc837c4ce4d8865' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-e207c86d484f9678' )
+rustc_args+=( 'extra-filename=-ecc837c4ce4d8865' )
 rustc_args+=( '--test' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustc_args+=( -L "dependency=${units."alloca-0.4.0-02674b3f942ac799"}/lib" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustc_args+=( -L "dependency=${units."alloca-0.4.0-bb3845ee7ce401a9"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle-1.0.14-59b88dfe9741bf5b"}/lib" )
 rustc_args+=( -L "dependency=${units."utf8parse-0.2.2-4047da135efd0687"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle_parse-1.0.0-f9c65782a68494e4"}/lib" )
@@ -11931,48 +11931,48 @@ rustc_args+=( -L "dependency=${units."anstyle_query-1.1.5-891900b545ec5553"}/lib
 rustc_args+=( -L "dependency=${units."colorchoice-1.0.5-6a6b16b673b9cf92"}/lib" )
 rustc_args+=( -L "dependency=${units."is_terminal_polyfill-1.70.2-d951561e0af8e45a"}/lib" )
 rustc_args+=( -L "dependency=${units."anstream-1.0.0-17e5a1bf76e9d8d2"}/lib" )
-rustc_args+=( -L "dependency=${units."anyhow-1.0.102-45f8a300e995074a"}/lib" )
+rustc_args+=( -L "dependency=${units."anyhow-1.0.102-e59528c435933cbd"}/lib" )
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_lex-1.1.0-0cc83627abe74285"}/lib" )
 rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
-rustc_args+=( -L "dependency=${units."clap-4.6.1-6fdbdedc44756634"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
+rustc_args+=( -L "dependency=${units."clap-4.6.1-d06673813069eefd"}/lib" )
 rustc_args+=( -L "dependency=${units."is_ci-1.2.0-0c5eebb051fadec1"}/lib" )
 rustc_args+=( -L "dependency=${units."supports_color-3.0.2-6de8f4c24e05c908"}/lib" )
 rustc_args+=( -L "dependency=${units."colorz-1.1.4-cb9cd0b9fdb38442"}/lib" )
 rustc_args+=( -L "dependency=${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
-rustc_args+=( -L "dependency=${units."goblin-0.7.1-d5fccc7297a5c32b"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
+rustc_args+=( -L "dependency=${units."goblin-0.7.1-86cca37a2f188591"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."libloading-0.8.9-4d3043bd37491640"}/lib" )
-rustc_args+=( -L "dependency=${units."num_traits-0.2.19-e0d678ec0e2cf000"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( -L "dependency=${units."rand-0.8.6-d7612d48b73c6af7"}/lib" )
+rustc_args+=( -L "dependency=${units."num_traits-0.2.19-864d67e44180e2c0"}/lib" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( -L "dependency=${units."rand-0.8.6-6704d0351415be1a"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
-rustc_args+=( -L "dependency=${units."tempfile-3.27.0-4533d3b63e6e5470"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror-1.0.69-a304706ed63f4916"}/lib" )
-rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-41a0e8ae94890626"}/lib" )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-41a0e8ae94890626"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
+rustc_args+=( -L "dependency=${units."tempfile-3.27.0-7b163cf99ec9b663"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/lib" )
+rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-163b25e5e7294bf6"}/lib" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
+rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-163b25e5e7294bf6"}/nix-support/extern-path)" )
 rustc_args+=( "$src/src/main.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata )
@@ -11987,12 +11987,12 @@ mkdir -p $out
   '';
     };
 
-    "greeting-0.1.0-33dc98e7a8997153" = mkUnit {
+    "greeting-0.1.0-26bdf257c149b1af" = mkUnit {
       pname = "greeting-clippy";
       version = "0.1.0";
       src = sources."cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e";
       nativeBuildInputs = [ rustToolchain ] ++ extraNativeBuildInputs ++ extraClippyNativeBuildInputs;
-      buildInputs = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d" units."cargo-unit-hello-0.1.0-79c447a9b93bbf11" units."tango_bench-0.7.2-41a0e8ae94890626" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
+      buildInputs = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2" units."cargo-unit-hello-0.1.0-8195277213ada084" units."tango_bench-0.7.2-163b25e5e7294bf6" units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d" ];
       dontStrip = true;
       buildPhase = ''
 mkdir -p build
@@ -12015,8 +12015,8 @@ export CARGO_PKG_LICENSE=""
 export CARGO_PKG_LICENSE_FILE=""
 export CARGO_PKG_RUST_VERSION=""
 export CARGO_MANIFEST_DIR="$src"
-rustc_env+=( 'CARGO_BIN_EXE_cargo-unit-goodbye=${units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d"}/bin/cargo-unit-goodbye' )
-rustc_env+=( 'CARGO_BIN_EXE_cargo-unit-hello=${units."cargo-unit-hello-0.1.0-79c447a9b93bbf11"}/bin/cargo-unit-hello' )
+rustc_env+=( 'CARGO_BIN_EXE_cargo-unit-goodbye=${units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2"}/bin/cargo-unit-goodbye' )
+rustc_env+=( 'CARGO_BIN_EXE_cargo-unit-hello=${units."cargo-unit-hello-0.1.0-8195277213ada084"}/bin/cargo-unit-hello' )
 
 if [ -f "${units."cargo-unit-hello-build-script-run-0.1.0-d98e8ca81180355d"}"/rustc-cfg ]; then
   while IFS= read -r line; do
@@ -12083,15 +12083,15 @@ rustc_args+=( 'panic=unwind' )
 rustc_args+=( '-C' )
 rustc_args+=( 'strip=debuginfo' )
 rustc_args+=( '-C' )
-rustc_args+=( 'metadata=33dc98e7a8997153' )
+rustc_args+=( 'metadata=26bdf257c149b1af' )
 rustc_args+=( '-C' )
-rustc_args+=( 'extra-filename=-33dc98e7a8997153' )
+rustc_args+=( 'extra-filename=-26bdf257c149b1af' )
 rustc_args+=( '--cfg' )
 rustc_args+=( 'test' )
 ${renderExtraRustcArgs "cargo-unit-hello" null}
 ${renderExtraLinkRustcArgs null}
-rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustc_args+=( -L "dependency=${units."alloca-0.4.0-02674b3f942ac799"}/lib" )
+rustc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustc_args+=( -L "dependency=${units."alloca-0.4.0-bb3845ee7ce401a9"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle-1.0.14-59b88dfe9741bf5b"}/lib" )
 rustc_args+=( -L "dependency=${units."utf8parse-0.2.2-4047da135efd0687"}/lib" )
 rustc_args+=( -L "dependency=${units."anstyle_parse-1.0.0-f9c65782a68494e4"}/lib" )
@@ -12099,48 +12099,48 @@ rustc_args+=( -L "dependency=${units."anstyle_query-1.1.5-891900b545ec5553"}/lib
 rustc_args+=( -L "dependency=${units."colorchoice-1.0.5-6a6b16b673b9cf92"}/lib" )
 rustc_args+=( -L "dependency=${units."is_terminal_polyfill-1.70.2-d951561e0af8e45a"}/lib" )
 rustc_args+=( -L "dependency=${units."anstream-1.0.0-17e5a1bf76e9d8d2"}/lib" )
-rustc_args+=( -L "dependency=${units."anyhow-1.0.102-45f8a300e995074a"}/lib" )
+rustc_args+=( -L "dependency=${units."anyhow-1.0.102-e59528c435933cbd"}/lib" )
 rustc_args+=( -L "dependency=${units."bitflags-2.11.1-0ae2d6f5857553b5"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_lex-1.1.0-0cc83627abe74285"}/lib" )
 rustc_args+=( -L "dependency=${units."strsim-0.11.1-cee309e29bbba424"}/lib" )
 rustc_args+=( -L "dependency=${units."clap_builder-4.6.0-c892665bf86bdb19"}/lib" )
 rustc_args+=( -L "dependency=${units."heck-0.5.0-6a53167a0b9cc73c"}/lib" )
 rustc_args+=( -L "dependency=${units."unicode_ident-1.0.24-acbabc81e6377010"}/lib" )
-rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-724a49d78ffaea7f"}/lib" )
-rustc_args+=( -L "dependency=${units."quote-1.0.45-fe4ab4dae126e843"}/lib" )
-rustc_args+=( -L "dependency=${units."syn-2.0.117-02db2024cc645b66"}/lib" )
-rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-39135dbe4156ffed"}/lib" )
-rustc_args+=( -L "dependency=${units."clap-4.6.1-6fdbdedc44756634"}/lib" )
+rustc_args+=( -L "dependency=${units."proc_macro2-1.0.106-530ea3bc82718609"}/lib" )
+rustc_args+=( -L "dependency=${units."quote-1.0.45-042f136ccd8a4446"}/lib" )
+rustc_args+=( -L "dependency=${units."syn-2.0.117-aabb514aab7dcd8d"}/lib" )
+rustc_args+=( -L "dependency=${units."clap_derive-4.6.1-1ae9e0a4ca36abe3"}/lib" )
+rustc_args+=( -L "dependency=${units."clap-4.6.1-d06673813069eefd"}/lib" )
 rustc_args+=( -L "dependency=${units."is_ci-1.2.0-0c5eebb051fadec1"}/lib" )
 rustc_args+=( -L "dependency=${units."supports_color-3.0.2-6de8f4c24e05c908"}/lib" )
 rustc_args+=( -L "dependency=${units."colorz-1.1.4-cb9cd0b9fdb38442"}/lib" )
 rustc_args+=( -L "dependency=${units."glob_match-0.2.1-b3cb21dee83bb7b9"}/lib" )
 rustc_args+=( -L "dependency=${units."log-0.4.29-193e8cf41b47a3d4"}/lib" )
 rustc_args+=( -L "dependency=${units."plain-0.2.3-863a51e90d177902"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-4d217f2db26c9ac7"}/lib" )
-rustc_args+=( -L "dependency=${units."scroll-0.11.0-7cb7b71a209be056"}/lib" )
-rustc_args+=( -L "dependency=${units."goblin-0.7.1-d5fccc7297a5c32b"}/lib" )
-rustc_args+=( -L "dependency=${units."libc-0.2.186-f5bac0f1c1742942"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll_derive-0.11.1-66830ce3f77270fc"}/lib" )
+rustc_args+=( -L "dependency=${units."scroll-0.11.0-631897c2b897bf4e"}/lib" )
+rustc_args+=( -L "dependency=${units."goblin-0.7.1-86cca37a2f188591"}/lib" )
+rustc_args+=( -L "dependency=${units."libc-0.2.186-bd85071c0c1b165c"}/lib" )
 rustc_args+=( -L "dependency=${units."cfg_if-1.0.4-99d94dab427a7c13"}/lib" )
 rustc_args+=( -L "dependency=${units."libloading-0.8.9-4d3043bd37491640"}/lib" )
-rustc_args+=( -L "dependency=${units."num_traits-0.2.19-e0d678ec0e2cf000"}/lib" )
-rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-8899b1469c97e118"}/lib" )
-rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-e9e7e38388c97ad8"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.2.17-a9dd04d9620dd699"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_core-0.6.4-dd2f2a6aa8326af5"}/lib" )
-rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-f23650caf34d40a7"}/lib" )
-rustc_args+=( -L "dependency=${units."rand-0.8.6-d7612d48b73c6af7"}/lib" )
+rustc_args+=( -L "dependency=${units."num_traits-0.2.19-864d67e44180e2c0"}/lib" )
+rustc_args+=( -L "dependency=${units."zerocopy-0.8.48-c59912109a71d629"}/lib" )
+rustc_args+=( -L "dependency=${units."ppv_lite86-0.2.21-2c3b220ec481024d"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.2.17-52301bb43cfd7cbf"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_core-0.6.4-f63904f47a69f8a5"}/lib" )
+rustc_args+=( -L "dependency=${units."rand_chacha-0.3.1-66a0552f6afa122e"}/lib" )
+rustc_args+=( -L "dependency=${units."rand-0.8.6-6704d0351415be1a"}/lib" )
 rustc_args+=( -L "dependency=${units."fastrand-2.4.1-7aca206f3f75cb7e"}/lib" )
-rustc_args+=( -L "dependency=${units."getrandom-0.4.2-091531b93708a5d1"}/lib" )
+rustc_args+=( -L "dependency=${units."getrandom-0.4.2-b2637fccd83a45c0"}/lib" )
 rustc_args+=( -L "dependency=${units."once_cell-1.21.4-2939d5b95721125a"}/lib" )
 rustc_args+=( -L "dependency=${units."linux_raw_sys-0.12.1-b74522f5bfe2a4f6"}/lib" )
-rustc_args+=( -L "dependency=${units."rustix-1.1.4-b68fa66645059bbe"}/lib" )
-rustc_args+=( -L "dependency=${units."tempfile-3.27.0-4533d3b63e6e5470"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-5bc0b95370195285"}/lib" )
-rustc_args+=( -L "dependency=${units."thiserror-1.0.69-a304706ed63f4916"}/lib" )
-rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-41a0e8ae94890626"}/lib" )
-rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
-rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-41a0e8ae94890626"}/nix-support/extern-path)" )
+rustc_args+=( -L "dependency=${units."rustix-1.1.4-475f3574a4d2a054"}/lib" )
+rustc_args+=( -L "dependency=${units."tempfile-3.27.0-7b163cf99ec9b663"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror_impl-1.0.69-7fa609b27dbde94b"}/lib" )
+rustc_args+=( -L "dependency=${units."thiserror-1.0.69-d7c517f9f19ca3ef"}/lib" )
+rustc_args+=( -L "dependency=${units."tango_bench-0.7.2-163b25e5e7294bf6"}/lib" )
+rustc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
+rustc_args+=( --extern "tango_bench=$(cat ${units."tango_bench-0.7.2-163b25e5e7294bf6"}/nix-support/extern-path)" )
 rustc_args+=( "$src/benches/greeting.rs" )
 rustc_args+=( --out-dir build )
 rustc_args+=( --emit dep-info,metadata )
@@ -12158,7 +12158,7 @@ mkdir -p $out
   };
 
   clippyUnitNamesByPackage = {
-      "cargo-unit-hello" = [ "build-script-build-0.1.0-ef428e696e6fdc5f" "cargo_unit_hello-0.1.0-c36ad539085ce09f" "cargo-unit-goodbye-0.1.0-746e4f759fe1714d" "cargo-unit-hello-0.1.0-79c447a9b93bbf11" "cargo_unit_hello-0.1.0-d4f198ec36ed5d1c" "cargo-unit-goodbye-0.1.0-041f697762e45dc7" "cargo-unit-hello-0.1.0-e207c86d484f9678" "greeting-0.1.0-33dc98e7a8997153" ];
+      "cargo-unit-hello" = [ "build-script-build-0.1.0-ef428e696e6fdc5f" "cargo_unit_hello-0.1.0-81804085a8a2bd21" "cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2" "cargo-unit-hello-0.1.0-8195277213ada084" "cargo_unit_hello-0.1.0-ec97860a035f5729" "cargo-unit-goodbye-0.1.0-bd02403bd15eae2e" "cargo-unit-hello-0.1.0-ecc837c4ce4d8865" "greeting-0.1.0-26bdf257c149b1af" ];
     };
 
   # Per-crate clippy gate: join only this package's own clippy units so editing
@@ -12202,8 +12202,8 @@ mkdir -p $out
         fi
       }
 
-      check_unused 'cargo-unit-hello 0.1.0' 'cargo_unit_hello' "${units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d"}" "${units."cargo-unit-hello-0.1.0-79c447a9b93bbf11"}" "${units."cargo-unit-goodbye-0.1.0-041f697762e45dc7"}" "${units."cargo-unit-hello-0.1.0-e207c86d484f9678"}" "${units."greeting-0.1.0-33dc98e7a8997153"}"
-      check_unused 'cargo-unit-hello 0.1.0' 'tango_bench' "${units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c"}" "${units."cargo-unit-goodbye-0.1.0-041f697762e45dc7"}" "${units."cargo-unit-hello-0.1.0-e207c86d484f9678"}" "${units."greeting-0.1.0-33dc98e7a8997153"}"
+      check_unused 'cargo-unit-hello 0.1.0' 'cargo_unit_hello' "${units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2"}" "${units."cargo-unit-hello-0.1.0-8195277213ada084"}" "${units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e"}" "${units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865"}" "${units."greeting-0.1.0-26bdf257c149b1af"}"
+      check_unused 'cargo-unit-hello 0.1.0' 'tango_bench' "${units."cargo_unit_hello-0.1.0-ec97860a035f5729"}" "${units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e"}" "${units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865"}" "${units."greeting-0.1.0-26bdf257c149b1af"}"
 
       if [ "$failures" -ne 0 ]; then
         exit 1
@@ -12218,9 +12218,9 @@ mkdir -p $out
   # Every test target in the graph, keyed the same way `tests.<name>` is.
   # The shared manifest derivation depends on every binary listed here.
   testTargets = [
-    { name = "cargo-unit-goodbye"; binary = "${units."cargo-unit-goodbye-0.1.0-041f697762e45dc7"}/bin/cargo-unit-goodbye"; packageName = "cargo-unit-hello"; packageVersion = "0.1.0"; packageRoot = "."; sourceStoreName = "cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e"; }
-    { name = "cargo-unit-hello"; binary = "${units."cargo-unit-hello-0.1.0-e207c86d484f9678"}/bin/cargo-unit-hello"; packageName = "cargo-unit-hello"; packageVersion = "0.1.0"; packageRoot = "."; sourceStoreName = "cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e"; }
-    { name = "cargo_unit_hello"; binary = "${units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c"}/bin/cargo_unit_hello"; packageName = "cargo-unit-hello"; packageVersion = "0.1.0"; packageRoot = "."; sourceStoreName = "cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e"; }
+    { name = "cargo-unit-goodbye"; binary = "${units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e"}/bin/cargo-unit-goodbye"; packageName = "cargo-unit-hello"; packageVersion = "0.1.0"; packageRoot = "."; sourceStoreName = "cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e"; }
+    { name = "cargo-unit-hello"; binary = "${units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865"}/bin/cargo-unit-hello"; packageName = "cargo-unit-hello"; packageVersion = "0.1.0"; packageRoot = "."; sourceStoreName = "cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e"; }
+    { name = "cargo_unit_hello"; binary = "${units."cargo_unit_hello-0.1.0-ec97860a035f5729"}/bin/cargo_unit_hello"; packageName = "cargo-unit-hello"; packageVersion = "0.1.0"; packageRoot = "."; sourceStoreName = "cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e"; }
   ];
   testTargetNamesByPackage =
     pkgs.lib.mapAttrs (_: targets: map (target: target.name) targets) (
@@ -12316,8 +12316,8 @@ if [ "''${#doctest_runtime_library_paths[@]}" -gt 0 ]; then
     fi
   fi
 fi
-rustdoc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustdoc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
+rustdoc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustdoc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
 rustdoc_args+=( "$src/src/lib.rs" )
 set -x
 rustdoc "''${rustdoc_args[@]}"
@@ -12412,8 +12412,8 @@ if [ "''${#doctest_runtime_library_paths[@]}" -gt 0 ]; then
     fi
   fi
 fi
-rustdoc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustdoc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
+rustdoc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustdoc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
 rustdoc_args+=( "$src/src/lib.rs" )
 set -x
 rustdoc "''${rustdoc_args[@]}"
@@ -12509,8 +12509,8 @@ if [ "''${#doctest_runtime_library_paths[@]}" -gt 0 ]; then
     fi
   fi
 fi
-rustdoc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/lib" )
-rustdoc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-c36ad539085ce09f"}/nix-support/extern-path)" )
+rustdoc_args+=( -L "dependency=${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/lib" )
+rustdoc_args+=( --extern "cargo_unit_hello=$(cat ${units."cargo_unit_hello-0.1.0-81804085a8a2bd21"}/nix-support/extern-path)" )
 rustdoc_args+=( "$src/src/lib.rs" )
 set -x
 doctest_log=$(mktemp)
@@ -12528,7 +12528,7 @@ set +x
     );
 
   benchmarkTargets = [
-    { name = "greeting"; binary = "${units."greeting-0.1.0-33dc98e7a8997153"}/bin/greeting"; packageName = "cargo-unit-hello"; packageVersion = "0.1.0"; packageRoot = "."; sourceStoreName = "cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e"; }
+    { name = "greeting"; binary = "${units."greeting-0.1.0-26bdf257c149b1af"}/bin/greeting"; packageName = "cargo-unit-hello"; packageVersion = "0.1.0"; packageRoot = "."; sourceStoreName = "cargo-unit-source-cargo-unit-hello-0.1.0-43b22546bc19bc0e"; }
   ];
 
   hostRustTarget = pkgs.stdenv.hostPlatform.rust.rustcTarget or pkgs.stdenv.hostPlatform.config;
@@ -13136,29 +13136,29 @@ in
   benchmarkPlan = mkBenchmarkPlan "cargo-unit-benchmark-plan";
   coverageReport = mkCoverageReport {};
   makeCoverageReport = mkCoverageReport;
-  roots = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d" units."cargo-unit-hello-0.1.0-79c447a9b93bbf11" units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c" units."cargo-unit-goodbye-0.1.0-041f697762e45dc7" units."cargo-unit-hello-0.1.0-e207c86d484f9678" units."greeting-0.1.0-33dc98e7a8997153" ];
-  checkedRoots = [ withPolicyChecks units."cargo_unit_hello-0.1.0-c36ad539085ce09f" withPolicyChecks units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d" withPolicyChecks units."cargo-unit-hello-0.1.0-79c447a9b93bbf11" withPolicyChecks units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c" withPolicyChecks units."cargo-unit-goodbye-0.1.0-041f697762e45dc7" withPolicyChecks units."cargo-unit-hello-0.1.0-e207c86d484f9678" withPolicyChecks units."greeting-0.1.0-33dc98e7a8997153" ];
+  roots = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2" units."cargo-unit-hello-0.1.0-8195277213ada084" units."cargo_unit_hello-0.1.0-ec97860a035f5729" units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e" units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865" units."greeting-0.1.0-26bdf257c149b1af" ];
+  checkedRoots = [ withPolicyChecks units."cargo_unit_hello-0.1.0-81804085a8a2bd21" withPolicyChecks units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2" withPolicyChecks units."cargo-unit-hello-0.1.0-8195277213ada084" withPolicyChecks units."cargo_unit_hello-0.1.0-ec97860a035f5729" withPolicyChecks units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e" withPolicyChecks units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865" withPolicyChecks units."greeting-0.1.0-26bdf257c149b1af" ];
   packages = {
-    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-c36ad539085ce09f";
-    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d";
-    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-79c447a9b93bbf11";
-    "greeting" = units."greeting-0.1.0-33dc98e7a8997153";
+    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-81804085a8a2bd21";
+    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2";
+    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-8195277213ada084";
+    "greeting" = units."greeting-0.1.0-26bdf257c149b1af";
   };
   binaries = {
-    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d";
-    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-79c447a9b93bbf11";
-    "greeting" = units."greeting-0.1.0-33dc98e7a8997153";
+    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2";
+    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-8195277213ada084";
+    "greeting" = units."greeting-0.1.0-26bdf257c149b1af";
   };
   libraries = {
-    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-c36ad539085ce09f";
+    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-81804085a8a2bd21";
   } // extraLibraries;
   benchmarks = {
-    "greeting" = units."greeting-0.1.0-33dc98e7a8997153";
+    "greeting" = units."greeting-0.1.0-26bdf257c149b1af";
   };
   tests = {
-    "cargo_unit_hello" = mkTestEntry { name = "cargo_unit_hello"; binary = "${units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c"}/bin/cargo_unit_hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
-    "cargo-unit-goodbye" = mkTestEntry { name = "cargo-unit-goodbye"; binary = "${units."cargo-unit-goodbye-0.1.0-041f697762e45dc7"}/bin/cargo-unit-goodbye"; packageName = "cargo-unit-hello"; edition = "2024"; };
-    "cargo-unit-hello" = mkTestEntry { name = "cargo-unit-hello"; binary = "${units."cargo-unit-hello-0.1.0-e207c86d484f9678"}/bin/cargo-unit-hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
+    "cargo_unit_hello" = mkTestEntry { name = "cargo_unit_hello"; binary = "${units."cargo_unit_hello-0.1.0-ec97860a035f5729"}/bin/cargo_unit_hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
+    "cargo-unit-goodbye" = mkTestEntry { name = "cargo-unit-goodbye"; binary = "${units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e"}/bin/cargo-unit-goodbye"; packageName = "cargo-unit-hello"; edition = "2024"; };
+    "cargo-unit-hello" = mkTestEntry { name = "cargo-unit-hello"; binary = "${units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865"}/bin/cargo-unit-hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
   };
   doctests = {
     "cargo_unit_hello" = mkDoctestEntry (builtins.head (builtins.filter (target: target.name == "cargo_unit_hello") doctestTargets));
@@ -13166,13 +13166,13 @@ in
   compareTangoBenchmarks = mkTangoBenchmarkComparison;
   targetSets = [
     {
-      roots = [ units."cargo_unit_hello-0.1.0-c36ad539085ce09f" units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d" units."cargo-unit-hello-0.1.0-79c447a9b93bbf11" ];
+      roots = [ units."cargo_unit_hello-0.1.0-81804085a8a2bd21" units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2" units."cargo-unit-hello-0.1.0-8195277213ada084" ];
       binaries = {
-    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-746e4f759fe1714d";
-    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-79c447a9b93bbf11";
+    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-e138086d6b5a5ac2";
+    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-8195277213ada084";
       };
       libraries = {
-    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-c36ad539085ce09f";
+    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-81804085a8a2bd21";
       };
       benchmarks = {
       };
@@ -13183,45 +13183,45 @@ in
       };
     }
     {
-      roots = [ units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c" units."cargo-unit-goodbye-0.1.0-041f697762e45dc7" units."cargo-unit-hello-0.1.0-e207c86d484f9678" ];
+      roots = [ units."cargo_unit_hello-0.1.0-ec97860a035f5729" units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e" units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865" ];
       binaries = {
-    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-041f697762e45dc7";
-    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-e207c86d484f9678";
+    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e";
+    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865";
       };
       libraries = {
-    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c";
+    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-ec97860a035f5729";
       };
       benchmarks = {
       };
       tests = {
-    "cargo_unit_hello" = mkTestEntry { name = "cargo_unit_hello"; binary = "${units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c"}/bin/cargo_unit_hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
-    "cargo-unit-goodbye" = mkTestEntry { name = "cargo-unit-goodbye"; binary = "${units."cargo-unit-goodbye-0.1.0-041f697762e45dc7"}/bin/cargo-unit-goodbye"; packageName = "cargo-unit-hello"; edition = "2024"; };
-    "cargo-unit-hello" = mkTestEntry { name = "cargo-unit-hello"; binary = "${units."cargo-unit-hello-0.1.0-e207c86d484f9678"}/bin/cargo-unit-hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
+    "cargo_unit_hello" = mkTestEntry { name = "cargo_unit_hello"; binary = "${units."cargo_unit_hello-0.1.0-ec97860a035f5729"}/bin/cargo_unit_hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
+    "cargo-unit-goodbye" = mkTestEntry { name = "cargo-unit-goodbye"; binary = "${units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e"}/bin/cargo-unit-goodbye"; packageName = "cargo-unit-hello"; edition = "2024"; };
+    "cargo-unit-hello" = mkTestEntry { name = "cargo-unit-hello"; binary = "${units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865"}/bin/cargo-unit-hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
       };
       doctests = {
       };
     }
     {
-      roots = [ units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c" units."cargo-unit-goodbye-0.1.0-041f697762e45dc7" units."cargo-unit-hello-0.1.0-e207c86d484f9678" units."greeting-0.1.0-33dc98e7a8997153" ];
+      roots = [ units."cargo_unit_hello-0.1.0-ec97860a035f5729" units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e" units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865" units."greeting-0.1.0-26bdf257c149b1af" ];
       binaries = {
-    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-041f697762e45dc7";
-    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-e207c86d484f9678";
-    "greeting" = units."greeting-0.1.0-33dc98e7a8997153";
+    "cargo-unit-goodbye" = units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e";
+    "cargo-unit-hello" = units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865";
+    "greeting" = units."greeting-0.1.0-26bdf257c149b1af";
       };
       libraries = {
-    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c";
+    "cargo_unit_hello" = units."cargo_unit_hello-0.1.0-ec97860a035f5729";
       };
       benchmarks = {
-    "greeting" = units."greeting-0.1.0-33dc98e7a8997153";
+    "greeting" = units."greeting-0.1.0-26bdf257c149b1af";
       };
       tests = {
-    "cargo_unit_hello" = mkTestEntry { name = "cargo_unit_hello"; binary = "${units."cargo_unit_hello-0.1.0-d4f198ec36ed5d1c"}/bin/cargo_unit_hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
-    "cargo-unit-goodbye" = mkTestEntry { name = "cargo-unit-goodbye"; binary = "${units."cargo-unit-goodbye-0.1.0-041f697762e45dc7"}/bin/cargo-unit-goodbye"; packageName = "cargo-unit-hello"; edition = "2024"; };
-    "cargo-unit-hello" = mkTestEntry { name = "cargo-unit-hello"; binary = "${units."cargo-unit-hello-0.1.0-e207c86d484f9678"}/bin/cargo-unit-hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
+    "cargo_unit_hello" = mkTestEntry { name = "cargo_unit_hello"; binary = "${units."cargo_unit_hello-0.1.0-ec97860a035f5729"}/bin/cargo_unit_hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
+    "cargo-unit-goodbye" = mkTestEntry { name = "cargo-unit-goodbye"; binary = "${units."cargo-unit-goodbye-0.1.0-bd02403bd15eae2e"}/bin/cargo-unit-goodbye"; packageName = "cargo-unit-hello"; edition = "2024"; };
+    "cargo-unit-hello" = mkTestEntry { name = "cargo-unit-hello"; binary = "${units."cargo-unit-hello-0.1.0-ecc837c4ce4d8865"}/bin/cargo-unit-hello"; packageName = "cargo-unit-hello"; edition = "2024"; };
       };
       doctests = {
       };
     }
   ];
-  default = withPolicyChecks units."cargo_unit_hello-0.1.0-c36ad539085ce09f";
+  default = withPolicyChecks units."cargo_unit_hello-0.1.0-81804085a8a2bd21";
 }

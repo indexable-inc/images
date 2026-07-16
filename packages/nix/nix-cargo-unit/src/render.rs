@@ -725,9 +725,6 @@ fn compute_hash(
     let unit = &graph.units[index];
     let mut dependency_hashes = Vec::new();
     for dependency in &unit.dependencies {
-        if graph.units[dependency.index].is_run_custom_build() {
-            continue;
-        }
         dependency_hashes.push(format!(
             "{}:{}:{}:{}",
             dependency.extern_crate_name,
@@ -4231,6 +4228,88 @@ version = "0.1.0"
         assert!(rendered.contains("targetSets = ["));
         assert_eq!(rendered.matches("binaries = {").count(), 3);
         assert_eq!(rendered.matches("\"hello\" = units.").count(), 4);
+    }
+
+    #[test]
+    fn build_script_run_names_include_nested_build_script_identity() {
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace/leaf#leaf@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/leaf/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": ["one"], "mode": "build", "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/leaf#leaf@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/leaf/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": ["one"], "mode": "run-custom-build",
+                  "dependencies": [{ "index": 0, "extern_crate_name": "build_script_build" }]
+                },
+                {
+                  "pkg_id": "path+file:///workspace/leaf#leaf@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/leaf/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": ["two"], "mode": "build", "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/leaf#leaf@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/leaf/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": ["two"], "mode": "run-custom-build",
+                  "dependencies": [{ "index": 2, "extern_crate_name": "build_script_build" }]
+                },
+                {
+                  "pkg_id": "path+file:///workspace/parent#parent@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/parent/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [], "mode": "build", "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/parent#parent@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/parent/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [], "mode": "run-custom-build",
+                  "dependencies": [
+                    { "index": 4, "extern_crate_name": "build_script_build" },
+                    { "index": 1, "extern_crate_name": "leaf" }
+                  ]
+                },
+                {
+                  "pkg_id": "path+file:///workspace/parent#parent@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/parent/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [], "mode": "run-custom-build",
+                  "dependencies": [
+                    { "index": 4, "extern_crate_name": "build_script_build" },
+                    { "index": 3, "extern_crate_name": "leaf" }
+                  ]
+                }
+              ],
+              "roots": [5, 6],
+              "root_sets": [[5], [6]]
+            }"#,
+        )
+        .unwrap();
+
+        let prepared = prepare_graph(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        assert_ne!(prepared.names[5], prepared.names[6]);
     }
 
     #[test]

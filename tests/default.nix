@@ -4974,8 +4974,8 @@
         message = "cargo-unit workspaces should retain a build-time generated catalog for drift checks";
       }
       {
-        assertion = cargoUnitWorkspace.unitsNix == cargoUnitCatalog;
-        message = "cargo-unit unitsNix should remain the effective-catalog compatibility handle";
+        assertion = cargoUnitWorkspace.unitsNix == cargoUnitWorkspace.generatedUnitCatalog;
+        message = "cargo-unit unitsNix should remain the generated derivation compatibility handle";
       }
       {
         assertion = !cargoUnitInvalidCatalogEval.success;
