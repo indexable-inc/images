@@ -1,5 +1,7 @@
 const REMOTE_STATUS_PATH = path self ./infra/status.nu
-const PROBE_OUTPUT_BLOCKS = 1_024
+# ulimit -f counts 512-byte POSIX blocks, so 2_048 blocks caps probe output
+# at exactly PROBE_OUTPUT_LIMIT; `_infra capped` relies on that equality.
+const PROBE_OUTPUT_BLOCKS = 2_048
 const PROBE_OUTPUT_LIMIT = 1MiB
 const REMOTE_WRAPPER = '
 /run/current-system/sw/bin/timeout --signal=TERM --kill-after=1s "$1" nu --no-config-file /dev/stdin
