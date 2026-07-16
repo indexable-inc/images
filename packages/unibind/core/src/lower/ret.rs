@@ -3,7 +3,7 @@
 
 use syn::spanned::Spanned as _;
 
-use super::ty::{lower_type, one_generic, Position};
+use super::ty::{Position, lower_type, one_generic};
 use super::{Declared, LowerError, Result};
 use crate::ir;
 
@@ -178,7 +178,6 @@ fn lower_stream(segment: &syn::PathSegment, declared: &Declared) -> Result<ir::T
         Position::Owned,
     )?)))
 }
-
 
 /// `Self` or the object's own name, as a bare path.
 fn is_object(ty: &syn::Type, object: &str) -> bool {

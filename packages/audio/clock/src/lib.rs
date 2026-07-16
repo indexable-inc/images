@@ -22,9 +22,7 @@ pub const SAMPLE_RATE: u32 = 48_000;
 
 /// Identifies a peer. Doubles as the leader-election key: the smallest id
 /// in the session leads the clock.
-#[derive(
-    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct PeerId(pub u64);
 
 impl PeerId {
@@ -294,7 +292,12 @@ mod tests {
     use super::*;
 
     const fn sample(t0: u64, t1: u64, t2: u64, t3: u64) -> PingSample {
-        PingSample { request_sent: t0, peer_received: t1, peer_replied: t2, response_received: t3 }
+        PingSample {
+            request_sent: t0,
+            peer_received: t1,
+            peer_replied: t2,
+            response_received: t3,
+        }
     }
 
     #[test]
@@ -363,8 +366,14 @@ mod tests {
         // B's clock runs 100_000 us ahead of C's.
         let c = SharedClock::follow(100_000, b.local_epoch_micros());
         // Same physical instant on all three clocks.
-        assert_eq!(a.frame_at(3_000_000, SAMPLE_RATE), b.frame_at(2_750_000, SAMPLE_RATE));
-        assert_eq!(a.frame_at(3_000_000, SAMPLE_RATE), c.frame_at(2_650_000, SAMPLE_RATE));
+        assert_eq!(
+            a.frame_at(3_000_000, SAMPLE_RATE),
+            b.frame_at(2_750_000, SAMPLE_RATE)
+        );
+        assert_eq!(
+            a.frame_at(3_000_000, SAMPLE_RATE),
+            c.frame_at(2_650_000, SAMPLE_RATE)
+        );
     }
 
     #[test]

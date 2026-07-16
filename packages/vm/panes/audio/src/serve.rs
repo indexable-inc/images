@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use panes_guest_transport::{Acceptor, Conn};
 pub use panes_guest_transport::ListenSpec;
+use panes_guest_transport::{Acceptor, Conn};
 use panes_protocol::audio::{self, SampleFormat, ToGuest, ToHost};
 use panes_protocol::{WireError, read_msg_bounded, write_msg};
 use tracing::{debug, info, warn};
@@ -276,7 +276,9 @@ mod tests {
 
     #[test]
     fn pump_stops_before_reading_when_host_gone() {
-        let mut pcm = Scripted { chunks: vec![vec![0u8; 4]] };
+        let mut pcm = Scripted {
+            chunks: vec![vec![0u8; 4]],
+        };
         let mut wire = Vec::new();
         let stop = AtomicBool::new(true);
         let end = pump(&mut pcm, &mut wire, 4, &stop).unwrap();
@@ -287,17 +289,31 @@ mod tests {
     #[test]
     fn hellos_exchange_and_validate_major() {
         let mut host_to_guest = Vec::new();
-        write_msg(&mut host_to_guest, &ToGuest::Hello { major: audio::VERSION_MAJOR, minor: 0 })
-            .unwrap();
+        write_msg(
+            &mut host_to_guest,
+            &ToGuest::Hello {
+                major: audio::VERSION_MAJOR,
+                minor: 0,
+            },
+        )
+        .unwrap();
         let mut sent = Vec::new();
         exchange_hellos(
             &mut host_to_guest.as_slice(),
             &mut sent,
-            &StreamFormat { rate: 48000, channels: 2 },
+            &StreamFormat {
+                rate: 48000,
+                channels: 2,
+            },
         )
         .unwrap();
         let hello: ToHost = read_msg_bounded(&mut sent.as_slice(), audio::MAX_FRAME).unwrap();
-        let ToHost::Hello { rate: 48000, channels: 2, format: SampleFormat::S16le, .. } = hello
+        let ToHost::Hello {
+            rate: 48000,
+            channels: 2,
+            format: SampleFormat::S16le,
+            ..
+        } = hello
         else {
             panic!("wrong hello");
         };
@@ -306,13 +322,22 @@ mod tests {
     #[test]
     fn hellos_reject_mismatched_major() {
         let mut host_to_guest = Vec::new();
-        write_msg(&mut host_to_guest, &ToGuest::Hello { major: audio::VERSION_MAJOR + 1, minor: 0 })
-            .unwrap();
+        write_msg(
+            &mut host_to_guest,
+            &ToGuest::Hello {
+                major: audio::VERSION_MAJOR + 1,
+                minor: 0,
+            },
+        )
+        .unwrap();
         let mut sent = Vec::new();
         let err = exchange_hellos(
             &mut host_to_guest.as_slice(),
             &mut sent,
-            &StreamFormat { rate: 48000, channels: 2 },
+            &StreamFormat {
+                rate: 48000,
+                channels: 2,
+            },
         )
         .unwrap_err();
         assert!(err.to_string().contains("major"));

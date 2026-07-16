@@ -75,7 +75,10 @@ impl NodeHandle {
     /// # Errors
     /// Fails when the node's clock task has stopped.
     pub async fn clock_changed(&mut self) -> Result<SharedClock> {
-        self.clock.changed().await.context("node clock task stopped")?;
+        self.clock
+            .changed()
+            .await
+            .context("node clock task stopped")?;
         Ok(*self.clock.borrow())
     }
 }
@@ -131,7 +134,9 @@ pub async fn spawn(
     score: Arc<Mutex<Score>>,
     blobs: Arc<BlobStore>,
 ) -> Result<NodeHandle> {
-    let listener = TcpListener::bind(config.tcp_bind).await.context("bind TCP")?;
+    let listener = TcpListener::bind(config.tcp_bind)
+        .await
+        .context("bind TCP")?;
     let tcp_addr = listener.local_addr()?;
     let udp = UdpSocket::bind(config.udp_bind).await.context("bind UDP")?;
     let udp_addr = udp.local_addr()?;
@@ -163,7 +168,13 @@ pub async fn spawn(
     }
     tasks.push(tokio::spawn(ping_loop(Arc::clone(&node))));
 
-    Ok(NodeHandle { tcp_addr, udp_addr, clock: clock_rx, tasks, conn_tasks })
+    Ok(NodeHandle {
+        tcp_addr,
+        udp_addr,
+        clock: clock_rx,
+        tasks,
+        conn_tasks,
+    })
 }
 
 async fn accept_loop(
@@ -205,7 +216,9 @@ async fn dial_loop(node: Arc<Node>, peer: SocketAddr) {
 }
 
 async fn serve_connection(node: Arc<Node>, stream: TcpStream) {
-    let peer = stream.peer_addr().unwrap_or_else(|_| ([0, 0, 0, 0], 0).into());
+    let peer = stream
+        .peer_addr()
+        .unwrap_or_else(|_| ([0, 0, 0, 0], 0).into());
     if let Err(error) = drive_connection(node, stream, peer).await {
         warn!(%peer, %error, "peer connection ended");
     }
@@ -448,8 +461,7 @@ impl Node {
             estimator.record(sample);
             estimator.estimate()
         };
-        let (Some(offset), Some(leader)) =
-            (offset, *self.leader.lock().expect("leader lock"))
+        let (Some(offset), Some(leader)) = (offset, *self.leader.lock().expect("leader lock"))
         else {
             return;
         };

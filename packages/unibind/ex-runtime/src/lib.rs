@@ -29,6 +29,6 @@ mod reply;
 mod runtime;
 mod stream;
 
-pub use reply::{spawn_reply, InFlight, Never};
+pub use reply::{InFlight, Never, spawn_reply};
 pub use runtime::runtime;
-pub use stream::{grant, spawn_stream, StreamHandle};
+pub use stream::{StreamHandle, grant, spawn_stream};

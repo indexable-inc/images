@@ -8,8 +8,8 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
 
-use crate::function::doc_attrs;
 use crate::RenderError;
+use crate::function::doc_attrs;
 
 pub fn render_error(
     error: &ir::ErrorType,
@@ -17,7 +17,10 @@ pub fn render_error(
     user: &Ident,
 ) -> Result<TokenStream, RenderError> {
     let rust_name = Ident::new(&error.name, Span::call_site());
-    let base_class = Ident::new(error.names.py.as_deref().unwrap_or(&error.name), Span::call_site());
+    let base_class = Ident::new(
+        error.names.py.as_deref().unwrap_or(&error.name),
+        Span::call_site(),
+    );
     let builtin = builtin_base(error.py_base.as_deref())?;
     let base_doc = error.docs.join("\n");
 

@@ -114,7 +114,10 @@ mod tests {
     #[test]
     fn rejects_malformed_specs() {
         for spec in ["mac1", "=host", "mac1=", "mac1=@host", "mac1=user@"] {
-            assert!(spec.parse::<NodeSpec>().is_err(), "`{spec}` should be rejected");
+            assert!(
+                spec.parse::<NodeSpec>().is_err(),
+                "`{spec}` should be rejected"
+            );
         }
     }
 }

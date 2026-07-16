@@ -15,7 +15,10 @@ pub enum Error {
     },
 
     #[snafu(display("walk {}", path.display()))]
-    Walk { path: PathBuf, source: ignore::Error },
+    Walk {
+        path: PathBuf,
+        source: ignore::Error,
+    },
 
     #[snafu(display("no tree-sitter grammar for {}", path.display()))]
     UnknownLanguage { path: PathBuf },
@@ -95,9 +98,7 @@ pub enum Error {
     #[snafu(display("rules:{line}: capture index {index} out of range for query"))]
     CaptureIndex { line: usize, index: u32 },
 
-    #[snafu(display(
-        "rewrite `{name}`: replacement target `{var}` is bound to text, not a node"
-    ))]
+    #[snafu(display("rewrite `{name}`: replacement target `{var}` is bound to text, not a node"))]
     ReplaceNotNode { name: String, var: String },
 
     #[snafu(display("rules:{line}: template references unbound variable `{var}`"))]

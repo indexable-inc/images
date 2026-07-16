@@ -93,11 +93,7 @@ fn flow(flake: &str, spec: &NodeSpec, dry_run: bool, report: &mut NodeReport) ->
 /// The store path `/run/current-system` points at, or `None` on a host that
 /// has never activated a generation.
 fn current_system(target: &Target) -> Result<Option<String>> {
-    let invocation = plan::remote(
-        target,
-        RunAs::SshUser,
-        &["readlink", "/run/current-system"],
-    )?;
+    let invocation = plan::remote(target, RunAs::SshUser, &["readlink", "/run/current-system"])?;
     let completed = exec::run(&invocation)?;
     match completed.code {
         0 => Ok(Some(completed.stdout.trim().to_owned())),
@@ -111,7 +107,11 @@ fn current_system(target: &Target) -> Result<Option<String>> {
 /// `darwin-rebuild` skips, and so do we.
 fn legacy_activate_user(target: &Target, system: &str) -> Result<bool> {
     let activate_user = format!("{system}/activate-user");
-    if !probe(&plan::remote(target, RunAs::SshUser, &["test", "-x", &activate_user])?)? {
+    if !probe(&plan::remote(
+        target,
+        RunAs::SshUser,
+        &["test", "-x", &activate_user],
+    )?)? {
         return Ok(false);
     }
     let deprecated = probe(&plan::remote(

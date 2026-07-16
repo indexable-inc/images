@@ -6,9 +6,9 @@
 //! packages/minecraft/minestom/servers/spleef). A protocol bump reshuffles
 //! them, so they live in one table here rather than scattered as literals.
 
-use md5::{Digest, Md5};
 use mc_protocol::varint::write_varint;
 use mc_protocol::wire::write_string;
+use md5::{Digest, Md5};
 
 /// Clientbound (server → bot) packet ids.
 pub mod clientbound {
@@ -158,8 +158,8 @@ mod tests {
         assert_eq!(
             bytes,
             [
-                0xB5, 0x0A, 0xD3, 0x85, 0x82, 0x9D, 0x31, 0x41, 0xA2, 0x16, 0x7E, 0x7D, 0x75,
-                0x39, 0xBA, 0x7F
+                0xB5, 0x0A, 0xD3, 0x85, 0x82, 0x9D, 0x31, 0x41, 0xA2, 0x16, 0x7E, 0x7D, 0x75, 0x39,
+                0xBA, 0x7F
             ]
         );
     }

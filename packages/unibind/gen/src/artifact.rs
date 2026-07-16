@@ -6,9 +6,9 @@
 
 use std::path::Path;
 
-use anyhow::{bail, Context as _};
+use anyhow::{Context as _, bail};
 use object::{Object as _, ObjectSection as _};
-use unibind_core::ir::{Interface, IR_VERSION};
+use unibind_core::ir::{IR_VERSION, Interface};
 
 /// Every interface embedded in one artifact, in section order.
 pub struct EmbeddedInterfaces {

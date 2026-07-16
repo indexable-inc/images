@@ -75,7 +75,12 @@ async fn spawn_peer(
         Arc::clone(&blobs),
     )
     .await?;
-    Ok(Peer { score, store: blobs, node, _dir: dir })
+    Ok(Peer {
+        score,
+        store: blobs,
+        node,
+        _dir: dir,
+    })
 }
 
 /// Poll `condition` until it holds or the deadline blows.
@@ -103,15 +108,27 @@ async fn publish_converges_to_bit_identical_audio() -> Result<()> {
         score.set_instrument(&hash, 0)?;
         score.set_control(0, 0.125)?;
         score.set_control(1, 0.5)?;
-        score.schedule(Event { at_frame: 2_000, control: 1, value: 0.25 })?;
-        score.schedule(Event { at_frame: 3_000, control: 0, value: -0.125 })?;
+        score.schedule(Event {
+            at_frame: 2_000,
+            control: 1,
+            value: 0.25,
+        })?;
+        score.schedule(Event {
+            at_frame: 3_000,
+            control: 0,
+            value: -0.125,
+        })?;
     }
 
     // B converges: score gossip carries the hash and events, the blob
     // protocol carries the module bytes, ping sampling follows A's clock.
     converge("score to reach B", || {
         let score = b.score.lock().expect("lock");
-        score.instrument().ok().flatten().is_some_and(|i| i.hash == hash)
+        score
+            .instrument()
+            .ok()
+            .flatten()
+            .is_some_and(|i| i.hash == hash)
             && score.events().len() == 2
     })
     .await;
@@ -132,7 +149,10 @@ async fn publish_converges_to_bit_identical_audio() -> Result<()> {
     let bits_a: Vec<u32> = out_a.iter().map(|s| s.to_bits()).collect();
     let bits_b: Vec<u32> = out_b.iter().map(|s| s.to_bits()).collect();
     assert_eq!(bits_a, bits_b, "peers must render bit-identical audio");
-    assert!(out_a.iter().any(|&s| s != 0.0), "the range actually made sound");
+    assert!(
+        out_a.iter().any(|&s| s != 0.0),
+        "the range actually made sound"
+    );
 
     // The clocks agree on *when* those frames play: within 50 ms.
     let now = time.now_micros();
@@ -157,8 +177,13 @@ async fn edits_flow_both_ways() -> Result<()> {
 
     let both = |score: &Arc<Mutex<Score>>| {
         let controls = score.lock().expect("lock").controls();
-        controls.contains(&ControlValue { control: 3, value: 0.75 })
-            && controls.contains(&ControlValue { control: 4, value: 0.25 })
+        controls.contains(&ControlValue {
+            control: 3,
+            value: 0.75,
+        }) && controls.contains(&ControlValue {
+            control: 4,
+            value: 0.25,
+        })
     };
     converge("A to see both controls", || both(&a.score)).await;
     converge("B to see both controls", || both(&b.score)).await;

@@ -84,7 +84,10 @@ fn objects_lower_with_constructor_methods_and_resource() {
     assert!(matches!(constructor.asyncness, ir::Asyncness::Sync));
     assert!(constructor.ret.is_none(), "the object itself is implied");
     assert_eq!(constructor.throws.as_deref(), Some("StoreError"));
-    assert!(matches!(constructor.args[0].ty, ir::Type::String { owned: false }));
+    assert!(matches!(
+        constructor.args[0].ty,
+        ir::Type::String { owned: false }
+    ));
 
     let [rows, compact, close] = store.methods.as_slice() else {
         panic!("three methods (the private helper is skipped)");
@@ -126,9 +129,8 @@ fn async_borrowed_args_are_rejected() {
 
 #[test]
 fn blocking_sets_the_flag_and_keeps_borrowed_bytes() {
-    let interface =
-        lower("mod m { #[unibind(blocking)] pub fn go(data: &[u8]) -> u64 { 0 } }")
-            .expect("lowering succeeds");
+    let interface = lower("mod m { #[unibind(blocking)] pub fn go(data: &[u8]) -> u64 { 0 } }")
+        .expect("lowering succeeds");
     let go = &interface.functions[0];
     assert!(go.blocking);
     assert!(matches!(go.args[0].ty, ir::Type::Bytes { owned: false }));
@@ -166,8 +168,7 @@ fn streams_in_argument_position_are_rejected() {
 
 #[test]
 fn resources_without_close_are_rejected() {
-    let message =
-        error_message("mod m { #[unibind::object(resource)] pub struct H { id: u64 } }");
+    let message = error_message("mod m { #[unibind::object(resource)] pub struct H { id: u64 } }");
     assert!(message.contains("close method"), "{message}");
 }
 

@@ -19,7 +19,7 @@ mod names;
 mod record;
 mod ty;
 
-pub use host::{host_class, HostClass};
+pub use host::{HostClass, host_class};
 pub use module::render;
 
 /// The rendered output for one interface.

@@ -4,7 +4,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
 
-use crate::{error, names, ty, RenderError};
+use crate::{RenderError, error, names, ty};
 
 /// Render one function's shim: decode the arguments in declaration order,
 /// call the user function, and encode the outcome through the runtime's

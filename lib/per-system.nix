@@ -373,6 +373,17 @@
       outputHashAlgo = "sha256";
       outputHashMode = "recursive";
     };
+    # The repo pin (rust-toolchain.toml, via lib/rust/tooling.nix) plus the
+    # rustfmt component its component list omits. Bound once and exported so
+    # the acceptance check below runs `cargo fmt --check` with byte-for-byte
+    # the same cargo-fmt the lane fixes with.
+    rustFmtToolchain = ix.repoRustToolchainFor pkgs {
+      components = [
+        "cargo"
+        "rustc"
+        "rustfmt"
+      ];
+    };
     # One lane: copy the scoped source, run the lane's fixers in place, emit
     # the tree. The fixers see nothing outside their scoped `src` by
     # construction, so lane outputs stay as disjoint as lane inputs.
@@ -426,6 +437,24 @@
           ruff check ${ix.ruffAnnArgs} --fix --exit-zero --no-cache .
         '';
       };
+      # `cargo fmt` with the repo-pinned nightly (#3433): the exact
+      # toolchain the workspace builds with, plus the rustfmt component the
+      # root rust-toolchain.toml's component list omits. cargo-fmt discovers
+      # targets via `cargo metadata --no-deps`, which parses manifests only:
+      # no Cargo.lock, no network, no dependency sources, so the scoped
+      # fileset below suffices. CARGO_HOME points at the build temp dir
+      # because cargo wants a writable home even for metadata (cwd is $out,
+      # which must stay free of cargo's cache). Formatting is the
+      # lane's only stage for now; `clippy --fix` (#3434) slots in BEFORE
+      # cargo fmt when it lands, per the formatter-last rule above.
+      rust = mkLane {
+        name = "rust";
+        tools = [rustFmtToolchain];
+        fix = ''
+          export CARGO_HOME="$TMPDIR/cargo-home"
+          cargo fmt --all
+        '';
+      };
     };
 
     # Scoped lane inputs: only the files a lane's tools read or rewrite,
@@ -462,14 +491,26 @@
         )
         (fs.maybeMissing (paths.root + "/.claude"))
       );
+      # Everything cargo-fmt reads: sources to rewrite plus every Cargo.toml
+      # (workspace membership and per-target discovery both come from
+      # manifests). rustfmt.toml is maybeMissing because the repo has none
+      # today; listing it here means adding one starts scoping the lane
+      # instead of being silently ignored. The toolchain pin itself needs no
+      # fileset entry: the lane's toolchain is a nativeBuildInput, so a pin
+      # bump already rebuilds the lane.
+      rust = laneSource (
+        fs.unions [
+          (fs.fileFilter (file: file.hasExt "rs") paths.root)
+          (fs.fileFilter (file: file.name == "Cargo.toml") paths.root)
+          (fs.maybeMissing (paths.root + "/rustfmt.toml"))
+        ]
+      );
     };
 
     # Union lane outputs into one tree. Lane filesets are disjoint, so the
     # same path arriving from two lanes is a lane-scoping bug, not a merge
     # to resolve: fail loudly rather than let one lane's fix silently shadow
-    # another's. (#3434's rust lane slots in as one more entry here; that it
-    # will internally fan out per crate is invisible to the union, which
-    # only sees the lane's composed tree.)
+    # another's.
     unite = name: trees:
       pkgs.runCommand name contentAddressed ''
         mkdir -p "$out"
@@ -503,7 +544,7 @@
       [ "$status" -le 1 ]
     '';
   in {
-    inherit lanes unite fixed patch;
+    inherit lanes unite fixed patch rustFmtToolchain;
   };
 
   # `check` is the full CI gate as one repo-owned command: check.yml runs
@@ -1676,11 +1717,27 @@
             violatingPython = pkgs.writeTextDir "fixture.py" ''
               raise IOError("fixture")
             '';
+            # A one-crate workspace whose main.rs cargo fmt rewrites: the
+            # manifest is what cargo-fmt's `cargo metadata --no-deps` walks,
+            # so this also proves the lane works from manifests alone (no
+            # Cargo.lock, no dependency sources, no network).
+            violatingRust = pkgs.runCommand "rust-fixture" {} ''
+              mkdir -p "$out/src"
+              cat > "$out/Cargo.toml" <<'EOF'
+              [package]
+              name = "fixture"
+              version = "0.0.0"
+              edition = "2021"
+              EOF
+              printf 'fn main(){println!("fixture") ;}\n' > "$out/src/main.rs"
+            '';
             fixedNix = lintFix.lanes.nix violatingNix;
             fixedPython = lintFix.lanes.python violatingPython;
+            fixedRust = lintFix.lanes.rust violatingRust;
             fixedTree = lintFix.unite "lint-fix-fixture-fixed" [
               fixedNix
               fixedPython
+              fixedRust
             ];
           in
             pkgs.runCommand "lint-fix-check"
@@ -1690,6 +1747,7 @@
                 pkgs.deadnix
                 pkgs.ruff
                 pkgs.statix
+                lintFix.rustFmtToolchain
               ];
             }
             ''
@@ -1710,6 +1768,12 @@
                 echo "fixture stopped violating ruff" >&2
                 exit 1
               fi
+              # cargo wants a writable home even for `fmt --check`.
+              export CARGO_HOME="$TMPDIR/cargo-home"
+              if (cd ${violatingRust} && cargo fmt --all --check); then
+                echo "fixture stopped violating cargo fmt" >&2
+                exit 1
+              fi
 
               # Post-fix: the united tree passes the same check stages the
               # lint gate runs, through the same stage binary.
@@ -1720,12 +1784,17 @@
               ${lib.getExe lintStage} statix
               ${lib.getExe lintStage} deadnix
               ${lib.getExe lintStage} ruff
+              # No rustfmt stage exists in the lint gate (#3433 ships the
+              # fixer only), so the post-fix rust gate is cargo fmt itself,
+              # from the same pinned toolchain the lane ran.
+              cargo fmt --all --check
               cd ..
 
               # No-op: a second pass over each already-fixed lane output must
               # be byte-identical.
               diff -r ${fixedNix} ${lintFix.lanes.nix fixedNix}
               diff -r ${fixedPython} ${lintFix.lanes.python fixedPython}
+              diff -r ${fixedRust} ${lintFix.lanes.rust fixedRust}
               mkdir -p "$out"
             '';
           filename-policy =

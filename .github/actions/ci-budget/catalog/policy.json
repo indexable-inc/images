@@ -21,17 +21,27 @@
     },
     "indexable-inc/ix": {
       "costly_paths": [
+        ".cargo/config.toml",
+        ".github/workflows/ci.yml",
         "Cargo.lock",
         "**/Cargo.lock",
+        "Cargo.toml",
         "flake.lock",
         "**/flake.lock",
+        "flake.nix",
+        "crates/vm/guest/console/terminal/zig/deps.nix",
+        "nix/checks/default.nix",
         "rust-toolchain.toml",
         "**/rust-toolchain.toml",
         "rust-toolchain",
         "**/rust-toolchain",
         "lib/workspace-cargo-unit.nix",
+        "nix/flake/outputs/default.nix",
         "nix/flake/outputs/workspace.nix",
-        "nix/packages/workspace-*.nix"
+        "nix/packages/workspace-*.nix",
+        "nix/packages/workspace-binaries.json",
+        "nix/packages/workspace-bins/**",
+        "nix/shells/toolchain.nix"
       ],
       "managed_workflows": [
         ".github/workflows/ci.yml"

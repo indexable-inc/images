@@ -207,18 +207,36 @@ mod tests {
     #[test]
     fn groups_by_month_then_keep_a_changelog_section() {
         let history = [
-            change("a".repeat(40).as_str(), "2026-07-03", "feat(sqlmerge): add policies"),
-            change("b".repeat(40).as_str(), "2026-07-01", "fix: reject shallow merge"),
-            change("c".repeat(40).as_str(), "2026-06-20", "sqlmerge: initial import"),
+            change(
+                "a".repeat(40).as_str(),
+                "2026-07-03",
+                "feat(sqlmerge): add policies",
+            ),
+            change(
+                "b".repeat(40).as_str(),
+                "2026-07-01",
+                "fix: reject shallow merge",
+            ),
+            change(
+                "c".repeat(40).as_str(),
+                "2026-06-20",
+                "sqlmerge: initial import",
+            ),
         ];
         let out = render(&history);
         let july = out.find("## 2026-07").expect("july section");
         let june = out.find("## 2026-06").expect("june section");
         assert!(july < june, "newest month first:\n{out}");
-        assert!(out.contains("### Added\n\n- sqlmerge: add policies"), "{out}");
+        assert!(
+            out.contains("### Added\n\n- sqlmerge: add policies"),
+            "{out}"
+        );
         assert!(out.contains("### Fixed\n\n- reject shallow merge"), "{out}");
         // Not a conventional type: whole subject survives, under Changed.
-        assert!(out.contains("### Changed\n\n- sqlmerge: initial import"), "{out}");
+        assert!(
+            out.contains("### Changed\n\n- sqlmerge: initial import"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -243,7 +261,11 @@ mod tests {
 
     #[test]
     fn escapes_markdown_in_subjects() {
-        let history = [change("d".repeat(40).as_str(), "2026-07-03", "add [bracket] <tag>")];
+        let history = [change(
+            "d".repeat(40).as_str(),
+            "2026-07-03",
+            "add [bracket] <tag>",
+        )];
         let out = render(&history);
         assert!(out.contains(r"add \[bracket\] \<tag\>"), "{out}");
     }
@@ -251,7 +273,11 @@ mod tests {
     #[test]
     fn breaking_marker_and_malformed_scope_do_not_panic() {
         let history = [
-            change("e".repeat(40).as_str(), "2026-07-03", "feat!: new wire format"),
+            change(
+                "e".repeat(40).as_str(),
+                "2026-07-03",
+                "feat!: new wire format",
+            ),
             change("f".repeat(40).as_str(), "2026-07-02", "fix(unclosed: scope"),
         ];
         let out = render(&history);

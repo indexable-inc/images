@@ -291,9 +291,7 @@ mod tests {
     #[test]
     fn first_listed_wins_when_multiple_globs_match() {
         // Both patterns match "cache_hot"; the first listed (theirs) wins.
-        let cfg = parse(
-            "[policies]\n\"cache_*\" = \"theirs\"\n\"*\" = \"abort\"\n",
-        );
+        let cfg = parse("[policies]\n\"cache_*\" = \"theirs\"\n\"*\" = \"abort\"\n");
         assert_eq!(cfg.policy_for("cache_hot"), ConflictPolicy::Theirs);
         // A table only the second pattern matches gets the second policy.
         assert_eq!(cfg.policy_for("users"), ConflictPolicy::Abort);

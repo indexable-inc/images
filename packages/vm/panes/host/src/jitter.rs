@@ -141,7 +141,10 @@ impl JitterBuffer {
 
     #[must_use]
     pub fn stats(&self) -> Stats {
-        self.inner.lock().expect("audio jitter mutex poisoned").stats
+        self.inner
+            .lock()
+            .expect("audio jitter mutex poisoned")
+            .stats
     }
 }
 
@@ -150,7 +153,9 @@ mod tests {
     use super::*;
 
     fn ramp(start: i16, len: usize) -> Vec<i16> {
-        (0..len).map(|i| start + i16::try_from(i).unwrap()).collect()
+        (0..len)
+            .map(|i| start + i16::try_from(i).unwrap())
+            .collect()
     }
 
     #[test]
@@ -166,7 +171,10 @@ mod tests {
         buf.push(&ramp(4, 1)); // reaches target
         let mut out = [0.0f32; 4];
         assert_eq!(buf.pop_f32(&mut out), PopOutcome::Playing);
-        let expected: Vec<f32> = [1i16, 2, 3, 4].iter().map(|&s| f32::from(s) / 32768.0).collect();
+        let expected: Vec<f32> = [1i16, 2, 3, 4]
+            .iter()
+            .map(|&s| f32::from(s) / 32768.0)
+            .collect();
         assert_eq!(out.to_vec(), expected);
     }
 

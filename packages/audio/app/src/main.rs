@@ -44,7 +44,11 @@ enum Command {
     /// Set a shared instrument control for everyone.
     SetControl { control: u16, value: f32 },
     /// Schedule a shared control change at an exact shared frame.
-    Schedule { at_frame: u64, control: u16, value: f32 },
+    Schedule {
+        at_frame: u64,
+        control: u16,
+        value: f32,
+    },
     /// macOS menu-bar volume item (talks to the local daemon).
     Tray,
 }
@@ -81,8 +85,7 @@ fn main() -> Result<()> {
             client::run(&request)
         }
         Command::Publish { path, at } => {
-            let bytes =
-                std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             client::run(&control::Request::Publish {
                 wasm_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
                 at_frame: at,
@@ -91,9 +94,15 @@ fn main() -> Result<()> {
         Command::SetControl { control, value } => {
             client::run(&control::Request::SetControl { control, value })
         }
-        Command::Schedule { at_frame, control, value } => {
-            client::run(&control::Request::Schedule { at_frame, control, value })
-        }
+        Command::Schedule {
+            at_frame,
+            control,
+            value,
+        } => client::run(&control::Request::Schedule {
+            at_frame,
+            control,
+            value,
+        }),
         Command::Tray => tray::run(),
     }
 }

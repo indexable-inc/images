@@ -88,7 +88,10 @@ const LOG_TAIL_MAX_ENTRIES: usize = 8;
 /// subcommand exist, i.e. should the UI show the pane at all -- is derived
 /// from this loop, so one pass must complete before the first park for a later
 /// client's seeded snapshot to know whether the pane exists.
-pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadcast::Sender<Bytes>) {
+pub async fn run_global_probe(
+    monitor: Arc<RwLock<MonitorState>>,
+    deltas: broadcast::Sender<Bytes>,
+) {
     // Between polls, the sampler turns each build's pid into live cpu/rss
     // figures from procfs (see `proc_stats`); the two-second poll interval is
     // also the cpu averaging window.
@@ -99,8 +102,10 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
         // existence survives a park (the UI hides the pane on `false`).
         let detected = polled.is_some();
         let pause = if let Some(builds) = polled {
-            let AnnotatedPoll { sampler: returned_sampler, builds } =
-                annotate_off_runtime(sampler, builds).await;
+            let AnnotatedPoll {
+                sampler: returned_sampler,
+                builds,
+            } = annotate_off_runtime(sampler, builds).await;
             sampler = returned_sampler;
             let status = format!("{} active", builds.len());
             let global = GlobalBuilds {
@@ -211,7 +216,13 @@ async fn poll_builds() -> Option<Vec<GlobalBuild>> {
             "builds",
             "--json",
         ],
-        &["--extra-experimental-features", "nix-command", "store", "builds", "--json"],
+        &[
+            "--extra-experimental-features",
+            "nix-command",
+            "store",
+            "builds",
+            "--json",
+        ],
     ];
     for args in ATTEMPTS {
         if let Some(builds) = try_builds(args).await {
@@ -720,7 +731,10 @@ mod tests {
         )
         .await;
         probe.abort();
-        assert!(parked.builds.is_empty(), "the parked view carries no stale rows");
+        assert!(
+            parked.builds.is_empty(),
+            "the parked view carries no stale rows"
+        );
     }
 
     /// A first client subscribing un-parks the probe within a client-poll
@@ -732,8 +746,12 @@ mod tests {
         let monitor = Arc::new(RwLock::new(MonitorState::default()));
         let (deltas, _) = broadcast::channel(8);
         let probe = tokio::spawn(run_global_probe(Arc::clone(&monitor), deltas.clone()));
-        wait_for_global_status(&monitor, |status| status == UNWATCHED_STATUS, "the probe to park")
-            .await;
+        wait_for_global_status(
+            &monitor,
+            |status| status == UNWATCHED_STATUS,
+            "the probe to park",
+        )
+        .await;
 
         let client = deltas.subscribe();
         wait_for_global_status(
@@ -797,14 +815,28 @@ mod tests {
         let single_block = compress_bzip2(&"short log\n".repeat(100), 9);
         // (fixture, decodes something?, finished?) per on-disk shape.
         let cases: [(&str, &[u8], bool, bool); 4] = [
-            ("mid-stream cut", &multi_block[..multi_block.len() / 2], true, false),
-            ("first block cut", &single_block[..single_block.len() / 2], false, false),
+            (
+                "mid-stream cut",
+                &multi_block[..multi_block.len() / 2],
+                true,
+                false,
+            ),
+            (
+                "first block cut",
+                &single_block[..single_block.len() / 2],
+                false,
+                false,
+            ),
             ("not bzip2", b"error: not a log", false, true),
             ("complete stream", &multi_block, true, true),
         ];
         for (name, bytes, decodes, finished) in cases {
             let reference = feed_pieces(bytes, 1);
-            assert_eq!(!reference.tail.is_empty(), decodes, "{name}: decoded output");
+            assert_eq!(
+                !reference.tail.is_empty(),
+                decodes,
+                "{name}: decoded output"
+            );
             assert_eq!(reference.finished, finished, "{name}: decoder state");
             if decodes {
                 assert!(
@@ -823,7 +855,10 @@ mod tests {
                     served,
                     "{name} in {pieces} pieces"
                 );
-                assert_eq!(sliced.finished, reference.finished, "{name} in {pieces} pieces");
+                assert_eq!(
+                    sliced.finished, reference.finished,
+                    "{name} in {pieces} pieces"
+                );
             }
         }
     }
@@ -847,7 +882,10 @@ mod tests {
     /// the buffer's first line is a fragment cut at an arbitrary byte.
     #[test]
     fn dropped_prefix_forces_line_boundary_cut() {
-        assert_eq!(tail_lines(b"ragment\nwhole line\n", 1 << 20, true), "whole line\n");
+        assert_eq!(
+            tail_lines(b"ragment\nwhole line\n", 1 << 20, true),
+            "whole line\n"
+        );
         // Without the marker the same buffer is a complete log and keeps line 1.
         assert_eq!(
             tail_lines(b"ragment\nwhole line\n", 1 << 20, false),
@@ -905,9 +943,27 @@ mod tests {
         // Table of identity cases; the misses each break exactly one
         // identity component.
         let cases: [Case; 9] = [
-            ("/nix/store/aaa-foo.drv", 11, 100, Some(9000), Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2")),
-            ("/nix/store/aaa-foo.drv", 12, 200, Some(9500), Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2")),
-            ("/nix/store/ccc-baz.drv", 21, 300, None, Some("/nix/var/log/nix/drvs/cc/cbaz.drv.bz2")),
+            (
+                "/nix/store/aaa-foo.drv",
+                11,
+                100,
+                Some(9000),
+                Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2"),
+            ),
+            (
+                "/nix/store/aaa-foo.drv",
+                12,
+                200,
+                Some(9500),
+                Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2"),
+            ),
+            (
+                "/nix/store/ccc-baz.drv",
+                21,
+                300,
+                None,
+                Some("/nix/var/log/nix/drvs/cc/cbaz.drv.bz2"),
+            ),
             // A recycled pid must not resolve its predecessor's log: neither
             // across start seconds nor -- same second -- across generations.
             ("/nix/store/aaa-foo.drv", 11, 101, Some(9000), None),
@@ -943,7 +999,10 @@ mod tests {
             .await
             .expect("fixture log reads");
         assert!(tail.len() <= LOG_TAIL_BYTES);
-        assert!(tail.starts_with("old line\n"), "tail starts at a line boundary");
+        assert!(
+            tail.starts_with("old line\n"),
+            "tail starts at a line boundary"
+        );
         assert!(tail.ends_with("newest line\n"));
         assert_eq!(cache.entry_count(), 0, "plain logs leave no decode state");
 
@@ -973,7 +1032,10 @@ mod tests {
     #[tokio::test]
     async fn read_log_tail_missing_file_is_not_found() {
         let error = LogTailCache::new()
-            .read_log_tail(worker_key(1), PathBuf::from("/nonexistent/nwm-test.drv.bz2"))
+            .read_log_tail(
+                worker_key(1),
+                PathBuf::from("/nonexistent/nwm-test.drv.bz2"),
+            )
             .await
             .expect_err("missing file errors");
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
@@ -1020,7 +1082,10 @@ mod tests {
             .read_log_tail(key.clone(), path.clone())
             .await
             .expect("finished log reads");
-        assert!(full.ends_with(line), "the tail advances to the newest lines");
+        assert!(
+            full.ends_with(line),
+            "the tail advances to the newest lines"
+        );
         assert_eq!(cache.consumed_for(&key), Some(compressed.len() as u64));
 
         std::fs::remove_dir_all(&dir).expect("clean scratch dir");
@@ -1084,7 +1149,8 @@ mod tests {
         }
 
         // Overflow the cap with distinct workers: the map stays bounded.
-        let keys: Vec<LogWorkerKey> = (10..=(10 + i64::try_from(LOG_TAIL_MAX_ENTRIES).expect("small cap")))
+        let keys: Vec<LogWorkerKey> = (10..=(10
+            + i64::try_from(LOG_TAIL_MAX_ENTRIES).expect("small cap")))
             .map(worker_key)
             .collect();
         for key in &keys {
@@ -1093,9 +1159,14 @@ mod tests {
                 .await
                 .expect("worker reads");
         }
-        assert!(cache.entry_count() <= LOG_TAIL_MAX_ENTRIES, "cache stays capped");
         assert!(
-            cache.consumed_for(keys.last().expect("nonempty keys")).is_some(),
+            cache.entry_count() <= LOG_TAIL_MAX_ENTRIES,
+            "cache stays capped"
+        );
+        assert!(
+            cache
+                .consumed_for(keys.last().expect("nonempty keys"))
+                .is_some(),
             "the newest poll survives the eviction"
         );
 

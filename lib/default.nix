@@ -300,6 +300,7 @@
     buildIxRustTool
     cargoUnitFor
     buildRustPackage
+    repoRustToolchainFor
     ;
   cargoUnit = cargoUnitFor pkgs;
   cargoUnitExternal = import ./rust/external.nix {repoRoot = paths.root;};
@@ -713,6 +714,7 @@
       provenance
       publicArtifactsFor
       relativePath
+      repoRustToolchainFor
       rnixDigitSeparators
       ruffAnnArgs
       rustWorkspace

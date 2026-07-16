@@ -5,7 +5,7 @@ use quote::quote;
 use unibind_core::ir;
 
 use crate::ty::{self, Level, TyCtx};
-use crate::{defaults, RenderError};
+use crate::{RenderError, defaults};
 
 /// The pieces of one callable's wrapper signature and call, shared between
 /// free functions, object methods, and constructors.
@@ -20,7 +20,10 @@ pub fn wrapper_parts(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<Wrapper
     let mut params = Vec::new();
     let mut exprs = Vec::new();
     for arg in &function.args {
-        ty::check(&arg.ty, &format!("argument `{}` of `{}`", arg.name, function.name))?;
+        ty::check(
+            &arg.ty,
+            &format!("argument `{}` of `{}`", arg.name, function.name),
+        )?;
         let ident = ty::name_ident(&arg.name)?;
         let declared = ty::decl(&arg.ty, ctx, Level::Top)?;
         match &arg.default {
@@ -32,7 +35,9 @@ pub fn wrapper_parts(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<Wrapper
             }
             Some(default) => {
                 params.push(quote!(#ident: #declared));
-                exprs.push(defaults::option_substituted(arg, default, &ident, function)?);
+                exprs.push(defaults::option_substituted(
+                    arg, default, &ident, function,
+                )?);
             }
             None => {
                 params.push(quote!(#ident: #declared));

@@ -98,7 +98,11 @@ fn lower_path(path: &syn::TypePath, declared: &Declared, position: Position) -> 
                 Position::Arg => Position::Arg,
                 Position::Owned | Position::Return => Position::Owned,
             };
-            Ok(ir::Type::Option(Box::new(lower_type(inner, declared, inner_position)?)))
+            Ok(ir::Type::Option(Box::new(lower_type(
+                inner,
+                declared,
+                inner_position,
+            )?)))
         }
         "Vec" => {
             let inner = one_generic(segment)?;

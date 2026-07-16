@@ -195,9 +195,9 @@ pub fn name_ident(name: &str) -> Result<Ident, RenderError> {
 fn int_tokens(kind: ir::IntKind) -> TokenStream {
     match kind {
         // Rejected by `check` before any of these spell into a signature.
-        ir::IntKind::U64 | ir::IntKind::Usize | ir::IntKind::Isize => quote!(::core::compile_error!(
-            "unreachable: BigInt-only integers are rejected at render time"
-        )),
+        ir::IntKind::U64 | ir::IntKind::Usize | ir::IntKind::Isize => quote!(
+            ::core::compile_error!("unreachable: BigInt-only integers are rejected at render time")
+        ),
         supported => {
             let ident = Ident::new(supported.rust_name(), Span::call_site());
             quote!(#ident)

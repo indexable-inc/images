@@ -51,10 +51,7 @@ fn ignore_file_is_language_independent() {
     let cases = [
         (Lang::Rust, "// clone:ignore-file\nfn foo() {}"),
         (Lang::Python, "# clone:ignore-file\ndef foo(): pass"),
-        (
-            Lang::JavaScript,
-            "// clone:ignore-file\nfunction foo() {}",
-        ),
+        (Lang::JavaScript, "// clone:ignore-file\nfunction foo() {}"),
     ];
     for (language, source) in cases {
         let tree = parse(source, language).expect("valid source");

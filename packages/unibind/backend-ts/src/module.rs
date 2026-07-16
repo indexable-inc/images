@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use unibind_core::ir;
 
 use crate::ty::TyCtx;
-use crate::{error, function, object, record, stream, RenderError, RenderedInterface};
+use crate::{RenderError, RenderedInterface, error, function, object, record, stream};
 
 /// Render `napi-rs` glue for one interface.
 ///
@@ -72,7 +72,10 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
 /// `AbortSignal` bridge.
 fn needs_signal(interface: &ir::Interface) -> bool {
     let fns = interface.functions.iter();
-    let methods = interface.objects.iter().flat_map(|object| object.methods.iter());
+    let methods = interface
+        .objects
+        .iter()
+        .flat_map(|object| object.methods.iter());
     fns.chain(methods)
         .any(|function| matches!(function.asyncness, ir::Asyncness::Async))
 }

@@ -282,9 +282,8 @@ fn read_status_response(stream: &mut TcpStream) -> io::Result<String> {
         ));
     }
     let declared = read_varint(&mut cursor)?;
-    let length = usize::try_from(declared).map_err(|_| {
-        io::Error::new(io::ErrorKind::InvalidData, "negative status JSON length")
-    })?;
+    let length = usize::try_from(declared)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "negative status JSON length"))?;
     let mut bytes = vec![0u8; length];
     cursor.read_exact(&mut bytes)?;
     String::from_utf8(bytes)
@@ -331,7 +330,14 @@ mod tests {
 
     #[test]
     fn rejects_bad_addresses() {
-        for bad in ["", ":25565", "host:notaport", "host:99999", "[::1", "[::1]x"] {
+        for bad in [
+            "",
+            ":25565",
+            "host:notaport",
+            "host:99999",
+            "[::1",
+            "[::1]x",
+        ] {
             let err = ServerAddress::parse(bad).expect_err(bad);
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad}");
         }
@@ -345,8 +351,7 @@ mod tests {
 
     #[test]
     fn parses_vanilla_status() {
-        let status =
-            SlpStatus::from_status_json(VANILLA_STATUS, Duration::ZERO).expect("parse");
+        let status = SlpStatus::from_status_json(VANILLA_STATUS, Duration::ZERO).expect("parse");
         assert_eq!(status.version_name, "26.2");
         assert_eq!(status.protocol_version, 776);
         assert_eq!(status.players_online, 3);
@@ -368,7 +373,8 @@ mod tests {
 
     #[test]
     fn missing_description_is_empty_motd() {
-        let raw = r#"{"version": {"name": "x", "protocol": 1}, "players": {"online": 0, "max": 1}}"#;
+        let raw =
+            r#"{"version": {"name": "x", "protocol": 1}, "players": {"online": 0, "max": 1}}"#;
         let status = SlpStatus::from_status_json(raw, Duration::ZERO).expect("parse");
         assert_eq!(status.motd, "");
     }

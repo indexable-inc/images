@@ -110,7 +110,11 @@ fn export_backends_parse_and_validate() {
 
     let unknown: TokenStream = "backends(zig)".parse().expect("args parse");
     let error = unibind_core::export_backends(unknown).expect_err("unknown backend fails");
-    assert!(error.message.contains("unknown backend"), "{}", error.message);
+    assert!(
+        error.message.contains("unknown backend"),
+        "{}",
+        error.message
+    );
 
     let misplaced = lower_with(
         TokenStream::new(),

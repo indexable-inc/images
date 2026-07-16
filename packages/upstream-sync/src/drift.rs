@@ -48,9 +48,16 @@ pub struct Row {
 /// # Errors
 /// Fails on flag conflicts, an unknown fork name, or unreadable local data
 /// (mapping, dag.json, status file); forge errors degrade to unknown cells.
-pub fn run(mapping_override: Option<&Path>, name: Option<&str>, json: bool, markdown: bool) -> Result<()> {
+pub fn run(
+    mapping_override: Option<&Path>,
+    name: Option<&str>,
+    json: bool,
+    markdown: bool,
+) -> Result<()> {
     if json && markdown {
-        return Err(eyre!("upstream-sync: drift: --json and --markdown are mutually exclusive"));
+        return Err(eyre!(
+            "upstream-sync: drift: --json and --markdown are mutually exclusive"
+        ));
     }
     let mapping_path = mapping::path(mapping_override)?;
     let forks = mapping::select(mapping::load(&mapping_path)?, name, "upstream-sync")?;
@@ -63,7 +70,13 @@ pub fn run(mapping_override: Option<&Path>, name: Option<&str>, json: bool, mark
     if markdown {
         println!("{table}");
     } else {
-        println!("{}", paint(CYAN, "== fork drift: pinned base vs upstream default branch =="));
+        println!(
+            "{}",
+            paint(
+                CYAN,
+                "== fork drift: pinned base vs upstream default branch =="
+            )
+        );
         println!("{table}");
     }
     Ok(())
@@ -98,10 +111,17 @@ fn github_behind(ctx: &str, slug: &Slug, rev: &str) -> Result<Option<i64>> {
     let Some(branch) = gh::read(ctx, &repo, ".default_branch")? else {
         return Ok(None);
     };
-    let Some(n) = gh::read(ctx, &format!("{repo}/compare/{rev}...{branch}"), ".ahead_by")? else {
+    let Some(n) = gh::read(
+        ctx,
+        &format!("{repo}/compare/{rev}...{branch}"),
+        ".ahead_by",
+    )?
+    else {
         return Ok(None);
     };
-    Ok(Some(n.parse().wrap_err_with(|| format!("gh compare ahead_by is not a number: {n}"))?))
+    Ok(Some(n.parse().wrap_err_with(|| {
+        format!("gh compare ahead_by is not a number: {n}")
+    })?))
 }
 
 /// Base-commit committer date on a GitLab host, or `None`. GitLab drift is
@@ -127,7 +147,10 @@ fn gitlab_base_date(url: &str, rev: &str) -> Option<String> {
     let warn = || {
         eprintln!(
             "{}",
-            paint(YELLOW, &format!("upstream-sync: drift: {endpoint} unreachable; base age left unknown"))
+            paint(
+                YELLOW,
+                &format!("upstream-sync: drift: {endpoint} unreachable; base age left unknown")
+            )
         );
     };
     let Ok(mut res) = ureq::get(&endpoint).call() else {
@@ -159,8 +182,12 @@ fn base_date(fork: &Fork, forge: &str, slug: &Slug, rev: Option<&str>) -> Result
 }
 
 fn age_days(date: &str) -> Result<i64> {
-    let dt = DateTime::parse_from_rfc3339(date).wrap_err_with(|| format!("unparseable base date {date}"))?;
-    Ok(Utc::now().signed_duration_since(dt).num_seconds().div_euclid(86_400))
+    let dt = DateTime::parse_from_rfc3339(date)
+        .wrap_err_with(|| format!("unparseable base date {date}"))?;
+    Ok(Utc::now()
+        .signed_duration_since(dt)
+        .num_seconds()
+        .div_euclid(86_400))
 }
 
 /// Patch stances walk dag.json node order (the canonical series, same as the
@@ -193,7 +220,13 @@ fn row(fork: &Fork) -> Result<Row> {
     if rev.is_none() {
         eprintln!(
             "{}",
-            paint(YELLOW, &format!("upstream-sync: drift: {}: input {} has no locked rev in flake.lock", fork.name, fork.input))
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-sync: drift: {}: input {} has no locked rev in flake.lock",
+                    fork.name, fork.input
+                )
+            )
         );
     }
     let forge = if mapping::is_github(&fork.url) {
@@ -266,7 +299,16 @@ fn row(fork: &Fork) -> Result<Row> {
 /// stance counts so an 80-column pipe still shows the verdict.
 fn render_table(rows: &[Row]) -> String {
     const HEADERS: [&str; 10] = [
-        "fork", "base", "behind", "age (days)", "action", "attempt", "hold", "never", "retired", "note",
+        "fork",
+        "base",
+        "behind",
+        "age (days)",
+        "action",
+        "attempt",
+        "hold",
+        "never",
+        "retired",
+        "note",
     ];
     let unknown = || "?".to_owned();
     let cells: Vec<[String; 10]> = rows
@@ -274,7 +316,9 @@ fn render_table(rows: &[Row]) -> String {
         .map(|r| {
             [
                 r.name.clone(),
-                r.rev.as_deref().map_or_else(unknown, |v| v.chars().take(12).collect()),
+                r.rev
+                    .as_deref()
+                    .map_or_else(unknown, |v| v.chars().take(12).collect()),
                 r.behind.map_or_else(unknown, |v| v.to_string()),
                 r.age_days.map_or_else(unknown, |v| v.to_string()),
                 r.action.clone(),
@@ -290,16 +334,32 @@ fn render_table(rows: &[Row]) -> String {
     let widths: Vec<usize> = HEADERS
         .iter()
         .enumerate()
-        .map(|(i, h)| cells.iter().map(|row| row[i].len()).chain([h.len()]).max().unwrap_or_default())
+        .map(|(i, h)| {
+            cells
+                .iter()
+                .map(|row| row[i].len())
+                .chain([h.len()])
+                .max()
+                .unwrap_or_default()
+        })
         .collect();
     let line = |vals: &[String]| {
-        let padded: Vec<String> = vals.iter().zip(&widths).map(|(v, w)| format!("{v:<w$}")).collect();
+        let padded: Vec<String> = vals
+            .iter()
+            .zip(&widths)
+            .map(|(v, w)| format!("{v:<w$}"))
+            .collect();
         format!("| {} |", padded.join(" | "))
     };
 
     let mut out = vec![
         line(&HEADERS.map(str::to_owned)),
-        line(&widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<String>>()),
+        line(
+            &widths
+                .iter()
+                .map(|w| "-".repeat(*w))
+                .collect::<Vec<String>>(),
+        ),
     ];
     out.extend(cells.iter().map(|row| line(row.as_slice())));
     out.join("\n")
@@ -309,7 +369,14 @@ fn render_table(rows: &[Row]) -> String {
 mod tests {
     use super::*;
 
-    fn row_stub(name: &str, rev: Option<&str>, behind: Option<i64>, age: Option<i64>, action: &str, note: &str) -> Row {
+    fn row_stub(
+        name: &str,
+        rev: Option<&str>,
+        behind: Option<i64>,
+        age: Option<i64>,
+        action: &str,
+        note: &str,
+    ) -> Row {
         Row {
             name: name.to_owned(),
             forge: "github".to_owned(),
@@ -332,7 +399,14 @@ mod tests {
     #[test]
     fn markdown_table_matches_nu_to_md_pretty() {
         let rows = [
-            row_stub("fake", Some("aaaaaaaaaaaaaaaaaaaa"), Some(123), Some(194), "rebase-recommended", ""),
+            row_stub(
+                "fake",
+                Some("aaaaaaaaaaaaaaaaaaaa"),
+                Some(123),
+                Some(194),
+                "rebase-recommended",
+                "",
+            ),
             row_stub("bad", None, None, None, "unknown", "x"),
         ];
         let expected = "\

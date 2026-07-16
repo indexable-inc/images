@@ -13,9 +13,9 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use unibind_core::ir;
 
+use crate::RenderError;
 use crate::function::{self, doc_attrs};
 use crate::ty::{self, Level, TyCtx};
-use crate::RenderError;
 
 /// Render the wrapper function and the handle class for one
 /// stream-returning function; the wrapper itself (sync or async, plain or
@@ -26,7 +26,10 @@ pub fn render_stream_fn(
     element: &ir::Type,
     ctx: &TyCtx<'_>,
 ) -> Result<TokenStream, RenderError> {
-    ty::check(element, &format!("the stream element of `{}`", function.name))?;
+    ty::check(
+        element,
+        &format!("the stream element of `{}`", function.name),
+    )?;
     if let ir::Type::Named(name) = element
         && ctx.object(name).is_some()
     {
@@ -52,7 +55,14 @@ pub fn render_stream_fn(
         "Pull handle over the stream returned by `{}`.",
         function.name
     )]);
-    let class_item = stream_class(&class, &js_class, &class_docs, &element_decl, &element_top, &element_ret);
+    let class_item = stream_class(
+        &class,
+        &js_class,
+        &class_docs,
+        &element_decl,
+        &element_top,
+        &element_ret,
+    );
     Ok(quote! {
         #wrapper_fn
         #class_item

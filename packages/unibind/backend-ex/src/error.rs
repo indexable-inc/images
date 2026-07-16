@@ -12,7 +12,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
 
-use crate::{names, RenderError};
+use crate::{RenderError, names};
 
 /// The glue-module struct name carrying `error` over the boundary.
 pub fn term_ident(error_name: &str) -> Ident {

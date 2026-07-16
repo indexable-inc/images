@@ -310,7 +310,12 @@ mod tests {
             "id [redacted:aws_access_key_id] end"
         );
 
-        let jwt = format!("eyJ{}.{}.{}", "h".repeat(41), "p".repeat(30), "s".repeat(43));
+        let jwt = format!(
+            "eyJ{}.{}.{}",
+            "h".repeat(41),
+            "p".repeat(30),
+            "s".repeat(43)
+        );
         assert_eq!(redact_secrets(&format!("t={jwt}")), "t=[redacted:jwt]");
     }
 
@@ -324,19 +329,13 @@ mod tests {
         assert_eq!(output, "before\n[redacted:private_key]\nafter");
 
         let truncated = format!("before\n-----BEGIN PRIVATE KEY-----\n{}", "MIIE".repeat(16));
-        assert_eq!(
-            redact_secrets(&truncated),
-            "before\n[redacted:private_key]"
-        );
+        assert_eq!(redact_secrets(&truncated), "before\n[redacted:private_key]");
     }
 
     #[test]
     fn authorization_headers_are_redacted() {
         let bearer = format!("Authorization: Bearer {}", "tok9".repeat(10));
-        assert_eq!(
-            redact_secrets(&bearer),
-            "[redacted:authorization_header]"
-        );
+        assert_eq!(redact_secrets(&bearer), "[redacted:authorization_header]");
         let basic = format!("authorization: basic {}=", "dXNlcjpw".repeat(4));
         assert_eq!(redact_secrets(&basic), "[redacted:authorization_header]");
         // Linear style: bare key as the header value.
@@ -412,7 +411,11 @@ mod tests {
         let output = sanitize_tool_result(&input);
         assert!(!output.contains('\u{1b}'), "ANSI stripped");
         assert!(!output.contains(&key), "secret gone");
-        assert!(output.contains("[truncated"), "capped: {} chars", output.len());
+        assert!(
+            output.contains("[truncated"),
+            "capped: {} chars",
+            output.len()
+        );
         assert!(output.contains("[redacted:github_token]"), "{output}");
         assert!(output.contains("[blob 320 chars]"), "{output}");
         assert!(

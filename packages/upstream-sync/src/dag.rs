@@ -33,8 +33,8 @@ impl Doc {
     /// # Errors
     /// Fails when the file is unreadable or not the expected shape.
     pub fn load(path: &Path) -> Result<Self> {
-        let raw = fs::read_to_string(path)
-            .wrap_err_with(|| format!("cannot read {}", path.display()))?;
+        let raw =
+            fs::read_to_string(path).wrap_err_with(|| format!("cannot read {}", path.display()))?;
         serde_json::from_str(&raw).wrap_err_with(|| format!("cannot parse {}", path.display()))
     }
 
@@ -105,7 +105,11 @@ pub fn resolve(reference: &str, names: &[String]) -> Result<String> {
     }
     Err(eyre!(
         "upstream-pr: '{reference}' is ambiguous; matches: {}",
-        candidates.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ")
+        candidates
+            .iter()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     ))
 }
 

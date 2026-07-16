@@ -84,7 +84,9 @@ pub async fn judge(
         .json(&body)
         .send()
         .await
-        .context(JudgeSendSnafu { model: api.model.to_owned() })?;
+        .context(JudgeSendSnafu {
+            model: api.model.to_owned(),
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();

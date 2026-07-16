@@ -480,10 +480,19 @@ const fn ctrl_handoff(
 fn translate_chord(kvk: u16) -> Option<Translation> {
     match kvk {
         KVK_ANSI_A | KVK_ANSI_C | KVK_ANSI_V | KVK_ANSI_X | KVK_ANSI_Z | KVK_DELETE => {
-            Some(Translation { keycode: keymap::evdev_from_kvk(kvk)?, ctrl: true })
+            Some(Translation {
+                keycode: keymap::evdev_from_kvk(kvk)?,
+                ctrl: true,
+            })
         }
-        KVK_LEFT_ARROW => Some(Translation { keycode: KEY_HOME, ctrl: false }),
-        KVK_RIGHT_ARROW => Some(Translation { keycode: KEY_END, ctrl: false }),
+        KVK_LEFT_ARROW => Some(Translation {
+            keycode: KEY_HOME,
+            ctrl: false,
+        }),
+        KVK_RIGHT_ARROW => Some(Translation {
+            keycode: KEY_END,
+            ctrl: false,
+        }),
         _ => None,
     }
 }
@@ -526,8 +535,7 @@ impl PanesView {
             // Tracked for chord classification but never forwarded in
             // translation mode (see flags_changed): releasing it here would
             // hand the guest a Super release for a press it never saw.
-            if self.ivars().chord_translation && (kvk == KVK_COMMAND || kvk == KVK_RIGHT_COMMAND)
-            {
+            if self.ivars().chord_translation && (kvk == KVK_COMMAND || kvk == KVK_RIGHT_COMMAND) {
                 continue;
             }
             self.send_key(kvk, ButtonState::Released);
@@ -591,7 +599,9 @@ impl PanesView {
     /// Event location in surface coordinates (top-left origin, buffer scale).
     fn surface_point(&self, event: &NSEvent) -> NSPoint {
         let local = self.convertPoint_fromView(event.locationInWindow(), None);
-        let scale = self.window().map_or(1.0, |window| window.backingScaleFactor());
+        let scale = self
+            .window()
+            .map_or(1.0, |window| window.backingScaleFactor());
         NSPoint::new(local.x * scale, local.y * scale)
     }
 
@@ -601,7 +611,11 @@ impl PanesView {
             return;
         }
         let point = self.surface_point(event);
-        app::send(ToGuest::PointerMotion { id: self.ivars().id, x: point.x, y: point.y });
+        app::send(ToGuest::PointerMotion {
+            id: self.ivars().id,
+            x: point.x,
+            y: point.y,
+        });
     }
 
     /// Motion while captured: `NSEvent` deltas keep flowing after
@@ -618,7 +632,9 @@ impl PanesView {
             return;
         }
         self.ivars().last_relative.set(identity);
-        let scale = self.window().map_or(1.0, |window| window.backingScaleFactor());
+        let scale = self
+            .window()
+            .map_or(1.0, |window| window.backingScaleFactor());
         let (dx, dy) = (event.deltaX() * scale, event.deltaY() * scale);
         if dx == 0.0 && dy == 0.0 {
             return;
@@ -633,7 +649,11 @@ impl PanesView {
                 crate::trace::now(),
             );
         }
-        app::send(ToGuest::PointerRelative { id: self.ivars().id, dx, dy });
+        app::send(ToGuest::PointerRelative {
+            id: self.ivars().id,
+            dx,
+            dy,
+        });
     }
 
     fn send_button(&self, event: &NSEvent, state: ButtonState) {
@@ -657,7 +677,11 @@ impl PanesView {
         if self.ivars().relative.get() {
             app::reassert_capture_cursor();
         }
-        app::send(ToGuest::PointerButton { id: self.ivars().id, button, state });
+        app::send(ToGuest::PointerButton {
+            id: self.ivars().id,
+            button,
+            state,
+        });
     }
 
     fn send_scroll(&self, event: &NSEvent) {
@@ -694,7 +718,9 @@ impl PanesView {
         }
         let msg = if event.hasPreciseScrollingDeltas() {
             // Trackpad: pixel deltas, scaled to buffer pixels like motion.
-            let scale = self.window().map_or(1.0, |window| window.backingScaleFactor());
+            let scale = self
+                .window()
+                .map_or(1.0, |window| window.backingScaleFactor());
             ToGuest::PointerAxis {
                 id,
                 source: AxisSource::Finger,
@@ -729,7 +755,11 @@ impl PanesView {
     }
 
     fn send_keycode(&self, keycode: u32, state: ButtonState) {
-        app::send(ToGuest::Key { id: self.ivars().id, keycode, state });
+        app::send(ToGuest::Key {
+            id: self.ivars().id,
+            keycode,
+            state,
+        });
     }
 }
 
@@ -747,7 +777,10 @@ mod tests {
     #[test]
     fn modifier_press_and_release_round_trip() {
         assert_eq!(modifier_transition(false, true), Some(ButtonState::Pressed));
-        assert_eq!(modifier_transition(true, false), Some(ButtonState::Released));
+        assert_eq!(
+            modifier_transition(true, false),
+            Some(ButtonState::Released)
+        );
     }
 
     #[test]
@@ -761,14 +794,25 @@ mod tests {
     fn modifier_classes_cover_both_sides() {
         for (left, right, class) in [
             (KVK_SHIFT, KVK_RIGHT_SHIFT, NSEventModifierFlags::Shift),
-            (KVK_CONTROL, KVK_RIGHT_CONTROL, NSEventModifierFlags::Control),
+            (
+                KVK_CONTROL,
+                KVK_RIGHT_CONTROL,
+                NSEventModifierFlags::Control,
+            ),
             (KVK_OPTION, KVK_RIGHT_OPTION, NSEventModifierFlags::Option),
-            (KVK_COMMAND, KVK_RIGHT_COMMAND, NSEventModifierFlags::Command),
+            (
+                KVK_COMMAND,
+                KVK_RIGHT_COMMAND,
+                NSEventModifierFlags::Command,
+            ),
         ] {
             assert_eq!(modifier_class(left), Some(class));
             assert_eq!(modifier_class(right), Some(class));
         }
-        assert_eq!(modifier_class(KVK_FUNCTION), Some(NSEventModifierFlags::Function));
+        assert_eq!(
+            modifier_class(KVK_FUNCTION),
+            Some(NSEventModifierFlags::Function)
+        );
         assert_eq!(modifier_class(KVK_ANSI_A), None);
     }
 
@@ -835,7 +879,9 @@ mod tests {
     #[test]
     fn chord_translation_table() {
         // Ctrl-wrapped: same physical key, synthetic ctrl.
-        for kvk in [KVK_ANSI_A, KVK_ANSI_C, KVK_ANSI_V, KVK_ANSI_X, KVK_ANSI_Z, KVK_DELETE] {
+        for kvk in [
+            KVK_ANSI_A, KVK_ANSI_C, KVK_ANSI_V, KVK_ANSI_X, KVK_ANSI_Z, KVK_DELETE,
+        ] {
             let translation = translate_chord(kvk).expect("mapped chord");
             assert!(translation.ctrl);
             assert_eq!(Some(translation.keycode), keymap::evdev_from_kvk(kvk));
@@ -843,11 +889,17 @@ mod tests {
         // Line motion: different key, no ctrl.
         assert_eq!(
             translate_chord(KVK_LEFT_ARROW),
-            Some(Translation { keycode: KEY_HOME, ctrl: false })
+            Some(Translation {
+                keycode: KEY_HOME,
+                ctrl: false
+            })
         );
         assert_eq!(
             translate_chord(KVK_RIGHT_ARROW),
-            Some(Translation { keycode: KEY_END, ctrl: false })
+            Some(Translation {
+                keycode: KEY_END,
+                ctrl: false
+            })
         );
         // Everything else is swallowed, never typed raw.
         assert_eq!(translate_chord(KVK_ANSI_W), None);

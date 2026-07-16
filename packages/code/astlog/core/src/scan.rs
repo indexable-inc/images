@@ -57,7 +57,11 @@ pub fn findings(program: &Program, corpus: &Corpus, db: &Database) -> Result<Vec
     let mut findings = Vec::new();
     for_each_candidate(program, corpus, db, |candidate| {
         if suppressions
-            .source(candidate.file_index, candidate.finding.line, &candidate.finding.rule)
+            .source(
+                candidate.file_index,
+                candidate.finding.line,
+                &candidate.finding.rule,
+            )
             .is_none()
         {
             findings.push(candidate.finding);
@@ -85,9 +89,11 @@ pub fn suppressed(
     let suppressions = Suppressions::collect(corpus);
     let mut suppressed = Vec::new();
     for_each_candidate(program, corpus, db, |candidate| {
-        if let Some(source) =
-            suppressions.source(candidate.file_index, candidate.finding.line, &candidate.finding.rule)
-        {
+        if let Some(source) = suppressions.source(
+            candidate.file_index,
+            candidate.finding.line,
+            &candidate.finding.rule,
+        ) {
             suppressed.push(SuppressedFinding {
                 finding: candidate.finding,
                 comment_line: source.line,
@@ -97,12 +103,18 @@ pub fn suppressed(
         Ok(())
     })?;
     suppressed.sort_by(|a, b| {
-        (&a.finding.file, a.finding.line, a.finding.column, &a.finding.rule).cmp(&(
-            &b.finding.file,
-            b.finding.line,
-            b.finding.column,
-            &b.finding.rule,
-        ))
+        (
+            &a.finding.file,
+            a.finding.line,
+            a.finding.column,
+            &a.finding.rule,
+        )
+            .cmp(&(
+                &b.finding.file,
+                b.finding.line,
+                b.finding.column,
+                &b.finding.rule,
+            ))
     });
     Ok(suppressed)
 }
@@ -250,9 +262,7 @@ impl Suppressions {
                     let first = corpus.position(file_index, info.start).line;
                     // `end` is exclusive; the comment's last line is the line
                     // of its final byte, and suppression extends one further.
-                    let last = corpus
-                        .position(file_index, info.end.saturating_sub(1))
-                        .line;
+                    let last = corpus.position(file_index, info.end.saturating_sub(1)).line;
                     let source = Source {
                         line: first,
                         text: one_line(text),
