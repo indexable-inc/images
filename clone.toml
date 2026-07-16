@@ -38,9 +38,5 @@ ignore = [
 # measured on the same code).
 [budget]
 global_pct = 0.45
-# ONE-SHOT EXCEPTION (#3454, revert tracked by #3456): the tree-wide cargo
-# fmt the new rust fixer lane applies touches 239 lines inside PRE-EXISTING
-# clone fragments, and the diff gate is not base-aware (#3455), so it counts
-# them as new duplication (6.34%). Restore 0.0 immediately after #3454 lands.
-diff_pct = 7.0
+diff_pct = 0.0
 diff_base = "origin/main"
