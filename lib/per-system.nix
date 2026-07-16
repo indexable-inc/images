@@ -13,6 +13,7 @@
   paths,
   rust-overlay,
   home-manager,
+  personalLightProfileCheck,
 }: let
   inherit (nixpkgs) lib;
   pkgs = import nixpkgs {
@@ -1538,28 +1539,48 @@
     )
     nonNixExampleImages;
 
-  # Build the check catalog from a rust-package keying. `checks` (flat: one
-  # derivation per `checks.<system>.<name>`, required by the flake schema and
-  # `nix flake check`) and `ciChecks` (sharded: one `recurseForDerivations` group
-  # per package, what the memory-bounded CI evaluator consumes) share the same
-  # explicit checks; only the rust keying differs (ENG-2201). The
-  # collision guard runs per keying, so producing `ciChecks` only forces the
-  # cheap per-package names, never the flat per-#[test] spine.
-  catalogFor = rustPackageSet:
-    lib.optionalAttrs (system == ix.system) (
+  # Fixed Rust checks stay directly addressable. Dynamically named package
+  # checks use a flat aggregate for the flake schema and sharded keys for the
+  # memory-bounded CI evaluator (ENG-2201).
+  fixedRustChecks = lib.optionalAttrs (system == ix.system) {
+    cargo-unit-catalog = tests.cargoUnitCatalog;
+    cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+    cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
+    sdk-rust-prebuilt = tests.sdkRustPrebuilt;
+    # Strict zuban + ruff ANN gate over the public ix-sdk Python sources
+    # (ENG-3131); the SDK is setuptools-built, so this is its build-time
+    # enforcement in place of a buildUvApplication pyChecker flag.
+    sdk-python-strict = tests.sdkPythonStrict;
+  };
+  rustChecksFor = rustPackageSet:
+    fixedRustChecks // lib.optionalAttrs (system == ix.system) rustPackageSet;
+  flatRustChecks =
+    fixedRustChecks
+    // lib.optionalAttrs (system == ix.system) {
+      # Keep the output key static: selecting an unrelated explicit check must
+      # not discover per-test keys (which requires the Rust planner IFD). The
+      # aggregate still carries every leaf as a normal derivation dependency.
+      rust-package-checks =
+        pkgs.runCommand "rust-package-checks" {
+          __structuredAttrs = true;
+          deps = builtins.attrValues rustPackageTestSets.flat;
+          strictDeps = true;
+        } ''
+          mkdir -p "$out"
+          printf '%s\n' 'Rust package checks passed' > "$out/result"
+        '';
+    };
+  # Keep explicit checks outside the Rust catalog thunk. This lets Nix select a
+  # small explicit check without first discovering dynamically generated Rust
+  # test keys (and therefore without evaluator-time builds).
+  baseExplicitChecks =
+    {
+      personal-light-profile = personalLightProfileCheck;
+      update-cargo-unit-catalog-host-native = assert lib.assertMsg (updateCargoUnitCatalog.system == system)
+      "update-cargo-unit-catalog must be host-native on ${system}"; updateCargoUnitCatalog;
+    }
+    // lib.optionalAttrs (system == ix.system) (
       let
-        rustChecks =
-          {
-            cargo-unit-catalog = tests.cargoUnitCatalog;
-            cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
-            cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
-            sdk-rust-prebuilt = tests.sdkRustPrebuilt;
-            # Strict zuban + ruff ANN gate over the public ix-sdk Python sources
-            # (ENG-3131); the SDK is setuptools-built, so this is its build-time
-            # enforcement in place of a buildUvApplication pyChecker flag.
-            sdk-python-strict = tests.sdkPythonStrict;
-          }
-          // rustPackageSet;
         explicitChecks = {
           inherit (tests) eval;
           update-cargo-unit-catalog-checkout = updateCargoUnitCatalogCheckoutTest;
@@ -2092,12 +2113,28 @@
             '';
           site-test = siteTests.all;
         };
-        checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
       in
-        assert lib.assertMsg (checkNameCollisions == [])
-        "checks: duplicate names across explicit/rust sets: ${lib.concatStringsSep ", " checkNameCollisions}";
-          explicitChecks // rustChecks
+        explicitChecks
     );
+  explicitChecksFor = rustChecks:
+    if system == ix.system
+    then
+      (
+        let
+          collisionCheckName = "check-catalog-names";
+          explicitCheckNames = [collisionCheckName] ++ lib.attrNames baseExplicitChecks;
+          checkNameCollisions = lib.intersectLists explicitCheckNames (lib.attrNames rustChecks);
+        in
+          baseExplicitChecks
+          // {
+            ${collisionCheckName} = assert lib.assertMsg (checkNameCollisions == [])
+            "checks: duplicate names across explicit/rust sets: ${lib.concatStringsSep ", " checkNameCollisions}";
+              pkgs.runCommandLocal "check-catalog-names" {} ''
+                touch "$out"
+              '';
+          }
+      )
+    else baseExplicitChecks;
   packageSet =
     lib.optionalAttrs (system == ix.system) {
       base = baseImage;
@@ -2310,14 +2347,17 @@ in {
 
   inherit darwinPackageAliases;
 
-  # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
-  # and `nix flake check` require. The `.#check` gate and blast-radius consume
-  # the sharded `ciChecks` instead, so this output is not what CI enumerates.
+  # A static aggregate keeps `checks` cheap to select while preserving every
+  # dynamically named Rust leaf as a native Nix dependency. The `.#check` gate
+  # and blast-radius consume the sharded `ciChecks` directly.
   # `forkChecks` is merged on EVERY system (not just x86_64-linux like the
   # rest of `catalogFor`): the patched sources are cheap, platform-relevant
   # derivations, so `nix build .#checks.aarch64-darwin.patched-src-clippy`
   # validates the series against a local Darwin build right after a flake update.
-  checks = catalogFor rustPackageTestSets.flat // forkChecks;
+  checks =
+    flatRustChecks
+    // forkChecks
+    // explicitChecksFor flatRustChecks;
   # Closure build gates, keyed `<fork>.<patch>` (see the binding above). A
   # non-schema output like `ciChecks`, exposed per system so a darwin host can
   # gate-build natively before an upstream PR.
@@ -2329,7 +2369,10 @@ in {
   # (ENG-2201). Not a `checks.<system>.<name>` output, because a non-derivation
   # there fails the flake schema. The patched-src checks are plain derivations,
   # so they key identically in both views.
-  ciChecks = catalogFor rustPackageTestSets.sharded // forkChecks;
+  ciChecks =
+    rustChecksFor rustPackageTestSets.sharded
+    // forkChecks
+    // explicitChecksFor (rustChecksFor rustPackageTestSets.sharded);
 
   formatter = pkgs.alejandra;
 

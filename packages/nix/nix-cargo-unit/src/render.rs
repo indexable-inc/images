@@ -4305,19 +4305,16 @@ version = "0.1.0"
         )
         .unwrap();
 
-        let prepared = prepare_graph(
-            &graph,
-            &RenderOptions {
-                workspace_root: PathBuf::from("/workspace"),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap();
+        let options = RenderOptions {
+            workspace_root: PathBuf::from("/workspace"),
+            vendor_root: None,
+            cargo_lock_sources: CargoLockSources::default(),
+            content_addressed: false,
+            toolchain_id: None,
+            deny_unused_crate_dependencies: false,
+            deny_panics: false,
+        };
+        let prepared = prepare_graph(&graph, &options).unwrap();
 
         assert_ne!(prepared.names[5], prepared.names[6]);
 
@@ -4327,19 +4324,7 @@ version = "0.1.0"
             roots: vec![0],
             root_sets: Vec::new(),
         };
-        let unrelated_prepared = prepare_graph(
-            &unrelated_graph,
-            &RenderOptions {
-                workspace_root: PathBuf::from("/workspace"),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap();
+        let unrelated_prepared = prepare_graph(&unrelated_graph, &options).unwrap();
         assert_eq!(prepared.names[7], unrelated_prepared.names[0]);
     }
 
@@ -5170,6 +5155,8 @@ version = "4.6.1"
 
         assert!(rendered.contains("[ \"README.md\" \"clap-4.6.1\" ]"));
         assert!(!rendered.contains("derive_arbitrary-1.4.2"));
+        assert!(rendered.contains("pkgs.runCommand name {}"));
+        assert!(!rendered.contains("scopedClosureSource vendorDir name includes"));
         fs::remove_dir_all(workspace).unwrap();
     }
 

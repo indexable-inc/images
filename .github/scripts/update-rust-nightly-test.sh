@@ -140,12 +140,12 @@ prepare_validator_fixture() {
     "$workspace/tests/fixtures/cargo-unit-hello" \
     "$candidate/tests/fixtures/cargo-unit-hello"
   for file in flake.lock rust-toolchain.toml; do
-    cp "$source_root/$file" "$workspace/$file"
-    cp "$source_root/$file" "$candidate/$file"
+    install -m 0644 "$source_root/$file" "$workspace/$file"
+    install -m 0644 "$source_root/$file" "$candidate/$file"
   done
-  cp "$source_root/tests/fixtures/cargo-unit-hello/unit-catalog" \
+  install -m 0644 "$source_root/tests/fixtures/cargo-unit-hello/unit-catalog" \
     "$workspace/tests/fixtures/cargo-unit-hello/unit-catalog"
-  cp "$source_root/tests/fixtures/cargo-unit-hello/unit-catalog" \
+  install -m 0644 "$source_root/tests/fixtures/cargo-unit-hello/unit-catalog" \
     "$candidate/tests/fixtures/cargo-unit-hello/unit-catalog"
   git -C "$workspace" init -q
   git -C "$workspace" add flake.lock rust-toolchain.toml \

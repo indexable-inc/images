@@ -392,6 +392,7 @@
             rust-overlay
             home-manager
             ;
+          personalLightProfileCheck = (personalLightProfile system).activationPackage;
         }
     );
     collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
@@ -670,17 +671,7 @@
     overlays.default = ix.overlay;
     templates = {};
     inherit packages;
-    checks = lib.mapAttrs (
-      system: systemChecks: let
-        updateCatalog = uncheckedPackages.${system}.update-cargo-unit-catalog;
-      in
-        systemChecks
-        // {
-          personal-light-profile = (personalLightProfile system).activationPackage;
-          update-cargo-unit-catalog-host-native = assert lib.assertMsg (updateCatalog.system == system)
-          "update-cargo-unit-catalog must be host-native on ${system}"; updateCatalog;
-        }
-    ) (collect "checks");
+    checks = collect "checks";
     # Sharded keying of the same check derivations for the memory-bounded CI
     # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
     # (ENG-2201). Kept separate from `checks` because its per-package
