@@ -1506,7 +1506,11 @@
               nativeBuildInputs = [
                 pkgs.binutils
                 pkgs.jq
-                pkgs.nushell
+                # The fork package, not pkgs.nushell: the deployed shell that
+                # executes this config is newer than the repo's nixpkgs pin
+                # (0.114 names vs 0.113.1), so the check must run a
+                # repo-controlled interpreter that tracks upstream (#3428).
+                repoPackages.nushell
               ];
             }
             ''
