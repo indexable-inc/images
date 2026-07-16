@@ -314,3 +314,7 @@ export def run-all [] {
 
     print "\n✅ All 31 tests passed!"
 }
+
+def main [] {
+    run-all
+}
