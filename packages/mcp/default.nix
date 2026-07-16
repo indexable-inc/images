@@ -289,6 +289,28 @@
     ''
   );
 
+  # `embed`: Python-native code embeddings (chunk / embed / parquet cache /
+  # similarity search) for semantic clone detection and code search
+  # (index#3417). Pure Python over the bundled numpy + polars; the inference
+  # runtime (torch + sentence-transformers on MPS) is darwin-only and gated in
+  # `darwinExtraPackages`, imported lazily inside the functions that need it.
+  embedPythonSource = builtins.path {
+    name = "ix-mcp-embed-python-source";
+    path = ./src/embed;
+  };
+  embedModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-embed-python-module"
+    {
+      strictDeps = true;
+      meta.description = "In-process code-embedding battery (torch/MPS) bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/embed"
+      mkdir -p "$site"
+      cp -r ${embedPythonSource}/embed/. "$site/"
+    ''
+  );
+
   # The `ix_google` package: typed PyO3 bindings for the google-gmail and
   # google-calendar Rust crates, baked into the pinned interpreter as a
   # complement to the (untyped) `google_auth` helper. Notebook users pick
@@ -1013,6 +1035,21 @@
       vmkitModule
       imessageModule
       ghosttyModule
+      # `embed` (code embeddings, index#3417) infers on torch/MPS, so its
+      # heavyweight runtime joins the interpreter only on Darwin; the module
+      # itself is bundled everywhere and imports these lazily with a clear
+      # error where they are absent. `torch` substitutes from the official
+      # cache. `sentence-transformers` is overridden because the stock package
+      # folds every optional-dependencies extra into its nativeCheckInputs and
+      # the `audio` extra carries phonemizer -> dlinfo, which this nixpkgs
+      # marks broken, refusing evaluation outright. The extras are test-only:
+      # drop the test run rather than allowlist a broken leaf; runtime
+      # dependencies are untouched.
+      ps.torch
+      (ps.sentence-transformers.overridePythonAttrs (_: {
+        doCheck = false;
+        nativeCheckInputs = [];
+      }))
     ];
 
   # htpy: build HTML in plain Python (`div(class_="x")[ ... ]`), auto-escaping
@@ -1392,6 +1429,7 @@
       scipqlModule
       flecsQueryModule
       fsearchModule
+      embedModule
       privateSessionModule
       googleAuthModule
       ixGoogleModule
@@ -1588,6 +1626,7 @@
     "mesh"
     "fabric"
     "claude_history"
+    "embed"
   ];
   # The `ix_notebook_mcp` server package is migrated file-by-file (the package
   # as a whole is still ~200 errors from strict-clean, index#1902): each file
@@ -1648,6 +1687,9 @@
     '';
 
   tuiBundled = importTest "tui" "import tui; print('tui-ok', tui.__version__)";
+  # `embed` imports everywhere (its torch/MPS runtime loads lazily inside the
+  # embedding calls), so the import test runs on Linux too.
+  embedBundled = importTest "embed" "import embed; print('embed-ok', embed.__version__)";
   # htpy must import and auto-escape: a `<` in a text node comes out as `&lt;`.
   htpyBundled = importTest "htpy" "import htpy; print('htpy-ok' if '&lt;' in str(htpy.div['<']) else 'htpy-bad')";
   searchBundled = importTest "search" "import search; print('search-ok', search.__version__)";
@@ -5837,6 +5879,7 @@ in
               searchBundled
               astlogBundled
               fsearchBundled
+              embedBundled
               dataLibsBundled
               gmailLibsBundled
               exaBundled
