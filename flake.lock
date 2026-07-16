@@ -1,17 +1,5 @@
 {
   "nodes": {
-    "bench-filesystem": {
-      "flake": false,
-      "locked": {
-        "path": "./packages/indexbench/filesystem",
-        "type": "path"
-      },
-      "original": {
-        "path": "./packages/indexbench/filesystem",
-        "type": "path"
-      },
-      "parent": []
-    },
     "btop-src": {
       "flake": false,
       "locked": {
@@ -504,7 +492,6 @@
     },
     "root": {
       "inputs": {
-        "bench-filesystem": "bench-filesystem",
         "btop-src": "btop-src",
         "clippy-src": "clippy-src",
         "codex-src": "codex-src",
