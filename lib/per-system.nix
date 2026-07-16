@@ -395,7 +395,11 @@
       # outright, and a call site that still passes the attr surfaces in the
       # eval checks -- exactly the manual migration the check stage's comment
       # prescribes. statix discovers statix.toml at the tree root (the nix
-      # lane source carries it).
+      # lane source carries it). deadnix runs before statix because its
+      # edits create statix findings the other order leaves behind: deleting
+      # a lambda pattern's last unused name leaves `{}:`, which statix's
+      # empty_pattern fix rewrites to `_:`; statix fixes never introduce
+      # dead code, so this order converges in one pass.
       nix = mkLane {
         name = "nix";
         tools = [
@@ -404,8 +408,8 @@
           pkgs.statix
         ];
         fix = ''
-          statix fix .
           deadnix --edit .
+          statix fix .
           alejandra --quiet .
         '';
       };
@@ -1651,9 +1655,13 @@
           lint-fix = let
             # One fixable finding per nix-lane tool: an unused binding
             # (deadnix --edit), useless parens (statix fix), misformatting
-            # (alejandra).
+            # (alejandra). The unused lambda pattern also pins the lane's
+            # ordering: deadnix deletes `unusedArg` leaving `{}:`, a fresh
+            # empty_pattern finding only a statix fix run AFTER deadnix
+            # repairs, so a statix-first lane fails this check's post-fix
+            # statix stage.
             violatingNix = pkgs.writeTextDir "fixture.nix" ''
-              let
+              {unusedArg}: let
                 unused = 1;
                 greeting = ("hello");
               in {   inherit greeting; }
