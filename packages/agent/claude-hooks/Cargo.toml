@@ -27,6 +27,8 @@ libc.workspace = true
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tree-sitter.workspace = true
+tree-sitter-bash.workspace = true
 # friction-report routes the model child's stdout to a real temp file (not a
 # pipe), and the subagent-cache tests use it too.
 tempfile.workspace = true

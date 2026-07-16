@@ -9,6 +9,7 @@
 //! returns with no output and the call proceeds.
 
 use serde_json::Value;
+use tree_sitter::{Node, Parser};
 
 use crate::DenyOutput;
 
@@ -109,15 +110,119 @@ fn grep_walks_tree(stage: &str) -> bool {
     false
 }
 
+fn node_text<'a>(node: Node<'_>, source: &'a str) -> Option<&'a str> {
+    source.get(node.byte_range())
+}
+
+type SyntaxPredicate = for<'tree> fn(Node<'tree>, &str) -> bool;
+
+fn variable_target_is_path(node: Node<'_>, source: &str) -> bool {
+    match node.kind() {
+        "variable_name" => node_text(node, source) == Some("path"),
+        "subscript" => node
+            .child_by_field_name("name")
+            .is_some_and(|name| variable_target_is_path(name, source)),
+        _ => false,
+    }
+}
+
+fn declaration_binds_path(node: Node<'_>, source: &str) -> bool {
+    // Attribute-only export and `-p` inspection preserve the tied parameter.
+    if node_text(node, source).and_then(|text| text.split_ascii_whitespace().next())
+        == Some("export")
+    {
+        return false;
+    }
+
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.named_children(&mut cursor).collect();
+    let prints_declaration = children.iter().any(|child| {
+        child.kind() == "word"
+            && node_text(*child, source).is_some_and(|word| {
+                word.strip_prefix('-')
+                    .is_some_and(|flags| flags.contains('p'))
+            })
+    });
+    !prints_declaration
+        && children
+            .into_iter()
+            .any(|child| variable_target_is_path(child, source))
+}
+
+fn is_zsh_path_binding(node: Node<'_>, source: &str) -> bool {
+    match node.kind() {
+        "variable_assignment" => node
+            .child_by_field_name("name")
+            .is_some_and(|name| variable_target_is_path(name, source)),
+        "declaration_command" => declaration_binds_path(node, source),
+        "for_statement" => node
+            .child_by_field_name("variable")
+            .is_some_and(|variable| variable_target_is_path(variable, source)),
+        _ => false,
+    }
+}
+
+fn syntax_tree_matches(node: Node<'_>, source: &str, predicate: SyntaxPredicate) -> bool {
+    if predicate(node, source) {
+        return true;
+    }
+
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| syntax_tree_matches(child, source, predicate))
+}
+
+fn bash_syntax_matches(command: &str, predicate: SyntaxPredicate) -> bool {
+    let mut parser = Parser::new();
+    if parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .is_err()
+    {
+        return false;
+    }
+    parser
+        .parse(command, None)
+        .is_some_and(|tree| syntax_tree_matches(tree.root_node(), command, predicate))
+}
+
+fn has_zsh_path_binding(command: &str) -> bool {
+    bash_syntax_matches(command, is_zsh_path_binding)
+}
+
+fn is_double_quoted_backtick_substitution(node: Node<'_>, source: &str) -> bool {
+    if node.kind() != "command_substitution"
+        || !node_text(node, source).is_some_and(|text| text.starts_with('`'))
+    {
+        return false;
+    }
+
+    let mut ancestor = node.parent();
+    while let Some(node) = ancestor {
+        if node.kind() == "string" {
+            return true;
+        }
+        ancestor = node.parent();
+    }
+    false
+}
+
+fn has_double_quoted_backtick_substitution(command: &str) -> bool {
+    bash_syntax_matches(command, is_double_quoted_backtick_substitution)
+}
+
 /// `PreToolUse(Bash)`: block recurring bad command shapes (output-to-/dev/null,
-/// recursive `grep -r`, `--no-verify`). Quote/escape-aware so a literal mention
-/// inside a commit message or `echo` is not a false positive.
+/// recursive `grep -r`, `--no-verify`, lowercase zsh `path` bindings, and
+/// double-quoted backticks).
+/// Quote/escape-aware so a literal mention inside a commit message or `echo` is
+/// not a false positive.
 pub fn bash_habits_guard() {
     let Some(payload) = payload() else { return };
     if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
         return;
     }
     let raw = command_of(&payload);
+    let zsh_path_binding = has_zsh_path_binding(&raw);
+    let double_quoted_backticks = has_double_quoted_backtick_substitution(&raw);
 
     // Match operators, not literal text inside a quoted string. Neutralize
     // escaped chars, then drop quoted substrings (a real `2>/dev/null` /
@@ -173,6 +278,29 @@ pub fn bash_habits_guard() {
              yourself outside the agent. (bash-habits-guard hook)"
                 .to_owned(),
         );
+        return;
+    }
+
+    // In zsh, lowercase `path` is tied to `PATH`. Parse binding nodes so
+    // harmless arguments such as `echo path=/tmp` remain allowed.
+    if zsh_path_binding {
+        deny(
+            "In zsh, lowercase `path` is tied to `PATH`, so binding or assigning \
+             it changes the command search path. Use a descriptive name such \
+             as `worktree_path` instead. (bash-habits-guard hook)"
+                .to_owned(),
+        );
+        return;
+    }
+
+    if double_quoted_backticks {
+        deny(
+            "Backticks inside double quotes trigger shell command substitution, so literal \
+             text can execute and disappear before the command runs. Use single quotes for \
+             literal text and search patterns, escape each backtick when interpolation is \
+             required, or use `$()` for intentional substitution. (bash-habits-guard hook)"
+                .to_owned(),
+        );
     }
 }
 
@@ -195,7 +323,10 @@ pub fn search_guard() {
 
 #[cfg(test)]
 mod tests {
-    use super::{grep_walks_tree, is_recursive_flag};
+    use super::{
+        grep_walks_tree, has_double_quoted_backtick_substitution, has_zsh_path_binding,
+        is_recursive_flag,
+    };
 
     #[test]
     fn recursive_flag_detection() {
@@ -219,5 +350,63 @@ mod tests {
         assert!(!grep_walks_tree("grep foo"));
         // -- ends flags
         assert!(!grep_walks_tree("grep -- -r"));
+    }
+
+    #[test]
+    fn zsh_path_binding_detection() {
+        for command in [
+            "path=/private/tmp/worktree; git status",
+            "path=(/private/tmp/worktree /bin); git status",
+            "path[1]=/private/tmp/worktree; git status",
+            "f() { local path=/private/tmp/worktree; git status; }; f",
+            "f() { local path; git status; }; f",
+            "f() { typeset path; git status; }; f",
+            "FOO=bar path=/private/tmp/worktree git status",
+            "result=$(path=/private/tmp/worktree; git status)",
+            "for path in /private/tmp/worktree /bin; do git status; done",
+        ] {
+            assert!(has_zsh_path_binding(command), "{command:?}");
+        }
+
+        for command in [
+            "worktree_path=/private/tmp/worktree; git status",
+            "PATH=/private/tmp/worktree git status",
+            "echo path=/private/tmp/worktree",
+            "env path=/private/tmp/worktree git status",
+            "bash -c 'path=/private/tmp/worktree; git status'",
+            "cat <<'EOF'\npath=/private/tmp/worktree\nEOF",
+            "export path",
+            "typeset -p path",
+        ] {
+            assert!(!has_zsh_path_binding(command), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn double_quoted_backtick_substitution_detection() {
+        for command in [
+            r#"rg -n "literal `:ixvm` pattern" ."#,
+            r#"query="`printf literal`"; rg "$query" ."#,
+            "printf '%s\\n' \"first line\\n`printf second`\\nthird line\"",
+        ] {
+            assert!(
+                has_double_quoted_backtick_substitution(command),
+                "{command:?}"
+            );
+        }
+
+        for command in [
+            r"rg -n 'literal `:ixvm` pattern' .",
+            r#"rg -n "literal \`:ixvm\` pattern" ."#,
+            r#"printf '%s\n' "$(pwd)""#,
+            r"printf '%s\n' `pwd`",
+            "# Markdown `code` in a comment",
+            "cat <<'EOF'\\nMarkdown `code`\\nEOF",
+        ] {
+            assert!(
+                !has_double_quoted_backtick_substitution(command),
+                "{command:?}"
+            );
+        }
     }
 }

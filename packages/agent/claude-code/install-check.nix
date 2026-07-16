@@ -473,6 +473,23 @@
     pre_guard bash-habits-guard "quoted mention not a false positive" allow \
       "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo '2>/dev/null'\"}}"
 
+    pre_guard bash-habits-guard "zsh path assignment denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"path=/private/tmp/worktree; git status"}}'
+    pre_guard bash-habits-guard "zsh local path assignment denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"f() { local path=/private/tmp/worktree; git status; }; f"}}'
+    pre_guard bash-habits-guard "zsh path subscript assignment denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"path[1]=/private/tmp/worktree; git status"}}'
+    pre_guard bash-habits-guard "zsh local path declaration denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"f() { local path; git status; }; f"}}'
+    pre_guard bash-habits-guard "zsh path loop binding denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"for path in /private/tmp/worktree /bin; do git status; done"}}'
+    pre_guard bash-habits-guard "descriptive path variable allowed" allow \
+      '{"tool_name":"Bash","tool_input":{"command":"worktree_path=/private/tmp/worktree; git status"}}'
+    pre_guard bash-habits-guard "path argument allowed" allow \
+      '{"tool_name":"Bash","tool_input":{"command":"echo path=/private/tmp/worktree"}}'
+    pre_guard bash-habits-guard "double quoted backticks denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"rg -n \"literal `:ixvm` pattern\" ."}}'
+
     pre_guard search-guard "Search tool denied" deny '{"tool_name":"Search"}'
     pre_guard search-guard "WebSearch not denied" allow '{"tool_name":"WebSearch"}'
 
