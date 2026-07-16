@@ -58,7 +58,7 @@ pub fn harvest(
         // snapshot; the unit template overlays it with --remove-destination so
         // a modified file shadows its source symlink.
         let in_snapshot = match std::fs::symlink_metadata(&src_path) {
-            Ok(_) => !same_bytes(&obj_path, &src_path)?,
+            Ok(_) => !same_entry(&obj_path, &src_path)?,
             Err(_) => true,
         };
         if in_snapshot {
@@ -73,10 +73,22 @@ pub fn harvest(
                 std::fs::create_dir_all(parent)
                     .wrap_err_with(|| format!("creating {}", parent.display()))?;
             }
-            // fs::copy follows symlinks and preserves permission bits, so
-            // snapshotted host tools stay executable.
-            std::fs::copy(objtree.join(rel), &dst)
-                .wrap_err_with(|| format!("snapshotting {rel}"))?;
+            let src = objtree.join(rel);
+            let meta = std::fs::symlink_metadata(&src)
+                .wrap_err_with(|| format!("stat {}", src.display()))?;
+            if meta.is_symlink() {
+                // Recreate symlinks verbatim (kbuild makes dir-targeted links
+                // like scripts/dtc/include-prefixes/*); copying would follow
+                // them and fail on directories.
+                let target = std::fs::read_link(&src)
+                    .wrap_err_with(|| format!("readlink {}", src.display()))?;
+                std::os::unix::fs::symlink(&target, &dst)
+                    .wrap_err_with(|| format!("snapshotting symlink {rel}"))?;
+            } else {
+                // fs::copy preserves permission bits, so snapshotted host
+                // tools stay executable.
+                std::fs::copy(&src, &dst).wrap_err_with(|| format!("snapshotting {rel}"))?;
+            }
         }
     }
 
@@ -164,9 +176,17 @@ fn in_generated_snapshot(rel: &str, unit_targets: &BTreeSet<&str>) -> bool {
     true
 }
 
-fn same_bytes(a: &Path, b: &Path) -> color_eyre::Result<bool> {
-    let meta_a = std::fs::metadata(a).wrap_err_with(|| format!("stat {}", a.display()))?;
-    let meta_b = std::fs::metadata(b).wrap_err_with(|| format!("stat {}", b.display()))?;
+fn same_entry(a: &Path, b: &Path) -> color_eyre::Result<bool> {
+    let meta_a = std::fs::symlink_metadata(a).wrap_err_with(|| format!("stat {}", a.display()))?;
+    let meta_b = std::fs::symlink_metadata(b).wrap_err_with(|| format!("stat {}", b.display()))?;
+    if meta_a.is_symlink() || meta_b.is_symlink() {
+        if !(meta_a.is_symlink() && meta_b.is_symlink()) {
+            return Ok(false);
+        }
+        let link_a = std::fs::read_link(a).wrap_err_with(|| format!("readlink {}", a.display()))?;
+        let link_b = std::fs::read_link(b).wrap_err_with(|| format!("readlink {}", b.display()))?;
+        return Ok(link_a == link_b);
+    }
     if meta_a.len() != meta_b.len() {
         return Ok(false);
     }
@@ -232,6 +252,39 @@ mod tests {
         for rel in &plan.generated {
             assert!(out.join(rel).is_file(), "snapshot copy missing {rel}");
         }
+    }
+
+    #[test]
+    fn handles_symlinks() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let srctree = tmp.path().join("src");
+        let objtree = tmp.path().join("obj");
+        let out = tmp.path().join("generated");
+
+        // A dir-targeted symlink present identically in src (kbuild's
+        // scripts/dtc/include-prefixes/*) stays out of the snapshot.
+        write(&srctree, "arch/arc/boot/dts/x.dts", "dts\n");
+        write(&objtree, "arch/arc/boot/dts/x.dts", "dts\n");
+        std::fs::create_dir_all(srctree.join("scripts/dtc/include-prefixes")).expect("mkdir");
+        std::fs::create_dir_all(objtree.join("scripts/dtc/include-prefixes")).expect("mkdir");
+        for root in [&srctree, &objtree] {
+            std::os::unix::fs::symlink(
+                "../../../arch/arc/boot/dts",
+                root.join("scripts/dtc/include-prefixes/arc"),
+            )
+            .expect("symlink fixture");
+        }
+        // A build-created symlink flows into the snapshot as a symlink.
+        std::os::unix::fs::symlink("arch/arc/boot/dts", objtree.join("dts-link"))
+            .expect("symlink fixture");
+        write(&objtree, "include/config/kernel.release", "6.12.95\n");
+
+        let plan = harvest(&objtree, &srctree, Some(&out)).expect("harvest");
+        assert_eq!(
+            plan.generated,
+            ["dts-link", "include/config/kernel.release"]
+        );
+        assert!(out.join("dts-link").is_symlink(), "snapshot keeps symlink");
     }
 
     #[test]
