@@ -45,10 +45,13 @@ outputs); per-unit source scoping is #3412.
     KBUILD_BUILD_USER = "nixbld";
     KBUILD_BUILD_HOST = "ix";
     KBUILD_BUILD_VERSION = "1";
-    # The ld-wrapper otherwise injects `-rpath $out/lib` into shared-object
-    # links; the 32-bit vdso is linked as a .so, so the builder's own store
-    # path lands inside vmlinux and plan/unit outputs can never match.
-    NIX_DONT_SET_RPATH = "1";
+    # stdenv setup's _addRpathPrefix otherwise prepends `-rpath $out/lib` to
+    # NIX_LDFLAGS; the 32-bit vdso is linked as a .so, so the builder's own
+    # store path lands inside vmlinux and plan/unit outputs can never match
+    # (#3411: gate diverged by exactly this 30-byte hash). NIX_DONT_SET_RPATH
+    # is the wrong knob: it governs the ld-wrapper's -L auto-rpath and is
+    # suffix-salted, so the bare name is ignored.
+    NIX_NO_SELF_RPATH = "1";
   };
 
   contentAddressing = {
