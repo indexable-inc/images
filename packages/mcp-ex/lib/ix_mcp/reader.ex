@@ -7,32 +7,37 @@ defmodule IxMcp.Reader do
   reads that file too. `start`/`end` select a 1-based inclusive line range.
   """
 
+  alias IxMcp.Evaluator
+  alias IxMcp.Jobs
+
   @eval_budget_s 30
 
   @spec read(String.t(), pos_integer() | nil, pos_integer() | nil) ::
           {:ok, String.t()} | {:error, String.t()}
   def read(target, first \\ nil, last \\ nil) do
-    cond do
-      File.regular?(target) ->
-        read_file(target, first, last)
+    if File.regular?(target) do
+      read_file(target, first, last)
+    else
+      read_value(target, first, last)
+    end
+  end
 
-      true ->
-        case IxMcp.Jobs.run(target, budget: @eval_budget_s, intent: "read #{String.slice(target, 0, 40)}") do
-          {%{status: :done} = summary, _output} ->
-            value_result(summary.id, first, last)
+  defp read_value(target, first, last) do
+    case Jobs.run(target, budget: @eval_budget_s, intent: "read #{String.slice(target, 0, 40)}") do
+      {%{status: :done} = summary, _output} ->
+        value_result(summary.id, first, last)
 
-          {%{running: true} = summary, _output} ->
-            {:error,
-             "expression still evaluating after #{@eval_budget_s}s; page it as job #{summary.id}"}
+      {%{running: true} = summary, _output} ->
+        {:error,
+         "expression still evaluating after #{@eval_budget_s}s; page it as job #{summary.id}"}
 
-          {%{result: message}, _output} ->
-            {:error, message || "evaluation failed"}
-        end
+      {%{result: message}, _output} ->
+        {:error, message || "evaluation failed"}
     end
   end
 
   defp value_result(job_id, first, last) do
-    case IxMcp.Jobs.result(job_id) do
+    case Jobs.result(job_id) do
       {:ok, value} when is_binary(value) ->
         if File.regular?(value) do
           read_file(value, first, last)
@@ -41,7 +46,7 @@ defmodule IxMcp.Reader do
         end
 
       {:ok, value} ->
-        {:ok, slice_lines(IxMcp.Evaluator.render(value), first, last)}
+        {:ok, slice_lines(Evaluator.render(value), first, last)}
 
       {:error, reason} ->
         {:error, inspect(reason)}

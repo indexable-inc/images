@@ -11,6 +11,7 @@ defmodule IxMcp.Application do
       │   └── IxMcp.Jobs.Job*   runs one evaluation in a monitored process
       ├── IxMcp.Jobs.History    ordered record of every run
       ├── IxMcp.MCP.Notifier    server-initiated notification fan-out
+      ├── IxMcp.PrWatch.Supervisor (Task.Supervisor)  one task per PR watch
       └── IxMcp.MCP.Stdio       (only when IX_MCP_STDIO=1) the stdio transport
 
   The transport is opt-in via environment so `mix test` and IEx sessions get
@@ -29,7 +30,8 @@ defmodule IxMcp.Application do
         {Registry, keys: :unique, name: IxMcp.Jobs.Registry},
         {DynamicSupervisor, name: IxMcp.Jobs.Supervisor, strategy: :one_for_one},
         IxMcp.Jobs.History,
-        IxMcp.MCP.Notifier
+        IxMcp.MCP.Notifier,
+        {Task.Supervisor, name: IxMcp.PrWatch.Supervisor}
       ] ++ transport()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: IxMcp.Supervisor)

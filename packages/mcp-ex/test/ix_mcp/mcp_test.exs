@@ -42,8 +42,14 @@ defmodule IxMcp.MCPTest do
   end
 
   test "session_set_name and topic_set round-trip" do
-    Server.handle(request("tools/call", %{"name" => "session_set_name", "arguments" => %{"name" => "abc"}}))
-    Server.handle(request("tools/call", %{"name" => "topic_set", "arguments" => %{"topic" => "xyz"}}))
+    Server.handle(
+      request("tools/call", %{"name" => "session_set_name", "arguments" => %{"name" => "abc"}})
+    )
+
+    Server.handle(
+      request("tools/call", %{"name" => "topic_set", "arguments" => %{"topic" => "xyz"}})
+    )
+
     assert IxMcp.Session.get() == %{name: "abc", topic: "xyz"}
   end
 

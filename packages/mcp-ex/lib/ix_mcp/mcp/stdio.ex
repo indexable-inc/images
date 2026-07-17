@@ -12,6 +12,7 @@ defmodule IxMcp.MCP.Stdio do
 
   use GenServer
 
+  alias IxMcp.MCP.Notifier
   alias IxMcp.MCP.Server
 
   @spec start_link(term()) :: GenServer.on_start()
@@ -21,30 +22,32 @@ defmodule IxMcp.MCP.Stdio do
 
   @impl true
   def init(_) do
-    IxMcp.MCP.Notifier.register(self())
+    Notifier.register(self())
     reader = self()
     spawn_link(fn -> read_loop(reader) end)
-    {:ok, %{}}
+    {:ok, %{pending: MapSet.new(), eof: false}}
   end
 
   @impl true
   def handle_info({:mcp_recv, line}, state) do
     stdio = self()
 
-    Task.start(fn ->
-      case JSON.decode(line) do
-        {:ok, message} ->
-          case Server.handle(message) do
-            nil -> :ok
-            response -> send(stdio, {:mcp_send, response})
-          end
+    {:ok, pid} =
+      Task.start(fn ->
+        case JSON.decode(line) do
+          {:ok, message} ->
+            case Server.handle(message) do
+              nil -> :ok
+              response -> send(stdio, {:mcp_send, response})
+            end
 
-        {:error, _reason} ->
-          send(stdio, {:mcp_send, parse_error()})
-      end
-    end)
+          {:error, _reason} ->
+            send(stdio, {:mcp_send, parse_error()})
+        end
+      end)
 
-    {:noreply, state}
+    ref = Process.monitor(pid)
+    {:noreply, %{state | pending: MapSet.put(state.pending, ref)}}
   end
 
   def handle_info({:mcp_send, message}, state) do
@@ -52,11 +55,25 @@ defmodule IxMcp.MCP.Stdio do
     {:noreply, state}
   end
 
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    maybe_stop(%{state | pending: MapSet.delete(state.pending, ref)})
+  end
+
+  # The client closed stdin: finish the requests already dispatched, then
+  # stop the whole VM cleanly (exit 0) -- an MCP server's life IS its stdin.
   def handle_info(:mcp_eof, state) do
-    {:stop, :normal, state}
+    maybe_stop(%{state | eof: true})
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  defp maybe_stop(state) do
+    if state.eof and MapSet.size(state.pending) == 0 do
+      System.stop(0)
+    end
+
+    {:noreply, state}
+  end
 
   defp read_loop(server) do
     case IO.binread(:stdio, :line) do
@@ -77,6 +94,10 @@ defmodule IxMcp.MCP.Stdio do
   end
 
   defp parse_error do
-    %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => -32_700, "message" => "parse error"}}
+    %{
+      "jsonrpc" => "2.0",
+      "id" => nil,
+      "error" => %{"code" => -32_700, "message" => "parse error"}
+    }
   end
 end

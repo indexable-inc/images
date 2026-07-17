@@ -78,7 +78,9 @@ defmodule IxMcp.Kernel do
       info ->
         stack =
           info[:current_stacktrace]
-          |> Enum.map_join("\n", fn entry -> "    " <> Exception.format_stacktrace_entry(entry) end)
+          |> Enum.map_join("\n", fn entry ->
+            "    " <> Exception.format_stacktrace_entry(entry)
+          end)
 
         "#{label} #{inspect(pid)} [#{info[:status]}, queue=#{info[:message_queue_len]}, reductions=#{info[:reductions]}]\n" <>
           stack

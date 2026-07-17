@@ -16,7 +16,11 @@ defmodule IxMcp.Jobs.Job do
 
   alias IxMcp.Evaluator
   alias IxMcp.Evaluator.IOProxy
+  alias IxMcp.Jobs.History
+  alias IxMcp.MCP.Notifier
   alias IxMcp.OsProc
+  alias IxMcp.Session
+  alias IxMcp.Workspace
 
   @enforce_keys [:id, :code]
   defstruct [
@@ -39,6 +43,25 @@ defmodule IxMcp.Jobs.Job do
   ]
 
   @type status :: :running | :done | :failed | :cancelled
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          code: String.t(),
+          intent: String.t() | nil,
+          session: String.t() | nil,
+          topic: String.t() | nil,
+          buffer: :ets.tid() | nil,
+          io_proxy: pid() | nil,
+          eval_pid: pid() | nil,
+          eval_ref: reference() | nil,
+          started_mono: integer() | nil,
+          started_at: DateTime.t() | nil,
+          finished_mono: integer() | nil,
+          result: {:value, term()} | {:failure, String.t()} | nil,
+          status: status(),
+          diagnostics: [String.t()],
+          subscribers: [pid()]
+        }
 
   @type summary :: %{
           id: String.t(),
@@ -117,7 +140,7 @@ defmodule IxMcp.Jobs.Job do
 
   @impl true
   def init({id, code, opts}) do
-    session = IxMcp.Session.get()
+    session = Session.get()
 
     state = %__MODULE__{
       id: id,
@@ -144,12 +167,12 @@ defmodule IxMcp.Jobs.Job do
     {eval_pid, eval_ref} =
       spawn_monitor(fn ->
         Process.group_leader(self(), io_proxy)
-        {binding, env} = IxMcp.Workspace.snapshot()
+        {binding, env} = Workspace.snapshot()
 
         outcome =
           case Evaluator.eval(code, binding, env) do
             {:ok, value, binding, env, diags} ->
-              IxMcp.Workspace.merge(binding, env)
+              Workspace.merge(binding, env)
               {:done, value, diags}
 
             {:parse_error, message} ->
@@ -162,7 +185,7 @@ defmodule IxMcp.Jobs.Job do
         send(job, {:eval_finished, self(), outcome})
       end)
 
-    IxMcp.Jobs.History.record(initial_history(state))
+    History.record(initial_history(state))
     {:noreply, %{state | io_proxy: io_proxy, eval_pid: eval_pid, eval_ref: eval_ref}}
   end
 
@@ -223,7 +246,10 @@ defmodule IxMcp.Jobs.Job do
     {:noreply, state}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{eval_ref: ref, status: :running} = state) do
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{eval_ref: ref, status: :running} = state
+      ) do
     # The cell's process died without reporting: a crash (exit, throw from a
     # linked process, kill). The exit reason IS the crash report, state and
     # all -- format it whole.
@@ -245,8 +271,8 @@ defmodule IxMcp.Jobs.Job do
 
     summary = build_summary(state)
     Enum.each(state.subscribers, fn pid -> send(pid, {:ix_job_finished, state.id, summary}) end)
-    IxMcp.Jobs.History.finished(state.id, status, summary.elapsed_s)
-    IxMcp.MCP.Notifier.job_finished(summary)
+    History.finished(state.id, status, summary.elapsed_s)
+    Notifier.job_finished(summary)
     %{state | subscribers: []}
   end
 
@@ -263,7 +289,8 @@ defmodule IxMcp.Jobs.Job do
       running: state.status == :running,
       intent: state.intent,
       elapsed_s: (finished - state.started_mono) / 1000,
-      output_bytes: :ets.foldl(fn {_seq, chunk}, acc -> acc + byte_size(chunk) end, 0, state.buffer),
+      output_bytes:
+        :ets.foldl(fn {_seq, chunk}, acc -> acc + byte_size(chunk) end, 0, state.buffer),
       diagnostics: state.diagnostics,
       result: render_result(state)
     }

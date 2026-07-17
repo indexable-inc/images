@@ -93,6 +93,54 @@ defmodule IxMcp.MCP.Tools do
         "inputSchema" => %{"type" => "object", "properties" => %{}}
       },
       %{
+        "name" => "pr_watch",
+        "description" => """
+        Watch a GitHub pull request via `gh` and push a channel notification
+        when it merges, closes, errors, or the watch times out. Watching is
+        read-only: it never arms auto-merge; merging stays an explicit act.
+        """,
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "pr" => %{
+              "type" => "string",
+              "description" => "PR number, URL, or branch gh understands"
+            },
+            "cwd" => %{
+              "type" => "string",
+              "description" => "Repository worktree where gh should run"
+            },
+            "interval" => %{"type" => "number", "default" => 15},
+            "timeout" => %{"type" => "number", "default" => 3600}
+          },
+          "required" => ["pr", "cwd"]
+        }
+      },
+      %{
+        "name" => "tui_act",
+        "description" => """
+        Drive a federated TUI resource: send keystrokes to a peer's live
+        terminal resource. Bridges to `ix-resource-cli act` and degrades
+        clearly when the CLI is absent. Omit `peer` to probe the peers in
+        IX_RESOURCE_PEERS for the one advertising the uri.
+        """,
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "uri" => %{"type" => "string", "description" => "ix://<host>/<name> resource uri"},
+            "send_keys" => %{
+              "type" => "string",
+              "description" => "Literal keystrokes, e.g. 'ls\n' or 'C-c'"
+            },
+            "peer" => %{
+              "type" => "string",
+              "description" => "Optional full endpoint URL of one peer"
+            }
+          },
+          "required" => ["uri", "send_keys"]
+        }
+      },
+      %{
         "name" => "kernel_restart",
         "description" => """
         Restart the evaluator on purpose: cancel every running job (their OS
@@ -137,6 +185,20 @@ defmodule IxMcp.MCP.Tools do
   def call("read", _args), do: {:error, "read requires string `target`"}
 
   def call("kernel_trace", _args), do: {:ok, IxMcp.Kernel.trace()}
+
+  def call("pr_watch", %{"pr" => pr, "cwd" => cwd} = args)
+      when is_binary(pr) and is_binary(cwd) do
+    IxMcp.PrWatch.start(pr, cwd, Map.get(args, "interval", 15), Map.get(args, "timeout", 3600))
+  end
+
+  def call("pr_watch", _args), do: {:error, "pr_watch requires string `pr` and `cwd`"}
+
+  def call("tui_act", %{"uri" => uri, "send_keys" => keys} = args)
+      when is_binary(uri) and is_binary(keys) do
+    IxMcp.Resources.act(uri, keys, Map.get(args, "peer"))
+  end
+
+  def call("tui_act", _args), do: {:error, "tui_act requires string `uri` and `send_keys`"}
 
   def call("kernel_restart", _args) do
     report = IxMcp.Kernel.restart()

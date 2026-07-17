@@ -19,10 +19,14 @@ defmodule IxMcp.MixProject do
     ]
   end
 
-  # Zero runtime dependencies on purpose: OTP >= 27 ships a JSON module
+  # Zero RUNTIME dependencies on purpose: OTP >= 27 ships a JSON module
   # (exposed as `JSON` in Elixir 1.18), so the MCP wire format needs no hex
-  # package and the Nix build needs no Mix-deps fixed-output derivation.
+  # package and the released server carries no Mix deps at all.
   defp deps do
-    []
+    [
+      # Static-analysis gate, test-only so the server runs `mix` offline with
+      # no deps; the sandboxed check runs in :test where credo is fetched.
+      {:credo, "~> 1.7", only: :test, runtime: false}
+    ]
   end
 end

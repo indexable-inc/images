@@ -76,7 +76,9 @@ defmodule IxMcp.Checkpoint do
   def load_file(path) do
     with {:ok, bin} <- File.read(path),
          {:ix_mcp_checkpoint, 1, named} <- :erlang.binary_to_term(bin) do
-      binding = Enum.map(named, fn {name, value_bin} -> {name, :erlang.binary_to_term(value_bin)} end)
+      binding =
+        Enum.map(named, fn {name, value_bin} -> {name, :erlang.binary_to_term(value_bin)} end)
+
       {current, env} =
         case fetch() do
           {:ok, b, e} -> {b, e}
@@ -108,7 +110,9 @@ defmodule IxMcp.Checkpoint do
   defp contains_live_ref?(v) when is_pid(v) or is_port(v) or is_reference(v), do: true
   defp contains_live_ref?(v) when is_function(v), do: not check_fun(v)
   defp contains_live_ref?(v) when is_list(v), do: Enum.any?(v, &contains_live_ref?/1)
-  defp contains_live_ref?(v) when is_tuple(v), do: v |> Tuple.to_list() |> Enum.any?(&contains_live_ref?/1)
+
+  defp contains_live_ref?(v) when is_tuple(v),
+    do: v |> Tuple.to_list() |> Enum.any?(&contains_live_ref?/1)
 
   defp contains_live_ref?(%_struct{} = v),
     do: v |> Map.from_struct() |> Map.values() |> Enum.any?(&contains_live_ref?/1)

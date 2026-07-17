@@ -40,7 +40,9 @@ defmodule IxMcp.OsProc do
   def kill_tree(os_pid) do
     os_pid
     |> descendants()
-    |> Enum.each(fn pid -> System.cmd("kill", ["-9", Integer.to_string(pid)], stderr_to_stdout: true) end)
+    |> Enum.each(fn pid ->
+      System.cmd("kill", ["-9", Integer.to_string(pid)], stderr_to_stdout: true)
+    end)
 
     :ok
   end

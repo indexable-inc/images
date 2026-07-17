@@ -61,6 +61,9 @@ in
       else null;
 
     strictDeps = true;
+    # Mix >= 1.18 starts Mix.PubSub, which opens a loopback TCP socket at
+    # compile time; the darwin sandbox denies plain sockets without this.
+    __darwinAllowLocalNetworking = true;
 
     nativeBuildInputs =
       [

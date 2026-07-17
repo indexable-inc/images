@@ -10,6 +10,7 @@ defmodule IxMcp.Jobs do
       Jobs.history()            # recent runs, newest first
   """
 
+  alias IxMcp.Jobs.History
   alias IxMcp.Jobs.Job
 
   @doc """
@@ -113,8 +114,8 @@ defmodule IxMcp.Jobs do
   end
 
   @doc "Recent runs, newest first."
-  @spec history(pos_integer()) :: [IxMcp.Jobs.History.entry()]
-  def history(n \\ 20), do: IxMcp.Jobs.History.list(n)
+  @spec history(pos_integer()) :: [History.entry()]
+  def history(n \\ 20), do: History.list(n)
 
   defp lines(id) do
     id |> output() |> String.split("\n")

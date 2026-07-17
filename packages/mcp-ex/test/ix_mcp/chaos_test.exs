@@ -43,15 +43,15 @@ defmodule IxMcp.ChaosTest do
     assert after_restart.result == "42"
   end
 
+  @tag :os_procs
   test "a job cancelled mid-subprocess leaves no orphan even under restart" do
     marker = "ix-mcp-chaos-#{System.unique_integer([:positive])}"
 
-    {job, _} =
-      Jobs.run(
-        "System.cmd(\"sh\", [\"-c\", \"sleep 600; echo #{marker}\"])",
-        budget: 0.2,
-        intent: "spawn subprocess"
-      )
+    code = """
+    System.cmd("sh", ["-c", "sleep 600; echo #{marker}"])
+    """
+
+    {job, _} = Jobs.run(code, budget: 0.2, intent: "spawn subprocess")
 
     assert job.running
     assert {_, 0} = System.cmd("pgrep", ["-f", marker])
