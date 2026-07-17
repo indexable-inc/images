@@ -98,22 +98,29 @@
       printf 'claude launcher env check failed: disabled-feature vars must be env_defaults, not env\n' >&2
       exit 1
     fi
-    ${lib.optionalString (wrapperEnvDefaults ? CLAUDE_CODE_DISABLE_1M_CONTEXT) ''
-    envstub="$PWD/envstub"
-    printf '%s\n' '#!${runtimeShell}' 'printf "%s\n" "''${CLAUDE_CODE_DISABLE_1M_CONTEXT-unset}"' > "$envstub"
-    chmod +x "$envstub"
-    sed "s|@helper@|$envstub|" ${launchSpec} > "$PWD/env-spec.json"
-    got="$(env -u CLAUDE_CODE_DISABLE_1M_CONTEXT IX_LAUNCH_SPEC="$PWD/env-spec.json" "$launcher")"
-    if [ "$got" != 1 ]; then
-      printf '1M-context guard check failed: unset caller env must get the default, got %s\n' "$got" >&2
-      exit 1
-    fi
-    got="$(env CLAUDE_CODE_DISABLE_1M_CONTEXT= IX_LAUNCH_SPEC="$PWD/env-spec.json" "$launcher")"
-    if [ "$got" != "" ]; then
-      printf '1M-context guard check failed: caller re-enable (empty value) must win, got %s\n' "$got" >&2
-      exit 1
-    fi
-  ''}
+    ${lib.optionalString (wrapperEnvDefaults != {}) (
+    # The soft-default mechanism itself, through one representative disabled
+    # toggle (whichever the build carries): an unset caller env gets the baked
+    # default, and an explicit caller value — even empty — wins.
+    let
+      guardVar = lib.head (builtins.attrNames wrapperEnvDefaults);
+    in ''
+      envstub="$PWD/envstub"
+      printf '%s\n' '#!${runtimeShell}' 'printf "%s\n" "''${${guardVar}-unset}"' > "$envstub"
+      chmod +x "$envstub"
+      sed "s|@helper@|$envstub|" ${launchSpec} > "$PWD/env-spec.json"
+      got="$(env -u ${guardVar} IX_LAUNCH_SPEC="$PWD/env-spec.json" "$launcher")"
+      if [ "$got" != 1 ]; then
+        printf 'env-defaults guard check failed: unset caller env must get the default, got %s\n' "$got" >&2
+        exit 1
+      fi
+      got="$(env ${guardVar}= IX_LAUNCH_SPEC="$PWD/env-spec.json" "$launcher")"
+      if [ "$got" != "" ]; then
+        printf 'env-defaults guard check failed: caller override (empty value) must win, got %s\n' "$got" >&2
+        exit 1
+      fi
+    ''
+  )}
 
     # The typed feature render must land verbatim in the baked settings env
     # (read at CC startup even when the launch env is missing), and the house

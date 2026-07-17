@@ -51,9 +51,9 @@
   # CLAUDE_CODE_AUTO_COMPACT_WINDOW into settings `env` (null bakes nothing).
   # Unknown keys throw, like systemTools. Merged over `defaultFeatures` in the
   # let-block:
-  #  - context1M = false: every 1M path in the CLI (the [1m] model suffix, the
-  #    silent auto-upgrade, the context-1m beta header) is ~5x input price;
-  #    past-the-window work belongs in subagents.
+  #  - context1M = true: stock behavior; native-1M models run their full
+  #    window (#3487). false bakes CLAUDE_CODE_DISABLE_1M_CONTEXT=1, gating
+  #    every 1M path in the CLI ([1m] suffix, auto-upgrade, beta header).
   #  - cron = false: drops the scheduling/loop tools.
   #  - autoCompactWindow = 300000: native-1M models (Fable 5, Sonnet 5,
   #    Opus 4.8) otherwise autocompact near the 1M cliff; 300K matches the
@@ -243,7 +243,7 @@
     cron = "CLAUDE_CODE_DISABLE_CRON";
   };
   defaultFeatures = {
-    context1M = false;
+    context1M = true;
     cron = false;
     autoCompactWindow = 300000;
   };

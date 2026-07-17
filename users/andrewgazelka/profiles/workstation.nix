@@ -168,13 +168,12 @@
     # controlled keys; the module materializes the result into the writable
     # ~/.claude/settings.json.
     extraSettings = claudeSettings;
-    # Personal opt-outs from the fleet posture: run the model's native 1M
-    # window (no DISABLE_1M clamp, no AUTO_COMPACT_WINDOW override) and keep
-    # the harness subagent/task tool schemas loaded. Pairs with the
-    # `backgroundSubagents` omit on programs.claude-code below, whose rule
-    # text declares these tools absent.
+    # Personal opt-outs from the fleet posture: autocompact at the model's
+    # native window (no AUTO_COMPACT_WINDOW clamp; the 1M window itself is
+    # the wrapper default since #3487) and keep the harness subagent/task
+    # tool schemas loaded. Pairs with the `backgroundSubagents` omit on
+    # programs.claude-code below, whose rule text declares these tools absent.
     features = {
-      context1M = true;
       autoCompactWindow = null;
     };
     # Matches agentPromptOmitRules `forceMerge` above: without this the baked
