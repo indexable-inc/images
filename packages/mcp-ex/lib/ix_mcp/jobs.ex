@@ -58,8 +58,35 @@ defmodule IxMcp.Jobs do
     end)
   end
 
-  @spec cancel(String.t()) :: :ok | {:error, :finished}
-  def cancel(id), do: with_job(id, &Job.cancel/1)
+  @spec cancel(String.t()) :: :ok | {:error, :finished | Job.status()}
+  def cancel(id) do
+    case lookup(id) do
+      {:ok, pid} ->
+        try do
+          Job.cancel(pid)
+        catch
+          # The registry unregisters dead pids asynchronously, so a lookup
+          # can briefly return a process that no longer exists; that
+          # :noproc means the same thing as a missed lookup (#3538).
+          :exit, {:noproc, _call} -> report_dead(id)
+        end
+
+      {:error, :not_found} ->
+        report_dead(id)
+    end
+  end
+
+  # A job whose process is gone cannot be cancelled, but it may still be on
+  # record: #3538 killed job processes out from under their ids, and raising
+  # "no such job" -- about an id `history/1` still listed -- sent the
+  # operator chasing a phantom. Report the recorded state; raise only for
+  # ids this server never ran.
+  defp report_dead(id) do
+    case History.get(id) do
+      %{status: status} -> {:error, status}
+      nil -> raise ArgumentError, "no such job: #{inspect(id)}"
+    end
+  end
 
   @spec result(String.t()) :: {:ok, term()} | {:error, :running | String.t()}
   def result(id), do: with_job(id, &Job.result/1)

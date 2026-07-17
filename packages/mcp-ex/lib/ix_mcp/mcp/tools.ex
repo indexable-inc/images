@@ -10,8 +10,17 @@ defmodule IxMcp.MCP.Tools do
   """
 
   alias IxMcp.Jobs
+  alias IxMcp.UTF8
 
   @budget_cap 120
+
+  # One exec reply's output budget. The full output always stays in the
+  # job's buffer for paging (Jobs.tail/lines/grep); only what a single reply
+  # carries is capped. Why cap at all: a cell that printed a multi-megabyte
+  # compiled binary rode whole into one JSON-RPC line (#3538) -- no client
+  # consumes that usefully, and the agent harness's context budget is orders
+  # of magnitude smaller. 64KiB is far above a legitimate reply page.
+  @max_output_bytes 65_536
 
   @surface_guide """
   Everything beyond running code is in-language, pre-aliased in every cell:
@@ -169,7 +178,19 @@ defmodule IxMcp.MCP.Tools do
   defp diagnostics_section(diags), do: Enum.map(diags, &("-- " <> &1))
 
   defp output_section(""), do: []
-  defp output_section(output), do: [String.trim_trailing(output, "\n")]
+
+  defp output_section(output) when byte_size(output) <= @max_output_bytes,
+    do: [String.trim_trailing(output, "\n")]
+
+  defp output_section(output) do
+    kept = UTF8.truncate(output, @max_output_bytes)
+
+    [
+      String.trim_trailing(kept, "\n"),
+      "[output truncated: showing first #{byte_size(kept)} of #{byte_size(output)} bytes; " <>
+        "page the full output with Jobs.lines(id, first, last) or Jobs.tail(id, n)]"
+    ]
+  end
 
   defp result_section(%{running: true}) do
     [

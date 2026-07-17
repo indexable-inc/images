@@ -8,6 +8,11 @@ defmodule IxMcp.MCP.Stdio do
   All writes to stdout go through this process, which is the only place in
   the application allowed to touch it (logs go to stderr, cell output goes to
   each job's IOProxy).
+
+  Invariant: every request that carries an id gets exactly one reply. A
+  handler task that dies is answered with a JSON-RPC error, and a response
+  the encoder rejects degrades to one -- silently dropping either left the
+  client waiting forever on a connection that looked alive (#3538).
   """
 
   use GenServer
@@ -34,38 +39,56 @@ defmodule IxMcp.MCP.Stdio do
     Notifier.register(self())
     reader = self()
     spawn_link(fn -> read_loop(reader) end)
-    {:ok, %{pending: MapSet.new(), eof: false}}
+    {:ok, %{pending: %{}, eof: false}}
   end
 
   @impl true
   def handle_info({:mcp_recv, line}, state) do
     stdio = self()
 
-    {:ok, pid} =
-      Task.start(fn ->
-        case JSON.decode(line) do
-          {:ok, message} ->
+    # Decode here, not in the task: the reply-always invariant needs the
+    # request id BEFORE the handler can die. A crashing task takes
+    # everything it knew with it, and an id-less DOWN can only be dropped --
+    # exactly the silent hang #3538 diagnosed. Decoding is cheap; the slow
+    # part (Server.handle) stays off this process.
+    case JSON.decode(line) do
+      {:ok, message} ->
+        {:ok, pid} =
+          Task.start(fn ->
             case Server.handle(message) do
               nil -> :ok
               response -> send(stdio, {:mcp_send, response})
             end
+          end)
 
-          {:error, _reason} ->
-            send(stdio, {:mcp_send, parse_error()})
-        end
-      end)
+        ref = Process.monitor(pid)
+        {:noreply, %{state | pending: Map.put(state.pending, ref, Map.get(message, "id"))}}
 
-    ref = Process.monitor(pid)
-    {:noreply, %{state | pending: MapSet.put(state.pending, ref)}}
+      {:error, _reason} ->
+        write(parse_error())
+        {:noreply, state}
+    end
   end
 
   def handle_info({:mcp_send, message}, state) do
-    IO.binwrite(:stdio, [JSON.encode!(message), "\n"])
+    write(message)
     {:noreply, state}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
-    maybe_stop(%{state | pending: MapSet.delete(state.pending, ref)})
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    {id, pending} = Map.pop(state.pending, ref)
+
+    # A handler task that died abnormally never sent its reply (the send is
+    # a finished handler's last act), so this DOWN is the final chance to
+    # answer. Dropping the ref without replying -- the pre-#3538 behavior --
+    # left the client waiting forever on a request the server had already
+    # forgotten. Written before maybe_stop/1 so a shutdown on EOF cannot
+    # outrun the reply.
+    if reason != :normal and id != nil do
+      write(handler_died(id, reason))
+    end
+
+    maybe_stop(%{state | pending: pending})
   end
 
   # The client closed stdin: finish the requests already dispatched, then
@@ -77,11 +100,27 @@ defmodule IxMcp.MCP.Stdio do
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp maybe_stop(state) do
-    if state.eof and MapSet.size(state.pending) == 0 do
+    if state.eof and map_size(state.pending) == 0 do
       System.stop(0)
     end
 
     {:noreply, state}
+  end
+
+  defp write(message) do
+    # Encoding must not be able to kill the transport: JSON.encode! raises
+    # {:invalid_byte, _} on invalid UTF-8, this process owns stdout, and its
+    # linked read_loop dies with it -- one bad byte in one response used to
+    # cost the whole connection (#3538). Degrade to an error reply for the
+    # same id so the client learns the response was unencodable and moves on.
+    line =
+      try do
+        JSON.encode!(message)
+      rescue
+        error -> JSON.encode!(unencodable(message, error))
+      end
+
+    IO.binwrite(:stdio, [line, "\n"])
   end
 
   defp read_loop(server) do
@@ -104,6 +143,31 @@ defmodule IxMcp.MCP.Stdio do
 
         read_loop(server)
     end
+  end
+
+  defp handler_died(id, reason) do
+    %{
+      "jsonrpc" => "2.0",
+      "id" => id,
+      "error" => %{
+        "code" => -32_603,
+        # inspect/2 rather than Exception.format_exit/1: inspect's output is
+        # always valid UTF-8, and the limits bound a reason that could embed
+        # megabytes of crashed-process state.
+        "message" => "request handler died: " <> inspect(reason, limit: 25, printable_limit: 500)
+      }
+    }
+  end
+
+  defp unencodable(message, error) do
+    %{
+      "jsonrpc" => "2.0",
+      "id" => Map.get(message, "id"),
+      "error" => %{
+        "code" => -32_603,
+        "message" => "response could not be encoded as JSON: " <> Exception.message(error)
+      }
+    }
   end
 
   defp parse_error do

@@ -13,7 +13,13 @@ defmodule IxMcp.Evaluator.IOProxy do
 
   Input requests answer `:eof`: cells are non-interactive, exactly like the
   Python kernel.
+
+  The sink's contract is a valid UTF-8 binary, nothing else: chunks feed
+  `byte_size/1` sums in job summaries and ride tool replies as JSON. See
+  `convert/2` (#3538).
   """
+
+  alias IxMcp.UTF8
 
   @spec start_link((iodata() -> any())) :: {:ok, pid()}
   def start_link(sink) when is_function(sink, 1) do
@@ -59,6 +65,21 @@ defmodule IxMcp.Evaluator.IOProxy do
   defp handle({:get_geometry, _}, _sink), do: {:error, :enotsup}
   defp handle(_request, _sink), do: {:error, :request}
 
-  defp convert(chars, :unicode), do: :unicode.characters_to_binary(chars)
-  defp convert(chars, :latin1), do: :erlang.iolist_to_binary(chars)
+  # `:unicode.characters_to_binary/1` answers invalid UTF-8 with an
+  # {:error, ...} TUPLE, not a binary. Passed through unchecked, that tuple
+  # landed in the job's output buffer as if it were output, `byte_size/1`
+  # crashed the job GenServer mid-finish, and the client hung forever on a
+  # request nothing would ever answer -- #3538, a cell printing a compiled
+  # binary. UTF8.sanitize/1 keeps valid UTF-8 byte-identical and turns
+  # every invalid byte into a visible `\xNN` escape, so the sink invariant
+  # (valid UTF-8 binary, always) holds no matter what a cell prints.
+  defp convert(chars, :unicode), do: UTF8.sanitize(chars)
+
+  # :latin1 put_chars (IO.binwrite and friends) hands over raw bytes. Bytes
+  # that already form valid UTF-8 pass byte-identical -- the same
+  # transparency #3523 gave the wire -- and anything else is escaped rather
+  # than reinterpreted as Latin-1 text: what actually reaches this clause is
+  # binary dumps, and mapping them to accented letters would disguise the
+  # bytes instead of naming them (#3538).
+  defp convert(chars, :latin1), do: chars |> :erlang.iolist_to_binary() |> UTF8.sanitize()
 end
