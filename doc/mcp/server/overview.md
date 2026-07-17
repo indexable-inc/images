@@ -79,7 +79,7 @@ session machinery; see [sessions](../sessions/overview.md).
 
 The FastMCP server is `mcp = FastMCP("ix-mcp")` (`tools.py:75`); its
 `serverInfo.version` is stamped from `IX_BUILD_REV` (the flake rev) onto the
-low-level server (`tools.py:197`). Three tools, all with
+low-level server (`tools.py:197`). Two tools, all with
 `structured_output=False` so FastMCP does not duplicate the reply as
 `structuredContent` (which doubled image blocks and blew the token cap,
 `tools.py:202-207`):
@@ -89,11 +89,7 @@ low-level server (`tools.py:197`). Three tools, all with
   kernel outputs with `outputs.to_mcp`, and appends notices when the budget was
   clamped or the reply was truncated (pointing the caller at `jobs['<id>']` paging
   helpers). `intent` is the run's human-facing title in the dashboard feed.
-- `read(target, start=None, end=None)` (`tools.py:289`): pulls a file or a kernel
-  value into the model's context via `await __ix_read(...)` while the dashboard
-  shows only a one-line note, so a large file does not flood the human's view.
-- `kernel_trace()` (`tools.py:315`): the out-of-band stack dump for a wedged
-  kernel.
+- `kernel_trace()`: the out-of-band stack dump for a wedged kernel.
 
 The first tool call of a session pops the dashboard in the human's browser once
 (`_open_dashboard_once`, `tools.py:162`; disabled by `IX_MCP_NO_BROWSER=1`).

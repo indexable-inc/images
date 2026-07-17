@@ -2515,28 +2515,6 @@
         odd = runtime.Result(user_html="x", llm_result=123)
         assert odd.llm_result == "123", odd.llm_result
 
-        # __ix_read: a file-path target returns the file's CONTENTS to the model
-        # (the dashboard note is user_html only), honoring start/end; and an
-        # expression that EVALUATES to an existing path reads that file too.
-        import pathlib
-        import tempfile
-        rd = ns["__ix_read"]
-        p = pathlib.Path(tempfile.mkdtemp()) / "sample.txt"
-        body = "alpha\nbeta\ngamma\ndelta"
-        p.write_text(body)
-        whole = await rd(str(p), None, None)
-        assert whole.llm_result == body, repr(whole.llm_result)
-        assert str(p) not in whole.llm_result or whole.llm_result == body
-        span = await rd(str(p), 2, 3)
-        assert span.llm_result == "beta\ngamma", repr(span.llm_result)
-        ns["sample_path"] = str(p)
-        via_expr = await rd("sample_path", None, None)
-        assert via_expr.llm_result == body, repr(via_expr.llm_result)
-        # A plain expression target still renders its value.
-        ns["answer"] = 41
-        via_val = await rd("answer + 1", None, None)
-        assert via_val.llm_result == "42", repr(via_val.llm_result)
-
     asyncio.run(main())
     # api(): a discoverable catalog of kernel builtins + bundled modules. `nu`
     # is the catalogued shell-out path; the retired `sh` is NOT listed (though it
@@ -2783,8 +2761,6 @@
       cp ${./tests/test_pr_watch_automerge.py} test_pr_watch_automerge.py
       # Issue #2540: input= routes past no-input statements (cd /tmp; ^cat) or raises.
       cp ${./tests/test_nu_input_routing.py} test_nu_input_routing.py
-      # Issue #3139: the read tool's target expression allows top-level await.
-      cp ${./tests/test_read_await.py} test_read_await.py
       # Issue #3131: a job wrapping nu(check=False) pages real stdout lines.
       cp ${./tests/test_nu_job_output.py} test_nu_job_output.py
       # Durable-local-first store writes (index#3418/#3419): outage-durable
@@ -2810,7 +2786,6 @@
         test_unexecuted_note.py \
         test_pr_watch_automerge.py \
         test_nu_input_routing.py \
-        test_read_await.py \
         test_nu_job_output.py \
         test_store_spool.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
@@ -3142,36 +3117,6 @@
       cp ${wedgeEscalationTestSource} "$TMPDIR/test_kernel_wedge_escalation.py"
       ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_wedge_escalation.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp wedge-escalation smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # The read tool's failure contract (index#2381): when the kernel bridge
-  # cannot execute the read (a wedge summary, a bridge returning neither
-  # output nor a completed job summary), the tool must raise a "kernel
-  # unavailable" error, never return empty content -- an empty reply is
-  # indistinguishable from reading an empty file, and was misread exactly that
-  # way. Pure unit tests over a stubbed kernel: no kernel boots, no sockets
-  # bind, so it runs in the sandbox on every platform.
-  readUnavailableTestSource = builtins.path {
-    name = "ix-mcp-read-unavailable-test";
-    path = ./tests/test_read_kernel_unavailable.py;
-  };
-  readUnavailableTests =
-    pkgs.runCommand "ix-mcp-read-unavailable-tests"
-    {
-      nativeBuildInputs = [typecheckTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${readUnavailableTestSource} "$TMPDIR/test_read_kernel_unavailable.py"
-      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_read_kernel_unavailable.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp read kernel-unavailable tests failed:" >&2
         cat stdout stderr >&2
         exit 1
       }
@@ -5922,7 +5867,6 @@ in
               kernelDeathSmoke
               kernelRestartSmoke
               wedgeEscalationSmoke
-              readUnavailableTests
               richSmoke
               yieldSmoke
               bindingsSmoke

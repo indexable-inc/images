@@ -96,8 +96,7 @@ def _stubbable(name: str) -> bool:
     builtin for the check exactly as the binding shadows it at runtime). Skipped
     are non-identifiers, keywords, and Python-managed dunders (``__name__``,
     ``__builtins__``); the runtime's own ``__ix_*`` entrypoints are NOT dunders
-    (no trailing underscores) and stay stubbable -- the ``read`` tool submits
-    ``await __ix_read(...)`` cells that must resolve."""
+    (no trailing underscores) and stay stubbable."""
     return (
         isinstance(name, str)
         and name.isidentifier()

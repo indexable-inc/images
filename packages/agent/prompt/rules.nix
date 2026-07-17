@@ -457,7 +457,7 @@
     mcpGuidanceOwnership = {
       text = ''
         Guidance for driving the index MCP surface (`python_exec` mechanics,
-        `nu`, jobs, dashboard sessions and topics, bundled modules, `pr_watch`)
+        jobs, dashboard sessions and topics, bundled modules, `pr_watch`)
         is authored in the MCP server's own instructions
         (`packages/mcp/ix_notebook_mcp/guide.py`) and arrives with the
         connection; this prompt only routes work to the kernel. When editing

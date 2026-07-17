@@ -564,7 +564,8 @@ class Code:
         return self.text
 
     def _repr_mimebundle_(self, **_kwargs: object) -> dict[str, Any]:
-        # '\n' only, matching the renderer's split (see runtime.__ix_read).
+        # '\n' only, matching the renderer's split (str.splitlines would also break
+        # on \f/\v/\x85/U+2028..., desyncing the gutter numbers from the rows shown).
         lines = self.text.split("\n")
         if lines and lines[-1] == "":
             lines.pop()

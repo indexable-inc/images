@@ -112,13 +112,6 @@ def test_a_nested_star_import_is_not_blocked() -> None:
     assert _check("if True:\n    from math import *").ok
 
 
-def test_internal_helper_cells_are_not_flagged() -> None:
-    # The read MCP tool submits `await __ix_read(...)` through the same runner
-    # path; the runtime's __ix_* entrypoints live in the namespace and must be
-    # stubbed (they are not Python-managed dunders), or every read() is blocked.
-    assert _check("await __ix_read('x', None, None, session=None)", {"__ix_read": object()}).ok
-
-
 def test_single_underscore_prior_names_are_stubbed() -> None:
     # `_df` is a real prior-cell binding, not an introspection artifact.
     assert _check("_out = _df", {"_df": object()}).ok

@@ -199,10 +199,9 @@ set `IX_MCP_AUTO_DASHBOARD=1` to restore the old per-server auto-spawn.
   aggregator (`nix run .#dashboard`, see above), or set `IX_MCP_AUTO_DASHBOARD=1`
   to restore the per-server auto-spawn.
 - `outputs.py` renders kernel messages for the agent (text, images).
-- `tools.py` is the MCP surface: the general `python_exec`, plus `read` (pull a
-  file or kernel value into the model's context while the dashboard stays quiet)
-  and `kernel_trace` (an out-of-band stack dump for a wedged kernel). Everything
-  else an agent needs is reachable from `python_exec` by importing the bundled
+- `tools.py` is the MCP surface: the general `python_exec`, plus `kernel_trace`
+  (an out-of-band stack dump for a wedged kernel). Everything else an agent
+  needs, reading files included, is reachable from `python_exec` and the bundled
   modules.
 
 ## Pinned interpreter and bundled modules
