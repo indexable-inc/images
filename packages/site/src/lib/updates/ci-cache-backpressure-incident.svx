@@ -1,0 +1,48 @@
+---
+id: ci-cache-backpressure-incident
+postedAt: 2026-07-17T10:30:00-07:00
+title: "Unwedging the fleet: cache publication backpressure held every build hostage"
+tags: [interesting, ci, nix, fleet, incident]
+links:
+  - label: root-cause issue ix#7611
+    href: https://github.com/indexable-inc/ix/issues/7611
+  - label: bounded publication PR ix#7581
+    href: https://github.com/indexable-inc/ix/pull/7581
+  - label: JobTimeoutSec fix
+    href: https://github.com/indexable-inc/ix/commit/93588e5435
+---
+
+A prod deploy sat wedged for over three hours today. The proximate symptom was a `nix build` that never finished; the actual cause was a designed backpressure loop doing exactly what it was told, fed by a drainer that could never succeed. Untangling it took the fleet from a 4,000-entry-per-host publication backlog to zero, and left main eval-green with the fix class gated in CI.
+
+## The circular failure
+
+Every CI host runs a post-build hook, `ix-cache-push-enqueue`, that registers freshly built store paths for publication to the shared Nix cache. When the pending queue exceeds 4,096 entries the hook blocks build admission until the drainer catches up. That is intentional: unbounded queues previously filled disks.
+
+The drainer, however, had two defects:
+
+1. Its substituter proof called `cmp`, which lives in diffutils, absent from the hook's minimal PATH. Every proof failed, so every entry was "retained for retry" forever, even when the path was already in the cache.
+2. Its recursive `nix copy` spawned unbounded thread pools, blowing through `TasksMax` and dying with `Resource temporarily unavailable` mid-transfer.
+
+So queues pinned at the watermark, the hook blocked every build on the host, and the nix daemon sat in `anon_pipe_read` waiting for the hook. The fix for both defects was already merged as 76c76b9d9d, but deploying it required a `nix build` on the wedged hosts: the fix was trapped behind the bug it fixed.
+
+## The unwedge
+
+The mitigation proved each pending entry against the cache endpoint directly (`curl .../ix-cache/$hash.narinfo` through the local ghostunnel) and retired proven entries under the drainer's own locking protocol, an enqueue-wide flock plus per-entry shard locks, so nothing raced. Across five hosts that retired roughly 15,700 already-published entries in minutes, dropped every queue below the watermark, and the blocked builds resumed on their own.
+
+One host, hil-compute-3, had a genuine 2,127-entry backlog of never-published paths. After the bounded drainer deployed, it published all of them: every queue on the fleet now reads zero.
+
+## Two more layers underneath
+
+Landing the fix surfaced two independent breakages of `main`, both introduced by the emergency admin-merge of the fix PR (its own gate was skipped):
+
+- a new boot-wanted oneshot with `Restart=` and no `JobTimeoutSec`, which the `seam-activation-job-timeouts` eval gate correctly rejects: such a unit can crash-loop under one start job forever and wedge `switch-to-configuration`, which is precisely the failure mode this whole incident was about
+- a deadnix violation from a leftover binding
+
+Both were fixed forward (93588e5435 and ix#7617), each verified by building the failing gate locally before pushing. The deploy that finally converged the fleet also flushed out three stale imperative hotfixes hiding in `/run/systemd/system`: runtime drop-ins survive every deploy and silently override the declarative units underneath, so an old nginx hotfix crashed activation on one host and an old recovery drop-in kept the unbounded drainer binary pinned on another. Incident runbooks now need an explicit drop-in removal step.
+
+## What is durable
+
+- Publication is bounded end to end: drain concurrency, `TasksMax=96`, memory ceilings, and admission backpressure with a watermark the drainer can actually work down.
+- The proof-of-publication path has its tools on PATH and fails loudly instead of retrying forever.
+- The eval seam gate that caught the timeout bug runs on every PR, so the crash-loop-wedges-deploy class cannot re-enter quietly.
+- GitHub App deploy tokens outliving their hour surfaced as a separate follow-up (ix#7612), since a multi-hour bootstrap should re-mint rather than fail at the final verify.
