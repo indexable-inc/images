@@ -7,23 +7,22 @@ defmodule IxMcp.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
+      elixirc_options: [warnings_as_errors: true],
       deps: deps()
     ]
   end
 
-  # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger],
+      extra_applications: [:logger, :crypto],
       mod: {IxMcp.Application, []}
     ]
   end
 
-  # Run "mix help deps" to learn about dependencies.
+  # Zero runtime dependencies on purpose: OTP >= 27 ships a JSON module
+  # (exposed as `JSON` in Elixir 1.18), so the MCP wire format needs no hex
+  # package and the Nix build needs no Mix-deps fixed-output derivation.
   defp deps do
-    [
-      # {:dep_from_hexpm, "~> 0.3.0"},
-      # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
-    ]
+    []
   end
 end
