@@ -16,8 +16,10 @@ process, no HTTP seam.
   dozens of functions (seconds), never the corpus (~2.5 min cold).
 * :func:`similar` -- semantic code search: the cached chunks nearest a query
   text (or a file's contents), one normalized GEMM over the cache matrix.
-* :func:`pairs` -- near-duplicate mining: the top all-pairs cosine hits, the
-  candidate band for type-4 (semantic) clone review.
+* :func:`pairs` -- near-duplicate mining over the whole cache: the top
+  all-pairs cosine hits, the candidate band for type-4 (semantic) clone review.
+* :func:`dupes` -- the one-call duplicate-code finder: :func:`ensure` a root,
+  then mine the top pairs among that root's own chunks only.
 
 The cache is one parquet file per model revision at
 ``~/.cache/index-embed/<model_rev>.parquet`` (columns ``hash``, ``path``,
@@ -50,7 +52,7 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]  # darwin-only optional dep (index#3417); zuban ignores per-module config
 
-__all__ = ["EmbedError", "ensure", "pairs", "similar", "texts"]
+__all__ = ["EmbedError", "dupes", "ensure", "pairs", "similar", "texts"]
 
 __version__ = "0.1.0"
 
@@ -309,24 +311,24 @@ def similar(text_or_path: str, k: int = 10) -> pl.DataFrame:
     )
 
 
-def pairs(k: int = 10) -> pl.DataFrame:
-    """The ``k`` most similar distinct cached chunk pairs (type-4 candidates).
+def _mine_pairs(frame: pl.DataFrame, k: int) -> pl.DataFrame:
+    """The ``k`` highest-cosine distinct chunk pairs in ``frame``.
 
-    Returns ``path_a`` / ``path_b`` / ``hash_a`` / ``hash_b`` / ``score``
-    sorted by descending cosine over the strict upper triangle.
+    ``frame`` needs ``hash`` / ``path`` / ``embedding`` columns; the result is
+    ``path_a`` / ``path_b`` / ``hash_a`` / ``hash_b`` / ``score`` sorted by
+    descending cosine over the strict upper triangle.
     """
-    cache = _read_cache()
-    if cache.height < 2:
-        raise EmbedError("embed: fewer than two cached chunks; run embed.ensure(root) first")
-    matrix = _matrix(cache)
+    if frame.height < 2:
+        raise EmbedError("embed: fewer than two chunks; run embed.ensure(root) first")
+    matrix = frame.get_column("embedding").to_numpy().astype(np.float32, copy=False)
     sims = matrix @ matrix.T
     rows, cols = np.triu_indices(matrix.shape[0], k=1)
     scores = sims[rows, cols]
     top_k = min(k, scores.shape[0])
     top = np.argpartition(-scores, top_k - 1)[:top_k]
     top = top[np.argsort(-scores[top])]
-    paths = cache.get_column("path")
-    hashes = cache.get_column("hash")
+    paths = frame.get_column("path")
+    hashes = frame.get_column("hash")
     return pl.DataFrame(
         {
             "path_a": [paths[int(rows[i])] for i in top],
@@ -335,4 +337,37 @@ def pairs(k: int = 10) -> pl.DataFrame:
             "hash_b": [hashes[int(cols[i])] for i in top],
             "score": scores[top],
         }
+    )
+
+
+def pairs(k: int = 10) -> pl.DataFrame:
+    """The ``k`` most similar chunk pairs across the whole cache: duplicate / type-4 clone candidates.
+
+    Mines every repo ever embedded on this machine; for duplicates within one
+    repo call :func:`dupes`, which scopes the mining to that root. Returns
+    ``path_a`` / ``path_b`` / ``hash_a`` / ``hash_b`` / ``score`` sorted by
+    descending cosine.
+    """
+    return _mine_pairs(_read_cache(), k)
+
+
+def dupes(root: str = ".", k: int = 20) -> pl.DataFrame:
+    """Find duplicate code under ``root`` in one call: the ``k`` most similar function pairs.
+
+    Chunks and embeds ``root`` via :func:`ensure` (incremental: cached chunks
+    skip the GPU), then mines the top cosine pairs among ``root``'s own chunks
+    only. Scores ~0.95+ read as near-verbatim duplication; ~0.85-0.95 as
+    same-shape logic worth a shared helper -- the type-4 (semantic) clones the
+    AST ``nix run .#clone`` gate cannot see. Returns ``path_a`` / ``sig_a`` /
+    ``path_b`` / ``sig_b`` / ``score`` sorted by descending cosine.
+    """
+    frame = ensure(root)
+    header = pl.col("text").str.split("\n").list.first()
+    sigs = frame.select("hash", header.str.replace(r"^// .*? :: ", "").alias("sig"))
+    return (
+        _mine_pairs(frame, k)
+        .join(sigs.rename({"hash": "hash_a", "sig": "sig_a"}), on="hash_a")
+        .join(sigs.rename({"hash": "hash_b", "sig": "sig_b"}), on="hash_b")
+        .select("path_a", "sig_a", "path_b", "sig_b", "score")
+        .sort("score", descending=True)
     )
