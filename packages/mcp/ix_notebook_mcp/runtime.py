@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     import polars as pl
 
 from . import readstats, registry, typecheck
-from .config import build_stamp, process_cwd
+from .config import process_cwd
 
 _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", default=None)
 
@@ -3747,17 +3747,14 @@ def doc(obj: Any) -> Result:
 
 
 def _build_row() -> dict:
-    """The catalog's header row: which build this kernel IS. The in-band
-    staleness signal (index#2110): when an agent's docs promise a helper or
-    kwarg this catalog lacks, the stamp attributes the gap to a stale deploy
-    instead of a phantom API."""
+    """The catalog's header row: the kernel these entries belong to."""
     return {
         "where": "kernel",
         "name": "build",
         "kind": "build",
-        "sig": f"ix-mcp {build_stamp()}",
-        "summary": "this kernel's build rev and commit age; a documented helper or "
-        "kwarg missing below means the running deploy predates it -- redeploy ix-mcp",
+        "sig": "ix-mcp",
+        "summary": "this kernel; a documented helper or kwarg missing below "
+        "means the running deploy predates it -- redeploy ix-mcp",
     }
 
 
@@ -3768,9 +3765,7 @@ def api() -> pl.DataFrame:
     its provenance, signature, and a one-line summary. Call `api()` to discover
     what exists instead of guessing names or grepping source. Filter and sort the
     returned Polars DataFrame directly, for example
-    `api().filter(pl.col("where") == "view")`. The first row is always the
-    kernel's own build stamp (rev, commit date, age), so a catalog that lacks
-    something your docs describe is attributable to a stale deploy.
+    `api().filter(pl.col("where") == "view")`.
 
     Leave the frame as the cell's final expression or yield it. Passing it to
     ``print`` converts it to Polars' terminal representation before MCP can render
@@ -3849,33 +3844,9 @@ def _type_error_hint(exc: TypeError) -> str:
             return ""
         sig = inspect.signature(obj)
         hint = f"\nHint: the signature is {func_name}{sig}; see doc({func_name})."
-        if _is_kernel_surface(func_name, obj):
-            # The exact confusion of index#2110: a binding error against a
-            # bundled helper reads identically whether the kwarg never existed
-            # or the running kernel predates it. Only OUR surface can be stale
-            # relative to an agent's docs, so user-defined callables get no
-            # stamp.
-            hint += (
-                f" Kernel build: {build_stamp()}; if your docs describe a newer"
-                f" {func_name}(), this deploy predates them -- redeploy ix-mcp."
-            )
         return hint
     except Exception:
         return ""
-
-
-def _is_kernel_surface(func_name: str, obj: Any) -> bool:
-    """Whether a callable is part of the kernel's own catalog surface (a
-    namespace builtin like ``grep``, a bundled module like ``nu``, or anything
-    defined in this package), as opposed to something the user defined in a
-    cell. Checks the resolved name's first segment against the registry and the
-    object's defining module root, either signal suffices."""
-    first = func_name.split(".", 1)[0]
-    if first in _API_BUILTINS or first in _API_MODULES:
-        return True
-    mod = getattr(obj, "__module__", None) or getattr(type(obj), "__module__", None) or ""
-    root = mod.split(".", 1)[0]
-    return root == "ix_notebook_mcp" or root in _API_MODULES
 
 
 async def _sweep_resources() -> None:

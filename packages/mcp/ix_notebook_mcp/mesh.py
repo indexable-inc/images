@@ -1,7 +1,7 @@
 """The tailnet mesh endpoint: ``GET /mesh`` on every live ix-mcp (index#1787).
 
 Each ix-mcp answers ``GET /mesh`` with a small read-only JSON identity card --
-hostname, pid, build version, start time, the labels of its named sessions, its
+hostname, pid, start time, the labels of its named sessions, its
 dashboard URL, and the kernel's working directory -- on the well-known mesh
 port (:data:`ix_notebook_mcp.config.DEFAULT_MESH_PORT`), bound ONLY to this
 machine's tailscale IP. The bundled ``mesh`` kernel module (``src/mesh``) is
@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 
 from aiohttp import web
 
-from .config import Config, mesh_enabled, mesh_port, server_version
+from .config import Config, mesh_enabled, mesh_port
 
 
 def build_app(
@@ -55,7 +55,6 @@ def build_app(
             {
                 "host": socket.gethostname(),
                 "pid": os.getpid(),
-                "version": server_version(),
                 "started_at": started_at,
                 "sessions": session_names(),
                 "dashboard_url": dashboard_url,

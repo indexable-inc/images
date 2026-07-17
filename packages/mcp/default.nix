@@ -1531,8 +1531,6 @@
       mkdir -p $out/bin
       makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
         --add-flags "-m ix_notebook_mcp" \
-        --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
-        --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
         ${fabricWrapperFlags} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
@@ -1555,8 +1553,6 @@
       # subcommand. Our jupyter-shaped serve; the MCP server is one client of it.
       makeWrapper ${lib.getExe mcpPython} $out/bin/ix-notebook \
         --add-flags "-m ix_notebook_mcp notebook" \
-        --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
-        --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
         ${fabricWrapperFlags} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \

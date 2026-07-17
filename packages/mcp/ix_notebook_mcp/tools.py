@@ -44,7 +44,7 @@ from mcp.types import ErrorData
 from pydantic import AnyUrl, Field
 
 from . import guide, mailbox, mcp_ui, outputs, resources_bridge, store
-from .config import config, server_version
+from .config import config
 from .kernel import current_kernel
 
 logger = logging.getLogger(__name__)
@@ -386,12 +386,6 @@ def set_dashboard_url(url: str) -> None:
 # The live dashboard URL (set by `set_dashboard_url`). Module-level because the
 # tool functions are module-level.
 _dashboard_url: str | None = None
-
-# Report the build's source revision as the MCP `serverInfo.version` so a client
-# can see exactly which commit of the server it is talking to. FastMCP does not
-# take a version, so stamp the low-level server directly. The derivation lives
-# in `config.server_version` so the `/mesh` endpoint reports the same value.
-mcp._mcp_server.version = server_version()
 
 Content = list[outputs.Content]
 

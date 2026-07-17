@@ -12,7 +12,7 @@ Usage::
 
     import mesh
 
-    await mesh.peers()      # one row per live ix-mcp: host, ip, version, ...
+    await mesh.peers()      # one row per live ix-mcp: host, ip, sessions, ...
     await mesh.sessions()   # flattened: one row per (host, session label)
 
 Everything network-touching is ``async def`` because the kernel is one shared
@@ -49,7 +49,6 @@ _TAILSCALE_BIN_ENV = "IX_MESH_TAILSCALE_BIN"
 _PEERS_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "host": pl.String,
     "ip": pl.String,
-    "version": pl.String,
     "sessions": pl.List(pl.String),
     "dashboard_url": pl.String,
     "started_at": pl.String,
@@ -143,15 +142,15 @@ async def peers(timeout: float = 1.0) -> pl.DataFrame:
     """Every ix-mcp answering ``/mesh`` on the tailnet, one polars row each.
 
     Columns: ``host`` (the card's own hostname), ``ip`` (tailscale IPv4),
-    ``version`` (build commit), ``sessions`` (named session labels),
-    ``dashboard_url``, ``started_at``, ``cwd``, and ``pid``. Peers that are
+    ``sessions`` (named session labels), ``dashboard_url``, ``started_at``,
+    ``cwd``, and ``pid``. Peers that are
     offline, not running ix-mcp, or slower than ``timeout`` seconds simply
     contribute no row -- discovery is a sweep, not a health check.
 
     Example::
 
         df = await mesh.peers()
-        df.select("host", "version", "sessions")
+        df.select("host", "sessions")
     """
     # httpx is bundled but heavy; imported per call like fleet.in_kernel so
     # `import mesh` (preimported at kernel startup) stays light.
@@ -189,7 +188,6 @@ async def peers(timeout: float = 1.0) -> pl.DataFrame:
             return {
                 "host": str(card.get("host") or host),
                 "ip": ip,
-                "version": str(card.get("version") or ""),
                 "sessions": [str(s) for s in sessions_field]
                 if isinstance(sessions_field, list)
                 else [],

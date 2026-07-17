@@ -15,7 +15,6 @@ members = [
   "packages/audio/net",
   "packages/audio/score",
   "packages/blast-radius",
-  "packages/build-version",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",
@@ -198,7 +197,6 @@ ast-merge-matcher = { path = "packages/code/ast-merge/matcher" }
 astlog-core = { path = "packages/code/astlog/core" }
 axum = "0.8"
 base64 = "0.22"
-build-version = { path = "packages/build-version" }
 bytes = "1"
 # Pure-Rust bzip2 (the 0.6 default backend is libbz2-rs-sys), used to read
 # Nix's build logs, which are bzip2-compressed on disk while being written.

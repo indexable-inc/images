@@ -294,20 +294,6 @@
   }: let
     inherit (nixpkgs) lib;
 
-    # The flake's own source revision, threaded into `ix` so packages can
-    # stamp the running build (e.g. the MCP server reports it as its
-    # `serverInfo.version`). Clean tree -> the commit hash; dirty tree ->
-    # `<commit>-dirty`; neither (eval from a non-git source) -> "dev".
-    rev = self.rev or self.dirtyRev or "dev";
-
-    # Commit time of that revision as unix epoch seconds, threaded alongside
-    # `rev` so a build can stamp a human date and relative age. Under
-    # reproducible builds there is no wall-clock compile time; this is the
-    # source date Nix already records (`self.lastModified`): the commit time
-    # on a clean tree, the working-tree mtime on a dirty one. `0` when
-    # evaluated from a non-git source.
-    revEpoch = self.lastModified or 0;
-
     # All path literals the flake exposes. Centralized so lib/ and
     # lib/per-system.nix have a single source of truth.
     # The data-subtree entries below resolve to the `outPath` of relative-path
@@ -350,8 +336,6 @@
     ix = import ./lib {
       inherit
         self
-        rev
-        revEpoch
         nixpkgs
         paths
         rust-overlay

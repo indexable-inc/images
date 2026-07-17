@@ -100,7 +100,7 @@ MODULES: tuple[Module, ...] = (
     Module(
         "mesh",
         "tailnet mesh of live ix-mcp servers, zero config: `await mesh.peers()` is one polars "
-        "row per reachable server (host, version, named sessions, dashboard URL) discovered "
+        "row per reachable server (host, named sessions, dashboard URL) discovered "
         "via tailscale; `await mesh.sessions()` flattens to one row per (host, session)",
         preimport=True,
     ),
