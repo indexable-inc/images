@@ -4,6 +4,7 @@ defmodule IxMcp.Application do
 
       IxMcp.Supervisor (one_for_one)
       ├── IxMcp.Session         session name / topic metadata
+      ├── IxMcp.ActionLog       SQLite append-only record of every tools/call
       ├── IxMcp.Checkpoint      ETS keeper for workspace state (survives Workspace restarts)
       ├── IxMcp.Workspace       the shared binding + Macro.Env every cell sees
       ├── IxMcp.Jobs.Registry   id -> job process
@@ -25,6 +26,7 @@ defmodule IxMcp.Application do
     children =
       [
         IxMcp.Session,
+        IxMcp.ActionLog,
         IxMcp.Checkpoint,
         IxMcp.Workspace,
         {Registry, keys: :unique, name: IxMcp.Jobs.Registry},

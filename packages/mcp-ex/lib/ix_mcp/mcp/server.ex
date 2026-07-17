@@ -43,8 +43,11 @@ defmodule IxMcp.MCP.Server do
 
   defp handle_tool_call(id, %{"name" => name} = params) do
     arguments = Map.get(params, "arguments", %{})
+    started = System.monotonic_time(:millisecond)
+    outcome = Tools.call(name, arguments)
+    log_action(name, arguments, outcome, System.monotonic_time(:millisecond) - started)
 
-    case Tools.call(name, arguments) do
+    case outcome do
       {:ok, text} ->
         result(id, %{"content" => [%{"type" => "text", "text" => text}], "isError" => false})
 
@@ -54,6 +57,25 @@ defmodule IxMcp.MCP.Server do
   end
 
   defp handle_tool_call(id, _params), do: error(id, -32_602, "tools/call requires a name")
+
+  # Every tools/call lands one metadata row in the action log before its
+  # response ships (see IxMcp.ActionLog for why the write is synchronous).
+  defp log_action(tool, arguments, outcome, elapsed_ms) do
+    %{name: session, topic: topic} = IxMcp.Session.get()
+
+    IxMcp.ActionLog.record(%{
+      session: session,
+      topic: topic,
+      tool: tool,
+      intent: intent(arguments),
+      arguments: JSON.encode!(arguments),
+      is_error: match?({:error, _}, outcome),
+      elapsed_ms: elapsed_ms
+    })
+  end
+
+  defp intent(%{"intent" => intent}) when is_binary(intent), do: intent
+  defp intent(_arguments), do: nil
 
   defp result(id, result), do: %{"jsonrpc" => "2.0", "id" => id, "result" => result}
 
