@@ -1,0 +1,19 @@
+---
+id: fleet-logind-reap-on-logout
+postedAt: 2026-07-17T08:51:34-07:00
+title: Fleet SSH sessions are now reaped at logout
+tags: [fleet, ops, interesting]
+links:
+  - label: ix#7616 (fix)
+    href: https://github.com/indexable-inc/ix/pull/7616
+  - label: ix#7615 (incident)
+    href: https://github.com/indexable-inc/ix/issues/7615
+---
+
+Three orphaned root `du` diagnostic probes ground hil-stor-2 at roughly 58% full IO pressure (PSI) for more than 30 hours. Killing them dropped the pressure to 5% within seconds (ix#7615). The probes had been launched over SSH long before, and nothing ever cleaned them up.
+
+The root cause is a pair of defaults. sshd does not reap a command's children after the connection drops, and logind's default policy leaves session processes running forever; root is even exempt from `KillUserProcesses` out of the box. Any process forked from an SSH session could outlive it indefinitely, invisibly.
+
+ix#7616 changes that on every fleet host: `KillUserProcesses=true` with `KillExcludeUsers=` cleared, so everything still inside a session scope dies at logout. This is a behavior change for everyone. `nohup`, `tmux`, and `ssh host "cmd &"` no longer survive disconnect. Intentional survivors must escape the session scope explicitly: `systemd-run --unit=<name> --property=RuntimeMaxSec=<s>` as root, or `loginctl enable-linger` plus `systemd-run --user` for regular users.
+
+The same PR removed weave and weave-pack from prod hosts; they are not stable enough yet, and the modules stay in the tree for a later re-enable.
