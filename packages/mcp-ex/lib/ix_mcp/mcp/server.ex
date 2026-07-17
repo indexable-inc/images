@@ -45,8 +45,22 @@ defmodule IxMcp.MCP.Server do
   defp handle_tool_call(id, %{"name" => name} = params) do
     arguments = Map.get(params, "arguments", %{})
     started = System.monotonic_time(:millisecond)
-    outcome = Tools.call(name, arguments)
-    log_action(name, arguments, outcome, System.monotonic_time(:millisecond) - started)
+    action_id = log_start(name, arguments)
+    outcome = Tools.call(name, arguments, action_id)
+
+    # exec rows are finalized by the job they spawn (whose eval may outlive
+    # this response -- the budget-then-background contract) or by exec's own
+    # argument rejection in Tools; every other tool is synchronous, so its
+    # wire outcome is its fate. The status='running' guard in finish_action
+    # makes a duplicate finalize harmless, never wrong.
+    if name != "exec" do
+      IxMcp.ActionLog.finish_action(
+        action_id,
+        finish_status(outcome),
+        match?({:error, _}, outcome),
+        System.monotonic_time(:millisecond) - started
+      )
+    end
 
     case outcome do
       {:ok, text} ->
@@ -59,23 +73,25 @@ defmodule IxMcp.MCP.Server do
 
   defp handle_tool_call(id, _params), do: error(id, -32_602, "tools/call requires a name")
 
-  # Every tools/call lands one metadata row in the action log before its
-  # response ships (see IxMcp.ActionLog for why the write is synchronous).
-  # Asking the session for ids here -- not at connect time -- is what makes
-  # session rows lazy: a connection that never calls a tool leaves no row.
-  defp log_action(tool, arguments, outcome, elapsed_ms) do
+  # Every tools/call lands one `running` row in the action log BEFORE it
+  # executes (#3536), so a reader sees in-flight calls and a crash mid-call
+  # leaves a visible running row rather than nothing. Asking the session for
+  # ids here -- not at connect time -- is what makes session rows lazy: a
+  # connection that never calls a tool leaves no row.
+  defp log_start(tool, arguments) do
     %{session_id: session_id, topic_id: topic_id} = IxMcp.Session.ids()
 
-    IxMcp.ActionLog.record(%{
+    IxMcp.ActionLog.start_action(%{
       session_id: session_id,
       topic_id: topic_id,
       tool: tool,
       intent: intent(arguments),
-      arguments: JSON.encode!(arguments),
-      is_error: match?({:error, _}, outcome),
-      elapsed_ms: elapsed_ms
+      arguments: JSON.encode!(arguments)
     })
   end
+
+  defp finish_status({:ok, _text}), do: "done"
+  defp finish_status({:error, _text}), do: "failed"
 
   # How agents learn the in-language surface (the old read/kernel_trace/
   # kernel_restart/pr_watch/tui_act tools, folded into cells -- #3532):

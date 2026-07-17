@@ -14,6 +14,7 @@ defmodule IxMcp.Jobs.Job do
 
   use GenServer, restart: :temporary
 
+  alias IxMcp.ActionLog
   alias IxMcp.Evaluator
   alias IxMcp.Evaluator.IOProxy
   alias IxMcp.Jobs.History
@@ -22,11 +23,17 @@ defmodule IxMcp.Jobs.Job do
   alias IxMcp.Session
   alias IxMcp.Workspace
 
+  # How often a running exec's eval process is stack-sampled into the action
+  # log (Process.info(pid, :current_stacktrace) -- external, works on a
+  # wedged process). Tests shrink it via app env to keep the suite fast.
+  @stack_sample_interval_ms Application.compile_env(:ix_mcp, :stack_sample_interval_ms, 1000)
+
   @enforce_keys [:id, :code]
   defstruct [
     :id,
     :code,
     :intent,
+    :action_id,
     :session,
     :topic,
     :buffer,
@@ -48,6 +55,7 @@ defmodule IxMcp.Jobs.Job do
           id: String.t(),
           code: String.t(),
           intent: String.t() | nil,
+          action_id: integer() | nil,
           session: String.t() | nil,
           topic: String.t() | nil,
           buffer: :ets.tid() | nil,
@@ -146,6 +154,7 @@ defmodule IxMcp.Jobs.Job do
       id: id,
       code: code,
       intent: Keyword.get(opts, :intent),
+      action_id: Keyword.get(opts, :action_id),
       session: session.name,
       topic: session.topic,
       buffer: :ets.new(:job_output, [:ordered_set, :public]),
@@ -186,6 +195,7 @@ defmodule IxMcp.Jobs.Job do
       end)
 
     History.record(initial_history(state))
+    if state.action_id, do: Process.send_after(self(), :sample_stack, @stack_sample_interval_ms)
     {:noreply, %{state | io_proxy: io_proxy, eval_pid: eval_pid, eval_ref: eval_ref}}
   end
 
@@ -256,6 +266,26 @@ defmodule IxMcp.Jobs.Job do
     {:noreply, finish(state, :failed, {:failure, Exception.format_exit(reason)}, [])}
   end
 
+  # Sampling stops itself once the run finished (no reschedule); the
+  # status='running' guard in the log makes a racing last sample harmless.
+  def handle_info(:sample_stack, %{status: :running} = state) do
+    case Process.info(state.eval_pid, :current_stacktrace) do
+      {:current_stacktrace, frames} ->
+        stack = JSON.encode!(Enum.map(frames, &Exception.format_stacktrace_entry/1))
+        ActionLog.update_stack(state.action_id, stack)
+
+      # The eval exited between the tick and the probe; the finish path owns
+      # the row now.
+      nil ->
+        :ok
+    end
+
+    Process.send_after(self(), :sample_stack, @stack_sample_interval_ms)
+    {:noreply, state}
+  end
+
+  def handle_info(:sample_stack, state), do: {:noreply, state}
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   # -- internals ---------------------------------------------------------------
@@ -268,6 +298,17 @@ defmodule IxMcp.Jobs.Job do
         diagnostics: diags,
         finished_mono: System.monotonic_time(:millisecond)
     }
+
+    # Finalize the action row before waking subscribers: a caller that saw
+    # the run finish must find the row already final, never still running.
+    if state.action_id do
+      ActionLog.finish_action(
+        state.action_id,
+        Atom.to_string(status),
+        status == :failed,
+        state.finished_mono - state.started_mono
+      )
+    end
 
     summary = build_summary(state)
     Enum.each(state.subscribers, fn pid -> send(pid, {:ix_job_finished, state.id, summary}) end)
