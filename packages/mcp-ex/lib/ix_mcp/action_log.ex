@@ -23,9 +23,12 @@ defmodule IxMcp.ActionLog do
   The database path resolves as app env `:actions_db` (tests pin
   `":memory:"`), then `$IX_MCP_ACTIONS_DB`, then
   `$XDG_STATE_HOME/ix-mcp-ex/actions.db` (state home defaulting to
-  `~/.local/state`). A pre-#3532 database (an `actions` table without a
-  `session_id` column) is migrated losslessly, in one transaction, when the
-  log opens. Writes are synchronous calls on purpose: the BEAM halts as soon
+  `~/.local/state`). The schema carries its version in `PRAGMA
+  user_version` (#3539): an older database migrates forward through the
+  ordered steps (losslessly, one transaction per step) when the log opens,
+  while a database stamped by a newer server is refused -- loudly, but
+  without failing startup: logging disables for this instance, because a
+  tool server must not die over its own log. Writes are synchronous calls on purpose: the BEAM halts as soon
   as stdin closes, so a fire-and-forget cast loses the tail of a short-lived
   session (observed live), while a call makes the row durable before the
   tool response ships; one SQLite insert is negligible against MCP wire
@@ -36,6 +39,8 @@ defmodule IxMcp.ActionLog do
   use GenServer
 
   alias Exqlite.Sqlite3
+
+  require Logger
 
   # The schema is a published contract (#3532): the action-log UI is built
   # against these exact tables, so changes here must be coordinated.
@@ -51,13 +56,25 @@ defmodule IxMcp.ActionLog do
   CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'done', stack TEXT, stack_at TEXT)
   """
 
-  # A pre-#3536 v2 database lacks the live-row columns; DEFAULT 'done' is
-  # exactly right for its rows, which were all written after the fact.
-  @add_live_columns [
-    "ALTER TABLE actions ADD COLUMN status TEXT NOT NULL DEFAULT 'done'",
-    "ALTER TABLE actions ADD COLUMN stack TEXT",
-    "ALTER TABLE actions ADD COLUMN stack_at TEXT"
-  ]
+  # index#3539: the schema version is stamped into SQLite's `PRAGMA
+  # user_version` header field instead of being re-derived by column
+  # sniffing on every open. Sniffing can only classify shapes this binary
+  # already knows: when the on-disk schema is NEWER than the reader (the
+  # 2026-07-17 incident -- a #3512-era binary starting against the file the
+  # #3532 normalization had already rewritten), every sniff answer is wrong
+  # and the mismatch surfaces as a match-crash deep in a prepare. A stamped
+  # version makes older shapes migratable in order, the current shape a
+  # no-op, and a future shape explicitly detectable. The ladder: 1 = the
+  # flat #3512 log, 2 = the #3532 normalization, 3 = the #3536 live rows.
+  @user_version 3
+
+  # Frozen historical DDL for the 1 -> 2 step: the actions shape exactly as
+  # #3532 shipped it, before the live-row columns. A migration must never
+  # borrow the current @create_actions, or editing today's schema would
+  # silently rewrite the ladder's history.
+  @create_actions_v2 """
+  CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL)
+  """
 
   # The v1 shape kept session/topic as TEXT per action row. The backfill
   # makes one session per distinct v1 session string (NULLs collapse into
@@ -65,11 +82,11 @@ defmodule IxMcp.ActionLog do
   # distinct (session, topic) pair -- v1 rows carry no topic boundaries, so
   # per-pair is the finest lossless grain -- and earliest-seen timestamps
   # stand in for the started_at v1 never stored.
-  @migrate_v1 [
+  @migrate_v1_to_v2 [
     "ALTER TABLE actions RENAME TO actions_v1",
     @create_sessions,
     @create_topics,
-    @create_actions,
+    @create_actions_v2,
     """
     INSERT INTO sessions (name, started_at)
     SELECT session, MIN(at) FROM actions_v1 GROUP BY session
@@ -90,6 +107,20 @@ defmodule IxMcp.ActionLog do
     """,
     "DROP TABLE actions_v1"
   ]
+
+  # A v2 database predates the live-row columns (#3536); DEFAULT 'done' is
+  # exactly right for its rows, which were all written after the fact.
+  @migrate_v2_to_v3 [
+    "ALTER TABLE actions ADD COLUMN status TEXT NOT NULL DEFAULT 'done'",
+    "ALTER TABLE actions ADD COLUMN stack TEXT",
+    "ALTER TABLE actions ADD COLUMN stack_at TEXT"
+  ]
+
+  # Ordered migrations keyed by the user_version each upgrades FROM. Every
+  # step runs in one immediate transaction that also stamps the version it
+  # produces, so an interrupted migration leaves the previous consistent,
+  # correctly-stamped version on disk.
+  @migrations [{1, @migrate_v1_to_v2}, {2, @migrate_v2_to_v3}]
 
   @insert """
   INSERT INTO actions (at, session_id, topic_id, tool, intent, arguments, is_error, elapsed_ms, status)
@@ -192,26 +223,62 @@ defmodule IxMcp.ActionLog do
     GenServer.call(server, :topics)
   end
 
+  @doc """
+  The resolved database path: app env `:actions_db` (tests pin `":memory:"`),
+  then `$IX_MCP_ACTIONS_DB`, then `$XDG_STATE_HOME/ix-mcp-ex/actions.db`.
+  Public because crash-dump routing (`IxMcp.Application`) aims
+  `ERL_CRASH_DUMP` at the same directory (#3539).
+  """
+  @spec db_path() :: String.t()
+  def db_path do
+    Application.get_env(:ix_mcp, :actions_db) ||
+      System.get_env("IX_MCP_ACTIONS_DB") ||
+      Path.join([state_home(), "ix-mcp-ex", "actions.db"])
+  end
+
   @impl true
   def init(opts) do
-    path = Keyword.get(opts, :path) || configured_path()
+    path = Keyword.get(opts, :path) || db_path()
 
     if path != ":memory:", do: File.mkdir_p!(Path.dirname(path))
 
     {:ok, conn} = Sqlite3.open(path)
 
-    case shape(conn) do
-      :v2 -> :ok
-      :v2_pre_live -> execute_all(conn, @add_live_columns)
-      :empty -> execute_all(conn, [@create_sessions, @create_topics, @create_actions])
-      :v1 -> execute_all(conn, ["BEGIN IMMEDIATE"] ++ @migrate_v1 ++ ["COMMIT"])
-    end
+    # index#3539: on 2026-07-17 a server binary match-crashed right here
+    # against an action log written under a newer schema, and the failed
+    # child took the whole application down -- every tool call died over a
+    # log nothing on the hot path reads. Older on-disk versions migrate
+    # forward; a future version (a newer server already ran against this
+    # file) refuses loudly but keeps the server up, degraded to not
+    # recording, so the blast radius stays scoped to the log itself.
+    case ensure_version(conn) do
+      :ok ->
+        {:ok, insert} = Sqlite3.prepare(conn, @insert)
+        {:ok, %{conn: conn, insert: insert}}
 
-    {:ok, insert} = Sqlite3.prepare(conn, @insert)
-    {:ok, %{conn: conn, insert: insert}}
+      {:future, found} ->
+        :ok = Sqlite3.close(conn)
+
+        Logger.error(
+          "action log #{path} has schema user_version #{found}, newer than the supported " <>
+            "#{@user_version}: a newer ix-mcp-ex has run against this file. Upgrade this " <>
+            "server or point IX_MCP_ACTIONS_DB at a fresh path; not recording actions for " <>
+            "this instance (index#3539)."
+        )
+
+        {:ok, :disabled}
+    end
   end
 
+  # index#3539 degraded mode: the file belongs to a newer server, so writes
+  # are dropped and reads answer empty rather than crashing every caller.
+  # Ids still come back as integers because IxMcp.Session stores them only
+  # to hand them straight back to this module, where they are ignored.
   @impl true
+  def handle_call(request, _from, :disabled) do
+    {:reply, disabled_reply(request), :disabled}
+  end
+
   def handle_call({:create_session, name, at}, _from, %{conn: conn} = state) do
     run(conn, "INSERT INTO sessions (name, started_at) VALUES (?, ?)", [name, at])
     {:ok, id} = Sqlite3.last_insert_rowid(conn)
@@ -289,19 +356,76 @@ defmodule IxMcp.ActionLog do
     {:reply, rows, state}
   end
 
-  defp shape(conn) do
+  defp ensure_version(conn) do
+    case user_version(conn) do
+      @user_version ->
+        :ok
+
+      found when found > @user_version ->
+        {:future, found}
+
+      0 ->
+        # Every database written before stamping existed reads 0, so a 0 is
+        # classified by inspecting the actual tables -- the one situation
+        # where sniffing is sound, because 0 can only be a fresh file or a
+        # shape older than stamping -- and the file leaves stamped, so every
+        # later open trusts the version alone.
+        case unstamped_version(conn) do
+          :fresh -> create(conn)
+          version -> migrate(conn, version)
+        end
+
+      found ->
+        migrate(conn, found)
+    end
+  end
+
+  defp user_version(conn) do
+    [[version]] = fetch(conn, "PRAGMA user_version", [])
+    version
+  end
+
+  defp unstamped_version(conn) do
     case table_columns(conn, "actions") do
       [] ->
-        :empty
+        :fresh
 
       columns ->
         cond do
-          "session_id" not in columns -> :v1
-          "status" not in columns -> :v2_pre_live
-          true -> :v2
+          "session_id" not in columns -> 1
+          "status" not in columns -> 2
+          true -> @user_version
         end
     end
   end
+
+  defp create(conn) do
+    execute_all(
+      conn,
+      ["BEGIN IMMEDIATE", @create_sessions, @create_topics, @create_actions, stamp(), "COMMIT"]
+    )
+  end
+
+  # An already-current file from before stamping existed: mark it, move on.
+  defp migrate(conn, @user_version), do: execute_all(conn, [stamp()])
+
+  defp migrate(conn, from) do
+    @migrations
+    |> Enum.drop_while(fn {version, _statements} -> version < from end)
+    |> Enum.each(fn {version, statements} ->
+      execute_all(conn, ["BEGIN IMMEDIATE"] ++ statements ++ [stamp(version + 1), "COMMIT"])
+    end)
+  end
+
+  defp stamp(version \\ @user_version), do: "PRAGMA user_version = #{version}"
+
+  defp disabled_reply({:create_session, _name, _at}), do: 0
+  defp disabled_reply({:create_topic, _session_id, _name, _at}), do: 0
+  defp disabled_reply({:start_action, _action}), do: 0
+  defp disabled_reply({:recent, _n}), do: []
+  defp disabled_reply(:sessions), do: []
+  defp disabled_reply(:topics), do: []
+  defp disabled_reply(_request), do: :ok
 
   defp table_columns(conn, table) do
     for [_cid, name | _rest] <- fetch(conn, "PRAGMA table_info(#{table})", []), do: name
@@ -324,12 +448,6 @@ defmodule IxMcp.ActionLog do
     {:ok, rows} = Sqlite3.fetch_all(conn, statement)
     :ok = Sqlite3.release(conn, statement)
     rows
-  end
-
-  defp configured_path do
-    Application.get_env(:ix_mcp, :actions_db) ||
-      System.get_env("IX_MCP_ACTIONS_DB") ||
-      Path.join([state_home(), "ix-mcp-ex", "actions.db"])
   end
 
   defp state_home do
