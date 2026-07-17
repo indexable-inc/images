@@ -22,7 +22,12 @@ pub const CONTROL_TEMPO: usize = 2;
 
 /// Render `out.len()` mono frames starting at absolute shared frame
 /// `start_frame`. Pure: same arguments, same bits, on every peer.
-pub fn render(start_frame: u64, sample_rate: u32, controls: &[f32; CONTROL_COUNT], out: &mut [f32]) {
+pub fn render(
+    start_frame: u64,
+    sample_rate: u32,
+    controls: &[f32; CONTROL_COUNT],
+    out: &mut [f32],
+) {
     for (i, sample) in out.iter_mut().enumerate() {
         *sample = sample_at(start_frame + i as u64, sample_rate, controls);
     }
@@ -55,27 +60,41 @@ fn sample_at(frame: u64, sample_rate: u32, controls: &[f32; CONTROL_COUNT]) -> f
 
     // A deterministic pseudo-random walk over the scale: integer bit mixing
     // only, so every peer picks the identical note for the identical step.
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "step is a small non-negative beat index")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "step is a small non-negative beat index"
+    )]
     let mixed = (step as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let note = RATIOS[(mixed >> 7) as usize % RATIOS.len()];
 
     let freq = root * note;
     let tone = 0.3f64.mul_add(triangle(2.0 * freq * t), triangle(freq * t));
     let envelope = (1.0 - pos) * (1.0 - pos);
-    #[expect(clippy::cast_possible_truncation, reason = "audio samples are f32 at the ABI")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "audio samples are f32 at the ABI"
+    )]
     let sample = (tone * envelope * gain) as f32;
     sample
 }
 
 fn frame_seconds(frame: u64, sample_rate: u32) -> f64 {
-    #[expect(clippy::cast_precision_loss, reason = "frame counts stay far below 2^53")]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "frame counts stay far below 2^53"
+    )]
     let t = frame as f64 / f64::from(sample_rate.max(1));
     t
 }
 
 /// Treat an unset (zero) control as its documented default.
 fn defaulted(control: f32, default: f64) -> f64 {
-    if control == 0.0 { default } else { f64::from(control) }
+    if control == 0.0 {
+        default
+    } else {
+        f64::from(control)
+    }
 }
 
 /// Triangle wave in `-1..=1` from a phase in cycles.
@@ -136,7 +155,10 @@ pub extern "C" fn sa_render(start_frame: i64, frames: i32, sample_rate: i32) {
     // SAFETY: single-threaded instance; the host never renders re-entrantly.
     let controls = unsafe { &*SHARED.controls.get() };
     let out = unsafe { &mut *SHARED.out.get() };
-    #[expect(clippy::cast_sign_loss, reason = "the host clamps both to non-negative")]
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "the host clamps both to non-negative"
+    )]
     let (start, count) = (start_frame.max(0) as u64, sample_rate.max(1) as u32);
     #[expect(clippy::cast_sign_loss, reason = "clamped non-negative")]
     let frames = (frames.max(0) as usize).min(MAX_BLOCK_FRAMES);

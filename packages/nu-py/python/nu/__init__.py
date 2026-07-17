@@ -39,9 +39,16 @@ payload (issue #2540).
 
 ``nu()`` is the single shell-out path: side-effectful commands
 (``git``/``gh`` writes) run as externals with ``^cmd``, and a CLI with a native
-``--json`` mode decodes end to end (``^gh ... --json | from json``). For a nix
-build, use the bundled ``nix`` module (a live dashboard build-tree pane), not
-``^nix``.
+``--json`` mode decodes end to end (``^gh ... --json | from json``). Builtin
+names SHADOW the externals -- ``ps``, ``open``, ``sort``, ``kill``, ``du``,
+``date`` are nushell commands -- so POSIX ``ps aux`` is a parse error
+("Usage: ps {flags}", issue #2933), and ``^`` applies per stage, so every
+external in a pasted POSIX pipeline needs its own prefix
+(``^ps aux | ^grep foo``, issue #2252). The builtin ``ps``'s ``cpu`` column is
+the live per-core percentage; on macOS ``^ps -o %cpu`` is BSD's decaying
+average, which reads 0.0 for a process that just started spinning, so prefer
+the builtin for current load. For a nix build, use the bundled ``nix``
+module (a live dashboard build-tree pane), not ``^nix``.
 
 Contract:
 

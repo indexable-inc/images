@@ -14,9 +14,10 @@ import re
 import sys
 import tomllib
 import urllib.request
+from pathlib import Path
 
 MANIFEST_URL = "https://static.rust-lang.org/dist/channel-rust-nightly.toml"
-TOOLCHAIN_PATH = "rust-toolchain.toml"
+TOOLCHAIN_PATH = Path("rust-toolchain.toml")
 
 # rustup's component short names (as written in rust-toolchain.toml) don't
 # always match the manifest's package keys: some ship as "-preview" packages
@@ -35,7 +36,7 @@ HOST_PLATFORMS = ["x86_64-unknown-linux-musl", "aarch64-apple-darwin"]
 
 
 def main() -> int:
-    with open(TOOLCHAIN_PATH, "rb") as f:
+    with TOOLCHAIN_PATH.open("rb") as f:
         toolchain = tomllib.load(f)["toolchain"]
 
     current_channel = toolchain["channel"]
@@ -48,7 +49,7 @@ def main() -> int:
     components = toolchain.get("components", [])
     targets = toolchain.get("targets", [])
 
-    with urllib.request.urlopen(MANIFEST_URL, timeout=30) as resp:
+    with urllib.request.urlopen(MANIFEST_URL, timeout=30) as resp:  # noqa: S310 -- fixed https:// constant
         manifest = tomllib.loads(resp.read().decode())
 
     manifest_date = manifest["date"]
@@ -81,14 +82,12 @@ def main() -> int:
             print(f"skip: target {target!r} has no available rust-std in manifest {manifest_date}")
             return 0
 
-    with open(TOOLCHAIN_PATH, encoding="utf-8") as f:
-        content = f.read()
+    content = TOOLCHAIN_PATH.read_text(encoding="utf-8")
     new_content = content.replace(f'"{current_channel}"', f'"nightly-{manifest_date}"')
     if new_content == content:
         print(f"could not find channel line for {current_channel!r} to rewrite")
         return 1
-    with open(TOOLCHAIN_PATH, "w", encoding="utf-8") as f:
-        f.write(new_content)
+    TOOLCHAIN_PATH.write_text(new_content, encoding="utf-8")
 
     print(f"bumped nightly {current_date} -> {manifest_date}")
     return 0

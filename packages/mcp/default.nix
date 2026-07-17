@@ -289,6 +289,28 @@
     ''
   );
 
+  # `embed`: Python-native code embeddings (chunk / embed / parquet cache /
+  # similarity search) for semantic clone detection and code search
+  # (index#3417). Pure Python over the bundled numpy + polars; the inference
+  # runtime (torch + sentence-transformers on MPS) is darwin-only and gated in
+  # `darwinExtraPackages`, imported lazily inside the functions that need it.
+  embedPythonSource = builtins.path {
+    name = "ix-mcp-embed-python-source";
+    path = ./src/embed;
+  };
+  embedModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-embed-python-module"
+    {
+      strictDeps = true;
+      meta.description = "In-process code-embedding battery (torch/MPS) bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/embed"
+      mkdir -p "$site"
+      cp -r ${embedPythonSource}/embed/. "$site/"
+    ''
+  );
+
   # The `ix_google` package: typed PyO3 bindings for the google-gmail and
   # google-calendar Rust crates, baked into the pinned interpreter as a
   # complement to the (untyped) `google_auth` helper. Notebook users pick
@@ -345,6 +367,9 @@
     pkgs.runCommand "ix-notebook-mcp-module"
     {
       strictDeps = true;
+      # store.py rides the durable weave spool (index#3419), so every env
+      # that bundles this package needs the weave client alongside it.
+      propagatedBuildInputs = [weaveModule];
       meta.description = "The ix notebook-first MCP server package";
     }
     ''
@@ -1013,6 +1038,21 @@
       vmkitModule
       imessageModule
       ghosttyModule
+      # `embed` (code embeddings, index#3417) infers on torch/MPS, so its
+      # heavyweight runtime joins the interpreter only on Darwin; the module
+      # itself is bundled everywhere and imports these lazily with a clear
+      # error where they are absent. `torch` substitutes from the official
+      # cache. `sentence-transformers` is overridden because the stock package
+      # folds every optional-dependencies extra into its nativeCheckInputs and
+      # the `audio` extra carries phonemizer -> dlinfo, which this nixpkgs
+      # marks broken, refusing evaluation outright. The extras are test-only:
+      # drop the test run rather than allowlist a broken leaf; runtime
+      # dependencies are untouched.
+      ps.torch
+      (ps.sentence-transformers.overridePythonAttrs (_: {
+        doCheck = false;
+        nativeCheckInputs = [];
+      }))
     ];
 
   # htpy: build HTML in plain Python (`div(class_="x")[ ... ]`), auto-escaping
@@ -1392,6 +1432,7 @@
       scipqlModule
       flecsQueryModule
       fsearchModule
+      embedModule
       privateSessionModule
       googleAuthModule
       ixGoogleModule
@@ -1588,6 +1629,7 @@
     "mesh"
     "fabric"
     "claude_history"
+    "embed"
   ];
   # The `ix_notebook_mcp` server package is migrated file-by-file (the package
   # as a whole is still ~200 errors from strict-clean, index#1902): each file
@@ -1648,6 +1690,9 @@
     '';
 
   tuiBundled = importTest "tui" "import tui; print('tui-ok', tui.__version__)";
+  # `embed` imports everywhere (its torch/MPS runtime loads lazily inside the
+  # embedding calls), so the import test runs on Linux too.
+  embedBundled = importTest "embed" "import embed; print('embed-ok', embed.__version__)";
   # htpy must import and auto-escape: a `<` in a text node comes out as `&lt;`.
   htpyBundled = importTest "htpy" "import htpy; print('htpy-ok' if '&lt;' in str(htpy.div['<']) else 'htpy-bad')";
   searchBundled = importTest "search" "import search; print('search-ok', search.__version__)";
@@ -1765,7 +1810,7 @@
         assert "partial" in repr(capped).lower(), "the repr must surface truncation"
 
         # A full scan under the limit is a plain frame with no truncated flag.
-        full = await fsearch.grep("needle", big, limit=100_000)
+        full = await fsearch.grep("needle", big, limit=100000)
         assert full.height == 1000, full.height
         assert not isinstance(full, fsearch.PartialFrame)
         assert not hasattr(full, "truncated")
@@ -1773,7 +1818,7 @@
         # A timeout returns the matches found before the deadline, not nothing.
         # A tiny timeout over the big tree is very likely to trip; if the machine
         # is fast enough to finish, the assertion below tolerates a complete scan.
-        timed = await fsearch.grep("needle", big, limit=10_000_000, timeout=0.001)
+        timed = await fsearch.grep("needle", big, limit=10000000, timeout=0.001)
         if isinstance(timed, fsearch.PartialFrame):
             assert timed.truncated is True
             assert "timed out" in timed.reason, timed.reason
@@ -2742,6 +2787,10 @@
       cp ${./tests/test_read_await.py} test_read_await.py
       # Issue #3131: a job wrapping nu(check=False) pages real stdout lines.
       cp ${./tests/test_nu_job_output.py} test_nu_job_output.py
+      # Durable-local-first store writes (index#3418/#3419): outage-durable
+      # spool, append-order drain, one loud line, no wire wait on the caller.
+      cp ${./tests/weave_stub.py} weave_stub.py
+      cp ${./tests/test_store_spool.py} test_store_spool.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
@@ -2763,6 +2812,7 @@
         test_nu_input_routing.py \
         test_read_await.py \
         test_nu_job_output.py \
+        test_store_spool.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp typecheck smoke failed:" >&2
         cat stdout stderr >&2
@@ -3181,7 +3231,7 @@
     # A huge llm_result is clipped to the same cap as any other text mime, so it
     # can never bypass the limit into the store / each dashboard poll.
     big = runtime._result_bundle(
-        runtime.Result(user_html="<b>x</b>", llm_result="z" * 500_000, llm_images=[b"\x89PNG\r\n"])
+        runtime.Result(user_html="<b>x</b>", llm_result="z" * 500000, llm_images=[b"\x89PNG\r\n"])
     )
     big_text = json.loads(big["data"][runtime.IX_LLM_MIME])["text"]
     assert big_text.endswith("[truncated]") and len(big_text) <= runtime._MAX_TEXT_BUNDLE + 32, len(big_text)
@@ -3719,7 +3769,7 @@
     apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
     def ns(dt):
-        return int((dt - apple_epoch).total_seconds() * 1_000_000_000)
+        return int((dt - apple_epoch).total_seconds() * 1000000000)
 
     t1 = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
     t2 = datetime(2024, 1, 2, 3, 5, 5, tzinfo=timezone.utc)
@@ -4079,7 +4129,7 @@
     wide = pl.DataFrame({f"c{j}": range(40) for j in range(40)})
     wout = view.df_html(wide)
     assert 'style="color:' not in wout, "cells must be class-styled, not inline"
-    assert len(wout) < 130_000, len(wout)
+    assert len(wout) < 130000, len(wout)
 
     # Nested List(Struct)/Struct cells render as boxed sub-tables, not a
     # truncated str(value): the inner field values must reach the HTML.
@@ -5837,6 +5887,7 @@ in
               searchBundled
               astlogBundled
               fsearchBundled
+              embedBundled
               dataLibsBundled
               gmailLibsBundled
               exaBundled

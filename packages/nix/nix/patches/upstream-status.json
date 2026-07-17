@@ -32,7 +32,7 @@
       "retired": false,
       "duplicates": []
     },
-    "0006-libstore-daemon-record-client-uid-and-user-for-build.patch": {
+    "0006-libstore-daemon-record-client-identity-for-build.patch": {
       "upstream": "hold",
       "pr": null,
       "retired": false,

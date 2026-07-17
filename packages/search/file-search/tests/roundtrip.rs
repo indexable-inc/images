@@ -81,8 +81,18 @@ fn reindex_removes_stale_and_deleted_file_chunks() {
         index
             .index_directory(workdir.path(), false)
             .expect("index v1");
-        assert!(!index.search("alpha", 5, None).expect("search kept v1").is_empty());
-        assert!(!index.search("charlie", 5, None).expect("search removed v1").is_empty());
+        assert!(
+            !index
+                .search("alpha", 5, None)
+                .expect("search kept v1")
+                .is_empty()
+        );
+        assert!(
+            !index
+                .search("charlie", 5, None)
+                .expect("search removed v1")
+                .is_empty()
+        );
     }
 
     fs::write(&kept, "echo foxtrot").expect("write kept v2");
@@ -92,9 +102,24 @@ fn reindex_removes_stale_and_deleted_file_chunks() {
         index
             .index_directory(workdir.path(), false)
             .expect("index v2");
-        assert!(index.search("alpha", 5, None).expect("stale search").is_empty());
-        assert!(index.search("charlie", 5, None).expect("deleted search").is_empty());
-        assert!(!index.search("foxtrot", 5, None).expect("current search").is_empty());
+        assert!(
+            index
+                .search("alpha", 5, None)
+                .expect("stale search")
+                .is_empty()
+        );
+        assert!(
+            index
+                .search("charlie", 5, None)
+                .expect("deleted search")
+                .is_empty()
+        );
+        assert!(
+            !index
+                .search("foxtrot", 5, None)
+                .expect("current search")
+                .is_empty()
+        );
     }
 }
 

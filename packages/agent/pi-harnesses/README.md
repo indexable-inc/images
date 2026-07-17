@@ -53,10 +53,11 @@ nix run github:indexable-inc/index#pi-prosecutor -- "your task"   # opus-4-8 exe
 nix run github:indexable-inc/index#pi-beam       -- "your task"
 nix run github:indexable-inc/index#pi-fusion     -- "your task"   # fable-5 primary + gpt-5.6-sol sidekick at low reasoning
 PI_HARNESS_MODEL=codex nix run github:indexable-inc/index#pi-prosecutor -- "..."   # gpt-5.6-sol medium
+PI_HARNESS_MODEL=kimi  nix run github:indexable-inc/index#pi-base       -- "..."   # kimi-k3, needs MOONSHOT_API_KEY
 ```
 
 API keys come from the caller's environment (`ANTHROPIC_API_KEY` /
-`OPENAI_API_KEY`); the harness owns model *selection* only. Every harness execs
+`OPENAI_API_KEY` / `MOONSHOT_API_KEY`); the harness owns model *selection* only. Every harness execs
 nixpkgs' pinned `pi-coding-agent` binary, never a `pi` resolved from the
 caller's PATH (host-level wrappers there inject conflicting flags and
 extensions); swap it with `.override { pi = ...; }`.

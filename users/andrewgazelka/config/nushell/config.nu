@@ -210,25 +210,12 @@ def _store_path_parts [
     }
 }
 
-def _as_path_list [] {
-    let input = $in
-    let kind = ($input | describe)
-
-    if $kind == "nothing" {
-        []
-    } else if ($kind =~ '^(list|table)') {
-        $input
-    } else {
-        [ $input ]
-    }
-}
-
 # Parse Nix store paths or drv paths into readable package/version columns.
 def drv-info [
     path?: string  # Optional store path. If omitted, reads a path or list of paths from stdin.
 ] {
     let paths = if $path == null {
-        $in | _as_path_list
+        $in | path list
     } else {
         [ $path ]
     }
@@ -434,7 +421,7 @@ def "ni why" [
 # Add build-log timing hints to selected `ni` rows or store paths.
 def "ni log-times" [] {
     $in
-    | _as_path_list
+    | path list
     | par-each --keep-order --threads 8 {|item|
         let kind = ($item | describe)
         let row = if ($kind =~ '^record') {
@@ -883,7 +870,7 @@ let abbreviations = abbr flatten-abbreviations {
     sor: "sort-by -r"
     sqlp: "SQLX_OFFLINE=false cargo sqlx prepare -- --all-features --tests --all-targets"
     sqlr: "cargo sqlx database reset -y"
-    st: "speedtest-go"
+    st: "strings"
     su: "git submodule update" # actually download the files
     sup: "c superglide"
     t: "trash"
@@ -1945,6 +1932,37 @@ def group-max [group_field: string, max_field: string]: list<record> -> list<rec
         | update items { get $max_field | sort | last }
         | rename $group_field $max_field
     }
+}
+
+# launchctl only reports loaded jobs, so discover installed jobs from their plists.
+def "launchctl installed" [] {
+    let locations = [
+        {
+            scope: "user"
+            kind: "agent"
+            path: ($env.HOME | path join "Library" "LaunchAgents")
+        }
+        { scope: "system", kind: "agent", path: "/Library/LaunchAgents" }
+        { scope: "system", kind: "daemon", path: "/Library/LaunchDaemons" }
+    ]
+
+    $locations
+    | each { |location|
+        glob ($location.path | path join "*.plist")
+        | par-each { |path|
+            let plist = ^plutil -convert json -o - $path | from json
+            {
+                # Empty vendor placeholder plists are not launchd jobs.
+                label: $plist.Label?
+                scope: $location.scope
+                kind: $location.kind
+                path: $path
+            }
+        }
+    }
+    | flatten
+    | where label != null
+    | sort-by label
 }
 
 def tui-ports [] {

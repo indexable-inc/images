@@ -267,6 +267,7 @@ let
     name = "daemon-signal";
     testDaemon = package.components.nix-cli;
   };
+  buildStatus = focusedFunctionalTest {name = "build-status";};
 in
   package.overrideAttrs (old: {
     passthru =
@@ -276,7 +277,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // {
-            inherit autoGcInterrupt daemonSignal smoke;
+            inherit autoGcInterrupt buildStatus daemonSignal smoke;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {

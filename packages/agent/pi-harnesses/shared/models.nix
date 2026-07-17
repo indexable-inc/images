@@ -32,6 +32,17 @@
     apiKeyEnv = "ANTHROPIC_API_KEY";
   };
 
+  # Kimi K3 via Moonshot's OpenAI-compatible API. The pinned pi build has no
+  # built-in kimi-k3 provider, so this alias carries a provider extension that
+  # registers one (see providers/moonshot.js). No `thinking`: K3 only accepts
+  # reasoning_effort=max and the extension pins every level to it.
+  kimi = {
+    provider = "moonshot";
+    model = "kimi-k3";
+    apiKeyEnv = "MOONSHOT_API_KEY";
+    providerExtension = ./providers/moonshot.js;
+  };
+
   # Cheap delegated worker for fusion-style harnesses.
   codex-low = {
     provider = "openai";

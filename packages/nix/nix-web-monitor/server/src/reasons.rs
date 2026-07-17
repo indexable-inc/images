@@ -119,7 +119,9 @@ async fn previous_drv(current: &str, name: &str) -> Result<Option<String>> {
         // `registered < cutoff` drops this-run outputs (e.g. the CA build's own
         // resolved-deriver output) so the baseline is a genuinely prior build.
         .filter(|candidate| {
-            candidate.deriver != current && is_drv(&candidate.deriver) && candidate.registered < cutoff
+            candidate.deriver != current
+                && is_drv(&candidate.deriver)
+                && candidate.registered < cutoff
         })
         .max_by_key(|candidate| candidate.registered)
         .map(|candidate| candidate.deriver))
@@ -161,7 +163,10 @@ async fn path_infos(paths: &[String]) -> Result<Vec<Candidate>> {
                 .get("registrationTime")
                 .and_then(Value::as_i64)
                 .unwrap_or(i64::MIN);
-            Some(Candidate { deriver, registered })
+            Some(Candidate {
+                deriver,
+                registered,
+            })
         })
         .collect())
 }
@@ -210,16 +215,22 @@ async fn diff_reason(current: &str, baseline: &str) -> Result<String> {
         return Ok("rebuilt".to_owned());
     }
     let json: Value = serde_json::from_slice(&out.stdout).context("parsing derivation show")?;
-    let obj = json.as_object().context("derivation show is not an object")?;
+    let obj = json
+        .as_object()
+        .context("derivation show is not an object")?;
     // CA derivations can key by a resolved path, so when the requested key is
     // absent fall back to the *other* entry by key identity (not map-iteration
     // order, which could pick the baseline for both and compare it with itself).
-    let cur = obj
-        .get(current)
-        .or_else(|| obj.iter().find(|(key, _)| key.as_str() != baseline).map(|(_, value)| value));
-    let base = obj
-        .get(baseline)
-        .or_else(|| obj.iter().find(|(key, _)| key.as_str() != current).map(|(_, value)| value));
+    let cur = obj.get(current).or_else(|| {
+        obj.iter()
+            .find(|(key, _)| key.as_str() != baseline)
+            .map(|(_, value)| value)
+    });
+    let base = obj.get(baseline).or_else(|| {
+        obj.iter()
+            .find(|(key, _)| key.as_str() != current)
+            .map(|(_, value)| value)
+    });
     let (Some(cur), Some(base)) = (cur, base) else {
         return Ok("rebuilt".to_owned());
     };
@@ -270,7 +281,10 @@ fn inputs_by_name(drv: &Value) -> BTreeMap<String, BTreeSet<String>> {
     };
     for path in inputs.keys() {
         if let Some(name) = output_name(path) {
-            by_name.entry(name.to_owned()).or_default().insert(path.clone());
+            by_name
+                .entry(name.to_owned())
+                .or_default()
+                .insert(path.clone());
         }
     }
     by_name
@@ -278,7 +292,9 @@ fn inputs_by_name(drv: &Value) -> BTreeMap<String, BTreeSet<String>> {
 
 /// The string array at `field`, or empty.
 fn set_field<'a>(drv: &'a Value, field: &str) -> &'a [Value] {
-    drv.get(field).and_then(Value::as_array).map_or(&[], Vec::as_slice)
+    drv.get(field)
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice)
 }
 
 /// The set of full store paths in a JSON string array. Full paths (not names):
@@ -290,7 +306,10 @@ fn path_set(paths: &[Value]) -> BTreeSet<&str> {
 
 /// The `<name>` of a `/nix/store/<hash>-<name>` path (no `.drv` stripping).
 fn store_path_name(path: &str) -> Option<&str> {
-    path.rsplit('/').next()?.get(33..).filter(|name| !name.is_empty())
+    path.rsplit('/')
+        .next()?
+        .get(33..)
+        .filter(|name| !name.is_empty())
 }
 
 /// Build-environment keys whose value differs between the two derivations.

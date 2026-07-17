@@ -706,7 +706,10 @@ fn misgrouped_digits_flags_and_regroups_nix_literals() -> TestResult {
     assert!(content.contains("misgrouped = 10_000;"));
     assert!(content.contains("misgroupedFrac = 10_000.000_001;"));
     assert!(content.contains("frac = 0.000_001;"));
-    assert!(content.contains("fine = 10_000;"), "grouped literal untouched");
+    assert!(
+        content.contains("fine = 10_000;"),
+        "grouped literal untouched"
+    );
     assert!(content.contains("short = 1000;"), "four digits stay bare");
     assert!(
         content.contains("fracFine = 1_000.000_1;"),

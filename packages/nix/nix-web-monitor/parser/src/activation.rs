@@ -174,7 +174,10 @@ mod tests {
         activation.ingest_line("Activating linkGeneration", 40);
 
         let names: Vec<&str> = activation.steps.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["checkLinkTargets", "writeBoundary", "linkGeneration"]);
+        assert_eq!(
+            names,
+            ["checkLinkTargets", "writeBoundary", "linkGeneration"]
+        );
 
         // The first step closed Done when the next opened.
         assert_eq!(activation.steps[0].status, ActivationStatus::Done);
@@ -204,7 +207,11 @@ mod tests {
     fn unstructured_darwin_stream_lands_under_seeded_step() {
         let mut activation = Activation::default();
         // Darwin: server seeds a single step; lines have no `Activating` markers.
-        activation.begin("sudo darwin-rebuild activate".to_owned(), Some("activate".to_owned()), 0);
+        activation.begin(
+            "sudo darwin-rebuild activate".to_owned(),
+            Some("activate".to_owned()),
+            0,
+        );
         activation.ingest_line("setting up /etc...", 1);
         activation.ingest_line("setting up launchd services...", 2);
         assert_eq!(activation.steps.len(), 1);
@@ -225,7 +232,10 @@ mod tests {
         activation.ingest_line("Activating my custom service now", 2);
         assert_eq!(activation.steps.len(), 1, "no spurious second step");
         assert_eq!(activation.steps[0].name, "linkGeneration");
-        assert_eq!(activation.steps[0].lines, ["Activating my custom service now"]);
+        assert_eq!(
+            activation.steps[0].lines,
+            ["Activating my custom service now"]
+        );
     }
 
     #[test]

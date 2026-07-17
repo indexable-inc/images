@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use edit_applier::Edit;
 use snafu::{OptionExt as _, ResultExt as _, ensure};
 
-use crate::error::{BadEditRowSnafu, EditUnknownPathSnafu, Error, ReadSourceSnafu, WriteRewriteSnafu};
+use crate::error::{
+    BadEditRowSnafu, EditUnknownPathSnafu, Error, ReadSourceSnafu, WriteRewriteSnafu,
+};
 use crate::facts::Facts;
 use crate::souffle;
 
@@ -93,8 +95,8 @@ pub fn fix(
         .iter()
         .map(|path| {
             let absolute = root.join(path);
-            let text = std::fs::read_to_string(&absolute)
-                .context(ReadSourceSnafu { path: absolute })?;
+            let text =
+                std::fs::read_to_string(&absolute).context(ReadSourceSnafu { path: absolute })?;
             Ok((PathBuf::from(path), text))
         })
         .collect::<Result<Vec<_>, Error>>()?;

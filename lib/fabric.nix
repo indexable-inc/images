@@ -40,11 +40,11 @@ in {
   */
   ports = {
     gcs = 6379;
-    clientServer = 10_001;
+    clientServer = 10001;
     nodeManager = 6380;
     objectManager = 6381;
-    workerLow = 10_002;
-    workerHigh = 10_031;
+    workerLow = 10002;
+    workerHigh = 10031;
   };
 
   /**

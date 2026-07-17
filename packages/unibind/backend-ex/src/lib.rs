@@ -20,7 +20,7 @@ mod object;
 mod record;
 mod ty;
 
-pub use host::{host_modules, HostModules};
+pub use host::{HostModules, host_modules};
 pub use module::render;
 
 /// The rendered output for one interface.

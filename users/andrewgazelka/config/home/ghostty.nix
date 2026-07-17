@@ -59,7 +59,7 @@
     theme = "dark:custom-dark,light:custom-light";
 
     split-divider-color = "2a2a2a";
-    scrollback-limit = 4_294_967_295;
+    scrollback-limit = 4294967295;
     scrollbar = "never";
     link-previews = true;
 

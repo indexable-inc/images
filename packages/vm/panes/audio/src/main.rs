@@ -34,6 +34,9 @@ fn main() -> anyhow::Result<()> {
     serve::run(
         &listen,
         &cli.pcm_tcp,
-        &serve::StreamFormat { rate: cli.rate, channels: cli.channels },
+        &serve::StreamFormat {
+            rate: cli.rate,
+            channels: cli.channels,
+        },
     )
 }

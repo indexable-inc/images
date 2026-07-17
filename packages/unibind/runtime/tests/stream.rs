@@ -1,10 +1,10 @@
 //! `UniStream` drains in order and pulls items lazily, one per request.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::executor::block_on;
 use futures::StreamExt as _;
+use futures::executor::block_on;
 use unibind_runtime::UniStream;
 
 #[test]
@@ -24,11 +24,19 @@ fn items_are_produced_one_pull_at_a_time() {
         counter.fetch_add(1, Ordering::SeqCst);
         item
     }));
-    assert_eq!(produced.load(Ordering::SeqCst), 0, "nothing runs before the first pull");
+    assert_eq!(
+        produced.load(Ordering::SeqCst),
+        0,
+        "nothing runs before the first pull"
+    );
     assert_eq!(block_on(stream.next()), Some(0));
     assert_eq!(produced.load(Ordering::SeqCst), 1);
     assert_eq!(block_on(stream.next()), Some(1));
-    assert_eq!(produced.load(Ordering::SeqCst), 2, "an unbounded source only advances per next()");
+    assert_eq!(
+        produced.load(Ordering::SeqCst),
+        2,
+        "an unbounded source only advances per next()"
+    );
 }
 
 #[test]

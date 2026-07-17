@@ -111,13 +111,15 @@ fn diff_gate_fails_on_duplicated_change_while_global_passes() {
 
     let global = &json["gate"]["global"];
     assert_eq!(
-        global["pass"], Value::Bool(true),
+        global["pass"],
+        Value::Bool(true),
         "global gate should pass under a 100% budget: {json:#}"
     );
 
     let diff = &json["gate"]["diff"];
     assert_eq!(
-        diff["pass"], Value::Bool(false),
+        diff["pass"],
+        Value::Bool(false),
         "diff gate should fail: the added function duplicates the base: {json:#}"
     );
     assert!(

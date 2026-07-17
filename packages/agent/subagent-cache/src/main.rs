@@ -44,8 +44,7 @@ async fn main() -> Result<()> {
 
     // NoTls: the daemon co-locates with its dedicated Postgres and reaches it
     // over the trusted host/vrack address, never the public internet.
-    let pg_config: tokio_postgres::Config =
-        config.database_url.parse().context(DbConfigSnafu)?;
+    let pg_config: tokio_postgres::Config = config.database_url.parse().context(DbConfigSnafu)?;
     let manager = Manager::new(pg_config, NoTls);
     let pool: Pool = Pool::builder(manager)
         .max_size(MAX_DB_CONNECTIONS)

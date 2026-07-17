@@ -22,8 +22,8 @@
 //! `search-core` and each source adapter can depend on it without pulling in a
 //! client.
 
-pub mod keys;
 pub mod files;
+pub mod keys;
 pub mod sanitize;
 
 use std::fmt;
@@ -61,17 +61,17 @@ pub struct Source(String);
 /// indistinguishable from an empty corpus. When an adapter crate gains a new
 /// `SOURCE_TAG`, add it here so the query surfaces accept it.
 pub const KNOWN_SOURCE_TAGS: &[&str] = &[
-    "claude_history", // packages/search/source/claude
-    "codex",          // packages/search/source/codex
-    "shell",          // packages/search/source/atuin
-    "claude_debug",   // packages/search/source/debug
-    "git",            // packages/search/source/git
-    "github",         // packages/search/source/github
-    "journald",       // packages/search/source/journald
-    "slack",          // packages/search/source/slack
-    "linear",         // packages/search/source/linear
-    "code",           // checkout sync (search-core)
-    "web",            // hosted web-search store
+    "claude_history",   // packages/search/source/claude
+    "codex",            // packages/search/source/codex
+    "shell",            // packages/search/source/atuin
+    "claude_debug",     // packages/search/source/debug
+    "git",              // packages/search/source/git
+    "github",           // packages/search/source/github
+    "journald",         // packages/search/source/journald
+    "slack",            // packages/search/source/slack
+    "linear",           // packages/search/source/linear
+    "code",             // checkout sync (search-core)
+    "web",              // hosted web-search store
     "distilled_facts",  // packages/agent/distiller (ReasoningBank-style lessons)
     "session_outcomes", // packages/agent/distiller (per-session verdicts)
 ];
@@ -247,9 +247,7 @@ macro_rules! impl_owned_source_adapter {
                 $crate::Source::new($source)
             }
 
-            fn documents(
-                &self,
-            ) -> impl Iterator<Item = Result<$crate::Document, $error>> + Send {
+            fn documents(&self) -> impl Iterator<Item = Result<$crate::Document, $error>> + Send {
                 self.$field.clone().into_iter().map($convert)
             }
         }

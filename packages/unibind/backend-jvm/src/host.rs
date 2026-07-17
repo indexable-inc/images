@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 
 use unibind_core::ir;
 
-use crate::{module, names, RenderError};
+use crate::{RenderError, module, names};
 
 /// One generated Java source file.
 pub struct HostClass {

@@ -17,7 +17,10 @@ use serde_json::Value;
 fn state_dir() -> PathBuf {
     std::env::var_os("CLAUDE_REVIEW_STATE_DIR")
         .filter(|v| !v.is_empty())
-        .map_or_else(|| crate::home().join(".claude/.review-state"), PathBuf::from)
+        .map_or_else(
+            || crate::home().join(".claude/.review-state"),
+            PathBuf::from,
+        )
 }
 
 fn marker_path(session: &str) -> PathBuf {
@@ -202,7 +205,10 @@ mod tests {
 
     #[test]
     fn session_rejects_path_escapes() {
-        assert_eq!(safe_session(&json!({"session_id": "abc-123"})).as_deref(), Some("abc-123"));
+        assert_eq!(
+            safe_session(&json!({"session_id": "abc-123"})).as_deref(),
+            Some("abc-123")
+        );
         assert!(safe_session(&json!({"session_id": "../escape"})).is_none());
         assert!(safe_session(&json!({"session_id": "a/b"})).is_none());
         assert!(safe_session(&json!({"session_id": "."})).is_none());
@@ -233,7 +239,10 @@ mod tests {
 
     #[test]
     fn gate_evaluates_a_plain_main_session_stop() {
-        assert_eq!(gate_action(&json!({"session_id": "s1"})), GateAction::Evaluate);
+        assert_eq!(
+            gate_action(&json!({"session_id": "s1"})),
+            GateAction::Evaluate
+        );
     }
 
     #[test]

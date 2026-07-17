@@ -146,7 +146,8 @@ fn covered_lines(result: &DetectionResult) -> BTreeMap<PathBuf, BTreeSet<usize>>
         for fragment in &group.fragments {
             // Canonicalize so fragment paths (spelled however the scan target
             // was) match the absolute keys `ChangedLines` uses.
-            let key = std::fs::canonicalize(&fragment.file).unwrap_or_else(|_| fragment.file.clone());
+            let key =
+                std::fs::canonicalize(&fragment.file).unwrap_or_else(|_| fragment.file.clone());
             let entry = covered.entry(key).or_default();
             for row in fragment.lines.start..=fragment.lines.end {
                 entry.insert(row + 1);

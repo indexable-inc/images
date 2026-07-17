@@ -126,6 +126,43 @@ def test_auth_rejection_disables_writes_permanently(
     assert "WEAVE_TOKEN" in err
 
 
+def test_unreachable_logs_once_per_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Repeated write failures log ONE loud line (with the health check and
+    restart handles), then stay silent until the server recovers (index#3416)."""
+    monkeypatch.setenv("WEAVE_URL", "http://weave.test")
+    calls: list[str] = []
+
+    def refusing_then_up(
+        method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None
+    ) -> object:
+        calls.append(url)
+        if len(calls) <= 3:
+            raise ConnectionError("connection refused")
+        return {"seq": 1, "id": "f1"}
+
+    monkeypatch.setattr(store, "_http_json", refusing_then_up)
+
+    conn = store.WeaveStore(tmp_path / "s.ixnb")
+    try:
+        assert conn.flush(timeout=30.0)
+        assert not conn.disabled
+    finally:
+        conn.close()
+
+    assert len(calls) >= 4, calls
+    # The spool owns the transition logging (index#3419): one loud line per
+    # reachable->unreachable transition, one on recovery, handles included.
+    err = capsys.readouterr().err
+    # Count the full prefix: the tmp dir path in the message contains this
+    # test's own name, which contains the bare word "unreachable".
+    assert err.count("weave spool: http://weave.test unreachable") == 1, err
+    assert "curl -s http://weave.test/api/info" in err
+    assert "launchctl kickstart -k gui/501/org.nix-community.home.weave-serve" in err
+    assert err.count("reachable again") == 1, err
+
+
 def test_transient_failures_still_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEAVE_URL", "http://weave.test")
     calls: list[str] = []

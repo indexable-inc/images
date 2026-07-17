@@ -9,8 +9,9 @@ description: >-
 inputs:
   subcommand:
     description: >-
-      Optional `check` app subcommand passed after `--`, e.g. `closure` for
-      the cache-push closure gate. Empty runs the full default gate.
+      Optional `check` app subcommand passed after `--`: `required` runs the
+      combined PR gate, while `closure` runs the manual cache-push closure
+      probe. Empty runs the checks-only default gate.
     required: false
     default: ""
 runs:

@@ -76,7 +76,10 @@ impl Message {
             }
         };
         let length = u32::try_from(payload.len() + 1).context("frame exceeds u32")?;
-        ensure!(length <= MAX_FRAME_BYTES, "frame of {length} bytes exceeds cap");
+        ensure!(
+            length <= MAX_FRAME_BYTES,
+            "frame of {length} bytes exceeds cap"
+        );
         let mut frame = Vec::with_capacity(payload.len() + 5);
         frame.extend_from_slice(&length.to_le_bytes());
         frame.push(tag);
@@ -180,7 +183,11 @@ impl Ping {
                 packet[4] = PING_REQUEST;
                 packet[5..13].copy_from_slice(&sent_micros.to_le_bytes());
             }
-            Self::Reply { sent_micros, received_micros, replied_micros } => {
+            Self::Reply {
+                sent_micros,
+                received_micros,
+                replied_micros,
+            } => {
                 packet[4] = PING_REPLY;
                 packet[5..13].copy_from_slice(&sent_micros.to_le_bytes());
                 packet[13..21].copy_from_slice(&received_micros.to_le_bytes());
@@ -207,7 +214,9 @@ impl Ping {
             u64::from_le_bytes(packet[offset..offset + 8].try_into().expect("fixed slice"))
         };
         match packet[4] {
-            PING_REQUEST => Ok(Some(Self::Request { sent_micros: u64_at(5) })),
+            PING_REQUEST => Ok(Some(Self::Request {
+                sent_micros: u64_at(5),
+            })),
             PING_REPLY => Ok(Some(Self::Reply {
                 sent_micros: u64_at(5),
                 received_micros: u64_at(13),
@@ -242,7 +251,9 @@ mod tests {
         }
         let mut reader = stream.as_slice();
         for message in &messages {
-            let decoded = Message::read_from(&mut reader).await?.expect("frame present");
+            let decoded = Message::read_from(&mut reader)
+                .await?
+                .expect("frame present");
             assert_eq!(&decoded, message);
         }
         assert_eq!(Message::read_from(&mut reader).await?, None, "clean EOF");
@@ -252,7 +263,11 @@ mod tests {
     #[test]
     fn pings_roundtrip_and_drop_foreign_traffic() -> Result<()> {
         let request = Ping::Request { sent_micros: 55 };
-        let reply = Ping::Reply { sent_micros: 55, received_micros: 60, replied_micros: 61 };
+        let reply = Ping::Reply {
+            sent_micros: 55,
+            received_micros: 60,
+            replied_micros: 61,
+        };
         assert_eq!(Ping::decode(&request.encode())?, Some(request));
         assert_eq!(Ping::decode(&reply.encode())?, Some(reply));
         assert_eq!(Ping::decode(b"not a ping packet")?, None);

@@ -300,6 +300,7 @@
     buildIxRustTool
     cargoUnitFor
     buildRustPackage
+    repoRustToolchainFor
     ;
   cargoUnit = cargoUnitFor pkgs;
   cargoUnitExternal = import ./rust/external.nix {repoRoot = paths.root;};
@@ -317,6 +318,14 @@
       inherit (languages) go;
     };
   goUnit = goUnitFor pkgs;
+  # Per-TU content-addressed Linux kernel builds (kbuild-unit, #3411): the
+  # kbuild analog of cargoUnitFor. Stage 1 harvests a monolithic kbuild's
+  # .cmd files into a plan; stage 2 renders one derivation per unit.
+  kernelUnitFor = pkgs:
+    import ./kernel/kbuild-unit.nix {
+      inherit lib pkgs;
+      nixKbuildUnit = buildIxRustTool pkgs (packagePath "nix-kbuild-unit");
+    };
 
   systemdHardening = import ./services/systemd-hardening.nix;
 
@@ -705,6 +714,7 @@
       provenance
       publicArtifactsFor
       relativePath
+      repoRustToolchainFor
       rnixDigitSeparators
       ruffAnnArgs
       rustWorkspace
@@ -817,6 +827,7 @@
         evalImageConfig
         exampleFleetsFor
         goUnitFor
+        kernelUnitFor
         macosSdk
         mkDev
         mkDevFor

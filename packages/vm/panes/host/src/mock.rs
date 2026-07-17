@@ -61,9 +61,17 @@ pub fn serve(path: &Path) -> std::io::Result<()> {
 
 /// What the reader thread distills from host messages for the render loop.
 enum HostEvent {
-    Hello { scale: u32, lz4: bool, minor: u16 },
+    Hello {
+        scale: u32,
+        lz4: bool,
+        minor: u16,
+    },
     Ack(u64),
-    Resize { width: u32, height: u32, scale: u32 },
+    Resize {
+        width: u32,
+        height: u32,
+        scale: u32,
+    },
     Close,
     Ping(u64),
     /// Right-click pressed: flip the window's pointer lock.
@@ -73,7 +81,13 @@ enum HostEvent {
 fn handle_conn(stream: UnixStream) -> Result<(), WireError> {
     let read_half = stream.try_clone()?;
     let mut writer = BufWriter::new(stream);
-    write_msg(&mut writer, &ToHost::Hello { major: VERSION_MAJOR, minor: VERSION_MINOR })?;
+    write_msg(
+        &mut writer,
+        &ToHost::Hello {
+            major: VERSION_MAJOR,
+            minor: VERSION_MINOR,
+        },
+    )?;
     writer.flush()?;
 
     let (tx, rx) = mpsc::channel();
@@ -89,7 +103,13 @@ fn read_host(stream: UnixStream, tx: &mpsc::Sender<HostEvent>) {
     let mut reader = BufReader::new(stream);
     loop {
         let event = match read_msg::<ToGuest>(&mut reader) {
-            Ok(ToGuest::Hello { major, minor, refresh_mhz, scale, encodings }) => {
+            Ok(ToGuest::Hello {
+                major,
+                minor,
+                refresh_mhz,
+                scale,
+                encodings,
+            }) => {
                 eprintln!(
                     "mock: host hello {major}.{minor}, refresh {refresh_mhz} mHz, \
                      scale {scale}, encodings {encodings:?}"
@@ -105,23 +125,40 @@ fn read_host(stream: UnixStream, tx: &mpsc::Sender<HostEvent>) {
                 }
             }
             Ok(ToGuest::Ack { seq, .. }) => HostEvent::Ack(seq),
-            Ok(ToGuest::PointerButton { button: BTN_RIGHT, state: ButtonState::Pressed, id }) => {
+            Ok(ToGuest::PointerButton {
+                button: BTN_RIGHT,
+                state: ButtonState::Pressed,
+                id,
+            }) => {
                 eprintln!("mock: right click on window {id}: toggling pointer lock");
                 HostEvent::LockToggle
             }
-            Ok(ToGuest::Configure { id, width, height, scale, activated }) => {
+            Ok(ToGuest::Configure {
+                id,
+                width,
+                height,
+                scale,
+                activated,
+            }) => {
                 eprintln!(
                     "mock: configure window {id}: {width}x{height} scale {scale} \
                      activated {activated}"
                 );
-                HostEvent::Resize { width, height, scale: scale.max(1) }
+                HostEvent::Resize {
+                    width,
+                    height,
+                    scale: scale.max(1),
+                }
             }
             Ok(ToGuest::CloseRequest { id }) => {
                 eprintln!("mock: close requested for window {id}");
                 HostEvent::Close
             }
             Ok(ToGuest::Ping { nonce }) => HostEvent::Ping(nonce),
-            Ok(ToGuest::KeyRepeat { delay_ms, interval_ms }) => {
+            Ok(ToGuest::KeyRepeat {
+                delay_ms,
+                interval_ms,
+            }) => {
                 // Functional evidence the 1.2 negotiation ran: the host only
                 // sends this after our Hello advertised minor >= 2.
                 eprintln!("mock: key repeat: delay {delay_ms} ms, interval {interval_ms} ms");
@@ -178,16 +215,26 @@ fn drive(
     let pattern = Pattern::new();
     let mut seq: u64 = 0;
     let send_frame = |writer: &mut BufWriter<UnixStream>,
-                          seq: &mut u64,
-                          width: u32,
-                          height: u32,
-                          scale: u32,
-                          full: bool|
+                      seq: &mut u64,
+                      width: u32,
+                      height: u32,
+                      scale: u32,
+                      full: bool|
      -> Result<(), WireError> {
         *seq += 1;
         let pixels = pattern.render(*seq, width, height, scale);
         let tiles = make_tiles(&pixels, width, height, lz4);
-        write_msg(writer, &ToHost::WindowFrame { id: WINDOW_ID, seq: *seq, width, height, full, tiles })?;
+        write_msg(
+            writer,
+            &ToHost::WindowFrame {
+                id: WINDOW_ID,
+                seq: *seq,
+                width,
+                height,
+                full,
+                tiles,
+            },
+        )?;
         writer.flush().map_err(WireError::from)
     };
 
@@ -216,7 +263,11 @@ fn drive(
                 }
                 send_frame(writer, &mut seq, width, height, scale, false)?;
             }
-            HostEvent::Resize { width: new_width, height: new_height, scale: new_scale } => {
+            HostEvent::Resize {
+                width: new_width,
+                height: new_height,
+                scale: new_scale,
+            } => {
                 if (new_width, new_height, new_scale) == (width, height, scale)
                     || new_width == 0
                     || new_height == 0
@@ -249,7 +300,13 @@ fn drive(
                 }
                 locked = !locked;
                 eprintln!("mock: sending PointerLock locked={locked}");
-                write_msg(writer, &ToHost::PointerLock { id: WINDOW_ID, locked })?;
+                write_msg(
+                    writer,
+                    &ToHost::PointerLock {
+                        id: WINDOW_ID,
+                        locked,
+                    },
+                )?;
                 writer.flush()?;
             }
             HostEvent::Hello { .. } => {}
@@ -381,11 +438,24 @@ fn make_tiles(pixels: &[u8], width: u32, height: u32, lz4: bool) -> Vec<Tile> {
                 let start = ((row * width + x) * 4) as usize;
                 raw.extend_from_slice(&pixels[start..start + (tile_w * 4) as usize]);
             }
-            let rect = Rect { x, y, w: tile_w, h: tile_h };
+            let rect = Rect {
+                x,
+                y,
+                w: tile_w,
+                h: tile_h,
+            };
             let tile = if lz4 {
-                Tile { rect, encoding: Encoding::Lz4, payload: lz4_flex::block::compress(&raw) }
+                Tile {
+                    rect,
+                    encoding: Encoding::Lz4,
+                    payload: lz4_flex::block::compress(&raw),
+                }
             } else {
-                Tile { rect, encoding: Encoding::Raw, payload: raw }
+                Tile {
+                    rect,
+                    encoding: Encoding::Raw,
+                    payload: raw,
+                }
             };
             tiles.push(tile);
             x += tile_w;
@@ -408,8 +478,10 @@ mod tests {
         let pixels = pattern.render(7, width, height, 1);
         for lz4 in [false, true] {
             let tiles = make_tiles(&pixels, width, height, lz4);
-            let covered: u64 =
-                tiles.iter().map(|t| u64::from(t.rect.w) * u64::from(t.rect.h)).sum();
+            let covered: u64 = tiles
+                .iter()
+                .map(|t| u64::from(t.rect.w) * u64::from(t.rect.h))
+                .sum();
             assert_eq!(covered, u64::from(width) * u64::from(height));
 
             let mut out = vec![0u8; pixels.len()];
@@ -456,24 +528,41 @@ mod tests {
         writer.flush().expect("flush");
 
         let hello: ToHost = read_msg(&mut reader).expect("guest hello");
-        assert!(matches!(hello, ToHost::Hello { major: VERSION_MAJOR, .. }));
+        assert!(matches!(
+            hello,
+            ToHost::Hello {
+                major: VERSION_MAJOR,
+                ..
+            }
+        ));
 
         let new: ToHost = read_msg(&mut reader).expect("window new");
-        let ToHost::WindowNew { id, width, height, .. } = new else {
+        let ToHost::WindowNew {
+            id, width, height, ..
+        } = new
+        else {
             panic!("expected WindowNew, got {new:?}");
         };
         assert_eq!(id, WINDOW_ID);
         assert_eq!((width, height), (LOGICAL_WIDTH, LOGICAL_HEIGHT));
 
         let first: ToHost = read_msg(&mut reader).expect("first frame");
-        let ToHost::WindowFrame { seq, full: true, .. } = first else {
+        let ToHost::WindowFrame {
+            seq, full: true, ..
+        } = first
+        else {
             panic!("expected full first WindowFrame, got a different message");
         };
 
         write_msg(&mut writer, &ToGuest::Ack { id, seq }).expect("ack");
         writer.flush().expect("flush");
         let second: ToHost = read_msg(&mut reader).expect("second frame");
-        let ToHost::WindowFrame { seq: next_seq, full: false, .. } = second else {
+        let ToHost::WindowFrame {
+            seq: next_seq,
+            full: false,
+            ..
+        } = second
+        else {
             panic!("expected incremental WindowFrame, got a different message");
         };
         assert_eq!(next_seq, seq + 1);
@@ -487,16 +576,35 @@ mod tests {
         };
         press(&mut writer, BTN_RIGHT, ButtonState::Pressed);
         let lock: ToHost = read_msg(&mut reader).expect("pointer lock");
-        assert!(matches!(lock, ToHost::PointerLock { id: WINDOW_ID, locked: true }));
+        assert!(matches!(
+            lock,
+            ToHost::PointerLock {
+                id: WINDOW_ID,
+                locked: true
+            }
+        ));
         press(&mut writer, BTN_RIGHT, ButtonState::Released);
         // Relative deltas while locked are logged, never answered; the next
         // wire message after the release-then-press must be the unlock.
-        write_msg(&mut writer, &ToGuest::PointerRelative { id, dx: 3.0, dy: -2.0 })
-            .expect("send relative");
+        write_msg(
+            &mut writer,
+            &ToGuest::PointerRelative {
+                id,
+                dx: 3.0,
+                dy: -2.0,
+            },
+        )
+        .expect("send relative");
         writer.flush().expect("flush");
         press(&mut writer, BTN_RIGHT, ButtonState::Pressed);
         let unlock: ToHost = read_msg(&mut reader).expect("pointer unlock");
-        assert!(matches!(unlock, ToHost::PointerLock { id: WINDOW_ID, locked: false }));
+        assert!(matches!(
+            unlock,
+            ToHost::PointerLock {
+                id: WINDOW_ID,
+                locked: false
+            }
+        ));
 
         write_msg(&mut writer, &ToGuest::CloseRequest { id }).expect("close request");
         writer.flush().expect("flush");

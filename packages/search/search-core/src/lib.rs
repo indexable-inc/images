@@ -49,7 +49,7 @@ pub use pipeline::{Query, index_and_answer, index_and_grep, index_and_semantic};
 pub use query_filter::{FilterSpec, InvalidTimeSpec, build_filter, parse_time_spec};
 pub use repo::repo_slug;
 pub use search::{
-    AnswerView, CodeScope, COMPACT_SNIPPET_CHARS, DisplayHit, RenderMode, SourceStat, ask, grep,
+    AnswerView, COMPACT_SNIPPET_CHARS, CodeScope, DisplayHit, RenderMode, SourceStat, ask, grep,
     hits_to_json, ranked, recent, semantic, stats,
 };
 pub use sync::{SyncReport, sync, wait_until_indexed};

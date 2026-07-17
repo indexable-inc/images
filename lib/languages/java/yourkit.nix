@@ -16,7 +16,7 @@
 
   Refs: https://www.yourkit.com/docs/java/help/startup_options.jsp
   */
-  defaultPort = 10_001;
+  defaultPort = 10001;
 
   /**
   Resolve the YourKit agent's `libyjpagent` path for the host the

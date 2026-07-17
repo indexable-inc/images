@@ -277,8 +277,11 @@
 
   lint = ix.writeNushellApplication pkgs {
     name = "lint";
-    meta.description = "Run all Nix formatting and lint checks in parallel via dag-runner";
-    runtimeInputs = [repoPackages.dag-runner];
+    meta.description = "Run all Nix formatting and lint checks in parallel via dag-runner; `--fix` applies the fixer lanes to the worktree";
+    runtimeInputs = [
+      pkgs.git
+      repoPackages.dag-runner
+    ];
     text = ''
       # nu
       const stages = ${builtins.toJSON lintStages}
@@ -313,9 +316,235 @@
           print ($runs | reject exit_code | to json)
           exit ($runs | get exit_code | math max)
         }
+        # `--fix` (#3432) applies the fixer lanes to the worktree: build
+        # `.#lint-fix-patch` -- the unified diff from the lanes' input
+        # snapshot to the composed fixed tree (see `lintFix` below) -- and
+        # `git apply` it from the repo root. A patch rather than a copy of
+        # the fixed files is a safety property: the snapshot Nix evaluates
+        # can be older than the worktree (a linked git worktree evaluates
+        # the committed state), and `git apply` is all-or-nothing on context
+        # mismatch, so stale fixes refuse loudly instead of clobbering
+        # uncommitted edits. `nix` comes from the ambient PATH for the same
+        # reason as `.#check`: a pinned client could mismatch the host daemon.
+        if "--fix" in $args {
+          if ($args | length) > 1 {
+            error make { msg: "--fix takes no other arguments" }
+          }
+          # Both the flake ref and `git apply` paths are root-relative, so
+          # anchor at the repo root instead of requiring callers to be there.
+          cd (^git rev-parse --show-toplevel | str trim)
+          let patch = (
+            ^nix ...[
+              "build" ".#lint-fix-patch"
+              "--no-link" "--print-out-paths"
+              "--option" "extra-experimental-features" "ca-derivations"
+            ]
+            | str trim
+          )
+          if (open --raw $patch | is-empty) {
+            print "lint --fix: tree already clean, nothing to apply"
+          } else {
+            ^git apply --stat $patch
+            ^git apply $patch
+            print "lint --fix: applied; the verdict-only stages (astlog, filenames, dirnames, clone) and unfixable findings still need `nix run .#lint`"
+          }
+          exit 0
+        }
         exec dag-runner ...$args ${lintSpec}
       }
     '';
+  };
+
+  # Fixer lanes (#3431/#3432): the fixable lint stages recast as pure tree
+  # transformers `src -> src'`. A derivation cannot mutate the repo, so
+  # "apply the fixes" means: emit the fixed tree, and let each consumer diff
+  # it against what it has (`lint --fix` above today, the CI autofix commit
+  # of #3435 later). Lanes split by file domain and build concurrently as
+  # independent derivations (wall clock = slowest lane); within a lane the
+  # stages run sequentially with the formatter LAST, because fix stages emit
+  # unformatted edits -- same-lane fixes computed in parallel against the
+  # original tree could union cleanly and still fail the format check.
+  # Every derivation here is content-addressed, so a no-op fix realises to
+  # its input's content and an already-clean tree is cache hits all the way
+  # down to an empty patch.
+  lintFix = let
+    contentAddressed = {
+      __contentAddressed = true;
+      outputHashAlgo = "sha256";
+      outputHashMode = "recursive";
+    };
+    # The repo pin (rust-toolchain.toml, via lib/rust/tooling.nix) plus the
+    # rustfmt component its component list omits. Bound once and exported so
+    # the acceptance check below runs `cargo fmt --check` with byte-for-byte
+    # the same cargo-fmt the lane fixes with.
+    rustFmtToolchain = ix.repoRustToolchainFor pkgs {
+      components = [
+        "cargo"
+        "rustc"
+        "rustfmt"
+      ];
+    };
+    # One lane: copy the scoped source, run the lane's fixers in place, emit
+    # the tree. The fixers see nothing outside their scoped `src` by
+    # construction, so lane outputs stay as disjoint as lane inputs.
+    mkLane = {
+      name,
+      tools,
+      fix,
+    }: src:
+      pkgs.runCommand "lint-fix-${name}"
+      (contentAddressed // {nativeBuildInputs = tools;})
+      ''
+        cp -R ${src} "$out"
+        chmod -R u+w "$out"
+        cd "$out"
+        ${fix}
+      '';
+    lanes = {
+      # Mirrors the alejandra/statix/deadnix check stages' strictness:
+      # `deadnix --edit` without -L deletes an unused lambda pattern name
+      # outright, and a call site that still passes the attr surfaces in the
+      # eval checks -- exactly the manual migration the check stage's comment
+      # prescribes. statix discovers statix.toml at the tree root (the nix
+      # lane source carries it). deadnix runs before statix because its
+      # edits create statix findings the other order leaves behind: deleting
+      # a lambda pattern's last unused name leaves `{}:`, which statix's
+      # empty_pattern fix rewrites to `_:`; statix fixes never introduce
+      # dead code, so this order converges in one pass.
+      nix = mkLane {
+        name = "nix";
+        tools = [
+          pkgs.alejandra
+          pkgs.deadnix
+          pkgs.statix
+        ];
+        fix = ''
+          deadnix --edit .
+          statix fix .
+          alejandra --quiet .
+        '';
+      };
+      # The same pinned ruff and selector as the `ruff` check stage -- the
+      # fix must not widen or narrow the rule set. `--exit-zero` because
+      # findings are this lane's input, not its verdict: an unfixable
+      # violation must not fail the lane (the check path still reports it),
+      # while a real ruff failure (bad config, panic) still exits 2.
+      # `--no-cache` keeps `.ruff_cache` out of the output tree (cwd = $out).
+      python = mkLane {
+        name = "python";
+        tools = [pkgs.ruff];
+        fix = ''
+          ruff check ${ix.ruffAnnArgs} --fix --exit-zero --no-cache .
+        '';
+      };
+      # `cargo fmt` with the repo-pinned nightly (#3433): the exact
+      # toolchain the workspace builds with, plus the rustfmt component the
+      # root rust-toolchain.toml's component list omits. cargo-fmt discovers
+      # targets via `cargo metadata --no-deps`, which parses manifests only:
+      # no Cargo.lock, no network, no dependency sources, so the scoped
+      # fileset below suffices. CARGO_HOME points at the build temp dir
+      # because cargo wants a writable home even for metadata (cwd is $out,
+      # which must stay free of cargo's cache). Formatting is the
+      # lane's only stage for now; `clippy --fix` (#3434) slots in BEFORE
+      # cargo fmt when it lands, per the formatter-last rule above.
+      rust = mkLane {
+        name = "rust";
+        tools = [rustFmtToolchain];
+        fix = ''
+          export CARGO_HOME="$TMPDIR/cargo-home"
+          cargo fmt --all
+        '';
+      };
+    };
+
+    # Scoped lane inputs: only the files a lane's tools read or rewrite,
+    # intersected with the tracked set. An edit outside a lane's fileset
+    # leaves that lane's input (hence, content-addressed, its output)
+    # untouched -- the whole-tree cache invalidation fix from #3431. The
+    # filesets must stay pairwise disjoint: `unite` treats a path emitted by
+    # two lanes as a scoping bug. Unlike the check stages' `fd` walks, these
+    # include tracked files under hidden directories (.github): a deliberate
+    # superset, since hidden-and-tracked is still shipped code.
+    sources = let
+      tracked = fs.gitTracked paths.root;
+      laneSource = fileset:
+        fs.toSource {
+          inherit (paths) root;
+          fileset = fs.intersection tracked fileset;
+        };
+    in {
+      nix = laneSource (
+        fs.union
+        (fs.fileFilter (file: file.hasExt "nix") paths.root)
+        (paths.root + "/statix.toml")
+      );
+      # `.claude` mirrors the ruff check stage's explicit filter (agent
+      # worktrees and assets); ruff.toml rides along so tree-root discovery
+      # inside the lane matches a checkout, though the inline flags already
+      # carry the whole policy.
+      python = laneSource (
+        fs.difference
+        (
+          fs.union
+          (fs.fileFilter (file: file.hasExt "py") paths.root)
+          (paths.root + "/ruff.toml")
+        )
+        (fs.maybeMissing (paths.root + "/.claude"))
+      );
+      # Everything cargo-fmt reads: sources to rewrite plus every Cargo.toml
+      # (workspace membership and per-target discovery both come from
+      # manifests). rustfmt.toml is maybeMissing because the repo has none
+      # today; listing it here means adding one starts scoping the lane
+      # instead of being silently ignored. The toolchain pin itself needs no
+      # fileset entry: the lane's toolchain is a nativeBuildInput, so a pin
+      # bump already rebuilds the lane.
+      rust = laneSource (
+        fs.unions [
+          (fs.fileFilter (file: file.hasExt "rs") paths.root)
+          (fs.fileFilter (file: file.name == "Cargo.toml") paths.root)
+          (fs.maybeMissing (paths.root + "/rustfmt.toml"))
+        ]
+      );
+    };
+
+    # Union lane outputs into one tree. Lane filesets are disjoint, so the
+    # same path arriving from two lanes is a lane-scoping bug, not a merge
+    # to resolve: fail loudly rather than let one lane's fix silently shadow
+    # another's.
+    unite = name: trees:
+      pkgs.runCommand name contentAddressed ''
+        mkdir -p "$out"
+        for tree in ${toString trees}; do
+          (cd "$tree" && find . -type f -print0) |
+            while IFS= read -r -d "" file; do
+              rel="''${file#./}"
+              if [ -e "$out/$rel" ]; then
+                echo "lane union conflict on $rel (from $tree): lane filesets must be disjoint" >&2
+                exit 1
+              fi
+              mkdir -p "$out/$(dirname "$rel")"
+              cp "$tree/$rel" "$out/$rel"
+            done
+        done
+      '';
+
+    fixed = unite "lint-fixed" (lib.mapAttrsToList (name: lane: lane sources.${name}) lanes);
+
+    # The artifact `lint --fix` consumes: one unified diff from the lanes'
+    # input snapshot to the fixed tree. Symlinking the trees as `a`/`b`
+    # makes the hunk headers `a/<path> b/<path>`, exactly what `git apply`'s
+    # default -p1 strips; absolute /nix/store labels would not.
+    patch = pkgs.runCommand "lint-fix.patch" contentAddressed ''
+      ln -s ${unite "lint-fix-input" (lib.attrValues sources)} a
+      ln -s ${fixed} b
+      status=0
+      diff -ruN a b > "$out" || status=$?
+      # 0 = trees identical (empty patch: already clean); 1 = fixes to
+      # apply; anything else is a diff failure.
+      [ "$status" -le 1 ]
+    '';
+  in {
+    inherit lanes unite fixed patch rustFmtToolchain;
   };
 
   # `check` is the full CI gate as one repo-owned command: check.yml runs
@@ -365,13 +594,14 @@
   # `set -o pipefail`). Uses the repo-built nix-eval-jobs directly by store path
   # rather than `nix run`.
   #
-  # `check closure` (the closure-gate.yml required check, #1873) reuses step 1's
-  # build gate over `.#cachePushRoots.x86_64-linux`: the exact set the
-  # post-merge cache-push linux lane publishes, so a package whose build broke
-  # (not just its eval) goes red at the PR instead of on every consumer.
+  # `check required` is the required PR path. It builds the namespaced union of
+  # ciChecks and cachePushRoots through one 16-worker evaluator pool, then runs
+  # the package schema gate. This replaces two competing self-hosted claims
+  # without running two 16-worker clients side by side (which has OOM-killed a
+  # 96 GiB runner before). `check closure` remains the manual closure probe.
   check = ix.writeNushellApplication pkgs {
     name = "check";
-    meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux (`closure` subcommand: build .#cachePushRoots.x86_64-linux)";
+    meta.description = "Run CI gates: default checks, `required` checks plus publishable closure, or `closure` only";
     text = ''
       # Patched nix-fast-build (packages/nix/nix-fast-build): stock --skip-cached
       # only skips a job whose nix-eval-jobs cacheStatus is `cached` (in a remote
@@ -389,8 +619,9 @@
 
       # Shared build gate: build every derivation under $flake with
       # nix-fast-build and exit 1 on any failure, after replaying each failed
-      # build's log. `main` runs it over ciChecks; `main closure` over the
-      # cache-push roots.
+      # build's log. `main` runs it over ciChecks, `main required` over the
+      # namespaced union of checks and cache-push roots, and `main closure` over
+      # cache-push roots alone.
       def build-gate [flake: string] {
         # ca-derivations: the rust workspace units default to
         # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating
@@ -529,9 +760,7 @@
         }
       }
 
-      def main [] {
-        build-gate ".#ciChecks.x86_64-linux"
-
+      def eval-package-schema [] {
         let tmp = (mktemp --directory --tmpdir "ix-check.XXXXXX")
         let report = ($tmp | path join "flake-schema-eval.jsonl")
         do --capture-errors {
@@ -554,6 +783,19 @@
           exit 1
         }
         rm --recursive --force $tmp
+      }
+
+      def main [] {
+        build-gate ".#ciChecks.x86_64-linux"
+        eval-package-schema
+      }
+
+      # Required PR/merge-group gate. One nix-fast-build invocation evaluates
+      # and builds both check roots and publishable closure roots with the same
+      # bounded pool; a second package-schema pass retains the broader eval gate.
+      def "main required" [] {
+        build-gate ".#requiredGateRoots.x86_64-linux"
+        eval-package-schema
       }
 
       # Pre-merge closure gate (closure-gate.yml, #1873): the same build gate
@@ -643,8 +885,6 @@
     text = builtins.readFile paths.tools.updateSounds;
     meta.description = "Refresh the pinned Minecraft sound pack in packages/minecraft/sound";
   };
-
-  benchFilesystem = import (paths.bench.filesystem + "/build.nix") {inherit ix pkgs;};
 
   # The indexbench CLI built for this system, fed to `mkBenchSuite` and the
   # `apps.bench` perf job. Also surfaced as `packages.indexbench` through the
@@ -1046,6 +1286,7 @@
     xdgConfigHome = "/Users/andrewgazelka/.config";
   };
   andrewZellijConfig = pkgs.writeText "andrewgazelka-zellij.kdl" (ix.kdl.render andrewZellij.settings);
+  andrewNushellConfig = paths.root + "/users/andrewgazelka/config/nushell";
 
   tests = import paths.tests {
     inherit
@@ -1441,6 +1682,121 @@
             ${lib.getExe lint}
             mkdir -p "$out"
           '';
+          # Acceptance for the fixer lanes (#3432), both halves in one gate: a
+          # deliberately violating tree becomes clean under the same check
+          # stages after one pass through its lane, and fixing the already-
+          # fixed tree is byte-identical (the no-op property that makes a
+          # clean tree a CA cache hit all the way down and `--fix` safe to
+          # re-run). Fixtures are built inline rather than committed:
+          # committed files with these violations would fail the repo's own
+          # lint stages (the same reason the astlog fixtures live as
+          # `.fixture`). Each fixture is first asserted to FAIL its check
+          # stage, so tool or selector drift that stops exercising a fixer
+          # turns this check red instead of silently proving nothing.
+          lint-fix = let
+            # One fixable finding per nix-lane tool: an unused binding
+            # (deadnix --edit), useless parens (statix fix), misformatting
+            # (alejandra). The unused lambda pattern also pins the lane's
+            # ordering: deadnix deletes `unusedArg` leaving `{}:`, a fresh
+            # empty_pattern finding only a statix fix run AFTER deadnix
+            # repairs, so a statix-first lane fails this check's post-fix
+            # statix stage.
+            violatingNix = pkgs.writeTextDir "fixture.nix" ''
+              {unusedArg}: let
+                unused = 1;
+                greeting = ("hello");
+              in {   inherit greeting; }
+            '';
+            # UP024 (IOError -> OSError): inside the shared selector's UP
+            # family with a SAFE autofix, so the lane's plain `--fix` applies
+            # it. Not C408 and friends: their fixes are unsafe-gated, the lane
+            # deliberately never passes `--unsafe-fixes`, and an unsafe-only
+            # fixture would survive the lane and fail this check's post-fix
+            # gate. Module-level so the ANN rules are satisfied without
+            # annotations.
+            violatingPython = pkgs.writeTextDir "fixture.py" ''
+              raise IOError("fixture")
+            '';
+            # A one-crate workspace whose main.rs cargo fmt rewrites: the
+            # manifest is what cargo-fmt's `cargo metadata --no-deps` walks,
+            # so this also proves the lane works from manifests alone (no
+            # Cargo.lock, no dependency sources, no network).
+            violatingRust = pkgs.runCommand "rust-fixture" {} ''
+              mkdir -p "$out/src"
+              cat > "$out/Cargo.toml" <<'EOF'
+              [package]
+              name = "fixture"
+              version = "0.0.0"
+              edition = "2021"
+              EOF
+              printf 'fn main(){println!("fixture") ;}\n' > "$out/src/main.rs"
+            '';
+            fixedNix = lintFix.lanes.nix violatingNix;
+            fixedPython = lintFix.lanes.python violatingPython;
+            fixedRust = lintFix.lanes.rust violatingRust;
+            fixedTree = lintFix.unite "lint-fix-fixture-fixed" [
+              fixedNix
+              fixedPython
+              fixedRust
+            ];
+          in
+            pkgs.runCommand "lint-fix-check"
+            {
+              nativeBuildInputs = [
+                pkgs.alejandra
+                pkgs.deadnix
+                pkgs.ruff
+                pkgs.statix
+                lintFix.rustFmtToolchain
+              ];
+            }
+            ''
+              # Pre-fix: every tool must find its planted violation.
+              if alejandra --check ${violatingNix}/fixture.nix; then
+                echo "fixture stopped violating alejandra" >&2
+                exit 1
+              fi
+              if statix check ${violatingNix}; then
+                echo "fixture stopped violating statix" >&2
+                exit 1
+              fi
+              if deadnix --fail ${violatingNix}; then
+                echo "fixture stopped violating deadnix" >&2
+                exit 1
+              fi
+              if ruff check ${ix.ruffAnnArgs} --no-cache ${violatingPython}/fixture.py; then
+                echo "fixture stopped violating ruff" >&2
+                exit 1
+              fi
+              # cargo wants a writable home even for `fmt --check`.
+              export CARGO_HOME="$TMPDIR/cargo-home"
+              if (cd ${violatingRust} && cargo fmt --all --check); then
+                echo "fixture stopped violating cargo fmt" >&2
+                exit 1
+              fi
+
+              # Post-fix: the united tree passes the same check stages the
+              # lint gate runs, through the same stage binary.
+              cp -R ${fixedTree} fixed
+              chmod -R u+w fixed
+              cd fixed
+              ${lib.getExe lintStage} alejandra
+              ${lib.getExe lintStage} statix
+              ${lib.getExe lintStage} deadnix
+              ${lib.getExe lintStage} ruff
+              # No rustfmt stage exists in the lint gate (#3433 ships the
+              # fixer only), so the post-fix rust gate is cargo fmt itself,
+              # from the same pinned toolchain the lane ran.
+              cargo fmt --all --check
+              cd ..
+
+              # No-op: a second pass over each already-fixed lane output must
+              # be byte-identical.
+              diff -r ${fixedNix} ${lintFix.lanes.nix fixedNix}
+              diff -r ${fixedPython} ${lintFix.lanes.python fixedPython}
+              diff -r ${fixedRust} ${lintFix.lanes.rust fixedRust}
+              mkdir -p "$out"
+            '';
           filename-policy =
             pkgs.runCommand "filename-policy-check"
             {
@@ -1486,6 +1842,40 @@
             mkdir -p "$HOME" "$out"
             zellij --config ${andrewZellijConfig} setup --check >"$out/check.txt"
           '';
+          nushell-config =
+            pkgs.runCommand "nushell-config-check"
+            {
+              nativeBuildInputs = [
+                pkgs.binutils
+                pkgs.jq
+                # The fork package, not pkgs.nushell: the deployed shell that
+                # executes this config is newer than the repo's nixpkgs pin
+                # (0.114 names vs 0.113.1), so the check must run a
+                # repo-controlled interpreter that tracks upstream (#3428).
+                repoPackages.nushell
+              ];
+            }
+            ''
+              export HOME="$TMPDIR/home"
+              config_dir=$(nu --no-config-file -c '$nu.default-config-dir')
+              mkdir -p "$(dirname "$config_dir")"
+              cp -R ${andrewNushellConfig} "$config_dir"
+              cd "$config_dir"
+              diagnostics="$TMPDIR/diagnostics.jsonl"
+              nu --no-config-file --ide-check 100 config.nu > "$diagnostics"
+              if ! jq -s -e 'map(select(.type == "diagnostic")) | length == 0' "$diagnostics" >/dev/null; then
+                jq -s 'map(select(.type == "diagnostic"))' "$diagnostics" >&2
+                exit 1
+              fi
+              if [[ $(nu --no-config-file -c 'nu-check functions/infra/status.nu') != true ]]; then
+                echo "infra status probe did not parse" >&2
+                exit 1
+              fi
+              for test in tests/test_*.nu; do
+                nu --no-config-file "$test"
+              done
+              touch "$out"
+            '';
           # Exercises the trusted half of the blast-radius PR comment: the
           # validate/render jq embedded in its workflow, extracted from the YAML so
           # the test can't drift from what the trusted comment job runs. The
@@ -1570,8 +1960,13 @@
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
       inherit lint site;
+      # Fixer-lane outputs (#3432): `lint-fixed` is the union of the lanes'
+      # fixed trees; `lint-fix-patch` is diff(snapshot, fixed), the artifact
+      # `nix run .#lint -- --fix` builds and git-applies. An empty patch
+      # means the tree is already clean.
+      lint-fixed = lintFix.fixed;
+      lint-fix-patch = lintFix.patch;
       site-dev = site.passthru.devServer;
-      bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-loaders = updateLoaders;
       inherit update;
@@ -1787,6 +2182,18 @@ in {
   ciChecks = catalogFor rustPackageTestSets.sharded // forkChecks;
 
   formatter = pkgs.alejandra;
+
+  # Per-TU content-addressed kernel build (kbuild-unit, #3411), exposed under
+  # `legacyPackages` so `nix build .#kernel-unit.vmlinux` resolves while the
+  # two-stage IFD plan (a full monolithic kbuild at eval time) stays out of
+  # `packages` and every gate closure that enumerates it (flake-check,
+  # blast-radius, cache-push). x86_64-linux only: the plan replays gcc/binutils
+  # saved commands, so there is no Darwin or cross lane to offer.
+  legacyPackages = lib.optionalAttrs (system == "x86_64-linux") {
+    kernel-unit = (ix.kernelUnitFor pkgs).buildKernel {
+      inherit (pkgs.linux_6_12) src;
+    };
+  };
 
   # `nix run .#bench` runs the repo's self-demo perf job (timing + RSS + custom
   # metrics, gated on regressions). The flake's package-with-mainProgram

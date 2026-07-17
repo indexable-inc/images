@@ -160,7 +160,7 @@
         objectStoreMemory = lib.mkOption {
           type = lib.types.nullOr lib.types.ints.positive;
           default = null;
-          example = 8_000_000_000;
+          example = 8000000000;
           description = ''
             Bytes of RAM for this node's object store (Plasma). Null lets Ray
             autodetect. The fabric env lifts Ray's 2GiB macOS cap

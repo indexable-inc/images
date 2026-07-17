@@ -16,7 +16,11 @@ const PERCENT: f64 = 100.0;
 pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     let mut instances = Vec::new();
     let mut seen_type1: FxHashSet<u64> = FxHashSet::default();
-    let generated_files: Vec<bool> = scan.files.iter().map(crate::types::file_is_generated).collect();
+    let generated_files: Vec<bool> = scan
+        .files
+        .iter()
+        .map(crate::types::file_is_generated)
+        .collect();
 
     for candidate in scan.index.type1_candidates() {
         if candidate.locations.len() < 2 {
@@ -63,7 +67,12 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     }
 
     let type3_groups = if config.enable_type3 {
-        find(scan, &generated_files, config.type3_threshold, config.type3_metric)
+        find(
+            scan,
+            &generated_files,
+            config.type3_threshold,
+            config.type3_metric,
+        )
     } else {
         Vec::new()
     };
@@ -130,8 +139,7 @@ pub fn rank_by_impact(groups: &mut [CloneGroup]) {
     }
 
     groups.sort_by(|left, right| {
-        left
-            .is_generated()
+        left.is_generated()
             .cmp(&right.is_generated())
             .then_with(|| right.line_impact().cmp(&left.line_impact()))
             .then_with(|| first_fragment_key(left).cmp(&first_fragment_key(right)))
@@ -181,7 +189,11 @@ fn locations_to_fragments(
         .filter_map(|loc| {
             let file = scan.files.get(loc.file_id)?;
             let node = file.nodes.get(loc.node_idx)?;
-            Some(Fragment::from_node(file, node, generated_files.get(loc.file_id).copied()?))
+            Some(Fragment::from_node(
+                file,
+                node,
+                generated_files.get(loc.file_id).copied()?,
+            ))
         })
         .collect()
 }

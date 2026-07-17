@@ -542,6 +542,11 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     weave_url = os.environ.get("WEAVE_URL", "http://127.0.0.1:7677")
     os.environ["WEAVE_URL"] = weave_url
     os.environ.setdefault("IX_WEAVE_AGENT", f"agent:{uuid.uuid5(uuid.NAMESPACE_URL, str(store_path)).hex[:8]}")
+    # Durable-local-first recording (index#3418): the bundled weave client's
+    # record() spool lives next to the store file, so fabric's spooled writes
+    # and the store's drain from one directory (and adopt each other's
+    # crashed segments).
+    os.environ.setdefault("WEAVE_SPOOL", f"{store_path}.spool")
     os.environ["IX_MCP_DASHBOARD_URL"] = weave_url
     os.environ["IX_MCP_DATA_API_URL"] = cfg.dashboard_url()
     os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(dashboard_port))

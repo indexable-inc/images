@@ -31,6 +31,19 @@
   repoRustNightlyDate = assert lib.assertMsg (lib.hasPrefix "nightly-" repoRustChannel)
   "rust-toolchain.toml must pin a nightly channel for repo-owned Rust packages";
     lib.removePrefix "nightly-" repoRustChannel;
+  # The repo's pinned toolchain (rust-toolchain.toml) as a buildable
+  # aggregate, for consumers outside the cargo-unit graph that must run the
+  # exact nightly the workspace builds with (the lint rust fixer lane runs
+  # `cargo fmt` through it, #3433). `args` passes through to
+  # `languages.rust.toolchain` (typically `components`); the channel and
+  # date always come from the repo pin so the toolchain version has exactly
+  # one statement.
+  repoRustToolchainFor = pkgs: args:
+    languages.rust.toolchain pkgs (args
+      // {
+        channel = "nightly";
+        version = repoRustNightlyDate;
+      });
   rustFor = pkgs:
     import ./build.nix {
       inherit
@@ -51,10 +64,7 @@
         };
         inherit clippy-src;
       };
-      rustToolchain = languages.rust.toolchain pkgs {
-        channel = "nightly";
-        version = repoRustNightlyDate;
-      };
+      rustToolchain = repoRustToolchainFor pkgs {};
       writePythonApplication = writePythonApplication pkgs;
     };
   # Build a repo-owned Rust tool while keeping nix-cargo-unit itself on the
@@ -111,5 +121,6 @@ in {
     buildIxRustTool
     cargoUnitFor
     buildRustPackage
+    repoRustToolchainFor
     ;
 }

@@ -7,7 +7,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
 
-use crate::{names, RenderError};
+use crate::{RenderError, names};
 
 /// Java exception classes an error enum may extend via `jvm(base = ...)`.
 /// The default is `RuntimeException`; the checked bases make the generated
@@ -40,7 +40,10 @@ pub fn render_error(error: &ir::ErrorType, user: &Ident) -> Result<TokenStream, 
         )));
     }
     // Validate the Java-side names alongside the glue.
-    names::checked(names::exception_name(error), &format!("error `{}`", error.name))?;
+    names::checked(
+        names::exception_name(error),
+        &format!("error `{}`", error.name),
+    )?;
     for variant in &error.variants {
         names::checked(
             names::variant_exception_name(variant),

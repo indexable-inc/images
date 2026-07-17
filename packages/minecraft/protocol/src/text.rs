@@ -36,7 +36,10 @@ mod tests {
 
     #[test]
     fn strips_section_sign_codes() {
-        assert_eq!(strip_format_codes("\u{a7}aHello \u{a7}lWorld"), "Hello World");
+        assert_eq!(
+            strip_format_codes("\u{a7}aHello \u{a7}lWorld"),
+            "Hello World"
+        );
     }
 
     #[test]

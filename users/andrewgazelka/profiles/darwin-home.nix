@@ -106,6 +106,7 @@ in {
   # the personal config consuming it. Mechanism in index, values here.
   imports = [
     (import ./nushell.nix {inherit configRoot;})
+    ./infra.nix
     optionsModule
     raycastModule
     # Ghostty config, generated from Nix (home/ghostty.nix). Replaces the former
@@ -663,7 +664,7 @@ in {
   # Log stays at ~/.local/share/weave/serve.log next to the store: the path
   # existing tooling and memories already reference.
   launchd.agents.weave-serve = {
-    enable = true;
+    enable = cfg.weave.enable;
     config = {
       ProgramArguments = lockArgs "weave-serve" [
         "${config.home.homeDirectory}/.local/share/weave/app/bin/weave"

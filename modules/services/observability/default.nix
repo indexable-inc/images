@@ -228,7 +228,7 @@ in {
 
       healthPort = mkOption {
         type = types.port;
-        default = 13_133;
+        default = 13133;
         description = "Collector health extension port on loopback.";
       };
 

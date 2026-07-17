@@ -188,7 +188,12 @@ impl ScanCursor {
     /// the same directory), so a crash mid-write can never leave a truncated
     /// cursor. Call only after every sink succeeded, or a failed write would be
     /// skipped forever.
-    pub fn store(&self, user: Option<&str>, source: &str, current: &Snapshot) -> anyhow::Result<()> {
+    pub fn store(
+        &self,
+        user: Option<&str>,
+        source: &str,
+        current: &Snapshot,
+    ) -> anyhow::Result<()> {
         let path = self.cursor_path(user, source);
         let dir = path.parent().context("cursor path has a parent")?;
         std::fs::create_dir_all(dir)

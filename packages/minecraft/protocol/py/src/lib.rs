@@ -69,9 +69,8 @@ mod _mc_protocol {
 
     impl std::fmt::Display for SlpError {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let (Self::Input { message }
-            | Self::Network { message }
-            | Self::Protocol { message }) = self;
+            let (Self::Input { message } | Self::Network { message } | Self::Protocol { message }) =
+                self;
             formatter.write_str(message)
         }
     }
@@ -116,11 +115,10 @@ mod _mc_protocol {
         #[unibind(default = 5.0)] timeout_seconds: f64,
     ) -> Result<SlpStatus, SlpError> {
         let parsed = parse(address)?;
-        let timeout = Duration::try_from_secs_f64(timeout_seconds).map_err(|error| {
-            SlpError::Input {
+        let timeout =
+            Duration::try_from_secs_f64(timeout_seconds).map_err(|error| SlpError::Input {
                 message: format!("invalid timeout {timeout_seconds}: {error}"),
-            }
-        })?;
+            })?;
         let status = mc_protocol::query(&parsed, timeout).map_err(|error| classify(&error))?;
         Ok(SlpStatus {
             version_name: status.version_name,

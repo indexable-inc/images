@@ -296,7 +296,11 @@ impl Facts {
         write_tsv(
             &dir.join("symbol_info.facts"),
             self.symbols.iter().map(|row| {
-                vec![row.symbol.clone(), row.kind.clone(), row.display_name.clone()]
+                vec![
+                    row.symbol.clone(),
+                    row.kind.clone(),
+                    row.display_name.clone(),
+                ]
             }),
         )?;
         write_tsv(
@@ -305,9 +309,9 @@ impl Facts {
         )?;
         write_tsv(
             &dir.join("relationship.facts"),
-            self.relationships.iter().map(|row| {
-                vec![row.symbol.clone(), row.related.clone(), row.kind.clone()]
-            }),
+            self.relationships
+                .iter()
+                .map(|row| vec![row.symbol.clone(), row.related.clone(), row.kind.clone()]),
         )
     }
 }

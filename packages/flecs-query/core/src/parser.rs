@@ -167,17 +167,15 @@ impl Parser {
             TokenKind::Ident | TokenKind::Number | TokenKind::Star => {
                 // Keyword forms (`and|`, `toggle|`, ...) only apply where
                 // upstream consults them: terms without a `!`/`?` prefix.
-                let keyword = if had_prefix {
-                    None
-                } else {
-                    self.keyword()?
-                };
+                let keyword = if had_prefix { None } else { self.keyword()? };
                 match keyword {
                     Some(KeywordPrefix::Oper(keyword_oper)) => {
                         oper = keyword_oper;
                         self.keyword_operand(None, &mut oper)?
                     }
-                    Some(KeywordPrefix::Flag(flag)) => self.keyword_operand(Some(flag), &mut oper)?,
+                    Some(KeywordPrefix::Flag(flag)) => {
+                        self.keyword_operand(Some(flag), &mut oper)?
+                    }
                     None => {
                         let first = self.ref_expr()?;
                         self.id_body(first, &mut oper)?

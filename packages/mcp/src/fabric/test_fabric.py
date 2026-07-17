@@ -6,7 +6,7 @@ import json
 import re
 import sys
 import threading
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -22,7 +22,7 @@ import weave
 from claude_agent_sdk import AssistantMessage, Message, ResultMessage, TextBlock
 
 import fabric
-from fabric import activity, claude, reconcile, remote
+from fabric import activity, claude, reconcile, remote, tmux
 
 _T = TypeVar("_T")
 
@@ -31,6 +31,24 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 def run(coro: Coroutine[Any, Any, _T]) -> _T:
     return asyncio.run(coro)
+
+
+@pytest.fixture(autouse=True)
+def _spool_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """weave.record spools under the test's tmp dir; teardown joins flusher
+    threads BEFORE monkeypatched transports revert (a live flusher must never
+    fall back to a real URL)."""
+    from weave import spool as weave_spool
+
+    monkeypatch.setenv("WEAVE_SPOOL", str(tmp_path / "weave-spool"))
+    yield tmp_path / "weave-spool"
+    weave_spool.close_all()
+    weave_spool._down_urls.clear()
+
+
+def drain() -> None:
+    """Wait for spooled records to reach the journal double before asserting."""
+    assert run(weave.flush(timeout=10))
 
 
 @dataclass
@@ -157,6 +175,7 @@ def test_run_records_ask_then_started_then_done(monkeypatch: pytest.MonkeyPatch)
         return handle, await handle.wait()
 
     handle, value = run(main())
+    drain()
     assert value == 5
     assert re.fullmatch(r"task:[0-9a-f]{8}", handle.task)
     attrs = [(a, v) for e, a, v in journal.facts if e == handle.task]
@@ -221,6 +240,7 @@ def test_run_failure_still_leaves_ask_and_failed(
         return handle
 
     handle = run(main())
+    drain()
     assert journal.states(handle.task) == ["submitted", "running", "failed"]
     errors = [v for e, a, v in journal.facts if e == handle.task and a == "error"]
     assert len(errors) == 1
@@ -276,6 +296,7 @@ def test_run_remote_records_target_node_and_done(monkeypatch: pytest.MonkeyPatch
         return handle, await handle.wait()
 
     handle, value = run(main())
+    drain()
     assert value == 7
     assert shipped
     assert shipped[0][0] is placement
@@ -413,6 +434,7 @@ def test_run_interrupt_records_interrupted(monkeypatch: pytest.MonkeyPatch) -> N
         return handle
 
     handle = run(main())
+    drain()
     assert journal.states(handle.task) == ["submitted", "running", "interrupted"]
     assert (handle.task, "interrupt", "requested") in journal.facts
 
@@ -437,6 +459,7 @@ def test_run_interrupt_fact_path(monkeypatch: pytest.MonkeyPatch) -> None:
         return handle
 
     handle = run(main())
+    drain()
     assert journal.states(handle.task) == ["submitted", "running", "interrupted"]
 
 
@@ -459,6 +482,7 @@ def test_session_records_turns_result_and_done(monkeypatch: pytest.MonkeyPatch) 
         return live
 
     live = run(main())
+    drain()
     task = live.task
     assert journal.states(task) == ["submitted", "running", "done"]
     assert journal.facts[-1] == (task, "state", "done")
@@ -492,6 +516,7 @@ def test_session_follow_up_input_streams(monkeypatch: pytest.MonkeyPatch) -> Non
         return live
 
     live = run(main())
+    drain()
     assert fake.queries == ["first", "second"]
     turns = [v for e, a, v in journal.facts if e == live.task and a == "turn"]
     assert len(turns) == 3  # result one, the follow-up user turn, result two
@@ -511,6 +536,7 @@ def test_interrupt_handle_path(monkeypatch: pytest.MonkeyPatch) -> None:
         return live
 
     live = run(main())
+    drain()
     assert fake.interrupts == 1  # converged on the SDK interrupt
     assert journal.states(live.task) == ["submitted", "running", "interrupted"]
     assert (live.task, "interrupt", "requested") in journal.facts
@@ -530,6 +556,7 @@ def test_interrupt_fact_path(monkeypatch: pytest.MonkeyPatch) -> None:
         return live
 
     live = run(main())
+    drain()
     assert fake.interrupts == 1  # the journal watcher converged on the SDK interrupt
     assert journal.states(live.task) == ["submitted", "running", "interrupted"]
 
@@ -544,6 +571,7 @@ def test_session_connect_failure_leaves_ask_and_failed(monkeypatch: pytest.Monke
 
     with pytest.raises(OSError, match="claude CLI missing"):
         run(main())
+    drain()
     tasks = {e for e, a, v in journal.facts if a == "type"}
     assert len(tasks) == 1
     task = tasks.pop()
@@ -551,6 +579,146 @@ def test_session_connect_failure_leaves_ask_and_failed(monkeypatch: pytest.Monke
     assert journal.states(task) == ["submitted", "failed"]
     assert journal.blob_for(task, "prompt") == b"never starts"
     assert journal.facts[-1] == (task, "state", "failed")
+
+
+
+# --- claude.session failure surfacing + auth precedence (index#3420) -----------
+
+
+def error_result_message(
+    text: str, *, is_error: bool = True, subtype: str = "error_during_execution",
+    api_error_status: int | None = None,
+) -> ResultMessage:
+    return ResultMessage(
+        subtype=subtype,
+        duration_ms=1,
+        duration_api_ms=1,
+        is_error=is_error,
+        num_turns=1,
+        session_id="s1",
+        result=text,
+        api_error_status=api_error_status,
+    )
+
+
+API_ERROR_400 = (
+    "API Error: 400 You have reached your specified API usage limits. "
+    "You will regain access on 2026-08-01 at 00:00 UTC."
+)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # The SDK-flagged shape: is_error=True on the result event.
+        error_result_message(API_ERROR_400),
+        # The incident shape (index#3420): the CLI ended the turn with the API
+        # error as plain result text under success-shaped flags.
+        error_result_message(API_ERROR_400, is_error=False, subtype="success"),
+        # Error flagged only via the API status field.
+        error_result_message("boom", is_error=False, subtype="success", api_error_status=500),
+    ],
+    ids=["is_error", "api_error_text", "api_error_status"],
+)
+def test_session_error_result_fails_journal_and_raises(
+    monkeypatch: pytest.MonkeyPatch, message: ResultMessage
+) -> None:
+    journal = install(monkeypatch)
+    fake = FakeClient()
+    use_fake(monkeypatch, fake)
+    detail = message.result or ""
+
+    async def main() -> claude.Session:
+        live = await claude.session("doomed")
+        fake.feed(message)
+        with pytest.raises(claude.SessionError, match=re.escape(detail[:40])):
+            await live.result(timeout=5)
+        await live.close()  # must not overwrite the failed terminal
+        return live
+
+    live = run(main())
+    drain()
+    assert journal.states(live.task) == ["submitted", "running", "failed"]
+    assert journal.facts[-1] == (live.task, "state", "failed")
+    errors = [v for e, a, v in journal.facts if e == live.task and a == "error"]
+    assert errors == [detail]
+    # The error text is still recorded as the turn's result blob.
+    assert journal.blob_for(live.task, "result") == detail.encode()
+
+
+def test_session_empty_error_result_names_subtype(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+    fake = FakeClient()
+    use_fake(monkeypatch, fake)
+
+    async def main() -> claude.Session:
+        live = await claude.session("doomed")
+        fake.feed(error_result_message(""))
+        with pytest.raises(claude.SessionError, match="error_during_execution"):
+            await live.result(timeout=5)
+        await live.close()
+        return live
+
+    live = run(main())
+    drain()
+    assert journal.states(live.task) == ["submitted", "running", "failed"]
+
+
+@pytest.mark.parametrize(
+    ("subscription", "key", "expect_scrub"),
+    [
+        ("1", "sk-ant-exhausted", True),
+        ("yes", "sk-ant-exhausted", True),
+        ("0", "sk-ant-exhausted", False),
+        ("off", "sk-ant-exhausted", False),
+        (None, "sk-ant-exhausted", False),
+        ("1", None, False),
+    ],
+)
+def test_auth_env_scrubs_key_only_under_subscription(
+    monkeypatch: pytest.MonkeyPatch, subscription: str | None, key: str | None, *, expect_scrub: bool
+) -> None:
+    for name, value in ((claude.ENV_SUBSCRIPTION, subscription), (claude.ENV_API_KEY, key)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    expected = {claude.ENV_API_KEY: ""} if expect_scrub else {}
+    assert claude._auth_env() == expected
+
+
+def _real_sdk_client(tmux_window: str | None) -> Any:
+    return claude._sdk_client(
+        system_prompt=None,
+        model=None,
+        cwd=None,
+        allowed_tools=None,
+        permission_mode=None,
+        max_turns=None,
+        tmux_window=tmux_window,
+    )
+
+
+def test_sdk_client_env_carries_auth_scrub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scrub rides ClaudeAgentOptions.env, the ONE env the SDK overlays
+    onto the subprocess (the SDK can override but never remove an inherited
+    key, so the scrub is the empty-string override)."""
+    monkeypatch.setenv(claude.ENV_SUBSCRIPTION, "1")
+    monkeypatch.setenv(claude.ENV_API_KEY, "sk-ant-exhausted")
+    client = _real_sdk_client(None)
+    assert client.options.env == {claude.ENV_API_KEY: ""}
+
+    monkeypatch.setenv(claude.ENV_SUBSCRIPTION, "0")
+    assert _real_sdk_client(None).options.env == {}
+
+
+def test_sdk_client_tmux_env_keeps_auth_scrub(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(claude.ENV_SUBSCRIPTION, "1")
+    monkeypatch.setenv(claude.ENV_API_KEY, "sk-ant-exhausted")
+    monkeypatch.setattr(tmux, "real_cli", lambda: "/bin/claude")
+    client = _real_sdk_client("task-test")
+    assert client.options.env[claude.ENV_API_KEY] == ""
+    assert client.options.env[tmux.ENV_WINDOW] == "task-test"
 
 
 # --- fabric.reconcile -----------------------------------------------------------
@@ -638,3 +806,259 @@ def test_activity_frame_is_the_per_node_view(monkeypatch: pytest.MonkeyPatch) ->
     ]
     history = run(activity.frame(open_only=False))
     assert history.height == 4
+
+
+# --- weave unreachable at the fabric boundary (index#3416) ----------------------
+
+
+def install_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Weave double for an absent server: every request fails to connect."""
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 61] Connection refused", request=request)
+
+    transport = httpx.MockTransport(refuse)
+    monkeypatch.setattr(
+        weave,
+        "_client",
+        lambda **kw: httpx.AsyncClient(transport=transport, base_url="http://weave.test", **kw),
+    )
+
+
+def test_activity_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_unreachable(monkeypatch)
+
+    with pytest.raises(fabric.FabricError) as excinfo:
+        run(activity.frame())
+    message = str(excinfo.value)
+    assert "weave server unreachable" in message
+    assert "curl -s http://weave.test/api/info" in message
+    assert "launchctl kickstart -k gui/501/org.nix-community.home.weave-serve" in message
+    assert isinstance(excinfo.value.__cause__, httpx.ConnectError)
+
+
+def test_reconcile_weave_unreachable_raises_fabric_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_unreachable(monkeypatch)
+
+    with pytest.raises(fabric.FabricError, match="weave server unreachable"):
+        run(reconcile.once())
+
+
+def test_run_spawn_survives_unreachable_weave(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The other half of the boundary (index#3419): spawn-path recording rides
+    the durable local spool, so an unreachable server never fails or blocks
+    ``fabric.run`` -- only the server-backed read paths raise FabricError."""
+    install_unreachable(monkeypatch)
+
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    async def main() -> object:
+        handle = await fabric.run(add, 2, 3)
+        return await handle.wait()
+
+    assert run(main()) == 5
+    segments = list((tmp_path / "weave-spool").glob("w-*.jsonl"))
+    assert segments, "intent must be durable on disk while undelivered"
+
+
+# --- outage: intent is durable and the spawn proceeds with weave down ------
+
+
+def test_session_spawns_and_records_while_weave_down(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """index#3418 invariant: with weave unreachable, the submitted intent is
+    fsync'd to the local spool BEFORE the SDK subprocess spawns, the session
+    completes normally, and after weave returns every fact drains in append
+    order."""
+    journal = Journal()
+    down = {"is": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if down["is"]:
+            raise httpx.ConnectError("weave down")
+        return Journal.handler(journal, request)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        weave,
+        "_client",
+        lambda **kw: httpx.AsyncClient(transport=transport, base_url="http://weave.test", **kw),
+    )
+    monkeypatch.setenv("IX_WEAVE_AGENT", "agent:tester")
+    fake = FakeClient()
+    use_fake(monkeypatch, fake)
+
+    async def main() -> claude.Session:
+        live = await claude.session("do it")
+        assert fake.connected  # the spawn proceeded with weave down
+        fake.feed(result_message("done"))
+        assert await live.result(timeout=5) == "done"
+        await live.close()
+        return live
+
+    live = run(main())
+    # Nothing reached the journal, but every fact is durable on disk in
+    # append order, prompt payload included.
+    assert fake.queries == ["do it"]
+    assert journal.facts == []
+    segments = list((tmp_path / "weave-spool").glob("w-*.jsonl"))
+    assert len(segments) == 1
+    lines = [json.loads(line) for line in segments[0].read_text().splitlines() if line]
+    attrs = [item["fact"]["attr"] for item in lines if "fact" in item]
+    assert attrs[0] == "type"
+    assert "state" in attrs
+    blob_refs = [ref["attr"] for item in lines if "blob_b64" in item for ref in item["refs"]]
+    assert "prompt" in blob_refs
+
+    down["is"] = False
+    drain()
+    task = live.task
+    assert journal.states(task) == ["submitted", "running", "done"]
+    assert journal.blob_for(task, "prompt") == b"do it"
+    assert journal.facts[-1] == (task, "state", "done")
+
+# --- fabric.tmux ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "expect"),
+    [(None, True), ("", True), ("1", True), ("yes", True), ("0", False), ("false", False), ("OFF", False)],
+)
+def test_tmux_enabled_knob(monkeypatch: pytest.MonkeyPatch, value: str | None, *, expect: bool) -> None:
+    if value is None:
+        monkeypatch.delenv(tmux.ENV_KNOB, raising=False)
+    else:
+        monkeypatch.setenv(tmux.ENV_KNOB, value)
+    assert tmux.enabled() is expect
+
+
+def use_fake_factory(monkeypatch: pytest.MonkeyPatch, fake: FakeClient) -> dict[str, Any]:
+    """Like ``use_fake`` but also captures the kwargs ``session`` passes."""
+
+    seen: dict[str, Any] = {}
+
+    def factory(**kw: object) -> FakeClient:
+        seen.update(kw)
+        return fake
+
+    monkeypatch.setattr(claude, "_sdk_client", factory)
+    monkeypatch.setattr(fabric, "INTERRUPT_POLL_S", 0.01)
+    return seen
+
+
+def test_session_tmux_on_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+    monkeypatch.delenv(tmux.ENV_KNOB, raising=False)
+    fake = FakeClient()
+    seen = use_fake_factory(monkeypatch, fake)
+
+    async def main() -> claude.Session:
+        live = await claude.session("hi")
+        await live.close()
+        return live
+
+    live = run(main())
+    drain()
+    window = tmux.window_name(live.task)
+    assert seen["tmux_window"] == window
+    assert (live.task, "tmux_window", window) in journal.facts
+
+
+@pytest.mark.parametrize(
+    ("knob", "override", "expect_window"),
+    [("0", None, False), ("1", False, False), ("0", True, True)],
+)
+def test_session_tmux_knob_and_override(
+    monkeypatch: pytest.MonkeyPatch, knob: str, *, override: bool | None, expect_window: bool
+) -> None:
+    journal = install(monkeypatch)
+    monkeypatch.setenv(tmux.ENV_KNOB, knob)
+    fake = FakeClient()
+    seen = use_fake_factory(monkeypatch, fake)
+
+    async def main() -> claude.Session:
+        live = await claude.session("hi", tmux=override)
+        await live.close()
+        return live
+
+    live = run(main())
+    drain()
+    if expect_window:
+        assert seen["tmux_window"] == tmux.window_name(live.task)
+    else:
+        assert seen["tmux_window"] is None
+        assert (live.task, "tmux_window", tmux.window_name(live.task)) not in journal.facts
+
+
+def _fake_tmux(tmp_path: Path) -> Path:
+    """A tmux stand-in: ``new-window`` runs its command arg detached via sh."""
+
+    binary = tmp_path / "tmux"
+    binary.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  has-session) exit 1 ;;\n"
+        "  new-session) exit 0 ;;\n"
+        "  kill-pane) exit 0 ;;\n"
+        "  new-window)\n"
+        '    for arg; do cmd="$arg"; done\n'
+        '    sh -c "$cmd" >/dev/null 2>&1 &\n'
+        '    echo "%99"\n'
+        "    ;;\n"
+        "esac\n"
+    )
+    binary.chmod(0o755)
+    return binary
+
+
+def test_tmux_shim_round_trips_the_pipe_protocol(tmp_path: Path) -> None:
+    """stdin reaches the pane-hosted CLI, its stdout comes back, rc preserved."""
+
+    import os
+    import shutil
+    import subprocess
+
+    _fake_tmux(tmp_path)
+    cat = shutil.which("cat")
+    assert cat is not None
+    pythonpath = f"{ROOT / 'fabric'}:{ROOT / 'weave'}"
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "PYTHONPATH": pythonpath,
+        tmux.ENV_CLI: cat,
+        tmux.ENV_WINDOW: "task-test",
+    }
+    done = subprocess.run(
+        [tmux.shim_path()], input=b"hello\n", capture_output=True, env=env, timeout=60, check=False
+    )
+    assert done.stdout == b"hello\n", done.stderr.decode()
+    assert done.returncode == 0
+
+
+def test_tmux_shim_answers_version_probe_directly(tmp_path: Path) -> None:
+    """The SDK's ``-v`` startup probe never opens a window (no tmux needed)."""
+
+    import os
+    import subprocess
+
+    cli = tmp_path / "fake-claude"
+    cli.write_text("#!/bin/sh\necho fake-claude 1.2.3\n")
+    cli.chmod(0o755)
+    env = {
+        **os.environ,
+        # The shim resolves fabric on its own interpreter; point it at the
+        # worktree source when the installed fabric predates fabric.tmux.
+        "PYTHONPATH": f"{ROOT / 'fabric'}:{ROOT / 'weave'}",
+        tmux.ENV_CLI: str(cli),
+        tmux.ENV_WINDOW: "task-test",
+    }
+    done = subprocess.run(
+        [tmux.shim_path(), "-v"], capture_output=True, env=env, timeout=30, check=False
+    )
+    assert done.stdout == b"fake-claude 1.2.3\n"
+    assert done.returncode == 0

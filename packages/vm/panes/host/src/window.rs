@@ -47,7 +47,11 @@ use crate::view::PanesView;
 fn stream_rate_range(screen: Option<&objc2_app_kit::NSScreen>) -> CAFrameRateRange {
     #[allow(clippy::cast_precision_loss)] // realistic refresh rates are tiny integers
     let max_fps = screen.map_or(60.0, |screen| screen.maximumFramesPerSecond() as f32);
-    CAFrameRateRange { minimum: max_fps, maximum: max_fps, preferred: max_fps }
+    CAFrameRateRange {
+        minimum: max_fps,
+        maximum: max_fps,
+        preferred: max_fps,
+    }
 }
 
 /// Tick rate while the window is fully occluded. The link keeps running as
@@ -56,8 +60,11 @@ fn stream_rate_range(screen: Option<&objc2_app_kit::NSScreen>) -> CAFrameRateRan
 /// immediately releases the next frame), which burns far more CPU on both
 /// sides than the presents it saves. ~10Hz keeps a covered window's stream
 /// alive and cheap; occluded ticks skip the encode/present entirely.
-const OCCLUDED_RATE_RANGE: CAFrameRateRange =
-    CAFrameRateRange { minimum: 8.0, maximum: 12.0, preferred: 10.0 };
+const OCCLUDED_RATE_RANGE: CAFrameRateRange = CAFrameRateRange {
+    minimum: 8.0,
+    maximum: 12.0,
+    preferred: 10.0,
+};
 
 /// Ticks with nothing to present before the display link re-pauses (~250ms
 /// at 120Hz). Pausing immediately after every present would put an unpause
@@ -188,9 +195,18 @@ impl Surface {
         let slot = || {
             renderer
                 .make_texture(size.width, size.height)
-                .map(|texture| Slot { texture, absorbed: 0, last_draw: None })
+                .map(|texture| Slot {
+                    texture,
+                    absorbed: 0,
+                    last_draw: None,
+                })
         };
-        Some(Self { slots: [slot()?, slot()?], current: 0, log: Vec::new(), size })
+        Some(Self {
+            slots: [slot()?, slot()?],
+            current: 0,
+            log: Vec::new(),
+            size,
+        })
     }
 
     /// Append damage for both textures to absorb. A full-surface rect
@@ -305,7 +321,10 @@ impl PaneWindow {
         let scale = f64::from(params.scale.max(1));
         let content = NSRect::new(
             NSPoint::new(0.0, 0.0),
-            NSSize::new(f64::from(params.width) / scale, f64::from(params.height) / scale),
+            NSSize::new(
+                f64::from(params.width) / scale,
+                f64::from(params.height) / scale,
+            ),
         );
         // `Titled` stays in the mask in both chrome modes: it is what gives
         // the window a normal frame and the standard accessibility window
@@ -327,7 +346,10 @@ impl PaneWindow {
         // SAFETY: `true` (the default for titled windows) would free the
         // ObjC object under our `Retained` on close.
         unsafe { ns.setReleasedWhenClosed(false) };
-        ns.setTitle(&NSString::from_str(&format!("{title_prefix}{}", params.title)));
+        ns.setTitle(&NSString::from_str(&format!(
+            "{title_prefix}{}",
+            params.title
+        )));
         if !native_titlebar {
             apply_hidden_titlebar(&ns);
         }
@@ -393,8 +415,11 @@ impl PaneWindow {
         link.setDelegate(Some(ProtocolObject::from_ref(&*link_delegate)));
         // Before the window is ordered in, `screen()` is None; the main
         // screen is where `center()` will place it.
-        let stream_rate =
-            stream_rate_range(ns.screen().or_else(|| objc2_app_kit::NSScreen::mainScreen(mtm)).as_deref());
+        let stream_rate = stream_rate_range(
+            ns.screen()
+                .or_else(|| objc2_app_kit::NSScreen::mainScreen(mtm))
+                .as_deref(),
+        );
         link.setPreferredFrameRateRange(stream_rate);
         // Common modes include NSEventTrackingRunLoopMode, so ticks keep
         // coming during live resize (where presentsWithTransaction needs
@@ -443,7 +468,10 @@ impl PaneWindow {
     /// occlusion path restores `stream_rate` itself on re-expose).
     pub fn refresh_stream_rate(&mut self, mtm: MainThreadMarker) {
         self.stream_rate = stream_rate_range(
-            self.ns.screen().or_else(|| objc2_app_kit::NSScreen::mainScreen(mtm)).as_deref(),
+            self.ns
+                .screen()
+                .or_else(|| objc2_app_kit::NSScreen::mainScreen(mtm))
+                .as_deref(),
         );
         if !self.occluded {
             self.link.setPreferredFrameRateRange(self.stream_rate);
@@ -457,7 +485,8 @@ impl PaneWindow {
     }
 
     pub fn set_title(&self, title_prefix: &str, title: &str) {
-        self.ns.setTitle(&NSString::from_str(&format!("{title_prefix}{title}")));
+        self.ns
+            .setTitle(&NSString::from_str(&format!("{title_prefix}{title}")));
         // Setting the title re-reveals the native title view on macOS 15+;
         // ghostty re-applies the hidden style from its `title` override for
         // exactly this reason (HiddenTitlebarTerminalWindow.swift).
@@ -515,13 +544,23 @@ impl PaneWindow {
             eprintln!("panes-host: window {}: zero-sized frame {seq}", self.id);
             true
         } else if width > MAX_DIM || height > MAX_DIM {
-            eprintln!("panes-host: window {}: {width}x{height} frame exceeds max dim", self.id);
+            eprintln!(
+                "panes-host: window {}: {width}x{height} frame exceeds max dim",
+                self.id
+            );
             true
-        } else if self.surface.as_ref().is_none_or(|surface| surface.size != size) {
+        } else if self
+            .surface
+            .as_ref()
+            .is_none_or(|surface| surface.size != size)
+        {
             self.surface = Surface::new(renderer, size);
             fresh_surface = true;
             if self.surface.is_none() {
-                eprintln!("panes-host: window {}: texture alloc {width}x{height} failed", self.id);
+                eprintln!(
+                    "panes-host: window {}: texture alloc {width}x{height} failed",
+                    self.id
+                );
             }
             self.surface.is_none()
         } else {
@@ -550,8 +589,10 @@ impl PaneWindow {
         if fresh_surface && !self.view.inLiveResize() {
             let drawable = self.layer.drawableSize();
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let (dw, dh) =
-                (drawable.width.round().max(0.0) as u32, drawable.height.round().max(0.0) as u32);
+            let (dw, dh) = (
+                drawable.width.round().max(0.0) as u32,
+                drawable.height.round().max(0.0) as u32,
+            );
             if (width, height) != (dw, dh) {
                 eprintln!(
                     "panes-host: window {}: presenting {width}x{height} frames scaled onto the \
@@ -565,8 +606,14 @@ impl PaneWindow {
         let in_bounds = |rect: Rect| {
             rect.w > 0
                 && rect.h > 0
-                && rect.x.checked_add(rect.w).is_some_and(|right| right <= width)
-                && rect.y.checked_add(rect.h).is_some_and(|bottom| bottom <= height)
+                && rect
+                    .x
+                    .checked_add(rect.w)
+                    .is_some_and(|right| right <= width)
+                && rect
+                    .y
+                    .checked_add(rect.h)
+                    .is_some_and(|bottom| bottom <= height)
         };
         // A full frame invalidates retained contents. Skip the clear only
         // when the accepted tiles already blanket the buffer (the common
@@ -581,13 +628,24 @@ impl PaneWindow {
             .sum();
         if (full || fresh_surface) && covered < u64::from(width) * u64::from(height) {
             let zeros = vec![0u8; width as usize * height as usize * 4];
-            surface.push(Rect { x: 0, y: 0, w: width, h: height }, zeros);
+            surface.push(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: width,
+                    h: height,
+                },
+                zeros,
+            );
         }
 
         for tile in tiles {
             let rect = tile.rect;
             if !in_bounds(rect) {
-                eprintln!("panes-host: window {}: tile out of bounds, skipped", self.id);
+                eprintln!(
+                    "panes-host: window {}: tile out of bounds, skipped",
+                    self.id
+                );
                 continue;
             }
             let expected = rect.w as usize * rect.h as usize * 4;
@@ -709,9 +767,11 @@ impl PaneWindow {
             // block, so it need not outlive this call.
             unsafe { drawable.addPresentedHandler(block2::RcBlock::as_ptr(&block)) };
         }
-        let Some(commands) =
-            renderer.draw(&slot.texture, &drawable, self.layer.presentsWithTransaction())
-        else {
+        let Some(commands) = renderer.draw(
+            &slot.texture,
+            &drawable,
+            self.layer.presentsWithTransaction(),
+        ) else {
             // Keep dirty + pending ack, but keep the slot switch: its
             // texture already absorbed the damage, so the retry next tick
             // just redraws it.
@@ -729,7 +789,9 @@ impl PaneWindow {
     /// True while any part of the window is on screen (`AppKit` occlusion
     /// state contains `Visible`).
     pub fn occlusion_visible(&self) -> bool {
-        self.ns.occlusionState().contains(NSWindowOcclusionState::Visible)
+        self.ns
+            .occlusionState()
+            .contains(NSWindowOcclusionState::Visible)
     }
 
     /// Redraw (stretching the stale texture) on the next tick; used during
@@ -793,9 +855,11 @@ fn apply_hidden_titlebar(ns: &NSWindow) {
     // AeroSpace's window list read it); only its rendering is hidden.
     ns.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     ns.setTitlebarAppearsTransparent(true);
-    for kind in
-        [NSWindowButton::CloseButton, NSWindowButton::MiniaturizeButton, NSWindowButton::ZoomButton]
-    {
+    for kind in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
         if let Some(button) = ns.standardWindowButton(kind) {
             button.setHidden(true);
         }
@@ -808,7 +872,10 @@ fn apply_hidden_titlebar(ns: &NSWindow) {
     // input. Ghostty hides the container outright ("nuke it from orbit");
     // same here, so the full frame delivers events to the guest.
     // SAFETY: superview is a plain accessor; main thread only.
-    if let Some(frame) = ns.contentView().and_then(|view| unsafe { view.superview() }) {
+    if let Some(frame) = ns
+        .contentView()
+        .and_then(|view| unsafe { view.superview() })
+    {
         hide_titlebar_container(&frame);
     }
 }

@@ -30,7 +30,7 @@
   # Audio: one fixed PCM format end to end. The PipeWire graph clock, the
   # protocol-simple tap, and the format panes-audio advertises to the host
   # must all agree, and these bindings are the single source of truth.
-  audioRate = 48_000;
+  audioRate = 48000;
   audioChannels = 2;
   # The tap is loopback TCP, not a unix socket, because
   # module-protocol-simple's unix accept path is dead code in PipeWire 1.6

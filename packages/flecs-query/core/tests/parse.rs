@@ -92,8 +92,14 @@ fn pairs() {
 #[test]
 fn explicit_sources() {
     let query = roundtrip("TimeOfDay(Game), Position($this), Likes($this, Dogs)", 3);
-    assert_eq!(id(&query.terms[0]).src, Src::Explicit(Ref::plain(name("Game"))));
-    assert_eq!(id(&query.terms[1]).src, Src::Explicit(Ref::plain(RefExpr::This)));
+    assert_eq!(
+        id(&query.terms[0]).src,
+        Src::Explicit(Ref::plain(name("Game")))
+    );
+    assert_eq!(
+        id(&query.terms[1]).src,
+        Src::Explicit(Ref::plain(RefExpr::This))
+    );
     let likes = id(&query.terms[2]);
     assert_eq!(likes.second.as_ref().unwrap().expr, name("Dogs"));
 }
@@ -204,8 +210,14 @@ fn variables() {
     // `$this` is the builtin variable, `this` is a plain name, `$` is the
     // singleton source.
     let query = roundtrip("Position($this), Position(this), Position($)", 3);
-    assert_eq!(id(&query.terms[0]).src, Src::Explicit(Ref::plain(RefExpr::This)));
-    assert_eq!(id(&query.terms[1]).src, Src::Explicit(Ref::plain(name("this"))));
+    assert_eq!(
+        id(&query.terms[0]).src,
+        Src::Explicit(Ref::plain(RefExpr::This))
+    );
+    assert_eq!(
+        id(&query.terms[1]).src,
+        Src::Explicit(Ref::plain(name("this")))
+    );
     assert_eq!(
         id(&query.terms[2]).src,
         Src::Explicit(Ref::plain(RefExpr::Var(String::new())))
@@ -213,7 +225,10 @@ fn variables() {
 
     // Variables can appear in any position, including as the component.
     roundtrip("$component($this)", 1);
-    roundtrip("SpaceShip($this), DockedTo($this, $planet), Planet($planet)", 3);
+    roundtrip(
+        "SpaceShip($this), DockedTo($this, $planet), Planet($planet)",
+        3,
+    );
 }
 
 #[test]
@@ -240,7 +255,10 @@ fn entity_ids() {
 #[test]
 fn lookup_paths_and_members() {
     roundtrip("flecs.meta.Member", 1);
-    let query = roundtrip("(Movement.direction, Left), Movement.direction($this, Left)", 2);
+    let query = roundtrip(
+        "(Movement.direction, Left), Movement.direction($this, Left)",
+        2,
+    );
     assert_eq!(id(&query.terms[0]).first.expr, name("Movement.direction"));
     // `\.` keeps a literal dot inside one name.
     let query = roundtrip("foo\\.bar", 1);

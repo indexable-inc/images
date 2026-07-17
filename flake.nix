@@ -51,10 +51,6 @@
       url = "path:./tests";
       flake = false;
     };
-    bench-filesystem = {
-      url = "path:./packages/indexbench/filesystem";
-      flake = false;
-    };
     site = {
       url = "path:./packages/site";
       flake = false;
@@ -293,7 +289,6 @@
     skills,
     examples,
     tests,
-    bench-filesystem,
     site,
     ...
   }: let
@@ -329,7 +324,6 @@
       examples = examples.outPath;
       users = ./users;
       tests = tests.outPath;
-      bench.filesystem = bench-filesystem.outPath;
       site = site.outPath;
       pgUint128Src = pg-uint128-src;
       packagesRoot = ./packages;
@@ -416,6 +410,27 @@
         "aarch64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     packages = withDarwinAliases (collect "packages");
+    ciChecks = collect "ciChecks";
+    cachePushRoots = withDarwinAliases (collect "cachePushRoots");
+    # One evaluator pool owns every required Linux build root. Prefix closure
+    # roots so a package and a check may share their natural name without one
+    # silently replacing the other. The explicit collision guard keeps a
+    # future check named `closure-*` from weakening the gate.
+    requiredGateRoots =
+      lib.mapAttrs (
+        system: systemChecks: let
+          closureRoots =
+            lib.mapAttrs' (
+              name: root: lib.nameValuePair "closure-${name}" root
+            )
+            cachePushRoots.${system};
+          collisions = builtins.attrNames (lib.intersectAttrs systemChecks closureRoots);
+        in
+          assert lib.assertMsg (collisions == [])
+          "requiredGateRoots.${system}: prefixed cache roots collide with ciChecks: ${builtins.concatStringsSep ", " collisions}";
+            systemChecks // closureRoots
+      )
+      ciChecks;
     rawSecurityRoots = collect "securityRoots";
     rawSecurityRootPaths = collect "securityRootPaths";
     securityRoots =
@@ -666,7 +681,7 @@
     # (ENG-2201). Kept separate from `checks` because its per-package
     # `recurseForDerivations` groups are not derivations, which the flake
     # `checks` schema requires.
-    ciChecks = collect "ciChecks";
+    inherit ciChecks;
     # Registry-derived map of package directory -> flake attr for every
     # `updateScript` package exposed on a system. update.yml's "Build changed
     # packages" step evaluates this to find which attr owns each file the
@@ -684,13 +699,21 @@
     # `toplevel` closure; cache-push.yml publishes this instead of the
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
     # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
-    cachePushRoots = withDarwinAliases (collect "cachePushRoots");
+    inherit cachePushRoots;
+    # Union consumed by `nix run .#check -- required`: one bounded
+    # nix-fast-build evaluator replaces the former flake-check and closure-gate
+    # self-hosted jobs without dropping either required status context.
+    inherit requiredGateRoots;
     # Typed security exposure roots consumed as JSON by the runtime DAG scanner.
     # Unlike cachePushRoots, every entry carries policy metadata and names only
     # a shipped runtime output or an example service closure. securityRootPaths
     # carries the derivations separately so callers realize terminal store paths
     # instead of trusting content-addressed placeholders from evaluation.
     inherit securityRoots securityRootPaths;
+    # Opt-in heavy roots (kbuild-unit #3411): `nix build .#kernel-unit.vmlinux`
+    # resolves through legacyPackages on x86_64-linux. Deliberately not in
+    # `packages`, so no CI gate closure picks up its eval-time IFD kbuild.
+    legacyPackages = collect "legacyPackages";
     formatter = collect "formatter";
     apps = collect "apps";
     devShells = collect "devShells";

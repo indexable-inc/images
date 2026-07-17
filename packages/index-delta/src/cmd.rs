@@ -914,11 +914,8 @@ mod tests {
                 })
             })
             .collect();
-        fs::write(
-            &manifest,
-            serde_json::json!({ "files": files }).to_string(),
-        )
-        .expect("write manifest");
+        fs::write(&manifest, serde_json::json!({ "files": files }).to_string())
+            .expect("write manifest");
         activate(&store, &manifest).expect("activate");
         fs::write(&drifted, r#"{"a": 2}"#).expect("drift");
 

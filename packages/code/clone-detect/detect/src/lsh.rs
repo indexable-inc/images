@@ -74,16 +74,15 @@ pub fn banding_for_threshold(threshold: f64) -> Banding {
         rows_per_band += 1;
     }
 
-    best.or(fallback)
-        .map_or(
-            // NUM_HASHES >= 1 guarantees at least one factorization, so this is
-            // unreachable; keep a defined value rather than panic.
-            Banding {
-                num_bands: NUM_HASHES,
-                rows_per_band: 1,
-            },
-            |(banding, _)| banding,
-        )
+    best.or(fallback).map_or(
+        // NUM_HASHES >= 1 guarantees at least one factorization, so this is
+        // unreachable; keep a defined value rather than panic.
+        Banding {
+            num_bands: NUM_HASHES,
+            rows_per_band: 1,
+        },
+        |(banding, _)| banding,
+    )
 }
 
 /// Seed generation multiplier (`SplitMix64` gamma constant).
@@ -557,8 +556,7 @@ mod tests {
         let sig_large = minhash_signature(&large);
 
         let set_based = estimated_overlap(&sig_small, &sig_large, 30, 45);
-        let multiset_based =
-            estimated_overlap(&sig_small, &sig_large, small.len(), large.len());
+        let multiset_based = estimated_overlap(&sig_small, &sig_large, small.len(), large.len());
         assert!(
             set_based > 0.9,
             "set-consistent estimate must keep duplicate-heavy containment, got {set_based}"

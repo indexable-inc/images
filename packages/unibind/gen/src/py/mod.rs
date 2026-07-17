@@ -63,7 +63,10 @@ impl HostEmitter for PyEmitter {
 fn reject_unrendered_surface(interface: &Interface) -> Result<(), EmitError> {
     if let Some(data_enum) = interface.enums.first() {
         return Err(EmitError {
-            message: format!("`{}` is a data enum, which phase 1 does not render", data_enum.name),
+            message: format!(
+                "`{}` is a data enum, which phase 1 does not render",
+                data_enum.name
+            ),
         });
     }
     Ok(())

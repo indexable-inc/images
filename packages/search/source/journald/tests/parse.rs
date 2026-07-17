@@ -22,13 +22,43 @@ const DAY_B: i64 = 1_781_136_000_000_000; // 2026-06-11T00:00:00Z
 fn groups_per_unit_and_day_with_filter_tags() {
     let input = [
         // nginx: two messages on day A, one on day B -> two documents.
-        line("_SYSTEMD_UNIT", "nginx.service", 3, DAY_A + 60_000_000, "worker died"),
-        line("_SYSTEMD_UNIT", "nginx.service", 4, DAY_A + 5_000_000, "slow upstream"),
-        line("_SYSTEMD_UNIT", "nginx.service", 3, DAY_B + 1_000_000, "worker died again"),
+        line(
+            "_SYSTEMD_UNIT",
+            "nginx.service",
+            3,
+            DAY_A + 60_000_000,
+            "worker died",
+        ),
+        line(
+            "_SYSTEMD_UNIT",
+            "nginx.service",
+            4,
+            DAY_A + 5_000_000,
+            "slow upstream",
+        ),
+        line(
+            "_SYSTEMD_UNIT",
+            "nginx.service",
+            3,
+            DAY_B + 1_000_000,
+            "worker died again",
+        ),
         // Another unit, same day A -> its own document.
-        line("_SYSTEMD_UNIT", "ix-indexer.service", 2, DAY_A + 90_000_000, "sync crashed"),
+        line(
+            "_SYSTEMD_UNIT",
+            "ix-indexer.service",
+            2,
+            DAY_A + 90_000_000,
+            "sync crashed",
+        ),
         // priority 6 (info) must be dropped even if present in a capture.
-        line("_SYSTEMD_UNIT", "nginx.service", 6, DAY_A + 70_000_000, "started ok"),
+        line(
+            "_SYSTEMD_UNIT",
+            "nginx.service",
+            6,
+            DAY_A + 70_000_000,
+            "started ok",
+        ),
     ]
     .join("\n");
 
@@ -48,7 +78,10 @@ fn groups_per_unit_and_day_with_filter_tags() {
         "nginx.service warnings/errors 2026-06-10"
     );
     // Recency axis: the day's LAST message (00:01:00, not the 00:00:05 one).
-    assert_eq!(nginx_a.meta_json["timestamp"], (DAY_A + 60_000_000) / 1_000_000);
+    assert_eq!(
+        nginx_a.meta_json["timestamp"],
+        (DAY_A + 60_000_000) / 1_000_000
+    );
 
     let body = String::from_utf8(nginx_a.body.clone()).expect("utf8");
     // Messages are time-sorted even though the input was not, with level labels.
@@ -77,9 +110,21 @@ fn groups_per_unit_and_day_with_filter_tags() {
 fn unit_attribution_falls_back_through_the_field_chain() {
     let input = [
         // pid1 talks ABOUT a unit via UNIT (no _SYSTEMD_UNIT on the entry).
-        line("UNIT", "minio.service", 3, DAY_A + 1_000_000, "Failed to start"),
+        line(
+            "UNIT",
+            "minio.service",
+            3,
+            DAY_A + 1_000_000,
+            "Failed to start",
+        ),
         // kernel messages carry only a syslog identifier.
-        line("SYSLOG_IDENTIFIER", "kernel", 4, DAY_A + 2_000_000, "thermal event"),
+        line(
+            "SYSLOG_IDENTIFIER",
+            "kernel",
+            4,
+            DAY_A + 2_000_000,
+            "thermal event",
+        ),
         // No attribution at all -> "unknown".
         format!(
             r#"{{"PRIORITY":"3","MESSAGE":"orphan","__REALTIME_TIMESTAMP":"{}"}}"#,
@@ -125,7 +170,8 @@ fn malformed_json_line_is_an_error_not_a_silent_drop() {
 #[test]
 fn lines_missing_priority_or_timestamp_are_skipped() {
     let input = [
-        r#"{"MESSAGE":"no priority","_SYSTEMD_UNIT":"a.service","__REALTIME_TIMESTAMP":"1"}"#.to_owned(),
+        r#"{"MESSAGE":"no priority","_SYSTEMD_UNIT":"a.service","__REALTIME_TIMESTAMP":"1"}"#
+            .to_owned(),
         r#"{"PRIORITY":"3","MESSAGE":"no timestamp","_SYSTEMD_UNIT":"a.service"}"#.to_owned(),
     ]
     .join("\n");
@@ -203,7 +249,10 @@ fn message_text_is_sanitized_before_hashing() {
     let log = JournaldLog::parse(input.as_bytes(), "h").expect("parse");
     let docs: Vec<_> = log.documents().map(|d| d.expect("doc")).collect();
     let body = String::from_utf8(docs[0].body.clone()).expect("utf8");
-    assert!(!body.contains(&fake_token), "raw token must not embed: {body}");
+    assert!(
+        !body.contains(&fake_token),
+        "raw token must not embed: {body}"
+    );
     assert!(body.contains("[redacted:github_token]"), "{body}");
     assert!(!body.contains('\u{1b}'), "ANSI stripped: {body}");
     assert_eq!(

@@ -277,7 +277,11 @@ mod tests {
 
         let view = state.build_view();
         assert_eq!(view.builds.len(), 1, "the build is a build row");
-        assert_eq!(view.activities.len(), 1, "only the fetch is an activity row");
+        assert_eq!(
+            view.activities.len(),
+            1,
+            "only the fetch is an activity row"
+        );
         assert_eq!(view.activities[0].kind, "file_transfer");
     }
 

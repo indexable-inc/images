@@ -5,8 +5,8 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
 
-use crate::function::{borrowed_params, nif_attr, Params};
-use crate::{error, names, ty, RenderError};
+use crate::function::{Params, borrowed_params, nif_attr};
+use crate::{RenderError, error, names, ty};
 
 /// One `resource_impl` registration plus a NIF per constructor and method.
 /// The user's struct itself gains nothing: `ResourceArc` wraps it as an

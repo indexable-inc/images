@@ -835,7 +835,8 @@ impl OscTitleTracker {
         // `ghostty_osc_*` call (including the reset below), so copy it now. Skip
         // a title that is not valid UTF-8 (ghostty's stream path ignores those
         // too) rather than substituting replacement characters.
-        if ok && !text.is_null()
+        if ok
+            && !text.is_null()
             && let Ok(title) = unsafe { CStr::from_ptr(text) }.to_str()
         {
             self.title = Some(title.to_owned());

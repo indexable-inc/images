@@ -67,12 +67,10 @@ impl FlecsQueryMcp {
     reason = "rmcp tool methods must take &self for the ToolRouter even though this server is stateless"
 )]
 impl FlecsQueryMcp {
-    #[tool(
-        description = "Parse a Flecs Query Language expression \
+    #[tool(description = "Parse a Flecs Query Language expression \
                        (https://www.flecs.dev, e.g. 'Position, [in] Velocity, \
                        (ChildOf, $parent)') into its typed AST as JSON. \
-                       Errors carry a byte span and a caret-rendered message."
-    )]
+                       Errors carry a byte span and a caret-rendered message.")]
     fn parse(&self, Parameters(args): Parameters<ExprArgs>) -> Result<String, ErrorData> {
         let query = parse_expr(&args.expr)?;
         serde_json::to_string(&query).map_err(|err| {
@@ -93,11 +91,9 @@ impl FlecsQueryMcp {
         Ok(parse_expr(&args.expr)?.to_string())
     }
 
-    #[tool(
-        description = "Check whether a string is well-formed Flecs Query \
+    #[tool(description = "Check whether a string is well-formed Flecs Query \
                        Language. Never errors: returns {valid, error?, \
-                       rendered?} so it can be used in linting loops."
-    )]
+                       rendered?} so it can be used in linting loops.")]
     fn validate(&self, Parameters(args): Parameters<ExprArgs>) -> Result<String, ErrorData> {
         let verdict = match flecs_query_core::parse(&args.expr) {
             Ok(_) => Verdict {

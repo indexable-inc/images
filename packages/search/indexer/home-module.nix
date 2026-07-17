@@ -197,7 +197,7 @@ in {
 
     interval = mkOption {
       type = types.ints.positive;
-      default = 86_400;
+      default = 86400;
       description = "Run the sync every N seconds (default: daily).";
     };
 

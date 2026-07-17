@@ -14,17 +14,50 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import os
 import platform
 from typing import TYPE_CHECKING, Protocol
 
 import weave
 
+from . import tmux as _tmux
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
 
-    from claude_agent_sdk import Message, PermissionMode
+    from claude_agent_sdk import Message, PermissionMode, ResultMessage
 
-__all__ = ["Session", "session"]
+__all__ = ["ENV_API_KEY", "ENV_SUBSCRIPTION", "Session", "SessionError", "session"]
+
+
+class SessionError(RuntimeError):
+    """A turn ended in an SDK error result; carries the CLI's error text."""
+
+
+# Subscription-auth signal for kernel-spawned agents (index#3420): when set
+# truthy, an inherited ANTHROPIC_API_KEY (e.g. an exhausted org key in the
+# kernel's launchd env) must not shadow claude.ai subscription auth, since
+# the CLI prefers the key over OAuth login.
+ENV_SUBSCRIPTION = "CLAUDE_USE_SUBSCRIPTION"
+ENV_API_KEY = "ANTHROPIC_API_KEY"
+
+_FALSE = frozenset({"", "0", "false", "no", "off"})
+
+
+def _auth_env() -> dict[str, str]:
+    """The one auth decision for every CLI this module spawns (index#3420).
+
+    The SDK merges ``ClaudeAgentOptions.env`` OVER the inherited process env
+    (a key can be overridden, never removed), so scrubbing means overriding
+    ``ANTHROPIC_API_KEY`` with the empty string, which the CLI reads as
+    unset. The tmux pane respawns the CLI with the shim subprocess's own
+    env, so this covers both spawn paths.
+    """
+
+    subscribed = os.environ.get(ENV_SUBSCRIPTION, "").strip().lower() not in _FALSE
+    if subscribed and ENV_API_KEY in os.environ:
+        return {ENV_API_KEY: ""}
+    return {}
 
 
 class SdkClient(Protocol):
@@ -53,21 +86,52 @@ def _sdk_client(
     allowed_tools: Sequence[str] | None,
     permission_mode: PermissionMode | None,
     max_turns: int | None,
+    tmux_window: str | None,
 ) -> SdkClient:
-    """Build the real SDK client; tests monkeypatch this factory."""
+    """Build the real SDK client; tests monkeypatch this factory.
+
+    ``tmux_window`` re-homes the CLI process into that window of the shared
+    :data:`fabric.tmux.SESSION` session via the :mod:`fabric.tmux` shim; the
+    SDK keeps the stream-json pipe protocol either way.
+    """
 
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
-    return ClaudeSDKClient(
-        ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            model=model,
-            cwd=cwd,
-            allowed_tools=list(allowed_tools or []),
-            permission_mode=permission_mode,
-            max_turns=max_turns,
-        )
+    options = ClaudeAgentOptions(
+        system_prompt=system_prompt,
+        model=model,
+        cwd=cwd,
+        allowed_tools=list(allowed_tools or []),
+        permission_mode=permission_mode,
+        max_turns=max_turns,
+        env=_auth_env(),
     )
+    if tmux_window is not None:
+        options.cli_path = _tmux.shim_path()
+        options.env = {
+            **options.env,
+            _tmux.ENV_CLI: _tmux.real_cli(),
+            _tmux.ENV_WINDOW: tmux_window,
+        }
+    return ClaudeSDKClient(options)
+
+
+# The CLI reports an in-band API failure as its final result text with this
+# prefix (e.g. "API Error: 400 ... usage limits ..."), historically under
+# success-shaped flags, so the text is matched as well as the error fields
+# (index#3420).
+_API_ERROR_PREFIX = "API Error:"
+
+
+def _result_error(message: ResultMessage) -> str | None:
+    """The error text of a failed turn, or ``None`` for a genuine success."""
+
+    text = message.result or ""
+    if message.is_error or message.api_error_status is not None:
+        return text or f"SDK error result: subtype={message.subtype}"
+    if text.startswith(_API_ERROR_PREFIX):
+        return text
+    return None
 
 
 def _turn_blob(message: Message) -> bytes:
@@ -85,8 +149,10 @@ class Session:
     The reader task records a ``turn`` fact (a CAS pointer) per SDK message
     and a ``result`` fact per ``ResultMessage``; the watcher task polls the
     journal for ``interrupt=requested``. Terminal state lands exactly once:
-    ``interrupted`` at interrupt time, ``failed`` if the SDK stream errors,
-    else ``done`` at :meth:`close` -- always the entity's last state fact.
+    ``interrupted`` at interrupt time, ``failed`` if the SDK stream errors
+    or a turn ends in an SDK error result (:func:`_result_error`, raised
+    from :meth:`result` as :class:`SessionError`), else ``done`` at
+    :meth:`close` -- always the entity's last state fact.
     """
 
     def __init__(self, task: str, client: SdkClient) -> None:
@@ -109,12 +175,14 @@ class Session:
 
         try:
             async for message in self._client.receive_messages():
-                turn_hash = await weave.put_blob(_turn_blob(message))
-                await weave.assert_fact(self.task, "turn", weave.hashref(turn_hash))
+                await weave.record([(self.task, "turn", weave.Blob(_turn_blob(message)))])
                 if isinstance(message, ResultMessage):
                     self._result = message.result or ""
-                    result_hash = await weave.put_blob(self._result.encode())
-                    await weave.assert_fact(self.task, "result", weave.hashref(result_hash))
+                    await weave.record([(self.task, "result", weave.Blob(self._result.encode()))])
+                    error = _result_error(message)
+                    if error is not None:
+                        self._error = SessionError(f"{self.task}: {error}")
+                        await self._write_terminal("failed", error=error)
                     self._turn_done.set()
         except asyncio.CancelledError:
             raise
@@ -134,7 +202,7 @@ class Session:
             return
         self._terminal_written = True
         facts: list[tuple[str, str, object]] = [] if error is None else [(self.task, "error", error)]
-        await weave.assert_facts([*facts, (self.task, "state", state)])
+        await weave.record([*facts, (self.task, "state", state)])
 
     async def _do_interrupt(self) -> None:
         if self._interrupted:
@@ -149,15 +217,13 @@ class Session:
 
         if self._interrupted or self._terminal_written:
             raise RuntimeError(f"session is closed: {self.task}")
-        turn_hash = await weave.put_blob(
-            json.dumps({"type": "UserMessage", "message": {"content": text}}).encode()
-        )
-        await weave.assert_fact(self.task, "turn", weave.hashref(turn_hash))
+        payload = json.dumps({"type": "UserMessage", "message": {"content": text}}).encode()
+        await weave.record([(self.task, "turn", weave.Blob(payload))])
         self._turn_done.clear()
         await self._client.query(text)
 
     async def result(self, *, timeout: float | None = None) -> str:
-        """Wait for the current turn's result text (also set on interrupt/failure)."""
+        """Wait for the turn's result text; an error result raises :class:`SessionError`."""
 
         async with asyncio.timeout(timeout):
             await self._turn_done.wait()
@@ -168,7 +234,7 @@ class Session:
     async def interrupt(self) -> None:
         """Interrupt natively: record the request, stop the SDK, mark interrupted."""
 
-        await weave.assert_fact(self.task, "interrupt", "requested")
+        await weave.record([(self.task, "interrupt", "requested")])
         await self._do_interrupt()
 
     async def close(self) -> None:
@@ -197,32 +263,44 @@ async def session(
     allowed_tools: Sequence[str] | None = None,
     permission_mode: PermissionMode | None = None,
     max_turns: int | None = None,
+    tmux: bool | None = None,
 ) -> Session:
     """Open a recorded, interruptible Claude session and send ``prompt``.
 
-    Ask facts land first (prompt text in CAS, ``state=submitted`` last), so
-    the intent is on the journal before the SDK subprocess spawns; a connect
-    or first-send failure still appends the ``failed`` terminal fact. On
+    Ask facts land first (``state=submitted`` last) through ``weave.record``:
+    durably spooled on local disk before the SDK subprocess spawns, delivered
+    to the journal in that order whenever weave is reachable - a down weave
+    server never blocks or loses the intent (index#3418). A connect or
+    first-send failure still appends the ``failed`` terminal fact. On
     success the session is live (``state=running``) and returns immediately:
     ``await s.result()`` waits for the turn, ``s.send()`` streams follow-up
     input, ``s.interrupt()`` stops it.
+
+    By default the CLI process runs inside a window of the shared
+    ``ix-agents`` tmux session named after the task, so a human can watch or
+    kill it (``tmux attach -t ix-agents``); a ``tmux_window`` fact records
+    the window on the task entity. ``tmux=False`` (or ``IX_FABRIC_TMUX=0``
+    globally) runs headless (index#3478).
     """
 
     from . import _requested_by
 
     task = weave.mint("task")
-    prompt_hash = await weave.put_blob(prompt.encode())
     facts: list[tuple[str, str, object]] = [
         (task, "type", "task"),
         (task, "fn", "claude.session"),
         (task, "node", platform.node()),
         (task, "requested_by", _requested_by()),
-        (task, "prompt", weave.hashref(prompt_hash)),
+        (task, "prompt", weave.Blob(prompt.encode())),
     ]
+    in_tmux = _tmux.enabled() if tmux is None else tmux
+    window = _tmux.window_name(task) if in_tmux else None
     if model is not None:
         facts.append((task, "model", model))
+    if window is not None:
+        facts.append((task, "tmux_window", window))
     facts.append((task, "state", "submitted"))
-    await weave.assert_facts(facts)
+    await weave.record(facts)
 
     client = _sdk_client(
         system_prompt=system_prompt,
@@ -231,6 +309,7 @@ async def session(
         allowed_tools=allowed_tools,
         permission_mode=permission_mode,
         max_turns=max_turns,
+        tmux_window=window,
     )
     live = Session(task, client)
     try:
@@ -239,6 +318,6 @@ async def session(
     except BaseException as exc:
         await live._write_terminal("failed", error=f"{type(exc).__name__}: {exc}")
         raise
-    await weave.assert_fact(task, "state", "running")
+    await weave.record([(task, "state", "running")])
     live._start()
     return live

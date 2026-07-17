@@ -29,10 +29,10 @@ index 039b202..69fdb6c 100644
    'store-gc.cc',
 diff --git a/src/nix/store-builds.cc b/src/nix/store-builds.cc
 new file mode 100644
-index 0000000..c509e41
+index 0000000..73ea8da
 --- /dev/null
 +++ b/src/nix/store-builds.cc
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,131 @@
 +#include "nix/cmd/command.hh"
 +#include "nix/main/common-args.hh"
 +#include "nix/store/globals.hh"
@@ -156,9 +156,8 @@ index 0000000..c509e41
 +            if (j.contains("why") && j["why"].contains("chain")) {
 +                auto & chain = j["why"]["chain"];
 +                if (chain.is_array() && !chain.empty())
-+                    logger->cout("    because %s wants it (%s)",
-+                        chain.front().get<std::string>(),
-+                        j["why"].value("cause", "?"));
++                    logger->cout(
++                        "    because %s wants it (%s)", chain.front().get<std::string>(), j["why"].value("cause", "?"));
 +            }
 +        }
 +    }
@@ -167,10 +166,10 @@ index 0000000..c509e41
 +static auto rCmdStoreBuilds = registerCommand2<CmdStoreBuilds>({"store", "builds"});
 diff --git a/src/nix/store-builds.md b/src/nix/store-builds.md
 new file mode 100644
-index 0000000..62eaba0
+index 0000000..330d6b1
 --- /dev/null
 +++ b/src/nix/store-builds.md
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,79 @@
 +R""(
 +
 +# Examples
@@ -232,6 +231,8 @@ index 0000000..62eaba0
 +- `outputs`: the wanted output names (builds only).
 +- `type`: `"build"` or `"substitution"`.
 +- `pid`: the daemon worker process building/substituting this path.
++- `clientPid`: the requesting Nix client process, if the daemon transport
++  exposes it (otherwise `null`).
 +- `startTime`: when the work began, in seconds since the Unix epoch.
 +- `user` / `uid`: the client that requested the work, if known (otherwise
 +  `null`, e.g. for a local store used without a daemon).

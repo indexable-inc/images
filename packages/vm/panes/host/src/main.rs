@@ -114,7 +114,8 @@ fn main() -> ExitCode {
 #[cfg(target_os = "macos")]
 fn run_host(cli: Cli) -> ExitCode {
     let target = if cli.mock {
-        let path = std::env::temp_dir().join(format!("panes-host-mock-{}.sock", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("panes-host-mock-{}.sock", std::process::id()));
         let serve_path = path.clone();
         std::thread::spawn(move || {
             if let Err(error) = mock::serve(&serve_path) {

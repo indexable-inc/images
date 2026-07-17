@@ -16,6 +16,19 @@
       description = "Domains redirected by the workstation browser-tab guard.";
     };
 
+    infra.hosts = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          sshAlias = lib.mkOption {
+            type = lib.types.nonEmptyStr;
+            description = "SSH alias used to query the host.";
+          };
+        };
+      });
+      default = {};
+      description = "NixOS infrastructure hosts queried by `infra ls`.";
+    };
+
     configurationRevision = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -87,6 +100,12 @@
         default = 0;
         description = "ix flake commit epoch displayed by Starship.";
       };
+    };
+
+    weave.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Run the local Weave fact server.";
     };
 
     sshSigningPublicKey = lib.mkOption {

@@ -90,7 +90,10 @@ pub fn ts_type(
                         .to_owned(),
                 });
             }
-            format!("Record<string, {}>", ts_type(interface, value, Level::Nested)?)
+            format!(
+                "Record<string, {}>",
+                ts_type(interface, value, Level::Nested)?
+            )
         }
         ir::Type::Named(name) => named_type_name(interface, name).to_owned(),
         ir::Type::Stream(_) => {

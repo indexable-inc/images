@@ -37,7 +37,12 @@ fn independent_merge_scenarios() {
             right: r#"fn alpha() { println!("alpha"); }
                 fn beta() { println!("BETA MODIFIED"); }
                 fn delta() { println!("delta from right"); }"#,
-            expected: &["ALPHA MODIFIED", "BETA MODIFIED", "fn gamma()", "fn delta()"],
+            expected: &[
+                "ALPHA MODIFIED",
+                "BETA MODIFIED",
+                "fn gamma()",
+                "fn delta()",
+            ],
         },
         CleanMergeCase {
             name: "different lines in one function",
