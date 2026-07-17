@@ -177,6 +177,10 @@
       context1M = true;
       autoCompactWindow = null;
     };
+    # Matches agentPromptOmitRules `forceMerge` above: without this the baked
+    # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
+    # rule permits.
+    protectedMergeGuard = false;
     systemTools = {
       Agent = true;
       TaskCreate = true;

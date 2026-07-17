@@ -65,6 +65,10 @@
   # tool set. Core shell/file/search tools stay in sharedPermissions because
   # their defaults depend on which MCP replacements the wrapper bakes.
   systemTools ? {},
+  # False drops the protected-merge `gh pr merge --admin/--force` Bash denies
+  # from the rendered permissions (policy/permissions.nix); pair with omitting
+  # the `forceMerge` prompt rule so prompt and permissions agree.
+  protectedMergeGuard ? true,
   # Directories baked into the wrapper as `--add-dir=<dir>` flags, one per entry.
   # `--add-dir` grants tool file-access to a directory, AND (the reason this arg
   # exists) Claude Code loads any `<dir>/.claude/skills/` and `<dir>/CLAUDE.md`
@@ -379,6 +383,7 @@
     inherit lib;
     indexKernelBaked = mcpServers ? index;
     exaSearchBaked = mcpServers ? exa;
+    inherit protectedMergeGuard;
   };
 
   # Controlled keys this package always owns: the highest-priority settings

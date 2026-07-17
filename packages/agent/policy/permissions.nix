@@ -33,10 +33,14 @@
   # True when the wrapper bakes the `exa` MCP server, which supersedes the
   # stock web search/fetch surface.
   exaSearchBaked ? false,
+  # False drops the protected-merge command denies from every render, for
+  # consumers whose operator deliberately permits merge-protection bypasses
+  # (pairs with omitting the `forceMerge` prompt rule).
+  protectedMergeGuard ? true,
 }: let
   # One list of protected-merge command globs; the Claude render wraps them in
   # Bash(...) deny patterns, the codex render ships them verbatim for hook use.
-  protectedMergeCommandPatterns = [
+  protectedMergeCommandPatterns = lib.optionals protectedMergeGuard [
     "gh pr merge*--admin*"
     "gh pr merge*--force*"
   ];
