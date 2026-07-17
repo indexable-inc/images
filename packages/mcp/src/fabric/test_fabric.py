@@ -581,6 +581,146 @@ def test_session_connect_failure_leaves_ask_and_failed(monkeypatch: pytest.Monke
     assert journal.facts[-1] == (task, "state", "failed")
 
 
+
+# --- claude.session failure surfacing + auth precedence (index#3420) -----------
+
+
+def error_result_message(
+    text: str, *, is_error: bool = True, subtype: str = "error_during_execution",
+    api_error_status: int | None = None,
+) -> ResultMessage:
+    return ResultMessage(
+        subtype=subtype,
+        duration_ms=1,
+        duration_api_ms=1,
+        is_error=is_error,
+        num_turns=1,
+        session_id="s1",
+        result=text,
+        api_error_status=api_error_status,
+    )
+
+
+API_ERROR_400 = (
+    "API Error: 400 You have reached your specified API usage limits. "
+    "You will regain access on 2026-08-01 at 00:00 UTC."
+)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # The SDK-flagged shape: is_error=True on the result event.
+        error_result_message(API_ERROR_400),
+        # The incident shape (index#3420): the CLI ended the turn with the API
+        # error as plain result text under success-shaped flags.
+        error_result_message(API_ERROR_400, is_error=False, subtype="success"),
+        # Error flagged only via the API status field.
+        error_result_message("boom", is_error=False, subtype="success", api_error_status=500),
+    ],
+    ids=["is_error", "api_error_text", "api_error_status"],
+)
+def test_session_error_result_fails_journal_and_raises(
+    monkeypatch: pytest.MonkeyPatch, message: ResultMessage
+) -> None:
+    journal = install(monkeypatch)
+    fake = FakeClient()
+    use_fake(monkeypatch, fake)
+    detail = message.result or ""
+
+    async def main() -> claude.Session:
+        live = await claude.session("doomed")
+        fake.feed(message)
+        with pytest.raises(claude.SessionError, match=re.escape(detail[:40])):
+            await live.result(timeout=5)
+        await live.close()  # must not overwrite the failed terminal
+        return live
+
+    live = run(main())
+    drain()
+    assert journal.states(live.task) == ["submitted", "running", "failed"]
+    assert journal.facts[-1] == (live.task, "state", "failed")
+    errors = [v for e, a, v in journal.facts if e == live.task and a == "error"]
+    assert errors == [detail]
+    # The error text is still recorded as the turn's result blob.
+    assert journal.blob_for(live.task, "result") == detail.encode()
+
+
+def test_session_empty_error_result_names_subtype(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal = install(monkeypatch)
+    fake = FakeClient()
+    use_fake(monkeypatch, fake)
+
+    async def main() -> claude.Session:
+        live = await claude.session("doomed")
+        fake.feed(error_result_message(""))
+        with pytest.raises(claude.SessionError, match="error_during_execution"):
+            await live.result(timeout=5)
+        await live.close()
+        return live
+
+    live = run(main())
+    drain()
+    assert journal.states(live.task) == ["submitted", "running", "failed"]
+
+
+@pytest.mark.parametrize(
+    ("subscription", "key", "expect_scrub"),
+    [
+        ("1", "sk-ant-exhausted", True),
+        ("yes", "sk-ant-exhausted", True),
+        ("0", "sk-ant-exhausted", False),
+        ("off", "sk-ant-exhausted", False),
+        (None, "sk-ant-exhausted", False),
+        ("1", None, False),
+    ],
+)
+def test_auth_env_scrubs_key_only_under_subscription(
+    monkeypatch: pytest.MonkeyPatch, subscription: str | None, key: str | None, *, expect_scrub: bool
+) -> None:
+    for name, value in ((claude.ENV_SUBSCRIPTION, subscription), (claude.ENV_API_KEY, key)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    expected = {claude.ENV_API_KEY: ""} if expect_scrub else {}
+    assert claude._auth_env() == expected
+
+
+def _real_sdk_client(tmux_window: str | None) -> Any:
+    return claude._sdk_client(
+        system_prompt=None,
+        model=None,
+        cwd=None,
+        allowed_tools=None,
+        permission_mode=None,
+        max_turns=None,
+        tmux_window=tmux_window,
+    )
+
+
+def test_sdk_client_env_carries_auth_scrub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scrub rides ClaudeAgentOptions.env, the ONE env the SDK overlays
+    onto the subprocess (the SDK can override but never remove an inherited
+    key, so the scrub is the empty-string override)."""
+    monkeypatch.setenv(claude.ENV_SUBSCRIPTION, "1")
+    monkeypatch.setenv(claude.ENV_API_KEY, "sk-ant-exhausted")
+    client = _real_sdk_client(None)
+    assert client.options.env == {claude.ENV_API_KEY: ""}
+
+    monkeypatch.setenv(claude.ENV_SUBSCRIPTION, "0")
+    assert _real_sdk_client(None).options.env == {}
+
+
+def test_sdk_client_tmux_env_keeps_auth_scrub(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(claude.ENV_SUBSCRIPTION, "1")
+    monkeypatch.setenv(claude.ENV_API_KEY, "sk-ant-exhausted")
+    monkeypatch.setattr(tmux, "real_cli", lambda: "/bin/claude")
+    client = _real_sdk_client("task-test")
+    assert client.options.env[claude.ENV_API_KEY] == ""
+    assert client.options.env[tmux.ENV_WINDOW] == "task-test"
+
+
 # --- fabric.reconcile -----------------------------------------------------------
 
 

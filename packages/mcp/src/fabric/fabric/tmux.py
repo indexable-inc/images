@@ -24,6 +24,7 @@ and the stdout FIFO, and records the exit code for the shim to exit with.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shlex
@@ -203,7 +204,11 @@ def shim_main() -> None:
         # SDK's stdin through; closing on EOF is the CLI's stdin EOF.
         with fifo_in.open("wb") as sink:
             paired.set()
-            while chunk := sys.stdin.buffer.read1(65536):
+            stdin = sys.stdin.buffer
+            # typeshed widens sys.stdin.buffer to BinaryIO, which lacks read1
+            # (read would block for a full buffer).
+            assert isinstance(stdin, io.BufferedReader), type(stdin)
+            while chunk := stdin.read1(65536):
                 sink.write(chunk)
                 sink.flush()
 
@@ -251,8 +256,11 @@ def pane_main(spec_path: str) -> None:
                 print(f"fabric.tmux pane: spawn failed: {exc}", file=sys.stderr)
                 code = record(127)
             else:
-                assert proc.stdout is not None
-                while chunk := proc.stdout.read1(65536):
+                stdout = proc.stdout
+                # PIPE with default bufsize is buffered; typeshed widens to
+                # IO[bytes], which lacks read1.
+                assert isinstance(stdout, io.BufferedReader), type(stdout)
+                while chunk := stdout.read1(65536):
                     mirror.write(chunk)
                     mirror.flush()
                     sys.stdout.buffer.write(chunk)
