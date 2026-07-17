@@ -15,6 +15,7 @@ import {
   currentWorkerJob,
   loadPolicy,
   parseArguments,
+  queuedRunCount,
   runBudgetedScript,
   validationSeconds,
 } from "./worker.mjs";
@@ -279,6 +280,80 @@ test("queue admission accepts the boundary and rejects one millisecond late", ()
         policy,
       }),
     DeadlineExceeded,
+  );
+});
+
+test("queue admission failure reports the wait, the budget, and saturation", () => {
+  const policy = loadPolicy();
+  // ix#7625: a PR worker created at 13:17:16Z started 33 minutes later while
+  // stacked deploy runs held every dispatcher slot. The failure must read as
+  // pool saturation with the actual wait, not as a bare timestamp comparison.
+  assert.throws(
+    () =>
+      assertQueueAdmission({
+        job: workerJob({
+          createdAt: "2026-07-17T13:17:16Z",
+          startedAt: "2026-07-17T13:50:23Z",
+        }),
+        policy,
+      }),
+    (error) => {
+      assert.ok(error instanceof DeadlineExceeded);
+      assert.match(error.message, /waited 1987s for a runner slot/);
+      assert.match(error.message, /300s queue admission budget/);
+      assert.match(error.message, /deadline 2026-07-17T13:22:16\.000Z/);
+      assert.match(error.message, /dispatcher\s+slot stayed busy/);
+      assert.match(error.message, /ix#7625/);
+      return true;
+    },
+  );
+});
+
+test("queued run count reads total_count and fails closed on malformed bodies", async () => {
+  const requests = [];
+  const depth = await queuedRunCount({
+    fetchImpl: async (url) => {
+      requests.push(new URL(url));
+      return new Response(
+        JSON.stringify({ total_count: 21, workflow_runs: [{}] }),
+        { status: 200 },
+      );
+    },
+    repository: "indexable-inc/ix",
+    token: "secret",
+  });
+
+  assert.equal(depth, 21);
+  assert.equal(requests.length, 1);
+  assert.equal(
+    requests[0].pathname,
+    "/repos/indexable-inc/ix/actions/runs",
+  );
+  assert.equal(requests[0].searchParams.get("status"), "queued");
+
+  for (const body of [
+    JSON.stringify({ workflow_runs: [] }),
+    JSON.stringify({ total_count: "21" }),
+    JSON.stringify({ total_count: -1 }),
+    JSON.stringify([]),
+  ]) {
+    await assert.rejects(
+      queuedRunCount({
+        fetchImpl: async () => new Response(body, { status: 200 }),
+        repository: "indexable-inc/ix",
+        token: "secret",
+      }),
+      /malformed/,
+    );
+  }
+
+  await assert.rejects(
+    queuedRunCount({
+      fetchImpl: async () => new Response("[]", { status: 500 }),
+      repository: "indexable-inc/ix",
+      token: "secret",
+    }),
+    /failed with 500/,
   );
 });
 
