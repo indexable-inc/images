@@ -69,9 +69,6 @@ nix-web-monitor serve [--host H] [--port N]
 - trailing args (`:73`): forwarded to `nix` verbatim, e.g. `build .#ix
   --keep-going`. The wrapper runs whatever `nix` is on the operator's PATH so the
   build matches a bare `nix build`.
-- `--version` carries the shared build stamp via
-  [build-version](../build-version/overview.md) (`server/src/main.rs:107`).
-
 HTTP routes (`server/src/main.rs:189`): `/` serves `index.html` with
 `Cache-Control: no-store` (so a rebuilt server's asset hashes are never stale),
 `/api/state` is a one-shot `MonitorSnapshot` JSON, `/ws` upgrades to the delta
@@ -106,9 +103,8 @@ rather than serving HTML for the wrong MIME type).
 - `server/default.nix`: builds the Svelte UI with `ix.buildSvelteSite`, selects
   the `nix-web-monitor` binary via `ix.cargoUnit.selectBinaryWithTests`
   (`:24`), then wraps it (`makeBinaryWrapper`) to set `NIX_WEB_MONITOR_SITE_DIR`
-  to the bundled site and stamp `IX_BUILD_REV`/`IX_BUILD_EPOCH` for
-  [build-version](../build-version/overview.md) (`:59`). Deliberately no PATH
-  wrapping for `nix` (`:48`).
+  to the bundled site (`:59`). Deliberately no PATH wrapping for `nix`
+  (`:48`).
 - Flake output / main program: `nix-web-monitor` (`server/package.nix`,
   `flake = true`). Run as `nix run .#nix-web-monitor -- build .#ix`.
 
@@ -116,4 +112,4 @@ rather than serving HTML for the wrong MIME type).
 
 Parser: `serde`(+json), `snafu`, `strip-ansi-escapes`. Server: `axum` (+ws),
 `tokio`, `tower-http`, `bytes`, `rmp-serde` (msgpack deltas), `ignore` (gitignore
-walk for copy-size), `clap`, and the parser + `build-version` crates.
+walk for copy-size), `clap`, and the parser crate.

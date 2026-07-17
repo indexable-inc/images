@@ -183,13 +183,11 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Inject the runtime version onto the derived command, then parse. `--help`
-    // / `--version` exit inside `get_matches`; a parse error exits via
-    // `Error::exit`, matching `Args::parse()`'s behavior. The version carries
-    // the shared build stamp (revision, commit date, and how long ago) the Nix
-    // wrapper sets in the environment; see the `build-version` crate.
+    // Inject the version onto the derived command, then parse. `--help` /
+    // `--version` exit inside `get_matches`; a parse error exits via
+    // `Error::exit`, matching `Args::parse()`'s behavior.
     let matches = Args::command()
-        .version(build_version::version_static(env!("CARGO_PKG_VERSION")))
+        .version(env!("CARGO_PKG_VERSION"))
         .get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
 

@@ -71,8 +71,8 @@ The returned attrset (`registry.nix:179-190`):
 
 `passthruTestEntriesFor` includes a package when its `packageSet` is enabled for
 the system, or (for a pure workspace crate) when it is `inRustWorkspace`
-(`:164-172`), so library crates like [build-version](../build-version/overview.md)
-and [progress-style](../progress-style/overview.md) still get gated.
+(`:164-172`), so library crates like
+[progress-style](../progress-style/overview.md) still get gated.
 
 ## Relation to the rest of the domain
 

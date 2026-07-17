@@ -23,14 +23,6 @@
   nix-src,
   ghostty,
   mesa-src,
-  # Flake source revision, stamped into builds that want to report it (see
-  # `sharedHelpers.rev`). Defaulted so a direct `import ./lib` still evaluates.
-  rev ? "dev",
-  # Commit time of `rev` as unix epoch seconds (Nix's `self.lastModified`), for
-  # builds that want to show a human date and relative age alongside the
-  # revision. The `build-version` crate renders it. `0` when unknown. Defaulted
-  # so a direct `import ./lib` still evaluates.
-  revEpoch ? 0,
   # The flake's own source (`self`), carrying `.outPath` (a `-source` store
   # path with string context, so it roots into a closure like `nixpkgs`) and
   # `.narHash`. Only the flake scope sees these, so they are plumbed down to
@@ -660,8 +652,6 @@
   sharedHelpers = {
     inherit (import ./util/endpoint.nix {inherit lib;}) endpoint endpointOf;
     inherit
-      rev
-      revEpoch
       agents
       allowVendoredUnfree
       artifacts

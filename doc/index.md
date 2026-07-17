@@ -43,7 +43,6 @@ User-facing guides for the hosted `ix` platform. Start at
 | [blast-radius](blast-radius/overview.md) | `packages/blast-radius` reports how many `.#checks.x86_64-linux` derivations a PR would rebuild and which changed inputs caused each rebuild. |
 | [bossbar-overlay](bossbar-overlay/overview.md) | `packages/bossbar-overlay` is three transparent, always-on-top, click-through desktop overlays drawn in the Minecraft style with `wgpu`: a boss bar HUD (`bossbar`), an open book (`book`),... |
 | [btop](btop/overview.md) | `packages/btop` repackages btop, the resource monitor (CPU, memory, disk, network, process TUI), rebuilt from a repo-owned fork instead of the upstream source. |
-| [build-version](build-version/overview.md) | `packages/build-version` is a tiny library crate that formats a binary's `--version` line from build metadata a Nix wrapper stamps into the environment, so every ix tool reports its revis... |
 | [chrome-vm](chrome-vm/overview.md) | `packages/chrome-vm` runs headless Chromium inside a real Linux VM on a macOS host and gives the screenshot back, in one command. |
 | [chrome-vm-image](chrome-vm-image/overview.md) | `packages/chrome-vm-image` is the raw EFI-bootable aarch64 NixOS disk image that the chrome-vm demo boots under vmkit/libkrun. |
 | [claude-code](claude-code/overview.md) | `packages/agent/claude-code` repackages Claude Code, Anthropic's agentic coding CLI, as a prebuilt-binary install with a thick layer of baked-in fleet defaults. |

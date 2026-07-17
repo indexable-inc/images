@@ -48,11 +48,9 @@ from ix_notebook_mcp import mesh as server_mesh
 from ix_notebook_mcp.config import (
     DEFAULT_MESH_PORT,
     Config,
-    build_stamp,
     is_tailnet_ipv4,
     mesh_enabled,
     mesh_port,
-    server_version,
 )
 
 
@@ -129,32 +127,6 @@ def test_mesh_enabled_default_on(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mesh_enabled()
 
 
-def test_server_version_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("IX_BUILD_REV", raising=False)
-    assert server_version() == "dev"
-    monkeypatch.setenv("IX_BUILD_REV", "abc123")
-    assert server_version() == "abc123"
-
-
-def test_build_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The stamp mirrors build-version's shape: short rev, commit date, age;
-    an unknown epoch (unset or the 0 non-git sentinel) degrades to the bare
-    short rev instead of rendering 1970."""
-    rev = "7e42ccdb18827401226635"
-    monkeypatch.setenv("IX_BUILD_REV", rev)
-    monkeypatch.delenv("IX_BUILD_EPOCH", raising=False)
-    assert build_stamp() == "7e42ccdb1882"
-    monkeypatch.setenv("IX_BUILD_EPOCH", "0")
-    assert build_stamp() == "7e42ccdb1882"
-    monkeypatch.setenv("IX_BUILD_EPOCH", "not-a-number")
-    assert build_stamp() == "7e42ccdb1882"
-    # 1970-01-02T00:00:00Z, viewed just over two days later: the same fixture
-    # as build-version's own stamp test, so the two implementations provably
-    # render the identical line.
-    monkeypatch.setenv("IX_BUILD_EPOCH", "86400")
-    assert build_stamp(now=3 * 86400 + 1) == "7e42ccdb1882 (1970-01-02, 2 days ago)"
-
-
 def test_is_tailnet_ipv4_gate() -> None:
     # The defense-in-depth gate on addresses taken from tailscale output
     # (index#1789 review, S1): only CGNAT 100.64.0.0/10 passes; wildcards,
@@ -188,8 +160,7 @@ def _fetch_card(app: web.Application) -> dict[str, Any]:
     return asyncio.run(go())
 
 
-def test_mesh_card_fields(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("IX_BUILD_REV", "deadbeef")
+def test_mesh_card_fields(tmp_path: Path) -> None:
     cfg = Config(workdir=tmp_path)
     app = server_mesh.build_app(
         cfg,
@@ -200,7 +171,6 @@ def test_mesh_card_fields(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     card = _fetch_card(app)
     assert card["host"] == socket.gethostname()
     assert card["pid"] == os.getpid()
-    assert card["version"] == "deadbeef"
     assert card["started_at"] == "2026-07-03T00:00:00+00:00"
     assert card["sessions"] == ["fix the build", "triage 1787"]
     assert card["dashboard_url"] == "http://100.1.2.3:4567/"
@@ -386,7 +356,7 @@ def test_peers_empty_without_tailscale(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.setenv(mesh_client._TAILSCALE_BIN_ENV, str(tmp_path / "missing-tailscale"))
     df = asyncio.run(mesh_client.peers())
     assert df.is_empty()
-    assert set(df.columns) >= {"host", "ip", "version", "sessions", "dashboard_url"}
+    assert set(df.columns) >= {"host", "ip", "sessions", "dashboard_url"}
 
 
 def test_peers_and_sessions_discover_live_server(
@@ -395,7 +365,6 @@ def test_peers_and_sessions_discover_live_server(
     port = _free_port()
     monkeypatch.delenv("IX_MCP_MESH", raising=False)
     monkeypatch.setenv("IX_MCP_MESH_PORT", str(port))
-    monkeypatch.setenv("IX_BUILD_REV", "cafebabe")
     stub = _write_stub_tailscale(tmp_path, _status(self_ip="127.0.0.1"))
     monkeypatch.setenv(mesh_client._TAILSCALE_BIN_ENV, str(stub))
     cfg = Config(workdir=tmp_path, mesh_host="127.0.0.1")
@@ -413,7 +382,6 @@ def test_peers_and_sessions_discover_live_server(
     row = peers_df.to_dicts()[0]
     assert row["host"] == socket.gethostname()  # the card's hostname wins over DNSName
     assert row["ip"] == "127.0.0.1"
-    assert row["version"] == "cafebabe"
     assert row["sessions"] == ["alpha", "beta"]
     assert row["dashboard_url"] == "http://127.0.0.1:9999/"
     assert row["pid"] == os.getpid()
