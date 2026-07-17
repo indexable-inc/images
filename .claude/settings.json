@@ -1,21 +1,4 @@
 {
-  "env": {
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000",
-    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
-  },
-  "extraKnownMarketplaces": {
-    "mixedbread-skills": {
-      "source": {
-        "source": "github",
-        "repo": "mixedbread-ai/skills"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "mixedbread-search@mixedbread-skills": true,
-    "mxbai-cli@mixedbread-skills": true,
-    "mixedbread-parsing@mixedbread-skills": true
-  },
   "hooks": {
     "SessionStart": [
       {
