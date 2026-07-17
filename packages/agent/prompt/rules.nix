@@ -189,6 +189,27 @@
     };
   }
   {
+    feasibilityClaims = {
+      text = ''
+        When judging a claim that something is impossible or infeasible, treat
+        each cited limit as a hypothesis: find the strongest existing system
+        that solved the analogous problem under the same constraint (a
+        fuel-bounded solver, incremental recomputation, cached execution of
+        untrusted build code) and test the objection against it before
+        endorsing it. A received limitation you have not tried to break is
+        folklore, not a verdict.
+      '';
+      reason = ''
+        Asked why an eval-backed home-manager LSP was "impossible", the agent
+        opened with the right verdict but relayed the folk objections
+        (undecidability, no schema without eval, effects) as real limits; the
+        user had to dismantle each one by citing rust-analyzer precedent
+        (fueled trait solver, salsa, proc-macro server). Precedent-testing
+        objections is the load-bearing move and was nowhere in the rules.
+      '';
+    };
+  }
+  {
     machineBuildObservability = {
       tags = ["claude-code"];
       text = ''
