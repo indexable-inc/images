@@ -26,7 +26,7 @@ defmodule IxMcp.Jobs do
     {:ok, pid} =
       DynamicSupervisor.start_child(
         IxMcp.Jobs.Supervisor,
-        {Job, {id, code, Keyword.take(opts, [:intent])}}
+        {Job, {id, code, Keyword.take(opts, [:intent, :action_id])}}
       )
 
     case Job.await(pid, round(budget_s * 1000)) do

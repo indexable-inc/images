@@ -104,32 +104,45 @@ defmodule IxMcp.MCP.Tools do
     ]
   end
 
-  @spec call(String.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
-  def call("exec", %{"code" => code} = args) when is_binary(code) do
+  @doc """
+  Run one tool call. `action_id` is the call's pre-inserted action-log row
+  (#3536): a valid exec hands it to the job it spawns, which finalizes the
+  row when the eval finishes; exec's argument rejection finalizes it right
+  here (no job ever owns it); every other tool leaves it to the transport,
+  which finalizes with the wire outcome.
+  """
+  @spec call(String.t(), map(), integer() | nil) :: {:ok, String.t()} | {:error, String.t()}
+  def call(name, args, action_id \\ nil)
+
+  def call("exec", %{"code" => code} = args, action_id) when is_binary(code) do
     budget = args |> Map.get("budget", 15) |> clamp_budget()
     intent = Map.get(args, "intent")
 
-    {summary, output} = Jobs.run(code, budget: budget, intent: intent)
+    {summary, output} = Jobs.run(code, budget: budget, intent: intent, action_id: action_id)
     {:ok, render_run(summary, output)}
   end
 
-  def call("exec", _args), do: {:error, "exec requires string `code`"}
+  def call("exec", _args, action_id) do
+    if action_id, do: IxMcp.ActionLog.finish_action(action_id, "failed", true, 0)
+    {:error, "exec requires string `code`"}
+  end
 
-  def call("session_set_name", %{"name" => name}) when is_binary(name) do
+  def call("session_set_name", %{"name" => name}, _action_id) when is_binary(name) do
     :ok = IxMcp.Session.set_name(name)
     {:ok, "session named: #{name}"}
   end
 
-  def call("session_set_name", _args), do: {:error, "session_set_name requires string `name`"}
+  def call("session_set_name", _args, _action_id),
+    do: {:error, "session_set_name requires string `name`"}
 
-  def call("topic_set", %{"topic" => topic}) when is_binary(topic) do
+  def call("topic_set", %{"topic" => topic}, _action_id) when is_binary(topic) do
     :ok = IxMcp.Session.set_topic(topic)
     {:ok, "topic set: #{topic}"}
   end
 
-  def call("topic_set", _args), do: {:error, "topic_set requires string `topic`"}
+  def call("topic_set", _args, _action_id), do: {:error, "topic_set requires string `topic`"}
 
-  def call(other, _args), do: {:error, "unknown tool: #{other}"}
+  def call(other, _args, _action_id), do: {:error, "unknown tool: #{other}"}
 
   defp clamp_budget(budget) when is_number(budget) and budget > 0, do: min(budget, @budget_cap)
   defp clamp_budget(_), do: 15

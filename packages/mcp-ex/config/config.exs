@@ -13,4 +13,6 @@ config :elixir_make, :force_build, exqlite: true
 # HOME, and no test should touch the operator's real log file.
 if config_env() == :test do
   config :ix_mcp, actions_db: ":memory:"
+  # Fast stack samples so the live-row tests observe one without real waits.
+  config :ix_mcp, stack_sample_interval_ms: 25
 end

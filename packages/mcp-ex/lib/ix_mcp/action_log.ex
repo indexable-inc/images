@@ -8,6 +8,18 @@ defmodule IxMcp.ActionLog do
   current session/topic ids live in `IxMcp.Session`. Pure logging for future
   reference; nothing on the hot path reads it.
 
+  Action rows are live (#3536): inserted with `status = 'running'` when the
+  call arrives (`start_action/2`) and finalized to `done`/`failed`/
+  `cancelled` when its work completes (`finish_action/5`) -- for `exec` that
+  is when the eval finishes, which for a backgrounded job is after the wire
+  response shipped. While an exec runs, its job samples the eval process's
+  `current_stacktrace` into `stack`/`stack_at` (`update_stack/3`), so a
+  reader can show the line a hung cell sits on. There is deliberately no
+  startup sweep of leftover `running` rows: several server instances share
+  one database, so a sweep would clobber a live sibling's rows. A row whose
+  kernel died stays `running` with a frozen `stack_at`; readers judge
+  liveness by that freshness (samples land every second).
+
   The database path resolves as app env `:actions_db` (tests pin
   `":memory:"`), then `$IX_MCP_ACTIONS_DB`, then
   `$XDG_STATE_HOME/ix-mcp-ex/actions.db` (state home defaulting to
@@ -36,8 +48,16 @@ defmodule IxMcp.ActionLog do
   """
 
   @create_actions """
-  CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL)
+  CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'done', stack TEXT, stack_at TEXT)
   """
+
+  # A pre-#3536 v2 database lacks the live-row columns; DEFAULT 'done' is
+  # exactly right for its rows, which were all written after the fact.
+  @add_live_columns [
+    "ALTER TABLE actions ADD COLUMN status TEXT NOT NULL DEFAULT 'done'",
+    "ALTER TABLE actions ADD COLUMN stack TEXT",
+    "ALTER TABLE actions ADD COLUMN stack_at TEXT"
+  ]
 
   # The v1 shape kept session/topic as TEXT per action row. The backfill
   # makes one session per distinct v1 session string (NULLs collapse into
@@ -72,12 +92,23 @@ defmodule IxMcp.ActionLog do
   ]
 
   @insert """
-  INSERT INTO actions (at, session_id, topic_id, tool, intent, arguments, is_error, elapsed_ms)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO actions (at, session_id, topic_id, tool, intent, arguments, is_error, elapsed_ms, status)
+  VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'running')
+  """
+
+  # Both updates guard on status = 'running': a finalize is idempotent and a
+  # stack sample racing the finish can never resurrect a finished row.
+  @finish """
+  UPDATE actions SET status = ?, is_error = ?, elapsed_ms = ?, stack = NULL, stack_at = NULL
+  WHERE id = ? AND status = 'running'
+  """
+
+  @update_stack """
+  UPDATE actions SET stack = ?, stack_at = ? WHERE id = ? AND status = 'running'
   """
 
   @select_recent """
-  SELECT a.at, s.name, t.name, a.tool, a.intent, a.arguments, a.is_error, a.elapsed_ms
+  SELECT a.at, s.name, t.name, a.tool, a.intent, a.arguments, a.is_error, a.elapsed_ms, a.status, a.stack
   FROM actions a
   JOIN sessions s ON s.id = a.session_id
   LEFT JOIN topics t ON t.id = a.topic_id
@@ -92,7 +123,9 @@ defmodule IxMcp.ActionLog do
           intent: String.t() | nil,
           arguments: String.t(),
           is_error: boolean(),
-          elapsed_ms: non_neg_integer()
+          elapsed_ms: non_neg_integer(),
+          status: String.t(),
+          stack: String.t() | nil
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -118,10 +151,24 @@ defmodule IxMcp.ActionLog do
     GenServer.call(server, {:create_topic, session_id, name, now()})
   end
 
-  @doc "Record one action; returns once the row is written."
-  @spec record(map(), GenServer.server()) :: :ok
-  def record(action, server \\ __MODULE__) do
-    GenServer.call(server, {:record, Map.put(action, :at, now())})
+  @doc "Insert an action row as `running` before the call executes; returns its id."
+  @spec start_action(map(), GenServer.server()) :: integer()
+  def start_action(action, server \\ __MODULE__) do
+    GenServer.call(server, {:start_action, Map.put(action, :at, now())})
+  end
+
+  @doc "Finalize a running action row; a no-op when it already finished."
+  @spec finish_action(integer(), String.t(), boolean(), non_neg_integer(), GenServer.server()) ::
+          :ok
+  def finish_action(id, status, is_error, elapsed_ms, server \\ __MODULE__)
+      when status in ["done", "failed", "cancelled"] do
+    GenServer.call(server, {:finish_action, id, status, is_error, elapsed_ms})
+  end
+
+  @doc "Refresh a running action row's sampled stack (JSON frames); a no-op once finished."
+  @spec update_stack(integer(), String.t(), GenServer.server()) :: :ok
+  def update_stack(id, stack_json, server \\ __MODULE__) do
+    GenServer.call(server, {:update_stack, id, stack_json, now()})
   end
 
   @doc "Latest `n` recorded actions, newest first, with session/topic names joined in."
@@ -155,6 +202,7 @@ defmodule IxMcp.ActionLog do
 
     case shape(conn) do
       :v2 -> :ok
+      :v2_pre_live -> execute_all(conn, @add_live_columns)
       :empty -> execute_all(conn, [@create_sessions, @create_topics, @create_actions])
       :v1 -> execute_all(conn, ["BEGIN IMMEDIATE"] ++ @migrate_v1 ++ ["COMMIT"])
     end
@@ -186,7 +234,7 @@ defmodule IxMcp.ActionLog do
     {:reply, id, state}
   end
 
-  def handle_call({:record, action}, _from, %{conn: conn, insert: insert} = state) do
+  def handle_call({:start_action, action}, _from, %{conn: conn, insert: insert} = state) do
     :ok =
       Sqlite3.bind(insert, [
         action.at,
@@ -194,12 +242,25 @@ defmodule IxMcp.ActionLog do
         action.topic_id,
         action.tool,
         action.intent,
-        action.arguments,
-        bool_to_int(action.is_error),
-        action.elapsed_ms
+        action.arguments
       ])
 
     :done = Sqlite3.step(conn, insert)
+    {:ok, id} = Sqlite3.last_insert_rowid(conn)
+    {:reply, id, state}
+  end
+
+  def handle_call(
+        {:finish_action, id, status, is_error, elapsed_ms},
+        _from,
+        %{conn: conn} = state
+      ) do
+    run(conn, @finish, [status, bool_to_int(is_error), elapsed_ms, id])
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:update_stack, id, stack_json, at}, _from, %{conn: conn} = state) do
+    run(conn, @update_stack, [stack_json, at, id])
     {:reply, :ok, state}
   end
 
@@ -230,8 +291,15 @@ defmodule IxMcp.ActionLog do
 
   defp shape(conn) do
     case table_columns(conn, "actions") do
-      [] -> :empty
-      columns -> if "session_id" in columns, do: :v2, else: :v1
+      [] ->
+        :empty
+
+      columns ->
+        cond do
+          "session_id" not in columns -> :v1
+          "status" not in columns -> :v2_pre_live
+          true -> :v2
+        end
     end
   end
 
@@ -273,7 +341,18 @@ defmodule IxMcp.ActionLog do
   defp bool_to_int(true), do: 1
   defp bool_to_int(false), do: 0
 
-  defp row_to_entry([at, session, topic, tool, intent, arguments, is_error, elapsed_ms]) do
+  defp row_to_entry([
+         at,
+         session,
+         topic,
+         tool,
+         intent,
+         arguments,
+         is_error,
+         elapsed_ms,
+         status,
+         stack
+       ]) do
     %{
       at: at,
       session: session,
@@ -282,7 +361,9 @@ defmodule IxMcp.ActionLog do
       intent: intent,
       arguments: arguments,
       is_error: is_error == 1,
-      elapsed_ms: elapsed_ms
+      elapsed_ms: elapsed_ms,
+      status: status,
+      stack: stack
     }
   end
 end

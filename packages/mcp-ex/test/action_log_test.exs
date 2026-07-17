@@ -39,6 +39,8 @@ defmodule IxMcp.ActionLogTest do
     assert entry.topic == "logging"
     assert entry.intent == "log probe"
     refute entry.is_error
+    assert entry.status == "done"
+    assert entry.stack == nil
     assert entry.elapsed_ms >= 0
     assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(entry.at)
   end
@@ -61,6 +63,99 @@ defmodule IxMcp.ActionLogTest do
     assert entry.tool == "exec"
     assert entry.intent == "not really code"
     assert entry.is_error
+    assert entry.status == "failed"
+  end
+
+  test "an exec row is running before the eval finishes, then finalizes with its true elapsed" do
+    response =
+      Server.handle(%{
+        "jsonrpc" => "2.0",
+        "id" => 5,
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "exec",
+          "arguments" => %{
+            "code" => "Process.sleep(250); :ok",
+            "intent" => "outlive the budget",
+            "budget" => 0.05
+          }
+        }
+      })
+
+    [%{"text" => text}] = response["result"]["content"]
+    %{"job" => job_id, "running" => true} = text |> String.split("\n") |> hd() |> JSON.decode!()
+
+    # The wire response shipped while the eval still runs: the row says so.
+    assert [%{tool: "exec", status: "running", elapsed_ms: 0} | _] = ActionLog.recent(1)
+
+    assert %{status: :done} = IxMcp.Jobs.await(job_id, 5_000)
+
+    # finish_action runs before the awaiting caller wakes, so the row is
+    # already final here -- with the eval's elapsed, not the wire budget's.
+    assert [entry | _] = ActionLog.recent(1)
+    assert entry.status == "done"
+    refute entry.is_error
+    assert entry.elapsed_ms >= 200
+    assert entry.stack == nil
+  end
+
+  test "a running exec's current_stacktrace is sampled into the row; cancel finalizes it" do
+    response =
+      Server.handle(%{
+        "jsonrpc" => "2.0",
+        "id" => 6,
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "exec",
+          "arguments" => %{
+            "code" => "Process.sleep(:infinity)",
+            "intent" => "wedge for sampling",
+            "budget" => 0.05
+          }
+        }
+      })
+
+    [%{"text" => text}] = response["result"]["content"]
+    %{"job" => job_id} = text |> String.split("\n") |> hd() |> JSON.decode!()
+
+    # The sampler ticks every 25ms under test config; give it a few ticks.
+    stack =
+      poll_until(fn ->
+        case ActionLog.recent(1) do
+          [%{status: "running", stack: stack} | _] when is_binary(stack) -> stack
+          _ -> nil
+        end
+      end)
+
+    frames = JSON.decode!(stack)
+    assert Enum.any?(frames, &(&1 =~ "sleep")), "expected a sleep frame in #{inspect(frames)}"
+
+    :ok = IxMcp.Jobs.cancel(job_id)
+
+    assert [entry | _] = ActionLog.recent(1)
+    assert entry.status == "cancelled"
+    refute entry.is_error
+    assert entry.stack == nil, "finalizing clears the sampled stack"
+  end
+
+  defp poll_until(fun, deadline_ms \\ 2_000) do
+    deadline = System.monotonic_time(:millisecond) + deadline_ms
+    do_poll(fun, deadline)
+  end
+
+  defp do_poll(fun, deadline) do
+    case fun.() do
+      nil ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          flunk("condition not met within #{deadline}ms deadline")
+        else
+          Process.sleep(10)
+          do_poll(fun, deadline)
+        end
+
+      value ->
+        value
+    end
   end
 
   test "one server instance is one session; topic_set is a timeline, not a dictionary" do
@@ -98,21 +193,22 @@ defmodule IxMcp.ActionLogTest do
     session_id = ActionLog.create_session("s", log)
     topic_id = ActionLog.create_topic(session_id, "t", log)
 
-    :ok =
-      ActionLog.record(
+    action_id =
+      ActionLog.start_action(
         %{
           session_id: session_id,
           topic_id: topic_id,
           tool: "exec",
           intent: "persist me",
-          arguments: "{}",
-          is_error: false,
-          elapsed_ms: 7
+          arguments: "{}"
         },
         log
       )
 
-    assert [%{intent: "persist me"}] = ActionLog.recent(20, log)
+    assert [%{intent: "persist me", status: "running"}] = ActionLog.recent(20, log)
+    :ok = ActionLog.finish_action(action_id, "done", false, 7, log)
+
+    assert [%{intent: "persist me", status: "done", elapsed_ms: 7}] = ActionLog.recent(20, log)
     stop_supervised!(:first_open)
 
     reopened =
@@ -120,6 +216,42 @@ defmodule IxMcp.ActionLogTest do
 
     assert [%{intent: "persist me", tool: "exec", session: "s", topic: "t"}] =
              ActionLog.recent(20, reopened)
+  end
+
+  test "a pre-live v2 database gains the status/stack columns; its rows read as done" do
+    path = tmp_db()
+
+    # The #3532 v2 shape, before the live-row columns (#3536).
+    {:ok, conn} = Sqlite3.open(path)
+
+    for statement <- [
+          "CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL)",
+          "CREATE TABLE topics (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES sessions(id), name TEXT NOT NULL, started_at TEXT NOT NULL)",
+          "CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL)",
+          "INSERT INTO sessions (id, name, started_at) VALUES (1, 'old', '2026-07-17T10:00:00Z')",
+          "INSERT INTO actions (at, session_id, topic_id, tool, intent, arguments, is_error, elapsed_ms) VALUES ('2026-07-17T10:00:01Z', 1, NULL, 'exec', 'pre-live row', '{}', 0, 5)"
+        ] do
+      :ok = Sqlite3.execute(conn, statement)
+    end
+
+    :ok = Sqlite3.close(conn)
+
+    log = start_supervised!({ActionLog, path: path, name: :action_log_pre_live})
+
+    # Old rows were written after the fact, so 'done' is their true status.
+    assert [%{intent: "pre-live row", status: "done", stack: nil}] = ActionLog.recent(10, log)
+
+    # The migrated table supports the live lifecycle end to end.
+    action_id =
+      ActionLog.start_action(
+        %{session_id: 1, topic_id: nil, tool: "exec", intent: "new row", arguments: "{}"},
+        log
+      )
+
+    :ok = ActionLog.update_stack(action_id, ~s(["frame"]), log)
+    assert [%{status: "running", stack: ~s(["frame"])} | _] = ActionLog.recent(10, log)
+    :ok = ActionLog.finish_action(action_id, "done", false, 3, log)
+    assert [%{status: "done", stack: nil} | _] = ActionLog.recent(10, log)
   end
 
   test "a v1 database migrates losslessly to the normalized schema, once" do
@@ -220,7 +352,10 @@ defmodule IxMcp.ActionLogTest do
              "intent",
              "arguments",
              "is_error",
-             "elapsed_ms"
+             "elapsed_ms",
+             "status",
+             "stack",
+             "stack_at"
            ]
 
     {:ok, statement} =
