@@ -41,6 +41,7 @@ extraction for Rust and Python, a ``// <path> :: <signature>`` header line,
 from __future__ import annotations
 
 import hashlib
+import heapq
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -64,6 +65,9 @@ BATCH_SIZE = 32
 # cannot dominate batch latency. Matches the measured prototype.
 MAX_CHUNK_CHARS = 8000
 CACHE_DIR = Path("~/.cache/index-embed")
+# Pair-mining row-block height: bounds the sims slice at block x n float32
+# (~1 GB at 123k chunks) instead of the fatal full n x n (index#3498).
+_MINE_BLOCK_ROWS = 2048
 
 
 class EmbedError(Exception):
@@ -316,26 +320,45 @@ def _mine_pairs(frame: pl.DataFrame, k: int) -> pl.DataFrame:
 
     ``frame`` needs ``hash`` / ``path`` / ``embedding`` columns; the result is
     ``path_a`` / ``path_b`` / ``hash_a`` / ``hash_b`` / ``score`` sorted by
-    descending cosine over the strict upper triangle.
+    descending cosine over the strict upper triangle. Mines in row blocks
+    feeding a global top-k heap: the full ``n x n`` sims matrix plus
+    ``np.triu_indices`` would be ~183 GB at the index repo's 123k chunks
+    (index#3498), so memory stays O(block * n).
     """
     if frame.height < 2:
         raise EmbedError("embed: fewer than two chunks; run embed.ensure(root) first")
     matrix = frame.get_column("embedding").to_numpy().astype(np.float32, copy=False)
-    sims = matrix @ matrix.T
-    rows, cols = np.triu_indices(matrix.shape[0], k=1)
-    scores = sims[rows, cols]
-    top_k = min(k, scores.shape[0])
-    top = np.argpartition(-scores, top_k - 1)[:top_k]
-    top = top[np.argsort(-scores[top])]
+    n = matrix.shape[0]
+    heap: list[tuple[float, int, int]] = []
+    cols = np.arange(n)[None, :]
+    for start in range(0, n, _MINE_BLOCK_ROWS):
+        block = matrix[start : start + _MINE_BLOCK_ROWS]
+        sims = block @ matrix.T
+        rows_global = (np.arange(block.shape[0]) + start)[:, None]
+        sims[cols <= rows_global] = -np.inf  # strict upper triangle only
+        flat = sims.ravel()
+        m = min(k, flat.size)
+        top = np.argpartition(-flat, m - 1)[:m]
+        for f in top:
+            score = float(flat[f])
+            if score == -np.inf:
+                continue
+            i = start + int(f) // n
+            j = int(f) % n
+            if len(heap) < k:
+                heapq.heappush(heap, (score, i, j))
+            elif score > heap[0][0]:
+                heapq.heapreplace(heap, (score, i, j))
+    heap.sort(reverse=True)
     paths = frame.get_column("path")
     hashes = frame.get_column("hash")
     return pl.DataFrame(
         {
-            "path_a": [paths[int(rows[i])] for i in top],
-            "path_b": [paths[int(cols[i])] for i in top],
-            "hash_a": [hashes[int(rows[i])] for i in top],
-            "hash_b": [hashes[int(cols[i])] for i in top],
-            "score": scores[top],
+            "path_a": [paths[i] for _, i, _ in heap],
+            "path_b": [paths[j] for _, _, j in heap],
+            "hash_a": [hashes[i] for _, i, _ in heap],
+            "hash_b": [hashes[j] for _, _, j in heap],
+            "score": [s for s, _, _ in heap],
         }
     )
 
