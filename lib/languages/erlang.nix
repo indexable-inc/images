@@ -9,7 +9,7 @@
   toolchainsFor = pkgs: {
     latest = pkgs.beamPackages.erlang;
     "26" = pkgs.erlang_26;
-    "27" = pkgs.erlang_27;
+    "27" = pkgs.beam27Packages.erlang;
     "28" = pkgs.beam28Packages.erlang;
   };
 in {
