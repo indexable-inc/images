@@ -61,6 +61,46 @@ defmodule IxMcp.MCP.Tools do
           "properties" => %{"topic" => %{"type" => "string", "minLength" => 3, "maxLength" => 80}},
           "required" => ["topic"]
         }
+      },
+      %{
+        "name" => "read",
+        "description" => """
+        Read a file (or a workspace value) into your context. `target` is read
+        as a file when it names one on disk; otherwise it is evaluated as an
+        Elixir expression against the shared workspace, exactly like a cell
+        (e.g. `Jobs.output("ab12")`, or a variable you bound earlier). An
+        expression whose value is a string naming an existing file reads that
+        file too. Pass `start`/`end` for a 1-based inclusive line range.
+        """,
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "target" => %{"type" => "string"},
+            "start" => %{"type" => "integer", "minimum" => 1},
+            "end" => %{"type" => "integer", "minimum" => 1}
+          },
+          "required" => ["target"]
+        }
+      },
+      %{
+        "name" => "kernel_trace",
+        "description" => """
+        Dump the current stack of every running job's processes (and core
+        server processes), taken from outside with Process.info/2. Works no
+        matter what any cell is doing -- no cell can block this server -- so
+        use it to see WHERE a slow job is stuck, then cancel or await it.
+        """,
+        "inputSchema" => %{"type" => "object", "properties" => %{}}
+      },
+      %{
+        "name" => "kernel_restart",
+        "description" => """
+        Restart the evaluator on purpose: cancel every running job (their OS
+        subprocess trees die with them), restart the workspace process, and
+        restore bindings from the in-VM checkpoint. Scoped to this server
+        only. Bindings survive; running jobs do not.
+        """,
+        "inputSchema" => %{"type" => "object", "properties" => %{}}
       }
     ]
   end
@@ -89,6 +129,22 @@ defmodule IxMcp.MCP.Tools do
   end
 
   def call("topic_set", _args), do: {:error, "topic_set requires string `topic`"}
+
+  def call("read", %{"target" => target} = args) when is_binary(target) do
+    IxMcp.Reader.read(target, Map.get(args, "start"), Map.get(args, "end"))
+  end
+
+  def call("read", _args), do: {:error, "read requires string `target`"}
+
+  def call("kernel_trace", _args), do: {:ok, IxMcp.Kernel.trace()}
+
+  def call("kernel_restart", _args) do
+    report = IxMcp.Kernel.restart()
+
+    {:ok,
+     "evaluator restarted: cancelled jobs #{inspect(report.jobs_cancelled)}, " <>
+       "#{report.bindings_restored} bindings restored"}
+  end
 
   def call(other, _args), do: {:error, "unknown tool: #{other}"}
 

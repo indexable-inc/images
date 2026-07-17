@@ -71,6 +71,10 @@ defmodule IxMcp.Jobs.Job do
   @spec cancel(GenServer.server()) :: :ok | {:error, :finished}
   def cancel(server), do: GenServer.call(server, :cancel)
 
+  @doc "The evaluation process and IO proxy (for tracing from outside)."
+  @spec procs(GenServer.server()) :: {pid(), pid()}
+  def procs(server), do: GenServer.call(server, :procs)
+
   @doc """
   Wait until the job finishes, up to `timeout_ms`. Returns the final summary
   or `:timeout` -- in which case the job keeps running in the background,
@@ -198,6 +202,8 @@ defmodule IxMcp.Jobs.Job do
   end
 
   def handle_call(:buffer, _from, state), do: {:reply, state.buffer, state}
+
+  def handle_call(:procs, _from, state), do: {:reply, {state.eval_pid, state.io_proxy}, state}
 
   @impl true
   def handle_cast({:unsubscribe, pid}, state) do
