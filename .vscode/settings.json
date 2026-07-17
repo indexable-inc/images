@@ -65,6 +65,7 @@
   },
   "search.exclude": {
     "**/.direnv": true,
+    "**/.claude/worktrees": true,
     "**/result": true,
     "**/result-*": true,
     "**/node_modules": true,
@@ -72,8 +73,12 @@
     "**/.gradle": true,
     "**/build": true
   },
+  "files.exclude": {
+    "**/.claude/worktrees": true
+  },
   "files.watcherExclude": {
     "**/.direnv/**": true,
+    "**/.claude/worktrees/**": true,
     "**/result": true,
     "**/result-*": true,
     "**/target/**": true,
