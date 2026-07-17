@@ -141,7 +141,7 @@
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
         '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_set_name","arguments":{"name":"smoke"}}}' \
-        '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"elixir_exec","arguments":{"intent":"utf8 wire roundtrip","budget":60,"code":"\"snow ☃\""}}}' \
+        '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"utf8 wire roundtrip","budget":60,"code":"\"snow ☃\""}}}' \
         | IX_MCP_ACTIONS_DB="$PWD/actions.db" ix-mcp-ex > response.jsonl 2> server-stderr.log
       rc=$?
       set -e
@@ -165,9 +165,9 @@
           ;;
       esac
       case "$out_lines" in
-        *'"elixir_exec"'*) ;;
+        *'"name":"exec"'*) ;;
         *)
-          echo "tools/list did not advertise elixir_exec" >&2
+          echo "tools/list did not advertise exec" >&2
           printf '%s\n' "$out_lines" >&2
           exit 1
           ;;
@@ -186,7 +186,7 @@
       case "$out_lines" in
         *'snow ☃'*) ;;
         *)
-          echo "elixir_exec did not round-trip a multi-byte UTF-8 payload" >&2
+          echo "exec did not round-trip a multi-byte UTF-8 payload" >&2
           printf '%s\n' "$out_lines" >&2
           exit 1
           ;;

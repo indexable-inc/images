@@ -3,8 +3,8 @@ defmodule IxMcp.Application do
   Supervision tree:
 
       IxMcp.Supervisor (one_for_one)
-      ├── IxMcp.Session         session name / topic metadata
-      ├── IxMcp.ActionLog       SQLite append-only record of every tools/call
+      ├── IxMcp.ActionLog       SQLite: sessions/topics/actions rows for every tools/call
+      ├── IxMcp.Session         this instance's session/topic ids + display labels
       ├── IxMcp.Checkpoint      ETS keeper for workspace state (survives Workspace restarts)
       ├── IxMcp.Workspace       the shared binding + Macro.Env every cell sees
       ├── IxMcp.Jobs.Registry   id -> job process
@@ -25,8 +25,9 @@ defmodule IxMcp.Application do
   def start(_type, _args) do
     children =
       [
-        IxMcp.Session,
+        # ActionLog before Session: Session lazily creates its rows through it.
         IxMcp.ActionLog,
+        IxMcp.Session,
         IxMcp.Checkpoint,
         IxMcp.Workspace,
         {Registry, keys: :unique, name: IxMcp.Jobs.Registry},

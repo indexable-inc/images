@@ -201,7 +201,7 @@
   ixMcp = ix.mcp;
   agentMcpServers = ixMcp.defaultServers {
     # The Elixir-native server (packages/mcp-ex) replaces the Python kernel on
-    # this workstation: agents drive `elixir_exec` against a persistent BEAM
+    # this workstation: agents drive `exec` against a persistent BEAM
     # workspace. No subcommands; stdio serve is its only mode.
     indexCommand = lib.getExe indexPkgs.mcp-ex;
     indexArgs = [];

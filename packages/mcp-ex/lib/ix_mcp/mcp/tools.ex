@@ -1,29 +1,58 @@
 defmodule IxMcp.MCP.Tools do
   @moduledoc """
-  The MCP tool surface. Every tool returns `{:ok, text}` or `{:error, text}`;
-  the transport wraps that in the MCP content envelope.
+  The MCP tool surface: exactly `exec`, `session_set_name`, and `topic_set`.
+  Everything that used to be a separate tool (read, trace, restart, PR
+  watching, TUI driving) is an in-language callable aliased into every cell
+  (#3532); `surface_guide/0` is the one text that teaches it, shared between
+  the `exec` description and the server instructions. Every tool returns
+  `{:ok, text}` or `{:error, text}`; the transport wraps that in the MCP
+  content envelope.
   """
 
   alias IxMcp.Jobs
 
   @budget_cap 120
 
+  @surface_guide """
+  Everything beyond running code is in-language, pre-aliased in every cell:
+
+      Jobs.tail("ab12", 20)   Jobs.await("ab12")   Jobs.cancel("ab12")   Jobs.history()
+      Read.file(path)                       a file; Read.file(path, first, last) slices
+                                            a 1-based inclusive line range
+      Ix.trace()                            stack dump of every running job's processes,
+                                            taken from outside with Process.info/2
+      Ix.restart()                          cancel running jobs (sparing the calling
+                                            cell), restart the workspace, restore
+                                            bindings from the checkpoint
+      PrWatch.start(pr, cwd)                watch a PR via gh; notification on
+                                            merge/close/error/timeout (optional
+                                            interval and timeout args)
+      Tui.act(uri, send_keys)               drive a federated TUI resource (optional
+                                            peer arg)
+      Api.api("tail") / Api.help(Jobs, :tail)   discovery over this whole surface
+
+  Each cell runs in its own BEAM process, so a blocking cell never delays
+  other jobs or this server -- and Ix.trace/0 and Ix.restart/0 work from a
+  fresh cell even while other jobs run or wedge, so a stuck job never locks
+  you out of recovery.
+  """
+
+  @doc "The in-language surface cheat sheet (also shipped as server instructions)."
+  @spec surface_guide() :: String.t()
+  def surface_guide, do: @surface_guide
+
   @spec list() :: [map()]
   def list do
     [
       %{
-        "name" => "elixir_exec",
+        "name" => "exec",
         "description" => """
         Run Elixir on the shared persistent workspace. Waits up to `budget`
         seconds; if the code is still running it keeps going in the background
         as a job and this returns a job handle. Bindings persist across calls:
         variables, aliases, imports, and modules you define stay defined.
-        Job control is in-language via the `Jobs` module (aliased in every
-        cell): `Jobs.tail("ab12", 20)`, `Jobs.await("ab12")`,
-        `Jobs.cancel("ab12")`, `Jobs.history()`. Each cell runs in its own
-        BEAM process, so a blocking cell never delays other jobs or this
-        server.
 
+        #{@surface_guide}
         Write plain Elixir, not shell. For files and data use the standard
         library directly -- File.read!/1, File.write!/2, Path.wildcard/1,
         File.ls!/1, File.stat!/1 -- instead of shelling out. Reserve
@@ -65,106 +94,18 @@ defmodule IxMcp.MCP.Tools do
       %{
         "name" => "topic_set",
         "description" =>
-          "Set the current topic. Runs fold under the topic inside the session; change it when work moves to a new phase.",
+          "Start a new topic. Runs fold under the topic inside the session; change it when work moves to a new phase (each call starts a fresh topic, even under a repeated name).",
         "inputSchema" => %{
           "type" => "object",
           "properties" => %{"topic" => %{"type" => "string", "minLength" => 3, "maxLength" => 80}},
           "required" => ["topic"]
         }
-      },
-      %{
-        "name" => "read",
-        "description" => """
-        Read a file (or a workspace value) into your context. `target` is read
-        as a file when it names one on disk; otherwise it is evaluated as an
-        Elixir expression against the shared workspace, exactly like a cell
-        (e.g. `Jobs.output("ab12")`, or a variable you bound earlier). An
-        expression whose value is a string naming an existing file reads that
-        file too. Pass `start`/`end` for a 1-based inclusive line range.
-        """,
-        "inputSchema" => %{
-          "type" => "object",
-          "properties" => %{
-            "target" => %{"type" => "string"},
-            "start" => %{"type" => "integer", "minimum" => 1},
-            "end" => %{"type" => "integer", "minimum" => 1}
-          },
-          "required" => ["target"]
-        }
-      },
-      %{
-        "name" => "kernel_trace",
-        "description" => """
-        Dump the current stack of every running job's processes (and core
-        server processes), taken from outside with Process.info/2. Works no
-        matter what any cell is doing -- no cell can block this server -- so
-        use it to see WHERE a slow job is stuck, then cancel or await it.
-        """,
-        "inputSchema" => %{"type" => "object", "properties" => %{}}
-      },
-      %{
-        "name" => "pr_watch",
-        "description" => """
-        Watch a GitHub pull request via `gh` and push a channel notification
-        when it merges, closes, errors, or the watch times out. Watching is
-        read-only: it never arms auto-merge; merging stays an explicit act.
-        """,
-        "inputSchema" => %{
-          "type" => "object",
-          "properties" => %{
-            "pr" => %{
-              "type" => "string",
-              "description" => "PR number, URL, or branch gh understands"
-            },
-            "cwd" => %{
-              "type" => "string",
-              "description" => "Repository worktree where gh should run"
-            },
-            "interval" => %{"type" => "number", "default" => 15},
-            "timeout" => %{"type" => "number", "default" => 3600}
-          },
-          "required" => ["pr", "cwd"]
-        }
-      },
-      %{
-        "name" => "tui_act",
-        "description" => """
-        Drive a federated TUI resource: send keystrokes to a peer's live
-        terminal resource. Bridges to `ix-resource-cli act` and degrades
-        clearly when the CLI is absent. Omit `peer` to probe the peers in
-        IX_RESOURCE_PEERS for the one advertising the uri.
-        """,
-        "inputSchema" => %{
-          "type" => "object",
-          "properties" => %{
-            "uri" => %{"type" => "string", "description" => "ix://<host>/<name> resource uri"},
-            "send_keys" => %{
-              "type" => "string",
-              "description" => "Literal keystrokes, e.g. 'ls\n' or 'C-c'"
-            },
-            "peer" => %{
-              "type" => "string",
-              "description" => "Optional full endpoint URL of one peer"
-            }
-          },
-          "required" => ["uri", "send_keys"]
-        }
-      },
-      %{
-        "name" => "kernel_restart",
-        "description" => """
-        Restart the evaluator on purpose: cancel every running job (their OS
-        subprocess trees die with them), restart the workspace process, and
-        restore bindings from the in-VM checkpoint. Scoped to this server
-        only. Bindings survive; running jobs do not.
-        """,
-        "inputSchema" => %{"type" => "object", "properties" => %{}}
       }
     ]
   end
 
   @spec call(String.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
-  def call("elixir_exec", %{"code" => code} = args) when is_binary(code) do
+  def call("exec", %{"code" => code} = args) when is_binary(code) do
     budget = args |> Map.get("budget", 15) |> clamp_budget()
     intent = Map.get(args, "intent")
 
@@ -172,7 +113,7 @@ defmodule IxMcp.MCP.Tools do
     {:ok, render_run(summary, output)}
   end
 
-  def call("elixir_exec", _args), do: {:error, "elixir_exec requires string `code`"}
+  def call("exec", _args), do: {:error, "exec requires string `code`"}
 
   def call("session_set_name", %{"name" => name}) when is_binary(name) do
     :ok = IxMcp.Session.set_name(name)
@@ -187,36 +128,6 @@ defmodule IxMcp.MCP.Tools do
   end
 
   def call("topic_set", _args), do: {:error, "topic_set requires string `topic`"}
-
-  def call("read", %{"target" => target} = args) when is_binary(target) do
-    IxMcp.Reader.read(target, Map.get(args, "start"), Map.get(args, "end"))
-  end
-
-  def call("read", _args), do: {:error, "read requires string `target`"}
-
-  def call("kernel_trace", _args), do: {:ok, IxMcp.Kernel.trace()}
-
-  def call("pr_watch", %{"pr" => pr, "cwd" => cwd} = args)
-      when is_binary(pr) and is_binary(cwd) do
-    IxMcp.PrWatch.start(pr, cwd, Map.get(args, "interval", 15), Map.get(args, "timeout", 3600))
-  end
-
-  def call("pr_watch", _args), do: {:error, "pr_watch requires string `pr` and `cwd`"}
-
-  def call("tui_act", %{"uri" => uri, "send_keys" => keys} = args)
-      when is_binary(uri) and is_binary(keys) do
-    IxMcp.Resources.act(uri, keys, Map.get(args, "peer"))
-  end
-
-  def call("tui_act", _args), do: {:error, "tui_act requires string `uri` and `send_keys`"}
-
-  def call("kernel_restart", _args) do
-    report = IxMcp.Kernel.restart()
-
-    {:ok,
-     "evaluator restarted: cancelled jobs #{inspect(report.jobs_cancelled)}, " <>
-       "#{report.bindings_restored} bindings restored"}
-  end
 
   def call(other, _args), do: {:error, "unknown tool: #{other}"}
 
@@ -249,7 +160,7 @@ defmodule IxMcp.MCP.Tools do
 
   defp result_section(%{running: true}) do
     [
-      "job still running; page it with Jobs.tail(id, n) / await it with Jobs.await(id) in a later elixir_exec call"
+      "job still running; page it with Jobs.tail(id, n) / await it with Jobs.await(id) in a later exec call"
     ]
   end
 

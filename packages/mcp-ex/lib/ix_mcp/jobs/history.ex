@@ -2,7 +2,7 @@ defmodule IxMcp.Jobs.History do
   @moduledoc """
   Ordered record of every run: id, intent, session/topic at start time, a code
   preview, and final status. This is what `Jobs.history/1` pages and what the
-  `elixir_exec` feed groups by session and topic.
+  `exec` feed groups by session and topic.
   """
 
   use Agent

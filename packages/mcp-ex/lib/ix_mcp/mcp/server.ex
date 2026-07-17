@@ -19,7 +19,8 @@ defmodule IxMcp.MCP.Server do
         result(id, %{
           "protocolVersion" => negotiate_version(params),
           "capabilities" => %{"tools" => %{"listChanged" => false}, "logging" => %{}},
-          "serverInfo" => %{"name" => "ix-mcp-ex", "version" => version()}
+          "serverInfo" => %{"name" => "ix-mcp-ex", "version" => version()},
+          "instructions" => instructions()
         })
 
       {"ping", id} when id != nil ->
@@ -60,18 +61,34 @@ defmodule IxMcp.MCP.Server do
 
   # Every tools/call lands one metadata row in the action log before its
   # response ships (see IxMcp.ActionLog for why the write is synchronous).
+  # Asking the session for ids here -- not at connect time -- is what makes
+  # session rows lazy: a connection that never calls a tool leaves no row.
   defp log_action(tool, arguments, outcome, elapsed_ms) do
-    %{name: session, topic: topic} = IxMcp.Session.get()
+    %{session_id: session_id, topic_id: topic_id} = IxMcp.Session.ids()
 
     IxMcp.ActionLog.record(%{
-      session: session,
-      topic: topic,
+      session_id: session_id,
+      topic_id: topic_id,
       tool: tool,
       intent: intent(arguments),
       arguments: JSON.encode!(arguments),
       is_error: match?({:error, _}, outcome),
       elapsed_ms: elapsed_ms
     })
+  end
+
+  # How agents learn the in-language surface (the old read/kernel_trace/
+  # kernel_restart/pr_watch/tui_act tools, folded into cells -- #3532):
+  # instructions arrive with the connection, so every MCP client sees them.
+  defp instructions do
+    """
+    An MCP server whose REPL is Elixir: `exec` runs cells on one shared,
+    persistent workspace (bindings survive across calls), each cell in its
+    own supervised BEAM process. Name the session before acting; set a topic
+    per work phase.
+
+    #{Tools.surface_guide()}
+    """
   end
 
   defp intent(%{"intent" => intent}) when is_binary(intent), do: intent
