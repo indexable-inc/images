@@ -57,7 +57,10 @@ mod tests {
             message: "outer",
             source: Some(Box::new(Layer {
                 message: "middle",
-                source: Some(Box::new(Layer { message: "leaf", source: None })),
+                source: Some(Box::new(Layer {
+                    message: "leaf",
+                    source: None,
+                })),
             })),
         };
 

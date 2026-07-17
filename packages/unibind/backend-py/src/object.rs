@@ -10,7 +10,7 @@ use unibind_core::ir;
 
 use crate::ctx::Ctx;
 use crate::function::{doc_attrs, render_method};
-use crate::{resource, sig, RenderError};
+use crate::{RenderError, resource, sig};
 
 pub fn render_object(object: &ir::Object, ctx: &Ctx<'_>) -> Result<TokenStream, RenderError> {
     let user = ctx.user;

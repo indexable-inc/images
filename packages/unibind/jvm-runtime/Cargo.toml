@@ -1,0 +1,11 @@
+[package]
+name = "unibind-jvm-runtime"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "C-ABI plumbing the unibind jvm backend's generated glue references at runtime: the RawBuf hand-off and the length-prefixed wire codec"
+
+[lints]
+workspace = true
+
+[dependencies]

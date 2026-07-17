@@ -72,8 +72,10 @@ impl UnitDay {
         let mut body = String::new();
         let mut shown = 0usize;
         for message in &self.messages {
-            let time = chrono::DateTime::from_timestamp(message.timestamp, 0)
-                .map_or_else(|| "??:??:??".to_owned(), |dt| dt.format("%H:%M:%S").to_string());
+            let time = chrono::DateTime::from_timestamp(message.timestamp, 0).map_or_else(
+                || "??:??:??".to_owned(),
+                |dt| dt.format("%H:%M:%S").to_string(),
+            );
             let line = format!(
                 "{time} [{}] {}\n",
                 priority_label(message.priority),

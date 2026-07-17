@@ -6,7 +6,7 @@ use syn::parse_quote;
 use unibind_core::ir;
 
 use crate::function::doc_attrs;
-use crate::{ty, RenderError, RenderedRecord};
+use crate::{RenderError, RenderedRecord, ty};
 
 /// The attributes the exported struct gains: `#[pyclass]` on the item and a
 /// read-only getter per field.

@@ -1,0 +1,17 @@
+# The "conductor": pure clock math for the shared LAN timeline. NTP-style
+# offset estimation over four timestamps plus the arithmetic that turns
+# shared micros into an absolute sample-frame index. No sockets here; the
+# network layer (audio-net) feeds measurements in, so every state machine is
+# unit-testable with synthetic delays.
+[package]
+name = "audio-clock"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Shared-timeline clock math for shared-audio: offset estimation and frame mapping"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+
+[lints]
+workspace = true

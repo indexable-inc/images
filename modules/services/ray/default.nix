@@ -23,10 +23,12 @@
 # temp-dir so Ray's AF_UNIX plasma socket stays under the 108-byte sun_path
 # limit, and PrivateDevices/PrivateUsers off so an attaching kernel can map the
 # shared-memory object store) mirrors the proven `examples/ray/cluster`
-# cluster-node module. Use nixpkgs `python3Packages.ray` -- the same Ray the
-# ix-mcp interpreter imports, so the cluster and the kernels driving it run an
-# identical version (Ray requires matching versions cluster-wide) and the
-# daemons are FHS-correct with no nix-ld shim.
+# cluster-node module. The daemon runs `indexLib.fabric.rayEnv` -- nixpkgs
+# `python3Packages.ray` (the same Ray the ix-mcp interpreter imports, so the
+# cluster and the kernels driving it run an identical version, required
+# cluster-wide; FHS-correct with no nix-ld shim) wrapped with the fabric
+# cluster env vars, so darwin and linux nodes share one pinned env
+# (index#3192).
 # `indexLib` is the index flake lib (writeNushellApplication/systemdHardening),
 # supplied by the consumer via `_module.args.indexLib`. It is deliberately NOT
 # named `ix`: a host binds `ix` to its own specialArg (the ix monorepo's is a
@@ -46,7 +48,6 @@
     mkEnableOption
     mkIf
     mkOption
-    mkPackageOption
     optional
     optionalAttrs
     optionals
@@ -101,6 +102,13 @@
       "/run/ray"
       "--object-spilling-directory"
       spillDir
+      # Custom resources this node advertises, as data (see
+      # `indexLib.fabric.nodeResources`): the `host_<name>` label
+      # `fabric.run(node=...)` targets, os/gpu labels, and the
+      # `fabric_env:<tag>` handshake resource submitters compare against
+      # their own env before shipping cloudpickled code here.
+      "--resources"
+      (builtins.toJSON cfg.resources)
     ]
     ++ optionals (cfg.objectStoreMemory != null) [
       "--object-store-memory"
@@ -233,11 +241,14 @@ in {
       '';
     };
 
-    package = mkPackageOption pkgs.python3Packages "ray" {
-      extraDescription = ''
-        The `ray` daemon, from the same nixpkgs pin as the ray bundled in the
-        ix-mcp interpreter, so the cluster and the kernels driving it run an
-        identical Ray version (required cluster-wide).
+    package = mkOption {
+      type = types.package;
+      default = indexLib.fabric.rayEnv pkgs;
+      defaultText = lib.literalExpression "indexLib.fabric.rayEnv pkgs";
+      description = ''
+        The `ray` daemon: the pinned fabric env, i.e. the same nixpkgs ray the
+        ix-mcp interpreter imports (Ray requires matching versions
+        cluster-wide) wrapped with the fabric cluster env vars.
       '';
     };
 
@@ -254,13 +265,13 @@ in {
 
     gcsPort = mkOption {
       type = types.port;
-      default = 6379;
+      default = indexLib.fabric.ports.gcs;
       description = "Head GCS port; workers connect here.";
     };
 
     clientServerPort = mkOption {
       type = types.port;
-      default = 10001;
+      default = indexLib.fabric.ports.clientServer;
       description = ''
         Head Ray Client server port. Off-cluster drivers reach the cluster at
         `ray://<headAddress>:<this>` (what `fleet.connect()` uses via
@@ -270,26 +281,49 @@ in {
 
     nodeManagerPort = mkOption {
       type = types.port;
-      default = 6380;
+      default = indexLib.fabric.ports.nodeManager;
       description = "Ray node-manager port (inter-node scheduling). Pinned so the firewall can name it.";
     };
 
     objectManagerPort = mkOption {
       type = types.port;
-      default = 6381;
+      default = indexLib.fabric.ports.objectManager;
       description = "Ray object-manager port (object-store transfers). Pinned so the firewall can name it.";
     };
 
     workerPortLow = mkOption {
       type = types.port;
-      default = 10002;
+      default = indexLib.fabric.ports.workerLow;
       description = "Low end of the pinned per-worker port range (inter-node worker RPC).";
     };
 
     workerPortHigh = mkOption {
       type = types.port;
-      default = 10031;
+      default = indexLib.fabric.ports.workerHigh;
       description = "High end of the pinned per-worker port range.";
+    };
+
+    resources = mkOption {
+      type = types.attrsOf types.number;
+      default = {};
+      example = {ssd = 1;};
+      description = ''
+        Ray custom resources this node advertises (`ray start --resources`).
+        The fabric baseline (`host_<hostName>`, os/gpu labels, and the
+        `fabric_env:<tag>` handshake resource) is merged in below from
+        `indexLib.fabric.nodeResources`; set extra keys here for
+        host-specific capabilities.
+      '';
+    };
+
+    gpu = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Advertise the `gpu` fabric label. Defaulted below from the host's
+        configured video drivers; set explicitly for a compute GPU with no
+        display stack.
+      '';
     };
 
     execPort = mkOption {
@@ -377,6 +411,19 @@ in {
   };
 
   config = mkIf cfg.enable {
+    services.ix-ray = {
+      # Baseline fabric labels as data, derived from host config rather than a
+      # hand-kept per-host enumeration. attrsOf merges these with user-set
+      # extras; a same-key collision is a loud eval error.
+      resources = indexLib.fabric.nodeResources {
+        python = pkgs.python3;
+        hostName = config.networking.hostName;
+        os = "linux";
+        inherit (cfg) gpu;
+      };
+      gpu = lib.mkDefault (lib.elem "nvidia" config.services.xserver.videoDrivers);
+    };
+
     assertions = [
       {
         assertion = cfg.role == "head" -> cfg.headAddress == null;

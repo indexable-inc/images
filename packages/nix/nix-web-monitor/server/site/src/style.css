@@ -326,149 +326,44 @@ main {
 
 /* ---------- workspace layout ---------- */
 
-/* The build DAG is the primary surface: it fills the body, with the live
- * activity tree as a side column and the raw log stream demoted to a short,
- * collapsible drawer along the bottom. */
-.body {
-  min-height: 0;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) 5px var(--logs-height, 220px);
-  background: var(--bg);
-}
+/* The pane system (src/lib/panes) owns the shell layout now: splits, tab
+ * groups, floating windows, and their persistence. This file keeps only the
+ * shared panel-content language the individual panels render inside a pane. */
 
-.body.logs-collapsed {
-  grid-template-rows: minmax(0, 1fr) auto;
-}
-
-.workspace {
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 5px var(--sidebar-width, 24rem);
-  background: var(--bg);
-}
-
-.main-pane,
-.side-pane {
-  min-height: 0;
-  min-width: 0;
+/* The topbar strip: the run summary plus the pane-layout reset affordance. */
+.topbar-row {
   display: flex;
-  flex-direction: column;
-  background: var(--bg);
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
 }
 
-.logs-drawer {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border-top: 1px solid var(--line);
-  background: var(--bg);
+.topbar-row .summary {
+  flex: 1 1 auto;
+  border-bottom: 0;
 }
 
-/* Collapsed: keep the panel header (filters, counts, the caret) on screen as a
- * one-line strip while hiding the stream itself, so reopening is one click. */
-.logs-collapsed .log-stream {
-  display: none;
+.layout-reset {
+  flex: 0 0 auto;
+  appearance: none;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--faint);
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0 0.75rem;
+  white-space: nowrap;
 }
 
-.logs-collapse {
-  width: 1.1rem;
+.layout-reset:hover {
+  color: var(--ink);
+  background: var(--panel-soft);
 }
 
-/* Visible 1px line + 5px hit area: the element is 5px wide but the visible
- * track is a centered 1px stripe so the layout doesn't look chunky. The whole
- * 5px is draggable and the grip dots appear on hover/focus for affordance. */
-.splitter {
-  position: relative;
-  background: transparent;
-  touch-action: none;
-}
-
-.splitter::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  background: var(--line);
-  transition: background 100ms ease-out;
-}
-
-.splitter::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  background: var(--faint);
-  border-radius: 1px;
-  opacity: 0;
-  transition: opacity 120ms ease-out, background 100ms ease-out;
-}
-
-.splitter:hover::before,
-.splitter:focus-visible::before {
-  background: var(--accent);
-}
-
-.splitter:hover::after,
-.splitter:focus-visible::after {
-  opacity: 0.75;
-}
-
-.splitter-h {
-  cursor: col-resize;
-}
-
-.splitter-h::before {
-  width: 1px;
-  height: 100%;
-}
-
-.splitter-h::after {
-  width: 2px;
-  height: 28px;
-}
-
-.splitter-v {
-  cursor: row-resize;
-}
-
-.splitter-v::before {
-  height: 1px;
-  width: 100%;
-}
-
-.splitter-v::after {
-  height: 2px;
-  width: 28px;
-}
-
-.splitter:focus-visible {
-  outline: none;
-}
-
-main.dragging-h {
-  cursor: col-resize;
-  user-select: none;
-}
-
-main.dragging-v {
-  cursor: row-resize;
-  user-select: none;
-}
-
-main.dragging-h .splitter-h::before,
-main.dragging-v .splitter-v::before {
-  background: var(--accent);
-}
-
-main.dragging-h .splitter-h::after,
-main.dragging-v .splitter-v::after {
-  opacity: 0.9;
-  background: var(--accent);
-}
-
+/* A panel fills whatever pane region hosts it. */
 .panel {
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   background: var(--panel);
@@ -476,18 +371,22 @@ main.dragging-v .splitter-v::after {
   flex-direction: column;
 }
 
-.panel-title {
+/* A panel's own slim control strip (filters, counts, sort chips), rendered
+ * under the pane tab bar. Replaces the per-panel title headers: the pane tab
+ * carries the name now. */
+.pane-toolbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.4rem 0.75rem;
-  border-bottom: 1px solid var(--line);
+  padding: 0.25rem 0.6rem;
+  border-bottom: 1px solid var(--line-soft);
   color: var(--muted);
-  text-transform: uppercase;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  background: var(--panel-soft);
+  background: var(--panel);
+}
+
+.pane-toolbar .panel-meta {
+  margin-left: auto;
 }
 
 .panel-meta {
@@ -496,23 +395,6 @@ main.dragging-v .splitter-v::after {
   text-transform: none;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
-}
-
-.side-pane > .daemon-panel,
-.side-pane > .global-panel,
-.side-pane > .activation-panel,
-.side-pane > .diff-panel {
-  flex: 0 0 auto;
-  border-bottom: 1px solid var(--line);
-}
-
-.side-pane > .daemon-panel {
-  max-height: 45%;
-}
-
-.side-pane > .graph-panel {
-  flex: 1 1 auto;
-  min-height: 0;
 }
 
 /* ---------- daemon panel ---------- */
@@ -708,6 +590,23 @@ main.dragging-v .splitter-v::after {
   color: var(--muted);
 }
 
+/* Server-sampled per-build cpu / resident-memory readouts (patched nix +
+ * procfs only; the spans self-hide when the sampler has no figure). */
+.global-stat {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Flat (sorted) machine-build rows share the tree rows' language minus the
+ * guides; the body provides the horizontal padding. */
+.global-tree .global-flat-row {
+  padding-left: 0;
+  padding-right: 0;
+}
+
 .global-badge-substitution {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
@@ -762,15 +661,6 @@ main.dragging-v .splitter-v::after {
 }
 
 /* ---------- activation + diff panels (switch only) ---------- */
-
-/* Both ride at the top of the side pane during a switch and cap their height so
- * the daemon panel and activity graph below stay visible; they self-hide on a
- * plain build (no activation, no diff). */
-.side-pane > .global-panel,
-.side-pane > .activation-panel,
-.side-pane > .diff-panel {
-  max-height: 40%;
-}
 
 .activation-body {
   min-height: 0;
@@ -1461,18 +1351,6 @@ main.dragging-v .splitter-v::after {
 /* ---------- responsive ---------- */
 
 @media (max-width: 960px) {
-  /* Stack the DAG over the activity tree and drop the column splitter; the log
-   * drawer keeps its own resizable row below. */
-  .workspace {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(8rem, 0.6fr);
-  }
-  .workspace .splitter-h {
-    display: none;
-  }
-  .side-pane {
-    border-top: 1px solid var(--line);
-  }
   .progress {
     margin-left: 0;
     width: 100%;

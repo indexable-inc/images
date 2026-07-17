@@ -2,9 +2,7 @@
   config,
   lib,
   ...
-}: let
-  cfg = config.users.andrewgazelka;
-in {
+}: {
   options.users.andrewgazelka = {
     blockedHosts = lib.mkOption {
       type = lib.types.listOf lib.types.str;
@@ -16,6 +14,19 @@ in {
       type = lib.types.listOf lib.types.str;
       default = [];
       description = "Domains redirected by the workstation browser-tab guard.";
+    };
+
+    infra.hosts = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          sshAlias = lib.mkOption {
+            type = lib.types.nonEmptyStr;
+            description = "SSH alias used to query the host.";
+          };
+        };
+      });
+      default = {};
+      description = "NixOS infrastructure hosts queried by `infra ls`.";
     };
 
     configurationRevision = lib.mkOption {
@@ -39,6 +50,11 @@ in {
         type = lib.types.nullOr lib.types.package;
         default = null;
         description = "Host-native Mercury CLI supplied by the consuming flake.";
+      };
+      noxLsp = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = null;
+        description = "Host-native nox-lsp (Nix language server) supplied by the consuming flake.";
       };
       typenix = lib.mkOption {
         type = lib.types.nullOr lib.types.package;
@@ -66,12 +82,6 @@ in {
         defaultText = lib.literalExpression ''"''${config.home.homeDirectory}/.config/nix"'';
         description = "Private runtime configuration directory containing secret files.";
       };
-      symphonyPack = lib.mkOption {
-        type = lib.types.str;
-        default = "${cfg.paths.indexCheckout}/packages/agent/symphony/workflows/indexable";
-        defaultText = lib.literalExpression ''"''${config.users.andrewgazelka.paths.indexCheckout}/packages/agent/symphony/workflows/indexable"'';
-        description = "Mutable Symphony workflow pack directory.";
-      };
       vscodeIslands = lib.mkOption {
         type = lib.types.nullOr lib.types.path;
         default = null;
@@ -90,6 +100,12 @@ in {
         default = 0;
         description = "ix flake commit epoch displayed by Starship.";
       };
+    };
+
+    weave.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Run the local Weave fact server.";
     };
 
     sshSigningPublicKey = lib.mkOption {

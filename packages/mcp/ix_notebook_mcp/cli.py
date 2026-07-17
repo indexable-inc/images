@@ -360,6 +360,22 @@ def _exec_trust_network() -> bool:
     )
 
 
+def _channel_delivery() -> str:
+    """Where the transport pump delivers channel outbox events (see
+    ``Config.channel_delivery``). An unknown ``IX_MCP_CHANNEL_DELIVERY`` value
+    falls back loudly to "client" rather than silently swallowing events under
+    a mode this build does not know.
+    """
+    value = os.environ.get("IX_MCP_CHANNEL_DELIVERY", "client").strip() or "client"
+    if value not in ("client", "weave-chat"):
+        print(
+            f"ix-mcp: unknown IX_MCP_CHANNEL_DELIVERY {value!r}; using 'client'",
+            file=sys.stderr,
+        )
+        return "client"
+    return value
+
+
 def _auto_dashboard() -> bool:
     """Legacy flag retained for environment compatibility.
 
@@ -509,6 +525,7 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         exec_trust_network=_exec_trust_network(),
         server_session_id=server_session_id,
         kernel_host=os.environ.get("IX_MCP_KERNEL", "local"),
+        channel_delivery=_channel_delivery(),
     )
     set_config(cfg)
 
@@ -525,6 +542,11 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     weave_url = os.environ.get("WEAVE_URL", "http://127.0.0.1:7677")
     os.environ["WEAVE_URL"] = weave_url
     os.environ.setdefault("IX_WEAVE_AGENT", f"agent:{uuid.uuid5(uuid.NAMESPACE_URL, str(store_path)).hex[:8]}")
+    # Durable-local-first recording (index#3418): the bundled weave client's
+    # record() spool lives next to the store file, so fabric's spooled writes
+    # and the store's drain from one directory (and adopt each other's
+    # crashed segments).
+    os.environ.setdefault("WEAVE_SPOOL", f"{store_path}.spool")
     os.environ["IX_MCP_DASHBOARD_URL"] = weave_url
     os.environ["IX_MCP_DATA_API_URL"] = cfg.dashboard_url()
     os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(dashboard_port))

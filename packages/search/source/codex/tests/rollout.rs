@@ -1,9 +1,6 @@
 //! Parse synthetic Codex session rollouts and check the projected documents.
 
-#![expect(
-    clippy::expect_used,
-    reason = "tests assert observable parse outcomes"
-)]
+#![expect(clippy::expect_used, reason = "tests assert observable parse outcomes")]
 
 use std::path::{Path, PathBuf};
 
@@ -39,7 +36,7 @@ fn full_session_renders_messages_and_folded_tool_calls() {
     let temp = tempfile::tempdir().expect("tempdir");
     let lines = [
         session_meta("s-full", "/home/u/proj"),
-        r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"turn_context","payload":{"cwd":"/home/u/proj","model":"gpt-5.5"}}"#.to_owned(),
+        r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"turn_context","payload":{"cwd":"/home/u/proj","model":"gpt-5.6-sol"}}"#.to_owned(),
         // Developer boilerplate: never indexed.
         r#"{"timestamp":"2026-05-31T10:00:02.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\nsandbox stuff\n</permissions instructions>"}]}}"#.to_owned(),
         // User prompt with an injected context block that must be dropped.
@@ -54,10 +51,13 @@ fn full_session_renders_messages_and_folded_tool_calls() {
         r#"{"timestamp":"2026-05-31T10:00:08.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ANSWER-MARKER done"}]}}"#.to_owned(),
         r#"{"timestamp":"2026-05-31T10:00:09.000Z","type":"response_item","payload":{"type":"web_search_call","status":"completed","action":{"type":"search","query":"serde adjacently tagged"}}}"#.to_owned(),
     ];
-    write_rollout(temp.path(), "rollout-2026-05-31T10-00-00-s-full.jsonl", &lines);
+    write_rollout(
+        temp.path(),
+        "rollout-2026-05-31T10-00-00-s-full.jsonl",
+        &lines,
+    );
 
-    let history =
-        CodexHistory::open_with(None, Some(temp.path()), "host1", "user1").expect("open");
+    let history = CodexHistory::open_with(None, Some(temp.path()), "host1", "user1").expect("open");
     let docs = documents(&history);
     assert_eq!(
         docs.len(),
@@ -97,7 +97,7 @@ fn full_session_renders_messages_and_folded_tool_calls() {
     assert_eq!(call.meta_json["record_type"], "function_call");
     assert_eq!(call.meta_json["role"], "assistant");
     assert_eq!(call.meta_json["tool_name"], "exec_command");
-    assert_eq!(call.meta_json["model"], "gpt-5.5");
+    assert_eq!(call.meta_json["model"], "gpt-5.6-sol");
 
     let answer = &docs[2];
     assert_eq!(answer.meta_json["role"], "assistant");
@@ -135,8 +135,7 @@ fn resumed_session_replay_dedupes_against_the_original() {
         &resumed,
     );
 
-    let history =
-        CodexHistory::open_with(None, Some(temp.path()), "host1", "user1").expect("open");
+    let history = CodexHistory::open_with(None, Some(temp.path()), "host1", "user1").expect("open");
     let docs = documents(&history);
     let replayed: Vec<_> = docs
         .iter()
@@ -169,8 +168,7 @@ fn orphan_tool_output_renders_standalone() {
         &lines,
     );
 
-    let history =
-        CodexHistory::open_with(None, Some(temp.path()), "host1", "user1").expect("open");
+    let history = CodexHistory::open_with(None, Some(temp.path()), "host1", "user1").expect("open");
     let docs = documents(&history);
     assert_eq!(docs.len(), 1);
     let body = String::from_utf8(docs[0].body.clone()).expect("utf8");
@@ -209,8 +207,7 @@ fn fake_secret_in_rollout_is_redacted_end_to_end() {
         &lines,
     );
 
-    let history =
-        CodexHistory::open_with(None, Some(temp.path()), "host1", "user1").expect("open");
+    let history = CodexHistory::open_with(None, Some(temp.path()), "host1", "user1").expect("open");
     let docs = documents(&history);
     assert_eq!(docs.len(), 1, "call and output fold into one document");
     let document = &docs[0];

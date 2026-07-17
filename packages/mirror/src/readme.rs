@@ -81,9 +81,7 @@ pub fn compose(pkg: &Package<'_>, existing: Option<&str>) -> String {
 /// skill-conformant README derives its own install lines); an older body
 /// without any gets the generated section appended.
 fn has_install(body: &str) -> bool {
-    body.contains("cargo install")
-        || body.contains("nix run github:")
-        || body.contains("{ git = ")
+    body.contains("cargo install") || body.contains("nix run github:") || body.contains("{ git = ")
 }
 
 fn hero_reference(pkg: &Package<'_>) -> String {
@@ -138,7 +136,9 @@ fn hook(description: &str, pkg: &Package<'_>) -> String {
     let clause = clause.split_once(". ").map_or(clause, |(clause, _)| clause);
     // A trailing purpose clause ("..., so every CLI matches") is the part a
     // hook drops; a clause that is still a long sentence keeps its first limb.
-    let clause = clause.split_once(", so ").map_or(clause, |(clause, _)| clause);
+    let clause = clause
+        .split_once(", so ")
+        .map_or(clause, |(clause, _)| clause);
     let clause = if clause.len() > 72 {
         clause.split_once(", ").map_or(clause, |(clause, _)| clause)
     } else {
@@ -399,7 +399,10 @@ mod tests {
             out.contains("**A git merge driver for SQLite database files: one `nix run` away?**"),
             "{out}"
         );
-        assert!(out.contains("nix run github:indexable-inc/index#sqlmerge"), "{out}");
+        assert!(
+            out.contains("nix run github:indexable-inc/index#sqlmerge"),
+            "{out}"
+        );
         assert!(
             out.contains("cargo install --git https://github.com/indexable-inc/sqlmerge sqlmerge"),
             "{out}"
@@ -462,6 +465,10 @@ mod tests {
         assert!(svg.contains("a&lt;b"), "{svg}");
         assert!(svg.contains("styling &amp; &quot;quotes&quot;"), "{svg}");
         assert!(svg.contains("class=\"accent\""), "{svg}");
-        assert_eq!(svg, hero_svg("a<b", Some("styling & \"quotes\"")), "deterministic");
+        assert_eq!(
+            svg,
+            hero_svg("a<b", Some("styling & \"quotes\"")),
+            "deterministic"
+        );
     }
 }

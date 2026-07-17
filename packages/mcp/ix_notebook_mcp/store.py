@@ -8,6 +8,7 @@ state is accessed through the serve data API.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import functools
 import hashlib
@@ -17,12 +18,14 @@ import socket
 import sys
 import threading
 import time
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+from weave.spool import Spool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,23 +37,31 @@ _T = TypeVar("_T")
 _DEFAULT_WEAVE_URL = "http://127.0.0.1:7677"
 _DEFAULT_DATA_API = "http://127.0.0.1:8765"
 _BATCH = 500
-_QUEUE_MAX = 10_000
-# How often the writer thread renews the kernel's board lease while this
+# How often the beat thread renews the kernel's board lease while this
 # process lives (weave prelude.dl: three missed beats, ~3 min, expire the
 # kernel entity and its sessions). The store rides INSIDE the kernel
 # process, so a beat is honest liveness: a crashed kernel, a reaped ray
 # actor, or a SIGKILLed serve's child all stop beating with no shutdown
-# hook needed.
+# hook needed. Beats ride the spool like every fact, so during a weave
+# outage the lease expires honestly (the board cannot verify liveness) and
+# renews from the drained backlog when the server returns.
 _BEAT_S = 60.0
 _WARNED_OFF = False
 
-def _http_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
-    headers: dict[str, str] = {}
+def _http_json(
+    method: str,
+    url: str,
+    *,
+    body: object = None,
+    content: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> object:
+    all_headers: dict[str, str] = dict(headers or {})
     data: bytes | None = content
     if body is not None:
         data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - configured local/Weave endpoint
+        all_headers["Content-Type"] = "application/json"
+    req = Request(url, data=data, headers=all_headers, method=method)  # noqa: S310 - configured local/Weave endpoint
     with urlopen(req, timeout=10.0) as resp:  # noqa: S310
         raw = resp.read()
     if not raw:
@@ -58,10 +69,16 @@ def _http_json(method: str, url: str, *, body: object = None, content: bytes | N
     return json.loads(raw.decode("utf-8"))
 
 
-def _http_bytes(method: str, url: str, *, content: bytes | None = None) -> bytes:
-    req = Request(url, data=content, method=method)  # noqa: S310 - configured local/Weave endpoint
+def _http_bytes(method: str, url: str, *, content: bytes | None = None, headers: dict[str, str] | None = None) -> bytes:
+    req = Request(url, data=content, headers=dict(headers or {}), method=method)  # noqa: S310 - configured local/Weave endpoint
     with urlopen(req, timeout=10.0) as resp:  # noqa: S310
         return resp.read()
+
+
+def _auth_denied(exc: BaseException) -> bool:
+    """An authentication rejection is permanent for this process: the
+    credential (or its absence) will not change under retry."""
+    return isinstance(exc, HTTPError) and exc.code in (401, 403)
 
 
 def _now() -> float:
@@ -90,6 +107,18 @@ def _entity(prefix: str, id: str) -> str:
 
 class _HashRef(str):
     """Marks a value as a CAS blob reference so it rides as a typed hash."""
+
+
+class _DeferredBlob:
+    """Bytes whose CAS put is deferred to the spool flusher (never a
+    synchronous /api/blob round trip on a write path); the owning fact rides
+    the spool as a blob item and gains the server hash ref at drain time."""
+
+    __slots__ = ("data", "digest")
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.digest = hashlib.sha256(data).hexdigest()
 
 
 def _api_value(value: object) -> dict:
@@ -123,14 +152,18 @@ class WeaveStore:
         suffix = _stable8(path)
         self.weave_url = os.environ.get("WEAVE_URL", _DEFAULT_WEAVE_URL).rstrip("/")
         self.disabled = self.weave_url.lower() == "off"
+        # The per-session store credential (weave session_env). Sent as
+        # X-Api-Key on every weave request, the same header the sibling
+        # `weave` client module uses; absent on open-loopback dev servers.
+        # The mailbox/data API is a different trust domain: no token there.
+        self._token = os.environ.get("WEAVE_TOKEN") or ""
         self.agent = os.environ.get("IX_WEAVE_AGENT") or f"agent:{suffix}"
         self.kernel = f"kernel:{suffix}"
         self.mailbox_base = os.environ.get("IX_MCP_DATA_API_URL", _DEFAULT_DATA_API).rstrip("/")
-        self._queue: deque[dict] = deque(maxlen=_QUEUE_MAX)
         self._cv = threading.Condition()
         self._closed = False
-        self._inflight = False
-        self._thread: threading.Thread | None = None
+        self._spool: Spool | None = None
+        self._beat: threading.Thread | None = None
         self._blob_cache: dict[str, str] = {}
         self._last_values: dict[tuple[str, str], Any] = {}
         global _WARNED_OFF
@@ -139,8 +172,18 @@ class WeaveStore:
                 print("ix-mcp store: WEAVE_URL=off, persistence writes are disabled", file=sys.stderr)
                 _WARNED_OFF = True
         else:
-            self._thread = threading.Thread(target=self._writer, name="ix-weave-writer", daemon=True)
-            self._thread.start()
+            # Durable-local-first (index#3418): every write lands in an
+            # fsync'd spool next to the store path before anything depends on
+            # it; the spool flusher drains to weave whenever it is reachable.
+            self._spool = Spool(
+                Path(f"{self.path}.spool"),
+                self._send,
+                url=self.weave_url,
+                permanent=_auth_denied,
+                on_permanent=self._disable_on_auth_denial,
+            )
+            self._beat = threading.Thread(target=self._beater, name="ix-weave-beat", daemon=True)
+            self._beat.start()
             now = _ms()
             self._enqueue_facts([
                 (self.agent, "type", "agent"),
@@ -160,54 +203,82 @@ class WeaveStore:
                 (self.agent, "on_kernel", self.kernel),
             ])
 
-    def close(self) -> None:
-        # Best-effort drain so queued facts do not die with the process.
-        self.flush(timeout=5.0)
-        self._closed = True
+    def _auth(self) -> dict[str, str]:
+        return {"X-Api-Key": self._token} if self._token else {}
+
+    def _disable_on_auth_denial(self, exc: BaseException) -> None:
+        """Weave rejected the credential (the spool's permanent classifier):
+        retrying cannot help, so fail loudly once and drop to the disabled
+        mode instead of silently backing off forever (the failure mode that
+        hid a dead kernel-presence lane). The spool flusher parks; its
+        segment stays on disk and drains in a future process once the
+        credential is fixed."""
+        hint = "with credential" if self._token else "without WEAVE_TOKEN"
+        print(
+            f"ix-mcp store: weave rejected writes ({exc}) {hint}; persistence "
+            f"writes to {self.weave_url} are DISABLED for this process - the "
+            "kernel will not appear on the board (set WEAVE_TOKEN to a "
+            "credential the weave server accepts)",
+            file=sys.stderr,
+        )
         with self._cv:
+            self.disabled = True
+            self._closed = True
             self._cv.notify_all()
 
-    def flush(self, timeout: float = 10.0) -> bool:
-        """Block until the write-behind queue is fully drained (or timeout)."""
-        if self.disabled:
-            return True
-        deadline = time.monotonic() + timeout
+    def close(self) -> None:
         with self._cv:
-            while (self._queue or self._inflight) and time.monotonic() < deadline:
-                self._cv.wait(timeout=0.1)
-            return not self._queue and not self._inflight
+            self._closed = True
+            self._cv.notify_all()  # release the beat thread
+        if self._spool is not None:
+            # One best-effort final drain; anything undelivered stays durable
+            # on disk for the next process to adopt.
+            self._spool.close()
 
-    def _enqueue(self, item: dict) -> None:
-        if self.disabled:
-            return
-        with self._cv:
-            if len(self._queue) == self._queue.maxlen:
-                print("ix-mcp store: write-behind cache full, dropping oldest fact", file=sys.stderr)
-            self._queue.append(item)
-            self._cv.notify()
+    def flush(self, timeout: float = 10.0) -> bool:
+        """Block until every spooled write is delivered (or timeout).
+
+        True when drained OR when delivery is permanently rejected (auth
+        denial): a permanent rejection must not wedge callers."""
+        if self.disabled or self._spool is None:
+            return True
+        return self._spool.flush(timeout)
+
+    def _blob_item(self, entity: str, attr: str, data: bytes) -> dict:
+        """The spool's deferred-CAS item shape (weave.spool): the flusher PUTs
+        the bytes and emits one hash-valued fact per ref, in place, so journal
+        seq = spool append order."""
+        return {
+            "blob_b64": base64.b64encode(data).decode("ascii"),
+            "refs": [{"entity": _api_value(entity), "attr": attr}],
+        }
 
     def _enqueue_facts(self, facts: list[tuple[str, str, Any]]) -> None:
-        if not facts:
+        if not facts or self.disabled or self._spool is None:
             return
         facts = [*facts, (self.agent, "last_active_ms", _ms())]
+        items: list[dict] = []
         for entity, attr, value in facts:
             key = (entity, attr)
-            if self._last_values.get(key) == value:
+            marker: object = ("blob", value.digest) if isinstance(value, _DeferredBlob) else value
+            if self._last_values.get(key) == marker:
                 continue
-            self._last_values[key] = value
-            self._enqueue({"fact": {"entity": _api_value(entity), "attr": attr, "value": _api_value(value)}})
+            self._last_values[key] = marker
+            if isinstance(value, _DeferredBlob):
+                items.append(self._blob_item(entity, attr, value.data))
+            else:
+                items.append({"fact": {"entity": _api_value(entity), "attr": attr, "value": _api_value(value)}})
+        self._spool.append_many(items)
 
     def _enqueue_blob_fact(self, entity: str, attr: str, data: bytes) -> None:
-        """Queue one (entity, attr, <hash of data>) fact whose CAS put is
-        deferred to the writer thread (see _resolve_blob_item). The enqueue is
-        a plain list append, so bulk payloads (pty chunks) never block the
-        caller on a synchronous /api/blob round trip; FIFO keeps journal seq =
-        enqueue order. Deliberately NOT routed through _enqueue_facts: its
-        last-value dedupe would eat a repeated identical chunk, and replay
-        needs every flush."""
-        if self.disabled:
+        """Spool one (entity, attr, <hash of data>) fact whose CAS put is
+        deferred to the flusher, so bulk payloads (pty chunks) never block the
+        caller on a synchronous /api/blob round trip. Deliberately NOT routed
+        through _enqueue_facts: its last-value dedupe would eat a repeated
+        identical chunk, and replay needs every flush."""
+        if self.disabled or self._spool is None:
             return
-        self._enqueue({"blob_fact": {"entity": entity, "attr": attr, "data": data}})
+        self._spool.append(self._blob_item(entity, attr, data))
 
     def put_blob(self, data: bytes) -> _HashRef:
         if self.disabled:
@@ -216,62 +287,51 @@ class WeaveStore:
         cached = self._blob_cache.get(digest)
         if cached:
             return _HashRef(cached)
-        h = str(_http_json("POST", f"{self.weave_url}/api/blob", content=data)["hash"])
+        h = str(_http_json("POST", f"{self.weave_url}/api/blob", content=data, headers=self._auth())["hash"])
         self._blob_cache[digest] = h
         return _HashRef(h)
 
     def get_blob(self, hash_: str) -> bytes:
         if self.disabled or not hash_:
             return b""
-        return _http_bytes("GET", f"{self.weave_url}/api/blob/{quote(hash_, safe='')}")
+        return _http_bytes("GET", f"{self.weave_url}/api/blob/{quote(hash_, safe='')}", headers=self._auth())
 
-    def _resolve_blob_item(self, item: dict) -> dict:
-        """blob_fact items defer their CAS put to the writer thread: PUT the
-        bytes (the server computes the blake3 hash) and rewrite the item into
-        a plain fact carrying the returned hash ref. A put failure raises into
-        _writer's retry path, which requeues the ORIGINAL items; put_blob's
-        digest cache makes the retry cheap."""
-        blob = item.get("blob_fact")
-        if blob is None:
-            return item
-        h = self.put_blob(blob["data"])
-        return {"fact": {"entity": _api_value(blob["entity"]), "attr": blob["attr"], "value": _api_value(h)}}
+    def _send(self, items: list[Any]) -> None:
+        """The spool's sender: deliver one drained batch to weave. blob items
+        PUT their bytes first (the server computes the blake3 hash) and emit
+        one hash-valued fact per ref, in place, so journal seq = spool append
+        order. Any failure raises into the spool's retry/park path; put_blob's
+        digest cache makes a retried put cheap."""
+        body: list[dict] = []
+        for item in items:
+            blob_b64 = item.get("blob_b64")
+            if blob_b64 is not None:
+                h = self.put_blob(base64.b64decode(blob_b64))
+                body.extend(
+                    {"fact": {"entity": ref["entity"], "attr": ref["attr"], "value": _api_value(h)}}
+                    for ref in item["refs"]
+                )
+            else:
+                body.append(item)
+        _http_json("POST", f"{self.weave_url}/api/facts", body=body if len(body) != 1 else body[0], headers=self._auth())
 
-    def _writer(self) -> None:
-        backoff = 0.25
-        next_beat = time.monotonic() + _BEAT_S
+    def _beater(self) -> None:
+        """Renew the kernel's board lease every _BEAT_S (module global, read
+        each cycle so tests can shrink it). Spooled directly, NOT via
+        _enqueue_facts: a beat is process liveness, and its agent
+        last_active_ms ride-along would un-idle an agent that has not done
+        anything."""
         while True:
             with self._cv:
-                while not self._queue and not self._closed and time.monotonic() < next_beat:
-                    self._cv.wait(timeout=1.0)
-                if not self._queue and self._closed:
+                self._cv.wait(timeout=_BEAT_S)
+                if self._closed:
                     return
-                if time.monotonic() >= next_beat:
-                    # Renew the kernel's board lease. Enqueued directly, NOT via
-                    # _enqueue_facts: a beat is process liveness, and its agent
-                    # last_active_ms ride-along would un-idle an agent that has
-                    # not done anything.
-                    next_beat = time.monotonic() + _BEAT_S
-                    self._queue.append(
-                        {"fact": {"entity": _api_value(self.kernel), "attr": "heartbeat_ms", "value": _api_value(_ms())}}
-                    )
-                batch = [self._queue.popleft() for _ in range(min(_BATCH, len(self._queue)))]
-                self._inflight = True
-            try:
-                body = [self._resolve_blob_item(item) for item in batch]
-                _http_json("POST", f"{self.weave_url}/api/facts", body=body if len(body) != 1 else body[0])
-                backoff = 0.25
-                with self._cv:
-                    self._inflight = False
-                    self._cv.notify_all()
-            except Exception as exc:
-                print(f"ix-mcp store: weave write failed, retrying: {exc}", file=sys.stderr)
-                with self._cv:
-                    for item in reversed(batch):
-                        self._queue.appendleft(item)
-                    self._inflight = False
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 5.0)
+            if self.disabled or self._spool is None:
+                continue
+            with contextlib.suppress(RuntimeError):  # spool closed mid-beat
+                self._spool.append(
+                    {"fact": {"entity": _api_value(self.kernel), "attr": "heartbeat_ms", "value": _api_value(_ms())}}
+                )
 
     def query(self, program: str, *, as_of: int | None = None) -> dict:
         # Sync reads are only used from runtime worker paths or AsyncConn executor
@@ -285,7 +345,7 @@ class WeaveStore:
         payload: dict[str, Any] = {"program": program}
         if as_of is not None:
             payload["as_of"] = as_of
-        return _http_json("POST", f"{self.weave_url}/api/query", body=payload)
+        return _http_json("POST", f"{self.weave_url}/api/query", body=payload, headers=self._auth())
 
     def mailbox(self, method: str, path: str, *, json_body: object = None) -> object:
         try:
@@ -360,12 +420,12 @@ class AsyncConn:
         self._pool.shutdown(wait=False)
 
 
-def _blob(conn: WeaveStore, value: object) -> _HashRef:
-    return conn.put_blob(_json_blob(value))
+def _blob(value: object) -> _DeferredBlob:
+    return _DeferredBlob(_json_blob(value))
 
 
-def _blob_text(conn: WeaveStore, text: str) -> _HashRef:
-    return conn.put_blob(text.encode("utf-8"))
+def _blob_text(text: str) -> _DeferredBlob:
+    return _DeferredBlob(text.encode("utf-8"))
 
 
 def _load_json_blob(conn: WeaveStore, hash_: str, default: object) -> object:
@@ -456,7 +516,7 @@ def start(conn: WeaveStore, *, id: str, name: str, code: str, started_at: float,
         (ent, "verb", "python_exec"),
         (ent, "desc", name),
         (ent, "topic", topic),
-        (ent, "code", _blob_text(conn, code)),
+        (ent, "code", _blob_text(code)),
         (ent, "status", "running"),
         (ent, "started_ms", _ms(started_at)),
         (ent, "budget", budget),
@@ -474,7 +534,7 @@ def update_output(conn: WeaveStore, id: str, output: str, outputs: list | None =
     if line is not None:
         facts.append((_entity("run", id), "line", line))
     if outputs is not None:
-        facts.append((_entity("run", id), "outputs", _blob(conn, outputs)))
+        facts.append((_entity("run", id), "outputs", _blob(outputs)))
     conn._enqueue_facts(facts)
 
 
@@ -504,22 +564,25 @@ def stream_snapshot(conn: WeaveStore, stream: str, data: bytes) -> None:
         conn._enqueue_blob_fact(stream, "snapshot", data)
 
 
-def finish(conn: WeaveStore, *, id: str, status: str, ended_at: float, output: str, result: str | None, error: str | None, error_line: int | None = None, outputs: list | None = None, bindings: dict | None = None, namespace: list | None = None) -> None:
-    ent = _entity("run", id)
+def finish(conn: WeaveStore, *, id: str, kind: str, status: str, ended_at: float, output: str, result: str | None, error: str | None, error_line: int | None = None, outputs: list | None = None, bindings: dict | None = None, namespace: list | None = None) -> None:
+    # This must select the same entity as start(): spawned awaitables are
+    # processes, not runs. Finishing a spawn under run:<id> leaves proc:<id>
+    # permanently running and creates a detached phantom run.
+    ent = _entity("proc", id) if kind == "spawn" else _entity("run", id)
     ended = _ms(ended_at)
     facts: list[tuple[str, str, Any]] = [(ent, "status", status), (ent, "ended_ms", ended), (ent, "last_output", (output or "")[-200:]), (conn.agent, "last_output", (output or "")[-200:])]
     if result is not None:
-        facts.append((ent, "result", _blob_text(conn, result)))
+        facts.append((ent, "result", _blob_text(result)))
     if error is not None:
         facts.append((ent, "error", error))
     if error_line is not None:
         facts.append((ent, "error_line", error_line))
     if outputs is not None:
-        facts.append((ent, "outputs", _blob(conn, outputs)))
+        facts.append((ent, "outputs", _blob(outputs)))
     if bindings is not None:
-        facts.append((ent, "bindings", _blob(conn, bindings)))
+        facts.append((ent, "bindings", _blob(bindings)))
     if namespace is not None:
-        facts.append((ent, "namespace", _blob(conn, namespace)))
+        facts.append((ent, "namespace", _blob(namespace)))
     conn._enqueue_facts(facts)
 
 
@@ -539,7 +602,7 @@ def save_tool_view(conn: WeaveStore, *, id: str, html: str, label: str) -> str |
     conn._enqueue_facts([
         (ent, "type", "view"),
         (ent, "renderer", "cas-html"),
-        (ent, "body", _blob_text(conn, html)),
+        (ent, "body", _blob_text(html)),
         (ent, "label", label),
         (ent, "child_of", _entity("run", id)),
     ])
@@ -616,13 +679,13 @@ def cells(conn: WeaveStore) -> list[dict]:
 
 
 def replace_cells(conn: WeaveStore, items: list[dict]) -> None:
-    conn._enqueue_facts([(conn.agent, "cells", _blob(conn, items))])
+    conn._enqueue_facts([(conn.agent, "cells", _blob(items))])
 
 
 
 def upsert_resource(conn: WeaveStore, *, id: str, title: str, kind: str, html: str, status: str, created_at: float, updated_at: float, execution_id: str = "") -> None:
     ent = _entity("resource", id)
-    facts = [(ent, "type", "resource"), (ent, "child_of", conn.agent), (ent, "verb", kind), (ent, "label", title), (ent, "html", _blob_text(conn, html)), (ent, "status", status), (ent, "started_ms", _ms(created_at)), (ent, "last_active_ms", _ms(updated_at))]
+    facts = [(ent, "type", "resource"), (ent, "child_of", conn.agent), (ent, "verb", kind), (ent, "label", title), (ent, "html", _blob_text(html)), (ent, "status", status), (ent, "started_ms", _ms(created_at)), (ent, "last_active_ms", _ms(updated_at))]
     if execution_id:
         facts.append((ent, "of_run", _entity("run", execution_id)))
     conn._enqueue_facts(facts)
@@ -692,9 +755,12 @@ def resource_live(conn: WeaveStore, id: str) -> bool:
 
 
 def save_snapshot(conn: WeaveStore, *, created_at: float, blob: bytes, names: list[str], skipped: list[dict]) -> None:
-    h = conn.put_blob(blob)
-    ent = f"snapshot:{h[:16]}"
-    conn._enqueue_facts([(ent, "type", "snapshot"), (ent, "child_of", conn.agent), (ent, "created_ms", _ms(created_at)), (ent, "blob", h), (ent, "names", _blob(conn, names)), (ent, "skipped", _blob(conn, skipped)), (conn.agent, "snapshot", h)])
+    payload = _DeferredBlob(blob)
+    # Entity id from the LOCAL digest: it must exist before the deferred CAS
+    # put drains (weave may be unreachable); the fact values still carry the
+    # server's blake3 ref once delivered.
+    ent = f"snapshot:{payload.digest[:16]}"
+    conn._enqueue_facts([(ent, "type", "snapshot"), (ent, "child_of", conn.agent), (ent, "created_ms", _ms(created_at)), (ent, "blob", payload), (ent, "names", _blob(names)), (ent, "skipped", _blob(skipped)), (conn.agent, "snapshot", payload)])
 
 
 def latest_snapshot(conn: WeaveStore) -> dict | None:

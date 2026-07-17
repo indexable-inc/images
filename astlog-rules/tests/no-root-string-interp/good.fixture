@@ -1,1 +1,12 @@
-{ root }: root + "/nix/file.cmake"
+{ checks, helper, ix, paths, repoRoot, root, workspaceRoot }: [
+  (root + "/nix/file.cmake")
+  (workspaceRoot + "/flake.nix")
+  (repoRoot + "/ruff.toml")
+  (paths.root + "/lib/build/helper.py")
+  (ix.paths.root + "/lib/build/pyo3-wheel.py")
+  "${helper}/pyo3-wheel.py"
+  "${checks.root}/result"
+  ''
+    python3 ${ix.paths.root + "/lib/build/pyo3-wheel.py"}
+  ''
+]

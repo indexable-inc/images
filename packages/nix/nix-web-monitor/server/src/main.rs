@@ -29,6 +29,7 @@ mod daemon;
 mod dependencies;
 mod emit;
 mod global;
+mod proc_stats;
 mod reasons;
 use daemon::run_daemon_probe;
 use dependencies::resolve_dependencies;
@@ -42,6 +43,10 @@ const DELTA_CHANNEL_CAPACITY: usize = 1024;
 /// but then stops reading would otherwise park the per-client task in `send`
 /// indefinitely; this bounds that to a drop instead of a permanent pin.
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound on the loopback probe that classifies a busy port as a sibling
+/// monitor. The probe targets a local listener, so anything slower is not one.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Parser)]
 #[command(about = "Run a Nix command with quiet terminal output and a live browser monitor.")]
@@ -165,13 +170,15 @@ enum TerminalOutput {
 }
 
 /// Shared state for the HTTP handlers: the monitor for one-shot JSON snapshots,
-/// the broadcast sender each WebSocket subscribes to for the live feed, and the
-/// cached `index.html` bytes served with cache-busting headers.
+/// the broadcast sender each WebSocket subscribes to for the live feed, the
+/// cached `index.html` bytes served with cache-busting headers, and the
+/// per-worker incremental decode state behind `/api/global-log`.
 #[derive(Clone)]
 struct AppState {
     monitor: Arc<RwLock<MonitorState>>,
     deltas: broadcast::Sender<Bytes>,
     index_html: Bytes,
+    log_tails: global::LogTailCache,
 }
 
 #[tokio::main]
@@ -210,7 +217,13 @@ async fn main() -> Result<()> {
     // no command whose exit could end the run, so it serves until interrupted.
     if matches!(args.command, NwmCommand::Serve) {
         let monitor = Arc::new(RwLock::new(MonitorState::default()));
-        let ui = start_ui(&args.host, args.port, site_dir, monitor).await?;
+        let UiStart::Bound(ui) = start_ui(&args.host, args.port, &site_dir, monitor).await? else {
+            bail!(
+                "port {} is already in use; a second serve daemon is a configuration error, \
+                 stop the other monitor or pass --port",
+                args.port
+            );
+        };
         eprintln!("nix-web-monitor: serving the machine view (no wrapped command); Ctrl-C to stop");
         tokio::signal::ctrl_c()
             .await
@@ -225,7 +238,35 @@ async fn main() -> Result<()> {
 
     let job = build_job(args.command).await.context("planning job")?;
     let monitor = Arc::new(RwLock::new(MonitorState::new(job.command_label.clone())));
-    let ui = start_ui(&args.host, args.port, site_dir, monitor).await?;
+    let ui = match start_ui(&args.host, args.port, &site_dir, Arc::clone(&monitor)).await? {
+        UiStart::Bound(ui) => ui,
+        // A sibling monitor (an always-on `nwm serve`) already owns the port:
+        // run the job headless beside it instead of failing the switch. Its
+        // machine-builds panel shows this run's builds; the terminal keeps the
+        // summary stream.
+        UiStart::PortBusy => {
+            let url = format!("http://127.0.0.1:{}", args.port);
+            if !sibling_monitor(args.port).await {
+                bail!(
+                    "binding web monitor on {}:{}: address already in use, and {url}/api/state \
+                     is not a nix-web-monitor; stop the occupant or pass --port",
+                    args.host,
+                    args.port
+                );
+            }
+            eprintln!(
+                "nix-web-monitor: {url} already serves the monitor; running headless \
+                 (builds appear in its machine view)"
+            );
+            // No subscriber ever joins this channel; `broadcast_deltas`
+            // tolerates zero receivers.
+            let (deltas, _) = broadcast::channel::<Bytes>(DELTA_CHANNEL_CAPACITY);
+            let exit_code =
+                run_job(job, args.terminal_output, args.nix_verbose, monitor, deltas).await?;
+            // With no UI of our own to keep alive, `--exit-when-done` is moot.
+            std::process::exit(exit_code.unwrap_or(1));
+        }
+    };
 
     let build = tokio::spawn(run_job(
         job,
@@ -273,6 +314,15 @@ impl Ui {
     }
 }
 
+/// How [`start_ui`] came up: bound and serving, or the port already held
+/// (`AddrInUse`). The caller decides what a busy port means: fatal for `serve`
+/// mode (a second daemon is a configuration error), an attach for a wrapped
+/// command when [`sibling_monitor`] confirms the occupant.
+enum UiStart {
+    Bound(Ui),
+    PortBusy,
+}
+
 /// Bind the web server on `host:port` and start the machine-wide probes: the
 /// UI, the `/api/state` snapshot, and the `/ws` delta feed on one port, plus
 /// the two best-effort overlays that live for the whole life of the UI --
@@ -282,9 +332,9 @@ impl Ui {
 async fn start_ui(
     host: &str,
     port: u16,
-    site_dir: PathBuf,
+    site_dir: &Path,
     monitor: Arc<RwLock<MonitorState>>,
-) -> Result<Ui> {
+) -> Result<UiStart> {
     let index_html =
         Bytes::from(std::fs::read(site_dir.join("index.html")).context("reading index.html")?);
     let (deltas, _) = broadcast::channel::<Bytes>(DELTA_CHANNEL_CAPACITY);
@@ -293,42 +343,68 @@ async fn start_ui(
         .parse()
         .with_context(|| format!("invalid HTTP address {host}:{port}"))?;
 
+    let listener = match tokio::net::TcpListener::bind(http_addr).await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            return Ok(UiStart::PortBusy);
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("binding web monitor on {http_addr}"));
+        }
+    };
+
     let state = AppState {
         monitor: Arc::clone(&monitor),
         deltas: deltas.clone(),
         index_html,
+        log_tails: global::LogTailCache::new(),
     };
-    let http_server = serve(http_addr, site_dir, state).await?;
+    let http_server = serve(listener, site_dir, state);
 
     eprintln!("nix-web-monitor: http://{http_addr}");
 
     let daemon_probe = tokio::spawn(run_daemon_probe(Arc::clone(&monitor), deltas.clone()));
     let global_probe = tokio::spawn(run_global_probe(Arc::clone(&monitor), deltas.clone()));
 
-    Ok(Ui {
+    Ok(UiStart::Bound(Ui {
         monitor,
         deltas,
         http_server,
         daemon_probe,
         global_probe,
-    })
+    }))
 }
 
-async fn serve(
-    addr: SocketAddr,
-    site_dir: PathBuf,
-    state: AppState,
-) -> Result<tokio::task::JoinHandle<()>> {
-    let listener = tokio::net::TcpListener::bind(addr)
+/// Whether the busy port is held by another nix-web-monitor: loopback
+/// `GET /api/state` must answer with a decodable [`MonitorSnapshot`]. The
+/// probe targets loopback regardless of `--host`, since a bind that collided
+/// on the port is reachable there in every supported configuration.
+async fn sibling_monitor(port: u16) -> bool {
+    let Ok(client) = reqwest::Client::builder().timeout(PROBE_TIMEOUT).build() else {
+        return false;
+    };
+    let Ok(response) = client
+        .get(format!("http://127.0.0.1:{port}/api/state"))
+        .send()
         .await
-        .with_context(|| format!("binding web monitor on {addr}"))?;
-    let app = router(&site_dir, state);
+    else {
+        return false;
+    };
+    response.json::<MonitorSnapshot>().await.is_ok()
+}
 
-    Ok(tokio::spawn(async move {
+fn serve(
+    listener: tokio::net::TcpListener,
+    site_dir: &Path,
+    state: AppState,
+) -> tokio::task::JoinHandle<()> {
+    let app = router(site_dir, state);
+
+    tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, app).await {
             eprintln!("nix-web-monitor: web server failed: {error}");
         }
-    }))
+    })
 }
 
 /// Build the HTTP router: the JSON snapshot, the WebSocket live feed, the
@@ -374,10 +450,19 @@ async fn state_snapshot(State(state): State<AppState>) -> Json<MonitorSnapshot> 
     Json(state.monitor.read().await.snapshot())
 }
 
-/// Which machine build's log `/api/global-log` should tail, by derivation path.
+/// Which machine build's log `/api/global-log` should tail, by exact worker.
 #[derive(serde::Deserialize)]
 struct GlobalLogQuery {
     drv: String,
+    pid: i64,
+    start: i64,
+    /// The worker's kernel start-time generation as the UI last saw it in the
+    /// status payload (`start` is whole seconds, so this is what pins a pid
+    /// recycled within one second). Matched exactly, `None` included: a
+    /// request omitting it only resolves a worker the sampler could not see
+    /// (already gone when sampled), never a sampled one.
+    #[serde(rename = "startTicks")]
+    start_ticks: Option<u64>,
 }
 
 /// Tail of one machine build's on-disk log, as plain text.
@@ -392,14 +477,30 @@ async fn global_log(
     State(state): State<AppState>,
     Query(query): Query<GlobalLogQuery>,
 ) -> Response {
-    let Some(log_file) = global::log_file_for(&state.monitor, &query.drv).await else {
+    let Some(log_file) = global::log_file_for(
+        &state.monitor,
+        &query.drv,
+        query.pid,
+        query.start,
+        query.start_ticks,
+    )
+    .await
+    else {
         return (
             StatusCode::NOT_FOUND,
             "not an active machine build with a recorded log",
         )
             .into_response();
     };
-    match global::read_log_tail(log_file).await {
+    // The tail read resumes this worker's cached incremental decode (compressed
+    // logs only), keyed by the same exact identity the lookup above gated on.
+    let key = global::LogWorkerKey {
+        drv_path: query.drv,
+        pid: query.pid,
+        start_time: query.start,
+        start_ticks: query.start_ticks,
+    };
+    match state.log_tails.read_log_tail(key, log_file).await {
         Ok(text) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             (StatusCode::NOT_FOUND, "log not written yet").into_response()
@@ -1368,6 +1469,7 @@ mod tests {
             monitor: Arc::new(RwLock::new(MonitorState::default())),
             deltas,
             index_html: Bytes::from_static(b"<!doctype html><title>test</title>"),
+            log_tails: global::LogTailCache::new(),
         }
     }
 
@@ -1393,6 +1495,40 @@ mod tests {
         assert!(matches!(args.command, NwmCommand::Serve));
         assert_eq!(args.host, "127.0.0.1");
         assert_eq!(args.port, 8080);
+    }
+
+    /// The attach path's classifier: a busy port counts as a sibling monitor
+    /// only when `/api/state` decodes as a snapshot; a listener without that
+    /// route (an empty router 404ing everything) must keep the bind failure
+    /// fatal.
+    #[tokio::test]
+    async fn sibling_probe_accepts_monitor_and_rejects_others() {
+        let sibling = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind sibling");
+        let sibling_port = sibling.local_addr().expect("sibling addr").port();
+        let sibling_router = router(Path::new("/nonexistent-site"), test_state());
+        tokio::spawn(async move {
+            axum::serve(sibling, sibling_router)
+                .await
+                .expect("sibling serves");
+        });
+
+        let foreign = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind foreign");
+        let foreign_port = foreign.local_addr().expect("foreign addr").port();
+        tokio::spawn(async move {
+            axum::serve(foreign, axum::Router::new())
+                .await
+                .expect("foreign serves");
+        });
+
+        assert!(sibling_monitor(sibling_port).await, "monitor detected");
+        assert!(
+            !sibling_monitor(foreign_port).await,
+            "non-monitor listener rejected"
+        );
     }
 
     /// Adding the `serve` subcommand must not narrow the passthrough: any other
@@ -1446,6 +1582,9 @@ mod tests {
                 detected: true,
                 builds: vec![nix_web_monitor_parser::GlobalBuild {
                     drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
+                    pid: Some(42),
+                    start_time: Some(1_720_200_000),
+                    start_ticks: Some(777_000),
                     log_file: Some(log_path.to_string_lossy().into_owned()),
                     ..nix_web_monitor_parser::GlobalBuild::default()
                 }],
@@ -1453,36 +1592,55 @@ mod tests {
             });
         let app = router(Path::new("/nonexistent-site"), state);
 
-        let found = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
+        // The full worker identity is (drv, pid, start second, startTicks
+        // generation); each refusal case below breaks exactly one component.
+        let hit = "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000&startTicks=777000";
+        let misses = [
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=43&start=1720200000&startTicks=777000",
+                "a different worker for the same drv must not resolve to this log",
+            ),
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200001&startTicks=777000",
+                "a reused pid must not resolve the previous worker's log",
+            ),
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000&startTicks=777001",
+                "a pid reused within the same second is a new generation, not this log",
+            ),
+            (
+                "/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42&start=1720200000",
+                "omitting the generation must not wildcard onto a sampled worker",
+            ),
+            (
+                "/api/global-log?drv=%2Fetc%2Fpasswd&pid=42&start=1720200000&startTicks=777000",
+                "a drv the machine view does not list must not resolve to a file",
+            ),
+        ];
+
+        let request_status = |uri: &str| {
+            let request = Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request builds");
+            let app = app.clone();
+            async move { app.oneshot(request).await.expect("router responds") }
+        };
+
+        let found = request_status(hit).await;
         assert_eq!(found.status(), StatusCode::OK);
         let body = axum::body::to_bytes(found.into_body(), 1 << 20)
             .await
             .expect("body collects");
         assert_eq!(&body[..], b"builder says hi\n");
 
-        let unknown = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/global-log?drv=%2Fetc%2Fpasswd")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
-        assert_eq!(
-            unknown.status(),
-            StatusCode::NOT_FOUND,
-            "a drv the machine view does not list must not resolve to a file"
-        );
+        for (uri, reason) in misses {
+            assert_eq!(
+                request_status(uri).await.status(),
+                StatusCode::NOT_FOUND,
+                "{reason}"
+            );
+        }
 
         std::fs::remove_dir_all(&dir).expect("clean scratch dir");
     }

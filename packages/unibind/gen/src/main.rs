@@ -8,12 +8,13 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context as _};
+use anyhow::{Context as _, bail};
 use clap::Parser as _;
 use unibind_core::ir::Interface;
 use unibind_gen::artifact;
 use unibind_gen::ex::ExEmitter;
 use unibind_gen::host::{self, HostEmitter};
+use unibind_gen::jvm::JvmEmitter;
 use unibind_gen::py::PyEmitter;
 use unibind_gen::ts::TsEmitter;
 
@@ -38,6 +39,9 @@ enum Command {
     /// Emit the Elixir host files: `lib/<app>/native.ex` with the NIF
     /// stubs and the typespec'd `lib/<app>.ex` wrapper.
     Ex(ExArgs),
+    /// Emit the Java host file: a single `<Class>.java` wrapping the
+    /// C-ABI symbols through the FFM API.
+    Jvm(JvmArgs),
 }
 
 #[derive(clap::Args)]
@@ -87,6 +91,22 @@ struct ExArgs {
     out: PathBuf,
 }
 
+#[derive(clap::Args)]
+struct JvmArgs {
+    /// Compiled cdylib carrying the embedded IR.
+    #[arg(long)]
+    artifact: PathBuf,
+
+    /// Java package the class is declared in (`com.example.sample`); the
+    /// file lands under the matching directory tree. Omit for the unnamed
+    /// package at the output root.
+    #[arg(long)]
+    package: Option<String>,
+
+    /// Output root; files are written at paths relative to it.
+    #[arg(long)]
+    out: PathBuf,
+}
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -94,28 +114,31 @@ fn main() -> anyhow::Result<()> {
         Command::Py(args) => run_py(&args),
         Command::Ts(args) => run_ts(&args),
         Command::Ex(args) => run_ex(&args),
+        Command::Jvm(args) => run_jvm(&args),
     }
 }
 
-fn run_py(args: &PyArgs) -> anyhow::Result<()> {
-    let embedded = artifact::read(&args.artifact)?;
-    let interface = single_interface(&args.artifact, &embedded, "py")?;
+/// Read the artifact's one interface and emit it: the whole run for every
+/// target whose emitter needs nothing else from the artifact path.
+fn run_host(artifact: &Path, out: &Path, emitter: &dyn HostEmitter) -> anyhow::Result<()> {
+    let embedded = artifact::read(artifact)?;
+    let interface = single_interface(artifact, &embedded, emitter.target())?;
+    emit_and_write(emitter, interface, out)
+}
 
+fn run_py(args: &PyArgs) -> anyhow::Result<()> {
     let emitter = PyEmitter {
         package: args.package.clone(),
         skip_init: args.skip_init,
     };
-    emit_and_write(&emitter, interface, &args.out)
+    run_host(&args.artifact, &args.out, &emitter)
 }
 
 fn run_ts(args: &TsArgs) -> anyhow::Result<()> {
-    let embedded = artifact::read(&args.artifact)?;
-    let interface = single_interface(&args.artifact, &embedded, "ts")?;
-
     let emitter = TsEmitter {
         addon: args.addon.clone(),
     };
-    emit_and_write(&emitter, interface, &args.out)
+    run_host(&args.artifact, &args.out, &emitter)
 }
 
 /// The one interface of `artifact_path`; every generator handles exactly
@@ -158,24 +181,14 @@ fn emit_and_write(
     Ok(())
 }
 
-fn run_ex(args: &ExArgs) -> anyhow::Result<()> {
-    let embedded = artifact::read(&args.artifact)?;
-    let interface = match embedded.interfaces.as_slice() {
-        [interface] => interface,
-        [] => bail!("{} embeds no unibind interface", args.artifact.display()),
-        several => bail!(
-            "{} embeds {} unibind interfaces ({}); the ex generator handles exactly one \
-             per artifact",
-            args.artifact.display(),
-            several.len(),
-            several
-                .iter()
-                .map(|interface| interface.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+fn run_jvm(args: &JvmArgs) -> anyhow::Result<()> {
+    let emitter = JvmEmitter {
+        package: args.package.clone(),
     };
+    run_host(&args.artifact, &args.out, &emitter)
+}
 
+fn run_ex(args: &ExArgs) -> anyhow::Result<()> {
     let Some(nif_soname) = args.artifact.file_name() else {
         bail!(
             "{} has no file name to derive the NIF soname from",
@@ -185,13 +198,5 @@ fn run_ex(args: &ExArgs) -> anyhow::Result<()> {
     let emitter = ExEmitter {
         nif_soname: nif_soname.to_string_lossy().into_owned(),
     };
-    let files = emitter
-        .emit(interface)
-        .with_context(|| format!("emitting the {} host files", emitter.target()))?;
-    host::write_host_files(&args.out, &files)?;
-
-    for file in &files {
-        println!("{}", file.path);
-    }
-    Ok(())
+    run_host(&args.artifact, &args.out, &emitter)
 }

@@ -1,0 +1,715 @@
+diff --git a/nix_fast_build/__init__.py b/nix_fast_build/__init__.py
+index bd131f6..90c13f0 100644
+--- a/nix_fast_build/__init__.py
++++ b/nix_fast_build/__init__.py
+@@ -15,6 +15,7 @@ if TYPE_CHECKING:
+ 
+ from .build import Build, BuildQueue, JobQueue, OptionalQueue, StopTask
+ from .errors import Error
++from .liveness import BuildLivenessMonitor
+ from .options import EvalMode, Options, ResultFormat, parse_args
+ from .pipe import Pipe
+ from .processes import (
+@@ -78,6 +79,11 @@ async def run(stack: AsyncExitStack, opts: Options) -> int:
+     results: list[Result] = []
+     result_queue: Queue[Result | None] = Queue()
+     build_queue = JobQueue()
++    liveness_monitor = (
++        BuildLivenessMonitor(opts.liveness_policy)
++        if opts.liveness_policy.enabled
++        else None
++    )
+ 
+     # Build list of optional queues that are actually needed
+     optional_queues: list[OptionalQueue] = []
+@@ -142,6 +148,12 @@ async def run(stack: AsyncExitStack, opts: Options) -> int:
+ 
+     async with TaskGroup() as tg:
+         tasks: list[asyncio.Task[object]] = []
++        liveness_task: asyncio.Task[object] | None = None
++        if liveness_monitor is not None:
++            liveness_task = tg.create_task(
++                liveness_monitor.run(), name="build-liveness"
++            )
++            tasks.append(liveness_task)
+         dequeue_task = tg.create_task(dequeue_results(), name="dequeue-results")
+         tasks.append(dequeue_task)
+         evaluation = tg.create_task(
+@@ -164,6 +176,7 @@ async def run(stack: AsyncExitStack, opts: Options) -> int:
+                     [oq.queue for oq in optional_queues],
+                     result_queue,
+                     opts,
++                    liveness_monitor=liveness_monitor,
+                     nom_pipe=nom_pipe,
+                 ),
+                 name=f"build-{i}",
+@@ -202,6 +215,11 @@ async def run(stack: AsyncExitStack, opts: Options) -> int:
+             progress_task.cancel()
+             await progress_task
+ 
++        if liveness_monitor is not None and liveness_task is not None:
++            logger.debug("Stopping build liveness monitor")
++            liveness_monitor.stop()
++            await liveness_task
++
+         # All workers are done; stop the result consumer.
+         result_queue.put_nowait(None)
+         await dequeue_task
+diff --git a/nix_fast_build/build.py b/nix_fast_build/build.py
+index 1113bf0..9729dc1 100644
+--- a/nix_fast_build/build.py
++++ b/nix_fast_build/build.py
+@@ -12,6 +12,7 @@ from dataclasses import dataclass
+ from pathlib import Path
+ from typing import IO, Any, TypeVar
+ 
++from .liveness import BuildLivenessMonitor
+ from .options import Options, maybe_remote, nix_shell
+ from .processes import ensure_stop
+ 
+@@ -24,6 +25,7 @@ class BuildResult:
+ 
+     return_code: int
+     log_output: str
++    error: str | None = None
+ 
+ 
+ @dataclass
+@@ -31,12 +33,14 @@ class Build:
+     attr: str
+     drv_path: str
+     outputs: dict[str, str]
++    required_system_features: frozenset[str] = frozenset()
+ 
+     async def build(
+         self,
+         stack: AsyncExitStack,
+         build_output: IO[bytes],
+         opts: Options,
++        liveness_monitor: BuildLivenessMonitor | None = None,
+         nom_pipe: IO[bytes] | None = None,
+     ) -> BuildResult:
+         """Build and return BuildResult."""
+@@ -47,7 +51,23 @@ class Build:
+                     self.attr, self.drv_path, build_output, opts, nom_pipe=nom_pipe
+                 )
+             )
+-            rc = await proc.wait()
++            diagnostic = None
++            if liveness_monitor is None:
++                rc = await proc.wait()
++            else:
++                rc, diagnostic = await liveness_monitor.wait_for_build(
++                    proc,
++                    attr=self.attr,
++                    drv_path=self.drv_path,
++                    required_system_features=self.required_system_features,
++                )
++            if diagnostic is not None:
++                logger.error(diagnostic)
++                return BuildResult(
++                    return_code=rc,
++                    log_output=diagnostic,
++                    error=diagnostic,
++                )
+             if rc == 0:
+                 logger.debug(f"build {self.attr} succeeded")
+                 return BuildResult(return_code=rc, log_output="")
+@@ -249,7 +269,14 @@ async def nix_build(
+     nom_pipe: IO[bytes] | None = None,
+ ) -> AsyncIterator[Process]:
+     args = opts.nix_command(
+-        ["build", f"{installable}^*", "--keep-going", *opts.options, *opts.store_args]
++        [
++            "build",
++            f"{installable}^*",
++            "--keep-going",
++            *opts.liveness_policy.nix_options(),
++            *opts.options,
++            *opts.store_args,
++        ]
+     )
+     if nom_pipe is not None:
+         args += ["--log-format", "internal-json", "-v"]
+@@ -302,6 +329,7 @@ class Job:
+     attr: str
+     drv_path: str
+     outputs: dict[str, str]
++    required_system_features: frozenset[str] = frozenset()
+ 
+ 
+ class StopTask:
+diff --git a/nix_fast_build/liveness.py b/nix_fast_build/liveness.py
+new file mode 100644
+index 0000000..5a48343
+--- /dev/null
++++ b/nix_fast_build/liveness.py
+@@ -0,0 +1,217 @@
++import asyncio
++import contextlib
++import json
++import os
++import signal
++import time
++from asyncio.subprocess import Process
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any, cast
++
++BIG_PARALLEL_FEATURE = "big-parallel"
++
++
++class BuildStatusError(RuntimeError):
++    def __init__(self, path: Path, source: Exception) -> None:
++        self.path = path
++        self.source = source
++        super().__init__(path, source)
++
++    def __str__(self) -> str:
++        return f"cannot read Nix build status {self.path}: {self.source}"
++
++
++@dataclass(frozen=True)
++class LivenessPolicy:
++    ordinary_seconds: float
++    big_parallel_seconds: float
++    poll_seconds: float = 1.0
++
++    def deadline(self, required_system_features: frozenset[str]) -> float:
++        if BIG_PARALLEL_FEATURE in required_system_features:
++            return self.big_parallel_seconds
++        return self.ordinary_seconds
++
++    @property
++    def enabled(self) -> bool:
++        return self.ordinary_seconds > 0
++
++    def nix_options(self) -> list[str]:
++        if not self.enabled:
++            return []
++        return [
++            "--option",
++            "max-no-progress-time",
++            str(int(self.ordinary_seconds)),
++            "--option",
++            "big-parallel-max-no-progress-time",
++            str(int(self.big_parallel_seconds)),
++        ]
++
++
++@dataclass(frozen=True)
++class ProgressSnapshot:
++    phase: str
++    goals: tuple[str, ...] = ()
++
++
++@dataclass
++class BuildWatch:
++    attr: str
++    drv_path: str
++    deadline_seconds: float
++    last_progress_at: float
++    last_snapshot: ProgressSnapshot = field(
++        default_factory=lambda: ProgressSnapshot(phase="waiting-for-builder")
++    )
++
++    def observe(self, snapshot: ProgressSnapshot, now: float) -> str | None:
++        if snapshot.phase == "builder-active":
++            # The daemon owns running-builder liveness and cancellation.
++            self.last_snapshot = snapshot
++            self.last_progress_at = now
++            return None
++        if snapshot != self.last_snapshot:
++            self.last_snapshot = snapshot
++            self.last_progress_at = now
++            return None
++        silent_for = now - self.last_progress_at
++        if silent_for < self.deadline_seconds:
++            return None
++        return (
++            f"derivation {self.drv_path} ({self.attr}) had no daemon-owned goal "
++            f"for {silent_for:.0f}s; state={snapshot.phase}; goals={len(snapshot.goals)}"
++        )
++
++
++@dataclass
++class _Subscription:
++    watch: BuildWatch
++    client_pid: int
++    stalled: asyncio.Future[str]
++
++
++class BuildLivenessMonitor:
++    def __init__(
++        self,
++        policy: LivenessPolicy,
++        *,
++        state_dir: Path | None = None,
++    ) -> None:
++        self.policy = policy
++        self.status_dir = (
++            state_dir
++            if state_dir is not None
++            else Path(os.environ.get("NIX_STATE_DIR", "/nix/var/nix"))
++        ) / "status"
++        self._subscriptions: dict[int, _Subscription] = {}
++        self._next_id = 0
++        self._stop = asyncio.Event()
++
++    async def run(self) -> None:
++        while not self._stop.is_set():
++            self.poll(time.monotonic())
++            with contextlib.suppress(TimeoutError):
++                await asyncio.wait_for(
++                    self._stop.wait(), timeout=self.policy.poll_seconds
++                )
++
++    def stop(self) -> None:
++        self._stop.set()
++
++    def poll(self, now: float) -> None:
++        entries = self._read_status_entries()
++        for subscription in self._subscriptions.values():
++            snapshot = _snapshot_for(subscription.client_pid, entries)
++            diagnostic = subscription.watch.observe(snapshot, now)
++            if diagnostic is not None and not subscription.stalled.done():
++                subscription.stalled.set_result(diagnostic)
++
++    async def wait_for_build(
++        self,
++        proc: Process,
++        *,
++        attr: str,
++        drv_path: str,
++        required_system_features: frozenset[str],
++    ) -> tuple[int, str | None]:
++        loop = asyncio.get_running_loop()
++        subscription_id = self._next_id
++        self._next_id += 1
++        stalled: asyncio.Future[str] = loop.create_future()
++        self._subscriptions[subscription_id] = _Subscription(
++            watch=BuildWatch(
++                attr=attr,
++                drv_path=drv_path,
++                deadline_seconds=self.policy.deadline(required_system_features),
++                last_progress_at=time.monotonic(),
++            ),
++            client_pid=proc.pid,
++            stalled=stalled,
++        )
++        process_done = asyncio.create_task(proc.wait())
++        try:
++            done, _ = await asyncio.wait(
++                {
++                    cast("asyncio.Future[object]", process_done),
++                    cast("asyncio.Future[object]", stalled),
++                },
++                return_when=asyncio.FIRST_COMPLETED,
++            )
++            if process_done in done:
++                return process_done.result(), None
++            if proc.returncode is not None:
++                return await process_done, None
++            diagnostic = stalled.result()
++            await _stop_process(proc)
++            await process_done
++            return 124, diagnostic
++        finally:
++            self._subscriptions.pop(subscription_id, None)
++            if not process_done.done():
++                process_done.cancel()
++                with contextlib.suppress(asyncio.CancelledError):
++                    await process_done
++
++    def _read_status_entries(self) -> list[dict[str, Any]]:
++        if not self.status_dir.exists():
++            return []
++        entries: list[dict[str, Any]] = []
++        for path in self.status_dir.glob("*.json"):
++            try:
++                payload = json.loads(path.read_text())
++            except FileNotFoundError:
++                continue
++            except (OSError, json.JSONDecodeError) as error:
++                raise BuildStatusError(path, error) from error
++            if isinstance(payload, dict):
++                payload["_status_file"] = path.name
++                entries.append(payload)
++        return entries
++
++
++async def _stop_process(proc: Process, wait_seconds: float = 3.0) -> None:
++    if proc.returncode is not None:
++        return
++    with contextlib.suppress(ProcessLookupError):
++        proc.send_signal(signal.SIGTERM)
++    try:
++        await asyncio.wait_for(proc.wait(), timeout=wait_seconds)
++    except TimeoutError:
++        with contextlib.suppress(ProcessLookupError):
++            proc.kill()
++        await proc.wait()
++
++
++def _snapshot_for(
++    client_pid: int,
++    entries: list[dict[str, Any]],
++) -> ProgressSnapshot:
++    matching = [entry for entry in entries if entry.get("clientPid") == client_pid]
++    if not matching:
++        return ProgressSnapshot(phase="waiting-for-builder")
++    return ProgressSnapshot(
++        phase="builder-active",
++        goals=tuple(sorted(str(entry.get("_status_file", "")) for entry in matching)),
++    )
+diff --git a/nix_fast_build/options.py b/nix_fast_build/options.py
+index 1a63b83..faa32dc 100644
+--- a/nix_fast_build/options.py
++++ b/nix_fast_build/options.py
+@@ -6,10 +6,13 @@ import multiprocessing
+ import os
+ import shlex
+ import shutil
++import sys
+ from dataclasses import dataclass, field
+ from pathlib import Path
++from typing import Any
+ 
+ from .errors import Error
++from .liveness import LivenessPolicy
+ 
+ 
+ def _nix_command(nix_bin: list[str], args: list[str]) -> list[str]:
+@@ -62,6 +65,9 @@ class Options:
+     select_expr: str | None = None
+     fail_fast: bool = False
+     reference_lock_file: str | None = None
++    liveness_policy: LivenessPolicy = field(
++        default_factory=lambda: LivenessPolicy(0, 0)
++    )
+ 
+     cachix_cache: str | None = None
+ 
+@@ -131,7 +137,7 @@ def nix_shell(fallback_package: str, wanted_command: str) -> list[str]:
+ 
+ async def get_nix_config(
+     nix_bin: list[str], remote: str | None, remote_ssh_options: list[str]
+-) -> dict[str, str]:
++) -> dict[str, Any]:
+     args = _maybe_remote(
+         _nix_command(nix_bin, ["config", "show", "--json"]), remote, remote_ssh_options
+     )
+@@ -149,7 +155,7 @@ async def get_nix_config(
+         raise Error(msg)
+     data = json.loads(stdout)
+ 
+-    config = {}
++    config: dict[str, Any] = {}
+     for key, value in data.items():
+         config[key] = value["value"]
+     return config
+@@ -408,6 +414,24 @@ async def parse_args(args: list[str]) -> Options:
+         default=False,
+         help="Stop as soon as any build or evaluation fails, instead of continuing with remaining builds.",
+     )
++    parser.add_argument(
++        "--max-no-progress-seconds",
++        type=int,
++        default=0,
++        help=(
++            "Fail an ordinary derivation after this many seconds without builder, "
++            "CPU, I/O, or log progress (0 disables the watchdog)."
++        ),
++    )
++    parser.add_argument(
++        "--big-parallel-max-no-progress-seconds",
++        type=int,
++        default=0,
++        help=(
++            "No-progress deadline for derivations requiring big-parallel; must "
++            "be at least --max-no-progress-seconds."
++        ),
++    )
+ 
+     a = parser.parse_args(args)
+ 
+@@ -497,6 +521,55 @@ async def parse_args(args: list[str]) -> Options:
+     nix_build_bin = shlex.split(a.nix_build)
+ 
+     nix_config = await get_nix_config(nix_bin, a.remote, remote_ssh_options)
++    if a.max_no_progress_seconds < 0:
++        parser.error("--max-no-progress-seconds must not be negative")
++    if a.big_parallel_max_no_progress_seconds < 0:
++        parser.error("--big-parallel-max-no-progress-seconds must not be negative")
++    if (
++        a.max_no_progress_seconds == 0
++        and a.big_parallel_max_no_progress_seconds > 0
++    ):
++        parser.error(
++            "--big-parallel-max-no-progress-seconds requires "
++            "--max-no-progress-seconds"
++        )
++    if (
++        a.max_no_progress_seconds > 0
++        and a.big_parallel_max_no_progress_seconds < a.max_no_progress_seconds
++    ):
++        parser.error(
++            "--big-parallel-max-no-progress-seconds must be at least "
++            "--max-no-progress-seconds"
++        )
++    if a.max_no_progress_seconds > 0:
++        if sys.platform != "linux":
++            parser.error(
++                "--max-no-progress-seconds requires Linux process activity metrics"
++            )
++        if a.remote or a.store:
++            parser.error(
++                "--max-no-progress-seconds supports only the local daemon; "
++                "remote status belongs to another host"
++            )
++        raw_features = nix_config.get("experimental-features", [])
++        features = (
++            set(raw_features)
++            if isinstance(raw_features, list)
++            else set(str(raw_features).split())
++        )
++        if "build-status-dir" not in features:
++            parser.error(
++                "--max-no-progress-seconds requires the Nix daemon's "
++                "build-status-dir experimental feature"
++            )
++        for setting in (
++            "max-no-progress-time",
++            "big-parallel-max-no-progress-time",
++        ):
++            if setting not in nix_config:
++                parser.error(
++                    f"--max-no-progress-seconds requires Nix setting {setting}"
++                )
+     if a.max_jobs is None:
+         a.max_jobs = int(nix_config.get("max-jobs", 0))
+     if a.no_nom is None:
+@@ -556,4 +629,8 @@ async def parse_args(args: list[str]) -> Options:
+         select_expr=a.select,
+         reference_lock_file=a.reference_lock_file,
+         fail_fast=a.fail_fast,
++        liveness_policy=LivenessPolicy(
++            ordinary_seconds=a.max_no_progress_seconds,
++            big_parallel_seconds=a.big_parallel_max_no_progress_seconds,
++        ),
+     )
+diff --git a/nix_fast_build/workers.py b/nix_fast_build/workers.py
+index cf16c73..a9b1ccb 100644
+--- a/nix_fast_build/workers.py
++++ b/nix_fast_build/workers.py
+@@ -13,6 +13,7 @@ from typing import IO, Any
+ 
+ from .build import Build, BuildQueue, Job, JobQueue, OptionalQueue, StopTask
+ from .errors import Error
++from .liveness import BuildLivenessMonitor
+ from .options import Options, maybe_remote, nix_shell
+ from .results import Result, ResultType
+ 
+@@ -75,7 +76,15 @@ async def run_evaluation(
+         if not drv_path:
+             msg = f"nix-eval-jobs did not return a drvPath: {line.decode()}"
+             raise Error(msg)
+-        build_queue.put_nowait(Job(attr, drv_path, _job_outputs(job)))
++        features = job.get("requiredSystemFeatures", [])
++        if not isinstance(features, list) or not all(
++            isinstance(feature, str) for feature in features
++        ):
++            msg = f"nix-eval-jobs returned invalid requiredSystemFeatures: {line.decode()}"
++            raise Error(msg)
++        build_queue.put_nowait(
++            Job(attr, drv_path, _job_outputs(job), frozenset(features))
++        )
+     return await eval_proc.wait()
+ 
+ 
+@@ -86,6 +95,7 @@ async def run_builds(
+     optional_queues: list[BuildQueue],
+     result_queue: "Queue[Result | None]",
+     opts: Options,
++    liveness_monitor: BuildLivenessMonitor | None = None,
+     nom_pipe: IO[bytes] | None = None,
+ ) -> int:
+     drv_paths: set[Any] = set()
+@@ -104,10 +114,19 @@ async def run_builds(
+             if job.drv_path in drv_paths:
+                 continue
+             drv_paths.add(job.drv_path)
+-            build = Build(job.attr, job.drv_path, job.outputs)
++            build = Build(
++                job.attr,
++                job.drv_path,
++                job.outputs,
++                job.required_system_features,
++            )
+             start_time = timeit.default_timer()
+             build_result = await build.build(
+-                stack, build_output, opts, nom_pipe=nom_pipe
++                stack,
++                build_output,
++                opts,
++                liveness_monitor=liveness_monitor,
++                nom_pipe=nom_pipe,
+             )
+             await result_queue.put(
+                 Result(
+@@ -115,7 +134,10 @@ async def run_builds(
+                     attr=job.attr,
+                     success=build_result.return_code == 0,
+                     duration=timeit.default_timer() - start_time,
+-                    error=f"build exited with {build_result.return_code}"
++                    error=(
++                        build_result.error
++                        or f"build exited with {build_result.return_code}"
++                    )
+                     if build_result.return_code != 0
+                     else None,
+                     log_output=build_result.log_output
+diff --git a/tests/test_liveness.py b/tests/test_liveness.py
+new file mode 100644
+index 0000000..c81e82a
+--- /dev/null
++++ b/tests/test_liveness.py
+@@ -0,0 +1,138 @@
++import asyncio
++import signal
++from pathlib import Path
++
++from nix_fast_build.liveness import (
++    BIG_PARALLEL_FEATURE,
++    BuildLivenessMonitor,
++    BuildWatch,
++    LivenessPolicy,
++    ProgressSnapshot,
++    _snapshot_for,
++)
++
++
++class _BlockedProcess:
++    pid = 123
++
++    def __init__(self) -> None:
++        self.returncode: int | None = None
++        self.stopped = asyncio.Event()
++        self.signal: int | None = None
++
++    async def wait(self) -> int:
++        await self.stopped.wait()
++        assert self.returncode is not None
++        return self.returncode
++
++    def send_signal(self, signal_number: int) -> None:
++        self.signal = signal_number
++        self.returncode = -signal_number
++        self.stopped.set()
++
++    def kill(self) -> None:
++        self.returncode = -signal.SIGKILL
++        self.stopped.set()
++
++
++def _watch(deadline: float = 60) -> BuildWatch:
++    return BuildWatch(
++        attr="check",
++        drv_path="/nix/store/example.drv",
++        deadline_seconds=deadline,
++        last_progress_at=0,
++    )
++
++
++def test_no_builder_wait_times_out() -> None:
++    watch = _watch()
++
++    diagnostic = watch.observe(
++        ProgressSnapshot(phase="waiting-for-builder"), 60
++    )
++
++    assert diagnostic is not None
++    assert "state=waiting-for-builder" in diagnostic
++    assert "/nix/store/example.drv" in diagnostic
++
++
++def test_status_is_correlated_to_exact_client_pid() -> None:
++    unrelated = {
++        "clientPid": 456,
++        "pid": 789,
++        "_status_file": "unrelated.json",
++    }
++
++    snapshot = _snapshot_for(123, [unrelated])
++
++    assert snapshot == ProgressSnapshot(phase="waiting-for-builder")
++
++
++def test_no_builder_wait_stops_client(tmp_path: Path) -> None:
++    async def run() -> None:
++        monitor = BuildLivenessMonitor(
++            LivenessPolicy(
++                ordinary_seconds=0.01,
++                big_parallel_seconds=0.02,
++                poll_seconds=0.001,
++            ),
++            state_dir=tmp_path,
++        )
++        proc = _BlockedProcess()
++        monitor_task = asyncio.create_task(monitor.run())
++        return_code, diagnostic = await monitor.wait_for_build(
++            proc,
++            attr="check",
++            drv_path="/nix/store/example.drv",
++            required_system_features=frozenset(),
++        )
++        monitor.stop()
++        await monitor_task
++        assert return_code == 124
++        assert diagnostic is not None
++        assert proc.signal == signal.SIGTERM
++
++    asyncio.run(run())
++
++
++def test_running_builder_is_owned_by_daemon() -> None:
++    watch = _watch()
++    builder = ProgressSnapshot(
++        phase="builder-active", goals=("example-123.json",)
++    )
++
++    assert watch.observe(builder, 1) is None
++    assert watch.observe(builder, 61) is None
++
++
++def test_active_long_build_survives() -> None:
++    watch = _watch()
++
++    for elapsed in range(1, 601):
++        snapshot = ProgressSnapshot(
++            phase="builder-active",
++            goals=("example-123.json",),
++        )
++        assert watch.observe(snapshot, float(elapsed)) is None
++
++
++def test_big_parallel_gets_extended_deadline() -> None:
++    policy = LivenessPolicy(ordinary_seconds=60, big_parallel_seconds=300)
++    deadline = policy.deadline(frozenset({BIG_PARALLEL_FEATURE}))
++    watch = _watch(deadline)
++
++    assert deadline == 300
++    assert watch.observe(ProgressSnapshot(phase="waiting-for-builder"), 60) is None
++    assert watch.observe(ProgressSnapshot(phase="waiting-for-builder"), 299) is None
++    assert watch.observe(ProgressSnapshot(phase="waiting-for-builder"), 300)
++
++
++def test_policy_renders_daemon_options() -> None:
++    assert LivenessPolicy(60, 300).nix_options() == [
++        "--option",
++        "max-no-progress-time",
++        "60",
++        "--option",
++        "big-parallel-max-no-progress-time",
++        "300",
++    ]

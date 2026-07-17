@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import os
-import time
-
 from ix_notebook_mcp import store
 
 
 def _capture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, object]]:
     calls: list[tuple[str, str, object]] = []
 
-    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
         calls.append((method, url, body if body is not None else content))
         if url.endswith("/api/blob"):
             return {"hash": f"h{len(calls):063d}"}
@@ -18,17 +15,12 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, object]]:
         return [] if isinstance(body, list) else {"seq": 1, "id": "f1"}
 
     monkeypatch.setattr(store, "_http_json", fake_json)
-    monkeypatch.setattr(store, "_http_bytes", lambda method, url, content=None: b"[]")
+    monkeypatch.setattr(store, "_http_bytes", lambda method, url, content=None, headers=None: b"[]")
     return calls
 
 
 def _drain(conn: store.WeaveStore, timeout: float = 2.0) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        with conn._cv:
-            if not conn._queue:
-                return
-        time.sleep(0.02)
+    assert conn.flush(timeout=timeout), "spool did not drain"
 
 
 def test_start_finish_set_session_and_snapshot_emit_fact_shapes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -37,7 +29,7 @@ def test_start_finish_set_session_and_snapshot_emit_fact_shapes(tmp_path: Path, 
     calls = _capture(monkeypatch)
     conn = store.connect(tmp_path / "session.ixnb")
     store.start(conn, id="abc", name="Example", code="x = 1", started_at=10.0, budget=3.0, topic="t")
-    store.finish(conn, id="abc", status="done", ended_at=12.0, output="hello", result="1", error=None, outputs=[{"text": "hello"}], bindings={"x": 1}, namespace=[])
+    store.finish(conn, id="abc", kind="cell", status="done", ended_at=12.0, output="hello", result="1", error=None, outputs=[{"text": "hello"}], bindings={"x": 1}, namespace=[])
     store.set_session(conn, name="Demo", client="claude")
     store.save_snapshot(conn, created_at=13.0, blob=b"state", names=["x"], skipped=[])
     _drain(conn)

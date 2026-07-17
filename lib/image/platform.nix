@@ -531,11 +531,11 @@ in {
           ix.healthChecks set more than one of `unit`, `http`, and `tcp`, which
           conflict (each derives the check's command):
             ${
-          lib.concatMapAttrsStringSep ", " (
-            name: check: "${name} (${lib.concatStringsSep " + " (probeSugars check)})"
-          )
-          multiSugarHealthChecks
-        }
+            lib.concatMapAttrsStringSep ", " (
+              name: check: "${name} (${lib.concatStringsSep " + " (probeSugars check)})"
+            )
+            multiSugarHealthChecks
+          }
 
           Pick the one probe that proves readiness, or write an explicit
           `command` when a single probe is not enough.
@@ -615,6 +615,12 @@ in {
       # for a lease that will never arrive, which keeps network-online.target
       # pending and blocks services such as minecraft.
       useDHCP = false;
+
+      # ix-vm-guest writes the runtime-provided nameservers to /etc/resolv.conf
+      # before starting the image. NixOS 26.05 enables resolvconf by default;
+      # with no NixOS-owned nameservers, stage 2 then replaces that file with an
+      # empty one and breaks DNS in an otherwise connected VM.
+      resolvconf.enable = lib.mkDefault false;
 
       # In-guest firewall is the NixOS nftables backend, enforcing each
       # module's `services.*.openFirewall` and `networking.firewall.allowed*`

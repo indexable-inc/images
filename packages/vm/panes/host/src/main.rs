@@ -28,6 +28,8 @@ mod jitter;
 mod keymap;
 #[cfg(target_os = "macos")]
 mod render;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod send_queue;
 #[cfg(target_os = "macos")]
 mod trace;
 #[cfg(target_os = "macos")]
@@ -112,7 +114,8 @@ fn main() -> ExitCode {
 #[cfg(target_os = "macos")]
 fn run_host(cli: Cli) -> ExitCode {
     let target = if cli.mock {
-        let path = std::env::temp_dir().join(format!("panes-host-mock-{}.sock", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("panes-host-mock-{}.sock", std::process::id()));
         let serve_path = path.clone();
         std::thread::spawn(move || {
             if let Err(error) = mock::serve(&serve_path) {

@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::str;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -149,6 +150,15 @@ fn first_seed(store: &Store, meta: &Meta, incoming: &[u8]) -> Result<Outcome> {
                     "yourEdits": diff::diff_bytes(meta.format, incoming, &found),
                 })),
             )?;
+            // The pre-existing target can still be a read-only store symlink
+            // (a home-manager link left by a `home.file` -> `mutable.files`
+            // migration). Keeping its content as day-one drift is pointless
+            // unless the file is writable, so materialize the symlink into a
+            // plain file holding the same bytes — the one seeding path that
+            // otherwise skips write_creating_parents' symlink replacement.
+            if fs::symlink_metadata(target).is_ok_and(|md| md.file_type().is_symlink()) {
+                write_creating_parents(target, &found)?;
+            }
             Ok(Outcome::DriftKept)
         }
         (_, pre_existing) => {
@@ -268,11 +278,83 @@ pub fn reseed_ephemeral(store: &Store) -> Result<()> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum State {
+pub enum State {
     Clean,
     Drifted,
     Conflict,
     Snoozed,
+}
+
+/// One side of a pending file's diff, in the representation its format is
+/// modeled in. Structured formats diff as logical ops: object key order is
+/// not significant (RFC 8259 §4, and likewise toml/yaml/plist tables), so a
+/// byte-level line diff would bury one real edit under an app rewriting the
+/// file in its own key order. Only true text files diff as lines.
+pub enum TuiDiff {
+    Text { old: String, new: String },
+    Ops(Vec<Op>),
+}
+
+fn tui_diff(format: Format, old: &[u8], new: &[u8]) -> TuiDiff {
+    match (format, str::from_utf8(old), str::from_utf8(new)) {
+        (Format::Text, Ok(old), Ok(new)) => TuiDiff::Text {
+            old: old.to_owned(),
+            new: new.to_owned(),
+        },
+        // Structured formats, plus non-UTF-8 text sides (a binary plist,
+        // say) where a lossy line diff would be gibberish.
+        _ => TuiDiff::Ops(diff::diff_bytes(format, old, new)),
+    }
+}
+
+/// Everything the TUI needs to render one pending file: identity, the diff
+/// of each side (base vs the file on disk, plus base vs the staged incoming
+/// base while a conflict is unresolved), and the conflict overlap.
+// clone:ignore -- identifier-blind shape match with cve-scan's unrelated
+// PackageEvidence (any two eight-field pub structs collide).
+pub struct TuiEntry {
+    pub path: String,
+    pub state: State,
+    pub format: Format,
+    pub persistence: Persistence,
+    pub declared_at: Option<String>,
+    pub yours: TuiDiff,
+    pub incoming: Option<TuiDiff>,
+    pub overlap: Vec<String>,
+}
+
+pub fn tui_entries(store: &Store) -> Result<Vec<TuiEntry>> {
+    let mut entries = Vec::new();
+    for meta in store.all_metas()? {
+        let entry = status_entry(store, &meta)?;
+        let base = store.base_bytes(&meta.path)?;
+        let upper = fs::read(&meta.path).unwrap_or_default();
+        let staged = store.staged_bytes(&meta.path)?;
+        entries.push(TuiEntry {
+            path: entry.path,
+            state: entry.state,
+            format: meta.format,
+            persistence: meta.persistence,
+            declared_at: meta.declared_at.clone(),
+            yours: tui_diff(meta.format, &base, &upper),
+            incoming: staged.map(|staged| tui_diff(meta.format, &base, &staged)),
+            overlap: entry.overlap,
+        });
+    }
+    // Every managed file is listed; the ones needing attention sort first
+    // and clean files sink to the bottom (stable, so store order holds
+    // within a state).
+    entries.sort_by_key(|entry| attention_rank(entry.state));
+    Ok(entries)
+}
+
+const fn attention_rank(state: State) -> u8 {
+    match state {
+        State::Conflict => 0,
+        State::Drifted => 1,
+        State::Snoozed => 2,
+        State::Clean => 3,
+    }
 }
 
 #[derive(Serialize)]
@@ -753,5 +835,119 @@ mod tests {
         fixture.activate();
         assert_eq!(fixture.target_contents(), r#"{"handmade": true}"#);
         assert_eq!(fixture.entry().state, State::Drifted);
+    }
+
+    #[test]
+    fn pre_existing_durable_symlink_is_materialized_writable() {
+        // Migrating `home.file` -> `mutable.files` can leave the target as a
+        // read-only store symlink. Day-one drift must still be writable.
+        let fixture = Fixture::new("durable");
+        let target = Path::new(&fixture.target);
+        fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let old_render = fixture
+            .source
+            .parent()
+            .expect("store dir")
+            .join("old-render.json");
+        fs::write(&old_render, r#"{"handmade": true}"#).expect("old render");
+        std::os::unix::fs::symlink(&old_render, target).expect("symlink");
+        fixture.set_base(r#"{"a": 1}"#);
+        fixture.activate();
+        // The symlink is replaced by a writable regular file with its content.
+        assert!(
+            fs::symlink_metadata(target)
+                .expect("meta")
+                .file_type()
+                .is_file(),
+            "target should be a regular file, not a symlink"
+        );
+        assert_eq!(fixture.target_contents(), r#"{"handmade": true}"#);
+        assert_eq!(fixture.entry().state, State::Drifted);
+    }
+    #[test]
+    fn tui_diff_uses_logical_ops_for_binary_sides() {
+        let bplist = |value: i64| {
+            let mut dict = plist::Dictionary::new();
+            dict.insert("a".to_owned(), plist::Value::from(value));
+            let mut bytes = Vec::new();
+            plist::Value::Dictionary(dict)
+                .to_writer_binary(&mut bytes)
+                .expect("serialize bplist");
+            bytes
+        };
+        let (old, new) = (bplist(1), bplist(2));
+        assert!(str::from_utf8(&old).is_err(), "fixture must be binary");
+        let TuiDiff::Ops(ops) = tui_diff(Format::Plist, &old, &new) else {
+            panic!("binary sides must diff as logical ops, not lossy text");
+        };
+        assert_eq!(
+            ops,
+            vec![Op::Replace {
+                path: "/a".to_owned(),
+                from: 1.into(),
+                to: 2.into(),
+            }]
+        );
+        assert!(matches!(
+            tui_diff(Format::Text, b"a\n", b"b\n"),
+            TuiDiff::Text { .. }
+        ));
+    }
+
+    #[test]
+    fn tui_lists_clean_files_after_pending() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let store = Store::open(root.join("state")).expect("open");
+        // "a" sorts before "b" by path; only attention rank may reorder them.
+        let clean = root.join("home/a.json");
+        let drifted = root.join("home/b.json");
+        let source = root.join("store/base.json");
+        fs::create_dir_all(source.parent().expect("parent")).expect("mkdir");
+        fs::write(&source, r#"{"a": 1}"#).expect("write source");
+        let manifest = root.join("manifest.json");
+        let files: Vec<_> = [&clean, &drifted]
+            .into_iter()
+            .map(|path| {
+                serde_json::json!({
+                    "path": path, "source": source, "persistence": "durable",
+                })
+            })
+            .collect();
+        fs::write(&manifest, serde_json::json!({ "files": files }).to_string())
+            .expect("write manifest");
+        activate(&store, &manifest).expect("activate");
+        fs::write(&drifted, r#"{"a": 2}"#).expect("drift");
+
+        let entries = tui_entries(&store).expect("entries");
+        let states: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry.state, entry.path.clone()))
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                (State::Drifted, drifted.to_string_lossy().into_owned()),
+                (State::Clean, clean.to_string_lossy().into_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn tui_diff_hides_key_reorder_noise_in_structured_formats() {
+        // An app rewriting a json file in its own key order must not drown
+        // the one real edit: the model diff shows exactly that edit.
+        let old = br#"{"a": 1, "src": {"repo": "r", "source": "github"}}"#;
+        let new = br#"{"src": {"source": "github", "repo": "r"}, "a": 1, "model": "m"}"#;
+        let TuiDiff::Ops(ops) = tui_diff(Format::Json, old, new) else {
+            panic!("structured formats must diff as logical ops");
+        };
+        assert_eq!(
+            ops,
+            vec![Op::Add {
+                path: "/model".to_owned(),
+                value: "m".into(),
+            }]
+        );
     }
 }

@@ -107,7 +107,14 @@ mod tests {
         };
         write_msg(&mut buf, &msg).unwrap();
         let back: ToHost = read_msg_bounded(&mut buf.as_slice(), MAX_FRAME).unwrap();
-        let ToHost::Hello { major: 1, minor: 0, rate: 48000, channels: 2, format } = back else {
+        let ToHost::Hello {
+            major: 1,
+            minor: 0,
+            rate: 48000,
+            channels: 2,
+            format,
+        } = back
+        else {
             panic!("wrong variant");
         };
         assert_eq!(format, SampleFormat::S16le);
@@ -117,7 +124,13 @@ mod tests {
     fn pcm_roundtrips() {
         let mut buf = Vec::new();
         let payload: Vec<u8> = (0..=255).collect();
-        write_msg(&mut buf, &ToHost::Pcm { payload: payload.clone() }).unwrap();
+        write_msg(
+            &mut buf,
+            &ToHost::Pcm {
+                payload: payload.clone(),
+            },
+        )
+        .unwrap();
         let back: ToHost = read_msg_bounded(&mut buf.as_slice(), MAX_FRAME).unwrap();
         let ToHost::Pcm { payload: got } = back else {
             panic!("wrong variant");
@@ -130,7 +143,11 @@ mod tests {
         // A prefix legal for the window stream (< 64 MB) must still be
         // rejected by an audio reader without allocating.
         let mut buf = Vec::new();
-        buf.extend_from_slice(&u32::try_from(MAX_FRAME + 1).expect("fits u32").to_le_bytes());
+        buf.extend_from_slice(
+            &u32::try_from(MAX_FRAME + 1)
+                .expect("fits u32")
+                .to_le_bytes(),
+        );
         let err = read_msg_bounded::<ToHost>(&mut buf.as_slice(), MAX_FRAME).unwrap_err();
         assert!(matches!(err, WireError::TooLarge(n) if n == MAX_FRAME + 1));
     }

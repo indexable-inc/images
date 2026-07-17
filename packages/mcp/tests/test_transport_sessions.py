@@ -86,7 +86,7 @@ def test_session_facts_are_silent_noop_when_disabled(tmp_path: Path, monkeypatch
     conn = store.connect(tmp_path / "off.ixnb")
     store.session_facts(conn, id="abcd1234", status="connected", client="http")
     store.session_facts(conn, id="abcd1234", status="closed")
-    assert not conn._queue
+    assert conn._spool is None  # off mode creates no spool
     conn.close()
 
 

@@ -46,14 +46,16 @@ impl QueryOutput {
 pub fn run(facts: &Facts, program: &str, dir: &Path) -> Result<QueryOutput, Error> {
     let facts_dir = dir.join("facts");
     let out_dir = dir.join("out");
-    std::fs::create_dir_all(&facts_dir).context(crate::error::WriteFactsSnafu { path: &facts_dir })?;
+    std::fs::create_dir_all(&facts_dir)
+        .context(crate::error::WriteFactsSnafu { path: &facts_dir })?;
     std::fs::create_dir_all(&out_dir).context(crate::error::WriteFactsSnafu { path: &out_dir })?;
     facts.write_dir(&facts_dir)?;
 
     let full_program = format!("{SCHEMA}\n{program}\n");
     let program_path = dir.join("query.dl");
-    std::fs::write(&program_path, &full_program)
-        .context(crate::error::WriteFactsSnafu { path: &program_path })?;
+    std::fs::write(&program_path, &full_program).context(crate::error::WriteFactsSnafu {
+        path: &program_path,
+    })?;
 
     // `SCIPQL_SOUFFLE` lets a wrapper bake an absolute path (the CLI and the
     // mcp interpreter do this) so the tool resolves without relying on PATH

@@ -26,7 +26,11 @@ fn write_terms(f: &mut Formatter<'_>, terms: &[Term]) -> Result {
     for (index, term) in terms.iter().enumerate() {
         if index > 0 {
             let previous = &terms[index - 1];
-            f.write_str(if previous.oper == Oper::Or { " || " } else { ", " })?;
+            f.write_str(if previous.oper == Oper::Or {
+                " || "
+            } else {
+                ", "
+            })?;
         }
         write!(f, "{term}")?;
     }

@@ -34,6 +34,7 @@ pub const BUILTINS: &[(&str, usize)] = &[
     ("same-text", 2),
     ("same-file", 2),
     ("text-match", 2),
+    ("misgrouped-digits", 2),
     ("no-descendant", 3),
     ("attached-sibling", 3),
 ];
@@ -254,7 +255,8 @@ impl Program {
         // a negative edge needs level(a) > level(b). A negative edge inside a cycle
         // forces unbounded growth, so if anything still changes after one pass per
         // relation the program is unstratifiable.
-        let mut level: HashMap<&str, usize> = self.rules.iter().map(|r| (r.name.as_str(), 0)).collect();
+        let mut level: HashMap<&str, usize> =
+            self.rules.iter().map(|r| (r.name.as_str(), 0)).collect();
         let passes = level.len() + 1;
         for pass in 0..=passes {
             let mut grew: Option<&str> = None;
@@ -270,7 +272,11 @@ impl Program {
                 // A relation whose level still grows after a full pass per
                 // relation sits on a negation cycle: report it, not rule #1.
                 Some(name) if pass == passes => {
-                    let line = self.rules.iter().find(|r| r.name == name).map_or(0, |r| r.line);
+                    let line = self
+                        .rules
+                        .iter()
+                        .find(|r| r.name == name)
+                        .map_or(0, |r| r.line);
                     return UnstratifiableProgramSnafu {
                         rule: name.to_owned(),
                         line,
@@ -574,10 +580,13 @@ fn parse_rewrite(items: &[Sexpr], line: usize) -> Result<Rewrite, Error> {
         .fail();
     };
     let (replace_head, replace_args) = expect_list(replace, "replace form")?;
-    let [Sexpr::Atom { text: target, .. }, Sexpr::Str {
-        text: template,
-        line: template_line,
-    }] = replace_args
+    let [
+        Sexpr::Atom { text: target, .. },
+        Sexpr::Str {
+            text: template,
+            line: template_line,
+        },
+    ] = replace_args
     else {
         return DslSnafu {
             line: replace.line(),
@@ -646,10 +655,13 @@ fn parse_body(atoms: &[Sexpr]) -> Result<Vec<BodyAtom>, Error> {
 fn parse_body_atom(form: &Sexpr) -> Result<BodyAtom, Error> {
     let (name, args) = expect_list(form, "body atom")?;
     if name == "match" {
-        let [Sexpr::Atom {
-            text: lang_name,
-            line: lang_line,
-        }, Sexpr::Str { text: query, line }] = args
+        let [
+            Sexpr::Atom {
+                text: lang_name,
+                line: lang_line,
+            },
+            Sexpr::Str { text: query, line },
+        ] = args
         else {
             return DslSnafu {
                 line: form.line(),

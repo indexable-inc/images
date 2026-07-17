@@ -2,8 +2,8 @@
 
 use syn::spanned::Spanned as _;
 
-use super::ty::{lower_type, Position};
-use super::{attrs, marker, ret, Declared, LowerError, Result};
+use super::ty::{Position, lower_type};
+use super::{Declared, LowerError, Result, attrs, marker, ret};
 use crate::ir;
 
 /// What a signature lowers as; receivers and return conventions differ.
@@ -35,12 +35,10 @@ pub(super) fn lower_fn(func: &syn::ItemFn, declared: &Declared) -> Result<ir::Fu
     lower_callable(&func.attrs, &func.sig, declared, Kind::Free)
 }
 
-pub(super) fn lower_callable(
-    attributes: &[syn::Attribute],
-    signature: &syn::Signature,
-    declared: &Declared,
-    kind: Kind<'_>,
-) -> Result<ir::Function> {
+/// Reject signature shapes that never cross the binding boundary (unsafe,
+/// generic, variadic); split out of [`lower_callable`] to keep it within
+/// clippy's function-length budget.
+fn reject_unsupported(signature: &syn::Signature) -> Result<()> {
     if let Some(unsafety) = signature.unsafety {
         return Err(LowerError::new(
             unsafety.span(),
@@ -60,6 +58,16 @@ pub(super) fn lower_callable(
             "variadic functions do not cross the binding boundary",
         ));
     }
+    Ok(())
+}
+
+pub(super) fn lower_callable(
+    attributes: &[syn::Attribute],
+    signature: &syn::Signature,
+    declared: &Declared,
+    kind: Kind<'_>,
+) -> Result<ir::Function> {
+    reject_unsupported(signature)?;
     let asyncness = match signature.asyncness {
         Some(token) => {
             if matches!(kind, Kind::Constructor { .. }) {
@@ -77,6 +85,7 @@ pub(super) fn lower_callable(
     let meta = attrs::UnibindMeta::from_attrs(attributes)?;
     meta.reject_default(kind.context())?;
     meta.reject_py_base(kind.context())?;
+    meta.reject_jvm_base(kind.context())?;
     meta.reject_backends(kind.context())?;
     meta.reject_resource(kind.context())?;
     match kind {
@@ -131,7 +140,9 @@ pub(super) fn lower_callable(
     check_default_order(signature, &args)?;
 
     let returned = match kind {
-        Kind::Constructor { object } => ret::lower_ctor_return(&signature.output, object, declared)?,
+        Kind::Constructor { object } => {
+            ret::lower_ctor_return(&signature.output, object, declared)?
+        }
         Kind::Free | Kind::Method => ret::lower_return(&signature.output, declared)?,
     };
     Ok(ir::Function {
@@ -167,6 +178,7 @@ fn lower_arg(arg: &syn::PatType, declared: &Declared) -> Result<ir::Arg> {
     };
     let meta = attrs::UnibindMeta::from_attrs(&arg.attrs)?;
     meta.reject_py_base("an argument")?;
+    meta.reject_jvm_base("an argument")?;
     meta.reject_backends("an argument")?;
     meta.reject_resource("an argument")?;
     meta.reject_constructor("an argument")?;

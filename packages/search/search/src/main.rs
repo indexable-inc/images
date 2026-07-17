@@ -729,8 +729,9 @@ async fn run_stats(cli: StatsArgs) -> anyhow::Result<()> {
     }
 
     let total: u64 = rows.iter().map(|row| row.documents).sum();
-    let render_count =
-        |documents: u64, truncated: bool| format!("{}{documents}", if truncated { "\u{2265}" } else { "" });
+    let render_count = |documents: u64, truncated: bool| {
+        format!("{}{documents}", if truncated { "\u{2265}" } else { "" })
+    };
     let name_width = rows
         .iter()
         .map(|row| row.source.len())
@@ -750,7 +751,10 @@ async fn run_stats(cli: StatsArgs) -> anyhow::Result<()> {
         "{}",
         paint(
             palette.range,
-            &format!("{:<name_width$}  {:>count_width$}  newest", "source", "documents"),
+            &format!(
+                "{:<name_width$}  {:>count_width$}  newest",
+                "source", "documents"
+            ),
         )
     );
     let now = epoch_now();
@@ -832,7 +836,11 @@ fn render_conversation(view: &ContextView, palette: &Palette) -> String {
         }
         // The anchor heading uses the path style so the requested record
         // stands out; the rest stay dim, letting the bodies carry the read.
-        let style = if is_anchor { palette.path } else { palette.range };
+        let style = if is_anchor {
+            palette.path
+        } else {
+            palette.range
+        };
         let mut block = format!("{marker} {}", paint(style, &head.join(" \u{b7} ")));
 
         for line in turn.text.trim_end().lines() {
@@ -1381,7 +1389,10 @@ fn provenance_line(hit: &DisplayHit, palette: &Palette) -> Option<String> {
     if parts.len() == 1 {
         return None;
     }
-    Some(paint(palette.range, &format!("  {}", parts.join(" \u{b7} "))))
+    Some(paint(
+        palette.range,
+        &format!("  {}", parts.join(" \u{b7} ")),
+    ))
 }
 
 /// Format an epoch-second timestamp as a UTC instant (`2026-06-12 03:11 UTC`),

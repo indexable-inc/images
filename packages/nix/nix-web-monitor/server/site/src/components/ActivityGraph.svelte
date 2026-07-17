@@ -1,6 +1,5 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity';
-  import PanelHeader from '$lib/PanelHeader.svelte';
   import ActivityTreeRow from '$components/ActivityTreeRow.svelte';
   import { buildActivityTree } from '$lib/activity-tree';
   import { useNow } from '$lib/now.svelte';
@@ -34,7 +33,7 @@
 </script>
 
 <section class="panel graph-panel">
-  <PanelHeader title="activities">
+  <div class="pane-toolbar">
     {#if collapsible.length > 0}
       <button type="button" class="chip tree-toggle" onclick={toggleAll}>
         {allCollapsed ? 'expand all' : 'collapse all'}
@@ -43,7 +42,7 @@
     <span class="panel-meta">
       {String(tree.shown)} shown{#if tree.hidden > 0} &middot; {String(tree.hidden)} hidden{/if}
     </span>
-  </PanelHeader>
+  </div>
   <div class="graph">
     {#each tree.roots as rootId, index (rootId)}
       <ActivityTreeRow

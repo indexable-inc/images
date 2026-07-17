@@ -165,8 +165,11 @@ fn write_readme(out: &Path, package_dir: &Path, package: &readme::Package<'_>) -
         if !hero.exists() {
             fs::create_dir_all(hero.parent().context("hero path has a parent")?)
                 .context("creating the hero's directory")?;
-            fs::write(&hero, readme::hero_svg(package.crate_name, package.description))
-                .context("writing the hero SVG")?;
+            fs::write(
+                &hero,
+                readme::hero_svg(package.crate_name, package.description),
+            )
+            .context("writing the hero SVG")?;
         }
     }
     fs::write(

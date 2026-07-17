@@ -8,10 +8,7 @@ fn lower(source: &str) -> Result<ir::Interface, unibind_core::LowerError> {
     lower_with(TokenStream::new(), source)
 }
 
-fn lower_with(
-    args: TokenStream,
-    source: &str,
-) -> Result<ir::Interface, unibind_core::LowerError> {
+fn lower_with(args: TokenStream, source: &str) -> Result<ir::Interface, unibind_core::LowerError> {
     let file: syn::File = syn::parse_str(source).expect("fixture parses");
     let Some(syn::Item::Mod(module)) = file.items.first() else {
         panic!("fixture starts with a module");
@@ -107,7 +104,10 @@ fn lowers_the_full_surface() {
         panic!("one error enum");
     };
     assert_eq!(error.py_base.as_deref(), Some("RuntimeError"));
-    assert_eq!(error.variants[0].names.py.as_deref(), Some("StoreGoneError"));
+    assert_eq!(
+        error.variants[0].names.py.as_deref(),
+        Some("StoreGoneError")
+    );
     assert_eq!(error.variants[1].name, "Invalid");
 }
 
@@ -141,22 +141,19 @@ fn unknown_types_name_the_offender() {
 
 #[test]
 fn required_after_defaulted_is_rejected() {
-    let message =
-        error_message("mod m { pub fn go(#[unibind(default = 1)] a: u32, b: u32) {} }");
+    let message = error_message("mod m { pub fn go(#[unibind(default = 1)] a: u32, b: u32) {} }");
     assert!(message.contains("needs a default"), "{message}");
 }
 
 #[test]
 fn foreign_error_types_are_rejected() {
-    let message =
-        error_message("mod m { pub fn go() -> Result<(), std::io::Error> { Ok(()) } }");
+    let message = error_message("mod m { pub fn go() -> Result<(), std::io::Error> { Ok(()) } }");
     assert!(message.contains("#[unibind::error]"), "{message}");
 }
 
 #[test]
 fn private_record_fields_are_rejected() {
-    let message =
-        error_message("mod m { #[unibind::record] pub struct Row { id: u64 } }");
+    let message = error_message("mod m { #[unibind::record] pub struct Row { id: u64 } }");
     assert!(message.contains("must be `pub`"), "{message}");
 }
 
@@ -186,14 +183,14 @@ fn export_backends_parses_and_rejects() {
     let args: TokenStream = "backends(rb)".parse().expect("tokens");
     let error = unibind_core::export_backends(args).expect_err("unknown backend");
     assert!(
-        error.message.contains("expected `py`, `ts`, or `ex`"),
+        error
+            .message
+            .contains("expected `py`, `ts`, `ex`, or `jvm`"),
         "{}",
         error.message
     );
 
-    let error = error_message(
-        "mod m { pub fn go(#[unibind(backends(py))] value: bool) {} }",
-    );
+    let error = error_message("mod m { pub fn go(#[unibind(backends(py))] value: bool) {} }");
     assert!(error.contains("applies to #[unibind::export]"), "{error}");
 }
 
@@ -204,5 +201,8 @@ fn ts_renames_lower_into_names() {
     )
     .expect("lowers");
     assert_eq!(interface.functions[0].names.ts.as_deref(), Some("goFast"));
-    assert_eq!(interface.functions[0].args[0].names.ts.as_deref(), Some("theValue"));
+    assert_eq!(
+        interface.functions[0].args[0].names.ts.as_deref(),
+        Some("theValue")
+    );
 }

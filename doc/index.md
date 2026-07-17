@@ -83,7 +83,7 @@ User-facing guides for the hosted `ix` platform. Start at
 | [mcp](mcp/overview.md) | `packages/mcp` is `ix-mcp` (the `ix_notebook_mcp` Python package): a Python execution MCP server. |
 | [minecraft](minecraft/overview.md) | `packages/minecraft` is a directory of small, single-purpose Minecraft tools in three languages. |
 | [minecraft-assets](minecraft-assets/overview.md) | `packages/minecraft-assets` is a Nix-only package (no Rust, no source code of its own) that produces authentic Minecraft GUI textures and the vanilla bitmap font by extracting them straig... |
-| [minestom](minestom/overview.md) | `packages/minestom` packages a minimal, from-scratch Minecraft server built on Minestom, the Java server library. |
+| [minestom](minestom/overview.md) | `packages/minestom` packages from-scratch Minecraft servers built on Minestom, the Java server library. |
 | [mixedbread](mixedbread/overview.md) | `packages/mixedbread` (crate `mixedbread`) is a minimal async Rust client for the Mixedbread vector store API. |
 | [mynoise](mynoise/overview.md) | `packages/mynoise` plays myNoise.net generators from the CLI by streaming and mixing their band loops locally. |
 | [nix-cargo-unit](nix-cargo-unit/overview.md) | `packages/nix-cargo-unit` renders a Cargo unit graph into composable Nix derivations: one `stdenv.mkDerivation` per rustc invocation, wired into a graph that mirrors Cargo's own. |
@@ -111,7 +111,6 @@ User-facing guides for the hosted `ix` platform. Start at
 | [source](source/overview.md) | `packages/source` is the workspace of source adapters that turn each data source (a code checkout's neighbors: Slack, Linear, GitHub, git history, Claude/Codex transcripts, shell history,... |
 | [spark-gluten](spark-gluten/overview.md) | `packages/spark-gluten` packages the Apache Gluten Velox-backend bundle for Spark 3.5, patched so its native libraries load on NixOS. |
 | [spark-hive](spark-hive/overview.md) | `packages/spark-hive` packages Apache Spark 3.5, the official complete (hadoop3 + Hive) binary distribution, self-contained for NixOS and pinned to JDK 17. |
-| [symphony](symphony/overview.md) | Symphony is a boring DAG runtime for deterministic agent workflows. |
 | [terminal-theme](terminal-theme/overview.md) | `packages/terminal-theme` owns one decision shared across the repo's terminal tools: is the terminal background light or dark. |
 | [tmux](tmux/overview.md) | `packages/tmux` repackages tmux with a modern default config baked in (truecolor, undercurl, mouse, vi copy mode, sane history and escape-time). |
 | [tonbo-artifacts](tonbo-artifacts/overview.md) | `packages/tonbo-artifacts` packages the Tonbo Artifacts CLI, a prebuilt binary served from Tonbo's release host. |

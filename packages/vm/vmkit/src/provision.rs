@@ -85,6 +85,58 @@ pub enum Error {
     PipePlutil { source: std::io::Error },
     #[snafu(display("plutil produced no stdin pipe to write the plist to"))]
     PlutilNoStdin,
+    #[snafu(display(
+        "the guest TCC database {db:?} does not exist; boot the guest once and log \
+         in as the target user before provisioning so macOS creates it"
+    ))]
+    TccDbMissing { db: PathBuf },
+    #[snafu(display("editing the guest TCC database {db:?} failed: {source}"))]
+    Tcc {
+        db: PathBuf,
+        source: rusqlite::Error,
+    },
+    #[snafu(display(
+        "computing the code-signing designated requirement for {path:?} failed \
+         (Security.framework OSStatus {status})"
+    ))]
+    Csreq { path: PathBuf, status: i32 },
+    #[snafu(display("reading the bundle identifier of {path:?} failed: {message}"))]
+    BundleId { path: PathBuf, message: String },
+    #[snafu(display("editing the launchd disabled.plist {path:?} failed: {source}"))]
+    DisabledPlist { path: PathBuf, source: plist::Error },
+}
+
+/// A macOS privacy service to pre-authorize for a target binary in the guest's
+/// TCC databases, so a freshly installed guest needs zero GUI permission clicks.
+/// The variant fixes both the TCC service key and which database it lives in
+/// (system-wide services need the SIP-protected system db; per-user services the
+/// user db).
+#[derive(Clone, Debug)]
+pub enum TccService {
+    /// Full Disk Access (`kTCCServiceSystemPolicyAllFiles`, system db): read any
+    /// file, e.g. `~/Library/Messages/chat.db` for iMessage codes.
+    FullDiskAccess,
+    /// Accessibility (`kTCCServiceAccessibility`, system db): drive the UI via
+    /// the accessibility API (synthetic events, element inspection).
+    Accessibility,
+    /// Screen Recording (`kTCCServiceScreenCapture`, system db): capture the
+    /// screen contents.
+    ScreenRecording,
+    /// Contacts (`kTCCServiceAddressBook`, user db).
+    Contacts,
+    /// Automation (`kTCCServiceAppleEvents`, user db): send `AppleEvents` to the
+    /// app bundle at this path (e.g. Messages, to script sending a text). The
+    /// controlled app's bundle id and designated requirement are read from it.
+    Automation { controlled: PathBuf },
+}
+
+/// A target binary to pre-authorize plus the services to grant it. `binary` is a
+/// host path to the same app or executable that runs in the guest; for Apple
+/// system apps (Terminal, Messages) the host and guest builds are identical, so
+/// the designated requirement computed here matches the guest at runtime.
+pub struct TccTarget {
+    pub binary: PathBuf,
+    pub services: Vec<TccService>,
 }
 
 /// Parameters for [`provision`].
@@ -93,6 +145,14 @@ pub struct Provision {
     pub user: String,
     pub autologin: bool,
     pub password: String,
+    /// TCC grants to pre-seed for the guest's automation binaries. Empty leaves
+    /// the guest's TCC databases untouched.
+    pub tcc: Vec<TccTarget>,
+    /// Enable Remote Login (ssh) so the guest is reachable over the network the
+    /// moment it boots.
+    pub remote_login: bool,
+    /// Enable Screen Sharing (the built-in VNC server).
+    pub screen_sharing: bool,
 }
 
 /// `diskutil apfs list -plist` result.
@@ -152,6 +212,9 @@ pub fn provision(params: Provision) -> Result<(), Error> {
         user,
         autologin,
         password,
+        tcc,
+        remote_login,
+        screen_sharing,
     } = params;
 
     let disk = bundle.join("disk.img");
@@ -195,6 +258,16 @@ pub fn provision(params: Provision) -> Result<(), Error> {
         &password,
         &version,
     )?;
+
+    // Remote access (ssh / Screen Sharing) and TCC pre-grants also edit the
+    // stopped Data volume, so the next boot is fully automatable with no GUI
+    // permission clicks. tccd honors an offline-written grant only because SIP is
+    // disabled in the guest image: a running, SIP-on guest refuses the write even
+    // as root.
+    apply_remote_access(Path::new(&data_mount), remote_login, screen_sharing)?;
+    if !tcc.is_empty() {
+        apply_tcc(Path::new(&data_mount), &user, &tcc)?;
+    }
     Ok(())
 }
 
@@ -612,6 +685,298 @@ fn tool_path(tool: &str) -> PathBuf {
     }
 }
 
+// tccd verifies TCC grants via Security.framework; `objc2-security` only
+// declares the FFI, so the framework is linked explicitly here (the same way
+// `src/input.rs` links CoreFoundation and CoreGraphics). CoreFoundation, which
+// `objc2-core-foundation` likewise leaves unlinked, is already linked crate-wide
+// by that `src/input.rs` block.
+#[link(name = "Security", kind = "framework")]
+unsafe extern "C" {}
+
+// ---------------------------------------------------------------------------
+// TCC pre-seed and Remote Login / Screen Sharing.
+//
+// A fresh macOS guest prompts (via a GUI dialog the automation cannot click)
+// the first time a process touches a protected resource: reading another app's
+// files (Full Disk Access), sending it AppleEvents (Automation), the address
+// book (Contacts), the accessibility API, screen capture. TCC records consent
+// in two SQLite databases: a system-wide one for system services and a per-user
+// one for the rest. Both are SIP-protected, so a running guest refuses the edit
+// even as root; the guest image therefore ships with SIP disabled and this
+// reconciler writes the grants offline against the stopped Data volume.
+//
+// A grant is an `access` row keyed to the requesting binary by its designated
+// requirement (`csreq`): the exact code-signing requirement blob tccd verifies
+// the live process against, computed here from the binary via Security.framework
+// so it is byte-identical to what `codesign` stores.
+// ---------------------------------------------------------------------------
+
+/// Which TCC database an [`access`] row lives in.
+#[derive(Clone, Copy)]
+enum TccDb {
+    /// System-wide db at `/Library/Application Support/com.apple.TCC/TCC.db`.
+    System,
+    /// Per-user db at `~/Library/Application Support/com.apple.TCC/TCC.db`.
+    User,
+}
+
+impl TccService {
+    /// The `kTCCService*` string this service is keyed by in the `access` table.
+    const fn tcc_name(&self) -> &'static str {
+        match self {
+            Self::FullDiskAccess => "kTCCServiceSystemPolicyAllFiles",
+            Self::Accessibility => "kTCCServiceAccessibility",
+            Self::ScreenRecording => "kTCCServiceScreenCapture",
+            Self::Contacts => "kTCCServiceAddressBook",
+            Self::Automation { .. } => "kTCCServiceAppleEvents",
+        }
+    }
+
+    /// The database this service's grants live in.
+    const fn database(&self) -> TccDb {
+        match self {
+            Self::FullDiskAccess | Self::Accessibility | Self::ScreenRecording => TccDb::System,
+            Self::Contacts | Self::Automation { .. } => TccDb::User,
+        }
+    }
+}
+
+/// Pre-seed the guest's TCC databases with the requested grants. The system db
+/// and the target user's db must already exist (macOS creates them at install /
+/// first login); a missing db is a loud error rather than a silently
+/// hand-built schema.
+fn apply_tcc(data: &Path, user: &str, targets: &[TccTarget]) -> Result<(), Error> {
+    let system_db = data.join("Library/Application Support/com.apple.TCC/TCC.db");
+    let user_db = data
+        .join("Users")
+        .join(user)
+        .join("Library/Application Support/com.apple.TCC/TCC.db");
+
+    for target in targets {
+        let csreq = designated_requirement(&target.binary)?;
+        let (client, client_type) = target_client(&target.binary)?;
+        for service in &target.services {
+            let db = match service.database() {
+                TccDb::System => &system_db,
+                TccDb::User => &user_db,
+            };
+            // Automation grants name the controlled app (its bundle id) as the
+            // indirect object and carry its designated requirement; every other
+            // service leaves the indirect columns at their `UNUSED` default.
+            let (indirect_id, indirect_csreq) = match service {
+                TccService::Automation { controlled } => (
+                    bundle_identifier(controlled)?,
+                    Some(designated_requirement(controlled)?),
+                ),
+                _ => ("UNUSED".to_owned(), None),
+            };
+            insert_grant(
+                db,
+                service.tcc_name(),
+                &client,
+                client_type,
+                &csreq,
+                &indirect_id,
+                indirect_csreq.as_deref(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Insert (or replace) one allowed `access` row. `auth_value = 2` is the allow
+/// verdict tccd acts on; `auth_reason = 2` (user consent) and `auth_version = 1`
+/// mirror a grant made through System Settings. `INSERT OR REPLACE` keys on the
+/// primary key `(service, client, client_type, indirect_object_identifier)`, so
+/// re-running provisioning is idempotent.
+fn insert_grant(
+    db: &Path,
+    service: &str,
+    client: &str,
+    client_type: i64,
+    csreq: &[u8],
+    indirect_id: &str,
+    indirect_csreq: Option<&[u8]>,
+) -> Result<(), Error> {
+    if !db.exists() {
+        return Err(Error::TccDbMissing {
+            db: db.to_path_buf(),
+        });
+    }
+    let conn = rusqlite::Connection::open(db).context(TccSnafu {
+        db: db.to_path_buf(),
+    })?;
+    conn.execute(
+        "INSERT OR REPLACE INTO access \
+         (service, client, client_type, auth_value, auth_reason, auth_version, csreq, \
+          policy_id, indirect_object_identifier_type, indirect_object_identifier, \
+          indirect_object_code_identity, flags, last_modified, pid, pid_version, \
+          boot_uuid, last_reminded) \
+         VALUES (?1, ?2, ?3, 2, 2, 1, ?4, NULL, 0, ?5, ?6, 0, \
+          CAST(strftime('%s', 'now') AS INTEGER), NULL, NULL, 'UNUSED', \
+          CAST(strftime('%s', 'now') AS INTEGER))",
+        rusqlite::params![
+            service,
+            client,
+            client_type,
+            csreq,
+            indirect_id,
+            indirect_csreq
+        ],
+    )
+    .context(TccSnafu {
+        db: db.to_path_buf(),
+    })?;
+    Ok(())
+}
+
+/// The TCC `(client, client_type)` for a target binary: an app bundle is keyed
+/// by its bundle identifier (`client_type = 0`), a bare executable by its
+/// absolute path (`client_type = 1`), matching how tccd identifies a process.
+fn target_client(binary: &Path) -> Result<(String, i64), Error> {
+    if binary.join("Contents/Info.plist").is_file() {
+        Ok((bundle_identifier(binary)?, 0))
+    } else {
+        Ok((binary.to_string_lossy().into_owned(), 1))
+    }
+}
+
+/// Read `CFBundleIdentifier` from an app bundle's `Contents/Info.plist`.
+fn bundle_identifier(app: &Path) -> Result<String, Error> {
+    let info = app.join("Contents/Info.plist");
+    let value = plist::Value::from_file(&info).map_err(|source| Error::BundleId {
+        path: app.to_path_buf(),
+        message: source.to_string(),
+    })?;
+    value
+        .as_dictionary()
+        .and_then(|d| d.get("CFBundleIdentifier"))
+        .and_then(plist::Value::as_string)
+        .map(str::to_owned)
+        .ok_or_else(|| Error::BundleId {
+            path: app.to_path_buf(),
+            message: "CFBundleIdentifier missing or not a string".to_owned(),
+        })
+}
+
+/// Compute the code-signing **designated requirement** blob for the binary at
+/// `path`: the bytes `codesign` stores and tccd verifies a requesting process
+/// against, via `SecStaticCodeCreateWithPath` -> `SecCodeCopyDesignatedRequirement`
+/// -> `SecRequirementCopyData`. A pre-seeded grant carrying this blob is honored
+/// with no prompt.
+fn designated_requirement(path: &Path) -> Result<Vec<u8>, Error> {
+    use objc2_core_foundation::{CFRetained, CFString, CFURL, CFURLPathStyle};
+    use objc2_security::{SecCSFlags, SecCode, SecStaticCode};
+    use std::ptr::{self, NonNull};
+
+    let make_err = |status: i32| Error::Csreq {
+        path: path.to_path_buf(),
+        status,
+    };
+
+    let cf_path = CFString::from_str(&path.to_string_lossy());
+    let url = CFURL::with_file_system_path(
+        None,
+        Some(&cf_path),
+        CFURLPathStyle::CFURLPOSIXPathStyle,
+        path.is_dir(),
+    )
+    .ok_or_else(|| make_err(0))?;
+
+    // Each `Sec*Create/Copy*` follows the Create rule (we own the returned ref),
+    // so wrap it in `CFRetained` to release it on drop.
+    let mut static_raw: *const SecStaticCode = ptr::null();
+    let status = unsafe {
+        SecStaticCode::create_with_path(
+            &url,
+            SecCSFlags::DefaultFlags,
+            NonNull::from(&mut static_raw),
+        )
+    };
+    if status != 0 {
+        return Err(make_err(status));
+    }
+    let static_code = NonNull::new(static_raw.cast_mut())
+        .map(|p| unsafe { CFRetained::from_raw(p) })
+        .ok_or_else(|| make_err(0))?;
+
+    let mut req_raw: *mut objc2_security::SecRequirement = ptr::null_mut();
+    let status = unsafe {
+        SecCode::copy_designated_requirement(
+            &static_code,
+            SecCSFlags::DefaultFlags,
+            NonNull::from(&mut req_raw),
+        )
+    };
+    if status != 0 {
+        return Err(make_err(status));
+    }
+    let requirement = NonNull::new(req_raw)
+        .map(|p| unsafe { CFRetained::from_raw(p) })
+        .ok_or_else(|| make_err(0))?;
+
+    let mut data_raw: *const objc2_core_foundation::CFData = ptr::null();
+    let status =
+        unsafe { requirement.copy_data(SecCSFlags::DefaultFlags, NonNull::from(&mut data_raw)) };
+    if status != 0 {
+        return Err(make_err(status));
+    }
+    let data = NonNull::new(data_raw.cast_mut())
+        .map(|p| unsafe { CFRetained::from_raw(p) })
+        .ok_or_else(|| make_err(0))?;
+
+    let len = usize::try_from(data.length()).expect("CFData length is non-negative");
+    if len == 0 {
+        return Err(make_err(0));
+    }
+    // SAFETY: `byte_ptr` is valid for `length` bytes while `data` is retained.
+    Ok(unsafe { std::slice::from_raw_parts(data.byte_ptr(), len) }.to_vec())
+}
+
+/// Enable Remote Login (ssh) and/or Screen Sharing on the stopped guest by
+/// clearing their launchd overrides in the boot-time `disabled.plist`. launchd
+/// reads this dict of `<service label> => <disabled?>` at boot; a `false` entry
+/// means "not disabled" (enabled), which is how `systemsetup -setremotelogin on`
+/// and the Sharing pane record the on state.
+fn apply_remote_access(data: &Path, remote_login: bool, screen_sharing: bool) -> Result<(), Error> {
+    let mut labels: Vec<&str> = Vec::new();
+    if remote_login {
+        labels.push("com.openssh.sshd");
+    }
+    if screen_sharing {
+        labels.push("com.apple.screensharing");
+    }
+    if labels.is_empty() {
+        return Ok(());
+    }
+
+    let path = data.join("private/var/db/com.apple.xpc.launchd/disabled.plist");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context(EditSnafu)?;
+    }
+    let mut dict = if path.exists() {
+        plist::Value::from_file(&path)
+            .map_err(|source| Error::DisabledPlist {
+                path: path.clone(),
+                source,
+            })?
+            .into_dictionary()
+            .unwrap_or_default()
+    } else {
+        plist::Dictionary::new()
+    };
+    for label in labels {
+        dict.insert(label.to_owned(), plist::Value::Boolean(false));
+    }
+    plist::Value::Dictionary(dict)
+        .to_file_binary(&path)
+        .map_err(|source| Error::DisabledPlist {
+            path: path.clone(),
+            source,
+        })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,5 +1040,79 @@ mod tests {
         assert_eq!(scan_dev_entries(plain), vec!["disk4", "disk4s2"]);
         // No devices -> empty (e.g. a parse-failure-shaped blob).
         assert!(scan_dev_entries("{}").is_empty());
+    }
+
+    #[test]
+    fn tcc_service_names_and_databases() {
+        assert_eq!(
+            TccService::FullDiskAccess.tcc_name(),
+            "kTCCServiceSystemPolicyAllFiles"
+        );
+        assert_eq!(
+            TccService::Accessibility.tcc_name(),
+            "kTCCServiceAccessibility"
+        );
+        assert_eq!(
+            TccService::ScreenRecording.tcc_name(),
+            "kTCCServiceScreenCapture"
+        );
+        assert_eq!(TccService::Contacts.tcc_name(), "kTCCServiceAddressBook");
+        assert_eq!(
+            TccService::Automation {
+                controlled: PathBuf::from("/x.app")
+            }
+            .tcc_name(),
+            "kTCCServiceAppleEvents",
+        );
+        assert!(matches!(
+            TccService::FullDiskAccess.database(),
+            TccDb::System
+        ));
+        assert!(matches!(
+            TccService::Accessibility.database(),
+            TccDb::System
+        ));
+        assert!(matches!(
+            TccService::ScreenRecording.database(),
+            TccDb::System
+        ));
+        assert!(matches!(TccService::Contacts.database(), TccDb::User));
+        assert!(matches!(
+            TccService::Automation {
+                controlled: PathBuf::from("/x.app")
+            }
+            .database(),
+            TccDb::User,
+        ));
+    }
+
+    #[test]
+    fn target_client_bare_executable_uses_path() {
+        // A bare executable (no Contents/Info.plist) is keyed by its path.
+        let (client, client_type) = target_client(Path::new("/usr/bin/true")).unwrap();
+        assert_eq!(client, "/usr/bin/true");
+        assert_eq!(client_type, 1);
+    }
+
+    #[test]
+    fn designated_requirement_matches_codesign_for_terminal() {
+        // Terminal's designated requirement is version-stable
+        // (`identifier "com.apple.Terminal" and anchor apple`), so its blob is a
+        // fixed regression value. Skip if the system app is absent (never on a
+        // normal macOS build host).
+        let terminal = Path::new("/System/Applications/Utilities/Terminal.app");
+        if !terminal.exists() {
+            return;
+        }
+        assert_eq!(bundle_identifier(terminal).unwrap(), "com.apple.Terminal");
+        let blob = designated_requirement(terminal).unwrap();
+        let expected = "fade0c000000003000000001000000060000000200000012\
+                        636f6d2e6170706c652e5465726d696e616c000000000003";
+        let hex: String = blob.iter().fold(String::new(), |mut acc, b| {
+            use std::fmt::Write as _;
+            write!(acc, "{b:02x}").unwrap();
+            acc
+        });
+        assert_eq!(hex, expected);
     }
 }

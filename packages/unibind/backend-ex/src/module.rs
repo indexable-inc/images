@@ -4,7 +4,7 @@ use quote::format_ident;
 use quote::quote;
 use unibind_core::ir;
 
-use crate::{error, function, names, object, record, RenderError, RenderedInterface};
+use crate::{RenderError, RenderedInterface, error, function, names, object, record};
 
 /// Render `rustler` glue for one interface.
 ///

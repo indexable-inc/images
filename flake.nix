@@ -51,10 +51,6 @@
       url = "path:./tests";
       flake = false;
     };
-    bench-filesystem = {
-      url = "path:./packages/indexbench/filesystem";
-      flake = false;
-    };
     site = {
       url = "path:./packages/site";
       flake = false;
@@ -123,6 +119,17 @@
     # scheduled content and fork updaters intentionally leave this input alone.
     codex-src = {
       url = "github:openai/codex/1f0566d3f59298d1bb88820a0d35294f1eeb07ea";
+      flake = false;
+    };
+
+    # The maintained fork is the application source. Its own flake owns the
+    # Rust lock, toolchain, and platform build.
+    zed-src.url = "github:indexable-inc/zed/ix-patched";
+
+    # Unmodified upstream base for validating and regenerating the patch series
+    # that produces zed-src's ix-patched branch.
+    zed-upstream = {
+      url = "github:zed-industries/zed/v1.10.x";
       flake = false;
     };
 
@@ -221,13 +228,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # TODO: re-add the `symphony` flake input that provided
-    # `pkgs.symphony-room-server`. room-server's real home is the ix monorepo
-    # (`crates/room`, `ix#packages.x86_64-linux.room-server`), but ix already
-    # inputs index (`ix/flake.nix`), so index cannot source it from ix without a
-    # circular flake dependency. Pin removed for now; re-add once that cycle is
-    # resolved or room-server moves into this repo.
-
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
     # `packages/tui/vt/libghostty-vt` owns the build. Pinned to the commit the
     # local clone validated against; `requireZig` in `build.zig.zon` is exact
@@ -281,13 +281,14 @@
     snix-src,
     clippy-src,
     codex-src,
+    zed-src,
+    zed-upstream,
     nix-src,
     ghostty,
     mesa-src,
     skills,
     examples,
     tests,
-    bench-filesystem,
     site,
     ...
   }: let
@@ -321,8 +322,8 @@
       skills = skills.outPath;
       modules = ./modules;
       examples = examples.outPath;
+      users = ./users;
       tests = tests.outPath;
-      bench.filesystem = bench-filesystem.outPath;
       site = site.outPath;
       pgUint128Src = pg-uint128-src;
       packagesRoot = ./packages;
@@ -368,6 +369,8 @@
         snix-src
         clippy-src
         codex-src
+        zed-src
+        zed-upstream
         nix-src
         ghostty
         mesa-src
@@ -407,6 +410,27 @@
         "aarch64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     packages = withDarwinAliases (collect "packages");
+    ciChecks = collect "ciChecks";
+    cachePushRoots = withDarwinAliases (collect "cachePushRoots");
+    # One evaluator pool owns every required Linux build root. Prefix closure
+    # roots so a package and a check may share their natural name without one
+    # silently replacing the other. The explicit collision guard keeps a
+    # future check named `closure-*` from weakening the gate.
+    requiredGateRoots =
+      lib.mapAttrs (
+        system: systemChecks: let
+          closureRoots =
+            lib.mapAttrs' (
+              name: root: lib.nameValuePair "closure-${name}" root
+            )
+            cachePushRoots.${system};
+          collisions = builtins.attrNames (lib.intersectAttrs systemChecks closureRoots);
+        in
+          assert lib.assertMsg (collisions == [])
+          "requiredGateRoots.${system}: prefixed cache roots collide with ciChecks: ${builtins.concatStringsSep ", " collisions}";
+            systemChecks // closureRoots
+      )
+      ciChecks;
     rawSecurityRoots = collect "securityRoots";
     rawSecurityRootPaths = collect "securityRootPaths";
     securityRoots =
@@ -420,15 +444,12 @@
               // {
                 attr = "packages.aarch64-darwin.${name}";
               }
-          )
-          (linuxDarwinAliases.aarch64-darwin or {});
+          ) (linuxDarwinAliases.aarch64-darwin or {});
       };
     securityRootPaths =
       rawSecurityRootPaths
       // {
-        aarch64-darwin =
-          rawSecurityRootPaths.aarch64-darwin
-          // (linuxDarwinAliases.aarch64-darwin or {});
+        aarch64-darwin = rawSecurityRootPaths.aarch64-darwin // (linuxDarwinAliases.aarch64-darwin or {});
       };
     indexPackages = system: packages.${system};
     personalConfigRoot = ./users/andrewgazelka/config;
@@ -442,7 +463,19 @@
     # consumer combines, but there is no reason to make them re-apply the
     # walker.
     provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+    # Declarative in-guest state push for vmkit macOS guest VMs (launchd
+    # agents from structured attrs, pinned binaries, idempotent ssh apply).
+    # One instance shared by homeModules.macos-guests and the personal darwin
+    # profile. See modules/home/macos-guests.nix.
+    macosGuestsHomeModule = import ./modules/home/macos-guests.nix {
+      inherit indexPackages ix;
+    };
     claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
+      inherit indexPackages;
+      promptModule = ./packages/agent/prompt;
+      mutableJsonModule = ix.mutableJson.homeModule;
+    };
+    codexHomeModule = import ./packages/agent/home-manager/codex.nix {
       inherit indexPackages;
       promptModule = ./packages/agent/prompt;
     };
@@ -451,16 +484,9 @@
       claudeCodeModule = claudeCodeHomeModule;
       portableServicesModule = ix.portableServices.homeModule;
     };
-    symphonyHomeModule = import ./packages/agent/symphony/home-module.nix {
-      inherit indexPackages ix;
-      portableServicesModule = ix.portableServices.homeModule;
-      beamvmModule = import ./packages/beamvm/home-module.nix {
-        inherit indexPackages ix;
-        portableServicesModule = ix.portableServices.homeModule;
-      };
-    };
     personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
       inherit indexPackages personalServicesModule ix;
+      codexModule = codexHomeModule;
       configRoot = personalConfigRoot;
       mutableFilesModule = mutableFilesHomeModule;
       provenanceModule = provenanceHomeModule;
@@ -474,7 +500,8 @@
       ghosttyModule = ./users/andrewgazelka/config/home/ghostty.nix;
       raycastModule = ./modules/home/raycast.nix;
       optionsModule = personalOptionsModule;
-      symphonyModule = symphonyHomeModule;
+      macosGuestsModule = macosGuestsHomeModule;
+      guestsModule = import ./users/andrewgazelka/guests {inherit indexPackages;};
     };
     personalLightProfile = system:
       home-manager.lib.homeManagerConfiguration {
@@ -527,6 +554,10 @@
       mutable-files = import ./modules/darwin/mutable-files.nix {
         indexPackages = system: packages.${system};
       };
+      # Fabric Ray worker for macs (index#3192): join the fleet cluster as a
+      # worker behind `services.ix-ray.enable`, same pinned ports and env as
+      # the NixOS module. See modules/darwin/ray.nix.
+      ray = import ./modules/darwin/ray.nix {indexLib = ix;};
       # Declarative NFS automounts via macOS autofs: each entry renders a
       # direct-map line, /etc/auto_master gains the include idempotently, and
       # activation reloads automountd. See modules/darwin/nfs.nix.
@@ -571,6 +602,13 @@
       # absorb-into-Nix via `index-delta apply-ops`. See
       # modules/home/mutable-files.nix and packages/index-delta.
       mutable-files = mutableFilesHomeModule;
+      # Reusable workstation module (macOS): declare vmkit macOS guest VMs
+      # (ssh endpoint, launchd agents from structured attrs, pinned binaries)
+      # and get a `macos-guest-<name>` apply/status/ssh command per guest.
+      # Import it and set `macosGuests.<name> = { ssh = ...; ... }`. Manual
+      # TCC bootstrap: modules/home/macos-guests/tcc-bootstrap.md. See
+      # modules/home/macos-guests.nix (index#3206, toward index#2682).
+      macos-guests = macosGuestsHomeModule;
       # Reusable workstation module (macOS): declare Raycast Focus session
       # defaults (title, filter mode, duration) and have them written to the
       # com.raycast.macos defaults domain at switch time. Import it and set
@@ -586,10 +624,7 @@
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
       claude-code = claudeCodeHomeModule;
-      codex = import ./packages/agent/home-manager/codex.nix {
-        indexPackages = system: packages.${system};
-        promptModule = ./packages/agent/prompt;
-      };
+      codex = codexHomeModule;
       # Personal-but-shareable workstation module for github:andrewgazelka: the
       # ix.dev downtime watcher + boss bar overlay + the shared say-detached
       # sound helper, all as portable services. Closed over the per-system
@@ -630,22 +665,6 @@
         indexPackages = system: packages.${system};
         portableServicesModule = ix.portableServices.homeModule;
       };
-      # Workstation-facing module: run the Symphony BEAM runtime as a user
-      # service (native launchd agent on macOS, systemd user unit on Linux)
-      # by composing portable-services. Mirrors the NixOS module's option
-      # vocabulary; point `packDir` at a mutable checkout for hot-reloaded
-      # workflows and skills. See packages/agent/symphony/home-module.nix.
-      symphony = symphonyHomeModule;
-      # Workstation-facing module: persistent BEAM VMs as user services with
-      # the OTP applications they host declared in Nix. Updating an app
-      # hot-swaps its code in the running VM (no restart, no dropped
-      # connections); only a beamvm/toolchain update restarts. See
-      # packages/beamvm/home-module.nix and packages/beamvm/harness.ex.
-      beamvm = import ./packages/beamvm/home-module.nix {
-        indexPackages = system: packages.${system};
-        portableServicesModule = ix.portableServices.homeModule;
-        inherit ix;
-      };
     };
     overlays.default = ix.overlay;
     templates = {};
@@ -662,7 +681,7 @@
     # (ENG-2201). Kept separate from `checks` because its per-package
     # `recurseForDerivations` groups are not derivations, which the flake
     # `checks` schema requires.
-    ciChecks = collect "ciChecks";
+    inherit ciChecks;
     # Registry-derived map of package directory -> flake attr for every
     # `updateScript` package exposed on a system. update.yml's "Build changed
     # packages" step evaluates this to find which attr owns each file the
@@ -680,13 +699,21 @@
     # `toplevel` closure; cache-push.yml publishes this instead of the
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
     # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
-    cachePushRoots = withDarwinAliases (collect "cachePushRoots");
+    inherit cachePushRoots;
+    # Union consumed by `nix run .#check -- required`: one bounded
+    # nix-fast-build evaluator replaces the former flake-check and closure-gate
+    # self-hosted jobs without dropping either required status context.
+    inherit requiredGateRoots;
     # Typed security exposure roots consumed as JSON by the runtime DAG scanner.
     # Unlike cachePushRoots, every entry carries policy metadata and names only
     # a shipped runtime output or an example service closure. securityRootPaths
     # carries the derivations separately so callers realize terminal store paths
     # instead of trusting content-addressed placeholders from evaluation.
     inherit securityRoots securityRootPaths;
+    # Opt-in heavy roots (kbuild-unit #3411): `nix build .#kernel-unit.vmlinux`
+    # resolves through legacyPackages on x86_64-linux. Deliberately not in
+    # `packages`, so no CI gate closure picks up its eval-time IFD kbuild.
+    legacyPackages = collect "legacyPackages";
     formatter = collect "formatter";
     apps = collect "apps";
     devShells = collect "devShells";

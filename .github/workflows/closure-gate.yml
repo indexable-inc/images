@@ -1,0 +1,69 @@
+name: Closure gate
+
+# Manual probe for the publishable closure (#1873). The required PR and merge
+# group path moved into check.yml's single `requiredGateRoots` evaluator, which
+# preserves the `closure-gate` status without competing for a second runner.
+# This workflow retains an operator-triggered closure-only diagnostic.
+#
+# Build-only, no publish: the ci-dispatcher attaches the ix-public push token
+# only to `-cache-push` jobs on main pushes (spawn.rs ix_public_push_eligible);
+# PR contexts run unmerged code and must never hold it. The post-merge Cache
+# push remains the publisher, but after a gated merge its realise phase is
+# ~free (this run already built the closure into the shared warm store), so
+# the unpublished window shrinks to roughly upload time. True
+# publish-before-merge (retiring cache-ready) stays open on #1873.
+#
+# The native aarch64-darwin cache lane (GitHub-hosted mac, cold codex is
+# 40-80 min) is not gated here; it stays a post-merge cache-push concern.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: closure-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Client-side eval knobs only, same set and rationale as check.yml: the
+  # self-hosted daemon owns substituters, trusted keys, and system features.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations
+    accept-flake-config = false
+    max-jobs = auto
+    cores = 1
+
+jobs:
+  ci-budget:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main
+    with:
+      pull-request-number: 0
+      force-big-change: true
+
+  closure-probe:
+    needs: ci-budget
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-closure-probe', github.run_id, github.run_attempt) }}"]
+    # A relock-class PR realises a near-full closure; match the cache-push
+    # linux lane budget, which fits that worst case.
+    timeout-minutes: ${{ needs.ci-budget.outputs.big_change == 'true' && 180 || 5 }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
+      # Output goes to a runner-local log (the action prints the host and
+      # path); the Actions log stays quiet unless the build fails.
+      - name: Build the cache-push closure
+        uses: ./.github/actions/check-logged
+        with:
+          subcommand: closure

@@ -31,8 +31,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
 use smithay::utils::{SERIAL_COUNTER, Transform};
 use smithay::wayland::compositor::{
-    CompositorClientState, CompositorState, SurfaceAttributes, TraversalAction,
-    send_surface_state, with_states, with_surface_tree_downward,
+    CompositorClientState, CompositorState, SurfaceAttributes, TraversalAction, send_surface_state,
+    with_states, with_surface_tree_downward,
 };
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::{
@@ -331,8 +331,12 @@ impl App {
         let repeat = wl_repeat_info(375, 90);
         if let Err(err) = seat.add_keyboard(xkb, repeat.delay, repeat.rate) {
             warn!(%err, layout = %cli.xkb_layout, "xkb keymap failed; falling back to defaults");
-            seat.add_keyboard(smithay::input::keyboard::XkbConfig::default(), repeat.delay, repeat.rate)
-                .expect("default xkb keymap must compile");
+            seat.add_keyboard(
+                smithay::input::keyboard::XkbConfig::default(),
+                repeat.delay,
+                repeat.rate,
+            )
+            .expect("default xkb keymap must compile");
         }
         seat.add_pointer();
 
@@ -466,7 +470,8 @@ impl App {
             return;
         }
         info!(scale, "output scale raised by per-window configure");
-        self.output.change_current_state(None, None, Some(Scale::Integer(scale)), None);
+        self.output
+            .change_current_state(None, None, Some(Scale::Integer(scale)), None);
         for pane in &self.panes {
             self.send_preferred_scale(pane.toplevel.wl_surface());
         }
@@ -492,7 +497,11 @@ impl App {
             return;
         };
         pane.announced_scale = pane.scale;
-        info!(id = pane.id, scale = pane.scale, "window scale re-announced");
+        info!(
+            id = pane.id,
+            scale = pane.scale,
+            "window scale re-announced"
+        );
         host.send(ToHost::WindowScale {
             id: pane.id,
             scale: pane.scale,
@@ -509,13 +518,16 @@ impl App {
         let Some(held) = self.panes[idx].pending_gpu.take() else {
             return;
         };
-        let frame = self.gpu.as_mut().and_then(|gpu| match gpu.readback(&held.dmabuf) {
-            Ok(frame) => Some(frame),
-            Err(err) => {
-                warn!(%err, "dmabuf readback failed; skipping frame");
-                None
-            }
-        });
+        let frame = self
+            .gpu
+            .as_mut()
+            .and_then(|gpu| match gpu.readback(&held.dmabuf) {
+                Ok(frame) => Some(frame),
+                Err(err) => {
+                    warn!(%err, "dmabuf readback failed; skipping frame");
+                    None
+                }
+            });
         // Released only now: the client was not allowed to write into the
         // buffer while a readback could still sample it.
         held.buffer.release();
@@ -698,7 +710,10 @@ impl App {
                     host.send(ToHost::Pong { nonce });
                 }
             }
-            ToGuest::KeyRepeat { delay_ms, interval_ms } => self.on_key_repeat(delay_ms, interval_ms),
+            ToGuest::KeyRepeat {
+                delay_ms,
+                interval_ms,
+            } => self.on_key_repeat(delay_ms, interval_ms),
             other => {
                 input::handle(self, &other);
                 // Pointer focus may have moved: activate a pending lock that
@@ -770,7 +785,13 @@ impl App {
     /// clients auto-repeat with exactly the Mac's delay and rate.
     fn on_key_repeat(&mut self, delay_ms: u32, interval_ms: u32) {
         let repeat = wl_repeat_info(delay_ms, interval_ms);
-        info!(delay_ms, interval_ms, rate = repeat.rate, delay = repeat.delay, "key repeat timing from host");
+        info!(
+            delay_ms,
+            interval_ms,
+            rate = repeat.rate,
+            delay = repeat.delay,
+            "key repeat timing from host"
+        );
         if let Some(keyboard) = self.seat.get_keyboard() {
             keyboard.change_repeat_info(repeat.rate, repeat.delay);
         }
@@ -834,8 +855,13 @@ impl App {
         let size_valid = width > 0 && height > 0;
         self.panes[idx].toplevel.with_pending_state(|state| {
             if size_valid {
-                state.size =
-                    Some((clamp_i32(width.div_ceil(scale)), clamp_i32(height.div_ceil(scale))).into());
+                state.size = Some(
+                    (
+                        clamp_i32(width.div_ceil(scale)),
+                        clamp_i32(height.div_ceil(scale)),
+                    )
+                        .into(),
+                );
             }
             if activated {
                 state.states.set(xdg_toplevel::State::Activated);
@@ -934,10 +960,16 @@ impl App {
             return;
         };
         if let Some(old) = self.locked_pane {
-            host.send(ToHost::PointerLock { id: old, locked: false });
+            host.send(ToHost::PointerLock {
+                id: old,
+                locked: false,
+            });
         }
         if let Some(new) = active {
-            host.send(ToHost::PointerLock { id: new, locked: true });
+            host.send(ToHost::PointerLock {
+                id: new,
+                locked: true,
+            });
         }
         info!(from = ?self.locked_pane, to = ?active, "pointer lock changed");
         self.locked_pane = active;
@@ -970,8 +1002,7 @@ impl App {
                 // Back off before the next rescue: if this full frame also
                 // goes unacked, flooding a struggling link with more fulls
                 // only pushes the ack further out.
-                pane.watchdog_ticks =
-                    (pane.watchdog_ticks * 2).min(INFLIGHT_WATCHDOG_MAX_TICKS);
+                pane.watchdog_ticks = (pane.watchdog_ticks * 2).min(INFLIGHT_WATCHDOG_MAX_TICKS);
                 warn!(
                     id = pane.id,
                     seq = pane.inflight,

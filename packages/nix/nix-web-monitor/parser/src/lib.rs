@@ -437,7 +437,8 @@ impl MonitorState {
         if self.rebuild_reasons.get(&derivation) == Some(&reason) {
             return;
         }
-        self.rebuild_reasons.insert(derivation.clone(), reason.clone());
+        self.rebuild_reasons
+            .insert(derivation.clone(), reason.clone());
         self.emit(Delta::RebuildReasonSet { derivation, reason });
     }
 
@@ -651,7 +652,9 @@ impl MonitorState {
         let promoted: Vec<String> = self
             .builds
             .iter_mut()
-            .filter(|(_, build)| matches!(build.status, BuildStatus::Stopped | BuildStatus::Planned))
+            .filter(|(_, build)| {
+                matches!(build.status, BuildStatus::Stopped | BuildStatus::Planned)
+            })
             .map(|(derivation, build)| {
                 build.status = BuildStatus::Succeeded;
                 derivation.clone()
@@ -1087,9 +1090,9 @@ fn root_cause_derivations(
         .iter()
         .filter(|derivation| {
             // Only classify once the closure is known; a root has no built input.
-            closure_deps.get(**derivation).is_some_and(|closure| {
-                !closure.iter().any(|input| built.contains(input.as_str()))
-            })
+            closure_deps
+                .get(**derivation)
+                .is_some_and(|closure| !closure.iter().any(|input| built.contains(input.as_str())))
         })
         .map(|derivation| (*derivation).to_owned())
         .collect();
@@ -1927,7 +1930,10 @@ mod tests {
         // it is omitted (not yet classifiable) rather than wrongly called a root.
         let closure = closures(&[("a", &["b", "c"]), ("b", &["c"]), ("c", &[])]);
         let built = BTreeSet::from(["a", "b", "c", "d"]);
-        assert_eq!(root_cause_derivations(&closure, &built), vec!["c".to_owned()]);
+        assert_eq!(
+            root_cause_derivations(&closure, &built),
+            vec!["c".to_owned()]
+        );
     }
 
     #[test]
@@ -1936,7 +1942,10 @@ mod tests {
         // cause even though its closure is non-empty.
         let closure = closures(&[("a", &["x"])]);
         let built = BTreeSet::from(["a"]);
-        assert_eq!(root_cause_derivations(&closure, &built), vec!["a".to_owned()]);
+        assert_eq!(
+            root_cause_derivations(&closure, &built),
+            vec!["a".to_owned()]
+        );
     }
 
     #[test]

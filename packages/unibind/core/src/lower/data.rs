@@ -2,8 +2,8 @@
 
 use syn::spanned::Spanned as _;
 
-use super::ty::{lower_type, Position};
-use super::{attrs, marker, Declared, LowerError, Result};
+use super::ty::{Position, lower_type};
+use super::{Declared, LowerError, Result, attrs, marker};
 use crate::ir;
 
 pub(super) fn lower_record(
@@ -14,6 +14,7 @@ pub(super) fn lower_record(
     reject_flags(&found.meta, "a record")?;
     found.meta.reject_default("a record")?;
     found.meta.reject_py_base("a record")?;
+    found.meta.reject_jvm_base("a record")?;
     require_pub(&item.vis, item.ident.span(), "record")?;
     if !item.generics.params.is_empty() || item.generics.where_clause.is_some() {
         return Err(LowerError::new(
@@ -39,6 +40,7 @@ pub(super) fn lower_record(
         reject_flags(&meta, "a record field")?;
         meta.reject_default("a record field")?;
         meta.reject_py_base("a record field")?;
+        meta.reject_jvm_base("a record field")?;
         lowered.push(ir::Field {
             name: ident.to_string(),
             names: meta.names(),
@@ -77,6 +79,7 @@ pub(super) fn lower_error(item: &syn::ItemEnum, found: &marker::Marker) -> Resul
         reject_flags(&meta, "an error variant")?;
         meta.reject_default("an error variant")?;
         meta.reject_py_base("an error variant")?;
+        meta.reject_jvm_base("an error variant")?;
         variants.push(ir::ErrorVariant {
             name: variant.ident.to_string(),
             names: meta.names(),
@@ -88,6 +91,7 @@ pub(super) fn lower_error(item: &syn::ItemEnum, found: &marker::Marker) -> Resul
         names: found.meta.names(),
         docs: marker::doc_lines(&item.attrs),
         py_base: found.meta.py_base.clone(),
+        jvm_base: found.meta.jvm_base.clone(),
         variants,
     })
 }

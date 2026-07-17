@@ -36,29 +36,33 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture
-def weave_server(tmp_path: Path) -> Iterator[str]:
-    port = _free_port()
-    store_dir = tmp_path / "weave-store"
-    subprocess.run([WEAVE_BIN, "--store", str(store_dir), "init"], check=True, capture_output=True)
+def _start_server(store_dir: Path, port: int) -> subprocess.Popen[bytes]:
+    """Launch `weave serve` on an initialized store and wait until it answers."""
     proc = subprocess.Popen(
         [WEAVE_BIN, "--store", str(store_dir), "serve", "--addr", f"127.0.0.1:{port}"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    url = f"http://127.0.0.1:{port}"
-    try:
-        from urllib.request import urlopen
+    from urllib.request import urlopen
 
-        for _ in range(100):
-            try:
-                urlopen(f"{url}/api/info", timeout=1).read()  # noqa: S310 - fixture-local http url
-                break
-            except Exception:
-                time.sleep(0.1)
-        else:
-            raise RuntimeError("weave serve never came up")
-        yield url
+    for _ in range(100):
+        try:
+            urlopen(f"http://127.0.0.1:{port}/api/info", timeout=1).read()
+            return proc
+        except Exception:
+            time.sleep(0.1)
+    proc.terminate()
+    raise RuntimeError("weave serve never came up")
+
+
+@pytest.fixture
+def weave_server(tmp_path: Path) -> Iterator[str]:
+    port = _free_port()
+    store_dir = tmp_path / "weave-store"
+    subprocess.run([WEAVE_BIN, "--store", str(store_dir), "init"], check=True, capture_output=True)
+    proc = _start_server(store_dir, port)
+    try:
+        yield f"http://127.0.0.1:{port}"
     finally:
         proc.terminate()
         proc.wait(timeout=10)
@@ -75,11 +79,14 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server: str, tmp_path: 
     store.start(ws, id="run-1", name="smoke import", code="print('hello weave')",
                 started_at=now, budget=15.0, kind="cell", topic="swap-e2e")
     store.update_output(ws, "run-1", "hello weave\n", line=1)
-    store.finish(ws, id="run-1", status="done", ended_at=now + 2.5,
+    store.finish(ws, id="run-1", kind="cell", status="done", ended_at=now + 2.5,
                  output="hello weave\n", result="'ok'", error=None,
                  outputs=[], bindings={}, namespace=[])
     store.start(ws, id="job-1", name="background watcher", code="watch()",
                 started_at=now, budget=0.0, kind="spawn", topic="swap-e2e")
+    store.finish(ws, id="job-1", kind="spawn", status="done", ended_at=now + 3.0,
+                 output="", result="'finished'", error=None,
+                 outputs=[], bindings={}, namespace=[])
     store.save_snapshot(ws, created_at=now, blob=b"snapshot-bytes" * 10,
                         names=["x", "y"], skipped=[])
     assert ws.flush(timeout=15.0), "write queue failed to drain"
@@ -87,6 +94,7 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server: str, tmp_path: 
     got = {r["id"]: r for r in store.recent(ws, limit=10)}
     assert got["run-1"]["status"] == "done"
     assert got["run-1"]["code"] == "print('hello weave')"
+    assert got["job-1"]["status"] == "done"
     assert store.get_session(ws)["name"] == "e2e demo session"
     snap = store.latest_snapshot(ws)
     assert snap is not None
@@ -104,29 +112,107 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server: str, tmp_path: 
         kinds = {tuple(r) for r in (await weave_mod.query('?- child_of(R, "agent:e2e"), type(R, T).'))["rows"]}
         assert ("run:run-1", "run") in kinds
         assert ("proc:job-1", "process") in kinds
+        assert not (await weave_mod.query('?- latest("run:job-1", A, V).'))["rows"]
 
     asyncio.run(check())
 
 
-def test_delegate_writes_task_shape(weave_server: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fabric_reconcile_and_activity_queries_against_real_weave(
+    weave_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("WEAVE_URL", weave_server)
     monkeypatch.setenv("IX_WEAVE_AGENT", "agent:e2e")
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "weave"))
+    src = Path(__file__).resolve().parents[1] / "src"
+    sys.path.insert(0, str(src / "weave"))
+    sys.path.insert(0, str(src / "fabric"))
     import weave
+    from fabric import activity, reconcile
 
     async def main() -> None:
-        task = await weave.delegate("say hello to the weave world", name="greeter", model="haiku")
-        # The task shape any fulfiller (the weave app) dispatches on, straight
-        # datalog against the real server: latest-wins attrs on the task entity.
+        # A runner-placed run's exact fact shape (fabric.run with node=), as
+        # if the runner died right after state=running.
+        task = weave.mint("task")
+        await weave.assert_facts([
+            (task, "type", "task"),
+            (task, "fn", "build_index"),
+            (task, "node", "hc9"),
+            (task, "requested_by", "agent:e2e"),
+            (task, "runner", "runner:hc9"),
+            (task, "state", "submitted"),
+        ])
+        await weave.assert_fact(task, "state", "running")
+
+        # The reconciler's datalog against the real derivation: latest state
+        # joined with that fact's write time (fact_id/fact_time).
+        rows = (await weave.query(reconcile.QUERY))["rows"]
+        stale = reconcile._parse(rows, now_ms=time.time() * 1000 + reconcile.GRACE_S * 1000 + 1)
+        assert (task, "runner:hc9") in stale
+        # Inside the grace window the same run is untouchable.
+        assert reconcile._parse(rows, now_ms=time.time() * 1000) == []
+
+        # once() against the real journal, with the Ray probe faked dead.
+        monkeypatch.setattr(reconcile, "GRACE_S", 0.0)
+        monkeypatch.setattr(reconcile, "_alive_runners", lambda candidates: set())
+        assert await reconcile.once() == [task]
         attrs = {r[0]: r[1] for r in (await weave.query(f'?- latest("{task}", A, V).'))["rows"]}
-        assert attrs.get("type") == "task"
-        assert attrs.get("agent") == "agent-greeter"
-        assert attrs.get("prompt") == "say hello to the weave world"
-        assert attrs.get("state") == "pending"
-        assert attrs.get("requested_by") == "agent:e2e"
-        agent_attrs = {r[0]: r[1] for r in (await weave.query('?- latest("agent-greeter", A, V).'))["rows"]}
-        assert agent_attrs.get("type") == "agent"
-        assert agent_attrs.get("name") == "greeter"
-        assert agent_attrs.get("model") == "haiku"
+        assert attrs["state"] == "lost"
+        assert "runner:hc9" in attrs["error"]
+        # A second pass is a no-op: lost is terminal, the run is closed.
+        assert await reconcile.once() == []
+
+        # The activity view sees the run on its node, now in its lost state.
+        history = {tuple(r) for r in (await weave.query(activity.QUERY))["rows"]}
+        assert (task, "hc9", "build_index", "lost") in history
 
     asyncio.run(main())
+
+
+def test_server_down_then_restart_drains_spool_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """index#3418: with the server down, record() is durable in the local
+    spool and returns; once the server comes up, the flusher delivers in
+    append order (latest-wins lands on the LAST appended state)."""
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    store_dir = tmp_path / "weave-store"
+    subprocess.run([WEAVE_BIN, "--store", str(store_dir), "init"], check=True, capture_output=True)
+    monkeypatch.setenv("WEAVE_URL", url)
+    monkeypatch.setenv("WEAVE_SPOOL", str(tmp_path / "spool"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "weave"))
+    import weave
+    from weave import spool
+
+    async def write() -> str:
+        task = weave.mint("task")
+        await weave.record([
+            (task, "type", "task"),
+            (task, "prompt", weave.Blob(b"restart ordering")),
+            (task, "state", "submitted"),
+        ])
+        await weave.record([(task, "state", "running")])
+        await weave.record([(task, "state", "done")])
+        return task
+
+    try:
+        task = asyncio.run(write())  # no server: everything spools locally
+        assert not asyncio.run(weave.flush(timeout=1.0))
+        assert list((tmp_path / "spool").glob("w-*.jsonl")), "record() must be durable on disk"
+
+        proc = _start_server(store_dir, port)
+        try:
+            assert asyncio.run(weave.flush(timeout=30.0)), "spool failed to drain after restart"
+
+            async def check() -> None:
+                rows = (await weave.query(f'?- latest("{task}", A, V).'))["rows"]
+                attrs = {r[0]: r[1] for r in rows}
+                # latest-wins: append order preserved means done landed last.
+                assert attrs["state"] == "done", attrs
+                assert await weave.get_blob(str(attrs["prompt"])) == b"restart ordering"
+
+            asyncio.run(check())
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+    finally:
+        spool.close_all()

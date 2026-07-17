@@ -124,6 +124,88 @@ def test_transport_pump_waits_for_initialization_before_draining_mailbox() -> No
     anyio.run(run)
 
 
+def _weave_chat_pump_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_config(
+        Config(
+            workdir=Path.cwd(),
+            store_path=Path("x"),
+            server_session_id="srv",
+            channel_delivery="weave-chat",
+        )
+    )
+    monkeypatch.setenv("WEAVE_URL", "http://weave.test")
+    monkeypatch.setenv("IX_WEAVE_AGENT", "agent:main")
+    monkeypatch.setattr(transport, "_OUTBOX_POLL_SECONDS", 0.01)
+
+
+def test_transport_pump_weave_chat_posts_instead_of_notifying(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        box = _box()
+        box.add_outbox(content="job done", meta=json.dumps({"job_id": "42"}), session="srv")
+        _weave_chat_pump_config(monkeypatch)
+        posts: list[tuple] = []
+        posted = anyio.Event()
+
+        def fake_http(method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
+            posts.append((method, url, body))
+            anyio.from_thread.run_sync(posted.set)
+            return {"id": body["id"], "seq": 1}
+
+        monkeypatch.setattr(store, "_http_json", fake_http)
+        initialized = anyio.Event()
+        initialized.set()
+        send, recv = anyio.create_memory_object_stream[SessionMessage](10)
+        async with send, recv, anyio.create_task_group() as tg:
+            tg.start_soon(transport.pump_outbox, send, initialized)
+            with anyio.fail_after(2):
+                await posted.wait()
+            # The client is never woken: no channel notification is emitted.
+            with anyio.move_on_after(0.05) as scope:
+                await recv.receive()
+            assert scope.cancel_called
+            tg.cancel_scope.cancel()
+        method, url, body = posts[0]
+        assert (method, url) == ("POST", "http://weave.test/api/chat")
+        assert body["to"] == "agent:main"
+        assert body["role"] == "user"
+        assert body["author"] == "ix-mcp"
+        assert body["id"].startswith("msg-ixch-")
+        assert body["text"] == '<channel source="ix-mcp" job_id="42">job done</channel>'
+
+    anyio.run(run)
+
+
+def test_transport_pump_weave_chat_retries_failed_post_with_same_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        box = _box()
+        box.add_outbox(content="flaky", meta="{}", session="srv")
+        _weave_chat_pump_config(monkeypatch)
+        attempts: list[str] = []
+        retried = anyio.Event()
+
+        def fake_http(method: str, url: str, *, body: object = None, content: bytes | None = None, headers: dict | None = None) -> object:
+            attempts.append(body["id"])
+            if len(attempts) == 1:
+                raise ConnectionError("weave down")
+            anyio.from_thread.run_sync(retried.set)
+            return {"id": body["id"], "seq": 1}
+
+        monkeypatch.setattr(store, "_http_json", fake_http)
+        initialized = anyio.Event()
+        initialized.set()
+        send, recv = anyio.create_memory_object_stream[SessionMessage](10)
+        async with send, recv, anyio.create_task_group() as tg:
+            tg.start_soon(transport.pump_outbox, send, initialized)
+            with anyio.fail_after(2):
+                await retried.wait()
+            tg.cancel_scope.cancel()
+        # The retry reuses the id minted for the row, so an ambiguous failure
+        # (response lost after the write landed) cannot double-deliver.
+        assert attempts[0] == attempts[1]
+
+    anyio.run(run)
+
+
 def test_reply_tool_appends_event(monkeypatch: pytest.MonkeyPatch) -> None:
     async def run() -> None:
         box = _box()

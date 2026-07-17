@@ -4,8 +4,8 @@ use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use unibind_core::ir;
 
-use crate::ty;
 use crate::RenderError;
+use crate::ty;
 
 /// The call-site expression for an argument JavaScript may omit: `None`
 /// falls back to the declared default.
@@ -112,7 +112,7 @@ pub fn option_substituted(
 /// Formatting instead of casting keeps the token faithful to the source
 /// digits for every i64.
 fn float_literal(value: i64) -> Result<proc_macro2::Literal, RenderError> {
-    format!("{value}.0").parse().map_err(|_| {
-        RenderError::new(format!("`{value}` is not renderable as a float default"))
-    })
+    format!("{value}.0")
+        .parse()
+        .map_err(|_| RenderError::new(format!("`{value}` is not renderable as a float default")))
 }

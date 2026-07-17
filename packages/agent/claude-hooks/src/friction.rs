@@ -205,8 +205,9 @@ fn labeled_texts(content: Option<&Value>) -> Vec<Labeled> {
                         if obj.get("is_error").and_then(Value::as_bool) == Some(true) =>
                     {
                         // json.dumps(content)[:400] — serialize even null.
-                        let dumped = serde_json::to_string(obj.get("content").unwrap_or(&Value::Null))
-                            .unwrap_or_else(|_| "null".to_owned());
+                        let dumped =
+                            serde_json::to_string(obj.get("content").unwrap_or(&Value::Null))
+                                .unwrap_or_else(|_| "null".to_owned());
                         out.push(Labeled::Error(dumped.chars().take(400).collect()));
                     }
                     _ => {}
@@ -269,7 +270,11 @@ fn condense(raw: &str) -> String {
                     parts.push(format!("TOOL ERROR: {}", take_chars(&text, 2000)));
                 }
                 Labeled::Text(text) => {
-                    parts.push(format!("{}: {}", role.to_uppercase(), take_chars(&text, 2000)));
+                    parts.push(format!(
+                        "{}: {}",
+                        role.to_uppercase(),
+                        take_chars(&text, 2000)
+                    ));
                 }
             }
         }
@@ -344,13 +349,13 @@ fn ask_model(delta: &str, cwd: Option<&str>) -> Vec<Item> {
         "",
         "--setting-sources",
         "",
-        // The index claude-code wrapper injects `--settings <default-settings>`
-        // (Stop hooks included) whenever the caller passes no --settings, and
-        // --setting-sources does not filter that injected file. Without this
-        // override every extractor run is itself sliced by the Stop hooks and
-        // spawns another extractor: 84k recursive transcripts on hydra
-        // (index#2275). An explicit empty hooks object keeps the extractor
-        // session hook-free.
+        // The house Stop hooks live in the materialized ~/.claude/settings.json
+        // (#3180); `--setting-sources ""` above drops that file, and this
+        // explicit empty hooks object pins the session hook-free even if some
+        // other layer (a CLI flag, a managed file) carries hooks. Without a
+        // hook-free session every extractor run is itself sliced by the Stop
+        // hooks and spawns another extractor: 84k recursive transcripts on
+        // hydra (index#2275).
         "--settings",
         "{\"hooks\":{}}",
         "--strict-mcp-config",
@@ -459,7 +464,10 @@ fn parse_items(s: &str) -> Vec<Item> {
         .iter()
         .filter_map(|it| {
             let obj = it.as_object()?;
-            let title = obj.get("title").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+            let title = obj
+                .get("title")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())?;
             let description = obj
                 .get("description")
                 .and_then(Value::as_str)
@@ -486,7 +494,10 @@ fn linear_key() -> Option<String> {
     {
         return Some(key);
     }
-    if let Some(key) = std::env::var("LINEAR_API_KEY").ok().filter(|v| !v.is_empty()) {
+    if let Some(key) = std::env::var("LINEAR_API_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
         return Some(key);
     }
     // Login Keychain entry (same one ci-triage uses).
@@ -571,7 +582,10 @@ fn file_issue(key: &str, item: &Item, session: &str, cwd: &str) -> bool {
     false
 }
 
-fn hostname() -> String {
+/// Shared with `retro.rs` (its dispatch stamps the origin host into the
+/// delegated retro prompt). `pub`, not `pub(crate)`: the module is private, so
+/// the two are equivalent and clippy's `redundant_pub_crate` prefers `pub`.
+pub fn hostname() -> String {
     Command::new("hostname")
         .output()
         .ok()
@@ -582,7 +596,11 @@ fn hostname() -> String {
 }
 
 fn normalize_title(title: &str) -> String {
-    title.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+    title
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // --- single-flight slot ---
@@ -640,7 +658,11 @@ fn analyze(payload: &Value) {
     };
     // A rewritten/truncated transcript resets the window to the start; title
     // dedupe below keeps that from double-filing.
-    let seek_to = if state.offset <= size { state.offset } else { 0 };
+    let seek_to = if state.offset <= size {
+        state.offset
+    } else {
+        0
+    };
     if f.seek(SeekFrom::Start(seek_to)).is_err() {
         return;
     }
@@ -796,14 +818,16 @@ pub fn friction_report() {
     let _ = fs::create_dir_all(state_dir());
 
     // Meta-session filter (index#2275): headless judges run in mktemp scratch
-    // cwds (the symphony overseer tick, one-off summarizers). Their transcripts
+    // cwds (overseer ticks, one-off summarizers). Their transcripts
     // are role prompts and reports, not agent work, and mining them burned a
     // model call per tick and filed noise. Deterministic skip, logged so the
     // exclusion stays visible in friction.log.
     if let Some(cwd) = payload.get("cwd").and_then(Value::as_str)
         && is_scratch_cwd(cwd)
     {
-        log(&format!("{session}: scratch cwd {cwd}, skipping meta-session"));
+        log(&format!(
+            "{session}: scratch cwd {cwd}, skipping meta-session"
+        ));
         return;
     }
 
@@ -834,9 +858,7 @@ fn is_plain_component(s: &str) -> bool {
 /// there are headless meta-calls by construction, never mined for friction.
 fn is_scratch_cwd(cwd: &str) -> bool {
     let path = cwd.strip_prefix("/private").unwrap_or(cwd);
-    path == "/tmp"
-        || path.starts_with("/tmp/")
-        || path.starts_with("/var/folders/")
+    path == "/tmp" || path.starts_with("/tmp/") || path.starts_with("/var/folders/")
 }
 
 /// Re-spawn THIS binary as `friction-report --analyze`, detached (new session,
@@ -879,8 +901,9 @@ fn detach_analyze(payload: &Value) {
 
 /// `start_new_session=True` equivalent: call `setsid()` in the child between
 /// fork and exec, putting it in a brand-new session and process group (pgid ==
-/// pid), detached from the controlling terminal.
-fn set_new_session(cmd: &mut Command) {
+/// pid), detached from the controlling terminal. Shared with `retro.rs`, whose
+/// dispatch worker detaches the same way.
+pub fn set_new_session(cmd: &mut Command) {
     // SAFETY: setsid is async-signal-safe and the only thing we do in the
     // child before exec; no allocation, no shared-state mutation.
     unsafe {

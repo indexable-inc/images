@@ -127,9 +127,9 @@ impl GithubExport {
 
         let ci_runs_path = dir.join("ci_runs.json");
         let ci_runs: Vec<CiRun> = match std::fs::read(&ci_runs_path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).context(ParseJsonSnafu {
-                path: ci_runs_path,
-            })?,
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).context(ParseJsonSnafu { path: ci_runs_path })?
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(source) => {
                 return Err(Error::ReadFile {

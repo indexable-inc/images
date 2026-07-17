@@ -14,12 +14,12 @@
     apiKeyEnv = "ANTHROPIC_API_KEY";
   };
 
-  # gpt-5.5 at medium reasoning effort. `thinking` is passed through as
+  # gpt-5.6-sol at medium reasoning effort. `thinking` is passed through as
   # `pi --thinking medium`. (opus-4-8 takes no thinking level: on 4.8 adaptive
   # thinking is the only mode, so `claude` omits it.)
   codex = {
     provider = "openai";
-    model = "gpt-5.5";
+    model = "gpt-5.6-sol";
     thinking = "medium";
     apiKeyEnv = "OPENAI_API_KEY";
   };
@@ -32,10 +32,21 @@
     apiKeyEnv = "ANTHROPIC_API_KEY";
   };
 
+  # Kimi K3 via Moonshot's OpenAI-compatible API. The pinned pi build has no
+  # built-in kimi-k3 provider, so this alias carries a provider extension that
+  # registers one (see providers/moonshot.js). No `thinking`: K3 only accepts
+  # reasoning_effort=max and the extension pins every level to it.
+  kimi = {
+    provider = "moonshot";
+    model = "kimi-k3";
+    apiKeyEnv = "MOONSHOT_API_KEY";
+    providerExtension = ./providers/moonshot.js;
+  };
+
   # Cheap delegated worker for fusion-style harnesses.
   codex-low = {
     provider = "openai";
-    model = "gpt-5.5";
+    model = "gpt-5.6-sol";
     thinking = "low";
     apiKeyEnv = "OPENAI_API_KEY";
   };

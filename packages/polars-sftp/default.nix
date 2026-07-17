@@ -90,7 +90,7 @@ let
         exit 1
       fi
       mkdir -p "$out"
-      python3 ${ix.paths.root}/lib/build/pyo3-wheel.py \
+      python3 ${ix.paths.root + "/lib/build/pyo3-wheel.py"} \
         --package polars_sftp \
         --dist-name polars-sftp \
         --so-name _polars_sftp.abi3.so \

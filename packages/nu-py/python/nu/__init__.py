@@ -39,9 +39,16 @@ payload (issue #2540).
 
 ``nu()`` is the single shell-out path: side-effectful commands
 (``git``/``gh`` writes) run as externals with ``^cmd``, and a CLI with a native
-``--json`` mode decodes end to end (``^gh ... --json | from json``). For a nix
-build, use the bundled ``nix`` module (a live dashboard build-tree pane), not
-``^nix``.
+``--json`` mode decodes end to end (``^gh ... --json | from json``). Builtin
+names SHADOW the externals -- ``ps``, ``open``, ``sort``, ``kill``, ``du``,
+``date`` are nushell commands -- so POSIX ``ps aux`` is a parse error
+("Usage: ps {flags}", issue #2933), and ``^`` applies per stage, so every
+external in a pasted POSIX pipeline needs its own prefix
+(``^ps aux | ^grep foo``, issue #2252). The builtin ``ps``'s ``cpu`` column is
+the live per-core percentage; on macOS ``^ps -o %cpu`` is BSD's decaying
+average, which reads 0.0 for a process that just started spinning, so prefer
+the builtin for current load. For a nix build, use the bundled ``nix``
+module (a live dashboard build-tree pane), not ``^nix``.
 
 Contract:
 
@@ -91,16 +98,19 @@ Contract:
   errors raise either way. A signal-terminated external reports the
   negative signal number, like subprocess.
 - ``timeout=`` REQUESTS a stop the way ctrl-c would (nushell checks the
-  flag between pipeline elements), raises ``TimeoutError``, and abandons
-  the shared engine for a fresh one: a single stuck element (a hung
-  ``http get``, an external that ignores the flag) may hold the old engine
-  arbitrarily long, and abandoning it keeps later ``nu()`` calls from
-  queueing behind the runaway. Persistent state is therefore LOST on a
-  timeout. Cancelling the awaiting task interrupts the same way but keeps
-  the engine (state survives); after cancelling a truly stuck pipeline,
-  ``nu.reset()`` unwedges. An external the pipeline already spawned
-  finishes on its own; run a genuinely long external as a background job
-  you poll, or in its own ``nu.Engine()`` so a stuck one is isolated.
+  flag between pipeline elements), SIGKILLs the eval's in-flight
+  externals' process groups (each external leads its own group, so a
+  never-exiting ``^sleep`` or a log follower dies now instead of holding
+  the engine as an orphan, issue #3183), raises ``TimeoutError``, and
+  abandons the shared engine for a fresh one: a stuck INTERNAL element (a
+  hung ``http get``) may still hold the old engine arbitrarily long, and
+  abandoning it keeps later ``nu()`` calls from queueing behind the
+  runaway. Persistent state is therefore LOST on a timeout. Cancelling
+  the awaiting task interrupts and kills the same way but keeps the
+  engine (state survives), so the engine is usable immediately after the
+  cancel; after cancelling a truly stuck internal pipeline, ``nu.reset()``
+  unwedges. Run a genuinely long external as a background job you poll,
+  or in its own ``nu.Engine()`` so a stuck one is isolated.
 - Calls against the shared engine run one at a time (REPL state needs
   ordered evaluation); for parallel pipelines, construct separate
   ``nu.Engine()`` instances.
@@ -303,17 +313,41 @@ class NuResult(NamedTuple):
     result: pl.DataFrame | dict[str, object] | str
     exit_code: int
 
+    def __ix_llm__(self) -> str | None:
+        """Model-facing text for the kernel's Result rendering (issue #3131).
+
+        The generic tuple rendering coerced ``(text, exit_code)`` into a mixed
+        one-column frame whose NUON escaped every newline, so a background job
+        wrapping ``nu(..., check=False)`` had no readable lines to page
+        (``jobs['<id>'].tail()`` returned frame fragments). Render the
+        command's own output verbatim instead, with ``sh``-style trailing
+        ``[exit N]`` marker on a non-zero exit; a frame result returns None so
+        the kernel's rich table rendering still applies.
+        """
+        if isinstance(self.result, str):
+            body = self.result
+        elif isinstance(self.result, dict):
+            body = repr(self.result)
+        else:
+            return None
+        marker = f"[exit {self.exit_code}]"
+        if not body:
+            return marker
+        return body if self.exit_code == 0 else f"{body}\n{marker}"
+
 
 def _resolve_dir(cwd: str | os.PathLike) -> str:
     """Return an existing directory as an absolute path.
 
     The engine persists PWD across calls, so a relative value would later be
     interpreted against an unrelated process directory and poison the session.
-    Resolve and validate it before the persistent engine sees it. This stays
-    synchronous on purpose: it is one local filesystem lookup, and keeping the
-    path method out of the async caller avoids ASYNC240.
+    Resolve and validate it before the persistent engine sees it (a leading
+    ``~`` expands first: every shell accepts one here, so callers reach for
+    it naturally, index#3101). This stays synchronous on purpose: it is one
+    local filesystem lookup, and keeping the path method out of the async
+    caller avoids ASYNC240.
     """
-    resolved = pathlib.Path(cwd).resolve()
+    resolved = pathlib.Path(cwd).expanduser().resolve()
     if not resolved.is_dir():
         raise ValueError(f"cwd is not a directory: {os.fspath(cwd)!r}")
     return os.fspath(resolved)
@@ -533,8 +567,9 @@ async def nu(
     the call raises :class:`NuCwdError` instead of silently running elsewhere
     and discards the stale engine so a retry starts fresh.
     ``env`` adds environment variables;
-    ``timeout`` interrupts the evaluation and discards the engine state (see
-    the module docstring); ``name`` labels the running job in the dashboard.
+    ``timeout`` interrupts the evaluation, kills its in-flight externals, and
+    discards the engine state (see the module docstring); ``name`` labels the
+    running job in the dashboard.
 
     Shape normalization: table -> frame; record -> plain ``dict`` (a struct,
     not a table: ``(await nu("do -i { ^cmd } | complete"))['exit_code']``

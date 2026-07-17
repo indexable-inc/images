@@ -183,7 +183,14 @@ pub async fn semantic(
     let hits = store
         .search(&stores, query, overfetch(top_k), options, filters)
         .await?;
-    Ok(project(manifest, hits, include_web, top_k, code_scope, mode))
+    Ok(project(
+        manifest,
+        hits,
+        include_web,
+        top_k,
+        code_scope,
+        mode,
+    ))
 }
 
 /// Grep `store_name` with a regular expression and project the hits.
@@ -262,7 +269,9 @@ pub async fn ranked(
         RenderMode::Full => top_k,
         RenderMode::Compact => overfetch(top_k),
     };
-    let hits = store.list_chunks(&stores, fetch, filters, Some(sort)).await?;
+    let hits = store
+        .list_chunks(&stores, fetch, filters, Some(sort))
+        .await?;
     // No manifest: this is a pure server-side listing, so code hits pass
     // through labeled by their stored path.
     Ok(project(
@@ -352,7 +361,12 @@ pub async fn stats(
             // The newest record of the source: a metadata-only listing of its
             // single top chunk by descending timestamp, under the same scope.
             let newest = store
-                .list_chunks(stores, 1, Some(&merged), Some(&SortBy::desc(keys::TIMESTAMP)))
+                .list_chunks(
+                    stores,
+                    1,
+                    Some(&merged),
+                    Some(&SortBy::desc(keys::TIMESTAMP)),
+                )
                 .await?
                 .first()
                 .and_then(|hit| hit.provenance.timestamp);
@@ -589,9 +603,9 @@ fn project(
 /// `external_id` when present (one per document), else source + label, which
 /// groups chunks of one file or record.
 fn document_key(hit: &DisplayHit) -> String {
-    hit.external_id.clone().unwrap_or_else(|| {
-        format!("{}\u{1f}{}", hit.source.as_str(), hit.label)
-    })
+    hit.external_id
+        .clone()
+        .unwrap_or_else(|| format!("{}\u{1f}{}", hit.source.as_str(), hit.label))
 }
 
 /// Cap a hit's snippet at `max_chars` characters (on a char boundary), marking

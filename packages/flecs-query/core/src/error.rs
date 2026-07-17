@@ -58,9 +58,7 @@ impl ParseError {
             start -= 1;
         }
         let line_start = src[..start].rfind('\n').map_or(0, |i| i + 1);
-        let line_end = src[start..]
-            .find('\n')
-            .map_or(src.len(), |i| start + i);
+        let line_end = src[start..].find('\n').map_or(src.len(), |i| start + i);
         let line = &src[line_start..line_end];
         let column = src[line_start..start].chars().count();
         let caret = " ".repeat(column);

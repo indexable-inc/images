@@ -19,7 +19,9 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::{ExportMem as _, ImportDma as _, Texture as _, TextureMapping as _};
+use smithay::backend::renderer::{
+    ExportMem as _, ImportDma as _, Texture as _, TextureMapping as _,
+};
 use smithay::utils::{Point, Rectangle, Size};
 
 pub struct Gpu {

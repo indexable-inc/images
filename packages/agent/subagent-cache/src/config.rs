@@ -8,7 +8,10 @@ use std::net::SocketAddr;
 /// shape but not their values, which must be tuned against measured hit and
 /// false-hit rates rather than asserted.
 #[derive(Debug, Clone, clap::Parser)]
-#[command(name = "subagent-cache", about = "Content-validated subagent investigation cache")]
+#[command(
+    name = "subagent-cache",
+    about = "Content-validated subagent investigation cache"
+)]
 pub struct Config {
     /// Postgres connection URL for the dedicated cache database.
     #[arg(long, env = "DATABASE_URL")]
@@ -33,10 +36,18 @@ pub struct Config {
     pub ttl_days: i64,
 
     /// Anthropic Messages API base URL (overridable for tests/proxies).
-    #[arg(long, env = "SUBAGENT_CACHE_JUDGE_API_BASE", default_value = "https://api.anthropic.com")]
+    #[arg(
+        long,
+        env = "SUBAGENT_CACHE_JUDGE_API_BASE",
+        default_value = "https://api.anthropic.com"
+    )]
     pub judge_api_base: String,
 
     /// Judge model id. A Haiku-class model; overridable as model ids roll.
-    #[arg(long, env = "SUBAGENT_CACHE_JUDGE_MODEL", default_value = "claude-haiku-4-5")]
+    #[arg(
+        long,
+        env = "SUBAGENT_CACHE_JUDGE_MODEL",
+        default_value = "claude-haiku-4-5"
+    )]
     pub judge_model: String,
 }

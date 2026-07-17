@@ -296,9 +296,8 @@ mod tests {
         std::fs::create_dir_all(&proj).expect("mkdir");
         std::fs::write(proj.join("s1.jsonl"), format!("{call}\n{result}\n")).expect("write");
 
-        let export =
-            super::ClaudeHistoryExport::open_with(temp.path(), "test-host", "test-user")
-                .expect("open");
+        let export = super::ClaudeHistoryExport::open_with(temp.path(), "test-host", "test-user")
+            .expect("open");
         let documents: Vec<_> = export
             .documents()
             .collect::<Result<_, _>>()

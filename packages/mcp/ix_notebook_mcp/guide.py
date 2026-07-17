@@ -69,7 +69,8 @@ JOBS = (
     "Each call runs as an async task and waits up to `budget` seconds; if the work is still going "
     "it keeps running in the background and the call returns a job handle. Background jobs live "
     "in the `jobs` dict, so manage them with more python_exec: `jobs['ab12']` to inspect, `await "
-    "jobs['ab12']` to wait (it yields the run's value), `jobs['ab12'].cancel()` to stop, "
+    "jobs['ab12']` to wait (it yields a `Result`: use `.text` for rendered text or `.value` "
+    "for the original Python value), `jobs['ab12'].cancel()` to stop, "
     "`jobs['ab12'].done()` to test if it has finished, `[j for j in jobs.values() if "
     "j.running()]` to list. `budget` is how long the run holds the one shared shell channel "
     "before it backgrounds, so keep it small and poll: do NOT pass a huge budget to sit on a "
@@ -77,7 +78,7 @@ JOBS = (
     "time and is capped server-side anyway. Let the work background, then re-await or poll "
     "`.done()` in a later cell. `jobs.spawn(coro, name=...)` registers an awaitable you created "
     "yourself as a first-class job with the same lifecycle (appears in `jobs`, notifies on "
-    "completion, result via `await jobs['<id>']`)."
+    "completion, result text via `(await jobs['<id>']).text`)."
 )
 
 PAGING = (
@@ -162,6 +163,20 @@ DISCOVER = (
     "cannot drift from the code and the catalog remains the source of truth."
 )
 
+PYTHON_FIRST = (
+    "HIGHLY recommended: solve tasks in plain Python, not shell. Shell traps live in the glue "
+    "between programs (pipes, redirects, quoting, builtin shadowing), never in the programs "
+    "themselves, so skip the glue: `psutil` for process questions instead of `ps`/`lsof`, "
+    "`pathlib`/`os.stat` instead of `find`/`stat`, `datetime` instead of `date`, `httpx` "
+    "instead of `curl`, and `githubkit` instead of the `gh` CLI (typed async GitHub client; "
+    "mint it once per session with `from githubkit import GitHub; gh = GitHub((await "
+    "nu('^gh auth token')).strip())` and reuse it: a direct API call returns structured data "
+    "in well under a second where every `gh` fork costs several). Reach for `nu(...)` ONLY "
+    "when a real external program is genuinely needed (git plumbing, `gh auth token`, a CLI "
+    "with no Python-native equivalent), and even then prefer one program per call with a "
+    "`--json` flag over multi-stage pipelines."
+)
+
 NO_SHELL = (
     "Do NOT hand-roll shell through Python: never `subprocess.run`, `os.system`, or "
     "`asyncio.create_subprocess_exec` for `ls`/`cat`/`grep`/`find`/`rg`/`fd` or any command whose "
@@ -178,9 +193,12 @@ NO_SHELL = (
 )
 
 NU = (
-    "`nu` is the ONE shell-out path: running a command, a pipeline, "
-    "listing/filtering/transforming, reaching into files or the web all go through it (the old "
-    "`sh()`/`zsh()` are retired and now raise a migration hint). `await nu(\"ls | where size > "
+    "`nu` is the ONE shell-out path, reserved for when an external program is genuinely "
+    "needed (Python-first rule above; the old `sh()`/`zsh()` are retired and now raise a "
+    "migration hint). It runs NUSHELL, not bash: bash reflexes are traps here (`ps aux` is a "
+    "parse error against the `ps` builtin, `2>/dev/null` is passed to an external as a "
+    "literal argument, `&&` does not chain, GNU coreutils shadow the BSD flags), so write "
+    "actual nushell or stay in Python. `await nu(\"ls | where size > "
     "1kb | sort-by size\")` runs a real nushell pipeline and every tabular result comes back as a Polars "
     "DataFrame, structured end to end (`ls`, `ps`, `sys`, `open Cargo.toml`, `from csv`, `http "
     "get`, `where`, `group-by`, `select`) — no jq/awk/sed/cut text munging and no scraping "
@@ -189,7 +207,10 @@ NU = (
     "and durations arrive as real Datetime/Duration columns and filesize as bytes, so you filter "
     "and sort on typed values, not strings. Run an external binary with `^cmd` "
     "(`await nu('^git status --short')`, `await nu('^gh pr list --json number,title | from "
-    "json')`); pass arguments as separate tokens so nushell never re-parses prose. Externals "
+    "json')`); pass arguments as separate tokens so nushell never re-parses prose. Builtin names "
+    "shadow the externals (`ps`, `open`, `sort`, `kill`), so POSIX `ps aux` is a parse error: "
+    "write `^ps aux`, and prefix EVERY external stage in a pasted POSIX pipeline "
+    "(`^ps aux | ^grep foo`). Externals "
     "run color-free by default (the engine overrides NO_COLOR/CLICOLOR/CLICOLOR_FORCE/"
     "FORCE_COLOR), so `--json` output decodes directly; a call that wants ANSI re-enables it "
     "with `env=` or `with-env`. The engine is embedded and PERSISTENT, a REPL: a `let`, a `def`, "
@@ -215,13 +236,26 @@ NU = (
 )
 
 DELEGATE = (
-    "Delegate work to coding agents with the weave verbs. `task = await "
-    "weave.delegate('prompt', name='reviewer', model=..., system=...)` appends task facts to "
-    "the shared journal; the weave app fulfills them as a live interactive Claude session - "
-    "visible and interruptible in the Constellation - and the outcome folds back to "
-    "agent:main automatically. `await weave.result(task)` blocks until the task finishes and "
-    "returns its result text (`timeout=` to bound the wait). Run a long delegation as a "
-    "background job and push a channel event with `await notify(...)` when it finishes."
+    "Delegate work with fabric: calls create work, journal facts record it, and nothing "
+    "dispatches. `s = await fabric.claude.session('prompt', model=..., cwd=...)` opens a live, "
+    "interruptible Claude Agent SDK session recorded on the shared weave journal (every turn "
+    "and the result in CAS); agent CLIs spawn inside tmux session `ix-agents` by default, one "
+    "window per task, so `tmux attach -t ix-agents` watches them live (`tmux=False` or "
+    "IX_FABRIC_TMUX=0 opts out); keep the main thread free with `job = jobs.spawn(s.result(), "
+    "name='delegate: reviewer')`, follow up with `await s.send(...)`, stop it with `await "
+    "s.interrupt()`, and `await s.close()` when done. For arbitrary Python, `handle = await "
+    "fabric.run(fn, *args)` executes fn here, or with `node='<host>'` on that fleet node's "
+    "runner actor over Ray; `await handle` returns fn's value and `await handle.interrupt()` "
+    "cancels it. Anyone can stop any run from anywhere by asserting one journal fact: `await "
+    "weave.assert_fact(task, 'interrupt', 'requested')`. `await weave.result(task)` blocks on "
+    "any task entity and returns its result text or raises its failed/lost/interrupted outcome "
+    "(`timeout=` to bound the wait); the durable journal record is authoritative and any "
+    "channel wake is best-effort, not exactly-once, so do not add a manual `notify(...)`. "
+    "`await fabric.activity.frame()` is the what-runs-where view (one datalog query over the "
+    "journal, not Ray's dashboard; `fabric.activity.publish()` pins it to the live dashboard), "
+    "and `jobs.spawn(fabric.reconcile.loop(), name='fabric: reconcile')` keeps marking runs "
+    "whose runner actor died without a terminal fact as state=lost - it never restarts them; "
+    "re-running is a fresh explicit call."
 )
 
 NIX = (
@@ -414,9 +448,10 @@ READ = (
     "python_exec whenever the content is for you to read, not for the human to look at — a normal "
     "cell's result streams to BOTH audiences, so it would flood the dashboard. `target` is read "
     "as a file when it names an existing file, otherwise it is evaluated as a Python expression "
-    "in the kernel namespace (e.g. `jobs['ab12'].output` to page a job, or a variable you bound "
-    "earlier); an expression whose value is a string naming an existing file reads that file "
-    "too. Pass `start` / `end` for a 1-based inclusive line range. When the kernel cannot execute "
+    "in the kernel namespace with top-level await allowed, exactly as in a cell (e.g. "
+    "`jobs['ab12'].output` to page a job, `await jobs['ab12']` to wait for one, or a variable "
+    "you bound earlier); an expression whose value is a string naming an existing file reads "
+    "that file too. Pass `start` / `end` for a 1-based inclusive line range. When the kernel cannot execute "
     "the read (wedged or dead), the tool ERRORS with 'kernel unavailable' rather than returning "
     "empty output, so empty content always means the file or value is genuinely empty."
 )

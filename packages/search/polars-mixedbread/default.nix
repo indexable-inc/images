@@ -88,7 +88,7 @@
       ''}
 
       mkdir -p "$out"
-      python3 ${ix.paths.root}/lib/build/pyo3-wheel.py \
+      python3 ${ix.paths.root + "/lib/build/pyo3-wheel.py"} \
         --package polars_mixedbread \
         --dist-name polars-mixedbread \
         --so-name _polars_mixedbread.abi3.so \

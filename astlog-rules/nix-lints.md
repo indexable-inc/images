@@ -2,7 +2,7 @@
 
 Complete reference for every house-style lint ASTLog enforces on Nix source in this
 repo. Reference for [`astlog-rules/nix.astlog`](./nix.astlog), the single source of
-truth. **100 lints total: 96 `error`, 4 `warning`.**
+truth. **101 lints total: 97 `error`, 4 `warning`.**
 
 ## How it works
 
@@ -33,7 +33,7 @@ truth. **100 lints total: 96 `error`, 4 `warning`.**
 | 9 | [`no-nixpkgs-channel-ref`](#no-nixpkgs-channel-ref) | err | `<nixpkgs>` channel reference is banned; use flake inputs |
 | 10 | [`no-path-flake-ref`](#no-path-flake-ref) | err | whole-tree `path:` flake refs copy the working tree byte-for-byte; use `.#...`, `git+file:///abs/path`, a relative `path:./<subtree>` input, or a proper flake input |
 | 11 | [`no-parent-path`](#no-parent-path) | err | relative parent path `../` reaches across a directory; use ix.<helper> / index.lib, ix.paths.<root> + a relative string, or the package registry instead of a `../` literal |
-| 12 | [`no-root-string-interp`](#no-root-string-interp) | err | `"${root}/..."` string-interpolates the workspace tree, leaking full-tree context; use `root + "/..."` (path concat) or `builtins.path { name; path; }` |
+| 12 | [`no-root-string-interp`](#no-root-string-interp) | err | interpolating a repository-root binding such as `ix.paths.root` records the whole tree as a derivation input; select the file or subtree as a path before interpolation |
 | 13 | [`no-fake-hash`](#no-fake-hash) | err | fake hashes are banned; compute the real SRI hash before editing tracked Nix files |
 | 14 | [`no-fetchfromgithub-fixed-hash`](#no-fetchfromgithub-fixed-hash) | err | do not pin GitHub source with `fetchFromGitHub { ... hash = ...; }`; add it as a flake input with `flake = false` and consume that source instead |
 | 15 | [`prefer-sri-hash`](#prefer-sri-hash) | err | legacy `sha256`-flavored hash attr; use the SRI `hash` slot: `hash` in fetchers, `cargoHash` / `vendorHash` / `npmDepsHash` in the language builders (or the typed `cargoLock` block for Rust) |
@@ -122,6 +122,7 @@ truth. **100 lints total: 96 `error`, 4 `warning`.**
 | 98 | [`separate-host-guest-pkgs`](#separate-host-guest-pkgs) | err | referencing the host's `pkgs` inside a test node breaks when host and guest platforms differ; take `pkgs` from the node module function |
 | 99 | [`wait-for-unit-and-port`](#wait-for-unit-and-port) | err | curling a service after only `wait_for_unit` races on fast hosts; wait for `network-online.target`, the unit, and the open port |
 | 100 | [`minimize-with-scope`](#minimize-with-scope) | err | `with <expr>;` over any target other than a tightly-scoped `with pkgs;` obscures name origins; bind with `let`/`inherit` |
+| 101 | [`no-misgrouped-digit-separators`](#no-misgrouped-digit-separators) | err | underscore separators must group digits in threes (integer part and exponent from the right, fraction from the left) |
 
 ## Rules by theme
 
@@ -141,6 +142,7 @@ truth. **100 lints total: 96 `error`, 4 `warning`.**
 - **NixOS modules (Nixcademy)** — [`parametrize-with-options`](#parametrize-with-options), [`avoid-specialargs`](#avoid-specialargs)
 - **NixOS tests (Nixcademy)** — [`separate-host-guest-pkgs`](#separate-host-guest-pkgs), [`wait-for-unit-and-port`](#wait-for-unit-and-port)
 - **Scoping (Nixcademy)** — [`minimize-with-scope`](#minimize-with-scope)
+- **Number literals** — [`no-misgrouped-digit-separators`](#no-misgrouped-digit-separators)
 
 ## Purity & reproducibility
 
@@ -422,20 +424,28 @@ import ../util/writers.nix { inherit lib; }
 
 **🔴 error**
 
-`"${root}/..."` string-interpolates the workspace tree into a string, leaking full-tree context. Use `root + "/..."` (path concat) or `builtins.path { name = "..."; path = root + "/..."; }`.
+String interpolation coerces a repository-root binding such as `root`, `workspaceRoot`, or `ix.paths.root` into a whole-tree store dependency. Select the file or subtree as a path before interpolation.
 
-*Matches:* `string_expression` · *predicates:* `text-match` · *1 pattern variant*
+*Matches:* `string_expression`, `indented_string_expression` · *predicates:* `text-match` · *2 pattern variants*
 
 <table><tr><th>flagged</th><th>ok</th></tr><tr><td>
 
 ```nix
-{ root }: "${root}/nix/file.cmake"
+{ ix, root }: [
+  "${root}/nix/file.cmake"
+  "${ix.paths.root}/lib/build/helper.py"
+  ''${ix.paths.root}/lib/build/helper.py''
+]
 ```
 
 </td><td>
 
 ```nix
-{ root }: root + "/nix/file.cmake"
+{ ix, root }: [
+  (root + "/nix/file.cmake")
+  (ix.paths.root + "/lib/build/helper.py")
+  ''${ix.paths.root + "/lib/build/helper.py"}''
+]
 ```
 
 </td></tr></table>
@@ -2533,6 +2543,40 @@ with import nixpkgs { }; with lib; [ (getLib hello) ]
 
 ```nix
 { pkgs }: let inherit (pkgs) lib; in [ (lib.getLib pkgs.hello) ]
+```
+
+</td></tr></table>
+
+## Number literals
+
+Digit grouping in numeric literals, following the Rust convention. The repo's
+patched nix (`packages/nix/nix/patches/0014-libexpr-accept-underscore-digit-separators-in-numeri.patch`)
+accepts underscore digit separators between digits (`10_000`, `1_000.000_1`,
+`2.5e1_0`) and strips them before the value is parsed; this lint enforces that
+separators, where present, group digits in threes, via the `misgrouped-digits`
+builtin and an autofix (`nix run .#astlog -- fix ...`). Bare literals are never
+nudged toward separators: stock Nix rejects the dialect (`25_565` lexes as `25`
+then `_565`), so consumer flakes importing this tree must stay stock-parseable
+(the old `prefer-digit-grouping` lint was retired in #3422).
+
+### no-misgrouped-digit-separators
+
+**🔴 error**
+
+A literal that already carries underscore separators must use exactly the canonical grouping: threes, counted from the right for the integer part and the exponent and from the left of the decimal point for the fraction (`1_0000` is `10_000`, `1_000.00_001` is `1_000.000_01`). The workspace's tree-sitter-nix fork (`packages/code/tree-sitter-nix`) lexes underscore literals as single integer/float nodes -- the same dialect the patched nix lexer accepts -- so one literal is one finding and one rewrite edit.
+
+*Matches:* `integer_expression` / `float_expression` · *predicates:* `text-match`, `misgrouped-digits` · *1 pattern variant* · *rewrite:* regroups the digits canonically
+
+<table><tr><th>flagged</th><th>ok</th></tr><tr><td>
+
+```nix
+{ port = 1_0000; timeout = 1_000.00_001; }
+```
+
+</td><td>
+
+```nix
+{ port = 10_000; timeout = 1_000.000_1; exponent = 2.5e10_000; }
 ```
 
 </td></tr></table>

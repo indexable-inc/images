@@ -50,6 +50,18 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # dependency-free and the unused-crate-dependencies check passes there.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `provision` pre-seeds the stopped guest's TCC databases (Full Disk Access,
+# Contacts, Automation, Accessibility, Screen Recording) and enables Remote
+# Login / Screen Sharing offline. `rusqlite` (bundled sqlite) writes the TCC
+# grants with bound params; `plist` edits the launchd `disabled.plist`;
+# `objc2-security` + `objc2-core-foundation` compute each grant's designated
+# requirement (csreq) blob via Security.framework, byte-identical to what
+# `codesign` stores, so tccd honors the grant. All macOS-gated: TCC and SIP are
+# macOS concepts, and the Linux stub graph stays dependency-free.
+rusqlite = { workspace = true }
+plist = { workspace = true }
+objc2-security = { workspace = true }
+objc2-core-foundation = { workspace = true }
 # The interactive `drive` sessions publish the live guest screen to the local
 # dashboard as an image pane. Only the lightweight `Publisher` half of
 # `dashboard-core` is used; it pulls the aggregator's deps along until that crate

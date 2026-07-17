@@ -151,11 +151,21 @@ impl<'de> Deserialize<'de> for CloneGroup {
             clone_type: input.clone_type,
             fragments: input.fragments,
         };
-        if input.impact_lines.is_some_and(|impact| impact != group.line_impact()) {
-            return Err(serde::de::Error::custom("impact_lines does not match fragments"));
+        if input
+            .impact_lines
+            .is_some_and(|impact| impact != group.line_impact())
+        {
+            return Err(serde::de::Error::custom(
+                "impact_lines does not match fragments",
+            ));
         }
-        if input.generated.is_some_and(|generated| generated != group.is_generated()) {
-            return Err(serde::de::Error::custom("generated does not match fragments"));
+        if input
+            .generated
+            .is_some_and(|generated| generated != group.is_generated())
+        {
+            return Err(serde::de::Error::custom(
+                "generated does not match fragments",
+            ));
         }
         Ok(group)
     }

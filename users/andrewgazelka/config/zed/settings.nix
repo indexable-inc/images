@@ -6,7 +6,7 @@
     default_model = {
       effort = "medium";
       enable_thinking = true;
-      model = "gpt-5.5";
+      model = "gpt-5.6-sol";
       provider = "openai";
     };
     dock = "right";
@@ -90,6 +90,7 @@
   diff_view_style = "split";
   excerpt_context_lines = 2;
   expand_excerpt_lines = 5;
+  find_all_references_include_current = false;
   file_types = {
     Nu = ["nu"];
     Scheme = ["astlog"];
@@ -139,8 +140,13 @@
         };
       };
       language_servers = [
-        "nixd"
-        "!nil"
+        # nox-lsp (nox docs/lsp.md): eval-backed Nix LSP, run through the
+        # registered nil adapter slot (Zed's Nix extension only registers
+        # nil/nixd; an lsp entry alone can't add a new adapter). typenix
+        # stays installed behind the nixd slot below; revert by swapping
+        # this list.
+        "nil"
+        "!nixd"
       ];
     };
     Nu = {
@@ -194,6 +200,23 @@
         };
       };
     };
+    # nil adapter slot repointed at nox-lsp (see languages.Nix above).
+    nil = {
+      binary = {
+        arguments = [];
+        path = "nox-lsp";
+      };
+      initialization_options = {
+        embedded = {
+          commands = {
+            bash = [
+              "bash-language-server"
+              "start"
+            ];
+          };
+        };
+      };
+    };
     nixd = {
       binary = {
         arguments = [];
@@ -204,6 +227,15 @@
       initialization_options = {
         check = {
           command = "clippy";
+        };
+      };
+    };
+    tombi = {
+      settings = {
+        lint = {
+          rules = {
+            tables-out-of-order = "off";
+          };
         };
       };
     };

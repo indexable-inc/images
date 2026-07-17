@@ -1,4 +1,4 @@
-{...}: let
+_: let
   redisPort = 6379;
 in {
   # The east-west group is a private network between this fleet's nodes, so

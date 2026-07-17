@@ -1,6 +1,7 @@
 # Full personal workstation profile. Index-owned dependencies are closed over
 # by the flake export; host-owned values arrive through typed options.nix.
 {
+  codexModule,
   configRoot,
   indexPackages,
   ix,
@@ -91,10 +92,12 @@
     doCheck = false;
   });
 
-  # Personal-only Claude config, seeded into ~/.claude/settings.json as a
-  # writable mutable file (see `mutable.files` below): the app's native
-  # default layer, which Claude itself edits at runtime (/config, plugin
-  # toggles), so it must not be a read-only store symlink.
+  # Personal-only Claude config, folded into the wrapper's settings render
+  # via `extraSettings` (see the claudeCode override below): the index
+  # claude-code Home Manager module materializes the full render into the
+  # writable ~/.claude/settings.json with a last-applied 3-way merge, so
+  # Claude's own runtime edits (/config, plugin toggles) survive and these
+  # keys still land in the app's native default layer (#3180).
   # House posture lives in the index wrapper itself now: attribution, worktree
   # baseRef, effort/fast/theme runtime-toggle defaults, auto-updates channel,
   # the version-aware statusline, the 1M/cron/autocompact clamps (typed
@@ -130,12 +133,9 @@
     # package, Codex's come from `codexBase.passthru.hooksJson` below.
   };
 
-  # Personal context appended after the house context render (the shared
-  # generator, packages/agent/prompt in index) in BOTH agents' instruction
-  # files: ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md, via each module's
-  # `houseContext.extraText`. The house rules come from the generator; this
-  # tracked file holds only what is personal or additive to them.
-  personalContext = builtins.readFile (repoFile "claude/global/CLAUDE.md");
+  # Andrew deliberately permits direct merge-protection bypasses. The shared
+  # prompt owns the rule text, so suppress its named rule in system prompts.
+  agentPromptOmitRules = ["forceMerge"];
 
   # claude-code from the index FLAKE PACKAGE SET (packages/claude-code in the
   # indexable-inc/index monorepo), not the overlay's pkgs.claude-code: only the
@@ -147,8 +147,7 @@
   # device-level IX_MCP_HOST session var (see home.sessionVariables), so Claude
   # and Codex match.
   claudeCode = indexPkgs.claude-code.override {
-    # Shared registry rendered to Claude's MCP JSON, filtered below for local
-    # tool policy.
+    # Shared registry rendered to Claude's MCP JSON.
     mcpServers = ixMcp.toClaudeJson agentMcpServers;
     # Skills no longer ride a baked `--plugin-dir` plugin: they are delivered
     # bare to ~/.claude/skills by the upstream programs.claude-code module's
@@ -162,20 +161,23 @@
       "/Users/*/Projects/*/index"
       "/Users/*/Projects/*/ix"
     ];
+    # Personal settings keys (memory dir, plugins, marketplaces), merged into
+    # the wrapper's computed render between the house defaults and the
+    # controlled keys; the module materializes the result into the writable
+    # ~/.claude/settings.json.
+    extraSettings = claudeSettings;
     # appendSystemPrompt (house rules appended to the stock prompt) comes from
     # the package default. Set `appendSystemPrompt = null;` here to ship the
     # stock prompt alone on this machine.
   };
 
   # House MCP registry, index/lib/util/mcp.nix, is the SINGLE source both
-  # agents render from. Keep the local policy as a filter over the shared
-  # registry so transport details cannot drift between Claude and Codex.
+  # agents render from, so transport details cannot drift between Claude and
+  # Codex.
   ixMcp = ix.mcp;
-  agentMcpServers = lib.removeAttrs (
-    ixMcp.defaultServers {
-      indexCommand = lib.getExe indexPkgs.mcp;
-    }
-  ) ["exa"];
+  agentMcpServers = ixMcp.defaultServers {
+    indexCommand = lib.getExe indexPkgs.mcp;
+  };
   codexMcpServers = lib.mapAttrs (_: def:
     if (def.transport or "stdio") == "stdio"
     then
@@ -199,7 +201,7 @@
   codexSettings = {
     check_for_update_on_startup = false;
     bypass_hook_trust = true;
-    model = "gpt-5.5";
+    model = "gpt-5.6-sol";
     model_reasoning_effort = "low";
     personality = "pragmatic";
     service_tier = "fast";
@@ -274,6 +276,12 @@ in {
   imports = [
     optionsModule
     personalServicesModule
+    # Declares `programs.codex.houseContext` (and the rest of the index codex
+    # options) that this profile sets below; home-manager's stock
+    # programs.codex module only carries enable/package/skills/context, so
+    # without this import the houseContext definitions fail eval (#2653
+    # regression).
+    codexModule
     # Per-generation provenance manifest: each HM generation carries
     # provenance.json mapping deployed files back to the nix file:line that
     # defined them; `whence <path>` (below) reads it with zero eval.
@@ -299,6 +307,10 @@ in {
     {
       assertion = cfg.packages.typenix != null;
       message = "users.andrewgazelka.packages.typenix must be set for the workstation profile.";
+    }
+    {
+      assertion = cfg.packages.noxLsp != null;
+      message = "users.andrewgazelka.packages.noxLsp must be set for the workstation profile.";
     }
     {
       assertion = cfg.paths.vscodeIslands != null;
@@ -379,9 +391,8 @@ in {
       #    (CronCreate/CronDelete/CronList).
       # Agent teams follow the index claude-code wrapper's env_defaults
       # (index#1786 bakes CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1); the context
-      # window is clamped to ~300K via claudeSettings.env above (and index#2167
-      # bakes the same into the wrapper). No per-machine override for either
-      # here.
+      # window clamp is baked into the wrapper's settings render (index#2167).
+      # No per-machine override for either here.
       ENABLE_TOOL_SEARCH = "false";
       CLAUDE_CODE_DISABLE_CRON = "1";
     }
@@ -513,7 +524,6 @@ in {
       # Development - Build tools
       cmake # cross-platform build system generator
       pkg-config # query compiler/linker flags for installed libs
-      bazel_8 # Google's hermetic, parallel build system (v8.x)
       # watchman  # commented 2026-05-22: upstream folly test (UninitializedMemoryHacksTest) fails to compile under current clang, blocking rebuilds. Re-enable when nixpkgs bumps folly.
       just # command runner (`justfile` — like make without the gotchas)
       capnproto # Cap'n Proto IDL + RPC (faster Protobuf alternative)
@@ -651,6 +661,13 @@ in {
           exec ${cfg.packages.typenix}/bin/typenix --lsp --stdio "$@"
         '';
       })
+      # nox-lsp: Nix language server over the nox arena evaluator (nox
+      # docs/lsp.md) — eval-backed hovers/completions, embedded-language
+      # delegation, provenance jumps. Zed's Nix language points at it
+      # (config/zed/settings.nix); supplied host-native by the consuming
+      # flake like typenix above.
+      cfg.packages.noxLsp
+      bash-language-server # nox-lsp delegates embedded bash strings to it (must be on PATH)
       # Experimental: MLsub/SimpleSub type checker LSP for Nix (Nix-native).
       # https://github.com/JRMurr/tix — Cursor/Zed point at tix-lsp.
       # inputs.tix.packages.${pkgs.stdenv.hostPlatform.system}.default
@@ -702,9 +719,8 @@ in {
       termdown # countdown timer / stopwatch (duplicate also listed above)
       twurl # `curl` with built-in Twitter/X OAuth signing
       ugrep # fast grep with PDF/zip/tar/JSON support
-      unar # universal unarchiver (rar/7z/zip/tar/etc. via The Unarchiver)
+      # unar # universal unarchiver (rar/7z/zip/tar/etc. via The Unarchiver); disabled 2026-07-12: same ld64-957.1 libc++-hardening trap as vengi-tools (index#3133), crashes linking `unar` via xcodebuild, no cache.nixos.org aarch64-darwin build. Re-enable with vengi-tools once the pin carries NixOS/nixpkgs#536365.
       viddy # modern `watch` with diff highlighting and time-travel
-      vivid # LS_COLORS theme generator (used by `eza`/`ls`)
       wabt # WebAssembly Binary Toolkit (`wasm2wat`, `wat2wasm`, `wasm-objdump`)
       wasmtime # standalone WebAssembly runtime
       watch # rerun a command periodically and show output
@@ -726,10 +742,11 @@ in {
       protoc-gen-swift # Swift codegen plugin for protoc
       # sif                                             # Singularity Image Format tooling
       swiftformat # Swift source code formatter
-      vengi-tools # voxel/mesh conversion toolkit; `vengi-voxconvert` supports binvox without x86_64-darwin nixpkgs
+      # vengi-tools # voxel/mesh conversion toolkit (`vengi-voxconvert` for binvox); disabled 2026-07-12: current nixpkgs crashes cctools ld64 (EXC_BREAKPOINT in ld::passes::stubs::Pass::process) linking its first executable, deterministically, and cache.nixos.org has no aarch64-darwin build. Re-enable via index#3133 once the toolchain regression is resolved.
       # wezterm # GPU terminal emulator; disabled 2026-07-01: aarch64-darwin output was absent from cache.nixos.org and rebuilt locally for ~46m during a routine flake update. Use Alacritty or `nix run nixpkgs#wezterm -- ...` when needed.
       cfg.packages.mercuryCli # Mercury CLI (custom flake input)
       indexPkgs.elevenlabs-say # ElevenLabs say-style TTS CLI (-r/-v, streaming); key via ELEVENLABS_API_KEY
+      indexPkgs.zed # Maintained fork carries reference filtering unavailable upstream.
       # vfkit guest helpers intentionally not installed: they force the
       # aarch64-linux microvm system into every Home Manager switch, so a stale
       # or stopped VM remote builder breaks unrelated macOS profile updates.
@@ -928,8 +945,8 @@ in {
 
   # Ghostty themes and shaders (cross-platform location); the assets are
   # shared, not per-user, so they live in modules/home/ghostty.
-  home.file.".config/ghostty/themes".source = ../../../modules/home/ghostty/themes;
-  home.file.".config/ghostty/shaders".source = ../../../modules/home/ghostty/shaders;
+  home.file.".config/ghostty/themes".source = ix.paths.modules + "/home/ghostty/themes";
+  home.file.".config/ghostty/shaders".source = ix.paths.modules + "/home/ghostty/shaders";
 
   # Alacritty
   home.file.".config/alacritty/alacritty.toml".source = renderStructured "alacritty-alacritty";
@@ -990,26 +1007,6 @@ in {
     source = config.lib.file.mkOutOfStoreSymlink "${configDir}/mitmproxy";
   };
 
-  # Claude CLI binary on PATH at a stable path. The package itself is installed
-  # via programs.claude-code below (as finalPackage); this is just a fixed
-  # location some tooling expects.
-  home.file.".local/bin/claude" = {
-    # finalPackage, not the raw claudeCode: the module wraps it with the
-    # declarative MCP plugin dir (see programs.claude-code.mcpServers), so this
-    # stable-path binary carries the same MCP set as the one on the home profile
-    # PATH instead of silently bypassing it.
-    source = "${config.programs.claude-code.finalPackage}/bin/claude";
-    force = true;
-  };
-
-  # Our own Codex on PATH at a stable path, same pattern as claude above. This
-  # is the MCP-injecting wrapper (see the `codex` let-binding), so the declared
-  # MCP set rides every invocation.
-  home.file.".local/bin/codex" = {
-    source = "${codex}/bin/codex";
-    force = true;
-  };
-
   # Agents, commands, and skills are managed declaratively by the upstream
   # home-manager programs.claude-code module: each is written as an in-store
   # path under ~/.claude (no out-of-store symlink, no SessionStart hook).
@@ -1017,9 +1014,11 @@ in {
   # dir), delivered bare to ~/.claude/skills/<name> and invoked as `/<skill>`
   # (no `index:` namespace): the same source Codex gets via programs.codex
   # below. This replaces the old baked `--plugin-dir` plugin.
-  # settings.json is NOT declared here (the module would render it as a
-  # read-only store symlink): it is seeded writable from claudeSettings via
-  # `mutable.files` below, because Claude edits it at runtime. .claude.json
+  # settings.json is NOT declared through the module's native `settings`
+  # option (it would render as a read-only store symlink): the index module's
+  # materializeSettings default reconciles the wrapper's full render
+  # (house posture + claudeSettings via extraSettings + controlled keys) into
+  # the writable file, because Claude edits it at runtime. .claude.json
   # remains app-owned runtime state because Claude stores account and session
   # metadata beside user choices there. CLAUDE.md is generation-owned and
   # module-rendered: the house context render (packages/agent/prompt) plus the
@@ -1027,10 +1026,7 @@ in {
   programs.claude-code = {
     enable = true;
     package = claudeCode;
-    houseContext = {
-      enable = true;
-      extraText = personalContext;
-    };
+    systemPrompt.omitRules = agentPromptOmitRules;
     # All agents, BARE, sourced straight from the index repo (index's agents
     # package now holds my former personal agents too). Bare (not plugin) so
     # `subagent_type code-reviewer` keeps resolving.
@@ -1056,21 +1052,28 @@ in {
     enable = true;
     package = codex;
     skills = skillsSrc;
-    # AGENTS.md rides the module's default house context render plus the same
-    # personal appendix Claude gets, so the two agents cannot drift.
-    houseContext.extraText = personalContext;
+    # Codex otherwise writes a second global context file. The generated system
+    # prompt is the single source of agent instructions.
+    houseContext.enable = false;
+    systemPrompt.omitRules = agentPromptOmitRules;
+    # hooks.json stays owned by the manual home.file declaration below (from
+    # `codexBase.passthru.hooksJson`, matching the package on PATH). Without
+    # this the imported codex module also claims ~/.codex/hooks.json with
+    # `finalPackage.hooksJson`, and the two sources conflict as soon as any
+    # hook-affecting option diverges from the wrapper defaults.
+    installHooks = false;
   };
 
-  # Both agents edit their own config at runtime, so neither file can be a
-  # read-only store render. Durable: in-app changes survive activation and
-  # login; when the declared base moves under local edits, the file queues in
+  # Codex edits its own config at runtime, so the file cannot be a read-only
+  # store render. Durable: in-app changes survive activation and login; when
+  # the declared base moves under local edits, the file queues in
   # `index-delta status --json` (both diffs as addressed ops) for an explicit
   # discard / adopt / absorb-into-Nix via `index-delta apply-ops`.
-  mutable.files.".claude/settings.json" = {
-    source = jsonFormat.generate "andrewgazelka-claude-settings.json" claudeSettings;
-    persistence = "durable";
-    declaredAt = "users/andrewgazelka/profiles/workstation.nix";
-  };
+  # ~/.claude/settings.json moved off this mechanism (#3180): its declared
+  # base carries store paths that move on every index bump (hooks, statusline),
+  # so durable drift queued a conflict per bump; the claude-code module's
+  # mutable-json 3-way merge updates those keys mechanically while preserving
+  # Claude's runtime writes.
   mutable.files.".codex/config.toml" = {
     source = tomlFormat.generate "andrewgazelka-codex-config.toml" codexSettings;
     persistence = "durable";
@@ -1112,7 +1115,8 @@ in {
     ''
   );
 
-  # Codex hooks (the one thing the programs.codex module above does NOT deliver;
+  # Codex hooks, delivered manually (the module's own delivery is switched off
+  # via `installHooks = false` above so this stays the single owner;
   # config.toml/AGENTS.md/skills rationale lives there). Rendered from the SAME
   # declaration list as Claude's, owned by the index repo
   # (packages/agent/hooks.nix) and exposed as the codex package's
