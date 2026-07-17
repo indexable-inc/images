@@ -196,6 +196,46 @@ export async function currentWorkerJob({
   return job;
 }
 
+/// Best-effort queue-depth probe for the admission failure message: how many
+/// workflow runs the repository still has queued while this late worker runs
+/// its check. The count is diagnostic context only, so callers must not let a
+/// failure here mask the deadline miss itself.
+export async function queuedRunCount({
+  apiUrl = "https://api.github.com",
+  fetchImpl = fetch,
+  repository,
+  token,
+}) {
+  const url = new URL(apiUrl);
+  const basePath = url.pathname.replace(/\/$/, "");
+  url.pathname = `${basePath}/repos/${repositoryPath(repository)}/actions/runs`;
+  url.searchParams.set("status", "queued");
+  url.searchParams.set("per_page", "1");
+  const response = await fetchImpl(url, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`GitHub queued runs request failed with ${response.status}`);
+  }
+  const payload = JSON.parse(body);
+  if (
+    payload === null ||
+    Array.isArray(payload) ||
+    typeof payload !== "object" ||
+    typeof payload.total_count !== "number" ||
+    !Number.isSafeInteger(payload.total_count) ||
+    payload.total_count < 0
+  ) {
+    throw new Error("GitHub queued runs response is malformed");
+  }
+  return payload.total_count;
+}
+
 function timestamp(value, name) {
   if (typeof value !== "string") {
     throw new Error(`GitHub worker job has no ${name}`);
@@ -219,8 +259,22 @@ export function assertQueueAdmission({ job, policy }) {
   const deadline =
     timing.createdAtMilliseconds + policy.queue_start_seconds * 1000;
   if (timing.startedAtMilliseconds > deadline) {
+    // A late start means no dispatcher slot freed up in time, not that this
+    // runner was slow: the self-hosted pool is one slot per host, shared by
+    // every workflow (PR ci, auto-deploy, prod deploy, cache-warm, publish,
+    // antithesis, ...), so a stacked deploy backlog starves PR admission
+    // (indexable-inc/ix#7625). Say how long the job actually waited so the
+    // failure reads as pool saturation instead of a runner defect.
+    const waitedSeconds = Math.round(
+      (timing.startedAtMilliseconds - timing.createdAtMilliseconds) / 1000,
+    );
     throw new DeadlineExceeded(
-      `worker started after its queue admission deadline (${job.started_at} > ${new Date(deadline).toISOString()})`,
+      `worker waited ${waitedSeconds}s for a runner slot, over the ` +
+        `${policy.queue_start_seconds}s queue admission budget (created ` +
+        `${job.created_at}, started ${job.started_at}, deadline ` +
+        `${new Date(deadline).toISOString()}). Every self-hosted dispatcher ` +
+        `slot stayed busy past the deadline; rerun once the backlog drains ` +
+        `(indexable-inc/ix#7625)`,
     );
   }
   return timing;
@@ -390,7 +444,25 @@ export async function main() {
     runnerName: process.env.RUNNER_NAME,
     token,
   });
-  const timing = assertQueueAdmission({ job, policy });
+  let timing;
+  try {
+    timing = assertQueueAdmission({ job, policy });
+  } catch (error) {
+    if (error instanceof DeadlineExceeded) {
+      try {
+        const depth = await queuedRunCount({
+          apiUrl: process.env.GITHUB_API_URL,
+          repository,
+          token,
+        });
+        error.message += ` ${depth} workflow run(s) were still queued in ${repository} at check time.`;
+      } catch {
+        // Queue depth is best-effort context; a second GitHub API failure
+        // must not mask the deadline miss itself.
+      }
+    }
+    throw error;
+  }
   if (mode === "check") return 0;
   assertSetupAllowance({
     nowMilliseconds: Date.now(),
