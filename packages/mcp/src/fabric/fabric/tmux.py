@@ -18,8 +18,10 @@ pipes to two FIFOs, then opens a tmux window running
 ``python -m fabric.tmux <spec.json>`` (:func:`pane_main`). The pane process
 spawns the real CLI with the shim's full environment (a tmux pane otherwise
 inherits the tmux *server's* environment, losing the SDK's env), feeds it
-the stdin FIFO, tees its stdout to both the pane (what the human watches)
-and the stdout FIFO, and records the exit code for the shim to exit with.
+the stdin FIFO, mirrors its raw stdout to the stdout FIFO (the SDK's
+transport, byte-exact), renders that stream-json as a live human-readable
+transcript in the pane (:mod:`fabric.render`, index#3496), and records the
+exit code for the shim to exit with.
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ import tempfile
 import threading
 from pathlib import Path
 from types import FrameType
+
+from . import render
 
 __all__ = [
     "ENV_CLI",
@@ -187,7 +191,15 @@ def shim_main() -> None:
         )
     )
     # `exec` so kill-pane HUPs the pane python directly, not a wrapper shell.
-    command = "exec " + shlex.join([sys.executable, "-m", "fabric.tmux", str(spec_path)])
+    # The pane inherits the tmux *server's* environment, so the shim's own
+    # PYTHONPATH rides along explicitly: the pane's `import fabric` must
+    # resolve the same module tree as the shim (the spec env only covers the
+    # CLI child, which spawns after that import).
+    pythonpath = os.environ.get("PYTHONPATH")
+    argv = [sys.executable, "-m", "fabric.tmux", str(spec_path)]
+    if pythonpath is not None:
+        argv = ["env", f"PYTHONPATH={pythonpath}", *argv]
+    command = "exec " + shlex.join(argv)
     tmux, pane = _new_window(window, command)
 
     def _on_terminate(signum: int, _frame: FrameType | None) -> None:
@@ -232,8 +244,25 @@ def shim_main() -> None:
     raise SystemExit(code)
 
 
+def _display(transcript: render.Transcript, line: bytes) -> None:
+    """Show one CLI stdout line in the pane, rendered.
+
+    The mirror FIFO is the SDK's transport, so a display bug must never
+    sever the session: a rendering failure prints loudly and falls back to
+    the raw line instead of raising out of the mirror loop.
+    """
+
+    try:
+        text = transcript.feed(line)
+    except Exception as exc:  # viewer only; see docstring
+        text = f"fabric.render failed ({exc!r}) on: {line[:200]!r}"
+    if text is not None:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+
+
 def pane_main(spec_path: str) -> None:
-    """Pane-facing side: run the real CLI, tee stdout to the pane and the SDK."""
+    """Pane-facing side: run the real CLI, mirror raw stdout to the SDK, render it in the pane."""
 
     spec = json.loads(Path(spec_path).read_text())
 
@@ -260,11 +289,17 @@ def pane_main(spec_path: str) -> None:
                 # PIPE with default bufsize is buffered; typeshed widens to
                 # IO[bytes], which lacks read1.
                 assert isinstance(stdout, io.BufferedReader), type(stdout)
+                transcript = render.Transcript()
+                pending = b""
                 while chunk := stdout.read1(65536):
                     mirror.write(chunk)
                     mirror.flush()
-                    sys.stdout.buffer.write(chunk)
-                    sys.stdout.buffer.flush()
+                    pending += chunk
+                    while (end := pending.find(b"\n")) != -1:
+                        line, pending = pending[:end], pending[end + 1 :]
+                        _display(transcript, line)
+                if pending:
+                    _display(transcript, pending)
                 # Record BEFORE the mirror FIFO closes: its EOF is the shim's
                 # cue to read the exit code, so the file must exist by then.
                 code = record(proc.wait())

@@ -22,7 +22,7 @@ import weave
 from claude_agent_sdk import AssistantMessage, ClaudeSDKClient, Message, ResultMessage, TextBlock
 
 import fabric
-from fabric import activity, claude, reconcile, remote, tmux
+from fabric import activity, claude, reconcile, remote, render, tmux
 
 _T = TypeVar("_T")
 
@@ -1066,3 +1066,140 @@ def test_tmux_shim_answers_version_probe_directly(tmp_path: Path) -> None:
     )
     assert done.stdout == b"fake-claude 1.2.3\n"
     assert done.returncode == 0
+
+
+# --- fabric.render ---------------------------------------------------------------
+
+
+def _rendered(transcript: render.Transcript, event: dict[str, object]) -> str:
+    shown = transcript.feed(json.dumps(event).encode())
+    assert shown is not None
+    return shown
+
+
+def test_render_turn_reads_as_transcript() -> None:
+    """Assistant text, tool calls, and labeled tool results render readably."""
+
+    transcript = render.Transcript()
+    header = _rendered(transcript, {"type": "system", "subtype": "init", "model": "opus", "cwd": "/repo"})
+    assert "model=opus" in header
+    assert "cwd=/repo" in header
+    call = _rendered(
+        transcript,
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "id": "tu1", "name": "Bash", "input": {"command": "ls"}}]},
+        },
+    )
+    assert "Bash" in call
+    assert '"ls"' in call
+    result = _rendered(
+        transcript,
+        {
+            "type": "user",
+            "message": {
+                "content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "a\nb\nc\nd\ne\nf"}]
+            },
+        },
+    )
+    assert "Bash" in result  # labeled by the remembered tool_use id
+    assert "a" in result
+    assert "+2 lines" in result
+    assert "f" not in result.replace("\x1b", "")
+    answer = _rendered(
+        transcript,
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "done\nsee diff"}]}},
+    )
+    assert "done" in answer
+    assert "see diff" in answer
+
+
+def test_render_result_summary_and_error() -> None:
+    ok = render.Transcript().feed(
+        json.dumps(
+            {"type": "result", "subtype": "success", "is_error": False, "duration_ms": 12300, "num_turns": 4, "total_cost_usd": 0.04}
+        ).encode()
+    )
+    assert ok is not None
+    assert "12.3s" in ok
+    assert "4 turns" in ok
+    assert "$0.0400" in ok
+    failed = render.Transcript().feed(
+        json.dumps(
+            {"type": "result", "subtype": "error_during_execution", "is_error": True, "duration_ms": 500, "result": "API Error: 400"}
+        ).encode()
+    )
+    assert failed is not None
+    assert "error_during_execution" in failed
+    assert "API Error: 400" in failed
+
+
+def test_render_passthrough_and_protocol_silence() -> None:
+    """Non-JSON shows verbatim; SDK control frames and partial deltas show nothing."""
+
+    transcript = render.Transcript()
+    assert transcript.feed(b"plain CLI noise") == "plain CLI noise"
+    assert transcript.feed(b"") is None
+    assert transcript.feed(json.dumps({"type": "control_response", "response": {}}).encode()) is None
+    assert transcript.feed(json.dumps({"type": "stream_event", "event": {}}).encode()) is None
+    unknown = transcript.feed(json.dumps({"type": "novel_event", "x": 1}).encode())
+    assert unknown is not None
+    assert "novel_event" in unknown
+
+
+def test_render_clips_unbounded_payloads() -> None:
+    """A whole-file Write input renders as one bounded line, not megabytes."""
+
+    event = {
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "id": "tu2", "name": "Write", "input": {"content": "A" * 10_000}}]},
+    }
+    shown = render.Transcript().feed(json.dumps(event).encode())
+    assert shown is not None
+    assert len(shown) < 400
+
+
+def test_pane_renders_stream_json_and_mirrors_raw(tmp_path: Path) -> None:
+    """pane_main shows a rendered transcript while the SDK mirror stays byte-exact."""
+
+    import os
+    import subprocess
+
+    raw = (
+        json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]}})
+        + "\n"
+        + json.dumps({"type": "result", "subtype": "success", "is_error": False, "duration_ms": 1000, "num_turns": 1})
+        + "\n"
+    )
+    cli = tmp_path / "fake-cli"
+    cli.write_text("#!/bin/sh\ncat " + str(tmp_path / "script-output") + "\n")
+    cli.chmod(0o755)
+    (tmp_path / "script-output").write_text(raw)
+    (tmp_path / "in").write_bytes(b"")
+    spec = tmp_path / "spec.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "argv": [str(cli)],
+                "env": dict(os.environ),
+                "cwd": str(tmp_path),
+                "stdin": str(tmp_path / "in"),
+                "stdout": str(tmp_path / "mirror"),
+                "rc": str(tmp_path / "rc"),
+            }
+        )
+    )
+    done = subprocess.run(
+        [sys.executable, "-m", "fabric.tmux", str(spec)],
+        capture_output=True,
+        env={**os.environ, "PYTHONPATH": f"{ROOT / 'fabric'}:{ROOT / 'weave'}"},
+        timeout=60,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr.decode()
+    assert (tmp_path / "mirror").read_bytes() == raw.encode()  # SDK transport untouched
+    assert (tmp_path / "rc").read_text() == "0"
+    pane = done.stdout.decode()
+    assert "Bash" in pane
+    assert "done" in pane
+    assert '"type": "assistant"' not in pane  # rendered, not raw JSON
