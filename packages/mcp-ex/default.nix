@@ -27,19 +27,23 @@
     ];
   };
 
-  # Test-env mix deps (credo + its deps) as a fixed-output derivation so the
-  # sandboxed check runs offline. The SRI pin lives in the sibling pins.json
-  # (repo policy: no inline hash literals); it has no URL (the FOD content is
-  # derived from mix.lock), so refresh it after a lock change by building and
-  # copying the `got:` hash from the mismatch error. The release itself has
-  # zero deps (OTP's JSON module is the whole wire format), so only the check
-  # fetches anything.
+  # Mix deps (exqlite + its build deps, plus test-only credo) as a
+  # fixed-output derivation so the sandboxed builds run offline; mixEnv=test
+  # is a superset of prod, so the release build stages the same FOD. The SRI
+  # pin lives in the sibling pins.json (repo policy: no inline hash literals);
+  # it has no URL (the FOD content is derived from mix.lock), so refresh it
+  # after a lock change by building and copying the `got:` hash from the
+  # mismatch error.
   mixFodDeps = pkgs.beamPackages.fetchMixDeps {
     pname = "ix-mcp-ex-deps";
     inherit version src elixir;
     mixEnv = "test";
     inherit ((ix.pins.loadPins ./pins.json).mix-deps) hash;
   };
+
+  # exqlite's dep telemetry builds with rebar3; mix finds it via MIX_REBAR3
+  # instead of trying to install one (impossible offline).
+  rebar3Env.MIX_REBAR3 = lib.getExe pkgs.beamPackages.rebar3;
 
   # The required Elixir quality lane: compile --warnings-as-errors (Elixir
   # 1.18's set-theoretic type checker), format, `mix credo --strict` against
@@ -48,6 +52,7 @@
     pname = "ix-mcp-ex-check";
     inherit version src elixir erlang;
     mixDeps = mixFodDeps;
+    extraEnv = rebar3Env;
   };
 
   meta = {
@@ -64,8 +69,8 @@
     # compile time; the darwin sandbox denies plain sockets without this.
     __darwinAllowLocalNetworking = true;
 
-    # hex provides the SCM module Mix needs to even parse the lockfile's
-    # test-only credo entry; nothing is fetched in the prod build.
+    # hex provides the SCM module Mix needs to parse the lockfile and
+    # compile the staged deps; nothing is fetched in the prod build.
     nativeBuildInputs = [
       erlang
       elixir
@@ -73,23 +78,31 @@
       pkgs.makeWrapper
     ];
 
-    env = {
-      MIX_ENV = "prod";
-      HEX_OFFLINE = "1";
-      LANG = "C.UTF-8";
-      LC_CTYPE = "C.UTF-8";
-    };
+    env =
+      {
+        MIX_ENV = "prod";
+        HEX_OFFLINE = "1";
+        LANG = "C.UTF-8";
+        LC_CTYPE = "C.UTF-8";
+      }
+      // rebar3Env;
 
+    # The deps FOD is read-only in the store; mix wants a writable deps dir
+    # (it compiles exqlite's NIF from vendored source there, forced by the
+    # `:elixir_make, :force_build` config since the sandbox has no network).
     postUnpack = ''
       export MIX_HOME="$TEMPDIR/mix"
       export HEX_HOME="$TEMPDIR/hex"
+      export MIX_DEPS_PATH="$TEMPDIR/deps"
+      cp --no-preserve=mode -R "${mixFodDeps}" "$MIX_DEPS_PATH"
     '';
 
     buildPhase = ''
       # shell
       runHook preBuild
-      # Zero prod deps (credo is test-only), so no deps staging is needed;
-      # --no-deps-check keeps mix from trying to resolve the lock online.
+      # --no-deps-check keeps mix from trying to re-resolve the lock online;
+      # the staged FOD above provides everything.
+      mix deps.compile --no-deps-check --skip-umbrella-children
       mix release --no-deps-check --path "$out/lib/ix-mcp-ex"
       runHook postBuild
     '';
@@ -111,8 +124,11 @@
     '';
   };
 
-  # End-to-end wire smoke test: a real MCP initialize -> tools/list exchange
-  # over the installed binary's stdio, no network.
+  # End-to-end wire smoke test: a real MCP initialize -> tools/list ->
+  # tools/call exchange over the installed binary's stdio, no network. The
+  # action log needs a writable path (the sandbox HOME is not), so the env
+  # override points it into the build dir, which also proves the SQLite NIF
+  # loads in the release.
   smoke =
     pkgs.runCommand "ix-mcp-ex-smoke"
     {
@@ -121,10 +137,11 @@
     }
     ''
       set +e
-      printf '%s\n%s\n' \
+      printf '%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
-        | ix-mcp-ex > response.jsonl 2> server-stderr.log
+        '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_set_name","arguments":{"name":"smoke"}}}' \
+        | IX_MCP_ACTIONS_DB="$PWD/actions.db" ix-mcp-ex > response.jsonl 2> server-stderr.log
       rc=$?
       set -e
       if [ "$rc" -ne 0 ]; then
@@ -154,6 +171,18 @@
           exit 1
           ;;
       esac
+      case "$out_lines" in
+        *'session named: smoke'*) ;;
+        *)
+          echo "tools/call session_set_name did not answer" >&2
+          printf '%s\n' "$out_lines" >&2
+          exit 1
+          ;;
+      esac
+      if [ ! -s actions.db ]; then
+        echo "action log was not written to actions.db" >&2
+        exit 1
+      fi
       mkdir -p "$out"
     '';
 in

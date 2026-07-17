@@ -19,13 +19,14 @@ defmodule IxMcp.MixProject do
     ]
   end
 
-  # Zero RUNTIME dependencies on purpose: OTP >= 27 ships a JSON module
-  # (exposed as `JSON` in Elixir 1.18), so the MCP wire format needs no hex
-  # package and the released server carries no Mix deps at all.
+  # exqlite is the one runtime dependency: the action log (#3512) appends
+  # every tools/call to a local SQLite file, and SQLite needs a NIF. The MCP
+  # wire format itself still rides OTP >= 27's built-in JSON module.
   defp deps do
     [
-      # Static-analysis gate, test-only so the server runs `mix` offline with
-      # no deps; the sandboxed check runs in :test where credo is fetched.
+      {:exqlite, "~> 0.39"},
+      # Static-analysis gate, test-only so the sandboxed check runs `mix credo`
+      # offline where the deps FOD provides it.
       {:credo, "~> 1.7", only: :test, runtime: false}
     ]
   end
