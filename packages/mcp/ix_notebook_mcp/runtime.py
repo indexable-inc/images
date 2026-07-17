@@ -3497,7 +3497,7 @@ def _normalize_bundle(data: dict, metadata: dict | None = None) -> dict:
     # run's stored outputs for native `data`-pane rendering. JSON cannot be
     # clipped without corrupting it, so an oversize spec is dropped whole and
     # the text/html fallback renders instead; producers keep their payloads
-    # under the cap (see _READ_CONTEXT_MAX).
+    # under the cap.
     view = data.get(IX_VIEW_MIME)
     if isinstance(view, dict):
         encoded = json.dumps(view)
@@ -4568,174 +4568,6 @@ def __ix_emit_read_stats_final() -> None:
     readstats.tracker().emit_final()
 
 
-def _existing_file(value: Any) -> pathlib.Path | None:
-    """``value`` as a :class:`pathlib.Path` when it is a string naming an
-    existing file, else None. The one rule `__ix_read` applies to both the raw
-    ``target`` and to a string an expression evaluates to."""
-    if not isinstance(value, str) or not value or len(value) > 4096 or "\n" in value:
-        return None
-    try:
-        candidate = pathlib.Path(value).expanduser()
-        return candidate if candidate.is_file() else None
-    except OSError:
-        return None
-
-
-def _tilde(path: Any) -> str:
-    """An absolute path with the home directory collapsed to ``~`` for a compact,
-    privacy-friendly note (``/Users/me/.ix/trace/x`` -> ``~/.ix/trace/x``)."""
-    text = str(path)
-    home = str(pathlib.Path.home())
-    if text == home:
-        return "~"
-    if text.startswith(home + os.sep):
-        return "~" + text[len(home):]
-    return text
-
-
-# Cap on the highlight context shipped to the dashboard for one read. The
-# frontend tokenizes the WHOLE file so a mid-file slice still highlights
-# correctly (open strings, nested blocks); past this size only the slice
-# travels, so a huge file never rides every dashboard poll. Stays under
-# _MAX_TEXT_BUNDLE even after JSON escaping so _normalize_bundle never drops it.
-_READ_CONTEXT_MAX = 128 * 1024
-
-# Well-known extensionless files -> highlight grammar. Anything else hints its
-# bare extension; the frontend aliases (py -> python) and falls back to plain.
-_NAMED_LANGS = {"dockerfile": "docker", "makefile": "make"}
-
-
-def _read_lang(path: Any) -> str | None:
-    """The dashboard highlight hint for a file: a named grammar for well-known
-    extensionless files, else the lowercased bare extension."""
-    name = pathlib.Path(path).name.lower()
-    return _NAMED_LANGS.get(name) or pathlib.Path(name).suffix.lstrip(".").lower() or None
-
-
-def _clip_lines(lines: list[str], budget: int) -> list[str]:
-    """The longest line-boundary prefix whose joined size fits ``budget``. When
-    even the first line alone exceeds the budget (minified JSON, a giant log
-    line), a character prefix of it is returned rather than nothing, so a
-    clipped view is never blank."""
-    out: list[str] = []
-    used = 0
-    for line in lines:
-        used += len(line) + 1
-        if used > budget:
-            break
-        out.append(line)
-    if not out and lines:
-        out.append(lines[0][:budget])
-    return out
-
-
-async def __ix_read(target: Any, start: int | None = None, end: int | None = None, session: str | None = None) -> Result:
-    """Read a file (or evaluate a kernel value) FOR THE MODEL, quietly.
-
-    Returns a Result whose ``llm_result`` is the full text the model receives and
-    whose ``user_view`` is a structured ``file-view`` spec the dashboard renders
-    natively (highlighted card with the read span), so a large read informs the
-    model without flooding the dashboard. ``target`` is read as a file when it
-    names an existing file, otherwise evaluated as a Python expression in the user
-    namespace (e.g. ``jobs['ab12'].output``, a variable you bound); top-level
-    ``await`` is allowed, exactly as in a cell. ``start`` and
-    ``end`` select a 1-based inclusive line range. ``session`` evaluates the
-    expression in that MCP session's namespace (the same one its ``python_exec``
-    cells run in), so a variable bound there resolves. Backs the ``read`` MCP tool.
-    """
-    ns = _session_ns(session)
-    value = None
-    path = _existing_file(target)
-    if path is None:
-        # Not a file on disk: evaluate the expression. Compiled with top-level
-        # await allowed, matching cells (_compile), so `await jobs['ab12']` is a
-        # valid target instead of a SyntaxError (index#3139); an awaited target's
-        # coroutine resolves right here on the kernel loop. If the VALUE is a
-        # string naming an existing file (`os.path.join(...)`, a variable holding
-        # a path), the same file rule applies to it -- an expression yielding a
-        # path reads the file, never echoes the path string back.
-        if isinstance(target, str):
-            code_obj = compile(target, "<read>", "eval", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
-            value = eval(code_obj, ns)  # noqa: S307 -- intentional: evaluating user-provided expression in kernel namespace
-            if inspect.iscoroutine(value):
-                value = await value
-        else:
-            value = target
-        path = _existing_file(value)
-    if path is not None:
-        # Off the loop: a large file read is blocking I/O, the one thing that
-        # freezes every other job on the shared event loop.
-        full = await asyncio.to_thread(path.read_text, errors="replace")
-        label = _tilde(path)
-        lang = _read_lang(path)
-    else:
-        full = value if isinstance(value, str) else _safe_repr(value)
-        label = target if isinstance(target, str) else _safe_repr(target)
-        lang = None
-    # '\n' is the ONE line boundary, matching the renderer's split — str.splitlines
-    # would also break on \f/\v/\x85/U+2028..., desyncing the gutter numbers and
-    # span meta from the rows actually displayed. A trailing newline is a
-    # terminator, not a phantom last line.
-    lines = full.split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()
-    total = len(lines)
-    if start is not None or end is not None:
-        lo = max((start or 1) - 1, 0)
-        hi = total if end is None else min(end, total)
-        selected = lines[lo:hi]
-        body = "\n".join(selected)
-        first, last = lo + 1, lo + len(selected)
-    else:
-        selected = lines
-        body = full
-        first, last = 1, total
-    if path is not None:
-        # Track this read for the redundant-read KPI. Hash the payload the agent
-        # actually RECEIVED (`body`, i.e. the line slice for a ranged read), not
-        # the whole file -- so reading lines 1-100 then 101-200 is two novel reads,
-        # not a false redundancy. Hashing is CPU-bound and `body` can be large, so
-        # it runs off the event loop (like the read itself); only the fast set
-        # lookup + counter update lands back on the loop. Never a second disk read.
-        _digest = await asyncio.to_thread(readstats.digest, path, body)
-        readstats.tracker().record_digest(session, _digest)
-    # Display context: the whole file when it fits, else the slice, else a
-    # line-clipped head of the slice. `start`/`end`/`total`/`chars` always
-    # describe what the model received; `text`+`context_start` describe display,
-    # and `truncated` marks a display copy that omits part of the read span so
-    # the card never silently poses as the full range.
-    truncated = False
-    if len(full) <= _READ_CONTEXT_MAX:
-        text, context_start = full, 1
-    elif len(body) <= _READ_CONTEXT_MAX:
-        text, context_start = body, first
-    else:
-        text, context_start = "\n".join(_clip_lines(selected, _READ_CONTEXT_MAX)), first
-        truncated = True
-    return Result(
-        user_view={
-            "renderer": "file-view",
-            "data": {
-                "label": label,
-                "file": path is not None,
-                "lang": lang,
-                "text": text,
-                "context_start": context_start,
-                "start": first,
-                "end": last,
-                "total": total,
-                "chars": len(body),
-                "truncated": truncated,
-            },
-        },
-        # Plain-HTML fallback for hosts (and the mixed-rich-output pane path)
-        # that do not render the structured view; the display context, escaped.
-        user_html=f'<pre class="ix-result">{_escape_html(text)}</pre>',
-        llm_result=body,
-    )
-
-
-
 def _install_display_capture(shell: Any) -> None:
     """Route display() / rich auto-display made *inside a job* to that job's output
     list (still forwarding to IOPub for the agent's reply), so the dashboard can
@@ -4946,7 +4778,6 @@ def install(user_ns: dict | None = None) -> None:
     _bind("__ix_run", __ix_run)
     _bind("__ix_exec", __ix_exec)
     _bind("__ix_cancel_running", __ix_cancel_running)
-    _bind("__ix_read", __ix_read)
     _bind("__ix_emit_read_stats_final", __ix_emit_read_stats_final)
     _bind("__ix_snapshot", __ix_snapshot)
     _bind("__ix_restore", __ix_restore)

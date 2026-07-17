@@ -8,8 +8,8 @@
   // one slim header line — language icon, filename, dimmed directory, a tiny
   // right-aligned span — over the code slice on the islands editor background.
   // The producer ships the WHOLE file as highlight context when it fits (see
-  // runtime.__ix_read), so a mid-file slice still tokenizes correctly; only the
-  // start..end lines are shown.
+  // the file-view producer, view.Code in packages/mcp/src/view), so a mid-file
+  // slice still tokenizes correctly; only the start..end lines are shown.
   let { pane }: { pane: Pane } = $props();
 
   interface FileView {

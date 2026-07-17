@@ -9,15 +9,12 @@ want (search the index, read the calendar, shell out) is reachable the same way,
 by importing the bundled module inside a cell, so it does not earn a dedicated
 tool.
 
-Two tools earn their place beside it because they do something ``python_exec``
-cannot. ``read`` pulls a file or a kernel value into the MODEL's context without
-spamming the human: the full text comes back to the agent while the dashboard
-shows only a one-line note. A plain cell cannot make that split for free — its
-result streams to both audiences — so reading a large file or paging a job's
-output through ``python_exec`` either floods the dashboard or costs the human a
-wall of text they did not ask for. ``kernel_trace`` dumps the kernel's stack out
-of band (a faulthandler signal, not the execute channel) so it works even when a
-cell has wedged the event loop, which is exactly when ``python_exec`` cannot help.
+One tool earns its place beside it because it does something ``python_exec``
+cannot: ``kernel_trace`` dumps the kernel's stack out of band (a faulthandler
+signal, not the execute channel) so it works even when a cell has wedged the
+event loop, which is exactly when ``python_exec`` cannot help. Reading a file or
+paging a value is ordinary kernel work, done in a plain cell (``pathlib``,
+``jobs['<id>'].tail(...)``), not a dedicated tool.
 
 The server ``instructions`` a client reads at ``initialize`` are composed, not
 hand-listed: :func:`_compose_instructions` joins the authored ``_KERNEL_GUIDE``
@@ -71,6 +68,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.DELEGATE,
     guide.SSH,
     guide.POLARS,
+    guide.MACHINE_READABLE,
     guide.RESULT_CONTRACT,
     guide.JOBS,
     guide.PAGING,
@@ -78,7 +76,6 @@ _KERNEL_GUIDE = guide.compose(
     guide.modules_index(),
     guide.credentials_note(),
     guide.HTML,
-    guide.OUTPUT_HTML,
     guide.VERIFY,
     guide.AUTOMERGE,
     guide.RESULT_SPLIT,
@@ -403,7 +400,7 @@ Content = list[outputs.Content]
     structured_output=False,
     description=(
         "Name this MCP connection's dashboard session. Call this before acting "
-        "tools such as python_exec, read, kernel_trace, or tui_act; the name "
+        "tools such as python_exec, kernel_trace, or tui_act; the name "
         "should be a short human task label, not code or secrets."
     ),
 )
@@ -682,86 +679,6 @@ async def pr_watch(
         fragments=mcp_ui.html_fragments(cell_outputs),
         title=f"watch PR {pr}",
         weave_view=summary.get("weave_view") if summary else None,
-    )
-
-
-@mcp.tool(structured_output=False, description=guide.READ)
-async def read(
-    target: Annotated[
-        str,
-        Field(
-            description=(
-                "A file path, or a Python expression evaluated in the kernel; "
-                "top-level await is allowed (e.g. jobs['ab12'].output, "
-                "await jobs['ab12'], or a variable you bound earlier)"
-            )
-        ),
-    ],
-    start: Annotated[int | None, Field(description="1-based first line to include")] = None,
-    end: Annotated[int | None, Field(description="Last line to include (inclusive)")] = None,
-    ctx: Context | None = None,
-) -> Content:
-    await _start_dashboard_once()
-    await _identify_client_once(ctx)
-    await _require_session_name(ctx, intent=f"read {target}")
-    sid = _session_id(ctx)
-    code = f"await __ix_read({target!r}, {start!r}, {end!r}, session={sid!r})"
-    # Title the run by what it reads (with the line span when given) so its card
-    # reads "read path/to/file.py:10-40", not the raw `await __ix_read(...)` call.
-    span = f":{start}-{end}" if start is not None and end is not None else (f":{start}" if start is not None else "")
-    name = f"read {target}{span}"
-    cell_outputs, summary = await current_kernel().python_exec(code, budget=30.0, name=name, session=sid)
-    status = summary.get("status") if summary is not None else None
-    if summary is not None and status == "error" and summary.get("error"):
-        # The in-kernel read itself raised (bad expression, unreadable path):
-        # the traceback is the useful answer, so return it as the content.
-        return [outputs.text(summary["error"])]
-    if summary is not None and status == "wedged":
-        # The kernel bridge could not execute the read: a wedged cell holds the
-        # kernel's one event loop, so nothing was read. Fail loudly -- a quiet
-        # empty reply here is indistinguishable from reading an empty file, and
-        # was misread exactly that way (index#2381).
-        raise McpError(
-            ErrorData(
-                code=types.INTERNAL_ERROR,
-                message=(
-                    f"read {target}: kernel unavailable, nothing was read. "
-                    + str(summary.get("error") or "The kernel did not respond.")
-                ),
-            )
-        )
-    rendered = outputs.to_mcp(cell_outputs)
-    content = [item for item in rendered if getattr(item, "text", None) != "(no output)"]
-    if content:
-        return content
-    if status == "done":
-        # The read COMPLETED and produced no text: the file or value is
-        # genuinely empty. Only this state may report emptiness (index#2381).
-        return rendered
-    if status == "running" and summary is not None and summary.get("id"):
-        # The kernel is healthy but the read outlived its foreground budget
-        # (a slow expression, a giant file): point at the live job instead of
-        # posing as empty output.
-        job_id = summary["id"]
-        return [
-            outputs.text(
-                f"[read {target} is still running as jobs[{job_id!r}] after its 30s "
-                f"foreground budget; await or page it via python_exec.]"
-            )
-        ]
-    # No output and no completed job summary: the in-kernel runtime never ran
-    # the read (dead bridge, cancelled run, stale build). Never report this as
-    # empty success (index#2381).
-    raise McpError(
-        ErrorData(
-            code=types.INTERNAL_ERROR,
-            message=(
-                f"read {target}: kernel unavailable, nothing was read "
-                "(the read produced no output and no completed job summary"
-                + (f"; status {status!r}" if status is not None else "")
-                + ")."
-            ),
-        )
     )
 
 

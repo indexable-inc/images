@@ -103,23 +103,6 @@ def test_no_session_keeps_the_single_shared_namespace(monkeypatch: pytest.Monkey
     assert shared["x"] == 40  # writes land in the shared dict, as before
 
 
-def test_ix_read_evaluates_in_the_callers_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    _wire(monkeypatch, {"Result": runtime.Result})
-    run_cell("answer = 41\nResult.ok('set')", session="s1")
-
-    async def reads() -> tuple[runtime.Result, runtime.Result]:
-        own = await runtime.__ix_read("answer + 1", session="s1")
-        try:
-            other = await runtime.__ix_read("answer + 1", session="s2")
-        except NameError as exc:
-            other = exc
-        return own, other
-
-    own, other = asyncio.run(reads())
-    assert own.llm_result == "42"
-    assert isinstance(other, NameError)  # s2 never bound `answer`
-
-
 # --------------------------------------------------------------------------- #
 # the server-side session key: stable per MCP session, HTTP transport only
 # --------------------------------------------------------------------------- #
