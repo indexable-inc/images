@@ -51,24 +51,26 @@ fn mapping_json(name: &str, patch_dir: &str, closure_gates: bool) -> String {
     )
 }
 
-/// Run the binary and assert it exited 0, labeled by lifecycle stage; the
-/// stages share this so the test stays within clippy's function-length budget.
-fn run_ok(exe: &str, args: &[&str], cwd: &std::path::Path, envs: &[(&str, String)], stage: u8) {
+/// Run the binary and assert its exit status: 0 when `want_ok`, nonzero
+/// otherwise, labeled by lifecycle stage. The stages share this so the test
+/// stays within clippy's function-length budget.
+fn run_expect(
+    exe: &str,
+    args: &[&str],
+    cwd: &std::path::Path,
+    envs: &[(&str, String)],
+    stage: u8,
+    want_ok: bool,
+) {
     let run = run_bin(exe, args, cwd, envs);
     assert_eq!(
-        run.status, 0,
-        "stage {stage} failed:\n{}\n{}",
-        run.stdout, run.stderr
-    );
-}
-
-/// Run the binary and assert it exited NONZERO, labeled by lifecycle stage.
-fn run_fails(exe: &str, args: &[&str], cwd: &std::path::Path, envs: &[(&str, String)], stage: u8) {
-    let run = run_bin(exe, args, cwd, envs);
-    assert_ne!(
-        run.status, 0,
-        "stage {stage}: expected a nonzero exit:\n{}\n{}",
-        run.stdout, run.stderr
+        run.status == 0,
+        want_ok,
+        "stage {stage}: expected {} exit, got {}:\n{}\n{}",
+        if want_ok { "a zero" } else { "a nonzero" },
+        run.status,
+        run.stdout,
+        run.stderr
     );
 }
 
@@ -92,12 +94,13 @@ fn pr_lifecycle_open_red_ci_retire_idempotent_and_gates() {
 
     // stage 1: --open records the created PR, ready for review with CI still
     // pending (upstream-pr opens ready; CI has not reported yet).
-    run_ok(
+    run_expect(
         exe,
         &["--open", "--mapping", &mapping_arg, "fake"],
         &work,
         &envs,
         1,
+        true,
     );
     let entry = &status_json(&work, "repo/patches")["patches"][PATCH];
     assert_eq!(
@@ -122,12 +125,13 @@ fn pr_lifecycle_open_red_ci_retire_idempotent_and_gates() {
         ("PATH", envs[0].1.clone()),
         ("GH_PR_VIEW_RESPONSE", view.display().to_string()),
     ];
-    run_ok(
+    run_expect(
         exe,
         &["--mapping", &mapping_arg, "fake"],
         &work,
         &envs_red,
         2,
+        true,
     );
     let doc = status_json(&work, "repo/patches");
     let entry = &doc["patches"][PATCH];
@@ -146,12 +150,13 @@ fn pr_lifecycle_open_red_ci_retire_idempotent_and_gates() {
         "stage 2: expected 2 log transitions, got {}",
         doc["log"]
     );
-    run_fails(
+    run_expect(
         exe,
         &["--fail-on-red-ci", "--mapping", &mapping_arg, "fake"],
         &work,
         &envs_red,
         2,
+        false,
     );
     let doc = status_json(&work, "repo/patches");
     assert_eq!(
@@ -167,12 +172,13 @@ fn pr_lifecycle_open_red_ci_retire_idempotent_and_gates() {
         r#"{"state":"MERGED","isDraft":false,"url":"https://github.com/fakeorg/fakerepo/pull/99999","number":99999}"#,
     )
     .unwrap();
-    run_ok(
+    run_expect(
         exe,
         &["--mapping", &mapping_arg, "fake"],
         &work,
         &envs_red,
         3,
+        true,
     );
     let doc = status_json(&work, "repo/patches");
     let entry = &doc["patches"][PATCH];
@@ -190,12 +196,13 @@ fn pr_lifecycle_open_red_ci_retire_idempotent_and_gates() {
 
     // stage 4: re-run is idempotent (no duplicate transitions), and a merged
     // PR never counts as red even under --fail-on-red-ci.
-    run_ok(
+    run_expect(
         exe,
         &["--fail-on-red-ci", "--mapping", &mapping_arg, "fake"],
         &work,
         &envs_red,
         4,
+        true,
     );
     let doc = status_json(&work, "repo/patches");
     assert_eq!(
@@ -220,12 +227,13 @@ fn closure_gate_stages(exe: &str, work: &std::path::Path, path: &str) {
 
     // stage 5: a red closure gate aborts the PR-opening.
     let envs_red = [("PATH", path.to_owned()), ("NIX_GATE_EXIT", "1".to_owned())];
-    run_ok(
+    run_expect(
         exe,
         &["--open", "--mapping", &gated_arg, "gated"],
         work,
         &envs_red,
         5,
+        true,
     );
     let entry = &status_json(work, "gated/patches")["patches"][PATCH];
     assert!(
@@ -235,12 +243,13 @@ fn closure_gate_stages(exe: &str, work: &std::path::Path, path: &str) {
 
     // stage 6: a green gate proceeds to open and record the PR.
     let envs = [("PATH", path.to_owned())];
-    run_ok(
+    run_expect(
         exe,
         &["--open", "--mapping", &gated_arg, "gated"],
         work,
         &envs,
         6,
+        true,
     );
     let entry = &status_json(work, "gated/patches")["patches"][PATCH];
     assert_eq!(
