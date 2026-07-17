@@ -12,9 +12,12 @@ command inside a symlink farm of src + snapshot + dep unit outputs.
 The plan build's monolithic vmlinux is kept as the equivalence reference:
 `vmlinuxEquivalence` cmp's it byte-for-byte against the unit-built vmlinux.
 
-Unit trees currently take the whole kernel source as input, so an edit to
-any source rebuilds every unit's tree (CA cutoff still dedups unchanged
-outputs); per-unit source scoping is #3412.
+Each unit's build tree is scoped to the sources its .cmd recorded (#3412):
+compile units see their .c plus tracked headers as per-file store paths,
+the link unit adds the script-read Makefile and header trees, and archive
+aggregation sees only dep unit outputs plus the snapshot. A one-file body
+edit thus re-instantiates one TU derivation and its link chain; a
+comment-only edit cuts off at the unchanged CA object.
 */
 {
   lib,
@@ -141,10 +144,21 @@ outputs); per-unit source scoping is #3412.
           < ${plan}/plan.json > $out
       '';
 
+    # Stable-path hop for the snapshot: the plan's output path shifts with
+    # every source edit (its reference vmlinux changes), which would perturb
+    # every unit's `generated` input. Re-homing the snapshot in its own CA
+    # derivation keeps the path fixed while the harvested content is
+    # unchanged, so unrelated units stay cached across plan reruns (#3412).
+    generatedSnapshot =
+      pkgs.runCommand "kbuild-unit-generated"
+      (lib.optionalAttrs contentAddressed contentAddressing) ''
+        cp -a ${plan}/generated $out
+      '';
+
     imported = import unitsNix {
       inherit pkgs;
       src = srcTree;
-      generated = "${plan}/generated";
+      generated = "${generatedSnapshot}";
       extraNativeBuildInputs = kbuildInputs;
       extraEnv = reproEnv;
     };

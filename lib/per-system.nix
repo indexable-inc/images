@@ -2193,6 +2193,12 @@ in {
     kernel-unit = (ix.kernelUnitFor pkgs).buildKernel {
       inherit (pkgs.linux_6_12) src;
     };
+    # defconfig-scale lane (#3412): thousands of units per eval, kept here
+    # solely so the eval-cost measurement has a stable attr to time.
+    kernel-unit-defconfig = (ix.kernelUnitFor pkgs).buildKernel {
+      inherit (pkgs.linux_6_12) src;
+      configTarget = "defconfig";
+    };
   };
 
   # `nix run .#bench` runs the repo's self-demo perf job (timing + RSS + custom
