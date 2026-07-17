@@ -643,6 +643,16 @@ in
         settings = settingsDefaults;
         settingsFile = settingsDefaultsFile;
 
+        # The exact string baked into the `--system-prompt-file` flag in
+        # `wrapperFlags` -- same binding as the flag, so passthru and argv
+        # cannot drift. Exposed because the `builtins.toFile` output behind
+        # that flag is otherwise anonymous: `nix eval --raw
+        # .#claude-code.systemPrompt` prints the realized prompt without
+        # digging the store path out of the launch spec. Null when the caller
+        # opted into the stock prompt (HM `systemPrompt.source = "stock"`),
+        # mirroring that no flag is baked then.
+        inherit systemPrompt;
+
         # Same capture path as extractSystemPrompt, but depends only on the fetched
         # upstream binary so prompt snapshots do not rebuild the wrapped package.
         extractStockSystemPrompt = import ./extract-system-prompt.nix {
