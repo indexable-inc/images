@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "weave"))
 sys.path.insert(0, str(ROOT / "fabric"))
 
 import weave
-from claude_agent_sdk import AssistantMessage, Message, ResultMessage, TextBlock
+from claude_agent_sdk import AssistantMessage, ClaudeSDKClient, Message, ResultMessage, TextBlock
 
 import fabric
 from fabric import activity, claude, reconcile, remote, tmux
@@ -687,8 +687,8 @@ def test_auth_env_scrubs_key_only_under_subscription(
     assert claude._auth_env() == expected
 
 
-def _real_sdk_client(tmux_window: str | None) -> Any:
-    return claude._sdk_client(
+def _real_sdk_client(tmux_window: str | None) -> ClaudeSDKClient:
+    client = claude._sdk_client(
         system_prompt=None,
         model=None,
         cwd=None,
@@ -697,6 +697,10 @@ def _real_sdk_client(tmux_window: str | None) -> Any:
         max_turns=None,
         tmux_window=tmux_window,
     )
+    # The tests read `client.options`, which the SdkClient protocol deliberately
+    # omits; narrow to the real SDK client instead of widening to Any (ANN401).
+    assert isinstance(client, ClaudeSDKClient)
+    return client
 
 
 def test_sdk_client_env_carries_auth_scrub(monkeypatch: pytest.MonkeyPatch) -> None:
