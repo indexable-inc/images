@@ -651,38 +651,6 @@ in {
     };
   };
 
-  # Weave fact server (indexable-inc/weave): the ix-mcp kernel store's
-  # write-behind flusher POSTs facts to 127.0.0.1:7677; with no listener every
-  # kernel cell logs connection-refused retries and drops facts (index#3203).
-  # The agent host (and its --agents flag) was retired outright in
-  # indexable-inc/weave#266 (fabric phase 3, index#3193), which closed the
-  # write-path wedge indexable-inc/weave#240 by construction: the journal
-  # only records facts. Binary + ui are gc-rooted out-links (this
-  # config has no weave input); refresh with
-  #   nix build ~/Projects/indexable-inc/weave#default --out-link ~/.local/share/weave/app
-  #   nix build ~/Projects/indexable-inc/weave#ui --out-link ~/.local/share/weave/ui
-  # Log stays at ~/.local/share/weave/serve.log next to the store: the path
-  # existing tooling and memories already reference.
-  launchd.agents.weave-serve = {
-    enable = cfg.weave.enable;
-    config = {
-      ProgramArguments = lockArgs "weave-serve" [
-        "${config.home.homeDirectory}/.local/share/weave/app/bin/weave"
-        "--store"
-        "${config.home.homeDirectory}/.local/share/weave/store"
-        "serve"
-        "--addr"
-        "127.0.0.1:7677"
-        "--ui"
-        "${config.home.homeDirectory}/.local/share/weave/ui"
-      ];
-      KeepAlive = true;
-      RunAtLoad = true;
-      StandardOutPath = "${config.home.homeDirectory}/.local/share/weave/serve.log";
-      StandardErrorPath = "${config.home.homeDirectory}/.local/share/weave/serve.log";
-    };
-  };
-
   launchd.agents.grayscale-off = {
     enable = false;
     config = {
