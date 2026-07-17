@@ -839,7 +839,6 @@ let abbreviations = abbr flatten-abbreviations {
     pcu: "process-compose up --tui=false --no-server --theme 'Custom Style'"
     pd: "pnpm dev"
     nfm: "nix flake metadata --json  | from json"
-    pi: "pnpm install"
     pk: "pkill -9"
     pl: "git pull"
     pr: "c ~/Projects"
