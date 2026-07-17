@@ -22,6 +22,13 @@ defmodule IxMcp.MCP.Stdio do
 
   @impl true
   def init(_) do
+    # The wire is bytes: JSON-RPC lines arrive and leave as UTF-8, but the
+    # io device defaults to :unicode, where IO.binread/2 fails with
+    # {:error, {:no_translation, :unicode, :latin1}} at the first codepoint
+    # above 255 -- #3523 (https://github.com/indexable-inc/index/issues/3523):
+    # one emoji in a cell payload closed the whole connection. :latin1 +
+    # binary makes stdio a transparent byte pipe in both directions.
+    :ok = :io.setopts(:standard_io, binary: true, encoding: :latin1)
     Notifier.register(self())
     reader = self()
     spawn_link(fn -> read_loop(reader) end)
@@ -80,7 +87,11 @@ defmodule IxMcp.MCP.Stdio do
       :eof ->
         send(server, :mcp_eof)
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        # A read error is not a clean EOF; name it on stderr before shutting
+        # down, or the death is indistinguishable from the client exiting
+        # (how #3523 stayed invisible: no log line, exit 0).
+        IO.puts(:stderr, "ix-mcp-ex: stdin read error: " <> inspect(reason))
         send(server, :mcp_eof)
 
       line ->

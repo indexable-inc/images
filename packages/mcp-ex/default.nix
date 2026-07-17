@@ -137,10 +137,11 @@
     }
     ''
       set +e
-      printf '%s\n%s\n%s\n' \
+      printf '%s\n%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
         '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_set_name","arguments":{"name":"smoke"}}}' \
+        '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"elixir_exec","arguments":{"intent":"utf8 wire roundtrip","budget":60,"code":"\"snow ☃\""}}}' \
         | IX_MCP_ACTIONS_DB="$PWD/actions.db" ix-mcp-ex > response.jsonl 2> server-stderr.log
       rc=$?
       set -e
@@ -175,6 +176,17 @@
         *'session named: smoke'*) ;;
         *)
           echo "tools/call session_set_name did not answer" >&2
+          printf '%s\n' "$out_lines" >&2
+          exit 1
+          ;;
+      esac
+      # Multi-byte UTF-8 in an inbound request used to kill the reader --
+      # #3523: the :unicode io device made IO.binread/2 return
+      # {:error, {:no_translation, :unicode, :latin1}}, swallowed as EOF.
+      case "$out_lines" in
+        *'snow ☃'*) ;;
+        *)
+          echo "elixir_exec did not round-trip a multi-byte UTF-8 payload" >&2
           printf '%s\n' "$out_lines" >&2
           exit 1
           ;;
