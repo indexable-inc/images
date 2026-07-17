@@ -386,6 +386,23 @@
     };
   }
   {
+    gitBackedFlakeReferences = {
+      text = ''
+        When evaluating a local Git checkout as a flake, never use
+        `builtins.getFlake (toString ./...)` or a whole-tree `path:` reference:
+        both copy ignored build outputs and every other file into the Nix store.
+        Use the Git fetcher (`"git+file://" + toString ./...`), a declared flake
+        input, or the CLI's `.#...` reference so Git filters the source tree.
+      '';
+      reason = ''
+        `builtins.getFlake (toString ./.)` appeared hung while it copied a 30 GB
+        checkout, including a 26 GB ignored `target/` and `node_modules`. The
+        repo's no-getflake-tostring and no-path-flake-ref lints already enforce
+        the same source-filtering boundary in Nix code (index#3485).
+      '';
+    };
+  }
+  {
     fixAtSource = {
       text = ''
         Fix problems at their source: prefer architectural changes that remove
