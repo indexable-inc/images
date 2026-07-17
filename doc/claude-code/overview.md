@@ -56,11 +56,14 @@ agent content from Nix outputs instead of invoking `nix build` interactively.
 ### Soft env defaults (set only when unset)
 
 `env_defaults` are applied only if the user has not set them
-(`default.nix:147-152`, `382`): `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` keeps every
-session on the standard 200K window instead of the silently auto-upgraded 1M
-window (uncached, slower per turn, ~5x the input price; past-the-window work
-belongs in subagents, and the smaller window makes auto-compaction trigger
-sooner). Verified against 2.1.197, the flag gates every 1M path in the CLI:
+(`default.nix:147-152`, `382`). Every feature toggled off in the typed
+`features` arg rides here as its `CLAUDE_CODE_DISABLE_<NAME>=1` var; by
+default that is only `cron` (`CLAUDE_CODE_DISABLE_CRON=1`, dropping the
+scheduling/loop tools). 1M context is NOT disabled by default (#3487):
+native-1M models run their full window. Consumers that want the 1M paths off
+(uncached, slower per turn, ~5x the input price) set
+`features.context1M = false`, which bakes `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`.
+Verified against 2.1.197, that flag gates every 1M path in the CLI:
 the explicit `[1m]` model suffix, the silent auto-upgrade on eligible models,
 honoring a `context-1m` beta header, and the built-in `[1m]` rows in `/model`.
 One cosmetic residual: server-pushed model options
@@ -69,10 +72,11 @@ valued `claude-fable-5[1m]`) can still appear in the picker — selecting one
 still runs at the standard window when the disable flag is active.
 
 The wrapper also bakes the same knobs into the settings render's `env` map
-(`CLAUDE_CODE_DISABLE_1M_CONTEXT=1`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000`)
-so `/context` and autocompact stay on the ~300K working window even if
-launch-time `env_defaults` are missing. Install checks assert both paths.
-Re-enable 1M per machine with `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
+(the disabled-feature vars plus `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000`, so
+`/context` and autocompact keep the ~300K working window even on a native-1M
+model, and even if launch-time `env_defaults` are missing). Install checks
+assert both paths. A caller's own export — even empty — always wins over an
+env_default, so any baked disable can be undone per machine.
 
 ### Prepended flags (`wrapperFlags`, `default.nix:353-361`)
 

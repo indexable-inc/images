@@ -111,7 +111,7 @@ in {
       type = lib.types.attrsOf (lib.types.nullOr (lib.types.either lib.types.bool lib.types.int));
       default = {};
       example = {
-        context1M = true;
+        context1M = false;
         autoCompactWindow = null;
       };
       description = ''
