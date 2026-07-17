@@ -59,14 +59,15 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
 
     let srcarch = detect_srcarch(&units)?;
 
-    let mut farm: BTreeSet<&str> = BTreeSet::new();
     let mut scopes: BTreeMap<&str, SourceScope> = BTreeMap::new();
     for &target in &reachable {
         let (entry, kind) = units[target];
-        let scope = source_scope(entry, kind, &units, &generated, &srcarch)?;
-        farm.extend(scope.files.iter().copied());
-        scopes.insert(target, scope);
+        scopes.insert(target, source_scope(entry, kind, &units, &generated, &srcarch)?);
     }
+    let farm: BTreeSet<&str> = scopes
+        .values()
+        .flat_map(|scope| scope.files.iter().map(String::as_str))
+        .collect();
 
     let mut entries = String::new();
     for &target in &reachable {
@@ -221,9 +222,32 @@ fn closure_of<'plan>(
 /// The srctree inputs a unit's replay is allowed to see (#3412): tracked
 /// files resolved through the per-file source farm, plus directory prefixes
 /// for the script-driven link whose reads no .cmd records.
-struct SourceScope<'plan> {
-    files: BTreeSet<&'plan str>,
+struct SourceScope {
+    files: BTreeSet<String>,
     dirs: Vec<String>,
+}
+
+/// Lexically resolve `.` and `..` in a srctree-relative path. kbuild records
+/// cpp -MD prerequisites verbatim, so one header can appear under several
+/// spellings (e.g. `arch/x86/mm/../include/asm/trace/exceptions.h`) and
+/// collide in the replay symlink farm unless canonicalized.
+fn normalize_rel(rel: &str) -> color_eyre::Result<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in rel.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    bail!("source path {rel:?} escapes the source tree");
+                }
+            }
+            _ => parts.push(part),
+        }
+    }
+    if parts.is_empty() {
+        bail!("source path {rel:?} normalizes to nothing");
+    }
+    Ok(parts.join("/"))
 }
 
 /// The single arch the plan builds for, from `arch/<srcarch>/` unit targets.
@@ -240,29 +264,29 @@ fn detect_srcarch(units: &BTreeMap<&str, (&CmdEntry, UnitKind)>) -> color_eyre::
     }
 }
 
-fn source_scope<'plan>(
-    entry: &'plan CmdEntry,
+fn source_scope(
+    entry: &CmdEntry,
     kind: UnitKind,
     units: &BTreeMap<&str, (&CmdEntry, UnitKind)>,
     generated: &BTreeSet<&str>,
     srcarch: &str,
-) -> color_eyre::Result<SourceScope<'plan>> {
-    let mut files: BTreeSet<&'plan str> = BTreeSet::new();
+) -> color_eyre::Result<SourceScope> {
+    let mut files: BTreeSet<String> = BTreeSet::new();
     let mut dirs: Vec<String> = Vec::new();
     match kind {
         UnitKind::Compile => {
             for dep in entry.source.iter().chain(&entry.deps) {
-                let rel = dep.strip_prefix("./").unwrap_or(dep);
-                if rel.starts_with('/') {
+                if dep.starts_with('/') {
                     // Toolchain-owned (store) headers arrive via the compiler.
                     continue;
                 }
-                if units.contains_key(rel) || generated.contains(rel) {
+                if dep.chars().any(char::is_whitespace) {
+                    bail!("whitespace in source path {dep:?} of {}", entry.target);
+                }
+                let rel = normalize_rel(dep)?;
+                if units.contains_key(rel.as_str()) || generated.contains(rel.as_str()) {
                     // Dep unit outputs and snapshot members overlay the tree.
                     continue;
-                }
-                if rel.chars().any(char::is_whitespace) {
-                    bail!("whitespace in source path {rel:?} of {}", entry.target);
                 }
                 files.insert(rel);
             }
@@ -271,15 +295,14 @@ fn source_scope<'plan>(
             // link-vmlinux.sh (snapshot member, sed-patched at plan time)
             // shells back into make and compiles sources with no .cmd of
             // their own; give it the Makefile machinery and header trees.
-            files.insert("Makefile");
-            files.insert("init/version-timestamp.c");
+            files.insert("Makefile".to_owned());
+            files.insert("init/version-timestamp.c".to_owned());
             if let Some(postlink) = entry
                 .cmd
                 .split_whitespace()
-                .map(|token| token.strip_prefix("./").unwrap_or(token))
                 .find(|token| token.ends_with("Makefile.postlink"))
             {
-                files.insert(postlink);
+                files.insert(normalize_rel(postlink)?);
             }
             dirs = vec![
                 format!("arch/{srcarch}/include"),
@@ -625,6 +648,38 @@ mod tests {
             rendered
                 .contains("\"kernel/fork.c\" = srcFile \"kbuild-src-fork.c\" \"kernel/fork.c\";")
         );
+    }
+
+    #[test]
+    fn normalizes_dotdot_dep_spellings_to_one_farm_entry() {
+        let mut plan = sample_plan();
+        // kbuild records cpp -MD prerequisites verbatim: the same header can
+        // appear relative to the object dir and relative to the srctree.
+        plan.cmds[0].deps = vec![
+            "arch/x86/mm/../include/asm/trace/./exceptions.h".to_owned(),
+            "arch/x86/include/asm/trace/exceptions.h".to_owned(),
+        ];
+
+        let rendered = render_units_nix(&plan, true).expect("render");
+        assert_eq!(
+            rendered
+                .matches("\"arch/x86/include/asm/trace/exceptions.h\" = srcFile")
+                .count(),
+            1,
+            "duplicate spellings must collapse to one farm entry"
+        );
+        assert!(
+            !rendered.contains(".."),
+            "no unnormalized path may survive rendering"
+        );
+    }
+
+    #[test]
+    fn rejects_source_paths_escaping_the_tree() {
+        let mut plan = sample_plan();
+        plan.cmds[0].deps = vec!["../outside.h".to_owned()];
+        let err = render_units_nix(&plan, true).expect_err("escape must fail");
+        assert!(err.to_string().contains("escapes the source tree"));
     }
 
     #[test]
