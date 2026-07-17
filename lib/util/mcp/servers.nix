@@ -21,12 +21,18 @@
     "SLACK_USER_TOKEN"
   ];
 
-  defaultServers = {indexCommand ? null}:
+  defaultServers = {
+    indexCommand ? null,
+    # The Python kernel's entrypoint needs its `serve` subcommand; the Elixir
+    # server (packages/mcp-ex) is stdio-serve-only and takes no arguments, so
+    # consumers pointing at it pass `indexArgs = []`.
+    indexArgs ? ["serve"],
+  }:
     lib.optionalAttrs (indexCommand != null) {
       index = {
         transport = "stdio";
         command = indexCommand;
-        args = ["serve"];
+        args = indexArgs;
         envVars = indexApiEnvVars;
       };
     }
