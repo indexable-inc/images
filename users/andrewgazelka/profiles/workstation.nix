@@ -166,6 +166,24 @@
     # controlled keys; the module materializes the result into the writable
     # ~/.claude/settings.json.
     extraSettings = claudeSettings;
+    # Personal opt-outs from the fleet posture: run the model's native 1M
+    # window (no DISABLE_1M clamp, no AUTO_COMPACT_WINDOW override) and keep
+    # the harness subagent/task tool schemas loaded. Pairs with the
+    # `backgroundSubagents` omit on programs.claude-code below, whose rule
+    # text declares these tools absent.
+    features = {
+      context1M = true;
+      autoCompactWindow = null;
+    };
+    systemTools = {
+      Agent = true;
+      TaskCreate = true;
+      TaskGet = true;
+      TaskList = true;
+      TaskOutput = true;
+      TaskStop = true;
+      TaskUpdate = true;
+    };
     # appendSystemPrompt (house rules appended to the stock prompt) comes from
     # the package default. Set `appendSystemPrompt = null;` here to ship the
     # stock prompt alone on this machine.
@@ -1026,7 +1044,10 @@ in {
   programs.claude-code = {
     enable = true;
     package = claudeCode;
-    systemPrompt.omitRules = agentPromptOmitRules;
+    # backgroundSubagents claims the subagent/task tools are absent; the
+    # claudeCode override above re-enables them on this machine, so the rule
+    # is omitted for Claude only (Codex still has no harness subagent tool).
+    systemPrompt.omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
     # All agents, BARE, sourced straight from the index repo (index's agents
     # package now holds my former personal agents too). Bare (not plugin) so
     # `subagent_type code-reviewer` keeps resolving.
