@@ -23,6 +23,16 @@ defmodule IxMcp.MCP.Tools do
         `Jobs.cancel("ab12")`, `Jobs.history()`. Each cell runs in its own
         BEAM process, so a blocking cell never delays other jobs or this
         server.
+
+        Write plain Elixir, not shell. For files and data use the standard
+        library directly -- File.read!/1, File.write!/2, Path.wildcard/1,
+        File.ls!/1, File.stat!/1 -- instead of shelling out. Reserve
+        System.cmd/3 for real external programs (git, nix, gh), and always
+        pass its arguments as a list: System.cmd("git", ["-C", dir, "status"]).
+        Never build shell command strings, and never use bash here-docs or
+        nested quoting to pass multi-line text -- they are brittle and can
+        wedge this transport. To hand multi-line text to a program, write it
+        to a file with File.write!/2 and pass the path.
         """,
         "inputSchema" => %{
           "type" => "object",
