@@ -34,9 +34,9 @@
   <text x="68" y="106" text-anchor="middle">agent</text>
   <text x="68" y="122" text-anchor="middle" class="small muted">MCP client</text>
 
-  <!-- elixir_exec edge -->
+  <!-- exec edge -->
   <line class="edge" x1="120" y1="110" x2="196" y2="110"/>
-  <text x="158" y="100" text-anchor="middle" class="small mono accent">elixir_exec</text>
+  <text x="158" y="100" text-anchor="middle" class="small mono accent">exec</text>
 
   <!-- BEAM box -->
   <rect class="box" x="200" y="18" width="330" height="184" rx="10"/>

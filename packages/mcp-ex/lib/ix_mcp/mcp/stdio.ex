@@ -1,7 +1,7 @@
 defmodule IxMcp.MCP.Stdio do
   @moduledoc """
   MCP over stdio: newline-delimited JSON-RPC on stdin/stdout. The reader loop
-  dispatches every request in its own task, so one slow `elixir_exec` call
+  dispatches every request in its own task, so one slow `exec` call
   never delays the next request -- the same guarantee the jobs layer gives
   cells, applied to the wire.
 
@@ -14,6 +14,8 @@ defmodule IxMcp.MCP.Stdio do
 
   alias IxMcp.MCP.Notifier
   alias IxMcp.MCP.Server
+
+  require Logger
 
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(_opts) do
@@ -91,7 +93,7 @@ defmodule IxMcp.MCP.Stdio do
         # A read error is not a clean EOF; name it on stderr before shutting
         # down, or the death is indistinguishable from the client exiting
         # (how #3523 stayed invisible: no log line, exit 0).
-        IO.puts(:stderr, "ix-mcp-ex: stdin read error: " <> inspect(reason))
+        Logger.error("ix-mcp-ex: stdin read error: " <> inspect(reason))
         send(server, :mcp_eof)
 
       line ->

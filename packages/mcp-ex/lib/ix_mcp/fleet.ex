@@ -49,6 +49,8 @@ defmodule IxMcp.Fleet do
   def nodes do
     (System.get_env(@nodes_env) || "")
     |> String.split([",", " ", "\n", "\t"], trim: true)
+    # Operator-set deploy config, a bounded list; :erpc requires node atoms.
+    # astlog-ignore: no-unsafe-to-atom
     |> Enum.map(&String.to_atom/1)
   end
 
@@ -172,10 +174,13 @@ defmodule IxMcp.Fleet do
   defp local_name do
     case System.get_env(@local_name_env) do
       name when is_binary(name) and name != "" ->
+        # Operator-set env; Node.start/2 requires an atom, minted once at boot.
+        # astlog-ignore: no-unsafe-to-atom
         String.to_atom(name)
 
       _ ->
         {:ok, host} = :inet.gethostname()
+        # astlog-ignore: no-unsafe-to-atom -- same: one boot-time atom
         String.to_atom("mcp-ex@" <> to_string(host))
     end
   end
@@ -184,6 +189,7 @@ defmodule IxMcp.Fleet do
   defp set_cookie do
     case cookie() do
       nil -> :ok
+      # astlog-ignore: no-unsafe-to-atom -- deploy-injected secret; the API takes an atom
       value -> Node.set_cookie(String.to_atom(value))
     end
 

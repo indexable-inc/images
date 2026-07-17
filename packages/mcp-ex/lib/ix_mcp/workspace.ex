@@ -13,7 +13,10 @@ defmodule IxMcp.Workspace do
 
   use GenServer
 
-  @prelude "alias IxMcp.Jobs; alias IxMcp.Api; alias IxMcp.Fleet"
+  # `Kernel` would shadow Elixir's; cells reach trace/restart as `Ix`.
+  @prelude "alias IxMcp.Jobs; alias IxMcp.Api; alias IxMcp.Fleet; " <>
+             "alias IxMcp.Read; alias IxMcp.PrWatch; alias IxMcp.Tui; " <>
+             "alias IxMcp.Kernel, as: Ix"
 
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(_opts) do

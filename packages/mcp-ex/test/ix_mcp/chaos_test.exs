@@ -62,6 +62,26 @@ defmodule IxMcp.ChaosTest do
     assert {_, 1} = System.cmd("pgrep", ["-f", marker])
   end
 
+  test "Ix.restart() from a cell recovers a wedged evaluator, sparing its own cell" do
+    {bound, _} = Jobs.run("precious = 1", intent: "bind state")
+    assert bound.status == :done
+
+    {wedged, _} = Jobs.run("Process.sleep(:infinity)", budget: 0.05, intent: "wedge")
+    assert wedged.running
+
+    # The prelude aliases IxMcp.Kernel as Ix, so recovery is reachable from
+    # any fresh cell even while another job wedges -- and the requesting
+    # cell survives its own restart to return the report.
+    {restart, _} = Jobs.run("Ix.restart()", intent: "restart from a cell")
+    assert restart.status == :done
+    assert restart.result =~ wedged.id
+    assert Jobs.get(wedged.id).status == :cancelled
+
+    {check, _} = Jobs.run("precious", intent: "after in-cell restart")
+    assert check.status == :done
+    assert check.result == "1"
+  end
+
   test "workspace crash restores bindings via supervisor + checkpoint (no tool call needed)" do
     {_, _} = Jobs.run("phoenix = :rises", intent: "bind")
 

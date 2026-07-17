@@ -1,9 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="elixir_exec runs cells as supervised BEAM processes over one persistent workspace; a blocked cell stalls only itself and job outcomes come back as channel notifications"></p>
+<p align="center"><img src="assets/hero.svg" width="720" alt="exec runs cells as supervised BEAM processes over one persistent workspace; a blocked cell stalls only itself and job outcomes come back as channel notifications"></p>
 
 # ix-mcp-ex
 
 What if a wedged cell could not freeze your agent's whole kernel? ix-mcp-ex is
-an MCP server whose REPL **is Elixir**: one tool, `elixir_exec`, runs code
+an MCP server whose REPL **is Elixir**: one tool, `exec`, runs code
 against a shared, persistent workspace of bindings, and every cell executes as
 its own supervised BEAM process. The namespace survives across calls, jobs that
 outlive a short budget keep running in the background, and no cell -- however
@@ -22,11 +22,11 @@ From a clone (`git clone https://github.com/indexable-inc/index`):
 nix run .#mcp-ex
 ```
 
-Point an MCP client at that command and call `elixir_exec`.
+Point an MCP client at that command and call `exec`.
 
 ## The main tool
 
-`elixir_exec(code, budget \\ 15, intent)` evaluates `code` on the shared
+`exec(code, budget \\ 15, intent)` evaluates `code` on the shared
 workspace and waits up to `budget` seconds. Finished in time: you get output
 and the rendered result. Still running: it continues as a background job and
 you get a handle. Job control needs no extra tools, because the registry is
@@ -47,15 +47,33 @@ are the discovery surface, generated live from module docs.
 
 ## Tools
 
+The MCP surface is exactly three tools; everything else the Python server
+exposed as tools is an in-language callable, pre-aliased in every cell like
+`Jobs` (the server instructions delivered at MCP initialize teach the same
+list):
+
 | tool | what it does |
 |---|---|
-| `elixir_exec` | run a cell; budget-then-background |
-| `read` | fetch a file or a workspace value, with line ranges |
-| `session_set_name` / `topic_set` | label this session's runs for the feed |
-| `kernel_trace` | stack dump of every job's processes, from outside |
-| `kernel_restart` | cancel jobs, restart the workspace, restore bindings |
-| `pr_watch` | watch a PR via `gh`, notify on merge/close/timeout |
-| `tui_act` | drive a federated TUI resource via `ix-resource-cli` |
+| `exec` | run a cell; budget-then-background |
+| `session_set_name` / `topic_set` | label this session's runs in the action log |
+
+| in-cell callable | what it does |
+|---|---|
+| `Read.file(path, first \\ nil, last \\ nil)` | a file, optionally a 1-based line range |
+| `Ix.trace()` | stack dump of every job's processes, from outside |
+| `Ix.restart()` | cancel jobs (sparing the calling cell), restart the workspace, restore bindings |
+| `PrWatch.start(pr, cwd, interval \\ 15, timeout \\ 3600)` | watch a PR via `gh`, notify on merge/close/timeout |
+| `Tui.act(uri, send_keys, peer \\ nil)` | drive a federated TUI resource via `ix-resource-cli` |
+
+Because cells are separate BEAM processes, `Ix.trace/0` and `Ix.restart/0`
+work from a fresh cell even while other jobs run or wedge -- the recovery
+path that used to justify out-of-band tools needs none.
+
+Every `tools/call` lands in a local SQLite action log
+(`~/.local/state/ix-mcp-ex/actions.db`): a `sessions` row per server
+instance (created lazily on first use), a `topics` row per `topic_set` call
+(a timeline -- repeated names make new rows), and an `actions` row per call
+referencing both.
 
 ## Why we left Python
 
@@ -78,8 +96,8 @@ compensating for the same four runtime facts:
    moment it happens.
 3. **Restart blast radius.** Restarting the shared Python kernel kills every
    session and fleet riding it, and tracing a wedged loop requires
-   faulthandler signal hacks from outside. `kernel_trace` here is
-   `Process.info/2` on live processes; `kernel_restart` is a supervisor
+   faulthandler signal hacks from outside. `Ix.trace()` here is
+   `Process.info/2` on live processes; `Ix.restart()` is a supervisor
    restarting one process subtree while an ETS checkpoint hands the bindings
    straight back.
 4. **No supervision.** Restart budgets, escalation, crash-with-state reports:
@@ -106,7 +124,8 @@ never leak orphans.
 
 ```
 IxMcp.Supervisor (one_for_one)
-├── IxMcp.Session          session name / topic metadata
+├── IxMcp.ActionLog        SQLite action log: sessions / topics / actions
+├── IxMcp.Session          this instance's session/topic ids + labels
 ├── IxMcp.Checkpoint       ETS keeper for workspace state (survives restarts)
 ├── IxMcp.Workspace        the shared binding + Macro.Env every cell sees
 ├── IxMcp.Jobs.Registry    id -> job process
@@ -134,13 +153,13 @@ wire format.
 ## Tests
 
 ```
-mix test                          # local: 26 tests, includes the chaos suite
+mix test                          # local, includes the chaos suite
 nix build .#mcp-ex.tests.elixir   # sandboxed gate: types, format, credo, tests
 nix build .#mcp-ex.tests.smoke    # real stdio initialize/tools-list exchange
 ```
 
 The chaos suite runs the motivating scenario live: a cell blocks forever,
-other jobs keep running, `kernel_trace` shows the wedged frame, restart
+other jobs keep running, `Ix.trace()` shows the wedged frame, restart
 recovers the bindings, and no spawned OS process outlives its job.
 
 ## Credits

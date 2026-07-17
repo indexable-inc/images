@@ -1,7 +1,8 @@
 defmodule IxMcp.PrWatch do
   @moduledoc """
   Watch a GitHub pull request via `gh` and push a channel notification when it
-  merges, closes, or the watch times out. Each watch is one supervised task:
+  merges, closes, or the watch times out -- `PrWatch.start/2..4` from any cell
+  (aliased in the workspace prelude). Each watch is one supervised task:
   a hung `gh` invocation stalls that watch alone, and the notification carries
   the final state -- no hand-written polling loops in agent sessions.
 
@@ -13,10 +14,10 @@ defmodule IxMcp.PrWatch do
 
   @spec start(String.t(), String.t(), number(), number()) ::
           {:ok, String.t()} | {:error, String.t()}
-  def start(pr, cwd, interval_s, timeout_s) do
+  def start(pr, cwd, interval_s \\ 15, timeout_s \\ 3600) do
     cond do
       System.find_executable("gh") == nil ->
-        {:error, "gh not found on PATH; pr_watch needs the GitHub CLI"}
+        {:error, "gh not found on PATH; PrWatch.start needs the GitHub CLI"}
 
       not File.dir?(cwd) ->
         {:error, "cwd does not exist: #{cwd}"}

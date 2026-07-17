@@ -19,7 +19,9 @@ defmodule IxMcp.Api do
     IxMcp.Kernel,
     IxMcp.Workspace,
     IxMcp.Checkpoint,
-    IxMcp.Reader
+    IxMcp.Read,
+    IxMcp.PrWatch,
+    IxMcp.Tui
   ]
 
   @type row :: %{

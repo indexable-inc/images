@@ -1,14 +1,20 @@
 defmodule IxMcp.Kernel do
   @moduledoc """
   The operations that needed signal hacks in the Python kernel, as ordinary
-  BEAM introspection:
+  BEAM introspection -- called from cells as `Ix.trace()` / `Ix.restart()`
+  (the workspace prelude aliases this module as `Ix`; plain `Kernel` would
+  shadow Elixir's). Because every cell is its own BEAM process, both work
+  from a fresh cell even while other jobs run or wedge, which is why restart
+  no longer needs to be an out-of-band MCP tool (#3532):
 
   * `trace/0` -- a live stack dump of every job's evaluation process (and the
     processes it spawned), taken with `Process.info/2` from outside. It works
     no matter what any cell is doing, because no cell can block this process.
   * `restart/0` -- kill every running job (including its OS subprocesses),
     restart the workspace, and restore bindings from the checkpoint table.
-    Blast radius: this server's jobs, nothing else.
+    Blast radius: this server's jobs, nothing else. When called from a cell,
+    that cell's own job is spared so the restart runs to completion and the
+    report comes back.
   """
 
   alias IxMcp.Jobs
@@ -58,16 +64,32 @@ defmodule IxMcp.Kernel do
   """
   @spec restart() :: %{jobs_cancelled: [String.t()], bindings_restored: non_neg_integer()}
   def restart do
+    caller_gl = Process.group_leader()
+
     cancelled =
-      for summary <- Jobs.running() do
+      for summary <- Jobs.running(), not caller_job?(summary.id, caller_gl) do
         Jobs.cancel(summary.id)
         summary.id
       end
 
+    # The restart itself is only messages to processes that are not jobs
+    # (the supervisor does the terminate/restart), so it completes even
+    # though it runs inside a job's own process.
     :ok = Supervisor.terminate_child(IxMcp.Supervisor, IxMcp.Workspace)
     {:ok, _pid} = Supervisor.restart_child(IxMcp.Supervisor, IxMcp.Workspace)
 
     %{jobs_cancelled: cancelled, bindings_restored: length(IxMcp.Workspace.names())}
+  end
+
+  # A cell calling `Ix.restart()` is itself a running job; cancelling it
+  # would kill the restart mid-flight and eat the report. Every process a
+  # cell spawns inherits the job's IOProxy as its group leader, so the
+  # group leader identifies the requesting job from anywhere inside it.
+  defp caller_job?(id, group_leader) do
+    case Jobs.lookup(id) do
+      {:ok, pid} -> match?({_eval, ^group_leader}, Job.procs(pid))
+      {:error, :not_found} -> false
+    end
   end
 
   defp describe(pid, label) do

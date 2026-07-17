@@ -1,20 +1,23 @@
-defmodule IxMcp.Resources do
+defmodule IxMcp.Tui do
   @moduledoc """
-  Bridge to the federated-resource CLI (`ix-resource-cli`), the same binary
-  the Python server shelled out to: `act --send-keys=<keys> --peer <url> --
-  <uri>` drives a peer's live terminal resource. When no peer is given, the
-  peers configured in `IX_RESOURCE_PEERS` are probed with `get` until one
-  advertises the uri. Degrades to a clear error when the CLI is absent.
+  Drive a federated TUI resource from a cell -- `Tui.act(uri, send_keys)`
+  (aliased in the workspace prelude). Bridges to the federated-resource CLI
+  (`ix-resource-cli`), the same binary the Python server shelled out to:
+  `act --send-keys=<keys> --peer <url> -- <uri>` drives a peer's live
+  terminal resource. When no peer is given, the peers configured in
+  `IX_RESOURCE_PEERS` are probed with `get` until one advertises the uri.
+  Degrades to a clear error when the CLI is absent.
   """
 
   @bin "ix-resource-cli"
 
+  @doc ~S{Send literal keystrokes (e.g. `"ls\n"` or `"C-c"`) to the resource at `uri`.}
   @spec act(String.t(), String.t(), String.t() | nil) ::
           {:ok, String.t()} | {:error, String.t()}
-  def act(uri, send_keys, peer) do
+  def act(uri, send_keys, peer \\ nil) do
     case System.find_executable(@bin) do
       nil ->
-        {:error, "#{@bin} not found on PATH; tui_act needs the resource CLI"}
+        {:error, "#{@bin} not found on PATH; Tui.act needs the resource CLI"}
 
       _bin ->
         case peer || find_peer(uri) do
