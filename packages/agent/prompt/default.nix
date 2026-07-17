@@ -20,6 +20,8 @@
 #   nix eval --raw --impure --expr \
 #     '(import ./packages/agent/prompt { lib = (import <nixpkgs> {}).lib; }).systemPrompt'
 # Swap `.systemPrompt` for `.contextFor "codex"` and friends for the variants.
+# The copy actually baked into the wrapper (after any `omitRules`) is
+# `nix eval --raw .#claude-code.systemPrompt`.
 {
   lib,
   # Rule names dropped from every render, e.g.
