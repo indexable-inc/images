@@ -111,6 +111,7 @@ jobs:
       # App token) to make the PR run CI; without it this falls back to
       # GITHUB_TOKEN and a maintainer must re-trigger `flake-check`.
       - name: Open pull request
+        id: pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
@@ -127,3 +128,15 @@ jobs:
             Each changed updater package also built on `x86_64-linux`, which proves the new hash fetches and builds but **not** that it is authentic. claude-code's updater verified Anthropic's detached GPG signature over all four platform checksums before writing. **Most pins have no upstream signature**, so please eyeball those hash changes before merging: the build only covers x86_64-linux, and the updater pins whatever bytes the release host served.
 
             Auto-bump, made with Claude Opus 4.8.
+
+      # Arm native auto-merge so the PR lands the moment its only required
+      # check (`flake-check`) passes; the non-required `approve` red X never
+      # blocks. Squash is the only merge method main's ruleset allows. Uses
+      # the same token identity that opened the PR, and a failure here fails
+      # the run: no silent fall-through to manual merge.
+      - name: Enable auto-merge
+        if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+        run: gh pr merge --auto --squash "$PR_URL"
