@@ -13,7 +13,7 @@ defmodule IxMcp.Workspace do
 
   use GenServer
 
-  @prelude "alias IxMcp.Jobs; alias IxMcp.Api"
+  @prelude "alias IxMcp.Jobs; alias IxMcp.Api; alias IxMcp.Fleet"
 
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(_opts) do
