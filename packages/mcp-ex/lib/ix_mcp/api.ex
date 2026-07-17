@@ -12,7 +12,15 @@ defmodule IxMcp.Api do
   provenance column.
   """
 
-  @surface [IxMcp.Jobs, IxMcp.Api, IxMcp.Fleet, IxMcp.Kernel, IxMcp.Workspace, IxMcp.Checkpoint, IxMcp.Reader]
+  @surface [
+    IxMcp.Jobs,
+    IxMcp.Api,
+    IxMcp.Fleet,
+    IxMcp.Kernel,
+    IxMcp.Workspace,
+    IxMcp.Checkpoint,
+    IxMcp.Reader
+  ]
 
   @type row :: %{
           module: module(),
