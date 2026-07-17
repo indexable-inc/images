@@ -14,3 +14,4 @@ pub mod mapping;
 pub mod patch;
 pub mod status;
 pub mod style;
+pub mod template;

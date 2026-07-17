@@ -26,6 +26,13 @@ pub struct Fork {
     pub patch_dir: String,
     #[serde(default)]
     pub closure_gates: bool,
+    /// The upstream repo's own cheap pre-submit commands (fmt-level checks
+    /// from its CONTRIBUTING/CI, never full test suites), run by
+    /// `upstream-pr` via `bash -ec` in the patched scratch checkout BEFORE
+    /// pushing or opening a PR. A failing command aborts the contribution
+    /// loudly (nushell/nushell#18549 opened with a `cargo fmt` failure).
+    #[serde(default)]
+    pub preflight: Vec<String>,
     #[serde(default)]
     pub patches: BTreeMap<String, PatchIntent>,
     pub upstream_policy: Option<Policy>,
@@ -39,6 +46,13 @@ pub struct PatchIntent {
     pub reason: Option<String>,
     #[serde(rename = "prExtra")]
     pub pr_extra: Option<String>,
+    /// User-facing release-note text (or "n/a") for target PR templates that
+    /// require a release-notes section. Not a duplicate of the commit body:
+    /// the body says what/why for reviewers, this is the changelog entry the
+    /// upstream publishes. `upstream-pr` refuses to open a PR against a
+    /// template demanding that section when the patch declares none.
+    #[serde(rename = "releaseNotes")]
+    pub release_notes: Option<String>,
 }
 
 /// Per-repo contribution policy from the mapping.

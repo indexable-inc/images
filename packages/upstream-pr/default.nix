@@ -1,7 +1,9 @@
-# `nix run .#upstream-pr -- <pkg> <patch> [--open] [--dry-run]`: contribute one
-# fork patch upstream (see packages/upstream-sync/src/bin/upstream_pr.rs for
-# the full design doc: dag.json ancestor closure, scratch clone + git am
-# --3way, fork branch push, draft PR with AI attribution).
+# `nix run .#upstream-pr -- <pkg> <patch> [--open] [--draft] [--dry-run]`:
+# contribute one fork patch upstream (see
+# packages/upstream-sync/src/bin/upstream_pr.rs for the full design doc:
+# dag.json ancestor closure, scratch clone + git am --3way, per-fork
+# preflight commands, fork branch push, template-rendered ready-for-review
+# PR with AI attribution).
 #
 # The binary lives in the upstream-sync crate (shared mapping/dag/patch
 # modules; that package owns the crate's tests and policy checks). This
@@ -15,6 +17,9 @@
   git,
   gh,
   coreutils,
+  # Preflight commands are arbitrary shell strings from the fork mapping,
+  # run with `bash -ec` in the scratch checkout.
+  bash,
   makeWrapper,
   symlinkJoin,
   ...
@@ -29,7 +34,7 @@ in
     postBuild = ''
       # shell
       wrapProgram $out/bin/upstream-pr \
-        --prefix PATH : ${lib.makeBinPath [git gh coreutils]} \
+        --prefix PATH : ${lib.makeBinPath [git gh coreutils bash]} \
         --set-default UPSTREAM_SYNC_FORK_PACKAGES ${forkData}
     '';
     meta = {
