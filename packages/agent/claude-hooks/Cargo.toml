@@ -30,6 +30,8 @@ serde_json.workspace = true
 # friction-report routes the model child's stdout to a real temp file (not a
 # pipe), and the subagent-cache tests use it too.
 tempfile.workspace = true
+tree-sitter.workspace = true
+tree-sitter-bash.workspace = true
 # xxh64 (seed 0) for the subagent-cache freshness hash; matches mgrep and the
 # hashes other developers' hooks wrote into the shared cache.
 xxhash-rust = { workspace = true, features = ["xxh64"] }
