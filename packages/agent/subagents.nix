@@ -162,17 +162,7 @@
     code-reviewer = {
       frontmatter = {
         description = "Adversarial, max-effort reviewer for a finished change. Spawn after work is complete (and before declaring it done) to find correctness, security, performance, and maintainability defects. Reviews a PR, a branch vs its base, the working-tree diff, or a given path. Read-only: it reports findings, it does not edit. Returns a severity-ranked report; Correctness + Security findings are blockers.";
-        model = "opus";
-        effort = "xhigh";
         color = "red";
-        tools = [
-          "Read"
-          "Bash"
-          "Glob"
-          "Grep"
-          "mcp__exa__web_search_exa"
-          "mcp__exa__web_fetch_exa"
-        ];
       };
       content = ''
         # Code Reviewer
