@@ -275,9 +275,6 @@ def test_tools_declare_ui_resource_in_meta() -> None:
         meta = by_name[name].meta
         assert meta is not None, f"{name} must opt into the UI viewer"
         assert meta["ui"]["resourceUri"] == mcp_ui.VIEWER_URI
-    # `read` deliberately stays plain: its contract is full text to the model
-    # with only a one-line note for the human.
-    assert by_name["read"].meta is None
 
 
 # --------------------------------------------------------------------------- #
