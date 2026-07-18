@@ -106,11 +106,12 @@ let
           done
           cd "$tree"
           mkdir -p "$(dirname ${lib.escapeShellArg target})"
-          # kbuild passes -frandom-seed=<objtree hash> per object; the
-          # cc-wrapper appends NIX_CFLAGS_COMPILE after user argv, so the last
-          # seed wins. Pin the appended seed to the same constant the plan
-          # build pinned, making the saved command's own seed irrelevant.
-          export NIX_CFLAGS_COMPILE="''${NIX_CFLAGS_COMPILE:-} -frandom-seed=kbuild-unit"
+          # Mirror the plan build (lib/kernel/kbuild-unit.nix): the
+          # cc-wrapper seeds -frandom-seed from this derivation's $out, so
+          # strip it and pin the same constant as the only seed, keeping
+          # replayed flags byte-identical to the plan's.
+          NIX_CFLAGS_COMPILE=$(printf '%s' "''${NIX_CFLAGS_COMPILE:-}" | sed 's/-frandom-seed=[^ ]*//g')
+          export NIX_CFLAGS_COMPILE="$NIX_CFLAGS_COMPILE -frandom-seed=kbuild-unit"
           ${lib.optionalString sourceLinkEnv ". ./.kbuild-unit-link-env"}
           sh -c ${lib.escapeShellArg kbuildCmd}
           runHook postBuild

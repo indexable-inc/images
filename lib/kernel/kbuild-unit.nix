@@ -94,12 +94,17 @@ comment-only edit cuts off at the unchanged CA object.
         configurePhase = ''
           # shell
           runHook preConfigure
-          # kbuild passes -frandom-seed=<objtree hash> per object; the
-          # cc-wrapper appends NIX_CFLAGS_COMPILE after user argv, so the last
-          # seed wins. Pin the appended seed to a constant here and in every
-          # unit replay (templates/units.nix.in), making the saved command's
-          # own seed irrelevant on both sides.
-          export NIX_CFLAGS_COMPILE="''${NIX_CFLAGS_COMPILE:-} -frandom-seed=kbuild-unit"
+          # The cc-wrapper seeds -frandom-seed from a fragment of this
+          # derivation's $out and appends NIX_CFLAGS_COMPILE after user argv,
+          # so the last seed wins codegen. Appending a constant pins objects,
+          # but the assembler listings the snapshot keeps (asm-offsets.s,
+          # bounds.s) record every passed option, so a surviving $out-derived
+          # seed would shift the snapshot's content address on every plan drv
+          # change and re-execute every unit. Strip the wrapper seed and pin
+          # the constant as the only seed, here and in every unit replay
+          # (templates/units.nix.in).
+          NIX_CFLAGS_COMPILE=$(printf '%s' "''${NIX_CFLAGS_COMPILE:-}" | sed 's/-frandom-seed=[^ ]*//g')
+          export NIX_CFLAGS_COMPILE="$NIX_CFLAGS_COMPILE -frandom-seed=kbuild-unit"
           # Capture the env kbuild exports to scripts/link-vmlinux.sh so the
           # rendered link unit can replay it (CC/LD/LINUXINCLUDE/KBUILD_* for
           # the in-script init/version-timestamp.o compile and postlink make).
