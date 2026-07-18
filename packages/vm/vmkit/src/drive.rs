@@ -69,12 +69,19 @@ const GLIDE_GAP: Duration = Duration::from_millis(16);
 pub struct DriveMacos {
     pub bundle: PathBuf,
     pub shares: Vec<DirShare>,
+    /// Block-device attachment policy, for a bundle whose `disk.img` is (a
+    /// symlink to) a raw device node.
+    pub disk_flags: crate::blockdev::DiskFlags,
 }
 
 pub fn drive_macos(drive: DriveMacos) -> Result<(), Error> {
-    let DriveMacos { bundle, shares } = drive;
+    let DriveMacos {
+        bundle,
+        shares,
+        disk_flags,
+    } = drive;
     let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
-    let view = start_guest_offscreen(mtm, &bundle, &shares)?;
+    let view = start_guest_offscreen(mtm, &bundle, &shares, disk_flags)?;
     drive_view(mtm, view, "macOS guest");
     Ok(())
 }

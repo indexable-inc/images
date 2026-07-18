@@ -56,7 +56,10 @@ enum Command {
         /// raw) whose own kernel/bootloader libkrun's embedded OVMF firmware
         /// boots; each further `--disk` attaches in order as an extra
         /// virtio-blk device the guest sees as /dev/vdb, /dev/vdc, ... (e.g. a
-        /// persistent data disk that survives boot-image swaps).
+        /// persistent data disk that survives boot-image swaps). Image files
+        /// only: raw /dev block devices are rejected here (libkrun opens disks
+        /// by path as plain files); the Virtualization.framework commands
+        /// (boot-linux-gui, drive-linux) attach them.
         #[cfg(target_os = "macos")]
         #[arg(long = "disk", value_name = "DISK", required = true)]
         disks: Vec<std::path::PathBuf>,
@@ -118,11 +121,18 @@ enum Command {
     /// framebuffer to `<out-prefix>.NNN.png` (no window, host cursor untouched).
     #[cfg(target_os = "macos")]
     BootLinuxGui {
-        /// Path to a raw EFI-bootable disk image (e.g. a NixOS `raw-efi` image).
-        #[arg(long)]
-        disk: std::path::PathBuf,
+        /// Guest disk, repeatable. The first is the raw EFI boot disk (e.g. a
+        /// NixOS `raw-efi` image); each further `--disk` attaches in order as
+        /// an extra virtio-blk device (/dev/vdb, /dev/vdc, ...). Each path is
+        /// an image file or a raw block device node (`/dev/diskN[sM]`,
+        /// `/dev/rdiskN[sM]`), told apart by stat; a root-owned device is
+        /// opened through an interactive-sudo helper (see also --disk-sync and
+        /// --force).
+        #[arg(long = "disk", value_name = "DISK", required = true)]
+        disks: Vec<std::path::PathBuf>,
         /// EFI variable store file (created if absent). Defaults to
-        /// `<disk>.efivars`.
+        /// `<boot disk>.efivars`; required explicitly when the boot disk is a
+        /// raw block device.
         #[arg(long)]
         efi_vars: Option<std::path::PathBuf>,
         /// Output path prefix for screenshots.
@@ -138,6 +148,8 @@ enum Command {
         /// Guest memory in MiB.
         #[arg(long, default_value_t = 4096)]
         memory_mib: u64,
+        #[command(flatten)]
+        disk_flags: blockdev::DiskFlags,
     },
     /// Boot an aarch64 Linux GUI guest from a raw EFI disk off-screen and drive it
     /// from stdin: synthetic keyboard/mouse and on-demand framebuffer screenshots,
@@ -145,11 +157,13 @@ enum Command {
     /// `drive-macos` (`key`/`down`/`up`/`type`/`click`/`wait`/`shot`/`quit`).
     #[cfg(target_os = "macos")]
     DriveLinux {
-        /// Path to a raw EFI-bootable disk image (e.g. a NixOS `raw-efi` image).
-        #[arg(long)]
-        disk: std::path::PathBuf,
+        /// Guest disk, repeatable: same semantics as `boot-linux-gui` (first is
+        /// the raw EFI boot disk; image files and raw block devices mix).
+        #[arg(long = "disk", value_name = "DISK", required = true)]
+        disks: Vec<std::path::PathBuf>,
         /// EFI variable store file (created if absent). Defaults to
-        /// `<disk>.efivars`.
+        /// `<boot disk>.efivars`; required explicitly when the boot disk is a
+        /// raw block device.
         #[arg(long)]
         efi_vars: Option<std::path::PathBuf>,
         /// Number of virtual CPUs.
@@ -158,6 +172,8 @@ enum Command {
         /// Guest memory in MiB.
         #[arg(long, default_value_t = 4096)]
         memory_mib: u64,
+        #[command(flatten)]
+        disk_flags: blockdev::DiskFlags,
     },
     /// Install macOS into a fresh bundle directory from a local restore image
     /// (IPSW). Bypasses Apple's online catalog (take a downloaded `.ipsw`).
@@ -193,6 +209,8 @@ enum Command {
         /// at `/Volumes/My Shared Files`.
         #[arg(long = "share", value_name = "TAG=HOSTDIR")]
         shares: Vec<String>,
+        #[command(flatten)]
+        disk_flags: blockdev::DiskFlags,
     },
     /// Run an installed macOS guest headlessly until it stops. SIGTERM and
     /// SIGINT request a clean shutdown from the guest.
@@ -207,6 +225,8 @@ enum Command {
         /// Share a host directory into the guest over virtio-fs, repeatable.
         #[arg(long = "share", value_name = "TAG=HOSTDIR")]
         shares: Vec<String>,
+        #[command(flatten)]
+        disk_flags: blockdev::DiskFlags,
     },
     /// Boot an installed macOS guest fully off-screen and drive it from stdin:
     /// synthetic keyboard/mouse input and on-demand framebuffer screenshots, with
@@ -223,6 +243,26 @@ enum Command {
         /// at `/Volumes/My Shared Files`.
         #[arg(long = "share", value_name = "TAG=HOSTDIR")]
         shares: Vec<String>,
+        #[command(flatten)]
+        disk_flags: blockdev::DiskFlags,
+    },
+    /// Hidden root helper for raw block-device disks: open DEVICE (a literal
+    /// `/dev/[r]diskN[sM...]` node) read-write and pass the file descriptor to
+    /// the unprivileged vmkit process over the unix socket at SOCKET
+    /// (`SCM_RIGHTS`). vmkit spawns this itself under plain interactive sudo
+    /// when a requested device is not readable, so the VM never runs as root;
+    /// it refuses to run without a sudo context (no sudoers automation, see
+    /// src/blockdev.rs).
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    OpenBlockDevice {
+        /// The disk device node to open.
+        #[arg(long)]
+        device: std::path::PathBuf,
+        /// Unix socket (in a 0700 directory owned by the sudo-invoking user)
+        /// to send the opened fd to.
+        #[arg(long)]
+        socket: std::path::PathBuf,
     },
     /// Copy a nix-built macOS binary and make it guest-portable: repoint every
     /// `/nix/store` dylib to its `/usr/lib` system equivalent (or bundle it next
@@ -301,8 +341,13 @@ fn main() -> ExitCode {
     // `com.apple.security.hypervisor` for the libkrun Linux path. The Nix store
     // binary is unsigned and immutable, so on the first VM command we re-exec a
     // self-signed copy (carrying both) from a per-user cache.
-    if !matches!(cli.command, Command::Info)
-        && let Err(error) = ensure_signed_and_reexec()
+    // `Info` and the root fd-handoff helper never touch a VM, so neither needs
+    // the entitlement re-exec (and the helper, running under sudo, must not
+    // create root-owned signing caches in the user's HOME).
+    if !matches!(
+        cli.command,
+        Command::Info | Command::OpenBlockDevice { .. }
+    ) && let Err(error) = ensure_signed_and_reexec()
     {
         eprintln!(
             "vmkit: could not self-sign with the virtualization/hypervisor entitlements: {error}"
@@ -383,6 +428,11 @@ fn ensure_signed_and_reexec() -> std::io::Result<()> {
 
     Err(std::process::Command::new(&signed)
         .env("IX_VMKIT_SIGNED", "1")
+        // The pre-re-exec binary path (typically the immutable /nix/store
+        // one): preferred over the user-writable signed cache copy when vmkit
+        // re-runs itself under sudo to open a root-owned block device, so the
+        // path the sudo prompt shows is the trustworthy one.
+        .env(blockdev::ORIG_EXE_ENV, &exe)
         .args(std::env::args_os().skip(1))
         .exec())
 }
@@ -648,6 +698,9 @@ mod linuxkrun;
 mod net;
 
 #[cfg(target_os = "macos")]
+mod blockdev;
+
+#[cfg(target_os = "macos")]
 mod drive;
 
 #[cfg(target_os = "macos")]
@@ -711,6 +764,8 @@ mod imp {
         #[snafu(display("provisioning the guest failed: {source}"))]
         Provision { source: crate::provision::Error },
         #[snafu(display("{source}"))]
+        Disk { source: crate::blockdev::Error },
+        #[snafu(display("{source}"))]
         Linux { source: crate::linuxkrun::Error },
     }
 
@@ -746,37 +801,39 @@ mod imp {
                 .map_err(|source| Error::Linux { source })
             }
             Command::BootLinuxGui {
-                disk,
+                disks,
                 efi_vars,
                 out_prefix,
                 seconds,
                 cpus,
                 memory_mib,
+                disk_flags,
             } => {
-                // Default the EFI variable store next to the disk so a bare
-                // `--disk foo.raw` just works and persists boot entries.
-                let var_store = efi_vars.unwrap_or_else(|| disk.with_extension("efivars"));
+                let var_store = efi_var_store(efi_vars, &disks)?;
                 crate::linuxguest::boot_linux_gui(crate::linuxguest::LinuxGuiBoot {
-                    disk,
+                    disks,
                     var_store,
                     out_prefix,
                     seconds,
                     cpus,
                     memory_mib,
+                    disk_flags,
                 })
             }
             Command::DriveLinux {
-                disk,
+                disks,
                 efi_vars,
                 cpus,
                 memory_mib,
+                disk_flags,
             } => {
-                let var_store = efi_vars.unwrap_or_else(|| disk.with_extension("efivars"));
+                let var_store = efi_var_store(efi_vars, &disks)?;
                 crate::linuxguest::drive_linux(crate::linuxguest::DriveLinux {
-                    disk,
+                    disks,
                     var_store,
                     cpus,
                     memory_mib,
+                    disk_flags,
                 })
             }
             Command::InstallMacos {
@@ -789,22 +846,34 @@ mod imp {
                 out_prefix,
                 seconds,
                 shares,
+                disk_flags,
             } => crate::macguest::boot_macos_screenshot(crate::macguest::MacBootScreenshot {
                 bundle,
                 out_prefix,
                 seconds,
                 shares: parse_shares(&shares)?,
+                disk_flags,
             }),
             Command::RunMacos {
                 bundle,
                 mac_address,
                 shares,
-            } => crate::macguest::run_macos(&bundle, &mac_address, &parse_shares(&shares)?),
-            Command::DriveMacos { bundle, shares } => {
-                crate::drive::drive_macos(crate::drive::DriveMacos {
-                    bundle,
-                    shares: parse_shares(&shares)?,
-                })
+                disk_flags,
+            } => {
+                crate::macguest::run_macos(&bundle, &mac_address, &parse_shares(&shares)?, disk_flags)
+            }
+            Command::DriveMacos {
+                bundle,
+                shares,
+                disk_flags,
+            } => crate::drive::drive_macos(crate::drive::DriveMacos {
+                bundle,
+                shares: parse_shares(&shares)?,
+                disk_flags,
+            }),
+            Command::OpenBlockDevice { device, socket } => {
+                crate::blockdev::serve_open_block_device(&device, &socket)
+                    .map_err(|source| Error::Disk { source })
             }
             Command::StageBinary { input, output } => {
                 let staged = crate::stagebin::stage_binary(&input, &output)
@@ -951,6 +1020,60 @@ mod imp {
                 })
             })
             .collect()
+    }
+
+    /// The EFI variable-store path: explicit `--efi-vars`, else
+    /// `<boot disk>.efivars` next to a boot image. A block-device boot disk
+    /// has no "next to" (the default would land in /dev), so it requires the
+    /// explicit flag.
+    fn efi_var_store(
+        efi_vars: Option<PathBuf>,
+        disks: &[std::path::PathBuf],
+    ) -> Result<PathBuf, Error> {
+        if let Some(path) = efi_vars {
+            return Ok(path);
+        }
+        let boot = disks.first().ok_or_else(|| Error::Args {
+            message: "at least one --disk is required".to_owned(),
+        })?;
+        if crate::blockdev::is_device_node(boot) {
+            return Err(Error::Args {
+                message: format!(
+                    "--efi-vars is required when the boot disk ({}) is a raw block device                      (the default <disk>.efivars would land next to it in /dev)",
+                    boot.display()
+                ),
+            });
+        }
+        Ok(boot.with_extension("efivars"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::path::PathBuf;
+
+        use super::efi_var_store;
+
+        #[test]
+        fn efi_var_store_defaults_next_to_a_boot_image() {
+            let disks = [PathBuf::from("/tmp/linux.raw")];
+            assert_eq!(
+                efi_var_store(None, &disks).expect("image boot disk"),
+                PathBuf::from("/tmp/linux.efivars")
+            );
+            assert_eq!(
+                efi_var_store(Some(PathBuf::from("/tmp/vars")), &disks).expect("explicit wins"),
+                PathBuf::from("/tmp/vars")
+            );
+        }
+
+        #[test]
+        fn efi_var_store_requires_the_flag_for_a_device_boot_disk() {
+            // /dev/null stats as a char device, which is exactly what the
+            // default-path decision keys on.
+            let disks = [PathBuf::from("/dev/null")];
+            let error = efi_var_store(None, &disks).expect_err("device boot disk");
+            assert!(error.to_string().contains("--efi-vars"), "{error}");
+        }
     }
 
     fn info() -> Result<(), Error> {
