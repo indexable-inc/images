@@ -1943,6 +1943,15 @@
               test -f "$pkg/share/nix-web-monitor/index.html"
               mkdir -p "$out"
             '';
+          # The `ix.buildNpmDist` contract, exercised hermetically: builds a
+          # sample npm distribution from a bash stub and drives the Node shim
+          # end-to-end (argv/exit-code forwarding, optionalDependencies
+          # resolution, the win32 `.exe` layout, and both failure modes). See
+          # lib/build/npm-dist-check.nix.
+          npm-dist-smoke = import ./build/npm-dist-check.nix {
+            inherit pkgs;
+            inherit (ix) buildNpmDist writeBashApplication;
+          };
           site-test = siteTests.all;
         };
         checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
