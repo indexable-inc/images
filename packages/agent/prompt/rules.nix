@@ -491,20 +491,28 @@
         patch in that package's `patches/` dir, not as a workaround
         downstream of it.
 
-        Author the patch as a commit on the pinned base whose body states the
-        reason (the commit message is the patch's record and its upstream PR
-        text), carry the fix's tests inside the same patch, export with the
-        canonical `git format-patch --zero-commit --no-signature --no-stat -N`
-        bytes, and regenerate `dag.json` with
-        `nix run .#rebase-patches -- dag <name>` (never hand-edit it; the same
-        tool rebases the whole series when the pinned base moves). Before
-        push, run the seconds-fast `patched-src-<name>` and `patch-dag-<name>`
-        checks, then build the fork package and run the patch's focused tests.
-        Upstreaming intent is declared per patch in the registry, never by
-        opening an upstream PR yourself. Consumers pin this repo through flake
-        locks, so a merged patch reaches the fleet only after their lock bump
-        and deploy: follow through to that before calling a production
-        incident fixed.
+        The tooling owns maintenance, not authoring: `nix run
+        .#rebase-patches` rebases the whole series when the pinned base
+        moves (`resume` continues past conflicts) and
+        `nix run .#rebase-patches -- dag <name>` regenerates `dag.json`
+        (never hand-edit it); no subcommand materializes or exports the
+        source tree, so that loop is plain git. Materialize: clone the
+        upstream to /tmp, `git checkout --detach` the pinned rev from
+        `flake.lock` (`nodes.<input>.locked.rev`), then
+        `git am <patchDir>/*.patch` so each patch becomes a commit. Edit and
+        commit normally: the commit body states the reason (the message is
+        the patch's record and its upstream PR text) and the fix's tests
+        ride inside the same patch. Export from the scratch clone, never the
+        repo checkout, with exactly
+        `git format-patch --zero-commit --no-signature --no-stat -N -o <patchDir> <base>..HEAD`
+        (flag drift fails the canonical-form check), then regen the dag.
+        Before push, run the seconds-fast `patched-src-<name>` and
+        `patch-dag-<name>` checks, then build the fork package and run the
+        patch's focused tests. Upstreaming intent is declared per patch in
+        the registry, never by opening an upstream PR yourself. Consumers
+        pin this repo through flake locks, so a merged patch reaches the
+        fleet only after their lock bump and deploy: follow through to that
+        before calling a production incident fixed.
       '';
       reason = ''
         Nothing in the prompt named the fork boundary or its tooling: the
@@ -513,9 +521,12 @@
         upstream" or a downstream guard. index#3559 (fleet CI wedged on
         half-closed cache downloads) shows the intended shape: fork patch
         0022 with its unit tests inside the patch (#3566), effective only
-        after the consumer lock bump. Sibling of fixAtSource, which owns the
-        general fix-at-source stance; this rule adds the vendor-point
-        mechanics.
+        after the consumer lock bump -- and its author ran the
+        materialize/export loop by hand (rebase-patches has only
+        rebase/resume/dag; an author subcommand is tracked as index#2148),
+        which is why the rule spells the git commands out byte-exact.
+        Sibling of fixAtSource, which owns the general fix-at-source
+        stance; this rule adds the vendor-point mechanics.
       '';
     };
   }
