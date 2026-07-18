@@ -480,6 +480,46 @@
     };
   }
   {
+    vendoredForks = {
+      text = ''
+        The index repo vendors and forks its key upstreams: Nix itself first
+        among them, plus nushell, btop, zed, clippy, mesa, and codex, with
+        `lib/fork-packages.nix` as the registry (downstream repos such as ix
+        keep their own series through the same tooling). Tracing a bug into
+        vendored code therefore never ends at "upstream's problem": the fork
+        is ours, and the fix lands at the vendor point as a numbered mailbox
+        patch in that package's `patches/` dir, not as a workaround
+        downstream of it.
+
+        Author the patch as a commit on the pinned base whose body states the
+        reason (the commit message is the patch's record and its upstream PR
+        text), carry the fix's tests inside the same patch, export with the
+        canonical `git format-patch --zero-commit --no-signature --no-stat -N`
+        bytes, and regenerate `dag.json` with
+        `nix run .#rebase-patches -- dag <name>` (never hand-edit it; the same
+        tool rebases the whole series when the pinned base moves). Before
+        push, run the seconds-fast `patched-src-<name>` and `patch-dag-<name>`
+        checks, then build the fork package and run the patch's focused tests.
+        Upstreaming intent is declared per patch in the registry, never by
+        opening an upstream PR yourself. Consumers pin this repo through flake
+        locks, so a merged patch reaches the fleet only after their lock bump
+        and deploy: follow through to that before calling a production
+        incident fixed.
+      '';
+      reason = ''
+        Nothing in the prompt named the fork boundary or its tooling: the
+        authoring recipe had to be reconstructed from rebase-patches source,
+        and diagnosis threads that hit vendored code defaulted to "file it
+        upstream" or a downstream guard. index#3559 (fleet CI wedged on
+        half-closed cache downloads) shows the intended shape: fork patch
+        0022 with its unit tests inside the patch (#3566), effective only
+        after the consumer lock bump. Sibling of fixAtSource, which owns the
+        general fix-at-source stance; this rule adds the vendor-point
+        mechanics.
+      '';
+    };
+  }
+  {
     machineReadableInterfaces = {
       text = ''
         Machine-readable first: ask every tool for its structured mode
