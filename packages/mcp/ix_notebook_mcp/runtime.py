@@ -3843,8 +3843,7 @@ def _type_error_hint(exc: TypeError) -> str:
         if obj is None or not callable(obj):
             return ""
         sig = inspect.signature(obj)
-        hint = f"\nHint: the signature is {func_name}{sig}; see doc({func_name})."
-        return hint
+        return f"\nHint: the signature is {func_name}{sig}; see doc({func_name})."
     except Exception:
         return ""
 
