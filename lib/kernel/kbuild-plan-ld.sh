@@ -32,15 +32,20 @@ real="$KBUILD_UNIT_LD_REAL"
 
 out=
 emulation=
+script=
 grab=
 for arg in "$@"; do
   case $grab in
     -o) out=$arg ;;
     -m) emulation=$arg ;;
+    -T) script=$arg ;;
   esac
   grab=
   case $arg in
-    -o | -m) grab=$arg ;;
+    -o | -m | -T) grab=$arg ;;
+    # link-vmlinux.sh passes the attached form (--script=<objtree>/<lds>).
+    --script=*) script=${arg#--script=} ;;
+    -T?*) script=${arg#-T} ;;
   esac
 done
 
@@ -49,11 +54,19 @@ case ${out##*/} in
   *) exec "$real" "$@" ;;
 esac
 
-# The SRSO branch of the 6.12 script does `. = srso_alias_untrain_ret | ((1
-# << 2) | (1 << 8) | (1 << 14) | (1 << 20))` inside .text, so that defsym
-# must sit above the kernel's start VMA or the location counter would move
-# backwards (a hard error); its partner is then OR-offset so the pair's
-# alias ASSERT (XOR == 0x104104) holds.
+# The SRSO branch of the script assigns the location counter from
+# srso_alias_untrain_ret (`. = srso_alias_untrain_ret | 0x104104`), which an
+# absolute --defsym cannot drive (ld converts the absolute value through the
+# section's load-address space and errors "cannot move location counter
+# backwards"). Upstream makes the OR-math work through section placement of
+# the pair, so the SRSO stand-in object replicates exactly that; it is
+# appended only when the generated script actually places the rethunk
+# sections, because on other configs they would be orphans.
+extra=("$KBUILD_UNIT_LD_PLACEHOLDER_DIR/placeholder-$([[ $emulation == elf_i386 ]] && echo 32 || echo 64).o")
+if [[ -n $script && -f $script ]] && grep -q 'rethunk_safe' "$script"; then
+  extra+=("$KBUILD_UNIT_LD_PLACEHOLDER_DIR/placeholder-srso-64.o")
+fi
+
 exec "$real" \
   --defsym jiffies_64=0 \
   --defsym pcpu_hot=0 \
@@ -64,12 +77,10 @@ exec "$real" \
   --defsym irq_stack_backing_store=0 \
   --defsym retbleed_return_thunk=0 \
   --defsym srso_safe_ret=0 \
-  --defsym srso_alias_untrain_ret=0xffffffff82000000 \
-  --defsym srso_alias_safe_ret=0xffffffff82104104 \
   --defsym __x86_indirect_its_thunk_rax=0x20 \
   --defsym __x86_indirect_its_thunk_rcx=0x60 \
   --defsym __x86_indirect_its_thunk_array=0x20 \
   --defsym its_return_thunk=0x20 \
   --unresolved-symbols=ignore-all \
   "$@" \
-  "$KBUILD_UNIT_LD_PLACEHOLDER_DIR/placeholder-$([[ $emulation == elf_i386 ]] && echo 32 || echo 64).o"
+  "${extra[@]}"

@@ -65,6 +65,15 @@ pub const DEFAULT_KEEP: &[&str] = &[
     "arch/x86/realmode/rm/**",
     "arch/x86/realmode/rmpiggy.S",
     "arch/*/boot/**",
+    // Assembly helpers that are only ever #included by the kept realmode
+    // and boot code (never compiled standalone, so they add nothing to the
+    // stub vmlinux link): reducing them breaks the realmode.elf link with
+    // undefined verify_cpu. boot/compressed pulls more .c includes
+    // (ident_map.c, tdx-shared.c, ...), but nothing under arch/*/boot/
+    // builds during the plan's `make vmlinux modules`; extend this when a
+    // bzImage target enters the plan.
+    "arch/x86/kernel/verify_cpu.S",
+    "arch/x86/kernel/sev_verify_cbit.S",
     // Host-tool sources compiled outside scripts/ and tools/: HOSTCC passes
     // through the compiler shim (no -D__KERNEL__), so a reduced host source
     // would link a main-less tool and fail the plan loudly (that is how a

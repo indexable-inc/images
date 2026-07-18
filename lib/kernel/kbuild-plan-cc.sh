@@ -80,11 +80,15 @@ for arg in "$@"; do
 done
 "$real" "${dep_args[@]}"
 
-# 2) Stub object: the same argv over /dev/null instead of the source, so the
-# object carries the right machine/ABI flags for thin `ar cDPrST` and `ld -r`
-# while its (empty) contents are independent of every function body. The
-# -include args would drag real code back in; a surviving -Wp,-MMD would
-# clobber the depfile step 1 just wrote.
+# 2) Stub object: the same argv over a canned stdin stub instead of the
+# source, so the object carries the right machine/ABI flags for thin
+# `ar cDPrST` and `ld -r` while its contents are independent of every
+# function body. The stub is not empty: modpost hard-errors on a module
+# object with no .modinfo license entry, so every stub carries one (the
+# value is plan-only garbage; the modpost units regenerate .mod.c and
+# Module.symvers from real objects at unit time). The -include args would
+# drag real code back in; a surviving -Wp,-MMD would clobber the depfile
+# step 1 just wrote.
 stub_args=()
 skip=0
 for arg in "$@"; do
@@ -99,8 +103,15 @@ for arg in "$@"; do
     *) stub_args+=("$arg") ;;
   esac
 done
-lang=c
 if [[ $src == *.S ]]; then
-  lang=assembler-with-cpp
+  printf '%s\n' \
+    '.section .modinfo,"a"' \
+    '.ascii "license=GPL"' \
+    '.byte 0' \
+    | "$real" "${stub_args[@]}" -x assembler-with-cpp -
+else
+  printf '%s\n' \
+    'static const char __attribute__((section(".modinfo"), used))' \
+    'kbuild_unit_stub_license[] = "license=GPL";' \
+    | "$real" "${stub_args[@]}" -x c -
 fi
-exec "$real" "${stub_args[@]}" -x "$lang" /dev/null

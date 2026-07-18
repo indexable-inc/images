@@ -170,6 +170,25 @@ only to make the plan's inputs body-independent.
       > extable.s
     ${pkgs.stdenv.cc.bintools.bintools}/bin/as --64 -o $out/placeholder-64.o extable.s
     ${pkgs.stdenv.cc.bintools.bintools}/bin/as --32 -o $out/placeholder-32.o extable.s
+    # SRSO stand-in (see kbuild-plan-ld.sh): the alias pair placed exactly
+    # like arch/x86/lib/retpoline.S places it, so the linker script's
+    # `. = srso_alias_untrain_ret | 0x104104` moves the location counter
+    # forward and the pair's alias ASSERT (XOR == 0x104104) holds. The 2MiB
+    # alignment keeps the untrain symbol's low bits clear of the OR mask.
+    printf '%s\n' \
+      '.section .text..__x86.rethunk_untrain,"ax"' \
+      '.balign 2097152' \
+      '.globl srso_alias_untrain_ret' \
+      '.type srso_alias_untrain_ret, @function' \
+      'srso_alias_untrain_ret:' \
+      '.byte 0xc3' \
+      '.section .text..__x86.rethunk_safe,"ax"' \
+      '.globl srso_alias_safe_ret' \
+      '.type srso_alias_safe_ret, @function' \
+      'srso_alias_safe_ret:' \
+      '.byte 0xc3' \
+      > srso.s
+    ${pkgs.stdenv.cc.bintools.bintools}/bin/as --64 -o $out/placeholder-srso-64.o srso.s
   '';
 
   buildKernel = {
