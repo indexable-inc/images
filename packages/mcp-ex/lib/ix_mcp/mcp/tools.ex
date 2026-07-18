@@ -33,9 +33,13 @@ defmodule IxMcp.MCP.Tools do
       Ix.restart()                          cancel running jobs (sparing the calling
                                             cell), restart the workspace, restore
                                             bindings from the checkpoint
-      PrWatch.start(pr, cwd)                watch a PR via gh; notification on
+      PrWatch.start(pr, cwd)                watch PR state via gh; notification on
                                             merge/close/error/timeout (optional
-                                            interval and timeout args)
+                                            interval and timeout args). Babysitting
+                                            CI? Pair it with `gh pr checks <pr>
+                                            --watch --fail-fast`: checks alone hang
+                                            forever on a CONFLICTING PR (dirty PRs
+                                            skip CI) and never show a merge (#3548)
       Tui.act(uri, send_keys)               drive a federated TUI resource (optional
                                             peer arg)
       Api.api("tail") / Api.help(Jobs, :tail)   discovery over this whole surface

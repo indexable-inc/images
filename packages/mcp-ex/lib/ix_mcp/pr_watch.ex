@@ -6,6 +6,12 @@ defmodule IxMcp.PrWatch do
   a hung `gh` invocation stalls that watch alone, and the notification carries
   the final state -- no hand-written polling loops in agent sessions.
 
+  This watches PR state, not CI. When a green gate matters, pair it with
+  `gh pr checks <pr> --watch --fail-fast`; state is the half agents forget
+  (#3548): a CONFLICTING PR skips pull_request CI entirely, and another actor
+  can rebase and merge underneath, so a checks-only poll waits forever on
+  signals that will never arrive.
+
   Divergence from the Python tool, on purpose: no auto-merge arming. Watching
   is read-only here; merging stays an explicit act by the caller.
   """
