@@ -2,8 +2,8 @@
 #
 # One derivation per kbuild unit, replaying the exact saved command
 # (`savedcmd_*`) from the plan build's .cmd files inside a symlink farm of
-# the pristine kernel source, the plan's generated-file snapshot, and the
-# unit's transitive dependency outputs. See lib/kernel/kbuild-unit.nix.
+# the unit's scoped sources (#3412), the plan's generated-file snapshot, and
+# the unit's transitive dependency outputs. See lib/kernel/kbuild-unit.nix.
 {
   pkgs,
   src,
@@ -17,12 +17,49 @@ let
   kernelRelease = {{ kernel_release }};
   contentAddressed = {{ content_addressed }};
 
+  srcRoot = builtins.toString src;
+
+  # One content-addressed store path per pristine source file. Units link
+  # exactly the files their .cmd recorded, so an edit invalidates only the
+  # units that actually read the edited file, and unchanged content keeps
+  # the same store path across source revisions (#3412).
+  srcFile =
+    name: rel:
+    builtins.path {
+      inherit name;
+      path = "${srcRoot}/${rel}";
+    };
+
+  # Scoped copy of whole directory prefixes for units that consume trees
+  # rather than tracked file lists (the vmlinux link's script-driven
+  # compiles read Makefile includes and header dirs no .cmd records).
+  dirScope =
+    name: prefixes:
+    builtins.path {
+      inherit name;
+      path = srcRoot;
+      filter =
+        path: _type:
+        let
+          rel = lib.removePrefix (srcRoot + "/") (builtins.toString path);
+        in
+        builtins.any (
+          prefix: rel == prefix || lib.hasPrefix (prefix + "/") rel || lib.hasPrefix (rel + "/") prefix
+        ) prefixes;
+    };
+
+  sourceFarm = {
+{{ source_farm_entries }}
+  };
+
   mkUnit =
     {
       pname,
       target,
       kbuildCmd,
       depUnits ? [ ],
+      sourceFiles ? [ ],
+      sourceDirs ? [ ],
       installFiles ? [ target ],
       sourceLinkEnv ? false,
     }:
@@ -38,22 +75,43 @@ let
         nativeBuildInputs = extraNativeBuildInputs;
         env = extraEnv;
         passthru = { inherit target; };
+        sourceFileRels = lib.concatStringsSep "\n" sourceFiles;
+        sourceFilePaths = lib.concatStringsSep "\n" (
+          map (rel: toString sourceFarm.${rel}) sourceFiles
+        );
+        # Dep closures and source lists can exceed the kernel's 128KiB
+        # single-env-string cap (MAX_ARG_STRLEN) at defconfig scale.
+        passAsFile = [
+          "depUnits"
+          "sourceFileRels"
+          "sourceFilePaths"
+        ];
         buildPhase = ''
           runHook preBuild
           tree="$NIX_BUILD_TOP/kbuild-tree"
           mkdir -p "$tree"
-          cp -rs --no-preserve=mode ${src}/. "$tree/"
+          ${lib.optionalString (sourceDirs != [ ]) ''
+            cp -rs --no-preserve=mode ${dirScope "${pname}-src-dirs" sourceDirs}/. "$tree/"
+          ''}
+          mapfile -t srcRels < "$sourceFileRelsPath"
+          mapfile -t srcPaths < "$sourceFilePathsPath"
+          for i in "''${!srcRels[@]}"; do
+            mkdir -p "$tree/$(dirname "''${srcRels[$i]}")"
+            ln -s "''${srcPaths[$i]}" "$tree/''${srcRels[$i]}"
+          done
           # The snapshot may shadow files the plan build modified in place.
           cp -rs --remove-destination --no-preserve=mode ${generated}/. "$tree/"
-          for dep in $depUnits; do
+          for dep in $(cat "$depUnitsPath"); do
             cp -rs --no-preserve=mode "$dep"/. "$tree/"
           done
           cd "$tree"
-          # kbuild passes -frandom-seed=<objtree hash> per object; the
-          # cc-wrapper appends NIX_CFLAGS_COMPILE after user argv, so the last
-          # seed wins. Pin the appended seed to the same constant the plan
-          # build pinned, making the saved command's own seed irrelevant.
-          export NIX_CFLAGS_COMPILE="''${NIX_CFLAGS_COMPILE:-} -frandom-seed=kbuild-unit"
+          mkdir -p "$(dirname ${lib.escapeShellArg target})"
+          # Mirror the plan build (lib/kernel/kbuild-unit.nix): the
+          # cc-wrapper seeds -frandom-seed from this derivation's $out, so
+          # strip it and pin the same constant as the only seed, keeping
+          # replayed flags byte-identical to the plan's.
+          NIX_CFLAGS_COMPILE=$(printf '%s' "''${NIX_CFLAGS_COMPILE:-}" | sed 's/-frandom-seed=[^ ]*//g')
+          export NIX_CFLAGS_COMPILE="$NIX_CFLAGS_COMPILE -frandom-seed=kbuild-unit"
           ${lib.optionalString sourceLinkEnv ". ./.kbuild-unit-link-env"}
           sh -c ${lib.escapeShellArg kbuildCmd}
           runHook postBuild
