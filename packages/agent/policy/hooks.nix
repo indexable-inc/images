@@ -14,6 +14,7 @@
   hookCommands = {
     cachedStartupNotes = hookRunnerSubcommand "session-digest";
     hostInventoryBanner = hookRunnerSubcommand "session-banner";
+    sessionIdContext = hookRunnerSubcommand "session-id";
     protectedCheckoutGuard = hookRunnerSubcommand "worktree-guard";
     nixCargoGuard = hookRunnerSubcommand "cargo-guard";
     shellHabitGuard = hookRunnerSubcommand "bash-habits-guard";
@@ -39,6 +40,12 @@
 
   declarations = {
     SessionStart = [
+      # Unconditional: agents key session-scoped artifacts (status boards,
+      # scratch dirs) by session id, and nothing else tells them their own id.
+      {
+        command = hookCommands.sessionIdContext;
+        timeout = 5;
+      }
       {
         command = hookCommands.cachedStartupNotes;
         enable = personalStartupContext;
