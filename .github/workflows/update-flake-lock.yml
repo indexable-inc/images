@@ -99,6 +99,17 @@ jobs:
           client-id: ${{ inputs.app-client-id }}
           private-key: ${{ secrets.app-private-key }}
 
+      # Notify the human behind a manual dispatch (of this workflow or of a
+      # cross-repo caller such as ix: a reusable workflow shares the caller's
+      # event and actor): review request + assignee, both empty (a no-op) on
+      # the scheduled runs, which have no triggering human. The PR body stays
+      # the update-flake-lock action's own template, so the review request is
+      # the notification channel here. Fully qualified like install-nix above
+      # because a reusable workflow checks out the caller's repository.
+      - name: Resolve triggering human
+        id: trigger
+        uses: indexable-inc/index/.github/actions/triggering-actor@main
+
       - name: Update flake.lock
         uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
         with:
@@ -106,6 +117,8 @@ jobs:
           branch: update-flake-lock
           commit-msg: "flake.lock: update"
           pr-title: "Update Nix flake inputs"
+          pr-assignees: ${{ steps.trigger.outputs.user }}
+          pr-reviewers: ${{ steps.trigger.outputs.user }}
           # Empty for schedule/dispatch on index (all inputs public); a caller
           # scopes this to avoid fetching private inputs it can't auth for.
           inputs: ${{ inputs.flake-inputs }}
