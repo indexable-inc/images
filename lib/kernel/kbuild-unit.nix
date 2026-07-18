@@ -12,6 +12,12 @@ command inside a symlink farm of src + snapshot + dep unit outputs.
 The plan build's monolithic vmlinux is kept as the equivalence reference:
 `vmlinuxEquivalence` cmp's it byte-for-byte against the unit-built vmlinux.
 
+On CONFIG_MODULES=y configs the plan also runs `make modules`, and the unit
+graph extends over module objects, both modpost passes (`vmlinux.symvers`
+with its generated ksymtab source, `Module.symvers` with each module's
+`.mod.c`), and every final `.ko` link; `modulesEquivalence` byte-compares
+each unit-built module against the monolithic build's (#3413).
+
 Each unit's build tree is scoped to the sources its .cmd recorded (#3412):
 compile units see their .c plus tracked headers as per-file store paths,
 the link unit adds the script-read Makefile and header trees, and archive
@@ -123,6 +129,13 @@ comment-only edit cuts off at the unchanged CA object.
           # shell
           runHook preBuild
           make -j"$NIX_BUILD_CORES" vmlinux
+          # The modules pass (modpost over modules.order, per-module .mod.o
+          # and .ko links) exists only on CONFIG_MODULES=y configs; tinyconfig
+          # has none, and the module-less plan must stay byte-identical so
+          # every existing unit realisation cuts off.
+          if grep -q '^CONFIG_MODULES=y$' .config; then
+            make -j"$NIX_BUILD_CORES" modules
+          fi
           runHook postBuild
         '';
         installPhase = ''
@@ -131,6 +144,13 @@ comment-only edit cuts off at the unchanged CA object.
           mkdir -p $out
           # Monolithic reference for the byte-identity gate below.
           cp vmlinux $out/vmlinux
+          # Reference modules for the module byte-identity gate: every .ko at
+          # its objtree-relative path, plus the modpost symvers dump.
+          if grep -q '^CONFIG_MODULES=y$' .config; then
+            mkdir -p $out/reference-modules
+            find . -name '*.ko' -exec cp --parents {} $out/reference-modules \;
+            cp Module.symvers $out/reference-modules/Module.symvers
+          fi
           nix-kbuild-unit harvest \
             --objtree . \
             --srctree ${srcTree} \
@@ -174,10 +194,36 @@ comment-only edit cuts off at the unchanged CA object.
       cmp ${imported.vmlinux}/vmlinux ${plan}/vmlinux
       sha256sum ${imported.vmlinux}/vmlinux ${plan}/vmlinux > $out
     '';
+
+    # Module exit gate (#3413): every unit-built .ko and the modules-pass
+    # symvers dump must be byte-identical to the monolithic build's. On a
+    # module-less config the gate instead asserts the plan build agreed that
+    # there was nothing to compare.
+    modulesEquivalence =
+      if imported.moduleSymvers == null
+      then
+        pkgs.runCommand "kbuild-unit-modules-equivalence" {} ''
+          test ! -e ${plan}/reference-modules
+          echo "no modules (CONFIG_MODULES=n)" > $out
+        ''
+      else
+        pkgs.runCommand "kbuild-unit-modules-equivalence" {} ''
+          cd ${plan}/reference-modules
+          # Same module set on both sides, then byte-compare each member.
+          diff <(find . -name '*.ko' | sort) \
+            <(cd ${imported.modules} && find . -name '*.ko' | sort)
+          count=0
+          while IFS= read -r -d "" ref; do
+            cmp "$ref" ${imported.modules}/"$ref"
+            count=$((count + 1))
+          done < <(find . -name '*.ko' -print0)
+          cmp Module.symvers ${imported.moduleSymvers}/Module.symvers
+          echo "$count modules byte-identical" > $out
+        '';
   in
     imported
     // {
-      inherit plan unitsNix srcTree vmlinuxEquivalence;
+      inherit plan unitsNix srcTree vmlinuxEquivalence modulesEquivalence;
     };
 in {
   inherit buildKernel;

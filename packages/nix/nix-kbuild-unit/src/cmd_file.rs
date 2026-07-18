@@ -123,6 +123,12 @@ mod tests {
     const VMLINUX_A: &str = include_str!("../testdata/tinyconfig-6.12/vmlinux.a.cmd");
     const VMLINUX: &str = include_str!("../testdata/tinyconfig-6.12/vmlinux.cmd");
     const VMLINUX_LDS: &str = include_str!("../testdata/tinyconfig-6.12/vmlinux.lds.cmd");
+    const EFIVARFS_O: &str = include_str!("../testdata/defconfig-6.12/efivarfs.o.cmd");
+    const EFIVARFS_MOD_O: &str = include_str!("../testdata/defconfig-6.12/efivarfs.mod.o.cmd");
+    const EFIVARFS_KO: &str = include_str!("../testdata/defconfig-6.12/efivarfs.ko.cmd");
+    const MODULE_SYMVERS: &str = include_str!("../testdata/defconfig-6.12/Module.symvers.cmd");
+    const MODULE_COMMON_O: &str = include_str!("../testdata/defconfig-6.12/module-common.o.cmd");
+    const VMLINUX_EXPORT_O: &str = include_str!("../testdata/defconfig-6.12/vmlinux.export.o.cmd");
 
     #[test]
     fn parses_c_compile() {
@@ -195,6 +201,58 @@ mod tests {
         assert_eq!(
             parsed.source.as_deref(),
             Some("arch/x86/kernel/vmlinux.lds.S")
+        );
+    }
+
+    #[test]
+    fn parses_module_build_cmds() {
+        // Multi-object module .o: savedcmd-only `ld -r` over the @-response
+        // file, with the delayed objtool pass riding in the same command.
+        let multi = parse(EFIVARFS_O).expect("parse efivarfs.o cmd");
+        assert_eq!(multi.target, "fs/efivarfs/efivarfs.o");
+        assert_eq!(multi.source, None);
+        assert!(
+            multi
+                .cmd
+                .contains("-r -o fs/efivarfs/efivarfs.o @fs/efivarfs/efivarfs.mod")
+        );
+
+        // The .mod.o compile is dep-tracked with the modpost-generated
+        // source.
+        let mod_o = parse(EFIVARFS_MOD_O).expect("parse efivarfs.mod.o cmd");
+        assert_eq!(mod_o.target, "fs/efivarfs/efivarfs.mod.o");
+        assert_eq!(mod_o.source.as_deref(), Some("fs/efivarfs/efivarfs.mod.c"));
+
+        // The final .ko link lists its member objects in argv.
+        let ko = parse(EFIVARFS_KO).expect("parse efivarfs.ko cmd");
+        assert_eq!(ko.target, "fs/efivarfs/efivarfs.ko");
+        assert!(ko.cmd.ends_with(
+            "-T scripts/module.lds -o fs/efivarfs/efivarfs.ko fs/efivarfs/efivarfs.o fs/efivarfs/efivarfs.mod.o .module-common.o"
+        ));
+
+        // The modules modpost reads vmlinux.o from argv and the module list
+        // from modules.order (-T), not from argv.
+        let symvers = parse(MODULE_SYMVERS).expect("parse Module.symvers cmd");
+        assert_eq!(symvers.target, "Module.symvers");
+        assert!(
+            symvers
+                .cmd
+                .ends_with("-o Module.symvers -T modules.order vmlinux.o")
+        );
+
+        // 6.12's per-ko common object and the ksymtab export object are
+        // ordinary dep-tracked compiles at the objtree root.
+        let common = parse(MODULE_COMMON_O).expect("parse .module-common.o cmd");
+        assert_eq!(common.target, ".module-common.o");
+        assert_eq!(common.source.as_deref(), Some("scripts/module-common.c"));
+
+        let export = parse(VMLINUX_EXPORT_O).expect("parse .vmlinux.export.o cmd");
+        assert_eq!(export.target, ".vmlinux.export.o");
+        assert_eq!(export.source.as_deref(), Some(".vmlinux.export.c"));
+        assert!(
+            export
+                .deps
+                .contains(&"include/linux/export-internal.h".to_owned())
         );
     }
 
