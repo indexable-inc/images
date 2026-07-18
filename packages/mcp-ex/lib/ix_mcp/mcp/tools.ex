@@ -71,6 +71,10 @@ defmodule IxMcp.MCP.Tools do
         File.ls!/1, File.stat!/1 -- instead of shelling out. Reserve
         System.cmd/3 for real external programs (git, nix, gh), and always
         pass its arguments as a list: System.cmd("git", ["-C", dir, "status"]).
+        A subprocess's stdin is a pipe that never closes, so tools that read
+        stdin when given no input path -- rg and grep especially -- hang
+        forever, even with cd: set. Always pass an explicit path argument:
+        System.cmd("rg", ["-n", "pat", "."], cd: dir).
         Never build shell command strings, and never use bash here-docs or
         nested quoting to pass multi-line text -- they are brittle and can
         wedge this transport. To hand multi-line text to a program, write it
