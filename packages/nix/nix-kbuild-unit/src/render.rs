@@ -128,10 +128,10 @@ fn unit_deps<'plan>(
                 }
             }
         }
-        UnitKind::Archive | UnitKind::ObjectAggregate | UnitKind::Modpost => {
+        UnitKind::Archive | UnitKind::ObjectAggregate | UnitKind::Modpost | UnitKind::Command => {
             // Member lists live in the command line itself (`ar`/`ld`/modpost
-            // argv, or the `printf ... | xargs ar` form for the top-level
-            // archive). Token-scan for object and archive operands only;
+            // argv, the `printf ... | xargs ar` form for the top-level
+            // archive, or a Command unit's strip/objcopy input operands);
             // interpreting any more shell than that is out of scope.
             // Nested archives name members relative to their directory, with
             // the prefix in the printf format: `printf "arch/x86/%s " entry/...`;
@@ -358,7 +358,7 @@ fn source_scope(
         // through `grep -F -f $(srctree)/scripts/head-object-list.txt`, and
         // without that file the grep fails, the reorder silently no-ops, and
         // the linked vmlinux diverges from the monolithic reference.
-        UnitKind::Archive | UnitKind::ObjectAggregate | UnitKind::Modpost => {
+        UnitKind::Archive | UnitKind::ObjectAggregate | UnitKind::Modpost | UnitKind::Command => {
             for rel in grep_file_reads(&entry.cmd)? {
                 if !units.contains_key(rel.as_str()) && !generated.contains(rel.as_str()) {
                     files.insert(rel);
@@ -636,6 +636,58 @@ mod tests {
             .expect("unit body");
         assert!(top.contains("units.\"arch/x86/built-in.a\""));
         assert!(top.contains("units.\"arch/x86/entry/built-in.a\""));
+    }
+
+    #[test]
+    fn wires_command_units_from_argv_references() {
+        let mut plan = sample_plan();
+        // EFI libstub (defconfig): a dep-tracked compile, an if_changed
+        // stubcopy with no dep tracking, and the archive over the copies.
+        plan.cmds.push(entry(
+            "drivers/firmware/efi/libstub/alignedmem.o",
+            "gcc -c -o drivers/firmware/efi/libstub/alignedmem.o \
+             drivers/firmware/efi/libstub/alignedmem.c",
+            Some("drivers/firmware/efi/libstub/alignedmem.c"),
+            &[],
+        ));
+        plan.cmds.push(entry(
+            "drivers/firmware/efi/libstub/alignedmem.stub.o",
+            "strip --strip-debug -o drivers/firmware/efi/libstub/alignedmem.stub.o \
+             drivers/firmware/efi/libstub/alignedmem.o; objcopy \
+             --remove-section=.note.gnu.property drivers/firmware/efi/libstub/alignedmem.o \
+             drivers/firmware/efi/libstub/alignedmem.stub.o",
+            None,
+            &[],
+        ));
+        plan.cmds.push(entry(
+            "drivers/firmware/efi/libstub/lib.a",
+            "rm -f drivers/firmware/efi/libstub/lib.a; ar cDPrsT \
+             drivers/firmware/efi/libstub/lib.a drivers/firmware/efi/libstub/alignedmem.stub.o",
+            None,
+            &[],
+        ));
+        plan.cmds[4].cmd = "ld -r -o vmlinux.o --whole-archive vmlinux.a --no-whole-archive \
+             --start-group drivers/firmware/efi/libstub/lib.a --end-group"
+            .to_owned();
+
+        let rendered = render_units_nix(&plan, true).expect("render");
+        let stub = rendered
+            .split("\"drivers/firmware/efi/libstub/alignedmem.stub.o\" = mkUnit {")
+            .nth(1)
+            .expect("stub.o unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        assert!(stub.contains("units.\"drivers/firmware/efi/libstub/alignedmem.o\""));
+        let aggregate = rendered
+            .split("\"vmlinux.o\" = mkUnit {")
+            .nth(1)
+            .expect("vmlinux.o unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        assert!(aggregate.contains("units.\"drivers/firmware/efi/libstub/lib.a\""));
+        assert!(aggregate.contains("units.\"drivers/firmware/efi/libstub/alignedmem.stub.o\""));
     }
 
     #[test]
