@@ -81,6 +81,14 @@ in {
       '';
     };
 
+    kbuildCcache = {
+      # Independent of `enable`: the kbuild-unit ccache plan strategy
+      # (lib/kernel/kbuild-unit.nix) runs on any builder host, not only ones
+      # registering GitHub runners, so a host can opt into the cache mount
+      # without the runner pool.
+      enable = mkEnableOption "host-mounted ccache dir for kbuild-unit ccache-strategy plan builds";
+    };
+
     packages = mkOption {
       type = types.listOf types.package;
       default = [];
@@ -92,48 +100,62 @@ in {
     };
   };
 
-  config = mkIf cfg.enable {
-    # A warm shared cache is the whole point of a persistent runner: let the
-    # daemon substitute index artifacts so jobs skip cold rebuilds. Every key
-    # uses the `extra-*` form so it adds to Nix's defaults and any host config
-    # rather than replacing them (keeping cache.nixos.org, kvm, etc.).
-    nix.settings = {
-      extra-experimental-features = [
-        "nix-command"
-        "flakes"
-        # Repo-owned Rust units are floating content-addressed derivations. This
-        # is a daemon protocol capability, not something a workflow-side
-        # NIX_CONFIG can add for an untrusted runner user.
-        "ca-derivations"
-      ];
-      # The daemon owns the same cache and key below. Runner users are
-      # untrusted, so consuming the flake's restricted copies only emits
-      # ignored-setting warnings and cannot change daemon policy.
-      accept-flake-config = false;
-      extra-substituters = ["https://cache.ix.dev"];
-      extra-trusted-public-keys = [
-        "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="
-      ];
-      # Index images pin `gcc.arch = znver5`, so every derivation in the closure
-      # requires this builder feature; advertise it or the daemon refuses the
-      # builds before they evaluate.
-      extra-system-features = ["gccarch-znver5"];
-    };
+  config = lib.mkMerge [
+    (mkIf cfg.kbuildCcache.enable {
+      # kbuild-unit's "ccache" plan strategy (#3413) compiles through ccache
+      # inside the build sandbox; the cache only works if the daemon mounts
+      # this host dir into every sandbox. The dir must exist before the first
+      # build or the daemon fails all builds on the missing mount source,
+      # hence the tmpfiles rule; 0770 root:nixbld lets sandboxed builders
+      # (nixbld group) write while nothing else on the host can. Size cap and
+      # cache hygiene knobs ride in the derivation env (kbuild-unit.nix), so
+      # the policy has one owner.
+      nix.settings.extra-sandbox-paths = ["/var/cache/kbuild-ccache"];
+      systemd.tmpfiles.rules = ["d /var/cache/kbuild-ccache 0770 root nixbld -"];
+    })
+    (mkIf cfg.enable {
+      # A warm shared cache is the whole point of a persistent runner: let the
+      # daemon substitute index artifacts so jobs skip cold rebuilds. Every key
+      # uses the `extra-*` form so it adds to Nix's defaults and any host config
+      # rather than replacing them (keeping cache.nixos.org, kvm, etc.).
+      nix.settings = {
+        extra-experimental-features = [
+          "nix-command"
+          "flakes"
+          # Repo-owned Rust units are floating content-addressed derivations. This
+          # is a daemon protocol capability, not something a workflow-side
+          # NIX_CONFIG can add for an untrusted runner user.
+          "ca-derivations"
+        ];
+        # The daemon owns the same cache and key below. Runner users are
+        # untrusted, so consuming the flake's restricted copies only emits
+        # ignored-setting warnings and cannot change daemon policy.
+        accept-flake-config = false;
+        extra-substituters = ["https://cache.ix.dev"];
+        extra-trusted-public-keys = [
+          "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="
+        ];
+        # Index images pin `gcc.arch = znver5`, so every derivation in the closure
+        # requires this builder feature; advertise it or the daemon refuses the
+        # builds before they evaluate.
+        extra-system-features = ["gccarch-znver5"];
+      };
 
-    services.github-runners = lib.genAttrs runnerNames (_name: {
-      enable = true;
-      inherit (cfg) url tokenFile ephemeral;
-      extraLabels = cfg.labels;
-      # Re-register under the same name after a host config change instead of
-      # failing on a name clash with the already-registered runner.
-      replace = true;
-      extraPackages =
-        [
-          pkgs.gh
-          pkgs.git
-          config.nix.package
-        ]
-        ++ cfg.packages;
-    });
-  };
+      services.github-runners = lib.genAttrs runnerNames (_name: {
+        enable = true;
+        inherit (cfg) url tokenFile ephemeral;
+        extraLabels = cfg.labels;
+        # Re-register under the same name after a host config change instead of
+        # failing on a name clash with the already-registered runner.
+        replace = true;
+        extraPackages =
+          [
+            pkgs.gh
+            pkgs.git
+            config.nix.package
+          ]
+          ++ cfg.packages;
+      });
+    })
+  ];
 }

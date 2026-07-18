@@ -30,28 +30,60 @@ pub const MARKER: &str =
     "/* nix-kbuild-unit skeleton: reduced to preprocessor directives (#3413) */\n";
 
 /// Sources kept whole even though they match `**/*.c` / `**/*.S`: their
-/// compiled output feeds the generated snapshot or the plan-time link, so a
-/// stub object would corrupt what units later consume. Globs: `*` matches
-/// within one path segment, `**` matches any number of segments.
+/// compiled output feeds the generated snapshot, the vdso/realmode blobs, or
+/// a host tool, so a reduced source would corrupt what units later consume
+/// (or fail the plan build loudly). Globs: `*` matches within one path
+/// segment, `**` matches any number of segments.
 ///
-/// - asm-offsets / bounds: their `-S` listings become `include/generated/`
-///   headers every unit reads from the snapshot.
-/// - vdso trees: the vdso `.so` is built at plan time and embedded via the
-///   generated `vdso-image-*.c`, so its bytes must be real.
-/// - realmode / boot: `realmode.bin` is incbin'd into vmlinux and its
-///   `.relocs` dump rides in the snapshot.
-/// - linker-script symbol definers: the plan-time vmlinux link evaluates
-///   `jiffies = jiffies_64;`-style script assignments eagerly, and ld hard
-///   errors on an undefined symbol in an expression, so the few TUs defining
-///   symbols the x86 linker script references stay real.
+/// Deliberately NOT kept: kernel-side TUs that merely define symbols the
+/// linker script references (`jiffies_64`, mitigation thunks, ...). Keeping
+/// them real would drag their relocations against stubbed code into the
+/// final plan-time link; instead the plan's `ld` shim `--defsym`s that
+/// symbol set (see lib/kernel/kbuild-plan-ld.sh).
 pub const DEFAULT_KEEP: &[&str] = &[
+    // Their `-S` listings become `include/generated/` headers every unit
+    // reads from the snapshot.
     "arch/*/kernel/asm-offsets*.c",
     "kernel/bounds.c",
-    "arch/*/entry/vdso/**",
-    "arch/*/kernel/vdso*/**",
+    // Sources feeding the vdso `.so` images, which are built at plan time
+    // and re-enter the unit graph via the generated `vdso-image-*.c`. The
+    // kernel-side files in the same dir (vma.c, extable.c, vdso32-setup.c)
+    // stay reduced: their objects link into vmlinux, and real code there
+    // would reference stubbed symbols. x86-specific paths are fine: harvest
+    // rejects non-x86 plans (detect_srcarch).
+    "arch/x86/entry/vdso/vclock_gettime.c",
+    "arch/x86/entry/vdso/vgetcpu.c",
+    "arch/x86/entry/vdso/vdso-note.S",
+    "arch/x86/entry/vdso/vsgx.S",
+    "arch/x86/entry/vdso/vdso2c.c",
+    "arch/x86/entry/vdso/vdso32/**",
     "lib/vdso/**",
-    "arch/x86/realmode/**",
+    // The realmode blob: rm/ links realmode.elf from real objects with its
+    // own linker script, and rmpiggy.S incbins the resulting .bin (its
+    // .relocs dump rides in the snapshot). arch/x86/realmode/init.c stays
+    // reduced for the same reason as vma.c above.
+    "arch/x86/realmode/rm/**",
+    "arch/x86/realmode/rmpiggy.S",
     "arch/*/boot/**",
+    // Host-tool sources compiled outside scripts/ and tools/: HOSTCC passes
+    // through the compiler shim (no -D__KERNEL__), so a reduced host source
+    // would link a main-less tool and fail the plan loudly (that is how a
+    // missing entry here surfaces). Enumerated from the 6.12 tree's
+    // `hostprogs` Makefile declarations.
+    "arch/*/tools/**",
+    "certs/extract-cert.c",
+    "drivers/accessibility/speakup/genmap.c",
+    "drivers/accessibility/speakup/makemapdata.c",
+    "drivers/gpu/drm/radeon/mkregtable.c",
+    "drivers/gpu/drm/xe/xe_gen_wa_oob.c",
+    "drivers/tty/vt/conmakehash.c",
+    "drivers/video/logo/pnmtologo.c",
+    "drivers/zorro/gen-devlist.c",
+    "fs/unicode/mkutf8data.c",
+    "lib/gen_crc32table.c",
+    "lib/gen_crc64table.c",
+    "lib/raid6/mktables.c",
+    "usr/gen_init_cpio.c",
 ];
 
 /// Reduce `src` into `out` (created if absent), keeping `extra_keep` globs
@@ -451,6 +483,37 @@ static const char *s = \"/* not a comment\";
         assert_eq!(
             reduction_lang("arch/x86/realmode/rm/wakemain.c", no_extra),
             None
+        );
+        assert_eq!(
+            reduction_lang("arch/x86/realmode/rmpiggy.S", no_extra),
+            None
+        );
+        // Host-tool sources outside scripts// tools/ stay whole; their
+        // kernel-side dir siblings still reduce.
+        assert_eq!(reduction_lang("arch/x86/tools/relocs_64.c", no_extra), None);
+        assert_eq!(reduction_lang("lib/gen_crc32table.c", no_extra), None);
+        assert_eq!(reduction_lang("usr/gen_init_cpio.c", no_extra), None);
+        assert_eq!(
+            reduction_lang("drivers/tty/vt/conmakehash.c", no_extra),
+            None
+        );
+        assert_eq!(
+            reduction_lang("drivers/tty/vt/vt.c", no_extra),
+            Some(Lang::C)
+        );
+        // Kernel-side files in kept dirs reduce: their objects link into
+        // vmlinux and must stay stubbed.
+        assert_eq!(
+            reduction_lang("arch/x86/entry/vdso/vma.c", no_extra),
+            Some(Lang::C)
+        );
+        assert_eq!(
+            reduction_lang("arch/x86/realmode/init.c", no_extra),
+            Some(Lang::C)
+        );
+        assert_eq!(
+            reduction_lang("kernel/time/timer.c", no_extra),
+            Some(Lang::C)
         );
         assert_eq!(
             reduction_lang("arch/x86/boot/compressed/misc.c", no_extra),
