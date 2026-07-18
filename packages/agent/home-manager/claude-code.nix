@@ -13,6 +13,7 @@
 }: {
   config,
   lib,
+  options,
   pkgs,
   ...
 }: let
@@ -274,6 +275,21 @@ in {
       {
         assertion = cfg.systemPrompt.source == "house" || cfg.systemPrompt.omitRules == [];
         message = "programs.claude-code.systemPrompt.omitRules only applies when source = \"house\".";
+      }
+      {
+        # omitRules reaches the shipped wrapper only through defaultedPackage
+        # (basePackage.override packageOverrides); an explicit `package =`
+        # discards that override. Left unchecked this shipped a half-applied
+        # policy: the explicit package's permissions allowed force-merging
+        # while its baked prompt still forbade it (index#3537). The package
+        # stays defaulted only while no definition beats the module's own
+        # `lib.mkDefault defaultedPackage` (numerically lower highestPrio
+        # wins), so compare against that same mkDefault priority.
+        assertion =
+          cfg.systemPrompt.omitRules
+          == []
+          || options.programs.claude-code.package.highestPrio >= (lib.mkDefault null).priority;
+        message = "programs.claude-code.systemPrompt.omitRules is ignored when package is set explicitly; pass omitRules to that package's override instead (index#3537).";
       }
       {
         # The upstream module renders settings.json as a read-only store
