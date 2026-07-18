@@ -146,6 +146,32 @@ only to make the plan's inputs body-independent.
     text = builtins.readFile ./kbuild-plan-ld.sh;
   };
 
+  # Appended by the ld shim to the stub vmlinux links: minimal one-entry
+  # stand-ins for sections the post-link tools require to exist (sorttable
+  # hard-fails on a vmlinux with no __ex_table; x86 entries are 3 ints on
+  # both widths). Assembled for each ELF class the shim may link
+  # (x86 tinyconfig is a 32-bit kernel, defconfig 64-bit).
+  planLdPlaceholders = pkgs.runCommand "kbuild-unit-ld-placeholders" {} ''
+    mkdir -p $out
+    # sorttable also patches main_extable_sort_needed (kernel/extable.c in
+    # real builds) through the symtab, so it needs backing storage here, not
+    # a --defsym absolute.
+    printf '%s\n' \
+      '.section __ex_table,"a"' \
+      '.balign 4' \
+      '.long 0, 0, 0' \
+      '.section .init.data,"aw"' \
+      '.globl main_extable_sort_needed' \
+      '.type main_extable_sort_needed, @object' \
+      '.size main_extable_sort_needed, 4' \
+      '.balign 4' \
+      'main_extable_sort_needed:' \
+      '.long 1' \
+      > extable.s
+    ${pkgs.stdenv.cc.bintools.bintools}/bin/as --64 -o $out/placeholder-64.o extable.s
+    ${pkgs.stdenv.cc.bintools.bintools}/bin/as --32 -o $out/placeholder-32.o extable.s
+  '';
+
   buildKernel = {
     src,
     configTarget ? "tinyconfig",
@@ -162,6 +188,7 @@ only to make the plan's inputs body-independent.
           KBUILD_UNIT_CC_MODE = "skeleton";
           KBUILD_UNIT_CC_REAL = "${pkgs.stdenv.cc}/bin/gcc";
           KBUILD_UNIT_LD_REAL = "${pkgs.stdenv.cc.bintools}/bin/ld";
+          KBUILD_UNIT_LD_PLACEHOLDER_DIR = "${planLdPlaceholders}";
         };
         ccache = {
           KBUILD_UNIT_CC_MODE = "ccache";
@@ -242,12 +269,15 @@ only to make the plan's inputs body-independent.
           # the in-script init/version-timestamp.o compile and postlink make).
           # The dump is build-created and not unit-owned, so harvest sweeps it
           # into the generated snapshot on its own. `export -p` because make
-          # runs the script under $(CONFIG_SHELL).
+          # runs the script under $(CONFIG_SHELL). The KBUILD_UNIT_* shim
+          # vars match the KBUILD_ prefix but must stay out: they carry
+          # plan-only store paths, and a snapshot that shifts with shim
+          # tweaks would re-execute every unit.
           # `|| :` and the muted stderr keep unit replays quiet: there the
           # dump target is a store symlink from the generated snapshot, the
           # rewrite fails by design, and the sourced snapshot env is already
           # identical to what the dump would produce.
-          sed -i '1a { export -p | grep -E "^(declare -x |export )(KBUILD_[A-Za-z0-9_]+|CONFIG_SHELL|CC|LD|NM|AR|OBJCOPY|OBJDUMP|READELF|STRIP|PAHOLE|RESOLVE_BTFIDS|SRCARCH|ARCH|srctree|objtree|LINUXINCLUDE|NOSTDINC_FLAGS|LDFLAGS_vmlinux|CFLAGS_vmlinux|KALLSYMS[A-Za-z0-9_]*|MAKE|HOSTCC)=" > .kbuild-unit-link-env; } 2>/dev/null || :' scripts/link-vmlinux.sh
+          sed -i '1a { export -p | grep -E "^(declare -x |export )(KBUILD_[A-Za-z0-9_]+|CONFIG_SHELL|CC|LD|NM|AR|OBJCOPY|OBJDUMP|READELF|STRIP|PAHOLE|RESOLVE_BTFIDS|SRCARCH|ARCH|srctree|objtree|LINUXINCLUDE|NOSTDINC_FLAGS|LDFLAGS_vmlinux|CFLAGS_vmlinux|KALLSYMS[A-Za-z0-9_]*|MAKE|HOSTCC)=" | grep -vE "^(declare -x |export )KBUILD_UNIT_" > .kbuild-unit-link-env; } 2>/dev/null || :' scripts/link-vmlinux.sh
           make ${configTarget}
           runHook postConfigure
         '';
