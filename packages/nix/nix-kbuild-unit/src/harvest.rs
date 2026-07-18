@@ -140,8 +140,15 @@ fn walk(root: &Path) -> color_eyre::Result<Vec<String>> {
 }
 
 /// `.cmd` sidecars are dotfiles (`.fork.o.cmd`); `auto.conf.cmd` and friends
-/// are make includes in a different format, not saved commands.
+/// are make includes in a different format, not saved commands. Host tools
+/// under `tools/` (objtool at defconfig scale) build with tools/build, whose
+/// sidecar dialect is `cmd_<absolute target> :=` with no `savedcmd_` line;
+/// nothing under `tools/` is ever a unit, and the built tools themselves
+/// flow into the generated snapshot, so skip their sidecars entirely.
 fn is_cmd_file(rel: &str) -> bool {
+    if rel.starts_with("tools/") {
+        return false;
+    }
     let name = file_name(rel);
     name.starts_with('.') && name.ends_with(".cmd")
 }
@@ -232,6 +239,16 @@ mod tests {
         write(&objtree, "kernel/.fork.o.d", "deps");
         write(&objtree, ".tmp_vmlinux1", "elf");
         write(&objtree, "System.map", "map");
+        // tools/build sidecar dialect (objtool at defconfig scale): no
+        // `savedcmd_` line, absolute target. Skipped, while the built tool
+        // itself flows into the snapshot.
+        write(
+            &objtree,
+            "tools/objtool/.builtin-check.o.cmd",
+            "cmd_/build/src/tools/objtool/builtin-check.o := gcc -c builtin-check.c\n",
+        );
+        write(&objtree, "tools/objtool/builtin-check.o", "ELF");
+        write(&objtree, "tools/objtool/objtool", "ELF");
 
         let plan = harvest(&objtree, &srctree, Some(&out)).expect("harvest");
 
@@ -247,6 +264,7 @@ mod tests {
                 ".kbuild-unit-link-env",
                 "include/config/kernel.release",
                 "include/generated/autoconf.h",
+                "tools/objtool/objtool",
             ]
         );
         for rel in &plan.generated {
