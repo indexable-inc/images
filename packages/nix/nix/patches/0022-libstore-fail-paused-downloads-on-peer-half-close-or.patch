@@ -1,0 +1,286 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Fri, 17 Jul 2026 21:22:27 -0700
+Subject: [PATCH] libstore: fail paused downloads on peer half-close or stall
+
+A daemon substitution download applies backpressure by pausing the curl
+transfer whenever the download buffer fills. While a handle is paused,
+curl neither reads its socket nor advances CURLOPT_LOW_SPEED_TIME
+(stalled-download-timeout), so a peer that half-closes the connection --
+or a consumer that stops draining -- parks the transfer forever: the
+worker thread keeps waking every 100ms but never reads the socket, and
+the goal behind it waits with no deadline. On the ix fleet this stranded
+per-connection nix-daemon children holding CLOSE-WAIT sockets to the
+binary caches with unread bytes in Recv-Q, wedging CI slots for hours
+(index#3559).
+
+Police paused transfers in the worker loop: get the active socket and
+fail the transfer when the peer has half-closed (POLLRDHUP/POLLHUP), or
+when it has been paused with no progress past stalled-download-timeout.
+Failures route through the normal completion path as transient curl
+errors, so download-attempts still applies before the build fails
+loudly -- no silent forever-retry. The decision is factored into a pure
+classifyPausedTransfer() helper with unit tests.
+
+diff --git a/src/libstore-tests/filetransfer.cc b/src/libstore-tests/filetransfer.cc
+new file mode 100644
+index 0000000..a5d7366
+--- /dev/null
++++ b/src/libstore-tests/filetransfer.cc
+@@ -0,0 +1,43 @@
++#include <gtest/gtest.h>
++
++#include <chrono>
++
++#include "nix/store/filetransfer.hh"
++
++namespace nix {
++
++using namespace std::chrono_literals;
++
++/* A half-closed peer can never finish delivering the body, so the transfer
++   must fail immediately -- even below the stall deadline (index#3559). */
++TEST(ClassifyPausedTransfer, HalfClosedFailsImmediately)
++{
++    EXPECT_EQ(classifyPausedTransfer(true, 0s, 300s), PausedTransferVerdict::failHalfClosed);
++}
++
++/* ... and even when the silent-stall deadline is disabled. */
++TEST(ClassifyPausedTransfer, HalfClosedFailsWithStallDisabled)
++{
++    EXPECT_EQ(classifyPausedTransfer(true, 0s, 0s), PausedTransferVerdict::failHalfClosed);
++}
++
++/* A live connection paused below the deadline is healthy backpressure. */
++TEST(ClassifyPausedTransfer, LivePauseBelowDeadlineKeepsWaiting)
++{
++    EXPECT_EQ(classifyPausedTransfer(false, 5s, 300s), PausedTransferVerdict::keepWaiting);
++}
++
++/* A silent (not half-closed) transfer paused at or past the deadline fails. */
++TEST(ClassifyPausedTransfer, SilentStallPastDeadlineFails)
++{
++    EXPECT_EQ(classifyPausedTransfer(false, 300s, 300s), PausedTransferVerdict::failStalled);
++    EXPECT_EQ(classifyPausedTransfer(false, 301s, 300s), PausedTransferVerdict::failStalled);
++}
++
++/* stalled-download-timeout == 0 disables the silent-stall deadline. */
++TEST(ClassifyPausedTransfer, StallDisabledNeverStalls)
++{
++    EXPECT_EQ(classifyPausedTransfer(false, 100000s, 0s), PausedTransferVerdict::keepWaiting);
++}
++
++} // namespace nix
+diff --git a/src/libstore-tests/meson.build b/src/libstore-tests/meson.build
+index 0a53735..78c33c9 100644
+--- a/src/libstore-tests/meson.build
++++ b/src/libstore-tests/meson.build
+@@ -64,6 +64,7 @@ sources = files(
+   'derived-path.cc',
+   'downstream-placeholder.cc',
+   'dummy-store.cc',
++  'filetransfer.cc',
+   'http-binary-cache-store.cc',
+   'legacy-ssh-store.cc',
+   'local-binary-cache-store.cc',
+diff --git a/src/libstore/filetransfer.cc b/src/libstore/filetransfer.cc
+index ca0bdb4..4b70f69 100644
+--- a/src/libstore/filetransfer.cc
++++ b/src/libstore/filetransfer.cc
+@@ -19,10 +19,14 @@
+ 
+ #include <unistd.h>
+ #include <fcntl.h>
++#ifndef _WIN32
++#  include <poll.h>
++#endif
+ 
+ #include <curl/curl.h>
+ 
+ #include <cmath>
++#include <cstdio>
+ #include <cstring>
+ #include <queue>
+ #include <random>
+@@ -72,6 +76,20 @@ struct curlMultiError final : CloneableError<curlMultiError, Error>
+ 
+ } // namespace
+ 
++PausedTransferVerdict classifyPausedTransfer(
++    bool peerHalfClosed, std::chrono::steady_clock::duration pausedFor, std::chrono::seconds stalledDownloadTimeout)
++{
++    /* A peer that has half-closed the connection can never deliver the rest of
++       the body, so fail at once regardless of the stall timer. */
++    if (peerHalfClosed)
++        return PausedTransferVerdict::failHalfClosed;
++    /* stalled-download-timeout == 0 disables the deadline, matching how curl
++       treats CURLOPT_LOW_SPEED_TIME == 0. */
++    if (stalledDownloadTimeout.count() != 0 && pausedFor >= stalledDownloadTimeout)
++        return PausedTransferVerdict::failStalled;
++    return PausedTransferVerdict::keepWaiting;
++}
++
+ struct curlFileTransfer : public FileTransfer
+ {
+     const FileTransferSettings & settings;
+@@ -133,6 +151,13 @@ struct curlFileTransfer : public FileTransfer
+ 
+         curl_off_t writtenToSink = 0;
+ 
++        /* When this transfer was most recently paused for backpressure, or
++           a default-constructed time_point when it is not paused. While a
++           handle is paused curl neither reads its socket nor applies
++           CURLOPT_LOW_SPEED_TIME to it, so nix must police the stall itself
++           (index#3559). */
++        std::chrono::steady_clock::time_point pausedSince{};
++
+         std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+ 
+         inline static const std::set<long> successfulStatuses{200, 201, 204, 206, 304, 0 /* other protocol */};
+@@ -263,6 +288,8 @@ struct curlFileTransfer : public FileTransfer
+                    when returning CURL_WRITEFUNC_PAUSE.
+                    https://curl-library.cool.haxx.narkive.com/larE1cRA/curl-easy-pause-documentation-question
+                    */
++                if (pausedSince == std::chrono::steady_clock::time_point())
++                    pausedSince = std::chrono::steady_clock::now();
+                 curl_easy_pause(req, CURLPAUSE_RECV);
+             }
+ 
+@@ -467,9 +494,59 @@ struct curlFileTransfer : public FileTransfer
+             if (paused) {
+                 curl_easy_pause(req, CURLPAUSE_CONT);
+                 paused = false;
++                pausedSince = {};
+             }
+         }
+ 
++        /**
++         * Whether the peer has closed (FIN) or reset its half of the
++         * connection while this transfer is paused. curl does not observe this
++         * on a paused handle, so without an explicit check a half-closed
++         * connection keeps the transfer -- and its CLOSE-WAIT socket -- alive
++         * forever (index#3559).
++         */
++        bool peerHalfClosed() noexcept
++        {
++#ifndef _WIN32
++            curl_socket_t sock = CURL_SOCKET_BAD;
++            if (curl_easy_getinfo(req, CURLINFO_ACTIVESOCKET, &sock) != CURLE_OK || sock == CURL_SOCKET_BAD)
++                return false;
++            struct pollfd pfd = {};
++            pfd.fd = sock;
++            short deadMask = POLLHUP | POLLERR | POLLNVAL;
++#  ifdef POLLRDHUP
++            /* POLLRDHUP is the only reliable half-close signal: a peer FIN
++               leaves us in CLOSE-WAIT with POLLIN|POLLRDHUP set but no POLLHUP
++               (our write half is still open). */
++            pfd.events = POLLRDHUP;
++            deadMask |= POLLRDHUP;
++#  endif
++            if (::poll(&pfd, 1, 0) <= 0)
++                return false;
++            return (pfd.revents & deadMask) != 0;
++#else
++            return false;
++#endif
++        }
++
++        /**
++         * Fail a paused transfer that curl can no longer time out, routing
++         * through the normal completion path so the existing error
++         * classification, retry-with-range, and callback machinery apply. Both
++         * verdicts are transient curl errors, so curl's retry budget
++         * (`download-attempts`) still applies before the build fails loudly.
++         */
++        void failPausedStall(PausedTransferVerdict verdict) noexcept
++        {
++            /* Reset pause bookkeeping so a retried attempt starts clean. */
++            unpause();
++            const char * why = verdict == PausedTransferVerdict::failHalfClosed
++                                   ? "peer closed the connection while the transfer was paused for backpressure (index#3559)"
++                                   : "no data received for stalled-download-timeout while the transfer was paused (index#3559)";
++            std::snprintf(errbuf, sizeof(errbuf), "%s", why);
++            finish(verdict == PausedTransferVerdict::failHalfClosed ? CURLE_RECV_ERROR : CURLE_OPERATION_TIMEDOUT);
++        }
++
+         void init()
+         {
+             if (!req)
+@@ -928,6 +1005,33 @@ struct curlFileTransfer : public FileTransfer
+             std::vector<std::shared_ptr<TransferItem>> incoming;
+             auto now = std::chrono::steady_clock::now();
+ 
++            /* Police paused transfers that curl can no longer time out. While a
++               handle is paused for backpressure curl neither reads its socket
++               nor advances CURLOPT_LOW_SPEED_TIME, so a peer that half-closes
++               the connection (or a consumer that stops draining) parks the
++               transfer forever holding a CLOSE-WAIT socket and never fails the
++               build (index#3559). Fail such transfers here instead. */
++            {
++                std::vector<std::pair<std::shared_ptr<TransferItem>, PausedTransferVerdict>> toFail;
++                for (auto & [handle, item] : items) {
++                    if (!item->paused)
++                        continue;
++                    auto pausedFor = item->pausedSince == std::chrono::steady_clock::time_point()
++                                         ? std::chrono::steady_clock::duration::zero()
++                                         : now - item->pausedSince;
++                    auto verdict = classifyPausedTransfer(
++                        item->peerHalfClosed(), pausedFor, std::chrono::seconds(settings.stalledDownloadTimeout.get()));
++                    if (verdict != PausedTransferVerdict::keepWaiting)
++                        toFail.emplace_back(item, verdict);
++                }
++                for (auto & [item, verdict] : toFail) {
++                    item->failPausedStall(verdict);
++                    curl_multi_remove_handle(curlm.get(), item->req);
++                    item->active = false;
++                    items.erase(item->req);
++                }
++            }
++
+             {
+                 auto state(state_.lock());
+                 while (!state->incoming.empty()) {
+diff --git a/src/libstore/include/nix/store/filetransfer.hh b/src/libstore/include/nix/store/filetransfer.hh
+index 688a6af..bf71fb3 100644
+--- a/src/libstore/include/nix/store/filetransfer.hh
++++ b/src/libstore/include/nix/store/filetransfer.hh
+@@ -1,6 +1,7 @@
+ #pragma once
+ ///@file
+ 
++#include <chrono>
+ #include <string>
+ #include <future>
+ 
+@@ -403,6 +404,31 @@ ref<FileTransfer> getFileTransfer();
+  */
+ ref<FileTransfer> makeFileTransfer(const FileTransferSettings & settings = fileTransferSettings);
+ 
++/**
++ * Outcome of policing a transfer that is paused for backpressure. curl cannot
++ * time out a paused handle, so `curlFileTransfer` classifies these itself
++ * (index#3559). Exposed here so the decision is unit-testable in isolation.
++ */
++enum class PausedTransferVerdict {
++    /** Still healthy; keep waiting for the consumer to drain and unpause. */
++    keepWaiting,
++    /** The peer half-closed the connection; the body can never complete. */
++    failHalfClosed,
++    /** Paused with no progress past `stalled-download-timeout`. */
++    failStalled,
++};
++
++/**
++ * Decide the fate of a paused transfer from its half-close state, how long it
++ * has been paused, and the configured `stalled-download-timeout` (0 disables
++ * the silent-stall deadline). A half-close always fails, even with the
++ * deadline disabled.
++ */
++PausedTransferVerdict classifyPausedTransfer(
++    bool peerHalfClosed,
++    std::chrono::steady_clock::duration pausedFor,
++    std::chrono::seconds stalledDownloadTimeout);
++
+ class FileTransferError final : public CloneableError<FileTransferError, Error>
+ {
+ public:
