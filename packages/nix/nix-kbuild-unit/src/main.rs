@@ -2,6 +2,7 @@ mod cmd_file;
 mod harvest;
 mod model;
 mod render;
+mod skeleton;
 
 use std::io::Read as _;
 use std::path::PathBuf;
@@ -27,6 +28,10 @@ enum Command {
 
     /// Render generated Nix from plan JSON on stdin.
     Render(RenderArgs),
+
+    /// Reduce a kernel source tree to directives-only "skeleton" sources
+    /// (#3413), so plan builds no longer depend on function bodies.
+    Skeleton(SkeletonArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -51,6 +56,22 @@ struct RenderArgs {
     content_addressed: bool,
 }
 
+#[derive(Debug, clap::Args)]
+struct SkeletonArgs {
+    /// Pristine kernel source tree to reduce.
+    #[arg(long, value_name = "PATH")]
+    src: PathBuf,
+
+    /// Where to write the reduced tree (created if absent).
+    #[arg(long, value_name = "PATH")]
+    out: PathBuf,
+
+    /// Keep sources matching this glob byte-verbatim, on top of the built-in
+    /// allowlist (repeatable; `*` matches within a path segment, `**` across).
+    #[arg(long = "keep", value_name = "GLOB")]
+    keep: Vec<String>,
+}
+
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
@@ -60,6 +81,10 @@ fn main() -> color_eyre::Result<()> {
                 harvest::harvest(&args.objtree, &args.srctree, args.generated_out.as_deref())?;
             serde_json::to_writer(std::io::stdout(), &plan).wrap_err("writing plan JSON")?;
             println!();
+        }
+        Command::Skeleton(args) => {
+            skeleton::skeleton(&args.src, &args.out, &args.keep)
+                .wrap_err("reducing source tree to a skeleton")?;
         }
         Command::Render(args) => {
             let mut input = String::new();
