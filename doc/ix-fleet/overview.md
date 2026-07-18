@@ -77,13 +77,12 @@ each node key matches its `name`; and that every `dependsOn` names a real node.
   false), an optional `updateStrategy` (`UpdateStrategy`: `maxUnavailable`,
   int >= 1), and the lists/maps `tags`, `groups`, `env`, `secrets`,
   `l7ProxyPorts`, `dependsOn`, `healthChecks` (name -> `HealthCheck`).
-- **`SwitchSpec`** (`:44`): `target`, `buildOn` (`auto`|`local`|`remote`,
-  default `auto`), optional `buildVm`, `sourceInstallable`, `overrideInputs`.
+- **`SwitchSpec`**: `sourceInstallable`, `overrideInputs`.
   `sourceInstallable` defaults to the bare node name `.#<node>` (not
   `.#<node>-system`): `mkFleet` exposes a `nixosConfigurations.<node>` output
   (bare external name -> the node's system) so `ix up .#<node>` resolves it, and
-  the simple attr lets the native multi-VM `ix up .#a .#b --build-vm <builder>`
-  derive each VM name. The `<node>-system` package stays as a build alias. Merge
+  the simple attr lets the native multi-VM `ix up .#a .#b` derive each VM
+  name. The `<node>-system` package stays as a build alias. Merge
   the fleet's `nixosConfigurations` into your flake's top-level
   `nixosConfigurations` (see `examples/nixos/switch-multi/flake.nix` for a
   direct `ix up` flake and `examples/dev/fleet/default.nix` for the mkDev
@@ -114,9 +113,7 @@ uses. A node maps to an ix branch (`ix_sdk.BranchInfo`/`BranchStatus`:
   `ix image push-manifest --locator <out>/locator.bin <out>/manifest.cas
   <destination> --region <region>` (`push_replacement_image`, `:338`); the CLI
   prints the pushed reference on stdout.
-- snapshot: `client().snapshot(name=...)` (`snapshot_node`, `:423`).
-- in-place switch: `client().switch_system(name, target, build_on)`
-  (`switch_node`, `:430`).
+- snapshot: `client().snapshot(name=...)` (`snapshot_node`).
 - east-west groups: `client().create_group(...)` / `add_group_member(...)`,
   idempotent on `ix_sdk.IxConflictError` (`ensure_group` `:461`,
   `ensure_node_groups` `:472`).
@@ -156,9 +153,10 @@ are what `switch` is for.
 - **`switch` batches in-process through the native multi-VM `ix up`.**
   `cmd_switch` walks `dependency_batches` layers in order (so `dependsOn` still
   gates the switch) and, within each layer, groups the batchable nodes by
-  `(buildVm, overrideInputs)` and runs one `ix up .#a .#b --build-vm <builder>`
-  per group (`switch_nodes_from_source`); the platform builds every closure on
-  the one warm builder and activates each on its own VM. Each group's VMs are
+  `(region, overrideInputs)` and runs one `ix up .#a .#b` per group
+  (`switch_nodes_from_source`); the platform builds every closure on the
+  tenant's managed builder VM (`ix-builder-<region>`, created on demand) and
+  activates each on its own VM. Each group's VMs are
   pre-created with their full fleet config and snapshotted first
   (`switch_group_workflow`), then the batch only switches existing VMs. Groups
   and single-node fallbacks within a layer run concurrently via `asyncio.gather`.
@@ -170,13 +168,11 @@ are what `switch` is for.
   -> ensure groups -> snapshot (if `node.snapshot` and not `--no-snapshot` and
   the node was not just created) -> switch -> health.
 - **Switch picks a path per node.** A node is batched into the native multi-VM
-  `ix up` only when it builds remotely, names a `buildVm`, and its installable is
-  exactly `.#<node-name>` (`is_batchable_switch`); the multi `ix up` derives each
-  VM name from that attr and rejects `--name`. Anything else falls back to the
-  single-target `ix up <installable> --name <node>` (`switch_node_from_source`,
-  `buildOn == "remote"` without a build VM or with a custom installable) or the
-  SDK `switch_system` (`switch_node`, `buildOn` `local`/`auto`), bounded by
-  `SWITCH_TIMEOUT_SECS = 1800`. Both source paths retry a transient
+  `ix up` only when its installable is exactly `.#<node-name>`
+  (`is_batchable_switch`); the multi `ix up` derives each VM name from that
+  attr and rejects `--name`. A custom installable falls back to the
+  single-target `ix up <installable> --name <node>`
+  (`switch_node_from_source`). Both paths retry a transient
   `stream framing error` up to `MAX_SWITCH_RETRIES` (`run_source_switch`).
 
 ## Health checks (`__init__.py:540-624`)

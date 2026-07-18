@@ -34,22 +34,16 @@ rendered fleet plan, image attrset, and wrapped CLI app.
 
   moduleList = spec: toList (spec.modules or spec.module or []);
 
-  # Default `switch.sourceInstallable`. The remote path goes through `ix up`,
-  # which rewrites a bare `.#<node>` to `nixosConfigurations.<node>...` and (for
-  # the native multi-VM switch) derives the VM name from that attr. The local
-  # path runs a plain `nix build <installable>` with no such rewrite, so it must
-  # name the `.#<node>-system` package alias that resolves to the toplevel.
-  defaultSourceInstallable = nodeName: buildOn:
-    if buildOn == "local"
-    then ".#${nodeName}-system"
-    else ".#${nodeName}";
+  # Default `switch.sourceInstallable`. Switches go through `ix up`, which
+  # rewrites a bare `.#<node>` to `nixosConfigurations.<node>...` and (for the
+  # native multi-VM switch) derives the VM name from that attr.
+  defaultSourceInstallable = nodeName: ".#${nodeName}";
 
   deploymentDefaults = {
     bootstrapImage = "registry.ix.dev/${bootstrapImage.name}:${bootstrapImage.tag}";
     region = "us-west-1";
     ipv4 = false;
     snapshot = true;
-    switch.buildOn = "remote";
   };
   isSecretName = name: builtins.match "[a-z][a-z0-9_]*" name != null;
 
@@ -297,16 +291,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
         imageName = config.ix.image.name;
         deploy = spec.deployment;
         replacementDestination = deploy.destination or "${imageName}:latest";
-        switchBuildOn = deploy.switch.buildOn or "remote";
         ipv4HealthChecks = lib.filterAttrs (_: check: check.requiresIpv4) config.ix.healthChecks;
-        # ix up expects a system out-path for local copy and a .drv for remote
-        # build. Picking the wrong shape uploads the build-time closure and tries
-        # to run `<drv>/bin/switch-to-configuration`, which deadlocks.
-        switchTarget = deploy.switch.target or unsafeDiscardStringContext (
-          if switchBuildOn == "local"
-          then "${config.system.build.toplevel}"
-          else config.system.build.toplevel.drvPath
-        );
         # Image-declared membership (`ix.networking.groups`) unions with the
         # fleet-level `nodes.<name>.groups`: the image carries its own network
         # identity, the fleet adds deployment-specific memberships on top.
@@ -327,14 +312,10 @@ rendered fleet plan, image attrset, and wrapped CLI app.
           replicaIndex = spec.replicaIndex or null;
           system = unsafeDiscardStringContext "${config.system.build.toplevel}";
           switch = {
-            target = switchTarget;
-            buildOn = switchBuildOn;
-            buildVm = deploy.switch.buildVm or null;
-            # Remote switches default to the bare `.#<node>` so the native multi-VM
-            # `ix up` can derive each VM name from the attr; local switches keep the
-            # `.#<node>-system` package alias (see `defaultSourceInstallable`).
+            # Defaults to the bare `.#<node>` so the native multi-VM `ix up`
+            # can derive each VM name from the attr.
             sourceInstallable =
-              deploy.switch.sourceInstallable or (defaultSourceInstallable name switchBuildOn);
+              deploy.switch.sourceInstallable or (defaultSourceInstallable name);
             overrideInputs = deploy.switch.overrideInputs or {};
           };
           inherit (deploy) bootstrapImage;
@@ -422,7 +403,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
               switch =
                 node.switch
                 // lib.optionalAttrs (!((checkedNodeSpecs.${name}.deployment.switch or {}) ? sourceInstallable)) {
-                  sourceInstallable = defaultSourceInstallable (prefixName name) node.switch.buildOn;
+                  sourceInstallable = defaultSourceInstallable (prefixName name);
                 };
             }
           )
@@ -507,7 +488,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
       )
       nodeConfigs;
     # Each node's NixOS system under its bare external name, so `ix up .#<node>`
-    # (and the native multi-VM `ix up .#a .#b --build-vm <builder>`) resolves
+    # (and the native multi-VM `ix up .#a .#b`) resolves
     # `nixosConfigurations.<node>.config.system.build.toplevel`. `nodeConfigs`
     # is already the evaluated `config` (`evalImageConfig` returns `.config`),
     # so the `{ config }` wrapper reuses that closure with no second eval; this

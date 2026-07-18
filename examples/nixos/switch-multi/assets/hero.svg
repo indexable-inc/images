@@ -20,7 +20,7 @@
   </defs>
 
   <rect class="box" x="20" y="73" width="150" height="56" rx="8"/>
-  <text x="95" y="96" text-anchor="middle" font-size="14" font-weight="600">builder VM</text>
+  <text x="95" y="96" text-anchor="middle" font-size="14" font-weight="600">tenant builder</text>
   <text x="95" y="114" text-anchor="middle" font-size="11" class="muted">warm /nix/store</text>
 
   <line class="edge" x1="170" y1="101" x2="285" y2="101"/>
@@ -42,5 +42,5 @@
   <rect class="box" x="542" y="136" width="150" height="44" rx="8"/>
   <text x="617" y="163" text-anchor="middle" font-size="13" font-weight="600">edge</text>
 
-  <text x="20" y="172" font-size="12" class="muted">ix up .#web .#worker .#edge --build-vm builder</text>
+  <text x="20" y="172" font-size="12" class="muted">ix up .#web .#worker .#edge</text>
 </svg>

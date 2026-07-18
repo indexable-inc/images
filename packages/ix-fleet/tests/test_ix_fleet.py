@@ -24,7 +24,6 @@ def fleet_node(name: str, *, depends_on: list[str] | None = None) -> dict[str, t
         "baseName": name,
         "system": f"/nix/store/{name}-system",
         "switch": {
-            "target": f"/nix/store/{name}-system.drv",
             "sourceInstallable": f".#{name}",
         },
         "bootstrapImage": "registry.ix.dev/ix/base:latest",
@@ -165,7 +164,6 @@ class PushReplacementImageTests(unittest.TestCase):
                 "baseName": "nginx",
                 "system": "/nix/store/example-system",
                 "switch": {
-                    "target": "/nix/store/example-system.drv",
                     "sourceInstallable": ".#health-check-nginx-system",
                 },
                 "bootstrapImage": "registry.ix.dev/ix/base:latest",
@@ -602,7 +600,7 @@ class SingleNodeWorkflowTests(unittest.TestCase):
             patch.object(ix_fleet, "ensure_node", async_recorder(calls, "ensure", result=False)),
             patch.object(ix_fleet, "ensure_node_groups", async_recorder(calls, "groups")),
             patch.object(ix_fleet, "snapshot_node", async_recorder(calls, "snapshot")),
-            patch.object(ix_fleet, "switch_node", async_recorder(calls, "switch")),
+            patch.object(ix_fleet, "switch_node_from_source", async_recorder(calls, "switch")),
             patch.object(ix_fleet, "run_node_health_checks", async_recorder(calls, "health")),
         ):
             asyncio.run(ix_fleet.run_switch_node_workflow(plan.nodes["api"], args))
@@ -645,7 +643,6 @@ class SwitchSourceTests(unittest.TestCase):
         calls: list[list[str]] = []
         cwds: list[Path | None] = []
         node_data = fleet_node("api")
-        node_data["switch"]["buildVm"] = "builder"
         node_data["switch"]["overrideInputs"] = {
             "ix": "github:indexable-inc/ix",
             "ix-images": "path:/workspace/index",
@@ -668,8 +665,6 @@ class SwitchSourceTests(unittest.TestCase):
                 "api",
                 "--workdir",
                 "subdir",
-                "--build-vm",
-                "builder",
                 "--override-input",
                 "ix=github:indexable-inc/ix",
                 "--override-input",
@@ -698,18 +693,6 @@ class SwitchSourceTests(unittest.TestCase):
                     dry_run=False,
                 ),
             )
-
-
-def remote_node(
-    name: str,
-    *,
-    build_vm: str = "builder",
-    depends_on: list[str] | None = None,
-) -> dict[str, typing.Any]:
-    node = fleet_node(name, depends_on=depends_on)
-    node["switch"]["buildOn"] = "remote"
-    node["switch"]["buildVm"] = build_vm
-    return node
 
 
 def cli_recorder(
@@ -744,40 +727,31 @@ class SwitchBatchTests(unittest.TestCase):
         return ix_fleet.FleetNode.model_validate(data)
 
     def test_is_batchable_switch(self) -> None:
-        assert ix_fleet.is_batchable_switch(self._node(remote_node("api")))
-        # local build: no shared builder to batch on.
-        local = fleet_node("api")
-        local["switch"]["buildOn"] = "local"
-        assert not ix_fleet.is_batchable_switch(self._node(local))
-        # remote but no build VM: multi `ix up` requires --build-vm.
-        no_vm = fleet_node("api")
-        no_vm["switch"]["buildOn"] = "remote"
-        assert not ix_fleet.is_batchable_switch(self._node(no_vm))
+        assert ix_fleet.is_batchable_switch(self._node(fleet_node("api")))
         # installable attr must equal the node name (multi derives the VM name
         # from it and rejects --name).
-        custom = remote_node("api")
+        custom = fleet_node("api")
         custom["switch"]["sourceInstallable"] = ".#api-system"
         assert not ix_fleet.is_batchable_switch(self._node(custom))
 
-    def test_batch_groups_split_by_build_vm_region_and_overrides(self) -> None:
-        a = self._node(remote_node("a", build_vm="b1"))
-        b = self._node(remote_node("b", build_vm="b1"))
-        c = self._node(remote_node("c", build_vm="b2"))
-        d = remote_node("d", build_vm="b1")
+    def test_batch_groups_split_by_region_and_overrides(self) -> None:
+        a = self._node(fleet_node("a"))
+        b = self._node(fleet_node("b"))
+        d = fleet_node("d")
         d["switch"]["overrideInputs"] = {"ix": "github:indexable-inc/ix"}
         d_node = self._node(d)
-        # Same build VM as a/b, but a different region: the server's multi-switch
-        # requires every target to share the builder's region, so it splits off.
-        e = remote_node("e", build_vm="b1")
+        # A different region splits off: every target in a multi-switch shares
+        # the tenant builder in its own region (CAS chunks are region-scoped).
+        e = fleet_node("e")
         e["region"] = "us-east-1"
         e_node = self._node(e)
 
-        groups = ix_fleet.batch_groups([a, b, c, d_node, e_node])
+        groups = ix_fleet.batch_groups([a, b, d_node, e_node])
         names = [[node.name for node in group] for group in groups]
-        assert names == [["a", "b"], ["c"], ["d"], ["e"]]
+        assert names == [["a", "b"], ["d"], ["e"]]
 
     def test_switch_nodes_from_source_builds_one_multi_ix_up(self) -> None:
-        nodes = [self._node(remote_node("web")), self._node(remote_node("worker"))]
+        nodes = [self._node(fleet_node("web")), self._node(fleet_node("worker"))]
         calls: list[list[str]] = []
         cwds: list[Path | None] = []
 
@@ -788,16 +762,15 @@ class SwitchBatchTests(unittest.TestCase):
             ),
         )
 
-        # One native multi-VM `ix up`: every installable, one shared --build-vm,
-        # and no --name (multi derives each VM name from its installable attr).
+        # One native multi-VM `ix up`: every installable, no --name (multi
+        # derives each VM name from its installable attr), no placement flags
+        # (the CLI routes the build to the tenant's managed builder).
         assert calls == [
             [
                 "ix",
                 "up",
                 ".#web",
                 ".#worker",
-                "--build-vm",
-                "builder",
                 "--workdir",
                 "subdir",
             ]
@@ -805,10 +778,13 @@ class SwitchBatchTests(unittest.TestCase):
         assert "--name" not in calls[0]
         assert cwds == [Path("/source")]
 
-    def test_cmd_switch_batches_remote_nodes_and_runs_singles(self) -> None:
-        api = remote_node("api")
-        web = remote_node("web")
-        cache = fleet_node("cache")  # buildOn defaults to auto -> single fallback
+    def test_cmd_switch_batches_nodes_and_runs_singles(self) -> None:
+        api = fleet_node("api")
+        web = fleet_node("web")
+        cache = fleet_node("cache")
+        # A custom installable attr cannot join a batch (multi derives each VM
+        # name from the attr), so cache falls back to the single-target path.
+        cache["switch"]["sourceInstallable"] = ".#cache-system"
         plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api", "web", "cache"], [api, web, cache]))
         groups: list[list[str]] = []
         singles: list[str] = []
@@ -852,8 +828,8 @@ class SwitchBatchTests(unittest.TestCase):
         assert singles == ["cache"]
 
     def test_cmd_switch_respects_dependency_layers(self) -> None:
-        api = remote_node("api")
-        worker = remote_node("worker", depends_on=["api"])
+        api = fleet_node("api")
+        worker = fleet_node("worker", depends_on=["api"])
         plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api", "worker"], [api, worker]))
         switched: list[list[str]] = []
 

@@ -20,12 +20,8 @@
     };
 in {
   nixosConfigurations = {
-    # The shared build VM. It only needs Nix (every NixOS system has the
-    # daemon), so it carries no sentinel; `ix up .#builder` brings it up once.
-    builder = mkSystem (_: []);
-
-    # The target VMs. `ix up .#web .#worker .#edge --build-vm builder` builds
-    # all three closures on `builder` and activates each on its own VM.
+    # The target VMs. `ix up .#web .#worker .#edge` builds all three closures
+    # on the tenant's managed builder and activates each on its own VM.
     web = mkSystem (pkgs: [pkgs.ripgrep]);
     worker = mkSystem (pkgs: [pkgs.jq]);
     edge = mkSystem (pkgs: [pkgs.hello]);
