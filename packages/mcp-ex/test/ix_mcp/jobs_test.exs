@@ -96,4 +96,72 @@ defmodule IxMcp.JobsTest do
     # ...and is gone, with its whole tree, after cancellation.
     assert {_, 1} = System.cmd("pgrep", ["-f", marker])
   end
+
+  # -- #3538: raw binary bytes in cell output ---------------------------------
+
+  test "a cell printing raw binary bytes still finishes, escaped, with a terminal history row" do
+    # The incident shape (IO.puts of a compiled binary): pre-fix,
+    # :unicode.characters_to_binary/1 returned an {:error, ...} tuple that
+    # landed in the output buffer as if it were output, byte_size/1 crashed
+    # the job GenServer mid-finish, the history row sat at :running forever,
+    # and this very call exited :noproc after its budget.
+    {summary, output} = Jobs.run(~S|IO.puts(<<0xFF>> <> "tail")|, budget: 2, intent: "binary out")
+
+    assert summary.status == :done
+    assert output == "\\xFFtail\n"
+
+    entry = Enum.find(Jobs.history(10), &(&1.id == summary.id))
+    assert entry.status == :done
+  end
+
+  test "IO.binwrite: bytes valid as UTF-8 pass byte-identical, invalid bytes are escaped" do
+    {utf8, utf8_out} = Jobs.run(~S|IO.binwrite("snow ☃")|, budget: 2, intent: "binwrite utf8")
+    assert utf8.status == :done
+    assert utf8_out == "snow ☃"
+
+    {bin, bin_out} = Jobs.run(~S|IO.binwrite(<<0xFF>>)|, budget: 2, intent: "binwrite binary")
+    assert bin.status == :done
+    assert bin_out == "\\xFF"
+  end
+
+  test "a job whose process dies mid-run gets a terminal history row, and cancel reports it" do
+    {running, _out} = Jobs.run("Process.sleep(:infinity)", budget: 0.05, intent: "to be killed")
+    assert running.running
+
+    {:ok, pid} = Jobs.lookup(running.id)
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+
+    # History finalizes on its own DOWN signal; poll for the flip.
+    entry =
+      eventually(fn ->
+        Enum.find(Jobs.history(10), &(&1.id == running.id && &1.status != :running))
+      end)
+
+    assert entry.status == :failed
+    assert is_float(entry.elapsed_s)
+
+    # The job process is gone but the run is on record: report its state
+    # (pre-fix this raised "no such job" about an id history still listed).
+    assert Jobs.cancel(running.id) == {:error, :failed}
+  end
+
+  test "cancel on an id that never existed still raises" do
+    assert_raise ArgumentError, ~r/no such job/, fn -> Jobs.cancel("00000000") end
+  end
+
+  defp eventually(probe, tries \\ 50) do
+    case probe.() do
+      nil when tries > 0 ->
+        Process.sleep(20)
+        eventually(probe, tries - 1)
+
+      nil ->
+        flunk("condition never became true")
+
+      value ->
+        value
+    end
+  end
 end

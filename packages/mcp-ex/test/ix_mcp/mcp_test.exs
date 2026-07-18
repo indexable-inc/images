@@ -66,4 +66,51 @@ defmodule IxMcp.MCPTest do
     assert %{"error" => %{"code" => -32_601}} = Server.handle(request("bogus/method", %{}))
     assert Server.handle(%{"method" => "notifications/initialized"}) == nil
   end
+
+  # -- #3538: binary output must ride the wire, not kill it -------------------
+
+  test "exec of a binary-printing cell replies with escaped output that the wire can encode" do
+    response =
+      Server.handle(
+        request("tools/call", %{
+          "name" => "exec",
+          "arguments" => %{
+            "code" => ~S|IO.puts(<<0xFF>> <> "marker")|,
+            "budget" => 2,
+            "intent" => "binary output"
+          }
+        })
+      )
+
+    refute response["result"]["isError"]
+    [%{"type" => "text", "text" => text}] = response["result"]["content"]
+    assert text =~ "\\xFFmarker"
+
+    # The leg that killed the connection: the stdio transport JSON-encodes
+    # this exact map, and the OTP encoder raises {:invalid_byte, _} on any
+    # invalid UTF-8 anywhere inside it.
+    assert is_binary(JSON.encode!(response))
+  end
+
+  test "exec output above the cap is truncated loudly, naming the original byte count" do
+    total = 300 * 1024
+
+    response =
+      Server.handle(
+        request("tools/call", %{
+          "name" => "exec",
+          "arguments" => %{
+            "code" => "IO.write(String.duplicate(\"x\", #{total}))",
+            "budget" => 5,
+            "intent" => "big output"
+          }
+        })
+      )
+
+    [%{"type" => "text", "text" => text}] = response["result"]["content"]
+    assert text =~ "output truncated"
+    assert text =~ "#{total} bytes"
+    # The reply must stay bounded no matter how much the cell printed.
+    assert byte_size(text) < 100_000
+  end
 end

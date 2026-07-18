@@ -317,7 +317,13 @@ defmodule IxMcp.Jobs.Job do
     %{state | subscribers: []}
   end
 
-  defp append(buffer, chunk) do
+  # Only binaries may enter the buffer (IOProxy's convert/2 guarantees valid
+  # UTF-8): a non-binary chunk resurfaces as a `byte_size/1` crash in
+  # build_summary/1 -- after the eval already succeeded -- which is how
+  # #3538 orphaned history rows at :running. The guard turns any regression
+  # into a failed put_chars at the offending call site instead of a poisoned
+  # job record.
+  defp append(buffer, chunk) when is_binary(chunk) do
     :ets.insert(buffer, {System.unique_integer([:monotonic]), chunk})
   end
 
