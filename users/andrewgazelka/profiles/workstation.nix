@@ -137,6 +137,11 @@
 
   # Andrew deliberately permits direct merge-protection bypasses. The shared
   # prompt owns the rule text, so suppress its named rule in system prompts.
+  # Threaded into the claudeCode/codex override args below, NOT into
+  # programs.<agent>.systemPrompt.omitRules: the modules fold that option only
+  # into their defaulted package, and this profile sets `package =` explicitly,
+  # which discarded the fold and shipped prompts WITH the forceMerge rule
+  # (index#3537).
   agentPromptOmitRules = ["forceMerge"];
 
   # claude-code from the index FLAKE PACKAGE SET (packages/claude-code in the
@@ -171,12 +176,23 @@
     # Personal opt-outs from the fleet posture: run the model's native 1M
     # window (no DISABLE_1M clamp, no AUTO_COMPACT_WINDOW override) and keep
     # the harness subagent/task tool schemas loaded. Pairs with the
-    # `backgroundSubagents` omit on programs.claude-code below, whose rule
-    # text declares these tools absent.
+    # `backgroundSubagents` omit in `omitRules` below, whose rule text
+    # declares these tools absent.
     features = {
       context1M = true;
       autoCompactWindow = null;
     };
+    # Prompt rule opt-outs live HERE, not on
+    # programs.claude-code.systemPrompt.omitRules: the module folds that
+    # option only into basePackage.override, and the explicit `package =
+    # claudeCode` below discards the defaulted package, so the option
+    # silently shipped prompts WITH the forceMerge rule while
+    # protectedMergeGuard below already allowed force-merging (index#3537).
+    # backgroundSubagents claims the subagent/task tools are absent; the
+    # features/systemTools opt-ins here re-enable them on this machine, so
+    # the rule is omitted for Claude only (Codex still has no harness
+    # subagent tool).
+    omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
     # Matches agentPromptOmitRules `forceMerge` above: without this the baked
     # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
     # rule permits.
@@ -284,6 +300,11 @@
       mcpServers = {};
       settings = {};
       forcedSettings = {};
+      # On the override, not programs.codex.systemPrompt.omitRules, for the
+      # same reason as claudeCode above: the module folds that option only
+      # into its defaulted package, and the explicit `package = codex` below
+      # discarded it, shipping prompts WITH the forceMerge rule (index#3537).
+      omitRules = agentPromptOmitRules;
     })
     // {
       # Upstream main keeps Cargo's workspace version at 0.0.0. Home Manager
@@ -1054,10 +1075,6 @@ in {
   programs.claude-code = {
     enable = true;
     package = claudeCode;
-    # backgroundSubagents claims the subagent/task tools are absent; the
-    # claudeCode override above re-enables them on this machine, so the rule
-    # is omitted for Claude only (Codex still has no harness subagent tool).
-    systemPrompt.omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
     # All agents, BARE, sourced straight from the index repo (index's agents
     # package now holds my former personal agents too). Bare (not plugin) so
     # `subagent_type code-reviewer` keeps resolving.
@@ -1086,7 +1103,6 @@ in {
     # Codex otherwise writes a second global context file. The generated system
     # prompt is the single source of agent instructions.
     houseContext.enable = false;
-    systemPrompt.omitRules = agentPromptOmitRules;
     # hooks.json stays owned by the manual home.file declaration below (from
     # `codexBase.passthru.hooksJson`, matching the package on PATH). Without
     # this the imported codex module also claims ~/.codex/hooks.json with

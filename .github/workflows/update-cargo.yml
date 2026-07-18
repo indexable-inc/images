@@ -92,10 +92,19 @@ jobs:
       # block the merge. Set an `AUTOBUMP_TOKEN` repo secret (a PAT or GitHub
       # App token) to make the PR run CI; without it this falls back to
       # GITHUB_TOKEN and a maintainer must re-trigger `flake-check`.
+      # Notify the human behind a manual dispatch: review request + assignee +
+      # body mention, all empty (a no-op) on the scheduled runs, which have no
+      # triggering human.
+      - name: Resolve triggering human
+        id: trigger
+        uses: ./.github/actions/triggering-actor
+
       - name: Open pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          assignees: ${{ steps.trigger.outputs.user }}
+          reviewers: ${{ steps.trigger.outputs.user }}
           base: main
           branch: update-cargo
           delete-branch: true
@@ -109,3 +118,5 @@ jobs:
             `flake-check` is what proves the new versions actually build, so review its result before merging.
 
             Auto-bump, made with Claude Opus 4.8.
+
+            ${{ steps.trigger.outputs.mention }}

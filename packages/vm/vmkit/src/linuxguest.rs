@@ -22,9 +22,8 @@ use objc2::rc::Retained;
 use objc2_app_kit::NSApplication;
 use objc2_foundation::{NSArray, NSFileHandle, NSPipe};
 use objc2_virtualization::{
-    VZBootLoader, VZDiskImageStorageDeviceAttachment, VZEFIBootLoader, VZEFIVariableStore,
-    VZEFIVariableStoreInitializationOptions, VZEntropyDeviceConfiguration,
-    VZFileHandleSerialPortAttachment, VZGenericPlatformConfiguration,
+    VZBootLoader, VZEFIBootLoader, VZEFIVariableStore, VZEFIVariableStoreInitializationOptions,
+    VZEntropyDeviceConfiguration, VZFileHandleSerialPortAttachment, VZGenericPlatformConfiguration,
     VZGraphicsDeviceConfiguration, VZKeyboardConfiguration, VZMemoryBalloonDeviceConfiguration,
     VZPlatformConfiguration, VZPointingDeviceConfiguration, VZSerialPortAttachment,
     VZSerialPortConfiguration, VZStorageDeviceConfiguration, VZUSBKeyboardConfiguration,
@@ -44,8 +43,12 @@ const DISPLAY_HEIGHT: isize = 1080;
 /// struct (like [`crate::linuxkrun::BootLinux`]) so callers and the future IPC
 /// layer name each field; every field is `Send`.
 pub struct LinuxGuiBoot {
-    /// Raw EFI-bootable disk image (e.g. a NixOS `raw-efi` image).
-    pub disk: PathBuf,
+    /// Guest disks: the first is the raw EFI boot disk (e.g. a NixOS
+    /// `raw-efi` image), each further one an extra virtio-blk device the
+    /// guest sees as /dev/vdb, /dev/vdc, ... Image files and raw block
+    /// devices mix freely (see [`crate::blockdev`]). Never empty (the CLI
+    /// enforces at least one).
+    pub disks: Vec<PathBuf>,
     /// EFI variable store file. Opened if present, created otherwise, so boot
     /// entries written by the guest's bootloader persist across runs.
     pub var_store: PathBuf,
@@ -57,6 +60,8 @@ pub struct LinuxGuiBoot {
     pub cpus: usize,
     /// Guest memory in MiB.
     pub memory_mib: u64,
+    /// Block-device attachment policy (sync mode, mounted-filesystem force).
+    pub disk_flags: crate::blockdev::DiskFlags,
 }
 
 /// Boot the Linux GUI guest off-screen and screenshot its framebuffer to
@@ -65,7 +70,13 @@ pub struct LinuxGuiBoot {
 pub fn boot_linux_gui(boot: LinuxGuiBoot) -> Result<(), Error> {
     let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
 
-    let config = build_linux_gui_config(&boot.disk, &boot.var_store, boot.cpus, boot.memory_mib)?;
+    let config = build_linux_gui_config(
+        &boot.disks,
+        &boot.var_store,
+        boot.cpus,
+        boot.memory_mib,
+        boot.disk_flags,
+    )?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
@@ -91,24 +102,32 @@ pub fn boot_linux_gui(boot: LinuxGuiBoot) -> Result<(), Error> {
 
 /// Parameters for driving a Linux GUI guest interactively from stdin.
 pub struct DriveLinux {
-    /// Raw EFI-bootable disk image.
-    pub disk: PathBuf,
+    /// Guest disks, as in [`LinuxGuiBoot::disks`].
+    pub disks: Vec<PathBuf>,
     /// EFI variable store file (opened or created).
     pub var_store: PathBuf,
     /// Number of virtual CPUs.
     pub cpus: usize,
     /// Guest memory in MiB.
     pub memory_mib: u64,
+    /// Block-device attachment policy (sync mode, mounted-filesystem force).
+    pub disk_flags: crate::blockdev::DiskFlags,
 }
 
 /// Boot the Linux GUI guest off-screen and hand it to the shared stdin command
 /// loop (synthetic keyboard/mouse + on-demand screenshots), so a caller can
 /// drive and inspect it without touching the host cursor or desktop.
 pub fn drive_linux(drive: DriveLinux) -> Result<(), Error> {
+    let DriveLinux {
+        disks,
+        var_store,
+        cpus,
+        memory_mib,
+        disk_flags,
+    } = drive;
     let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
 
-    let config =
-        build_linux_gui_config(&drive.disk, &drive.var_store, drive.cpus, drive.memory_mib)?;
+    let config = build_linux_gui_config(&disks, &var_store, cpus, memory_mib, disk_flags)?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
@@ -126,11 +145,19 @@ pub fn drive_linux(drive: DriveLinux) -> Result<(), Error> {
 /// balloon. Shared by the screenshot ([`boot_linux_gui`]) and interactive
 /// ([`drive_linux`]) paths.
 fn build_linux_gui_config(
-    disk: &Path,
+    disks: &[PathBuf],
     var_store_path: &Path,
     cpus: usize,
     memory_mib: u64,
+    disk_flags: crate::blockdev::DiskFlags,
 ) -> Result<Retained<VZVirtualMachineConfiguration>, Error> {
+    // clap's `required = true` guarantees this from the CLI; guard for other
+    // callers so the failure is legible rather than a disk-less EFI boot.
+    if disks.is_empty() {
+        return Err(Error::Args {
+            message: "at least one disk (the EFI boot disk) is required".to_owned(),
+        });
+    }
     let memory_bytes = memory_mib
         .checked_mul(1024 * 1024)
         .ok_or(Error::MemoryTooLarge { mib: memory_mib })?;
@@ -169,24 +196,23 @@ fn build_linux_gui_config(
     let gfx = unsafe { VZVirtioGraphicsDeviceConfiguration::new() };
     unsafe { gfx.setScanouts(&NSArray::from_slice(&[&*scanout])) };
 
-    // Root disk (the NixOS aarch64 EFI image).
-    let disk_url = file_url(disk);
-    let disk_attach = unsafe {
-        VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
-            VZDiskImageStorageDeviceAttachment::alloc(),
-            &disk_url,
-            false,
-        )
-    }
-    .map_err(|e| Error::Bundle {
-        message: ns_error_message(&e),
-    })?;
-    let block = unsafe {
-        VZVirtioBlockDeviceConfiguration::initWithAttachment(
-            VZVirtioBlockDeviceConfiguration::alloc(),
-            &disk_attach,
-        )
-    };
+    // Guest disks: the boot image first, then any extra virtio-blk devices,
+    // in order (vda, vdb, ...). Each may be an image file or a raw block
+    // device; `storage_attachment` stats the path and builds the right VZ
+    // attachment (see crate::blockdev).
+    let blocks = disks
+        .iter()
+        .map(|disk| {
+            let attach = crate::blockdev::storage_attachment(disk, disk_flags)
+                .map_err(|source| Error::Disk { source })?;
+            Ok(unsafe {
+                VZVirtioBlockDeviceConfiguration::initWithAttachment(
+                    VZVirtioBlockDeviceConfiguration::alloc(),
+                    &attach,
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
 
     let keyboard = unsafe { VZUSBKeyboardConfiguration::new() };
     let pointing = unsafe { VZUSBScreenCoordinatePointingDeviceConfiguration::new() };
@@ -220,7 +246,13 @@ fn build_linux_gui_config(
     let platform_ref: &VZPlatformConfiguration = &platform;
     let boot_ref: &VZBootLoader = &boot_loader;
     let gfx_ref: &VZGraphicsDeviceConfiguration = &gfx;
-    let block_ref: &VZStorageDeviceConfiguration = &block;
+    let block_refs: Vec<&VZStorageDeviceConfiguration> = blocks
+        .iter()
+        .map(|block| {
+            let block_ref: &VZStorageDeviceConfiguration = block;
+            block_ref
+        })
+        .collect();
     let kbd_ref: &VZKeyboardConfiguration = &keyboard;
     let pt_ref: &VZPointingDeviceConfiguration = &pointing;
     let serial_ref: &VZSerialPortConfiguration = &serial;
@@ -232,7 +264,7 @@ fn build_linux_gui_config(
         config.setCPUCount(cpus);
         config.setMemorySize(memory_bytes);
         config.setGraphicsDevices(&NSArray::from_slice(&[gfx_ref]));
-        config.setStorageDevices(&NSArray::from_slice(&[block_ref]));
+        config.setStorageDevices(&NSArray::from_slice(&block_refs));
         config.setKeyboards(&NSArray::from_slice(&[kbd_ref]));
         config.setPointingDevices(&NSArray::from_slice(&[pt_ref]));
         config.setSerialPorts(&NSArray::from_slice(&[serial_ref]));

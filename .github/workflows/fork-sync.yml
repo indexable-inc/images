@@ -26,6 +26,9 @@ concurrency:
 jobs:
   fork-sync:
     runs-on: ubuntu-latest
+    # p95 64m, worst 68m over the 21 green runs to date (2026-07-17); 1.5x
+    # headroom on an hour-scale lane.
+    timeout-minutes: 100
     permissions:
       contents: write
       pull-requests: write
@@ -101,9 +104,17 @@ jobs:
       # only when the tool itself cannot run. The table lands in the job's step
       # summary and in the rolling PR body (`body-path` below); the body file is
       # written outside the workspace so create-pull-request cannot commit it.
+      # Notify the human behind a manual dispatch: review request + assignee +
+      # body mention, all empty (a no-op) on the scheduled runs, which have no
+      # triggering human.
+      - name: Resolve triggering human
+        id: trigger
+        uses: ./.github/actions/triggering-actor
+
       - name: Fork drift report
         env:
           GH_TOKEN: ${{ github.token }}
+          TRIGGER_MENTION: ${{ steps.trigger.outputs.mention }}
         run: |
           set -euo pipefail
           nix run .#upstream-sync -- drift --markdown > "$RUNNER_TEMP/drift.md"
@@ -128,12 +139,18 @@ jobs:
             cat "$RUNNER_TEMP/drift.md"
             echo ""
             echo "Auto-bump, made with Claude Opus 4.8."
+            if [ -n "${TRIGGER_MENTION}" ]; then
+              echo ""
+              echo "${TRIGGER_MENTION}"
+            fi
           } > "$RUNNER_TEMP/pr-body.md"
 
       - name: Open pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          assignees: ${{ steps.trigger.outputs.user }}
+          reviewers: ${{ steps.trigger.outputs.user }}
           base: main
           branch: fork-sync
           delete-branch: true

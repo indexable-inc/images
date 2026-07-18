@@ -424,6 +424,27 @@
     };
   }
   {
+    moduleOptionShadowing = {
+      text = ''
+        A NixOS/Home Manager module option folded only into a derived default
+        (`package = lib.mkDefault (base.override {...})`) is silently discarded
+        once the consumer sets that target explicitly. Apply options to the
+        final value, or assert on the conflict by comparing
+        `options.<ns>.package.highestPrio` against `(lib.mkDefault null).priority`
+        (not `lib.modules.defaultOverridePriority`, which is the plain-definition
+        priority, 100). When a module option seems ignored, first check whether
+        an explicit setting shadows the module's defaulted path.
+      '';
+      reason = ''
+        `programs.claude-code.systemPrompt.omitRules` reached the wrapper only
+        through the mkDefault-ed package; a profile setting `package` explicitly
+        discarded it with no error, shipping prompt text the config said to omit
+        (index#3537). Reverse-engineering the silent drop was expensive; the fix
+        was an eval-time assertion (#3545).
+      '';
+    };
+  }
+  {
     fixAtSource = {
       text = ''
         Fix problems at their source: prefer architectural changes that remove
@@ -455,6 +476,57 @@
         happened only because the workaround was not treated as the end state.
         Merged from fixAtSource + noFallbacks + principledEndgame in the #3164
         lean-prompt trim.
+      '';
+    };
+  }
+  {
+    vendoredForks = {
+      text = ''
+        The index repo vendors and forks its key upstreams: Nix itself first
+        among them, plus nushell, btop, zed, clippy, mesa, and codex, with
+        `lib/fork-packages.nix` as the registry (downstream repos such as ix
+        keep their own series through the same tooling). Tracing a bug into
+        vendored code therefore never ends at "upstream's problem": the fork
+        is ours, and the fix lands at the vendor point as a numbered mailbox
+        patch in that package's `patches/` dir, not as a workaround
+        downstream of it.
+
+        The tooling owns maintenance, not authoring: `nix run
+        .#rebase-patches` rebases the whole series when the pinned base
+        moves (`resume` continues past conflicts) and
+        `nix run .#rebase-patches -- dag <name>` regenerates `dag.json`
+        (never hand-edit it); no subcommand materializes or exports the
+        source tree, so that loop is plain git. Materialize: clone the
+        upstream to /tmp, `git checkout --detach` the pinned rev from
+        `flake.lock` (`nodes.<input>.locked.rev`), then
+        `git am <patchDir>/*.patch` so each patch becomes a commit. Edit and
+        commit normally: the commit body states the reason (the message is
+        the patch's record and its upstream PR text) and the fix's tests
+        ride inside the same patch. Export from the scratch clone, never the
+        repo checkout, with exactly
+        `git format-patch --zero-commit --no-signature --no-stat -N -o <patchDir> <base>..HEAD`
+        (flag drift fails the canonical-form check), then regen the dag.
+        Before push, run the seconds-fast `patched-src-<name>` and
+        `patch-dag-<name>` checks, then build the fork package and run the
+        patch's focused tests. Upstreaming intent is declared per patch in
+        the registry, never by opening an upstream PR yourself. Consumers
+        pin this repo through flake locks, so a merged patch reaches the
+        fleet only after their lock bump and deploy: follow through to that
+        before calling a production incident fixed.
+      '';
+      reason = ''
+        Nothing in the prompt named the fork boundary or its tooling: the
+        authoring recipe had to be reconstructed from rebase-patches source,
+        and diagnosis threads that hit vendored code defaulted to "file it
+        upstream" or a downstream guard. index#3559 (fleet CI wedged on
+        half-closed cache downloads) shows the intended shape: fork patch
+        0022 with its unit tests inside the patch (#3566), effective only
+        after the consumer lock bump -- and its author ran the
+        materialize/export loop by hand (rebase-patches has only
+        rebase/resume/dag; an author subcommand is tracked as index#2148),
+        which is why the rule spells the git commands out byte-exact.
+        Sibling of fixAtSource, which owns the general fix-at-source
+        stance; this rule adds the vendor-point mechanics.
       '';
     };
   }

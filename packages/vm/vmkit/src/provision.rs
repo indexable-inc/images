@@ -620,8 +620,10 @@ const EMPTY_PLIST: &[u8] = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
       <plist version=\"1.0\"><dict/></plist>\n";
 
 /// Run a tool that emits a plist on stdout, converting it to JSON with `plutil`
-/// so it parses with `serde_json`. Returns the JSON text.
-fn run_plist_json(tool: &'static str, args: &[&str]) -> Result<String, Error> {
+/// so it parses with `serde_json`. Returns the JSON text. Crate-visible: the
+/// raw block-device mounted-filesystem check (`crate::blockdev`) reads
+/// `diskutil list -plist` through the same seam.
+pub(crate) fn run_plist_json(tool: &'static str, args: &[&str]) -> Result<String, Error> {
     let tool_path = tool_path(tool);
     let out = Command::new(tool_path)
         .args(args)

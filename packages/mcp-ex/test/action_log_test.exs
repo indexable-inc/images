@@ -130,16 +130,24 @@ defmodule IxMcp.ActionLogTest do
     %{"job" => job_id} = text |> String.split("\n") |> hd() |> JSON.decode!()
 
     # The sampler ticks every 25ms under test config; give it a few ticks.
-    stack =
+    entry =
       poll_until(fn ->
         case ActionLog.recent(1) do
-          [%{status: "running", stack: stack} | _] when is_binary(stack) -> stack
+          [%{status: "running", stack: stack} = entry | _] when is_binary(stack) -> entry
           _ -> nil
         end
       end)
 
-    frames = JSON.decode!(stack)
+    frames = JSON.decode!(entry.stack)
     assert Enum.any?(frames, &(&1 =~ "sleep")), "expected a sleep frame in #{inspect(frames)}"
+
+    # Machinery below the eval boundary is pruned from the sample, so the
+    # innermost stored frame is one the cell author can act on (#3546).
+    refute Enum.any?(frames, &(&1 =~ "erl_eval")), "expected pruned frames in #{inspect(frames)}"
+
+    # A top-level statement runs interpreted: no frame is the cell's own, so
+    # there is no cell line and a viewer falls back to the top frame.
+    assert entry.line == nil
 
     :ok = IxMcp.Jobs.cancel(job_id)
 
@@ -147,6 +155,53 @@ defmodule IxMcp.ActionLogTest do
     assert entry.status == "cancelled"
     refute entry.is_error
     assert entry.stack == nil, "finalizing clears the sampled stack"
+    assert entry.line == nil, "finalizing clears the sampled cell line"
+  end
+
+  test "a cell-owned frame's line is sampled into the row as the live cell line" do
+    # Code compiled in the cell (the module it defines) carries
+    # `file: "cell"` in its frames; line 3 is the Process.sleep call site.
+    code = """
+    defmodule IxMcp.ActionLogTest.CellLineProbe do
+      def loop do
+        Process.sleep(50)
+        loop()
+      end
+    end
+
+    IxMcp.ActionLogTest.CellLineProbe.loop()
+    """
+
+    response =
+      Server.handle(%{
+        "jsonrpc" => "2.0",
+        "id" => 7,
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "exec",
+          "arguments" => %{"code" => code, "intent" => "loop for line sampling", "budget" => 0.05}
+        }
+      })
+
+    [%{"text" => text}] = response["result"]["content"]
+    %{"job" => job_id} = text |> String.split("\n") |> hd() |> JSON.decode!()
+
+    entry =
+      poll_until(fn ->
+        case ActionLog.recent(1) do
+          [%{status: "running", line: line} = entry | _] when is_integer(line) -> entry
+          _ -> nil
+        end
+      end)
+
+    assert entry.line == 3
+
+    # The stored frames name the cell line too, right under the sleep frame.
+    frames = JSON.decode!(entry.stack)
+    assert Enum.any?(frames, &(&1 =~ "cell:3")), "expected a cell:3 frame in #{inspect(frames)}"
+
+    :ok = IxMcp.Jobs.cancel(job_id)
+    assert [%{status: "cancelled", line: nil} | _] = ActionLog.recent(1)
   end
 
   defp poll_until(fun, deadline_ms \\ 2_000) do
@@ -259,13 +314,13 @@ defmodule IxMcp.ActionLogTest do
         log
       )
 
-    :ok = ActionLog.update_stack(action_id, ~s(["frame"]), log)
-    assert [%{status: "running", stack: ~s(["frame"])} | _] = ActionLog.recent(10, log)
+    :ok = ActionLog.update_stack(action_id, ~s(["frame"]), 2, log)
+    assert [%{status: "running", stack: ~s(["frame"]), line: 2} | _] = ActionLog.recent(10, log)
     :ok = ActionLog.finish_action(action_id, "done", false, 3, log)
-    assert [%{status: "done", stack: nil} | _] = ActionLog.recent(10, log)
+    assert [%{status: "done", stack: nil, line: nil} | _] = ActionLog.recent(10, log)
 
-    # The 2 -> 3 step stamped the file on its way through (index#3539).
-    assert user_version(path) == 3
+    # The 2 -> 3 -> 4 steps stamped the file on their way through (index#3539).
+    assert user_version(path) == 4
   end
 
   test "a v1 database migrates losslessly to the normalized schema, once" do
@@ -349,8 +404,8 @@ defmodule IxMcp.ActionLogTest do
 
     stop_supervised!(:migrate)
 
-    # The ladder ran 1 -> 2 -> 3 and left the stamp behind (index#3539).
-    assert user_version(path) == 3
+    # The ladder ran 1 -> 2 -> 3 -> 4 and left the stamp behind (index#3539).
+    assert user_version(path) == 4
 
     # The migrated file is the v2 shape on disk: normalized columns, no v1
     # leftovers, and a reopen (no-op detection) does not duplicate rows.
@@ -372,7 +427,8 @@ defmodule IxMcp.ActionLogTest do
              "elapsed_ms",
              "status",
              "stack",
-             "stack_at"
+             "stack_at",
+             "line"
            ]
 
     {:ok, statement} =
@@ -394,7 +450,7 @@ defmodule IxMcp.ActionLogTest do
   test "a fresh database is created stamped with the current schema version" do
     path = tmp_db()
     start_supervised!({ActionLog, path: path, name: :action_log_fresh_stamp})
-    assert user_version(path) == 3
+    assert user_version(path) == 4
   end
 
   test "an unstamped file already at the current schema is stamped, not rewritten" do
@@ -419,7 +475,32 @@ defmodule IxMcp.ActionLogTest do
 
     reopened = start_supervised!({ActionLog, path: path, name: :action_log_stamp_b})
     assert [%{intent: "keep"}] = ActionLog.recent(10, reopened)
-    assert user_version(path) == 3
+    assert user_version(path) == 4
+  end
+
+  test "an unstamped pre-line file (the #3536 shape) sniffs as v3 and gains the line column" do
+    path = tmp_db()
+
+    # The v3 shape exactly as pre-stamping #3536-era binaries wrote it:
+    # status/stack columns present, line absent, user_version still 0.
+    {:ok, conn} = Sqlite3.open(path)
+
+    for statement <- [
+          "CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL)",
+          "CREATE TABLE topics (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES sessions(id), name TEXT NOT NULL, started_at TEXT NOT NULL)",
+          "CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'done', stack TEXT, stack_at TEXT)",
+          "INSERT INTO sessions (id, name, started_at) VALUES (1, 'old', '2026-07-17T10:00:00Z')",
+          "INSERT INTO actions (at, session_id, topic_id, tool, intent, arguments, is_error, elapsed_ms) VALUES ('2026-07-17T10:00:01Z', 1, NULL, 'exec', 'pre-line row', '{}', 0, 5)"
+        ] do
+      :ok = Sqlite3.execute(conn, statement)
+    end
+
+    :ok = Sqlite3.close(conn)
+
+    log = start_supervised!({ActionLog, path: path, name: :action_log_pre_line})
+
+    assert [%{intent: "pre-line row", status: "done", line: nil}] = ActionLog.recent(10, log)
+    assert user_version(path) == 4
   end
 
   test "a database stamped by a newer server disables logging instead of crashing" do
@@ -436,7 +517,7 @@ defmodule IxMcp.ActionLogTest do
 
     # The refusal names both versions, so the operator knows which side moves.
     assert output =~ "user_version 9000"
-    assert output =~ "supported 3"
+    assert output =~ "supported 4"
     assert output =~ "index#3539"
 
     # The server stays useful: writes are absorbed, reads answer empty.
@@ -449,7 +530,7 @@ defmodule IxMcp.ActionLogTest do
         log
       )
 
-    :ok = ActionLog.update_stack(action_id, "[]", log)
+    :ok = ActionLog.update_stack(action_id, "[]", nil, log)
     :ok = ActionLog.finish_action(action_id, "done", false, 1, log)
     assert ActionLog.recent(10, log) == []
     assert ActionLog.sessions(log) == []

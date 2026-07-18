@@ -216,40 +216,56 @@
     overlays = [ix.overlay];
   };
   homeAgentIndexPackages = _: ix.packageSetFor homeAgentPkgs;
-  homeAgentConfig =
-    (home-manager.lib.homeManagerConfiguration {
-      pkgs = homeAgentPkgs;
-      modules = [
-        (import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
-          indexPackages = homeAgentIndexPackages;
-          promptModule = paths.packagesRoot + "/agent/prompt";
-          mutableJsonModule = ix.mutableJson.homeModule;
-        })
-        (import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
-          indexPackages = homeAgentIndexPackages;
-          promptModule = paths.packagesRoot + "/agent/prompt";
-        })
-        {
-          home = {
-            username = "agent";
-            homeDirectory = "/home/agent";
-            stateVersion = "25.05";
-          };
-          programs.claude-code = {
-            enable = true;
-            systemPrompt.omitRules = ["reportToPlaybook"];
-            houseContext.enable = true;
-            personalStartupContext = true;
-          };
-          programs.codex = {
-            enable = true;
-            configDir = ".config/codex-test";
-            defaults.agents.max_depth = 4;
-            systemPrompt.omitRules = ["reportToPlaybook"];
-          };
-        }
-      ];
-    }).config;
+  homeAgentHome = home-manager.lib.homeManagerConfiguration {
+    pkgs = homeAgentPkgs;
+    modules = [
+      (import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
+        indexPackages = homeAgentIndexPackages;
+        promptModule = paths.packagesRoot + "/agent/prompt";
+        mutableJsonModule = ix.mutableJson.homeModule;
+      })
+      (import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
+        indexPackages = homeAgentIndexPackages;
+        promptModule = paths.packagesRoot + "/agent/prompt";
+      })
+      {
+        home = {
+          username = "agent";
+          homeDirectory = "/home/agent";
+          stateVersion = "25.05";
+        };
+        programs.claude-code = {
+          enable = true;
+          systemPrompt.omitRules = ["reportToPlaybook"];
+          houseContext.enable = true;
+          personalStartupContext = true;
+        };
+        programs.codex = {
+          enable = true;
+          configDir = ".config/codex-test";
+          defaults.agents.max_depth = 4;
+          systemPrompt.omitRules = ["reportToPlaybook"];
+        };
+      }
+    ];
+  };
+  homeAgentConfig = homeAgentHome.config;
+  # index#3537: an explicit `package =` outprioritizes the modules'
+  # mkDefault-ed wrapper, so the systemPrompt.omitRules fold can no longer
+  # reach the shipped package; the modules must fail eval loudly instead of
+  # silently shipping prompts that still carry the omitted rules. Home
+  # Manager checks assertions eagerly on any config access, so tryEval
+  # failing here is the guard tripping: the same fixpoint with the package
+  # left defaulted (homeAgentConfig above) passes every assertion, making
+  # the explicit package the only delta.
+  homeAgentExplicitPackageFails = program:
+    !(builtins.tryEval (
+      builtins.seq
+      (homeAgentHome.extendModules {
+        modules = [{programs.${program}.package = homeAgentPkgs.hello;}];
+      }).config
+      true
+    )).success;
   macosGuestsConfig =
     (lib.evalModules {
       specialArgs.pkgs = homeAgentPkgs;
@@ -4471,6 +4487,25 @@
             builtins.readFile homeAgentConfig.programs.codex.finalPackage.passthru.modelInstructionsFile
           );
         message = "Codex Home Manager module should thread systemPrompt.omitRules into the package wrapper";
+      }
+      {
+        # Claude counterpart of the codex threading check above: the package
+        # is left defaulted here, so the module's omitRules fold must strip
+        # the omitted rule's text from the baked prompt (index#3537).
+        assertion =
+          !lib.strings.hasInfix "Publish substantial investigations"
+          homeAgentConfig.programs.claude-code.package.passthru.systemPrompt;
+        message = "Claude Code Home Manager module should thread systemPrompt.omitRules into the package wrapper";
+      }
+      {
+        # index#3537: with an explicitly-set package the omitRules fold is
+        # discarded, which once shipped permissions that allowed force-merge
+        # under a prompt that forbade it; both modules must trip their guard
+        # assertion instead of half-applying the policy.
+        assertion =
+          homeAgentExplicitPackageFails "claude-code"
+          && homeAgentExplicitPackageFails "codex";
+        message = "agent Home Manager modules should fail eval when systemPrompt.omitRules rides an explicitly-set package";
       }
       {
         # When explicitly enabled, the native `context` option carries the

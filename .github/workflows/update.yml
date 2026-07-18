@@ -24,6 +24,8 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    # p95 44m, worst 48m over last 30 green runs (2026-07-17); 2x headroom.
+    timeout-minutes: 90
     permissions:
       contents: write
       pull-requests: write
@@ -110,10 +112,19 @@ jobs:
       # block the merge. Set an `AUTOBUMP_TOKEN` repo secret (a PAT or GitHub
       # App token) to make the PR run CI; without it this falls back to
       # GITHUB_TOKEN and a maintainer must re-trigger `flake-check`.
+      # Notify the human behind a manual dispatch: review request + assignee +
+      # body mention, all empty (a no-op) on the scheduled runs, which have no
+      # triggering human.
+      - name: Resolve triggering human
+        id: trigger
+        uses: ./.github/actions/triggering-actor
+
       - name: Open pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          assignees: ${{ steps.trigger.outputs.user }}
+          reviewers: ${{ steps.trigger.outputs.user }}
           base: main
           branch: update-content
           delete-branch: true
@@ -127,3 +138,5 @@ jobs:
             Each changed updater package also built on `x86_64-linux`, which proves the new hash fetches and builds but **not** that it is authentic. claude-code's updater verified Anthropic's detached GPG signature over all four platform checksums before writing. **Most pins have no upstream signature**, so please eyeball those hash changes before merging: the build only covers x86_64-linux, and the updater pins whatever bytes the release host served.
 
             Auto-bump, made with Claude Opus 4.8.
+
+            ${{ steps.trigger.outputs.mention }}

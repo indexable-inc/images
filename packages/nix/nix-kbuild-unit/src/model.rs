@@ -49,6 +49,10 @@ pub enum UnitKind {
     Link,
     /// `scripts/mod/modpost` export check over `vmlinux.o`.
     Modpost,
+    /// A savedcmd-only object rule with no dep tracking (`if_changed`, not
+    /// `if_changed_dep`): EFI libstub's stubcopy strip/objcopy at defconfig
+    /// scale. Replays the exact argv over the unit outputs it references.
+    Command,
 }
 
 impl CmdEntry {
@@ -64,11 +68,14 @@ impl CmdEntry {
             "vmlinux.symvers" => Some(UnitKind::Modpost),
             _ if target.ends_with(".a") => Some(UnitKind::Archive),
             _ if target.ends_with(".o")
-                && self.source.is_some()
                 && !target.starts_with("scripts/")
                 && !target.starts_with("tools/") =>
             {
-                Some(UnitKind::Compile)
+                if self.source.is_some() {
+                    Some(UnitKind::Compile)
+                } else {
+                    Some(UnitKind::Command)
+                }
             }
             _ => None,
         }
@@ -124,7 +131,16 @@ mod tests {
             .unit_kind(),
             None
         );
-        // An .o with no dep tracking (compiled inside a script) is not a unit.
-        assert_eq!(entry("init/version-timestamp.o", None).unit_kind(), None);
+        // An .o with a savedcmd but no dep tracking (`if_changed` rules)
+        // replays as an opaque command unit; ones nothing references (the
+        // link script rebuilds init/version-timestamp.o itself) get pruned.
+        assert_eq!(
+            entry("drivers/firmware/efi/libstub/alignedmem.stub.o", None).unit_kind(),
+            Some(UnitKind::Command)
+        );
+        assert_eq!(
+            entry("init/version-timestamp.o", None).unit_kind(),
+            Some(UnitKind::Command)
+        );
     }
 }

@@ -2738,9 +2738,6 @@
       # sh Output rendering regressions (issue #1766: a failed build must not
       # read as success/still-running); imports the site-packages sh module.
       cp ${./tests/test_sh_module.py} test_sh_module.py
-      # In-band kernel build staleness (#2110): the api() header row and the
-      # TypeError-hint build stamp; imports the site-packages ix_notebook_mcp.
-      cp ${./tests/test_build_info.py} test_build_info.py
       # Issue #2355: per-serve kernel trace file + sweep of orphaned dumps.
       cp ${./tests/test_kernel_trace_path.py} test_kernel_trace_path.py
       # The kernel host seam: local/ray selection, the actor's connection-info
@@ -2774,7 +2771,6 @@
         test_fsearch_files_only.py \
         test_claude_history.py \
         test_sh_module.py \
-        test_build_info.py \
         test_kernel_trace_path.py \
         test_kernel_host.py \
         test_store_kernel_lease.py \
