@@ -271,8 +271,19 @@ defmodule IxMcp.Jobs.Job do
   def handle_info(:sample_stack, %{status: :running} = state) do
     case Process.info(state.eval_pid, :current_stacktrace) do
       {:current_stacktrace, frames} ->
-        stack = JSON.encode!(Enum.map(frames, &Exception.format_stacktrace_entry/1))
-        ActionLog.update_stack(state.action_id, stack)
+        # The machinery below the eval boundary (:erl_eval, :elixir, Code) is
+        # plumbing the cell author did not write; cut it like the error path
+        # does so the innermost stored frame is one the author can act on. A
+        # stack with no author frames at all (a cell still compiling, say)
+        # keeps the raw frames rather than storing an empty stack.
+        shown =
+          case Evaluator.prune_stacktrace(frames) do
+            [] -> frames
+            pruned -> pruned
+          end
+
+        stack = JSON.encode!(Enum.map(shown, &Exception.format_stacktrace_entry/1))
+        ActionLog.update_stack(state.action_id, stack, cell_line(frames))
 
       # The eval exited between the tick and the probe; the finish path owns
       # the row now.
@@ -289,6 +300,20 @@ defmodule IxMcp.Jobs.Job do
   def handle_info(_msg, state), do: {:noreply, state}
 
   # -- internals ---------------------------------------------------------------
+
+  # The 1-based line of cell source the eval currently sits on, from the
+  # deepest frame the cell itself owns: Workspace evals with
+  # `Code.env_for_eval(file: "cell")`, so frames from code compiled in the
+  # cell (a module the cell defined) carry `file: ~c"cell"`. Top-level cell
+  # statements and anonymous fns run interpreted through :erl_eval and leave
+  # no such frame -- then there is no cell line and the viewer falls back to
+  # the formatted top frame (#3546).
+  defp cell_line(frames) do
+    Enum.find_value(frames, fn {_mod, _fun, _arity, meta} ->
+      line = meta[:line]
+      if meta[:file] == ~c"cell" and is_integer(line) and line > 0, do: line
+    end)
+  end
 
   defp finish(state, status, result, diags) do
     state = %{

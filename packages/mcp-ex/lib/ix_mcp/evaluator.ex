@@ -77,9 +77,14 @@ defmodule IxMcp.Evaluator do
   defp format_position(line) when is_integer(line), do: "#{line}"
   defp format_position(_), do: "?"
 
-  # Everything below the compiler's eval frames is evaluator machinery the
-  # cell author did not write; cut it the way Livebook does.
-  defp prune_stacktrace(stacktrace) do
+  @doc """
+  Cut evaluator machinery out of a stacktrace the way Livebook does:
+  everything below the compiler's eval frames is plumbing the cell author
+  did not write. Used for error stacktraces and for the live stack samples
+  the running job stores in the action log (#3546).
+  """
+  @spec prune_stacktrace(Exception.stacktrace()) :: Exception.stacktrace()
+  def prune_stacktrace(stacktrace) do
     stacktrace
     |> Enum.take_while(fn {mod, fun, _arity, _meta} -> {mod, fun} != {:elixir, :eval_forms} end)
     |> Enum.reject(fn {mod, _fun, _arity, _meta} ->
