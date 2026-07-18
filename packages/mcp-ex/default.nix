@@ -115,10 +115,15 @@
       # RELEASE_DISTRIBUTION=none: a stdio MCP server needs no Erlang
       # distribution, and the default sname mode wants an epmd listen socket
       # (denied in sandboxes, pointless everywhere else).
+      # PrWatch execs the GitHub CLI; baking gh's store path into IX_MCP_GH
+      # keeps the watcher independent of whatever PATH the MCP client
+      # launched the server with (#3553). set-default, not set: mix test and
+      # operators may point the watcher at a different gh.
       makeWrapper "$out/lib/ix-mcp-ex/bin/ix_mcp" "$out/bin/ix-mcp-ex" \
         --set IX_MCP_STDIO 1 \
         --set RELEASE_DISTRIBUTION none \
         --set-default RELEASE_TMP /tmp \
+        --set-default IX_MCP_GH ${lib.getExe pkgs.gh} \
         --add-flags start
       runHook postInstall
     '';

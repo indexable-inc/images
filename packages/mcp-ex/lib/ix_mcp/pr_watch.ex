@@ -6,6 +6,11 @@ defmodule IxMcp.PrWatch do
   a hung `gh` invocation stalls that watch alone, and the notification carries
   the final state -- no hand-written polling loops in agent sessions.
 
+  The notification is a promise, kept unconditionally: the release bakes gh's
+  store path into `IX_MCP_GH` so a watch never depends on the PATH the MCP
+  client launched the server with, and a watcher that crashes anyway reports
+  the crash over the channel instead of vanishing (#3553).
+
   This watches PR state, not CI. When a green gate matters, pair it with
   `gh pr checks <pr> --watch --fail-fast`; state is the half agents forget
   (#3548): a CONFLICTING PR skips pull_request CI entirely, and another actor
@@ -22,8 +27,8 @@ defmodule IxMcp.PrWatch do
           {:ok, String.t()} | {:error, String.t()}
   def start(pr, cwd, interval_s \\ 15, timeout_s \\ 3600) do
     cond do
-      System.find_executable("gh") == nil ->
-        {:error, "gh not found on PATH; PrWatch.start needs the GitHub CLI"}
+      gh() == nil ->
+        {:error, "gh not found (no IX_MCP_GH, none on PATH); PrWatch needs the GitHub CLI"}
 
       not File.dir?(cwd) ->
         {:error, "cwd does not exist: #{cwd}"}
@@ -32,11 +37,31 @@ defmodule IxMcp.PrWatch do
         {:ok, pid} =
           Task.Supervisor.start_child(IxMcp.PrWatch.Supervisor, fn ->
             deadline = System.monotonic_time(:millisecond) + round(timeout_s * 1000)
-            watch(pr, cwd, round(interval_s * 1000), deadline)
+            watch_loudly(pr, cwd, round(interval_s * 1000), deadline)
           end)
 
         {:ok, "watching PR #{pr} (#{inspect(pid)}); a channel notification reports the outcome"}
     end
+  end
+
+  # The release wrapper bakes the GitHub CLI's store path into IX_MCP_GH, so
+  # a watch never depends on whatever PATH the MCP client launched the server
+  # with (#3553: gh lived outside the release and the watcher died at the
+  # first poll). The PATH lookup remains only for mix test / IEx runs outside
+  # the release.
+  defp gh do
+    System.get_env("IX_MCP_GH") || System.find_executable("gh")
+  end
+
+  # start/4 promised the caller a notification, so a crashing watcher must
+  # not vanish into the supervisor's logs (#3553): deliver the crash over the
+  # channel first, then re-raise so the crash report still reaches the logger.
+  defp watch_loudly(pr, cwd, interval_ms, deadline) do
+    watch(pr, cwd, interval_ms, deadline)
+  catch
+    kind, reason ->
+      notify(pr, "error", String.slice(Exception.format(kind, reason, __STACKTRACE__), 0, 800))
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   defp watch(pr, cwd, interval_ms, deadline) do
@@ -58,7 +83,7 @@ defmodule IxMcp.PrWatch do
   end
 
   defp poll(pr, cwd) do
-    case System.cmd("gh", ["pr", "view", pr, "--json", "state,mergedAt,url"],
+    case System.cmd(gh(), ["pr", "view", pr, "--json", "state,mergedAt,url"],
            cd: cwd,
            stderr_to_stdout: true
          ) do
@@ -77,9 +102,15 @@ defmodule IxMcp.PrWatch do
 
   defp notify(pr, state, detail) do
     Notifier.notify("notifications/message", %{
-      "level" => if(state == "merged", do: "info", else: "warning"),
+      "level" => level(state),
       "logger" => "ix_mcp.pr_watch",
       "data" => %{"event" => "pr_watch", "pr" => pr, "state" => state, "detail" => detail}
     })
   end
+
+  # "error" rode as "warning" before #3553; a watch that will never report
+  # again is an error, not something to skim past.
+  defp level("merged"), do: "info"
+  defp level("error"), do: "error"
+  defp level(_state), do: "warning"
 end
