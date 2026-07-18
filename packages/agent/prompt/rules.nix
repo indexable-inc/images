@@ -424,6 +424,27 @@
     };
   }
   {
+    moduleOptionShadowing = {
+      text = ''
+        A NixOS/Home Manager module option folded only into a derived default
+        (`package = lib.mkDefault (base.override {...})`) is silently discarded
+        once the consumer sets that target explicitly. Apply options to the
+        final value, or assert on the conflict by comparing
+        `options.<ns>.package.highestPrio` against `(lib.mkDefault null).priority`
+        (not `lib.modules.defaultOverridePriority`, which is the plain-definition
+        priority, 100). When a module option seems ignored, first check whether
+        an explicit setting shadows the module's defaulted path.
+      '';
+      reason = ''
+        `programs.claude-code.systemPrompt.omitRules` reached the wrapper only
+        through the mkDefault-ed package; a profile setting `package` explicitly
+        discarded it with no error, shipping prompt text the config said to omit
+        (index#3537). Reverse-engineering the silent drop was expensive; the fix
+        was an eval-time assertion (#3545).
+      '';
+    };
+  }
+  {
     fixAtSource = {
       text = ''
         Fix problems at their source: prefer architectural changes that remove
