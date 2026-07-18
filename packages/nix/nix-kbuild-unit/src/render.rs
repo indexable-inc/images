@@ -250,6 +250,42 @@ fn normalize_rel(rel: &str) -> color_eyre::Result<String> {
     Ok(parts.join("/"))
 }
 
+/// Srctree files a saved command reads through `grep -f` (member-list
+/// filters like `scripts/head-object-list.txt`). Such reads leave no .cmd
+/// dep, so the source scope must recover them from the command text. Only a
+/// `-f` inside a grep invocation counts: `rm -f`/`ar`-flag lookalikes in the
+/// same command line stay ignored, and a pipe or statement end closes the
+/// grep. Absolute paths arrive store-resolved and need no farm entry.
+fn grep_file_reads(cmd: &str) -> color_eyre::Result<Vec<String>> {
+    let mut reads = Vec::new();
+    let mut in_grep = false;
+    let mut next_is_file = false;
+    for raw in cmd.split_whitespace() {
+        let token = raw.trim_matches('"');
+        if next_is_file {
+            next_is_file = false;
+            in_grep = false;
+            // Command substitution wraps the pipeline, so the file operand
+            // can carry the closing `)`.
+            let path = token.trim_end_matches([')', ';']);
+            if !path.starts_with('/') {
+                reads.push(normalize_rel(path)?);
+            }
+            continue;
+        }
+        if token == "|" || token == "&&" || token == "||" || token.ends_with(';') {
+            in_grep = false;
+            continue;
+        }
+        match token {
+            "grep" => in_grep = true,
+            "-f" if in_grep => next_is_file = true,
+            _ => {}
+        }
+    }
+    Ok(reads)
+}
+
 /// The single arch the plan builds for, from `arch/<srcarch>/` unit targets.
 fn detect_srcarch(units: &BTreeMap<&str, (&CmdEntry, UnitKind)>) -> color_eyre::Result<String> {
     let arches: BTreeSet<&str> = units
@@ -296,6 +332,12 @@ fn source_scope(
             // shells back into make and compiles sources with no .cmd of
             // their own; give it the Makefile machinery and header trees.
             files.insert("Makefile".to_owned());
+            // The script rebuilds the timestamp object through `${MAKE} -f
+            // ${srctree}/scripts/Makefile.build obj=init
+            // init/version-timestamp.o`, and Makefile.build includes the obj
+            // directory's kbuild file; init/ is the only subdir the script
+            // descends into.
+            files.insert("init/Makefile".to_owned());
             files.insert("init/version-timestamp.c".to_owned());
             if let Some(postlink) = entry
                 .cmd
@@ -310,8 +352,19 @@ fn source_scope(
                 "scripts".to_owned(),
             ];
         }
-        // Pure aggregation over dep unit outputs plus snapshot tools.
-        UnitKind::Archive | UnitKind::ObjectAggregate | UnitKind::Modpost => {}
+        // Aggregation replays dep unit outputs plus snapshot tools, but a
+        // saved command can still read srctree files no .cmd dep records:
+        // cmd_ar_vmlinux.a reorders boot head objects to the archive front
+        // through `grep -F -f $(srctree)/scripts/head-object-list.txt`, and
+        // without that file the grep fails, the reorder silently no-ops, and
+        // the linked vmlinux diverges from the monolithic reference.
+        UnitKind::Archive | UnitKind::ObjectAggregate | UnitKind::Modpost => {
+            for rel in grep_file_reads(&entry.cmd)? {
+                if !units.contains_key(rel.as_str()) && !generated.contains(rel.as_str()) {
+                    files.insert(rel);
+                }
+            }
+        }
     }
     Ok(SourceScope { files, dirs })
 }
@@ -468,7 +521,9 @@ mod tests {
                 ),
                 entry(
                     "vmlinux.a",
-                    "rm -f vmlinux.a; ar cDPrST vmlinux.a ./built-in.a",
+                    "rm -f vmlinux.a; ar cDPrST vmlinux.a ./built-in.a; ar mPiT $(ar t \
+                     vmlinux.a | sed -n 1p) vmlinux.a $(ar t vmlinux.a | grep -F -f \
+                     ./scripts/head-object-list.txt)",
                     None,
                     &[],
                 ),
@@ -695,6 +750,7 @@ mod tests {
         for rel in [
             "\"Makefile\"",
             "\"arch/x86/Makefile.postlink\"",
+            "\"init/Makefile\"",
             "\"init/version-timestamp.c\"",
         ] {
             assert!(link.contains(rel), "link scope missing {rel}");
@@ -709,6 +765,25 @@ mod tests {
         for dir in ["\"arch/x86/include\"", "\"include\"", "\"scripts\""] {
             assert!(dirs.contains(dir), "link sourceDirs missing {dir}");
         }
+    }
+
+    #[test]
+    fn scopes_grep_read_member_list_files_for_archives() {
+        let rendered = render_units_nix(&sample_plan(), true).expect("render");
+        let archive = rendered
+            .split("\"vmlinux.a\" = mkUnit {")
+            .nth(1)
+            .expect("vmlinux.a unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        // cmd_ar_vmlinux.a reads the head-object list through `grep -F -f`;
+        // the scope must carry it or the reorder silently no-ops.
+        assert!(archive.contains("\"scripts/head-object-list.txt\""));
+        assert!(rendered.contains(
+            "\"scripts/head-object-list.txt\" = srcFile \"kbuild-src-head-object-list.txt\" \
+             \"scripts/head-object-list.txt\";"
+        ));
     }
 
     #[test]
