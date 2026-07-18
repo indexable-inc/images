@@ -312,7 +312,9 @@ fn set_payload(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
             if file_type.is_block_device() || file_type.is_char_device() {
                 return Err(Error::Source {
                     path: disk.clone(),
-                    message: "raw block devices are not supported by the libkrun backend                               (it only takes disk image files); use the Virtualization.framework                               commands (boot-linux-gui, drive-linux) to attach a /dev disk"
+                    message: "raw block devices are not supported by the libkrun backend \
+                              (it only takes disk image files); use the Virtualization.framework \
+                              commands (boot-linux-gui, drive-linux) to attach a /dev disk"
                         .to_owned(),
                 });
             }

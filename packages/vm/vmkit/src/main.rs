@@ -344,10 +344,8 @@ fn main() -> ExitCode {
     // `Info` and the root fd-handoff helper never touch a VM, so neither needs
     // the entitlement re-exec (and the helper, running under sudo, must not
     // create root-owned signing caches in the user's HOME).
-    if !matches!(
-        cli.command,
-        Command::Info | Command::OpenBlockDevice { .. }
-    ) && let Err(error) = ensure_signed_and_reexec()
+    if !matches!(cli.command, Command::Info | Command::OpenBlockDevice { .. })
+        && let Err(error) = ensure_signed_and_reexec()
     {
         eprintln!(
             "vmkit: could not self-sign with the virtualization/hypervisor entitlements: {error}"
@@ -859,9 +857,12 @@ mod imp {
                 mac_address,
                 shares,
                 disk_flags,
-            } => {
-                crate::macguest::run_macos(&bundle, &mac_address, &parse_shares(&shares)?, disk_flags)
-            }
+            } => crate::macguest::run_macos(
+                &bundle,
+                &mac_address,
+                &parse_shares(&shares)?,
+                disk_flags,
+            ),
             Command::DriveMacos {
                 bundle,
                 shares,
@@ -1039,7 +1040,8 @@ mod imp {
         if crate::blockdev::is_device_node(boot) {
             return Err(Error::Args {
                 message: format!(
-                    "--efi-vars is required when the boot disk ({}) is a raw block device                      (the default <disk>.efivars would land next to it in /dev)",
+                    "--efi-vars is required when the boot disk ({}) is a raw block device \
+                     (the default <disk>.efivars would land next to it in /dev)",
                     boot.display()
                 ),
             });

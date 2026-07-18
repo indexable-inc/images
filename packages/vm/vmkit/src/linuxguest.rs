@@ -22,9 +22,8 @@ use objc2::rc::Retained;
 use objc2_app_kit::NSApplication;
 use objc2_foundation::{NSArray, NSFileHandle, NSPipe};
 use objc2_virtualization::{
-    VZBootLoader, VZEFIBootLoader, VZEFIVariableStore,
-    VZEFIVariableStoreInitializationOptions, VZEntropyDeviceConfiguration,
-    VZFileHandleSerialPortAttachment, VZGenericPlatformConfiguration,
+    VZBootLoader, VZEFIBootLoader, VZEFIVariableStore, VZEFIVariableStoreInitializationOptions,
+    VZEntropyDeviceConfiguration, VZFileHandleSerialPortAttachment, VZGenericPlatformConfiguration,
     VZGraphicsDeviceConfiguration, VZKeyboardConfiguration, VZMemoryBalloonDeviceConfiguration,
     VZPlatformConfiguration, VZPointingDeviceConfiguration, VZSerialPortAttachment,
     VZSerialPortConfiguration, VZStorageDeviceConfiguration, VZUSBKeyboardConfiguration,
