@@ -13,8 +13,10 @@ defmodule IxMcp.ActionLog do
   `cancelled` when its work completes (`finish_action/5`) -- for `exec` that
   is when the eval finishes, which for a backgrounded job is after the wire
   response shipped. While an exec runs, its job samples the eval process's
-  `current_stacktrace` into `stack`/`stack_at` (`update_stack/3`), so a
-  reader can show the line a hung cell sits on. There is deliberately no
+  `current_stacktrace` into `stack`/`stack_at` -- plus, when the stack has a
+  frame the cell itself owns, the 1-based cell source line into `line`
+  (`update_stack/4`, #3546) -- so a reader can show the line a hung cell
+  sits on and highlight it in the rendered cell source. There is deliberately no
   startup sweep of leftover `running` rows: several server instances share
   one database, so a sweep would clobber a live sibling's rows. A row whose
   kernel died stays `running` with a frozen `stack_at`; readers judge
@@ -53,7 +55,7 @@ defmodule IxMcp.ActionLog do
   """
 
   @create_actions """
-  CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'done', stack TEXT, stack_at TEXT)
+  CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'done', stack TEXT, stack_at TEXT, line INTEGER)
   """
 
   # index#3539: the schema version is stamped into SQLite's `PRAGMA
@@ -65,8 +67,9 @@ defmodule IxMcp.ActionLog do
   # and the mismatch surfaces as a match-crash deep in a prepare. A stamped
   # version makes older shapes migratable in order, the current shape a
   # no-op, and a future shape explicitly detectable. The ladder: 1 = the
-  # flat #3512 log, 2 = the #3532 normalization, 3 = the #3536 live rows.
-  @user_version 3
+  # flat #3512 log, 2 = the #3532 normalization, 3 = the #3536 live rows,
+  # 4 = the #3546 live cell line.
+  @user_version 4
 
   # Frozen historical DDL for the 1 -> 2 step: the actions shape exactly as
   # #3532 shipped it, before the live-row columns. A migration must never
@@ -116,11 +119,17 @@ defmodule IxMcp.ActionLog do
     "ALTER TABLE actions ADD COLUMN stack_at TEXT"
   ]
 
+  # A v3 database predates the sampled cell line (#3546); NULL is exactly
+  # right for its rows, whose samples never carried one.
+  @migrate_v3_to_v4 [
+    "ALTER TABLE actions ADD COLUMN line INTEGER"
+  ]
+
   # Ordered migrations keyed by the user_version each upgrades FROM. Every
   # step runs in one immediate transaction that also stamps the version it
   # produces, so an interrupted migration leaves the previous consistent,
   # correctly-stamped version on disk.
-  @migrations [{1, @migrate_v1_to_v2}, {2, @migrate_v2_to_v3}]
+  @migrations [{1, @migrate_v1_to_v2}, {2, @migrate_v2_to_v3}, {3, @migrate_v3_to_v4}]
 
   @insert """
   INSERT INTO actions (at, session_id, topic_id, tool, intent, arguments, is_error, elapsed_ms, status)
@@ -130,16 +139,16 @@ defmodule IxMcp.ActionLog do
   # Both updates guard on status = 'running': a finalize is idempotent and a
   # stack sample racing the finish can never resurrect a finished row.
   @finish """
-  UPDATE actions SET status = ?, is_error = ?, elapsed_ms = ?, stack = NULL, stack_at = NULL
+  UPDATE actions SET status = ?, is_error = ?, elapsed_ms = ?, stack = NULL, stack_at = NULL, line = NULL
   WHERE id = ? AND status = 'running'
   """
 
   @update_stack """
-  UPDATE actions SET stack = ?, stack_at = ? WHERE id = ? AND status = 'running'
+  UPDATE actions SET stack = ?, stack_at = ?, line = ? WHERE id = ? AND status = 'running'
   """
 
   @select_recent """
-  SELECT a.at, s.name, t.name, a.tool, a.intent, a.arguments, a.is_error, a.elapsed_ms, a.status, a.stack
+  SELECT a.at, s.name, t.name, a.tool, a.intent, a.arguments, a.is_error, a.elapsed_ms, a.status, a.stack, a.line
   FROM actions a
   JOIN sessions s ON s.id = a.session_id
   LEFT JOIN topics t ON t.id = a.topic_id
@@ -156,7 +165,8 @@ defmodule IxMcp.ActionLog do
           is_error: boolean(),
           elapsed_ms: non_neg_integer(),
           status: String.t(),
-          stack: String.t() | nil
+          stack: String.t() | nil,
+          line: pos_integer() | nil
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -196,10 +206,14 @@ defmodule IxMcp.ActionLog do
     GenServer.call(server, {:finish_action, id, status, is_error, elapsed_ms})
   end
 
-  @doc "Refresh a running action row's sampled stack (JSON frames); a no-op once finished."
-  @spec update_stack(integer(), String.t(), GenServer.server()) :: :ok
-  def update_stack(id, stack_json, server \\ __MODULE__) do
-    GenServer.call(server, {:update_stack, id, stack_json, now()})
+  @doc """
+  Refresh a running action row's sampled stack (JSON frames) and the cell
+  source line the eval currently sits on (nil when the sample has no frame
+  the cell owns, #3546); a no-op once finished.
+  """
+  @spec update_stack(integer(), String.t(), pos_integer() | nil, GenServer.server()) :: :ok
+  def update_stack(id, stack_json, line, server \\ __MODULE__) do
+    GenServer.call(server, {:update_stack, id, stack_json, line, now()})
   end
 
   @doc "Latest `n` recorded actions, newest first, with session/topic names joined in."
@@ -326,8 +340,8 @@ defmodule IxMcp.ActionLog do
     {:reply, :ok, state}
   end
 
-  def handle_call({:update_stack, id, stack_json, at}, _from, %{conn: conn} = state) do
-    run(conn, @update_stack, [stack_json, at, id])
+  def handle_call({:update_stack, id, stack_json, line, at}, _from, %{conn: conn} = state) do
+    run(conn, @update_stack, [stack_json, at, line, id])
     {:reply, :ok, state}
   end
 
@@ -394,6 +408,7 @@ defmodule IxMcp.ActionLog do
         cond do
           "session_id" not in columns -> 1
           "status" not in columns -> 2
+          "line" not in columns -> 3
           true -> @user_version
         end
     end
@@ -469,7 +484,8 @@ defmodule IxMcp.ActionLog do
          is_error,
          elapsed_ms,
          status,
-         stack
+         stack,
+         line
        ]) do
     %{
       at: at,
@@ -481,7 +497,8 @@ defmodule IxMcp.ActionLog do
       is_error: is_error == 1,
       elapsed_ms: elapsed_ms,
       status: status,
-      stack: stack
+      stack: stack,
+      line: line
     }
   end
 end
