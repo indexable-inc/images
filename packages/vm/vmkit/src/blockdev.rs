@@ -49,7 +49,7 @@
 use std::fs::File;
 use std::io::ErrorKind;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -347,9 +347,13 @@ fn open_via_sudo(path: &Path) -> Result<File, Error> {
          (a password prompt may follow)",
         path.display()
     );
-    // 0700 by default (tempfile's Unix dir mode), which the helper verifies.
+    // Explicitly 0700: tempfile creates directories with the process umask
+    // (0755 in practice), and the helper refuses any socket directory that is
+    // group/other accessible -- the run that discovered this failed exactly
+    // there.
     let dir = tempfile::Builder::new()
         .prefix("vmkit-fd-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
         .tempdir()
         .context(HandoffSnafu)?;
     let socket = dir.path().join("fd.sock");
