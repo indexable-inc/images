@@ -1,0 +1,19 @@
+---
+id: vmkit-raw-block-devices
+postedAt: 2026-07-17T19:10:00-07:00
+title: "vmkit attaches raw host block devices as VM disks, bypassing APFS"
+tags: [interesting, vm, vmkit, macos]
+links:
+  - label: vmkit README
+    href: https://github.com/indexable-inc/index/blob/main/packages/vm/vmkit/README.md
+  - label: issue #3554
+    href: https://github.com/indexable-inc/index/issues/3554
+---
+
+`vmkit`'s Virtualization.framework guests can now use a real disk instead of an image file: any `--disk` on `boot-linux-gui` / `drive-linux` (and a macOS bundle's `disk.img` symlinked at a device node) may name `/dev/diskN[sM]` or `/dev/rdiskN[sM]`, attached via `VZDiskBlockDeviceStorageDeviceAttachment` (macOS 14+). Guest I/O goes straight to the device, skipping APFS sparse-file fragmentation, COW metadata, and host-side double caching — the costs persistent high-churn guests pay most.
+
+```sh
+nix run .#vmkit -- drive-linux --disk ./linux.raw --disk /dev/disk4s2
+```
+
+Safety first: a device that hosts mounted filesystems — including through APFS physical-store linkage, where the volumes mount under a synthesized container disk — is refused unless `--force`, and the guest-flush mode is an explicit `--disk-sync full|none` (default `full`). A root-owned `/dev` node is opened by a sudo'd re-exec of vmkit that hands the fd back over a private unix socket, so the VM never runs as root and no sudoers entry is ever installed (the pitfall that got lima's equivalent feature reverted). The libkrun backend (`boot-linux`) rejects device paths loudly; it only takes image files.

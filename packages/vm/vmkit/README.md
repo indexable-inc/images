@@ -104,6 +104,28 @@ What works today:
   (`click`), `wait`, and on-demand `shot`, with a one-line ack per command (see
   [Driving the guest](#driving-the-guest)). Input goes straight to the guest's
   keyboard/pointing device, so the host cursor never moves.
+- **Raw block devices as disks** (the Virtualization.framework commands): any
+  `--disk` on `boot-linux-gui` / `drive-linux` (both now repeatable: first is
+  the boot disk, the rest extra virtio-blk devices), and a macOS bundle's
+  `disk.img` symlinked at a device node, may name a `/dev/[r]diskN[sM]` disk
+  instead of an image file. It attaches via
+  `VZDiskBlockDeviceStorageDeviceAttachment` (macOS 14+), so guest I/O hits the
+  disk directly instead of an APFS image file. Detection is by stat, never by
+  path sniffing. A device hosting mounted filesystems (including through APFS
+  physical-store linkage) is refused unless `--force`; `--disk-sync full|none`
+  picks the guest-flush mode (default `full`). A root-owned node is opened by a
+  sudo'd re-exec of vmkit (hidden `open-block-device` subcommand) that passes
+  the fd back over a private unix socket, so the VM itself never runs as root
+  and no sudoers entry is ever installed. `boot-linux` (libkrun) rejects device
+  paths loudly: it opens disks by path, and macOS offers no workable fd route
+  (lima-vm/lima#5104).
+
+  ```sh
+  # Second disk straight on a real partition; refused while anything on it is
+  # mounted, sudo-prompted if the node is root-owned.
+  nix run .#vmkit -- drive-linux --disk ./linux.raw --disk /dev/disk4s2
+  ```
+
 - **virtio-fs directory sharing**: `--share TAG=HOSTDIR` on `boot-macos`
   and `drive-macos` shares a host directory into the guest. Tag `auto` uses the
   macOS automount tag, mounting at `/Volumes/My Shared Files`.
