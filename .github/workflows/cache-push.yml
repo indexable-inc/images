@@ -53,7 +53,9 @@ jobs:
     # `-cache-push` and attaches the push-only ix-public token as a per-job
     # systemd credential (spawn.rs ix_public_push_eligible).
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-cache-push', github.run_id, github.run_attempt) }}"]
-    timeout-minutes: 180
+    # p95 51m, worst 138m over last 30 green runs (2026-07-17); 150 covers the
+    # worst observed cold push with headroom instead of the old 3h cap.
+    timeout-minutes: 150
     outputs:
       # Realise-failure count for advance-cache-ready's publish-hole gate (#3195).
       failed-roots: ${{ steps.publish.outputs.failed-roots }}
@@ -622,6 +624,8 @@ jobs:
     # makes its failed-roots output addressable.
     needs: [push, darwin-build, darwin-push]
     runs-on: ubuntu-latest
+    # p95 <1m over last 30 green runs (2026-07-17); 10m floor.
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

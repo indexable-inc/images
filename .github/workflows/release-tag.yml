@@ -15,6 +15,9 @@ concurrency:
 jobs:
   validate-tag:
     runs-on: ubuntu-latest
+    # No green samples yet; checkout + ancestry check, sized like the other
+    # sub-minute gates (2026-07-17). 10m floor.
+    timeout-minutes: 10
     steps:
       - name: Checkout tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

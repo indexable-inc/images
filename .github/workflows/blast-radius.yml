@@ -131,6 +131,8 @@ jobs:
   comment:
     needs: evaluate
     runs-on: ubuntu-latest
+    # p95 <1m over last 30 green runs (2026-07-17); 10m floor.
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write

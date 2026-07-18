@@ -18,6 +18,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # p95 2m over last 30 green runs (2026-07-17); 10m floor. Without a cap a
+    # substitution stall here sits at GitHub's 6h default (2026-07-17 wedge).
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -54,6 +57,8 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    # p95 <1m over last 30 green runs (2026-07-17); 10m floor.
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

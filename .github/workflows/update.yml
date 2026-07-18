@@ -24,6 +24,8 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    # p95 44m, worst 48m over last 30 green runs (2026-07-17); 2x headroom.
+    timeout-minutes: 90
     permissions:
       contents: write
       pull-requests: write
