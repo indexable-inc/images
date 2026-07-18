@@ -1,3 +1,4 @@
+mod apply_suggestions;
 mod hash;
 mod model;
 mod panic_scan;
@@ -24,6 +25,9 @@ struct Cli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Command {
+    /// Apply `MachineApplicable` suggestions from rustc/clippy JSON diagnostics.
+    ApplySuggestions(ApplySuggestionsArgs),
+
     /// Merge several Cargo unit-graph JSON files.
     Merge(MergeArgs),
 
@@ -50,6 +54,19 @@ struct ScanPanicsArgs {
     /// searched for `*.rlib` and `*.o` recursively.
     #[arg(required = true, value_name = "PATH")]
     paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, clap::Args)]
+struct ApplySuggestionsArgs {
+    /// Writable source tree the fixes are applied under. Suggestions whose
+    /// spans fall outside it (macro expansions into read-only dependency
+    /// sources) are skipped, mirroring cargo fix's workspace-only rule.
+    #[arg(long, value_name = "PATH")]
+    source_root: PathBuf,
+
+    /// Captured driver stderr (`--error-format=json`, one JSON object per line).
+    #[arg(long, value_name = "PATH")]
+    diagnostics: PathBuf,
 }
 
 #[derive(Debug, clap::Args)]
@@ -128,6 +145,20 @@ struct RenderArgs {
     /// compiled artifact for reachable panic machinery and fails if any is found.
     #[arg(long)]
     deny_panics: bool,
+}
+
+fn apply_suggestions_command(args: &ApplySuggestionsArgs) -> color_eyre::Result<()> {
+    let diagnostics = std::fs::read_to_string(&args.diagnostics)
+        .wrap_err_with(|| format!("reading diagnostics {}", args.diagnostics.display()))?;
+    let outcome = apply_suggestions::apply_diagnostics(&args.source_root, &diagnostics)?;
+    eprintln!(
+        "cargo-unit clippy fix: applied {}, deferred {}, skipped {} suggestion(s)",
+        outcome.applied, outcome.deferred, outcome.skipped
+    );
+    // Stdout carries only the applied count: the fix derivation's fixpoint
+    // loop reads it to decide whether re-running the driver is worthwhile.
+    println!("{}", outcome.applied);
+    Ok(())
 }
 
 fn merge(args: MergeArgs) -> color_eyre::Result<()> {
@@ -358,6 +389,7 @@ fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
     match Cli::parse().command {
+        Command::ApplySuggestions(args) => apply_suggestions_command(&args),
         Command::Merge(args) => merge(args),
         Command::NextestMetadata(args) => nextest_metadata(&args),
         Command::Render(args) => render(args),

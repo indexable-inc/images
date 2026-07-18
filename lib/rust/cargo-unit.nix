@@ -557,10 +557,44 @@
           extraLibraries = {};
         }
       else {};
+    # Re-verification for the per-package clippy `--fix` transformers (#3434):
+    # import the SAME rendered graph once more with every package's fixed tree
+    # overriding its scoped source. The ordinary per-unit clippy gates then
+    # re-run against the composed workspace, with dependent crates' rlibs
+    # rebuilt from the fixed sources, so a fix that breaks a dependent crate
+    # (cross-crate fork lints see the caller, not the fixed crate) fails this
+    # gate instead of landing silently. Same clippy toolchain as the fix and
+    # check graphs; no third IFD, only a third call of the memoized import.
+    # Every consumer of the fixes keys them by `passthru.sourceName` (the
+    # verify overrides below, the lint lane overlay in lib/per-system.nix),
+    # so two packages sharing one closure-scoped source would silently drop
+    # one package's edits. No workspace does that today; fail loudly if one
+    # appears rather than mis-compose.
+    clippyFixByPackage = let
+      fixes = clippyUnits.clippyFixByPackage or {};
+      sourceNames = lib.mapAttrsToList (_: fix: fix.passthru.sourceName) fixes;
+    in
+      assert lib.assertMsg (lib.unique sourceNames == sourceNames)
+      "cargoUnit.buildWorkspace: two packages share one scoped source, so their clippy fixes cannot compose by sourceName"; fixes;
+    clippyFixVerifyUnits =
+      if perUnitClippyEnabled
+      then
+        importUnits args.policy.clippy.package.toolchain {
+          extraUnits = {};
+          extraLibraries = {};
+          packageSourceOverrides =
+            lib.mapAttrs' (
+              _packageName: fix: lib.nameValuePair fix.passthru.sourceName fix
+            )
+            clippyFixByPackage;
+        }
+      else {};
     workspaceUnits =
       units
       // lib.optionalAttrs perUnitClippyEnabled {
         inherit (clippyUnits) clippyByPackage;
+        inherit clippyFixByPackage;
+        clippyFixVerifiedByPackage = clippyFixVerifyUnits.clippyByPackage;
       };
 
     targetSetNames = let
@@ -841,7 +875,23 @@
     policyChecks =
       lib.optionalAttrs (
         workspace.policy.clippy.enable && (workspace.clippyByPackage or {}) ? ${packageName}
-      ) {clippy = workspace.clippyByPackage.${packageName};}
+      ) {
+        clippy = workspace.clippyByPackage.${packageName};
+        # Re-verification for the per-package clippy fixers (#3434): the same
+        # per-unit gate rendered over the composed FIXED tree
+        # (`clippyFixVerifiedByPackage`), so a machine-applied fix in a
+        # dependency that breaks this crate (cross-crate fork lints observe
+        # the caller, not the fixed crate) fails the crate's own enforced
+        # gate instead of landing through the autofix patch. Scoped to the
+        # same packages as `clippy` on purpose: a crate whose gate CI never
+        # enforces can carry live findings on main, and its verify gate
+        # would fail on those pre-existing residuals, not on anything the
+        # fixers changed. On a clean crate the fix is an identity whose
+        # content-addressed output realises to the scoped source's own
+        # store path, so this resolves to the same build as `clippy` and
+        # adds no second clippy pass.
+        clippyFixVerified = workspace.clippyFixVerifiedByPackage.${packageName};
+      }
       // lib.optionalAttrs (
         workspace.policy.denyUnusedCrateDependencies
         && (workspace.unusedCrateDependenciesByPackage or {}) ? ${packageName}

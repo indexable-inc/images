@@ -57,6 +57,13 @@
   # the output is byte-identical to a graph rendered without the seam.
   extraUnits ? {},
   extraLibraries ? {},
+  # Replace scoped package sources wholesale, keyed like `sources` /
+  # `sourceAudit`. cargo-unit.nix re-imports this same rendered graph with
+  # each package's clippy-fixed tree overriding its source, so the ordinary
+  # per-unit clippy gates (and every dependent unit's rebuild) re-verify the
+  # composed fixed workspace instead of trusting per-package fixes in
+  # isolation (#3434). Empty default keeps the merge a no-op.
+  packageSourceOverrides ? {},
 }:
 
 let
@@ -141,8 +148,18 @@ let
     '';
     scopedClosureSource vendorDir name includes;
 
-  sources = {
+  generatedSources = {
 {{ source_entries }}  };
+  # Unknown override keys fail loudly: a typo would otherwise silently
+  # re-verify the unfixed tree.
+  unknownSourceOverrides = builtins.filter (name: !(generatedSources ? ${name})) (
+    builtins.attrNames packageSourceOverrides
+  );
+  sources =
+    assert pkgs.lib.assertMsg (unknownSourceOverrides == [ ]) ''
+      nix-cargo-unit: packageSourceOverrides names unknown sources: ${builtins.concatStringsSep " " unknownSourceOverrides}
+    '';
+    generatedSources // packageSourceOverrides;
   sourceAudit = {
 {{ source_audit_entries }}  };
 
@@ -197,6 +214,19 @@ let
             paths = map (unitName: clippyUnits.${unitName}) names;
           })
         clippyUnitNamesByPackage
+    else
+      { };
+
+  # Per-package `clippy --fix` tree transformer: the package's own clippy
+  # units run sequentially against one writable copy of its scoped source,
+  # applying MachineApplicable suggestions to a fixpoint; the output is the
+  # fixed source tree, with `passthru.sourceName` linking it back to
+  # `sources` / `sourceAudit` for composition and re-verification (#3434).
+  # Gated like clippyByPackage, and empty when the graph has no local units.
+  clippyFixByPackage =
+    if clippyEnabled then
+      {
+{{ clippy_fix_entries }}      }
     else
       { };
 
@@ -820,6 +850,7 @@ in
   inherit
     clippyUnits
     clippyByPackage
+    clippyFixByPackage
     doctestTargetNamesByPackage
     policyChecks
     sourceAudit

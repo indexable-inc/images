@@ -5,6 +5,11 @@
   ix,
   paths,
   home-manager,
+  # A cargoUnit whose pkgs carries rust-overlay: `ix.pkgs` (repo overlay
+  # only) has no `pkgs.rust-bin`, so the default clippy package (llm-clippy,
+  # pinned-nightly fork driver) cannot resolve from `ix.cargoUnit`. Only the
+  # clippy-fix fixture needs the driver; everything else stays on ix.pkgs.
+  cargoUnitWithClippy,
 }: let
   inherit (nixpkgs) lib;
   inherit (ix) pkgs;
@@ -942,6 +947,75 @@
       clippy.enable = false;
     };
   };
+
+  # Acceptance for the per-crate clippy fixers (#3434), both halves of the
+  # contract plus its re-verification, on a committed two-crate workspace:
+  # `dirty` plants a machine-applicable violation (needless_return, denied
+  # through the workspace manifest so the manifest-derived lint path is the
+  # one exercised) and `clean` depends on it. The fixture stays outside the
+  # repo's root workspace, so the repo's own clippy and cargo-fmt gates never
+  # see the planted violation.
+  cargoUnitClippyFixFixture = fs.toSource {
+    root = ./fixtures/cargo-unit-clippy-fix;
+    fileset = fs.unions [
+      ./fixtures/cargo-unit-clippy-fix/Cargo.lock
+      ./fixtures/cargo-unit-clippy-fix/Cargo.toml
+      ./fixtures/cargo-unit-clippy-fix/crates
+    ];
+  };
+  cargoUnitClippyFixWorkspace = cargoUnitWithClippy.buildWorkspace {
+    src = cargoUnitClippyFixFixture;
+    workspaceRoot = ./fixtures/cargo-unit-clippy-fix;
+    cargoArgs = ["--workspace"];
+    policy = {
+      denyUnusedCrateDependencies = false;
+      cargoAudit.enable = false;
+      cargoMachete.enable = false;
+      clippy.enable = true;
+    };
+  };
+  cargoUnitClippyFixTest = let
+    dirtyFix = cargoUnitClippyFixWorkspace.clippyFixByPackage.dirty;
+    cleanFix = cargoUnitClippyFixWorkspace.clippyFixByPackage.clean;
+  in
+    pkgs.runCommand "cargo-unit-clippy-fix-check" {
+      __structuredAttrs = true;
+      strictDeps = true;
+      # Re-verification: the ordinary per-unit clippy gates over the fixed
+      # tree. `dirty` proves the fix itself lints clean; `clean` proves a
+      # dependent crate still lints against the FIXED dirty's rebuilt rlib.
+      verifyGates = lib.attrValues cargoUnitClippyFixWorkspace.clippyFixVerifiedByPackage;
+    } ''
+      # The committed source must still plant the violation, or this check
+      # proves nothing (mirrors the lint-fix fixture's drift guard).
+      grep -q "return 42" ${dirtyFix.src}/src/lib.rs
+
+      # Dirty crate: the machine-applicable fix must change the tree and
+      # remove the needless return.
+      if diff -r ${dirtyFix.src} ${dirtyFix} > /dev/null; then
+        echo "dirty crate's clippy fix changed nothing" >&2
+        exit 1
+      fi
+      if grep -n "return" ${dirtyFix}/src/lib.rs; then
+        echo "needless_return survived the clippy fix" >&2
+        exit 1
+      fi
+
+      # Clean crate: a byte-identical no-op...
+      diff -r ${cleanFix.src} ${cleanFix}
+      # ...whose content-addressed output realises to the scoped source's
+      # own store path (same name, same recursive hash). This is the
+      # property that makes the re-verify graph resolve to the SAME
+      # derivations as the ordinary clippy gates, so a clean crate costs no
+      # second clippy pass.
+      if [ "${cleanFix}" != "${cleanFix.src}" ]; then
+        echo "clean crate's identity fix did not realise to its source path:" >&2
+        echo "  fix:    ${cleanFix}" >&2
+        echo "  source: ${cleanFix.src}" >&2
+        exit 1
+      fi
+      mkdir -p "$out"
+    '';
 
   # Self-test for the prebuilt-library injection seam (mkPrebuiltLibraryUnit +
   # extraUnits / extraLibraries). The shape: build a leaf library crate normally
@@ -6336,6 +6410,7 @@ in {
     ;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
   cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
+  cargoUnitClippyFix = cargoUnitClippyFixTest;
   # Validate the current R2 publication and local prebuilt-unit wrapper.
   sdkRustPrebuilt = sdkRust.artifactCheck;
   # Strict type + annotation gate over the public ix-sdk Python sources.
