@@ -3,7 +3,9 @@
 # One derivation per kbuild unit, replaying the exact saved command
 # (`savedcmd_*`) from the plan build's .cmd files inside a symlink farm of
 # the unit's scoped sources (#3412), the plan's generated-file snapshot, and
-# the unit's transitive dependency outputs. See lib/kernel/kbuild-unit.nix.
+# the unit's transitive dependency outputs; on CONFIG_MODULES builds this
+# covers module objects, the modpost passes, and each final .ko link
+# (#3413). See lib/kernel/kbuild-unit.nix.
 {
   pkgs,
   src,
@@ -140,6 +142,20 @@ in
   inherit units kernelRelease;
   vmlinux = units."vmlinux";
   modpost = units."vmlinux.symvers";
+  # The `make modules` modpost unit (Module.symvers plus every regenerated
+  # <mod>.mod.c), or null on CONFIG_MODULES=n configs.
+  moduleSymvers = {{ module_symvers }};
+  # Every unit-built kernel module at its objtree-relative path.
+  modules = pkgs.linkFarm "kbuild-modules" [
+{{ module_entries }}
+  ];
+  # Aggregation root spanning every reachable unit output. Unit outputs are
+  # build-time deps of vmlinux, so pushing vmlinux to a cache would never
+  # publish the per-TU objects; this farm carries them in one runtime
+  # closure for the fleet-cache lane.
+  allUnits = pkgs.linkFarm "kernel-unit-closure" [
+{{ all_unit_entries }}
+  ];
   # Units present in the plan but unreachable from the link and modpost
   # roots (vdso / realmode intermediates consumed at plan time).
   prunedTargets = [

@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use color_eyre::eyre::{OptionExt as _, bail};
+use color_eyre::eyre::{OptionExt as _, bail, eyre};
 
 use crate::model::{CmdEntry, Plan, UnitKind};
 
@@ -26,24 +26,30 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
     }
     let generated: BTreeSet<&str> = plan.generated.iter().map(String::as_str).collect();
 
-    let mut direct_deps: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for (&target, &(entry, kind)) in &units {
-        direct_deps.insert(target, unit_deps(entry, kind, &units, &generated)?);
+    let provided_files = modpost_provided_files(plan, &units)?;
+    // Reverse view for installFiles: what each providing unit must install
+    // beyond its own target.
+    let mut provides: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (rel, unit) in &provided_files {
+        provides.entry(*unit).or_default().push(rel.as_str());
     }
 
-    // Prune to what the exposed roots reach: vdso/realmode intermediates are
-    // consumed at plan time and never feed the link.
-    let mut reachable: BTreeSet<&str> = BTreeSet::new();
-    let mut queue: Vec<&str> = ["vmlinux", "vmlinux.symvers"]
-        .into_iter()
-        .filter(|root| units.contains_key(root))
-        .collect();
-    while let Some(target) = queue.pop() {
-        if !reachable.insert(target) {
-            continue;
-        }
-        queue.extend(&direct_deps[target]);
+    let mut direct_deps: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (&target, &(entry, kind)) in &units {
+        direct_deps.insert(
+            target,
+            unit_deps(
+                entry,
+                kind,
+                &units,
+                &generated,
+                &provided_files,
+                &plan.modules,
+            )?,
+        );
     }
+
+    let reachable = reachable_units(&units, &direct_deps);
     let pruned: Vec<&str> = units
         .keys()
         .copied()
@@ -62,7 +68,10 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
     let mut scopes: BTreeMap<&str, SourceScope> = BTreeMap::new();
     for &target in &reachable {
         let (entry, kind) = units[target];
-        scopes.insert(target, source_scope(entry, kind, &units, &generated, &srcarch)?);
+        scopes.insert(
+            target,
+            source_scope(entry, kind, &units, &generated, &provided_files, &srcarch)?,
+        );
     }
     let farm: BTreeSet<&str> = scopes
         .values()
@@ -78,6 +87,7 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
             kind,
             &closures[target],
             &scopes[target],
+            provides.get(target).map_or(&[][..], Vec::as_slice),
         );
     }
 
@@ -98,6 +108,8 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
         writeln!(pruned_list, "    {}", nix_string(target)).expect("write to string");
     }
 
+    let (module_symvers, module_entries, all_unit_entries) = module_export_slots(&reachable);
+
     fill_template(
         UNITS_TEMPLATE,
         &[
@@ -106,8 +118,93 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
             ("unit_entries", entries),
             ("source_farm_entries", farm_entries),
             ("pruned_targets", pruned_list),
+            ("module_symvers", module_symvers),
+            ("module_entries", module_entries),
+            ("all_unit_entries", all_unit_entries),
         ],
     )
+}
+
+/// Prune to what the exposed roots reach: vmlinux, the modpost dumps, and
+/// every final `.ko`; vdso/realmode intermediates are consumed at plan time
+/// and never feed the link.
+fn reachable_units<'plan>(
+    units: &BTreeMap<&'plan str, (&'plan CmdEntry, UnitKind)>,
+    direct_deps: &BTreeMap<&'plan str, BTreeSet<&'plan str>>,
+) -> BTreeSet<&'plan str> {
+    let mut reachable: BTreeSet<&str> = BTreeSet::new();
+    let mut queue: Vec<&str> = ["vmlinux", "vmlinux.symvers", "Module.symvers"]
+        .into_iter()
+        .filter(|root| units.contains_key(root))
+        .chain(
+            units
+                .keys()
+                .copied()
+                .filter(|target| target.ends_with(".ko")),
+        )
+        .collect();
+    while let Some(target) = queue.pop() {
+        if !reachable.insert(target) {
+            continue;
+        }
+        queue.extend(&direct_deps[target]);
+    }
+    reachable
+}
+
+/// Files a modpost unit regenerates at replay time and therefore provides to
+/// its consumers (they exist in neither srctree nor snapshot), keyed by
+/// objtree-relative path: `vmlinux.symvers` emits `.vmlinux.export.c`,
+/// `Module.symvers` emits every module's `<mod>.mod.c`.
+fn modpost_provided_files<'plan>(
+    plan: &'plan Plan,
+    units: &BTreeMap<&'plan str, (&'plan CmdEntry, UnitKind)>,
+) -> color_eyre::Result<BTreeMap<String, &'plan str>> {
+    let mut provided_files: BTreeMap<String, &str> = BTreeMap::new();
+    if units.contains_key(".vmlinux.export.o") {
+        let (modpost, _) = units
+            .get_key_value("vmlinux.symvers")
+            .ok_or_eyre(".vmlinux.export.o present but no vmlinux.symvers modpost")?;
+        provided_files.insert(".vmlinux.export.c".to_owned(), *modpost);
+    }
+    if let Some((modpost_modules, _)) = units.get_key_value("Module.symvers") {
+        for base in &plan.modules {
+            let stem = base
+                .strip_suffix(".o")
+                .ok_or_else(|| eyre!("modules.order entry {base:?} is not an .o path"))?;
+            provided_files.insert(format!("{stem}.mod.c"), *modpost_modules);
+        }
+    }
+    Ok(provided_files)
+}
+
+/// Render the module-facing template slots from the reachable unit set: the
+/// `moduleSymvers` export, the `.ko` link-farm entries, and the all-units
+/// aggregation entries.
+fn module_export_slots(reachable: &BTreeSet<&str>) -> (String, String, String) {
+    let module_symvers = if reachable.contains("Module.symvers") {
+        "units.\"Module.symvers\"".to_owned()
+    } else {
+        "null".to_owned()
+    };
+    let mut module_entries = String::new();
+    let mut all_unit_entries = String::new();
+    for &target in reachable {
+        let quoted = nix_string(target);
+        if target.ends_with(".ko") {
+            writeln!(
+                module_entries,
+                "    {{ name = {quoted}; path = \"${{units.{quoted}}}/\" + {quoted}; }}"
+            )
+            .expect("write to string");
+        }
+        writeln!(
+            all_unit_entries,
+            "    {{ name = {quoted}; path = units.{quoted}; }}"
+        )
+        .expect("write to string");
+    }
+    (module_symvers, module_entries, all_unit_entries)
 }
 
 /// Direct unit-level dependencies of one saved command.
@@ -116,26 +213,41 @@ fn unit_deps<'plan>(
     kind: UnitKind,
     units: &BTreeMap<&'plan str, (&'plan CmdEntry, UnitKind)>,
     generated: &BTreeSet<&str>,
+    provided_files: &BTreeMap<String, &'plan str>,
+    modules: &'plan [String],
 ) -> color_eyre::Result<BTreeSet<&'plan str>> {
     let mut deps = BTreeSet::new();
     match kind {
         UnitKind::Compile => {
             // Tracked prerequisites are almost always sources and headers; a
-            // unit-built prerequisite (another unit's output) becomes a dep.
+            // unit-built prerequisite (another unit's output) becomes a dep,
+            // and a modpost-provided source (<mod>.mod.c, .vmlinux.export.c)
+            // wires in the modpost unit that regenerates it.
             for dep in entry.source.iter().chain(&entry.deps) {
                 if let Some((key, _)) = units.get_key_value(dep.as_str()) {
                     deps.insert(*key);
+                } else if !dep.starts_with('/')
+                    && let Some(provider) = provided_files.get(normalize_rel(dep)?.as_str())
+                {
+                    deps.insert(*provider);
                 }
             }
         }
-        UnitKind::Archive | UnitKind::ObjectAggregate | UnitKind::Modpost | UnitKind::Command => {
+        UnitKind::Archive
+        | UnitKind::ObjectAggregate
+        | UnitKind::Modpost
+        | UnitKind::ModpostModules
+        | UnitKind::ModuleLink
+        | UnitKind::Command => {
             // Member lists live in the command line itself (`ar`/`ld`/modpost
             // argv, the `printf ... | xargs ar` form for the top-level
-            // archive, or a Command unit's strip/objcopy input operands);
-            // interpreting any more shell than that is out of scope.
+            // archive, a Command unit's strip/objcopy input operands, or the
+            // `.ko` link's object list); interpreting any more shell than
+            // that is out of scope.
             // Nested archives name members relative to their directory, with
             // the prefix in the printf format: `printf "arch/x86/%s " entry/...`;
-            // the pipe to xargs ends the member list.
+            // the pipe to xargs ends the member list. A multi-object module
+            // links `@<mod>.mod`, whose harvested contents expand like argv.
             let mut printf_prefix: Option<&str> = None;
             for token in entry.cmd.split_whitespace() {
                 if token == "|" {
@@ -143,6 +255,19 @@ fn unit_deps<'plan>(
                     continue;
                 }
                 let unquoted = token.trim_matches('"');
+                if let Some(at_ref) = unquoted.strip_prefix('@') {
+                    let contents = entry.at_file_contents.get(at_ref).ok_or_else(|| {
+                        eyre!(
+                            "unit {} references response file @{at_ref}, which harvest \
+                             did not capture",
+                            entry.target
+                        )
+                    })?;
+                    for member in contents.split_whitespace() {
+                        resolve_member(member, entry, units, generated, &mut deps)?;
+                    }
+                    continue;
+                }
                 if let Some(prefix) = unquoted.strip_suffix("%s") {
                     printf_prefix = Some(prefix);
                     continue;
@@ -151,19 +276,17 @@ fn unit_deps<'plan>(
                 let cleaned = printf_prefix.map_or(Cow::Borrowed(cleaned), |prefix| {
                     Cow::Owned(format!("{prefix}{cleaned}"))
                 });
-                let cleaned = cleaned.strip_prefix("./").unwrap_or(&cleaned);
-                if cleaned == entry.target || !(cleaned.ends_with(".o") || cleaned.ends_with(".a"))
-                {
-                    continue;
-                }
-                if let Some((key, _)) = units.get_key_value(cleaned) {
+                resolve_member(&cleaned, entry, units, generated, &mut deps)?;
+            }
+            if kind == UnitKind::ModpostModules {
+                // The module member list lives in modules.order (passed as
+                // `-T modules.order`), not in argv; vmlinux.o still rides in
+                // argv and resolves through the token scan above.
+                for base in modules {
+                    let (key, _) = units.get_key_value(base.as_str()).ok_or_else(|| {
+                        eyre!("modules.order entry {base} has no corresponding unit")
+                    })?;
                     deps.insert(*key);
-                } else if !generated.contains(cleaned) {
-                    bail!(
-                        "unit {} references {cleaned}, which is neither a unit nor in \
-                         the generated snapshot",
-                        entry.target
-                    );
                 }
             }
         }
@@ -175,9 +298,40 @@ fn unit_deps<'plan>(
                 .get_key_value("vmlinux.o")
                 .ok_or_eyre("vmlinux link present but no vmlinux.o aggregate")?;
             deps.insert(*key);
+            // On CONFIG_MODULES builds the script also links the modpost-built
+            // ksymtab object into vmlinux.
+            if let Some((key, _)) = units.get_key_value(".vmlinux.export.o") {
+                deps.insert(*key);
+            }
         }
     }
     Ok(deps)
+}
+
+/// Resolve one member token (or response-file line) of an aggregation
+/// command to a unit dep, tolerating non-member tokens and bailing on a
+/// member that nothing accounts for.
+fn resolve_member<'plan>(
+    raw: &str,
+    entry: &CmdEntry,
+    units: &BTreeMap<&'plan str, (&'plan CmdEntry, UnitKind)>,
+    generated: &BTreeSet<&str>,
+    deps: &mut BTreeSet<&'plan str>,
+) -> color_eyre::Result<()> {
+    let cleaned = raw.strip_prefix("./").unwrap_or(raw);
+    if cleaned == entry.target || !(cleaned.ends_with(".o") || cleaned.ends_with(".a")) {
+        return Ok(());
+    }
+    if let Some((key, _)) = units.get_key_value(cleaned) {
+        deps.insert(*key);
+    } else if !generated.contains(cleaned) {
+        bail!(
+            "unit {} references {cleaned}, which is neither a unit nor in \
+             the generated snapshot",
+            entry.target
+        );
+    }
+    Ok(())
 }
 
 fn closure_of<'plan>(
@@ -305,6 +459,7 @@ fn source_scope(
     kind: UnitKind,
     units: &BTreeMap<&str, (&CmdEntry, UnitKind)>,
     generated: &BTreeSet<&str>,
+    provided_files: &BTreeMap<String, &str>,
     srcarch: &str,
 ) -> color_eyre::Result<SourceScope> {
     let mut files: BTreeSet<String> = BTreeSet::new();
@@ -320,8 +475,12 @@ fn source_scope(
                     bail!("whitespace in source path {dep:?} of {}", entry.target);
                 }
                 let rel = normalize_rel(dep)?;
-                if units.contains_key(rel.as_str()) || generated.contains(rel.as_str()) {
-                    // Dep unit outputs and snapshot members overlay the tree.
+                if units.contains_key(rel.as_str())
+                    || generated.contains(rel.as_str())
+                    || provided_files.contains_key(rel.as_str())
+                {
+                    // Dep unit outputs, snapshot members, and modpost-provided
+                    // sources overlay the tree; none exists in srctree.
                     continue;
                 }
                 files.insert(rel);
@@ -358,7 +517,12 @@ fn source_scope(
         // through `grep -F -f $(srctree)/scripts/head-object-list.txt`, and
         // without that file the grep fails, the reorder silently no-ops, and
         // the linked vmlinux diverges from the monolithic reference.
-        UnitKind::Archive | UnitKind::ObjectAggregate | UnitKind::Modpost | UnitKind::Command => {
+        UnitKind::Archive
+        | UnitKind::ObjectAggregate
+        | UnitKind::Modpost
+        | UnitKind::ModpostModules
+        | UnitKind::ModuleLink
+        | UnitKind::Command => {
             for rel in grep_file_reads(&entry.cmd)? {
                 if !units.contains_key(rel.as_str()) && !generated.contains(rel.as_str()) {
                     files.insert(rel);
@@ -391,6 +555,7 @@ fn render_unit(
     kind: UnitKind,
     closure: &BTreeSet<&str>,
     scope: &SourceScope,
+    provides: &[&str],
 ) {
     let target = entry.target.as_str();
     writeln!(out, "    {} = mkUnit {{", nix_string(target)).expect("write to string");
@@ -425,6 +590,15 @@ fn render_unit(
         writeln!(out, "        \"System.map\"").expect("write to string");
         writeln!(out, "      ];").expect("write to string");
         writeln!(out, "      sourceLinkEnv = true;").expect("write to string");
+    } else if !provides.is_empty() {
+        // A modpost unit installs the sources it regenerates for its
+        // consumers alongside its own target.
+        writeln!(out, "      installFiles = [").expect("write to string");
+        writeln!(out, "        {}", nix_string(target)).expect("write to string");
+        for rel in provides {
+            writeln!(out, "        {}", nix_string(rel)).expect("write to string");
+        }
+        writeln!(out, "      ];").expect("write to string");
     }
     writeln!(out, "    }};").expect("write to string");
 }
@@ -494,6 +668,7 @@ mod tests {
             source: source.map(str::to_owned),
             deps: deps.iter().map(|&d| d.to_owned()).collect(),
             config_deps: Vec::new(),
+            at_file_contents: std::collections::BTreeMap::new(),
         }
     }
 
@@ -561,7 +736,77 @@ mod tests {
                 ),
             ],
             generated: vec!["include/generated/autoconf.h".to_owned()],
+            modules: Vec::new(),
         }
+    }
+
+    /// `sample_plan` extended the way a `CONFIG_MODULES=y` defconfig build
+    /// extends it: one single-object module, one multi-object module (linked
+    /// through an @-response file), the shared `.module-common.o`, the
+    /// ksymtab export chain, and the `make modules` modpost pass.
+    fn module_plan() -> Plan {
+        let mut plan = sample_plan();
+        plan.modules = vec!["drivers/net/dummy.o".to_owned(), "fs/nfs/nfs.o".to_owned()];
+        plan.generated.push("fs/nfs/nfs.mod".to_owned());
+        plan.generated.push("modules.order".to_owned());
+        plan.generated.push("scripts/module.lds".to_owned());
+        plan.cmds.push(entry(
+            ".vmlinux.export.o",
+            "gcc -c -o .vmlinux.export.o .vmlinux.export.c",
+            Some(".vmlinux.export.c"),
+            &[".vmlinux.export.c", "include/linux/export-internal.h"],
+        ));
+        plan.cmds.push(entry(
+            ".module-common.o",
+            "gcc -c -o .module-common.o scripts/module-common.c",
+            Some("scripts/module-common.c"),
+            &["scripts/module-common.c"],
+        ));
+        plan.cmds.push(entry(
+            "drivers/net/dummy.o",
+            "gcc -c -o drivers/net/dummy.o drivers/net/dummy.c",
+            Some("drivers/net/dummy.c"),
+            &[],
+        ));
+        plan.cmds.push(entry(
+            "fs/nfs/client.o",
+            "gcc -c -o fs/nfs/client.o fs/nfs/client.c",
+            Some("fs/nfs/client.c"),
+            &[],
+        ));
+        let mut nfs = entry(
+            "fs/nfs/nfs.o",
+            "ld -m elf_x86_64 -z noexecstack -r -o fs/nfs/nfs.o @fs/nfs/nfs.mod",
+            None,
+            &[],
+        );
+        nfs.at_file_contents
+            .insert("fs/nfs/nfs.mod".to_owned(), "fs/nfs/client.o\n".to_owned());
+        plan.cmds.push(nfs);
+        plan.cmds.push(entry(
+            "Module.symvers",
+            "scripts/mod/modpost -M -E -o Module.symvers -T modules.order vmlinux.o",
+            None,
+            &[],
+        ));
+        for module in ["drivers/net/dummy", "fs/nfs/nfs"] {
+            plan.cmds.push(entry(
+                &format!("{module}.mod.o"),
+                &format!("gcc -c -o {module}.mod.o {module}.mod.c"),
+                Some(&format!("{module}.mod.c")),
+                &[&format!("{module}.mod.c")],
+            ));
+            plan.cmds.push(entry(
+                &format!("{module}.ko"),
+                &format!(
+                    "ld -r -T scripts/module.lds -o {module}.ko {module}.o {module}.mod.o \
+                     .module-common.o"
+                ),
+                None,
+                &[],
+            ));
+        }
+        plan
     }
 
     #[test]
@@ -691,6 +936,150 @@ mod tests {
     }
 
     #[test]
+    fn wires_module_units() {
+        let rendered = render_units_nix(&module_plan(), true).expect("render");
+
+        // The modules modpost depends on vmlinux.o (argv) and on every
+        // module object listed in modules.order (plan.modules), and installs
+        // the .mod.c sources it regenerates for the .mod.o compiles.
+        let modpost = rendered
+            .split("\"Module.symvers\" = mkUnit {")
+            .nth(1)
+            .expect("Module.symvers unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        for dep in [
+            "units.\"vmlinux.o\"",
+            "units.\"drivers/net/dummy.o\"",
+            "units.\"fs/nfs/nfs.o\"",
+        ] {
+            assert!(modpost.contains(dep), "Module.symvers missing {dep}");
+        }
+        for install in ["\"drivers/net/dummy.mod.c\"", "\"fs/nfs/nfs.mod.c\""] {
+            assert!(
+                modpost.contains(install),
+                "Module.symvers must install {install}"
+            );
+        }
+
+        // Each .mod.o compile consumes its modpost-provided source.
+        let mod_o = rendered
+            .split("\"drivers/net/dummy.mod.o\" = mkUnit {")
+            .nth(1)
+            .expect("dummy.mod.o unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        assert!(mod_o.contains("units.\"Module.symvers\""));
+        assert!(
+            !rendered.contains("srcFile \"kbuild-src-dummy.mod.c\""),
+            "provided .mod.c must not become a source farm entry"
+        );
+
+        // The .ko link scans its member objects from argv.
+        let ko = rendered
+            .split("\"drivers/net/dummy.ko\" = mkUnit {")
+            .nth(1)
+            .expect("dummy.ko unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        for dep in [
+            "units.\"drivers/net/dummy.o\"",
+            "units.\"drivers/net/dummy.mod.o\"",
+            "units.\".module-common.o\"",
+        ] {
+            assert!(ko.contains(dep), "dummy.ko missing {dep}");
+        }
+
+        // The ksymtab export chain: modpost provides .vmlinux.export.c, the
+        // export compile consumes it, the link consumes the object.
+        let symvers = rendered
+            .split("\"vmlinux.symvers\" = mkUnit {")
+            .nth(1)
+            .expect("vmlinux.symvers unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        assert!(symvers.contains("\".vmlinux.export.c\""));
+        let export_o = rendered
+            .split("\".vmlinux.export.o\" = mkUnit {")
+            .nth(1)
+            .expect(".vmlinux.export.o unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        assert!(export_o.contains("units.\"vmlinux.symvers\""));
+        let link = rendered
+            .split("\"vmlinux\" = mkUnit {")
+            .nth(1)
+            .expect("vmlinux unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        assert!(link.contains("units.\".vmlinux.export.o\""));
+
+        // Modules are roots (nothing module-side may be pruned) and surface
+        // through the exports.
+        assert!(rendered.contains("moduleSymvers = units.\"Module.symvers\";"));
+        assert!(rendered.contains(
+            "{ name = \"drivers/net/dummy.ko\"; path = \"${units.\"drivers/net/dummy.ko\"}/\" + \"drivers/net/dummy.ko\"; }"
+        ));
+        assert!(rendered.contains("{ name = \"fs/nfs/nfs.ko\";"));
+        assert!(rendered.contains("{ name = \"vmlinux\"; path = units.\"vmlinux\"; }"));
+        assert!(rendered.contains("{ name = \"kernel/fork.o\"; path = units.\"kernel/fork.o\"; }"));
+    }
+
+    #[test]
+    fn expands_response_file_members() {
+        let rendered = render_units_nix(&module_plan(), true).expect("render");
+        // The multi-object module .o links `@fs/nfs/nfs.mod`; its harvested
+        // contents wire the member compiles.
+        let nfs = rendered
+            .split("\"fs/nfs/nfs.o\" = mkUnit {")
+            .nth(1)
+            .expect("nfs.o unit rendered")
+            .split("};")
+            .next()
+            .expect("unit body");
+        assert!(nfs.contains("units.\"fs/nfs/client.o\""));
+    }
+
+    #[test]
+    fn rejects_uncaptured_response_file() {
+        let mut plan = module_plan();
+        for entry in &mut plan.cmds {
+            if entry.target == "fs/nfs/nfs.o" {
+                entry.at_file_contents.clear();
+            }
+        }
+        let err = render_units_nix(&plan, true).expect_err("missing @file must fail");
+        assert!(err.to_string().contains("@fs/nfs/nfs.mod"));
+    }
+
+    #[test]
+    fn rejects_modules_order_entry_without_unit() {
+        let mut plan = module_plan();
+        plan.modules.push("drivers/net/ghost.o".to_owned());
+        let err = render_units_nix(&plan, true).expect_err("unknown module must fail");
+        assert!(err.to_string().contains("drivers/net/ghost.o"));
+    }
+
+    #[test]
+    fn module_less_plan_renders_null_module_exports() {
+        let rendered = render_units_nix(&sample_plan(), true).expect("render");
+        assert!(rendered.contains("moduleSymvers = null;"));
+        assert!(!rendered.contains(".ko\""), "no module unit may render");
+        assert!(
+            rendered.contains("pkgs.linkFarm \"kbuild-modules\" [\n\n  ];"),
+            "modules farm must be empty"
+        );
+        // The closure aggregation still spans every reachable unit.
+        assert!(rendered.contains("{ name = \"vmlinux\"; path = units.\"vmlinux\"; }"));
+    }
+
+    #[test]
     fn rejects_unknown_archive_members() {
         let mut plan = sample_plan();
         plan.cmds.push(entry(
@@ -713,6 +1102,7 @@ mod tests {
             kernel_release: "6.12.95".to_owned(),
             cmds: vec![],
             generated: vec![],
+            modules: vec![],
         };
         let err = render_units_nix(&plan, false).expect_err("missing link must fail");
         assert!(err.to_string().contains("no vmlinux link command"));
