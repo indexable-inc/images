@@ -1,0 +1,19 @@
+[package]
+name = "plumb-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "libplumb: embeddable shell where every run is a value with per-stage capture and auto-bound variables"
+
+[lints]
+workspace = true
+
+[dependencies]
+plumb-syntax.workspace = true
+serde = { workspace = true, features = ["derive"] }
+snafu.workspace = true
+glob.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
