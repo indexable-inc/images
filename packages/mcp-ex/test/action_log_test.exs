@@ -1,6 +1,8 @@
 defmodule IxMcp.ActionLogTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Exqlite.Sqlite3
   alias IxMcp.ActionLog
   alias IxMcp.MCP.Server
@@ -14,6 +16,15 @@ defmodule IxMcp.ActionLogTest do
 
     on_exit(fn -> File.rm(path) end)
     path
+  end
+
+  defp user_version(path) do
+    {:ok, conn} = Sqlite3.open(path)
+    {:ok, statement} = Sqlite3.prepare(conn, "PRAGMA user_version")
+    {:ok, [[version]]} = Sqlite3.fetch_all(conn, statement)
+    :ok = Sqlite3.release(conn, statement)
+    :ok = Sqlite3.close(conn)
+    version
   end
 
   test "a tools/call lands one row under the current session and topic" do
@@ -252,6 +263,9 @@ defmodule IxMcp.ActionLogTest do
     assert [%{status: "running", stack: ~s(["frame"])} | _] = ActionLog.recent(10, log)
     :ok = ActionLog.finish_action(action_id, "done", false, 3, log)
     assert [%{status: "done", stack: nil} | _] = ActionLog.recent(10, log)
+
+    # The 2 -> 3 step stamped the file on its way through (index#3539).
+    assert user_version(path) == 3
   end
 
   test "a v1 database migrates losslessly to the normalized schema, once" do
@@ -335,6 +349,9 @@ defmodule IxMcp.ActionLogTest do
 
     stop_supervised!(:migrate)
 
+    # The ladder ran 1 -> 2 -> 3 and left the stamp behind (index#3539).
+    assert user_version(path) == 3
+
     # The migrated file is the v2 shape on disk: normalized columns, no v1
     # leftovers, and a reopen (no-op detection) does not duplicate rows.
     {:ok, conn} = Sqlite3.open(path)
@@ -372,5 +389,80 @@ defmodule IxMcp.ActionLogTest do
     reopened = start_supervised!({ActionLog, path: path, name: :action_log_remigration})
     assert length(ActionLog.sessions(reopened)) == 3
     assert length(ActionLog.recent(10, reopened)) == 6
+  end
+
+  test "a fresh database is created stamped with the current schema version" do
+    path = tmp_db()
+    start_supervised!({ActionLog, path: path, name: :action_log_fresh_stamp})
+    assert user_version(path) == 3
+  end
+
+  test "an unstamped file already at the current schema is stamped, not rewritten" do
+    path = tmp_db()
+
+    log = start_supervised!({ActionLog, path: path, name: :action_log_stamp_a}, id: :stamp_first)
+    session_id = ActionLog.create_session("s", log)
+
+    _action_id =
+      ActionLog.start_action(
+        %{session_id: session_id, topic_id: nil, tool: "exec", intent: "keep", arguments: "{}"},
+        log
+      )
+
+    stop_supervised!(:stamp_first)
+
+    # Rewind the stamp: this is exactly what a current-schema file written by
+    # a pre-user_version server (any #3536-era binary) looks like on disk.
+    {:ok, conn} = Sqlite3.open(path)
+    :ok = Sqlite3.execute(conn, "PRAGMA user_version = 0")
+    :ok = Sqlite3.close(conn)
+
+    reopened = start_supervised!({ActionLog, path: path, name: :action_log_stamp_b})
+    assert [%{intent: "keep"}] = ActionLog.recent(10, reopened)
+    assert user_version(path) == 3
+  end
+
+  test "a database stamped by a newer server disables logging instead of crashing" do
+    path = tmp_db()
+
+    {:ok, conn} = Sqlite3.open(path)
+    :ok = Sqlite3.execute(conn, "PRAGMA user_version = 9000")
+    :ok = Sqlite3.close(conn)
+
+    {log, output} =
+      with_log(fn ->
+        start_supervised!({ActionLog, path: path, name: :action_log_future})
+      end)
+
+    # The refusal names both versions, so the operator knows which side moves.
+    assert output =~ "user_version 9000"
+    assert output =~ "supported 3"
+    assert output =~ "index#3539"
+
+    # The server stays useful: writes are absorbed, reads answer empty.
+    session_id = ActionLog.create_session("ignored", log)
+    topic_id = ActionLog.create_topic(session_id, "t", log)
+
+    action_id =
+      ActionLog.start_action(
+        %{session_id: session_id, topic_id: topic_id, tool: "exec", intent: "x", arguments: "{}"},
+        log
+      )
+
+    :ok = ActionLog.update_stack(action_id, "[]", log)
+    :ok = ActionLog.finish_action(action_id, "done", false, 1, log)
+    assert ActionLog.recent(10, log) == []
+    assert ActionLog.sessions(log) == []
+    assert ActionLog.topics(log) == []
+
+    # The newer file is left exactly as found, for the newer server.
+    assert user_version(path) == 9000
+
+    {:ok, conn} = Sqlite3.open(path)
+    {:ok, statement} = Sqlite3.prepare(conn, "SELECT name FROM sqlite_master")
+    {:ok, tables} = Sqlite3.fetch_all(conn, statement)
+    :ok = Sqlite3.release(conn, statement)
+    :ok = Sqlite3.close(conn)
+    assert tables == []
   end
 end

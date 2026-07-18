@@ -16,13 +16,17 @@ defmodule IxMcp.Application do
       └── IxMcp.MCP.Stdio       (only when IX_MCP_STDIO=1) the stdio transport
 
   The transport is opt-in via environment so `mix test` and IEx sessions get
-  the full evaluator without a reader loop competing for stdin.
+  the full evaluator without a reader loop competing for stdin. Before the
+  tree starts, `ERL_CRASH_DUMP` is pointed into the action log's directory:
+  a BEAM crash dump otherwise lands in the inherited cwd (#3539).
   """
 
   use Application
 
   @impl true
   def start(_type, _args) do
+    route_crash_dumps()
+
     children =
       [
         # ActionLog before Session: Session lazily creates its rows through it.
@@ -38,6 +42,26 @@ defmodule IxMcp.Application do
       ] ++ transport()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: IxMcp.Supervisor)
+  end
+
+  # index#3539: without ERL_CRASH_DUMP the BEAM writes erl_crash.dump into
+  # whatever cwd it inherited from the MCP client -- the 2026-07-17 startup
+  # crash dumped 3.6MB into ~/.config/nix, which then got committed by
+  # accident. The runtime reads the variable at dump time, not at boot, so
+  # exporting it before any child can fail routes every dump from
+  # application start on into the state dir that already holds the action
+  # log. An explicit operator ERL_CRASH_DUMP wins; the in-memory test
+  # database has no directory to aim at, so it opts out.
+  defp route_crash_dumps do
+    db = IxMcp.ActionLog.db_path()
+
+    if is_nil(System.get_env("ERL_CRASH_DUMP")) and db != ":memory:" do
+      dir = Path.dirname(db)
+      File.mkdir_p!(dir)
+      System.put_env("ERL_CRASH_DUMP", Path.join(dir, "erl_crash.dump"))
+    end
+
+    :ok
   end
 
   defp transport do
