@@ -509,7 +509,11 @@ jobs:
           if-no-files-found: error
 
   darwin-push:
-    needs: darwin-build
+    # `push` is named only so its failed-roots output can feed the darwin
+    # pin's publish-hole gate below (darwin-build already implies it).
+    needs: [push, darwin-build]
+    permissions:
+      contents: write
     # Its own dispatch-identity label: the dispatcher spawns one runner per
     # `ix-ci-run-*` label, and the `-cache-push` SUFFIX (not the exact label)
     # plus repo + main branch is what attaches the push-only ix-public token
@@ -606,23 +610,72 @@ jobs:
             "$xargs" -a relay/roots.txt -r "$attic" push --jobs 16 ix-public
           phase push "$push_t"
 
+      # The darwin twin of advance-cache-ready: darwin consumers pin
+      # `cache-ready-darwin` for the #1890 native-artifact guarantee without
+      # holding the fleet's linux pin hostage to a hosted-mac build. A step
+      # here (self-hosted, no extra job) rather than a hosted job: the relay
+      # above is this ref's precondition, and a publish hole in either lane
+      # fails this job so the run stays the truth gate (#3195).
+      - name: Fast-forward cache-ready-darwin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          LINUX_FAILED_ROOTS: ${{ needs.push.outputs.failed-roots }}
+          DARWIN_FAILED_ROOTS: ${{ needs.darwin-build.outputs.failed-roots }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "$(( ${LINUX_FAILED_ROOTS:-0} ))" -gt 0 ] || [ "$(( ${DARWIN_FAILED_ROOTS:-0} ))" -gt 0 ]; then
+            echo "::error::not advancing cache-ready-darwin over a publish hole: ${LINUX_FAILED_ROOTS:-0} linux and ${DARWIN_FAILED_ROOTS:-0} darwin root(s) failed to realise (#3195)"
+            exit 1
+          fi
+
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::notice::not on main ($GITHUB_REF); leaving cache-ready-darwin alone"
+            exit 0
+          fi
+
+          if ! current="$(gh api "repos/$REPOSITORY/git/ref/heads/cache-ready-darwin" --jq .object.sha)"; then
+            gh api -X POST "repos/$REPOSITORY/git/refs" \
+              -f ref=refs/heads/cache-ready-darwin -f "sha=$SHA" > /dev/null
+            echo "::notice::created cache-ready-darwin at $SHA"
+            exit 0
+          fi
+
+          if [ "$current" = "$SHA" ]; then
+            echo "::notice::cache-ready-darwin already at $SHA"
+            exit 0
+          fi
+
+          # force=false: fast-forward-only, same rationale as cache-ready.
+          if gh api -X PATCH "repos/$REPOSITORY/git/refs/heads/cache-ready-darwin" \
+               -f "sha=$SHA" -F force=false > /dev/null; then
+            echo "::notice::cache-ready-darwin advanced: $current -> $SHA"
+          else
+            echo "::notice::cache-ready-darwin not moved (non-fast-forward; a newer run owns the ref)"
+          fi
+
   # Consumers pinning `github:indexable-inc/index/main` can `nix flake update`
   # inside the 15-25 min window between a merge and the push above finishing,
   # locking a rev whose darwin cross closure is not yet on cache.ix.dev; the
   # substitute-only darwin packages (RFC 0009) then fail with "Required
   # system: 'x86_64-linux'" (indexable-inc/index#1862). Fast-forwarding
-  # `cache-ready` only after a successful push gives consumers a pin target
-  # whose closure is always published. Gated on BOTH lanes (#1890): darwin
-  # consumers pinning `cache-ready` rely on the native artifacts having been
-  # relayed, so a darwin lane failure must hold the pin back exactly like a
-  # linux one. Downstream of the lanes, so a failure here never gates the
-  # cache publish itself. Also the run's truth gate (#3195): the lanes stay
-  # green over individual failed roots so their partial publishes land, and
-  # this job fails instead, holding the pin and turning the run red.
+  # `cache-ready` only after a successful linux push gives consumers a pin
+  # target whose x86_64-linux closure is always published, minutes after the
+  # merge. The darwin lanes moved OFF this gate (2026-07-19): they exist to
+  # prewarm dev macs, every fleet consumer of this pin is linux, and gating
+  # on the GitHub-hosted mac held the fleet pin hostage for 2h13m-2h45m per
+  # run (8-run sample). Darwin consumers pin `cache-ready-darwin` instead,
+  # advanced at the end of darwin-push once the native artifacts are relayed
+  # (same #1890 guarantee, its own ref). Downstream of the lane, so a failure
+  # here never gates the cache publish itself. Also the linux lane's truth
+  # gate (#3195): `push` stays green over individual failed roots so partial
+  # publishes land, and this job fails instead, holding the pin and turning
+  # the run red.
   advance-cache-ready:
-    # darwin-build is already an ancestor through darwin-push; naming it here
-    # makes its failed-roots output addressable.
-    needs: [push, darwin-build, darwin-push]
+    needs: [push]
     runs-on: ubuntu-latest
     # p95 <1m over last 30 green runs (2026-07-17); 10m floor.
     timeout-minutes: 10
@@ -635,7 +688,6 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           SHA: ${{ github.sha }}
           LINUX_FAILED_ROOTS: ${{ needs.push.outputs.failed-roots }}
-          DARWIN_FAILED_ROOTS: ${{ needs.darwin-build.outputs.failed-roots }}
         run: |
           set -euo pipefail
 
@@ -644,8 +696,8 @@ jobs:
           # pin advanced over the hole onto every darwin consumer (#3195,
           # #3188). Fail before any ref move so consumers keep the last
           # fully-published rev and the run cannot conclude success.
-          if [ "$(( ${LINUX_FAILED_ROOTS:-0} ))" -gt 0 ] || [ "$(( ${DARWIN_FAILED_ROOTS:-0} ))" -gt 0 ]; then
-            echo "::error::not advancing cache-ready over a publish hole: ${LINUX_FAILED_ROOTS:-0} linux and ${DARWIN_FAILED_ROOTS:-0} darwin root(s) failed to realise (named in the lane annotations above) (#3195)"
+          if [ "$(( ${LINUX_FAILED_ROOTS:-0} ))" -gt 0 ]; then
+            echo "::error::not advancing cache-ready over a publish hole: ${LINUX_FAILED_ROOTS:-0} linux root(s) failed to realise (named in the lane annotations above) (#3195)"
             exit 1
           fi
 

@@ -714,6 +714,29 @@
     };
   }
   {
+    noHostedRunners = {
+      text = ''
+        CI runs on our self-hosted fleet runners only. Never author or keep a
+        workflow job on GitHub-hosted runners (`runs-on: ubuntu-latest`,
+        `macos-*`, or any hosted label), and never route work to any mac
+        runner, hosted or self-hosted: there is no mac in CI. Jobs target the
+        fleet's self-hosted linux labels, and darwin artifacts are
+        cross-compiled from linux (pkgsCross) or leave the pipeline. A
+        hosted-runner or mac job in a workflow you touch is a defect: fix it
+        or file it.
+      '';
+      reason = ''
+        2026-07-18: the index cache-push darwin leg ran on GitHub-hosted
+        macos-14 and took 2h13m-2h45m per run (8-run sample) while the
+        self-hosted linux leg finished in under 4 minutes, putting a hosted
+        mac on the critical path of every cache-ready advance and fleet nix
+        deploy. Hosted runners are the slow, unobservable tier: no journal
+        access, no warm store, no reuse. Same direction as ix#7609 (remove
+        hosted ubuntu-latest from the required path).
+      '';
+    };
+  }
+  {
     decisiveness = {
       text = ''
         Bias to action. When verified facts are enough, act: take the
