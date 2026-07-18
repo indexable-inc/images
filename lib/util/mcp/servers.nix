@@ -21,6 +21,17 @@
     "SLACK_USER_TOKEN"
   ];
 
+  # Fleet BEAM distribution for the Elixir server's Fleet module (index#3514,
+  # fleet side ix#7622): node list and cookie-file path are machine-private
+  # values set in the operator's config repo; only the names are forwarded
+  # here. The cookie itself is deliberately not forwarded as a value var --
+  # `IX_BEAM_COOKIE_FILE` keeps it out of the process-environment surface.
+  fleetBeamEnvVars = [
+    "IX_BEAM_COOKIE_FILE"
+    "IX_BEAM_LOCAL_NAME"
+    "IX_BEAM_NODES"
+  ];
+
   defaultServers = {
     indexCommand ? null,
     # The Python kernel's entrypoint needs its `serve` subcommand; the Elixir
@@ -33,7 +44,7 @@
         transport = "stdio";
         command = indexCommand;
         args = indexArgs;
-        envVars = indexApiEnvVars;
+        envVars = indexApiEnvVars ++ fleetBeamEnvVars;
       };
     }
     // {
