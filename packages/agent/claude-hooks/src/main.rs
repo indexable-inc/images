@@ -78,6 +78,7 @@ fn main() -> ExitCode {
         Some("worktree-guard") => worktree_guard(),
         Some("prompt-priors") => prompt_priors(),
         Some("session-banner") => session_banner::session_banner(),
+        Some("session-id") => session_id(),
         Some("review-log-edit") => review::review_log_edit(),
         Some("review-gate") => review::review_gate(),
         Some("retro-gate") => retro::retro_gate(),
@@ -187,6 +188,34 @@ fn session_digest() {
         hook_event_name: "SessionStart",
         additional_context: context,
     });
+}
+
+// --- session-id ---
+
+/// Session-scoped artifacts (status boards, scratch dirs) are keyed by the
+/// session id, but nothing ambient tells the agent its own id, so this echoes
+/// the payload's `session_id` back as startup context. Shared by Claude Code
+/// and Codex: both send `session_id` on `SessionStart`.
+fn session_id() {
+    let Some(input) = read_stdin() else { return };
+    let Ok(payload) = serde_json::from_str::<Value>(&input) else {
+        return;
+    };
+    let Some(context) = session_id_context(&payload) else {
+        return;
+    };
+    emit(ContextOutput {
+        hook_event_name: "SessionStart",
+        additional_context: context,
+    });
+}
+
+fn session_id_context(payload: &Value) -> Option<String> {
+    let session = safe_session(payload)?;
+    Some(format!(
+        "Your session id: {session}. Use it wherever a session-scoped path is needed \
+         (e.g. test-ide boards: canvas/boards/{session}/main.svelte)."
+    ))
 }
 
 // --- worktree-guard ---
@@ -447,6 +476,7 @@ fn provenance(hit: &Value) -> String {
 mod tests {
     use super::{
         cap_chars, has_fleet_noun, matches_protected, passes_word_gate, provenance, render_priors,
+        session_id_context,
     };
     use serde_json::json;
 
@@ -518,6 +548,20 @@ mod tests {
         })];
         let out = render_priors(&hits).expect("hit");
         assert_eq!(out.chars().count(), 4800);
+    }
+
+    #[test]
+    fn session_id_context_echoes_id_and_rejects_unsafe_ids() {
+        let ctx = session_id_context(&json!({ "session_id": "abc-123" })).expect("context");
+        assert!(ctx.contains("Your session id: abc-123"));
+        assert!(ctx.contains("canvas/boards/abc-123/main.svelte"));
+        for bad in [
+            json!({}),
+            json!({ "session_id": "" }),
+            json!({ "session_id": "../x" }),
+        ] {
+            assert!(session_id_context(&bad).is_none());
+        }
     }
 
     #[test]
