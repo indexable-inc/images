@@ -26,6 +26,9 @@ concurrency:
 jobs:
   fork-sync:
     runs-on: ubuntu-latest
+    # p95 64m, worst 68m over the 21 green runs to date (2026-07-17); 1.5x
+    # headroom on an hour-scale lane.
+    timeout-minutes: 100
     permissions:
       contents: write
       pull-requests: write
