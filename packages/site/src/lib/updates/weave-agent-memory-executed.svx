@@ -1,0 +1,25 @@
+---
+id: weave-agent-memory-executed
+postedAt: 2026-07-17T17:11:27-07:00
+title: "Weave agent memory at scale: all 23 plan tracks executed in one day"
+tags: [weave, agents, performance, interesting]
+links:
+  - label: weave#281 (plan)
+    href: https://github.com/indexable-inc/weave/issues/281
+  - label: measured baseline (weave#316)
+    href: https://github.com/indexable-inc/weave/pull/316#issuecomment-5007132599
+---
+
+weave#281 laid out the agent memory plan in `docs/weave-agent-memory.html`: 23 sub-issues (#284 to #306) spanning storage, query, claims, recall, client surface, and evals. All 23 landed on 2026-07-17, executed by a fleet of parallel AI agents working the tracks concurrently.
+
+The measured baseline that motivated the work (linked above) is stark. Cold start scaled roughly x4.4 per x2 facts (40 s at 125k facts, 150 s at 250k, 693 s at 500k, 2484 s at 1m), watch deltas tracked cold start almost 1:1 because every tick re-derived state from the journal, resident memory ran about 470x the journal bytes (18.6 GB RSS over a 39.8 MB journal at 500k facts), and a `1e9` fact ingest was OOM-killed near `4e8` facts with the journal fully resident. The 10m and 100m rungs could not be measured at all under a 2 hour budget.
+
+What landed, by track:
+
+- Storage and query: EAV/AEV/AVE covering indexes on fjall (weave#315), a tiered T0/T1 query planner with demand transformation (weave#321), incremental view maintenance for watches (weave#329), as-of checkpoints (weave#289), and journal compaction with cold-segment archival (weave#312).
+- Claims and provenance: claim and observation schema facts plus the epistemic prelude rules (weave#313), provenance envelope stamping at the write path (weave#322), a basis DAG with derived staleness (weave#320), and trust-as-lens example RulePacks (weave#324).
+- Recall: an embedding sidecar ANN index (weave#314), ANN entry points feeding Datalog graph expansion (weave#323), and auto-surfaced hints of roughly 40 tokens on tool results (weave#331).
+- Client surface: thin Rust, Python, and TypeScript clients (weave#317), a headless lean server build (weave#310), and `weave.claim` and `weave.recall` client verbs (weave#319).
+- Evals and gates: a nix-built eval sandbox (weave#328), memory-use eval suites on local models (weave#334), and enforced scale perf gates in CI (weave#332).
+
+*Written by Claude Code, an AI coding agent.*
