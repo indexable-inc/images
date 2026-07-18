@@ -13,6 +13,7 @@
   paths,
   rust-overlay,
   home-manager,
+  personalLightProfileCheck,
 }: let
   inherit (nixpkgs) lib;
   pkgs = import nixpkgs {
@@ -1129,15 +1130,15 @@
       rootsForTarget = target: let
         units = crossWorkspace.unitsFor {inherit target;};
       in
-        # These three ARE the whole eval-time closure: the `import unitsNix`
-        # forces `unitsNix`, which references only `unitGraphJson` and `vendorDir`
+        # These three ARE the whole eval-time closure: importing the generated
+        # catalog forces it, and it references only `unitGraphJson` and `vendorDir`
         # (the cargo-lock it also reads is a plain flake source path, always
         # present). `cargo-vendor-config.toml` is not a fourth root: it is a
         # build input of the `unitGraphJson` builder, not on the import path and
         # not in `vendorDir`'s closure, so substituting `unitGraphJson`'s output
         # makes it moot -- the Mac never runs that builder.
         {
-          "cross-ifd-${target}-units-nix" = units.unitsNix;
+          "cross-ifd-${target}-units-nix" = units.generatedUnitCatalog;
           "cross-ifd-${target}-unit-graph" = units.unitGraphJson;
           "cross-ifd-${target}-vendor-dir" = units.vendorDir;
         };
@@ -1296,6 +1297,150 @@
       home-manager
       ;
   };
+  # This is an exec-style toolchain wrapper, so the checked Bash writer keeps
+  # Python's exit and signal behavior instead of interposing another process.
+  bumpRustNightly = ix.writeBashApplication pkgs {
+    name = "bump-rust-nightly";
+    runtimeInputs = [pkgs.python3];
+    text = ''
+      export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+      exec python3 \
+        ${paths.root + "/.github/scripts/bump-rust-nightly.py"} "$@"
+    '';
+  };
+  # The source catalog is canonical Linux data, but the command that installs
+  # it into a checkout must be executable on every supported developer host.
+  # Atomic replacement and symlink refusal are easier to audit as checked
+  # Bash than as a cross-platform sequence of Nushell filesystem operations.
+  mkUpdateCargoUnitCatalog = nixPackage:
+    ix.writeBashApplication pkgs {
+      name = "update-cargo-unit-catalog";
+      runtimeInputs = [
+        pkgs.coreutils
+        pkgs.gitMinimal
+        nixPackage
+      ];
+      text = ''
+        if (( $# > 1 )); then
+          printf 'usage: update-cargo-unit-catalog [CHECKOUT]\n' >&2
+          exit 2
+        fi
+        checkout=''${1:-.}
+        # Command substitution strips trailing newlines, which are legal in a
+        # checkout path. The sentinel preserves Git's exact path before removal.
+        repo_root=$(git -C "$checkout" rev-parse --show-toplevel && printf '.')
+        repo_root=''${repo_root%.}
+        repo_root=''${repo_root%$'\n'}
+        destination="$repo_root/tests/fixtures/cargo-unit-hello/unit-catalog"
+        for directory in \
+          "$repo_root/tests" \
+          "$repo_root/tests/fixtures" \
+          "$repo_root/tests/fixtures/cargo-unit-hello"; do
+          if [[ ! -d "$directory" || -L "$directory" ]]; then
+            printf 'refusing unsafe catalog directory: %s\n' "$directory" >&2
+            exit 1
+          fi
+        done
+        if [[ ! -f "$destination" || -L "$destination" ]]; then
+          printf 'refusing unsafe catalog destination: %s\n' "$destination" >&2
+          exit 1
+        fi
+        temporary=$(mktemp "$destination.tmp.XXXXXX")
+        trap 'rm -f "$temporary"' EXIT
+        # Building inside B prevents an updater launched from A from installing
+        # A's data, and avoids treating a legal `#` in B's path as a fragment.
+        generated_catalog=$(
+          cd -- "$repo_root"
+          nix build --no-link --print-out-paths \
+            '.#packages.x86_64-linux.cargo-unit-generated-catalog'
+        )
+        if [[ $generated_catalog == *$'\n'* \
+          || ! -f $generated_catalog \
+          || -L $generated_catalog ]]; then
+          printf 'catalog build returned an invalid output: %q\n' "$generated_catalog" >&2
+          exit 1
+        fi
+        install -m 0644 "$generated_catalog" "$temporary"
+        mv -fT "$temporary" "$destination"
+        trap - EXIT
+        printf 'updated %s\n' "$destination"
+      '';
+    };
+  updateCargoUnitCatalogBase = mkUpdateCargoUnitCatalog repoPackages.nix-ix;
+  updateCargoUnitCatalogNixProbe = pkgs.writeShellApplication {
+    name = "nix";
+    text = ''
+      expected_ref='.#packages.x86_64-linux.cargo-unit-generated-catalog'
+      if (( $# != 4 )) \
+        || [[ $PWD != "$EXPECTED_CHECKOUT" ]] \
+        || [[ $1 != build || $2 != --no-link || $3 != --print-out-paths || $4 != "$expected_ref" ]]; then
+        printf 'unexpected catalog build invocation:' >&2
+        printf ' %q' "$@" >&2
+        printf '\n' >&2
+        exit 1
+      fi
+      printf '%s\n' "$EXPECTED_CATALOG"
+    '';
+  };
+  updateCargoUnitCatalogCheckoutTest = let
+    updater = mkUpdateCargoUnitCatalog updateCargoUnitCatalogNixProbe;
+  in
+    pkgs.runCommandLocal "update-cargo-unit-catalog-checkout" {
+      nativeBuildInputs = [
+        pkgs.coreutils
+        pkgs.gitMinimal
+        updater
+      ];
+    } ''
+      # `#` is legal in a checkout path but denotes an output fragment in a
+      # flake reference, so this catches accidental path interpolation there.
+      checkout="$TMPDIR/checkout#b"
+      destination="$checkout/tests/fixtures/cargo-unit-hello/unit-catalog"
+      generated="$TMPDIR/generated-by-b"
+      mkdir -p "$(dirname "$destination")"
+      printf 'old catalog\n' >"$destination"
+      printf 'catalog generated by checkout B\n' >"$generated"
+      git -C "$checkout" init -q
+      expected_checkout=$(git -C "$checkout" rev-parse --show-toplevel)
+
+      (
+        cd "$TMPDIR"
+        EXPECTED_CHECKOUT="$expected_checkout" EXPECTED_CATALOG="$generated" \
+          update-cargo-unit-catalog "$checkout"
+      )
+
+      cmp "$generated" "$destination"
+
+      printf 'old catalog\n' >"$destination"
+      generated_link="$TMPDIR/generated-link"
+      ln -s "$generated" "$generated_link"
+      if EXPECTED_CHECKOUT="$expected_checkout" EXPECTED_CATALOG="$generated_link" \
+        update-cargo-unit-catalog "$checkout" >"$TMPDIR/symlink.log" 2>&1; then
+        printf 'catalog updater admitted a symlink build output\n' >&2
+        exit 1
+      fi
+      cmp <(printf 'old catalog\n') "$destination"
+      touch "$out"
+    '';
+  updateCargoUnitCatalog = updateCargoUnitCatalogBase.overrideAttrs (old: {
+    passthru = (old.passthru or {}) // {tests.checkout = updateCargoUnitCatalogCheckoutTest;};
+  });
+
+  updateRustNightlyWorkflowCheck =
+    pkgs.runCommandLocal "update-rust-nightly-workflow-check" {
+      nativeBuildInputs = [
+        pkgs.bash
+        pkgs.coreutils
+        pkgs.gitMinimal
+        pkgs.jq
+        pkgs.nix
+        pkgs.yq-go
+      ];
+    } ''
+      bash ${paths.root + "/.github/scripts/update-rust-nightly-test.sh"} \
+        ${paths.root + "/.github/workflows/update-rust-nightly.yml"}
+      touch "$out"
+    '';
 
   exampleFleets = ix.exampleFleetsFor {hostSystem = system;};
 
@@ -1394,29 +1539,52 @@
     )
     nonNixExampleImages;
 
-  # Build the check catalog from a rust-package keying. `checks` (flat: one
-  # derivation per `checks.<system>.<name>`, required by the flake schema and
-  # `nix flake check`) and `ciChecks` (sharded: one `recurseForDerivations` group
-  # per package, what the memory-bounded CI evaluator consumes) share the same
-  # explicit checks; only the rust keying differs (ENG-2201). The
-  # collision guard runs per keying, so producing `ciChecks` only forces the
-  # cheap per-package names, never the flat per-#[test] spine.
-  catalogFor = rustPackageSet:
-    lib.optionalAttrs (system == ix.system) (
+  # Fixed Rust checks stay directly addressable. Dynamically named package
+  # checks use a flat aggregate for the flake schema and sharded keys for the
+  # memory-bounded CI evaluator (ENG-2201).
+  fixedRustChecks = lib.optionalAttrs (system == ix.system) {
+    cargo-unit-catalog = tests.cargoUnitCatalog;
+    cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+    cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
+    sdk-rust-prebuilt = tests.sdkRustPrebuilt;
+    # Strict zuban + ruff ANN gate over the public ix-sdk Python sources
+    # (ENG-3131); the SDK is setuptools-built, so this is its build-time
+    # enforcement in place of a buildUvApplication pyChecker flag.
+    sdk-python-strict = tests.sdkPythonStrict;
+  };
+  rustChecksFor = rustPackageSet:
+    fixedRustChecks // lib.optionalAttrs (system == ix.system) rustPackageSet;
+  flatRustChecks =
+    fixedRustChecks
+    // lib.optionalAttrs (system == ix.system) {
+      # Keep the output key static: selecting an unrelated explicit check must
+      # not discover per-test keys (which requires the Rust planner IFD). The
+      # aggregate still carries every leaf as a normal derivation dependency.
+      rust-package-checks =
+        pkgs.runCommand "rust-package-checks" {
+          __structuredAttrs = true;
+          deps = builtins.attrValues rustPackageTestSets.flat;
+          strictDeps = true;
+        } ''
+          mkdir -p "$out"
+          printf '%s\n' 'Rust package checks passed' > "$out/result"
+        '';
+    };
+  # Keep explicit checks outside the Rust catalog thunk. This lets Nix select a
+  # small explicit check without first discovering dynamically generated Rust
+  # test keys (and therefore without evaluator-time builds).
+  baseExplicitChecks =
+    {
+      personal-light-profile = personalLightProfileCheck;
+      update-cargo-unit-catalog-host-native = assert lib.assertMsg (updateCargoUnitCatalog.system == system)
+      "update-cargo-unit-catalog must be host-native on ${system}"; updateCargoUnitCatalog;
+    }
+    // lib.optionalAttrs (system == ix.system) (
       let
-        rustChecks =
-          {
-            cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
-            cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
-            sdk-rust-prebuilt = tests.sdkRustPrebuilt;
-            # Strict zuban + ruff ANN gate over the public ix-sdk Python sources
-            # (ENG-3131); the SDK is setuptools-built, so this is its build-time
-            # enforcement in place of a buildUvApplication pyChecker flag.
-            sdk-python-strict = tests.sdkPythonStrict;
-          }
-          // rustPackageSet;
         explicitChecks = {
           inherit (tests) eval;
+          update-cargo-unit-catalog-checkout = updateCargoUnitCatalogCheckoutTest;
+          update-rust-nightly-workflow = updateRustNightlyWorkflowCheck;
           # Boots a NixOS VM running the minecraft-blocks producer's Paper
           # server and asserts the BlockEvents plugin's onEnable succeeded
           # with no exception (ENG-2186). Paper's paperclip bootstrap is
@@ -1945,12 +2113,28 @@
             '';
           site-test = siteTests.all;
         };
-        checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
       in
-        assert lib.assertMsg (checkNameCollisions == [])
-        "checks: duplicate names across explicit/rust sets: ${lib.concatStringsSep ", " checkNameCollisions}";
-          explicitChecks // rustChecks
+        explicitChecks
     );
+  explicitChecksFor = rustChecks:
+    if system == ix.system
+    then
+      (
+        let
+          collisionCheckName = "check-catalog-names";
+          explicitCheckNames = [collisionCheckName] ++ lib.attrNames baseExplicitChecks;
+          checkNameCollisions = lib.intersectLists explicitCheckNames (lib.attrNames rustChecks);
+        in
+          baseExplicitChecks
+          // {
+            ${collisionCheckName} = assert lib.assertMsg (checkNameCollisions == [])
+            "checks: duplicate names across explicit/rust sets: ${lib.concatStringsSep ", " checkNameCollisions}";
+              pkgs.runCommandLocal "check-catalog-names" {} ''
+                touch "$out"
+              '';
+          }
+      )
+    else baseExplicitChecks;
   packageSet =
     lib.optionalAttrs (system == ix.system) {
       base = baseImage;
@@ -1966,6 +2150,9 @@
       # means the tree is already clean.
       lint-fixed = lintFix.fixed;
       lint-fix-patch = lintFix.patch;
+      bump-rust-nightly = bumpRustNightly;
+      cargo-unit-generated-catalog = tests.cargoUnitGeneratedCatalog;
+      update-cargo-unit-catalog = updateCargoUnitCatalog;
       site-dev = site.passthru.devServer;
       update-mods = updateMods;
       update-loaders = updateLoaders;
@@ -2138,7 +2325,7 @@ in {
     # target override IS the host workspace, so these are exactly the drvs a
     # Darwin consumer's eval of the native wrappers imports.
     nativeIfdRoots = lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-      native-ifd-units-nix = crossWorkspace.units.unitsNix;
+      native-ifd-units-nix = crossWorkspace.units.generatedUnitCatalog;
       native-ifd-unit-graph = crossWorkspace.units.unitGraphJson;
       native-ifd-vendor-dir = crossWorkspace.units.vendorDir;
     };
@@ -2160,14 +2347,17 @@ in {
 
   inherit darwinPackageAliases;
 
-  # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
-  # and `nix flake check` require. The `.#check` gate and blast-radius consume
-  # the sharded `ciChecks` instead, so this output is not what CI enumerates.
+  # A static aggregate keeps `checks` cheap to select while preserving every
+  # dynamically named Rust leaf as a native Nix dependency. The `.#check` gate
+  # and blast-radius consume the sharded `ciChecks` directly.
   # `forkChecks` is merged on EVERY system (not just x86_64-linux like the
   # rest of `catalogFor`): the patched sources are cheap, platform-relevant
   # derivations, so `nix build .#checks.aarch64-darwin.patched-src-clippy`
   # validates the series against a local Darwin build right after a flake update.
-  checks = catalogFor rustPackageTestSets.flat // forkChecks;
+  checks =
+    flatRustChecks
+    // forkChecks
+    // explicitChecksFor flatRustChecks;
   # Closure build gates, keyed `<fork>.<patch>` (see the binding above). A
   # non-schema output like `ciChecks`, exposed per system so a darwin host can
   # gate-build natively before an upstream PR.
@@ -2179,7 +2369,10 @@ in {
   # (ENG-2201). Not a `checks.<system>.<name>` output, because a non-derivation
   # there fails the flake schema. The patched-src checks are plain derivations,
   # so they key identically in both views.
-  ciChecks = catalogFor rustPackageTestSets.sharded // forkChecks;
+  ciChecks =
+    rustChecksFor rustPackageTestSets.sharded
+    // forkChecks
+    // explicitChecksFor (rustChecksFor rustPackageTestSets.sharded);
 
   formatter = pkgs.alejandra;
 

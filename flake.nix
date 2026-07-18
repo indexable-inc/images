@@ -376,6 +376,7 @@
             rust-overlay
             home-manager
             ;
+          personalLightProfileCheck = (personalLightProfile system).activationPackage;
         }
     );
     collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
@@ -393,7 +394,8 @@
       // lib.genAttrs [
         "aarch64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
-    packages = withDarwinAliases (collect "packages");
+    uncheckedPackages = withDarwinAliases (collect "packages");
+    packages = uncheckedPackages;
     ciChecks = collect "ciChecks";
     cachePushRoots = withDarwinAliases (collect "cachePushRoots");
     # One evaluator pool owns every required Linux build root. Prefix closure
@@ -653,13 +655,7 @@
     overlays.default = ix.overlay;
     templates = {};
     inherit packages;
-    checks = lib.mapAttrs (
-      system: systemChecks:
-        systemChecks
-        // {
-          personal-light-profile = (personalLightProfile system).activationPackage;
-        }
-    ) (collect "checks");
+    checks = collect "checks";
     # Sharded keying of the same check derivations for the memory-bounded CI
     # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
     # (ENG-2201). Kept separate from `checks` because its per-package

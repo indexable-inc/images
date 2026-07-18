@@ -724,10 +724,11 @@ fn compute_hash(
 
     let unit = &graph.units[index];
     let mut dependency_hashes = Vec::new();
+    // Build-script runs are omitted from the transitive rlib closure below,
+    // but their outputs are still direct Nix inputs. Include them in identity
+    // so merged Cargo target graphs cannot emit two distinct derivations under
+    // the same unit attribute name.
     for dependency in &unit.dependencies {
-        if graph.units[dependency.index].is_run_custom_build() {
-            continue;
-        }
         dependency_hashes.push(format!(
             "{}:{}:{}:{}",
             dependency.extern_crate_name,
@@ -4234,6 +4235,100 @@ version = "0.1.0"
     }
 
     #[test]
+    fn build_script_run_names_include_nested_build_script_identity() {
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace/leaf#leaf@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/leaf/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": ["one"], "mode": "build", "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/leaf#leaf@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/leaf/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": ["one"], "mode": "run-custom-build",
+                  "dependencies": [{ "index": 0, "extern_crate_name": "build_script_build" }]
+                },
+                {
+                  "pkg_id": "path+file:///workspace/leaf#leaf@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/leaf/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": ["two"], "mode": "build", "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/leaf#leaf@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/leaf/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": ["two"], "mode": "run-custom-build",
+                  "dependencies": [{ "index": 2, "extern_crate_name": "build_script_build" }]
+                },
+                {
+                  "pkg_id": "path+file:///workspace/parent#parent@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/parent/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [], "mode": "build", "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/parent#parent@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/parent/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [], "mode": "run-custom-build",
+                  "dependencies": [
+                    { "index": 4, "extern_crate_name": "build_script_build" },
+                    { "index": 1, "extern_crate_name": "leaf" }
+                  ]
+                },
+                {
+                  "pkg_id": "path+file:///workspace/parent#parent@0.1.0",
+                  "target": { "kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "/workspace/parent/build.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [], "mode": "run-custom-build",
+                  "dependencies": [
+                    { "index": 4, "extern_crate_name": "build_script_build" },
+                    { "index": 3, "extern_crate_name": "leaf" }
+                  ]
+                },
+                {
+                  "pkg_id": "path+file:///workspace/unrelated#unrelated@0.1.0",
+                  "target": { "kind": ["lib"], "crate_types": ["lib"], "name": "unrelated", "src_path": "/workspace/unrelated/src/lib.rs", "edition": "2024" },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [], "mode": "build", "dependencies": []
+                }
+              ],
+              "roots": [5, 6],
+              "root_sets": [[5], [6]]
+            }"#,
+        )
+        .unwrap();
+
+        let options = RenderOptions {
+            workspace_root: PathBuf::from("/workspace"),
+            vendor_root: None,
+            cargo_lock_sources: CargoLockSources::default(),
+            content_addressed: false,
+            toolchain_id: None,
+            deny_unused_crate_dependencies: false,
+            deny_panics: false,
+        };
+        let prepared = prepare_graph(&graph, &options).unwrap();
+
+        assert_ne!(prepared.names[5], prepared.names[6]);
+
+        let unrelated_graph = UnitGraph {
+            version: graph.version,
+            units: vec![graph.units[7].clone()],
+            roots: vec![0],
+            root_sets: Vec::new(),
+        };
+        let unrelated_prepared = prepare_graph(&unrelated_graph, &options).unwrap();
+        assert_eq!(prepared.names[7], unrelated_prepared.names[0]);
+    }
+
+    #[test]
     fn scopes_doctests_to_each_root_set() {
         let graph: UnitGraph = serde_json::from_str(
             r#"{
@@ -5060,6 +5155,8 @@ version = "4.6.1"
 
         assert!(rendered.contains("[ \"README.md\" \"clap-4.6.1\" ]"));
         assert!(!rendered.contains("derive_arbitrary-1.4.2"));
+        assert!(rendered.contains("pkgs.runCommand name {}"));
+        assert!(!rendered.contains("scopedClosureSource vendorDir name includes"));
         fs::remove_dir_all(workspace).unwrap();
     }
 

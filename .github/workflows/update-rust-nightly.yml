@@ -16,15 +16,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  update-rust-nightly:
-    runs-on: ubuntu-latest
+  prepare-update:
+    # This credential-free job is the only place that evaluates the moving
+    # rust-overlay input. Its unique label guarantees that no process survives
+    # onto the distinct runner that later receives the PR credential.
+    runs-on:
+      [
+        "${{ format('ix-ci-run-{0}-{1}-update-rust-nightly-prepare', github.run_id, github.run_attempt) }}",
+      ]
     timeout-minutes: 10
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
 
       # The rolling Rust manifest can publish before rust-overlay has generated
       # that day's expressions. Advance the overlay first so a toolchain bump
@@ -32,13 +40,238 @@ jobs:
       - name: Update Rust overlay
         run: nix flake update rust-overlay
 
-      # python3's stdlib tomllib parses both the pin and the upstream manifest
-      # properly instead of grepping dates out of TOML by hand.
+      # The flake-owned app pins Python and its CA bundle. Its stdlib tomllib
+      # parses both the pin and upstream manifest instead of grepping TOML.
       - name: Compute latest available nightly
-        run: python3 .github/scripts/bump-rust-nightly.py
+        run: nix run .#bump-rust-nightly
 
       - name: Verify the pinned nightly evaluates
         run: nix eval .#packages.x86_64-linux.agents.drvPath
+
+      # The rendered unit keys include the toolchain store basename. A nightly
+      # bump therefore must update the source-owned graph in the same PR.
+      - name: Regenerate cargo-unit catalog
+        run: nix run .#update-cargo-unit-catalog
+
+      # Copy only inert candidate data into a bounded artifact. The publishing
+      # job treats even these files as hostile and validates them before copy.
+      - name: Stage candidate data
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/rust-nightly-candidate"
+          mkdir -p "$candidate/tests/fixtures/cargo-unit-hello"
+          install -m 0644 flake.lock "$candidate/flake.lock"
+          install -m 0644 rust-toolchain.toml "$candidate/rust-toolchain.toml"
+          install -m 0644 tests/fixtures/cargo-unit-hello/unit-catalog \
+            "$candidate/tests/fixtures/cargo-unit-hello/unit-catalog"
+
+      - name: Upload candidate data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-nightly-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rust-nightly-candidate
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-update:
+    needs: prepare-update
+    # Never reuse the evaluation runner here: this job receives write scope but
+    # executes no repository or artifact code, only fixed data validators.
+    runs-on:
+      [
+        "${{ format('ix-ci-run-{0}-{1}-update-rust-nightly-publish', github.run_id, github.run_attempt) }}",
+      ]
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Download candidate data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rust-nightly-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rust-nightly-candidate
+
+      - name: Validate and install candidate data
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/rust-nightly-candidate"
+          catalog="$candidate/tests/fixtures/cargo-unit-hello/unit-catalog"
+
+          # Globs are shell-owned so the privileged runner needs no flake-pinned
+          # findutils just to reject unexpected artifact entries.
+          shopt -s dotglob globstar nullglob
+          entries=("$candidate"/**)
+          for entry in "${entries[@]}"; do
+            relative=${entry#"$candidate"/}
+            case "$relative" in
+              "" | flake.lock | rust-toolchain.toml | tests | tests/fixtures | \
+                tests/fixtures/cargo-unit-hello | \
+                tests/fixtures/cargo-unit-hello/unit-catalog) ;;
+              *) printf 'unexpected artifact entry: %s\n' "$relative" >&2; exit 1 ;;
+            esac
+          done
+
+          for directory in \
+            "$candidate" \
+            "$candidate/tests" \
+            "$candidate/tests/fixtures" \
+            "$candidate/tests/fixtures/cargo-unit-hello"; do
+            [[ -d "$directory" && ! -L "$directory" ]] || {
+              printf 'candidate is not a real directory: %s\n' "$directory" >&2
+              exit 1
+            }
+          done
+          for file in \
+            "$candidate/flake.lock" \
+            "$candidate/rust-toolchain.toml" \
+            "$catalog"; do
+            [[ -f "$file" && ! -L "$file" ]] || {
+              printf 'candidate is not a regular file: %s\n' "$file" >&2
+              exit 1
+            }
+          done
+          [[ $(wc -c <"$candidate/flake.lock") -le 1048576 ]]
+          [[ $(wc -c <"$candidate/rust-toolchain.toml") -le 16384 ]]
+          [[ $(wc -c <"$catalog") -ge 100000 ]]
+          [[ $(wc -c <"$catalog") -le 2097152 ]]
+
+          for directory in \
+            "$GITHUB_WORKSPACE" \
+            "$GITHUB_WORKSPACE/tests" \
+            "$GITHUB_WORKSPACE/tests/fixtures" \
+            "$GITHUB_WORKSPACE/tests/fixtures/cargo-unit-hello"; do
+            [[ -d "$directory" && ! -L "$directory" ]] || {
+              printf 'unsafe checkout directory: %s\n' "$directory" >&2
+              exit 1
+            }
+          done
+          for file in \
+            "$GITHUB_WORKSPACE/flake.lock" \
+            "$GITHUB_WORKSPACE/rust-toolchain.toml" \
+            "$GITHUB_WORKSPACE/tests/fixtures/cargo-unit-hello/unit-catalog"; do
+            [[ -f "$file" && ! -L "$file" ]] || {
+              printf 'unsafe checkout file: %s\n' "$file" >&2
+              exit 1
+            }
+          done
+          [[ $(git rev-parse --verify HEAD) == "$GITHUB_SHA" ]]
+
+          # Parse JSON and TOML strictly as data with fixed expressions. The
+          # expressions contain no artifact-supplied Nix. Only the overlay's
+          # immutable pin tuple and the dated channel may differ from base.
+          BASE_LOCK_FILE="$GITHUB_WORKSPACE/flake.lock" \
+          CANDIDATE_LOCK_FILE="$candidate/flake.lock" nix eval \
+            --offline --no-eval-cache --impure \
+            --option accept-flake-config false --option allowed-uris '' \
+            --raw --expr '
+              let
+                parse = name: builtins.fromJSON (builtins.readFile (builtins.getEnv name));
+                base = parse "BASE_LOCK_FILE";
+                candidate = parse "CANDIDATE_LOCK_FILE";
+                baseOverlay = base.nodes."rust-overlay".locked;
+                candidateOverlay = candidate.nodes."rust-overlay".locked;
+                withoutPin = lock: lock // {
+                  nodes = lock.nodes // {
+                    "rust-overlay" = lock.nodes."rust-overlay" // {
+                      locked = builtins.removeAttrs lock.nodes."rust-overlay".locked [
+                        "lastModified"
+                        "narHash"
+                        "rev"
+                      ];
+                    };
+                  };
+                };
+              in
+                assert withoutPin candidate == withoutPin base;
+                assert builtins.isInt candidateOverlay.lastModified;
+                assert candidateOverlay.lastModified >= baseOverlay.lastModified;
+                assert builtins.isString candidateOverlay.rev
+                  && builtins.match "[0-9a-f]{40}" candidateOverlay.rev != null;
+                assert builtins.isString candidateOverlay.narHash
+                  && builtins.match "sha256-[A-Za-z0-9+/]{43}=" candidateOverlay.narHash != null;
+                "ok"
+            ' >/dev/null
+          BASE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/rust-toolchain.toml" \
+          CANDIDATE_TOOLCHAIN_FILE="$candidate/rust-toolchain.toml" nix eval \
+            --offline --no-eval-cache --impure \
+            --option accept-flake-config false --option allowed-uris '' \
+            --raw --expr '
+              let
+                parse = name: builtins.fromTOML (builtins.readFile (builtins.getEnv name));
+                base = parse "BASE_TOOLCHAIN_FILE";
+                candidate = parse "CANDIDATE_TOOLCHAIN_FILE";
+                baseChannel = base.toolchain.channel;
+                candidateChannel = candidate.toolchain.channel;
+                withoutChannel = manifest: manifest // {
+                  toolchain = builtins.removeAttrs manifest.toolchain ["channel"];
+                };
+              in
+                assert withoutChannel candidate == withoutChannel base;
+                assert builtins.match "nightly-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]" candidateChannel != null;
+                assert !(candidateChannel < baseChannel);
+                "ok"
+            ' >/dev/null
+          IFS= read -r catalog_header <"$catalog"
+          [[ "$catalog_header" == '# Generated by nix-cargo-unit. Do not edit by hand.' ]]
+          [[ $(tail -c 2 "$catalog") == '}' ]]
+          # Treat the generated Nix as inert text. A nightly may only rewrite
+          # 16-hex unit identities; any structural change requires manual
+          # review. The later PR evaluation still belongs on the coordinator's
+          # restricted evaluator and daemon, never on this credentialed job.
+          BASE_CATALOG_FILE="$GITHUB_WORKSPACE/tests/fixtures/cargo-unit-hello/unit-catalog" \
+          CANDIDATE_CATALOG_FILE="$catalog" nix eval \
+            --offline --no-eval-cache --impure \
+            --option accept-flake-config false --option allowed-uris '' \
+            --raw --expr '
+              let
+                normalize = name:
+                  builtins.concatStringsSep "<unit-id>" (
+                    builtins.filter builtins.isString (
+                      builtins.split "[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]" (
+                        builtins.readFile (builtins.getEnv name)
+                      )
+                    )
+                  );
+              in
+                assert normalize "CANDIDATE_CATALOG_FILE" == normalize "BASE_CATALOG_FILE";
+                "ok"
+            ' >/dev/null
+
+          replace_regular() {
+            local source=$1 destination=$2 temporary
+            [[ -f "$destination" && ! -L "$destination" ]] || {
+              printf 'unsafe checkout destination: %s\n' "$destination" >&2
+              exit 1
+            }
+            temporary=$(mktemp "$destination.candidate.XXXXXX")
+            install -m 0644 "$source" "$temporary"
+            mv -fT "$temporary" "$destination"
+          }
+          replace_regular "$candidate/flake.lock" "$GITHUB_WORKSPACE/flake.lock"
+          replace_regular "$candidate/rust-toolchain.toml" "$GITHUB_WORKSPACE/rust-toolchain.toml"
+          replace_regular "$catalog" \
+            "$GITHUB_WORKSPACE/tests/fixtures/cargo-unit-hello/unit-catalog"
+
+          # Porcelain includes untracked paths, unlike `git diff --name-only`.
+          # Only unstaged modifications of the three pre-existing files pass.
+          mapfile -t status < <(git status --porcelain=v1 --untracked-files=all)
+          for entry in "${status[@]}"; do
+            case "$entry" in
+              " M flake.lock" | " M rust-toolchain.toml" | \
+                " M tests/fixtures/cargo-unit-hello/unit-catalog") ;;
+              *) printf 'unexpected checkout status: %s\n' "$entry" >&2; exit 1 ;;
+            esac
+          done
+          [[ -z $(git diff --summary) ]]
+          git diff --check
 
       # Opens (or updates) a single PR, and only when something changed:
       # create-pull-request no-ops on an empty diff (which is also what the
@@ -67,6 +300,10 @@ jobs:
           reviewers: ${{ steps.trigger.outputs.user }}
           base: main
           branch: update-rust-nightly
+          add-paths: |
+            flake.lock
+            rust-toolchain.toml
+            tests/fixtures/cargo-unit-hello/unit-catalog
           delete-branch: true
           commit-message: "rust-toolchain: bump nightly"
           title: "rust-toolchain: bump nightly"

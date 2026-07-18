@@ -139,7 +139,21 @@ let
     assert pkgs.lib.assertMsg (vendorDir != null) ''
       nix-cargo-unit needs vendorDir to build a filtered vendor source closure.
     '';
-    scopedClosureSource vendorDir name includes;
+    # vendorDir is a derivation. Filtering it with builtins.path would realise
+    # the complete vendor farm during evaluation, before Nix can schedule it.
+    pkgs.runCommand name {} ''
+      mkdir -p "$out"
+      for include in ${pkgs.lib.escapeShellArgs includes}; do
+        source=${vendorDir}/"$include"
+        # Cargo packages can retain test-only includes that are absent from the
+        # published crate. builtins.path ignored those missing paths as well.
+        if [[ -e "$source" || -L "$source" ]]; then
+          destination="$out/$include"
+          mkdir -p "$(dirname "$destination")"
+          ln -s "$source" "$destination"
+        fi
+      done
+    '';
 
   sources = {
 {{ source_entries }}  };

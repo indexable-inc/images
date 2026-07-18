@@ -39,16 +39,39 @@ if [[ "$wired" != "true" ]]; then
 fi
 
 nix() {
-  if [[ "$#" -ne 6 || "$1" != "run" || "$2" != ".#clone" || "$3" != "--" || "$4" != "." || "$5" != "--diff" ]]; then
-    printf 'unexpected clone invocation:' >&2
-    printf ' %q' "$@" >&2
-    printf '\n' >&2
-    return 1
+  if [[ "${1:-}" == "run" ]]; then
+    if [[ "$#" -ne 6 || "$2" != ".#clone" || "$3" != "--" || "$4" != "." || "$5" != "--diff" ]]; then
+      printf 'unexpected clone invocation:' >&2
+      printf ' %q' "$@" >&2
+      printf '\n' >&2
+      return 1
+    fi
+    if [[ "$6" != "$EXPECTED_BASE_SHA" ]]; then
+      printf 'expected clone base %s, got %s\n' "$EXPECTED_BASE_SHA" "$6" >&2
+      return 1
+    fi
+    return
   fi
-  if [[ "$6" != "$EXPECTED_BASE_SHA" ]]; then
-    printf 'expected clone base %s, got %s\n' "$EXPECTED_BASE_SHA" "$6" >&2
-    return 1
+
+  # The checkout-base test stubs Nix, so pin the no-IFD evaluator boundary
+  # here too; otherwise this mock could silently bypass a weakened gate.
+  if [[ "${1:-}" == "eval" ]]; then
+    [[ "$#" -eq 17 ]]
+    [[ "${2:-}" == "--raw" && "${3:-}" == ".#lib" && "${4:-}" == "--apply" ]]
+    [[ "${5:-}" == 'ix: (import (ix.paths.root + "/tests/cargo-unit-catalog.nix") { inherit ix; pkgs = ix.pkgs; }).workspace.binaries.cargo-unit-hello.drvPath' ]]
+    [[ "${6:-}" == "--option" && "${7:-}" == "allow-import-from-derivation" && "${8:-}" == "false" ]]
+    [[ "${9:-}" == "--option" && "${10:-}" == "builders" && "${11+x}" == "x" && "${11}" == "" ]]
+    [[ "${12:-}" == "--option" && "${13:-}" == "fallback" && "${14:-}" == "false" ]]
+    [[ "${15:-}" == "--option" && "${16:-}" == "max-jobs" && "${17:-}" == "0" ]]
+    touch "$TMPDIR/catalog-eval"
+    printf '/nix/store/test-cargo-unit-hello.drv'
+    return
   fi
+
+  printf 'unexpected nix invocation:' >&2
+  printf ' %q' "$@" >&2
+  printf '\n' >&2
+  return 1
 }
 export -f nix
 
@@ -68,6 +91,10 @@ export -f nix
 )
 if [[ ! -f "$TMPDIR/handoff" ]]; then
   printf 'gate never reached the check handoff\n' >&2
+  exit 1
+fi
+if [[ ! -f "$TMPDIR/catalog-eval" ]]; then
+  printf 'gate never enforced the no-IFD cargo catalog boundary\n' >&2
   exit 1
 fi
 

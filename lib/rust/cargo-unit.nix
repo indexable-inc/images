@@ -145,8 +145,16 @@
 
   Returns the generated attrset with `sourceAudit`, `units`, `roots`, `checkedRoots`,
   `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
-  `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
-  derivations for inspection.
+  `policyChecks`, plus the intermediate `unitGraphJson`, `generatedUnitCatalog`,
+  `unitsNix`, and `vendorDir` derivations for inspection. `unitCatalog` names
+  the effective imported catalog path.
+
+  `unitCatalog = ./units.nix` imports a source-owned catalog instead of the
+  generated catalog. The supplied value must be a Nix path or `null`; `null`
+  preserves normal generated-catalog behavior. `generatedUnitCatalog` remains
+  available without being imported, so callers can compare it with the
+  source-owned catalog in a normal build-time drift check. `unitsNix` remains
+  an alias of the generated derivation for compatibility.
 
   `testPolicyByPackage.<package>` accepts structured test-runner policy:
   `{ skip = [ "case_name" ]; testThreads = "1"; }`. `buildWorkspace` renders
@@ -355,8 +363,10 @@
     # derived once at the resolution boundary, not re-spelled here.
     workspaceToolchainId = context.toolchainId;
 
-    # Second IFD stage: render `units.nix` from the unit graph above.
-    unitsNix = let
+    # Second IFD stage: render `units.nix` from the unit graph above. This
+    # remains lazy when a source-owned catalog supplies the evaluation graph;
+    # callers can realise it later in an ordinary drift-check derivation.
+    generatedUnitCatalog = let
       contentAddressed = rawArgs.contentAddressed or true;
 
       extraFlags = lib.optional contentAddressed "--content-addressed" ++ effects.renderFlags;
@@ -376,6 +386,14 @@
           < ${unitGraphJson} \
           > "$out"
       '';
+
+    suppliedUnitCatalog = rawArgs.unitCatalog or null;
+    unitCatalog = assert lib.assertMsg (
+      suppliedUnitCatalog == null || builtins.isPath suppliedUnitCatalog
+    ) "cargoUnit.buildWorkspace unitCatalog must be a Nix path or null";
+      if suppliedUnitCatalog == null
+      then generatedUnitCatalog
+      else suppliedUnitCatalog;
 
     perUnitClippyEnabled = args.policy.clippy.enable;
     # Workspace-level policy checks: audit + machete only. Clippy is NOT here;
@@ -416,7 +434,7 @@
         effects.linkRustcArgsForPlatform resolvedPlatform
         ++ (rawArgs.extraLinkRustcArgsForPlatform or (_platform: [])) platform;
     in
-      import unitsNix (
+      import unitCatalog (
         {
           inherit pkgs vendorDir vendorSources;
           inherit (args) src;
@@ -695,18 +713,34 @@
     workspaceUnits
     // {
       inherit
+        generatedUnitCatalog
+        unitCatalog
         unitGraphJson
-        unitsNix
         vendorDir
         testPolicyByPackage
         nextestByTarget
         testChecksByTarget
         testChecksAll
         ;
+      # Preserve the established derivation-typed inspection handle; callers
+      # select the effective imported path through unitCatalog explicitly.
+      unitsNix = generatedUnitCatalog;
       cargoConfigScript = context.configScript;
       targetSets = namedTargetSets;
       inherit (args) policy;
     };
+
+  /**
+  Generate a workspace's catalog without importing its effective catalog.
+
+  Updaters must use this recovery surface: selecting `generatedUnitCatalog`
+  from a normal `buildWorkspace` still merges the imported unit attrset, so a
+  syntactically invalid source catalog could otherwise prevent its own repair.
+  The inert catalog exposes no roots and therefore cannot accidentally become
+  a build surface.
+  */
+  generateUnitCatalog = rawArgs:
+    (buildWorkspace (rawArgs // {unitCatalog = ./empty-unit-catalog.nix;})).generatedUnitCatalog;
 
   # One lookup for every selector that picks a root out of a workspace: fail
   # with the calling selector's name and the full set of available keys, so a
@@ -1031,6 +1065,7 @@ in {
     buildBinary
     buildBinaries
     buildWorkspace
+    generateUnitCatalog
     selectBinaryWithTests
     selectLibraryWithTests
     defaultToolchainId
