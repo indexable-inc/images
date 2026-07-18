@@ -29,13 +29,13 @@ use objc2_io_surface::{IOSurface, IOSurfaceLockOptions, IOSurfaceRef};
 use objc2_quartz_core::CALayer;
 use objc2_virtualization::{
     VZBootLoader, VZDirectoryShare, VZDirectorySharingDeviceConfiguration,
-    VZDiskImageStorageDeviceAttachment, VZGraphicsDeviceConfiguration, VZKeyboardConfiguration,
-    VZMACAddress, VZMacAuxiliaryStorage, VZMacAuxiliaryStorageInitializationOptions,
-    VZMacGraphicsDeviceConfiguration, VZMacGraphicsDisplayConfiguration, VZMacHardwareModel,
-    VZMacMachineIdentifier, VZMacOSBootLoader, VZMacOSInstaller, VZMacOSRestoreImage,
-    VZMacPlatformConfiguration, VZNATNetworkDeviceAttachment, VZNetworkDeviceConfiguration,
-    VZPlatformConfiguration, VZPointingDeviceConfiguration, VZSharedDirectory,
-    VZSingleDirectoryShare, VZStorageDeviceConfiguration, VZUSBKeyboardConfiguration,
+    VZGraphicsDeviceConfiguration, VZKeyboardConfiguration, VZMACAddress, VZMacAuxiliaryStorage,
+    VZMacAuxiliaryStorageInitializationOptions, VZMacGraphicsDeviceConfiguration,
+    VZMacGraphicsDisplayConfiguration, VZMacHardwareModel, VZMacMachineIdentifier,
+    VZMacOSBootLoader, VZMacOSInstaller, VZMacOSRestoreImage, VZMacPlatformConfiguration,
+    VZNATNetworkDeviceAttachment, VZNetworkDeviceConfiguration, VZPlatformConfiguration,
+    VZPointingDeviceConfiguration, VZSharedDirectory, VZSingleDirectoryShare,
+    VZStorageDeviceConfiguration, VZUSBKeyboardConfiguration,
     VZUSBScreenCoordinatePointingDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
     VZVirtioFileSystemDeviceConfiguration, VZVirtioNetworkDeviceConfiguration, VZVirtualMachine,
     VZVirtualMachineConfiguration, VZVirtualMachineDelegate, VZVirtualMachineView,
@@ -105,6 +105,9 @@ pub struct MacBootScreenshot {
     pub out_prefix: PathBuf,
     pub seconds: u64,
     pub shares: Vec<DirShare>,
+    /// Block-device attachment policy, for a bundle whose `disk.img` is (a
+    /// symlink to) a raw device node.
+    pub disk_flags: crate::blockdev::DiskFlags,
 }
 
 /// Build the off-screen window + `VZVirtualMachineView`, create the VM, and
@@ -115,8 +118,9 @@ pub fn start_guest_offscreen(
     mtm: MainThreadMarker,
     bundle: &Path,
     shares: &[DirShare],
+    disk_flags: crate::blockdev::DiskFlags,
 ) -> Result<Retained<VZVirtualMachineView>, Error> {
-    let config = build_macos_config(bundle, shares, None)?;
+    let config = build_macos_config(bundle, shares, None, disk_flags)?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
@@ -126,9 +130,14 @@ pub fn start_guest_offscreen(
 }
 
 /// Run a macOS guest as a supervisor-owned foreground process.
-pub fn run_macos(bundle: &Path, mac_address: &str, shares: &[DirShare]) -> Result<(), Error> {
+pub fn run_macos(
+    bundle: &Path,
+    mac_address: &str,
+    shares: &[DirShare],
+    disk_flags: crate::blockdev::DiskFlags,
+) -> Result<(), Error> {
     let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
-    let config = build_macos_config(bundle, shares, Some(mac_address))?;
+    let config = build_macos_config(bundle, shares, Some(mac_address), disk_flags)?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
@@ -253,10 +262,11 @@ pub fn boot_macos_screenshot(boot: MacBootScreenshot) -> Result<(), Error> {
         out_prefix,
         seconds,
         shares,
+        disk_flags,
     } = boot;
 
     let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
-    let vm_view = start_guest_offscreen(mtm, &bundle, &shares)?;
+    let vm_view = start_guest_offscreen(mtm, &bundle, &shares, disk_flags)?;
 
     // Tick times for screenshots: the hardcoded ticks below the deadline, then
     // the deadline itself, so a short `--seconds` stops on time and always takes
@@ -661,7 +671,9 @@ fn start_install(bundle: &Path, ipsw: &Path, hw_data: &[u8], disk_gib: u64) -> R
         message: format!("create aux storage: {}", ns_error_message(&e)),
     })?;
 
-    let config = build_macos_config(bundle, &[], None)?;
+    // The install disk is the fresh image file created above, so the
+    // block-device policy flags cannot apply; the defaults are inert.
+    let config = build_macos_config(bundle, &[], None, crate::blockdev::DiskFlags::default())?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
@@ -704,6 +716,7 @@ fn build_macos_config(
     bundle: &Path,
     shares: &[DirShare],
     mac_address: Option<&str>,
+    disk_flags: crate::blockdev::DiskFlags,
 ) -> Result<Retained<VZVirtualMachineConfiguration>, Error> {
     let hw_data = std::fs::read(bundle.join("hardware-model.bin")).map_err(|e| Error::Bundle {
         message: format!("hardware-model.bin: {e}"),
@@ -755,17 +768,12 @@ fn build_macos_config(
     let gfx = unsafe { VZMacGraphicsDeviceConfiguration::new() };
     unsafe { gfx.setDisplays(&NSArray::from_slice(&[&*display])) };
 
-    let disk_url = file_url(&bundle.join("disk.img"));
-    let disk_attach = unsafe {
-        VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
-            VZDiskImageStorageDeviceAttachment::alloc(),
-            &disk_url,
-            false,
-        )
-    }
-    .map_err(|e| Error::Bundle {
-        message: ns_error_message(&e),
-    })?;
+    // The bundle's disk: normally an image file, but `disk.img` may be a
+    // symlink to a raw device node (e.g. a dedicated partition for a
+    // persistent guest), which attaches as a block device (see
+    // crate::blockdev).
+    let disk_attach = crate::blockdev::storage_attachment(&bundle.join("disk.img"), disk_flags)
+        .map_err(|source| Error::Disk { source })?;
     let block = unsafe {
         VZVirtioBlockDeviceConfiguration::initWithAttachment(
             VZVirtioBlockDeviceConfiguration::alloc(),

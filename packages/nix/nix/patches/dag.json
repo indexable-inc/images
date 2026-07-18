@@ -95,6 +95,10 @@
         "0005-libstore-write-status-files-from-build-and-substitut.patch",
         "0008-tests-functional-test-build-status-directory.patch"
       ]
+    },
+    {
+      "patch": "0022-libstore-fail-paused-downloads-on-peer-half-close-or.patch",
+      "deps": []
     }
   ]
 }

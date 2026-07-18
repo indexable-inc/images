@@ -295,11 +295,29 @@ fn set_payload(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
     }
     let mut keep = vec![firmware_c];
     for (index, disk) in boot.disks.iter().enumerate() {
-        if !disk.exists() {
-            return Err(Error::Source {
-                path: disk.clone(),
-                message: "disk image does not exist".to_owned(),
-            });
+        let meta = std::fs::metadata(disk).map_err(|error| Error::Source {
+            path: disk.clone(),
+            message: format!("disk image is not accessible: {error}"),
+        })?;
+        // Raw block devices are rejected loudly: libkrun opens each disk by
+        // path as a plain file, and no fd handoff can rescue that on macOS
+        // (F_SETFL on a disk fd returns ENOTTY, and reopening /dev/fd/N
+        // re-checks vnode permissions, so a root-opened descriptor is useless
+        // to this unprivileged process; see lima-vm/lima#5104). The
+        // Virtualization.framework commands (boot-linux-gui, drive-linux)
+        // attach block devices instead.
+        {
+            use std::os::unix::fs::FileTypeExt;
+            let file_type = meta.file_type();
+            if file_type.is_block_device() || file_type.is_char_device() {
+                return Err(Error::Source {
+                    path: disk.clone(),
+                    message: "raw block devices are not supported by the libkrun backend \
+                              (it only takes disk image files); use the Virtualization.framework \
+                              commands (boot-linux-gui, drive-linux) to attach a /dev disk"
+                        .to_owned(),
+                });
+            }
         }
         let disk = disk.canonicalize().unwrap_or_else(|_| disk.clone());
         let disk_c = cstr(&disk.to_string_lossy())?;
