@@ -323,6 +323,7 @@
     import ./kernel/kbuild-unit.nix {
       inherit lib pkgs;
       nixKbuildUnit = buildIxRustTool pkgs (packagePath "nix-kbuild-unit");
+      writeBashApplication = writeBashApplication pkgs;
     };
 
   systemdHardening = import ./services/systemd-hardening.nix;

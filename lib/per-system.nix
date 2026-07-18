@@ -2322,6 +2322,15 @@ in {
       inherit (pkgs.linux_6_12) src;
       configTarget = "defconfig";
     };
+    # Static fallback lane (#3413): keeps the ccache plan strategy exercised
+    # so a config whose plan-time tooling rejects skeleton stub objects has a
+    # validated escape hatch to flip to (strategy selection is per-lane and
+    # never auto-detected; Nix cannot catch a failed drv, and a silent flip
+    # would hide skeleton regressions).
+    kernel-unit-ccache = (ix.kernelUnitFor pkgs).buildKernel {
+      inherit (pkgs.linux_6_12) src;
+      planStrategy = "ccache";
+    };
   };
 
   # `nix run .#bench` runs the repo's self-demo perf job (timing + RSS + custom
