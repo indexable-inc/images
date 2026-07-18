@@ -1,0 +1,77 @@
+name: Resolve triggering human
+description: >-
+  The GitHub login of the human whose action caused this run, so a
+  PR-generating lane can notify them (@mention in the body, review request,
+  assignee). Bot PRs opened by the update/fork-sync lanes are otherwise
+  unattributed: nobody is subscribed, so they sit unnoticed until someone
+  trawls the PR list. Resolution is per event: `workflow_dispatch` names the
+  dispatching actor, `push` the head-commit author, `pull_request` the PR
+  author; `schedule` has no human, and a bot actor (github-actions, any
+  `*[bot]` app) resolves to empty rather than re-notifying automation, which
+  also breaks mention loops between bots. Owns the resolution so lanes cannot
+  drift apart.
+
+outputs:
+  user:
+    description: >-
+      GitHub login to notify, or empty when the run has no human trigger
+      (schedule) or the triggering actor is itself a bot. Feed it directly to
+      create-pull-request's `assignees`/`reviewers`, which treat empty as
+      "none".
+    value: ${{ steps.resolve.outputs.user }}
+  mention:
+    description: >-
+      Markdown attribution line ("Triggered by <sha> (<event>) from @<user>.")
+      for the generated PR body, or empty when `user` is empty. An @mention in
+      the body notifies even when the review request is rejected (a token
+      without the reviewer's read access, say).
+    value: ${{ steps.resolve.outputs.mention }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve triggering human
+      id: resolve
+      shell: bash
+      # Context reaches the script through env, never inline `${{ }}` in
+      # `run:`: an actor login or commit-author name is attacker-adjacent
+      # text and interpolating it into the script body would be injectable.
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        ACTOR: ${{ github.actor }}
+        HEAD_COMMIT_AUTHOR: ${{ github.event.head_commit.author.username }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+
+        # `:-` defaults: a missing context field (a push whose head commit
+        # has no linked GitHub account, say) renders the env var empty, and
+        # under `set -u` the fallback keeps that a skip, not a crash.
+        case "$EVENT_NAME" in
+          # `github.actor` (not `triggering_actor`): on a re-run the original
+          # dispatcher still owns the change the run advances.
+          workflow_dispatch) user="${ACTOR:-}" ;;
+          push) user="${HEAD_COMMIT_AUTHOR:-}" ;;
+          pull_request|pull_request_target) user="${PR_AUTHOR:-}" ;;
+          # schedule and everything else: no human to notify.
+          *) user="" ;;
+        esac
+
+        # Bot guard: never tag automation. App actors end in `[bot]`;
+        # github-actions and dependabot also appear bare in commit-author
+        # usernames.
+        case "$user" in
+          *"[bot]"|github-actions|dependabot) user="" ;;
+        esac
+
+        mention=""
+        if [ -n "$user" ]; then
+          short_sha="${SHA:0:11}"
+          mention="Triggered by \`${short_sha}\` (\`${EVENT_NAME}\`) from @${user}."
+        fi
+
+        {
+          echo "user=$user"
+          echo "mention=$mention"
+        } >> "$GITHUB_OUTPUT"
