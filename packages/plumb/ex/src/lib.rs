@@ -54,6 +54,23 @@ mod _plumb {
 
     impl std::error::Error for PlumbError {}
 
+    /// The BEAM's main VM process ignores SIGCHLD (ports fork from
+    /// erl_child_setup, so the VM expects to own no children), and SIG_IGN
+    /// auto-reaps our pipeline children before waitpid can collect their
+    /// exit statuses (ECHILD). Restore the default disposition once: with
+    /// erl_child_setup in the picture the VM process has no other children
+    /// to reap.
+    fn ensure_sigchld_default() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            // SAFETY: signal(2) with a standard disposition; no handler
+            // code runs.
+            unsafe {
+                libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+            }
+        });
+    }
+
     fn convert(error: plumb_core::Error) -> PlumbError {
         use plumb_core::Error;
         let message = error.to_string();
@@ -87,6 +104,7 @@ mod _plumb {
         /// Open a shell (process env, process cwd, output captured only).
         #[unibind(constructor)]
         pub fn new() -> Result<Self, PlumbError> {
+            ensure_sigchld_default();
             plumb_core::Shell::new(plumb_core::Config::default())
                 .map(|inner| Self { inner })
                 .map_err(convert)

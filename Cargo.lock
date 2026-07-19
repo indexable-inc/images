@@ -8977,6 +8977,7 @@ dependencies = [
 name = "plumb-ex"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "plumb-core",
  "rustler",
  "serde",

@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
+libc.workspace = true
 plumb-core.workspace = true
 serde.workspace = true
 rustler.workspace = true
