@@ -543,6 +543,16 @@
           upstream = "hold";
           reason = "Fleet CI policy for indexable-inc/index#3317. Validate the process-aware deadline before proposing a general Nix interface; humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # 0023: forge archive inputs (github:/gitlab:/sourcehut:) requesting
+        # submodules or LFS are constructed as the equivalent git+https input
+        # (archive tarballs cannot contain that data), so lock files record a
+        # plain `git` node stock Nix understands. Fixes the hard failure of
+        # NixOS/nix#13571 and the silent empty-submodule trees of
+        # NixOS/nix#14982; the mapping mirrors GitHubInputScheme::clone().
+        "0023-libfetchers-fetch-forge-inputs-via-git-when-submodul.patch" = {
+          upstream = "hold";
+          reason = "Implements roberth's implicit git+https switch from NixOS/nix#14982 (also fixes NixOS/nix#13571; indexable-inc/index#3626). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];

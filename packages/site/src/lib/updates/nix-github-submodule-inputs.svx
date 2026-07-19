@@ -1,0 +1,15 @@
+---
+id: nix-github-submodule-inputs
+postedAt: 2026-07-19T09:00:00-07:00
+title: "github: flake inputs can fetch submodules"
+tags: [nix, fork, fetchers]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/3626
+  - label: upstream bug
+    href: https://github.com/NixOS/nix/issues/14982
+---
+
+The fleet's patched nix now honors `submodules` (and `lfs`) on `github:`, `gitlab:` and `sourcehut:` flake inputs. Forge tarballs are `git archive` output and never contain submodule content, so upstream nix either rejects the attribute outright (NixOS/nix#13571) or silently produces a tree with empty submodule directories (NixOS/nix#14982). Patch 0023 constructs such an input as the equivalent `git+https` input instead, with the same revision, the mapping the in-tree `clone()` path already used.
+
+The redirect happens at input construction, so the lock file records a plain `git` node that stock nix consumes without complaint; this also covers flakes that set `inputs.self.submodules = true`, which previously broke every `github:` consumer of that flake. Plain forge inputs keep tarball semantics and byte-identical hashes. Two caveats ride along, both scoped to inputs that request submodules or LFS: git checkouts do not apply `export-ignore`/`export-subst` attributes the way archives do, and private repositories authenticate through git's credential machinery rather than the forge `access-tokens` setting.

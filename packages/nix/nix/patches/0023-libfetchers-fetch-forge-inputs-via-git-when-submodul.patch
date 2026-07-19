@@ -1,0 +1,544 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 19 Jul 2026 00:43:38 -0700
+Subject: [PATCH] libfetchers: fetch forge inputs via git when submodules are
+ requested
+
+The github/gitlab/sourcehut input schemes download `git archive`
+tarballs, which never contain submodule content or Git LFS data, so
+`submodules = true` on such an input either failed at input
+construction with "input attribute 'submodules' not supported by
+scheme 'github'" (NixOS/nix#13571) or, when injected after
+construction by flake `self` attributes, was silently ignored and
+produced a tree with empty submodule directories (NixOS/nix#14982).
+roberth's triage of #14982 names the fix implemented here: implicitly
+switch to the git+https input scheme. The mapping already exists
+in-tree: GitHubInputScheme::clone() clones exactly that URL.
+
+Redirect at input construction, not at fetch time:
+GitArchiveInputScheme::inputFromAttrs() now returns the equivalent
+`git` input (host/owner/repo folded into the URL, same ref/rev,
+shallow like an archive, narHash/lastModified forwarded when present)
+whenever `submodules` or `lfs` is requested. Construction is the right
+layer because everything downstream then sees the input that is really
+fetched; in particular a lock file records a plain `git` node that any
+Nix release understands, whereas a `github` node carrying a
+`submodules` attribute is rejected by stock Nix on the next read,
+which is exactly the failure mode of #13571. Input::fromURL() and
+Input::fromAttrs() learn to keep a scheme set by a delegating scheme,
+and the archive URL parser accepts the `submodules`/`lfs` query
+parameters it used to drop silently. An explicit `false` is
+normalized away so locked forge nodes never carry the attribute.
+
+Flake `self` attributes bypass construction (applySelfAttrs() inserts
+attributes into an already constructed input), so
+GitArchiveInputScheme::getAccessor() performs the same redirect as a
+backstop, and getFlake() erases `__final` alongside the `narHash` it
+already erases before the self-attrs refetch: the flag asserted that
+fetching would reproduce the previous attribute set exactly, which the
+added attributes just falsified, and checkLocks() pins every attribute
+of a final input, `type` included.
+
+Correctness notes, also in the manual text:
+
+- Inputs that request neither submodules nor LFS take the archive path
+  unchanged, byte-identical narHashes included. Submodule fetches get
+  git-scheme narHashes, identical to the documented git+https
+  workaround for these bugs.
+
+- A Git checkout is not always bit-identical to the forge archive of
+  the same revision (export-ignore/export-subst attributes), the
+  caveat roberth raised in #14982. Behavior only changes when
+  submodules or LFS are requested, cases that were previously broken.
+
+- Rev verification gets stronger, not weaker: the git fetcher verifies
+  the fetched commit hash, while archive contents are only trusted
+  transitively via narHash.
+
+- Private repositories fetched with submodules use Git's credential
+  machinery instead of the forge access-tokens setting, as git+https
+  inputs always have (clone() shares this property).
+
+No upstream implementation existed to vendor as of 2026-07-19 (the
+NixOS/nix#14982 timeline carries only downstream mentions). Covered by
+unit tests in src/libfetchers-tests/input.cc; the construction cases
+fail before this change (attribute rejection, silent query-parameter
+drop).
+
+Refs indexable-inc/index#3626.
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/doc/manual/rl-next/github-submodules.md b/doc/manual/rl-next/github-submodules.md
+new file mode 100644
+index 00000000..db987a0c
+--- /dev/null
++++ b/doc/manual/rl-next/github-submodules.md
+@@ -0,0 +1,38 @@
++---
++synopsis: "`github:`, `gitlab:` and `sourcehut:` inputs support `submodules` and `lfs` by fetching via Git"
++issues: [13571, 14982]
++prs: []
++---
++
++The forge archive input schemes now accept the `submodules` and `lfs`
++attributes. Forge archive tarballs are `git archive` output and never
++contain submodule content or Git LFS files, so such inputs previously
++either failed with `input attribute 'submodules' not supported by
++scheme 'github'` or silently produced a tree with empty submodule
++directories. When one of these attributes is enabled, the input is now
++constructed as the equivalent `git+https` input (same host, owner,
++repository and revision), which supports both features:
++
++```
++nix build 'github:owner/repo?submodules=1'
++```
++
++behaves like the previously documented workaround
++
++```
++nix build 'git+https://github.com/owner/repo?submodules=1&shallow=1'
++```
++
++including in lock files: the locked input is recorded as a plain `git`
++input, which older Nix versions understand. This also applies when the
++flake sets `inputs.self.submodules = true`, which previously broke
++consumers of such flakes.
++
++Note that a Git checkout is not always bit-identical to the forge's
++archive of the same revision: archives honor the `export-ignore` and
++`export-subst` Git attributes, a Git checkout does not. Inputs that
++request neither `submodules` nor `lfs` are unaffected and keep tarball
++semantics, hashes and the forge API access-token path. Fetching a
++private repository with `submodules = true` uses Git's credential
++machinery (for example `netrc-file`) instead of the forge
++`access-tokens` setting, as `git+https` inputs always have.
+diff --git a/src/libfetchers-tests/input.cc b/src/libfetchers-tests/input.cc
+index faff55f2..f762caed 100644
+--- a/src/libfetchers-tests/input.cc
++++ b/src/libfetchers-tests/input.cc
+@@ -19,7 +19,15 @@ struct InputFromAttrsTestCase
+ };
+ 
+ class InputFromAttrsTest : public ::testing::WithParamInterface<InputFromAttrsTestCase>, public ::testing::Test
+-{};
++{
++public:
++    void SetUp() override
++    {
++        // The forge archive schemes (github/gitlab/sourcehut) are gated
++        // on the flakes feature.
++        experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
++    }
++};
+ 
+ TEST_P(InputFromAttrsTest, attrsAreCorrectAndRoundTrips)
+ {
+@@ -55,7 +63,180 @@ INSTANTIATE_TEST_SUITE_P(
+                     {"url", Attr("ssh://git@github.com/NixOS/nixpkgs")},
+                     {"type", Attr("git")},
+                 },
++        },
++        // Forge archive inputs that request submodules or LFS construct
++        // the equivalent git+https input, because forge tarballs cannot
++        // contain that data (issues #13571, #14982).
++        InputFromAttrsTestCase{
++            .attrs =
++                {
++                    {"type", Attr("github")},
++                    {"owner", Attr("NixOS")},
++                    {"repo", Attr("nix")},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++            .expectedUrl = "git+https://github.com/NixOS/nix.git?shallow=1&submodules=1",
++            .description = "github_submodules_redirects_to_git",
++            .expectedAttrs =
++                {
++                    {"type", Attr("git")},
++                    {"url", Attr("https://github.com/NixOS/nix.git")},
++                    {"shallow", Attr(Explicit<bool>{true})},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++        },
++        InputFromAttrsTestCase{
++            .attrs =
++                {
++                    {"type", Attr("github")},
++                    {"owner", Attr("NixOS")},
++                    {"repo", Attr("nix")},
++                    {"rev", Attr("0123456789abcdef0123456789abcdef01234567")},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++            .expectedUrl = "git+https://github.com/NixOS/nix.git?rev=0123456789abcdef0123456789abcdef01234567&"
++                           "shallow=1&submodules=1",
++            .description = "github_submodules_redirect_keeps_rev",
++            .expectedAttrs =
++                {
++                    {"type", Attr("git")},
++                    {"url", Attr("https://github.com/NixOS/nix.git")},
++                    {"rev", Attr("0123456789abcdef0123456789abcdef01234567")},
++                    {"shallow", Attr(Explicit<bool>{true})},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++        },
++        InputFromAttrsTestCase{
++            .attrs =
++                {
++                    {"type", Attr("github")},
++                    {"owner", Attr("NixOS")},
++                    {"repo", Attr("nix")},
++                    {"host", Attr("github.example.com")},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++            .expectedUrl = "git+https://github.example.com/NixOS/nix.git?shallow=1&submodules=1",
++            .description = "github_submodules_redirect_keeps_host",
++            .expectedAttrs =
++                {
++                    {"type", Attr("git")},
++                    {"url", Attr("https://github.example.com/NixOS/nix.git")},
++                    {"shallow", Attr(Explicit<bool>{true})},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++        },
++        InputFromAttrsTestCase{
++            .attrs =
++                {
++                    {"type", Attr("github")},
++                    {"owner", Attr("NixOS")},
++                    {"repo", Attr("nix")},
++                    {"lfs", Attr(Explicit<bool>{true})},
++                },
++            .expectedUrl = "git+https://github.com/NixOS/nix.git?lfs=1&shallow=1",
++            .description = "github_lfs_redirects_to_git",
++            .expectedAttrs =
++                {
++                    {"type", Attr("git")},
++                    {"url", Attr("https://github.com/NixOS/nix.git")},
++                    {"shallow", Attr(Explicit<bool>{true})},
++                    {"lfs", Attr(Explicit<bool>{true})},
++                },
++        },
++        InputFromAttrsTestCase{
++            .attrs =
++                {
++                    {"type", Attr("gitlab")},
++                    {"owner", Attr("foo")},
++                    {"repo", Attr("bar")},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++            .expectedUrl = "git+https://gitlab.com/foo/bar.git?shallow=1&submodules=1",
++            .description = "gitlab_submodules_redirects_to_git",
++            .expectedAttrs =
++                {
++                    {"type", Attr("git")},
++                    {"url", Attr("https://gitlab.com/foo/bar.git")},
++                    {"shallow", Attr(Explicit<bool>{true})},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++        },
++        InputFromAttrsTestCase{
++            .attrs =
++                {
++                    {"type", Attr("sourcehut")},
++                    {"owner", Attr("~foo")},
++                    {"repo", Attr("bar")},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++            .expectedUrl = "git+https://git.sr.ht/~foo/bar?shallow=1&submodules=1",
++            .description = "sourcehut_submodules_redirects_to_git",
++            .expectedAttrs =
++                {
++                    {"type", Attr("git")},
++                    {"url", Attr("https://git.sr.ht/~foo/bar")},
++                    {"shallow", Attr(Explicit<bool>{true})},
++                    {"submodules", Attr(Explicit<bool>{true})},
++                },
++        },
++        // Plain forge inputs keep archive semantics (and hashes).
++        InputFromAttrsTestCase{
++            .attrs =
++                {
++                    {"type", Attr("github")},
++                    {"owner", Attr("NixOS")},
++                    {"repo", Attr("nix")},
++                },
++            .expectedUrl = "github:NixOS/nix",
++            .description = "github_without_submodules_stays_github",
++        },
++        // An explicit false is the archive default and is normalized
++        // away, so locked forge inputs never carry the attribute.
++        InputFromAttrsTestCase{
++            .attrs =
++                {
++                    {"type", Attr("github")},
++                    {"owner", Attr("NixOS")},
++                    {"repo", Attr("nix")},
++                    {"submodules", Attr(Explicit<bool>{false})},
++                },
++            .expectedUrl = "github:NixOS/nix",
++            .description = "github_submodules_false_is_dropped",
++            .expectedAttrs =
++                {
++                    {"type", Attr("github")},
++                    {"owner", Attr("NixOS")},
++                    {"repo", Attr("nix")},
++                },
+         }),
+     [](const ::testing::TestParamInfo<InputFromAttrsTestCase> & info) { return info.param.description; });
+ 
++class InputFromURLTest : public ::testing::Test
++{
++public:
++    void SetUp() override
++    {
++        experimentalFeatureSettings.experimentalFeatures.get().insert(Xp::Flakes);
++    }
++};
++
++/* Previously `github:...?submodules=1` silently dropped the query
++   parameter and fetched a tarball with empty submodule directories
++   (issue #14982). */
++TEST_F(InputFromURLTest, githubSubmodulesUrlRedirectsToGit)
++{
++    fetchers::Settings fetchSettings;
++    auto input = fetchers::Input::fromURL(fetchSettings, "github:NixOS/nix?submodules=1");
++    EXPECT_EQ(fetchers::maybeGetStrAttr(input.toAttrs(), "type"), std::optional<std::string>("git"));
++    EXPECT_EQ(input.toURLString(), "git+https://github.com/NixOS/nix.git?shallow=1&submodules=1");
++}
++
++TEST_F(InputFromURLTest, githubSubmodulesFalseUrlStaysGithub)
++{
++    fetchers::Settings fetchSettings;
++    auto input = fetchers::Input::fromURL(fetchSettings, "github:NixOS/nix?submodules=0");
++    EXPECT_EQ(fetchers::maybeGetStrAttr(input.toAttrs(), "type"), std::optional<std::string>("github"));
++    EXPECT_EQ(input.toURLString(), "github:NixOS/nix");
++}
++
+ } // namespace nix
+diff --git a/src/libfetchers/fetchers.cc b/src/libfetchers/fetchers.cc
+index 5df582c7..6800990e 100644
+--- a/src/libfetchers/fetchers.cc
++++ b/src/libfetchers/fetchers.cc
+@@ -52,7 +52,11 @@ Input Input::fromURL(const Settings & settings, const ParsedURL & url, bool requ
+         auto res = inputScheme->inputFromURL(settings, url, requireTree);
+         if (res) {
+             experimentalFeatureSettings.require(inputScheme->experimentalFeature());
+-            res->scheme = inputScheme;
++            /* A scheme may delegate construction to another scheme (the
++               forge archive schemes construct a `git` input when
++               submodules are requested); keep the delegate's scheme. */
++            if (!res->scheme)
++                res->scheme = inputScheme;
+             fixupInput(*res);
+             return std::move(*res);
+         }
+@@ -106,7 +110,11 @@ Input Input::fromAttrs(const Settings & settings, Attrs && attrs)
+     auto res = inputScheme->inputFromAttrs(settings, attrs);
+     if (!res)
+         return raw();
+-    res->scheme = inputScheme;
++    /* A scheme may delegate construction to another scheme (the forge
++       archive schemes construct a `git` input when submodules are
++       requested); keep the delegate's scheme. */
++    if (!res->scheme)
++        res->scheme = inputScheme;
+     fixupInput(*res);
+     return std::move(*res);
+ }
+diff --git a/src/libfetchers/github.cc b/src/libfetchers/github.cc
+index b7e05f7b..a1d5777b 100644
+--- a/src/libfetchers/github.cc
++++ b/src/libfetchers/github.cc
+@@ -45,6 +45,8 @@ struct GitArchiveInputScheme : InputScheme
+         std::optional<std::string> rev;
+         std::optional<std::string> ref;
+         std::optional<std::string> host_url;
++        std::optional<bool> submodules;
++        std::optional<bool> lfs;
+ 
+         auto size = path.size();
+         if (size == 3) {
+@@ -75,6 +77,10 @@ struct GitArchiveInputScheme : InputScheme
+                 ref = value;
+             } else if (name == "host")
+                 host_url = value;
++            else if (name == "submodules")
++                submodules = value == "1";
++            else if (name == "lfs")
++                lfs = value == "1";
+             // FIXME: barf on unsupported attributes
+         }
+ 
+@@ -88,6 +94,10 @@ struct GitArchiveInputScheme : InputScheme
+             attrs.insert_or_assign("ref", *ref);
+         if (host_url)
+             attrs.insert_or_assign("host", *host_url);
++        if (submodules)
++            attrs.insert_or_assign("submodules", Explicit<bool>{*submodules});
++        if (lfs)
++            attrs.insert_or_assign("lfs", Explicit<bool>{*lfs});
+ 
+         auto narHash = url.query.find("narHash");
+         if (narHash != url.query.end())
+@@ -131,6 +141,44 @@ struct GitArchiveInputScheme : InputScheme
+                 "treeHash",
+                 {},
+             },
++            {
++                "submodules",
++                {
++                    .type = "Bool",
++                    .required = false,
++                    .doc = R"(
++                      Also fetch submodules. Forge archive tarballs never
++                      contain submodule content, so enabling this fetches the
++                      repository through the equivalent `git+https` input
++                      instead (same revision, `submodules = true`); see the
++                      `git` input scheme for the exact fetch semantics.
++
++                      Note that a Git checkout is not always bit-identical to
++                      the forge's archive of the same revision: the archive
++                      honors the `export-ignore` and `export-subst` Git
++                      attributes, a Git checkout does not. Inputs that request
++                      neither `submodules` nor `lfs` are unaffected and keep
++                      tarball semantics and hashes.
++
++                      Default: `false`
++                    )",
++                },
++            },
++            {
++                "lfs",
++                {
++                    .type = "Bool",
++                    .required = false,
++                    .doc = R"(
++                      Also fetch Git LFS files. Forge archive tarballs contain
++                      LFS pointer files rather than the large file content, so
++                      enabling this fetches the repository through the
++                      equivalent `git+https` input instead, like `submodules`.
++
++                      Default: `false`
++                    )",
++                },
++            },
+         };
+         return attrs;
+     }
+@@ -158,8 +206,22 @@ struct GitArchiveInputScheme : InputScheme
+         if (auto host = maybeGetStrAttr(attrs, "host"); host && !std::regex_match(*host, hostRegex))
+             throw BadURL("input %s contains an invalid instance host", attrsToJSON(attrs));
+ 
++        /* Delegate to the git scheme: an archive tarball cannot provide
++           the requested tree, and constructing the git input here means
++           everything downstream, locking included, sees the input that
++           is actually fetched. A lock file therefore records a plain
++           `git` input that any Nix understands, instead of a forge
++           input carrying an attribute other Nix versions reject. */
++        if (auto gitAttrs = gitEquivalentAttrs(attrs))
++            return Input::fromAttrs(settings, std::move(*gitAttrs));
++
+         Input input{};
+         input.attrs = attrs;
++        /* An explicit `false` is the archive default; drop it so locked
++           forge inputs never carry an attribute other schemes and older
++           Nix versions reject. */
++        input.attrs.erase("submodules");
++        input.attrs.erase("lfs");
+         return input;
+     }
+ 
+@@ -272,6 +334,59 @@ struct GitArchiveInputScheme : InputScheme
+      */
+     virtual ParsedURL getGitUrl(const Input & input) const = 0;
+ 
++    /**
++     * The attributes of the equivalent `git` input, for inputs that
++     * request tree features an archive tarball cannot provide. Forge
++     * archives are `git archive` output, which never contains submodule
++     * content or Git LFS files, so `submodules = true` either failed
++     * ("input attribute 'submodules' not supported by scheme 'github'",
++     * https://github.com/NixOS/nix/issues/13571) or was silently
++     * ignored, yielding empty submodule directories
++     * (https://github.com/NixOS/nix/issues/14982). This mirrors the
++     * github-to-git+https mapping `clone()` already performs.
++     *
++     * Returns std::nullopt when neither feature is requested; plain
++     * archive inputs keep tarball fetch semantics and hashes.
++     */
++    std::optional<Attrs> gitEquivalentAttrs(const Attrs & attrs) const
++    {
++        auto submodules = maybeGetBoolAttr(attrs, "submodules").value_or(false);
++        auto lfs = maybeGetBoolAttr(attrs, "lfs").value_or(false);
++        if (!submodules && !lfs)
++            return std::nullopt;
++
++        /* getGitUrl() only reads the identity attributes. */
++        Input probe{};
++        probe.attrs = attrs;
++
++        Attrs res;
++        res.insert_or_assign("type", std::string{"git"});
++        res.insert_or_assign("url", getGitUrl(probe).to_string());
++        /* An archive is the tree of one revision without history, so
++           the equivalent Git fetch is a shallow one. */
++        res.insert_or_assign("shallow", Explicit<bool>{true});
++        if (submodules)
++            res.insert_or_assign("submodules", Explicit<bool>{true});
++        if (lfs)
++            res.insert_or_assign("lfs", Explicit<bool>{true});
++        if (auto ref = maybeGetStrAttr(attrs, "ref"))
++            res.insert_or_assign("ref", *ref);
++        if (auto rev = maybeGetStrAttr(attrs, "rev"))
++            res.insert_or_assign("rev", *rev);
++        /* The verification attributes stay meaningful across the scheme
++           change: `narHash` still names the expected result tree, and
++           `lastModified` the commit time (forge archives set file
++           mtimes to the commit time, which is also what the git scheme
++           reports). The rest (owner/repo/host are folded into the URL,
++           `treeHash` is archive-specific, `__final` is owned by the
++           lock layer) must not be forwarded. */
++        if (auto narHash = maybeGetStrAttr(attrs, "narHash"))
++            res.insert_or_assign("narHash", *narHash);
++        if (auto lastModified = maybeGetIntAttr(attrs, "lastModified"))
++            res.insert_or_assign("lastModified", *lastModified);
++        return res;
++    }
++
+     struct TarballInfo
+     {
+         Hash treeHash;
+@@ -426,6 +541,15 @@ struct GitArchiveInputScheme : InputScheme
+     std::pair<ref<SourceAccessor>, Input>
+     getAccessor(const Settings & settings, Store & store, const Input & _input) const override
+     {
++        /* Flake `self` attributes are applied to an already constructed
++           input by direct attribute insertion (see applySelfAttrs() in
++           libflake), so a submodules/LFS request can reach the fetch
++           stage without ever passing through inputFromAttrs(); redirect
++           it here too. The returned input is the locked git input, so
++           lock files record the input that was actually fetched. */
++        if (auto gitAttrs = gitEquivalentAttrs(_input.attrs))
++            return Input::fromAttrs(settings, std::move(*gitAttrs)).getAccessor(settings, store);
++
+         auto [input, tarballInfo] = downloadArchive(settings, store, _input);
+ 
+ #if 0
+diff --git a/src/libflake/flake.cc b/src/libflake/flake.cc
+index 67522d2c..752cbcfb 100644
+--- a/src/libflake/flake.cc
++++ b/src/libflake/flake.cc
+@@ -389,6 +389,13 @@ static Flake getFlake(
+         debug("refetching input '%s' due to self attribute", newLockedRef);
+         // FIXME: need to remove attrs that are invalidated by the changed input attrs, such as 'narHash'.
+         newLockedRef.input.attrs.erase("narHash");
++        /* `__final` is likewise invalidated: it asserted that fetching
++           would reproduce the previous attribute set exactly, but the
++           self attributes just changed the input, possibly to the point
++           of being served by another scheme (forge inputs requesting
++           submodules are fetched as `git` inputs), and checkLocks()
++           pins every attribute of a final input, `type` included. */
++        newLockedRef.input.attrs.erase("__final");
+         auto cachedInput2 = state.inputCache->getAccessor(
+             state.fetchSettings, *state.store, newLockedRef.input, fetchers::UseRegistries::No);
+         cachedInput.accessor = cachedInput2.accessor;
