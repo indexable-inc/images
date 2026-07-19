@@ -72,7 +72,7 @@ pub fn run(shell: &Shell) -> ExitCode {
                 match shell.eval(trimmed) {
                     Ok(report) => summarize(&report),
                     Err(Error::ExitRequested { code }) => {
-                        return ExitCode::from(u8::try_from(code.rem_euclid(256)).unwrap_or(1));
+                        return crate::exit_code(code);
                     }
                     Err(error) => eprintln!("plumb: {error}"),
                 }
@@ -173,10 +173,12 @@ fn summarize(report: &Report) {
 }
 
 fn human_bytes(count: u64) -> String {
+    #[expect(clippy::cast_precision_loss, reason = "a rounded size label needs no exact mantissa")]
+    let bytes = count as f64;
     if count >= 1024 * 1024 {
-        format!("{:.1}MB", f64::from(u32::try_from(count / 1024).unwrap_or(u32::MAX)) / 1024.0)
+        format!("{:.1}MB", bytes / (1024.0 * 1024.0))
     } else if count >= 1024 {
-        format!("{:.1}KB", f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / 1024.0)
+        format!("{:.1}KB", bytes / 1024.0)
     } else {
         format!("{count}B")
     }

@@ -102,5 +102,6 @@ fn one_shot(shell: &Shell, source: &str, json: bool) -> ExitCode {
 
 /// Map a wait status onto the 0..=255 process exit range, like a shell.
 fn exit_code(status: i32) -> ExitCode {
-    ExitCode::from(u8::try_from(status.rem_euclid(256)).unwrap_or(1))
+    // rem_euclid(256) yields 0..=255, always within u8, so this never fails.
+    ExitCode::from(u8::try_from(status.rem_euclid(256)).expect("status mod 256 fits in u8"))
 }
