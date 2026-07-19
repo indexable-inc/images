@@ -193,17 +193,17 @@
     # claudeCode` below discards the defaulted package, so the option
     # silently shipped prompts WITH the forceMerge rule while
     # protectedMergeGuard below already allowed force-merging (index#3537).
-    # backgroundSubagents claims the subagent/task tools are absent; the
-    # features/systemTools opt-ins here re-enable them on this machine, so
-    # the rule is omitted for Claude only (Codex still has no harness
-    # subagent tool).
+    # The task-list tools below are re-enabled (progress boards use them),
+    # so the backgroundSubagents rule (which claims subagent AND task tools
+    # absent) stays omitted. Agent itself is back to the repo default
+    # (denied): delegation now goes through the kernel's depth-1 Agents.*
+    # surface (index#3700).
     omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
     # Matches agentPromptOmitRules `forceMerge` above: without this the baked
     # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
     # rule permits.
     protectedMergeGuard = false;
     systemTools = {
-      Agent = true;
       TaskCreate = true;
       TaskGet = true;
       TaskList = true;
