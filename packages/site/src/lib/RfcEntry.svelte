@@ -1,5 +1,6 @@
 <script lang="ts">
   import { inlineTitleHtml } from './updates';
+  import RfcStatusBadge from './RfcStatusBadge.svelte';
   import type { Rfc } from './rfcs';
 
   const { rfc }: { rfc: Rfc } = $props();
@@ -21,7 +22,7 @@
     </p>
   {/if}
   <dl class="frontmatter">
-    <dt>Status</dt><dd>{rfc.status}</dd>
+    <dt>Status</dt><dd><RfcStatusBadge status={rfc.status} /></dd>
     <dt>Authors</dt><dd>{rfc.authors}</dd>
     <dt>Created</dt><dd>{rfc.created}</dd>
     <dt>Updated</dt><dd>{rfc.updated}</dd>

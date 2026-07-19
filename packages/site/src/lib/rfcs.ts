@@ -1,11 +1,27 @@
 import type { Component } from 'svelte';
 
+// Ordered by weight: from a vibe someone wrote down to a design the whole
+// repo depends on, plus the terminal states. The index badge colors ramp
+// along this ladder.
+export const rfcStatuses = [
+  'Sketch',
+  'Draft',
+  'Input wanted',
+  'Last call',
+  'Accepted',
+  'Load-bearing',
+  'Rejected',
+  'Withdrawn',
+  'Superseded'
+] as const;
+export type RfcStatus = (typeof rfcStatuses)[number];
+
 export type RfcMeta = {
   id: string;
   number: string;
   // Markdown source: backticks for inline code.
   title: string;
-  status: string;
+  status: RfcStatus;
   authors: string;
   // YYYY-MM-DD.
   created: string;
@@ -50,6 +66,11 @@ for (const [path, mod] of Object.entries(modules)) {
   }
   if (mod.metadata.id !== stem) {
     throw new Error(`RFC ${path}: frontmatter id '${mod.metadata.id}' disagrees with filename '${stem}'`);
+  }
+  if (!(rfcStatuses as readonly string[]).includes(mod.metadata.status)) {
+    throw new Error(
+      `RFC ${path}: unknown status '${mod.metadata.status}'; expected one of ${rfcStatuses.join(', ')}`
+    );
   }
   const existing = numberToPath.get(number);
   if (existing !== undefined) {

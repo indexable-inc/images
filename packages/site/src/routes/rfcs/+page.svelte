@@ -2,6 +2,7 @@
   import { resolve } from '$app/paths';
   import { inlineTitleHtml } from '$lib/updates';
   import { rfcs } from '$lib/rfcs';
+  import RfcStatusBadge from '$lib/RfcStatusBadge.svelte';
 </script>
 
 <svelte:head>
@@ -21,11 +22,12 @@
 <ul class="rfc-index">
   {#each rfcs as rfc (rfc.id)}
     <li>
+      <span class="num">{rfc.number}</span>
       <a href={resolve('/rfcs/[id]', { id: rfc.id })}>
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-        {@html inlineTitleHtml(`RFC ${rfc.number}: ${rfc.title}`)}
+        {@html inlineTitleHtml(rfc.title)}
       </a>
-      <span class="status">· {rfc.status}</span>
+      <RfcStatusBadge status={rfc.status} />
     </li>
   {/each}
 </ul>
@@ -56,16 +58,44 @@
 </ol>
 
 <h2>Status values</h2>
+<p>
+  Statuses form a ladder of weight, from a vibe someone wrote down to a design the whole repo
+  depends on. Move an RFC up the ladder with a follow-up PR that edits the frontmatter.
+</p>
 <ul>
-  <li><code>Draft</code>: the proposal exists and is open to feedback. Default for a freshly merged RFC.</li>
-  <li><code>Accepted</code>: the design is the plan of record. Implementation may not be started.</li>
   <li>
-    <code>Implemented</code>: the proposal landed and the relevant code, docs, or process exist.
+    <RfcStatusBadge status="Sketch" />: an idea written down so it is not lost. Little human
+    review yet; may be largely machine-drafted.
+  </li>
+  <li>
+    <RfcStatusBadge status="Draft" />: a coherent proposal the author stands behind. Open to
+    feedback. Default for a freshly merged RFC.
+  </li>
+  <li>
+    <RfcStatusBadge status="Input wanted" />: the author has thought hard about it and now wants
+    more human eyes before going further.
+  </li>
+  <li>
+    <RfcStatusBadge status="Last call" />: final thoughts wanted. Accepted absent objections
+    within a stated window.
+  </li>
+  <li>
+    <RfcStatusBadge status="Accepted" />: the design is the plan of record. Implementation may
+    not be started.
+  </li>
+  <li>
+    <RfcStatusBadge status="Load-bearing" />: the proposal landed and the repo now depends on it.
     Link the tracking issue and the PRs.
   </li>
-  <li><code>Rejected</code>: a follow-up PR set this status. Keep the file so the reasoning is preserved.</li>
-  <li><code>Withdrawn</code>: the author no longer pursues it. Same retention rule.</li>
-  <li><code>Superseded</code>: pointed at a newer RFC via <code>supersededBy</code> in frontmatter.</li>
+  <li>
+    <RfcStatusBadge status="Rejected" />: a follow-up PR set this status. Keep the file so the
+    reasoning is preserved.
+  </li>
+  <li><RfcStatusBadge status="Withdrawn" />: the author no longer pursues it. Same retention rule.</li>
+  <li>
+    <RfcStatusBadge status="Superseded" />: pointed at a newer RFC via <code>supersededBy</code> in
+    frontmatter.
+  </li>
 </ul>
 
 <h2>Numbering</h2>
@@ -78,7 +108,7 @@
 <p>
   Once an RFC is <code>Accepted</code>, file a GitHub issue tagged <code>rfc-implementation</code>
   that links the RFC. The issue tracks the work; the RFC remains the design source of truth. When
-  the work lands, a follow-up PR sets the RFC status to <code>Implemented</code> and links the
+  the work lands, a follow-up PR sets the RFC status to <code>Load-bearing</code> and links the
   issue and PRs from the frontmatter.
 </p>
 
@@ -94,15 +124,21 @@
 
 <style>
   .rfc-index {
-    padding-left: 1.4rem;
+    list-style: none;
+    padding-left: 0;
   }
 
   .rfc-index li {
-    margin: 0.3rem 0;
+    display: flex;
+    align-items: baseline;
+    gap: 0.65rem;
+    margin: 0.45rem 0;
   }
 
-  .status {
-    color: var(--fg-muted);
-    font-size: 0.9em;
+  .num {
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    color: var(--fg-faint);
+    flex-shrink: 0;
   }
 </style>
