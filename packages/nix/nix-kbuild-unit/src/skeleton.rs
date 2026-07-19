@@ -53,6 +53,12 @@ pub const DEFAULT_KEEP: &[&str] = &[
     // rejects non-x86 plans (detect_srcarch).
     "arch/x86/entry/vdso/vclock_gettime.c",
     "arch/x86/entry/vdso/vgetcpu.c",
+    // CONFIG_VDSO_GETRANDOM (6.11+, on at defconfig, invisible at
+    // tinyconfig): stubbing these dropped __vdso_getrandom from the plan's
+    // vdso64.so and left the stubs' .modinfo in it, so the composed vmlinux
+    // diverged from the reference at the embedded image.
+    "arch/x86/entry/vdso/vgetrandom.c",
+    "arch/x86/entry/vdso/vgetrandom-chacha.S",
     "arch/x86/entry/vdso/vdso-note.S",
     "arch/x86/entry/vdso/vsgx.S",
     "arch/x86/entry/vdso/vdso2c.c",
@@ -486,6 +492,14 @@ static const char *s = \"/* not a comment\";
         assert_eq!(reduction_lang("kernel/bounds.c", no_extra), None);
         assert_eq!(
             reduction_lang("arch/x86/entry/vdso/vgetcpu.c", no_extra),
+            None
+        );
+        assert_eq!(
+            reduction_lang("arch/x86/entry/vdso/vgetrandom.c", no_extra),
+            None
+        );
+        assert_eq!(
+            reduction_lang("arch/x86/entry/vdso/vgetrandom-chacha.S", no_extra),
             None
         );
         assert_eq!(reduction_lang("lib/vdso/gettimeofday.c", no_extra), None);
