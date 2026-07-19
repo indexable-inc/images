@@ -1,0 +1,17 @@
+---
+id: kbuild-unit-edit-constant
+postedAt: 2026-07-19T09:00:00-07:00
+title: "Kernel edit loops stop re-paying the whole tree"
+tags: [nix, kernel, kbuild-unit, performance]
+links:
+  - label: library
+    href: https://github.com/indexable-inc/index/blob/main/lib/kernel/kbuild-unit.nix
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/3706
+---
+
+A one-line kernel body edit rebuilds a handful of derivations in seconds, but the measured defconfig loop was 1m51s: the rest was a flat per-edit tax -- whole-tree re-skeletonization, whole-tree source re-ingestion, and flake eval -- paid regardless of what changed. Three changes flatten it.
+
+Skeletonization is now sharded. Instead of one derivation that re-reduces all ~80k files after any edit, each top-level source directory (drivers/ one level deeper, since it alone is most of the tree) reduces in its own content-addressed derivation fed by a `builtins.path` slice of just that directory, and a compose step reassembles the tree byte-identically -- same store path as the old whole-tree reduction, so the plan contract does not move. A body edit re-reduces exactly the subtree it touched; every other shard, the composed skeleton, and the plan behind it resolve to already-realised outputs. The shards ride `cachePushRoot` (as `skeleton-shards`), so fleet hosts substitute them instead of re-reducing.
+
+Everything downstream now keys on those slices: the per-file source farm and the link unit's directory scopes resolve srctree paths through them, so Nix's source-ingestion memoization holds across evals for whatever an edit did not touch. `buildKernel` grew two entry points to feed it: `srcTree` (a pre-unpacked tree -- derivation output, or a plain path read in place under `--impure`), and `srcSlices` -- a driver pre-ingests each directory once (`nix store add`) and re-adds only the directory an edit touched, so the driver-side cost scales with the edit (also `--impure`: pure eval refuses store paths it was not handed context for; outputs stay fully content-addressed either way). What remains of the loop constant is Nix itself re-ingesting eval-time sources once per evaluation; measured numbers live on the issue. `.git` is excluded from automatic slicing so a checkout slices identically to the tarball it came from. Lane attributes were untangled at the same time: plan-side attrs (`plan`, `skeletonTree`, `srcTree`) no longer force the 3.6k-derivation units import just to be looked at.

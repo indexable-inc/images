@@ -8,7 +8,7 @@
 # (#3413). See lib/kernel/kbuild-unit.nix.
 {
   pkgs,
-  src,
+  srcSlices,
   generated,
   extraNativeBuildInputs ? [ ],
   extraEnv ? { },
@@ -19,7 +19,29 @@ let
   kernelRelease = {{ kernel_release }};
   contentAddressed = {{ content_addressed }};
 
-  srcRoot = builtins.toString src;
+  # Resolve a srctree-relative path against the per-directory source slices
+  # (#3706): exact slice key first (directory prefixes like "include"),
+  # then the deepest sharded directory (drivers/net before drivers), then
+  # the top-level directory, then the root files slice (key ""). Slices are
+  # content-addressed store paths that change only when their directory's
+  # content changes, so the hashing below memoizes across evals for
+  # everything an edit did not touch.
+  slicePathFor =
+    rel:
+    let
+      parts = lib.splitString "/" rel;
+      n = builtins.length parts;
+      depth2 = lib.concatStringsSep "/" (lib.take 2 parts);
+      top = builtins.head parts;
+    in
+    if srcSlices ? ${rel} then
+      "${srcSlices.${rel}}"
+    else if n >= 3 && srcSlices ? ${depth2} then
+      "${srcSlices.${depth2}}/${lib.concatStringsSep "/" (lib.drop 2 parts)}"
+    else if n >= 2 && srcSlices ? ${top} then
+      "${srcSlices.${top}}/${lib.concatStringsSep "/" (lib.drop 1 parts)}"
+    else
+      "${srcSlices.""}/${rel}";
 
   # One content-addressed store path per pristine source file. Units link
   # exactly the files their .cmd recorded, so an edit invalidates only the
@@ -29,25 +51,18 @@ let
     name: rel:
     builtins.path {
       inherit name;
-      path = "${srcRoot}/${rel}";
+      path = slicePathFor rel;
     };
 
-  # Scoped copy of whole directory prefixes for units that consume trees
-  # rather than tracked file lists (the vmlinux link's script-driven
-  # compiles read Makefile includes and header dirs no .cmd records).
+  # Scoped copy of one directory prefix for units that consume trees rather
+  # than tracked file lists (the vmlinux link's script-driven compiles read
+  # Makefile includes and header dirs no .cmd records). Ingested from its
+  # slice, so an edit outside the prefix neither re-hashes nor re-keys it.
   dirScope =
-    name: prefixes:
+    prefix:
     builtins.path {
-      inherit name;
-      path = srcRoot;
-      filter =
-        path: _type:
-        let
-          rel = lib.removePrefix (srcRoot + "/") (builtins.toString path);
-        in
-        builtins.any (
-          prefix: rel == prefix || lib.hasPrefix (prefix + "/") rel || lib.hasPrefix (rel + "/") prefix
-        ) prefixes;
+      name = "kbuild-src-dir-${lib.replaceStrings [ "/" ] [ "-" ] prefix}";
+      path = slicePathFor prefix;
     };
 
   sourceFarm = {
@@ -92,9 +107,12 @@ let
           runHook preBuild
           tree="$NIX_BUILD_TOP/kbuild-tree"
           mkdir -p "$tree"
-          ${lib.optionalString (sourceDirs != [ ]) ''
-            cp -rs --no-preserve=mode ${dirScope "${pname}-src-dirs" sourceDirs}/. "$tree/"
-          ''}
+          ${lib.optionalString (sourceDirs != [ ]) (
+            lib.concatMapStrings (prefix: ''
+              mkdir -p "$tree/${prefix}"
+              cp -rs --no-preserve=mode ${dirScope prefix}/. "$tree/${prefix}/"
+            '') sourceDirs
+          )}
           mapfile -t srcRels < "$sourceFileRelsPath"
           mapfile -t srcPaths < "$sourceFilePathsPath"
           for i in "''${!srcRels[@]}"; do

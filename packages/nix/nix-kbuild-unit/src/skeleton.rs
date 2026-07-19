@@ -19,6 +19,7 @@
 //! recognize them and substitute stub objects without any allowlist plumbing:
 //! the reducer's keep decision *is* the shim's stub decision.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{WrapErr as _, bail};
@@ -103,7 +104,21 @@ pub const DEFAULT_KEEP: &[&str] = &[
 
 /// Reduce `src` into `out` (created if absent), keeping `extra_keep` globs
 /// verbatim on top of [`DEFAULT_KEEP`].
-pub fn skeleton(src: &Path, out: &Path, extra_keep: &[String]) -> color_eyre::Result<()> {
+///
+/// `prefix` re-roots classification for sharded reduction (#3706): when the
+/// caller reduces one subtree (say the content of `net/`) as its own
+/// derivation, every path inside is classified as `<prefix>/<rel>` so the
+/// keep-allowlist and the `scripts/`/`tools/` verbatim rules keep matching
+/// tree-relative paths, while the output layout stays relative to `src`.
+/// Empty means `src` is the tree root. Composing per-subtree shards (plus a
+/// files-only root shard) therefore reproduces the whole-tree reduction
+/// byte-for-byte.
+pub fn skeleton(
+    src: &Path,
+    out: &Path,
+    extra_keep: &[String],
+    prefix: &str,
+) -> color_eyre::Result<()> {
     std::fs::create_dir_all(out).wrap_err_with(|| format!("creating {}", out.display()))?;
     let mut stack = vec![PathBuf::new()];
     while let Some(rel_dir) = stack.pop() {
@@ -131,7 +146,12 @@ pub fn skeleton(src: &Path, out: &Path, extra_keep: &[String]) -> color_eyre::Re
                     .wrap_err_with(|| format!("recreating symlink {rel_str}"))?;
                 continue;
             }
-            match reduction_lang(rel_str, extra_keep) {
+            let classified = if prefix.is_empty() {
+                Cow::Borrowed(rel_str)
+            } else {
+                Cow::Owned(format!("{prefix}/{rel_str}"))
+            };
+            match reduction_lang(&classified, extra_keep) {
                 Some(lang) => {
                     let bytes = std::fs::read(entry.path())
                         .wrap_err_with(|| format!("reading {rel_str}"))?;
@@ -338,6 +358,35 @@ fn segment_match(pattern: &[u8], segment: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Write one fixture file under `src`, creating parent directories.
+    fn write_fixture(src: &Path, rel: &str, contents: &str) {
+        let path = src.join(rel);
+        std::fs::create_dir_all(path.parent().expect("rel has parent")).expect("mkdir");
+        std::fs::write(path, contents).expect("write fixture");
+    }
+
+    /// Every file under `root`, keyed by root-relative path.
+    fn collect_files(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut files = std::collections::BTreeMap::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read output dir") {
+                let entry = entry.expect("dir entry");
+                if entry.file_type().expect("file type").is_dir() {
+                    stack.push(entry.path());
+                } else {
+                    let rel = entry
+                        .path()
+                        .strip_prefix(root)
+                        .expect("under root")
+                        .to_owned();
+                    files.insert(rel, std::fs::read(entry.path()).expect("read file"));
+                }
+            }
+        }
+        files
+    }
 
     fn reduced(text: &str, lang: Lang) -> String {
         String::from_utf8(reduce(text.as_bytes(), lang)).expect("reduced output is UTF-8")
@@ -583,20 +632,16 @@ static const char *s = \"/* not a comment\";
         let src = tmp.path().join("src");
         let out = tmp.path().join("out");
 
-        let write = |rel: &str, contents: &str| {
-            let path = src.join(rel);
-            std::fs::create_dir_all(path.parent().expect("rel has parent")).expect("mkdir");
-            std::fs::write(path, contents).expect("write fixture");
-        };
-        write("kernel/fork.c", "#include <a.h>\nint fork_body;\n");
-        write("kernel/bounds.c", "int kept_whole;\n");
-        write(
+        write_fixture(&src, "kernel/fork.c", "#include <a.h>\nint fork_body;\n");
+        write_fixture(&src, "kernel/bounds.c", "int kept_whole;\n");
+        write_fixture(
+            &src,
             "include/linux/a.h",
             "static inline int f(void) { return 1; }\n",
         );
-        write("arch/x86/kernel/vmlinux.lds.S", "SECTIONS { }\n");
-        write("scripts/mod/modpost.c", "int host_tool;\n");
-        write("Makefile", "obj-y := fork.o\n");
+        write_fixture(&src, "arch/x86/kernel/vmlinux.lds.S", "SECTIONS { }\n");
+        write_fixture(&src, "scripts/mod/modpost.c", "int host_tool;\n");
+        write_fixture(&src, "Makefile", "obj-y := fork.o\n");
         std::fs::create_dir_all(src.join("scripts/dtc/include-prefixes")).expect("mkdir");
         std::os::unix::fs::symlink(
             "../../../arch/x86/boot/dts",
@@ -604,7 +649,7 @@ static const char *s = \"/* not a comment\";
         )
         .expect("symlink fixture");
 
-        skeleton(&src, &out, &[]).expect("skeleton");
+        skeleton(&src, &out, &[], "").expect("skeleton");
 
         let read = |rel: &str| std::fs::read_to_string(out.join(rel)).expect("read output");
         assert_eq!(read("kernel/fork.c"), format!("{MARKER}#include <a.h>\n"));
@@ -635,43 +680,122 @@ static const char *s = \"/* not a comment\";
     }
 
     #[test]
+    fn prefix_reroots_classification() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let src = tmp.path().join("scripts-content");
+        let out = tmp.path().join("out");
+        std::fs::create_dir_all(src.join("mod")).expect("mkdir");
+        std::fs::write(src.join("mod/modpost.c"), "int host_tool_body;\n").expect("write");
+
+        // Reduced as a tree root, mod/modpost.c is an ordinary kernel TU...
+        skeleton(&src, &out, &[], "").expect("skeleton without prefix");
+        let reduced_out = std::fs::read_to_string(out.join("mod/modpost.c")).expect("read output");
+        assert!(reduced_out.starts_with(MARKER));
+
+        // ...but as the content of scripts/ it is a host tool and stays
+        // verbatim, exactly as in the whole-tree reduction.
+        let out_scripts = tmp.path().join("out-scripts");
+        skeleton(&src, &out_scripts, &[], "scripts").expect("skeleton with prefix");
+        assert_eq!(
+            std::fs::read_to_string(out_scripts.join("mod/modpost.c")).expect("read output"),
+            "int host_tool_body;\n"
+        );
+
+        // The keep-allowlist also matches through the prefix.
+        let kernel_src = tmp.path().join("kernel-content");
+        std::fs::create_dir_all(&kernel_src).expect("mkdir");
+        std::fs::write(kernel_src.join("bounds.c"), "int kept_whole;\n").expect("write");
+        std::fs::write(kernel_src.join("fork.c"), "int reduced_body;\n").expect("write");
+        let out_kernel = tmp.path().join("out-kernel");
+        skeleton(&kernel_src, &out_kernel, &[], "kernel").expect("skeleton with prefix");
+        assert_eq!(
+            std::fs::read_to_string(out_kernel.join("bounds.c")).expect("read output"),
+            "int kept_whole;\n"
+        );
+        assert!(
+            std::fs::read_to_string(out_kernel.join("fork.c"))
+                .expect("read output")
+                .starts_with(MARKER)
+        );
+    }
+
+    #[test]
+    fn sharded_reduction_composes_to_the_whole_tree_reduction() {
+        // The #3706 contract: per-top-level-directory shards (plus a
+        // files-only root shard) must compose byte-for-byte to the single
+        // whole-tree reduction, or the sharded skeleton would change the
+        // plan's input and re-run it.
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let src = tmp.path().join("src");
+        write_fixture(&src, "Makefile", "obj-y := fork.o\n");
+        write_fixture(&src, "Kconfig", "source \"kernel/Kconfig\"\n");
+        write_fixture(&src, "kernel/fork.c", "#include <a.h>\nint body;\n");
+        write_fixture(&src, "kernel/bounds.c", "int kept_whole;\n");
+        write_fixture(&src, "scripts/mod/modpost.c", "int host_tool;\n");
+        write_fixture(
+            &src,
+            "include/linux/a.h",
+            "static inline int f(void) { return 1; }\n",
+        );
+        write_fixture(
+            &src,
+            "drivers/net/dummy.c",
+            "#include <b.h>\nint driver_body;\n",
+        );
+        write_fixture(&src, "drivers/Makefile", "obj-y += net/\n");
+
+        let whole = tmp.path().join("whole");
+        skeleton(&src, &whole, &[], "").expect("whole-tree reduction");
+
+        // Compose: files-only root shard + one shard per top-level dir,
+        // with drivers/ sharded one level deeper (files + subdirs), the way
+        // lib/kernel/kbuild-unit.nix composes them.
+        let composed = tmp.path().join("composed");
+        std::fs::create_dir_all(&composed).expect("mkdir");
+        let root_shard = tmp.path().join("shard-root");
+        std::fs::create_dir_all(&root_shard).expect("mkdir");
+        for entry in std::fs::read_dir(&src).expect("list src") {
+            let entry = entry.expect("dir entry");
+            let name = entry.file_name();
+            if entry.file_type().expect("file type").is_dir() {
+                continue;
+            }
+            std::fs::copy(entry.path(), root_shard.join(&name)).expect("copy root file");
+        }
+        skeleton(&root_shard, &composed, &[], "").expect("root files shard");
+        for dir in ["kernel", "scripts", "include"] {
+            skeleton(&src.join(dir), &composed.join(dir), &[], dir).expect("dir shard");
+        }
+        let drivers_files = tmp.path().join("shard-drivers-files");
+        std::fs::create_dir_all(&drivers_files).expect("mkdir");
+        std::fs::copy(src.join("drivers/Makefile"), drivers_files.join("Makefile"))
+            .expect("copy drivers file");
+        skeleton(&drivers_files, &composed.join("drivers"), &[], "drivers")
+            .expect("drivers files shard");
+        skeleton(
+            &src.join("drivers/net"),
+            &composed.join("drivers/net"),
+            &[],
+            "drivers/net",
+        )
+        .expect("drivers subdir shard");
+
+        assert_eq!(collect_files(&whole), collect_files(&composed));
+    }
+
+    #[test]
     fn deterministic_over_reruns() {
         let tmp = tempfile::tempdir().expect("create tempdir");
         let src = tmp.path().join("src");
-        let write = |rel: &str, contents: &str| {
-            let path = src.join(rel);
-            std::fs::create_dir_all(path.parent().expect("rel has parent")).expect("mkdir");
-            std::fs::write(path, contents).expect("write fixture");
-        };
-        write("kernel/fork.c", "#include <a.h>\nint body;\n");
-        write("kernel/sub/dir.c", "#define D 1\nint body;\n");
-        write("Makefile", "obj-y := fork.o\n");
+        write_fixture(&src, "kernel/fork.c", "#include <a.h>\nint body;\n");
+        write_fixture(&src, "kernel/sub/dir.c", "#define D 1\nint body;\n");
+        write_fixture(&src, "Makefile", "obj-y := fork.o\n");
 
         let out_a = tmp.path().join("a");
         let out_b = tmp.path().join("b");
-        skeleton(&src, &out_a, &[]).expect("first run");
-        skeleton(&src, &out_b, &[]).expect("second run");
+        skeleton(&src, &out_a, &[], "").expect("first run");
+        skeleton(&src, &out_b, &[], "").expect("second run");
 
-        let collect = |root: &Path| {
-            let mut files = std::collections::BTreeMap::new();
-            let mut stack = vec![root.to_path_buf()];
-            while let Some(dir) = stack.pop() {
-                for entry in std::fs::read_dir(&dir).expect("read output dir") {
-                    let entry = entry.expect("dir entry");
-                    if entry.file_type().expect("file type").is_dir() {
-                        stack.push(entry.path());
-                    } else {
-                        let rel = entry
-                            .path()
-                            .strip_prefix(root)
-                            .expect("under root")
-                            .to_owned();
-                        files.insert(rel, std::fs::read(entry.path()).expect("read file"));
-                    }
-                }
-            }
-            files
-        };
-        assert_eq!(collect(&out_a), collect(&out_b));
+        assert_eq!(collect_files(&out_a), collect_files(&out_b));
     }
 }
