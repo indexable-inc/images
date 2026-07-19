@@ -10,17 +10,6 @@ index is the bet on the other path: every change lands here now, in one graph ev
 
 That graph is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/).
 
-## Stories
-
-The fastest way to get what this repo is for: short case examples, each a two-minute read with a diagram.
-
-1. [Your whole team's Claude, from one flake](https://indexable-inc.github.io/index/stories/manage-claude-with-nix/): the agent binary, prompt, tools, permissions, and MCP servers, pinned in code.
-2. [Add a tool once, everyone gets it](https://indexable-inc.github.io/index/stories/add-a-tool-once/): a small utility stops dying on the laptop it was born on.
-3. [Your Mac never compiles](https://indexable-inc.github.io/index/stories/mac-never-compiles/): the Linux fleet cross-compiles macOS binaries your laptop just downloads.
-4. [Every session becomes searchable memory](https://indexable-inc.github.io/index/stories/searchable-history/): shell and agent history from every machine, one semantic index.
-5. [CI builds each crate exactly once](https://indexable-inc.github.io/index/stories/build-each-crate-once/): the Rust workspace as a per-crate build DAG.
-6. [A thousand agents, one Elixir kernel](https://indexable-inc.github.io/index/stories/elixir-agent-kernel/): agents work through supervised, fleet-federated workspaces on a runtime built for that shape.
-
 ## Why
 
 <p align="center">
@@ -66,6 +55,17 @@ Every consumer of an API lives in this repo, and agents make repo-wide refactors
 </p>
 
 You download binaries instead of compiling them. CI builds on the [ix.dev](https://ix.dev) cluster, close to 1,000 vCPUs, and pushes every closure to `cache.ix.dev`, prebuilt for Linux and cross-compiled for macOS.
+
+## Stories
+
+The fastest way to get what this repo is for: short case examples, each a two-minute read with a diagram.
+
+1. [Your whole team's Claude, from one flake](https://indexable-inc.github.io/index/stories/manage-claude-with-nix/): the agent binary, prompt, tools, permissions, and MCP servers, pinned in code.
+2. [Add a tool once, everyone gets it](https://indexable-inc.github.io/index/stories/add-a-tool-once/): a small utility stops dying on the laptop it was born on.
+3. [Your Mac never compiles](https://indexable-inc.github.io/index/stories/mac-never-compiles/): the Linux fleet cross-compiles macOS binaries your laptop just downloads.
+4. [Every session becomes searchable memory](https://indexable-inc.github.io/index/stories/searchable-history/): shell and agent history from every machine, one semantic index.
+5. [CI builds each crate exactly once](https://indexable-inc.github.io/index/stories/build-each-crate-once/): the Rust workspace as a per-crate build DAG.
+6. [A thousand agents, one Elixir kernel](https://indexable-inc.github.io/index/stories/elixir-agent-kernel/): agents work through supervised, fleet-federated workspaces on a runtime built for that shape.
 
 ## Layout
 
