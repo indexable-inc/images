@@ -1,0 +1,33 @@
+---
+id: pin-freeze-postmortem
+postedAt: '2026-07-19T06:15:00-07:00'
+title: one frozen pin, five root causes: a morning of CI archaeology
+links:
+  - label: 'union gap #3669'
+    href: 'https://github.com/indexable-inc/index/issues/3669'
+  - label: 'darwin split #3672'
+    href: 'https://github.com/indexable-inc/index/pull/3672'
+  - label: 'tigerbeetle incident ix#7844'
+    href: 'https://github.com/indexable-inc/ix/issues/7844'
+  - label: 'wedge reaper ix#7851'
+    href: 'https://github.com/indexable-inc/ix/issues/7851'
+  - label: 'updater loop #3692'
+    href: 'https://github.com/indexable-inc/index/issues/3692'
+tags:
+  - ci
+  - interesting
+---
+
+The fleet pin (`cache-ready`) stopped moving at 00:43 and stayed frozen all morning. Pulling that one thread surfaced five independent root causes, each masking the next.
+
+**Two green PRs made a red main.** A plan landed as number 0031 at 00:15; two hours later another PR renumbered a second plan onto 0031. Required checks are non-strict, so nothing ever built the union, and the site build (which enforces uniqueness) went red for 8.5 hours. The publish-hole gate correctly froze the pin over the failed root. Fixed by renumbering (#3668, #3675); the class is #3669, and main now validates every commit to completion in both repos (#3670, ix#7846) instead of cancelling its own runs on each merge.
+
+**The mac lane starved the linux lane.** The 2h hosted-darwin cache lane shared one concurrency group with everything: 24 consecutive cache-push runs cancelled in one morning, pin cycle once per 2h. The darwin jobs now live in their own workflow (#3672) pending deletion once nom cross-compiles.
+
+**A pin bump downgraded a database.** ix's nixpkgs follows index's, and index's nixpkgs was 14 days stale, so an unrelated index-pin bump moved ix's nixpkgs backwards 9 days, shipping TigerBeetle 0.17.8 under a data file already hot-upgraded to 0.17.9. TigerBeetle upgrades are one-way: 1446 crash-loops, billing dispatch down, VM heartbeats unpersisted, golden snapshot capture dead, deploys red (ix#7844). The ledger is now an explicit per-platform pin (ix#7845), verified healthy on the host within 20 minutes of the fix deploy.
+
+**Why was nixpkgs stale?** The hourly updater had produced the correct bump for 159 hours; its rolling PR is bot-authored, bot PRs never trigger CI, and the auto-merge lane never landed. A human re-authoring the identical bump got CI instantly (#3683). The closed-loop design is #3692.
+
+**Why did the unblocked lane still die?** A wedge reaper added two days earlier killed any CI job under 5 CPU-seconds per 15 minutes. A cache-push realise phase is pure network at 3.8, indistinguishable from the reaper's own measured wedge floor of 2.3: five healthy jobs reaped in one morning, three in a row on the pin's lane (ix#7851). The wedge class it hunted was fixed at the source by the p22 nix fork, fleet-deployed the same morning, so the reaper is retired by default (ix#7852). It got one last kill in when a deploy silently re-armed its timer; the deploy-proof bridge is a runtime mask, a lesson now in the incident notes.
+
+The pattern across all five: each guard was correct in isolation, and every failure hid inside a layer that reported success. The fixes that matter are the ones that make red visible at the moment it happens: per-commit verdicts on main, one workflow per concurrency domain, explicit pins for one-way state, and CI that runs on the robot's PRs too.
