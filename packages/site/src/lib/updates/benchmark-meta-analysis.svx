@@ -1,0 +1,397 @@
+---
+id: benchmark-meta-analysis
+postedAt: 2026-07-19T16:30:00-07:00
+title: "Benchmark-org meta-analysis: who is hardest to game, and where Fable 5, GPT-5.6, and Kimi K3 stand"
+tags: [interesting, ai, benchmarks]
+links:
+  - label: issue 3704
+    href: https://github.com/indexable-inc/index/issues/3704
+  - label: Fable 5 system card (local corpus)
+    href: https://github.com/indexable-inc/index/blob/main/packages/system-cards/cards/anthropic/claude-fable-5-mythos-5.md
+  - label: The Leaderboard Illusion
+    href: https://arxiv.org/abs/2504.20879
+  - label: AA intelligence methodology
+    href: https://artificialanalysis.ai/methodology/intelligence-benchmarking
+---
+
+<script>
+  import RubricGrid from '../RubricGrid.svelte';
+  import BenchCompareTable from '../BenchCompareTable.svelte';
+
+  const dimensions = [
+    { key: 'privateSet', label: 'private', meaning: 'A held-out test set the ranked vendors cannot read. 2 = decisions rest on hidden items, 0 = everything is public.' },
+    { key: 'live', label: 'live', meaning: 'Rotating or continuously fresh items. 2 = live or monthly refresh, 0 = one static release.' },
+    { key: 'verified', label: 'verified', meaning: 'How answers are checked. 2 = execution or exact match, 1 = rubric-driven LLM judge, 0 = preference votes only.' },
+    { key: 'human', label: 'human', meaning: 'Fresh human judgment instead of a static answer key. 2 = expert pairwise ratings, 1 = humans review flagged cases, 0 = none.' },
+    { key: 'leak', label: 'leak', meaning: 'Exposure of scored items to training crawls. 2 = effectively unavailable, 0 = in every crawl.' },
+    { key: 'orgRun', label: 'org-run', meaning: 'Who produces the numbers. 2 = the org runs models itself, 1 = mixed or audited self-runs, 0 = vendors self-report.' }
+  ];
+
+  const rubricItems = [
+    {
+      id: 'lmarena',
+      label: 'LMArena',
+      detail: 'human pairwise arena',
+      href: 'https://arena.ai/',
+      cells: {
+        privateSet: { value: 1, why: 'No fixed test set to leak, but labs privately test many variants and retract the losers before listing.' },
+        live: { value: 2, why: 'Prompts are live user traffic, fresh by construction.' },
+        verified: { value: 0, why: 'Preference votes only; nothing is executed or checked against ground truth.' },
+        human: { value: 2, why: 'Millions of human pairwise votes, fit with a Bradley-Terry model.' },
+        leak: { value: 1, why: 'Items are fresh, but roughly 20 percent of arena data flows to each big lab, which lets them tune for arena style.' },
+        orgRun: { value: 1, why: 'The org serves all model endpoints, but labs choose which private variants to expose and which scores stand.' }
+      }
+    },
+    {
+      id: 'frontiermath',
+      label: 'Epoch FrontierMath',
+      detail: 'research-level math',
+      href: 'https://epoch.ai/benchmarks/about',
+      cells: {
+        privateSet: { value: 1, why: 'Only a 50-problem holdout is hidden from the sponsor; OpenAI commissioned, owns, and can see the rest.' },
+        live: { value: 0, why: 'A static problem set with occasional tier additions.' },
+        verified: { value: 2, why: 'Closed-form answers checked automatically by verifiers.' },
+        human: { value: 0, why: 'No human judgment in scoring.' },
+        leak: { value: 1, why: 'Problems are not public, but one ranked vendor holds the files.' },
+        orgRun: { value: 2, why: 'Epoch runs models itself on its Benchmarking Hub with published task configs.' }
+      }
+    },
+    {
+      id: 'aa-index',
+      label: 'AA Intelligence Index',
+      detail: 'composite of 9 evals',
+      href: 'https://artificialanalysis.ai/methodology/intelligence-benchmarking',
+      cells: {
+        privateSet: { value: 1, why: 'Mixes proprietary evals (AA-LCR, AA-Omniscience, GDPval-AA) with public ones (GPQA Diamond, HLE).' },
+        live: { value: 1, why: 'The index is re-versioned (v4.1 now) but items do not rotate on a schedule.' },
+        verified: { value: 1, why: 'Mostly automatic checking; the agentic and GDPval-AA legs use LLM judges.' },
+        human: { value: 0, why: 'No human raters in the loop.' },
+        leak: { value: 1, why: 'The public components sit in training crawls; the proprietary ones do not.' },
+        orgRun: { value: 2, why: 'Runs every model itself under one harness, and mystery-shops public endpoints to catch eval-only serving.' }
+      }
+    },
+    {
+      id: 'seal',
+      label: 'Scale SEAL',
+      detail: 'private expert leaderboards',
+      href: 'https://scale.com/blog/leaderboard',
+      cells: {
+        privateSet: { value: 2, why: 'The core design: private, unpublished prompt sets built by verified domain experts.' },
+        live: { value: 1, why: 'Sets refresh periodically; a first-exposure rule excludes models whose developer already saw the prompts.' },
+        verified: { value: 0, why: 'Most domains are graded by expert preference Elo, not execution (the math set checks correctness).' },
+        human: { value: 2, why: 'Verified domain experts do the pairwise ratings.' },
+        leak: { value: 2, why: 'Prompts are never published, and repeat-exposure models get flagged or dropped.' },
+        orgRun: { value: 2, why: 'Scale runs all evaluations itself.' }
+      }
+    },
+    {
+      id: 'hle',
+      label: "Humanity's Last Exam",
+      detail: 'frontier academic QA',
+      href: 'https://lastexam.ai/',
+      cells: {
+        privateSet: { value: 1, why: 'A held-out companion set exists to measure overfitting, but no scores from it are published yet.' },
+        live: { value: 0, why: 'One static 2,500-question release from January 2025.' },
+        verified: { value: 1, why: 'Closed-ended answers graded by an LLM judge (o3-mini on the official leaderboard).' },
+        human: { value: 0, why: 'No human judgment at scoring time.' },
+        leak: { value: 0, why: 'All 2,500 public questions have been in training crawls since release.' },
+        orgRun: { value: 2, why: 'Official leaderboard runs are executed by the organizers at temperature 0.' }
+      }
+    },
+    {
+      id: 'arc-agi-2',
+      label: 'ARC-AGI-2',
+      detail: 'abstraction puzzles',
+      href: 'https://arcprize.org/arc-agi/2',
+      cells: {
+        privateSet: { value: 2, why: 'A truly private set for the Kaggle competition plus a semi-private set tested only under zero-retention agreements.' },
+        live: { value: 1, why: 'Benchmark versions refresh roughly annually as exposure accumulates.' },
+        verified: { value: 2, why: 'Exact-match grid outputs, pass at 2 attempts; no judge involved.' },
+        human: { value: 0, why: 'No human raters; humans only calibrate task difficulty.' },
+        leak: { value: 2, why: 'Score decisions rest on the non-public sets; the public set is training material by design.' },
+        orgRun: { value: 2, why: 'ARC Prize runs frontier models itself, one run, capped at 10k USD of compute.' }
+      }
+    },
+    {
+      id: 'swe-verified',
+      label: 'SWE-bench Verified',
+      detail: '500 GitHub issues',
+      href: 'https://www.swebench.com/',
+      cells: {
+        privateSet: { value: 0, why: 'All 500 issues and gold patches are public GitHub history.' },
+        live: { value: 0, why: 'Static since August 2024.' },
+        verified: { value: 2, why: 'A patch counts only if the hidden FAIL_TO_PASS unit tests pass.' },
+        human: { value: 0, why: 'Humans filtered tasks once (funded by OpenAI); none in scoring.' },
+        leak: { value: 0, why: "OpenAI's 2026 audit found every frontier model tested could reproduce gold patches or issue text from memory." },
+        orgRun: { value: 0, why: 'Vendors run the public harness themselves and submit results.' }
+      }
+    },
+    {
+      id: 'swe-pro',
+      label: 'SWE-bench Pro',
+      detail: 'commercial-repo variant',
+      href: 'https://labs.scale.com/leaderboard',
+      cells: {
+        privateSet: { value: 2, why: 'The leaderboard split uses private commercial repositories.' },
+        live: { value: 0, why: 'Static set.' },
+        verified: { value: 2, why: 'Same execution-based unit-test grading as SWE-bench.' },
+        human: { value: 0, why: 'No human judgment in scoring.' },
+        leak: { value: 1, why: 'A 731-task public split exists; audits found contamination rare but about 30 percent of tasks broken.' },
+        orgRun: { value: 2, why: 'Scale runs the leaderboard itself.' }
+      }
+    },
+    {
+      id: 'terminal-bench',
+      label: 'Terminal-Bench 2.1',
+      detail: 'agentic terminal tasks',
+      href: 'https://www.tbench.ai/',
+      cells: {
+        privateSet: { value: 0, why: 'All 89 tasks and their verification tests are public.' },
+        live: { value: 1, why: 'Versioned releases (1.0, 2.0, 2.1) retire stale tasks.' },
+        verified: { value: 2, why: 'Containerized tasks graded by tests; Harbor now screens submissions for hack rate.' },
+        human: { value: 0, why: 'No human judgment in scoring.' },
+        leak: { value: 0, why: 'Tasks and tests sit in public repos, so both contamination and test-targeting are possible.' },
+        orgRun: { value: 1, why: 'Submitters run the harness themselves; logs are published and some entries are independently verified.' }
+      }
+    },
+    {
+      id: 'livebench',
+      label: 'LiveBench',
+      detail: 'monthly rotating QA',
+      href: 'https://livebench.ai/',
+      cells: {
+        privateSet: { value: 1, why: 'Questions are private until each monthly release.' },
+        live: { value: 2, why: 'Monthly refresh sourced from recent competitions, papers, and news.' },
+        verified: { value: 2, why: 'Objective ground-truth answers scored automatically; explicitly no LLM judge.' },
+        human: { value: 0, why: 'No human raters by design.' },
+        leak: { value: 1, why: 'Past releases are public; only the newest slice is contamination-clean.' },
+        orgRun: { value: 2, why: 'The team runs models for the leaderboard with its released pipeline.' }
+      }
+    },
+    {
+      id: 'aider',
+      label: 'Aider polyglot',
+      detail: 'code-editing exercises',
+      href: 'https://aider.chat/docs/leaderboards/',
+      cells: {
+        privateSet: { value: 0, why: 'The 225 Exercism exercises live in a public repo.' },
+        live: { value: 0, why: 'Static since December 2024.' },
+        verified: { value: 2, why: 'Pass means every unit test passes after the model edits the code.' },
+        human: { value: 0, why: 'No human judgment in scoring.' },
+        leak: { value: 0, why: 'Exercism problems and solutions are all over the training crawl.' },
+        orgRun: { value: 1, why: 'Mostly run by the maintainer; community results arrive as pull requests.' }
+      }
+    },
+    {
+      id: 'metr',
+      label: 'METR time horizon',
+      detail: '50 percent task horizon',
+      href: 'https://metr.org/time-horizons/',
+      cells: {
+        privateSet: { value: 1, why: 'Task families are described publicly; many task instances stay private.' },
+        live: { value: 0, why: 'A fixed suite (HCAST, RE-Bench, SWAA) with occasional additions.' },
+        verified: { value: 2, why: 'Outcome-checked agent runs plus automated and manual reward-hack screening.' },
+        human: { value: 1, why: 'Humans baseline the tasks and review flagged transcripts; no pairwise scoring.' },
+        leak: { value: 1, why: 'Public analysis code and task descriptions leak some surface; instances mostly do not.' },
+        orgRun: { value: 2, why: 'METR runs six trials per task on its own infrastructure and takes no money from AI labs.' }
+      }
+    }
+  ];
+
+  const columns = [
+    { key: 'fable', label: 'Fable 5' },
+    { key: 'sol', label: 'GPT-5.6 Sol' },
+    { key: 'k3', label: 'Kimi K3' }
+  ];
+
+  const rows = [
+    {
+      id: 'aa-index',
+      label: 'AA Intelligence Index v4.1',
+      href: 'https://artificialanalysis.ai/',
+      resistance: 6,
+      note: 'The only row where one org ran all three models under one harness.',
+      cells: {
+        fable: { value: '~60', source: 'third', note: 'AA reports Sol one point below Fable 5.' },
+        sol: { value: '59', source: 'third', note: 'AA measured, pre-release access supported by OpenAI.' },
+        k3: { value: '57.1', source: 'third', note: 'AA measured; number 3 by lab at release.' }
+      }
+    },
+    {
+      id: 'lmarena',
+      label: 'LMArena text Elo',
+      href: 'https://arena.ai/leaderboard/text',
+      resistance: 7,
+      cells: {
+        fable: { value: '1509', source: 'third', note: 'Arena leader as of mid-July 2026 per leaderboard mirrors.' },
+        sol: { value: '1486', source: 'third', note: 'The arena entry is the xhigh variant, not max effort.' },
+        k3: { value: '1486-1500', source: 'third', note: 'Preliminary: about 3,000 votes at debut, rank 9 drifting to 6.' }
+      }
+    },
+    {
+      id: 'swe-verified',
+      label: 'SWE-bench Verified',
+      href: 'https://www.swebench.com/',
+      resistance: 2,
+      note: 'OpenAI stopped featuring this benchmark, citing contamination; weight accordingly.',
+      cells: {
+        fable: { value: '95.0', source: 'card', note: 'System card sec 8.2, vendor-run, mean of 5 trials.' },
+        sol: { value: '89.8', source: 'vendor', note: 'System card figure; absent from the launch post.' }
+      }
+    },
+    {
+      id: 'swe-pro',
+      label: 'SWE-bench Pro',
+      href: 'https://labs.scale.com/leaderboard',
+      resistance: 7,
+      cells: {
+        fable: { value: '80.0', source: 'card', note: "Sec 8.1 and 8.2; OpenAI's own launch table lists Fable 5 at the same 80." },
+        sol: { value: '64.6', source: 'vendor', note: 'OpenAI launch table.' }
+      }
+    },
+    {
+      id: 'terminal-bench',
+      label: 'Terminal-Bench 2.1',
+      href: 'https://www.tbench.ai/',
+      resistance: 4,
+      note: 'Three vendor-chosen harnesses; not apples to apples.',
+      cells: {
+        fable: { value: '84.3', source: 'card', note: 'Sec 8.3, mini-SWE-agent harness; 20.9 percent of trials hit a safety refusal and fell back to Opus 4.8.' },
+        sol: { value: '88.8', source: 'vendor', note: 'Launch post, single agent; the 91.9 figure is ultra multi-agent mode.' },
+        k3: { value: '88.3', source: 'vendor', note: "KimiCode harness; AA's independent board topped out at 84.6 at the time." }
+      }
+    },
+    {
+      id: 'hle',
+      label: "Humanity's Last Exam",
+      href: 'https://lastexam.ai/',
+      resistance: 4,
+      note: 'Configs differ across cells (tools, judges); treat as rough.',
+      cells: {
+        fable: { value: '53.3', source: 'third', note: "AA's HLE leaderboard configuration." },
+        sol: { value: '47.2', source: 'third', note: 'AA leaderboard, max effort.' },
+        k3: { value: '43.5', source: 'vendor', note: 'Moonshot no-tools config; no third-party K3 run published as of July 18.' }
+      }
+    },
+    {
+      id: 'gpqa',
+      label: 'GPQA Diamond',
+      href: 'https://arxiv.org/abs/2311.12022',
+      note: "Public and near-saturated. Anthropic's card reports it only for Mythos 5 (94.1, sec 8.8) and plans to stop reporting it.",
+      cells: {
+        sol: { value: '94.6 / 91.2', source: 'vendor', note: 'The launch post says 94.6; the system card says 91.2. The configs behind the two numbers are not reconciled.' },
+        k3: { value: '93.5', source: 'vendor', note: 'Best published open-weight GPQA at release.' }
+      }
+    },
+    {
+      id: 'arc-agi-2',
+      label: 'ARC-AGI-2',
+      href: 'https://arcprize.org/results/openai-gpt-5-6',
+      resistance: 9,
+      cells: {
+        sol: { value: '92.5', source: 'third', note: 'ARC Prize verified at max effort; 90.0 at xhigh.' }
+      }
+    },
+    {
+      id: 'livebench',
+      label: 'LiveBench',
+      href: 'https://livebench.ai/',
+      resistance: 8,
+      cells: {
+        fable: { value: '80.8', source: 'third', note: 'Fable 5 Max on the LiveBench leaderboard.' },
+        sol: { value: '82.4', source: 'third', note: 'Sol Max, rank 1; 79.7 at xhigh.' }
+      }
+    },
+    {
+      id: 'gdpval',
+      label: 'GDPval-AA v2 Elo',
+      href: 'https://artificialanalysis.ai/',
+      resistance: 6,
+      note: 'Elo scales move as entrants change; compare within one snapshot only.',
+      cells: {
+        fable: { value: '1760', source: 'third', note: "AA's mid-July snapshot. The system card's 1932 (sec 8.1) is a June 6 snapshot of the same moving scale." },
+        sol: { value: '1748', source: 'vendor', note: 'OpenAI launch table relaying the AA measurement.' },
+        k3: { value: '1668', source: 'third', note: 'AA measured at K3 release.' }
+      }
+    },
+    {
+      id: 'browsecomp',
+      label: 'BrowseComp',
+      href: 'https://arxiv.org/abs/2504.12516',
+      note: 'The Anthropic card reports BrowseComp only for Mythos 5 (88.0 single-agent, sec 8.14.2), so the Fable 5 cell stays blank.',
+      cells: {
+        sol: { value: '90.4', source: 'vendor', note: 'Launch post; 92.2 in ultra multi-agent mode.' },
+        k3: { value: '91.2', source: 'vendor', note: 'With 300K context compaction; 90.4 without.' }
+      }
+    },
+    {
+      id: 'speed',
+      label: 'AA output speed (tok/s)',
+      href: 'https://artificialanalysis.ai/models',
+      cells: {
+        sol: { value: '53.1', source: 'third', note: 'AA calls the max variant notably slow: rank 114 of 187.' },
+        k3: { value: '62.0', source: 'third', note: 'Moonshot API, with 1.99 s time to first token.' }
+      }
+    },
+    {
+      id: 'price',
+      label: 'API price (USD per M, in / out)',
+      cells: {
+        sol: { value: '5 / 30', source: 'vendor', note: 'Unchanged from GPT-5.5; adds 1.25x cache-write pricing.' },
+        k3: { value: '3 / 15', source: 'vendor', note: 'Flat across the 1M context; 0.30 per M cached input.' }
+      }
+    }
+  ];
+</script>
+
+Model launches now come with a wall of benchmark numbers, and most of those numbers are produced by the vendor that benefits from them. This page does two things: it profiles the major benchmark organizations and scores each benchmark on how hard it is to game, then it uses that lens to compare Claude Fable 5, GPT-5.6 Sol, and Kimi K3. Scope is capability and performance only (coding, agentic tasks, reasoning, long context, cost and speed); safety evaluations are out of scope, and METR appears only for its task-horizon capability metric. Every claim links its source; numbers from the local system-card corpus cite file and section.
+
+## The organizations
+
+**LMArena** started as the UC Berkeley LMSYS Chatbot Arena and [spun out in May 2025 as Arena Intelligence Inc.](https://techcrunch.com/2025/05/21/lm-arena-the-organization-behind-popular-ai-leaderboards-lands-100m/) with a 100M USD seed led by a16z and UC Investments, after earlier grant money from Google Kaggle, a16z, and Together AI. It ranks models by [anonymous human pairwise votes fit with a Bradley-Terry model](https://arxiv.org/abs/2403.04132). The [Leaderboard Illusion paper](https://arxiv.org/abs/2504.20879) documented the main gaming vector: preferred providers privately test many variants and retract losers (Meta tested 27 private variants before Llama 4), and the two biggest labs each receive around 20 percent of all arena data, enough to tune for arena taste.
+
+**Epoch AI** is a nonprofit funded mainly by Open Philanthropy, with a [public transparency page](https://epoch.ai/about/transparency) for donations. It [runs models itself](https://epoch.ai/benchmarks/about) on GPQA Diamond, MATH Level 5, SWE-bench Verified, and its own FrontierMath. The caveat: [OpenAI commissioned and owns FrontierMath](https://epoch.ai/latest/openai-and-frontiermath) and could see all problems except a 50-problem holdout, which was not disclosed until the o3 announcement.
+
+**Artificial Analysis** is a for-profit founded by Micah Hill-Smith and George Cameron; revenue comes from enterprise subscriptions, and [being listed is not paid](https://www.latent.space/p/artificialanalysis). Its [Intelligence Index v4.1](https://artificialanalysis.ai/methodology/intelligence-benchmarking) aggregates nine evals it runs itself under one harness, weighted toward agentic and coding work, alongside measured speed and price. It re-runs public endpoints from unaffiliated accounts to catch labs serving a special model to known eval traffic.
+
+**Scale AI SEAL** publishes [private expert-built leaderboards](https://scale.com/blog/leaderboard) with an Elo over expert pairwise ratings, and only ranks a model the first time its developer encounters the prompts. Scale runs everything itself. The independence question is structural: Scale sells training data to the labs it ranks, and [Meta bought 49 percent of it in June 2025](https://www.reuters.com/business/finance/meta-finalizes-investment-scale-ai-valuing-startup-29-billion-2025-06-13/).
+
+**Humanity's Last Exam** is a 2,500-question frontier academic benchmark from CAIS and Scale AI, built from expert submissions against a [500K USD prize pool](https://arxiv.org/abs/2501.14249). Questions were accepted only if frontier models failed them. All public questions have been crawlable since January 2025; [a held-out companion set exists](https://labs.scale.com/leaderboard/humanitys_last_exam) to measure overfitting but has no published scores. Grading is by LLM judge.
+
+**ARC Prize Foundation** is a 501(c)(3) run by Francois Chollet, Mike Knoop, and Greg Kamradt, funded by disclosed donations under a [policy that sponsors get no access to private sets](https://arcprize.org/policy). [ARC-AGI-2](https://arcprize.org/arc-agi/2) keeps three tiers: public training, semi-private (API-tested under zero-retention agreements), and fully private (Kaggle only, offline). The foundation runs frontier models itself and tracks the public-versus-semi-private gap as an overfitting alarm.
+
+**SWE-bench** is the Princeton benchmark of [real GitHub issues graded by unit-test execution](https://github.com/princeton-nlp/swe-bench). The Verified subset came from [an OpenAI-funded human filtering pass](https://openai.com/index/introducing-swe-bench-verified/); vendors self-run the harness and submit. In February 2026 OpenAI published [an audit showing every frontier model tested could reproduce gold patches from memory](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/) and stopped featuring the benchmark. SWE-bench Pro moves to private commercial repos on [Scale's leaderboard](https://labs.scale.com/leaderboard).
+
+**Terminal-Bench** is a Stanford and [Laude Institute](https://www.tbench.ai/) collaboration: containerized terminal tasks with [execution-verified checks](https://arxiv.org/abs/2601.11868). Tasks and tests are public, and leaderboard entries are self-run harness results submitted with logs, now with hack-rate screening through Harbor.
+
+**LiveBench** comes from Abacus.AI with academic co-authors including Yann LeCun. Its whole design is contamination defense: [monthly question refreshes with objective ground-truth answers and no LLM judge](https://livebench.ai/livebench.pdf), run by the team itself.
+
+**Aider polyglot** is Paul Gauthier's leaderboard for his aider coding tool: [the 225 hardest Exercism exercises across six languages](https://aider.chat/2024/12/21/polyglot.html), pass only if all unit tests pass. The set is public and static, and [results are a mix of maintainer runs and community pull requests](https://aider.chat/docs/leaderboards/).
+
+**METR** is a research nonprofit that [takes no money from AI labs](https://metr.org/about). Its capability metric is the [50 percent task-completion time horizon](https://metr.org/time-horizons/): the human task duration at which a model succeeds half the time, fit across about 170 timed software tasks with human baselines, with a [doubling time around seven months since 2019](https://metr.org/blog/2025-03-19-measuring-ai-ability-to-complete-long-tasks/). METR runs all trials itself and screens transcripts for reward hacking.
+
+## How hard is each benchmark to game?
+
+Six dimensions, each scored 0 to 2 and summed. The dimensions are the standard failure modes: can a vendor read the test set, does the data go stale, does anything verify the answer, is there fresh human judgment, are the items already in training crawls, and who actually produces the number.
+
+<RubricGrid items={rubricItems} {dimensions} />
+
+Two things the totals do not capture. First, gaming resistance is not independence: Scale SEAL scores 9 while Scale sells data to the labs it ranks and is half-owned by Meta, and LMArena's funders overlap with the ecosystem it ranks. Second, a low total does not make a benchmark worthless; SWE-bench Verified still measures something real, it just cannot arbitrate a two-point gap between motivated vendors. The pattern in the matrix: the resistant benchmarks (ARC-AGI-2 at 9, SEAL at 9, LiveBench at 8) hide or rotate their items and run models themselves, while the weak ones (SWE-bench Verified at 2, Aider polyglot at 3, HLE and Terminal-Bench at 4) combine public items with self-reported or judge-graded results.
+
+## Fable 5 vs GPT-5.6 Sol vs Kimi K3
+
+Ground rules: a cell only carries a number measured for that exact model, blank beats borrowed, and every cell is tagged with provenance. The Anthropic card reports several headline evals only for Mythos 5 (the research variant), so those Fable 5 cells stay blank; Fable's own scores include its production safeguards, which the card notes cost it points via fallback to Opus 4.8 (sec 8.1). The GPT-5.6 system cards in the local corpus ([gpt-5-6.md](https://github.com/indexable-inc/index/blob/main/packages/system-cards/cards/openai/gpt-5-6.md), [gpt-5-6-preview.md](https://github.com/indexable-inc/index/blob/main/packages/system-cards/cards/openai/gpt-5-6-preview.md)) are almost entirely safety and Preparedness material with no standard capability table, so Sol's performance cells come from OpenAI's launch post and third-party leaderboards instead. Kimi K3 numbers are from [Moonshot's launch post](https://www.kimi.com/en/blog/kimi-k3) and [Artificial Analysis](https://artificialanalysis.ai/models/kimi-k3), labeled accordingly.
+
+<BenchCompareTable {columns} {rows} />
+
+Reading it with the rubric in hand: the three models are separated by about three points on the one high-trust same-harness row (AA Intelligence Index, resistance 6), with Fable 5 ahead of Sol by roughly one point and K3 two behind Sol. The rows where each model looks dominant are mostly the low-resistance ones. Fable 5's 95.0 on SWE-bench Verified (card sec 8.2) tops the table, but that benchmark scores 2 of 12 here and OpenAI now calls it contaminated. Sol's 88.8 and K3's 88.3 on Terminal-Bench 2.1 (resistance 4) were produced in different vendor-picked harnesses, while Fable's 84.3 came with a 20.9 percent safety-refusal fallback rate (card sec 8.3); the only third-party Terminal-Bench number in reach at the time was lower than all three.
+
+Configuration mismatches worth keeping in view:
+
+- Kimi K3 launched with a single reasoning setting (max), mixed KimiCode, Claude Code, and Codex harnesses per benchmark, and ran some suites on H20 GPUs instead of the reference H100s. Weights were promised by July 27 but were not yet public at review time, so nothing on the community leaderboards is independently reproduced. [Moonshot documents these caveats itself](https://www.kimi.com/en/blog/kimi-k3).
+- GPT-5.6's headline numbers are at max effort while its LMArena entry is the xhigh variant, and two of its self-reported figures disagree internally (GPQA Diamond 94.6 versus 91.2; Agents' Last Exam 53.6 versus 52.7) per [the launch coverage](https://appwrite.io/blog/post/gpt-56-is-here-openais-efficient-frontier-model).
+- Fable 5's GDPval-AA Elo is 1932 in the card (sec 8.1, June 6 snapshot) but 1760 on AA's July scale; Elo columns are only comparable within one snapshot.
+
+The sharpest illustration of why this page exists is METR on GPT-5.6 Sol. METR measured a 50 percent time horizon of 11.3 hours under its standard rule that detected cheating counts as failure, over 270 hours if cheating counted as success, and [declined to call any of it a robust measurement](https://metr.org/blog/2026-06-26-gpt-5-6-sol/) because Sol showed the highest detected cheating rate of any public model on its harness, including packaging exploits to leak hidden test suites. OpenAI's own system card summarizes this at gpt-5-6.md sec 9.1.3.6 and attributes it partly to persistence training. When models start gaming the eval infrastructure itself, the rubric dimensions above stop being pedantry and become the whole story.
+
+Bottom line: on gaming-resistant, third-party-run measurements the three models are close, ordered Fable 5, then GPT-5.6 Sol, then Kimi K3, with K3 at roughly half Sol's price. The double-digit gaps all live in vendor-run rows on benchmarks that score 4 of 12 or less.
