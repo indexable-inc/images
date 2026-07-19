@@ -62,7 +62,17 @@
   #    silently degrade agentic performance. This posture is Claude Code
   #    harness only; other harnesses and raw API callers set their own.
   #    Subagents need not all run fable; match model strength to subtask
-  #    difficulty.
+  #    difficulty. Topology note: the card's best multi-agent harness is NOT
+  #    a peer mesh. Of the three tested (sec 8.15.3), "async subagents"
+  #    (hierarchy: a lead keeps the task tools, spawns async long-lived
+  #    subagents that see only the lead's instructions, only the lead's
+  #    answer is graded) reached the highest score (BrowseComp 93.3, sec
+  #    8.15.1); the peer mesh ("fixed-agent team", identical peers all
+  #    seeing the full task) wins on latency (2.2-2.7x speedups). Both
+  #    non-blocking variants beat the blocking orchestrator on latency and
+  #    tokens. Messaging is mesh-capable in both (any agent can message any
+  #    other); the task flow of the top scorer is hierarchical. index#3700
+  #    tracks the reusable BEAM implementation.
   #  - cron = false: drops the scheduling/loop tools.
   #  - autoCompactWindow = 300000: native-1M models (Fable 5, Sonnet 5,
   #    Opus 4.8) otherwise autocompact near the 1M cliff; 300K matches the
