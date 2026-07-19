@@ -232,6 +232,23 @@
         "type": "github"
       }
     },
+    "home-manager-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783550008,
+        "narHash": "sha256-qbbZUk9IG9dLNwCPwdPBs6I5clxwugRpP+1YU+GPK20=",
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "rev": "f4d01c1d87c7c2ec909549165d5a8338f1bd3315",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "rev": "f4d01c1d87c7c2ec909549165d5a8338f1bd3315",
+        "type": "github"
+      }
+    },
     "launchk-src": {
       "flake": false,
       "locked": {
@@ -604,6 +621,7 @@
         "git-src": "git-src",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
+        "home-manager-src": "home-manager-src",
         "launchk-src": "launchk-src",
         "mesa-src": "mesa-src",
         "nix-derivation-src": "nix-derivation-src",

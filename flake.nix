@@ -90,6 +90,21 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Upstream nix-community/home-manager, patched in-repo
+    # (packages/home-manager/patches) with the batched activation linking
+    # series. Distinct from the `home-manager` flake input above: this is the
+    # de-forked SOURCE base (lib/fork-packages.nix), consumed by the
+    # `patched-src-home-manager` check and mirrored to the
+    # indexable-inc/home-manager `ix-patched` branch that workstation configs
+    # consume as their home-manager flake input. Pinned BY REV (autoUpdate =
+    # false): bump by hand with `nix flake update home-manager-src` + `nix run
+    # .#rebase-patches -- home-manager`, then re-push the fork branch
+    # (`mirror fork-branch --name home-manager --push`).
+    home-manager-src = {
+      url = "github:nix-community/home-manager/f4d01c1d87c7c2ec909549165d5a8338f1bd3315";
+      flake = false;
+    };
+
     # Upstream rust-lang/rust-clippy, patched in-repo with the restriction lints
     # tuned for LLM-assisted codebases (packages/llm-clippy/patches). Pinned BY
     # REV, not a floating branch: clippy-driver links rustc_private and must match
@@ -339,6 +354,7 @@
     sdk-prebuilt-nixpkgs,
     sdk-prebuilt-rust-overlay,
     home-manager,
+    home-manager-src,
     hermes-agent,
     btop-src,
     nushell-src,
@@ -418,6 +434,7 @@
         sdk-prebuilt-nixpkgs
         sdk-prebuilt-rust-overlay
         home-manager
+        home-manager-src
         hermes-agent
         btop-src
         nushell-src

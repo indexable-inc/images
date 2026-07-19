@@ -210,6 +210,38 @@
       };
     }
     {
+      # Home Manager is consumed as a FLAKE by workstation config repos, not
+      # as a package built here, so the series' consumer is the maintained
+      # fork repo: `mirror fork-branch --name home-manager --push` keeps
+      # indexable-inc/home-manager's `ix-patched` branch equal to the pinned
+      # base plus this series, and a config repo points its `home-manager`
+      # flake input at that branch. Pinned by rev (autoUpdate = false): there
+      # is no `.#home-manager.updateScript` package for the fork-sync cron to
+      # drive; bump by hand with `nix flake update home-manager-src` + `nix
+      # run .#rebase-patches -- home-manager`, then re-push the fork branch.
+      name = "home-manager";
+      input = "home-manager-src";
+      url = "https://github.com/nix-community/home-manager.git";
+      patchDir = "packages/home-manager/patches";
+      autoUpdate = false;
+      forkRepo = "indexable-inc/home-manager";
+      upstreamPolicy = {
+        prsWelcome = true;
+        # The contributing manual (guidelines, getting-started) has no
+        # AI-contribution policy as of 2026-07-19; PRs are welcome with
+        # commit-format and test expectations spelled out there.
+        aiPrsAllowed = "unknown";
+        citation = "https://nix-community.github.io/home-manager/#ch-contributing";
+        notes = "PRs welcome. Commit subject `{module}: summary` <= 50 chars, body explains motivation; changes should carry tests. No CLA.";
+      };
+      patches = {
+        "0001-files-batch-symlink-creation-and-target-checks-in-ac.patch" = {
+          upstream = "attempt";
+          reason = "General activation performance fix (per-file fork+exec dominates linkGeneration/checkLinkTargets on darwin, 3.4s -> 0.2s for 365 links); behavior-preserving and upstream-quality.";
+        };
+      };
+    }
+    {
       name = "git";
       input = "git-src";
       url = "https://github.com/git/git.git";
