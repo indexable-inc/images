@@ -233,9 +233,11 @@ jobs:
           fi
 
   # Native aarch64-darwin lane (#1890). The linux lane covers the cross-compiled
-  # packages, but the genuinely-native darwin artifacts (codex from the patched
-  # fork, btop, nix-output-monitor, the config-launch launcher units, the native
-  # cargo-unit IFD graph) were never published anywhere, so every darwin
+  # packages -- since #2690 that includes codex: `packages.aarch64-darwin.codex`
+  # is the cross alias, so the system filter below drops it from this lane --
+  # but the genuinely-native darwin artifacts (btop, nix-output-monitor, the
+  # config-launch launcher units, the native cargo-unit IFD graph) were never
+  # published anywhere, so every darwin
   # consumer compiled them locally. `cachePushRoots.aarch64-darwin` post-alias
   # is the honest "what a darwin consumer can install" set; filtering the eval
   # rows to `system == "aarch64-darwin"` drops the cross aliases, example-fleet
