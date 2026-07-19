@@ -96,7 +96,7 @@ defmodule AgentHarness.Coordinator do
   # -- admission --
 
   defp admit(state, opts) do
-    id = Keyword.get(opts, :name, "sub-#{state.total_created + 1}")
+    id = Keyword.get_lazy(opts, :name, fn -> default_id(state) end)
     model = Keyword.get(opts, :model, state.config.default_model)
 
     cond do
@@ -140,6 +140,21 @@ defmodule AgentHarness.Coordinator do
     }
 
     DynamicSupervisor.start_child(Names.agent_supervisor(state.harness), {Agent, args})
+  end
+
+  # Default ids share the roster namespace with user-chosen names, so a
+  # host that once named an agent "sub-2" must not lose its next anonymous
+  # spawn to :name_taken; skip taken numbers instead of failing admission.
+  defp default_id(state), do: default_id(state.roster, state.total_created + 1)
+
+  defp default_id(roster, n) do
+    id = "sub-#{n}"
+
+    if Map.has_key?(roster, id) do
+      default_id(roster, n + 1)
+    else
+      id
+    end
   end
 
   # -- roster --

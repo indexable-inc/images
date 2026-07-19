@@ -36,7 +36,9 @@
   # next to the unpacked project so the relative path resolves in the
   # sandbox. Reached through the package registry (`.src` of the sibling's
   # derivation) so its fileset stays the single source of truth and no `../`
-  # literal crosses package directories here.
+  # literal crosses package directories here. Tripwire: if agent-harness-ex
+  # ever gains a hex dep, the mixFodDeps FOD content below changes while its
+  # pins.json hash will not; bump the pin there.
   stageAgentHarness = ''
     cp --no-preserve=mode -R ${repoPackages.agent-harness-ex.src} "$NIX_BUILD_TOP/agent-harness-ex"
   '';
