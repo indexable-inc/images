@@ -7,11 +7,11 @@
   </picture>
 </p>
 
-index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): one shared definition of the software everyone here runs. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/). It is also the default world an [ix.dev](https://ix.dev) VM boots: ix is the runtime, index is what runs on it.
+[ix.dev](https://ix.dev) rents out cloud machines where you pay for what you use. index defines everything those machines run: the apps, the libraries they are built from, and the tools that build them, compilers included. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/).
 
-It exists because agents now write patches faster than upstream review can absorb them. A fix that takes an agent minutes can wait months in a review queue, and some projects refuse AI-written patches outright. Here the same change lands on main today, and upstream can adopt it whenever it wants. The [philosophy](https://indexable-inc.github.io/index/philosophy/) page has the full argument.
+Every dependency here, down to the compiler, is something this repo can patch: the moment upstream falls short, index forks it. Forking has always been a bad trade, a same-day fix paid for by re-applying it by hand on every upstream update, forever, which is why forks rot and why everyone waits on review queues instead. index bets that [agents have flipped the trade](https://indexable-inc.github.io/index/philosophy/): they carry the upkeep, the build graph checks their work, and whatever a fix breaks surfaces within the hour as a failed check.
 
-## Why
+## What you get
 
 <p align="center">
   <picture>
@@ -40,7 +40,7 @@ Patch a compiler, fix a library, tighten a lint: nothing quietly runs last year'
   </picture>
 </p>
 
-Patches live next to the code that needs them. No dependency has a bus factor outside the repo.
+Patches live next to the code that needs them: a slow review queue, or a project that refuses AI-written patches outright, blocks nothing. Upstream can adopt the fix whenever it wants.
 
 ### One standard for everything
 

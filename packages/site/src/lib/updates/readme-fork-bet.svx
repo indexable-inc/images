@@ -1,0 +1,17 @@
+---
+id: readme-fork-bet
+postedAt: 2026-07-19T04:54:15-07:00
+title: "README opens in plain terms and leads with the fork-vs-wait bet"
+tags: [docs, readme]
+links:
+  - label: README
+    href: https://github.com/indexable-inc/index/blob/main/README.md
+  - label: "#3678"
+    href: https://github.com/indexable-inc/index/issues/3678
+---
+
+The README used to open with "index is a Nix monorepo in the spirit of nixpkgs", which assumes the reader already knows Nix, nixpkgs, and monorepos. An outside reader's feedback showed what actually lands: say what ix is, say index is everything an ix machine runs, then the dilemma every developer already knows. Wait on upstream review, often for months, or fork and re-apply your fix by hand on every update, forever.
+
+The new intro is two paragraphs, then diagrams. Paragraph one: what ix is and what index contains. Paragraph two: any dependency that falls short gets forked and patched in place, forking is famously a bad trade, and the bet is that agents doing the upkeep with the build graph checking their work flips the trade. Nix is linked but never explained. The point that some projects refuse AI-written patches moved into the "Never blocked on upstream" diagram section, next to the picture that makes it.
+
+The hero, the flywheel section (now titled "What you get"), and the stories are unchanged.

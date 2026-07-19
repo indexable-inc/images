@@ -1,6 +1,6 @@
 # Philosophy
 
-Agents made writing code cheap. Waiting is now the expensive part.
+Agents collapsed the cost of writing a change. What stayed expensive is everything between a written fix and a running one: review queues, release cycles, rebuilds. Each principle below removes one of those waits.
 
 - **Never blocked.** Land it here now. Generate the upstream PR from the patch; never wait on it.
 - **One graph.** A change lands once and reaches everyone.
