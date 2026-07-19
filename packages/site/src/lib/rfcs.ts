@@ -26,21 +26,21 @@ export const rfcDimensions: readonly ScoreDimension[] = [
     low: 'Incremental',
     high: 'Moonshot',
     meaning:
-      'How far past current practice the proposal reaches: a tweak to something that exists, or a bet that changes what the repo is.'
+      'Distance from current practice, independent of payoff: rebuilding the Rust build on experimental Nix is a 9 even if it never lands; typing an existing builder is a 4 even though its impact is real.'
   },
   {
     key: 'impact',
     label: 'Impact',
     low: 'Marginal',
     high: 'Transformative',
-    meaning: 'How much better the repo gets if this lands, summed across everyone who works in it.'
+    meaning: 'Size of the win if it lands, regardless of novelty or compounding: a boring change that saves everyone an hour a day is high impact with low ambition and low leverage.'
   },
   {
     key: 'effort',
     label: 'Effort',
     low: 'Weekend',
     high: 'Quarter',
-    meaning: 'Wall-clock and complexity to implement fully, not just to prototype.'
+    meaning: 'The time price: wall-clock and complexity to implement fully, not just to prototype.'
   },
   {
     key: 'risk',
@@ -48,7 +48,7 @@ export const rfcDimensions: readonly ScoreDimension[] = [
     low: 'Safe',
     high: 'Hairy',
     meaning:
-      'What breaks, or what the repo is stuck carrying, if the bet turns out wrong: blast radius plus reversibility.'
+      'The downside price: what breaks, or what the repo is stuck carrying, if the bet turns out wrong. Blast radius times how hard it is to back out.'
   },
   {
     key: 'maturity',
@@ -56,7 +56,7 @@ export const rfcDimensions: readonly ScoreDimension[] = [
     low: 'Rough',
     high: 'Battle-tested',
     meaning:
-      'How hardened the implementation is today: unbuilt or rough sketch code at the low end, a daily-driven battle-tested system at the high end. Orthogonal to API stability.'
+      'Not a judgment of the idea: the present state of its implementation, from unbuilt to daily-driven and hardened. The one axis that moves on its own as work lands. Orthogonal to API stability.'
   },
   {
     key: 'leverage',
@@ -64,7 +64,7 @@ export const rfcDimensions: readonly ScoreDimension[] = [
     low: 'One-off',
     high: 'Flywheel',
     meaning:
-      'Whether it compounds: a one-off improvement, a multiplier that helps everything else, or a flywheel where each use makes the next cheaper.'
+      'The shape of the win over time, not its size: does each use make the next cheaper? A contract every future integration inherits scores high before much impact has arrived; a big one-time saving scores low however large.'
   },
   {
     key: 'taste',
@@ -72,7 +72,7 @@ export const rfcDimensions: readonly ScoreDimension[] = [
     low: 'Mechanical',
     high: 'Judgment',
     meaning:
-      'How much tasteful human input the work needs. Low means the path is straightforward and an advanced model can execute it; high means the hard part is knowing what good looks like, and human judgment moves the outcome.'
+      'The judgment price: how much of the outcome depends on a human knowing what good looks like. Low means the path is clear and an advanced model can execute it; high means taste moves the result more than execution does.'
   }
 ];
 
