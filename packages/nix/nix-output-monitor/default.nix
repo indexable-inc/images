@@ -117,6 +117,7 @@
     crossHaskell = ix.crossHaskell {
       inherit crossGhc lib;
       inherit (ix.pkgs) haskellPackages llvmPackages stdenv;
+      writeBashApplication = ix.writeBashApplication ix.pkgs;
     };
     # Same source/version/dependency metadata nixpkgs' by-name package uses,
     # with the forked nix-derivation source swapped in (same override as the
