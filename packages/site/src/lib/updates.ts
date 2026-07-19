@@ -50,7 +50,7 @@ export const siteUpdates: SiteUpdate[] = Object.entries(modules)
 export const siteUrl = 'https://indexable-inc.github.io/index/';
 export const siteFeedUrl = `${siteUrl}feed.xml`;
 export const siteIntro =
-  'Images, NixOS modules, helpers, and notes published by ix.';
+  'A shared, open-source monorepo of developer tools: packages, NixOS modules, fleet examples, and the agent infrastructure that ties them together. Add something useful, and everyone gets it.';
 
 function stripFrontmatter(source: string): string {
   return source.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();

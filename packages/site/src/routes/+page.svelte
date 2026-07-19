@@ -30,7 +30,7 @@
 </svelte:head>
 
 <section class="hero">
-  <h1>Open source from ix.</h1>
+  <h1>One repo everyone can edit.</h1>
   <p>{siteIntro}</p>
 </section>
 
