@@ -1,0 +1,15 @@
+---
+id: mcp-ex-fleet-guidance
+postedAt: 2026-07-19T12:00:00-07:00
+title: "mcp-ex instructions now steer agents to the fleet for the work it wins"
+tags: [mcp, fleet]
+links:
+  - label: fleet.ex
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/fleet.ex
+  - label: issue #3711
+    href: https://github.com/indexable-inc/index/issues/3711
+---
+
+`IxMcp.Fleet` reaches beamd on the fleet hosts (700+ idle server cores, root, OTP 28) from the laptop that runs the MCP server, but nothing in the server's instructions mentioned it, so agents hand-rolled ssh for work that should fan out. The `exec` tool description, the server instructions, and the in-cell `Api.help(IxMcp.Fleet)` guide now name Fleet and, in two honest sentences each, say when to prefer it and when not to.
+
+Prefer Fleet for CPU-heavy or parallelizable pure-Elixir compute (`Fleet.multicall/3`, `Fleet.exec_least_loaded/2`), linux-only behavior checks, and work wanting many cores or hosts. Keep work local when it touches the workstation's files, repos, or bindings, is a small low-latency eval, is stateful (remote bindings do not persist -- code ships as source strings), or is darwin-specific. `Fleet.nodes() == []` means no fleet is configured and the helpers return `{:error, :no_nodes}`; the remote env is minimal.

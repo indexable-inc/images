@@ -47,12 +47,22 @@ defmodule IxMcp.MCP.Tools do
                                             .send_key(term, "enter" | "ctrl+c" | ...),
                                             .wait_for(term, pattern),
                                             .snapshot/1, .close/1
+      Fleet.multicall(Fleet.nodes(), code)  run Elixir across the fleet's server cores
+                                            (Fleet.exec_least_loaded/2 for one node)
       Api.api("tail") / Api.help(Jobs, :tail)   discovery over this whole surface
 
   Each cell runs in its own BEAM process, so a blocking cell never delays
   other jobs or this server -- and Ix.trace/0 and Ix.restart/0 work from a
   fresh cell even while other jobs run or wedge, so a stuck job never locks
   you out of recovery.
+
+  Prefer Fleet for CPU-heavy or parallelizable pure-Elixir compute, linux-only
+  behavior checks, and work wanting many cores or hosts (fleet nodes are root);
+  keep it local for anything touching this workstation's files, repos, or
+  bindings, small low-latency evals, stateful work (remote bindings do NOT
+  persist -- code ships as source strings), and darwin-specific behavior.
+  Fleet.nodes() == [] means no fleet is configured (helpers return
+  {:error, :no_nodes}); the remote env is minimal (shell-outs limited).
   """
 
   @doc "The in-language surface cheat sheet (also shipped as server instructions)."
