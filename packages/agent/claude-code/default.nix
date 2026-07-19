@@ -693,6 +693,30 @@ in
         settings = settingsDefaults;
         settingsFile = settingsDefaultsFile;
 
+        # Machine-readable knob tables for the commented knob reference at
+        # the Home Manager consumption site
+        # (packages/agent/home-manager/claude-code.nix):
+        # checks.claude-code-knob-reference asserts that reference against
+        # these plus `builtins.functionArgs`, so the reference cannot
+        # silently go stale. Passthru never reaches the derivation, so
+        # exposing them keeps the drvPath byte-identical (index#3710).
+        knobDefaults = {
+          features = defaultFeatures;
+          systemTools = defaultSystemTools;
+        };
+
+        # Mechanical extraction of every env var the shipped cli.js reads:
+        # the registry behind env-registry.tsv and the env reference block
+        # in the Home Manager module (index#3710). Regenerate after a
+        # version bump:
+        #   nix build .#claude-code.envRegistry
+        #   cp result packages/agent/claude-code/env-registry.tsv
+        # (checks.claude-code-knob-reference pins the committed TSV to
+        # manifest.json's version, so a bump that skips this goes red.)
+        envRegistry = pkgs.runCommand "claude-code-env-registry.tsv" {
+          nativeBuildInputs = [python3];
+        } "python3 ${./extract-env-registry.py} ${stockCli}/bin/claude ${version} > $out";
+
         # The exact string baked into the `--system-prompt-file` flag in
         # `wrapperFlags` -- same binding as the flag, so passthru and argv
         # cannot drift. Exposed because the `builtins.toFile` output behind
