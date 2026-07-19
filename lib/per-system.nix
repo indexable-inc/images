@@ -1943,6 +1943,42 @@
               test -f "$pkg/share/nix-web-monitor/index.html"
               mkdir -p "$out"
             '';
+          # codex reaches Macs exclusively through the cross alias (#2690): the
+          # required gate already builds `codex-aarch64-apple-darwin` as a
+          # closure root, but a green build cannot assert architecture. Walk
+          # the shipped entrypoint exactly as a Mac would: the shim must be
+          # portable /bin/sh (a compiled wrapper would be a dead Linux ELF),
+          # and both binaries it execs -- config-launch and the codex-rs
+          # binary named by the launch spec -- must be Mach-O arm64 (#3583).
+          cross-darwin-codex-smoke =
+            pkgs.runCommand "cross-darwin-codex-smoke" {nativeBuildInputs = [pkgs.file pkgs.jq];}
+            ''
+              pkg=${crossPackages.codex-aarch64-apple-darwin}
+              read -r shebang < "$pkg/bin/codex"
+              case "$shebang" in
+                "#!/bin/sh") ;;
+                *)
+                  echo "expected /bin/sh shim, got: $shebang" >&2
+                  exit 1
+                  ;;
+              esac
+              spec=$(sed -n 's/^export IX_LAUNCH_SPEC=//p' "$pkg/bin/codex")
+              test -f "$spec"
+              launcher=$(grep -o '/nix/store/[^ "]*/bin/config-launch' "$pkg/bin/codex")
+              target=$(jq -r .target "$spec")
+              for bin in "$launcher" "$target"; do
+                info=$(file -b "$bin")
+                echo "$bin: $info"
+                case "$info" in
+                  *Mach-O*arm64*) ;;
+                  *)
+                    echo "expected Mach-O arm64 for $bin, got: $info" >&2
+                    exit 1
+                    ;;
+                esac
+              done
+              mkdir -p "$out"
+            '';
           site-test = siteTests.all;
         };
         checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
