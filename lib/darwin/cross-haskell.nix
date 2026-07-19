@@ -26,12 +26,53 @@
   lib,
   llvmPackages,
   stdenv,
+  # Pre-bound checked-bash writer (`ix.writeBashApplication pkgs`), for the
+  # checked-ar wrapper below.
+  writeBashApplication,
 }: let
   hp = haskellPackages;
   nativeGhc = hp.ghc;
   bintools = llvmPackages.bintools-unwrapped;
 
   targetTool = name: "${crossGhc}/bin/${crossGhc.targetPrefix}${name}";
+
+  # Flattening ar: with MergeObjsCmd="" (no Mach-O `ld -r` exists on a Linux
+  # host) the cross GHC *ar-joins* multi-object modules -- an FFI-stub module
+  # like terminal-size's Posix comes out of GHC as a small `ar` archive of
+  # ghc_N.o pieces, not an object. Cabal then packs those into libHS<pkg>.a,
+  # and ld64.lld does not look inside nested archives, so their symbols
+  # vanish; because GHC links executables with `-undefined dynamic_lookup`,
+  # the failure only surfaces at dyld time on the Mac ("symbol not found in
+  # flat namespace"). Cabal handles exactly this with ar's `L` modifier
+  # (flatten archive inputs into their members; see the ghc#21068 note in
+  # Distribution.Simple.Program.Ar) -- but only on its non-darwin branch,
+  # because a *native* darwin toolchain has a real `ld -r` and never
+  # ar-joins. Rewrite Cabal's darwin-shaped create call (`-r -s [-c]
+  # <archive> @<rsp>`) into a fresh `qLsc` quick-append, which flattens.
+  checkedAr = writeBashApplication {
+    name = "cross-haskell-flatten-ar";
+    text = ''
+      ar=${lib.getExe' bintools "llvm-ar"}
+      archive=""
+      rsp=""
+      for a in "$@"; do
+        case "$a" in
+          @*) rsp="''${a#@}" ;;
+          -*) ;;
+          *.a)
+            if [ -z "$archive" ]; then
+              archive="$a"
+            fi
+            ;;
+        esac
+      done
+      if [ -n "$archive" ] && [ -n "$rsp" ]; then
+        rm -f "$archive"
+        exec "$ar" qLsc "$archive" "@$rsp"
+      fi
+      exec "$ar" "$@"
+    '';
+  };
 
   # Direct Haskell deps from hackage2nix metadata; boot libs are null. Tool
   # deps (alex/happy) are host programs, provided globally below. Executable
@@ -97,6 +138,7 @@
         done
         ${targetTool "ghc-pkg"} --package-db="$pkgdb" recache
 
+
         # Setup runs on the build host: compile it with the native GHC. Most
         # sdists ship no Setup.hs; synthesize the one their build-type means.
         if [ ! -e Setup.hs ] && [ ! -e Setup.lhs ]; then
@@ -129,7 +171,7 @@
           --with-hc-pkg=${targetTool "ghc-pkg"} \
           --with-hsc2hs=${targetTool "hsc2hs"} \
           --hsc2hs-option=--cross-compile \
-          --with-ar=${lib.getExe' bintools "llvm-ar"} \
+          --with-ar=${lib.getExe checkedAr} \
           --with-strip=${lib.getExe' bintools "llvm-strip"} \
           --package-db="$pkgdb" \
           --prefix="$out" \
