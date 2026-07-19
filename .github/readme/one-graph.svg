@@ -23,8 +23,7 @@
       <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
     </marker>
   </defs>
-  <path class="frame" d="M 142 14 H 711 Q 719 14 719 22 V 158 Q 719 166 711 166 H 9 Q 1 166 1 158 V 22 Q 1 14 9 14 H 22"/>
-  <text x="28" y="18.5">[-] one graph</text>
+  <rect class="frame" x="1" y="14" width="718" height="152" rx="8"/>
   <text x="360" y="58" text-anchor="middle">patch</text>
   <path class="mwire" d="M 360 66 L 140 120"/>
   <path class="mwire" d="M 360 66 L 195 120"/>

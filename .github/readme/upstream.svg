@@ -23,8 +23,7 @@
       <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
     </marker>
   </defs>
-  <path class="frame" d="M 206 14 H 711 Q 719 14 719 22 V 158 Q 719 166 711 166 H 9 Q 1 166 1 158 V 22 Q 1 14 9 14 H 22"/>
-  <text x="28" y="18.5">[-] patches live here</text>
+  <rect class="frame" x="1" y="14" width="718" height="152" rx="8"/>
   <rect class="mwire dash" x="60" y="68" width="150" height="46" rx="4"/>
   <text class="m" x="135" y="95" text-anchor="middle">upstream</text>
   <path class="mwire dash" marker-end="url(#am)" d="M 222 91 H 318"/>
