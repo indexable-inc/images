@@ -23,6 +23,8 @@
   --status-rejected: #b91c1c;
   --status-withdrawn: #a0a0a0;
   --status-superseded: #6b6b6b;
+  /* Chip for plans that actively request comments. */
+  --status-rfc: #0e7490;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -43,6 +45,7 @@
     --status-rejected: #f87171;
     --status-withdrawn: #5d5a55;
     --status-superseded: #9a9690;
+    --status-rfc: #22d3ee;
   }
 }
 

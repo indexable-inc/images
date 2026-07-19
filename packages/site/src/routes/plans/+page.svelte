@@ -59,6 +59,9 @@
       </a>
       <span class="num">{plan.number}</span>
       <StatusBadge status={plan.status} />
+      {#if plan.rfc}
+        <StatusBadge status="RFC" />
+      {/if}
     </li>
   {/each}
 </ul>

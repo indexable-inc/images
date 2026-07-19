@@ -88,6 +88,8 @@ export type PlanMeta = {
   updated: string;
   // 1-10 scores with rationale for the /plans chart. Seed estimates; tune via PR.
   scores: Record<string, Score>;
+  // True when the plan actively requests comments: the RFC subset of plans.
+  rfc?: boolean;
   trackingIssue: string | null;
   supersedes: string | null;
   supersededBy: string | null;
@@ -130,6 +132,9 @@ for (const [path, mod] of Object.entries(modules)) {
     throw new Error(`Plan ${path}: frontmatter id '${mod.metadata.id}' disagrees with filename '${stem}'`);
   }
   validateScores(`Plan ${path}`, planDimensions, mod.metadata.scores);
+  if (mod.metadata.rfc !== undefined && typeof mod.metadata.rfc !== 'boolean') {
+    throw new Error(`Plan ${path}: 'rfc' must be a boolean when present`);
+  }
   if (!(planStatuses as readonly string[]).includes(mod.metadata.status)) {
     throw new Error(
       `Plan ${path}: unknown status '${mod.metadata.status}'; expected one of ${planStatuses.join(', ')}`

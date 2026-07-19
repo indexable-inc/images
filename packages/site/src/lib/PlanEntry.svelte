@@ -40,7 +40,13 @@
     </p>
   {/if}
   <dl class="frontmatter">
-    <dt>Status</dt><dd><StatusBadge status={plan.status} /></dd>
+    <dt>Status</dt>
+    <dd>
+      <StatusBadge status={plan.status} />
+      {#if plan.rfc}
+        <StatusBadge status="RFC" />
+      {/if}
+    </dd>
     {#each planDimensions as dim (dim.key)}
       <dt>{dim.label}</dt>
       <dd class="score">
