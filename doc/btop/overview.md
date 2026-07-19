@@ -29,6 +29,11 @@ flags, the rest of `meta`) is inherited from nixpkgs `btop` unchanged.
   There is no `manifest.json` and no `updateScript`; the flake lock owns the
   pin.
 - Platforms: inherited from nixpkgs `btop` (unix); no extra `systems` gate.
+- Darwin consumers substitute a Linux cross build: `package.nix` sets
+  `cross = true` (#3584), so the RFC 0009 lane compiles a Mach-O arm64 btop
+  with the apple-sdk cross toolchain (clang + macOS SDK) and aliases it into
+  `packages.aarch64-darwin.btop`; the darwin cache-push lane no longer builds
+  btop natively.
 
 Because the derivation is `overrideAttrs` over the upstream package, a nixpkgs
 bump to `btop` (new build inputs, phase changes) flows through automatically;

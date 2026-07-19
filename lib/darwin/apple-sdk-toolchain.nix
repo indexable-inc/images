@@ -218,6 +218,56 @@
   appleAr = lib.getExe' appleArPackage arName;
   appleRanlib = lib.getExe' appleRanlibPackage ranlibName;
 
+  clangxx = lib.getExe' pkgs.llvmPackages.clang-unwrapped "clang++";
+
+  standaloneCcName = "apple-sdk-standalone-cc-${target}";
+  standaloneCxxName = "apple-sdk-standalone-cxx-${target}";
+
+  # Standalone C/C++ packages (CMake or make builds outside the cargo-unit
+  # lane; btop is the first, #3584) need the compiler driver to also *link*
+  # executables, which the zig wrappers above cannot do: `zig cc` insists on
+  # building its bundled libc++/compiler_rt for the target and zig 0.16's
+  # Mach-O lane segfaults doing so, and objects compiled against zig's libc++
+  # headers are ABI-incompatible with the SDK's system libc++ a Mac binary
+  # must link anyway. So this lane is plain clang/clang++ with the SDK's own
+  # libc++ headers (-nostdinc++ + c++/v1) and ld64.lld resolving the SDK's
+  # .tbd stubs -- the same header/dylib pairing Xcode uses natively. The
+  # linker flags ride along at compile time (unused there, hence
+  # -Wno-unused-command-line-argument) so one wrapper serves both CMake's
+  # compile and link steps.
+  standaloneFlags = "--target=${target} -mmacosx-version-min=11.0 -isysroot ${appleSdk} -B${pkgs.lld}/bin -fuse-ld=lld -Wno-unused-command-line-argument";
+  appleStandaloneCcPackage = writeBashApplication pkgs {
+    name = standaloneCcName;
+    text = ''
+      exec ${clang} ${standaloneFlags} "$@"
+    '';
+  };
+  appleStandaloneCxxPackage = writeBashApplication pkgs {
+    name = standaloneCxxName;
+    text = ''
+      exec ${clangxx} ${standaloneFlags} -nostdinc++ -isystem ${appleSdk}/usr/include/c++/v1 "$@"
+    '';
+  };
+  appleStandaloneCc = lib.getExe' appleStandaloneCcPackage standaloneCcName;
+  appleStandaloneCxx = lib.getExe' appleStandaloneCxxPackage standaloneCxxName;
+
+  appleStandaloneCmakeToolchain = pkgs.writeText "apple-sdk-standalone-toolchain-${target}.cmake" ''
+    set(CMAKE_SYSTEM_NAME Darwin)
+    set(CMAKE_SYSTEM_PROCESSOR ${cmakeArch})
+    set(CMAKE_OSX_ARCHITECTURES ${cmakeArch})
+    set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)
+    set(CMAKE_OSX_SYSROOT ${appleSdk})
+    set(CMAKE_C_COMPILER ${appleStandaloneCc})
+    set(CMAKE_CXX_COMPILER ${appleStandaloneCxx})
+    set(CMAKE_AR ${appleAr})
+    set(CMAKE_RANLIB ${appleRanlib})
+    set(CMAKE_FIND_ROOT_PATH ${appleSdk})
+    set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+    set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+    set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+  '';
+
   appleCmakeToolchain = pkgs.writeText "apple-sdk-toolchain-${target}.cmake" ''
     set(CMAKE_SYSTEM_NAME Darwin)
     set(CMAKE_SYSTEM_PROCESSOR ${cmakeArch})
@@ -267,6 +317,11 @@ in
     # host units at the Darwin toolchain, so no unqualified tool vars either.
     # MACOSX_DEPLOYMENT_TARGET and SDKROOT stay unqualified: they have
     # Apple-target semantics only, so host compiles never read them.
+    # CMake toolchain for standalone (non-cargo-unit) C/C++ packages: clang +
+    # SDK libc++, linking through ld64.lld. See the standalone lane comment
+    # above for why this is not the zig toolchain.
+    standaloneCmakeToolchain = appleStandaloneCmakeToolchain;
+
     env = {
       MACOSX_DEPLOYMENT_TARGET = "11.0";
       SDKROOT = appleSdk;

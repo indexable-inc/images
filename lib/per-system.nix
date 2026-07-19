@@ -1979,6 +1979,23 @@
               done
               mkdir -p "$out"
             '';
+          # btop is the first non-Rust cross package: a plain CMake/C++ build
+          # driven by the cross toolchain's standalone clang + macOS SDK lane,
+          # outside the cargo unit DAG the other smokes exercise. Assert the
+          # C++ lane also emits a real Mach-O arm64 binary (#3584).
+          cross-darwin-btop-smoke = pkgs.runCommand "cross-darwin-btop-smoke" {nativeBuildInputs = [pkgs.file];} ''
+            bin=${crossPackages.btop-aarch64-apple-darwin}/bin/btop
+            info=$(file -b "$bin")
+            echo "$info"
+            case "$info" in
+              *Mach-O*arm64*) ;;
+              *)
+                echo "expected Mach-O arm64, got: $info" >&2
+                exit 1
+                ;;
+            esac
+            mkdir -p "$out"
+          '';
           site-test = siteTests.all;
         };
         checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
