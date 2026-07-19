@@ -14,6 +14,7 @@ scores:
   risk: { value: 5, why: 'one clause defending the number' }
   maturity: { value: 5, why: 'one clause defending the number' }
   leverage: { value: 5, why: 'one clause defending the number' }
+  taste: { value: 5, why: 'one clause defending the number' }
 supersedes: null
 supersededBy: null
 description: Template. Copy to `NNNN-short-slug.svx`, update the `title` frontmatter field, fill in the rest of the frontmatter and the body.

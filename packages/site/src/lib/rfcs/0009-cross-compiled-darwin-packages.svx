@@ -14,6 +14,7 @@ scores:
   risk: { value: 5, why: 'cross-built artifacts can diverge from native darwin builds' }
   maturity: { value: 6, why: 'landed and in daily use, native-parity gaps remain' }
   leverage: { value: 8, why: 'every new package gets a mac binary for free' }
+  taste: { value: 5, why: 'the aliasing design took taste, the remaining parity work is mechanical' }
 supersedes: null
 supersededBy: null
 description: 'A package opts into macOS with one `cross = true` line; the Linux CI fleet cross-compiles it for Apple silicon, caches the closure, and a Mac substitutes the prebuilt binary instead of compiling anything.'

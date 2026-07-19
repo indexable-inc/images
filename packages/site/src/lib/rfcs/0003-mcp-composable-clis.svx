@@ -14,6 +14,7 @@ scores:
   risk: { value: 3, why: 'worst case is boilerplate, not breakage' }
   maturity: { value: 2, why: 'pattern exists piecemeal, first target not landed' }
   leverage: { value: 8, why: 'every future integration inherits both surfaces by construction' }
+  taste: { value: 5, why: 'the contract choice took taste, each integration after it is mechanical' }
 supersedes: null
 supersededBy: null
 ---

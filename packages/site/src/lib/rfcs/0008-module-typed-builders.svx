@@ -14,6 +14,7 @@ scores:
   risk: { value: 3, why: 'failures surface at eval time, immediately' }
   maturity: { value: 5, why: 'wrapPackage landed typed, the remaining builders have not' }
   leverage: { value: 7, why: 'each migrated builder gives every caller the same guarantees' }
+  taste: { value: 4, why: 'the pattern is set, migrating each builder is mechanical' }
 supersedes: null
 supersededBy: null
 description: 'Type the argument surface of repo-owned builders in `lib/build/` with the NixOS module system, so defaults, argument merging, typo rejection, and an introspectable schema all come from one declaration.'

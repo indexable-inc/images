@@ -13,6 +13,8 @@ export type ScoreDimension = {
   // Axis endpoint words, low to high.
   low: string;
   high: string;
+  // What the axis really measures; rendered as the legend.
+  meaning: string;
 };
 
 // An item plotted on a ScoreChart. `label` is the short mark label (an RFC

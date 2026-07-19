@@ -14,6 +14,7 @@ scores:
   risk: { value: 4, why: 'a fork patch to the core fetcher that upstream may never take' }
   maturity: { value: 6, why: 'patch and example landed in the nix-ix series' }
   leverage: { value: 6, why: 'any flake input can grow structured-history consumers' }
+  taste: { value: 4, why: 'design settled in review, implementation is mechanical' }
 supersedes: null
 supersededBy: null
 description: 'Git inputs opt into `exportHistory = true` and evaluation sees `inputs.foo.history`: a deterministic, depth-bounded list of commits (rev, parents, author, message, optionally paths touched), cached by rev, never in lock files. Changelogs become a pure function of a locked input.'

@@ -14,6 +14,7 @@ scores:
   risk: { value: 2, why: 'analysis document, worst case is wasted reading' }
   maturity: { value: 7, why: 'the machinery it documents is in daily use' }
   leverage: { value: 5, why: 'keeps the fork loop healthy, which everything vendored rides on' }
+  taste: { value: 6, why: 'judging which practices deserve adoption is the tasteful part' }
 supersedes: null
 supersededBy: null
 description: 'The de-fork patch machinery benchmarked against Debian DEP-3, Yocto, the kernel/b4 workflow, Gerrit, jujutsu, and friends: the format/DAG/rerere core already matches or exceeds the state of the art. Three adoptions, reasoned rejections for the rest.'

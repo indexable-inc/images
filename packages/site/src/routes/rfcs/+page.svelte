@@ -38,10 +38,9 @@
 
 <h2>Map</h2>
 <p>
-  Every RFC scores itself 1-10 in frontmatter along six axes: ambition (incremental to moonshot),
-  impact, effort, risk, maturity (rough to battle-tested), and leverage (one-off to flywheel).
-  Every score carries a one-clause why, so a number you disagree with is a PR away from a better
-  one. Pick any two axes; click a dot to read the RFC.
+  Every RFC scores itself 1-10 in frontmatter along the axes defined below, and every score
+  carries a one-clause why, so a number you disagree with is a PR away from a better one. Pick
+  any two axes; click a dot to read the RFC.
 </p>
 <div class="chart-legend">
   {#each chartStatuses as status (status)}
@@ -63,6 +62,14 @@
     </li>
   {/each}
 </ul>
+
+<h2>Dimensions</h2>
+<dl class="dims">
+  {#each rfcDimensions as dim (dim.key)}
+    <dt>{dim.label} <span class="range">{dim.low} → {dim.high}</span></dt>
+    <dd>{dim.meaning}</dd>
+  {/each}
+</dl>
 
 <h2>When to write one</h2>
 <p>
@@ -168,6 +175,25 @@
     align-items: baseline;
     gap: 0.65rem;
     margin: 0.45rem 0;
+  }
+
+  .dims dt {
+    font-weight: 600;
+    margin-top: 0.7rem;
+  }
+
+  .dims .range {
+    font-family: var(--font-mono);
+    font-size: 0.75em;
+    font-weight: 400;
+    color: var(--fg-faint);
+    margin-left: 0.5rem;
+  }
+
+  .dims dd {
+    margin: 0.15rem 0 0;
+    color: var(--fg-muted);
+    max-width: 65ch;
   }
 
   .chart-legend {

@@ -20,12 +20,60 @@ export type RfcStatus = (typeof rfcStatuses)[number];
 // Score axes every RFC carries in frontmatter under `scores:`, each with a
 // 1-10 value and a why. The chart on /rfcs plots any two against each other.
 export const rfcDimensions: readonly ScoreDimension[] = [
-  { key: 'ambition', label: 'Ambition', low: 'Incremental', high: 'Moonshot' },
-  { key: 'impact', label: 'Impact', low: 'Marginal', high: 'Transformative' },
-  { key: 'effort', label: 'Effort', low: 'Weekend', high: 'Quarter' },
-  { key: 'risk', label: 'Risk', low: 'Safe', high: 'Hairy' },
-  { key: 'maturity', label: 'Maturity', low: 'Rough', high: 'Battle-tested' },
-  { key: 'leverage', label: 'Leverage', low: 'One-off', high: 'Flywheel' }
+  {
+    key: 'ambition',
+    label: 'Ambition',
+    low: 'Incremental',
+    high: 'Moonshot',
+    meaning:
+      'How far past current practice the proposal reaches: a tweak to something that exists, or a bet that changes what the repo is.'
+  },
+  {
+    key: 'impact',
+    label: 'Impact',
+    low: 'Marginal',
+    high: 'Transformative',
+    meaning: 'How much better the repo gets if this lands, summed across everyone who works in it.'
+  },
+  {
+    key: 'effort',
+    label: 'Effort',
+    low: 'Weekend',
+    high: 'Quarter',
+    meaning: 'Wall-clock and complexity to implement fully, not just to prototype.'
+  },
+  {
+    key: 'risk',
+    label: 'Risk',
+    low: 'Safe',
+    high: 'Hairy',
+    meaning:
+      'What breaks, or what the repo is stuck carrying, if the bet turns out wrong: blast radius plus reversibility.'
+  },
+  {
+    key: 'maturity',
+    label: 'Maturity',
+    low: 'Rough',
+    high: 'Battle-tested',
+    meaning:
+      'How hardened the implementation is today: unbuilt or rough sketch code at the low end, a daily-driven battle-tested system at the high end. Orthogonal to API stability.'
+  },
+  {
+    key: 'leverage',
+    label: 'Leverage',
+    low: 'One-off',
+    high: 'Flywheel',
+    meaning:
+      'Whether it compounds: a one-off improvement, a multiplier that helps everything else, or a flywheel where each use makes the next cheaper.'
+  },
+  {
+    key: 'taste',
+    label: 'Taste',
+    low: 'Mechanical',
+    high: 'Judgment',
+    meaning:
+      'How much tasteful human input the work needs. Low means the path is straightforward and an advanced model can execute it; high means the hard part is knowing what good looks like, and human judgment moves the outcome.'
+  }
 ];
 
 export type RfcMeta = {

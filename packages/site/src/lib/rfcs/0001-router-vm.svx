@@ -14,6 +14,7 @@ scores:
   risk: { value: 5, why: 'a misconfigured router bricks group egress, though blast radius stays per group' }
   maturity: { value: 1, why: 'proposal only, nothing implemented' }
   leverage: { value: 7, why: 'one primitive replaces a stream of per-feature networking asks' }
+  taste: { value: 6, why: 'deciding what ix must never learn about networking is the taste call' }
 supersedes: null
 supersededBy: null
 ---

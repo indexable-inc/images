@@ -14,6 +14,7 @@ scores:
   risk: { value: 4, why: 'staged retirement keeps old paths until the bus is proven' }
   maturity: { value: 2, why: 'otlp ingress exists, the unification does not' }
   leverage: { value: 7, why: 'every new event source rides the same bus afterward' }
+  taste: { value: 5, why: 'topology is decided, the rollout and backfill are careful but mechanical' }
 supersedes: null
 supersededBy: null
 description: Make the OpenTelemetry Collector the single ingestion bus for fleet telemetry and the agent/shell history corpus, fanning out to ClickHouse (Grafana), an S3 archive, and Mixedbread (semantic search), and retire the bespoke per-source shippers.

@@ -14,6 +14,7 @@ scores:
   risk: { value: 5, why: 'a shared home volume concentrates credentials in one place' }
   maturity: { value: 4, why: 'dev.nix and mkDev exist, the shared-volume story is partial' }
   leverage: { value: 8, why: 'every user forks the same seed, improvements flow to all fleets' }
+  taste: { value: 7, why: 'what the default environment feels like is pure taste' }
 supersedes: null
 supersededBy: null
 description: 'One `dev.nix` a user owns and forks: the default config for new VMs, a declarative fleet, and an opt-in shared SMB volume that carries one Claude/ix login across the whole fleet.'

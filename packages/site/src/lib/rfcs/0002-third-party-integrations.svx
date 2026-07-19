@@ -14,6 +14,7 @@ scores:
   risk: { value: 6, why: 'credential scoping and an ix-side control plane touch the trust model' }
   maturity: { value: 1, why: 'proposal only, nothing implemented' }
   leverage: { value: 6, why: 'one contract every future vendor integration reuses' }
+  taste: { value: 7, why: 'the contract shape and trust boundaries need human judgment, no precedent to copy' }
 supersedes: null
 supersededBy: null
 ---
