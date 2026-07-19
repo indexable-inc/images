@@ -1,7 +1,7 @@
 ---
 id: pin-freeze-postmortem
 postedAt: '2026-07-19T06:15:00-07:00'
-title: one frozen pin, five root causes: a morning of CI archaeology
+title: 'one frozen pin, five root causes: a morning of CI archaeology'
 links:
   - label: 'union gap #3669'
     href: 'https://github.com/indexable-inc/index/issues/3669'
