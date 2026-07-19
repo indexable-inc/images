@@ -1067,6 +1067,14 @@
     else throw "cross: unsupported target `${target}`";
   crossEntries = packageRegistry.crossEntriesFor system;
   crossWorkspace = ix.rustWorkspaceFor pkgs;
+  # One nixpkgs cross scope per darwin target, shared by every cross entry
+  # that builds through upstream nixpkgs packaging (nix-ix) rather than the
+  # cargo-unit lane. Lazy: rust-only cross entries never force the
+  # instantiation, so the scope costs nothing until a C/C++ cross package
+  # is actually evaluated.
+  crossNixpkgsByTarget = lib.genAttrs (lib.attrValues darwinTargetsBySystem) (
+    target: ix.darwinCrossPkgs {inherit pkgs target;}
+  );
   crossIxFor = target: let
     targetWorkspace =
       crossWorkspace
@@ -1083,6 +1091,10 @@
         isCross = true;
         inherit target;
         targetSystem = targetSystemFor target;
+        # nixpkgs' own cross scope for packages that build through upstream
+        # packaging rather than the rust unit graph (nix-ix's modular C++
+        # closure). See lib/darwin/nixpkgs-cross.nix.
+        pkgs = crossNixpkgsByTarget.${target};
       };
       wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // {isCross = true;});
     };
