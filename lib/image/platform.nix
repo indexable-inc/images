@@ -589,9 +589,15 @@ in {
       # which stays on the rootfs and is not affected by this.
       tmp = {
         useTmpfs = true;
-        # No-op when useTmpfs is on, but keeps /tmp clean if an image
-        # ever sets useTmpfs = false explicitly.
-        cleanOnBoot = true;
+        # Do NOT set cleanOnBoot here. It is not a no-op under useTmpfs:
+        # nixpkgs nixos/modules/system/boot/tmp.nix emits
+        # `D! /tmp 1777 root root` for cleanOnBoot unconditionally, so
+        # systemd-tmpfiles-setup.service deletes the CONTENTS of /tmp
+        # partway through boot. ix guests accept exec/shell before systemd
+        # activation settles (ENG-5440), so early workload writes to /tmp
+        # were destroyed mid-run: SQLite "disk I/O error" + ENOENT on a
+        # near-empty tmpfs (ix#7905, ix#7908). A fresh tmpfs per boot has
+        # nothing to clean; the rule only ever deletes live data.
       };
     };
 
