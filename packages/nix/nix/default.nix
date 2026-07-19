@@ -307,6 +307,10 @@ let
     testDaemon = package.components.nix-cli;
   };
   buildStatus = focusedFunctionalTest {name = "build-status";};
+  # Patch 0024 regression coverage: the upstream relative-paths lock file
+  # test now asserts sparse child-lock semantics (stale copied nodes refresh
+  # from the child's own flake.lock; in-sync locks stay byte-identical).
+  sparseLocks = focusedFunctionalTest {name = "relative-paths-lockfile";};
 in
   package.overrideAttrs (old: {
     passthru =
@@ -320,7 +324,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // lib.optionalAttrs (!isCross) {
-            inherit autoGcInterrupt buildStatus daemonSignal smoke;
+            inherit autoGcInterrupt buildStatus daemonSignal smoke sparseLocks;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {
