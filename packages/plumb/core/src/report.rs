@@ -103,8 +103,16 @@ pub struct Stage {
     pub builtin: bool,
     /// Exit status (128+signal for signal deaths, 127 for not found).
     pub status: i32,
+    /// Wall-clock start, unix epoch milliseconds.
+    pub started_at_ms: u64,
+    /// Wall-clock end, unix epoch milliseconds.
+    pub ended_at_ms: u64,
     /// Wall time of this stage in milliseconds.
     pub duration_ms: u64,
+    /// CPU time in user mode, milliseconds (rusage; 0 for builtins).
+    pub user_ms: u64,
+    /// CPU time in kernel mode, milliseconds (rusage; 0 for builtins).
+    pub sys_ms: u64,
     /// Captured stdout of this stage. For stage K, this is also exactly what
     /// stage K+1 received on stdin.
     pub stdout: Capture,
@@ -140,6 +148,10 @@ pub struct Report {
     pub substitutions: Vec<Self>,
     /// Run ids of `&` background items this run started.
     pub background_started: Vec<u64>,
+    /// Wall-clock start of the run, unix epoch milliseconds.
+    pub started_at_ms: u64,
+    /// Wall-clock end of the run, unix epoch milliseconds.
+    pub ended_at_ms: u64,
     /// Wall time of the whole run in milliseconds.
     pub duration_ms: u64,
     /// When the run aborted early (unset variable, failed glob, redirect
@@ -162,6 +174,14 @@ impl Report {
     pub fn stages(&self) -> impl Iterator<Item = &Stage> {
         self.pipelines.iter().flat_map(|p| p.stages.iter())
     }
+}
+
+/// Wall clock now, unix epoch milliseconds.
+#[must_use]
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, duration_millis)
 }
 
 /// Duration in whole milliseconds without a fallible narrowing conversion.

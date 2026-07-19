@@ -9,7 +9,6 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{PipeReader, PipeWriter, Read, Write};
-use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread::JoinHandle;
@@ -171,6 +170,7 @@ struct Running {
     stderr: StageStream,
     stderr_merged: bool,
     spawned_at: Instant,
+    started_at_ms: u64,
 }
 
 fn open_sink(sink: &FileSink) -> Result<File, Error> {
@@ -232,6 +232,7 @@ pub fn run_pipeline(
                     stderr: StageStream::Ready(Capture::new(0)),
                     stderr_merged: false,
                     spawned_at: Instant::now(),
+                    started_at_ms: crate::report::now_ms(),
                 }
             }
             StageSpec::Quiet { status, argv } => Running {
@@ -243,6 +244,7 @@ pub fn run_pipeline(
                 stderr: StageStream::Ready(Capture::new(0)),
                 stderr_merged: false,
                 spawned_at: Instant::now(),
+                started_at_ms: crate::report::now_ms(),
             },
             StageSpec::External(spec) => spawn_external(
                 *spec,
@@ -257,15 +259,16 @@ pub fn run_pipeline(
     }
 
     let mut result_stages = Vec::with_capacity(count);
-    for (position, mut stage) in running.into_iter().enumerate() {
-        let status = match stage.child.as_mut() {
-            Some(child) => {
-                let exit = child.wait().context(IoSnafu)?;
-                exit.code()
-                    .or_else(|| exit.signal().map(|sig| 128 + sig))
-                    .unwrap_or(1)
-            }
-            None => stage.fixed_status,
+    for (position, stage) in running.into_iter().enumerate() {
+        let wait = match stage.child.as_ref() {
+            // Already reaped by wait4; dropping the Child afterwards is
+            // fine (std's Drop neither waits nor kills).
+            Some(child) => wait4_child(child)?,
+            None => WaitOutcome {
+                status: stage.fixed_status,
+                user_ms: 0,
+                sys_ms: 0,
+            },
         };
         let stdout = stage.stdout.finish();
         let stderr = stage.stderr.finish();
@@ -274,27 +277,35 @@ pub fn run_pipeline(
             index: first_stage_index + position,
             argv: stage.argv,
             builtin: stage.builtin,
-            status,
+            status: wait.status,
+            started_at_ms: stage.started_at_ms,
+            ended_at_ms: crate::report::now_ms(),
             duration_ms: crate::report::duration_millis(duration),
+            user_ms: wait.user_ms,
+            sys_ms: wait.sys_ms,
             stdout,
             stderr,
             stderr_merged: stage.stderr_merged,
         });
     }
 
-    // Pipefail, except a stage killed by SIGPIPE (141): that is the normal
-    // fate of an upstream whose reader finished (`yes | head`), and calling
-    // it a failure would fail almost every early-exiting pipeline.
-    let status = result_stages
-        .iter()
-        .rev()
-        .map(|stage| stage.status)
-        .find(|status| *status != 0 && *status != 128 + libc::SIGPIPE)
-        .unwrap_or(0);
+    let status = pipefail_status(&result_stages);
     Ok(PipelineRun {
         stages: result_stages,
         status,
     })
+}
+
+/// Pipefail, except a stage killed by SIGPIPE (141): that is the normal
+/// fate of an upstream whose reader finished (`yes | head`), and calling
+/// it a failure would fail almost every early-exiting pipeline.
+fn pipefail_status(stages: &[Stage]) -> i32 {
+    stages
+        .iter()
+        .rev()
+        .map(|stage| stage.status)
+        .find(|status| *status != 0 && *status != 128 + libc::SIGPIPE)
+        .unwrap_or(0)
 }
 
 fn spawn_external(
@@ -393,6 +404,7 @@ fn spawn_external(
             stderr: StageStream::spawn(err_reader, stderr_forward, config.capture_limit),
             stderr_merged: spec.stderr_to_stdout,
             spawned_at,
+            started_at_ms: crate::report::now_ms(),
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let mut stderr = Capture::new(config.capture_limit);
@@ -408,6 +420,7 @@ fn spawn_external(
                 stderr: StageStream::Ready(stderr),
                 stderr_merged: false,
                 spawned_at,
+                started_at_ms: crate::report::now_ms(),
             })
         }
         Err(error) => Err(Error::Io { source: error }),
@@ -429,4 +442,52 @@ fn restore_default_signals(command: &mut Command) {
             Ok(())
         });
     }
+}
+
+/// What `wait4` reports for a finished child.
+struct WaitOutcome {
+    status: i32,
+    user_ms: u64,
+    sys_ms: u64,
+}
+
+/// Timeval to whole milliseconds.
+fn timeval_millis(time: libc::timeval) -> u64 {
+    let seconds = u64::try_from(time.tv_sec).unwrap_or(0);
+    let micros = u64::try_from(time.tv_usec).unwrap_or(0);
+    seconds.saturating_mul(1000).saturating_add(micros / 1000)
+}
+
+/// Reap a child with `wait4(2)` so its rusage (user/kernel CPU time) comes
+/// back with the exit status; `Child::wait` would discard it.
+fn wait4_child(child: &Child) -> Result<WaitOutcome, Error> {
+    let pid = i32::try_from(child.id()).map_err(|_| Error::Io {
+        source: std::io::Error::other("pid out of i32 range"),
+    })?;
+    let mut status: libc::c_int = 0;
+    // SAFETY: plain wait4 on a pid we spawned; rusage is a plain-old-data
+    // out-parameter.
+    let mut rusage: libc::rusage = unsafe { std::mem::zeroed() };
+    loop {
+        let reaped = unsafe { libc::wait4(pid, &raw mut status, 0, &raw mut rusage) };
+        if reaped == pid {
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(Error::Io { source: error });
+        }
+    }
+    let exit = if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else if libc::WIFSIGNALED(status) {
+        128 + libc::WTERMSIG(status)
+    } else {
+        1
+    };
+    Ok(WaitOutcome {
+        status: exit,
+        user_ms: timeval_millis(rusage.ru_utime),
+        sys_ms: timeval_millis(rusage.ru_stime),
+    })
 }
