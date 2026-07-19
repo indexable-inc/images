@@ -45,7 +45,7 @@
   {
     style = {
       text = ''
-        Be shokunin: concise, readable, clean. Match nearby style. Name
+        Keep code and prose concise, readable, clean. Match nearby style. Name
         things by what they add to their scope. Comment why, not what. Type
         Python boundaries and run the repo's type checker on package edits.
       '';
@@ -125,6 +125,20 @@
       reason = ''
         Fixes shipped for unreproduced reports; a reboot was prescribed from
         a stale diagnosis. Absorbs feasibilityClaims (index#3594).
+      '';
+    };
+  }
+  {
+    buildObservability = {
+      tags = ["claude-code"];
+      text = ''
+        `nix store builds --json` lists every in-flight daemon build
+        machine-wide (patched nix; confirm with `nix store builds --help`).
+      '';
+      reason = ''
+        Agents guessed at daemon state after observability shipped (nix
+        2.34.7+ix). Also the only runtime-tagged rule; the provider-prompts
+        tests assert the tag axis through it.
       '';
     };
   }
