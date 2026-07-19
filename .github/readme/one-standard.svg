@@ -23,8 +23,8 @@
       <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
     </marker>
   </defs>
-  <path class="frame" d="M 126 14 H 711 Q 719 14 719 22 V 158 Q 719 166 711 166 H 9 Q 1 166 1 158 V 22 Q 1 14 9 14 H 22"/>
-  <text x="28" y="18.5">[-] one bar</text>
+  <path class="frame" d="M 160 14 H 711 Q 719 14 719 22 V 158 Q 719 166 711 166 H 9 Q 1 166 1 158 V 22 Q 1 14 9 14 H 22"/>
+  <text x="28" y="18.5">[-] one standard</text>
   <text class="m cap" x="48" y="68">CLIPPY</text>
   <rect class="ink" x="160" y="57" width="360" height="12"/>
   <text class="m" x="672" y="68" text-anchor="end">every crate</text>

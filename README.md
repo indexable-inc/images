@@ -26,10 +26,10 @@ Patch a compiler, fix a library, tighten a lint: every package in the graph rebu
 
 Patches live here, next to the code that needs them. A slow, wrong, or abandoned upstream never blocks a fix, and no dependency has a bus factor outside the repo.
 
-### One bar for everything
+### One standard for everything
 
 <p align="center">
-  <img src=".github/readme/one-bar.svg" alt="custom clippy lints, cve scans, and license checks cover the whole graph" width="720">
+  <img src=".github/readme/one-standard.svg" alt="custom clippy lints, cve scans, and license checks cover the whole graph" width="720">
 </p>
 
 Security scans, license checks, custom Clippy lints: every rule runs over the whole graph. Add a rule and every package meets it, in the same change.
@@ -52,7 +52,7 @@ CI builds the graph for Linux, cross-compiles it for macOS, and pushes to `cache
 
 ## The flywheel
 
-These compound. Better tools make agents more capable; capable agents make sweeping changes cheap; cheap changes keep everything at the newest bar; the improved tools feed straight back in. The repo gets easier to improve the more it improves.
+These compound. Better tools make agents more capable; capable agents make sweeping changes cheap; cheap changes keep everything at the newest standard; the improved tools feed straight back in. The repo gets easier to improve the more it improves.
 
 ## Layout
 
