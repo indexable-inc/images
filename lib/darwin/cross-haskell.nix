@@ -156,7 +156,14 @@
         if ./Setup register --gen-pkg-config=cross-pkg.conf 2>/dev/null; then
           mkdir -p "$out/lib/package.conf.d"
           if [ -d cross-pkg.conf ]; then
-            cp cross-pkg.conf/*.conf "$out/lib/package.conf.d/"
+            # Multi-library packages (internal sub-libraries: attoparsec,
+            # vector) yield a directory with one conf per library, not all
+            # of them suffixed .conf -- normalize, ghc-pkg recache only
+            # reads *.conf.
+            for conf in cross-pkg.conf/*; do
+              base=$(basename "$conf")
+              cp "$conf" "$out/lib/package.conf.d/''${base%.conf}.conf"
+            done
           elif [ -f cross-pkg.conf ]; then
             cp cross-pkg.conf "$out/lib/package.conf.d/${hsDrv.pname}-${hsDrv.version}.conf"
           fi
