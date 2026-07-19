@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 19 Jul 2026 02:14:50 -0700
+Subject: [PATCH] libexpr: gate lazy input mounting behind an off-by-default
+ lazy-trees setting
+
+Upstream master enables lazy input mounting unconditionally. Our fork
+keeps the mechanism but defaults it off, per indexable-inc/index#3645:
+roberth's determinism review of NixOS/nix#13225 (randomness or
+fingerprints as placeholders make the language non-deterministic and
+impure; path equality and ordering must remain observably identical;
+his rope-string lazy-hashing alternative remains unbuilt) plus the
+toString-without-context wrinkle mean that flipping the fleet to lazy
+evaluation is a separate decision with its own drv-hash and eval-result
+equivalence sweeps. This patch only makes the capability available
+behind the new EvalSettings boolean `lazy-trees`.
+
+With lazy-trees = false, the default:
+- mountInput() copies eagerly (FetchMode::Copy), exactly like the
+  2.34.7 base;
+- ensureLazyPathCopied()/ensureLazyPathsCopied() return immediately,
+  since everything was already copied at mount time;
+- realiseContext() and builtins.storePath keep the eager ensureValid()
+  and ensurePath() calls even for mounted paths (inputs are mounted on
+  storeFS in both modes, so checking mount presence alone would skip
+  validity checks the base performed);
+- the getFlake discarded-context compatibility lookup is inert, because
+  the materialization it relies on is itself gated (with eager copying
+  the store path is physically present and the base code path already
+  handled it).
+
+Off means off: the only deltas against the base are behavior-neutral
+refactors, verified by byte-identical drvPaths on index's own attrs
+(indexable-inc/index#3645 records the validation).
+
+With lazy-trees = true, inputs mount at their final content-addressed
+store paths (hashed via dry run at mount time, so paths, hashes, and
+lock files match eager mode by construction) and materialize only when
+something forces them.
+
+Refs indexable-inc/index#3645
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/libexpr/include/nix/expr/eval-settings.hh b/src/libexpr/include/nix/expr/eval-settings.hh
+index d9dba95..c787475 100644
+--- a/src/libexpr/include/nix/expr/eval-settings.hh
++++ b/src/libexpr/include/nix/expr/eval-settings.hh
+@@ -296,6 +296,34 @@ struct EvalSettings : Config
+             Intermediate results are not cached.
+         )"};
+ 
++    Setting<bool> lazyTrees{
++        this,
++        false,
++        "lazy-trees",
++        R"(
++            If set to true, flake inputs are not copied to the Nix store
++            eagerly. Instead the evaluator computes the store path and NAR
++            hash of each input up front (so paths, hashes and lock files
++            are byte-identical to eager mode) and mounts the input's
++            source tree at that store path inside the evaluator. The
++            store object is only materialized on demand, when something
++            actually forces it: instantiating a derivation that
++            references the path, `builtins.storePath`, IFD, and similar.
++
++            This avoids the per-evaluation cost of copying whole source
++            trees (such as large monorepo checkouts) into the store.
++
++            Strings that carry a lazy store path but whose context has
++            been discarded (for example via `builtins.toString` on a
++            path followed by `builtins.unsafeDiscardStringContext`, or
++            other context-dropping tricks) refer to a path that may not
++            exist on disk until something forces the copy. Such
++            derivations were always unsound; with lazy trees the failure
++            can surface earlier, as a missing store path at build time.
++
++            This is off by default for now.
++        )"};
++
+     Setting<bool> ignoreExceptionsDuringTry{
+         this,
+         false,
+diff --git a/src/libexpr/paths.cc b/src/libexpr/paths.cc
+index acd9ad3..a4316c8 100644
+--- a/src/libexpr/paths.cc
++++ b/src/libexpr/paths.cc
+@@ -22,6 +22,13 @@ SourcePath EvalState::storePath(const StorePath & path)
+ 
+ void EvalState::ensureLazyPathCopied(const StorePath & path)
+ {
++    /* With lazy-trees disabled every input was copied to the store when
++       it was mounted, so there is nothing left to materialize. Returning
++       early keeps the disabled mode byte-for-byte identical to the
++       behavior before this patch series. */
++    if (!settings.lazyTrees)
++        return;
++
+     if (settings.readOnlyMode)
+         return;
+ 
+@@ -61,14 +68,17 @@ void EvalState::ensureLazyPathsCopied(const NixStringContext & context)
+ StorePath
+ EvalState::mountInput(fetchers::Input & input, const fetchers::Input & originalInput, ref<SourceAccessor> accessor)
+ {
+-    /* To mount the input, dryRun is sufficient. We still compute the narHash (to check for mismatches) and the store
+-       path to figure out where to mount it. TODO: This could be relaxed in the future by making outPath and narHash
++    /* With lazy-trees enabled, dryRun is sufficient to mount the input.
++       We still compute the narHash (to check for mismatches) and the store
++       path to figure out where to mount it, so paths, hashes and lock files
++       do not depend on the setting. TODO: This could be relaxed in the future by making outPath and narHash
+        lazier. Good code that doesn't do `toString ./.` or otherwise inspects the outPath string and only uses it for
+        doing relative imports does not even require computing the store path. That is a big invasive change though and
+        would require having a special "LazyStorePathString" thunk. narHash also doesn't need to be computed eagerly in
+        case it's not actually specified (like during local development with a dirty tree) - in that case narHash could
+        also become a lazy app/thunk that shares the state with the storePath delayed computation. */
+-    auto [storePath, narHash] = fetchToStore2(fetchSettings, *store, accessor, FetchMode::DryRun, input.getName());
++    auto [storePath, narHash] = fetchToStore2(
++        fetchSettings, *store, accessor, settings.lazyTrees ? FetchMode::DryRun : FetchMode::Copy, input.getName());
+ 
+     allowPath(storePath); // FIXME: should just whitelist the entire virtual store
+ 
+diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
+index 8336248..3f7dc8a 100644
+--- a/src/libexpr/primops.cc
++++ b/src/libexpr/primops.cc
+@@ -92,7 +92,7 @@ StringMap EvalState::realiseContext(const NixStringContext & context, StorePathS
+                     /* If the path happens to be mounted on the storeFS, that means it's lazy path string and would get
+                        copied to the store on-demand (when referenced in a derivation). The string is equal to final
+                        store path where the store object would end up (the path is hashed before mounting). */
+-                    if (!storeFS->getMount(CanonPath(store->printStorePath(o.path))))
++                    if (!settings.lazyTrees || !storeFS->getMount(CanonPath(store->printStorePath(o.path))))
+                         ensureValid(o.path);
+                     if (maybePathsOut)
+                         maybePathsOut->emplace(o.path);
+@@ -1951,7 +1951,8 @@ static void prim_storePath(EvalState & state, const PosIdx pos, Value ** args, V
+     if (!state.store->isInStore(sourcePath.path.abs()))
+         state.error<EvalError>("path '%1%' is not in the Nix store", sourcePath).atPos(pos).debugThrow();
+     auto storePath = state.store->toStorePath(sourcePath.path.abs()).first;
+-    if (!state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath))) && !settings.readOnlyMode)
++    if (!(state.settings.lazyTrees && state.storeFS->getMount(CanonPath(state.store->printStorePath(storePath))))
++        && !settings.readOnlyMode)
+         state.store->ensurePath(storePath);
+     context.insert(NixStringContextElem::Opaque{.path = storePath});
+     v.mkString(sourcePath.path.abs(), context, state.mem);

@@ -109,6 +109,32 @@
     {
       "patch": "0024-libflake-defer-to-the-child-lock-for-relative-path-f.patch",
       "deps": []
+    },
+    {
+      "patch": "0025-libexpr-Add-a-way-to-collect-string-context-from-Val.patch",
+      "deps": []
+    },
+    {
+      "patch": "0026-Don-t-copy-flakes-to-the-store-unnecessarily.patch",
+      "deps": []
+    },
+    {
+      "patch": "0027-libexpr-Make-hash-mismatches-while-copying-lazy-path.patch",
+      "deps": [
+        "0026-Don-t-copy-flakes-to-the-store-unnecessarily.patch"
+      ]
+    },
+    {
+      "patch": "0028-libexpr-Handle-lazy-paths-in-builtins.storePath-bett.patch",
+      "deps": [
+        "0026-Don-t-copy-flakes-to-the-store-unnecessarily.patch"
+      ]
+    },
+    {
+      "patch": "0029-libexpr-gate-lazy-input-mounting-behind-an-off-by-de.patch",
+      "deps": [
+        "0028-libexpr-Handle-lazy-paths-in-builtins.storePath-bett.patch"
+      ]
     }
   ]
 }

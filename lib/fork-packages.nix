@@ -620,6 +620,42 @@
           upstream = "hold";
           reason = "Eval/lock-time sparse lock semantics for relative path inputs, the scoped start of the sparseNodes plan (NixOS/nix#7730; indexable-inc/index#3627). Hold: humans submit Nix patches upstream per NixOS/nix#15984, and the sparseNodes migration should land via the upstream plan, not a cold fork PR.";
         };
+        # 0025-0028: lazy trees (indexable-inc/index#3645), vendored as the
+        # variant upstream actually merged to master (NixOS/nix#15711 plus its
+        # two post-merge fixes), not the closed lazy-trees-v2 PR
+        # (NixOS/nix#13225) and not Determinate's random-virtual-path
+        # implementation: roberth rejected randomness/fingerprint placeholders
+        # as impure (path equality and ordering must stay observably
+        # identical; his rope-string lazy-hashing alternative is unbuilt), and
+        # #13225 was closed 2026-07-16 pointing at #15711 as the mergeable
+        # subset. Determinate's own v2.35.1 tree has dropped the
+        # random-path implementation and rides the same mechanism. All four
+        # are already on upstream master; drop when the base reaches 2.35+.
+        "0025-libexpr-Add-a-way-to-collect-string-context-from-Val.patch" = {
+          upstream = "hold";
+          reason = "Backports upstream 569ee752c (prerequisite of NixOS/nix#15711, merged to master 2026-04-27); drop when the base reaches a release containing it (2.35+).";
+        };
+        "0026-Don-t-copy-flakes-to-the-store-unnecessarily.patch" = {
+          upstream = "hold";
+          reason = "Backports upstream 891ef140b (NixOS/nix#15711, merged to master 2026-04-27); drop when the base reaches a release containing it (2.35+).";
+        };
+        "0027-libexpr-Make-hash-mismatches-while-copying-lazy-path.patch" = {
+          upstream = "hold";
+          reason = "Backports upstream 8ffda0826 (NixOS/nix#15950, post-merge fix to #15711); drop when the base reaches a release containing it (2.35+).";
+        };
+        "0028-libexpr-Handle-lazy-paths-in-builtins.storePath-bett.patch" = {
+          upstream = "hold";
+          reason = "Backports upstream 933f3140b (NixOS/nix#16078, post-merge fix to #15711); drop when the base reaches a release containing it (2.35+).";
+        };
+        # 0029: our divergence from upstream master, which enables lazy
+        # mounting unconditionally. The off-by-default `lazy-trees` setting
+        # keeps the fork byte-identical to eager evaluation unless opted in;
+        # flipping the fleet on is a separate decision with its own drv-hash
+        # and eval-result equivalence sweeps (indexable-inc/index#3645).
+        "0029-libexpr-gate-lazy-input-mounting-behind-an-off-by-de.patch" = {
+          upstream = "hold";
+          reason = "Fork policy gate for the 0025-0028 backports (indexable-inc/index#3645): upstream ships the behavior unconditionally, we default it off pending fleet-wide equivalence sweeps. Retire together with the backports when the base reaches 2.35+.";
+        };
       };
     }
     {
@@ -725,8 +761,7 @@
         "0001-tokenizer-accept-underscore-digit-separators-in-nume.patch" = {
           upstream = "hold";
           reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
-        };
-      };
+        };      };
     }
   ];
 }

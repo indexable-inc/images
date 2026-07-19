@@ -22,7 +22,11 @@
 # build-observability series (patches 0003..0009): behind an experimental
 # feature of that name, every active build/substitution goal writes a JSON
 # status file under `<nixStateDir>/status/`, readable daemonlessly via the
-# new `nix store builds [--json]` command. The fork's
+# new `nix store builds [--json]` command. Patches 0025-0029 carry the lazy
+# trees backport (NixOS/nix#15711 plus its post-merge fixes) behind an
+# off-by-default `lazy-trees` eval setting: flake inputs mount at their
+# content-addressed store paths and only materialize when forced
+# (indexable-inc/index#3645). The fork's
 # `codex/flake-check-eval-cache` branch (draft PR indexable-inc/nix#1) is
 # deliberately excluded: it is self-declared WIP, untested, and incomplete.
 let
