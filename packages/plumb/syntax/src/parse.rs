@@ -5,8 +5,8 @@
 use snafu::Snafu;
 
 use crate::ast::{
-    AndOr, AndOrTail, Assign, Command, Connector, Item, Part, Pipeline, Program, RedirOp,
-    Redirect, Span, Word,
+    AndOr, AndOrTail, Assign, Command, Connector, Item, Part, PathSeg, Pipeline, Program,
+    RedirOp, Redirect, Span, Word,
 };
 
 /// Parse failure: an unsupported construct or malformed input, with the byte
@@ -482,7 +482,7 @@ impl Parser<'_> {
                         None | Some(' ' | '\t' | '\n' | ';' | '|' | '&' | '<' | '>' | '/') => {
                             acc.push_part(Part::Var {
                                 name: "HOME".to_owned(),
-                                indices: Vec::new(),
+                                path: Vec::new(),
                                 span: Span {
                                     start,
                                     end: self.byte_pos(),
@@ -584,36 +584,48 @@ impl Parser<'_> {
                     .to_owned(),
             );
         }
-        let mut indices = Vec::new();
-        while self.peek() == Some('[') {
-            if indices.len() == 2 {
-                return self.fail_at(
-                    start,
-                    "run references take at most two indexes: ${o[run][stage]}".to_owned(),
-                );
-            }
-            self.pos += 1;
-            let negative = self.peek() == Some('-');
-            if negative {
-                self.pos += 1;
-            }
-            let mut digits = String::new();
-            while let Some(c) = self.peek() {
-                if c.is_ascii_digit() {
-                    digits.push(c);
+        let mut path = Vec::new();
+        loop {
+            match self.peek() {
+                Some('[') => {
                     self.pos += 1;
-                } else {
-                    break;
+                    let negative = self.peek() == Some('-');
+                    if negative {
+                        self.pos += 1;
+                    }
+                    let mut digits = String::new();
+                    while let Some(c) = self.peek() {
+                        if c.is_ascii_digit() {
+                            digits.push(c);
+                            self.pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let (Ok(magnitude), Some(']')) = (digits.parse::<i64>(), self.peek())
+                    else {
+                        return self.fail_at(
+                            start,
+                            "run reference indexes are integers: ${o[7]} or ${o[-1]}"
+                                .to_owned(),
+                        );
+                    };
+                    self.pos += 1;
+                    path.push(PathSeg::Index(if negative { -magnitude } else { magnitude }));
                 }
+                Some('.') => {
+                    self.pos += 1;
+                    let field = self.ident_run();
+                    if field.is_empty() {
+                        return self.fail_at(
+                            start,
+                            "expected a field name after `.` in a run reference".to_owned(),
+                        );
+                    }
+                    path.push(PathSeg::Field(field));
+                }
+                _ => break,
             }
-            let (Ok(magnitude), Some(']')) = (digits.parse::<i64>(), self.peek()) else {
-                return self.fail_at(
-                    start,
-                    "run reference indexes are integers: ${o[7]} or ${o[-1]}".to_owned(),
-                );
-            };
-            self.pos += 1;
-            indices.push(if negative { -magnitude } else { magnitude });
         }
         if self.peek() != Some('}') {
             return self.fail_at(
@@ -625,7 +637,7 @@ impl Parser<'_> {
         self.pos += 1;
         acc.push_part(Part::Var {
             name,
-            indices,
+            path,
             span: Span {
                 start,
                 end: self.byte_pos(),
@@ -682,7 +694,7 @@ impl Parser<'_> {
                 self.pos += 2;
                 acc.push_part(Part::Var {
                     name: "?".to_owned(),
-                    indices: Vec::new(),
+                    path: Vec::new(),
                     span: Span {
                         start,
                         end: self.byte_pos(),
@@ -695,7 +707,7 @@ impl Parser<'_> {
                 let name = self.ident_run();
                 acc.push_part(Part::Var {
                     name,
-                    indices: Vec::new(),
+                    path: Vec::new(),
                     span: Span {
                         start,
                         end: self.byte_pos(),
@@ -724,7 +736,7 @@ fn unquoted_literal(word: &Word) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, Command, Connector, Part, RedirOp};
+    use super::{parse, Command, Connector, Part, PathSeg, RedirOp};
 
     fn one_command(src: &str) -> Command {
         let program = parse(src).expect("should parse");
@@ -821,28 +833,58 @@ mod tests {
     #[test]
     fn run_references() {
         let command = one_command("echo ${o[7]} ${e[7][0]} ${s[-1]}");
-        let refs: Vec<(&str, &[i64])> = command.words[1..]
+        let refs: Vec<(&str, Vec<PathSeg>)> = command.words[1..]
             .iter()
             .map(|w| match &w.parts[0] {
-                Part::Var { name, indices, .. } => (name.as_str(), indices.as_slice()),
+                Part::Var { name, path, .. } => (name.as_str(), path.clone()),
                 other => panic!("expected var, got {other:?}"),
             })
             .collect();
         assert_eq!(
             refs,
             [
-                ("o", [7_i64].as_slice()),
-                ("e", [7_i64, 0].as_slice()),
-                ("s", [-1_i64].as_slice())
+                ("o", vec![PathSeg::Index(7)]),
+                ("e", vec![PathSeg::Index(7), PathSeg::Index(0)]),
+                ("s", vec![PathSeg::Index(-1)])
             ]
         );
     }
 
     #[test]
+    fn structured_run_paths() {
+        let command = one_command("echo ${runs[7].stages[0].stdout} ${runs[-1].status}");
+        match &command.words[1].parts[0] {
+            Part::Var { name, path, .. } => {
+                assert_eq!(name, "runs");
+                assert_eq!(
+                    path,
+                    &vec![
+                        PathSeg::Index(7),
+                        PathSeg::Field("stages".to_owned()),
+                        PathSeg::Index(0),
+                        PathSeg::Field("stdout".to_owned())
+                    ]
+                );
+            }
+            other => panic!("expected var, got {other:?}"),
+        }
+        match &command.words[2].parts[0] {
+            Part::Var { name, path, .. } => {
+                assert_eq!(name, "runs");
+                assert_eq!(
+                    path,
+                    &vec![PathSeg::Index(-1), PathSeg::Field("status".to_owned())]
+                );
+            }
+            other => panic!("expected var, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn run_reference_errors() {
         assert_parse_errors(&[
-            ("echo ${o[1][2][3]}", "at most two"),
             ("echo ${o[x]}", "integers"),
+            ("echo ${runs[1].}", "field name"),
             ("echo ${o[1}", "integers"),
             ("echo ${o[]}", "integers"),
         ]);

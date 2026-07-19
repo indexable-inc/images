@@ -32,14 +32,14 @@ pub enum Part {
         /// True when the text originated inside quotes or a backslash escape.
         quoted: bool,
     },
-    /// `$NAME` / `${NAME}` / `$?` variable reference, or an indexed run
-    /// reference `${o[7]}` / `${o[7][0]}` (braced form only).
+    /// `$NAME` / `${NAME}` / `$?` variable reference, or a run reference:
+    /// the terse `${o[7]}` / `${o[7][0]}` forms and the structured
+    /// `${runs[7].stages[0].stdout}` paths (braced form only).
     Var {
         /// Variable name (`?` for the last-status special).
         name: String,
-        /// Indexes from `${NAME[i]}` / `${NAME[i][j]}`; empty for a plain
-        /// reference. Negative values count back from the latest.
-        indices: Vec<i64>,
+        /// Path segments after the name; empty for a plain reference.
+        path: Vec<PathSeg>,
         /// Location of the reference in the source.
         span: Span,
     },
@@ -50,6 +50,15 @@ pub enum Part {
         /// Location of the substitution in the source.
         span: Span,
     },
+}
+
+/// One step of a run-reference path: `[7]` or `.stdout`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathSeg {
+    /// `[i]`: negative values count back from the latest.
+    Index(i64),
+    /// `.name`
+    Field(String),
 }
 
 /// A single shell word: the concatenation of its parts.

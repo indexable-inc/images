@@ -27,6 +27,7 @@ Every run stays addressable:
 | `${o[7]}` / `${e[7]}` / `${s[7]}` | run 7's final stdout / stderr / status |
 | `${o[7][0]}` | what pipe stage 0 printed (exactly what stage 1 consumed) |
 | `${o[-1]}`, `${o[-1][-2]}` | negative indexes count back from the latest |
+| `${runs[7].stages[0].stdout}` | structured paths, field names matching the report JSON (`output`, `status`, `argv`, `duration_ms`, `stdout_bytes`, ...) |
 | `$o` / `$e` / `$s` | the last run's stdout / stderr / status |
 | `$?` | last status, as in bash |
 
