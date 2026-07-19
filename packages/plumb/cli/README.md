@@ -2,72 +2,47 @@
 
 # plumb
 
-Ever run `cargo clippy | tail -n 5` and then wanted the 400 lines you just threw away? plumb is a shell where every run is a value. Each pipe stage's stdout and stderr are captured while they stream, the whole run becomes an inspectable report, and every stream stays addressable afterwards, so later commands reuse earlier output (including the bytes that flowed *between* pipe stages) without re-running anything. It is a Rust library first (`plumb-core`), with a reedline REPL and one-shot CLI on top, built for programs (LLM agents especially) that run commands and need what actually happened, not a scrollback.
+A simple bash for agents: every step of a pipe is observable.
 
-The syntax is a strict bash subset: everything plumb accepts pastes into bash unchanged and means the same thing there. Everything else is a loud parse error naming the construct, never a silent reinterpretation.
-
-## Runs are values
+Agents protect their context window by tailing everything: `cargo test 2>&1 | tail -n 20`. Then the answer turns out to be in the lines tail threw away, so they re-run the whole build. In plumb nothing is thrown away. `tail` still shows 20 lines, but the full stream of every pipe stage is kept and addressable, so the agent greps what it already ran instead of running it again.
 
 ```console
-plumb src> echo warn >&2; seq 1 10000 | tail -n 3
-warn
-9998
-9999
-10000
-[0] echo warn  exit 0  0ms (cpu 0+0ms)  out 0B  err 5B
-[1] seq 1 10000  exit 0  9ms (cpu 4+2ms)  out 47.7KB  err 0B
-[2] tail -n 3  exit 0  9ms (cpu 1+0ms)  out 16B  err 0B
-run 3: exit 0  ${o[3]} ${e[3]} ${s[3]}
-plumb src> echo ${o[3][1]} | head -n 1
-1
+plumb> cargo test 2>&1 | tail -n 20
+   ...the 20 lines...
+[0] cargo test  exit 101  41s (cpu 38s+2s)  out 482KB  err 0B
+[1] tail -n 20  exit 0  41s  out 891B  err 0B
+run 7: exit 101  ${o[7]} ${e[7]} ${s[7]}
+
+plumb> echo ${o[7][0]} | rg 'FAILED|panicked'    # searches all 482KB; nothing re-runs
 ```
 
-Every run stays addressable:
+That is the whole idea:
 
-| reference | value |
-| --- | --- |
-| `${o[7]}` / `${e[7]}` / `${s[7]}` | run 7's final stdout / stderr / status |
-| `${o[7][0]}` | what pipe stage 0 printed (exactly what stage 1 consumed) |
-| `${o[-1]}`, `${o[-1][-2]}` | negative indexes count back from the latest |
-| `${runs[7].stages[0].stdout}` | structured paths, field names matching the report JSON (`output`, `status`, `argv`, `stdout_bytes`, `started_at_ms`/`ended_at_ms`, wall `duration_ms` and rusage `user_ms`/`sys_ms`, ...) |
-| `$o` / `$e` / `$s` | the last run's stdout / stderr / status |
-| `$?` | last status, as in bash |
+- `${o[7]}` the final output of run 7; `${o[7][0]}` what pipe stage 0 printed; `${e[7]}` stderr; `${s[7]}` status
+- `${o[-1]}` negative indexes count back from the latest run
+- `${runs[7].stages[0].stdout_bytes}` structured fields matching the `--json` report: `status`, `argv`, wall and cpu times (`duration_ms`, `user_ms`, `sys_ms`), byte counts
+- `:runs` lists runs, `:json 7` dumps one, `:out 7 0` prints a raw stream
 
-`:runs` lists retained runs, `:json 7` dumps a run's full report (argv after expansion, per-stage status, timing, byte counts, truncation flags), `:out 7 0` prints a captured stream raw. Captures are head+tail bounded (256KiB per stream by default) with exact byte totals, so a gigabyte through a pipe costs fixed memory, and truncation is always marked, never silent.
+Memory stays bounded: each stream keeps head+tail (256KiB default) with exact byte counts, and truncation is always marked, never silent.
 
-## Strict where bash is treacherous
+## It also removes bash's footguns
 
-- Unset variable expansion is an error (no `rm -rf /$TYPO`).
-- A glob matching nothing is an error (`failglob`).
-- `pipefail` semantics, except SIGPIPE deaths (`yes | head` succeeds).
-- Expansions never word-split: `$X` is exactly one argument.
-- Unsupported bash (keywords, subshells, backticks, here-docs, fancy expansions) is a parse error with a span, so nothing runs under a wrong reading.
-- State builtins (`cd`, `export`, ...) refuse to be pipeline stages instead of silently mutating a subshell.
+- Unset variable expansion is an error (no `rm -rf /$TYPO`)
+- A glob matching nothing is an error
+- Per-stage exit codes; pipeline status is pipefail (minus SIGPIPE deaths, so `yes | head` succeeds)
+- Anything outside the subset (keywords, subshells, backticks, here-docs) is a loud parse error with a span, never a silent reinterpretation
 
-Supported: pipes, `&&` `||` `;`, redirections (`>` `>>` `<` `2>` `2>&1` `&>` `>&2`), quoting, `$VAR`/`${VAR}`, `$(...)` command substitution, globs, `~`, `NAME=v cmd` prefixes, `&` background runs, comments.
+The subset pastes into bash unchanged: pipes, `&&` `||` `;`, redirections (`>` `>>` `<` `2>` `2>&1` `&>` `>&2`), quoting, `$VAR`, `$(...)`, globs, `~`, `NAME=v cmd`, `&` background runs.
 
-## A library first
+## Embed it
 
 ```rust
 let shell = plumb_core::Shell::new(plumb_core::Config::default())?;
-let report = shell.eval("cargo clippy 2>&1 | tail -n 5")?;
-report.status;                        // pipefail status
-report.pipelines[0].stages[0].stdout  // everything tail consumed
-    .render();
-shell.eval("echo ${o[1][0]} | rg dead")?;  // reused; clippy never re-runs
-serde_json::to_string(&report)?;      // the whole run, machine-readable
+let report = shell.eval("cargo test 2>&1 | tail -n 20")?;   // Report: fully serde-serializable
+shell.eval("echo ${o[1][0]} | rg FAILED")?;                  // reuse; nothing re-runs
 ```
 
-`Shell` is a cheap cloneable handle over shared state: concurrent evals from threads (`eval_detached`) or `&` background items see each other's variables, cwd, and run history; `wait` joins them. `exit` surfaces as `Error::ExitRequested` so the embedder decides what dying means. From Elixir, `plumb-ex` (unibind) exposes the same shell with reports as JSON.
-
-One-shot and script modes stream live and exit with the run's status; `--json` prints the report instead:
-
-```console
-$ plumb -c 'echo hi | tr a-z A-Z' --json | jq .pipelines[0].stages[1].stdout.text
-"HI\n"
-$ plumb build.plumb
-$ some-generator | plumb
-```
+`Shell` is a cloneable handle over shared state, so concurrent evals (threads, `&`) share variables and history. From Elixir, `plumb-ex` exposes the same shell with reports as JSON: `{:ok, json} = Plumb.Shell.eval(shell, "make 2>&1 | tail -5")`. One-shots: `plumb -c '...'` (add `--json` for the report), scripts via `plumb file` or stdin.
 
 ## Install
 
