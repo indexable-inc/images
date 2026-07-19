@@ -87,8 +87,9 @@
   # system, not the top-level x86_64-linux one. See lib/util/patched-src.nix.
   patchedSrcFor = pkgs:
     import ./util/patched-src.nix {
-      inherit lib evalTimeSubstitutable;
+      inherit lib evalTimeSubstitutable pkgs forkPackages;
       inherit (pkgs) applyPatches;
+      patchesRoot = paths.root;
     };
   # De-forked-package mapping (name -> input / upstream URL / patch dir), the
   # single source of truth for the patched-src checks, the `.#update` fork

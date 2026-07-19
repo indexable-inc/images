@@ -15,8 +15,10 @@ let
   inherit (ix) pkgs;
   # De-forking: `clippy-src` is now upstream rust-lang/rust-clippy pinned by rev,
   # and the LLM-tuned lint series lives in ./patches (applied via the shared
-  # patched-src util). The patched tree carries the toolchain file and Cargo.lock
-  # the build reads below, exactly as the old fork tree did.
+  # patched-src util, which also appends the fork's nix-derived patches
+  # declared in lib/fork-packages.nix `derivedPatches`). The patched tree
+  # carries the toolchain file and Cargo.lock the build reads below, exactly
+  # as the old fork tree did.
   source =
     if clippy-src == null
     then throw "llm-clippy: clippy-src is required"
@@ -43,9 +45,9 @@ in
 
     src = source;
     rustToolchain = toolchain;
-    # Read the lockfile straight from the patched tree (patch 0014 tracks
-    # Cargo.lock) so a base bump + regenerated series brings dependency changes
-    # along with the source. No separately checked-in lockfile to drift.
+    # Read the lockfile straight from the patched tree (the `cargo-lock`
+    # derived patch tracks ./patches/derived/Cargo.lock) so a base bump +
+    # refreshed lockfile brings dependency changes along with the source.
     cargoLock.lockFile = source + "/Cargo.lock";
 
     nativeBuildInputs = [makeWrapper];
