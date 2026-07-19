@@ -8974,6 +8974,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "plumb-ex"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "plumb-core",
+ "rustler",
+ "serde",
+ "serde_json",
+ "unibind",
+]
+
+[[package]]
 name = "plumb-syntax"
 version = "0.1.0"
 dependencies = [

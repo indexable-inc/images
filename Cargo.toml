@@ -80,6 +80,7 @@ members = [
   "packages/nix/oci-image-builder",
   "packages/nu-py",
   "packages/plumb/cli",
+  "packages/plumb/ex",
   "packages/plumb/core",
   "packages/plumb/syntax",
   "packages/progress-style",
