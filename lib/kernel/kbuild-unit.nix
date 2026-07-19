@@ -33,6 +33,28 @@ with its generated ksymtab source, `Module.symvers` with each module's
 `.mod.c`), and every final `.ko` link; `modulesEquivalence` byte-compares
 each unit-built module against the reference build's (#3413).
 
+Sharing over the fleet cache rides `cachePushRoot` (#3413): one linkFarm
+whose runtime closure spans every unit output plus the IFD artifacts
+(plan, rendered units.nix, snapshot, skeleton). Building that root on a
+CI dispatcher enqueues ONE obligation whose recursive closure the cache
+drainer publishes -- NARs and CA realisations -- so other hosts
+substitute units instead of rebuilding, while the mass unit build itself
+runs with the per-derivation post-build hook disabled (one hook enqueue
+per unit serialized 3.6k-unit builds to a crawl under queue
+backpressure; see #3413).
+
+Plan reruns must reproduce the snapshot bit-identically or every unit
+re-executes at defconfig scale, so the plan pins down every observed
+nondeterminism carrier: the build tree always unpacks to a fixed
+directory name (DWARF comp_dir and the vdso build-id record the absolute
+build path; a name that shifted with the src derivation made the
+embedded vdso diverge from the reference's), snapshotted host tools
+under tools/ are stripped of debug info (tools/build compiles with -g,
+and objtool's .debug_line_str differed across otherwise identical plan
+builds), and the link-env dump is emitted by one bash helper with sorted
+names and printf %q quoting instead of whichever shell CONFIG_SHELL
+resolves to (its `export -p` quoting style flipped between runs).
+
 Each unit's build tree is scoped to the sources its .cmd recorded (#3412):
 compile units see their .c plus tracked headers as per-file store paths,
 the link unit adds the script-read Makefile and header trees, and archive
@@ -101,6 +123,19 @@ only to make the plan's inputs body-independent.
     export NIX_CFLAGS_COMPILE="$NIX_CFLAGS_COMPILE -frandom-seed=kbuild-unit"
   '';
 
+  # DWARF comp_dir, the vdso build-id, and objtool's .debug_line_str all
+  # record the absolute build tree path, and parts of that DWARF flow into
+  # unit inputs (the vdso .so embedded via the generated vdso-image-*.c) and
+  # the snapshot (host tools, vdso .so.dbg). Unpack to one fixed name --
+  # matching the `kbuild-tree` unit replays build in -- so those bytes agree
+  # between the plan (whose src name varies by strategy: skeletonTree vs
+  # srcTree), the reference build, and every plan rerun (#3413).
+  pinBuildTreeName = ''
+    # shell
+    mv "$sourceRoot" kbuild-tree
+    sourceRoot=kbuild-tree
+  '';
+
   buildVmlinuxAndModules = ''
     # shell
     runHook preBuild
@@ -135,6 +170,28 @@ only to make the plan's inputs body-independent.
   planCcShim = writeBashApplication {
     name = "gcc";
     text = builtins.readFile ./kbuild-plan-cc.sh;
+  };
+
+  # Deterministic emitter for the `.kbuild-unit-link-env` dump. The dump used
+  # to be `export -p` output, whose quoting style belongs to whichever shell
+  # CONFIG_SHELL resolves to and flipped across plan builds (#3413 PR A),
+  # shifting the snapshot CA and re-executing every unit. One bash helper
+  # with LC_ALL=C-sorted names and printf %q quoting owns the format instead.
+  # Inherited env is the interface: link-vmlinux.sh exports what its
+  # subprocesses need, so the helper reads its own environment. KBUILD_UNIT_*
+  # stays out: those carry plan-only shim store paths, and a snapshot that
+  # shifts with shim tweaks would re-execute every unit.
+  linkEnvVarPattern = "^(KBUILD_[A-Za-z0-9_]+|CONFIG_SHELL|CC|LD|NM|AR|OBJCOPY|OBJDUMP|READELF|STRIP|PAHOLE|RESOLVE_BTFIDS|SRCARCH|ARCH|srctree|objtree|LINUXINCLUDE|NOSTDINC_FLAGS|LDFLAGS_vmlinux|CFLAGS_vmlinux|KALLSYMS[A-Za-z0-9_]*|MAKE|HOSTCC)$";
+  linkEnvDump = writeBashApplication {
+    name = "kbuild-unit-link-env-dump";
+    text = ''
+      # shell
+      compgen -A export | LC_ALL=C sort | grep -E '${linkEnvVarPattern}' \
+        | grep -vE '^KBUILD_UNIT_' \
+        | while IFS= read -r name; do
+            printf 'export %s=%q\n' "$name" "''${!name}"
+          done
+    '';
   };
 
   # Skeleton-only linker shim: `--defsym`s the linker-script-referenced
@@ -259,11 +316,14 @@ only to make the plan's inputs body-independent.
         pname = "kbuild-unit-plan";
         version = configTarget;
         src = planSrc;
-        nativeBuildInputs = kbuildInputs ++ [nixKbuildUnit];
+        nativeBuildInputs = kbuildInputs ++ [nixKbuildUnit linkEnvDump];
         env = reproEnv // planShimEnv;
-        # Unit replays must see identical bits: no strip / patchelf over the
-        # reference vmlinux or the snapshotted host tools.
+        # Unit replays must see identical bits: no fixup strip / patchelf over
+        # the reference vmlinux or the snapshot (the targeted host-tool strip
+        # in installPhase is deliberate; fixup would also rewrite outputs the
+        # gates byte-compare).
         dontFixup = true;
+        postUnpack = pinBuildTreeName;
         # The sed below inserts a brace group after line 1; substituteInPlace
         # only replaces, and the script has no stable anchor string to
         # replace, while sed's `1a` address cannot stop matching.
@@ -287,16 +347,16 @@ only to make the plan's inputs body-independent.
           # rendered link unit can replay it (CC/LD/LINUXINCLUDE/KBUILD_* for
           # the in-script init/version-timestamp.o compile and postlink make).
           # The dump is build-created and not unit-owned, so harvest sweeps it
-          # into the generated snapshot on its own. `export -p` because make
-          # runs the script under $(CONFIG_SHELL). The KBUILD_UNIT_* shim
-          # vars match the KBUILD_ prefix but must stay out: they carry
-          # plan-only store paths, and a snapshot that shifts with shim
-          # tweaks would re-execute every unit.
+          # into the generated snapshot on its own. The helper (see
+          # linkEnvDump above) owns the selection and the canonical quoting;
+          # it is called by bare name so the patched script -- itself a
+          # snapshot member -- carries no store path.
           # `|| :` and the muted stderr keep unit replays quiet: there the
-          # dump target is a store symlink from the generated snapshot, the
-          # rewrite fails by design, and the sourced snapshot env is already
-          # identical to what the dump would produce.
-          sed -i '1a { export -p | grep -E "^(declare -x |export )(KBUILD_[A-Za-z0-9_]+|CONFIG_SHELL|CC|LD|NM|AR|OBJCOPY|OBJDUMP|READELF|STRIP|PAHOLE|RESOLVE_BTFIDS|SRCARCH|ARCH|srctree|objtree|LINUXINCLUDE|NOSTDINC_FLAGS|LDFLAGS_vmlinux|CFLAGS_vmlinux|KALLSYMS[A-Za-z0-9_]*|MAKE|HOSTCC)=" | grep -vE "^(declare -x |export )KBUILD_UNIT_" > .kbuild-unit-link-env; } 2>/dev/null || :' scripts/link-vmlinux.sh
+          # helper is off PATH and the dump target is a store symlink from
+          # the generated snapshot, the redump fails by design, and the
+          # sourced snapshot env is already identical to what the dump would
+          # produce.
+          sed -i '1a { kbuild-unit-link-env-dump > .kbuild-unit-link-env; } 2>/dev/null || :' scripts/link-vmlinux.sh
           make ${configTarget}
           runHook postConfigure
         '';
@@ -315,6 +375,18 @@ only to make the plan's inputs body-independent.
             --srctree ${planSrc} \
             --generated-out $out/generated \
             > $out/plan.json
+          # tools/build compiles host tools with -g, and their DWARF varies
+          # with the build path when the sandbox is off (#3413 PR A: objtool
+          # differed only in .debug_line_str across identical-source plan
+          # builds, re-executing every unit). The snapshot only needs the
+          # tools to run, so drop the debug sections deterministically.
+          if [ -d $out/generated/tools ]; then
+            find $out/generated/tools -type f | while IFS= read -r tool; do
+              if [ "$(head -c4 "$tool" | od -An -tx1 | tr -d ' ')" = 7f454c46 ]; then
+                strip --strip-debug "$tool"
+              fi
+            done
+          fi
           runHook postInstall
         '';
       }
@@ -331,6 +403,7 @@ only to make the plan's inputs body-independent.
         nativeBuildInputs = kbuildInputs;
         env = reproEnv;
         dontFixup = true;
+        postUnpack = pinBuildTreeName;
         configurePhase = ''
           # shell
           runHook preConfigure
@@ -381,6 +454,42 @@ only to make the plan's inputs body-independent.
       extraEnv = reproEnv;
     };
 
+    # The fleet cache lane's aggregation root (#3413): unit outputs are
+    # build-time deps of vmlinux, so pushing any final artifact would never
+    # publish the per-TU objects; this farm carries every unit output plus
+    # the eval-time IFD artifacts (plan, rendered units.nix, snapshot,
+    # skeleton) in one runtime closure. Build it on a CI dispatcher and the
+    # post-build hook enqueues ONE obligation whose recursive closure the
+    # drainer publishes -- NARs and the CA realisations another host needs to
+    # substitute instead of rebuild. The mass unit build itself must run with
+    # the per-derivation hook disabled (`--option post-build-hook ''` as a
+    # trusted user): at 3.6k units the per-drv enqueue serialized the whole
+    # build under queue backpressure (#3413 PR A).
+    cachePushRoot = pkgs.linkFarm "kbuild-unit-cache-root" (
+      [
+        {
+          name = "units";
+          path = imported.allUnits;
+        }
+        {
+          name = "units-nix";
+          path = unitsNix;
+        }
+        {
+          name = "generated";
+          path = generatedSnapshot;
+        }
+        {
+          name = "plan";
+          path = plan;
+        }
+      ]
+      ++ lib.optional (planStrategy == "skeleton") {
+        name = "skeleton";
+        path = skeletonTree;
+      }
+    );
+
     # The exit gate: the unit-composed vmlinux must be byte-identical to the
     # monolithic vmlinux from the reference build (the plan build itself for
     # ccache/full, the dedicated referenceKernel for skeleton).
@@ -417,7 +526,7 @@ only to make the plan's inputs body-independent.
   in
     imported
     // {
-      inherit plan unitsNix srcTree skeletonTree referenceKernel vmlinuxEquivalence modulesEquivalence;
+      inherit plan unitsNix srcTree skeletonTree referenceKernel cachePushRoot vmlinuxEquivalence modulesEquivalence;
     };
 in {
   inherit buildKernel;

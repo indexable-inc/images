@@ -56,11 +56,18 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
         .filter(|target| !reachable.contains(target))
         .collect();
 
-    // Thin archives resolve members at read time, so a unit's build tree
-    // needs its full transitive dep closure, not just direct deps.
-    let mut closures: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    // Thin archives resolve members by path at read time, so a consumer's
+    // build tree must materialize the archive's members, recursively through
+    // nested thin archives. Everything else a saved command reads (`ld -r`
+    // outputs, compiled objects, modpost dumps) is self-contained, so direct
+    // deps suffice. Carrying the full transitive closure instead re-linked
+    // every `.ko` after any single-module body edit: the dep list rode
+    // through `Module.symvers` to every module object (#3413).
+    let mut expansions: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut dep_sets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for &target in &reachable {
-        closure_of(target, &direct_deps, &mut closures)?;
+        let deps = unit_dep_set(target, &units, &direct_deps, &mut expansions)?;
+        dep_sets.insert(target, deps);
     }
 
     let srcarch = detect_srcarch(&units)?;
@@ -85,7 +92,7 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
             &mut entries,
             entry,
             kind,
-            &closures[target],
+            &dep_sets[target],
             &scopes[target],
             provides.get(target).map_or(&[][..], Vec::as_slice),
         );
@@ -334,12 +341,34 @@ fn resolve_member<'plan>(
     Ok(())
 }
 
-fn closure_of<'plan>(
+/// The dep units whose outputs `target`'s build tree materializes: its
+/// direct deps, plus each thin-archive dep's member expansion.
+fn unit_dep_set<'plan>(
     target: &'plan str,
+    units: &BTreeMap<&'plan str, (&'plan CmdEntry, UnitKind)>,
     direct_deps: &BTreeMap<&'plan str, BTreeSet<&'plan str>>,
-    closures: &mut BTreeMap<&'plan str, BTreeSet<&'plan str>>,
+    expansions: &mut BTreeMap<&'plan str, BTreeSet<&'plan str>>,
+) -> color_eyre::Result<BTreeSet<&'plan str>> {
+    let mut deps = BTreeSet::new();
+    for &dep in &direct_deps[target] {
+        deps.insert(dep);
+        if units[dep].1 == UnitKind::Archive {
+            archive_expansion(dep, units, direct_deps, expansions)?;
+            deps.extend(&expansions[dep]);
+        }
+    }
+    Ok(deps)
+}
+
+/// Memoized member set of one thin archive: its direct deps plus, through
+/// nested thin archives, theirs.
+fn archive_expansion<'plan>(
+    target: &'plan str,
+    units: &BTreeMap<&'plan str, (&'plan CmdEntry, UnitKind)>,
+    direct_deps: &BTreeMap<&'plan str, BTreeSet<&'plan str>>,
+    expansions: &mut BTreeMap<&'plan str, BTreeSet<&'plan str>>,
 ) -> color_eyre::Result<()> {
-    if closures.contains_key(target) {
+    if expansions.contains_key(target) {
         return Ok(());
     }
     // Iterative DFS with an explicit in-progress set for cycle detection.
@@ -347,16 +376,18 @@ fn closure_of<'plan>(
     let mut in_progress: BTreeSet<&str> = BTreeSet::new();
     while let Some((current, children_done)) = stack.pop() {
         if children_done {
-            let mut closure = BTreeSet::new();
+            let mut expansion = BTreeSet::new();
             for &dep in &direct_deps[current] {
-                closure.insert(dep);
-                closure.extend(&closures[dep]);
+                expansion.insert(dep);
+                if units[dep].1 == UnitKind::Archive {
+                    expansion.extend(&expansions[dep]);
+                }
             }
-            closures.insert(current, closure);
+            expansions.insert(current, expansion);
             in_progress.remove(current);
             continue;
         }
-        if closures.contains_key(current) {
+        if expansions.contains_key(current) {
             continue;
         }
         if !in_progress.insert(current) {
@@ -364,6 +395,9 @@ fn closure_of<'plan>(
         }
         stack.push((current, true));
         for &dep in &direct_deps[current] {
+            if units[dep].1 != UnitKind::Archive || expansions.contains_key(dep) {
+                continue;
+            }
             if in_progress.contains(dep) {
                 bail!("dependency cycle through unit {dep}");
             }
@@ -553,7 +587,7 @@ fn render_unit(
     out: &mut String,
     entry: &CmdEntry,
     kind: UnitKind,
-    closure: &BTreeSet<&str>,
+    dep_set: &BTreeSet<&str>,
     scope: &SourceScope,
     provides: &[&str],
 ) {
@@ -562,9 +596,9 @@ fn render_unit(
     writeln!(out, "      pname = {};", nix_string(&pname(target))).expect("write to string");
     writeln!(out, "      target = {};", nix_string(target)).expect("write to string");
     writeln!(out, "      kbuildCmd = {};", nix_string(&entry.cmd)).expect("write to string");
-    if !closure.is_empty() {
+    if !dep_set.is_empty() {
         writeln!(out, "      depUnits = [").expect("write to string");
-        for dep in closure {
+        for dep in dep_set {
             writeln!(out, "        units.{}", nix_string(dep)).expect("write to string");
         }
         writeln!(out, "      ];").expect("write to string");
@@ -830,7 +864,8 @@ mod tests {
         let rendered = render_units_nix(&sample_plan(), false).expect("render");
 
         // vmlinux.o must see the archives AND their members (thin archives
-        // resolve member paths at read time).
+        // resolve member paths at read time), recursively through nested
+        // thin archives.
         let aggregate = rendered
             .split("\"vmlinux.o\" = mkUnit {")
             .nth(1)
@@ -844,9 +879,55 @@ mod tests {
             "units.\"kernel/built-in.a\"",
             "units.\"kernel/fork.o\"",
         ] {
-            assert!(aggregate.contains(dep), "vmlinux.o closure missing {dep}");
+            assert!(aggregate.contains(dep), "vmlinux.o dep set missing {dep}");
         }
         assert!(rendered.contains("contentAddressed = false;"));
+    }
+
+    #[test]
+    fn trims_dep_sets_to_thin_archive_consumers() {
+        let rendered = render_units_nix(&module_plan(), true).expect("render");
+        let unit_body = |target: &str| {
+            rendered
+                .split(&format!("\"{target}\" = mkUnit {{"))
+                .nth(1)
+                .unwrap_or_else(|| panic!("{target} unit rendered"))
+                .split("};")
+                .next()
+                .expect("unit body")
+                .to_owned()
+        };
+
+        // `ld -r` outputs and modpost dumps are self-contained, so consumers
+        // stop at their direct deps: the full transitive closure re-linked
+        // every .ko after any single-module body edit, because each .ko rode
+        // through <mod>.mod.o -> Module.symvers -> every module object.
+        let ko = unit_body("drivers/net/dummy.ko");
+        for absent in [
+            "units.\"Module.symvers\"",
+            "units.\"vmlinux.o\"",
+            "units.\"fs/nfs/nfs.o\"",
+            "units.\"fs/nfs/client.o\"",
+        ] {
+            assert!(!ko.contains(absent), "dummy.ko must not carry {absent}");
+        }
+
+        let mod_o = unit_body("drivers/net/dummy.mod.o");
+        assert!(mod_o.contains("units.\"Module.symvers\""));
+        assert!(!mod_o.contains("units.\"vmlinux.o\""));
+
+        // modpost reads the self-contained vmlinux.o, never the thin
+        // archives (or their members) behind it.
+        let symvers = unit_body("vmlinux.symvers");
+        assert!(symvers.contains("units.\"vmlinux.o\""));
+        assert!(!symvers.contains("units.\"vmlinux.a\""));
+        assert!(!symvers.contains("units.\"kernel/fork.o\""));
+
+        // The vmlinux link consumes vmlinux.o and the ksymtab object only.
+        let link = unit_body("vmlinux");
+        assert!(link.contains("units.\"vmlinux.o\""));
+        assert!(!link.contains("units.\"vmlinux.a\""));
+        assert!(!link.contains("units.\"kernel/fork.o\""));
     }
 
     #[test]
