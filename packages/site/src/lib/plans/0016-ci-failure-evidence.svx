@@ -1,0 +1,43 @@
+---
+id: 0016-ci-failure-evidence
+number: '0016'
+title: Every red check carries its evidence
+status: Sketch
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 4, why: 'plumbing existing logs to where the reader is, plus an autofix lane' }
+  impact: { value: 7, why: 'every CI failure today costs a manual expedition to a runner host' }
+  effort: { value: 5, why: 'failure surfacing in the check output, autofix for the mechanical class' }
+  risk: { value: 3, why: 'worst case is a noisier check annotation' }
+  maturity: { value: 2, why: 'runner-side logs exist; the last mile to the check does not' }
+  leverage: { value: 7, why: 'every future failure, and every agent debugging one, benefits' }
+  taste: { value: 3, why: 'what to surface is obvious from the issues; the work is wiring' }
+description: 'A failing check shows the actual compiler, test, or lint output in the check itself, not an exit code pointing at a runner host. The mechanical failure class (fmt, clippy fixable, lint autofix) gets fixed by CI rather than reported by it.'
+---
+
+## Summary
+
+The recurring CI complaint is not that checks fail, it is that failures
+arrive as exit codes: flake-check prints a derivation path, the real error
+lives in a log on a fleet host, and every agent pays a manual expedition to
+find it. Meanwhile a large class of failures (formatting, fixable clippy,
+lint autofix) is mechanical: CI knows the fix and reports instead of
+applying. Two changes: every red check embeds the decisive output, and the
+mechanical class gets an autofix lane that pushes the fix to the PR branch.
+
+## Non-goals
+
+New checks or changed gates; this is legibility and automation for the
+gates that exist.
+
+## Absorbed issues
+
+[#2244](https://github.com/indexable-inc/index/issues/2244), [#2056](https://github.com/indexable-inc/index/issues/2056), [#2052](https://github.com/indexable-inc/index/issues/2052), [#2029](https://github.com/indexable-inc/index/issues/2029), [#3435](https://github.com/indexable-inc/index/issues/3435), [#3434](https://github.com/indexable-inc/index/issues/3434), [#3431](https://github.com/indexable-inc/index/issues/3431), [#3120](https://github.com/indexable-inc/index/issues/3120), [#2763](https://github.com/indexable-inc/index/issues/2763), [#2762](https://github.com/indexable-inc/index/issues/2762), [#2620](https://github.com/indexable-inc/index/issues/2620), [#2609](https://github.com/indexable-inc/index/issues/2609), [#2752](https://github.com/indexable-inc/index/issues/2752), [#2664](https://github.com/indexable-inc/index/issues/2664), [#2460](https://github.com/indexable-inc/index/issues/2460), [#2410](https://github.com/indexable-inc/index/issues/2410), [#2501](https://github.com/indexable-inc/index/issues/2501), [#2679](https://github.com/indexable-inc/index/issues/2679), [#2499](https://github.com/indexable-inc/index/issues/2499), [#2431](https://github.com/indexable-inc/index/issues/2431), [#2371](https://github.com/indexable-inc/index/issues/2371), [#2338](https://github.com/indexable-inc/index/issues/2338), [#2372](https://github.com/indexable-inc/index/issues/2372)
+
+Drafted by Claude Code (Fable) from the open-issue corpus; scores are seed
+estimates.

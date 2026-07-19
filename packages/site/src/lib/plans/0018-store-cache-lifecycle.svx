@@ -1,0 +1,43 @@
+---
+id: 0018-store-cache-lifecycle
+number: '0018'
+title: Store and cache as a managed lifecycle
+status: Sketch
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 5, why: 'turns ad hoc GC and cache-push firefighting into one managed loop' }
+  impact: { value: 7, why: 'full disks and wedged cache pushes take machines out for hours' }
+  effort: { value: 6, why: 'checkpointed GC, push admission control, and daemon failure handling' }
+  risk: { value: 5, why: 'GC that deletes the wrong roots costs rebuild days; changes need staging' }
+  maturity: { value: 3, why: 'watchdogs and manual recipes exist; the managed loop does not' }
+  leverage: { value: 7, why: 'every machine and every CI run sits on this substrate' }
+  taste: { value: 4, why: 'retention policy needs judgment; the machinery is well-understood' }
+description: 'One managed lifecycle for the Nix store and cache plane: checkpointed GC that never forces mass rebuilds, cache-push admission that cannot livelock, and daemon failures that surface instead of wedging builds fleet-wide.'
+---
+
+## Summary
+
+Store and cache failures arrive as emergencies: a disk fills mid-build, GC
+deletes roots a fleet still needs, the cache-push queue pins at its limit
+and starves, the daemon crashes under concurrent CA imports. Each incident
+produced a watchdog or a recipe; none produced a lifecycle. This plan
+manages the substrate as one loop per host: budgeted, checkpointed GC that
+respects fleet-wide roots; push admission with backpressure that sheds load
+instead of livelocking; and daemon health that reports to the same place
+CI status does.
+
+## Non-goals
+
+Replacing the cache plane or the Nix fork; this manages what exists.
+
+## Absorbed issues
+
+[#3343](https://github.com/indexable-inc/index/issues/3343), [#3342](https://github.com/indexable-inc/index/issues/3342), [#3341](https://github.com/indexable-inc/index/issues/3341), [#3338](https://github.com/indexable-inc/index/issues/3338), [#3313](https://github.com/indexable-inc/index/issues/3313), [#3563](https://github.com/indexable-inc/index/issues/3563), [#3559](https://github.com/indexable-inc/index/issues/3559), [#3100](https://github.com/indexable-inc/index/issues/3100), [#2541](https://github.com/indexable-inc/index/issues/2541), [#2534](https://github.com/indexable-inc/index/issues/2534), [#2533](https://github.com/indexable-inc/index/issues/2533), [#2521](https://github.com/indexable-inc/index/issues/2521), [#2500](https://github.com/indexable-inc/index/issues/2500), [#2354](https://github.com/indexable-inc/index/issues/2354), [#3031](https://github.com/indexable-inc/index/issues/3031), [#3022](https://github.com/indexable-inc/index/issues/3022), [#2996](https://github.com/indexable-inc/index/issues/2996), [#2995](https://github.com/indexable-inc/index/issues/2995), [#3000](https://github.com/indexable-inc/index/issues/3000), [#2844](https://github.com/indexable-inc/index/issues/2844), [#2853](https://github.com/indexable-inc/index/issues/2853), [#2851](https://github.com/indexable-inc/index/issues/2851), [#3033](https://github.com/indexable-inc/index/issues/3033), [#3039](https://github.com/indexable-inc/index/issues/3039), [#2926](https://github.com/indexable-inc/index/issues/2926), [#2767](https://github.com/indexable-inc/index/issues/2767), [#2921](https://github.com/indexable-inc/index/issues/2921)
+
+Drafted by Claude Code (Fable) from the open-issue corpus; scores are seed
+estimates.

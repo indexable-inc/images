@@ -1,0 +1,43 @@
+---
+id: 0019-search-trust
+number: '0019'
+title: Search results you can trust
+status: Sketch
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 4, why: 'a correctness bar for existing search surfaces, not a new engine' }
+  impact: { value: 6, why: 'silent false negatives poison audits that claim covered everything' }
+  effort: { value: 4, why: 'index-state visibility, honest degradation, and a recall test corpus' }
+  risk: { value: 2, why: 'worst case is slower answers that admit their gaps' }
+  maturity: { value: 3, why: 'the surfaces work in the common case; the failure modes are silent' }
+  leverage: { value: 6, why: 'every audit and every agent that greps through it inherits the bar' }
+  taste: { value: 3, why: 'the bar is obvious; the work is tests and plumbing' }
+description: 'The search surfaces (fff.grep and friends) stop failing silently: a query that cannot be answered completely says so, index staleness is visible, and a recall corpus in CI keeps false negatives from shipping.'
+---
+
+## Summary
+
+A search tool that silently returns partial results is worse than none: an
+audit that greps for callers and misses some claims a coverage it does not
+have. The fff.grep issue cluster is exactly that shape: plain-mode misses,
+regex classes that quietly do not match, path filters that exclude more
+than asked, stale indexes serving old trees. The bar this plan sets: every
+query either answers completely or says why it cannot, staleness is part
+of the result, and a recall corpus runs in CI so regressions are caught
+before an audit trusts them.
+
+## Non-goals
+
+Ranking or performance work; correctness first.
+
+## Absorbed issues
+
+[#1136](https://github.com/indexable-inc/index/issues/1136), [#1134](https://github.com/indexable-inc/index/issues/1134), [#1131](https://github.com/indexable-inc/index/issues/1131), [#1129](https://github.com/indexable-inc/index/issues/1129), [#1123](https://github.com/indexable-inc/index/issues/1123), [#1115](https://github.com/indexable-inc/index/issues/1115), [#1103](https://github.com/indexable-inc/index/issues/1103), [#1049](https://github.com/indexable-inc/index/issues/1049), [#1033](https://github.com/indexable-inc/index/issues/1033)
+
+Drafted by Claude Code (Fable) from the open-issue corpus; scores are seed
+estimates.
