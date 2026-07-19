@@ -761,7 +761,8 @@
         "0001-tokenizer-accept-underscore-digit-separators-in-nume.patch" = {
           upstream = "hold";
           reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
-        };      };
+        };
+      };
     }
   ];
 }
