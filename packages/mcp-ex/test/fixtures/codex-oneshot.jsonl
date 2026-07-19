@@ -1,0 +1,6 @@
+Reading additional input from stdin...
+{"type":"thread.started","thread_id":"019f7bfb-1338-78f0-9b33-1551852a85e1"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Under-development features enabled: multi_agent_v2. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/andrewgazelka/.codex/config.toml."}}
+{"type":"turn.started"}
+{"type":"error","message":"Your workspace is out of credits. Add credits to continue."}
+{"type":"turn.failed","error":{"message":"Your workspace is out of credits. Add credits to continue."}}

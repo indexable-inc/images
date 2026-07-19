@@ -13,6 +13,8 @@ defmodule IxMcp.Application do
       ├── IxMcp.Jobs.History    ordered record of every run
       ├── IxMcp.MCP.Notifier    server-initiated notification fan-out
       ├── IxMcp.PrWatch.Supervisor (Task.Supervisor)  one task per PR watch
+      ├── IxMcp.Agents.Harness     (AgentHarness) depth-1 subagent processes (#3700)
+      ├── IxMcp.Agents.Events      subagent ledger: events, finals, graph, notifications
       └── IxMcp.MCP.Stdio       (only when IX_MCP_STDIO=1) the stdio transport
 
   The transport is opt-in via environment so `mix test` and IEx sessions get
@@ -38,7 +40,11 @@ defmodule IxMcp.Application do
         {DynamicSupervisor, name: IxMcp.Jobs.Supervisor, strategy: :one_for_one},
         IxMcp.Jobs.History,
         IxMcp.MCP.Notifier,
-        {Task.Supervisor, name: IxMcp.PrWatch.Supervisor}
+        {Task.Supervisor, name: IxMcp.PrWatch.Supervisor},
+        # The depth-1 subagent surface (index#3700): harness first, then the
+        # ledger that drains its lead mailbox.
+        {AgentHarness, name: IxMcp.Agents.Harness, runner: IxMcp.Agents.CliRunner},
+        {IxMcp.Agents.Events, harness: IxMcp.Agents.Harness}
       ] ++ transport()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: IxMcp.Supervisor)

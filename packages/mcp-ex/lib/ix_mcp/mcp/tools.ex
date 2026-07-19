@@ -47,6 +47,15 @@ defmodule IxMcp.MCP.Tools do
                                             .send_key(term, "enter" | "ctrl+c" | ...),
                                             .wait_for(term, pattern),
                                             .snapshot/1, .close/1
+      Agents.spawn(brief, backend: :claude | :codex | :kimi)
+                                            spawn a real agent CLI as an async depth-1
+                                            subagent (Fable 5 card sec 8.15.3, #3700);
+                                            returns its id at once. Steer with
+                                            Agents.send(id, text); observe with
+                                            Agents.status(), .events(id), .report(),
+                                            .graph(); block only when necessary with
+                                            Agents.await(id). Finals arrive as
+                                            agent_finished notifications
       Fleet.multicall(Fleet.nodes(), code)  run Elixir across the fleet's server cores
                                             (Fleet.exec_least_loaded/2 for one node)
       Api.api("tail") / Api.help(Jobs, :tail)   discovery over this whole surface
