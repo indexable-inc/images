@@ -1,7 +1,7 @@
 # index
 
 <p align="center">
-  <img src=".github/readme/flywheel.svg" alt="the flywheel: a patch lands once, the whole graph rebuilds, everything is prebuilt for linux and macos, agents migrate every consumer, and the loop repeats" width="720">
+  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper" width="720">
 </p>
 
 One build graph for everything.
