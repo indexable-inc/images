@@ -2,6 +2,7 @@
   import { inlineTitleHtml } from './updates';
   import RfcStatusBadge from './RfcStatusBadge.svelte';
   import { rfcDimensions } from './rfcs';
+  import ScoreMeter from './ScoreMeter.svelte';
   import type { Rfc } from './rfcs';
 
   const { rfc }: { rfc: Rfc } = $props();
@@ -26,7 +27,11 @@
     <dt>Status</dt><dd><RfcStatusBadge status={rfc.status} /></dd>
     {#each rfcDimensions as dim (dim.key)}
       <dt>{dim.label}</dt>
-      <dd>{rfc.scores[dim.key].value}/10 · {rfc.scores[dim.key].why}</dd>
+      <dd class="score">
+        <ScoreMeter value={rfc.scores[dim.key].value} />
+        <span class="value">{rfc.scores[dim.key].value}</span>
+        <span class="why">{rfc.scores[dim.key].why}</span>
+      </dd>
     {/each}
     <dt>Authors</dt><dd>{rfc.authors}</dd>
     <dt>Created</dt><dd>{rfc.created}</dd>
@@ -39,3 +44,23 @@
     <Body />
   </div>
 </article>
+
+<style>
+  .score {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .score .value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85em;
+    color: var(--fg-muted);
+    min-width: 1.4em;
+  }
+
+  .score .why {
+    color: var(--fg-muted);
+  }
+</style>
