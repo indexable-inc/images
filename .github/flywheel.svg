@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 440" role="img" aria-labelledby="t">
+  <title id="t">The index flywheel: a patch lands once, the whole graph rebuilds, everything ships prebuilt for Linux and macOS, and agents migrate every consumer, which makes the next patch cheaper.</title>
+  <style>
+    :root { --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --box: #f6f8fa; --accent: #0969da; }
+    @media (prefers-color-scheme: dark) {
+      :root { --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --box: #151b23; --accent: #4493f8; }
+    }
+    text { font-family: ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 15px; fill: var(--fg); text-anchor: middle; }
+    .node { fill: var(--box); stroke: var(--line); stroke-width: 1.5; }
+    .flow { fill: none; stroke: var(--accent); stroke-width: 2; }
+    .head { fill: var(--accent); }
+    .center { fill: var(--muted); font-size: 14px; letter-spacing: 0.04em; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M 0 0 L 10 5 L 0 10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="node" x="280" y="28" width="200" height="52" rx="10"/>
+  <text x="380" y="60">patch lands once</text>
+
+  <rect class="node" x="532" y="194" width="200" height="52" rx="10"/>
+  <text x="632" y="226">whole graph rebuilds</text>
+
+  <rect class="node" x="270" y="360" width="220" height="52" rx="10"/>
+  <text x="380" y="392">prebuilt for Linux + macOS</text>
+
+  <rect class="node" x="28" y="188" width="200" height="64" rx="10"/>
+  <text x="128" y="214">agents migrate</text>
+  <text x="128" y="234">every consumer</text>
+
+  <text class="center" x="380" y="214">one repo</text>
+  <text class="center" x="380" y="234">one build graph</text>
+
+  <path class="flow" marker-end="url(#arrow)" d="M 492 70 Q 612 96 631 182"/>
+  <path class="flow" marker-end="url(#arrow)" d="M 631 258 Q 612 344 502 370"/>
+  <path class="flow" marker-end="url(#arrow)" d="M 258 370 Q 148 344 129 264"/>
+  <path class="flow" marker-end="url(#arrow)" d="M 129 176 Q 148 96 268 70"/>
+</svg>
