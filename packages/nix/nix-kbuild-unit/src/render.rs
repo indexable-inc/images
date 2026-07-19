@@ -64,9 +64,21 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
     // every `.ko` after any single-module body edit: the dep list rode
     // through `Module.symvers` to every module object (#3413).
     let mut expansions: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut closures: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     let mut dep_sets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for &target in &reachable {
-        let deps = unit_dep_set(target, &units, &direct_deps, &mut expansions)?;
+        // The vmlinux link is the one exception to the trim:
+        // scripts/link-vmlinux.sh links the KBUILD_VMLINUX_OBJS/LIBS
+        // archives directly (vmlinux.a, lib/lib.a, ... -- an env-driven
+        // list no argv or .cmd records; x86_64 defconfig under IBT links
+        // vmlinux.o instead), so its tree keeps the full transitive
+        // closure, exactly what every unit carried before the trim.
+        let deps = if units[target].1 == UnitKind::Link {
+            full_closure(target, &direct_deps, &mut closures)?;
+            closures[target].clone()
+        } else {
+            unit_dep_set(target, &units, &direct_deps, &mut expansions)?
+        };
         dep_sets.insert(target, deps);
     }
 
@@ -358,6 +370,46 @@ fn unit_dep_set<'plan>(
         }
     }
     Ok(deps)
+}
+
+/// Memoized full transitive dep closure (the vmlinux link unit's dep set).
+/// Iterative DFS with an explicit in-progress set for cycle detection.
+fn full_closure<'plan>(
+    target: &'plan str,
+    direct_deps: &BTreeMap<&'plan str, BTreeSet<&'plan str>>,
+    closures: &mut BTreeMap<&'plan str, BTreeSet<&'plan str>>,
+) -> color_eyre::Result<()> {
+    if closures.contains_key(target) {
+        return Ok(());
+    }
+    let mut stack = vec![(target, false)];
+    let mut in_progress: BTreeSet<&str> = BTreeSet::new();
+    while let Some((current, children_done)) = stack.pop() {
+        if children_done {
+            let mut closure = BTreeSet::new();
+            for &dep in &direct_deps[current] {
+                closure.insert(dep);
+                closure.extend(&closures[dep]);
+            }
+            closures.insert(current, closure);
+            in_progress.remove(current);
+            continue;
+        }
+        if closures.contains_key(current) {
+            continue;
+        }
+        if !in_progress.insert(current) {
+            bail!("dependency cycle through unit {current}");
+        }
+        stack.push((current, true));
+        for &dep in &direct_deps[current] {
+            if in_progress.contains(dep) {
+                bail!("dependency cycle through unit {dep}");
+            }
+            stack.push((dep, false));
+        }
+    }
+    Ok(())
 }
 
 /// Memoized member set of one thin archive: its direct deps plus, through
@@ -923,11 +975,17 @@ mod tests {
         assert!(!symvers.contains("units.\"vmlinux.a\""));
         assert!(!symvers.contains("units.\"kernel/fork.o\""));
 
-        // The vmlinux link consumes vmlinux.o and the ksymtab object only.
+        // The vmlinux link is exempt: link-vmlinux.sh links the
+        // KBUILD_VMLINUX_OBJS/LIBS archives directly (an env-driven list no
+        // .cmd records), so it keeps the full transitive closure.
         let link = unit_body("vmlinux");
-        assert!(link.contains("units.\"vmlinux.o\""));
-        assert!(!link.contains("units.\"vmlinux.a\""));
-        assert!(!link.contains("units.\"kernel/fork.o\""));
+        for dep in [
+            "units.\"vmlinux.o\"",
+            "units.\"vmlinux.a\"",
+            "units.\"kernel/fork.o\"",
+        ] {
+            assert!(link.contains(dep), "vmlinux link closure missing {dep}");
+        }
     }
 
     #[test]
