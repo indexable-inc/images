@@ -30,7 +30,7 @@
 </svelte:head>
 
 <section class="hero">
-  <h1>One repo everyone can edit.</h1>
+  <h1>Land it now. Everyone gets it.</h1>
   <p>{siteIntro}</p>
 </section>
 

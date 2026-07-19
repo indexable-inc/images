@@ -8,6 +8,7 @@
 
   const homeHref = resolve('/');
   const philosophyHref = resolve('/philosophy');
+  const storiesHref = resolve('/stories');
   const rfcsHref = resolve('/rfcs');
   const feedHref = resolve('/feed.xml');
 </script>
@@ -20,6 +21,7 @@
   <a class="wordmark" href={homeHref}>index</a>
   <nav>
     <a href={philosophyHref}>philosophy</a>
+    <a href={storiesHref}>stories</a>
     <a href={rfcsHref}>rfcs</a>
     <a href="https://github.com/indexable-inc/index">github</a>
     <a href="https://ix.dev">ix.dev</a>

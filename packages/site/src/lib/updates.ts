@@ -50,7 +50,7 @@ export const siteUpdates: SiteUpdate[] = Object.entries(modules)
 export const siteUrl = 'https://indexable-inc.github.io/index/';
 export const siteFeedUrl = `${siteUrl}feed.xml`;
 export const siteIntro =
-  'A shared, open-source monorepo of developer tools: packages, NixOS modules, fleet examples, and the agent infrastructure that ties them together. Add something useful, and everyone gets it.';
+  'Agents made writing code cheap; waiting on review queues and upstreams is now the expensive part. index is one open monorepo where every change lands now and reaches everyone: packages, NixOS modules, VM images, patched toolchains, and the agent infrastructure that ties them together.';
 
 function stripFrontmatter(source: string): string {
   return source.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
