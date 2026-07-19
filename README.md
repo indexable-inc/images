@@ -34,7 +34,7 @@ Patches live here, next to the code that needs them. A slow, wrong, or abandoned
 
 Security scans, license checks, custom Clippy lints: every rule runs over the whole graph. Add a rule and every package meets it, in the same change.
 
-### No stable internal APIs, on purpose
+### No stable APIs required
 
 <p align="center">
   <img src=".github/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
