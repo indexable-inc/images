@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" role="img" aria-label="the flywheel: a patch lands once, the whole graph rebuilds, everything is prebuilt for linux and macos, agents migrate every consumer, and the loop repeats">
+  <style>
+    :root { --fg: #18181b; --muted: #8a8f98; --line: #d4d4d8; }
+    @media (prefers-color-scheme: dark) {
+      :root { --fg: #e6e6e9; --muted: #7f838c; --line: #3c3c42; }
+    }
+    text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; fill: var(--fg); }
+    .m { fill: var(--muted); }
+    .cap { font-size: 12px; letter-spacing: 0.08em; }
+    .frame { fill: none; stroke: var(--line); stroke-width: 1.3; }
+    .wire { fill: none; stroke: var(--fg); stroke-width: 1.3; }
+    .mwire { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+    .dash { stroke-dasharray: 3 4; }
+    .head { fill: var(--fg); }
+    .mhead { fill: var(--muted); }
+    .ink { fill: var(--fg); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="head" d="M 0 0 L 8 4 L 0 8 z"/>
+    </marker>
+    <marker id="am" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
+    </marker>
+  </defs>
+  <path class="frame" d="M 136 14 H 711 Q 719 14 719 22 V 218 Q 719 226 711 226 H 9 Q 1 226 1 218 V 22 Q 1 14 9 14 H 22"/>
+  <text x="28" y="18.5">[-] flywheel</text>
+  <text x="80" y="92">patch lands once</text>
+  <text x="440" y="92">whole graph rebuilds</text>
+  <text x="418" y="172">prebuilt for linux + macos</text>
+  <text x="80" y="172">agents migrate every consumer</text>
+  <text class="m" x="360" y="136" text-anchor="middle">one repo, one graph</text>
+  <path class="wire" marker-end="url(#a)" d="M 225 87 H 420"/>
+  <path class="wire" marker-end="url(#a)" d="M 612 87 H 664 V 167 H 641"/>
+  <path class="wire" marker-end="url(#a)" d="M 398 167 H 326"/>
+  <path class="wire" marker-end="url(#a)" d="M 60 167 H 30 V 87 H 60"/>
+</svg>

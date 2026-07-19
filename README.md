@@ -1,35 +1,45 @@
 # index
 
 <p align="center">
-  <img src=".github/flywheel.svg" alt="The flywheel: a patch lands once, the whole graph rebuilds, everything ships prebuilt for Linux and macOS, agents migrate every consumer" width="680">
+  <img src=".github/readme/flywheel.svg" alt="the flywheel: a patch lands once, the whole graph rebuilds, everything is prebuilt for linux and macos, agents migrate every consumer, and the loop repeats" width="720">
 </p>
 
-Everything we build and depend on, in one repo, as one build graph.
+One build graph for an entire stack.
 
-index is a Nix monorepo: ~85 packages, forked toolchains (our own Nix, our own Clippy), NixOS and Home Manager modules, VM images, and the CI that builds it all. Think the Raycast extensions monorepo, but for an entire stack.
+index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): packages, patched toolchains (Nix, Clippy), NixOS and Home Manager modules, VM images, and the CI that builds them all live together, so they move together.
 
 ## Why
 
-**A change lands once and reaches everything.** Patch a compiler, fix a library, tighten a lint: the whole graph rebuilds against it. No package is quietly running last year's version of anything.
+<img src=".github/readme/one-graph.svg" alt="one patch fans out to every package in the graph" width="720">
 
-**Never blocked on upstream.** Patches live here, next to the code that needs them. If upstream is slow, wrong, or abandoned, we ship anyway. No dependency has a bus factor we don't control.
+**A change lands once and reaches everything.** Patch a compiler, fix a library, tighten a lint: every package in the graph rebuilds against it. Nothing quietly runs last year's version of anything.
 
-**One bar for everything.** Security scans, license checks, and our Clippy fork's custom lints run over the whole graph. Add a rule and every crate meets it, in the same change.
+<img src=".github/readme/upstream.svg" alt="patches live in the repo next to the code; no waiting on upstream" width="720">
 
-**No stable internal APIs, on purpose.** Every consumer of every internal API lives in this repo, and agents make repo-wide refactors cheap. So an API is free to be correct instead of compatible: change it, migrate every call site, land one commit.
+**Never blocked on upstream.** Patches live here, next to the code that needs them. A slow, wrong, or abandoned upstream never blocks a fix, and no dependency has a bus factor outside the repo.
 
-**Prebuilt everywhere.** CI builds the graph for Linux and cross-compiles it for macOS, then pushes to `cache.ix.dev`. You download binaries instead of compiling them.
+<img src=".github/readme/one-bar.svg" alt="custom clippy lints, cve scans, and license checks cover the whole graph" width="720">
+
+**One bar for everything.** Security scans, license checks, custom Clippy lints: every rule runs over the whole graph. Add a rule and every package meets it, in the same change.
+
+<img src=".github/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
+
+**No stable internal APIs, on purpose.** Every consumer of every internal API lives here, and agents make repo-wide refactors cheap. An API is free to be correct instead of compatible: change it, migrate every call site, land one commit.
+
+<img src=".github/readme/prebuilt.svg" alt="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos" width="720">
+
+**Prebuilt everywhere.** CI builds the graph for Linux, cross-compiles it for macOS, and pushes to `cache.ix.dev`. Binaries download instead of compile.
 
 ## The flywheel
 
-These compound. Better tools make the agents better; better agents make sweeping changes cheap; cheap changes keep everything at the newest bar; and the improved tools feed straight back in. The repo gets easier to improve the more it improves. That is the point.
+These compound. Better tools make agents more capable; capable agents make sweeping changes cheap; cheap changes keep everything at the newest bar; the improved tools feed straight back in. The repo gets easier to improve the more it improves.
 
 ## Layout
 
 | dir | what |
 |---|---|
-| `packages/` | the tools (85 and counting) |
+| `packages/` | the tools |
 | `modules/` | NixOS + Home Manager modules |
 | `lib/` | build machinery (`cargo-unit`, package sets) |
-| `images/` | VM images for the ix fleet |
+| `images/` | VM images |
 | `examples/` | consuming index from your own flake |
