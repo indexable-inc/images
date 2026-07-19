@@ -291,6 +291,27 @@
     };
   }
   {
+    subagentToolSubset = {
+      topics = ["tooling"];
+      text = ''
+        Treat a subagent's toolset as never a superset of yours: if you
+        cannot run shell commands, assume your children cannot either.
+        Nothing tells an agent what tools its children get, so an agent
+        lacking a capability delegates hoping the child has it; the child
+        inherits the same limits, reasons the same way, and the recursion
+        spawns agents that burn tokens doing no work. Some agent types do
+        attach extra tools, but decide as if none do: when you lack the
+        tools for a task, fail fast and name the missing tool instead of
+        spawning.
+      '';
+      reason = ''
+        A parent without exec tools recursively spawned relay agents that
+        inherited the same gap: roughly 30k tokens of pure coordination
+        and no real work.
+      '';
+    };
+  }
+  {
     wallTime = {
       topics = ["workflow" "agency"];
       text = ''

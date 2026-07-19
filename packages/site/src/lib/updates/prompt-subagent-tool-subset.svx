@@ -1,0 +1,13 @@
+---
+id: prompt-subagent-tool-subset
+postedAt: 2026-07-19T12:00:00-07:00
+title: "House prompt: subagent tools are never a superset of yours"
+tags: [agent, prompt]
+links:
+  - label: rules
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent/prompt/rules.nix
+---
+
+The house prompt gains a `subagentToolSubset` rule: treat a subagent's toolset as never a superset of your own. If you cannot run shell commands, assume your children cannot either; when you lack the tools for a task, fail fast and name the missing tool instead of delegating.
+
+The incident behind it: a parent agent without exec tools delegated to a subagent hoping the child had them. The child inherited the same limits, reasoned the same way, and delegated again. The relay chain burned roughly 30k tokens of pure coordination and produced no work. Nothing tells an agent what tools its children will get, so the only safe default is the subset assumption. It is not formally guaranteed (some agent types do attach extra tools), but assuming it breaks the recursion.
