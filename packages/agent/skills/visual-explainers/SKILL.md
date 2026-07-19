@@ -71,6 +71,19 @@ When the task is an actual data chart rather than a system explainer:
 - Interaction still earns its place: a tooltip that shows the exact value, a
   toggle that isolates one series. Nothing autoplays.
 
+## Time
+
+- Render timestamps in the reader's local timezone, and check what that is
+  before writing any time into copy (`date +%Z` on the host, or better: keep
+  the machine ISO-8601 instant in the data and let the page format it with
+  `Intl.DateTimeFormat`, which is right for every reader). Hardcoded `13:45Z`
+  in prose makes the reader do arithmetic; that is the page's job.
+- Prefer human forms everywhere: "4h ago", "38m elapsed", "eta 5:10-5:25 pm",
+  a counter ticking from a real start instant. Machine timestamps belong in
+  the data layer, human time in the rendered layer.
+- Label the zone whenever the page states an absolute clock time, since the
+  artifact may be read later or from somewhere else.
+
 ## Worked example: the target shape
 
 "How Svelte HMR works": the reader edits a fake `Button.svelte` in a textarea,

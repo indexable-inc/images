@@ -1,0 +1,14 @@
+---
+id: visual-explainers-human-time
+postedAt: '2026-07-19T05:20:00-07:00'
+title: visual explainers render human time in the reader's timezone
+links:
+  - label: 'visual-explainers skill'
+    href: 'https://github.com/indexable-inc/index/blob/main/packages/agent/skills/visual-explainers/SKILL.md'
+tags:
+  - agent
+---
+
+The visual-explainers skill now has a Time section: pages keep machine ISO-8601 instants in the data layer and render only human forms ("38m elapsed", "eta 5:10-5:25 pm"), formatted for the reader's local timezone via `Intl.DateTimeFormat` rather than hardcoded into copy.
+
+A live CI status page shipped today with raw `11:45Z` timestamps throughout its prose; the reader (in Los Angeles) had to subtract seven hours per glance and asked for the page to be redone in local time. Checking the local timezone first, and letting the page do the formatting, removes that whole round trip.
