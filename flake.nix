@@ -253,6 +253,20 @@
       flake = false;
     };
 
+    # pdtpartners/nix-ninja: ninja-compatible build runner that turns each
+    # compilation unit of a meson/ninja graph into its own content-addressed
+    # Nix derivation (the incremental build lane for the patched nix fork,
+    # packages/nix/nix-ninja-build, issue #3655). Pre-alpha upstream, so
+    # pinned BY REV rather than by branch: the hourly flake-lock updater must
+    # not move it; bump deliberately after revalidating the lane. Consumed as
+    # a source tree (flake = false) and built with rustPlatform in
+    # packages/nix-ninja, not through its flake, which would drag crane/fenix
+    # inputs and only targets x86_64-linux.
+    nix-ninja-src = {
+      url = "github:pdtpartners/nix-ninja/f16edb417af156cdb777cc1201b67733b82b224e";
+      flake = false;
+    };
+
     # snix (Rust reimplementation of Nix; TVL-style depot, no flake.nix) consumed
     # as a source tree so `packages/snix` builds its CLI through cargo-unit
     # instead of the upstream crate2nix `Cargo.nix`. The Cargo workspace lives in
@@ -335,6 +349,7 @@
     fff-src,
     nu-jupyter-kernel-src,
     launchk-src,
+    nix-ninja-src,
     snix-src,
     clippy-src,
     codex-src,
@@ -412,6 +427,7 @@
         fff-src
         nu-jupyter-kernel-src
         launchk-src
+        nix-ninja-src
         snix-src
         clippy-src
         codex-src

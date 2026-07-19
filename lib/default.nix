@@ -16,6 +16,7 @@
   fff-src,
   nu-jupyter-kernel-src,
   launchk-src,
+  nix-ninja-src,
   snix-src,
   clippy-src,
   codex-src,
@@ -763,6 +764,7 @@
     fffSrc = fff-src;
     nuJupyterKernelSrc = nu-jupyter-kernel-src;
     launchkSrc = launchk-src;
+    nixNinjaSrc = nix-ninja-src;
     snixSrc = snix-src;
     mesaSrc = mesa-src;
     # Pinned toolchain evaluation context for the prebuilt public-SDK rlib:

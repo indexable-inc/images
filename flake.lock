@@ -301,6 +301,23 @@
         "type": "github"
       }
     },
+    "nix-ninja-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1778777365,
+        "narHash": "sha256-/jmN3Uvpg+4s2bcxzdCTHKro9HbHvswz/Aua3xzrxac=",
+        "owner": "pdtpartners",
+        "repo": "nix-ninja",
+        "rev": "f16edb417af156cdb777cc1201b67733b82b224e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "pdtpartners",
+        "repo": "nix-ninja",
+        "rev": "f16edb417af156cdb777cc1201b67733b82b224e",
+        "type": "github"
+      }
+    },
     "nix-src": {
       "flake": false,
       "locked": {
@@ -591,6 +608,7 @@
         "mesa-src": "mesa-src",
         "nix-derivation-src": "nix-derivation-src",
         "nix-fast-build-src": "nix-fast-build-src",
+        "nix-ninja-src": "nix-ninja-src",
         "nix-src": "nix-src",
         "nixpkgs": "nixpkgs",
         "nu-jupyter-kernel-src": "nu-jupyter-kernel-src",
