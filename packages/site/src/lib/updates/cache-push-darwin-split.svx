@@ -1,0 +1,31 @@
+---
+id: cache-push-darwin-split
+postedAt: 2026-07-19T04:30:00-07:00
+title: "Cache pin advances every merge: the darwin lane moves to its own workflow"
+tags: [ci, interesting]
+links:
+  - label: "PR #3672"
+    href: https://github.com/indexable-inc/index/pull/3672
+  - label: "#3587: delete the darwin lane"
+    href: https://github.com/indexable-inc/index/issues/3587
+  - label: "#3586: cross-build audit"
+    href: https://github.com/indexable-inc/index/issues/3586
+---
+
+The fleet's `cache-ready` pin now advances minutes after every merge instead
+of once per ~2 hours: the native darwin cache lane (`darwin-build` and
+`darwin-push`) moved out of `cache-push.yml` into its own
+`cache-push-darwin.yml` with its own concurrency group. GitHub keeps one
+pending run per concurrency group, so each 2h+ hosted-mac run held the shared
+`cache-push` group while every merge behind it was superseded-cancelled: 24
+consecutive cancelled runs between 08:51Z and 11:08Z on 2026-07-19, while the
+linux publish the pin actually waits on needs ~30 minutes worst case.
+
+The `cache-ready-darwin` gate changed shape with the move. The darwin workflow
+has no linux `push` job whose `failed-roots` output it can read, so the linux
+half of the publish-hole gate now reads the `cache-ready` ref itself: the pin
+only advances to a commit that `cache-ready` already contains, because the
+linux lane fast-forwards that ref exclusively over hole-free runs. Linux lag
+logs a notice and exits clean; the next darwin run catches up. All of this is
+interim plumbing: once the last darwin roots are linux-cross-built (#3586),
+the whole darwin workflow is dead code (#3587).
