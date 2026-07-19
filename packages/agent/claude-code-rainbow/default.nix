@@ -136,13 +136,13 @@ in
         echo "== rainbow byte proof =="
         new=$(grep -c "Rainbow!!! Claude Code" "$out/bin/claude" || true)
         old=$(grep -c "Welcome to Claude Code" "$out/bin/claude" || true)
-        hex=$(grep -c "#ff7f00" "$out/bin/claude" || true)
+        hex=$(grep -c "rgb(255,20,255)" "$out/bin/claude" || true)
         echo "new banner count: $new"
         echo "old banner count: $old"
-        echo "rainbow hex #ff7f00 count: $hex"
+        echo "rainbow rgb count: $hex"
         [ "$new" -ge 1 ] || { echo "FAIL: new rainbow banner not present" >&2; exit 1; }
         [ "$old" -eq 0 ] || { echo "FAIL: original banner bytes still present ($old)" >&2; exit 1; }
-        [ "$hex" -ge 1 ] || { echo "FAIL: rainbow hex not present" >&2; exit 1; }
+        [ "$hex" -ge 1 ] || { echo "FAIL: rainbow rgb not present" >&2; exit 1; }
       ''
       + lib.optionalString (!stdenv.hostPlatform.isDarwin) ''
         echo "== version smoke =="
