@@ -904,6 +904,28 @@ mod tests {
         plan
     }
 
+    /// Body of one rendered `mkUnit` block, for dep-set assertions.
+    fn unit_body<'a>(rendered: &'a str, target: &str) -> &'a str {
+        rendered
+            .split(&format!("\"{target}\" = mkUnit {{"))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{target} unit rendered"))
+            .split("};")
+            .next()
+            .expect("unit body")
+    }
+
+    /// Assert which dep edges a rendered unit body carries and omits.
+    #[track_caller]
+    fn assert_dep_edges(body: &str, unit: &str, carries: &[&str], omits: &[&str]) {
+        for dep in carries {
+            assert!(body.contains(dep), "{unit} dep set missing {dep}");
+        }
+        for dep in omits {
+            assert!(!body.contains(dep), "{unit} must not carry {dep}");
+        }
+    }
+
     #[test]
     fn renders_reachable_units_and_prunes_the_rest() {
         let rendered = render_units_nix(&sample_plan(), true).expect("render");
@@ -927,74 +949,69 @@ mod tests {
         // vmlinux.o must see the archives AND their members (thin archives
         // resolve member paths at read time), recursively through nested
         // thin archives.
-        let aggregate = rendered
-            .split("\"vmlinux.o\" = mkUnit {")
-            .nth(1)
-            .expect("vmlinux.o unit rendered")
-            .split("};")
-            .next()
-            .expect("unit body");
-        for dep in [
-            "units.\"vmlinux.a\"",
-            "units.\"built-in.a\"",
-            "units.\"kernel/built-in.a\"",
-            "units.\"kernel/fork.o\"",
-        ] {
-            assert!(aggregate.contains(dep), "vmlinux.o dep set missing {dep}");
-        }
+        assert_dep_edges(
+            unit_body(&rendered, "vmlinux.o"),
+            "vmlinux.o",
+            &[
+                "units.\"vmlinux.a\"",
+                "units.\"built-in.a\"",
+                "units.\"kernel/built-in.a\"",
+                "units.\"kernel/fork.o\"",
+            ],
+            &[],
+        );
         assert!(rendered.contains("contentAddressed = false;"));
     }
 
     #[test]
     fn trims_dep_sets_to_thin_archive_consumers() {
         let rendered = render_units_nix(&module_plan(), true).expect("render");
-        let unit_body = |target: &str| {
-            rendered
-                .split(&format!("\"{target}\" = mkUnit {{"))
-                .nth(1)
-                .unwrap_or_else(|| panic!("{target} unit rendered"))
-                .split("};")
-                .next()
-                .expect("unit body")
-                .to_owned()
-        };
 
         // `ld -r` outputs and modpost dumps are self-contained, so consumers
         // stop at their direct deps: the full transitive closure re-linked
         // every .ko after any single-module body edit, because each .ko rode
         // through <mod>.mod.o -> Module.symvers -> every module object.
-        let ko = unit_body("drivers/net/dummy.ko");
-        for absent in [
-            "units.\"Module.symvers\"",
-            "units.\"vmlinux.o\"",
-            "units.\"fs/nfs/nfs.o\"",
-            "units.\"fs/nfs/client.o\"",
-        ] {
-            assert!(!ko.contains(absent), "dummy.ko must not carry {absent}");
-        }
+        assert_dep_edges(
+            unit_body(&rendered, "drivers/net/dummy.ko"),
+            "dummy.ko",
+            &[],
+            &[
+                "units.\"Module.symvers\"",
+                "units.\"vmlinux.o\"",
+                "units.\"fs/nfs/nfs.o\"",
+                "units.\"fs/nfs/client.o\"",
+            ],
+        );
 
-        let mod_o = unit_body("drivers/net/dummy.mod.o");
-        assert!(mod_o.contains("units.\"Module.symvers\""));
-        assert!(!mod_o.contains("units.\"vmlinux.o\""));
+        assert_dep_edges(
+            unit_body(&rendered, "drivers/net/dummy.mod.o"),
+            "dummy.mod.o",
+            &["units.\"Module.symvers\""],
+            &["units.\"vmlinux.o\""],
+        );
 
         // modpost reads the self-contained vmlinux.o, never the thin
         // archives (or their members) behind it.
-        let symvers = unit_body("vmlinux.symvers");
-        assert!(symvers.contains("units.\"vmlinux.o\""));
-        assert!(!symvers.contains("units.\"vmlinux.a\""));
-        assert!(!symvers.contains("units.\"kernel/fork.o\""));
+        assert_dep_edges(
+            unit_body(&rendered, "vmlinux.symvers"),
+            "vmlinux.symvers",
+            &["units.\"vmlinux.o\""],
+            &["units.\"vmlinux.a\"", "units.\"kernel/fork.o\""],
+        );
 
         // The vmlinux link is exempt: link-vmlinux.sh links the
         // KBUILD_VMLINUX_OBJS/LIBS archives directly (an env-driven list no
         // .cmd records), so it keeps the full transitive closure.
-        let link = unit_body("vmlinux");
-        for dep in [
-            "units.\"vmlinux.o\"",
-            "units.\"vmlinux.a\"",
-            "units.\"kernel/fork.o\"",
-        ] {
-            assert!(link.contains(dep), "vmlinux link closure missing {dep}");
-        }
+        assert_dep_edges(
+            unit_body(&rendered, "vmlinux"),
+            "vmlinux",
+            &[
+                "units.\"vmlinux.o\"",
+                "units.\"vmlinux.a\"",
+                "units.\"kernel/fork.o\"",
+            ],
+            &[],
+        );
     }
 
     #[test]
@@ -1072,13 +1089,7 @@ mod tests {
             .next()
             .expect("unit body");
         assert!(stub.contains("units.\"drivers/firmware/efi/libstub/alignedmem.o\""));
-        let aggregate = rendered
-            .split("\"vmlinux.o\" = mkUnit {")
-            .nth(1)
-            .expect("vmlinux.o unit rendered")
-            .split("};")
-            .next()
-            .expect("unit body");
+        let aggregate = unit_body(&rendered, "vmlinux.o");
         assert!(aggregate.contains("units.\"drivers/firmware/efi/libstub/lib.a\""));
         assert!(aggregate.contains("units.\"drivers/firmware/efi/libstub/alignedmem.stub.o\""));
     }
