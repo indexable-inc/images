@@ -1,54 +1,55 @@
-{pkgs}: let
-  # nix-fast-build's --skip-cached drops a job only when nix-eval-jobs reports
-  # its `cacheStatus` as `cached` (present in a configured *remote* substituter).
-  # A `local` status (output already realized in *this* runner's store, but not
-  # pushed anywhere) falls through to the build queue and gets re-realized every
-  # run (workers.py, the `elif cache_status == "local"` arm).
-  #
-  # On index's persistent warm CI runner that is almost everything: the rust
-  # workspace units default to `contentAddressed = true` (lib/rust/cargo-unit.nix)
-  # and the image checks are floating-CA system closures (lib/per-system.nix), and
-  # none of them are pushed to cache.ix.dev, so the patched nix-eval-jobs
-  # (packages/nix/nix-eval-jobs) correctly resolves them to `local` -- at which
-  # point stock nix-fast-build re-realizes all ~1450 of them. Each is a no-op
-  # realize (~0.05-0.4s measured warm) but the per-drv dispatch over ~1450 units
-  # is the ~85s build-step floor.
-  #
-  # The patch makes `local` skip the build like `cached` does (still queueing an
-  # upload first if a binary-cache target is set): a locally-present output never
-  # needs (re)building. nix-eval-jobs#403 / nix#12128 fixed the *status*; this
-  # fixes what --skip-cached does with it.
-  package = pkgs.nix-fast-build.overrideAttrs (old: {
-    patches =
-      (old.patches or [])
-      ++ [
-        ./skip-local.patch
-        ./liveness.patch
-      ];
-    doCheck = true;
-    nativeCheckInputs =
-      (old.nativeCheckInputs or [])
-      ++ [
-        pkgs.mypy
-        pkgs.python3Packages.pytest
-        pkgs.ruff
-      ];
-    checkPhase = ''
-      # shell
-      runHook preCheck
-      pytest -q tests/test_liveness.py
-      ruff check nix_fast_build
-      mypy nix_fast_build
-      runHook postCheck
-    '';
-  });
+{
+  ix,
+  lib,
+  pkgs,
+}: let
+  # Upstream Mic92/nix-fast-build (nix-fast-build-src, pinned to the tag
+  # nixpkgs packages) with the in-repo patch series (./patches) applied:
+  # --skip-cached skipping locally-realized outputs, and the typed
+  # per-derivation no-progress deadline. The series, its upstream intent, and
+  # the seconds-fast `patched-src-nix-fast-build` apply gate are driven by
+  # lib/fork-packages.nix; each patch's commit message carries its full WHY.
+  patchedSrc = ix.patchedSrc {
+    name = "nix-fast-build";
+    src = ix.nix-fast-buildSrc;
+    patchDir = ./patches;
+  };
 
-  # The patch only touches Python control flow, so the real risk is that the
-  # surrounding source drifted out from under the diff on a nixpkgs bump (the
-  # patch would fail to apply at build time) -- a build of `package` already
-  # catches that. The smoke test additionally runs the binary so an import-time
-  # break surfaces here rather than mid-CI-run; `--help` exits 0 without touching
-  # a store or daemon (absent in the sandbox).
+  # The nixpkgs recipe expects nix-fast-build's version to match the source
+  # it wraps; a nixpkgs bump with a stale nix-fast-build-src pin would
+  # silently build the old tree under the new label, so fail eval until the
+  # pin is advanced.
+  package = assert lib.assertMsg (pkgs.nix-fast-build.version == "1.6.0") ''
+    packages/nix/nix-fast-build: nixpkgs nix-fast-build is
+    ${pkgs.nix-fast-build.version} but nix-fast-build-src pins tag 1.6.0.
+    Repin the nix-fast-build-src input to the matching upstream tag and run
+    `nix run .#rebase-patches -- nix-fast-build`.'';
+    pkgs.nix-fast-build.overrideAttrs (old: {
+      src = patchedSrc;
+      doCheck = true;
+      nativeCheckInputs =
+        (old.nativeCheckInputs or [])
+        ++ [
+          pkgs.mypy
+          pkgs.python3Packages.pytest
+          pkgs.ruff
+        ];
+      checkPhase = ''
+        # shell
+        runHook preCheck
+        pytest -q tests/test_liveness.py
+        ruff check nix_fast_build
+        mypy nix_fast_build
+        runHook postCheck
+      '';
+    });
+
+  # The patches only touch Python control flow, so the real risk is that the
+  # surrounding source drifted out from under the series on a base bump --
+  # `checks.<system>.patched-src-nix-fast-build` (and a build of `package`)
+  # already catches that. The smoke test additionally runs the binary so an
+  # import-time break surfaces here rather than mid-CI-run; `--help` exits 0
+  # without touching a store or daemon (absent in the sandbox).
   smoke =
     pkgs.runCommand "nix-fast-build-smoke"
     {

@@ -1,21 +1,19 @@
-{pkgs}: let
+{
+  ix,
+  lib,
+  pkgs,
+}: let
   inherit (pkgs.haskell.lib) compose;
 
   # `nom build` reads every .drv with the `nix-derivation` Haskell library. Its
   # 1.1.3 parser runs each output path through `filepathParser`, which fails on
   # an empty string, but a floating content-addressed (or deferred) output is
   # exactly `("out","","r:sha256","")` with an empty path. So nom spams
-  # `DerivationParseError "string"` (attoparsec's `string` combinator failing on
-  # the next `]`/`,` literal after the output parser backtracks) and renders no
-  # dependency graph for CA derivations, which the index repo builds heavily.
-  #
-  # The patch keeps the single-constructor `DerivationOutput` record and only
-  # widens `filepathParser` to accept an empty path. nom is then unchanged:
-  # `insertDerivation` calls `parseStorePath ""`, which returns `Nothing`, so the
-  # still-unrealised floating output is dropped via `traverseMaybeWithKey`
-  # instead of crashing on a partial field selector. This is deliberately
-  # smaller than upstream PR #26, which turns `DerivationOutput` into a sum type
-  # and would force a matching nom source patch.
+  # `DerivationParseError "string"` and renders no dependency graph for CA
+  # derivations, which the index repo builds heavily. The fix is a registry
+  # fork of Gabriella439/Haskell-Nix-Derivation-Library (nix-derivation-src +
+  # ./patches, driven by lib/fork-packages.nix); the patch's commit message
+  # carries the full WHY, including why it stays smaller than upstream PR #26.
   #
   # nixpkgs builds nom as `haskellPackages.callPackage ./generated-package.nix`
   # (top-level, not in the haskellPackages set), so feed the override through the
@@ -24,9 +22,30 @@
   #
   # Upstream: https://github.com/maralorn/nix-output-monitor/issues/122
   #           https://github.com/Gabriella439/Haskell-Nix-Derivation-Library/issues/28
+  patchedNixDerivationSrc = ix.patchedSrc {
+    name = "nix-derivation";
+    src = ix.nix-derivationSrc;
+    patchDir = ./patches;
+  };
+
+  # The hackage recipe expects its source's cabal version; a haskellPackages
+  # bump past 1.1.3 with a stale nix-derivation-src pin would silently build
+  # the old tree under the new label, so fail eval until the pin is advanced.
+  # `overrideSrc` also drops the hackage cabal-revision overlay
+  # (editedCabalFile), which is safe because the pinned tree already carries
+  # the revisions' dependency-bound relaxations (see flake.nix).
   haskellPackages = pkgs.haskellPackages.extend (
     _hfinal: hprev: {
-      nix-derivation = compose.appendPatch ./ca-empty-output-path.patch hprev.nix-derivation;
+      nix-derivation = assert lib.assertMsg (hprev.nix-derivation.version == "1.1.3") ''
+        packages/nix/nix-output-monitor: haskellPackages.nix-derivation is
+        ${hprev.nix-derivation.version} but nix-derivation-src pins 1.1.3.
+        Repin the nix-derivation-src input to the matching upstream rev and
+        run `nix run .#rebase-patches -- nix-derivation`.'';
+        compose.overrideSrc {
+          src = patchedNixDerivationSrc;
+          version = hprev.nix-derivation.version;
+        }
+        hprev.nix-derivation;
     }
   );
 

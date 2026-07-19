@@ -1,6 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 19 Jul 2026 01:31:00 -0700
+Subject: [PATCH] tokenizer: accept underscore digit separators in numeric
+ literals
+
+Lex `1_000`, `1_000.000_1`, and `2.5e1_0` -- the dialect index's
+patched nix lexer accepts (packages/nix/nix/patches/0014-libexpr-
+accept-underscore-digit-separators-in-numeri.patch). alejandra, statix,
+and deadnix all parse nix through rnix, and none of them can format or
+lint a tree that uses separators until their tokenizer takes them; the
+index packages patch this into each tool's vendored rnix crate at build
+time (lib/util/rnix-digit-separators).
+
+Semantics mirror the flex patch exactly: one or more `_` between two
+digits of the integer part, the fraction, or the exponent; never
+leading (`_1_000` stays an identifier) or trailing (`1_` still lexes as
+`1` then `_`). Token text keeps the separators, so a formatter passes
+them through verbatim.
+
+Refs indexable-inc/index#3638
+
+diff --git a/src/tokenizer.rs b/src/tokenizer.rs
+index de621f0..a880a58 100644
 --- a/src/tokenizer.rs
 +++ b/src/tokenizer.rs
-@@ -525,14 +525,14 @@
+@@ -525,14 +525,14 @@ impl Tokenizer<'_> {
                  // More background on this: https://github.com/nix-community/rnix-parser/issues/157
                  if fst == '0' && self.peek() != Some('.') {
                      // In that case just consume the remaining number characters to fill the TOKEN_INTEGER
@@ -18,7 +42,7 @@
                          self.consume_scientific()
                      } else {
                          TOKEN_INTEGER
-@@ -543,13 +543,35 @@
+@@ -543,13 +543,35 @@ impl Tokenizer<'_> {
          })
      }
  

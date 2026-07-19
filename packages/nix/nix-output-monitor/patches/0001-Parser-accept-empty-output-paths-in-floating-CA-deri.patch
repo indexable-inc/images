@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 19 Jul 2026 01:30:58 -0700
+Subject: [PATCH] Parser: accept empty output paths in floating-CA derivations
+
+The 1.1.3 parser runs every output path through filepathParser, which
+fails on an empty string, but a floating content-addressed (or
+deferred) output is exactly ("out","","r:sha256","") with an empty
+path. A consumer parsing such a .drv gets DerivationParseError "string"
+(attoparsec's `string` combinator failing on the next `]`/`,` literal
+after the output parser backtracks). nix-output-monitor, which reads
+every .drv of a build with this library, spams that error and renders
+no dependency graph for content-addressed builds.
+
+Keep the single-constructor DerivationOutput record and only widen
+filepathParser to accept the empty path. nix-output-monitor is then
+unchanged: insertDerivation calls parseStorePath "", which returns
+Nothing, so a still-unrealised floating output is dropped via
+traverseMaybeWithKey instead of crashing on a partial field selector.
+This is deliberately smaller than upstream PR #26, which turns
+DerivationOutput into a sum type and would force a matching
+nix-output-monitor source patch.
+
+Upstream reports:
+https://github.com/maralorn/nix-output-monitor/issues/122
+https://github.com/Gabriella439/Haskell-Nix-Derivation-Library/issues/28
+
+Refs indexable-inc/index#3638
+
+diff --git a/src/Nix/Derivation/Parser.hs b/src/Nix/Derivation/Parser.hs
+index 3aac359..f92e807 100644
+--- a/src/Nix/Derivation/Parser.hs
++++ b/src/Nix/Derivation/Parser.hs
+@@ -136,6 +136,12 @@ filepathParser = do
+     text <- textParser
+     let str = Data.Text.unpack text
+     case (Data.Text.uncons text, System.FilePath.isValid str) of
++        -- An empty path is a floating content-addressed or deferred output
++        -- (`("out","","r:sha256","")` / `("out","","","")`); the store path is
++        -- only assigned after realisation. Accept it instead of failing so
++        -- consumers can parse CA derivations. https://github.com/Gabriella439/Haskell-Nix-Derivation-Library/issues/28
++        (Nothing, _) -> do
++            return str
+         (Just ('/', _), True) -> do
+             return str
+         _ -> do
