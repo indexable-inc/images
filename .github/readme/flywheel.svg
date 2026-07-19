@@ -7,23 +7,43 @@
     text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; fill: var(--fg); }
     .m { fill: var(--muted); }
     .frame { fill: none; stroke: var(--line); stroke-width: 1.3; }
-    .wire { fill: none; stroke: var(--fg); stroke-width: 1.3; }
-    .head { fill: var(--fg); }
+    .mwire { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+    .mhead { fill: var(--muted); }
+    .cursor { fill: var(--fg); animation: blink 1.2s steps(1) infinite; }
+    .pulse { fill: none; stroke: var(--fg); stroke-width: 5; }
+    #p1 { stroke-dasharray: 14 175; stroke-dashoffset: 14; animation: k1 6s steps(12) infinite; }
+    #p2 { stroke-dasharray: 14 160; stroke-dashoffset: 14; animation: k2 6s steps(12) infinite; animation-delay: 1.5s; }
+    #p3 { stroke-dasharray: 14 130; stroke-dashoffset: 14; animation: k3 6s steps(12) infinite; animation-delay: 3s; }
+    #p4 { stroke-dasharray: 14 140; stroke-dashoffset: 14; animation: k4 6s steps(12) infinite; animation-delay: 4.5s; }
+    @keyframes k1 { 0% { stroke-dashoffset: 14; } 25% { stroke-dashoffset: -175; } 100% { stroke-dashoffset: -175; } }
+    @keyframes k2 { 0% { stroke-dashoffset: 14; } 25% { stroke-dashoffset: -160; } 100% { stroke-dashoffset: -160; } }
+    @keyframes k3 { 0% { stroke-dashoffset: 14; } 25% { stroke-dashoffset: -130; } 100% { stroke-dashoffset: -130; } }
+    @keyframes k4 { 0% { stroke-dashoffset: 14; } 25% { stroke-dashoffset: -140; } 100% { stroke-dashoffset: -140; } }
+    @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) {
+      .pulse { display: none; }
+      .cursor { animation: none; }
+    }
   </style>
   <defs>
-    <marker id="a" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path class="head" d="M 0 0 L 8 4 L 0 8 z"/>
+    <marker id="am" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
     </marker>
   </defs>
   <path class="frame" d="M 136 14 H 711 Q 719 14 719 22 V 218 Q 719 226 711 226 H 9 Q 1 226 1 218 V 22 Q 1 14 9 14 H 22"/>
   <text x="28" y="18.5">[-] flywheel</text>
+  <rect class="cursor" x="127" y="8" width="7" height="12"/>
   <text x="80" y="92">a change lands once</text>
   <text x="440" y="92">it reaches everything</text>
   <text x="456" y="172">everything improves</text>
   <text x="80" y="172">the next change is cheaper</text>
   <text class="m" x="360" y="136" text-anchor="middle">one repo, one graph</text>
-  <path class="wire" marker-end="url(#a)" d="M 245 87 H 420"/>
-  <path class="wire" marker-end="url(#a)" d="M 620 87 H 664 V 167 H 628"/>
-  <path class="wire" marker-end="url(#a)" d="M 436 167 H 306"/>
-  <path class="wire" marker-end="url(#a)" d="M 60 167 H 30 V 87 H 60"/>
+  <path class="mwire" marker-end="url(#am)" d="M 245 87 H 420"/>
+  <path class="mwire" marker-end="url(#am)" d="M 620 87 H 664 V 167 H 628"/>
+  <path class="mwire" marker-end="url(#am)" d="M 436 167 H 306"/>
+  <path class="mwire" marker-end="url(#am)" d="M 60 167 H 30 V 87 H 60"/>
+  <path id="p1" class="pulse" d="M 245 87 H 420"/>
+  <path id="p2" class="pulse" d="M 620 87 H 664 V 167 H 628"/>
+  <path id="p3" class="pulse" d="M 436 167 H 306"/>
+  <path id="p4" class="pulse" d="M 60 167 H 30 V 87 H 60"/>
 </svg>
