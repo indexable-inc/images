@@ -10,6 +10,9 @@ export type BenchCell = {
   value: string;
   source: BenchSource;
   note?: string;
+  // Plottable 0-100 score for BenchScorePanels; omit for cells on other
+  // scales (Elo, price, tok/s) and for values the chart cannot place.
+  chart?: number;
 };
 
 export type BenchColumn = {
