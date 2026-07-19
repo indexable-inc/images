@@ -53,7 +53,16 @@
   # let-block:
   #  - context1M = false: every 1M path in the CLI (the [1m] model suffix, the
   #    silent auto-upgrade, the context-1m beta header) is ~5x input price;
-  #    past-the-window work belongs in subagents.
+  #    past-the-window work belongs in subagents. Cost tradeoff, not
+  #    perf-neutral: the Fable 5 system card measured its agentic scores at
+  #    max-effort adaptive thinking, 128K max output tokens per turn, and
+  #    contexts up to 1M (footnote 27: raising the per-turn cap from 16K to
+  #    128K moved the OSWorld score). Do not additionally lower per-turn
+  #    output caps (CLAUDE_CODE_MAX_OUTPUT_TOKENS) or effort; tight caps
+  #    silently degrade agentic performance. This posture is Claude Code
+  #    harness only; other harnesses and raw API callers set their own.
+  #    Subagents need not all run fable; match model strength to subtask
+  #    difficulty.
   #  - cron = false: drops the scheduling/loop tools.
   #  - autoCompactWindow = 300000: native-1M models (Fable 5, Sonnet 5,
   #    Opus 4.8) otherwise autocompact near the 1M cliff; 300K matches the
