@@ -1,0 +1,13 @@
+---
+id: activation-step-speedups
+postedAt: 2026-07-19T14:00:00-07:00
+title: "Two activation steps stop wasting 2.5 seconds"
+tags: [home-manager, nix, performance]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/3687
+---
+
+The new per-step activation timings immediately paid for themselves. `clearBlockedCookies` spent 2 of its 2.1 seconds inside Python's import machinery: the step runs a bare `.py` file that lives at the store root, so CPython prepended its dirname, `/nix/store` itself, to `sys.path`, and every stdlib import miss re-listed the entire store. The actual cookie work costs 30 milliseconds. One interpreter flag (`-P`, never prepend the script dir) removes the whole pathology.
+
+`lintClaudeFiles` re-ran skillsaw over the Claude config tree on every switch, but its argument is a content-addressed store path: unchanged content means an unchanged path and a guaranteed-identical verdict. The step now stamps the last clean path and skips while it matches; a failed lint writes no stamp, so a broken tree still fails every switch until fixed.

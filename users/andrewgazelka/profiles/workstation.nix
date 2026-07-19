@@ -85,7 +85,11 @@
   # blocked. See scripts/clear-blocked-cookies.py.
   clearBlockedCookies = ix.writeBashApplication pkgs {
     name = "clear-blocked-cookies";
-    text = ''exec ${pkgs.python3.interpreter} ${configRoot + "/scripts/clear-blocked-cookies.py"} "$@"'';
+    # -P: the script is a bare .py at the store root, so without it CPython
+    # prepends its dirname -- /nix/store itself -- to sys.path, and every
+    # stdlib import miss relists the whole store (~3s of a 3.2s run went to
+    # posix.listdir; the cookie work is ~0.03s). See index#3687.
+    text = ''exec ${pkgs.python3.interpreter} -P ${configRoot + "/scripts/clear-blocked-cookies.py"} "$@"'';
   };
 
   # Override fish to skip failing tests
