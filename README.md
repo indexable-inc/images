@@ -10,10 +10,6 @@ It exists because agents now write patches faster than upstream review can absor
 
 ## Why
 
-<p align="center">
-  <img src=".github/readme/unblocked.svg" alt="agents write code faster than upstream review can take it; index lands the change on main now and fans it out to everyone" width="720">
-</p>
-
 ### A change lands once and reaches everything
 
 <p align="center">
