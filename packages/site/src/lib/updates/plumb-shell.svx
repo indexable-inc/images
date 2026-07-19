@@ -1,0 +1,37 @@
+---
+id: plumb-shell
+postedAt: 2026-07-18T19:45:00-07:00
+title: "plumb: a shell where every run is a value"
+links:
+  - { label: "mirror repo", href: "https://github.com/indexable-inc/plumb" }
+  - { label: "PR #3579", href: "https://github.com/indexable-inc/index/pull/3579" }
+  - { label: "issue #3578", href: "https://github.com/indexable-inc/index/issues/3578" }
+tags:
+  - shell
+  - rust
+  - agents
+  - interesting
+---
+
+`packages/plumb` is a bash-subset shell built library-first for LLM agents. Run
+`cargo clippy 2>&1 | tail -n 5` and the run comes back as a value: per-stage
+argv, status, timing, and bounded captures of every stream, including what each
+pipe stage fed the next. Outputs auto-bind to variables (`$o1_0` is everything
+`tail` consumed), so a later command can reuse any earlier stream without
+re-running it.
+
+Three crates: `plumb-syntax` (spanned parser; unsupported bash is a loud error,
+never a misparse), `plumb-core` (cloneable `Shell` over shared state, tee'd
+capture engine with backpressure, strict semantics: pipefail, unset-var error,
+failglob, no word splitting), and the `plumb` CLI (reedline REPL with
+per-stage summaries and `:runs` / `:json` / `:out` inspection, `-c`, script and
+stdin modes, `--json`). A public read-only mirror is generated at
+`indexable-inc/plumb`.
+
+The Elixir binding (`plumb-ex`, via unibind) exposes `Plumb.Shell.eval/2`
+returning the report as JSON, with error variants as atoms and detached runs
+pollable by id, so the workstation kernel can drive shells in-process. Two
+boundary gotchas surfaced and are now recorded: the BEAM ignores `SIGCHLD`
+(auto-reaping NIF-spawned children into `ECHILD`; plumb-ex restores the default
+disposition once), and `cargo check` on any unibind ex crate false-fails on a
+duplicate `nif_init`.
