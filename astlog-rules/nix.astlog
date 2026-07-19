@@ -139,13 +139,29 @@
 ;; no-builtins-path-without-name: `builtins.path { path = ...; }` without
 ;; `name` derives the store-path name from the working directory. Set
 ;; `name = "<stable>"` so the result is reproducible across clones.
+;; `name` can be bound directly or brought in with `inherit`/`inherit (x)`;
+;; the inherit forms carry no `attrpath` node, so a helper relation covers
+;; them (#3747).
+(rule (attrset-inherits-name attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (inherit attrs: (inherited_attrs attr: (identifier) @a)))) @attrs")
+  (text a "name"))
+(rule (attrset-inherits-name attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (inherit_from attrs: (inherited_attrs attr: (identifier) @a)))) @attrs")
+  (text a "name"))
 (rule (no-builtins-path-without-name n)
   (match nix "
     (apply_expression
       function: (select_expression) @f
       argument: (attrset_expression) @attrs) @n")
   (text f "builtins.path")
-  (no-descendant attrs "attrpath" "name"))
+  (no-descendant attrs "attrpath" "name")
+  (not (attrset-inherits-name attrs)))
 (lint no-builtins-path-without-name error
   "`builtins.path` without `name` derives the store-path name from the working directory; set `name = \"<stable>\"` so the result is reproducible across clones")
 

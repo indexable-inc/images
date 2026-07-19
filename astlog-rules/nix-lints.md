@@ -272,7 +272,7 @@ __impure = true: prefer ix.writeNushellApplication for side-effect orchestrators
 
 `builtins.path { path = ...; }` without `name` derives the store-path name from the working directory. Set `name = "<stable>"` so the result is reproducible across clones.
 
-*Matches:* `apply_expression` · *predicates:* `no-descendant`, `text` · *1 pattern variant*
+*Matches:* `apply_expression` · *predicates:* `no-descendant`, `text`, `not` · *1 pattern variant*
 
 <table><tr><th>flagged</th><th>ok</th></tr><tr><td>
 
@@ -284,6 +284,10 @@ builtins.path { path = ./src; }
 
 ```nix
 builtins.path { name = "source"; path = ./src; }
+```
+
+```nix
+let name = "source"; in builtins.path { inherit name; path = ./src; }
 ```
 
 </td></tr></table>

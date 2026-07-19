@@ -1,1 +1,8 @@
-builtins.path { name = "source"; path = ./src; }
+[
+  (builtins.path {
+    name = "source";
+    path = ./src;
+  })
+  (let name = "source"; in builtins.path { inherit name; path = ./src; })
+  (let attrs = { name = "source"; }; in builtins.path { inherit (attrs) name; path = ./src; })
+]

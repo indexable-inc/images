@@ -734,11 +734,7 @@ only to make the plan's inputs body-independent.
     # The slice map units.nix resolves srctree-relative paths through:
     # exact directory keys plus the files-only slices keyed by their
     # directory ("" for the tree root).
-    sliceMap = builtins.listToAttrs (map (shard: {
-        name = shard.dest;
-        value = shard.slice;
-      })
-      shardSpecs);
+    sliceMap = lib.genAttrs' shardSpecs (shard: lib.nameValuePair shard.dest shard.slice);
 
     imported = import unitsNix {
       inherit pkgs;
