@@ -29,6 +29,14 @@ Make the filesystem answer like a database instead: an index, maintained
 incrementally from filesystem events, that answers "everything with
 attribute X" in query time rather than traversal time.
 
+## Example
+
+A systemd service that keeps every repo on a machine fresh: query "every
+folder containing `.git`" (or every folder deliberately tagged with a `git`
+xattr) and `git pull` each one every 30 seconds. Today that is a full
+filesystem scan per tick or a hand-maintained list; with the index it is
+one query, and newly cloned repos join automatically.
+
 ## Prior art
 
 flecs: entities with components, queried by component. Files are entities,
