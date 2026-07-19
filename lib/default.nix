@@ -749,7 +749,7 @@
       writeRustApplication
       ;
     btopSrc = btop-src;
-    "home-managerSrc" = home-manager-src;
+    home-managerSrc = home-manager-src;
     gitSrc = git-src;
     nushell = nushell-src;
     nushellSrc = nushell-src;
