@@ -42,6 +42,11 @@ defmodule IxMcp.MCP.Tools do
                                             skip CI) and never show a merge (#3548)
       Tui.act(uri, send_keys)               drive a federated TUI resource (optional
                                             peer arg)
+      TuiLocal.spawn(cmd, args)             spawn a local PTY program (vim, less, a
+                                            REPL); then TuiLocal.send/2,
+                                            .send_key(term, "enter" | "ctrl+c" | ...),
+                                            .wait_for(term, pattern),
+                                            .snapshot/1, .close/1
       Api.api("tail") / Api.help(Jobs, :tail)   discovery over this whole surface
 
   Each cell runs in its own BEAM process, so a blocking cell never delays

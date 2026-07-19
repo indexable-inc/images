@@ -1,6 +1,10 @@
 {
   lib,
   ix,
+  # The sibling package set: the compiled :tui_ex OTP app (packages/tui/ex)
+  # rides into the release and the check env as `IX_MCP_TUI_EX`, never as a
+  # mix dep, so the kernel and the NIF binding ship independently.
+  repoPackages,
 }: let
   # Read the package set from `ix` rather than a `pkgs` callPackage formal
   # (which `override` can't reach); `ix.pkgs` is the caller's set.
@@ -45,6 +49,10 @@
   # instead of trying to install one (impossible offline).
   rebar3Env.MIX_REBAR3 = lib.getExe pkgs.beamPackages.rebar3;
 
+  # Where IxMcp.TuiLocal loads the compiled :tui_ex app from at runtime
+  # ($IX_MCP_TUI_EX/ebin goes on the code path, priv/ holds the NIF).
+  tuiExApp = "${repoPackages.tui-ex}/lib/tui_ex";
+
   # The required Elixir quality lane: compile --warnings-as-errors (Elixir
   # 1.18's set-theoretic type checker), format, `mix credo --strict` against
   # the shared lib/elixir/credo.exs, and the ExUnit suite.
@@ -52,7 +60,9 @@
     pname = "ix-mcp-ex-check";
     inherit version src elixir erlang;
     mixDeps = mixFodDeps;
-    extraEnv = rebar3Env;
+    # IX_MCP_TUI_EX makes the suite's local-TUI tests run in the sandbox
+    # (test_helper.exs skips them when it is unset).
+    extraEnv = rebar3Env // {IX_MCP_TUI_EX = tuiExApp;};
   };
 
   meta = {
@@ -119,11 +129,15 @@
       # keeps the watcher independent of whatever PATH the MCP client
       # launched the server with (#3553). set-default, not set: mix test and
       # operators may point the watcher at a different gh.
+      # IX_MCP_TUI_EX follows the IX_MCP_GH pattern: bake the store path of
+      # the compiled :tui_ex app so TuiLocal works regardless of the
+      # client's PATH; set-default keeps it operator-overridable.
       makeWrapper "$out/lib/ix-mcp-ex/bin/ix_mcp" "$out/bin/ix-mcp-ex" \
         --set IX_MCP_STDIO 1 \
         --set RELEASE_DISTRIBUTION none \
         --set-default RELEASE_TMP /tmp \
         --set-default IX_MCP_GH ${lib.getExe pkgs.gh} \
+        --set-default IX_MCP_TUI_EX ${tuiExApp} \
         --add-flags start
       runHook postInstall
     '';
@@ -142,7 +156,7 @@
     }
     ''
       set +e
-      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
         '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_set_name","arguments":{"name":"smoke"}}}' \
@@ -150,6 +164,7 @@
         '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"binary output rides as escapes","budget":60,"code":"IO.puts(<<255, 97>> <> \"bin-marker\")"}}}' \
         '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"connection survives binary output","budget":60,"code":"\"alive-after-binary\""}}}' \
         '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"crash dump routing probe","budget":60,"code":"System.fetch_env!(\"ERL_CRASH_DUMP\")"}}}' \
+        '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"local pty drive probe","budget":60,"code":"{:ok, t} = TuiLocal.spawn(\"cat\", []); :ok = TuiLocal.send(t, \"pty-smoke\\r\"); {:ok, s} = TuiLocal.wait_for(t, \"pty-smoke\"); :ok = TuiLocal.close(t); s"}}}' \
         | IX_MCP_ACTIONS_DB="$PWD/actions.db" ix-mcp-ex > response.jsonl 2> server-stderr.log
       rc=$?
       set -e
@@ -229,6 +244,18 @@
         *"$PWD/erl_crash.dump"*) ;;
         *)
           echo "ERL_CRASH_DUMP is not routed next to the action log" >&2
+          printf '%s\n' "$out_lines" >&2
+          exit 1
+          ;;
+      esac
+      # The release boots embedded (no code-path autoload), so this is the
+      # one gate that proves IxMcp.TuiLocal's runtime load of the :tui_ex
+      # app -- code path, app load, NIF @on_load -- works in the shipped
+      # artifact, not just under mix.
+      case "$out_lines" in
+        *'pty-smoke'*) ;;
+        *)
+          echo "exec did not drive a local PTY through TuiLocal" >&2
           printf '%s\n' "$out_lines" >&2
           exit 1
           ;;

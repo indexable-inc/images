@@ -21,7 +21,8 @@ defmodule IxMcp.Api do
     IxMcp.Checkpoint,
     IxMcp.Read,
     IxMcp.PrWatch,
-    IxMcp.Tui
+    IxMcp.Tui,
+    IxMcp.TuiLocal
   ]
 
   @type row :: %{

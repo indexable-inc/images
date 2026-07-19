@@ -113,6 +113,7 @@ members = [
   "packages/sqlmerge",
   "packages/terminal/kitty",
   "packages/terminal/terminal-theme",
+  "packages/tui/ex",
   "packages/tui/reel",
   "packages/tui/tui",
   "packages/tui/tui-node",

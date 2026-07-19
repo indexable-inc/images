@@ -13121,6 +13121,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tui-ex"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustler",
+ "tui",
+ "unibind",
+]
+
+[[package]]
 name = "tui-node"
 version = "0.1.0"
 dependencies = [
