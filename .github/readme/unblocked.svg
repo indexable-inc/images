@@ -81,35 +81,43 @@
     <animateMotion begin="1s" dur="1.5s" repeatCount="indefinite" path="M 100 230 L 252 230"/>
   </rect>
 
-  <rect class="blk" x="-3.5" y="-3.5" width="7" height="7">
-    <animateMotion begin="0s" dur="1.5s" repeatCount="indefinite" path="M 328 230 L 500 230 L 500 185 L 634 185"/>
+  <rect class="blk" x="-4" y="-4" width="8" height="8">
+    <animateMotion dur="1.5s" repeatCount="indefinite" path="M 328 230 L 500 230"/>
   </rect>
   <rect class="blk" x="-3.5" y="-3.5" width="7" height="7">
-    <animateMotion begin="0.12s" dur="1.5s" repeatCount="indefinite" path="M 328 230 L 500 230 L 500 208 L 634 208"/>
+    <animateMotion dur="1.5s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;1" keyTimes="0;0.4;1" path="M 500 230 L 500 185 L 634 185"/>
+    <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.4;0.47;1" dur="1.5s" repeatCount="indefinite"/>
   </rect>
   <rect class="blk" x="-3.5" y="-3.5" width="7" height="7">
-    <animateMotion begin="0.24s" dur="1.5s" repeatCount="indefinite" path="M 328 230 L 500 230 L 634 230"/>
+    <animateMotion dur="1.5s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;1" keyTimes="0;0.4;1" path="M 500 230 L 500 208 L 634 208"/>
+    <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.4;0.47;1" dur="1.5s" repeatCount="indefinite"/>
   </rect>
   <rect class="blk" x="-3.5" y="-3.5" width="7" height="7">
-    <animateMotion begin="0.36s" dur="1.5s" repeatCount="indefinite" path="M 328 230 L 500 230 L 500 252 L 634 252"/>
+    <animateMotion dur="1.5s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;1" keyTimes="0;0.4;1" path="M 500 230 L 634 230"/>
+    <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.4;0.47;1" dur="1.5s" repeatCount="indefinite"/>
   </rect>
   <rect class="blk" x="-3.5" y="-3.5" width="7" height="7">
-    <animateMotion begin="0.48s" dur="1.5s" repeatCount="indefinite" path="M 328 230 L 500 230 L 500 275 L 634 275"/>
+    <animateMotion dur="1.5s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;1" keyTimes="0;0.4;1" path="M 500 230 L 500 252 L 634 252"/>
+    <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.4;0.47;1" dur="1.5s" repeatCount="indefinite"/>
+  </rect>
+  <rect class="blk" x="-3.5" y="-3.5" width="7" height="7">
+    <animateMotion dur="1.5s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;1" keyTimes="0;0.4;1" path="M 500 230 L 500 275 L 634 275"/>
+    <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.4;0.47;1" dur="1.5s" repeatCount="indefinite"/>
   </rect>
 
   <rect class="ink" x="640" y="180" width="10" height="10">
-    <animate attributeName="opacity" values="0.35;1;0.35" dur="1.5s" begin="0.75s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.35;1;0.35" keyTimes="0;0.07;1" dur="1.5s" begin="0.5s" repeatCount="indefinite"/>
   </rect>
   <rect class="ink" x="640" y="203" width="10" height="10">
-    <animate attributeName="opacity" values="0.35;1;0.35" dur="1.5s" begin="0.87s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.35;1;0.35" keyTimes="0;0.07;1" dur="1.5s" begin="0.5s" repeatCount="indefinite"/>
   </rect>
   <rect class="ink" x="640" y="225" width="10" height="10">
-    <animate attributeName="opacity" values="0.35;1;0.35" dur="1.5s" begin="0.99s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.35;1;0.35" keyTimes="0;0.07;1" dur="1.5s" begin="0.5s" repeatCount="indefinite"/>
   </rect>
   <rect class="ink" x="640" y="247" width="10" height="10">
-    <animate attributeName="opacity" values="0.35;1;0.35" dur="1.5s" begin="1.11s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.35;1;0.35" keyTimes="0;0.07;1" dur="1.5s" begin="0.5s" repeatCount="indefinite"/>
   </rect>
   <rect class="ink" x="640" y="270" width="10" height="10">
-    <animate attributeName="opacity" values="0.35;1;0.35" dur="1.5s" begin="1.23s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.35;1;0.35" keyTimes="0;0.07;1" dur="1.5s" begin="0.5s" repeatCount="indefinite"/>
   </rect>
 </svg>

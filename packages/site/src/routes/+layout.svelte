@@ -7,6 +7,7 @@
   const { children }: { children: Snippet } = $props();
 
   const homeHref = resolve('/');
+  const philosophyHref = resolve('/philosophy');
   const rfcsHref = resolve('/rfcs');
   const feedHref = resolve('/feed.xml');
 </script>
@@ -18,6 +19,7 @@
 <header>
   <a class="wordmark" href={homeHref}>index</a>
   <nav>
+    <a href={philosophyHref}>philosophy</a>
     <a href={rfcsHref}>rfcs</a>
     <a href="https://github.com/indexable-inc/index">github</a>
     <a href="https://ix.dev">ix.dev</a>
