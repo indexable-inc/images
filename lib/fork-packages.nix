@@ -688,6 +688,18 @@
           upstream = "hold";
           reason = "Fork policy gate for the 0025-0028 backports (indexable-inc/index#3645): upstream ships the behavior unconditionally, we default it off pending fleet-wide equivalence sweeps. Retire together with the backports when the base reaches 2.35+.";
         };
+        # 0030: a relative path input that is a git submodule of its parent
+        # is a pinned tree, but its lock node carried no metadata; consumers
+        # could not see the pin's age or provenance (a prompt segment showed
+        # a fresh pin as 20653 days old, indexable-inc/index#3733). Stamps
+        # the gitlink rev and its commit time into the locked ref, so
+        # flake.lock and inputs.<name>.{lastModified,rev,shortRev} carry
+        # them. Plain subdirectories stay unstamped: their time equals the
+        # parent's and would churn the lock on every parent commit.
+        "0030-libflake-stamp-submodule-metadata-on-relative-path-f.patch" = {
+          upstream = "hold";
+          reason = "Submodule metadata for relative path inputs (indexable-inc/index#3737); companion to 0024 in the sparseNodes direction (NixOS/nix#7730). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
     {
