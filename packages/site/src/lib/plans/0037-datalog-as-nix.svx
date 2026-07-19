@@ -1,0 +1,88 @@
+---
+id: 0037-datalog-as-nix
+number: '0037'
+title: 'Datalog as a generalization of Nix: cached demand-driven rules over a content-addressed memo table'
+status: Sketch
+rfc: true
+authors: andrewgazelka
+created: '2026-07-19'
+updated: '2026-07-19'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 8, why: 'reframes the build system as an instance of a general cached logic engine' }
+  impact: { value: 7, why: 'eval-layer incrementality plus first-class queries over the store, if the claim holds' }
+  effort: { value: 8, why: 'a tabled evaluator over the CA build trace is a real project even at prototype scope' }
+  risk: { value: 7, why: 'may collapse into a plain eval-cache project with Datalog adding nothing marginal' }
+  maturity: { value: 2, why: 'literature is strong (BSalC, Skyframe, DICE, Salsa, DBSP) but nothing exists in-repo' }
+  leverage: { value: 7, why: 'one fact store would back builds, fleet queries, and provenance at once' }
+  taste: { value: 7, why: 'choosing tabled top-down over fashionable bottom-up engines is the load-bearing call' }
+description: 'Build Systems a la Carte places Nix at suspending scheduling plus deep constructive traces, one point in a broader space: demand-driven tabled Datalog over content-addressed memo tables. This plan states the correspondence precisely, argues bottom-up engines are the wrong default, and scopes a salsa-based prototype to test whether the generalization buys incremental eval and first-class queries or collapses into an eval-cache project.'
+---
+
+## Summary
+
+Nix already sits in a known design grid: Build Systems a la Carte
+classifies it as a suspending scheduler with deep constructive traces,
+i.e. a lazy, demand-driven evaluator over a content-addressed memo table.
+That is one point in a space whose general form is cached, demand-driven
+logic programming: tabled (top-down) Datalog whose facts are keyed by
+content hashes. This plan states the correspondence, and scopes a
+prototype to learn whether the generalization earns its keep.
+
+## The claim
+
+A derivation is a rule head: built(Drv, Out) holds when the input facts
+hold and the builder maps input hashes to an output hash. The Nix build
+trace is literally the memo table for that relation (the manual now
+describes it as exactly that). Evaluation and instantiation form a second,
+pure rule layer. What the generalization would add over Nix today:
+
+- incremental re-evaluation with early cutoff at the eval layer (the
+  current eval cache is coarse; Skyframe, DICE, and Salsa show node-level
+  invalidation is the proven shape)
+- queries as first-class rules over the same fact store: reverse
+  dependencies, which fleet hosts realize a closure, why a path exists
+- provenance for free: Datalog derivation trees are the provenance
+
+## Why it can work
+
+Every serious incremental engine converged on the same shape: Bazel
+Skyframe, Buck2 DICE, and Salsa are memoized function graphs with
+dependency tracking, early cutoff, and demand-driven evaluation. That
+shape is tabled Datalog evaluation restricted to functional
+(single-valued) relations. Nix adds the one piece those systems lack:
+content addressing makes memo keys stable across machines, which is why a
+shared cache works at all.
+
+## Why it might not
+
+- Bottom-up Datalog (DDlog, DBSP, Souffle) is the wrong default: it
+  materializes every derivable fact, and a build graph needs laziness. The
+  engine must be top-down/tabled, so off-the-shelf incremental-Datalog
+  engines do not drop in.
+- Builders are effects with imperfect determinism; the logic layer must
+  treat them as trusted oracles, which is exactly what constructive traces
+  already do, limiting what pure Datalog semantics adds.
+- Dynamic dependencies (Nix RFC 92 plan dynamism) become rules that
+  generate rules; tabling can express it, but it is the hard 20 percent.
+- The marginal win over simply adopting a DICE- or Salsa-style eval cache
+  must be demonstrated, or this collapses into that smaller project.
+
+## Prototype plan
+
+1. Model a small slice (fetchurl plus text-manipulation builds) as facts
+   and rules over the existing CA build trace; a tabled evaluator in Rust
+   using salsa as the tabling engine, shelling out to nix for realization.
+2. Measure incremental re-eval cost against nix eval on a nixpkgs-shaped
+   change, and express one nontrivial query (reverse deps with provenance)
+   as a rule.
+3. Decide: generalize, or record that eval-layer incrementality, not
+   Datalog semantics, is the valuable part, and pursue that instead.
+
+## Prior art
+
+Build Systems a la Carte (Mokhov, Mitchell, Peyton Jones); the Nix manual
+build-trace page; Bazel Skyframe docs; Buck2 DICE docs; Salsa and Adapton;
+DDlog and DBSP for the bottom-up incremental world; Nix RFC 92.
