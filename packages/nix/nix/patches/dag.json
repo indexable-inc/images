@@ -135,6 +135,10 @@
       "deps": [
         "0028-libexpr-Handle-lazy-paths-in-builtins.storePath-bett.patch"
       ]
+    },
+    {
+      "patch": "0030-libflake-stamp-submodule-metadata-on-relative-path-f.patch",
+      "deps": []
     }
   ]
 }
