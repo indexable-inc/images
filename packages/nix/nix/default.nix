@@ -217,8 +217,10 @@ let
         ''
         + lib.optionalString isCross ''
           format=$(file -bL "$out/bin/nix")
+          # file(1) orders arch and kind differently across versions
+          # ("Mach-O 64-bit arm64 executable" vs "... executable arm64").
           case $format in
-          "Mach-O 64-bit executable ${machoArch}"*) ;;
+          "Mach-O 64-bit ${machoArch} executable"* | "Mach-O 64-bit executable ${machoArch}"*) ;;
           *)
             echo "expected a Mach-O 64-bit ${machoArch} executable, got: $format" >&2
             exit 1
