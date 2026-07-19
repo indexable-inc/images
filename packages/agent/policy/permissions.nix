@@ -108,18 +108,17 @@
   ];
 
   # Claude-bundled skills that inject Anthropic's own style guidance with no
-  # real benefit to this harness. The CLI cannot strip a bundled skill from
-  # the listing, but a scoped deny hard-blocks invocation (verified 2026-07,
-  # index#3607: `Skill(dataviz)` deny rejects the call; `artifact-design`
-  # additionally vanishes from the listing once the Artifact tool itself is
-  # denied in the wrapper's tool table). These denies HOLD under
-  # `--dangerously-skip-permissions` (probed 2026-07: tool absent, skill
-  # delisted, invocation denied under bypass), like every deny; bypass skips
-  # prompts, not deny rules. Unconditional: unlike the kernel-superseded rows
-  # these have no non-kernel fallback role.
+  # real benefit to this harness. `artifact-design` vanishes from the listing
+  # once the Artifact tool itself is denied in the wrapper's tool table, and
+  # this scoped deny hard-blocks any blind invocation (verified 2026-07,
+  # index#3607). It HOLDS under `--dangerously-skip-permissions` (probed
+  # 2026-07), like every deny; bypass skips prompts, not deny rules.
+  # Unconditional: unlike the kernel-superseded rows it has no non-kernel
+  # fallback role. The sibling `dataviz` skill needs no deny: the wrapper
+  # removes it outright via `skillOverrides` in claude-code/default.nix
+  # (index#3659), which both delists it and refuses invocation.
   claudeBundledSkillDenies = [
     "Skill(artifact-design)"
-    "Skill(dataviz)"
   ];
 in {
   claude = {
