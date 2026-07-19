@@ -1,0 +1,120 @@
+---
+id: 0035-endorsement-trust-lens
+number: '0035'
+title: 'Endorsement trust lens: judge ideas by local PageRank over people we trusted'
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-19'
+updated: '2026-07-19'
+trackingIssue: '#3631'
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 6, why: 'gives every agent the who-is-talking prior humans use, derived instead of gut-felt' }
+  impact: { value: 6, why: 'agents currently weigh a stranger and a proven contributor identically' }
+  effort: { value: 4, why: 'edges already exist in git, review, and issue history; the lens is a bounded graph walk' }
+  risk: { value: 4, why: 'a popularity prior can entrench cliques and be gamed; costly-act edges and caps contain it' }
+  maturity: { value: 2, why: 'weave trust-as-lens states the principle; nothing computes or consumes it in index' }
+  leverage: { value: 7, why: 'every triage surface (reviews, nominations, RFC comments) inherits one prior' }
+  taste: { value: 6, why: 'which edges count as endorsement is judgment; the walk is plumbing' }
+description: 'When an agent judges an incoming idea (a review comment, an issue suggestion, an external PR, RFC input), it should weigh who is talking the way people do: a voice close to voices we have consistently accepted starts with credit. The history to derive this already exists in merged PRs, approvals, and accepted claims. This plan defines the endorsement graph, a read-time personalized-PageRank lens over it, and the surfaces that consume the prior, never a stored reputation score.'
+---
+
+## Summary
+
+Give agents the prior humans use when they hear an idea: who is saying it,
+and how close is that voice to voices we already trust. Build an
+endorsement graph from acts the org has already recorded (merged and
+unreverted PRs, approvals, issues that led to landed fixes, accepted
+claims), and at judgment time run a personalized PageRank seeded at the
+principals the reader has consistently accepted, a few hops out. The
+result is a prior, computed per reader per query and never stored. If a
+new voice keeps agreeing with, or being leaned on by, people we have liked
+a lot, its ideas start with credit; a voice clustered with consistently
+rejected sources starts in deficit.
+
+## Motivation
+
+Agents treat all input as equally credible. A drive-by suggestion from an
+unknown account and a review comment from the person who wrote the
+subsystem get the same weight in the context window. Humans do not work
+this way, and the correction they apply is not bias, it is evidence:
+track record is data. We have that data and throw it away.
+
+The weave agent-memory plan (weave#281, extended in weave#337) already
+establishes the principle on the storage side: trust is a lens, never a
+stored column, and the journal's agrees, supersedes, and based_on facts
+form an endorsement graph. This plan is the index-side consumer: where the
+graph comes from in this repo's history, and which agent decisions read
+the prior.
+
+## Detailed design
+
+### Edges: only costly acts
+
+An endorsement edge is created by an act that cost something, never by a
+cheap signal:
+
+- A merged PR that was not reverted endorses its author (weight grows
+  with survival time).
+- An approving review that merged endorses the author; a requested change
+  that was accepted endorses the reviewer.
+- An issue whose fix landed endorses the filer.
+- In agent memory, a claim pulled into another principal's basis endorses
+  its author (weave based_on), as do agrees edges.
+
+Likes, comments, and volume do not create edges. That is the sybil
+defense: manufacturing standing requires landing real work past the
+existing gates.
+
+### The lens
+
+At judgment time the reader seeds personalized PageRank at the principals
+whose contributions it (or its operator) has consistently accepted, walks
+the endorsement edges a bounded number of hops, and reads off the mass on
+the voice being judged. Properties carried over from trust-as-lens:
+
+- Derived per reader per query; different readers legitimately weigh the
+  same history differently.
+- Never stored: no reputation column, no global leaderboard, nothing to
+  gradually go stale or get gamed at rest.
+- Local: the walk stays in the seed neighborhood, so pricing one voice
+  never needs the global graph.
+
+### Consumers
+
+- Review triage: code-reviewer and human-facing summaries order external
+  suggestions by prior, and say so.
+- Plan and RFC comments: input-wanted plans surface which feedback comes
+  from near the trusted cluster.
+- Plan 0034 nominations: the fixer drains high-prior nominations first,
+  and a class may require a minimum prior to skip human review.
+
+### What the prior may not do
+
+The prior orders attention; it never replaces gates. A high-trust voice
+still goes through 0034's risk classifier, review passes, and red-team
+evals: trusted people get compromised, and popularity is not authority.
+Symmetrically, a zero-prior voice is unpriced, not rejected; its
+acceptance check still speaks for itself.
+
+## Rollout
+
+1. Extract the edge set from git and GitHub history for index; validate
+   that the derived neighborhood matches operator intuition on a sample.
+2. Implement the lens as a query (0030's graph is the natural home; a
+   standalone extractor is fine until it lands).
+3. Wire the first consumer: suggestion ordering in review summaries.
+4. Feed 0034 nomination triage once both plans have landed their first
+   stages.
+
+## Open questions
+
+- Seed set: operator-curated, derived from the reader's own accept
+  history, or both?
+- Decay: does an endorsement from three years ago still carry mass?
+- Negative edges: reverted PRs and rejected claims as explicit deficit,
+  or just absent credit?
+
+Drafted by Claude Code (Fable); comments wanted, hence the RFC flag.
