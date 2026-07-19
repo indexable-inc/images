@@ -62,25 +62,13 @@
       "retired": false,
       "duplicates": []
     },
-    "0011-Add-ix-metadata-to-Cargo-manifests.patch": {
-      "upstream": "never",
-      "pr": null,
-      "retired": false,
-      "duplicates": []
-    },
-    "0012-Add-string_ip_field-lint.patch": {
+    "0011-Add-string_ip_field-lint.patch": {
       "upstream": "hold",
       "pr": null,
       "retired": false,
       "duplicates": []
     },
-    "0013-track-Cargo.lock-so-downstream-nix-consumers-don-t-c.patch": {
-      "upstream": "never",
-      "pr": null,
-      "retired": false,
-      "duplicates": []
-    },
-    "0014-Add-anonymous-tuple-return-type-lint.patch": {
+    "0012-Add-anonymous-tuple-return-type-lint.patch": {
       "upstream": "hold",
       "pr": null,
       "retired": false,

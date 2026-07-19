@@ -20,6 +20,32 @@
 #   input      : flake.lock input name whose `locked.rev` pins the base.
 #   url        : upstream git URL the base and rebase fetch from.
 #   patchDir   : repo-relative path to the ordered `*.patch` series.
+#   derivedPatches : optional list of patches DERIVED BY NIX at build time
+#                instead of stored as line diffs -- for mechanical or generated
+#                content (a stanza stamped into every manifest, a tracked
+#                lockfile) that re-conflicts on every rebase when kept as a
+#                diff. Each entry:
+#                  name      : short id (names the generated patch derivation).
+#                  generator : repo-relative path to a .nix file evaluating to
+#                              `{pkgs, src, ...}: drv` whose output is a single
+#                              unified-diff file produced at BUILD time from
+#                              the actual pinned tree (copy src, apply the
+#                              mechanical edit, diff old new). A generator must
+#                              fail loudly behind a structural guard (e.g.
+#                              "every `[package]` manifest got the stanza,
+#                              count > 0"), never silently no-op, and never
+#                              bake in magic totals that go stale.
+#                  reason    : one line, the patch's reason of record. Derived
+#                              patches are not commits, so the dag commit-body
+#                              reason check cannot cover them; this field does.
+#                  upstream  : always "never". A derived patch is repo-local
+#                              mechanical output and is invisible to
+#                              rebase-patches, dag.json, and upstream-sync by
+#                              construction (it is not a `*.patch` file), so it
+#                              can never be rebased, dag-tracked, or sent
+#                              upstream.
+#                `patchedSrc` appends the generator outputs after the static
+#                series; see lib/util/patched-src.nix.
 #   autoUpdate : whether the scheduled fork-sync (.github/workflows/fork-sync.yml)
 #                may free-float the base under a routine bump. `false` pins the
 #                input by rev and keeps it out of the cron; it moves only under a
@@ -303,26 +329,33 @@
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        # Adds ix-specific package metadata to clippy's own Cargo manifests.
-        "0011-Add-ix-metadata-to-Cargo-manifests.patch" = {
-          upstream = "never";
-          reason = "Repo-specific: adds ix packaging metadata to clippy's Cargo manifests.";
-        };
-        "0012-Add-string_ip_field-lint.patch" = {
+        "0011-Add-string_ip_field-lint.patch" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        # Tracks Cargo.lock so our nix consumers get a stable lock; upstream
-        # clippy deliberately gitignores it.
-        "0013-track-Cargo.lock-so-downstream-nix-consumers-don-t-c.patch" = {
-          upstream = "never";
-          reason = "Repo-specific: tracks Cargo.lock for our nix consumers; upstream intentionally gitignores it.";
-        };
-        "0014-Add-anonymous-tuple-return-type-lint.patch" = {
+        "0012-Add-anonymous-tuple-return-type-lint.patch" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
       };
+      # Mechanical deltas derived by nix from the pinned tree (see the
+      # `derivedPatches` field doc above): stored line diffs for these
+      # re-conflicted on every rebase and went stale whenever upstream added a
+      # manifest or moved a dependency.
+      derivedPatches = [
+        {
+          name = "ix-metadata";
+          generator = "packages/llm-clippy/patches/derived/ix-metadata.nix";
+          reason = "Repo-specific: stamps [package.metadata.ix.inputs] into every [package] manifest so cargo-unit treats the fork's crates like repo crates; derived from the tree so new upstream manifests are covered automatically.";
+          upstream = "never";
+        }
+        {
+          name = "cargo-lock";
+          generator = "packages/llm-clippy/patches/derived/cargo-lock.nix";
+          reason = "Repo-specific: tracks Cargo.lock for our nix consumers (upstream intentionally gitignores it); the committed lockfile lives next to the generator and moves only with the nightly / clippy-src bump.";
+          upstream = "never";
+        }
+      ];
     }
     {
       # mesa is panes-GPU-coupled: its input is pinned by rev (upstream tag

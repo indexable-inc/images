@@ -22,8 +22,10 @@
   # which the astlog `no-parent-path` rule bans).
   patchedSrcFor = pkgs:
     import (repoRoot + "/lib/util/patched-src.nix") {
-      inherit lib evalTimeSubstitutable;
+      inherit lib evalTimeSubstitutable pkgs;
       inherit (pkgs) applyPatches;
+      inherit (import (repoRoot + "/lib/fork-packages.nix")) forkPackages;
+      patchesRoot = repoRoot;
     };
 
   repoRustToolchainFile = lib.importTOML (repoRoot + "/rust-toolchain.toml");

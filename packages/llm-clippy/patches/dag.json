@@ -53,23 +53,13 @@
       ]
     },
     {
-      "patch": "0011-Add-ix-metadata-to-Cargo-manifests.patch",
-      "deps": [
-        "0002-Add-module_file_count-lint.patch"
-      ]
-    },
-    {
-      "patch": "0012-Add-string_ip_field-lint.patch",
+      "patch": "0011-Add-string_ip_field-lint.patch",
       "deps": [
         "0010-Add-non_trait_imports-lint.patch"
       ]
     },
     {
-      "patch": "0013-track-Cargo.lock-so-downstream-nix-consumers-don-t-c.patch",
-      "deps": []
-    },
-    {
-      "patch": "0014-Add-anonymous-tuple-return-type-lint.patch",
+      "patch": "0012-Add-anonymous-tuple-return-type-lint.patch",
       "deps": [
         "0005-Add-underscore_in_module_filename-lint.patch",
         "0009-Add-drop_must_use-lint.patch"
