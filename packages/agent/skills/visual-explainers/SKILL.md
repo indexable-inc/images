@@ -28,8 +28,11 @@ Promote any piece another board could reuse into the catalog instead of
 copying it.
 
 Fall back to a single self-contained HTML file (inline CSS and JS, vanilla,
-opens from file:// with the network off) only when the dashboard repo is
-unavailable.
+opens from file:// with the network off) when the dashboard repo is
+unavailable or the user explicitly asks for an HTML file. In the fallback,
+put multi-line code or command blocks in `pre`: newlines inside a styled
+`div` collapse silently into one run-on paragraph, and the page looks fine
+in the editor while shipping broken.
 
 ## Static-first: the lesson is visible on load
 
