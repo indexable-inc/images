@@ -66,13 +66,3 @@ The fastest way to get what this repo is for: short case examples, each a two-mi
 4. [Every session becomes searchable memory](https://indexable-inc.github.io/index/stories/searchable-history/): shell and agent history from every machine, one semantic index.
 5. [CI builds each crate exactly once](https://indexable-inc.github.io/index/stories/build-each-crate-once/): the Rust workspace as a per-crate build DAG.
 6. [A thousand agents, one Elixir kernel](https://indexable-inc.github.io/index/stories/elixir-agent-kernel/): agents work through supervised, fleet-federated workspaces on a runtime built for that shape.
-
-## Layout
-
-| dir | what |
-|---|---|
-| `packages/` | the tools |
-| `modules/` | NixOS + Home Manager modules |
-| `lib/` | build machinery (`cargo-unit`, package sets) |
-| `images/` | VM images |
-| `examples/` | consuming index from your own flake |
