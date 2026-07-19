@@ -9,8 +9,11 @@
 #   (c) dag.json is in sync: regenerating from scratch yields identical bytes,
 #       and the NNNN order is a valid topological order of the DAG.
 #   (d) the hand-written upstreaming intent (lib/fork-packages.nix `patches`)
-#       is coherent with the series: every intent key names a real patch file
-#       (a rebase can renumber/rename patches and orphan intent silently),
+#       is coherent with the series, in both directions: every intent key
+#       names a real patch file (a rebase can renumber/rename patches and
+#       orphan intent silently), and -- when the fork declares intent at
+#       all -- every patch file has an intent entry, so a new patch cannot
+#       silently ride the registry's hold/unclassified fallback,
 #   (e) every patch states WHY it exists in its commit-message body. The body
 #       is the reason of record (one fact, one home): it rides the `git am` /
 #       rebase / `format-patch` round-trip, so it reaches upstream reviewers,
@@ -88,14 +91,28 @@ def main [src_dir: string, patch_dir: string, expected_base: string, intent_json
     $failed = true
   }
 
-  # (d) intent coherence: keys must name real patch files (a rebase renumbers
-  # names and would orphan intent silently).
+  # (d) intent coherence, both directions. Keys must name real patch files (a
+  # rebase renumbers names and would orphan intent silently), and every patch
+  # must carry an intent entry: without the mirror check, a new patch falls
+  # back to the registry's fail-safe default (hold / "unclassified") and its
+  # upstream stance never gets written down (index#3637). Forks that declare
+  # no intent pass an empty record and stay exempt (mkForkChecks defaults to
+  # `{}` for them).
   let intent = ($intent_json | from json)
   let names = ($patches | get name)
-  for key in ($intent | columns) {
+  let intent_keys = ($intent | columns)
+  for key in $intent_keys {
     if $key not-in $names {
       print $"patch-dag check: lib/fork-packages.nix intent references nonexistent patch ($key) \(renamed by a rebase?\); update the intent key."
       $failed = true
+    }
+  }
+  if not ($intent_keys | is-empty) {
+    for name in $names {
+      if $name not-in $intent_keys {
+        print $"patch-dag check: ($name) has no entry in the fork's `patches` intent attrset \(lib/fork-packages.nix\); declare its upstream stance + reason instead of riding the hold/unclassified default."
+        $failed = true
+      }
     }
   }
 
