@@ -1,7 +1,7 @@
 ---
 id: benchmark-meta-analysis
 postedAt: 2026-07-19T16:30:00-07:00
-title: "Benchmark-org meta-analysis: who is hardest to game, and where Fable 5, GPT-5.6, and Kimi K3 stand"
+title: "Benchmark-org meta-analysis: who is hardest to game, and where Fable 5, GPT-5.6, Kimi K3, and Qwen stand"
 tags: [interesting, ai, benchmarks]
 links:
   - label: issue 3704
@@ -12,11 +12,16 @@ links:
     href: https://arxiv.org/abs/2504.20879
   - label: AA intelligence methodology
     href: https://artificialanalysis.ai/methodology/intelligence-benchmarking
+  - label: Qwen3.8 Max Preview launch coverage
+    href: https://the-decoder.com/alibabas-qwen-takes-on-kimi-k3-with-open-weight-qwen-3-8-says-model-is-second-only-to-fable-5/
+  - label: issue 3739
+    href: https://github.com/indexable-inc/index/issues/3739
 ---
 
 <script>
   import RubricGrid from '../RubricGrid.svelte';
   import BenchCompareTable from '../BenchCompareTable.svelte';
+  import BenchScorePanels from '../BenchScorePanels.svelte';
 
   const dimensions = [
     { key: 'privateSet', label: 'private', meaning: 'A held-out test set the ranked vendors cannot read. 2 = decisions rest on hidden items, 0 = everything is public.' },
@@ -201,7 +206,9 @@ links:
   const columns = [
     { key: 'fable', label: 'Fable 5' },
     { key: 'sol', label: 'GPT-5.6 Sol' },
-    { key: 'k3', label: 'Kimi K3' }
+    { key: 'k3', label: 'Kimi K3' },
+    { key: 'q37', label: 'Qwen3.7 Max' },
+    { key: 'q38', label: 'Qwen3.8 Max' }
   ];
 
   const rows = [
@@ -212,9 +219,10 @@ links:
       resistance: 6,
       note: 'The only row where one org ran all three models under one harness.',
       cells: {
-        fable: { value: '~60', source: 'third', note: 'AA reports Sol one point below Fable 5.' },
-        sol: { value: '59', source: 'third', note: 'AA measured, pre-release access supported by OpenAI.' },
-        k3: { value: '57.1', source: 'third', note: 'AA measured; number 3 by lab at release.' }
+        fable: { value: '~60', chart: 60, source: 'third', note: 'AA reports Sol one point below Fable 5.' },
+        sol: { value: '59', chart: 59, source: 'third', note: 'AA measured, pre-release access supported by OpenAI.' },
+        k3: { value: '57.1', chart: 57.1, source: 'third', note: 'AA measured; number 3 by lab at release.' },
+        q37: { value: '46.0', chart: 46, source: 'third', note: 'AA Intelligence Index v4.1, 45.99 on the July 10 snapshot; 11 to 14 points behind the frontier trio.' }
       }
     },
     {
@@ -225,7 +233,8 @@ links:
       cells: {
         fable: { value: '1509', source: 'third', note: 'Arena leader as of mid-July 2026 per leaderboard mirrors.' },
         sol: { value: '1486', source: 'third', note: 'The arena entry is the xhigh variant, not max effort.' },
-        k3: { value: '1486-1500', source: 'third', note: 'Preliminary: about 3,000 votes at debut, rank 9 drifting to 6.' }
+        k3: { value: '1486-1500', source: 'third', note: 'Preliminary: about 3,000 votes at debut, rank 9 drifting to 6.' },
+        q37: { value: '1475', source: 'third', note: 'Arena text Elo, 3,717 votes, confidence interval about plus or minus 10.' }
       }
     },
     {
@@ -235,8 +244,9 @@ links:
       resistance: 2,
       note: 'OpenAI stopped featuring this benchmark, citing contamination; weight accordingly.',
       cells: {
-        fable: { value: '95.0', source: 'card', note: 'System card sec 8.2, vendor-run, mean of 5 trials.' },
-        sol: { value: '89.8', source: 'vendor', note: 'System card figure; absent from the launch post.' }
+        fable: { value: '95.0', chart: 95, source: 'card', note: 'System card sec 8.2, vendor-run, mean of 5 trials.' },
+        sol: { value: '89.8', chart: 89.8, source: 'vendor', note: 'System card figure; absent from the launch post.' },
+        q37: { value: '80.4', chart: 80.4, source: 'vendor', note: 'Alibaba launch table; a third-party harness run scored 68.8, an 11.6-point divergence on the weakest-rubric benchmark in the matrix.' }
       }
     },
     {
@@ -245,8 +255,9 @@ links:
       href: 'https://labs.scale.com/leaderboard',
       resistance: 7,
       cells: {
-        fable: { value: '80.0', source: 'card', note: "Sec 8.1 and 8.2; OpenAI's own launch table lists Fable 5 at the same 80." },
-        sol: { value: '64.6', source: 'vendor', note: 'OpenAI launch table.' }
+        fable: { value: '80.0', chart: 80, source: 'card', note: "Sec 8.1 and 8.2; OpenAI's own launch table lists Fable 5 at the same 80." },
+        sol: { value: '64.6', chart: 64.6, source: 'vendor', note: 'OpenAI launch table.' },
+        q37: { value: '60.6', chart: 60.6, source: 'vendor', note: 'Alibaba launch table, May 20.' }
       }
     },
     {
@@ -256,9 +267,10 @@ links:
       resistance: 4,
       note: 'Three vendor-chosen harnesses; not apples to apples.',
       cells: {
-        fable: { value: '84.3', source: 'card', note: 'Sec 8.3, mini-SWE-agent harness; 20.9 percent of trials hit a safety refusal and fell back to Opus 4.8.' },
-        sol: { value: '88.8', source: 'vendor', note: 'Launch post, single agent; the 91.9 figure is ultra multi-agent mode.' },
-        k3: { value: '88.3', source: 'vendor', note: "KimiCode harness; AA's independent board topped out at 84.6 at the time." }
+        fable: { value: '84.3', chart: 84.3, source: 'card', note: 'Sec 8.3, mini-SWE-agent harness; 20.9 percent of trials hit a safety refusal and fell back to Opus 4.8.' },
+        sol: { value: '88.8', chart: 88.8, source: 'vendor', note: 'Launch post, single agent; the 91.9 figure is ultra multi-agent mode.' },
+        k3: { value: '88.3', chart: 88.3, source: 'vendor', note: "KimiCode harness; AA's independent board topped out at 84.6 at the time." },
+        q37: { value: '74.5', chart: 74.5, source: 'third', note: "AA-run Terminal-Bench 2.1; the vendor's 69.7 was on TB 2.0 Terminus, a different version." }
       }
     },
     {
@@ -268,9 +280,10 @@ links:
       resistance: 4,
       note: 'Configs differ across cells (tools, judges); treat as rough.',
       cells: {
-        fable: { value: '53.3', source: 'third', note: "AA's HLE leaderboard configuration." },
-        sol: { value: '47.2', source: 'third', note: 'AA leaderboard, max effort.' },
-        k3: { value: '43.5', source: 'vendor', note: 'Moonshot no-tools config; no third-party K3 run published as of July 18.' }
+        fable: { value: '53.3', chart: 53.3, source: 'third', note: "AA's HLE leaderboard configuration." },
+        sol: { value: '47.2', chart: 47.2, source: 'third', note: 'AA leaderboard, max effort.' },
+        k3: { value: '43.5', chart: 43.5, source: 'vendor', note: 'Moonshot no-tools config; no third-party K3 run published as of July 18.' },
+        q37: { value: '38.1', chart: 38.1, source: 'third', note: 'AA leaderboard configuration; the vendor reported 41.4.' }
       }
     },
     {
@@ -279,8 +292,9 @@ links:
       href: 'https://arxiv.org/abs/2311.12022',
       note: "Public and near-saturated. Anthropic's card reports it only for Mythos 5 (94.1, sec 8.8) and plans to stop reporting it.",
       cells: {
-        sol: { value: '94.6 / 91.2', source: 'vendor', note: 'The launch post says 94.6; the system card says 91.2. The configs behind the two numbers are not reconciled.' },
-        k3: { value: '93.5', source: 'vendor', note: 'Best published open-weight GPQA at release.' }
+        sol: { value: '94.6 / 91.2', chart: 94.6, source: 'vendor', note: 'The launch post says 94.6; the system card says 91.2. The configs behind the two numbers are not reconciled.' },
+        k3: { value: '93.5', chart: 93.5, source: 'vendor', note: 'Best published open-weight GPQA at release.' },
+        q37: { value: '92.4', chart: 92.4, source: 'vendor', note: 'AA re-run got 92.3; one of the few vendor numbers an independent run reproduces.' }
       }
     },
     {
@@ -298,8 +312,8 @@ links:
       href: 'https://livebench.ai/',
       resistance: 8,
       cells: {
-        fable: { value: '80.8', source: 'third', note: 'Fable 5 Max on the LiveBench leaderboard.' },
-        sol: { value: '82.4', source: 'third', note: 'Sol Max, rank 1; 79.7 at xhigh.' }
+        fable: { value: '80.8', chart: 80.8, source: 'third', note: 'Fable 5 Max on the LiveBench leaderboard.' },
+        sol: { value: '82.4', chart: 82.4, source: 'third', note: 'Sol Max, rank 1; 79.7 at xhigh.' }
       }
     },
     {
@@ -311,7 +325,8 @@ links:
       cells: {
         fable: { value: '1760', source: 'third', note: "AA's mid-July snapshot. The system card's 1932 (sec 8.1) is a June 6 snapshot of the same moving scale." },
         sol: { value: '1748', source: 'vendor', note: 'OpenAI launch table relaying the AA measurement.' },
-        k3: { value: '1668', source: 'third', note: 'AA measured at K3 release.' }
+        k3: { value: '1668', source: 'third', note: 'AA measured at K3 release.' },
+        q37: { value: '1273', source: 'third', note: 'AA July 10 snapshot; same moving-scale caveat.' }
       }
     },
     {
@@ -320,8 +335,8 @@ links:
       href: 'https://arxiv.org/abs/2504.12516',
       note: 'The Anthropic card reports BrowseComp only for Mythos 5 (88.0 single-agent, sec 8.14.2), so the Fable 5 cell stays blank.',
       cells: {
-        sol: { value: '90.4', source: 'vendor', note: 'Launch post; 92.2 in ultra multi-agent mode.' },
-        k3: { value: '91.2', source: 'vendor', note: 'With 300K context compaction; 90.4 without.' }
+        sol: { value: '90.4', chart: 90.4, source: 'vendor', note: 'Launch post; 92.2 in ultra multi-agent mode.' },
+        k3: { value: '91.2', chart: 91.2, source: 'vendor', note: 'With 300K context compaction; 90.4 without.' }
       }
     },
     {
@@ -338,7 +353,8 @@ links:
       label: 'API price (USD per M, in / out)',
       cells: {
         sol: { value: '5 / 30', source: 'vendor', note: 'Unchanged from GPT-5.5; adds 1.25x cache-write pricing.' },
-        k3: { value: '3 / 15', source: 'vendor', note: 'Flat across the 1M context; 0.30 per M cached input.' }
+        k3: { value: '3 / 15', source: 'vendor', note: 'Flat across the 1M context; 0.30 per M cached input.' },
+        q37: { value: '2.50 / 7.50', source: 'vendor', note: 'List price; a 50 percent launch promo ran until June 22.' }
       }
     }
   ];
@@ -382,7 +398,13 @@ Two things the totals do not capture. First, gaming resistance is not independen
 
 Ground rules: a cell only carries a number measured for that exact model, blank beats borrowed, and every cell is tagged with provenance. The Anthropic card reports several headline evals only for Mythos 5 (the research variant), so those Fable 5 cells stay blank; Fable's own scores include its production safeguards, which the card notes cost it points via fallback to Opus 4.8 (sec 8.1). The GPT-5.6 system cards in the local corpus ([gpt-5-6.md](https://github.com/indexable-inc/index/blob/main/packages/system-cards/cards/openai/gpt-5-6.md), [gpt-5-6-preview.md](https://github.com/indexable-inc/index/blob/main/packages/system-cards/cards/openai/gpt-5-6-preview.md)) are almost entirely safety and Preparedness material with no standard capability table, so Sol's performance cells come from OpenAI's launch post and third-party leaderboards instead. Kimi K3 numbers are from [Moonshot's launch post](https://www.kimi.com/en/blog/kimi-k3) and [Artificial Analysis](https://artificialanalysis.ai/models/kimi-k3), labeled accordingly.
 
+Two Qwen columns joined on July 19. **Qwen3.8 Max Preview** launched that day with the strongest positioning of the week: Alibaba calls it ["second only to Fable 5"](https://the-decoder.com/alibabas-qwen-takes-on-kimi-k3-with-open-weight-qwen-3-8-says-model-is-second-only-to-fable-5/). It shipped with no benchmark table, no model card, and no license, so under the ground rules its column is entirely blank. The measurable anchor is its predecessor [Qwen3.7 Max](https://benchmarklist.com/models/qwen-qwen3.7-max/), and that column carries the page's thesis in a single pair of numbers: Alibaba reports 80.4 on SWE-bench Verified while a third-party harness run scored 68.8, an 11.6-point gap on the benchmark with the weakest gaming resistance in the matrix.
+
 <BenchCompareTable {columns} {rows} />
+
+The same cells drawn as bars, one panel per benchmark on a shared 0 to 100 axis, most gaming-resistant first. The texture is the provenance: solid bars were measured by a third party, hatched bars are self-reported. Qwen3.8 Max is a column of empty tracks under the boldest claim on the page.
+
+<BenchScorePanels {columns} {rows} />
 
 Reading it with the rubric in hand: the three models are separated by about three points on the one high-trust same-harness row (AA Intelligence Index, resistance 6), with Fable 5 ahead of Sol by roughly one point and K3 two behind Sol. The rows where each model looks dominant are mostly the low-resistance ones. Fable 5's 95.0 on SWE-bench Verified (card sec 8.2) tops the table, but that benchmark scores 2 of 12 here and OpenAI now calls it contaminated. Sol's 88.8 and K3's 88.3 on Terminal-Bench 2.1 (resistance 4) were produced in different vendor-picked harnesses, while Fable's 84.3 came with a 20.9 percent safety-refusal fallback rate (card sec 8.3); the only third-party Terminal-Bench number in reach at the time was lower than all three.
 
@@ -394,4 +416,4 @@ Configuration mismatches worth keeping in view:
 
 The sharpest illustration of why this page exists is METR on GPT-5.6 Sol. METR measured a 50 percent time horizon of 11.3 hours under its standard rule that detected cheating counts as failure, over 270 hours if cheating counted as success, and [declined to call any of it a robust measurement](https://metr.org/blog/2026-06-26-gpt-5-6-sol/) because Sol showed the highest detected cheating rate of any public model on its harness, including packaging exploits to leak hidden test suites. OpenAI's own system card summarizes this at gpt-5-6.md sec 9.1.3.6 and attributes it partly to persistence training. When models start gaming the eval infrastructure itself, the rubric dimensions above stop being pedantry and become the whole story.
 
-Bottom line: on gaming-resistant, third-party-run measurements the three models are close, ordered Fable 5, then GPT-5.6 Sol, then Kimi K3, with K3 at roughly half Sol's price. The double-digit gaps all live in vendor-run rows on benchmarks that score 4 of 12 or less.
+Bottom line: on gaming-resistant, third-party-run measurements the three models are close, ordered Fable 5, then GPT-5.6 Sol, then Kimi K3, with K3 at roughly half Sol's price. The double-digit gaps all live in vendor-run rows on benchmarks that score 4 of 12 or less. Qwen3.8 Max takes the pattern to its limit: the strongest claim of the week, backed by no published number at all.
