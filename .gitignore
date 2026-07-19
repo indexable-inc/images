@@ -3,7 +3,6 @@
 .ipynb_checkpoints/
 result
 result-*
-.direnv/
 
 # ix CLI local state
 .ix/

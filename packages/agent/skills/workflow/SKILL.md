@@ -78,10 +78,9 @@ fixes a tracked GitHub issue, include `Fixes #123`, `Closes #123`, or
 Every commit must reference the site page that explains it. Include a repo
 path such as `packages/site/src/lib/updates/<slug>.svx` (pages under `plans/`
 and `stories/` count too) anywhere in the message; the long-form description
-belongs on that page, not in the commit body. The `.githooks/commit-msg` hook
-rejects commits without one. The page must exist in the commit's tree, so a
-page added in the same commit counts. Merge, fixup, squash, and revert commits
-are exempt.
+belongs on that page, not in the commit body. The page must exist in the
+commit's tree, so a page added in the same commit counts. Merge, fixup,
+squash, and revert commits are exempt.
 
 `main` is the long-lived human branch. PRs target `main`. Deployment refs are
 tags on commits that are already reachable from `main`.

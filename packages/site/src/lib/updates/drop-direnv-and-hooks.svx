@@ -1,0 +1,21 @@
+---
+id: drop-direnv-and-hooks
+postedAt: "2026-07-19T06:20:00-07:00"
+title: "the repo drops direnv and the last git hook"
+links:
+  - label: "contributor setup"
+    href: "https://github.com/indexable-inc/index/blob/main/CONTRIBUTING.md"
+tags:
+  - workflow
+---
+
+`.envrc` existed to export `core.hooksPath` so git ran the tracked
+`.githooks/commit-msg` hook, and to load the flake devShell. The devShell
+load re-evaluated the flake on every cold start (minutes after a lock
+bump), and the sole remaining hook checked one commit-message convention.
+That is a lot of machinery for one regex.
+
+Both are gone: no `.envrc`, no `.githooks/`, nothing to `direnv allow`.
+Cloning the repo is the whole setup. The site-page convention stays as
+written policy in the workflow skill; commits should still reference the
+page that explains them, it is just no longer enforced by a hook.

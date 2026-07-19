@@ -7,7 +7,6 @@ description: "Repository directory layout and where each kind of file lives. Use
 
 ```
 flake.nix                                  # manifest: inputs + delegated outputs
-.envrc, .githooks/pre-commit               # direnv wires the tracked hook
 lib/                                       # public helpers, builders, discovery
 modules/                                   # registered NixOS modules and profiles
 images/                                    # image modules plus optional versions
