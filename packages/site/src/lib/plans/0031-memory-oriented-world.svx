@@ -1,6 +1,6 @@
 ---
-id: 0024-memory-oriented-world
-number: '0024'
+id: 0031-memory-oriented-world
+number: '0031'
 title: One memory, queryable across the whole world
 status: Input wanted
 rfc: true
@@ -52,6 +52,11 @@ filter to current, apply a threshold, rank.
 - Plan 0021 (filesystem as database) becomes one adapter in this frame:
   files are entities, xattrs components, its index a pull-through
   source.
+- Plans 0025 (agent gossip), 0026 (shared brain), 0028 (cross-agent
+  memory), and 0030 (knowledge graph) name write paths and stores; this
+  plan names the query substrate they can share: facts in Datalog,
+  rollups as saved projections. 0025's irritation clusters are the
+  first projection this plan wants rendered.
 
 ## Open questions
 
