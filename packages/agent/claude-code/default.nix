@@ -166,6 +166,8 @@
   # consumer bake a variant minus a rule without restating the whole prompt, e.g.
   # `claude-code.override { omitRules = [ "htmlDeliverable" ]; }`. `[ ]` keeps all.
   omitRules ? [],
+  # Topic names dropped from the baked house prompt (prompt `omitTopics`).
+  omitTopics ? [],
   # Text used AS Claude Code's system prompt, REPLACING the stock prompt. The
   # string is materialized to a store file and baked into the wrapper as
   # `--system-prompt-file=<path>`: passing by path (not inline text) keeps
@@ -179,13 +181,13 @@
   # (single-value options are last-wins), and a caller who wants the stock
   # prompt plus additions can still pass `--append-system-prompt[-file]`.
   # Defaults to the shared house prompt (`systemPrompt` in ../common.nix,
-  # authored in ../prompt/rules.nix: the shokunin craft ethos plus the pre-v1
-  # backward-compatibility engineering rule, plus a preference for working in git
-  # worktrees); set to `null` to bake no flag and ship the stock prompt alone.
+  # authored in ../prompt/rules.nix: craft, pre-v1, worktree, and reporting
+  # rules); set to `null` to bake no flag and ship the stock prompt alone.
   systemPrompt ?
     (import (ix.paths.packagesRoot + "/agent/common.nix") {
       inherit lib ix repoPackages;
       promptOmitRules = omitRules;
+      promptOmitTopics = omitTopics;
     }).systemPrompt,
   # Writer used to build `passthru.updateScript`. Only the flake package set
   # supplies it (lib/packages.nix); the overlay eval context leaves it null. The
@@ -277,7 +279,13 @@
   # The MCP resource browsers are kernel-superseded the same way.
   defaultSystemTools = {
     Agent = false;
-    Artifact = true;
+    # Off: no real benefit in this harness (previews ship as files or URLs),
+    # and enabling it surfaces Claude-bundled design skills that inject
+    # Anthropic style guidelines we do not want steering output. Denying the
+    # bare name also drops the companion `artifact-design` skill from the
+    # skills listing (verified 2026-07, index#3607); the sibling `dataviz`
+    # skill is invocation-blocked in policy/permissions.nix.
+    Artifact = false;
     AskUserQuestion = false;
     DesignSync = false;
     EnterPlanMode = false;

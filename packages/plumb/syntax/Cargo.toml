@@ -1,0 +1,12 @@
+[package]
+name = "plumb-syntax"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Lexer and parser for the plumb shell's bash-subset grammar: spanned AST, loud errors on unsupported bash"
+
+[lints]
+workspace = true
+
+[dependencies]
+snafu.workspace = true

@@ -1,0 +1,10 @@
+[
+  { "find": "rgb(215,119,87)",  "replace": "rgb(255,20,255)",  "expect": 9 },
+  { "find": "rgb(245,149,117)", "replace": "rgb(255,120,255)", "expect": 2 },
+  { "find": "rgb(87,105,247)",  "replace": "rgb(20,255,120)",  "expect": 5 },
+  { "find": "rgb(0,102,102)",   "replace": "rgb(0,255,255)",   "expect": 2 },
+  { "find": "rgb(71,130,200)",  "replace": "rgb(255,120,20)",  "expect": 5 },
+  { "find": "rgb(255,0,135)",   "replace": "rgb(255,255,0)",   "expect": 2 },
+  { "find": "rgb(153,153,153)", "replace": "rgb(255,100,255)", "expect": 5 },
+  { "find": "rgb(135,0,255)",   "replace": "rgb(255,0,100)",   "expect": 9 }
+]

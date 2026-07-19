@@ -10,6 +10,7 @@
   hermes-agent,
   btop-src,
   nushell-src,
+  git-src,
   drgn-src,
   perftest-src,
   fff-src,
@@ -21,6 +22,10 @@
   zed-src,
   zed-upstream,
   nix-src,
+  nix-fast-build-src,
+  nix-derivation-src,
+  rnix-0-12-src,
+  rnix-0-14-src,
   ghostty,
   mesa-src,
   # The flake's own source (`self`), carrying `.outPath` (a `-source` store
@@ -303,7 +308,7 @@
   # Patch the vendored rnix inside a rust tool so it lexes underscore digit
   # separators in nix numeric literals; the alejandra/statix/deadnix package
   # dirs under packages/nix/ consume this. See its doc comment.
-  rnixDigitSeparators = import ./util/rnix-digit-separators;
+  rnixDigitSeparators = import ./util/rnix-digit-separators {inherit lib;};
   goUnitFor = pkgs:
     import ./build/go-unit.nix {
       inherit lib pkgs;
@@ -652,6 +657,10 @@
   cache = import ./cache.nix;
   kdl = import ./formats/kdl.nix {inherit home-manager;};
 
+  # Import-seam gate for fork-syntax islands; frozen syntax by design, see
+  # the file header.
+  evaluatorGate = import ./evaluator-gate.nix;
+
   /**
   Helper surface shared by both the per-module `specialArgs.ix`
   (`ixSpecialArgs`) and the public `index.lib` (`ixReturn`). Listed once
@@ -681,6 +690,7 @@
       deepMerge
       efx
       evalTimeSubstitutable
+      evaluatorGate
       fabric
       forkClosureGates
       forkPackages
@@ -735,12 +745,17 @@
       writeRustApplication
       ;
     btopSrc = btop-src;
+    gitSrc = git-src;
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
     zedSrc = zed-upstream;
     clippySrc = clippy-src;
     nixSrc = nix-src;
+    nix-fast-buildSrc = nix-fast-build-src;
+    nix-derivationSrc = nix-derivation-src;
+    rnix-0-12Src = rnix-0-12-src;
+    rnix-0-14Src = rnix-0-14-src;
     drgnSrc = drgn-src;
     perftestSrc = perftest-src;
     fffSrc = fff-src;

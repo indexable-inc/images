@@ -1,0 +1,119 @@
+---
+id: 0032-websearch-eval-claude-vs-exa
+number: '0032'
+title: 'Web-search eval: Claude built-in WebSearch vs Exa'
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-19'
+updated: '2026-07-19'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 4, why: 'one eval suite over two backends the fleet already has wired up' }
+  impact: { value: 6, why: 'every research-heavy session inherits whichever backend the data picks' }
+  effort: { value: 5, why: 'task mining from transcripts, a grading rubric with a human-audit lane, N rollouts per backend' }
+  risk: { value: 2, why: 'worst case is a suite that confirms the current default; nothing breaks' }
+  maturity: { value: 1, why: 'unbuilt; the harness pattern exists in system-prompt-eval and the experiment skill' }
+  leverage: { value: 6, why: 'the suite reruns whenever either backend changes, and extends to any new search tool' }
+  taste: { value: 6, why: 'grading found-the-primary-source without an LLM judge rubber stamp is the hard part' }
+description: 'Our agents research constantly and use Exa MCP by default, a choice made without measured evidence. Vendor benchmarks conflict head-on and none test our workload. Build an eval from real session transcripts that runs Claude Code built-in WebSearch/WebFetch against the Exa MCP tools from identical fresh-context agents and grades primary-source hits, time-to-answer, tool calls, and claim-level correctness.'
+---
+
+## Summary
+
+Build a task suite from real research moments in our own session transcripts (upstream issue status, merged-PR archaeology, vendor and contact lookups, incident forensics) and run it against two backends: Claude Code's built-in WebSearch/WebFetch and the Exa MCP tools (`web_search_exa`, `web_fetch_exa`) our agents use today. Identical fresh-context agents, N rollouts per task per backend, graded on whether the load-bearing primary source was found, time-to-answer, tool calls used, and claim-level correctness audited against the fetched pages. Report per-task win rates. The output is a decision: switch defaults, keep both behind a router, or drop one.
+
+## Motivation
+
+Agents in this org research constantly: dependency intake checks upstream repos and advisories, incident forensics chases changelogs and issue threads, and upstream-status questions ("is this fixed, in what release") decide what we build versus wait for. We picked Exa as the default search backend without measured evidence, and the config has never been challenged by data.
+
+The two backends differ mechanically in ways that should matter for our workload. Claude Code's WebSearch is a server-side Anthropic tool backed by Brave's index; the model sees title and URL only, and WebFetch summarizes pages through a Haiku pass with a 125-character quote cap (documented by runtime inspection, see prior art). Exa search returns full text and highlights from a semantic index. For "find the exact PR that changed lock-update semantics" the verbatim-content difference plausibly dominates; for "what is the latest release" freshness of the underlying index plausibly dominates. We do not know, and the published numbers cannot tell us: every vendor wins its own benchmark (see prior art), and none of them test transcripts like ours.
+
+The cost question rides along: built-in WebSearch bills $10 per 1,000 searches plus tokens, Exa bills per request on our MCP plan. A backend that needs half the tool calls to find the primary source is cheaper even at a higher per-call price. Wrong-answer cost dwarfs both: a hallucinated-support citation that survives into a report costs an engineer-hour to unwind (plan 0033 documents one).
+
+## Prior art
+
+Static retrieval benchmarks measure the wrong layer for this question:
+
+- BEIR (arXiv:2104.08663): zero-shot retrieval over 18 fixed corpora, nDCG@10 over static relevance labels. No live index, no query reformulation loop, no answer synthesis.
+- MTEB retrieval (arXiv:2210.07316): embedding-model benchmark that folds BEIR in; measures encoders, not search APIs.
+
+Agentic browsing evals are closer in shape but use general-knowledge tasks, not engineering-workflow ones:
+
+- GAIA (arXiv:2311.12983): 466 assistant questions needing browsing and tool use; humans 92%, GPT-4 with plugins 15% at publication.
+- BrowseComp (arXiv:2504.12516, https://openai.com/index/browsecomp/): 1,266 hard-to-find-info questions; OpenAI Deep Research 51.5% where GPT-4o with browsing managed 1.9%; human trainers solved 29.2% inside a two-hour cap. The task style (entangled constraints, short verifiable answers) is a good template for our upstream-status questions.
+- SimpleQA (arXiv:2411.04368, https://openai.com/index/introducing-simpleqa/): 4,326 short fact questions with single indisputable answers; built as a closed-book factuality benchmark, now the de facto search-backend eval because vendors run it with a search harness attached.
+
+Vendor benchmarks exist and disagree with each other, which is itself the finding:
+
+- Exa's published claims: SimpleQA-graded search quality of Exa 89.77% vs Google 86.27%, Bing 85.41%, Brave 81.64% (https://exa.ai/bing-api-deprecation); a state-of-the-art claim with the caveat, stated in their own methodology, that competitor scores report "the highest number between our results and theirs" (https://exa.ai/blog/api-evals); eval philosophy at https://exa.ai/blog/evals-at-exa; open benchmark repo with the most coding-relevant suite found anywhere, WebCode, where Exa groundedness is 79.4 vs Brave 76.3 and Tavily 61.1 (https://github.com/exa-labs/benchmarks).
+- Perplexity's open harness (https://github.com/perplexity-ai/search_evals) ranks the same providers in a different order: SimpleQA Perplexity 0.930, Tavily 0.890, Brave 0.822, Exa 0.781. Exa is first on its own harness and last of four on Perplexity's. Harness design (query generation model, snippet vs full-text feeding, grader) dominates the outcome, which is the strongest argument for running our own on our own tasks.
+
+On the Claude side there is no published quality benchmark from Anthropic, only tool documentation (https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool: versions, domain filters, $10 per 1,000 searches, citations always on). What is known comes from runtime inspection: Claude Code's WebSearch discards everything but title and URL, WebFetch pipes pages through Haiku summarization with a 125-character quote cap, and the backing index is Brave's (https://mikhail.io/2025/10/claude-code-web-tools/, https://trevorfox.com/2026/04/how-claude-code-search-actually-works/). One small independent eval (https://github.com/andresfortunato/raw-web-search) found built-in WebSearch strong on general factual coverage (96% vs 72% against raw extraction) and weak exactly where our workload lives: verbatim code and API docs, where Haiku paraphrasing mangles content, and URL extraction (roughly 100% vs 50% fetch success). Third-party API comparisons (https://rhumb.dev/blog/exa-vs-tavily-vs-serper-vs-brave-search) are qualitative scorecards, no Claude-builtin lane.
+
+Nothing published compares Claude Code's built-in search against Exa on engineering-agent tasks. The ground is genuinely open.
+
+## Detailed design
+
+### Task suite
+
+Mine tasks from real transcripts (the fleet history archive is searchable; plan 0027 makes per-session provenance easier later). Candidate task families, each with a known, human-verified answer key:
+
+- Upstream issue status: "what is the current status of NixOS/nix issue 7730" (the correct answer requires finding both the open issue and merged PR #13437; plan 0033 uses this same pair for a different grading axis).
+- Merged-PR archaeology: "find the merged PR that changed lock-update semantics in Nix".
+- Vendor and contact lookups: the rep for an account, the billing contact, a company's current pricing page.
+- Incident root-cause: "what changed in dependency X between versions A and B that could cause symptom S".
+- Release-status: "is fix Y in any released version of Z".
+
+Target 20 to 40 tasks. Each task record: the prompt, the load-bearing primary source URL (the artifact, not a blog about it), acceptable equivalent sources, and the answer key as checkable claims.
+
+### Harness
+
+The experiment skill pattern with `tui.harness.Claude` (`packages/tui/tui-py/python/tui/harness.py`): fresh-context Claude Code sessions, live-visible on the dashboard. Two lanes differing only in tool config: one with built-in WebSearch/WebFetch allowed and Exa MCP absent, one with Exa MCP tools and built-ins denied. Same model, same system prompt, same task text. N rollouts per task per lane (start with N=5; widen where win rates are close). Session transcripts are the grading input.
+
+### Grading
+
+Per rollout:
+
+- Found the load-bearing primary source: y/n, checked by URL match (plus the equivalents list) against fetched URLs in the transcript.
+- Time-to-answer: wall clock from task start to final answer.
+- Tool calls used: count of search plus fetch calls.
+- Claim-level correctness: decompose the final answer into claims, audit each against the pages the session actually fetched. A claim the fetched pages do not support is a hallucinated-support citation and fails the rollout regardless of whether it happens to be true. LLM-graded with a human audit lane on a sample (the Exa and Perplexity harness disagreement above is what unaudited LLM grading buys).
+
+Report per-task win rates per metric, not aggregate vibes: a backend can win contact lookups and lose PR archaeology, and the router decision below needs exactly that shape.
+
+## Decision criteria
+
+Stated before the data comes in:
+
+- Switch defaults to built-in WebSearch if it wins primary-source rate on a clear majority of task families and is not worse on hallucinated-support rate.
+- Keep both behind a router if each backend wins some task family by a wide margin (say 20+ points of win rate) and the family is predictable from the task text; the router is then a one-line rule in the prompt, not new machinery.
+- Drop the loser if one backend wins or ties every family; the config and its per-call spend go away.
+- If hallucinated-support rates differ materially, that metric vetoes the others: we would take slower and fewer answers over confident wrong citations.
+
+## Drawbacks
+
+- Answer keys rot: upstream status changes, contacts move. Volatile tasks need a checked-at date and periodic re-keying, or the suite silently grades against stale truth.
+- Two lanes cannot be perfectly identical: tool descriptions themselves steer agent behavior, so some difference is tool-prompt quality, not index quality. That confound is real but it is also fair: agents consume the tool through its description.
+- N=5 over 30 tasks and 2 lanes is 300 sessions; at a few minutes each this is an afternoon of compute and a nontrivial search bill. Fine for a one-shot decision, worth budgeting before it becomes a recurring CI lane.
+
+## Alternatives
+
+- Adopt a published benchmark (SimpleQA with a search harness) instead of mining our transcripts: cheaper, but it measures general trivia, and the vendor disagreement shows the harness would decide the result anyway.
+- A/B in production by routing live sessions: real workload, but uncontrolled tasks, no answer keys, and failed research costs real engineering time.
+- Trust the mechanism analysis and skip the eval: the documented title-plus-URL and quote-cap limits suggest Exa wins code-shaped tasks, but "plausibly dominates" is the phrase this plan exists to delete.
+
+## Unresolved questions
+
+- Does WebFetch vs `web_fetch_exa` get evaluated as part of the search lane or as a separate axis? A backend could win search and lose fetch.
+- How to price the comparison honestly: per-call list price, or measured tokens plus calls per solved task?
+- Do we include mgrep/semantic code search tasks, or scope strictly to web? (Plan 0019 owns internal search trust.)
+- Is the router decision stable across models, or does it need a rerun when the default model changes? Plan 0023 would make the rerun cheap.
+
+## Future possibilities
+
+The suite generalizes to any new search backend in an afternoon: add a lane, rerun, read the per-family table. If the claim-level grading lane works, it is the same machinery plan 0033 needs for its truthfulness eval, and the two suites should share a grader.
+
+Drafted by an AI agent via Claude Code; comments wanted, hence the RFC flag.

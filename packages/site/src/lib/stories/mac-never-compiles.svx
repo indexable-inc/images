@@ -1,0 +1,38 @@
+---
+id: mac-never-compiles
+title: Your Mac never compiles
+hook: One `cross = true` line, and the Linux fleet builds macOS binaries your laptop just downloads.
+order: 3
+---
+
+Compiling a Rust workspace on a laptop turns it into a hand warmer, and CI
+on hosted macOS runners is slow and expensive. Most teams accept one or the
+other.
+
+Here a package opts into macOS with one line: `cross = true`. The Linux CI
+fleet cross-compiles it for Apple silicon, pushes the closure to
+`cache.ix.dev`, and aliases the result into the native Darwin package set.
+A Mac running `nix build` substitutes the prebuilt binary instead of
+compiling anything. The package definition never learns any of this
+happened.
+
+<svg viewBox="0 0 640 200" role="img" aria-label="Linux builders push to the cache; the Mac only downloads" style="width: 100%; height: auto;">
+  <rect x="20" y="30" width="150" height="50" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <rect x="20" y="120" width="150" height="50" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <text x="95" y="59" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">linux builder</text>
+  <text x="95" y="149" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">linux builder</text>
+  <path d="M 170 55 L 260 95" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 170 145 L 260 105" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <rect x="260" y="72" width="160" height="56" rx="10" fill="none" stroke="var(--fg-muted)" stroke-width="1.5" />
+  <text x="340" y="97" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">cache.ix.dev</text>
+  <text x="340" y="115" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">aarch64-darwin closures</text>
+  <path d="M 420 100 L 500 100" stroke="var(--status-load-bearing)" stroke-width="2" />
+  <text x="460" y="90" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--status-load-bearing)">download</text>
+  <rect x="500" y="72" width="120" height="56" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <text x="560" y="97" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">your Mac</text>
+  <text x="560" y="115" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">0 s compiling</text>
+</svg>
+
+The design and its tradeoffs are written up in
+[Plan 0009](https://indexable-inc.github.io/index/plans/0009-cross-compiled-darwin-packages/),
+which the fleet has since made load-bearing.

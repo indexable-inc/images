@@ -8952,6 +8952,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "plumb"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "plumb-core",
+ "reedline",
+ "serde_json",
+]
+
+[[package]]
+name = "plumb-core"
+version = "0.1.0"
+dependencies = [
+ "glob",
+ "libc",
+ "plumb-syntax",
+ "serde",
+ "serde_json",
+ "snafu",
+]
+
+[[package]]
+name = "plumb-ex"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "plumb-core",
+ "rustler",
+ "serde",
+ "serde_json",
+ "unibind",
+]
+
+[[package]]
+name = "plumb-syntax"
+version = "0.1.0"
+dependencies = [
+ "snafu",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

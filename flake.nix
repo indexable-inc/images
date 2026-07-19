@@ -109,6 +109,18 @@
       flake = false;
     };
 
+    # Upstream git/git, patched in-repo (packages/git/patches): linked
+    # worktrees borrow the common-dir submodule object store instead of
+    # re-cloning every submodule from the network (#3610). Pinned by rev to
+    # the v2.54.0 tag because the package overlays nixpkgs' git recipe, so
+    # the base must track nixpkgs' git version, never free-float: on a
+    # nixpkgs git bump, repin to the matching tag and run
+    # `nix run .#rebase-patches -- dag git`.
+    git-src = {
+      url = "github:git/git/94f057755b7941b321fd11fec1b2e3ca5313a4e0";
+      flake = false;
+    };
+
     # Upstream openai/codex, patched in-repo (packages/agent/codex/patches).
     # Pinned BY REV: importCargoLock removes the aggregate cargoHash, but git
     # dependencies still carry fixed output hashes in the package. A
@@ -162,6 +174,50 @@
     # scheduled fork-sync bumps nushell-src and rebases the xattr patch.
     nushell-src = {
       url = "github:nushell/nushell";
+      flake = false;
+    };
+
+    # Upstream Mic92/nix-fast-build, patched in-repo
+    # (packages/nix/nix-fast-build/patches). Pinned to the rev of tag 1.6.0 --
+    # the exact version nixpkgs packages -- because the package overlays the
+    # patched source onto nixpkgs' nix-fast-build recipe, so the base must
+    # track the nixpkgs version, never free-float (autoUpdate = false in
+    # lib/fork-packages.nix). On a nixpkgs nix-fast-build bump, repin to the
+    # matching tag and run `nix run .#rebase-patches -- nix-fast-build`.
+    nix-fast-build-src = {
+      url = "github:Mic92/nix-fast-build/a28921953d962c6c2527108a6be4062eb6dc2f51";
+      flake = false;
+    };
+
+    # Upstream Gabriella439/Haskell-Nix-Derivation-Library, the `nix-derivation`
+    # Haskell library nix-output-monitor parses .drv files with, patched
+    # in-repo (packages/nix/nix-output-monitor/patches). The repo publishes no
+    # tags; this rev is upstream main while the cabal version still reads
+    # 1.1.3 -- the hackage release nixpkgs builds -- PLUS the post-release
+    # dependency-bound relaxations (QuickCheck 2.15, filepath 1.5) hackage
+    # carries as cabal revisions, so overriding the hackage sdist with this
+    # tree keeps the same dependency envelope. autoUpdate = false: repin when
+    # nixpkgs moves to a newer nix-derivation.
+    nix-derivation-src = {
+      url = "github:Gabriella439/Haskell-Nix-Derivation-Library/f1f5d5a2270b5ee23dfad40fee385cf4e94d6cea";
+      flake = false;
+    };
+
+    # Upstream nix-community/rnix-parser at the release tags whose crates the
+    # repo's nix tools vendor today: v0.12.0 (alejandra, deadnix) and v0.14.0
+    # (statix). lib/util/rnix-digit-separators patches the *vendored* rnix
+    # crate inside each tool's cargo vendor dir at build time; these pinned
+    # sources give the same patch series a registry-grade
+    # `patched-src-rnix-0-1{2,4}` apply gate in flake checks, so tokenizer
+    # drift surfaces in CI instead of a consumer build. autoUpdate = false:
+    # each pin moves only when a nixpkgs bump moves the vendored rnix version
+    # (then repin to the matching tag and rerun `rebase-patches`).
+    rnix-0-12-src = {
+      url = "github:nix-community/rnix-parser/d521c438acfa9383646f9c4af9d10bbb02df0f78";
+      flake = false;
+    };
+    rnix-0-14-src = {
+      url = "github:nix-community/rnix-parser/0472081214c24b1ab4d34f7bf544284ed4e45ad3";
       flake = false;
     };
 
@@ -272,6 +328,7 @@
     hermes-agent,
     btop-src,
     nushell-src,
+    git-src,
     drgn-src,
     perftest-src,
     pg-uint128-src,
@@ -284,6 +341,10 @@
     zed-src,
     zed-upstream,
     nix-src,
+    nix-fast-build-src,
+    nix-derivation-src,
+    rnix-0-12-src,
+    rnix-0-14-src,
     ghostty,
     mesa-src,
     skills,
@@ -345,6 +406,7 @@
         hermes-agent
         btop-src
         nushell-src
+        git-src
         drgn-src
         perftest-src
         fff-src
@@ -356,6 +418,10 @@
         zed-src
         zed-upstream
         nix-src
+        nix-fast-build-src
+        nix-derivation-src
+        rnix-0-12-src
+        rnix-0-14-src
         ghostty
         mesa-src
         ;

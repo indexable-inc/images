@@ -4,22 +4,48 @@
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
 
-  --bg: #fbfaf8;
-  --fg: #111111;
-  --fg-muted: #6b6b6b;
-  --fg-faint: #a0a0a0;
-  --rule: #ebe7e0;
-  --code: #f1ede5;
+  /* Stone neutrals (matches margins-ink), not warm cream. */
+  --bg: #fafaf9;
+  --fg: #1c1917;
+  --fg-muted: #78716c;
+  --fg-faint: #a8a29e;
+  --rule: #e7e5e4;
+  --code: #f5f5f4;
+
+  /* RFC status ladder, faint -> saturated as an RFC gains weight.
+     Consumed by RfcStatusBadge and RfcChart; one source of truth. */
+  --status-sketch: #a0a0a0;
+  --status-draft: #6b6b6b;
+  --status-input-wanted: #b45309;
+  --status-last-call: #7c3aed;
+  --status-accepted: #1d4ed8;
+  --status-load-bearing: #15803d;
+  --status-rejected: #b91c1c;
+  --status-withdrawn: #a0a0a0;
+  --status-superseded: #6b6b6b;
+  /* Chip for plans that actively request comments. */
+  --status-rfc: #0e7490;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0c0c0c;
-    --fg: #f4f1ea;
-    --fg-muted: #9a9690;
-    --fg-faint: #5d5a55;
-    --rule: #1d1d1d;
-    --code: #1a1a1a;
+    --bg: #161514;
+    --fg: #fafaf9;
+    --fg-muted: #a8a29e;
+    --fg-faint: #78716c;
+    --rule: #292524;
+    --code: #1c1b1a;
+
+    --status-sketch: #5d5a55;
+    --status-draft: #9a9690;
+    --status-input-wanted: #fbbf24;
+    --status-last-call: #a78bfa;
+    --status-accepted: #60a5fa;
+    --status-load-bearing: #4ade80;
+    --status-rejected: #f87171;
+    --status-withdrawn: #5d5a55;
+    --status-superseded: #9a9690;
+    --status-rfc: #22d3ee;
   }
 }
 

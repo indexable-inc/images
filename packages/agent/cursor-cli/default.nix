@@ -15,6 +15,8 @@
   # `systemPrompt` default below; ignored when `systemPrompt` is passed
   # explicitly.
   omitRules ? [],
+  # Topic names dropped from the baked house prompt (prompt `omitTopics`).
+  omitTopics ? [],
   # Bake `--force` ("force allow commands unless explicitly denied") so every
   # session starts without per-command approval dialogs: the same posture as
   # claude-code's default `--dangerously-skip-permissions`, for the same reason
@@ -30,6 +32,7 @@
     (import (ix.paths.packagesRoot + "/agent/common.nix") {
       inherit lib ix repoPackages;
       promptOmitRules = omitRules;
+      promptOmitTopics = omitTopics;
     }).defaultServers,
   # The house prompt rendered for the cursor runtime. Cursor has no
   # system-prompt flag either (rules load from a project's AGENTS.md /
@@ -39,6 +42,7 @@
     (import (ix.paths.packagesRoot + "/agent/common.nix") {
       inherit lib ix repoPackages;
       promptOmitRules = omitRules;
+      promptOmitTopics = omitTopics;
     }).systemPromptFor
     "cursor",
 }: let

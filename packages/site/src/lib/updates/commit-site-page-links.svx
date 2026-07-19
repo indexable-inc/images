@@ -1,0 +1,17 @@
+---
+id: commit-site-page-links
+postedAt: 2026-07-18T12:00:00-07:00
+title: "Every commit now references the site page that explains it"
+tags: [workflow, git, hooks, site]
+links:
+  - label: issue 3611
+    href: https://github.com/indexable-inc/index/issues/3611
+  - label: commit-msg hook
+    href: https://github.com/indexable-inc/index/blob/main/.githooks/commit-msg
+---
+
+Commit subjects alone rarely explain a change, and long commit bodies are hard to find again. Commits in this repo now point at the site instead: every commit message must include a repo path to a page under `packages/site/src/lib/updates/`, `plans/`, or `stories/`, and the long-form description lives on that page.
+
+A new `.githooks/commit-msg` hook enforces this through the same `core.hooksPath` activation as the existing pre-commit lint hook. The referenced page must exist in the commit's staged tree, so adding the page in the same commit satisfies the check. Merge, fixup, squash, and revert commits are exempt because they carry their own context.
+
+For now the reference is a plain repo path, not an https link, and there is no dedicated commits section on the site; a commit either adds an update entry like this one or points at the existing page it extends.

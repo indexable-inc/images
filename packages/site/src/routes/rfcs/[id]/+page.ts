@@ -1,13 +1,11 @@
-import { error } from '@sveltejs/kit';
-import { findRfc, rfcEntries } from '$lib/rfcs';
+import { redirect } from '@sveltejs/kit';
+import { resolve } from '$app/paths';
+import { planEntries } from '$lib/plans';
 import type { EntryGenerator, PageLoad } from './$types';
 
 export const prerender = true;
 
-export const entries: EntryGenerator = () => rfcEntries();
+// One redirect stub per published /rfcs/<id> URL.
+export const entries: EntryGenerator = () => planEntries();
 
-export const load: PageLoad = ({ params }) => {
-  const rfc = findRfc(params.id);
-  if (!rfc) error(404, `Unknown RFC: ${params.id}`);
-  return { rfc };
-};
+export const load: PageLoad = ({ params }): never => redirect(301, resolve('/plans/[id]', { id: params.id }));

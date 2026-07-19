@@ -1,0 +1,15 @@
+<svelte:head>
+  <title>philosophy · index</title>
+  <meta name="description" content="The rules the repo runs on." />
+</svelte:head>
+
+# Philosophy
+
+Agents made writing code cheap. Waiting is now the expensive part.
+
+- **Never blocked.** Land it here now. Generate the upstream PR from the patch; never wait on it.
+- **One graph.** A change lands once and reaches everyone.
+- **Fix the source.** A dependency's bug is our bug; patch it where it lives.
+- **Correct over compatible.** Every caller is here, so APIs change instead of accrete.
+- **One standard.** Add a rule once; everything meets it in the same change.
+- **Prebuilt.** If CI built it, nobody builds it again.

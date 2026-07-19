@@ -1,0 +1,54 @@
+---
+id: 0020-stuck-agent-recovery
+number: '0020'
+title: Agents should feel the cost of being stuck
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 6, why: 'changes how the harness shapes agent behavior, not just what tools exist' }
+  impact: { value: 8, why: 'two-hour grinds that should be twenty minutes burn the scarcest resource' }
+  effort: { value: 5, why: 'stall detection, budget signals, and an escalation ladder are small mechanisms' }
+  risk: { value: 4, why: 'a bad signal nags; the eval gate keeps a net-negative method from shipping' }
+  maturity: { value: 1, why: 'hypothesis stage, drafted from observed sessions' }
+  leverage: { value: 8, why: 'every agent session on every task inherits better stuck-behavior' }
+  taste: { value: 8, why: 'what pain should feel like to a model is exactly the judgment part' }
+description: 'Fable 5 sessions sometimes grind a task for two hours that should take twenty minutes, repeating a failing approach with small variations. Hypothesis: actions are painless. Make cost and stall legible in-session, prescribe an escalation ladder, and gate the method on an A/B eval against SOTA models.'
+---
+
+## Summary
+
+Watch enough sessions and the failure mode is unmistakable: the agent is
+not blocked, it is stuck, re-running a failing approach with small
+variations for two hours on a task that should take twenty minutes. A human
+in that loop feels pain: elapsed time, mounting cost, the embarrassment of
+the fifth identical error. The agent feels none of it. Every action costs
+the same nothing, so nothing ever forces the question "is this approach
+working?"
+
+## Proposal
+
+Make the cost legible, then prescribe what to do when it registers:
+
+1. **Stall detection**: N attempts with no state change injects an explicit
+   notice into context: what was tried, how long, what has not changed.
+2. **Budget signals**: elapsed wall-clock and spend, visible in-session,
+   against a stated estimate for the task.
+3. **Escalation ladder**: on a stall the agent must pick a rung, not
+   retry: restate the goal, change strategy entirely, widen context,
+   delegate a subproblem, or surface the blocker with evidence.
+
+## Eval gate
+
+The method ships only if it wins: an A/B suite of stuck-prone tasks run
+against SOTA models (Fable 5 and peers), measuring time-to-completion,
+success rate, and quality of giving up (does the blocked report name the
+real blocker). If the signals do not move those numbers, they come out.
+
+Drafted by Claude Code (Fable) from operator observations; comments wanted,
+hence the RFC flag.

@@ -77,7 +77,10 @@
 #                                 a commit message; appended after the PR body.
 #                    A patch with no entry defaults to `hold` with an "unclassified"
 #                    reason (fail-safe: an unclassified patch is never sent upstream
-#                    automatically). `upstream-sync` treats a repo whose
+#                    automatically) -- but for a fork that declares any intent, the
+#                    `patch-dag-<name>` check fails a patch with no entry, so the
+#                    fallback only backstops forks with no `patches` attrset at all.
+#                    `upstream-sync` treats a repo whose
 #                    `upstreamPolicy.aiPrsAllowed == false` as `never` regardless of
 #                    the per-patch mark, so a banned repo cannot leak a PR.
 #
@@ -147,6 +150,10 @@
           upstream = "never";
           reason = "Required to install the stable app from Zed's own flake, but Zed's contribution policy rejects autonomous-agent submissions.";
         };
+        "0003-editor-navigate-directly-to-a-single-reference.patch" = {
+          upstream = "never";
+          reason = "General editor behavior fix (indexable-inc/index#2976), but Zed's contribution policy rejects autonomous-agent submissions.";
+        };
       };
     }
     {
@@ -173,6 +180,31 @@
         "0002-proc-show-kernel-working-directory-cwd-in-the-detail.patch" = {
           upstream = "hold";
           reason = "General feature (show process cwd in detail view); wants a quality pass and a discussion issue first.";
+        };
+      };
+    }
+    {
+      name = "git";
+      input = "git-src";
+      url = "https://github.com/git/git.git";
+      patchDir = "packages/git/patches";
+      # The package overlays nixpkgs' git recipe onto this source, so the base
+      # must equal nixpkgs' git version tag (v2.54.0), never free-float under
+      # the fork-sync cron. Repin manually when nixpkgs bumps git.
+      autoUpdate = false;
+      upstreamPolicy = {
+        # git/git on GitHub is a read-only mirror: contributions go through the
+        # mailing list (or GitGitGadget), never GitHub PRs, so the tool must not
+        # open one. Upstreaming this series is a manual mailing-list submission.
+        prsWelcome = false;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/git/git/blob/master/Documentation/SubmittingPatches.adoc";
+        notes = "Mailing-list workflow (git@vger.kernel.org / GitGitGadget); DCO sign-off required; no AI-specific policy found as of 2026-07-18.";
+      };
+      patches = {
+        "0001-submodule-helper-borrow-common-dir-module-store-in-l.patch" = {
+          upstream = "hold";
+          reason = "General fix git upstream anticipated in df56607dff2 but never implemented; wants a mailing-list submission with review, which upstream-sync cannot automate for a non-PR project.";
         };
       };
     }
@@ -469,9 +501,12 @@
         # 0014: underscore digit separators in numeric literals (`1_000`,
         # `1_000.000_1`, `2.5e1_0`), Rust-shaped (between digits only; a
         # leading underscore is still an identifier), stripped before the
-        # value is parsed. Repo `.nix` files stay separator-free until the
-        # whole toolchain (stock nix, alejandra/statix/deadnix, tree-sitter)
-        # accepts the syntax; astlog's digit-grouping lints track that
+        # value is parsed. Fork-only syntax is allowed only inside import
+        # islands wrapped in `ix.evaluatorGate.require` (today: tests/);
+        # everything else stays stock-parseable so external flake consumers
+        # and the `nix-ix` bootstrap keep evaluating on upstream Nix,
+        # enforced by `checks.<system>.stock-nix-parse` (index#3635).
+        # astlog's digit-grouping lints track the remaining toolchain
         # backlog (astlog-rules/nix.astlog).
         "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch" = {
           upstream = "hold";
@@ -517,6 +552,132 @@
         "0021-libstore-enforce-derivation-no-progress-deadlines.patch" = {
           upstream = "hold";
           reason = "Fleet CI policy for indexable-inc/index#3317. Validate the process-aware deadline before proposing a general Nix interface; humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0022: a paused (backpressured) substitution download neither reads
+        # its socket nor advances CURLOPT_LOW_SPEED_TIME, so a peer half-close
+        # parked the transfer forever -- nix-daemon children stranded in
+        # CLOSE-WAIT wedged CI slots for hours. The worker loop now polls
+        # paused transfers and fails them as transient curl errors, so
+        # download-attempts still applies.
+        "0022-libstore-fail-paused-downloads-on-peer-half-close-or.patch" = {
+          upstream = "hold";
+          reason = "Fails paused downloads on peer half-close or stall past stalled-download-timeout instead of parking forever (indexable-inc/index#3559). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0023: forge archive inputs (github:/gitlab:/sourcehut:) requesting
+        # submodules or LFS are constructed as the equivalent git+https input
+        # (archive tarballs cannot contain that data), so lock files record a
+        # plain `git` node stock Nix understands. Fixes the hard failure of
+        # NixOS/nix#13571 and the silent empty-submodule trees of
+        # NixOS/nix#14982; the mapping mirrors GitHubInputScheme::clone().
+        "0023-libfetchers-fetch-forge-inputs-via-git-when-submodul.patch" = {
+          upstream = "hold";
+          reason = "Implements roberth's implicit git+https switch from NixOS/nix#14982 (also fixes NixOS/nix#13571; indexable-inc/index#3626). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+      };
+    }
+    {
+      # nix-fast-build is the CI build engine (the `check` app): the package
+      # overlays this patched source onto nixpkgs' nix-fast-build recipe
+      # (packages/nix/nix-fast-build), so the base must equal the nixpkgs
+      # package version (tag 1.6.0), never free-float under the fork-sync
+      # cron. On a nixpkgs nix-fast-build bump, repin the input to the
+      # matching tag and run `nix run .#rebase-patches -- nix-fast-build`.
+      name = "nix-fast-build";
+      input = "nix-fast-build-src";
+      url = "https://github.com/Mic92/nix-fast-build.git";
+      patchDir = "packages/nix/nix-fast-build/patches";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/Mic92/nix-fast-build";
+        notes = "No CONTRIBUTING or AI policy published as of 2026-07-19; small focused PRs with tests are the observed norm.";
+      };
+      patches = {
+        "0001-workers-make-skip-cached-skip-locally-realized-outpu.patch" = {
+          upstream = "hold";
+          reason = "Changes what --skip-cached means for `local` outputs for every user; upstream would plausibly want it opt-in, so it needs reshaping as a flag before a PR.";
+        };
+        "0002-build-add-a-typed-per-derivation-no-progress-deadlin.patch" = {
+          upstream = "never";
+          reason = "Depends on index's nix fork (build-status directory, patches 0003-0009/0021) that upstream Nix does not have; unmergeable until that daemon interface exists upstream.";
+        };
+      };
+    }
+    {
+      # nix-derivation is the Haskell .drv parser nix-output-monitor links;
+      # packages/nix/nix-output-monitor feeds this patched source into a
+      # haskellPackages.extend override. The base is upstream main while its
+      # cabal version still reads 1.1.3 (the hackage release nixpkgs builds,
+      # plus the bound-relaxation cabal revisions hackage layers on top), so
+      # it must not free-float: repin when nixpkgs moves past 1.1.3, then
+      # `nix run .#rebase-patches -- nix-derivation`.
+      name = "nix-derivation";
+      input = "nix-derivation-src";
+      url = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library.git";
+      patchDir = "packages/nix/nix-output-monitor/patches";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library";
+        notes = "No CONTRIBUTING or AI policy; the CA gap is tracked upstream as issue #28 with PR #26 proposing a sum-type DerivationOutput.";
+      };
+      patches = {
+        "0001-Parser-accept-empty-output-paths-in-floating-CA-deri.patch" = {
+          upstream = "hold";
+          reason = "Upstream PR #26 already proposes the larger sum-type fix for issue #28; ours is the deliberately smaller parser widening, so engage on #26/#28 rather than file a competing PR.";
+        };
+      };
+    }
+    {
+      # rnix (nix-community/rnix-parser) is patched as a *vendored cargo
+      # crate*, not as a package source: lib/util/rnix-digit-separators
+      # rewrites the crate inside each consuming tool's cargo vendor dir at
+      # build time, selecting the series matching the vendored version
+      # (0.11/0.12 share one tokenizer shape, 0.13/0.14 the other). These two
+      # entries pin the upstream tags the in-use crates were cut from --
+      # v0.12.0 (alejandra, deadnix) here, v0.14.0 (statix) below -- so each
+      # series gets the standard canonical form, patched-src apply gate, and
+      # dag/reason checks; the build-time patcher reads the same patch files
+      # from these patchDirs. Repin alongside the vendored-version change on a
+      # nixpkgs bump (the build fails loudly on an unknown rnix version).
+      name = "rnix-0-12";
+      input = "rnix-0-12-src";
+      url = "https://github.com/nix-community/rnix-parser.git";
+      patchDir = "lib/util/rnix-digit-separators/patches-0.12";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/nix-community/rnix-parser";
+        notes = "nix-community project, PRs welcome, no stated AI policy; the patched dialect is gated on the Nix language itself changing, and 0.12 is a historical tag that upstream would not amend anyway.";
+      };
+      patches = {
+        "0001-tokenizer-accept-underscore-digit-separators-in-nume.patch" = {
+          upstream = "hold";
+          reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
+        };
+      };
+    }
+    {
+      # See the rnix-0-12 entry above: same logical patch on the v0.14.0
+      # tokenizer generation (statix's vendored rnix).
+      name = "rnix-0-14";
+      input = "rnix-0-14-src";
+      url = "https://github.com/nix-community/rnix-parser.git";
+      patchDir = "lib/util/rnix-digit-separators/patches-0.14";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/nix-community/rnix-parser";
+        notes = "nix-community project, PRs welcome, no stated AI policy; the patched dialect is gated on the Nix language itself changing.";
+      };
+      patches = {
+        "0001-tokenizer-accept-underscore-digit-separators-in-nume.patch" = {
+          upstream = "hold";
+          reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
         };
       };
     }

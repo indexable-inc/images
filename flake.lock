@@ -169,6 +169,23 @@
         "type": "github"
       }
     },
+    "git-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1776650499,
+        "narHash": "sha256-bA144ECODQIly1q0xilmTMYrHmvBrMF5DfBsEMd4YyY=",
+        "owner": "git",
+        "repo": "git",
+        "rev": "94f057755b7941b321fd11fec1b2e3ca5313a4e0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "git",
+        "repo": "git",
+        "rev": "94f057755b7941b321fd11fec1b2e3ca5313a4e0",
+        "type": "github"
+      }
+    },
     "hermes-agent": {
       "inputs": {
         "flake-parts": "flake-parts",
@@ -248,6 +265,40 @@
         "shallow": true,
         "type": "git",
         "url": "https://gitlab.freedesktop.org/mesa/mesa"
+      }
+    },
+    "nix-derivation-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1754435816,
+        "narHash": "sha256-Yv65p5fvCCDj3iSSmCV0OO2n/mNGvVeYpemKRySiERw=",
+        "owner": "Gabriella439",
+        "repo": "Haskell-Nix-Derivation-Library",
+        "rev": "f1f5d5a2270b5ee23dfad40fee385cf4e94d6cea",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Gabriella439",
+        "repo": "Haskell-Nix-Derivation-Library",
+        "rev": "f1f5d5a2270b5ee23dfad40fee385cf4e94d6cea",
+        "type": "github"
+      }
+    },
+    "nix-fast-build-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1781073171,
+        "narHash": "sha256-PMBbenLBvn/0pSFOhwPVn171Vw7kU5YmBUNDhxllZ7c=",
+        "owner": "Mic92",
+        "repo": "nix-fast-build",
+        "rev": "a28921953d962c6c2527108a6be4062eb6dc2f51",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Mic92",
+        "repo": "nix-fast-build",
+        "rev": "a28921953d962c6c2527108a6be4062eb6dc2f51",
+        "type": "github"
       }
     },
     "nix-src": {
@@ -490,6 +541,40 @@
         "type": "github"
       }
     },
+    "rnix-0-12-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1736460466,
+        "narHash": "sha256-8f+9yVuEmisbrOe8EowzbUv9rrRZjr9VcPxKB/7DvXc=",
+        "owner": "nix-community",
+        "repo": "rnix-parser",
+        "rev": "d521c438acfa9383646f9c4af9d10bbb02df0f78",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "rnix-parser",
+        "rev": "d521c438acfa9383646f9c4af9d10bbb02df0f78",
+        "type": "github"
+      }
+    },
+    "rnix-0-14-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1771267694,
+        "narHash": "sha256-TMrPz2WKTgypDKkjZnB1YPcYx/IT7EZcixFGrbOAm6A=",
+        "owner": "nix-community",
+        "repo": "rnix-parser",
+        "rev": "0472081214c24b1ab4d34f7bf544284ed4e45ad3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "rnix-parser",
+        "rev": "0472081214c24b1ab4d34f7bf544284ed4e45ad3",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "btop-src": "btop-src",
@@ -499,16 +584,21 @@
         "examples": "examples",
         "fff-src": "fff-src",
         "ghostty": "ghostty",
+        "git-src": "git-src",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
         "launchk-src": "launchk-src",
         "mesa-src": "mesa-src",
+        "nix-derivation-src": "nix-derivation-src",
+        "nix-fast-build-src": "nix-fast-build-src",
         "nix-src": "nix-src",
         "nixpkgs": "nixpkgs",
         "nu-jupyter-kernel-src": "nu-jupyter-kernel-src",
         "nushell-src": "nushell-src",
         "perftest-src": "perftest-src",
         "pg-uint128-src": "pg-uint128-src",
+        "rnix-0-12-src": "rnix-0-12-src",
+        "rnix-0-14-src": "rnix-0-14-src",
         "rust-overlay": "rust-overlay",
         "sdk-prebuilt-nixpkgs": "sdk-prebuilt-nixpkgs",
         "sdk-prebuilt-rust-overlay": "sdk-prebuilt-rust-overlay",

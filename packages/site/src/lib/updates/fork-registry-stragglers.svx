@@ -1,0 +1,21 @@
+---
+id: fork-registry-stragglers
+postedAt: 2026-07-19T12:00:00-07:00
+title: "Every production patch now lives in the fork-packages registry"
+tags: [nix, ci, forks]
+links:
+  - label: fork registry
+    href: https://github.com/indexable-inc/index/blob/main/lib/fork-packages.nix
+  - label: issue 3638
+    href: https://github.com/indexable-inc/index/issues/3638
+---
+
+Six patches used to live outside `lib/fork-packages.nix` with none of the fork machinery: `nix-fast-build`'s `skip-local` and `liveness` patches (the 715-line liveness patch was the riskiest in the repo with the least tooling), `nix-output-monitor`'s `nix-derivation` CA parser fix, and the three version-flavored `rnix` tokenizer patches applied to vendored cargo crates at build time.
+
+They are now four registry forks with pinned `flake = false` inputs, canonical `git format-patch` series, and the standard gates: `patched-src-<name>` proves each series still applies against its pinned base in seconds, and `patch-dag-<name>` enforces the dependency DAG and a stated reason in every patch's commit body.
+
+- `nix-fast-build` pins `Mic92/nix-fast-build` at tag 1.6.0 (the nixpkgs version; an eval assertion fires if nixpkgs moves first) and overrides the nixpkgs package's `src` with `ix.patchedSrc`.
+- `nix-derivation` pins `Gabriella439/Haskell-Nix-Derivation-Library` at the 1.1.3 head and feeds the patched source through `haskell.lib.compose.overrideSrc` instead of `appendPatch`.
+- `rnix-0-12` / `rnix-0-14` pin the `rnix-parser` tags that alejandra/deadnix (0.12) and statix (0.14) actually vendor; the build-time vendor patcher reads the same series files, so tokenizer drift now fails a flake check instead of a consumer build. The dead 0.10 flavor (no consumer since statix moved to rnix 0.14) is deleted; an unknown vendored version still fails the build loudly.
+
+Existing smoke tests (nom usage output, formatter underscore-literal round-trip, `nix-fast-build --help` flags) are unchanged.

@@ -152,11 +152,10 @@ Defaults to the default pair, additions only:
 ### System prompt (`packages/agent/prompt/`)
 
 `systemPrompt` is baked as the session's system prompt, REPLACING the stock one
-rather than appending to it (`default.nix:95-113`). The text is the shokunin craft ethos plus
-fleet engineering rules: pre-v1 no-backward-compatibility, one-concept-one-
-implementation, always work in a git worktree, spawn background subagents for
-independent work, do work through the index Python kernel and `search` priors,
-gate admin/force merges on a fresh local build, never use em dashes, and more
+rather than appending to it (`default.nix:95-113`). The text is the house
+rules: craft and style defaults, pre-v1 no-backward-compatibility,
+one-concept-one-implementation, git worktrees, delegation through the index
+kernel, no force merges, no em dashes, and more
 (`packages/agent/prompt/rules.nix`). Set to `null` to ship the stock prompt alone.
 
 ### Hooks (`packages/agent/policy/hook-runner.nix`, `default.nix:209-285`)

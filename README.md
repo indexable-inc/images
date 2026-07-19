@@ -1,156 +1,66 @@
-<p align="center">
-  <img src="doc/assets/logo.svg" width="80" alt="index" />
-</p>
+# index
 
 <p align="center">
-  <a href="https://antithesis.com/"><img src="https://img.shields.io/badge/Antithesis-tested-00B214?labelColor=7F39DA&style=flat" alt="Antithesis tested" /></a>
-  <!-- OpenSSF Scorecard badge hidden until the rolling Code-Review score
-       and CII Best Practices badge catch up; surface it once both move. -->
-  <!-- <a href="https://scorecard.dev/viewer/?uri=github.com/indexable-inc/index"><img src="https://api.scorecard.dev/projects/github.com/indexable-inc/index/badge" alt="OpenSSF Scorecard" /></a> -->
+  <img src=".github/readme/globe.svg" alt="a spinning globe: the whole world, rendered as braille text" width="480">
 </p>
+
+index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): one shared definition of the software everyone here runs. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/). It is also the default world an [ix.dev](https://ix.dev) VM boots: ix is the runtime, index is what runs on it.
+
+It exists because agents now write patches faster than upstream review can absorb them. A fix that takes an agent minutes can wait months in a review queue, and some projects refuse AI-written patches outright. Here the same change lands on main today, and upstream can adopt it whenever it wants. The [philosophy](https://indexable-inc.github.io/index/philosophy/) page has the full argument.
+
+## Why
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)"  srcset="doc/assets/demo-dark.avif"  type="image/avif">
-    <source media="(prefers-color-scheme: light)" srcset="doc/assets/demo-light.avif" type="image/avif">
-    <source media="(prefers-color-scheme: dark)"  srcset="doc/assets/demo-dark.webp">
-    <source media="(prefers-color-scheme: light)" srcset="doc/assets/demo-light.webp">
-    <img alt="A terminal demo: a colored git-log-pretty tree, then driving a live Python REPL." src="doc/assets/demo-dark.webp" width="800">
-  </picture>
+  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
 </p>
+
+### A change lands once and reaches everything
 
 <p align="center">
-  <a href="https://ix.dev">ix.dev</a>
+  <img src=".github/readme/one-graph.svg" alt="one patch fans out to every package in the graph" width="720">
 </p>
 
-# Index
+Patch a compiler, fix a library, tighten a lint: nothing quietly runs last year's version of anything.
+
+### Never blocked on upstream
 
 <p align="center">
-  <img src="doc/assets/hero.svg" width="760" alt="Three contributors commit tools into one shared Nix flake; everyone runs everything with nix run." />
+  <img src=".github/readme/upstream.svg" alt="a fix lands in this repo now; upstream can take it someday" width="720">
 </p>
 
-Ever built a great little tool and watched it die on your laptop? `index` is a
-shared, open-source monorepo of developer tools that anyone can modify. The
-bet: one repo everyone can edit is the fastest way for all of us to move. Add
-something useful, and everyone gets it.
+Patches live next to the code that needs them. No dependency has a bus factor outside the repo.
 
-It is one Nix flake holding ~45 packages (mostly Rust, with Python, Elixir,
-TypeScript, and Svelte where they fit), a corpus of NixOS modules, fleet
-examples, and the agent infrastructure that ties them together. Most packages have
-a from-source page under [`doc/`](doc/index.md). To explore, point Claude at
-this repo and ask whether anything here is useful for you.
+### One standard for everything
 
-## Quickstart
+<p align="center">
+  <img src=".github/readme/one-standard.svg" alt="clippy, cve scan, and licenses applied to every package in the graph" width="720">
+</p>
 
-All you need is [Nix](https://nixos.org/download/) with flakes enabled:
+Add a rule and every package meets it, in the same change.
 
-```sh
-git clone https://github.com/indexable-inc/index
-cd index
-nix flake show          # list every package, module, and check
-nix run .#lint          # alejandra, statix, deadnix, astlog (nix + rust)
-nix run .#reel          # regenerate the demo above
-nix build .#nginx-lifecycle-up   # realize one example fleet wrapper
-```
+### No stable APIs required
 
-`nix flake show` prints the whole map — every package, NixOS module, and
-check in the flake; the sections below are the guided tour of that same list.
+<p align="center">
+  <img src=".github/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
+</p>
 
-## What's inside
+Every consumer of an API lives in this repo, and agents make repo-wide refactors cheap, so an API can be correct instead of compatible.
 
-### Agent infrastructure
+### Prebuilt everywhere
 
-The harness, governance, and tuning loop that runs coding agents (Claude Code and
-Codex) across the fleet under one set of rules. The house system prompt is
-[`prompt/rules.nix`](packages/agent/prompt/rules.nix), an ordered set of named,
-reviewable bindings rather than a text blob, so behavior changes land as PR diffs.
+<p align="center">
+  <img src=".github/readme/prebuilt.svg" alt="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos" width="720">
+</p>
 
-| Package | What it does |
-| --- | --- |
-| [`claude-code`](packages/agent/claude-code/) / [`codex`](packages/agent/codex/) | Agent CLIs wrapped with the shared house prompt, MCP servers, and hooks baked in |
-| [`policy`](packages/agent/policy/) | One source of tool-access rules for both wrappers (deny force-merge, block superseded builtins) |
-| [`system-prompt-eval`](packages/agent/system-prompt-eval/) | Spawns sandboxed `claude -p` rollouts, scores them with an LLM judge, commits the scores |
-| [`claude-hooks`](doc/claude-hooks/overview.md) | Lifecycle hooks as one Rust binary; every hook fails open and silent, so a broken hook never blocks a session |
-| [`subagent-cache`](packages/agent/subagent-cache/) | Memoizes read-only investigations across the team, validated by Postgres recall + a Haiku judge + file-freshness hashing |
-| [`distiller`](packages/agent/distiller/) | Turns raw session transcripts into searchable, reusable lessons |
-| [`pi-harnesses`](packages/agent/pi-harnesses/) | Fixed agent postures: sandboxed engine, beam-search executor, skeptical prosecutor |
-| [`claude-stories`](packages/agent/claude-stories/) | A status-line row of teammate avatars, peer-discovered over Tailscale with no central server |
+You download binaries instead of compiling them. CI builds on the [ix.dev](https://ix.dev) cluster, close to 1,000 vCPUs, and pushes every closure to `cache.ix.dev`, prebuilt for Linux and cross-compiled for macOS.
 
-### A Nix build system rebuilt for speed
+## Stories
 
-| Package | What it does |
-| --- | --- |
-| [`nix-cargo-unit`](packages/nix/nix-cargo-unit/) | Renders the Cargo workspace as one content-addressed derivation per rustc unit, not per crate |
-| [`snix`](packages/nix/snix/) | A Rust reimplementation of Nix, built here with cargo-unit (~1100 crate builds collapse into one incremental graph) |
-| [`nix-fast-build`](packages/nix/nix-fast-build/) + [`nix-eval-jobs`](packages/nix/nix-eval-jobs/) | Patched to correctly skip already-realized CA outputs (an ~85s cache-check floor for ~1450 units becomes ~0.1s) |
-| [`oci-image-builder`](packages/nix/oci-image-builder/) | Splits image "describe" from "materialize" and shards per-layer tarring, so rebuilds stay fast and deterministic |
-| [`nix-web-monitor`](packages/nix/nix-web-monitor/) | Streams Nix's internal JSON build log into a live browser dashboard while the build runs in your terminal |
-| [`blast-radius`](packages/blast-radius/) | Reports how many derivations a PR would rebuild, and why |
-| [`indexbench`](packages/indexbench/) | Gates macro-benchmark and allocation-count regressions in CI |
+The fastest way to get what this repo is for: short case examples, each a two-minute read with a diagram.
 
-### Code intelligence and search
-
-| Package | What it does |
-| --- | --- |
-| [`search`](packages/search/search/) | Semantic code search by meaning; content-addressed, so identical files across branches share one embedding |
-| [`astlog`](packages/code/astlog/) | Datalog over tree-sitter syntax trees (matches as relations, joins as rules); gates `nix run .#lint` |
-| [`scipql`](packages/code/scipql/) | The same idea over a SCIP semantic index, so a rename never touches an unrelated same-named symbol |
-
-### Terminal automation
-
-| Package | What it does |
-| --- | --- |
-| [`tui`](packages/tui/tui/) | A PTY driver: drive any interactive program (gdb, vim, REPLs) and read back a rendered screen, not raw escape codes. Python + Node bindings |
-| [`reel`](packages/tui/reel/) | Records a terminal demo through the PTY driver and encodes it to animated AVIF/WebP (see below) |
-| [`run`](packages/tui/run/) | Records a command under a terminal session, keeping agent logs small |
-| [`dashboard`](packages/dashboard/) | A live grid of running terminals in the browser over a Loro CRDT and SSE |
-
-The demo at the top of this README is not a screen recording. [`reel`](packages/tui/reel/)
-drives a real shell through the PTY driver, rasterizes the styled grid with a flat
-palette and an embedded monospace face, and encodes a 60fps animated AVIF (WebP
-fallback). AV1's inter-frame compression keeps it around 140 KB. Regenerate it any
-time with `nix run .#reel`.
-
-### Agent-facing primitives
-
-A Python [`mcp`](packages/mcp/) server hands all of the above to an LLM with no
-install step. Its one general `python_exec` tool runs on a single shared,
-persistent IPython kernel: namespace persists across calls, work can background
-past the foreground budget, and sessions checkpoint to disk. Bundled modules
-expose search, the PTY driver, a `fleet` cluster API (Ray, Spark, SSH fan-out to
-Polars frames), browser and screen control, and cloud integrations.
-
-### VMs, modules, and fleet
-
-The layer [ix](https://ix.dev) publishes on top of its closed-source VM primitives:
-reusable, auto-discovered [NixOS modules](modules/) and declarative fleet helpers.
-
-| Package | What it does |
-| --- | --- |
-| [`vmkit`](packages/vm/vmkit/) | Spawns guests on macOS Virtualization.framework or Linux libkrun from one binary |
-| [`chrome-vm`](packages/vm/chrome-vm/) | Runs headless Chromium inside a real VM |
-| [`ix-fleet`](packages/ix-fleet/) | Drives declarative multi-VM rollouts |
-| [`dag-runner`](packages/dag-runner/) | Executes JSON task DAGs for parallel health checks |
-
-## Layout
-
-| Path | Contents |
-| --- | --- |
-| [`packages/`](packages/) | Repo-owned tools and their package-local assets: agent stack, Nix build system, search, PTY driver, MCP server, `reel` |
-| [`packages/agent/skills/`](packages/agent/skills/) | Claude Code skills shipped to agents by the `skills` flake package |
-| [`packages/indexbench/filesystem/`](packages/indexbench/filesystem/) | Filesystem benchmark source for the `bench-filesystem` package |
-| [`packages/sdk/`](packages/sdk/) | Source-available SDK bindings and SDK-specific checks |
-| [`packages/maintainers/scripts/`](packages/maintainers/scripts/) | Repo maintenance scripts that are packaged or called by flake outputs |
-| [`modules/`](modules/) | Opt-in NixOS service modules and profiles, auto-discovered |
-| [`lib/`](lib/) | Shared Nix APIs and reusable builders only; package-specific glue stays with its package |
-| [`doc/`](doc/index.md) | From-source documentation, one page per package |
-| [`examples/`](examples/) | Standalone consumer fleets and copyable `mkDev` composition patterns |
-| [`packages/site/src/lib/rfcs/`](packages/site/src/lib/rfcs/) | Architecture decision records (RFCs, published on the site) |
-
-## Feedback
-
-Bug reports and enhancement requests go to [GitHub Issues](https://github.com/indexable-inc/index/issues). Security reports follow [SECURITY.md](SECURITY.md). Code changes land through pull requests against the `main` branch; see [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, coding standards, and commit conventions.
-
-## Contributor notes
-
-See [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) when you're ready to dig in.
+1. [Your whole team's Claude, from one flake](https://indexable-inc.github.io/index/stories/manage-claude-with-nix/): the agent binary, prompt, tools, permissions, and MCP servers, pinned in code.
+2. [Add a tool once, everyone gets it](https://indexable-inc.github.io/index/stories/add-a-tool-once/): a small utility stops dying on the laptop it was born on.
+3. [Your Mac never compiles](https://indexable-inc.github.io/index/stories/mac-never-compiles/): the Linux fleet cross-compiles macOS binaries your laptop just downloads.
+4. [Every session becomes searchable memory](https://indexable-inc.github.io/index/stories/searchable-history/): shell and agent history from every machine, one semantic index.
+5. [CI builds each crate exactly once](https://indexable-inc.github.io/index/stories/build-each-crate-once/): the Rust workspace as a per-crate build DAG.
+6. [A thousand agents, one Elixir kernel](https://indexable-inc.github.io/index/stories/elixir-agent-kernel/): agents work through supervised, fleet-federated workspaces on a runtime built for that shape.

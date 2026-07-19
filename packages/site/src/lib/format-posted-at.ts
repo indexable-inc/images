@@ -24,3 +24,27 @@ export function formatPostedAt(postedAt: string, zone: string | undefined): stri
     .find((part) => part.type === 'timeZoneName');
   return `${date} · ${time} ${tzNamePart?.value ?? tz}`;
 }
+
+// Date-only variant for day-granular fields (RFC created/updated).
+// Unparseable input (the template's YYYY-MM-DD placeholder) passes through.
+export function formatDay(iso: string): string {
+  if (Number.isNaN(Date.parse(iso))) return iso;
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC'
+  }).format(new Date(iso));
+}
+
+// '2 weeks ago' for a day-granular ISO date. Client-only: callers pass
+// Date.now() after mount so prerendered HTML stays deterministic.
+export function relativeDay(iso: string, now: number): string {
+  const dayMs = 86_400_000;
+  const days = Math.round((now - Date.parse(iso)) / dayMs);
+  const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+  if (Math.abs(days) < 7) return rtf.format(-days, 'day');
+  if (Math.abs(days) < 30) return rtf.format(-Math.round(days / 7), 'week');
+  if (Math.abs(days) < 365) return rtf.format(-Math.round(days / 30), 'month');
+  return rtf.format(-Math.round(days / 365), 'year');
+}

@@ -42,6 +42,8 @@
   # `systemPrompt` default below; ignored when `systemPrompt` is passed
   # explicitly.
   omitRules ? [],
+  # Topic names dropped from the baked house prompt (prompt `omitTopics`).
+  omitTopics ? [],
   # Forced config: codex `-c key=value` overrides applied on EVERY invocation.
   # `-c` is codex's highest-precedence layer (above ~/.codex/config.toml), so use
   # this ONLY for wrapper INVARIANTS the user must not silently lose. The one we
@@ -96,6 +98,7 @@
         then builtins.removeAttrs repoPackages ["mcp"]
         else repoPackages;
       promptOmitRules = omitRules;
+      promptOmitTopics = omitTopics;
     }).defaultServers,
   # The house model/base instructions Codex should run with. This becomes a
   # store-backed `model_instructions_file` soft default. Null bakes no default.
@@ -103,6 +106,7 @@
     (import (ix.paths.packagesRoot + "/agent/common.nix") {
       inherit lib ix repoPackages;
       promptOmitRules = omitRules;
+      promptOmitTopics = omitTopics;
     }).systemPromptFor
     "codex",
   # Existing prompt file to use instead of materializing `systemPrompt`.

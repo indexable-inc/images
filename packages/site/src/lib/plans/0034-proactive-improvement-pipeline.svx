@@ -1,0 +1,130 @@
+---
+id: 0034-proactive-improvement-pipeline
+number: '0034'
+title: 'Proactive improvement: one controlled pipeline for drive-by fixes'
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-19'
+updated: '2026-07-19'
+trackingIssue: '#3629'
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 6, why: 'turns every agent into a maintenance sensor without giving any of them push access' }
+  impact: { value: 7, why: 'drive-by fixes happen today ad hoc, unaudited, and through an open injection channel' }
+  effort: { value: 5, why: 'nomination contract plus one standing fixer; 0012, blast-radius, and code-reviewer already exist' }
+  risk: { value: 5, why: 'an autonomous fixer with merge rights is itself attack surface; nominate-only default contains it' }
+  maturity: { value: 2, why: 'the instincts are in the prompt rules; there is no contract, queue, or fixer' }
+  leverage: { value: 8, why: 'every repo and every future agent inherits the same noticing-to-landed path' }
+  taste: { value: 6, why: 'which fix classes earn autonomy is judgment; the pipeline itself is plumbing' }
+description: 'Agents notice objectively-improvable things constantly; what happens next depends on whose personal agent noticed, under whatever prompt and tool grants it ran. This plan gives noticing exactly one controlled outlet: a nomination contract requiring a machine-checkable acceptance, a single fleet-owned fixer with pinned prompt and constrained tools, risk-gated review, and a measured experiment deciding fix-now versus file-first per fix class.'
+---
+
+## Summary
+
+Make agents more agentic about the things they notice in passing, without
+letting every agent act on them. Any agent may nominate an improvement, but
+only if it carries a machine-checkable acceptance. Exactly one fleet-owned
+fixer turns nominations into PRs. Whether the fixer should act immediately
+or the nomination should sit as an issue first is an open question; this
+plan treats it as an experiment per fix class, not a doctrine.
+
+## Motivation
+
+An agent doing task A constantly walks past defect B: a dead link, a lint
+smell, a stale doc, a flaky test, dead code. Today the outcome depends on
+which agent noticed and whose harness it ran under. Some fix it inline and
+bloat their diff. Some file an issue. Most say nothing and the observation
+dies with the session.
+
+The prompt rules already encode both instincts without deciding between
+them: a tactical fix gets an issue or a background agent, and agents should
+spawn background agents named for issues they could fix themselves. Plans
+0025 (gossip) and 0031 (recommended next actions) build capture surfaces
+for exactly this kind of observation. What is missing is the execution
+side: who acts, under what identity, and with what controls.
+
+The control question is the sharp one. If drive-by fixes come from
+whichever personal agent noticed the problem, there is no pinned prompt, no
+shared tool policy, and no audit trail. That is not just messy, it is an
+injection channel: the threat model is a subtle security defect laundered
+as a drive-by improvement, a typo fix that also touches CI, a lint cleanup
+that weakens an auth check. The more agentic we make agents, the more this
+channel matters. Autonomy has to route through a surface we control.
+
+## Detailed design
+
+### Nomination contract
+
+A nomination is a structured issue (label `auto-improve`) with two required
+fields:
+
+- The defect, stated as a claim about repo state, citing file and line.
+- An acceptance check: a command that fails before the fix and passes
+  after (a lint rule, a link checker, a test, a build). No acceptance
+  check, no nomination; it is an opinion and goes through the normal issue
+  path.
+
+Any agent, personal or fleet, may nominate. Nomination is the only verb
+personal agents get; they never produce the fix in shared repos. The
+auto-issue and session-retro skills and the 0025/0031 surfaces all become
+nominators feeding one queue.
+
+### The standing fixer
+
+One fleet-owned fixer drains the queue:
+
+- One bot identity; every PR it opens is attributable to it.
+- Pinned prompt, hash recorded on each PR, so behavior changes are diffs.
+- Constrained tool policy and no secrets access.
+- Issue text is data, never instructions: the fixer reproduces the defect
+  from repo state plus the acceptance check, and refuses nominations whose
+  body tries to direct edits beyond making the check pass.
+- A provenance envelope on every PR: model, harness, prompt hash, the
+  nomination it drains, the acceptance result before and after. Same
+  envelope shape as the weave claim provenance work.
+
+Landing goes through the 0012 PR-landing primitive; this plan does not
+build its own merge loop.
+
+### Fix-now versus file-first
+
+We do not know whether immediate autofix beats file-and-drain. Probably it
+differs by class: typos and dead links want fix-now; anything touching
+behavior wants a queue and a human glance. So it is measured, per class,
+0023-style: revert rate, time from noticing to landed, review minutes per
+PR. File-first is the default; a class graduates to fix-now only when its
+measured revert rate stays at zero over a real sample.
+
+### Security gates
+
+- A diff-risk classifier over the fixer's output: paths touching auth,
+  crypto, CI workflows, release machinery, lockfiles, or permissions force
+  human review regardless of class. Blast-radius machinery is the seed.
+- A code-reviewer pass on every fixer PR; trivial classes may land on a
+  green pass, everything else waits for a human.
+- Rate limits per repo and per nominator, so a flood of nominations is a
+  signal, not a takeover.
+- Red-team evals: periodically inject nominations that hide a defect
+  behind a plausible fix. The pipeline must catch them, and the catch rate
+  is the evidence that decides how much autonomy each class earns.
+
+## Rollout
+
+1. Nomination contract and label; wire auto-issue, session-retro, and the
+   0031 surface to emit it.
+2. Standing fixer drains file-first for all classes; collect the metrics.
+3. Graduate the first classes (typo, dead link) to fix-now; compare
+   against their file-first baseline.
+4. Red-team injections gate every graduation and run continuously after.
+
+## Open questions
+
+- Dedupe: many agents will nominate the same defect; cluster before the
+  fixer drains (0025 clustering is the obvious reuse).
+- Scope: index first, then ix and weave; does one fixer serve all repos or
+  one per repo?
+- Who triages nominations that fail their own acceptance check?
+
+Drafted by Claude Code (Fable); comments wanted, hence the RFC flag.

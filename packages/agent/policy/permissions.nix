@@ -106,10 +106,26 @@
     "CronDelete"
     "CronList"
   ];
+
+  # Claude-bundled skills that inject Anthropic's own style guidance with no
+  # real benefit to this harness. The CLI cannot strip a bundled skill from
+  # the listing, but a scoped deny hard-blocks invocation (verified 2026-07,
+  # index#3607: `Skill(dataviz)` deny rejects the call; `artifact-design`
+  # additionally vanishes from the listing once the Artifact tool itself is
+  # denied in the wrapper's tool table). These denies HOLD under
+  # `--dangerously-skip-permissions` (probed 2026-07: tool absent, skill
+  # delisted, invocation denied under bypass), like every deny; bypass skips
+  # prompts, not deny rules. Unconditional: unlike the kernel-superseded rows
+  # these have no non-kernel fallback role.
+  claudeBundledSkillDenies = [
+    "Skill(artifact-design)"
+    "Skill(dataviz)"
+  ];
 in {
   claude = {
     deniedToolPatterns =
       map (pattern: "Bash(${pattern})") protectedMergeCommandPatterns
+      ++ claudeBundledSkillDenies
       ++ lib.optionals exaSearchBaked exaSuperseded.claudeTools
       ++ lib.optionals indexKernelBaked (kernelClaudeTools ++ claudeHouseDeniedTools);
   };

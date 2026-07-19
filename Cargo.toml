@@ -79,6 +79,10 @@ members = [
   "packages/nix/nix-web-monitor/server",
   "packages/nix/oci-image-builder",
   "packages/nu-py",
+  "packages/plumb/cli",
+  "packages/plumb/ex",
+  "packages/plumb/core",
+  "packages/plumb/syntax",
   "packages/progress-style",
   "packages/repo-walker",
   "packages/screencast/screencast",
@@ -239,6 +243,8 @@ efx-engine = { path = "packages/efx/engine" }
 efx-ir = { path = "packages/efx/ir" }
 efx-lang = { path = "packages/efx/lang" }
 file-language = { path = "packages/code/file-language" }
+plumb-core = { path = "packages/plumb/core" }
+plumb-syntax = { path = "packages/plumb/syntax" }
 flate2 = "1"
 flecs-query-core = { path = "packages/flecs-query/core" }
 fontdue = "0.9"
@@ -326,6 +332,7 @@ reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
   "multipart",
 ] }
+reedline = "0.49"
 rmp-serde = "1"
 rodio = { version = "0.22", default-features = false, features = ["playback", "vorbis"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
