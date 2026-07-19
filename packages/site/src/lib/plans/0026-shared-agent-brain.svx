@@ -18,7 +18,7 @@ scores:
   maturity: { value: 1, why: 'hypothesis stage; MEMORY.md and grep are the only prior art here' }
   leverage: { value: 9, why: 'recall quality compounds across every future session' }
   taste: { value: 8, why: 'what strengthens and what decays is the entire design' }
-description: 'Agent memory today is flat markdown recalled by grep: no ranking, no decay, no sharing, so every lesson is learned once per host and forgotten when recall misses. Steal three mechanisms from brains: retrieval strengthens a memory, bad outcomes weaken it (dopamine-style prediction error), and a background consolidation agent (the inner voice) merges, links, and promotes off-session. One fleet-wide embedding-indexed graph, real-time weight updates, habits alongside facts.'
+description: 'Agent memory today is flat markdown recalled by grep: no ranking, no decay, no sharing, so every lesson is learned once per host and forgotten when recall misses. Steal three mechanisms from brains: retrieval strengthens a memory, bad outcomes weaken it (dopamine-style prediction error), and a background consolidation agent (the inner voice) merges, links, and promotes off-session. One fleet-wide embedding-indexed graph, real-time weight updates, habits alongside facts. A dreaming pass replays failure traces and per-session mood to re-link what agents missed in the moment, and dreams up tagged speculative memories that only real outcomes can promote.'
 ---
 
 ## Summary
@@ -52,6 +52,34 @@ actually worked.
   together, promotes hot recent memories to long-term, and flags
   contradictions for verification. One-shot notes become structure here.
 
+## Dreaming
+
+Consolidation cleans the graph; dreaming rewrites it. A dream pass
+replays whole session traces, not just memory nodes, and hunts for the
+links the agent never made in the moment: two failures with the same
+root cause on different days, a fix in one repo that silently answered a
+struggle in another. Failure traces are the richest input, since the
+missed connection is usually the thing that failed.
+
+Track mood alongside memory. Each session gets a cheap valence score
+from the friction in its trace (corrections, denied tool calls, retries,
+user frustration), stored on the memories that fired. Dreaming
+backtracks from bad episodes the way rumination does: walk from the
+frustration to the core memory that set it up, then re-arrange around
+it. Demote it, split it, or re-link the neighbors that should have fired
+instead. Mood is the routing signal for where to dream, the same way
+emotional salience picks what a brain replays at night.
+
+Dreams also generate. From moments where the agent was corrected or
+plainly did not understand, synthesize new speculative memories:
+extrapolations of where the user is heading, written in the style of the
+user's own past predictions. Imagine the next version of the site, or
+the API the user will ask for next. These are hallucinations on purpose,
+a small world model sketched ahead of the evidence. They enter the graph
+tagged as dreams with low weight; only reinforcement from a real outcome
+can promote them, and a dream that never comes true decays like any
+other unused memory.
+
 ## Relation to what exists
 
 Write-at-moment-of-learning and the MEMORY.md index remain the capture
@@ -65,7 +93,9 @@ Reinforcement entrenches: a wrong memory that keeps being recalled and
 shallowly confirmed grows stronger. A miscalibrated judge decays true
 memories. A shared store means one poisoned memory misleads the whole
 fleet. All three demand a conservative judge, reversible decay, and
-provenance on every write.
+provenance on every write. Dreamed memories are fabrications by design;
+if the dream tag is ever lost they poison recall as confidently as
+facts.
 
 ## Eval gate
 
