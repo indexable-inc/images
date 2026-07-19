@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="TuiManager spawns children on real PTYs and a vt100 emulator turns their bytes into a readable screen"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="TuiManager spawns children on real PTYs and a vt100 emulator turns their bytes into a readable screen">
+  </picture>
+</p>
 
 # tui
 

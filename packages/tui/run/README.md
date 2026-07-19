@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="run records a command's PTY session, prints only head and tail, and writes replayable artifacts"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="run records a command's PTY session, prints only head and tail, and writes replayable artifacts">
+  </picture>
+</p>
 
 # run
 

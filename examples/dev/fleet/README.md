@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="two agent VMs mount one SMB identity volume from file-server; builder opts out"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="two agent VMs mount one SMB identity volume from file-server; builder opts out">
+  </picture>
+</p>
 
 # ix fleet
 

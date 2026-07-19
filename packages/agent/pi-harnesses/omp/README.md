@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="660" alt="the pinned upstream oh-my-pi binary plus bridge extensions make existing Claude Code hooks and agents work under omp"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="660" alt="the pinned upstream oh-my-pi binary plus bridge extensions make existing Claude Code hooks and agents work under omp">
+  </picture>
+</p>
 
 # omp
 

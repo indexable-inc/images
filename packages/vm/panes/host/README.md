@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="panes-host decodes guest frames into one Metal-backed NSWindow per toplevel, acks each present back to the guest, and forwards NSEvents as evdev input"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="panes-host decodes guest frames into one Metal-backed NSWindow per toplevel, acks each present back to the guest, and forwards NSEvents as evdev input">
+  </picture>
+</p>
 
 # panes-host
 

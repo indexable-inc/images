@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="you chat with the hermes daemon in one ix VM; the only network traffic is outbound to the model API"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="you chat with the hermes daemon in one ix VM; the only network traffic is outbound to the model API">
+  </picture>
+</p>
 
 # Hermes Operator VM
 

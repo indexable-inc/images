@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="A layer plan is described into a tiny content-addressed image.json, then materialized into a verified OCI tar, with per-layer sharded derivations"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="A layer plan is described into a tiny content-addressed image.json, then materialized into a verified OCI tar, with per-layer sharded derivations">
+  </picture>
+</p>
 
 # oci-image-builder
 

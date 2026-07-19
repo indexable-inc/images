@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="620" alt="a fable-5 primary delegates bounded work to a headless gpt-5.6-sol sidekick at low reasoning in an isolated worktree, which returns a summary and a patch"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="620" alt="a fable-5 primary delegates bounded work to a headless gpt-5.6-sol sidekick at low reasoning in an isolated worktree, which returns a summary and a patch">
+  </picture>
+</p>
 
 # pi-fusion
 

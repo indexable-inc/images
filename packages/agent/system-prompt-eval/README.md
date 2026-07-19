@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="the house system prompt is loaded into fresh claude -p rollouts, an LLM judge scores them, and the scores are committed as diffable JSON"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="the house system prompt is loaded into fresh claude -p rollouts, an LLM judge scores them, and the scores are committed as diffable JSON">
+  </picture>
+</p>
 
 # system-prompt-eval
 

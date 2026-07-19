@@ -19,6 +19,12 @@ use std::fmt::Write as _;
 /// module synthesizes.
 pub const HERO_PATH: &str = "assets/hero.svg";
 
+/// The hero's committed dark twin, selected by the README's `<picture>`
+/// source: Safari never evaluates `prefers-color-scheme` inside an SVG
+/// loaded via `<img>` (WebKit bug 199134), so the embedded query alone
+/// renders the light palette for Safari readers on GitHub's dark theme.
+pub const HERO_DARK_PATH: &str = "assets/hero-dark.svg";
+
 pub struct Package<'a> {
     /// Monorepo `owner/name`, e.g. `indexable-inc/index`.
     pub monorepo: &'a str,
@@ -87,7 +93,12 @@ fn has_install(body: &str) -> bool {
 fn hero_reference(pkg: &Package<'_>) -> String {
     let alt = pkg.description.unwrap_or(pkg.crate_name);
     format!(
-        "<p align=\"center\"><img src=\"{HERO_PATH}\" width=\"720\" alt=\"{}\"></p>",
+        "<p align=\"center\">\n\
+         \x20 <picture>\n\
+         \x20   <source media=\"(prefers-color-scheme: dark)\" srcset=\"{HERO_DARK_PATH}\">\n\
+         \x20   <img src=\"{HERO_PATH}\" width=\"720\" alt=\"{}\">\n\
+         \x20 </picture>\n\
+         </p>",
         xml_escape(alt)
     )
 }
@@ -210,9 +221,27 @@ fn usage(pkg: &Package<'_>) -> String {
 /// The synthesized hero for a package that ships neither a README nor its
 /// own `assets/hero.svg`: crate name and tagline with a deterministic
 /// geometric mark derived from the crate name (same name, same mark; no
-/// per-package art to maintain). One SVG adapts to dark/light via its
-/// embedded `prefers-color-scheme` CSS, per the creating-a-readme skill.
+/// per-package art to maintain). Adapts via its embedded
+/// `prefers-color-scheme` CSS when opened directly; README embedding also
+/// needs `hero_dark_svg`, because Safari never evaluates that query inside
+/// an SVG loaded via `<img>` (WebKit bug 199134).
 pub fn hero_svg(name: &str, tagline: Option<&str>) -> String {
+    hero_svg_styled(name, tagline, Scheme::Light)
+}
+
+/// The hero's dark twin (the creating-a-readme skill): the same file with
+/// the dark palette as the base defaults and the media block removed, for
+/// the README's `<picture>` dark source.
+pub fn hero_dark_svg(name: &str, tagline: Option<&str>) -> String {
+    hero_svg_styled(name, tagline, Scheme::Dark)
+}
+
+enum Scheme {
+    Light,
+    Dark,
+}
+
+fn hero_svg_styled(name: &str, tagline: Option<&str>, scheme: Scheme) -> String {
     let hash = fnv1a(name.as_bytes());
     let hue = hash % 360;
     let mut marks = String::new();
@@ -240,21 +269,31 @@ pub fn hero_svg(name: &str, tagline: Option<&str>) -> String {
             xml_escape(line)
         );
     }
+    let style = match scheme {
+        Scheme::Light => format!(
+            "svg {{ color: #1f2328; }}\n\
+             text {{ fill: currentColor; }}\n\
+             .muted {{ fill: #656d76; }}\n\
+             .accent {{ fill: hsl({hue} 70% 45%); }}\n\
+             @media (prefers-color-scheme: dark) {{\n\
+             svg {{ color: #e6edf3; }}\n\
+             .muted {{ fill: #8b949e; }}\n\
+             .accent {{ fill: hsl({hue} 75% 65%); }}\n\
+             }}\n"
+        ),
+        Scheme::Dark => format!(
+            "svg {{ color: #e6edf3; }}\n\
+             text {{ fill: currentColor; }}\n\
+             .muted {{ fill: #8b949e; }}\n\
+             .accent {{ fill: hsl({hue} 75% 65%); }}\n"
+        ),
+    };
     format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 880 220\" role=\"img\" aria-label=\"{name}\"\n\
          \x20    font-family=\"system-ui, -apple-system, 'Segoe UI', sans-serif\">\n\
          <title>{name}</title>\n\
          <style>\n\
-         svg {{ color: #1f2328; }}\n\
-         text {{ fill: currentColor; }}\n\
-         .muted {{ fill: #656d76; }}\n\
-         .accent {{ fill: hsl({hue} 70% 45%); }}\n\
-         @media (prefers-color-scheme: dark) {{\n\
-         svg {{ color: #e6edf3; }}\n\
-         .muted {{ fill: #8b949e; }}\n\
-         .accent {{ fill: hsl({hue} 75% 65%); }}\n\
-         }}\n\
-         </style>\n\
+         {style}\
          {marks}  <text font-size=\"{name_size}\" font-weight=\"700\" x=\"160\" y=\"104\">{escaped}</text>\n\
          {tags}</svg>\n",
         name = xml_escape(name),
@@ -356,7 +395,11 @@ mod tests {
     fn synthesized_readme_leads_hero_then_banner() {
         let out = compose(&package(), None);
         assert!(
-            out.starts_with("<p align=\"center\"><img src=\"assets/hero.svg\" width=\"720\""),
+            out.starts_with(
+                "<p align=\"center\">\n  <picture>\n    \
+                 <source media=\"(prefers-color-scheme: dark)\" srcset=\"assets/hero-dark.svg\">\n    \
+                 <img src=\"assets/hero.svg\" width=\"720\""
+            ),
             "{out}"
         );
         assert!(
@@ -470,5 +513,14 @@ mod tests {
             hero_svg("a<b", Some("styling & \"quotes\"")),
             "deterministic"
         );
+    }
+
+    #[test]
+    fn hero_dark_twin_bakes_dark_palette_without_media_query() {
+        let dark = hero_dark_svg("a<b", Some("styling & \"quotes\""));
+        assert!(!dark.contains("@media"), "{dark}");
+        assert!(dark.contains("svg { color: #e6edf3; }"), "{dark}");
+        assert!(dark.contains(".muted { fill: #8b949e; }"), "{dark}");
+        assert!(dark.contains("75% 65%"), "{dark}");
     }
 }

@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="680" alt="an eval result JSON is served into a local single-page app with summary cards, a behaviors panel, and the full action timeline"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="680" alt="an eval result JSON is served into a local single-page app with summary cards, a behaviors panel, and the full action timeline">
+  </picture>
+</p>
 
 # system-prompt-eval-viewer
 

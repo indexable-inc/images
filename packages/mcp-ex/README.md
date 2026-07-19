@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="exec runs cells as supervised BEAM processes over one persistent workspace; a blocked cell stalls only itself and job outcomes come back as channel notifications"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="exec runs cells as supervised BEAM processes over one persistent workspace; a blocked cell stalls only itself and job outcomes come back as channel notifications">
+  </picture>
+</p>
 
 # ix-mcp-ex
 

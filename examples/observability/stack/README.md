@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="an app VM's collector agent forwards spans and tailed logs over OTLP to an observability VM running a collector, ClickHouse, and Grafana"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="an app VM's collector agent forwards spans and tailed logs over OTLP to an observability VM running a collector, ClickHouse, and Grafana">
+  </picture>
+</p>
 
 # Observability stack
 

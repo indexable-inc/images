@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="One Rust source file compiles to PTX with cargo oxide, then launches on an NVIDIA GPU"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="One Rust source file compiles to PTX with cargo oxide, then launches on an NVIDIA GPU">
+  </picture>
+</p>
 
 # cuda-hello
 

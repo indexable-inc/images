@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="players reach the Paper server over public ipv4; the hermes agent reaches only its RCON console over the east-west group"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="players reach the Paper server over public ipv4; the hermes agent reaches only its RCON console over the east-west group">
+  </picture>
+</p>
 
 # Hermes Minecraft Operator
 

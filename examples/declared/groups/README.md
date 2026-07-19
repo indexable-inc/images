@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="client joins the group via the fleet spec, api via its image; both union into one east-west network"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="client joins the group via the fleet spec, api via its image; both union into one east-west network">
+  </picture>
+</p>
 
 # Declared groups
 

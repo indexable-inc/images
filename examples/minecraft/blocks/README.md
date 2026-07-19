@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="block placements flow from the Paper producer through a Kafka log into a ClickHouse spatial view; telemetry takes a separate collector path"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="block placements flow from the Paper producer through a Kafka log into a ClickHouse spatial view; telemetry takes a separate collector path">
+  </picture>
+</p>
 
 # Minecraft Blocks
 

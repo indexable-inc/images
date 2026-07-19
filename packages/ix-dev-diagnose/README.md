@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="ix-dev-diagnose resolves ix.dev, probes TCP, TLS, and HTTP per address, and writes a JSON report plus a one-line verdict"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="ix-dev-diagnose resolves ix.dev, probes TCP, TLS, and HTTP per address, and writes a JSON report plus a one-line verdict">
+  </picture>
+</p>
 
 # ix-dev-diagnose
 

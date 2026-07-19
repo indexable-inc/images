@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="a driver fans tasks to a ray-head VM that two ray-worker replicas join over the east-west network"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="a driver fans tasks to a ray-head VM that two ray-worker replicas join over the east-west network">
+  </picture>
+</p>
 
 # Ray cluster
 

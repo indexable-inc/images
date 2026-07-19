@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="ix.languages helpers compose one workbench VM whose PATH carries JVM, native, scripting, functional, and BEAM toolchains plus language servers"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="ix.languages helpers compose one workbench VM whose PATH carries JVM, native, scripting, functional, and BEAM toolchains plus language servers">
+  </picture>
+</p>
 
 # Polyglot dev VM
 

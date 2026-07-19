@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="import search queries the shared corpus store and returns each hit as a row in a polars DataFrame"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="import search queries the shared corpus store and returns each hit as a row in a polars DataFrame">
+  </picture>
+</p>
 
 # search-py
 

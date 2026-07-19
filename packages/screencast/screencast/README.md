@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="A Mac's screen is hardware-encoded to H.265 and uploaded as HLS to an ingest server that stores and replays every session"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="A Mac's screen is hardware-encoded to H.265 and uploaded as HLS to an ingest server that stores and replays every session">
+  </picture>
+</p>
 
 # screencast
 

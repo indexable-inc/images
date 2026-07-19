@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="a digest-pinned distro userland plus a Nix layer assemble into an OCI archive that ix image push uploads to a registry"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="a digest-pinned distro userland plus a Nix layer assemble into an OCI archive that ix image push uploads to a registry">
+  </picture>
+</p>
 
 # Non-NixOS OCI images
 

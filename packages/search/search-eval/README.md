@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="two eval tiers: gold-labeled queries score search rankings, and a one-tool claude agent's graded answers score downstream usefulness"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="two eval tiers: gold-labeled queries score search rankings, and a one-tool claude agent's graded answers score downstream usefulness">
+  </picture>
+</p>
 
 # search-eval
 

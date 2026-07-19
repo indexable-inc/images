@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="a diffusion model generates neural terrain inside one Fabric VM that players join on 25565"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="a diffusion model generates neural terrain inside one Fabric VM that players join on 25565">
+  </picture>
+</p>
 
 # Crazy Terrain
 

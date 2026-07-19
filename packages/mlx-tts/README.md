@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="Text goes into mlx-tts, which runs an MLX-Audio model locally on Apple Silicon and writes or plays audio"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="Text goes into mlx-tts, which runs an MLX-Audio model locally on Apple Silicon and writes or plays audio">
+  </picture>
+</p>
 
 # mlx-tts
 

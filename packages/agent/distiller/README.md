@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="local Claude Code transcripts are scanned, distilled and judged by one headless claude -p call, then written as facts markdown and corpus parquet slices that the archive funnel makes searchable"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="local Claude Code transcripts are scanned, distilled and judged by one headless claude -p call, then written as facts markdown and corpus parquet slices that the archive funnel makes searchable">
+  </picture>
+</p>
 
 # distiller
 

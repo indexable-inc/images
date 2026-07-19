@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 430" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #e6edf3; }
+    .muted   { fill: #8b949e; }
+    .accent  { fill: #a371f7; }
+    .accent-stroke { stroke: #a371f7; }
+    .box     { stroke: currentColor; fill: none; rx: 8; }
+    text     { fill: currentColor; font-size: 14px; }
+    .mono    { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 13px; }
+    .cmd     { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 15px; }
+    .small   { font-size: 11px; }
+    .edge    { stroke: currentColor; stroke-width: 1.2; fill: none; marker-end: url(#arrow); }
+    .tap     { stroke: #a371f7; fill: none; stroke-dasharray: 4 3; marker-end: url(#arrow-accent); }
+    .decomp  { stroke: #8b949e; fill: none; stroke-dasharray: 2 3; marker-end: url(#arrow-muted); }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="accent"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="muted"/>
+    </marker>
+  </defs>
+
+  <!-- 1. what you type -->
+  <text class="cmd" x="40" y="36"><tspan class="accent">plumb&gt;</tspan> cargo clippy | tail -n 5</text>
+  <line class="decomp" x1="150" y1="48" x2="150" y2="84"/>
+
+  <!-- 2. what runs -->
+  <rect class="box" x="40" y="88" width="160" height="42"/>
+  <text class="mono" x="120" y="114" text-anchor="middle">cargo clippy</text>
+  <line class="edge" x1="200" y1="109" x2="290" y2="109"/>
+  <rect class="box" x="290" y="88" width="110" height="42"/>
+  <text class="mono" x="345" y="114" text-anchor="middle">tail -n 5</text>
+  <line class="edge" x1="400" y1="109" x2="452" y2="109"/>
+  <text class="mono muted" x="460" y="114">the 5 lines you see</text>
+
+  <!-- 3. every stream tee'd into the run value -->
+  <line class="tap" x1="90" y1="130" x2="90" y2="194"/>
+  <text class="small muted" x="98" y="164">stderr</text>
+  <line class="tap" x1="170" y1="130" x2="170" y2="194"/>
+  <text class="small muted" x="178" y="164">stdout</text>
+  <line class="tap" x1="345" y1="130" x2="345" y2="194"/>
+  <text class="small muted" x="353" y="164">stdout</text>
+  <text class="small muted" x="470" y="188">every stream is captured, exact byte counts,</text>
+  <text class="small muted" x="470" y="203">bounded memory</text>
+
+  <!-- 4. the run, kept as a value -->
+  <rect class="box accent-stroke" x="40" y="198" width="420" height="140"/>
+  <text class="accent" x="58" y="224" font-weight="600">run 7, kept as a value</text>
+  <text class="mono accent" x="58" y="254">${o[7][0]}</text>
+  <text class="mono muted" x="175" y="254">everything clippy printed</text>
+  <text class="mono accent" x="58" y="282">${o[7]}</text>
+  <text class="mono muted" x="175" y="282">the 5 lines tail kept</text>
+  <text class="mono accent" x="58" y="310">${e[7]}</text>
+  <text class="mono muted" x="130" y="310">stderr</text>
+  <text class="mono accent" x="240" y="310">${s[7]}</text>
+  <text class="mono muted" x="312" y="310">exit status</text>
+
+  <!-- 5. reuse without re-running -->
+  <line class="tap" x1="250" y1="338" x2="250" y2="374"/>
+  <text class="cmd" x="40" y="400"><tspan class="accent">plumb&gt;</tspan> echo ${o[7][0]} | rg dead</text>
+  <text class="small muted" x="360" y="400">grep the full clippy output later; nothing re-runs</text>
+</svg>

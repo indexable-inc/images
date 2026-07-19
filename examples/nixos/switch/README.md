@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="ix up uploads configuration.nix, builds the closure server-side, and switches the running devbox VM in place"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="ix up uploads configuration.nix, builds the closure server-side, and switches the running devbox VM in place">
+  </picture>
+</p>
 
 # NixOS switch
 

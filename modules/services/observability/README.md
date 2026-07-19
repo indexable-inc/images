@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="App SDKs, host metrics, and logs flow through per-node agent Collectors to one gateway that writes ClickHouse, read by Grafana and ix-observe"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="App SDKs, host metrics, and logs flow through per-node agent Collectors to one gateway that writes ClickHouse, read by Grafana and ix-observe">
+  </picture>
+</p>
 
 # ix Observability
 

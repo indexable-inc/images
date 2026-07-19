@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="a systemd timer runs the uv-packaged scraper daily; it fetches GitHub metrics, writes parquet, and optionally syncs to S3"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="a systemd timer runs the uv-packaged scraper daily; it fetches GitHub metrics, writes parquet, and optionally syncs to S3">
+  </picture>
+</p>
 
 # Daily Python scraper
 

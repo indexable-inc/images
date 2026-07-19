@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="620" alt="the executor fans a decision out to isolated worktree branches, a scorer ranks them on ground truth, and the winning patch returns"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="620" alt="the executor fans a decision out to isolated worktree branches, a scorer ranks them on ground truth, and the winning patch returns">
+  </picture>
+</p>
 
 # pi-beam
 

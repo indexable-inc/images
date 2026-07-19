@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="560" alt="pi plus a small UX extension pack yields the same agent with a nicer cockpit"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="560" alt="pi plus a small UX extension pack yields the same agent with a nicer cockpit">
+  </picture>
+</p>
 
 # pi-base
 

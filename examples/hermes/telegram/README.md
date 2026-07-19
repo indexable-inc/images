@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="the hermes VM long-polls the Telegram API; you message the bot from the app, no inbound port anywhere"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="the hermes VM long-polls the Telegram API; you message the bot from the app, no inbound port anywhere">
+  </picture>
+</p>
 
 # Hermes Telegram Companion
 

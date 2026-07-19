@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="python_exec runs agent code on one persistent IPython kernel whose execution log feeds a live human dashboard"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="python_exec runs agent code on one persistent IPython kernel whose execution log feeds a live human dashboard">
+  </picture>
+</p>
 
 # ix-mcp
 

@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="Rust, Python, and TypeScript SDKs link one precompiled ix-sdk core that talks to the hosted ix service"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="Rust, Python, and TypeScript SDKs link one precompiled ix-sdk core that talks to the hosted ix service">
+  </picture>
+</p>
 
 # ix SDK
 

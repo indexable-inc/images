@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="the signed vmkit CLI boots and drives macOS guests (Virtualization.framework) and Linux guests (libkrun) off-screen, returning framebuffer PNGs and serial consoles"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="the signed vmkit CLI boots and drives macOS guests (Virtualization.framework) and Linux guests (libkrun) off-screen, returning framebuffer PNGs and serial consoles">
+  </picture>
+</p>
 
 # vmkit
 

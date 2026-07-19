@@ -219,6 +219,41 @@
           exit 1
         }
       }
+      # Safari never evaluates `prefers-color-scheme` (or `light-dark()`)
+      # inside an SVG loaded via `<img>` (WebKit bug 199134), so a
+      # self-adapting SVG embedded bare renders its light palette for Safari
+      # readers on GitHub's dark theme. Any markdown embed of such an SVG must
+      # go through a `<picture>` whose dark source points at a committed
+      # `-dark.svg` twin (the creating-a-readme skill documents the pattern).
+      def "main svg-dark" [] {
+        let offenders = (
+          fd --hidden --extension md --exclude .git --exclude .claude
+          | lines
+          | each {|md|
+              let dir = ($md | path dirname)
+              let body = (open --raw $md)
+              $body
+              | parse --regex '(?:src="|\]\()(?<ref>[^"()\s]+\.svg)'
+              | each {|row| $row.ref }
+              | uniq
+              | each {|ref|
+                  let svg = (if ($ref | str starts-with '/') { $ref | str substring 1.. } else { $dir | path join $ref })
+                  let dark_ref = ($ref | str replace --regex '\.svg$' '-dark.svg')
+                  let dark_svg = ($svg | str replace --regex '\.svg$' '-dark.svg')
+                  let adaptive = (($svg | path exists) and ((open --raw $svg) =~ 'prefers-color-scheme|light-dark\('))
+                  let covered = (($body | str contains $'srcset="($dark_ref)"') and ($dark_svg | path exists))
+                  if ($adaptive and (not $covered)) { $"  ($md) embeds ($ref)" } else { null }
+                }
+              | compact
+            }
+          | flatten
+        )
+        if ($offenders | is-not-empty) {
+          print --stderr "Safari ignores prefers-color-scheme inside img-loaded SVGs (WebKit bug 199134); embed via <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"<hero>-dark.svg\"><img src=\"<hero>.svg\"></picture> with a committed dark twin:"
+          $offenders | each {|line| print --stderr $line }
+          exit 1
+        }
+      }
       # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
       # pathlib + pytest + explicit annotations + no `typing.cast`; see
       # lib/ruff-ann.nix) over EVERY tracked .py, so non-package dirs
@@ -248,7 +283,7 @@
         clone . out> /dev/null
       }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | ruff | clone" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | svg-dark | ruff | clone" }
       }
     '';
   };
@@ -265,6 +300,7 @@
     "astlog-elixir"
     "filenames"
     "dirnames"
+    "svg-dark"
     "ruff"
     "clone"
   ];

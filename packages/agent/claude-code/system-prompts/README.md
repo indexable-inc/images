@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="the pinned claude-code binary sends its system prompt to a local capture server, which writes normalized per-model snapshots that git can diff"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="the pinned claude-code binary sends its system prompt to a local capture server, which writes normalized per-model snapshots that git can diff">
+  </picture>
+</p>
 
 # Claude Code stock system prompts
 

@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="the indexer writes code and fleet history into one corpus store; search queries it and returns ranked hits"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="the indexer writes code and fleet history into one corpus store; search queries it and returns ranked hits">
+  </picture>
+</p>
 
 # search
 

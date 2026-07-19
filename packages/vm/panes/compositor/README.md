@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="client commits are diffed in a FrameStore, encoded as LZ4 band tiles, and shipped over vsock; the host's ack on present fires the clients' frame callbacks"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="client commits are diffed in a FrameStore, encoded as LZ4 band tiles, and shipped over vsock; the host's ack on present fires the clients' frame callbacks">
+  </picture>
+</p>
 
 # panes-compositor
 

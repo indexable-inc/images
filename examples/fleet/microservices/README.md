@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="a gateway load-balancing three api replicas that share a redis cache, rolled one replica at a time"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="a gateway load-balancing three api replicas that share a redis cache, rolled one replica at a time">
+  </picture>
+</p>
 
 # Fleet microservices
 

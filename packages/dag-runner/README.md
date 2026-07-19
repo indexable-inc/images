@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="a spec.json fans out into a validated DAG where independent nodes run in parallel and the runner exits with the worst outcome"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="a spec.json fans out into a validated DAG where independent nodes run in parallel and the runner exits with the worst outcome">
+  </picture>
+</p>
 
 # dag-runner
 

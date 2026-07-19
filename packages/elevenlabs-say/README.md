@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="Text from an argument, a file, or a live stdin stream is synthesized by ElevenLabs and played or saved"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="Text from an argument, a file, or a live stdin stream is synthesized by ElevenLabs and played or saved">
+  </picture>
+</p>
 
 # elevenlabs-say
 

@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="an asyncio coroutine drives a Rust-owned PTY and reads back a styled Snapshot of the screen"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="an asyncio coroutine drives a Rust-owned PTY and reads back a styled Snapshot of the screen">
+  </picture>
+</p>
 
 # tui (Python)
 

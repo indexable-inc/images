@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="A remote file is fetched over SFTP by a Rust reader and handed to Polars as a LazyFrame with projection and row-limit pushdown"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="A remote file is fetched over SFTP by a Rust reader and handed to Polars as a LazyFrame with projection and row-limit pushdown">
+  </picture>
+</p>
 
 # polars-sftp
 

@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="GitHub Actions jobs dispatch to a static runner pool on one NixOS host that shares a warm Nix store and the cache.ix.dev substituter"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="GitHub Actions jobs dispatch to a static runner pool on one NixOS host that shares a warm Nix store and the cache.ix.dev substituter">
+  </picture>
+</p>
 
 # ci-runner
 

@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="frontends in the hermes-api group call the agent's OpenAI-compatible endpoint on 9119; the agent dials out to the model API"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="frontends in the hermes-api group call the agent's OpenAI-compatible endpoint on 9119; the agent dials out to the model API">
+  </picture>
+</p>
 
 # Hermes API Server
 

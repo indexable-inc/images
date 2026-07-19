@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="one token in the ix secret store materializes on three agent VMs whose git credential helpers authenticate to github.com"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="one token in the ix secret store materializes on three agent VMs whose git credential helpers authenticate to github.com">
+  </picture>
+</p>
 
 # Synced GitHub auth
 

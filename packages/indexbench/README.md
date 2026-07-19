@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="micro closures, macro commands, and @bench lines all produce metric Runs that append to the bench-history branch and feed a comparator that exits non-zero on regression"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="micro closures, macro commands, and @bench lines all produce metric Runs that append to the bench-history branch and feed a comparator that exits non-zero on regression">
+  </picture>
+</p>
 
 # indexbench
 

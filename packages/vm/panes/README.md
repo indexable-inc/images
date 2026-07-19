@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="guest apps render into a headless Wayland compositor whose frames cross vsock to a macOS agent that presents each toplevel as its own native window, with audio on a second vsock port"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="guest apps render into a headless Wayland compositor whose frames cross vsock to a macOS agent that presents each toplevel as its own native window, with audio on a second vsock port">
+  </picture>
+</p>
 
 # panes: seamless guest-Linux windows on macOS
 

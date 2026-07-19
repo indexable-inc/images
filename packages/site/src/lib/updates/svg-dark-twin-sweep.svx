@@ -1,0 +1,21 @@
+---
+id: svg-dark-twin-sweep
+postedAt: 2026-07-19T14:00:00-07:00
+title: "Every package README hero gets a dark twin, and a lint keeps it that way"
+tags: [readme, svg, safari, lint]
+links:
+  - label: root README fix
+    href: https://github.com/indexable-inc/index/commit/90fb323cf285d3e22bce2b6720b64187c98cbd1a
+  - label: WebKit bug 199134
+    href: https://bugs.webkit.org/show_bug.cgi?id=199134
+---
+
+The Safari dark-mode fix that landed on the root README now covers the whole
+tree: all 77 markdown-embedded `assets/hero.svg` files gained a committed
+`hero-dark.svg` twin (the same file with the dark palette as its base
+defaults), and every embed switched to the `<picture>` pattern with a
+`prefers-color-scheme: dark` source. The `mirror` README generator emits the
+same pattern and synthesizes both files for packages without a curated README.
+A new `svg-dark` stage in `nix run .#lint` fails any markdown file that embeds
+a self-adapting SVG without the dark `<picture>` source, so the pattern cannot
+regress.

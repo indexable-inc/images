@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="the monorepo feeds two generators: mirror gen plus publish syncs a read-only mirror repo, and mirror fork-branch regenerates a fork repo's ix-patched branch"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="the monorepo feeds two generators: mirror gen plus publish syncs a read-only mirror repo, and mirror fork-branch regenerates a fork repo's ix-patched branch">
+  </picture>
+</p>
 
 # mirror
 

@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="source files become relations via tree-sitter query matches, Datalog rules join them into derived rows, and derived rows become lint findings or rewrite edits"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="source files become relations via tree-sitter query matches, Datalog rules join them into derived rows, and derived rows become lint findings or rewrite edits">
+  </picture>
+</p>
 
 # astlog
 

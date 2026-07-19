@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="Java and Bedrock clients enter through Velocity and Geyser; the Paper backend port stays private"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="Java and Bedrock clients enter through Velocity and Geyser; the Paper backend port stays private">
+  </picture>
+</p>
 
 # Survival Server
 

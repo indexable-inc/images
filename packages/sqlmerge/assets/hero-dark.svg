@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 230" role="img" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #e6edf3; }
+    text { fill: currentColor; }
+    .muted { fill: #8b949e; }
+    .box { stroke: currentColor; fill: none; stroke-width: 1.2; }
+    .accent { stroke: #a371f7; fill: none; stroke-width: 1.4; }
+    .edge { stroke: currentColor; fill: none; stroke-width: 1.2; marker-end: url(#arrow); }
+    .head { fill: currentColor; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head"/>
+    </marker>
+  </defs>
+  <rect class="box" x="30" y="25" width="130" height="34" rx="6"/>
+  <text x="95" y="46" text-anchor="middle">base (%O)</text>
+  <rect class="box" x="30" y="98" width="130" height="34" rx="6"/>
+  <text x="95" y="119" text-anchor="middle">ours (%A)</text>
+  <rect class="box" x="30" y="171" width="130" height="34" rx="6"/>
+  <text x="95" y="192" text-anchor="middle">theirs (%B)</text>
+
+  <path class="edge" d="M160,42 C230,42 240,98 296,106"/>
+  <path class="edge" d="M160,115 L296,115"/>
+  <path class="edge" d="M160,188 C230,188 240,132 296,124"/>
+  <text class="muted" x="228" y="66" text-anchor="middle" font-size="12">session diff</text>
+  <text class="muted" x="228" y="108" text-anchor="middle" font-size="12">apply in place</text>
+
+  <rect class="accent" x="300" y="98" width="140" height="34" rx="6"/>
+  <text x="370" y="119" text-anchor="middle">sqlmerge</text>
+
+  <path class="edge" d="M440,106 C500,98 500,69 541,69"/>
+  <path class="edge" d="M440,124 C500,132 500,161 541,161"/>
+  <text class="muted" x="492" y="56" text-anchor="middle" font-size="12">clean rows</text>
+  <text class="muted" x="492" y="148" text-anchor="middle" font-size="12">conflicting rows</text>
+
+  <rect class="box" x="545" y="52" width="150" height="34" rx="6"/>
+  <text x="620" y="73" text-anchor="middle">merged %A, exit 0</text>
+  <rect class="box" x="545" y="144" width="150" height="34" rx="6"/>
+  <text x="620" y="165" text-anchor="middle">report, exit 1</text>
+</svg>

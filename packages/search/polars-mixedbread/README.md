@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="scan_mixedbread searches the store lazily into a polars LazyFrame, pushing string-equality filters down to be applied before ranking"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="scan_mixedbread searches the store lazily into a polars LazyFrame, pushing string-equality filters down to be applied before ranking">
+  </picture>
+</p>
 
 # polars-mixedbread
 

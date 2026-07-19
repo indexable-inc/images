@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="allowed-client reaches service inside the east-west group; outside-client has no route"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="allowed-client reaches service inside the east-west group; outside-client has no route">
+  </picture>
+</p>
 
 # East-west firewall
 

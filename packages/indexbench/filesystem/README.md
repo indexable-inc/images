@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="two target directories run the same fio and metadata workloads and report throughput, IOPS, and file rates for relative comparison"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="two target directories run the same fio and metadata workloads and report throughput, IOPS, and file rates for relative comparison">
+  </picture>
+</p>
 
 # Filesystem Bench
 

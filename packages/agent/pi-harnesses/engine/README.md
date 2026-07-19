@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="640" alt="Room sends a prompt to the locked-down pi-harness, whose event mapper streams Room-shaped JSON events back"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="640" alt="Room sends a prompt to the locked-down pi-harness, whose event mapper streams Room-shaped JSON events back">
+  </picture>
+</p>
 
 # pi-harness
 

@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="the shared mk-pi-harness builder wraps the pinned pi binary into six harness packages, one posture each"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="the shared mk-pi-harness builder wraps the pinned pi binary into six harness packages, one posture each">
+  </picture>
+</p>
 
 # pi-harnesses
 

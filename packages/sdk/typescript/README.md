@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="@indexable/sdk loads a native binding on Node and Bun or a wasm binding in browsers, both driving ix VMs"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="@indexable/sdk loads a native binding on Node and Bun or a wasm binding in browsers, both driving ix VMs">
+  </picture>
+</p>
 
 # @indexable/sdk
 

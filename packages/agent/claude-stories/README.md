@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="each peer publishes and serves its repo story; render discovers them over the tailnet and prints a status-line avatar row"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="each peer publishes and serves its repo story; render discovers them over the tailnet and prints a status-line avatar row">
+  </picture>
+</p>
 
 # claude-stories
 

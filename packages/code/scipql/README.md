@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="a Rust project is indexed to index.scip, lowered to Soufflé facts keyed by moniker, and souffle-derived relations become either applied edits or polars tables"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="a Rust project is indexed to index.scip, lowered to Soufflé facts keyed by moniker, and souffle-derived relations become either applied edits or polars tables">
+  </picture>
+</p>
 
 # scipql
 

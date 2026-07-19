@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="a lookup must clear FTS recall, a Haiku judge, and a client-side freshness check to serve a cached finding; any miss falls back to a cold run that repopulates the cache"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="a lookup must clear FTS recall, a Haiku judge, and a client-side freshness check to serve a cached finding; any miss falls back to a cold run that repopulates the cache">
+  </picture>
+</p>
 
 # subagent-cache
 

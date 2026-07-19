@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="Anything that writes rows to a SQLite file drives three Minecraft-style desktop overlays within about 200ms"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="Anything that writes rows to a SQLite file drives three Minecraft-style desktop overlays within about 200ms">
+  </picture>
+</p>
 
 # Minecraft Desktop Overlays
 

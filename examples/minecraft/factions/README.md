@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="one Paper factions VM with three public listeners: game, BlueMap web map, and voice chat"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="one Paper factions VM with three public listeners: game, BlueMap web map, and voice chat">
+  </picture>
+</p>
 
 # Factions Server
 

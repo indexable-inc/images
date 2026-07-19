@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="one command boots a Linux guest that screenshots a page with headless Chromium and ships the PNG back over the serial console"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="one command boots a Linux guest that screenshots a page with headless Chromium and ships the PNG back over the serial console">
+  </picture>
+</p>
 
 # chrome-vm
 

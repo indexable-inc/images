@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="any S3 client talks to port 8333 on one ix VM where SeaweedFS serves the S3 API and stores objects in its state directory"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="any S3 client talks to port 8333 on one ix VM where SeaweedFS serves the S3 API and stores objects in its state directory">
+  </picture>
+</p>
 
 # S3 storage
 

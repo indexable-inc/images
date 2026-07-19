@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="one builder VM builds three closures that fan out through regional CAS to the web, worker, and edge VMs"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="one builder VM builds three closures that fan out through regional CAS to the web, worker, and edge VMs">
+  </picture>
+</p>
 
 # NixOS switch: many VMs, one build VM
 

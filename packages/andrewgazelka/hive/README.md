@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="Hive.Swarm spawns agent processes that message each other by logical id, resolved through Hive.Registry"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="Hive.Swarm spawns agent processes that message each other by logical id, resolved through Hive.Registry">
+  </picture>
+</p>
 
 # Hive
 

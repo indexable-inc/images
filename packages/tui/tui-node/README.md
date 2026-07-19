@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="Node drives Rust-owned PTYs over N-API promises and a browser grid watches them live"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="Node drives Rust-owned PTYs over N-API promises and a browser grid watches them live">
+  </picture>
+</p>
 
 # tui (Node.js)
 

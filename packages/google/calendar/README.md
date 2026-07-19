@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="Three thin surfaces (CLI, MCP tools, Python) drive one Rust Calendar client that talks OAuth and the Calendar v3 API"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="Three thin surfaces (CLI, MCP tools, Python) drive one Rust Calendar client that talks OAuth and the Calendar v3 API">
+  </picture>
+</p>
 
 # google-calendar
 

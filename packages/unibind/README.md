@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="an annotated Rust module is lowered by syn into an Interface IR, which renders through pyo3 today and napi-rs and rustler in planned phases"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="an annotated Rust module is lowered by syn into an Interface IR, which renders through pyo3 today and napi-rs and rustler in planned phases">
+  </picture>
+</p>
 
 # unibind
 
