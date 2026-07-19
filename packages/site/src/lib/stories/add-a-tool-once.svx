@@ -1,0 +1,37 @@
+---
+id: add-a-tool-once
+title: Add a tool once, everyone gets it
+hook: A small utility stops dying on the laptop it was born on. One package.nix, and the whole team runs it forever.
+order: 2
+---
+
+Everyone has built a great little tool and watched it die: it lived in one
+person's `~/bin`, needed a runtime nobody else had installed, and quietly
+rotted. The cost of sharing it (packaging, docs, installs, updates) was
+higher than the value of the tool.
+
+index inverts that cost. A tool is a directory with a `package.nix`; landing
+it on main puts it in the flake, and from that moment anyone (and any CI
+job, and any VM) runs it with one command. No install instructions, no
+version skew, no bit rot: the same graph that builds it also rebuilds it
+when its dependencies move.
+
+<svg viewBox="0 0 640 200" role="img" aria-label="One commit becomes a package everyone runs" style="width: 100%; height: auto;">
+  <rect x="20" y="70" width="150" height="56" rx="10" fill="none" stroke="var(--fg-muted)" stroke-width="1.5" />
+  <text x="95" y="94" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">notify/</text>
+  <text x="95" y="112" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">package.nix</text>
+  <path d="M 170 98 L 250 98" stroke="var(--fg-faint)" stroke-width="1.5" />
+  <text x="210" y="88" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--fg-faint)">merge</text>
+  <rect x="250" y="70" width="130" height="56" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <text x="315" y="102" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">flake</text>
+  <path d="M 380 98 L 460 40" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 380 98 L 460 98" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 380 98 L 460 156" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <text x="465" y="44" font-family="var(--font-mono)" font-size="12" fill="var(--status-load-bearing)">nix run .#notify</text>
+  <text x="465" y="102" font-family="var(--font-mono)" font-size="12" fill="var(--status-load-bearing)">nix run .#notify</text>
+  <text x="465" y="160" font-family="var(--font-mono)" font-size="12" fill="var(--status-load-bearing)">nix run .#notify</text>
+</svg>
+
+That is the bet of the whole repo: one repo everyone can edit is the
+fastest way for all of us to move. Browse what has accumulated under
+[`packages/`](https://github.com/indexable-inc/index/tree/main/packages).

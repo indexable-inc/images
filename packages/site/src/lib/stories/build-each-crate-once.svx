@@ -1,0 +1,39 @@
+---
+id: build-each-crate-once
+title: CI builds each crate exactly once
+hook: The Rust workspace becomes a per-crate build DAG in Nix. A one-line change rebuilds one unit; the cache serves everything else.
+order: 5
+---
+
+`cargo build` in CI is all-or-nothing: touch one crate and the runner
+rebuilds the world, because the workspace is one opaque build to the
+outside. Caching means "hope the target dir survived".
+
+index renders the workspace's unit graph into the Nix build graph itself:
+every crate (and its tests, and its clippy pass) is its own derivation with
+exact dependencies. A one-line change invalidates exactly the units
+downstream of it. Everything else is a cache hit, on CI and on every
+developer machine, because they share the same store.
+
+<svg viewBox="0 0 640 210" role="img" aria-label="A dependency DAG where one changed crate rebuilds and the rest are cache hits" style="width: 100%; height: auto;">
+  <rect x="40" y="85" width="110" height="40" rx="8" fill="none" stroke="var(--status-input-wanted)" stroke-width="2" />
+  <text x="95" y="109" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--status-input-wanted)">core (edited)</text>
+  <rect x="220" y="30" width="110" height="40" rx="8" fill="none" stroke="var(--status-input-wanted)" stroke-width="2" />
+  <text x="275" y="54" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--status-input-wanted)">api: rebuilt</text>
+  <rect x="220" y="140" width="110" height="40" rx="8" fill="var(--code)" stroke="var(--rule)" />
+  <text x="275" y="164" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">util: cached</text>
+  <rect x="420" y="30" width="120" height="40" rx="8" fill="none" stroke="var(--status-input-wanted)" stroke-width="2" />
+  <text x="480" y="54" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--status-input-wanted)">cli: rebuilt</text>
+  <rect x="420" y="140" width="120" height="40" rx="8" fill="var(--code)" stroke="var(--rule)" />
+  <text x="480" y="164" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">tests: cached</text>
+  <path d="M 150 95 L 220 58" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 150 115 L 220 152" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 330 50 L 420 50" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 330 160 L 420 160" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+</svg>
+
+The same per-unit seam is where repo-wide lint policy attaches: the patched
+Clippy with house lints runs per crate and caches per crate. The machinery
+is [`lib/`'s `cargo-unit`](https://github.com/indexable-inc/index/tree/main/packages/nix/nix-cargo-unit),
+proposed to go further in
+[RFC 0005](https://indexable-inc.github.io/index/rfcs/0005-cargo-drv/).

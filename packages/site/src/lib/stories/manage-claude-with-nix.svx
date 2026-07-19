@@ -1,0 +1,40 @@
+---
+id: manage-claude-with-nix
+title: Your whole team's Claude, from one flake
+hook: Pin the agent binary, its system prompt, its tools, its permissions, and its MCP servers in code, and every machine runs the same setup.
+order: 1
+---
+
+Everyone who runs a coding agent ends up with a pile of hand-edited config:
+a settings file here, an MCP server there, a prompt tweak that lives on one
+laptop and dies with it. When something works, there is no way to give it to
+the rest of the team.
+
+In index the whole agent is a package. The wrapped `claude-code` pins the
+binary version, bakes the house system prompt, denies the tools we do not
+want, registers MCP servers, and ships a skills directory, all from Nix. A
+prompt improvement is a pull request; after the next switch, every machine
+on the team runs it.
+
+<svg viewBox="0 0 640 240" role="img" aria-label="One flake definition fans out to three identical agent setups" style="width: 100%; height: auto;">
+  <rect x="230" y="16" width="180" height="64" rx="10" fill="none" stroke="var(--fg-muted)" stroke-width="1.5" />
+  <text x="320" y="42" text-anchor="middle" font-family="var(--font-mono)" font-size="13" fill="var(--fg)">flake.nix</text>
+  <text x="320" y="62" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">prompt · tools · MCP · skills</text>
+  <path d="M 320 80 L 120 150" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 320 80 L 320 150" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 320 80 L 520 150" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <rect x="50" y="150" width="140" height="56" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <rect x="250" y="150" width="140" height="56" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <rect x="450" y="150" width="140" height="56" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <text x="120" y="176" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">laptop</text>
+  <text x="320" y="176" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">workstation</text>
+  <text x="520" y="176" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">fleet VM</text>
+  <text x="120" y="194" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--status-load-bearing)">same agent</text>
+  <text x="320" y="194" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--status-load-bearing)">same agent</text>
+  <text x="520" y="194" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--status-load-bearing)">same agent</text>
+</svg>
+
+The same seam manages the rest of the harness: permission denies are policy
+in one Nix file, hooks are rendered from shared definitions, and the system
+prompt is versioned like any other source file. Start at
+[`packages/agent/claude-code`](https://github.com/indexable-inc/index/tree/main/packages/agent/claude-code).
