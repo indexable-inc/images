@@ -25,6 +25,11 @@ defmodule IxMcp.MixProject do
   defp deps do
     [
       {:exqlite, "~> 0.39"},
+      # The Fable 5 async-subagents harness (packages/agent-harness-ex,
+      # #3700): agents as supervised processes with mailbox-backed Send/Wait
+      # semantics. A path dep so the harness rides into the release; the MCP
+      # tool surface over it is follow-up work, nothing is exposed yet.
+      {:agent_harness, path: "../agent-harness-ex"},
       # Static-analysis gate, test-only so the sandboxed check runs `mix credo`
       # offline where the deps FOD provides it.
       {:credo, "~> 1.7", only: :test, runtime: false}
