@@ -10,23 +10,33 @@ index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixp
 
 ## Why
 
-<img src=".github/readme/one-graph.svg" alt="one patch fans out to every package in the graph" width="720">
+<p align="center">
+  <img src=".github/readme/one-graph.svg" alt="one patch fans out to every package in the graph" width="720">
+</p>
 
 **A change lands once and reaches everything.** Patch a compiler, fix a library, tighten a lint: every package in the graph rebuilds against it. Nothing quietly runs last year's version of anything.
 
-<img src=".github/readme/upstream.svg" alt="patches live in the repo next to the code; no waiting on upstream" width="720">
+<p align="center">
+  <img src=".github/readme/upstream.svg" alt="patches live in the repo next to the code; no waiting on upstream" width="720">
+</p>
 
 **Never blocked on upstream.** Patches live here, next to the code that needs them. A slow, wrong, or abandoned upstream never blocks a fix, and no dependency has a bus factor outside the repo.
 
-<img src=".github/readme/one-bar.svg" alt="custom clippy lints, cve scans, and license checks cover the whole graph" width="720">
+<p align="center">
+  <img src=".github/readme/one-bar.svg" alt="custom clippy lints, cve scans, and license checks cover the whole graph" width="720">
+</p>
 
 **One bar for everything.** Security scans, license checks, custom Clippy lints: every rule runs over the whole graph. Add a rule and every package meets it, in the same change.
 
-<img src=".github/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
+<p align="center">
+  <img src=".github/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
+</p>
 
 **No stable internal APIs, on purpose.** Every consumer of every internal API lives here, and agents make repo-wide refactors cheap. An API is free to be correct instead of compatible: change it, migrate every call site, land one commit.
 
-<img src=".github/readme/prebuilt.svg" alt="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos" width="720">
+<p align="center">
+  <img src=".github/readme/prebuilt.svg" alt="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos" width="720">
+</p>
 
 **Prebuilt everywhere.** CI builds the graph for Linux, cross-compiles it for macOS, and pushes to `cache.ix.dev`. Binaries download instead of compile.
 
