@@ -42,13 +42,14 @@
     };
   }
   {
-    shokunin = {
+    conciseByDefault = {
       text = ''
-        Be shokunin: keep code and prose concise, readable, and clean by default.
+        Keep code and prose concise, readable, and clean by default.
       '';
       reason = ''
         Sets the default quality bar; without it output drifts verbose and
-        over-engineered.
+        over-engineered. Was "Be shokunin: ..."; Andrew rejected the
+        shokunin terminology (2026-07-19).
       '';
     };
   }

@@ -179,7 +179,7 @@
   # (single-value options are last-wins), and a caller who wants the stock
   # prompt plus additions can still pass `--append-system-prompt[-file]`.
   # Defaults to the shared house prompt (`systemPrompt` in ../common.nix,
-  # authored in ../prompt/rules.nix: the shokunin craft ethos plus the pre-v1
+  # authored in ../prompt/rules.nix: the concise-by-default quality bar plus the pre-v1
   # backward-compatibility engineering rule, plus a preference for working in git
   # worktrees); set to `null` to bake no flag and ship the stock prompt alone.
   systemPrompt ?
