@@ -572,6 +572,20 @@ impl Parser<'_> {
         }
     }
 
+    /// Consume a run of identifier characters (`[A-Za-z0-9_]*`).
+    fn ident_run(&mut self) -> String {
+        let mut name = String::new();
+        while let Some(c) = self.peek() {
+            if c == '_' || c.is_ascii_alphanumeric() {
+                name.push(c);
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        name
+    }
+
     /// Parse a `$`-introduced form; the `$` has not been consumed yet.
     /// Returns false when the `$` turns out to be literal (end of word or
     /// before plain punctuation), leaving the caller to emit it.
@@ -600,15 +614,7 @@ impl Parser<'_> {
             }
             Some('{') => {
                 self.pos += 2;
-                let mut name = String::new();
-                while let Some(c) = self.peek() {
-                    if c == '_' || c.is_ascii_alphanumeric() {
-                        name.push(c);
-                        self.pos += 1;
-                    } else {
-                        break;
-                    }
-                }
+                let name = self.ident_run();
                 let plain = self.peek() == Some('}')
                     && !name.is_empty()
                     && !name.starts_with(|c: char| c.is_ascii_digit());
@@ -642,15 +648,7 @@ impl Parser<'_> {
             }
             Some(first) if first == '_' || first.is_ascii_alphabetic() => {
                 self.pos += 1;
-                let mut name = String::new();
-                while let Some(inner) = self.peek() {
-                    if inner == '_' || inner.is_ascii_alphanumeric() {
-                        name.push(inner);
-                        self.pos += 1;
-                    } else {
-                        break;
-                    }
-                }
+                let name = self.ident_run();
                 acc.push_part(Part::Var {
                     name,
                     span: Span {
