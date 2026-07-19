@@ -1,0 +1,74 @@
+---
+id: 0031-recommended-next-actions
+number: '0031'
+title: 'Recommended next actions: a multi-select menu when the work lands'
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-19'
+updated: '2026-07-19'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 4, why: 'structures a handoff that already happens informally in every session-ending summary' }
+  impact: { value: 6, why: 'the follow-up work a session surfaces stops evaporating when the transcript scrolls away' }
+  effort: { value: 4, why: 'a structured artifact, a picker, and dispatch to machinery that already exists (issues, tasks, background agents)' }
+  risk: { value: 3, why: 'worst case is menu fatigue and ignored recommendations; nothing existing breaks' }
+  maturity: { value: 1, why: 'unbuilt; the nearest ancestor is the auto-issue skill mining history after the fact' }
+  leverage: { value: 7, why: 'every completed task seeds the next ones, and accept/decline data tunes what gets recommended' }
+  taste: { value: 6, why: 'the line between a defensible default and a genuine option decides whether this helps or nags' }
+description: 'When an agent finishes a task it usually knows what should happen next: the refactor it deferred, the test gap it noticed, the sibling repo with the same bug. Today that knowledge dies as prose in a final summary. Give completion a structured surface: the agent emits recommended next actions, the user multi-selects, and each selected item becomes real work (an issue, a task, a spawned agent) with provenance back to the session that proposed it.'
+---
+
+## Summary
+
+Add a recommendations step to task completion. An agent that finishes work emits a small structured list of proposed next actions, each with a title, a one-line why, an effort guess, and a dispatch shape (file an issue, queue a task, spawn a background agent, draft a plan). The user selects any subset, in one gesture, and the harness dispatches each selection through machinery that already exists. Declined recommendations are recorded too: what the user does not want is signal.
+
+## Motivation
+
+Sessions end with next steps in prose. The agent writes "possible follow-ups" into a summary, the user reads it, agrees with three of five, and then the transcript scrolls away and all five are gone. The knowledge of what to do next exists at exactly one moment, at completion, in the head of the one party (the agent) that just spent an hour in the code, and the current interface for capturing it is the user retyping it as issues.
+
+The house rules already forbid the degenerate version of this: offering to act instead of acting, or presenting a menu where a defensible default exists. That rule is about the current task. This plan is about work that is genuinely out of scope for the current task, where the user must choose because the options compete for future attention and only the user knows the priorities. Today that choice has no surface, so it defaults to nothing happening.
+
+The auto-issue skill proves the demand from the other direction: it mines past transcripts to reconstruct the issues a person was about to file. Mining after the fact is recovery; this plan captures the same intent at the moment it is freshest and cheapest.
+
+## Detailed design
+
+- **The artifact.** On completion the agent emits `recommendations` as structured data, not prose: id, title, why (one line), effort guess, dispatch shape, and links to the evidence in the session. Three to five items, hard cap; a recommendation the agent cannot attach evidence to does not qualify. Nothing about the final summary changes; the artifact rides alongside it.
+- **The picker.** The harness renders the list as a multi-select (TUI checkboxes; a numbered reply works over plain text). One gesture selects any subset, including none. Selection is the only interaction: no editing, no reordering, no discussion step. A recommendation worth discussing becomes a conversation the normal way.
+- **Dispatch.** Each selected item routes by its shape through existing machinery: issues via the issues skill, tasks via the task list, agents via the background-agent path with the recommendation as the brief, plans as a drafted `plans/` svx. Every dispatched artifact carries provenance: the session id (plan 0027) and the recommendation id that produced it.
+- **Declines are data.** Unselected recommendations are logged with the same structure. An agent proposing the same declined follow-up for the third time should know it is nagging; the log is what makes that checkable, and eventually tunable.
+- **The graph hook.** Where plan 0030 exists, a recommendation is an `idea` node attested by the agent (claims, not truth), edges to what it concerns, and selection or decline recorded as edges from the user. Agents subscribed nearby (plan 0030's standing queries) hear about accepted follow-ups in their area without being the session that proposed them. The plan works without the graph; the graph makes recommendations visible across agents instead of per-session.
+
+## Drawbacks
+
+- A menu at the end of every task is friction; if the bar for a recommendation is low the picker becomes a nag screen users train themselves to skip, and the accept rate rots to zero. The hard cap and the evidence requirement are the guardrails, and the decline log is the smoke detector.
+- Dispatch without follow-through moves clutter downstream: accepted items become stale issues instead of lost prose. Downstream hygiene (issue triage, task expiry) inherits the load.
+- The agent now optimizes for having recommendations, a mild incentive to invent work. Accept-rate visibility per agent is the counterweight.
+
+## Alternatives
+
+- **Do nothing:** next steps stay prose; the auto-issue skill keeps reconstructing them from history at higher cost and lower fidelity.
+- **Auto-file everything:** skip the picker, file every recommendation as an issue with an inferred-future label. Maximizes capture, floods the tracker, and discards the one thing only the user knows: priority.
+- **Always-ask mid-task:** ask about follow-ups as they are noticed instead of batching to completion. Interrupts the work the user actually asked for, and the rules correctly prohibit it.
+
+## Prior art
+
+- The auto-issue skill: same intent, mined retroactively from transcripts and Slack; this plan is its capture-at-source complement.
+- Claude Code plan mode: a structured propose-then-approve gate, but for the current task before work starts; this is the mirror image, after work ends, for future tasks.
+- The forge ledger (`.forge/tasks.json`): structured task records with status transitions that agents claim and judges verify; the dispatch target for task-shaped selections.
+- Code review tools that end with "create follow-up issue" buttons on unresolved threads: the same completion-time capture, scoped to review comments.
+
+## Unresolved questions
+
+- Does the picker gate session end (blocking, always shown) or arrive as a notification the user can answer later? Blocking maximizes capture and annoyance together.
+- Is the effort guess worth its noise, or do recommendations only need title, why, and shape?
+- When the same recommendation is accepted, does the recommending agent get to start it immediately, or does dispatch always go through the queue so priority stays with the user?
+- Per-agent accept rate is the obvious quality metric; where does it surface, and does a low rate throttle an agent's recommendation budget automatically?
+
+## Future possibilities
+
+Recommendations with accept/decline history are training data for what a given user considers worth doing. The same structure could rank the auto-issue skill's candidates, seed a daily "what next" digest across sessions, and, through plan 0030's graph, let one agent's accepted follow-up become the standing query that wakes another.
+
+Drafted by an AI agent via Claude Code; comments wanted, hence the RFC flag.
