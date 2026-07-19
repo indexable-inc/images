@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sergei Zimmerman <sergei@zimmerman.foo>
+Date: Mon, 1 Jun 2026 21:34:02 +0300
+Subject: [PATCH] libexpr: Make hash mismatches while copying lazy paths to the
+ store a proper error
+
+Backport of the first post-merge fix to NixOS/nix#15711 (upstream
+NixOS/nix#15950): when a dirty source tree is modified while nix is
+evaluating from it, the on-demand copy hashes differently from the
+mount-time dry-run hash. That is a user-triggerable condition (the
+upstream author hit it himself), so fail with a proper Error (exit code
+102, the same class as NAR hash mismatches) instead of panic(), which
+aborts the whole process. Vendored together with the lazy mounting
+backport so our series carries upstream's known fixes for it.
+
+Refs indexable-inc/index#3645
+
+(cherry picked from commit 8ffda0826d3b850b67b2e1ab48088a7a50ac80c5)
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/libexpr/paths.cc b/src/libexpr/paths.cc
+index 002dd63..acd9ad3 100644
+--- a/src/libexpr/paths.cc
++++ b/src/libexpr/paths.cc
+@@ -38,15 +38,15 @@ void EvalState::ensureLazyPathCopied(const StorePath & path)
+         FetchMode::Copy,
+         path.name());
+ 
+-    /* Catch hash mismatches more loudly. This is more likely caused by unsound
+-       caching of different accessor types that fetch the same repo with
+-       the same git revision, but with different kinds of accessors (think
+-       tarball-based fetchers vs local/remote git accessors). */
++    /* This can happen if the source gets modified by another process while we are evaluaing
++       from it. Alternatively, the caching might be unsound and fetcher cache is poisoned somehow.
++       See https://github.com/NixOS/nix/issues/14317. */
+     if (storePath != path) {
+-        panic(fmt(
+-            "hashed store path computed by the evaluator ('%1%') does not match what was computed when copying to the store ('%2%'), this is a bug",
++        throw Error(
++            (unsigned int) 102,
++            "store path ('%1%') was hashed to avoid a full copy at first, but upon reading it again, the contents have changed ('%2%'), so we can not proceed. Make sure files do not change during evaluation",
+             store->printStorePath(path),
+-            store->printStorePath(storePath)));
++            store->printStorePath(storePath));
+     }
+ }
+ 

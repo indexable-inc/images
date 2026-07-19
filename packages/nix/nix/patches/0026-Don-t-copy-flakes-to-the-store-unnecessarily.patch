@@ -1,0 +1,563 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sergei Zimmerman <sergei@zimmerman.foo>
+Date: Sun, 19 Apr 2026 03:46:58 +0300
+Subject: [PATCH] Don't copy flakes to the store unnecessarily
+
+Backport of the lazy trees mechanism that upstream actually merged
+(NixOS/nix#15711, merged to master 2026-04-27 as c2acffee566, after our
+2.34.7 base branched from master on 2026-03-02), vendored per
+indexable-inc/index#3645 as the biggest known eval-cost lever for
+flake-heavy workloads: evaluating a flake no longer copies every input
+tree into the store first.
+
+Mechanism: mountInput() computes the store path and narHash of an input
+with FetchMode::DryRun and mounts the input's source accessor at that
+store path in storeFS instead of copying. The store object is
+materialized on demand by the new EvalState::ensureLazyPathCopied() and
+ensureLazyPathsCopied(), called from every site that needs a real store
+object: derivationStrict inputSrcs, builtins.storePath, builtins.toFile
+references, builtins.exec, IFD string realisation, installable string
+coercion, app resolution, and the printed or written outputs of nix
+eval and nix-instantiate. builtins.getFlake gains a backwards
+compatibility lookup so a store-path flakeref whose string context was
+discarded still resolves through the storeFS mount. nix flake metadata
+no longer forces a copy of the flake tree. Because the store path is
+still derived from the dry-run NAR hash, paths, hashes, and lock files
+are byte identical to eager mode by construction.
+
+Source selection: indexable-inc/index#3645 names two candidate sources,
+both examined.
+- NixOS/nix#13225 (edolstra, "Lazy trees v2") mounts inputs at random
+  virtual store paths and devirtualizes (copies to the content-addressed
+  location, rewriting strings) when a derivation forces them. It was
+  closed unmerged on 2026-07-16; xokdvium: "the best we could achieve
+  without the generally contended topic of exposing entropy in the
+  language has been done in #15711. Some of the stuff from here has been
+  merged, modulo the StorePath::random() bits."
+- DeterminateSystems/nix shipped lazy trees to Determinate Nix users via
+  staged rollouts since 3.8.0, which is why the issue calls it the more
+  battle-tested source. But as of their v2.35.1, whose merge base with
+  upstream master is exactly our base commit 2c6d06e93, their tree no
+  longer contains the random-virtual-path implementation (no lazy-trees
+  or devirtualize symbols remain): they ride the same upstream mechanism
+  this commit backports. #15711 itself says it "repurposes a slightly
+  less lazy (but also more deterministic) approach than determinate nix
+  has taken" and takes its getFlake compatibility hack from detnix.
+
+Upstream pushback, which is why a later commit in this series gates the
+behavior off by default:
+- roberth, reviewing #13225: "Using randomness or even fingerprints for
+  placeholders makes the language non-deterministic and impure." Path
+  equality and ordering must remain observably identical to eager
+  evaluation. His preferred design, rope-structured strings with lazily
+  computed fixed-length substrings (lazy hashing), has not been built
+  yet by anyone. This backport sidesteps the randomness objection (the
+  mounted path IS the final content-addressed path, hashed up front) at
+  the cost of still hashing every input once.
+- The toString wrinkle: a derivation built from a store path string
+  whose context was discarded was always unsound, but lazy mounting
+  changes when it surfaces. The referenced path may not exist on disk
+  until something forces the copy, so evaluations that worked by
+  accident (the eager copy happened to exist) can fail with a missing
+  store path. #13225 handled this with a new devirtualize-without-
+  reference context type plus a warning; #15711 instead keeps real
+  paths, forces the copy at the sites listed above, and adds the
+  getFlake compatibility lookup.
+
+Adaptations to the 2.34.7 base:
+- the base predates the getFlake nPath variant from upstream master and
+  the SourcePath lockFlake() overload that upstream's compatibility
+  lookup resolves mounted refs with, so the lookup instead materializes
+  the mounted store object (ensureLazyPathCopied) and falls through to
+  the unchanged path-input flow: same user-visible behavior, eager only
+  for this discarded-context corner case;
+- EvalSettings::isReadOnly() does not exist in 2.34.7 (it arrived with
+  the unrelated libexpr-c use-after-free fix d5f162d1166); the base's
+  readOnlyMode reference is used directly;
+- the flakes.sh assertion that the nix flake metadata --json .path
+  exists on disk is dropped, exactly as upstream dropped it.
+
+This commit alone leaves lazy mounting enabled unconditionally, matching
+upstream master; a later commit in the series adds the off-by-default
+lazy-trees setting per the fork policy in indexable-inc/index#3645.
+
+Refs indexable-inc/index#3645
+
+(cherry picked from commit 891ef140b8564a7848a3d75976e172c3e15ec14b)
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/libcmd/installable-value.cc b/src/libcmd/installable-value.cc
+index 3a167af..92811c1 100644
+--- a/src/libcmd/installable-value.cc
++++ b/src/libcmd/installable-value.cc
+@@ -54,8 +54,11 @@ InstallableValue::trySinglePathToDerivedPaths(Value & v, const PosIdx pos, std::
+     }
+ 
+     else if (v.type() == nString) {
++        auto path = state->coerceToSingleDerivedPath(pos, v, errorCtx);
++        if (auto o = std::get_if<SingleDerivedPath::Opaque>(&path.raw()))
++            state->ensureLazyPathCopied(o->path);
+         return {{
+-            .path = DerivedPath::fromSingle(state->coerceToSingleDerivedPath(pos, v, errorCtx)),
++            .path = DerivedPath::fromSingle(path),
+             .info = make_ref<ExtraPathInfo>(),
+         }};
+     }
+diff --git a/src/libexpr/include/nix/expr/eval.hh b/src/libexpr/include/nix/expr/eval.hh
+index bea6161..9de0f23 100644
+--- a/src/libexpr/include/nix/expr/eval.hh
++++ b/src/libexpr/include/nix/expr/eval.hh
+@@ -728,6 +728,26 @@ public:
+     std::optional<std::string> tryAttrsToString(
+         const PosIdx pos, Value & v, NixStringContext & context, bool coerceMore = false, bool copyToStore = true);
+ 
++    enum class CopyLazyPaths : bool {
++        PreserveLazy = false,
++        Copy = true,
++    };
++
++    /**
++     * For efficiency reasons, some store paths (as seen by the evaluator) in
++     * the storeFS at their content-addressed locations don't get copied to the
++     * store eagerly. This saves on needless I/O and possibly IPC if all the
++     * evaluator does is just evaluate nix expressions from those locations.
++     * This function copies such store objects to the store if they aren't already valid.
++     */
++    void ensureLazyPathCopied(const StorePath & path);
++
++    /**
++     * Ensure that all NixStringContextElem::Opaque context elements get fetched
++     * to the store.
++     */
++    void ensureLazyPathsCopied(const NixStringContext & context);
++
+     /**
+      * String coercion.
+      *
+@@ -1031,9 +1051,14 @@ public:
+ 
+     /**
+      * Coerce `v` to a path and realise it, i.e. build anything in the value's string context using `realiseContext()`.
++     * @param copyLazyPaths When encountering a lazy path (i.e. a string with Opaque context that's also "mounted" on
++     * the storeFS), fetch the store path to the store.
+      */
+     SourcePath realisePath(
+-        const PosIdx pos, Value & v, std::optional<SymlinkResolution> resolveSymlinks = SymlinkResolution::Full);
++        const PosIdx pos,
++        Value & v,
++        std::optional<SymlinkResolution> resolveSymlinks = SymlinkResolution::Full,
++        CopyLazyPaths copyLazyPaths = CopyLazyPaths::PreserveLazy);
+ 
+     /**
+      * Realise the given string with context, and return the string with outputs instead of downstream output
+diff --git a/src/libexpr/include/nix/expr/print-ambiguous.hh b/src/libexpr/include/nix/expr/print-ambiguous.hh
+index 7e44a6b..07fcc33 100644
+--- a/src/libexpr/include/nix/expr/print-ambiguous.hh
++++ b/src/libexpr/include/nix/expr/print-ambiguous.hh
+@@ -17,6 +17,12 @@ class EvalState;
+  *
+  * See: https://github.com/NixOS/nix/issues/9730
+  */
+-void printAmbiguous(EvalState & state, Value & v, std::ostream & str, std::set<const void *> * seen, size_t depth = 0);
++void printAmbiguous(
++    EvalState & state,
++    Value & v,
++    std::ostream & str,
++    std::set<const void *> * seen,
++    NixStringContext * context = nullptr,
++    size_t depth = 0);
+ 
+ } // namespace nix
+diff --git a/src/libexpr/paths.cc b/src/libexpr/paths.cc
+index 08c2a45..002dd63 100644
+--- a/src/libexpr/paths.cc
++++ b/src/libexpr/paths.cc
+@@ -20,10 +20,55 @@ SourcePath EvalState::storePath(const StorePath & path)
+     return {rootFS, CanonPath{store->printStorePath(path)}};
+ }
+ 
++void EvalState::ensureLazyPathCopied(const StorePath & path)
++{
++    if (settings.readOnlyMode)
++        return;
++
++    auto mount = storeFS->getMount(CanonPath(store->printStorePath(path)));
++    if (!mount)
++        return;
++
++    /* TODO: We could memoise this in-memory if necessary. */
++    auto storePath = fetchToStore(
++        fetchSettings,
++        *store,
++        SourcePath{ref(mount)},
++        /* Force a copy. mountInput does a dryRun to just calculate the storePath and narHash. */
++        FetchMode::Copy,
++        path.name());
++
++    /* Catch hash mismatches more loudly. This is more likely caused by unsound
++       caching of different accessor types that fetch the same repo with
++       the same git revision, but with different kinds of accessors (think
++       tarball-based fetchers vs local/remote git accessors). */
++    if (storePath != path) {
++        panic(fmt(
++            "hashed store path computed by the evaluator ('%1%') does not match what was computed when copying to the store ('%2%'), this is a bug",
++            store->printStorePath(path),
++            store->printStorePath(storePath)));
++    }
++}
++
++void EvalState::ensureLazyPathsCopied(const NixStringContext & context)
++{
++    for (const auto & c : context)
++        if (auto * o = std::get_if<NixStringContextElem::Opaque>(&c.raw))
++            /* TODO: This could be done in parallel. */
++            ensureLazyPathCopied(o->path);
++}
++
+ StorePath
+ EvalState::mountInput(fetchers::Input & input, const fetchers::Input & originalInput, ref<SourceAccessor> accessor)
+ {
+-    auto [storePath, narHash] = fetchToStore2(fetchSettings, *store, accessor, FetchMode::Copy, input.getName());
++    /* To mount the input, dryRun is sufficient. We still compute the narHash (to check for mismatches) and the store
++       path to figure out where to mount it. TODO: This could be relaxed in the future by making outPath and narHash
++       lazier. Good code that doesn't do `toString ./.` or otherwise inspects the outPath string and only uses it for
++       doing relative imports does not even require computing the store path. That is a big invasive change though and
++       would require having a special "LazyStorePathString" thunk. narHash also doesn't need to be computed eagerly in
++       case it's not actually specified (like during local development with a dirty tree) - in that case narHash could
++       also become a lazy app/thunk that shares the state with the storePath delayed computation. */
++    auto [storePath, narHash] = fetchToStore2(fetchSettings, *store, accessor, FetchMode::DryRun, input.getName());
+ 
+     allowPath(storePath); // FIXME: should just whitelist the entire virtual store
+ 
+diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
+index 3fb31fb..386faa0 100644
+--- a/src/libexpr/primops.cc
++++ b/src/libexpr/primops.cc
+@@ -10,6 +10,7 @@
+ #include "nix/store/names.hh"
+ #include "nix/store/path-references.hh"
+ #include "nix/store/store-api.hh"
++#include "nix/util/mounted-source-accessor.hh"
+ #include "nix/util/util.hh"
+ #include "nix/util/os-string.hh"
+ #include "nix/util/processes.hh"
+@@ -63,7 +64,7 @@ std::string EvalState::realiseString(Value & s, StorePathSet * storePathsOutMayb
+     nix::NixStringContext stringContext;
+     auto rawStr = coerceToString(pos, s, stringContext, "while realising a string").toOwned();
+     auto rewrites = realiseContext(stringContext, storePathsOutMaybe, isIFD);
+-
++    ensureLazyPathsCopied(stringContext);
+     return nix::rewriteStrings(rawStr, rewrites);
+ }
+ 
+@@ -88,7 +89,11 @@ StringMap EvalState::realiseContext(const NixStringContext & context, StorePathS
+                     ensureValid(b.drvPath->getBaseStorePath());
+                 },
+                 [&](const NixStringContextElem::Opaque & o) {
+-                    ensureValid(o.path);
++                    /* If the path happens to be mounted on the storeFS, that means it's lazy path string and would get
++                       copied to the store on-demand (when referenced in a derivation). The string is equal to final
++                       store path where the store object would end up (the path is hashed before mounting). */
++                    if (!storeFS->getMount(CanonPath(store->printStorePath(o.path))))
++                        ensureValid(o.path);
+                     if (maybePathsOut)
+                         maybePathsOut->emplace(o.path);
+                 },
+@@ -158,7 +163,8 @@ StringMap EvalState::realiseContext(const NixStringContext & context, StorePathS
+     return res;
+ }
+ 
+-SourcePath EvalState::realisePath(const PosIdx pos, Value & v, std::optional<SymlinkResolution> resolveSymlinks)
++SourcePath EvalState::realisePath(
++    const PosIdx pos, Value & v, std::optional<SymlinkResolution> resolveSymlinks, CopyLazyPaths copyLazyPaths)
+ {
+     NixStringContext context;
+ 
+@@ -167,6 +173,8 @@ SourcePath EvalState::realisePath(const PosIdx pos, Value & v, std::optional<Sym
+     try {
+         if (!context.empty() && path.accessor == rootFS) {
+             auto rewrites = realiseContext(context);
++            if (copyLazyPaths == CopyLazyPaths::Copy)
++                ensureLazyPathsCopied(context);
+             path = {path.accessor, CanonPath(rewriteStrings(path.path.abs(), rewrites))};
+         }
+         return resolveSymlinks ? path.resolveSymlinks(*resolveSymlinks) : path;
+@@ -441,10 +449,11 @@ static RegisterPrimOp primop_import(
+ /* !!! Should we pass the Pos or the file name too? */
+ extern "C" typedef void (*ValueInitializer)(EvalState & state, Value & v);
+ 
+-/* Load a ValueInitializer from a DSO and return whatever it initializes */
++/* Load a ValueInitializer from a DSO and return whatever it initializes. FIXME: This doesn't
++   work with chroot stores. */
+ void prim_importNative(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+ {
+-    auto path = state.realisePath(pos, *args[0]);
++    auto path = state.realisePath(pos, *args[0], SymlinkResolution::Full, EvalState::CopyLazyPaths::Copy);
+ 
+     std::string sym(
+         state.forceStringNoCtx(*args[1], pos, "while evaluating the second argument passed to builtins.importNative"));
+@@ -471,7 +480,7 @@ void prim_importNative(EvalState & state, const PosIdx pos, Value ** args, Value
+     /* We don't dlclose because v may be a primop referencing a function in the shared object file */
+ }
+ 
+-/* Execute a program and parse its output */
++/* Execute a program and parse its output. FIXME: This doesn't work with chroot stores. */
+ void prim_exec(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+ {
+     state.forceList(*args[0], pos, "while evaluating the first argument passed to builtins.exec");
+@@ -509,6 +518,7 @@ void prim_exec(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+             .debugThrow();
+     }
+ 
++    state.ensureLazyPathsCopied(context);
+     auto output = runProgram(program, true, toOsStrings(std::move(commandArgs)));
+     Expr * parsed;
+     try {
+@@ -1726,7 +1736,10 @@ static void derivationStrictInternal(EvalState & state, std::string_view drvName
+                 [&](const NixStringContextElem::Built & b) {
+                     drv.inputDrvs.ensureSlot(*b.drvPath).value.insert(b.output);
+                 },
+-                [&](const NixStringContextElem::Opaque & o) { drv.inputSrcs.insert(o.path); },
++                [&](const NixStringContextElem::Opaque & o) {
++                    state.ensureLazyPathCopied(o.path);
++                    drv.inputSrcs.insert(o.path);
++                },
+             },
+             c.raw);
+     }
+@@ -1930,6 +1943,10 @@ static void prim_storePath(EvalState & state, const PosIdx pos, Value ** args, V
+     auto path =
+         state.coerceToPath(pos, *args[0], context, "while evaluating the first argument passed to 'builtins.storePath'")
+             .path;
++    /* Here we are leaving the realm of the rootFS accessor and must actually fetch to the store.
++       TODO: This could probably get optimised to avoid the fetching altogether to short-circuit when the path
++       is already mounted on storeFS. */
++    state.ensureLazyPathsCopied(context);
+     /* Resolve symlinks in ‘path’, unless ‘path’ itself is a symlink
+        directly in the store.  The latter condition is necessary so
+        e.g. nix-push does the right thing. */
+@@ -2666,9 +2683,10 @@ static void prim_toFile(EvalState & state, const PosIdx pos, Value ** args, Valu
+     StorePathSet refs;
+ 
+     for (auto c : context) {
+-        if (auto p = std::get_if<NixStringContextElem::Opaque>(&c.raw))
++        if (auto p = std::get_if<NixStringContextElem::Opaque>(&c.raw)) {
++            state.ensureLazyPathCopied(p->path);
+             refs.insert(p->path);
+-        else
++        } else
+             state
+                 .error<EvalError>(
+                     "files created by %1% may not reference derivations, but %2% references %3%",
+diff --git a/src/libexpr/print-ambiguous.cc b/src/libexpr/print-ambiguous.cc
+index ed91cad..b0a5224 100644
+--- a/src/libexpr/print-ambiguous.cc
++++ b/src/libexpr/print-ambiguous.cc
+@@ -7,7 +7,13 @@
+ namespace nix {
+ 
+ // See: https://github.com/NixOS/nix/issues/9730
+-void printAmbiguous(EvalState & state, Value & v, std::ostream & str, std::set<const void *> * seen, size_t depth)
++void printAmbiguous(
++    EvalState & state,
++    Value & v,
++    std::ostream & str,
++    std::set<const void *> * seen,
++    NixStringContext * context,
++    size_t depth)
+ {
+     checkInterrupt();
+ 
+@@ -22,6 +28,8 @@ void printAmbiguous(EvalState & state, Value & v, std::ostream & str, std::set<c
+         break;
+     case nString:
+         printLiteralString(str, v.string_view());
++        if (context)
++            copyContext(v, *context);
+         break;
+     case nPath:
+         str << v.path().to_string(); // !!! escaping?
+@@ -36,7 +44,7 @@ void printAmbiguous(EvalState & state, Value & v, std::ostream & str, std::set<c
+             str << "{ ";
+             for (auto & i : v.attrs()->lexicographicOrder(state.symbols)) {
+                 str << state.symbols[i->name] << " = ";
+-                printAmbiguous(state, *i->value, str, seen, depth + 1);
++                printAmbiguous(state, *i->value, str, seen, context, depth + 1);
+                 str << "; ";
+             }
+             str << "}";
+@@ -52,7 +60,7 @@ void printAmbiguous(EvalState & state, Value & v, std::ostream & str, std::set<c
+             str << "[ ";
+             for (auto v2 : v.listView()) {
+                 if (v2)
+-                    printAmbiguous(state, *v2, str, seen, depth + 1);
++                    printAmbiguous(state, *v2, str, seen, context, depth + 1);
+                 else
+                     str << "(nullptr)";
+                 str << " ";
+diff --git a/src/libflake/flake-primops.cc b/src/libflake/flake-primops.cc
+index 4b84c08..a2d7593 100644
+--- a/src/libflake/flake-primops.cc
++++ b/src/libflake/flake-primops.cc
+@@ -29,6 +29,7 @@
+ #include "nix/util/source-path.hh"
+ #include "nix/util/types.hh"
+ #include "nix/util/util.hh"
++#include "nix/store/store-api.hh"
+ 
+ namespace nix::flake::primops {
+ 
+@@ -44,6 +45,19 @@ PrimOp getFlake(const Settings & settings)
+                 flakeRefS,
+                 state.positions[pos]);
+ 
++        /* Backwards compatibility: since flakes used to be copied to the store eagerly, some users
++           relied on being able to do builtins.getFlake on a flakeref with discarded string context.
++           If such a ref points at a lazily mounted (not yet materialized) store path, force the copy
++           so the path-input fetch below can read it from disk. Upstream resolves these refs directly
++           through the storeFS mount via a SourcePath lockFlake() overload; that overload builds on
++           the getFlake-on-paths refactor which is not in this base, so materializing and falling
++           through to the unchanged path-input flow is the minimal equivalent. */
++        if (auto sourcePath = flakeRef.input.getSourcePath();
++            flakeRef.input.getType() == "path" && sourcePath && state.store->isInStore(sourcePath->string())) {
++            auto [storePath, subPath] = state.store->toStorePath(sourcePath->string());
++            state.ensureLazyPathCopied(storePath);
++        }
++
+         callFlake(
+             state,
+             lockFlake(
+diff --git a/src/nix/app.cc b/src/nix/app.cc
+index 634db04..167ffd8 100644
+--- a/src/nix/app.cc
++++ b/src/nix/app.cc
+@@ -95,6 +95,8 @@ UnresolvedApp InstallableValue::toApp(EvalState & state)
+                     c.raw));
+         }
+ 
++        state.ensureLazyPathsCopied(context);
++
+         return UnresolvedApp{App{
+             .context = std::move(context2),
+             .program = program,
+diff --git a/src/nix/eval.cc b/src/nix/eval.cc
+index f41d98f..69eb3ae 100644
+--- a/src/nix/eval.cc
++++ b/src/nix/eval.cc
+@@ -83,10 +83,10 @@ struct CmdEval : MixJSON, InstallableValueCommand, MixReadOnlyOption
+ 
+             [&](this const auto & recurse, Value & v, const PosIdx pos, const std::filesystem::path & path) -> void {
+                 state->forceValue(v, pos);
+-                if (v.type() == nString)
+-                    // FIXME: disallow strings with contexts?
++                if (v.type() == nString) {
++                    copyContext(v, context);
+                     writeFile(path, v.string_view());
+-                else if (v.type() == nAttrs) {
++                } else if (v.type() == nAttrs) {
+                     [[maybe_unused]] bool directoryCreated = std::filesystem::create_directory(path);
+                     // Directory should not already exist
+                     assert(directoryCreated);
+@@ -110,9 +110,8 @@ struct CmdEval : MixJSON, InstallableValueCommand, MixReadOnlyOption
+ 
+         else if (raw) {
+             logger->stop();
+-            writeFull(
+-                getStandardOutput(),
+-                *state->coerceToString(noPos, *v, context, "while generating the eval command output"));
++            auto string = state->coerceToString(noPos, *v, context, "while generating the eval command output");
++            writeFull(getStandardOutput(), *string);
+         }
+ 
+         else if (json) {
+@@ -120,8 +119,11 @@ struct CmdEval : MixJSON, InstallableValueCommand, MixReadOnlyOption
+         }
+ 
+         else {
+-            logger->cout("%s", ValuePrinter(*state, *v, PrintOptions{.force = true, .derivationPaths = true}));
++            ValuePrinter printer(*state, *v, PrintOptions{.force = true, .derivationPaths = true}, &context);
++            logger->cout("%s", printer);
+         }
++
++        state->ensureLazyPathsCopied(context);
+     }
+ };
+ 
+diff --git a/src/nix/flake.cc b/src/nix/flake.cc
+index df2a3a9..3c4533e 100644
+--- a/src/nix/flake.cc
++++ b/src/nix/flake.cc
+@@ -7,6 +7,7 @@
+ #include "nix/expr/get-drvs.hh"
+ #include "nix/util/os-string.hh"
+ #include "nix/util/signals.hh"
++#include "nix/util/mounted-source-accessor.hh"
+ #include "nix/store/store-open.hh"
+ #include "nix/store/derivations.hh"
+ #include "nix/store/outputs-spec.hh"
+@@ -217,8 +218,10 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
+         auto lockedFlake = lockFlake();
+         auto & flake = lockedFlake.flake;
+ 
+-        // Currently, all flakes are in the Nix store via the rootFS accessor.
+-        auto storePath = store->printStorePath(store->toStorePath(flake.path.path.abs()).first);
++        /* Flakes do not get copied to the store, but are instead mounted at
++           their expected store paths in storeFS. Querying metadata does not
++           force copying to the store, as one would expect. */
++        auto storePath = store->toStorePath(flake.path.path.abs()).first;
+ 
+         if (json) {
+             nlohmann::json j;
+@@ -240,7 +243,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
+                 j["revCount"] = *revCount;
+             if (auto lastModified = flake.lockedRef.input.getLastModified())
+                 j["lastModified"] = *lastModified;
+-            j["path"] = storePath;
++            j["path"] = store->printStorePath(storePath);
+             j["locks"] = lockedFlake.lockFile.toJSON().first;
+             if (auto fingerprint = lockedFlake.getFingerprint(*store, fetchSettings))
+                 j["fingerprint"] = fingerprint->to_string(HashFormat::Base16, false);
+@@ -251,7 +254,7 @@ struct CmdFlakeMetadata : FlakeCommand, MixJSON
+                 logger->cout(ANSI_BOLD "Locked URL:" ANSI_NORMAL "    %s", flake.lockedRef.to_string());
+             if (flake.description)
+                 logger->cout(ANSI_BOLD "Description:" ANSI_NORMAL "   %s", *flake.description);
+-            logger->cout(ANSI_BOLD "Path:" ANSI_NORMAL "          %s", storePath);
++            logger->cout(ANSI_BOLD "Path:" ANSI_NORMAL "          %s", store->printStorePath(storePath));
+             if (auto rev = flake.lockedRef.input.getRev())
+                 logger->cout(ANSI_BOLD "Revision:" ANSI_NORMAL "      %s", rev->to_string(HashFormat::Base16, false));
+             if (auto dirtyRev = fetchers::maybeGetStrAttr(flake.lockedRef.toAttrs(), "dirtyRev"))
+diff --git a/src/nix/nix-instantiate/nix-instantiate.cc b/src/nix/nix-instantiate/nix-instantiate.cc
+index 82838e2..ec08fdd 100644
+--- a/src/nix/nix-instantiate/nix-instantiate.cc
++++ b/src/nix/nix-instantiate/nix-instantiate.cc
+@@ -68,7 +68,7 @@ void processExpr(
+                 if (strict)
+                     state.forceValueDeep(vRes);
+                 std::set<const void *> seen;
+-                printAmbiguous(state, vRes, std::cout, &seen);
++                printAmbiguous(state, vRes, std::cout, &seen, &context);
+                 std::cout << std::endl;
+             }
+         } else {
+@@ -96,6 +96,8 @@ void processExpr(
+                 std::cout << fmt("%s%s\n", drvPathS, (outputName != "out" ? "!" + outputName : ""));
+             }
+         }
++
++        state.ensureLazyPathsCopied(context);
+     }
+ }
+ 
+diff --git a/tests/functional/flakes/flakes.sh b/tests/functional/flakes/flakes.sh
+index 8d95f61..fec80cc 100755
+--- a/tests/functional/flakes/flakes.sh
++++ b/tests/functional/flakes/flakes.sh
+@@ -69,7 +69,6 @@ nix flake metadata "$flake1Dir" | grepQuiet 'URL:.*flake1.*'
+ # Test 'nix flake metadata --json'.
+ json=$(nix flake metadata flake1 --json | jq .)
+ [[ $(echo "$json" | jq -r .description) = 'Bla bla' ]]
+-[[ -d $(echo "$json" | jq -r .path) ]]
+ [[ $(echo "$json" | jq -r .lastModified) = $(git -C "$flake1Dir" log -n1 --format=%ct) ]]
+ hash1=$(echo "$json" | jq -r .revision)
+ [[ -n $(echo "$json" | jq -r .fingerprint) ]]
