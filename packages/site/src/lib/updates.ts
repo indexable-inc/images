@@ -28,7 +28,10 @@ type SvxModule = {
   default: Component;
   // The raw frontmatter shape. `tags` is optional here because mdsvex does
   // not validate; the loader below normalizes to a required `string[]`.
-  metadata: Omit<SiteUpdateMeta, 'tags'> & { tags?: string[] };
+  // `metadata` itself is absent when the frontmatter fails to parse
+  // (e.g. an unquoted title containing a colon); the loader rejects that
+  // loudly, naming the file.
+  metadata?: Omit<SiteUpdateMeta, 'tags'> & { tags?: string[] };
 };
 
 const modules = import.meta.glob<SvxModule>('./updates/*.svx', { eager: true });
@@ -39,12 +42,20 @@ const rawModules = import.meta.glob<string>('./updates/*.svx', {
 });
 
 export const siteUpdates: SiteUpdate[] = Object.entries(modules)
-  .map(([path, mod]) => ({
-    ...mod.metadata,
-    tags: (mod.metadata.tags ?? []).map((tag) => tag.toLowerCase()),
-    component: mod.default,
-    rawBody: stripFrontmatter(rawModules[path] ?? '')
-  }))
+  .map(([path, mod]) => {
+    if (mod.metadata === undefined) {
+      // Malformed frontmatter (e.g. an unquoted title containing a colon)
+      // makes mdsvex emit a module with no metadata; name the file instead
+      // of crashing on `undefined.tags` deep inside the prerender.
+      throw new Error(`${path}: frontmatter failed to parse (no metadata export)`);
+    }
+    return {
+      ...mod.metadata,
+      tags: (mod.metadata.tags ?? []).map((tag) => tag.toLowerCase()),
+      component: mod.default,
+      rawBody: stripFrontmatter(rawModules[path] ?? '')
+    };
+  })
   .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt));
 
 export const siteUrl = 'https://indexable-inc.github.io/index/';
