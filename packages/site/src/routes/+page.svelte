@@ -3,8 +3,8 @@
   import { resolve } from '$app/paths';
   import FilterBar from '$lib/FilterBar.svelte';
   import UpdateEntry from '$lib/UpdateEntry.svelte';
-  import { parseFilter } from '$lib/filter-expression';
-  import { siteIntro, siteUpdates } from '$lib/updates';
+  import { compileSearch, tagOptions } from '$lib/filter-expression';
+  import { plainText, siteIntro, siteUpdates } from '$lib/updates';
 
   // The prerendered HTML uses UTC so every visitor's pre-hydration view
   // matches. After mount, we re-render each <time> in the visitor's local
@@ -14,15 +14,23 @@
     timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   });
 
-  // Default filter narrows to author-flagged headline items. Visitors can
-  // clear the input to see the full log or write any boolean expression.
+  // Default search narrows to author-flagged headline items. Visitors can
+  // clear the input to see the full log, add tags (autocompleted), or type
+  // free text to full-text search titles and bodies.
   let filter = $state('interesting');
 
-  const parsed = $derived(parseFilter(filter));
+  const tags = tagOptions(siteUpdates);
+  const tagNames = tags.map((t) => t.name);
+  // Search corpus per entry: title + raw body, computed once.
+  const searchable = siteUpdates.map((update) => ({
+    update,
+    candidate: { tags: update.tags, text: `${plainText(update.title)}\n${update.rawBody}` }
+  }));
+
+  const matches = $derived(compileSearch(filter, tagNames));
   const filtered = $derived(
-    parsed.ok ? siteUpdates.filter((u) => parsed.matches(u.tags)) : siteUpdates
+    searchable.filter((s) => matches(s.candidate)).map((s) => s.update)
   );
-  const error = $derived(parsed.ok ? undefined : parsed.error);
 </script>
 
 <svelte:head>
@@ -42,7 +50,7 @@
   }}
   matchCount={filtered.length}
   totalCount={siteUpdates.length}
-  {error}
+  {tags}
 />
 
 <ol class="log">
