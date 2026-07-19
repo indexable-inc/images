@@ -290,7 +290,10 @@
 
   /* The autocomplete: a box-drawn menu one cell below the panel's bottom
      rule, left-aligned under the word being completed (the field is mono,
-     so character index * 1ch is the pixel offset). */
+     so character index * 1ch is the pixel offset). The menu only exists
+     while the panel is focused, so it wears the same crisp frame the
+     focused panel does; a var(--rule) hairline here read as a frameless
+     filled rectangle floating over the page text. */
   .menu {
     position: absolute;
     top: calc(var(--cell-h) * 2);
@@ -304,7 +307,7 @@
     max-height: calc(var(--cell-h) * 8);
     overflow-y: auto;
     background: var(--bg);
-    border: 1px solid var(--rule);
+    border: 1px solid var(--fg-muted);
     border-radius: var(--radius);
   }
 

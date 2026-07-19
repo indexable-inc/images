@@ -55,7 +55,7 @@
   }
 </script>
 
-<figure class="dag">
+<figure class="dag" style="--dag-w: {width}px">
   <!-- Fixed 1:1 pixels, not viewBox scaling: labels keep the site's one
        14px cell everywhere; narrow screens scroll like a wide terminal pane. -->
   <svg {width} {height} viewBox="0 0 {width} {height}" role="img" aria-label="Plan structure diagram">
@@ -83,8 +83,24 @@
 
 <style>
   .dag {
-    margin: var(--cell-h) 0;
+    /* A multi-column pipeline is wider than the 76ch column at most window
+       sizes; clipping it at the column edge cuts the last nodes mid-glyph.
+       Break out of the column instead, centered, up to the viewport (6ch of
+       air keeps clear of page padding and any classic vertical scrollbar).
+       Anything still wider scrolls like a wide terminal pane. */
+    --dag-visible: min(var(--dag-w), calc(100vw - 6ch));
+    width: var(--dag-visible);
+    margin: var(--cell-h) 0 var(--cell-h) calc((100% - var(--dag-visible)) / 2);
     overflow-x: auto;
+    /* Classic (non-overlay) scrollbars lay ~16px inside the figure and knock
+       every line after the diagram off the 21px grid. Hide the scrollbar
+       chrome; the pane still scrolls, and the figure's height stays exactly
+       the svg's whole-cell height. */
+    scrollbar-width: none;
+  }
+
+  .dag::-webkit-scrollbar {
+    display: none;
   }
 
   svg {
