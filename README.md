@@ -6,9 +6,7 @@
 
 Agents made writing code cheap. Shipping it is still expensive: review queues, maintainer bus factors, projects that will not take AI-written patches at all. The bottleneck moved from writing the change to landing it.
 
-index is the bet on the other path: every change lands here now, in one graph everyone consumes the same way. Upstream can take it someday. The whole stance fits in six lines: [philosophy](https://indexable-inc.github.io/index/philosophy/).
-
-That graph is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/).
+index is the other path: one Nix monorepo, in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions), where every change lands on main now and upstream can take it someday. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/). See the [philosophy](https://indexable-inc.github.io/index/philosophy/) for more.
 
 ## Why
 
