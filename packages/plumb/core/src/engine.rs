@@ -453,8 +453,12 @@ struct WaitOutcome {
 
 /// Timeval to whole milliseconds.
 fn timeval_millis(time: libc::timeval) -> u64 {
-    let seconds = u64::try_from(time.tv_sec).unwrap_or(0);
-    let micros = u64::try_from(time.tv_usec).unwrap_or(0);
+    // Kernel-reported rusage times are non-negative; clamp defensively so a
+    // hostile value reads as zero instead of panicking mid-reap. After the
+    // clamp the conversion cannot fail: a non-negative signed value always
+    // fits in u64.
+    let seconds = u64::try_from(time.tv_sec.max(0)).expect("non-negative value fits in u64");
+    let micros = u64::try_from(time.tv_usec.max(0)).expect("non-negative value fits in u64");
     seconds.saturating_mul(1000).saturating_add(micros / 1000)
 }
 
