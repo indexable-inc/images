@@ -27,6 +27,19 @@ What the plan kbuild compiles is governed by `planStrategy` (#3413):
 - "full": exact pre-#3413 behavior (plan = reference), kept as the
   debugging baseline.
 
+The skeleton reduction is sharded per top-level source directory (drivers/
+one level deeper), each shard a CA derivation over an eval-time
+`builtins.path` slice of just that directory, composed back into one tree
+whose bytes -- and therefore store path -- match a whole-tree reduction
+(#3706). A body edit re-reduces exactly the directory it touched; every
+other shard, the composed skeleton, and the plan behind it resolve to
+already-realised outputs. The same slicing serves the pre-unpacked
+`srcTree` argument (a developer working tree as a plain path, under
+--impure eval), which keeps whole-tree store ingestion out of the edit
+loop entirely: builtins.path re-ingests only the directory an edit
+touched, and the per-file source farm in units.nix re-keys only the
+edited translation units.
+
 On CONFIG_MODULES=y configs the plan also runs `make modules`, and the unit
 graph extends over module objects, both modpost passes (`vmlinux.symvers`
 with its generated ksymtab source, `Module.symvers` with each module's
@@ -259,7 +272,28 @@ only to make the plan's inputs body-independent.
   '';
 
   buildKernel = {
-    src,
+    # The kernel source tarball (pkgs.linux_*.src), unpacked once below.
+    # Exactly one of `src`/`srcTree` must be given.
+    src ? null,
+    # A pre-unpacked kernel tree instead: a derivation output (say
+    # applyPatches over a checkout) or a plain path (a developer working
+    # tree, which needs --impure eval). Slicing reads straight from the
+    # tree, so a plain-path edit loop never pays a whole-tree store copy
+    # (#3706).
+    srcTree ? null,
+    # Pre-ingested per-directory slices instead of a tree: an attrset from
+    # slice key to store path, with the same key shape the automatic
+    # slicing produces ("" for the files directly at the tree root, one key
+    # per top-level directory, and "<dir>/<sub>" plus a files-only "<dir>"
+    # for deep-sharded directories such as drivers/). This scopes the
+    # driver-side cost of an edit loop to the directory an edit touched
+    # (`nix store add` it and re-evaluate); note that current Nix still
+    # re-ingests eval-time sources once per evaluation -- builtins.path has
+    # no cross-eval memoization -- which is the measured residual of the
+    # #3706 loop. Needs --impure eval, like a plain-path srcTree: pure
+    # evaluation refuses to read store paths it was not handed context
+    # for. Outputs stay fully content-addressed either way.
+    srcSlices ? null,
     configTarget ? "tinyconfig",
     contentAddressed ? true,
     planStrategy ? "skeleton",
@@ -297,30 +331,265 @@ only to make the plan's inputs body-independent.
         or (throw "kbuild-unit: unknown planStrategy \"${planStrategy}\" (expected \"skeleton\", \"ccache\", or \"full\")");
 
     # The kernel `src` is a tarball; units and harvest need the unpacked tree
-    # as a directory (symlink-farm base and byte-compare reference).
-    srcTree = pkgs.srcOnly {
-      name = "kbuild-unit-src";
-      inherit src;
-      # Unpack only; omitting stdenv trips this repo's abort-on-warn.
-      stdenv = pkgs.stdenvNoCC;
-    };
+    # as a directory (symlink-farm base and byte-compare reference). A caller
+    # that already has the tree passes `srcTree` and skips the unpack.
+    tree =
+      if builtins.length (lib.filter (given: given != null) [src srcTree srcSlices]) != 1
+      then throw "kbuild-unit: pass exactly one of src (tarball), srcTree (unpacked tree), or srcSlices (pre-ingested slices)"
+      else if srcTree != null
+      then srcTree
+      else if src != null
+      then
+        pkgs.srcOnly {
+          name = "kbuild-unit-src";
+          inherit src;
+          # Unpack only; omitting stdenv trips this repo's abort-on-warn.
+          stdenv = pkgs.stdenvNoCC;
+        }
+      else throw "kbuild-unit: srcSlices given; there is no whole tree to read";
 
-    # Directives-only reduction of the tree (#3413). CA: a function-body edit
-    # rebuilds this derivation but lands the identical output path, so the
-    # plan's resolved derivation is already realised and does not rerun. A
-    # header/Makefile/Kconfig edit changes the skeleton and reruns the plan.
-    skeletonTree =
-      pkgs.runCommand "kbuild-unit-skeleton"
+    # A plain-path tree (developer working tree) is read in place; a
+    # derivation tree is realised once and read from its output (the readDir
+    # below is the eval/build boundary: instantiating the plan now needs the
+    # tree built first, which was already true in practice via the source
+    # farm in units.nix).
+    treeIsPath = builtins.isPath tree;
+    treeRoot =
+      if treeIsPath
+      then tree
+      else "${tree}";
+    treeSubPath = rel:
+      if treeIsPath
+      then tree + ("/" + rel)
+      else "${tree}/${rel}";
+
+    # `.git` never enters the slices: an unpacked tarball has none, and a
+    # working tree must slice identically to the tarball it came from
+    # (setlocalversion must also never see it, or the plan would grow a
+    # local-version suffix the reference build lacks). It is a directory in
+    # a checkout but a file in a linked worktree, so both shapes go.
+    treeEntries = builtins.readDir treeRoot;
+    treeDirNames =
+      lib.filter
+      (name: treeEntries.${name} == "directory" && name != ".git")
+      (builtins.attrNames treeEntries);
+    subDirNames = dir: let
+      entries = builtins.readDir (treeSubPath dir);
+    in
+      lib.filter (name: entries.${name} == "directory") (builtins.attrNames entries);
+
+    # Per-directory slices (#3706): each top-level directory (and each
+    # drivers/ subdirectory) becomes its own content-addressed store path,
+    # so an edit re-ingests exactly the directory it touched while every
+    # other slice keeps its store path. Everything downstream keys on the
+    # slices -- the skeleton shards, the per-file source farm, and the link
+    # unit's directory scopes (units.nix resolves srctree paths through
+    # them) -- which is what lets Nix's source-ingestion memoization hold
+    # across evals for everything an edit did not touch: builtins.path
+    # re-hashing is only cheap when its source sits inside an unchanged,
+    # valid store path.
+    #
+    # Slices are always eval-ingested source paths, never derivation
+    # outputs: builtins.path cannot consume a content-addressed derivation
+    # output (its eval-time string is an unresolved placeholder), so a
+    # `src`/`srcTree` tree pays one whole-tree hash per edit here. An edit
+    # loop that wants to pay only for the directory it touched pre-ingests
+    # its slices and passes `srcSlices` instead.
+    sanitizeRel = rel: lib.replaceStrings ["/"] ["-"] rel;
+    sliceName = key: merge: "kbuild-src-slice-${
+      if key == ""
+      then "root-files"
+      else sanitizeRel key + lib.optionalString merge "-files"
+    }";
+    dirSlice = name: rel:
+      builtins.path {
+        inherit name;
+        path = treeSubPath rel;
+      };
+    # Files directly inside `subPath` (the tree root, or a deep-sharded
+    # directory): rejecting directories in the filter also stops the walk,
+    # so this touches one level only.
+    filesOnlySlice = name: subPath:
+      builtins.path {
+        inherit name;
+        path =
+          if subPath == ""
+          then treeRoot
+          else treeSubPath subPath;
+        filter = path: type: type != "directory" && baseNameOf path != ".git";
+      };
+
+    # Directories sharded one level deeper: drivers/ alone is well over half
+    # of the tree, so a top-level shard would still re-reduce all of it on
+    # any driver edit.
+    deepSharded = ["drivers"];
+
+    # One slice (and skeleton shard) per spec: `dest` is both the slice key
+    # units.nix resolves srctree paths through and where the shard's output
+    # lands in the composed tree; `merge` marks a files-only spec (content
+    # merges into an existing directory, and the slice serves the files
+    # directly inside that directory) as opposed to a directory spec (the
+    # slice *is* the directory).
+    shardSpecs =
+      if srcSlices != null
+      then let
+        keys = builtins.attrNames srcSlices;
+      in
+        map (
+          key: let
+            # A key with children (or the root) is a files-only slice; the
+            # rest are whole directories. Same shape the automatic slicing
+            # produces below.
+            merge = key == "" || lib.any (other: lib.hasPrefix "${key}/" other) keys;
+          in {
+            dest = key;
+            inherit merge;
+            # Re-ingesting normalizes the given path (string or path) into
+            # a tracked source path; when it already sits in the store and
+            # is unchanged, this memoizes instead of re-hashing.
+            slice = builtins.path {
+              name = sliceName key merge;
+              path = srcSlices.${key};
+            };
+          }
+        )
+        keys
+      else autoShardSpecs;
+
+    autoShardSpecs =
+      [
+        {
+          dest = "";
+          merge = true;
+          slice = filesOnlySlice (sliceName "" true) "";
+        }
+      ]
+      ++ lib.concatMap (
+        dir:
+          if lib.elem dir deepSharded
+          then
+            [
+              {
+                dest = dir;
+                merge = true;
+                slice = filesOnlySlice (sliceName dir true) dir;
+              }
+            ]
+            ++ map (sub: {
+              dest = "${dir}/${sub}";
+              merge = false;
+              slice = dirSlice (sliceName "${dir}/${sub}" false) "${dir}/${sub}";
+            }) (subDirNames dir)
+          else [
+            {
+              dest = dir;
+              merge = false;
+              slice = dirSlice (sliceName dir false) dir;
+            }
+          ]
+      )
+      treeDirNames;
+
+    # Directives-only reduction of one slice (#3413, sharded per #3706).
+    # `--prefix` re-roots classification so the keep-allowlist and the
+    # scripts//tools/ verbatim rules keep matching tree-relative paths. CA:
+    # a body edit rebuilds exactly its own shard, which lands the identical
+    # output path, so the compose below (and the plan behind it) resolves to
+    # already-realised outputs and never reruns. A header/Makefile/Kconfig
+    # edit changes its shard's output and legitimately reruns the plan.
+    shardFor = {
+      dest,
+      merge,
+      slice,
+    }:
+      pkgs.runCommand "kbuild-unit-skeleton-shard${lib.optionalString (dest != "") "-${sanitizeRel dest}"}${lib.optionalString (merge && dest != "") "-files"}"
       ({nativeBuildInputs = [nixKbuildUnit];} // lib.optionalAttrs contentAddressed contentAddressing)
       ''
-        nix-kbuild-unit skeleton --src ${srcTree} --out $out \
+        nix-kbuild-unit skeleton --src ${slice} --out $out \
+          --prefix ${lib.escapeShellArg dest} \
           ${lib.concatMapStringsSep " " (glob: "--keep ${lib.escapeShellArg glob}") skeletonKeep}
       '';
+
+    shards = map (spec: spec // {drv = shardFor spec;}) shardSpecs;
+
+    # Compose per-spec pieces back into one tree at each spec's dest;
+    # `getPath` selects the piece (a shard's reduced output for the
+    # skeleton, the raw slice for the whole-tree compose).
+    composeTree = name: specs: getPath:
+      pkgs.runCommand name
+      (lib.optionalAttrs contentAddressed contentAddressing)
+      ''
+        mkdir -p $out
+        ${lib.concatMapStrings (
+            spec: let
+              dest =
+                if spec.dest == ""
+                then "$out"
+                else "$out/${lib.escapeShellArg spec.dest}";
+              parent = builtins.dirOf spec.dest;
+            in
+              if spec.merge
+              then ''
+                mkdir -p ${dest}
+                cp -a ${getPath spec}/. ${dest}/
+                # cp -a src/. propagates the store piece's read-only mode
+                # onto the target directory; later pieces still copy into
+                # it. NAR serialization carries no directory modes, so this
+                # cannot perturb the content address.
+                chmod u+w ${dest}
+              ''
+              else ''
+                ${lib.optionalString (parent != ".") "mkdir -p $out/${lib.escapeShellArg parent}\n"}cp -a ${getPath spec} ${dest}
+              ''
+          )
+          specs}
+      '';
+
+    # The composed skeleton, byte-identical (same CA store path) to the
+    # previous single-derivation whole-tree reduction, so the plan contract
+    # does not move. The compose only re-runs when a shard's *output*
+    # changes; after a body edit every shard resolves to its existing
+    # realisation and the compose never executes.
+    skeletonTree = composeTree "kbuild-unit-skeleton" shards (shard: shard.drv);
+
+    # Every shard in one farm: probes build it to warm exactly the sharded
+    # reduction, and the cache lane pushes it so other hosts substitute
+    # shard realisations instead of re-reducing.
+    skeletonShards = pkgs.linkFarm "kbuild-unit-skeleton-shards" (map (shard: {
+        name =
+          if shard.dest == ""
+          then "root-files"
+          else sanitizeRel shard.dest + lib.optionalString shard.merge "-files";
+        path = shard.drv;
+      })
+      shards);
+
+    # A derivation-consumable whole-tree path. For a plain-path tree the
+    # copy happens lazily at instantiation -- the equivalence gates and the
+    # non-skeleton plan strategies force it, the skeleton edit loop never
+    # does -- and `.git` stays out for the same reason it stays out of the
+    # slices.
+    wholeTree =
+      if srcSlices != null
+      then
+        # No whole tree was given; compose one from the slices (content-
+        # identical to the tree they came from). Only the equivalence
+        # gates' reference build and the non-skeleton plan strategies force
+        # this.
+        composeTree "kbuild-unit-src" shardSpecs (spec: spec.slice)
+      else if treeIsPath
+      then
+        builtins.path {
+          name = "kbuild-unit-src";
+          path = tree;
+          filter = path: _type: baseNameOf path != ".git";
+        }
+      else tree;
 
     planSrc =
       if planStrategy == "skeleton"
       then skeletonTree
-      else srcTree;
+      else wholeTree;
 
     plan = pkgs.stdenv.mkDerivation ({
         pname = "kbuild-unit-plan";
@@ -415,7 +684,7 @@ only to make the plan's inputs body-independent.
     referenceKernel = pkgs.stdenv.mkDerivation ({
         pname = "kbuild-unit-reference";
         version = configTarget;
-        src = srcTree;
+        src = wholeTree;
         nativeBuildInputs = kbuildInputs;
         env = reproEnv;
         dontFixup = true;
@@ -462,9 +731,18 @@ only to make the plan's inputs body-independent.
         cp -a ${plan}/generated $out
       '';
 
+    # The slice map units.nix resolves srctree-relative paths through:
+    # exact directory keys plus the files-only slices keyed by their
+    # directory ("" for the tree root).
+    sliceMap = builtins.listToAttrs (map (shard: {
+        name = shard.dest;
+        value = shard.slice;
+      })
+      shardSpecs);
+
     imported = import unitsNix {
       inherit pkgs;
-      src = srcTree;
+      srcSlices = sliceMap;
       generated = "${generatedSnapshot}";
       extraNativeBuildInputs = kbuildInputs;
       extraEnv = reproEnv;
@@ -500,10 +778,16 @@ only to make the plan's inputs body-independent.
           path = plan;
         }
       ]
-      ++ lib.optional (planStrategy == "skeleton") {
-        name = "skeleton";
-        path = skeletonTree;
-      }
+      ++ lib.optionals (planStrategy == "skeleton") [
+        {
+          name = "skeleton";
+          path = skeletonTree;
+        }
+        {
+          name = "skeleton-shards";
+          path = skeletonShards;
+        }
+      ]
     );
 
     # The exit gate: the unit-composed vmlinux must be byte-identical to the
@@ -540,9 +824,18 @@ only to make the plan's inputs body-independent.
           echo "$count modules byte-identical" > $out
         '';
   in
-    imported
-    // {
-      inherit plan unitsNix srcTree skeletonTree referenceKernel cachePushRoot vmlinuxEquivalence modulesEquivalence;
+    # Explicit exports rather than `imported // ...`: an attrset update
+    # forces the import's attribute names, which walks the whole IFD chain
+    # (plan build included) just to look at plan-side attrs like
+    # `skeletonTree` or `srcTree`. Spelled out, only the unit-graph attrs
+    # touch the import (#3706).
+    {
+      inherit (imported) units kernelRelease vmlinux modpost moduleSymvers modules allUnits prunedTargets;
+      inherit plan unitsNix skeletonTree skeletonShards referenceKernel cachePushRoot vmlinuxEquivalence modulesEquivalence;
+      srcTree =
+        if srcSlices != null
+        then wholeTree
+        else tree;
     };
 in {
   inherit buildKernel;

@@ -70,6 +70,11 @@ struct SkeletonArgs {
     /// allowlist (repeatable; `*` matches within a path segment, `**` across).
     #[arg(long = "keep", value_name = "GLOB")]
     keep: Vec<String>,
+
+    /// Classify every path as if it lived under this tree-relative prefix
+    /// (sharded reduction of one subtree, #3706); empty means the tree root.
+    #[arg(long, value_name = "PREFIX", default_value = "")]
+    prefix: String,
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -83,7 +88,7 @@ fn main() -> color_eyre::Result<()> {
             println!();
         }
         Command::Skeleton(args) => {
-            skeleton::skeleton(&args.src, &args.out, &args.keep)
+            skeleton::skeleton(&args.src, &args.out, &args.keep, &args.prefix)
                 .wrap_err("reducing source tree to a skeleton")?;
         }
         Command::Render(args) => {
