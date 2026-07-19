@@ -125,6 +125,7 @@
     {#if hovered}
       <div
         class="tooltip"
+        class:flip={hovered.px > W * 0.55}
         style:left={`${((hovered.px / W) * 100).toFixed(2)}%`}
         style:top={`${((hovered.py / H) * 100).toFixed(2)}%`}
       >
@@ -177,7 +178,7 @@
     position: relative;
     border: 1px solid var(--rule);
     border-radius: 10px;
-    overflow: hidden;
+    /* No overflow clipping: the tooltip must escape the chart box. */
   }
 
   svg {
@@ -225,7 +226,9 @@
   .tooltip {
     position: absolute;
     transform: translate(12px, -50%);
-    max-width: 22rem;
+    width: max-content;
+    max-width: min(22rem, 60vw);
+    z-index: 1;
     background: var(--bg);
     border: 1px solid var(--rule);
     border-radius: 8px;
@@ -233,6 +236,11 @@
     font-size: 0.8rem;
     pointer-events: none;
     box-shadow: 0 2px 10px rgb(0 0 0 / 0.12);
+  }
+
+  /* Right-half dots open the tooltip to the left so it never runs off page. */
+  .tooltip.flip {
+    transform: translate(calc(-100% - 12px), -50%);
   }
 
   .tooltip .detail,
