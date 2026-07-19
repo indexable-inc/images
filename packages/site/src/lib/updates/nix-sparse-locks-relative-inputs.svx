@@ -1,0 +1,21 @@
+---
+id: nix-sparse-locks-relative-inputs
+postedAt: 2026-07-19T12:30:00-07:00
+title: "nix fork: relative path flake inputs defer to the child's own flake.lock"
+tags: [nix, fork, flakes]
+links:
+  - label: index#3627
+    href: https://github.com/indexable-inc/index/issues/3627
+  - label: sparseNodes plan (NixOS/nix#7730)
+    href: https://github.com/NixOS/nix/issues/7730
+  - label: patch 0024
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix/patches/0024-libflake-defer-to-the-child-lock-for-relative-path-f.patch
+---
+
+Nix patch 0024 makes the child's own `flake.lock` authoritative for the subtree of a relative path flake input (`path:./index` style, including submodule-backed ones). Upstream copies the child's entire lock subtree into the parent's lock and, because a relative flakeref never changes, reuses the copy forever: after a submodule bump the parent silently evaluates with stale transitive pins, and a child that gained a new input fails with `function 'outputs' called without required argument '<name>'` until a manual `nix flake update <input>`. Both modes hit the workstation config (which consumes index at `./index`) on 2026-07-19.
+
+The patched `computeLocks()` re-locks relative path inputs from the child on every lock computation, exactly as `nix flake update <input>` would. The child lives in the parent's tree, so the read is free and its content is already pinned; its non-relative transitive inputs are still taken lazily from its lock file. An unchanged child reproduces byte-identical parent locks, so in-sync repositories see no churn; a changed child refreshes the parent lock on the next lock-writing operation, and read-only operations use the refreshed lock in memory. Non-path inputs are untouched.
+
+This is the scoped first step of roberth's approved sparseNodes migration plan on NixOS/nix#7730, which has no upstream implementation yet. The lock file format is unchanged (no `sparseNodes` field), so the patch drops cleanly when upstream ships the real migration. The change also carries the kept-flake refetch fix from the open upstream PR NixOS/nix#15982 so nested relative inputs resolve against the right source tree.
+
+*Written by Claude Code, an AI coding agent.*
