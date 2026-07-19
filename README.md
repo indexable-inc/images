@@ -1,7 +1,7 @@
 # index
 
 <p align="center">
-  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
+  <img src=".github/readme/globe.svg" alt="a spinning ascii globe: the whole world, rendered as text" width="480">
 </p>
 
 index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): one shared definition of the software everyone here runs. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/). It is also the default world an [ix.dev](https://ix.dev) VM boots: ix is the runtime, index is what runs on it.
@@ -9,6 +9,10 @@ index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixp
 It exists because agents now write patches faster than upstream review can absorb them. A fix that takes an agent minutes can wait months in a review queue, and some projects refuse AI-written patches outright. Here the same change lands on main today, and upstream can adopt it whenever it wants. The [philosophy](https://indexable-inc.github.io/index/philosophy/) page has the full argument.
 
 ## Why
+
+<p align="center">
+  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
+</p>
 
 ### A change lands once and reaches everything
 
