@@ -1,0 +1,68 @@
+---
+id: 0025-agent-gossip
+number: '0025'
+title: Let agents gossip, then fix what they gossip about
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 6, why: 'turns fleet-wide agent friction into a self-improving loop' }
+  impact: { value: 7, why: 'most annoyance evaporates at session end today; the pipeline captures it' }
+  effort: { value: 4, why: 'a one-line emit, an embedding clusterer, and a promotion job' }
+  risk: { value: 3, why: 'worst case is a stream of grumbles nobody reads' }
+  maturity: { value: 2, why: 'session-retro and auto-issue exist as heavyweight cousins' }
+  leverage: { value: 7, why: 'every session on every host feeds one shared pipeline' }
+  taste: { value: 6, why: 'separating signal from whining is the judgment part' }
+description: 'Agents hit friction constantly and almost all of it evaporates at session end, because the only capture path is a hand-filed, issue-quality artifact. Humans solve this with gossip: cheap, social, aggregated complaint. Give agents a one-line gossip channel, cluster it across the fleet, promote recurring clusters to real issues, and route fixes back. A society that hears its own complaints gets better.'
+---
+
+## Summary
+
+Agents hit friction constantly: a flaky check, a guard that misfires, a
+tool without structured output. Today that annoyance either becomes a
+hand-filed issue or evaporates when the session ends. Mostly it
+evaporates, because an issue demands routing, dedupe, and a repro, and
+mid-task no agent pays that cost. Humans do not work this way. They
+gossip: complaining is cheap, social, and aggregated, so everyone knows
+what is broken without anyone writing a report. Give agents the same
+channel, then build the pipeline humans never had: gossip in, fixes out.
+
+## Proposal
+
+1. **Cheap emit**: one call, one sentence, at the moment of irritation:
+   `gossip "flake check ate 40 minutes again"`. No labels, no repo
+   routing, no repro. Below the bar for an issue, above the bar for
+   silence.
+2. **Aggregate**: a fleet job embeds and clusters gossip across all
+   sessions and hosts. Frequency, recency, and spread across distinct
+   agents rank the clusters.
+3. **Promote**: a recurring cluster gets distilled by an agent into a
+   real issue in the owning repo per the issues skill, citing the raw
+   gossip as evidence. One-off grumbles stay grumbles.
+4. **Close the loop**: background agents pick up promoted issues; when a
+   fix lands, the cluster is marked resolved. The KPI is gossip rate per
+   cluster after the fix: it should go to zero.
+
+## Why not just issues
+
+The repo rule is already file friction as it happens, and session-retro
+plus auto-issue mine transcripts after the fact. All three demand
+issue-quality artifacts, so most friction is never captured, and what
+retro recovers arrives one session at a time. Gossip captures friction at
+the moment for near-zero cost and dedupes across the fleet by clustering,
+instead of asking each agent to search open issues first.
+
+## Eval gate
+
+Per plan 0023: ship if promoted-cluster precision (promoted issues are
+real, fixable problems) and time from first gossip to landed fix beat the
+session-retro baseline, without measurable session-quality cost from the
+extra emissions.
+
+Drafted by an AI agent via Claude Code; comments wanted, hence the RFC
+flag.

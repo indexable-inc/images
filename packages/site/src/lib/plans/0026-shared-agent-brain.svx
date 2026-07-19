@@ -1,0 +1,77 @@
+---
+id: 0026-shared-agent-brain
+number: '0026'
+title: A shared brain, memories that strengthen and decay
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 9, why: 'replaces flat per-host memory files with a learning substrate' }
+  impact: { value: 8, why: 'every agent inherits every other agent''s verified experience' }
+  effort: { value: 8, why: 'graph store, embedding recall, reinforcement loop, consolidation agent' }
+  risk: { value: 7, why: 'wrong reinforcement can entrench a bad memory fleet-wide' }
+  maturity: { value: 1, why: 'hypothesis stage; MEMORY.md and grep are the only prior art here' }
+  leverage: { value: 9, why: 'recall quality compounds across every future session' }
+  taste: { value: 8, why: 'what strengthens and what decays is the entire design' }
+description: 'Agent memory today is flat markdown recalled by grep: no ranking, no decay, no sharing, so every lesson is learned once per host and forgotten when recall misses. Steal three mechanisms from brains: retrieval strengthens a memory, bad outcomes weaken it (dopamine-style prediction error), and a background consolidation agent (the inner voice) merges, links, and promotes off-session. One fleet-wide embedding-indexed graph, real-time weight updates, habits alongside facts.'
+---
+
+## Summary
+
+Agent memory today is flat files: per-host markdown, grep for recall, no
+ranking, no decay, no sharing. Every lesson is learned once per host and
+lost the moment recall misses. Brains do better with three mechanisms
+this plan steals. Retrieval strengthens: what you recall often gets
+easier to recall. Bad outcomes weaken: prediction error demotes what hurt
+you. Consolidation runs in the background: sleep replays, merges, and
+links. Build a shared memory graph with those dynamics and every agent
+inherits every other agent's experience, weighted by how well it has
+actually worked.
+
+## Design sketch
+
+- **Store**: one fleet-wide graph. Nodes are declarative facts and
+  procedural habits (when X, do Y); habits are closer to what agents
+  need than facts. Edges are typed: derived-from, contradicts, co-fired.
+  Every node is embedding-indexed.
+- **Recall**: query by embedding, then spread along edges from the hits,
+  like association. Rank by similarity times a learned weight, so
+  often-used memories surface first.
+- **Reinforcement**: a recall that leads to a good outcome bumps the
+  weight. An in-session judgment that a memory was wrong, stale, or hurt
+  performance decays it, the dopamine analogue. Unused weights decay
+  slowly by default, so the store forgets instead of accumulating
+  forever. Negative habits degrade the same way positive ones grow.
+- **Consolidation**: a background agent, the inner voice, walks the
+  graph off-session: merges near-duplicates, links memories that fired
+  together, promotes hot recent memories to long-term, and flags
+  contradictions for verification. One-shot notes become structure here.
+
+## Relation to what exists
+
+Write-at-moment-of-learning and the MEMORY.md index remain the capture
+surface; this plan replaces storage and recall underneath. The existing
+verify-before-use rule becomes the negative stimulus: a memory that
+fails verification is precisely the one that should decay.
+
+## Drawbacks
+
+Reinforcement entrenches: a wrong memory that keeps being recalled and
+shallowly confirmed grows stronger. A miscalibrated judge decays true
+memories. A shared store means one poisoned memory misleads the whole
+fleet. All three demand a conservative judge, reversible decay, and
+provenance on every write.
+
+## Eval gate
+
+Per plan 0023: recall precision against the grep baseline on replayed
+sessions, and an A/B on repeat-task suites. The number that must move is
+time and success rate on the second encounter of a known problem class.
+
+Drafted by an AI agent via Claude Code; comments wanted, hence the RFC
+flag.
