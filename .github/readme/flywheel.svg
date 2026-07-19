@@ -14,7 +14,6 @@
     .head { fill: var(--fg); }
     .mhead { fill: var(--muted); }
     .ink { fill: var(--fg); }
-    .cursor { fill: var(--fg); animation: blink 1.2s steps(1) infinite; }
     .pulse { fill: none; stroke: var(--fg); stroke-width: 5; }
     #p1 { stroke-dasharray: 14 175; stroke-dashoffset: 14; animation: k1 13.09s infinite; }
     #p2 { stroke-dasharray: 14 160; stroke-dashoffset: 14; animation: k2 13.09s infinite; }
@@ -255,10 +254,8 @@
       99.795% { stroke-dashoffset: 14; animation-timing-function: linear; }
       100.000% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
     }
-    @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
     @media (prefers-reduced-motion: reduce) {
       .pulse { display: none; }
-      .cursor { animation: none; }
     }
   </style>
   <defs>
@@ -268,7 +265,6 @@
   </defs>
   <path class="frame" d="M 136 14 H 711 Q 719 14 719 22 V 218 Q 719 226 711 226 H 9 Q 1 226 1 218 V 22 Q 1 14 9 14 H 22"/>
   <text x="28" y="18.5">[-] flywheel</text>
-  <rect class="cursor" x="127" y="8" width="7" height="12"/>
   <text x="80" y="92">a change lands once</text>
   <text x="440" y="92">it reaches everything</text>
   <text x="456" y="172">everything improves</text>
