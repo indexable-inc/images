@@ -10,6 +10,7 @@
   hermes-agent,
   btop-src,
   nushell-src,
+  git-src,
   drgn-src,
   perftest-src,
   fff-src,
@@ -726,6 +727,7 @@
       writeRustApplication
       ;
     btopSrc = btop-src;
+    gitSrc = git-src;
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;

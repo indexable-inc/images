@@ -109,6 +109,18 @@
       flake = false;
     };
 
+    # Upstream git/git, patched in-repo (packages/git/patches): linked
+    # worktrees borrow the common-dir submodule object store instead of
+    # re-cloning every submodule from the network (#3610). Pinned by rev to
+    # the v2.54.0 tag because the package overlays nixpkgs' git recipe, so
+    # the base must track nixpkgs' git version, never free-float: on a
+    # nixpkgs git bump, repin to the matching tag and run
+    # `nix run .#rebase-patches -- dag git`.
+    git-src = {
+      url = "github:git/git/94f057755b7941b321fd11fec1b2e3ca5313a4e0";
+      flake = false;
+    };
+
     # Upstream openai/codex, patched in-repo (packages/agent/codex/patches).
     # Pinned BY REV: importCargoLock removes the aggregate cargoHash, but git
     # dependencies still carry fixed output hashes in the package. A
@@ -272,6 +284,7 @@
     hermes-agent,
     btop-src,
     nushell-src,
+    git-src,
     drgn-src,
     perftest-src,
     pg-uint128-src,
@@ -345,6 +358,7 @@
         hermes-agent
         btop-src
         nushell-src
+        git-src
         drgn-src
         perftest-src
         fff-src

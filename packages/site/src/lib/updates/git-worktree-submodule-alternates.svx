@@ -1,0 +1,17 @@
+---
+id: git-worktree-submodule-alternates
+postedAt: 2026-07-18T22:30:00-07:00
+title: "Patched git: linked worktrees stop re-cloning submodules"
+tags: [git, fork, worktree, submodule]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/3610
+  - label: patch series
+    href: https://github.com/indexable-inc/index/tree/main/packages/git/patches
+---
+
+`git` joins the de-forked packages (`lib/fork-packages.nix`): upstream v2.54.0 plus one patch that fixes a twelve-year-old gap in git's worktree support. Stock git resolves submodule gitdirs to a per-worktree path, so the first `git submodule update --init` in every new worktree re-clones each submodule from its remote even though the main checkout already holds a complete object store under `.git/modules/`. Upstream called the reuse "logical" in the 2014 commit that shipped the split (df56607dff2) and never implemented it.
+
+The patch teaches `prepare_possible_alternates()` to add `$GIT_COMMON_DIR/modules/<name>/objects` as a clone reference with `--reference-if-able` semantics whenever the resolved gitdir is per-worktree. Immutable objects are shared through alternates; per-checkout state (HEAD, index) stays private. Measured on a 5 MB submodule: a new worktree's submodule init drops from 5.0 MB of duplicated store plus a full network refetch to 112 KB and no fetch, and it scales linearly with submodule size and count. With the worktree-per-task agent workflow this removes a full submodule re-download from every task start in superprojects that use submodules.
+
+The base is pinned by rev to nixpkgs' git version tag (`autoUpdate = false`) because the package overlays the nixpkgs recipe onto the patched tree; an eval-time assert fails loudly when nixpkgs' git moves so the pin gets advanced deliberately. Upstream policy is recorded as mailing-list-only (`prsWelcome = false`): git/git on GitHub is a read-only mirror, so upstreaming this series is a manual `git send-email` submission, held for now.
