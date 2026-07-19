@@ -1,0 +1,15 @@
+---
+id: visual-explainers-skill
+postedAt: 2026-07-19T12:00:00-07:00
+title: "`visual-explainers` skill: interactive, explanation-first visualization"
+tags: [agent, skills]
+links:
+  - label: visual-explainers skill
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent/skills/visual-explainers/SKILL.md
+  - label: "#3660"
+    href: https://github.com/indexable-inc/index/issues/3660
+---
+
+Agents now carry a house skill for building visualizations. The Claude-bundled `dataviz` skill was invocation-blocked in #3607 because it injected Anthropic's own chart styling; `visual-explainers` fills the gap with a different philosophy. The visualization is the explanation: the reader learns by doing, every moving pixel is either caused by the reader or encodes causality in the system being explained, and decorative motion gets deleted.
+
+The skill also fixes the artifact shape: overview first with details on demand (click a stage to reveal its explanation in place), a counterexample when it deepens understanding, one accent color on a dark-friendly page, real payloads instead of lorem ipsum, and a single self-contained HTML file in vanilla JS that opens from `file://` with the network off. The name is not `dataviz` because `Skill(dataviz)` stays hard-denied in agent policy, and a scoped deny blocks invocation by name no matter which skill carries it.
