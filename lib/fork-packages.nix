@@ -177,6 +177,31 @@
       };
     }
     {
+      name = "git";
+      input = "git-src";
+      url = "https://github.com/git/git.git";
+      patchDir = "packages/git/patches";
+      # The package overlays nixpkgs' git recipe onto this source, so the base
+      # must equal nixpkgs' git version tag (v2.54.0), never free-float under
+      # the fork-sync cron. Repin manually when nixpkgs bumps git.
+      autoUpdate = false;
+      upstreamPolicy = {
+        # git/git on GitHub is a read-only mirror: contributions go through the
+        # mailing list (or GitGitGadget), never GitHub PRs, so the tool must not
+        # open one. Upstreaming this series is a manual mailing-list submission.
+        prsWelcome = false;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/git/git/blob/master/Documentation/SubmittingPatches.adoc";
+        notes = "Mailing-list workflow (git@vger.kernel.org / GitGitGadget); DCO sign-off required; no AI-specific policy found as of 2026-07-18.";
+      };
+      patches = {
+        "0001-submodule-helper-borrow-common-dir-module-store-in-l.patch" = {
+          upstream = "hold";
+          reason = "General fix git upstream anticipated in df56607dff2 but never implemented; wants a mailing-list submission with review, which upstream-sync cannot automate for a non-PR project.";
+        };
+      };
+    }
+    {
       name = "nushell";
       input = "nushell-src";
       url = "https://github.com/nushell/nushell.git";

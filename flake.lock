@@ -169,6 +169,23 @@
         "type": "github"
       }
     },
+    "git-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1776650499,
+        "narHash": "sha256-bA144ECODQIly1q0xilmTMYrHmvBrMF5DfBsEMd4YyY=",
+        "owner": "git",
+        "repo": "git",
+        "rev": "94f057755b7941b321fd11fec1b2e3ca5313a4e0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "git",
+        "repo": "git",
+        "rev": "94f057755b7941b321fd11fec1b2e3ca5313a4e0",
+        "type": "github"
+      }
+    },
     "hermes-agent": {
       "inputs": {
         "flake-parts": "flake-parts",
@@ -499,6 +516,7 @@
         "examples": "examples",
         "fff-src": "fff-src",
         "ghostty": "ghostty",
+        "git-src": "git-src",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
         "launchk-src": "launchk-src",
