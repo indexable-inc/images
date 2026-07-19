@@ -315,6 +315,19 @@ in {
       context = lib.mkIf cfg.houseContext.enable (lib.mkDefault houseContextText);
     };
 
+    # Claude Code's stock auto-updater installs native builds under
+    # ~/.local/share/claude/versions and re-points ~/.local/bin/claude at
+    # them, shadowing the nix wrapper on PATH; experimenting with unwrapped
+    # Claude Code strands the same symlink on stale builds. Re-pin it to the
+    # wrapper on every switch so a reset never survives an activation.
+    # TODO(indexable-inc/index#3671): we should not need this. "Don't
+    # uninstall" covers the common case, yet stray installs keep winning
+    # PATH; once the updater fight is fixed at the source, remove this.
+    home.file.".local/bin/claude" = lib.mkIf cfg.enable {
+      source = "${cfg.finalPackage}/bin/claude";
+      force = true;
+    };
+
     # The wrapper injects no `--settings` flag (#3180): its computed render is
     # seeded into the writable user settings.json instead, where Claude Code's
     # own runtime writes survive the merge and every key stays overridable by

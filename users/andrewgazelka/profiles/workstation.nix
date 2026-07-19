@@ -1,6 +1,7 @@
 # Full personal workstation profile. Index-owned dependencies are closed over
 # by the flake export; host-owned values arrive through typed options.nix.
 {
+  activationTimingModule,
   codexModule,
   configRoot,
   indexPackages,
@@ -325,6 +326,9 @@ in {
   imports = [
     optionsModule
     personalServicesModule
+    # Times every activation step and prints a slowest-steps summary
+    # (indexable-inc/index#3673).
+    activationTimingModule
     # Declares `programs.codex.houseContext` (and the rest of the index codex
     # options) that this profile sets below; home-manager's stock
     # programs.codex module only carries enable/package/skills/context, so

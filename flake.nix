@@ -543,6 +543,7 @@
       optionsModule = personalOptionsModule;
       indexSkillsSrc = paths.skills;
       tmuxModule = ./modules/home/tmux.nix;
+      activationTimingModule = ./modules/home/activation-timing.nix;
     };
     personalDarwinHomeModule = import ./users/andrewgazelka/profiles/darwin-home.nix {
       inherit indexPackages ix;
@@ -635,6 +636,11 @@
       # base directories instead of $HOME. Import it and set
       # `xdgTidy.enable = true`. See modules/home/xdg-tidy.nix.
       xdg-tidy = ./modules/home/xdg-tidy.nix;
+
+      # Wall time on every `Activating <name>` line plus a slowest-steps
+      # summary at the end of activation. See
+      # modules/home/activation-timing.nix.
+      activation-timing = ./modules/home/activation-timing.nix;
       # Cursor-shape feedback for zsh vi mode (beam insert, block command,
       # reset around every prompt/command). Import it and set
       # `zshViCursor.enable = true`. See modules/home/zsh-vi-cursor.nix.
