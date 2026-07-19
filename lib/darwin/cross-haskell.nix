@@ -48,10 +48,10 @@
     deps,
     patches ? [],
     extraConfigureFlags ? [],
-    # "" = configure every component (the root package); dependencies
-    # configure only their library, mirroring cabal-install's per-component
-    # setup -- their executables' deps are deliberately outside the closure.
-    component ? "lib:${hsDrv.pname}",
+    # Configure the whole package, not `lib:<pname>`: per-component setup
+    # cannot see internal sub-libraries (attoparsec:attoparsec-internal),
+    # and tests/benchmarks stay disabled by default so their dependencies
+    # never enter the picture.
     postInstall ? "",
     extraNativeBuildInputs ? [],
   }: let
@@ -135,8 +135,7 @@
           --disable-executable-stripping \
           --disable-library-stripping \
           --ghc-options=-j"$NIX_BUILD_CORES" \
-          ${lib.concatStringsSep " " extraConfigureFlags} \
-          ${component}
+          ${lib.concatStringsSep " " extraConfigureFlags}
 
         runHook postConfigure
       '';
@@ -225,7 +224,6 @@ in {
       deps = map (d: crossSet.${d.pname}) rootDeps;
       patches = patchesFor.${root.pname} or [];
       extraConfigureFlags = configureFlagsFor.${root.pname} or [];
-      component = "";
       inherit extraNativeBuildInputs postInstall;
     };
 }
