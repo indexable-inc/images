@@ -1,6 +1,6 @@
 ---
-id: 0031-memory-oriented-world
-number: '0031'
+id: 0039-memory-oriented-world
+number: '0039'
 title: One memory, queryable across the whole world
 status: Input wanted
 rfc: true
