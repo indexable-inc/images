@@ -606,6 +606,20 @@
           upstream = "hold";
           reason = "Implements roberth's implicit git+https switch from NixOS/nix#14982 (also fixes NixOS/nix#13571; indexable-inc/index#3626). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # 0024: the child's own flake.lock is authoritative for the subtree of
+        # a relative path flake input (the child lives in the parent's tree,
+        # so its fetch is free and its content is already pinned). Scoped
+        # first step of roberth's approved sparseNodes plan (NixOS/nix#7730,
+        # Nov 2025, unimplemented upstream); lock format untouched, so the
+        # patch drops cleanly when upstream ships the real migration. Also
+        # carries the kept-flake relative-input refetch of the open upstream
+        # PR NixOS/nix#15982 (bug NixOS/nix#14762), which the deferral needs
+        # for nested relative inputs. Extends the merged update-time child
+        # lock respect of NixOS/nix#13437 to every lock computation.
+        "0024-libflake-defer-to-the-child-lock-for-relative-path-f.patch" = {
+          upstream = "hold";
+          reason = "Eval/lock-time sparse lock semantics for relative path inputs, the scoped start of the sparseNodes plan (NixOS/nix#7730; indexable-inc/index#3627). Hold: humans submit Nix patches upstream per NixOS/nix#15984, and the sparseNodes migration should land via the upstream plan, not a cold fork PR.";
+        };
       };
     }
     {

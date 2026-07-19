@@ -105,6 +105,10 @@
       "deps": [
         "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch"
       ]
+    },
+    {
+      "patch": "0024-libflake-defer-to-the-child-lock-for-relative-path-f.patch",
+      "deps": []
     }
   ]
 }
