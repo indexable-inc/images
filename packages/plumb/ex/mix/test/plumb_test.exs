@@ -47,7 +47,9 @@ defmodule PlumbTest do
     {:ok, _} = Plumb.Shell.eval(shell, "echo alpha")
     report = decode!(Plumb.Shell.eval(shell, "echo ${o[1]}-more"))
     assert final_stdout(report) == "alpha-more\n"
-    assert Plumb.Shell.var(shell, "o") == "alpha"
+    # Bare $o is the most recently finished run (#3595); earlier runs stay
+    # addressable through ${o[N]}, exercised by the eval above.
+    assert Plumb.Shell.var(shell, "o") == "alpha-more"
     assert Plumb.Shell.var(shell, "does-not-exist") == nil
   end
 
