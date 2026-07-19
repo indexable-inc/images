@@ -94,7 +94,7 @@ impl Serialize for Capture {
 /// One pipeline stage after it ran.
 #[derive(Debug, Clone, Serialize)]
 pub struct Stage {
-    /// Index of the stage across the whole run (the `K` in `$oN_K`).
+    /// Index of the stage across the whole run (the `K` in `${o[N][K]}`).
     pub index: usize,
     /// The argv actually spawned, after expansion (empty for builtins that
     /// take no arguments? never: argv[0] is always present).
@@ -127,7 +127,7 @@ pub struct PipelineRun {
 /// evaluated.
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
-    /// Run id: the `N` in `$oN` / `$eN` / `$sN`.
+    /// Run id: the `N` in `${o[N]}` / `${e[N]}` / `${s[N]}`.
     pub id: u64,
     /// The source text that was evaluated.
     pub source: String,

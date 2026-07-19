@@ -4,17 +4,20 @@
 //! `$VAR`, globs, `$(...)`, `&&`/`||`/`;`, `&`) and returns a [`Report`]:
 //! per-stage argv, status, timing, and bounded captures of every stream
 //! that flowed through the pipeline, including what each pipe stage fed the
-//! next. Outputs auto-bind to shell variables (`$oN`, `$eN`, `$sN`,
-//! `$oN_K`, `$eN_K`, and `$o`/`$e`/`$s` for the last run), so any earlier
-//! run's data, including intermediate pipe data, can feed later commands
-//! without re-running anything.
+//! next. Every run stays addressable afterwards: `${o[N]}` / `${e[N]}` /
+//! `${s[N]}` resolve run N's final stdout / stderr / status, `${o[N][K]}`
+//! resolves pipe stage K, negative indexes count from the latest, and
+//! `$o` / `$e` / `$s` alias the most recent run. Any earlier stream,
+//! including intermediate pipe data, can feed later commands without
+//! re-running anything.
 //!
 //! ```no_run
 //! let shell = plumb_core::Shell::new(plumb_core::Config::default())?;
 //! let report = shell.eval("cargo clippy 2>&1 | tail -n 5")?;
 //! assert_eq!(report.pipelines[0].stages.len(), 2);
-//! let full_clippy = shell.var("o1_0"); // everything tail consumed
-//! # let _ = full_clippy;
+//! // Everything tail consumed, reused without re-running clippy:
+//! let hits = shell.eval("echo ${o[1][0]} | rg dead")?;
+//! # let _ = hits;
 //! # Ok::<(), plumb_core::Error>(())
 //! ```
 //!

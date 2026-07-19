@@ -16,9 +16,9 @@ tags:
 `packages/plumb` is a bash-subset shell built library-first for LLM agents. Run
 `cargo clippy 2>&1 | tail -n 5` and the run comes back as a value: per-stage
 argv, status, timing, and bounded captures of every stream, including what each
-pipe stage fed the next. Outputs auto-bind to variables (`$o1_0` is everything
-`tail` consumed), so a later command can reuse any earlier stream without
-re-running it.
+pipe stage fed the next. Every stream stays addressable afterwards (`${o[1][0]}` is
+everything `tail` consumed, negative indexes count from the latest), so a
+later command can reuse any earlier stream without re-running it.
 
 Three crates: `plumb-syntax` (spanned parser; unsupported bash is a loud error,
 never a misparse), `plumb-core` (cloneable `Shell` over shared state, tee'd

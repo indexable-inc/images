@@ -1,6 +1,6 @@
 defmodule PlumbTest do
   # Not async: evals share one OS process's children; keep runs ordered so
-  # the auto-bound $oN ids in assertions stay deterministic per shell.
+  # the run ids in ${o[N]} assertions stay deterministic per shell.
   use ExUnit.Case, async: false
 
   defp eventually(fun, timeout_ms \\ 2_000) do
@@ -45,9 +45,9 @@ defmodule PlumbTest do
   test "auto-bound variables cross evals and are readable from Elixir" do
     {:ok, shell} = Plumb.Shell.new()
     {:ok, _} = Plumb.Shell.eval(shell, "echo alpha")
-    report = decode!(Plumb.Shell.eval(shell, "echo $o1-more"))
+    report = decode!(Plumb.Shell.eval(shell, "echo ${o[1]}-more"))
     assert final_stdout(report) == "alpha-more\n"
-    assert Plumb.Shell.var(shell, "o1") == "alpha"
+    assert Plumb.Shell.var(shell, "o") == "alpha"
     assert Plumb.Shell.var(shell, "does-not-exist") == nil
   end
 

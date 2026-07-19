@@ -1,35 +1,36 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="a pipeline whose every stream is tapped into a run value, whose variables feed a later command"></p>
+<p align="center"><img src="assets/hero.svg" width="760" alt="a typed pipeline decomposes into tee'd stages; the run becomes an addressable value whose streams feed a later command without re-running"></p>
 
 # plumb
 
-Ever run `cargo clippy | tail -n 5` and then wanted the 400 lines you just threw away? plumb is a shell where every run is a value: each pipe stage's stdout and stderr are captured (bounded, with exact byte counts), the whole run becomes an inspectable report, and outputs auto-bind to variables so later commands can reuse any earlier stream, including the intermediate pipe data, without re-running anything. It is a Rust library first (`plumb-core`), with a reedline REPL and a one-shot CLI on top, built for programs (LLM agents especially) that run commands and need what actually happened, not a scrollback.
+Ever run `cargo clippy | tail -n 5` and then wanted the 400 lines you just threw away? plumb is a shell where every run is a value. Each pipe stage's stdout and stderr are captured while they stream, the whole run becomes an inspectable report, and every stream stays addressable afterwards, so later commands reuse earlier output (including the bytes that flowed *between* pipe stages) without re-running anything. It is a Rust library first (`plumb-core`), with a reedline REPL and one-shot CLI on top, built for programs (LLM agents especially) that run commands and need what actually happened, not a scrollback.
 
 The syntax is a strict bash subset: everything plumb accepts pastes into bash unchanged and means the same thing there. Everything else is a loud parse error naming the construct, never a silent reinterpretation.
 
 ## Runs are values
 
 ```console
-plumb tmp> sh -c 'echo warn >&2; seq 1 10000' | tail -n 3
+plumb src> sh -c 'echo warn >&2; seq 1 10000' | tail -n 3
 9998
 9999
 10000
 [0] sh -c echo warn >&2; seq 1 10000  exit 0  11ms  out 48.9KB  err 5B
 [1] tail -n 3  exit 0  11ms  out 15B  err 0B
-run 3: exit 0  ${o3} ${e3} ${s3}
-plumb tmp> echo $o3_0 | head -n 1
+run 3: exit 0  ${o[3]} ${e[3]} ${s[3]}
+plumb src> echo ${o[3][0]} | head -n 1
 1
 ```
 
-Every run `N` binds, automatically:
+Every run stays addressable:
 
-| variable | value |
+| reference | value |
 | --- | --- |
-| `$oN` / `$eN` / `$sN` | final stdout / stderr / status |
-| `$oN_K` / `$eN_K` | stdout / stderr of pipe stage `K` (what stage `K+1` consumed) |
-| `$o` / `$e` / `$s` | same, for the most recent run |
+| `${o[7]}` / `${e[7]}` / `${s[7]}` | run 7's final stdout / stderr / status |
+| `${o[7][0]}` | what pipe stage 0 printed (exactly what stage 1 consumed) |
+| `${o[-1]}`, `${o[-1][-2]}` | negative indexes count back from the latest |
+| `$o` / `$e` / `$s` | the last run's stdout / stderr / status |
 | `$?` | last status, as in bash |
 
-`:runs` lists retained runs, `:json N` dumps a run's full report (argv after expansion, per-stage status, timing, byte counts, truncation flags), `:out N K` prints a captured stream raw. Captures are head+tail bounded (256KiB per stream by default) with exact totals, so a gigabyte through a pipe costs fixed memory and truncation is always marked, never silent.
+`:runs` lists retained runs, `:json 7` dumps a run's full report (argv after expansion, per-stage status, timing, byte counts, truncation flags), `:out 7 0` prints a captured stream raw. Captures are head+tail bounded (256KiB per stream by default) with exact byte totals, so a gigabyte through a pipe costs fixed memory, and truncation is always marked, never silent.
 
 ## Strict where bash is treacherous
 
@@ -47,14 +48,14 @@ Supported: pipes, `&&` `||` `;`, redirections (`>` `>>` `<` `2>` `2>&1` `&>` `>&
 ```rust
 let shell = plumb_core::Shell::new(plumb_core::Config::default())?;
 let report = shell.eval("cargo clippy 2>&1 | tail -n 5")?;
-report.status;                       // pipefail status
-report.pipelines[0].stages[0].stdout // everything tail consumed
+report.status;                        // pipefail status
+report.pipelines[0].stages[0].stdout  // everything tail consumed
     .render();
-shell.var("o1_0");                   // same thing, as a variable
-serde_json::to_string(&report)?;     // the whole run, machine-readable
+shell.eval("echo ${o[1][0]} | rg dead")?;  // reused; clippy never re-runs
+serde_json::to_string(&report)?;      // the whole run, machine-readable
 ```
 
-`Shell` is a cheap cloneable handle over shared state: concurrent evals from threads (`eval_detached`) or `&` background items see each other's variables, cwd, and run history; `wait` joins them. `exit` surfaces as `Error::ExitRequested` so the embedder decides what dying means.
+`Shell` is a cheap cloneable handle over shared state: concurrent evals from threads (`eval_detached`) or `&` background items see each other's variables, cwd, and run history; `wait` joins them. `exit` surfaces as `Error::ExitRequested` so the embedder decides what dying means. From Elixir, `plumb-ex` (unibind) exposes the same shell with reports as JSON.
 
 One-shot and script modes stream live and exit with the run's status; `--json` prints the report instead:
 
@@ -72,4 +73,4 @@ nix run github:indexable-inc/index#plumb
 cargo install --git https://github.com/indexable-inc/plumb
 ```
 
-The crates live in the [index monorepo](https://github.com/indexable-inc/index) under `packages/plumb/` (`plumb-syntax` parser, `plumb-core` library, `plumb` CLI); this repo is a read-only mirror.
+The crates live in the [index monorepo](https://github.com/indexable-inc/index) under `packages/plumb/` (`plumb-syntax` parser, `plumb-core` library, `plumb` CLI, `plumb-ex` Elixir NIF); this repo is a read-only mirror.

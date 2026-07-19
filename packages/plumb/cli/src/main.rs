@@ -17,8 +17,9 @@ use plumb_core::{Config, Error, Shell};
     about = "An inspectable bash-subset shell: every run is a value",
     long_about = "An inspectable bash-subset shell. Every run returns a report with per-stage \
                   argv, status, timing, and captured stdout/stderr (including what each pipe \
-                  stage fed the next). Outputs auto-bind to variables: $oN/$eN/$sN for run N, \
-                  $oN_K/$eN_K per stage, $o/$e/$s for the last run."
+                  stage fed the next). Runs stay addressable afterwards: ${o[N]}/${e[N]}/${s[N]} \
+                  for run N, ${o[N][K]} per pipe stage, negative indexes count from the latest, \
+                  and $o/$e/$s alias the last run."
 )]
 struct Args {
     /// Evaluate this source string and exit.
