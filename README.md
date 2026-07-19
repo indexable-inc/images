@@ -1,7 +1,7 @@
 # index
 
 <p align="center">
-  <img src=".github/readme/unblocked.svg" alt="agents write code faster than upstream review can take it; index lands the change on main now and fans it out to everyone" width="720">
+  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
 </p>
 
 index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): one shared definition of the software everyone here runs. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/). It is also the default world an [ix.dev](https://ix.dev) VM boots: ix is the runtime, index is what runs on it.
@@ -11,7 +11,7 @@ It exists because agents now write patches faster than upstream review can absor
 ## Why
 
 <p align="center">
-  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
+  <img src=".github/readme/unblocked.svg" alt="agents write code faster than upstream review can take it; index lands the change on main now and fans it out to everyone" width="720">
 </p>
 
 ### A change lands once and reaches everything
