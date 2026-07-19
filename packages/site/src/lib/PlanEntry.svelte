@@ -2,17 +2,17 @@
   import { onMount } from 'svelte';
   import { formatDay, relativeDay } from './format-posted-at';
   import { inlineTitleHtml } from './updates';
-  import RfcStatusBadge from './RfcStatusBadge.svelte';
-  import { rfcDimensions } from './rfcs';
+  import StatusBadge from './StatusBadge.svelte';
+  import { planDimensions } from './plans';
   import ScoreMeter from './ScoreMeter.svelte';
-  import type { Rfc } from './rfcs';
+  import type { Plan } from './plans';
 
-  const { rfc }: { rfc: Rfc } = $props();
+  const { plan }: { plan: Plan } = $props();
 
-  const Body = $derived(rfc.component);
-  const titleHtml = $derived(inlineTitleHtml(rfc.title));
-  const descriptionHtml = $derived(rfc.description ? inlineTitleHtml(rfc.description) : undefined);
-  const authors = $derived(rfc.authors.split(/[,\s]+/).filter((name) => name.length > 0));
+  const Body = $derived(plan.component);
+  const titleHtml = $derived(inlineTitleHtml(plan.title));
+  const descriptionHtml = $derived(plan.description ? inlineTitleHtml(plan.description) : undefined);
+  const authors = $derived(plan.authors.split(/[,\s]+/).filter((name) => name.length > 0));
 
   // Relative dates need a clock; take it after mount so the prerendered
   // HTML is deterministic (same pattern as the homepage timestamps).
@@ -27,8 +27,8 @@
   }
 </script>
 
-<article id={rfc.id}>
-  <p class="eyebrow">RFC {rfc.number}</p>
+<article id={plan.id}>
+  <p class="eyebrow">Plan {plan.number}</p>
   <h1>
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
     {@html titleHtml}
@@ -40,13 +40,13 @@
     </p>
   {/if}
   <dl class="frontmatter">
-    <dt>Status</dt><dd><RfcStatusBadge status={rfc.status} /></dd>
-    {#each rfcDimensions as dim (dim.key)}
+    <dt>Status</dt><dd><StatusBadge status={plan.status} /></dd>
+    {#each planDimensions as dim (dim.key)}
       <dt>{dim.label}</dt>
       <dd class="score">
-        <ScoreMeter value={rfc.scores[dim.key].value} />
-        <span class="value">{rfc.scores[dim.key].value}</span>
-        <span class="why">{rfc.scores[dim.key].why}</span>
+        <ScoreMeter value={plan.scores[dim.key].value} />
+        <span class="value">{plan.scores[dim.key].value}</span>
+        <span class="why">{plan.scores[dim.key].why}</span>
       </dd>
     {/each}
     <dt>Authors</dt>
@@ -58,11 +58,11 @@
         </a>
       {/each}
     </dd>
-    <dt>Created</dt><dd><time datetime={rfc.created}>{day(rfc.created)}</time></dd>
-    <dt>Updated</dt><dd><time datetime={rfc.updated}>{day(rfc.updated)}</time></dd>
-    <dt>Tracking issue</dt><dd>{rfc.trackingIssue ?? '—'}</dd>
-    <dt>Supersedes</dt><dd>{rfc.supersedes ?? '—'}</dd>
-    <dt>Superseded by</dt><dd>{rfc.supersededBy ?? '—'}</dd>
+    <dt>Created</dt><dd><time datetime={plan.created}>{day(plan.created)}</time></dd>
+    <dt>Updated</dt><dd><time datetime={plan.updated}>{day(plan.updated)}</time></dd>
+    <dt>Tracking issue</dt><dd>{plan.trackingIssue ?? '—'}</dd>
+    <dt>Supersedes</dt><dd>{plan.supersedes ?? '—'}</dd>
+    <dt>Superseded by</dt><dd>{plan.supersededBy ?? '—'}</dd>
   </dl>
   <div class="body">
     <Body />

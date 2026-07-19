@@ -21,7 +21,7 @@ supersededBy: null
 
 ## Summary
 
-Define a repo-side contract for ix-managed third-party integrations where the valuable part of the service is a partner relationship rather than open-source code. A VM declares an integration claim, ix provisions one per-VM scoped credential through an ix-side control plane, and the guest receives only a runtime credential file owned by the consuming unit. This RFC does not choose a real vendor, contact a partner, move money, or implement the ix-side service. The first implementation should prove the contract end to end against a mock provider.
+Define a repo-side contract for ix-managed third-party integrations where the valuable part of the service is a partner relationship rather than open-source code. A VM declares an integration claim, ix provisions one per-VM scoped credential through an ix-side control plane, and the guest receives only a runtime credential file owned by the consuming unit. This plan does not choose a real vendor, contact a partner, move money, or implement the ix-side service. The first implementation should prove the contract end to end against a mock provider.
 
 ## Motivation
 
@@ -157,7 +157,7 @@ The first implementation should add a mock provider only. The mock proves the de
 
 1. **Claim topology.** Should the repo accept the recommended two-layer design with generic `ix.integrations.claims` plus provider-specific lowering modules?
 2. **Materialization.** Should implementation use the recommended fleet-time binding plus boot-time metadata materialization, or choose only one mechanism?
-3. **Metering primitive.** What is the ix-side host-controlled endpoint for usage records that cannot be forged by the guest? If none exists, this RFC asks ix to add one before real ix-billed usage ships.
+3. **Metering primitive.** What is the ix-side host-controlled endpoint for usage records that cannot be forged by the guest? If none exists, this plan asks ix to add one before real ix-billed usage ships.
 4. **VM identity primitive.** Which host-attested transport does the metadata endpoint trust: hypervisor-attached vsock, host-injected mTLS, signed instance identity document, or something else? The first implementation must pick one before real credentials are wired.
 5. **Revenue share.** How does ix represent vendor wholesale cost, ix margin, customer-visible price, refunds, and credits?
 6. **Umbrella-account failure.** What operator and customer behavior follows when a vendor suspends or revokes the ix platform account?

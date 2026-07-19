@@ -34,5 +34,5 @@ happened.
 </svg>
 
 The design and its tradeoffs are written up in
-[RFC 0009](https://indexable-inc.github.io/index/rfcs/0009-cross-compiled-darwin-packages/),
+[Plan 0009](https://indexable-inc.github.io/index/plans/0009-cross-compiled-darwin-packages/),
 which the fleet has since made load-bearing.

@@ -31,7 +31,7 @@ Today there is no first-class "this is my dev environment" object. The pieces al
 - **Fleets** are `index.lib.mkFleet` ([`lib/image/fleet.nix`](https://github.com/indexable-inc/index/blob/main/lib/image/fleet.nix)): `defaults` are modules applied to every node, `nodes` carry `replicas`/`dependsOn`/`groups`, and the helper emits the `ix up` wrapper. This already does "fleet a group declaratively."
 - **Single-VM boot**: per the ix playbook, `ix up <installable>` expands a flake installable to `nixosConfigurations.<name>.config.system.build.toplevel`, nixos-rebuild style, and the CLI has a per-user config surface under `~/.n/`. Nothing wires a user's chosen config in as the default.
 - **Shared files**: [`examples/multi-client/file-sharing`](https://github.com/indexable-inc/index/tree/main/examples/multi-client/file-sharing) already serves an SMB share with correct cross-client locking (`strict locking`, `posix locking`, `strict sync`) and mounts it on replicas.
-- **Shared identity**: [`examples/synced-github/auth`](https://github.com/indexable-inc/index/tree/main/examples/synced-github/auth) gives a fleet one GitHub identity, and its README explicitly leaves open *"whether ix should also offer a config-sync primitive for the local dev-VM case"* ([#465](https://github.com/indexable-inc/index/issues/465)). This RFC is that primitive, scoped tightly.
+- **Shared identity**: [`examples/synced-github/auth`](https://github.com/indexable-inc/index/tree/main/examples/synced-github/auth) gives a fleet one GitHub identity, and its README explicitly leaves open *"whether ix should also offer a config-sync primitive for the local dev-VM case"* ([#465](https://github.com/indexable-inc/index/issues/465)). This plan is that primitive, scoped tightly.
 - **Agent CLIs**: [`images/dev/development-base`](https://github.com/indexable-inc/index/blob/main/images/dev/development-base/default.nix) already bakes our wrapped `claude-code` (`IS_SANDBOX=1` + a read-only `/etc/claude-code/managed-settings.json` policy) and `codex`, and treats `~/.claude/settings.json` as app-owned.
 
 The concrete pain: a user who wants "my agent box, three of them, all logged into the same Claude account, and let any of them spin up more" has to hand-write a fleet, copy the SMB example, reconcile it with the auth example, and manually re-run `claude login` on every replica. There is no forkable starting point and no way to make a chosen config the default a bare `ix up` uses.
@@ -116,7 +116,7 @@ When `selfSource` (default on), every VM gets `/ix` containing the `dev.nix` rep
 - **Editability.** A `/nix/store` copy is read-only. When `shared.enable`, `/ix` lives on the share, so it is writable and edits propagate fleet-wide. Without a share, first-boot activation copies the source into `/ix` as a writable working tree (optionally `git init`) seeded from a read-only store copy.
 - **Credentials for recursion.** Creating VMs needs real ix credentials; `ix.dev.shared.ix` binding `~/.n` onto the share is what makes a guest able to do it. This is a separate opt-in from `ix.dev.shared.claude` precisely because it widens blast radius.
 
-The `ix` CLI is *not* in dev images today (`development-base` ships `claude-code`, `codex`, and a build toolchain only). Adding it to the dev base is a required piece of this RFC.
+The `ix` CLI is *not* in dev images today (`development-base` ships `claude-code`, `codex`, and a build toolchain only). Adding it to the dev base is a required piece of this plan.
 
 ### The agent layer
 
@@ -167,7 +167,7 @@ Our wrapped `claude-code` (the `IS_SANDBOX=1` wrapper plus the read-only `/etc/c
 
 - [`lib/image/fleet.nix`](https://github.com/indexable-inc/index/blob/main/lib/image/fleet.nix) — the Colmena-style fleet evaluator `mkDev` wraps.
 - [`examples/multi-client/file-sharing`](https://github.com/indexable-inc/index/tree/main/examples/multi-client/file-sharing) — the SMB server/client pattern with cross-client locking.
-- [`examples/synced-github/auth`](https://github.com/indexable-inc/index/tree/main/examples/synced-github/auth) — fleet-wide single identity, and the open question ([#465](https://github.com/indexable-inc/index/issues/465)) this RFC answers.
+- [`examples/synced-github/auth`](https://github.com/indexable-inc/index/tree/main/examples/synced-github/auth) — fleet-wide single identity, and the open question ([#465](https://github.com/indexable-inc/index/issues/465)) this plan answers.
 - [`examples/declared/groups`](https://github.com/indexable-inc/index/tree/main/examples/declared/groups) — private east-west group networking the share rides on.
 - [`images/dev/development-base`](https://github.com/indexable-inc/index/blob/main/images/dev/development-base/default.nix) — the wrapped `claude-code` + `codex` base and the managed-settings model.
 - Nix flake templates (`nix flake init -t`) and dotfiles repos as the "fork and own" pattern.

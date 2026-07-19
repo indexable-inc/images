@@ -84,7 +84,7 @@ services.ix-router = {
 When enabled, the module:
 
 - Sets `boot.kernel.sysctl."net.ipv4.ip_forward" = 1` and the IPv6 equivalent.
-- Brings up `networking.nftables.enable = true` with a `forward` chain that defaults to drop and admits entries from `services.ix-router.forward` plus any `extraInputRules`-style escape hatch (typed where possible, freeform-submodule via `pkgs.formats.*` per RFC 0042; **no** stringly `extraConfig` on this module).
+- Brings up `networking.nftables.enable = true` with a `forward` chain that defaults to drop and admits entries from `services.ix-router.forward` plus any `extraInputRules`-style escape hatch (typed where possible, freeform-submodule via `pkgs.formats.*` per Plan 0042; **no** stringly `extraConfig` on this module).
 - If `masquerade = true`, adds a `postrouting` rule that NATs the group's source range to `upstream`.
 - Loads `nf_conntrack` and tunes the conntrack table size; sets `net.netfilter.nf_conntrack_max` to something sane for the configured group size.
 
@@ -100,7 +100,7 @@ The module is intentionally narrow. Users who want FRR for BGP, WireGuard for VP
 
 ### Migration
 
-No existing callers. The closed PR #43 (`services.gateway`) lands or does not land independently; this RFC does not depend on it.
+No existing callers. The closed PR #43 (`services.gateway`) lands or does not land independently; this plan does not depend on it.
 
 ## Drawbacks
 
@@ -130,7 +130,7 @@ No existing callers. The closed PR #43 (`services.gateway`) lands or does not la
 
 1. **Granularity: per-group vs per-fleet.** Per-group lets each group have its own router and isolates blast radius. Per-fleet is simpler and probably covers 80% of users. Leaning per-group; want pushback before committing.
 2. **Underlying ix capability.** Does ix today actually allow a designated node to be the L2 next-hop for other nodes in a group? If groups today are fully ix-managed L2 segments with no escape hatch for "this member is special," the fleet-layer change is cheap; otherwise it is a conversation with the ix team and an ix-side primitive. Need to confirm before implementation.
-3. **Operator recovery path.** What is the supported way to reach a VM whose router is misconfigured? Probably host-side bypass for `ix shell`/`ix switch`, but that has to come from ix. The RFC depends on it.
+3. **Operator recovery path.** What is the supported way to reach a VM whose router is misconfigured? Probably host-side bypass for `ix shell`/`ix switch`, but that has to come from ix. The plan depends on it.
 4. **IPv6.** All the above is written assuming v4. The mechanics translate (`net.ipv6.conf.all.forwarding`, nftables `ip6` chains, NAT66 only if you actually need it) but the fleet-layer wiring needs to allocate v6 too. Confirm ix exposes group-local v6 addresses before committing the design to dual-stack from day one.
 5. **Boot-order signaling.** Does the fleet layer have a way to say "boot `gw` before the other members of `web`"? If not, backend VMs need retry semantics on `network-online.target`, which is fine but should be called out in the stock image.
 

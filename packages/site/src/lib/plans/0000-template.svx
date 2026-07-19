@@ -1,7 +1,7 @@
 ---
 id: 0000-template
 number: '0000'
-title: <RFC title>
+title: <plan title>
 status: Draft
 authors: <github-handle>
 created: YYYY-MM-DD
@@ -23,7 +23,7 @@ template: true
 
 ## Summary
 
-One paragraph. State what this RFC proposes in concrete terms a reader can act on. If the summary is hard to write, the RFC is not ready yet.
+One paragraph. State what this plan proposes in concrete terms a reader can act on. If the summary is hard to write, the plan is not ready yet.
 
 ## Motivation
 
@@ -50,12 +50,12 @@ What else was considered? Why is the proposed design preferred over each? Includ
 
 ## Prior art
 
-Where does this pattern exist already, in this repo, in NixOS, in upstream Linux, in cloud providers, in other RFC processes? Link concrete artifacts where possible.
+Where does this pattern exist already, in this repo, in NixOS, in upstream Linux, in cloud providers, in other plan processes? Link concrete artifacts where possible.
 
 ## Unresolved questions
 
-Specific open points the RFC author wants reviewers to answer or push back on. Keep them tractable: each should be resolvable inside the PR thread, not its own follow-up RFC.
+Specific open points the plan author wants reviewers to answer or push back on. Keep them tractable: each should be resolvable inside the PR thread, not its own follow-up plan.
 
 ## Future possibilities
 
-Optional. Sketch directions this design enables but does not commit to. Useful for reviewers to understand "where does this go next" without thinking the RFC is promising to deliver it.
+Optional. Sketch directions this design enables but does not commit to. Useful for reviewers to understand "where does this go next" without thinking the plan is promising to deliver it.

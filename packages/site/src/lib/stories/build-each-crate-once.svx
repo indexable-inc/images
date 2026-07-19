@@ -36,4 +36,4 @@ The same per-unit seam is where repo-wide lint policy attaches: the patched
 Clippy with house lints runs per crate and caches per crate. The machinery
 is [`lib/`'s `cargo-unit`](https://github.com/indexable-inc/index/tree/main/packages/nix/nix-cargo-unit),
 proposed to go further in
-[RFC 0005](https://indexable-inc.github.io/index/rfcs/0005-cargo-drv/).
+[Plan 0005](https://indexable-inc.github.io/index/plans/0005-cargo-drv/).

@@ -8,9 +8,9 @@ One build graph for everything.
 
 index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/), together in one graph.
 
-## Six stories
+## Stories
 
-The fastest way to get what this repo is for: six short case examples, each a two-minute read with a diagram.
+The fastest way to get what this repo is for: short case examples, each a two-minute read with a diagram.
 
 1. [Your whole team's Claude, from one flake](https://indexable-inc.github.io/index/stories/manage-claude-with-nix/): the agent binary, prompt, tools, permissions, and MCP servers, pinned in code.
 2. [Add a tool once, everyone gets it](https://indexable-inc.github.io/index/stories/add-a-tool-once/): a small utility stops dying on the laptop it was born on.

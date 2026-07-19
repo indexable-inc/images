@@ -31,7 +31,7 @@ Two concrete consumers exist today and both are worked around with imperative sc
 - **Mirror changelogs.** The mirror machinery (`packages/mirror`, #2022) generates standalone repos per workspace package. A standard-format `CHANGELOG.md` per package subtree is the natural next artifact, and the data it needs — which commits touched `packages/<name>` and what they said — is precisely commit history filtered by path. Today the only options are at-push scripting inside `mirror` (imperative, a second source of truth, invisible to eval) or nothing. With history as input data, the changelog is derived *in Nix* from the same locked input the build uses.
 - **Release notes / provenance in eval.** Anything that wants "what changed between these two revs of an input" (site update feeds, blast-radius-style summaries, version-bump PR bodies) currently shells out to `git log` outside the eval boundary, against a checkout that may not even match the locked rev.
 
-The underlying gap is old and upstream-recognised: Nix deliberately strips `.git` from fetched sources because `.git` is nondeterministic (packfile layout, ref state, reflogs), and upstream has repeatedly declined `leaveDotGit`-for-flakes on exactly those grounds (`nixpkgs` fetchers document `leaveDotGit` as non-reproducible; NixOS/nix#8567 tracks the demand). But the *useful subset* of `.git` — the commit graph reachable from the fetched rev — is content-addressed and immutable: `rev` transitively pins every parent, author, message and tree. Nix already ships two scalar projections of that graph as first-class deterministic metadata: `revCount` and `lastModified`. This RFC generalises them to the structured projection, dodging the nondeterminism objection entirely.
+The underlying gap is old and upstream-recognised: Nix deliberately strips `.git` from fetched sources because `.git` is nondeterministic (packfile layout, ref state, reflogs), and upstream has repeatedly declined `leaveDotGit`-for-flakes on exactly those grounds (`nixpkgs` fetchers document `leaveDotGit` as non-reproducible; NixOS/nix#8567 tracks the demand). But the *useful subset* of `.git` — the commit graph reachable from the fetched rev — is content-addressed and immutable: `rev` transitively pins every parent, author, message and tree. Nix already ships two scalar projections of that graph as first-class deterministic metadata: `revCount` and `lastModified`. This plan generalises them to the structured projection, dodging the nondeterminism objection entirely.
 
 ## Detailed design
 
@@ -118,14 +118,14 @@ Partial clones are unaffected in principle: the walk reads commit and tree objec
 
 ## Prior art
 
-- **`revCount` / `lastModified`**: the existing precedent that history-derived, rev-determined metadata is legitimate fetcher output; this RFC is their generalisation, and reuses their exact caching pattern (`Cache::Key{"gitRevCount", {rev}}` → `{"gitHistory", {rev, depth, paths, format}}`).
-- **RFC 0009 / the `nix-ix` patch series**: the fork-local delivery vehicle — `lib/util/patched-src.nix`, `dag.json`, per-patch upstream intent in `lib/fork-packages.nix` (this patch: `hold`, see below).
+- **`revCount` / `lastModified`**: the existing precedent that history-derived, rev-determined metadata is legitimate fetcher output; this plan is their generalisation, and reuses their exact caching pattern (`Cache::Key{"gitRevCount", {rev}}` → `{"gitHistory", {rev, depth, paths, format}}`).
+- **Plan 0009 / the `nix-ix` patch series**: the fork-local delivery vehicle — `lib/util/patched-src.nix`, `dag.json`, per-patch upstream intent in `lib/fork-packages.nix` (this patch: `hold`, see below).
 - **`builtins.fetchTree` locked-attr flow**: `callFlake` → `fetchFinalTree` → `emitTreeAttrs` is the existing single path this design hooks for all three user surfaces.
 - **Elsewhere**: Bazel's `git_repository` exposes nothing like this (changelog generation lives in release tooling); Buck2 likewise. `jj`/`git log --format=%H%x00...` streaming formats are the imperative equivalents consumers use today. The "history as data, views derived per consumer" split follows the repo's own pipeline convention (transport / durable log / per-query views).
 
 ## Upstreaming posture
 
-Written to be upstreamable, parked fork-local. The design deliberately avoids every objection upstream raised against `leaveDotGit` (nondeterminism, NAR bloat): the export is deterministic by construction, opt-in, feature-gated (`git-export-history`), out of lock files, and adds no bytes to fetched store paths. The patch is self-contained against `2.34.7` with an upstream-style functional test and release note, so `nix run .#upstream-pr` can carry it when the freeze lifts. It stays `upstream = "hold"` in `lib/fork-packages.nix` for now: upstreaming is paused repo-wide pending NixOS/nix#15984 (see #2021), and a feature of this size should open as an upstream issue/RFC discussion first, not a cold PR.
+Written to be upstreamable, parked fork-local. The design deliberately avoids every objection upstream raised against `leaveDotGit` (nondeterminism, NAR bloat): the export is deterministic by construction, opt-in, feature-gated (`git-export-history`), out of lock files, and adds no bytes to fetched store paths. The patch is self-contained against `2.34.7` with an upstream-style functional test and release note, so `nix run .#upstream-pr` can carry it when the freeze lifts. It stays `upstream = "hold"` in `lib/fork-packages.nix` for now: upstreaming is paused repo-wide pending NixOS/nix#15984 (see #2021), and a feature of this size should open as an upstream issue/plan discussion first, not a cold PR.
 
 ## Unresolved questions
 
@@ -137,10 +137,10 @@ Written to be upstreamable, parked fork-local. The design deliberately avoids ev
 
 ## Future possibilities
 
-- **Mirror CHANGELOG.md**: `mirror gen` consumes `inputs.self.history` filtered by `packages/<name>/` and writes a Keep-a-Changelog file into each standalone repo — the motivating consumer, unblocked by this RFC.
+- **Mirror CHANGELOG.md**: `mirror gen` consumes `inputs.self.history` filtered by `packages/<name>/` and writes a Keep-a-Changelog file into each standalone repo — the motivating consumer, unblocked by this plan.
 - **`nix flake metadata --history`** rendering the same data from the CLI.
 - **Range queries** (`historySince = <rev>`): stop the walk at a base rev, the natural "changes between two locked revs" primitive for update PRs. Deterministic for the same reasons.
-- **Upstream RFC** once #15984 resolves, proposing the schema as documented fetchTree output.
+- **Upstream plan** once #15984 resolves, proposing the schema as documented fetchTree output.
 
 ### Revision: cost bounding (2026-07-07, #2156)
 

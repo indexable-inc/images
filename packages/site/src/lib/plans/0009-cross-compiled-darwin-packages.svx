@@ -59,12 +59,12 @@ The repo's primary target is `x86_64-linux`: the fleet, the CI runners, the imag
 1. **CI is Linux.** The warm-store runner pool that builds and caches every package is `x86_64-linux`. There is no Darwin builder in the CI path.
 2. **Building from source on a laptop is the bad outcome.** A cold `nix build` of a Rust tool with a Svelte front-end defeats the entire point of `cache.ix.dev`. Linux users substitute; Darwin users were compiling.
 
-The fix has to be declarative. The moment "make it work on a Mac" means hand-rolling a cross derivation per package, target logic leaks into definitions and every new tool pays the tax again. The toolchain half already exists in the sibling `ix` repo (`nix/lib/apple-sdk-toolchain.nix`); this RFC ports it and reduces opting in to a registry tag.
+The fix has to be declarative. The moment "make it work on a Mac" means hand-rolling a cross derivation per package, target logic leaks into definitions and every new tool pays the tax again. The toolchain half already exists in the sibling `ix` repo (`nix/lib/apple-sdk-toolchain.nix`); this plan ports it and reduces opting in to a registry tag.
 
 ## Design principles
 
 - **Definitions are target-agnostic.** A `default.nix` consumes `ix.rustWorkspace.units` and `ix.wrapPackage` and never branches on a triple. Cross is achieved by swapping what those handles *mean*, not by asking packages to handle it.
-- **The target lives in the DAG, not the definition.** The per-unit Rust build graph (RFC 0005) is already a DAG of derivations; cross-compilation is the same DAG re-rooted at a different triple.
+- **The target lives in the DAG, not the definition.** The per-unit Rust build graph (Plan 0005) is already a DAG of derivations; cross-compilation is the same DAG re-rooted at a different triple.
 - **Darwin consumes, Linux produces.** The Mac path is substitution from the cache, never local compilation. Cache availability is part of the design, not an optimization.
 - **One line in, one line out.** Adding a package to the Mac set is adding `cross = true`; removing it is deleting the line.
 
@@ -113,7 +113,7 @@ This is the whole trick. `packages/nix/nix-web-monitor/server/default.nix` calls
 
 ### The builder DAG
 
-RFC 0005's `nix-cargo-unit` renders the Cargo workspace into a graph of one derivation per compilation unit. `unitsFor { target }` renders that same graph for a non-host triple, and the result is a genuinely *mixed-platform* DAG: cargo already distinguishes host units from target units, and the renderer preserves the split.
+Plan 0005's `nix-cargo-unit` renders the Cargo workspace into a graph of one derivation per compilation unit. `unitsFor { target }` renders that same graph for a non-host triple, and the result is a genuinely *mixed-platform* DAG: cargo already distinguishes host units from target units, and the renderer preserves the split.
 
 ```text
 build scripts, proc-macros ──run on──▶ x86_64-linux (build host)
@@ -126,7 +126,7 @@ zig cc + macOS SDK sysroot (C deps, linker)
 
 - **Host nodes stay host nodes.** Build scripts and proc-macro crates compile for and execute on the Linux builder; only rlib and bin units target the Apple triple. Per-platform hooks (`extraRustcArgsForPlatform`, `extraLinkRustcArgsForPlatform`) scope target-only flags (the framework search path, the SDK link args) to matching units, so host units are untouched by cross configuration.
 - **The graph is pruned per target, not patched.** `cargo` cfg-excludes platform-gated dependencies during rendering, so a Darwin graph simply never contains `alsa-sys`; there is no "skip this dep on Mac" conditional anywhere in Nix (`lib/rust/workspace.nix` gates ALSA plumbing on `targetIsLinux`, derived from the triple).
-- **Incremental like any DAG.** Each unit is a cached derivation. Touch one crate and CI rebuilds that unit and its dependents in the Darwin graph, not the workspace: the same economics native builds already get from RFC 0005.
+- **Incremental like any DAG.** Each unit is a cached derivation. Touch one crate and CI rebuilds that unit and its dependents in the Darwin graph, not the workspace: the same economics native builds already get from Plan 0005.
 - **Targets are data.** The cross graph takes a toolchain carrying the target's `rust-std` (`rustToolchainFor … { targets = [ target ]; }`) and, for Apple triples only, the zig toolchain below. A musl or `aarch64-linux` triple needs neither zig nor an SDK: the same `unitsFor` call with the ordinary linker.
 
 ### The Linux→Darwin toolchain
@@ -205,7 +205,7 @@ Adding a package to the Mac set: add `cross = true` to its `package.nix`. Removi
 
 ## Prior art
 
-- **RFC 0005 (cargo-drv).** The per-unit workspace DAG whose `unitsFor { target }` hook this lane calls. Cross is a consumer of that renderer's per-platform hooks, not a new build system.
+- **Plan 0005 (cargo-drv).** The per-unit workspace DAG whose `unitsFor { target }` hook this lane calls. Cross is a consumer of that renderer's per-platform hooks, not a new build system.
 - **The registry's target selectors.** `packageSet` / `flake` / `overlay` normalization in `packages/registry.nix` established the "tag in `package.nix`, collect in the registry, realize in `per-system.nix`" shape that `cross` follows exactly.
 - **The sibling `ix` repo's `nix/lib/apple-sdk-toolchain.nix`.** Direct source of the toolchain; same SDK tarball and hash, so the SDK store path is shared between repos.
 - **`zig cc` as a cross compiler.** A full clang + sysroot cross toolchain behind one binary; an established pattern well beyond this repo.
