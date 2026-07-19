@@ -31,6 +31,16 @@
     ];
   };
 
+  # The :agent_harness mix path dependency (mix.exs points at
+  # ../agent-harness-ex): every builder below stages the sibling's source
+  # next to the unpacked project so the relative path resolves in the
+  # sandbox. Reached through the package registry (`.src` of the sibling's
+  # derivation) so its fileset stays the single source of truth and no `../`
+  # literal crosses package directories here.
+  stageAgentHarness = ''
+    cp --no-preserve=mode -R ${repoPackages.agent-harness-ex.src} "$NIX_BUILD_TOP/agent-harness-ex"
+  '';
+
   # Mix deps (exqlite + its build deps, plus test-only credo) as a
   # fixed-output derivation so the sandboxed builds run offline; mixEnv=test
   # is a superset of prod, so the release build stages the same FOD. The SRI
@@ -42,6 +52,8 @@
     pname = "ix-mcp-ex-deps";
     inherit version src elixir;
     mixEnv = "test";
+    # deps.get loads mix.exs of every dep, path deps included.
+    postUnpack = stageAgentHarness;
     inherit ((ix.pins.loadPins ./pins.json).mix-deps) hash;
   };
 
@@ -60,6 +72,7 @@
     pname = "ix-mcp-ex-check";
     inherit version src elixir erlang;
     mixDeps = mixFodDeps;
+    setupHook = stageAgentHarness;
     # IX_MCP_TUI_EX makes the suite's local-TUI tests run in the sandbox
     # (test_helper.exs skips them when it is unset).
     extraEnv = rebar3Env // {IX_MCP_TUI_EX = tuiExApp;};
@@ -105,6 +118,7 @@
       export HEX_HOME="$TEMPDIR/hex"
       export MIX_DEPS_PATH="$TEMPDIR/deps"
       cp --no-preserve=mode -R "${mixFodDeps}" "$MIX_DEPS_PATH"
+      ${stageAgentHarness}
     '';
 
     buildPhase = ''
