@@ -48,6 +48,10 @@ showed.
   (error red, success green) used only for their meaning.
 - Generous whitespace. Monospace for code and data tokens.
 - No chart junk, no gradients as decoration, no drop shadows doing nothing.
+- No edge bars: the colored stripe down the left border of a card, callout,
+  quote block, or stat tile. That chrome is the signature of a generated
+  dashboard and readers discount the page on sight. Separate and emphasize
+  blocks with whitespace and type, never a bar.
 
 ## Form
 
