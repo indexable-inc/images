@@ -284,7 +284,7 @@
     # Anthropic style guidelines we do not want steering output. Denying the
     # bare name also drops the companion `artifact-design` skill from the
     # skills listing (verified 2026-07, index#3607); the sibling `dataviz`
-    # skill is invocation-blocked in policy/permissions.nix.
+    # skill is removed via `skillOverrides` in houseSettingsDefaults below.
     Artifact = false;
     AskUserQuestion = false;
     DesignSync = false;
@@ -349,6 +349,18 @@
     fileCheckpointingEnabled = false;
     autoUpdatesChannel = "latest";
     skipAutoPermissionPrompt = true;
+    # Remove the Claude-bundled `dataviz` skill outright: it injects
+    # Anthropic's own chart-style guidance with no benefit to this harness,
+    # and before this override it sat permission-denied yet still listed,
+    # spending context on a skill that could never run. `"off"` both drops
+    # the skill from the listing and refuses invocation ("disabled for model
+    # invocation in skillOverrides settings"), and both hold under
+    # `--dangerously-skip-permissions` (probed headlessly on 2.1.206,
+    # index#3659; the older prompt-path stub where user/project
+    # `skillOverrides` was ignored no longer reproduces). The sibling
+    # `artifact-design` skill needs no row here: denying the bare Artifact
+    # tool in defaultSystemTools above already delists it (index#3607).
+    skillOverrides.dataviz = "off";
     # House statusline (./statusline.nu): context bar, model, effort, and the
     # running CLI version with an update marker against Anthropic's `latest`
     # release pointer. The house effortLevel also rides argv as the script's
