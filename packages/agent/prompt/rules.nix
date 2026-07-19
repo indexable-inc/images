@@ -2,7 +2,8 @@
 # validation, tag filtering, and rendering. Each entry is one attribute: the
 # key is the rule name (the `omitRules` handle and prompt order); the value
 # holds `text`, `reason`, and optional `tags`. `reason` is provenance for
-# auditing and pruning, never rendered. A rule renders where every tag it
+# auditing and pruning; it never reaches any rendered prompt, so anything
+# the agent must actually follow belongs in `text`. A rule renders where every tag it
 # declares matches the target (see ./default.nix); `system` marks rules that
 # belong only when this text IS the agent's whole system prompt.
 #
@@ -336,13 +337,16 @@
     forceMerge = {
       topics = ["workflow"];
       text = ''
-        Never bypass required checks, review, branch protection, or the merge
-        queue: no `gh pr merge --admin`, no `--force`. Fix it or wait; if
-        speed matters, ask a human.
+        Bypassing required checks, review, branch protection, or the merge
+        queue (`gh pr merge --admin`, `--force`) takes an explicit human
+        grant, and only for an infra-stalled check, never a failing one;
+        verify main afterward. Without the grant, fix it or wait.
       '';
       reason = ''
         Speed pressure tempted bypasses that skip the checks keeping main
-        releasable.
+        releasable. The original absolute misstated policy: a standing
+        grant (2026-07-17) covers infra-stalled checks on the user's own
+        repos, so the rule states the condition instead (index#3684).
       '';
     };
   }
@@ -395,6 +399,28 @@
         system card prompting guidance, measured to nearly eliminate
         fabricated status reports:
         https://www-cdn.anthropic.com/d00db56fa754a1b115b6dd7cb2e3c342ee809620.pdf
+      '';
+    };
+  }
+  {
+    calibratedClaims = {
+      topics = ["writing"];
+      text = ''
+        Word each claim at the strength of its evidence, the way a system
+        card does: "passed 40 of 41" over "works", "did not reproduce in
+        20 runs" over "impossible". An absolute ("always", "never",
+        "guaranteed") is a measurement report, not emphasis. Without the
+        measurement, speak the estimative ladder (unlikely, roughly even,
+        likely, almost certainly; "cannot rule out" for severe tails) and
+        name what was checked. Disclose the regression next to the win.
+      '';
+      reason = ''
+        Requested 2026-07-19: reports drifted into absolutes. Register
+        from the Claude Fable 5 system card ("extremely difficult (though
+        not impossible)", "a much less clear judgement than for previous
+        models", regressions disclosed beside headline results) and the
+        IC estimative lexicon (likely / cannot rule out /
+        low-moderate-high confidence).
       '';
     };
   }
