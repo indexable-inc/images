@@ -165,16 +165,24 @@ in {
   # structure, context budget, weak language, and cross-file consistency; uvx
   # fetches it from PyPI on first use and caches it, so later runs are offline.
   # It lints the exact tracked source that the generation will deploy.
+  # The lint target is a content-addressed store path, so an unchanged path
+  # is a guaranteed-identical verdict: stamp the last clean path and skip the
+  # ~0.5s uvx run while it matches. A failed lint writes no stamp, so a
+  # broken tree keeps failing every switch. See index#3687.
   home.activation.lintClaudeFiles = config.lib.dag.entryBefore ["writeBoundary"] ''
-    if [ -d ${configRoot + "/claude/global"} ]; then
+    _lintTarget=${configRoot + "/claude/global"}
+    _lintStamp="''${XDG_CACHE_HOME:-$HOME/.cache}/skillsaw-lint.stamp"
+    if [ -d "$_lintTarget" ] && [ "$(cat "$_lintStamp" 2>/dev/null)" != "$_lintTarget" ]; then
       echo "Linting Claude skills, commands, and agents…"
       ${pkgs.uv}/bin/uvx --quiet skillsaw lint \
         --type dot-claude \
-        ${configRoot + "/claude/global"} || {
+        "$_lintTarget" || {
           echo "✗ skillsaw lint failed — aborting home-manager switch" >&2
           echo "  Fix users/andrewgazelka/config/claude/global in index." >&2
           exit 1
         }
+      mkdir -p "$(dirname "$_lintStamp")"
+      printf '%s' "$_lintTarget" > "$_lintStamp"
     fi
   '';
 
