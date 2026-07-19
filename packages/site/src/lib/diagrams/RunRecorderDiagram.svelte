@@ -57,4 +57,4 @@
   ];
 </script>
 
-<DiagramFrame {nodes} {edges} height={320} caption="One PTY in, one structured artifact set out, ready for polars." />
+<DiagramFrame {nodes} {edges} heightCells={16} caption="One PTY in, one structured artifact set out, ready for polars." />

@@ -21,7 +21,7 @@ description: 'One typed lifecycle for kernel work: spawn, observe, cancel, reap,
 ---
 
 <script>
-  import Dag from '$lib/Dag.svelte';
+  import Dag from '../Dag.svelte';
 </script>
 
 ## Summary

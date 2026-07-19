@@ -176,39 +176,34 @@
   .plan-index li {
     display: flex;
     align-items: baseline;
-    gap: 0.65rem;
-    margin: 0.45rem 0;
+    gap: 0 2ch;
   }
 
   .dims dt {
-    font-weight: 600;
-    margin-top: 0.7rem;
+    font-weight: 700;
+    margin-top: var(--cell-h);
   }
 
   .dims .range {
-    font-family: var(--font-mono);
-    font-size: 0.75em;
     font-weight: 400;
     color: var(--fg-faint);
-    margin-left: 0.5rem;
+    margin-left: 2ch;
   }
 
   .dims dd {
-    margin: 0.15rem 0 0;
+    margin: 0;
     color: var(--fg-muted);
     max-width: 65ch;
   }
 
   .chart-legend {
     display: flex;
-    gap: 0.5rem;
+    gap: 0 2ch;
     flex-wrap: wrap;
-    margin-bottom: 0.25rem;
+    margin-top: var(--cell-h);
   }
 
   .num {
-    font-family: var(--font-mono);
-    font-size: 0.8em;
     color: var(--fg-faint);
     flex-shrink: 0;
   }

@@ -30,6 +30,19 @@ export type ScoredItem = {
   scores: Record<string, Score>;
 };
 
+// Presence is enforced by validateScores when a catalog loads; this lookup
+// recovers the non-optional Score for renderers, including consumers that
+// compile with noUncheckedIndexedAccess.
+// `scores` is Partial so the lookup admits undefined under any tsconfig:
+// consumers compile with noUncheckedIndexedAccess, this app without.
+export function scoreOf(owner: string, scores: Partial<Record<string, Score>>, key: string): Score {
+  const score = scores[key];
+  if (score === undefined) {
+    throw new Error(`${owner}: missing score '${key}'`);
+  }
+  return score;
+}
+
 export function validateScores(
   owner: string,
   dimensions: readonly ScoreDimension[],

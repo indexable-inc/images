@@ -12,13 +12,15 @@
 <script lang="ts">
   export let item: NewsItem;
 
-  const categoryColors: Record<NewsItem['category'], { bg: string; text: string }> = {
-    'Lead': { bg: '#dbeafe', text: '#111827' },
-    'Tooling': { bg: '#f3e8ff', text: '#581c87' },
-    'Antithesis': { bg: '#fee2e2', text: '#7f1d1d' },
-    'Storage': { bg: '#fed7aa', text: '#92400e' },
-    'CI': { bg: '#dcfce7', text: '#14532d' },
-    'Filesystem': { bg: '#f3f4f6', text: '#1f2937' }
+  // Categories borrow the site's one semantic-color family (--status-*),
+  // the same way ix reserves color for code syntax.
+  const categoryColor: Record<NewsItem['category'], string> = {
+    Lead: 'var(--status-accepted)',
+    Tooling: 'var(--status-last-call)',
+    Antithesis: 'var(--status-rejected)',
+    Storage: 'var(--status-input-wanted)',
+    CI: 'var(--status-load-bearing)',
+    Filesystem: 'var(--status-sketch)'
   };
 
   const formattedTime = item.timestamp.toLocaleTimeString('en-US', {
@@ -30,7 +32,7 @@
 
 <article class="news-item">
   <div class="header">
-    <span class="category" style="background-color: {categoryColors[item.category].bg}; color: {categoryColors[item.category].text}">
+    <span class="category" style:--c={categoryColor[item.category]}>
       {item.category}
     </span>
     <time class="timestamp" dateTime={item.timestamp.toISOString()}>
@@ -46,55 +48,65 @@
 </article>
 
 <style>
+  /* One grid-aligned panel per merge; the 1px frame is absorbed into the
+     vertical padding so following rows stay on the cell grid. */
   .news-item {
-    padding: 1rem;
-    border-left: 4px solid #ccc;
-    margin-bottom: 1.5rem;
-    background: #fafafa;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: calc(var(--cell-h) - 1px) 2ch;
+    margin-bottom: var(--cell-h);
+    background: var(--bg);
   }
 
   .header {
     display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    margin-bottom: 0.5rem;
+    gap: 0 2ch;
+    align-items: baseline;
   }
 
+  /* [ CATEGORY ] chip in the category's semantic color. */
   .category {
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    font-weight: 700;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
+    color: var(--c);
+    white-space: nowrap;
+  }
+
+  .category::before {
+    content: '[';
+    font-weight: 400;
+    color: color-mix(in srgb, var(--c) 55%, transparent);
+  }
+
+  .category::after {
+    content: ']';
+    font-weight: 400;
+    color: color-mix(in srgb, var(--c) 55%, transparent);
   }
 
   .timestamp {
-    font-size: 0.75rem;
-    color: #666;
+    display: inline;
+    color: var(--fg-faint);
   }
 
   .headline {
-    margin: 0.5rem 0;
-    font-size: 1.1rem;
-    font-weight: 600;
+    margin: 0;
   }
 
   .description {
-    margin: 0.5rem 0;
-    color: #444;
-    font-size: 0.9rem;
-    line-height: 1.5;
+    margin: 0;
+    color: var(--fg-muted);
   }
 
   .pr-link {
     display: inline-block;
-    margin-top: 0.5rem;
-    color: #0066cc;
+    color: var(--fg-muted);
     text-decoration: none;
-    font-weight: 500;
   }
 
   .pr-link:hover {
-    text-decoration: underline;
+    background: var(--fg);
+    color: var(--bg);
   }
 </style>

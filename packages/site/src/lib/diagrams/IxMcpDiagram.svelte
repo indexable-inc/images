@@ -45,4 +45,4 @@
   ];
 </script>
 
-<DiagramFrame {nodes} {edges} height={300} caption="One stdio session, one persistent Python interpreter, many tool calls." />
+<DiagramFrame {nodes} {edges} heightCells={15} caption="One stdio session, one persistent Python interpreter, many tool calls." />

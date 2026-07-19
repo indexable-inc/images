@@ -9,7 +9,7 @@ links:
 ---
 
 <script>
-  import RunRecorderDiagram from '$lib/diagrams/RunRecorderDiagram.svelte';
+  import RunRecorderDiagram from '../diagrams/RunRecorderDiagram.svelte';
 </script>
 
 `nix run .#run -- <command> ...` executes the command in a PTY, prints a bounded head/tail summary to the terminal, and writes the full live stream plus per-line timing under `./.ix/run/latest/`.

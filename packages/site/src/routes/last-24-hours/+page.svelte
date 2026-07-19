@@ -79,40 +79,33 @@
 
 <style>
   .newspaper {
-    max-width: 800px;
     margin: 0 auto;
-    padding: 2rem 1rem;
-    font-family: Georgia, serif;
+    padding: calc(var(--cell-h) * 2) 0;
   }
 
   .masthead {
     text-align: center;
-    margin-bottom: 2rem;
-    border-bottom: 3px solid #333;
-    padding-bottom: 1.5rem;
+    padding-bottom: calc(var(--cell-h) - 1px);
+    border-bottom: 1px solid var(--fg);
   }
 
   .masthead h1 {
-    margin: 0;
-    font-size: 3rem;
-    font-weight: 700;
-    letter-spacing: -1px;
+    margin: 0 auto;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
 
   .subtitle {
-    margin: 0.5rem 0 0 0;
-    font-size: 1.1rem;
-    color: #666;
-    font-style: italic;
+    margin: var(--cell-h) 0 0;
+    color: var(--fg-muted);
   }
 
   .note {
-    margin: 1rem 0 0 0;
-    font-size: 0.9rem;
-    color: #999;
+    margin: var(--cell-h) 0 0;
+    color: var(--fg-faint);
   }
 
   .news-feed {
-    margin-top: 2rem;
+    margin-top: calc(var(--cell-h) * 2);
   }
 </style>
