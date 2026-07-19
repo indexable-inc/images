@@ -1,7 +1,10 @@
 # index
 
 <p align="center">
-  <img src=".github/readme/globe.svg" alt="a spinning globe: the whole world, rendered as braille text" width="480">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/globe-dark.svg">
+    <img src=".github/readme/globe.svg" alt="a spinning globe: the whole world, rendered as braille text" width="480">
+  </picture>
 </p>
 
 index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): one shared definition of the software everyone here runs. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/). It is also the default world an [ix.dev](https://ix.dev) VM boots: ix is the runtime, index is what runs on it.
@@ -11,13 +14,19 @@ It exists because agents now write patches faster than upstream review can absor
 ## Why
 
 <p align="center">
-  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/flywheel-dark.svg">
+    <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
+  </picture>
 </p>
 
 ### A change lands once and reaches everything
 
 <p align="center">
-  <img src=".github/readme/one-graph.svg" alt="one patch fans out to every package in the graph" width="720">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/one-graph-dark.svg">
+    <img src=".github/readme/one-graph.svg" alt="one patch fans out to every package in the graph" width="720">
+  </picture>
 </p>
 
 Patch a compiler, fix a library, tighten a lint: nothing quietly runs last year's version of anything.
@@ -25,7 +34,10 @@ Patch a compiler, fix a library, tighten a lint: nothing quietly runs last year'
 ### Never blocked on upstream
 
 <p align="center">
-  <img src=".github/readme/upstream.svg" alt="a fix lands in this repo now; upstream can take it someday" width="720">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/upstream-dark.svg">
+    <img src=".github/readme/upstream.svg" alt="a fix lands in this repo now; upstream can take it someday" width="720">
+  </picture>
 </p>
 
 Patches live next to the code that needs them. No dependency has a bus factor outside the repo.
@@ -33,7 +45,10 @@ Patches live next to the code that needs them. No dependency has a bus factor ou
 ### One standard for everything
 
 <p align="center">
-  <img src=".github/readme/one-standard.svg" alt="clippy, cve scan, and licenses applied to every package in the graph" width="720">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/one-standard-dark.svg">
+    <img src=".github/readme/one-standard.svg" alt="clippy, cve scan, and licenses applied to every package in the graph" width="720">
+  </picture>
 </p>
 
 Add a rule and every package meets it, in the same change.
@@ -41,7 +56,10 @@ Add a rule and every package meets it, in the same change.
 ### No stable APIs required
 
 <p align="center">
-  <img src=".github/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/refactor-dark.svg">
+    <img src=".github/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
+  </picture>
 </p>
 
 Every consumer of an API lives in this repo, and agents make repo-wide refactors cheap, so an API can be correct instead of compatible.
@@ -49,7 +67,10 @@ Every consumer of an API lives in this repo, and agents make repo-wide refactors
 ### Prebuilt everywhere
 
 <p align="center">
-  <img src=".github/readme/prebuilt.svg" alt="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos" width="720">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/prebuilt-dark.svg">
+    <img src=".github/readme/prebuilt.svg" alt="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos" width="720">
+  </picture>
 </p>
 
 You download binaries instead of compiling them. CI builds on the [ix.dev](https://ix.dev) cluster, close to 1,000 vCPUs, and pushes every closure to `cache.ix.dev`, prebuilt for Linux and cross-compiled for macOS.

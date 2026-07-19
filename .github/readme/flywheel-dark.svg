@@ -1,0 +1,278 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" role="img" aria-label="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster">
+  <style>
+    :root { --fg: #e6e6e9; --muted: #7f838c; --line: #3c3c42; }
+    text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; fill: var(--fg); }
+    .m { fill: var(--muted); }
+    .cap { font-size: 12px; letter-spacing: 0.08em; }
+    .frame { fill: none; stroke: var(--line); stroke-width: 1.3; }
+    .wire { fill: none; stroke: var(--fg); stroke-width: 1.3; }
+    .mwire { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+    .dash { stroke-dasharray: 3 4; }
+    .head { fill: var(--fg); }
+    .mhead { fill: var(--muted); }
+    .ink { fill: var(--fg); }
+    .pulse { fill: none; stroke: var(--fg); stroke-width: 5; }
+    #p1 { stroke-dasharray: 14 175; stroke-dashoffset: 14; animation: k1 13.09s infinite; }
+    #p2 { stroke-dasharray: 14 160; stroke-dashoffset: 14; animation: k2 13.09s infinite; }
+    #p3 { stroke-dasharray: 14 130; stroke-dashoffset: 14; animation: k3 13.09s infinite; }
+    #p4 { stroke-dasharray: 14 140; stroke-dashoffset: 14; animation: k4 13.09s infinite; }
+    @keyframes k1 {
+      0.000% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      7.867% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      27.512% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      32.866% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      46.236% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      49.864% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      58.922% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      61.392% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      67.558% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      69.241% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      73.443% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      74.579% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      77.417% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      78.204% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      80.168% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      80.693% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      82.002% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      82.374% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      83.301% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      83.553% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      84.180% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      84.432% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      85.059% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      85.311% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      85.938% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      86.189% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      86.817% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      87.068% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      87.696% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      87.947% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      88.575% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      88.826% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      89.454% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      89.705% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      90.332% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      90.584% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      91.211% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      91.463% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      92.090% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      92.341% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      92.969% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      93.220% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      93.848% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      94.099% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      94.727% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      94.978% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      95.606% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      95.857% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      96.485% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      96.736% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      97.363% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      97.615% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      98.242% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      98.494% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+      99.121% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      99.372% { stroke-dashoffset: -175; animation-timing-function: steps(1); }
+    }
+    @keyframes k2 {
+      0% { stroke-dashoffset: 14; animation-timing-function: steps(1); }
+      7.867% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      15.109% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      32.866% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      37.795% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      49.864% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      53.203% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      61.392% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      63.665% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      69.241% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      70.790% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      74.579% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      75.625% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      78.204% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      78.928% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      80.693% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      81.175% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      82.374% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      82.716% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      83.553% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      83.784% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      84.432% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      84.663% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      85.311% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      85.542% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      86.189% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      86.421% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      87.068% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      87.300% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      87.947% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      88.178% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      88.826% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      89.057% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      89.705% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      89.936% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      90.584% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      90.815% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      91.463% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      91.694% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      92.341% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      92.573% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      93.220% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      93.452% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      94.099% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      94.331% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      94.978% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      95.209% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      95.857% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      96.088% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      96.736% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      96.967% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      97.615% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      97.846% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      98.494% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      98.725% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+      99.372% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      99.604% { stroke-dashoffset: -160; animation-timing-function: steps(1); }
+    }
+    @keyframes k3 {
+      0% { stroke-dashoffset: 14; animation-timing-function: steps(1); }
+      15.109% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      21.103% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      37.795% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      41.874% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      53.203% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      55.967% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      63.665% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      65.546% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      70.790% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      72.072% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      75.625% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      76.491% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      78.928% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      79.527% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      81.175% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      81.575% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      82.716% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      82.999% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      83.784% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      83.976% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      84.663% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      84.854% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      85.542% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      85.733% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      86.421% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      86.612% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      87.300% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      87.491% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      88.178% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      88.370% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      89.057% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      89.249% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      89.936% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      90.128% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      90.815% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      91.007% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      91.694% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      91.885% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      92.573% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      92.764% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      93.452% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      93.643% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      94.331% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      94.522% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      95.209% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      95.401% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      96.088% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      96.280% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      96.967% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      97.159% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      97.846% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      98.038% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      98.725% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      98.916% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+      99.604% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      99.795% { stroke-dashoffset: -130; animation-timing-function: steps(1); }
+    }
+    @keyframes k4 {
+      0% { stroke-dashoffset: 14; animation-timing-function: steps(1); }
+      21.103% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      27.512% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      41.874% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      46.236% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      55.967% { stroke-dashoffset: 14; animation-timing-function: steps(12); }
+      58.922% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      65.546% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      67.558% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      72.072% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      73.443% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      76.491% { stroke-dashoffset: 14; animation-timing-function: steps(8); }
+      77.417% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      79.527% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      80.168% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      81.575% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      82.002% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      82.999% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      83.301% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      83.976% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      84.180% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      84.854% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      85.059% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      85.733% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      85.938% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      86.612% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      86.817% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      87.491% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      87.696% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      88.370% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      88.575% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      89.249% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      89.454% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      90.128% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      90.332% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      91.007% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      91.211% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      91.885% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      92.090% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      92.764% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      92.969% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      93.643% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      93.848% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      94.522% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      94.727% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      95.401% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      95.606% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      96.280% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      96.485% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      97.159% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      97.363% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      98.038% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      98.242% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      98.916% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      99.121% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+      99.795% { stroke-dashoffset: 14; animation-timing-function: linear; }
+      100.000% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .pulse { display: none; }
+    }
+  </style>
+  <defs>
+    <marker id="am" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
+    </marker>
+  </defs>
+  <path class="frame" d="M 136 14 H 711 Q 719 14 719 22 V 218 Q 719 226 711 226 H 9 Q 1 226 1 218 V 22 Q 1 14 9 14 H 22"/>
+  <text x="28" y="18.5">[-] flywheel</text>
+  <text x="80" y="92">a change lands once</text>
+  <text x="440" y="92">it reaches everything</text>
+  <text x="456" y="172">everything improves</text>
+  <text x="80" y="172">the next change is cheaper</text>
+  <text class="m" x="360" y="136" text-anchor="middle">one repo, one graph</text>
+  <path class="mwire" marker-end="url(#am)" d="M 245 87 H 420"/>
+  <path class="mwire" marker-end="url(#am)" d="M 620 87 H 664 V 167 H 628"/>
+  <path class="mwire" marker-end="url(#am)" d="M 436 167 H 306"/>
+  <path class="mwire" marker-end="url(#am)" d="M 60 167 H 30 V 87 H 60"/>
+  <path id="p1" class="pulse" d="M 245 87 H 420"/>
+  <path id="p2" class="pulse" d="M 620 87 H 664 V 167 H 628"/>
+  <path id="p3" class="pulse" d="M 436 167 H 306"/>
+  <path id="p4" class="pulse" d="M 60 167 H 30 V 87 H 60"/>
+</svg>

@@ -1,6 +1,6 @@
 ---
 name: creating-a-readme
-description: "House README style: a committed SVG hero that adapts to dark/light via embedded prefers-color-scheme CSS, a hook-question intro with a 2-3 sentence pitch, install lines derived from the flake and crate metadata, and an optional git-log version history. Use when writing, reviewing, or generating any README in this repo, including the mirror generator's output."
+description: "House README style: a committed SVG hero with a dark twin selected via a picture element (Safari ignores prefers-color-scheme inside img-loaded SVGs), a hook-question intro with a 2-3 sentence pitch, install lines derived from the flake and crate metadata, and an optional git-log version history. Use when writing, reviewing, or generating any README in this repo, including the mirror generator's output."
 ---
 
 ## Creating a README
@@ -13,16 +13,26 @@ generators (e.g. `packages/mirror`) conform to it rather than restating it.
 ### Hero SVG
 
 One symbolic SVG per README, committed next to it (convention:
-`assets/hero.svg`; the root README uses `doc/assets/`). Reference it with a
-plain image link as the first element:
+`assets/hero.svg`; the root README uses `doc/assets/`), plus a committed dark
+twin (`assets/hero-dark.svg`): the same file with the dark palette as the
+`:root` defaults and the dark media block removed. The twin exists because
+Safari never evaluates `prefers-color-scheme` (or `light-dark()`) inside an
+SVG loaded through `<img>` (WebKit bug 199134), so a lone self-adapting file
+renders its light palette on GitHub's dark theme for every Safari reader.
+Reference both with a `<picture>` as the first element; the page-level media
+query switches correctly in every engine:
 
 ```markdown
-<p align="center"><img src="assets/hero.svg" width="720" alt="one line: what the diagram shows"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="one line: what the diagram shows">
+  </picture>
+</p>
 ```
 
-Do NOT use the two-file `<picture>` dark/light hack. GitHub renders an SVG's
-own embedded `<style>`, so a single file adapts by itself. Put the theme
-switch inside the SVG:
+Keep the theme switch inside the base SVG too, so it still adapts when
+viewed directly:
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" role="img"
@@ -47,8 +57,9 @@ switch inside the SVG:
 Rules:
 
 - Transparent background. Every themed property gets a value in both the
-  default (light) block and the dark block; verify by reading the CSS, since
-  the caveat is that `prefers-color-scheme` inside an `<img>` follows the
+  default (light) block and the dark block, and the dark twin's `:root`
+  defaults must equal the base file's dark block; verify by reading the CSS.
+  Even where the embedded query works (Chrome, Firefox), it follows the
   OS/browser scheme, not GitHub's manual theme toggle.
 - Symbolic and minimal: one diagram showing what the thing does (data flow,
   before/after, the shape of the transformation). A README needs one hero,
@@ -117,7 +128,8 @@ changelog. Skip the section entirely for fast-moving packages.
 
 ### Checklist
 
-1. `assets/hero.svg` committed, referenced first, adapts in both schemes.
+1. `assets/hero.svg` plus `assets/hero-dark.svg` committed, referenced first
+   via `<picture>`, legible in both schemes.
 2. Hook question plus 2-3 sentence pitch above the fold.
 3. Install lines derived from flake/crate metadata, not copied from another
    README.
