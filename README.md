@@ -1,10 +1,12 @@
 # index
 
 <p align="center">
-  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
+  <img src=".github/readme/unblocked.svg" alt="agents write code faster than upstream review can take it; index lands the change on main now and fans it out to everyone" width="720">
 </p>
 
-One build graph for everything.
+Agents made writing code cheap. Shipping it is still expensive: review queues, maintainer bus factors, projects that will not take AI-written patches at all. The bottleneck moved from writing the change to landing it.
+
+index is the bet on the other path: every change lands here now, in one graph everyone consumes the same way. Upstream can take it someday.
 
 index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/), together in one graph.
 
@@ -20,6 +22,10 @@ The fastest way to get what this repo is for: short case examples, each a two-mi
 6. [A thousand agents, one Elixir kernel](https://indexable-inc.github.io/index/stories/elixir-agent-kernel/): agents work through supervised, fleet-federated workspaces on a runtime built for that shape.
 
 ## Why
+
+<p align="center">
+  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
+</p>
 
 ### A change lands once and reaches everything
 
