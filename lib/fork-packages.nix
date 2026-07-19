@@ -494,9 +494,12 @@
         # 0014: underscore digit separators in numeric literals (`1_000`,
         # `1_000.000_1`, `2.5e1_0`), Rust-shaped (between digits only; a
         # leading underscore is still an identifier), stripped before the
-        # value is parsed. Repo `.nix` files stay separator-free until the
-        # whole toolchain (stock nix, alejandra/statix/deadnix, tree-sitter)
-        # accepts the syntax; astlog's digit-grouping lints track that
+        # value is parsed. Fork-only syntax is allowed only inside import
+        # islands wrapped in `ix.evaluatorGate.require` (today: tests/);
+        # everything else stays stock-parseable so external flake consumers
+        # and the `nix-ix` bootstrap keep evaluating on upstream Nix,
+        # enforced by `checks.<system>.stock-nix-parse` (index#3635).
+        # astlog's digit-grouping lints track the remaining toolchain
         # backlog (astlog-rules/nix.astlog).
         "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch" = {
           upstream = "hold";

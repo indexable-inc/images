@@ -644,6 +644,10 @@
   cache = import ./cache.nix;
   kdl = import ./formats/kdl.nix {inherit home-manager;};
 
+  # Import-seam gate for fork-syntax islands; frozen syntax by design, see
+  # the file header.
+  evaluatorGate = import ./evaluator-gate.nix;
+
   /**
   Helper surface shared by both the per-module `specialArgs.ix`
   (`ixSpecialArgs`) and the public `index.lib` (`ixReturn`). Listed once
@@ -673,6 +677,7 @@
       deepMerge
       efx
       evalTimeSubstitutable
+      evaluatorGate
       fabric
       forkClosureGates
       forkPackages

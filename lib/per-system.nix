@@ -1272,6 +1272,16 @@
     fileset = fs.gitTracked paths.root;
   };
 
+  # Every tracked `.nix` outside the tests/ fork-syntax island. The
+  # stock-nix-parse check below defines the stock-parseable surface as
+  # exactly this tree (index#3635).
+  stockParseSource = fs.toSource {
+    inherit (paths) root;
+    fileset = fs.difference (
+      fs.intersection (fs.gitTracked paths.root) (fs.fileFilter (file: file.hasExt "nix") paths.root)
+    ) (paths.root + "/tests");
+  };
+
   # Just the astlog rules file plus its fixture pairs, so the rules self-test
   # below only rebuilds when the rules or fixtures change, not on every
   # tracked-file edit the way `lintSource` does.
@@ -1288,14 +1298,18 @@
   andrewZellijConfig = pkgs.writeText "andrewgazelka-zellij.kdl" (ix.kdl.render andrewZellij.settings);
   andrewNushellConfig = paths.root + "/users/andrewgazelka/config/nushell";
 
-  tests = import paths.tests {
+  # Fork-syntax island: tests/ may use fork-only syntax (underscore digit
+  # separators), so a stock-Nix evaluator must hit the gate's install
+  # message when a tests-derived check is forced, not a bare parse error
+  # (index#3635).
+  tests = ix.evaluatorGate.require "tests" (import paths.tests {
     inherit
       nixpkgs
       ix
       paths
       home-manager
       ;
-  };
+  });
 
   exampleFleets = ix.exampleFleetsFor {hostSystem = system;};
 
@@ -1438,6 +1452,28 @@
           agent-skills = pkgs.runCommand "agent-skills-check" {} ''
             test -d ${skillsDir}
             test -d ${agentsDir}
+            mkdir -p "$out"
+          '';
+          # The externally consumed surface (everything outside the tests/
+          # fork-syntax island) must stay parseable by *stock* upstream Nix:
+          # external flakes evaluate index with their own evaluator, and the
+          # `nix-ix` bootstrap only works while its import closure parses on
+          # stock Nix. CI runs the fork, so without this gate a stray
+          # fork-only literal outside tests/ would ship silently and brick
+          # onboarding and every external consumer (index#3635). `pkgs.nix`
+          # is upstream Nix from the nixpkgs pin, never the fork.
+          stock-nix-parse = pkgs.runCommand "stock-nix-parse-check" {nativeBuildInputs = [pkgs.nix];} ''
+            export HOME="$TMPDIR"
+            export NIX_STORE_DIR="$TMPDIR/store" NIX_STATE_DIR="$TMPDIR/state" NIX_CONF_DIR="$TMPDIR/conf"
+            fail=0
+            while IFS= read -r -d "" f; do
+              if ! nix-instantiate --parse "$f" > /dev/null 2> "$TMPDIR/err"; then
+                echo "not stock-parseable: ''${f#${stockParseSource}/}" >&2
+                cat "$TMPDIR/err" >&2
+                fail=1
+              fi
+            done < <(find ${stockParseSource} -name '*.nix' -print0 | sort -z)
+            [ "$fail" = 0 ]
             mkdir -p "$out"
           '';
           # Pins the last-applied 3-way merge behind homeModules.mutable-json:
