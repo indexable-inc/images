@@ -1,0 +1,103 @@
+---
+id: 0024-version-tracking-forks
+number: '0024'
+title: Version-tracking forks, base the series on the source nixpkgs already pins
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 4, why: 'one new fork mode in existing machinery, not a new system' }
+  impact: { value: 5, why: 'deletes a manual repin ritual that will otherwise fire on every nixpkgs git bump' }
+  effort: { value: 4, why: 'rebase-patches gains a derived-base mode; patched-src consumes a package src' }
+  risk: { value: 3, why: 'dist tarball vs git tag tree deltas are the one sharp edge, and it is checkable' }
+  maturity: { value: 2, why: 'git (#3612) is the first and only nixpkgs-recipe fork; pattern is fresh' }
+  leverage: { value: 6, why: 'every future fork of a nixpkgs-packaged tool inherits zero-upkeep tracking' }
+  taste: { value: 6, why: 'the judgment is refusing a second pin for a version nixpkgs already owns' }
+description: 'Forks that overlay a nixpkgs recipe (git, #3612) currently hand-pin an input that must equal nixpkgs version, guarded by a comment ritual and an eval assert. Proposal: a trackNixpkgs fork mode where the series applies to the nixpkgs src itself, so a nixpkgs bump needs zero action unless the series genuinely conflicts.'
+---
+
+## Problem
+
+The git fork (#3610, PR #3612) overlays nixpkgs' git recipe onto a patched
+tree, which forces its base to equal nixpkgs' git version. Today that
+invariant lives in upkeep:
+
+- a `git-src` input pinned by rev to the `v2.54.0` tag, with a seven-line
+  comment explaining the ritual ("on a nixpkgs git bump, repin to the
+  matching tag and run rebase-patches");
+- an eval-time assert in `packages/git` that fails when nixpkgs moves;
+- `autoconf` + `make configure` in the package, because the git tag tree
+  lacks the generated `configure` the kernel.org dist tarball ships.
+
+Every nixpkgs git bump demands a human: repin, relock, regenerate dag,
+rebuild. One fact (git's version) has two owners, and the second owner is
+a comment.
+
+## Proposal: `trackNixpkgs` fork mode
+
+A fork entry declares that its base IS the nixpkgs source:
+
+```nix
+{
+  name = "git";
+  trackNixpkgs = {
+    attr = "git";              # pkgs.git supplies version and src
+    tagTemplate = "v{version}"; # upstream tag for the rebase checkout
+  };
+  url = "https://github.com/git/git.git";
+  patchDir = "packages/git/patches";
+  # no input, no autoUpdate: there is nothing to update
+}
+```
+
+Consequences, all deletions:
+
+- **No flake input, no lock node.** `ix.patchedSrc` applies the series to
+  the unpacked `pkgs.git.src` (applyPatches unpacks tarballs already).
+- **No assert.** Drift is impossible by construction; version has one
+  owner.
+- **No `make configure` hack.** The dist tarball ships `configure` and the
+  `version` file; the package overlay shrinks to `src = patchedSrc`.
+- **The right failure mode.** `checks.patched-src-git` breaks exactly when
+  a nixpkgs bump conflicts with the series, at eval-adjacent build speed.
+  A clean apply means a nixpkgs bump needs zero action, which is most
+  bumps.
+
+`rebase-patches` gains the derived-base mode: for a `trackNixpkgs` entry
+it resolves `pkgs.<attr>.version`, clones `url` at
+`tagTemplate.format(version)`, and runs the same real-rebase regeneration
+it does today. `upstream-sync` and the dag checks read the same JSON and
+do not change.
+
+## The sharp edge
+
+Dist tarballs are `make dist` products: the git tarball adds generated
+files (`configure`, `version`) to the tag tree. The series must therefore
+touch only files present in both trees. That is checkable mechanically at
+export time: every path in every patch must exist in the git tag tree the
+rebase ran against, and the canonical-form assertion already walks patch
+contents. A project whose tarball diverges structurally from its tags
+cannot use this mode and keeps a pinned input; the mode is opt-in per
+entry.
+
+## Alternatives considered
+
+- **Status quo** (pinned input + assert + comment): works, but the upkeep
+  fires on every nixpkgs bump forever, and the comment is the enforcement.
+- **Derived fetch** (`fetchFromGitHub { rev = "v${git.version}"; hash }`):
+  kills drift but keeps a hash to bump per nixpkgs move and adds a second
+  download of a source nixpkgs already fetched. Half the upkeep survives.
+
+## Migration
+
+Convert git first; it is the only nixpkgs-recipe fork today. btop and
+nushell keep their inputs: their recipes are version-agnostic overrides
+where a free-floating base is the point. The mode exists for the narrow
+case where the recipe and the source must agree on a version.
+
+Drafted by Claude Code (Claude Opus 4.5); comments wanted, hence the RFC flag.
