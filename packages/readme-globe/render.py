@@ -38,6 +38,10 @@ BAYER = np.array([
 
 
 def land_mask(path: str, width: int = 2880) -> np.ndarray:
+    # The pinned NASA original is 21600x10800 (233 MP), above PIL's default
+    # decompression-bomb ceiling; the texture is a fixed-output pin, not
+    # untrusted input, so lift the limit rather than pin a mutable thumbnail.
+    Image.MAX_IMAGE_PIXELS = None
     img = Image.open(path).convert("RGB")
     img = img.resize((width, width // 2), Image.BILINEAR)
     a = np.asarray(img).astype(np.int16)
