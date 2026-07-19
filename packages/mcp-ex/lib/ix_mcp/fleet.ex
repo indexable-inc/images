@@ -31,9 +31,10 @@ defmodule IxMcp.Fleet do
       Fleet.exec_any("node() |> to_string()")            # a random node
       Fleet.multicall(Fleet.nodes(), "node()", timeout: 10_000)
 
-  When to reach for this: CPU-heavy or parallelizable pure-Elixir compute (fan
-  out with `multicall/3`), linux-only behavior checks, and work wanting many
-  cores or hosts -- nodes are root on the fleet. Stay local for anything
+  When to reach for this: expensive work of any kind -- compiling, builds,
+  test suites, large data crunching (fan out with `multicall/3`) -- plus
+  linux-only behavior checks and work wanting many cores or hosts; nodes are
+  root on the fleet. Stay local for anything
   touching this workstation's files, repos, or bindings, small low-latency
   evals, stateful work (bindings do not persist remotely), and darwin-specific
   behavior.

@@ -56,8 +56,10 @@ defmodule IxMcp.MCP.Tools do
   fresh cell even while other jobs run or wedge, so a stuck job never locks
   you out of recovery.
 
-  Prefer Fleet for CPU-heavy or parallelizable pure-Elixir compute, linux-only
-  behavior checks, and work wanting many cores or hosts (fleet nodes are root);
+  Prefer Fleet whenever the work is expensive -- compiling, builds, test
+  suites, large data crunching, anything that would peg this workstation for
+  more than a few seconds -- and for linux-only behavior checks or work
+  wanting many cores or hosts (fleet nodes are root);
   keep it local for anything touching this workstation's files, repos, or
   bindings, small low-latency evals, stateful work (remote bindings do NOT
   persist -- code ships as source strings), and darwin-specific behavior.
