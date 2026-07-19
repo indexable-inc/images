@@ -1,0 +1,43 @@
+---
+id: kernel-depth-1-subagents
+postedAt: 2026-07-19T13:25:00-07:00
+title: "Agents.*: depth-1 CLI subagents land in the kernel"
+tags: [interesting, mcp, agents, elixir]
+links:
+  - label: agent-harness-ex (index#3700)
+    href: https://github.com/indexable-inc/index/issues/3700
+  - label: Kernel surface
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/agents.ex
+  - label: Fable 5 card, sec 8.15
+    href: https://github.com/indexable-inc/index/blob/main/packages/system-cards/cards/anthropic/claude-fable-5-mythos-5.md
+---
+
+The kernel can now spawn real agent CLIs as async, long-lived subagents:
+`Agents.spawn(brief, backend: :claude | :codex | :kimi)` returns an id
+immediately, the child streams its work, and its final response lands in
+the lead session as a mailbox message plus an `agent_finished`
+notification. This is the Fable 5 system card's top-scoring multi-agent
+harness (sec 8.15.3, async subagents: BrowseComp 93.3 vs 88.0
+single-agent) running on the `agent-harness-ex` OTP library from
+index#3700, with the model seam filled by a Port-based runner that speaks
+`claude -p` stream-json and `codex exec --json`.
+
+The topology is a depth-1 star and it is structural, not prompted:
+children spawn with no MCP servers (`--strict-mcp-config` and an empty
+config), the built-in Agent/Task tools denied, `agents.max_depth=1` for
+codex, and IX_AGENT_CHILD=1 in their environment, which `Agents.spawn`
+refuses under. There is no child-to-child call in the surface at all.
+Kimi K3 rides the claude harness pointed at Moonshot's
+Anthropic-compatible endpoint.
+
+Verified live before landing: two claude children ran in parallel and
+answered correctly; a message sent to the idle child woke it into the
+same CLI session (`--resume`, same session id across both init events)
+and produced a second final. Messages queue in the harness and inject
+after the recipient's next tool result, the card's delivery rule.
+
+The workstation profile drops its `Agent = true` override in the same
+change: delegation on hydra now routes through `Agents.*` instead of the
+harness Task tool, which is what the card's data says to do (the
+async-subagent hierarchy beat the peer mesh on score and the blocking
+orchestrator on everything).
