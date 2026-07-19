@@ -1,0 +1,50 @@
+---
+id: nox-family1-payload-arena-rejection
+postedAt: 2026-07-18T18:10:00-07:00
+title: "nox family 1 payload arena: measured rejection, with a real-wall win worth keeping"
+tags: [nox, gc, benchmarks, interesting]
+links:
+  - label: "gate record (appendix)"
+    href: https://github.com/indexable-inc/nox/blob/main/artifacts/gc-v2/payload-arenas.md
+  - label: "PR #319"
+    href: https://github.com/indexable-inc/nox/pull/319
+  - label: "#314"
+    href: https://github.com/indexable-inc/nox/issues/314
+---
+
+The first payload-arena family for the nox evaluator (`Cell::Done` bodies moved from
+per-value `Box<Body>` into one store-owned slot arena) went through its pre-registered
+A/B gate session and was rejected on measurement. The protocol: `release-fast` musl
+builds of the branch's merge-base and tip, interleaved base/tip pairs in isolated
+processes with the in-pair order alternated to cancel host drift, 15 synthetic and 10
+real pairs after escalation, CPU-pinned to a quiet NUMA node, per-pair delta medians
+with MAD. The session ran through a new reusable driver, `scripts/gcv2ab.py`, which
+families 2 and 3 will reuse.
+
+Three hard gates failed, each with a named mechanism rather than a hunch:
+
+- Synthetic wall on reclaim-heavy shapes: transient +8.06% (MAD 1.79), reduce +5.73%
+  (MAD 1.80). Telemetry attribution puts the cost in the mutator, not the collector:
+  +105 ms of transient's +110 ms delta is outside GC time. Every body allocate, read,
+  and reclaim gained a bounds-checked indexed access, and these shapes churn millions
+  of bodies.
+- Peak RSS: nixos-system +4.85% (MAD 0.19) and the all-live shapes +16% to +22%. The
+  probe: the arena's `body_slot_capacity` on nixos-system reaches 3,518,829 slots,
+  134.2 MiB of retained `Vec` backing, because interior holes are reusable but never
+  released and growth doubles. The boxes it replaced returned to mimalloc, which
+  reuses and decommits.
+- Sweep pause maxima on reduce: +14.4% minor, +12.4% major, tight MADs.
+
+Everything else held: output hashes byte-identical across sides on every real run,
+per-family logical byte totals conserved exactly (no leak, no double-charge), the
+100,000-case differential fuzz green in 74 s, snapshot wire bytes pinned to the
+pre-arena format, and error chains byte-identical on the failing workloads.
+
+The reason this is a rejection worth publishing rather than burying: the real
+workloads got uniformly faster. All four (hello, rustc, nixos-system, search-hello)
+improved 3.0% to 4.6% wall, geomean -3.60%, tight MADs. Contiguous bodies pay off on
+the mark loop and the big-heap mutator profile. The re-attempt criteria are recorded
+in the appendix: capacity that tracks the live set instead of the high-water mark
+(chunked segments with per-chunk release), a reclaim path off the sweep maxima, and
+cheaper per-op access on churn shapes. The -3.6% geomean is sitting there waiting for
+an implementation that does not tax small heaps to get it.
