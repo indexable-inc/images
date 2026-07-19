@@ -9,14 +9,16 @@ The syntax is a strict bash subset: everything plumb accepts pastes into bash un
 ## Runs are values
 
 ```console
-plumb src> sh -c 'echo warn >&2; seq 1 10000' | tail -n 3
+plumb src> echo warn >&2; seq 1 10000 | tail -n 3
+warn
 9998
 9999
 10000
-[0] sh -c echo warn >&2; seq 1 10000  exit 0  11ms  out 48.9KB  err 5B
-[1] tail -n 3  exit 0  11ms  out 15B  err 0B
+[0] echo warn  exit 0  0ms (cpu 0+0ms)  out 0B  err 5B
+[1] seq 1 10000  exit 0  9ms (cpu 4+2ms)  out 47.7KB  err 0B
+[2] tail -n 3  exit 0  9ms (cpu 1+0ms)  out 16B  err 0B
 run 3: exit 0  ${o[3]} ${e[3]} ${s[3]}
-plumb src> echo ${o[3][0]} | head -n 1
+plumb src> echo ${o[3][1]} | head -n 1
 1
 ```
 
