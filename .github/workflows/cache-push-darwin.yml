@@ -50,11 +50,12 @@ jobs:
   # packages -- since #2690 that includes codex (`packages.aarch64-darwin.codex`
   # is the cross alias, so the system filter below drops it from this lane) and
   # since #3584 btop, cross-built as a CMake/C++ package with the apple-sdk
-  # cross toolchain -- but the genuinely-native darwin artifacts
-  # (nix-output-monitor: GHC cannot cross-compile Linux->Darwin,
-  # nixpkgs#405893; the config-launch launcher units; the native cargo-unit
-  # IFD graph) were never published anywhere, so every darwin consumer
-  # compiled them locally. `cachePushRoots.aarch64-darwin` post-alias
+  # cross toolchain, and since #3606 nix-output-monitor, compiled by the
+  # Linux-hosted cross GHC (ix.crossGhc; the #3584 infeasibility verdict
+  # only condemned nixpkgs' pkgsCross SDK bootstrap, nixpkgs#405893) -- but
+  # the genuinely-native darwin artifacts (the config-launch launcher units;
+  # the native cargo-unit IFD graph) were never published anywhere, so every
+  # darwin consumer compiled them locally. `cachePushRoots.aarch64-darwin` post-alias
   # is the honest "what a darwin consumer can install" set; filtering the eval
   # rows to `system == "aarch64-darwin"` drops the cross aliases, example-fleet
   # system closures, and linux images that resolve to x86_64-linux drvs the
