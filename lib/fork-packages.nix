@@ -77,7 +77,10 @@
 #                                 a commit message; appended after the PR body.
 #                    A patch with no entry defaults to `hold` with an "unclassified"
 #                    reason (fail-safe: an unclassified patch is never sent upstream
-#                    automatically). `upstream-sync` treats a repo whose
+#                    automatically) -- but for a fork that declares any intent, the
+#                    `patch-dag-<name>` check fails a patch with no entry, so the
+#                    fallback only backstops forks with no `patches` attrset at all.
+#                    `upstream-sync` treats a repo whose
 #                    `upstreamPolicy.aiPrsAllowed == false` as `never` regardless of
 #                    the per-patch mark, so a banned repo cannot leak a PR.
 #
@@ -146,6 +149,10 @@
         "0002-nix-expose-stable-application-package.patch" = {
           upstream = "never";
           reason = "Required to install the stable app from Zed's own flake, but Zed's contribution policy rejects autonomous-agent submissions.";
+        };
+        "0003-editor-navigate-directly-to-a-single-reference.patch" = {
+          upstream = "never";
+          reason = "General editor behavior fix (indexable-inc/index#2976), but Zed's contribution policy rejects autonomous-agent submissions.";
         };
       };
     }
@@ -545,6 +552,16 @@
         "0021-libstore-enforce-derivation-no-progress-deadlines.patch" = {
           upstream = "hold";
           reason = "Fleet CI policy for indexable-inc/index#3317. Validate the process-aware deadline before proposing a general Nix interface; humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0022: a paused (backpressured) substitution download neither reads
+        # its socket nor advances CURLOPT_LOW_SPEED_TIME, so a peer half-close
+        # parked the transfer forever -- nix-daemon children stranded in
+        # CLOSE-WAIT wedged CI slots for hours. The worker loop now polls
+        # paused transfers and fails them as transient curl errors, so
+        # download-attempts still applies.
+        "0022-libstore-fail-paused-downloads-on-peer-half-close-or.patch" = {
+          upstream = "hold";
+          reason = "Fails paused downloads on peer half-close or stall past stalled-download-timeout instead of parking forever (indexable-inc/index#3559). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
         # 0023: forge archive inputs (github:/gitlab:/sourcehut:) requesting
         # submodules or LFS are constructed as the equivalent git+https input
