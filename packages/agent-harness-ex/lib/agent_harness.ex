@@ -122,7 +122,8 @@ defmodule AgentHarness do
   delivered at the recipient's next `checkpoint/2` (i.e. after its next tool
   result), or immediately if the recipient is blocked in
   `wait_for_message/3`. Messaging an idle subagent wakes it: the text
-  becomes its new instructions.
+  becomes its new instructions. The `from` id is host-trusted: nothing
+  verifies the sender until the MCP surface adds enforcement.
   """
   @spec send_message(harness(), agent_id(), agent_id(), String.t()) ::
           :ok | {:error, :not_found}
@@ -155,10 +156,7 @@ defmodule AgentHarness do
   @spec add_usage(harness(), agent_id(), non_neg_integer()) ::
           {:ok, non_neg_integer()} | {:error, :budget_exhausted | :not_found}
   def add_usage(harness, id, tokens) do
-    case call_agent(harness, id, fn pid -> Agent.add_usage(pid, tokens) end) do
-      {:error, :not_found} -> {:error, :not_found}
-      other -> other
-    end
+    call_agent(harness, id, fn pid -> Agent.add_usage(pid, tokens) end)
   end
 
   defp call_agent(harness, id, fun) do
@@ -167,7 +165,10 @@ defmodule AgentHarness do
       [] -> {:error, :not_found}
     end
   catch
-    # The agent died between lookup and call; same answer as a missed lookup.
+    # The agent died between lookup and call, or mid-call (e.g. a concurrent
+    # delete_subagent shutting it down); same answer as a missed lookup.
     :exit, {:noproc, _call} -> {:error, :not_found}
+    :exit, {:shutdown, _call} -> {:error, :not_found}
+    :exit, {{:shutdown, _reason}, _call} -> {:error, :not_found}
   end
 end

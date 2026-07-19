@@ -215,8 +215,36 @@ defmodule AgentHarness.Agent do
 
   defp finish_run(state, result) do
     route_to_lead(state, final_message(state, result))
-    %{state | task: nil, status: :idle}
+    state = drop_waiters(%{state | task: nil, status: :idle})
+    wake_from_mailbox(state)
   end
+
+  # The only process that can legitimately be blocked in wait_for_message
+  # here is the run that just ended (a crashed runner's stranded call), so
+  # answer :timeout (a no-op for a dead caller) instead of leaving a stale
+  # waiter to swallow the next wake message.
+  defp drop_waiters(state) do
+    Enum.each(state.waiters, fn {from, timer} ->
+      cancel_timer(timer)
+      GenServer.reply(from, :timeout)
+    end)
+
+    %{state | waiters: []}
+  end
+
+  # A message that landed during the final-composition window (after the
+  # runner's last checkpoint, before its return) queued instead of waking
+  # the agent. Same rule as the idle-wake clause in accept/2: the head
+  # becomes the new instructions and the rest of the queue stays FIFO for
+  # the next checkpoint.
+  defp wake_from_mailbox(%{role: :subagent} = state) do
+    case :queue.out(state.mailbox) do
+      {{:value, msg}, rest} -> start_run(%{state | mailbox: rest}, msg.text)
+      {:empty, _empty} -> state
+    end
+  end
+
+  defp wake_from_mailbox(state), do: state
 
   defp final_message(state, {:ok, text}) when is_binary(text) do
     Message.new(state.id, Names.lead_id(), text, :final)

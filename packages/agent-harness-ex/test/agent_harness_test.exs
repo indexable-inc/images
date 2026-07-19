@@ -48,7 +48,7 @@ defmodule AgentHarnessTest do
     @impl true
     def run(_instructions, ctx) do
       notify = Keyword.fetch!(ctx.opts, :notify)
-      send(notify, {:waiting, ctx.agent_id})
+      send(notify, {:waiting, self(), ctx.agent_id})
       {:ok, msgs} = AgentHarness.wait_for_message(ctx.harness, ctx.agent_id)
       send(notify, {:got, msgs})
       {:ok, "woken"}
@@ -62,6 +62,33 @@ defmodule AgentHarnessTest do
     def run(instructions, ctx) do
       send(Keyword.fetch!(ctx.opts, :notify), {:run, ctx.agent_id, instructions})
       {:ok, "answer:" <> instructions}
+    end
+  end
+
+  defmodule LatchRunner do
+    @behaviour AgentHarness.Runner
+
+    # Holds the final response open behind a test-controlled latch: the
+    # window between the runner's last checkpoint and its return is where a
+    # send_message must not strand (the agent is still :working, so nothing
+    # would wake it later).
+    @impl true
+    def run(instructions, ctx) do
+      notify = Keyword.fetch!(ctx.opts, :notify)
+      send(notify, {:run, self(), ctx.agent_id, instructions})
+      loop(instructions, ctx, notify)
+    end
+
+    defp loop(instructions, ctx, notify) do
+      receive do
+        :checkpoint ->
+          {:ok, %{messages: msgs}} = AgentHarness.checkpoint(ctx.harness, ctx.agent_id)
+          send(notify, {:drained, msgs})
+          loop(instructions, ctx, notify)
+
+        :release ->
+          {:ok, "final:" <> instructions}
+      end
     end
   end
 
@@ -110,7 +137,7 @@ defmodule AgentHarnessTest do
   test "wait_for_message blocks until a message arrives" do
     harness = start_harness(runner: WaitingRunner)
     {:ok, id} = create(harness)
-    assert_receive {:waiting, ^id}
+    assert_receive {:waiting, _task, ^id}
 
     refute_receive {:got, _msgs}, 100
 
@@ -169,8 +196,85 @@ defmodule AgentHarnessTest do
     assert {:ok, %{tokens_remaining: 0}} = AgentHarness.checkpoint(harness, id)
   end
 
+  test "a runner crash while blocked in wait_for_message does not strand the agent" do
+    harness = start_harness(runner: WaitingRunner)
+    {:ok, id} = create(harness)
+    assert_receive {:waiting, task, ^id}
+
+    # Pin the race: the runner notifies before its wait call registers, so
+    # wait for the agent to actually hold the waiter before killing it.
+    agent = GenServer.whereis(AgentHarness.Agent.via(harness, id))
+    wait_until(fn -> match?(%{waiters: [_ | _]}, :sys.get_state(agent)) end)
+
+    Process.exit(task, :kill)
+
+    # The crash surfaces to the lead as an :error final and the agent idles.
+    assert {:ok, [msg]} = AgentHarness.wait_for_message(harness, AgentHarness.lead_id(), 1_000)
+    assert msg.kind == :error
+    assert msg.from == id
+    assert {:ok, :idle} = AgentHarness.subagent_status(harness, id)
+
+    # Regression (C2): the dead run's stale waiter must not swallow the
+    # wake; the message has to start a fresh run.
+    :ok = AgentHarness.send_message(harness, "lead", id, "wake")
+    assert_receive {:waiting, _task2, ^id}
+    assert {:ok, :working} = AgentHarness.subagent_status(harness, id)
+  end
+
+  test "a message landing during the final-composition window re-runs the agent" do
+    harness = start_harness(runner: LatchRunner)
+    {:ok, id} = create(harness)
+    assert_receive {:run, task, ^id, "instructions"}
+
+    # The agent is :working and past its last checkpoint; these queue.
+    :ok = AgentHarness.send_message(harness, "lead", id, "follow-up")
+    :ok = AgentHarness.send_message(harness, "lead", id, "second")
+
+    send(task, :release)
+    assert {:ok, [final]} = AgentHarness.wait_for_message(harness, AgentHarness.lead_id(), 1_000)
+    assert final.text == "final:instructions"
+
+    # Regression (C1): the queued head becomes the new instructions instead
+    # of idling over it...
+    assert_receive {:run, task2, ^id, "follow-up"}
+
+    # ...and the rest of the queue stays FIFO for the next checkpoint.
+    send(task2, :checkpoint)
+    assert_receive {:drained, [msg]}
+    assert msg.text == "second"
+
+    send(task2, :release)
+  end
+
+  test "default subagent ids skip names the host already took" do
+    harness = start_harness([])
+
+    {:ok, "sub-2"} =
+      AgentHarness.create_subagent(harness, "instructions", name: "sub-2", notify: self())
+
+    # total_created is now 1, so the naive default for the next spawn would
+    # be the taken "sub-2"; admission must pick a free id instead.
+    assert {:ok, id} = create(harness)
+    assert id != "sub-2"
+    assert {:ok, :working} = AgentHarness.subagent_status(harness, id)
+  end
+
   test "messaging an unknown agent reports not_found" do
     harness = start_harness([])
     assert {:error, :not_found} = AgentHarness.send_message(harness, "lead", "ghost", "hi")
+  end
+
+  defp wait_until(fun, tries \\ 50) do
+    cond do
+      fun.() ->
+        :ok
+
+      tries == 0 ->
+        flunk("condition never became true")
+
+      true ->
+        Process.sleep(10)
+        wait_until(fun, tries - 1)
+    end
   end
 end

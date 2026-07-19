@@ -1,9 +1,11 @@
 defmodule AgentHarness.Names do
-  @moduledoc false
-
-  # One harness instance = one process family. Every registered name is
-  # derived from the instance name the host chose, so several harnesses can
-  # coexist in one VM (e.g. one per kernel session).
+  @moduledoc """
+  One harness instance = one process family. Every registered name is
+  derived from the instance name the host chose, so several harnesses can
+  coexist in one VM (e.g. one per kernel session). Deriving names mints
+  atoms, which are never garbage collected, so hosts must draw harness
+  names from a bounded set.
+  """
 
   @spec registry(atom()) :: atom()
   def registry(harness), do: Module.concat(harness, Registry)
