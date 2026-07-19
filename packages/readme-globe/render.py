@@ -1,9 +1,9 @@
-"""Render a spinning ASCII globe as an animated SVG.
+"""Render a spinning globe as braille-dithered text in an animated SVG.
 
-Pipeline: equirectangular earth texture -> land mask -> orthographic
-projection per frame -> ASCII shading -> stacked SVG text frames
-animated with CSS steps(). Land renders in the foreground color, ocean
-in the muted color, matching the house README palette.
+Each character cell is a braille glyph (U+2800 block), giving a 2x4
+subdot grid per cell: an 80x40 grid renders at 160x160 effective dots.
+Land dots survive an ordered-dither test against Lambert shading, so
+sphere depth emerges as dot density; ocean is a sparse muted pattern.
 """
 
 from __future__ import annotations
@@ -15,19 +15,29 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-COLS = 64
-ROWS = 32
-FRAMES = 36
-SECONDS = 9.0
+COLS = 80
+ROWS = 40
+FRAMES = 96
+SECONDS = 8.0
 TILT = math.radians(18.0)
-RAMP = ":-=+*#%@"  # land, dark -> lit
 LIGHT = (-0.45, 0.55, 0.75)
-CW = 7.2  # char advance at font-size 12
-RH = 14.4  # row height = 2 * CW so cells are square on screen
-PAD = 10.0
+CW = 6.0  # char advance at font-size 10
+RH = 12.0
+PAD = 8.0
+
+# braille dot bit for (subcol, subrow)
+BIT = {(0, 0): 0, (0, 1): 1, (0, 2): 2, (0, 3): 6,
+       (1, 0): 3, (1, 1): 4, (1, 2): 5, (1, 3): 7}
+
+BAYER = np.array([
+    [0, 8, 2, 10],
+    [12, 4, 14, 6],
+    [3, 11, 1, 9],
+    [15, 7, 13, 5],
+]) / 16.0
 
 
-def land_mask(path: str, width: int = 1440) -> np.ndarray:
+def land_mask(path: str, width: int = 2880) -> np.ndarray:
     img = Image.open(path).convert("RGB")
     img = img.resize((width, width // 2), Image.BILINEAR)
     a = np.asarray(img).astype(np.int16)
@@ -35,61 +45,66 @@ def land_mask(path: str, width: int = 1440) -> np.ndarray:
     return ~((b > r + 8) & (b > g + 8))  # ocean = blue-dominant
 
 
-def cell(mask: np.ndarray, i: int, j: int, lon0: float,
-         lit: tuple[float, float, float], ct: float, st: float) -> str:
-    h, w = mask.shape
-    hits = 0
-    shade = 0.0
-    on_sphere = 0
-    for di, dj in ((0.25, 0.25), (0.25, 0.75), (0.75, 0.25), (0.75, 0.75)):
-        x = 2.0 * (j + dj) / COLS - 1.0
-        y = 2.0 * (i + di) / ROWS - 1.0
-        rr = x * x + y * y
-        if rr > 1.0:
-            continue
-        on_sphere += 1
-        z = math.sqrt(1.0 - rr)
-        y2 = y * ct - z * st
-        z2 = y * st + z * ct
-        lat = math.asin(max(-1.0, min(1.0, -y2)))
-        lon = math.atan2(x, z2) + lon0
-        u = int(((lon / (2 * math.pi) + 0.5) % 1.0) * w) % w
-        v = int((0.5 - lat / math.pi) * (h - 1))
-        if mask[v, u]:
-            hits += 1
-        shade += max(0.0, x * lit[0] + (-y) * lit[1] + z * lit[2])
-    if on_sphere < 2:
-        return " "
-    shade /= on_sphere
-    if hits * 2 > on_sphere:
-        k = int((0.30 + 0.70 * shade ** 1.2) * (len(RAMP) - 1) + 0.5)
-        return RAMP[min(len(RAMP) - 1, k)]
-    return "."
-
-
 def render_frame(mask: np.ndarray, lon0: float) -> list[str]:
+    h, w = mask.shape
     lx, ly, lz = LIGHT
     n = math.sqrt(lx * lx + ly * ly + lz * lz)
-    lit = (lx / n, ly / n, lz / n)
+    lx, ly, lz = lx / n, ly / n, lz / n
     ct, st = math.cos(TILT), math.sin(TILT)
-    return [
-        "".join(cell(mask, i, j, lon0, lit, ct, st) for j in range(COLS))
-        for i in range(ROWS)
-    ]
+    subw, subh = COLS * 2, ROWS * 4
+    rows = []
+    for i in range(ROWS):
+        row = []
+        for j in range(COLS):
+            bits = 0
+            sea = 0
+            for sc in range(2):
+                for sr in range(4):
+                    px, py = j * 2 + sc, i * 4 + sr
+                    x = 2.0 * (px + 0.5) / subw - 1.0
+                    y = 2.0 * (py + 0.5) / subh - 1.0
+                    rr = x * x + y * y
+                    if rr > 1.0:
+                        continue
+                    z = math.sqrt(1.0 - rr)
+                    y2 = y * ct - z * st
+                    z2 = y * st + z * ct
+                    lat = math.asin(max(-1.0, min(1.0, -y2)))
+                    lon = math.atan2(x, z2) + lon0
+                    u = int(((lon / (2 * math.pi) + 0.5) % 1.0) * w) % w
+                    v = int((0.5 - lat / math.pi) * (h - 1))
+                    if not mask[v, u]:
+                        sea += 1
+                        continue
+                    shade = max(0.0, x * lx + (-y) * ly + z * lz)
+                    density = 0.35 + 0.65 * shade ** 1.1
+                    if density > BAYER[py % 4, px % 4]:
+                        bits |= 1 << BIT[(sc, sr)]
+            if bits:
+                row.append(chr(0x2800 + bits))
+            elif sea >= 4:
+                # sparse fixed weave so the water reads as a surface
+                row.append(chr(0x2800 + (0x04 if (i + j) % 2 else 0x20)))
+            else:
+                row.append(" ")
+        rows.append("".join(row))
+    return rows
 
 
 def esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def is_sea(c: str) -> bool:
+    return c in (chr(0x2804), chr(0x2820))
+
+
 def layer_rows(rows: list[str], *, keep_land: bool) -> list[str]:
-    """One SVG <text> per row, trimmed, width pinned with textLength."""
     out = []
     cls = "lnd" if keep_land else "sea"
     for i, row in enumerate(rows):
         s = "".join(
-            c if (c not in " ." if keep_land else c == ".") else " "
-            for c in row
+            c if (is_sea(c) != keep_land and c != " ") else " " for c in row
         )
         core = s.rstrip()
         lead = len(core) - len(core.lstrip())
@@ -122,15 +137,16 @@ def main() -> None:
         f"    #f{k} {{ animation-delay: {(k / FRAMES - 1) * SECONDS:.4f}s; }}"
         for k in range(FRAMES)
     )
-    svg = f"""<!-- generated by packages/readme-globe/render.py; regenerate: nix build .#readme-globe -->\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {wpx:.0f} {hpx:.0f}" role="img" aria-label="a spinning ascii globe: the whole world, rendered as text">
+    svg = f"""<!-- generated by packages/readme-globe/render.py; regenerate: nix build .#readme-globe -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {wpx:.0f} {hpx:.0f}" role="img" aria-label="a spinning globe rendered as braille text">
   <style>
     :root {{ --fg: #18181b; --muted: #8a8f98; }}
     @media (prefers-color-scheme: dark) {{
       :root {{ --fg: #e6e6e9; --muted: #7f838c; }}
     }}
-    text {{ font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; lengthAdjust: spacing; }}
+    text {{ font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 10px; }}
     .lnd {{ fill: var(--fg); }}
-    .sea {{ fill: var(--muted); opacity: 0.55; }}
+    .sea {{ fill: var(--muted); opacity: 0.5; }}
     .fr {{ visibility: hidden; animation: cyc {SECONDS}s steps(1, end) infinite; }}
     @keyframes cyc {{
       0% {{ visibility: visible; }}
@@ -146,7 +162,7 @@ def main() -> None:
 </svg>
 """
     Path(sys.argv[2]).write_text(svg)
-    print(f"{len(svg)} bytes, {FRAMES} frames")
+    print(f"{len(svg.encode())} bytes, {FRAMES} frames")
 
 
 if __name__ == "__main__":

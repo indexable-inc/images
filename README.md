@@ -1,7 +1,7 @@
 # index
 
 <p align="center">
-  <img src=".github/readme/globe.svg" alt="a spinning ascii globe: the whole world, rendered as text" width="480">
+  <img src=".github/readme/globe.svg" alt="a spinning globe: the whole world, rendered as braille text" width="480">
 </p>
 
 index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): one shared definition of the software everyone here runs. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/). It is also the default world an [ix.dev](https://ix.dev) VM boots: ix is the runtime, index is what runs on it.

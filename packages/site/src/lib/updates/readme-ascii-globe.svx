@@ -10,8 +10,8 @@ links:
     href: https://github.com/indexable-inc/index/tree/main/packages/readme-globe
 ---
 
-The README hero is now a spinning ASCII globe (`.github/readme/globe.svg`): the whole world rendered as monospace text, land in the foreground color, ocean muted, adapting to light and dark mode like every other README graphic. The flywheel diagram moves back to lead the Why section.
+The README hero is now a spinning globe (`.github/readme/globe.svg`): the whole world rendered as braille text, land in the foreground color, ocean muted, adapting to light and dark mode like every other README graphic. The flywheel diagram moves back to lead the Why section.
 
-The globe is not hand-drawn. `packages/readme-globe` is a Nix derivation that fetches a hash-pinned NASA Blue Marble equirectangular texture from Wikimedia Commons, thresholds it into a land mask, orthographically projects 36 rotation frames onto a character grid with Lambert shading and an axial tilt, and emits one animated SVG whose frames cycle with CSS `steps()`. Regenerate with `nix build .#readme-globe` and copy the output over the committed file.
+The globe is not hand-drawn. `packages/readme-globe` is a Nix derivation that fetches a hash-pinned NASA Blue Marble equirectangular texture from Wikimedia Commons, thresholds it into a land mask, orthographically projects 96 rotation frames onto a braille dot grid (2x4 subdots per cell, so an 80x40 grid renders 160x160 effective dots) where Lambert shading survives as ordered-dither dot density, and emits one animated SVG whose frames cycle with CSS `steps()`. Regenerate with `nix build .#readme-globe` and copy the output over the committed file.
 
-Why SVG instead of a GIF or webp: text stays crisp at any scale, `prefers-color-scheme` works (raster formats pick one background), reduced-motion users get a static frame, and 36 frames of ASCII compress to a fraction of any raster animation.
+Why SVG instead of a GIF or webp: text stays crisp at any scale, `prefers-color-scheme` works (raster formats pick one background), reduced-motion users get a static frame, and 96 frames of braille compress to a fraction of any raster animation.
