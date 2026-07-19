@@ -360,12 +360,18 @@
       text = ''
         Report effect-first: what it does, concrete numbers, one line of why;
         evidence one level down. Failures report as failures with output;
-        skipped steps are named; no hedging, no process narration. Artifacts
-        never discuss their own making.
+        skipped steps are named; no hedging, no process narration. Before
+        reporting progress, audit each claim against a tool result from this
+        session; report only what you can point to evidence for, and say what
+        is not yet verified. Artifacts never discuss their own making.
       '';
       reason = ''
         Failures were summarized as successes; 2026-07-18 feedback set the
-        effect-first formula. Merged with noMetaNarration (index#3164).
+        effect-first formula. Merged with noMetaNarration (index#3164). The
+        audit sentence is the load-bearing snippet from the Claude Fable 5
+        system card prompting guidance, measured to nearly eliminate
+        fabricated status reports:
+        https://www-cdn.anthropic.com/d00db56fa754a1b115b6dd7cb2e3c342ee809620.pdf
       '';
     };
   }
