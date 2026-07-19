@@ -1,0 +1,8 @@
+[
+  { "find": "#e2e8f0", "replace": "#ff0000", "expect": 61 },
+  { "find": "#64748b", "replace": "#ff7f00", "expect": 61 },
+  { "find": "#334155", "replace": "#00ff00", "expect": 40 },
+  { "find": "#475569", "replace": "#0000ff", "expect": 38 },
+  { "find": "#0f172a", "replace": "#8b00ff", "expect": 24 },
+  { "find": "#1a1a19", "replace": "#00ffff", "expect": 16 }
+]

@@ -1,0 +1,7 @@
+[
+  {
+    "find": "Welcome to Claude Code",
+    "replace": "Rainbow!!! Claude Code",
+    "expect": 10
+  }
+]
