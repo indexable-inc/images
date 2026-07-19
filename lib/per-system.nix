@@ -1073,7 +1073,7 @@
   # instantiation, so the scope costs nothing until a C/C++ cross package
   # is actually evaluated.
   crossNixpkgsByTarget = lib.genAttrs (lib.attrValues darwinTargetsBySystem) (
-    target: ix.darwinCrossPkgs {inherit pkgs target;}
+    target: ix.darwinCrossPkgs pkgs target
   );
   crossIxFor = target: let
     targetWorkspace =

@@ -592,10 +592,10 @@
   Linux -> Darwin nixpkgs cross scope for C/C++ closures that build through
   upstream nixpkgs packaging (`nix-ix`), with the linux-unbuildable apple
   toolchain pieces shimmed by llvm equivalents and SDK-lifted stubs.
-  `{ pkgs, target }: package set`.
+  `pkgs: target: package set`.
   See [`lib/darwin/nixpkgs-cross.nix`](lib/darwin/nixpkgs-cross.nix).
   */
-  darwinCrossPkgs = import ./darwin/nixpkgs-cross.nix {inherit macosSdk;};
+  darwinCrossPkgs = import ./darwin/nixpkgs-cross.nix {inherit macosSdk pins;};
 
   /**
   Verified Mac App Store `name -> numeric ID` catalog for nix-darwin
