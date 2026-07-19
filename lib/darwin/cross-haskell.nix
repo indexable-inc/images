@@ -33,11 +33,15 @@
 
   targetTool = name: "${crossGhc}/bin/${crossGhc.targetPrefix}${name}";
 
-  # Direct Haskell *library* deps from hackage2nix metadata; boot libs are
-  # null. Tool deps (alex/happy) are host programs, provided globally below.
+  # Direct Haskell deps from hackage2nix metadata; boot libs are null. Tool
+  # deps (alex/happy) are host programs, provided globally below. Executable
+  # deps ride along because configure is whole-package: a package whose
+  # executable needs more than its library (nix-derivation's
+  # pretty-derivation wants pretty-show) still has to resolve it.
   libDepsOf = drv:
     lib.unique (builtins.filter (d: d != null && (d.isHaskellLibrary or false)) (
       (drv.getCabalDeps.libraryHaskellDepends or [])
+      ++ (drv.getCabalDeps.executableHaskellDepends or [])
       ++ (drv.getCabalDeps.setupHaskellDepends or [])
     ));
 
