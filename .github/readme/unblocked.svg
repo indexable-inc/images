@@ -20,6 +20,11 @@
     <marker id="am" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
     </marker>
+    <!-- blocks pass under the main box: its interior is cut out of the moving layer -->
+    <mask id="under-main">
+      <rect x="0" y="0" width="720" height="320" fill="#fff"/>
+      <rect x="258" y="210" width="70" height="40" rx="4" fill="#000"/>
+    </mask>
   </defs>
 
   <rect class="frame" x="1" y="14" width="718" height="292" rx="8"/>
@@ -65,6 +70,7 @@
   <path class="mwire" d="M 360 252 H 634"/>
   <path class="mwire" d="M 360 275 H 634"/>
   <text class="m cap" x="645" y="174" text-anchor="middle">everyone</text>
+  <g mask="url(#under-main)">
   <rect class="blk" opacity="0" x="-4" y="-4" width="8" height="8">
     <animateMotion dur="2.2s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;1" keyTimes="0;0.975;1" path="M 100 230 L 360 230 L 360 185 L 634 185"/>
     <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.975;0.995;1" dur="2.2s" repeatCount="indefinite"/>
@@ -105,6 +111,7 @@
     <animateMotion begin="1.1s" dur="2.2s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;1" keyTimes="0;0.975;1" path="M 100 230 L 360 230 L 360 275 L 634 275"/>
     <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.975;0.995;1" begin="1.1s" dur="2.2s" repeatCount="indefinite"/>
   </rect>
+  </g>
   <rect class="ink" x="640" y="180" width="10" height="10">
     <animate attributeName="opacity" values="0.35;1;0.35" keyTimes="0;0.07;1" dur="1.1s" begin="0.97s" repeatCount="indefinite"/>
   </rect>
