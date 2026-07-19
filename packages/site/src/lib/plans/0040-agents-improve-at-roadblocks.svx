@@ -1,0 +1,277 @@
+---
+id: 0040-agents-improve-at-roadblocks
+number: '0040'
+title: The same roadblock never costs the same time twice
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-19'
+updated: '2026-07-19'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 7, why: 'closes the loop from incident to lesson to consumer to eval, across process, harness, and CI' }
+  impact: { value: 8, why: 'one frozen pin cost a morning across five root causes on 2026-07-19; every class had prior sightings' }
+  effort: { value: 6, why: 'stall detection, a paging consumer, and a replay battery; system-prompt-eval and indexbench exist' }
+  risk: { value: 4, why: 'worst case is nagging pages and stale lessons; the eval gate catches a net-negative loop' }
+  maturity: { value: 2, why: 'session-retro and escalation issues exist; nothing pages a consumer and nothing measures speed' }
+  leverage: { value: 9, why: 'every future roadblock pays out a lesson other agents inherit instead of a private rerun' }
+  taste: { value: 8, why: 'what counts as an incident class, a lesson, and a fair replay is the judgment' }
+description: 'Every roadblock an agent clears ends with two artifacts: the fix and a lesson with a named consumer. Stalls escalate reasoning depth and parallelism instead of retrying the same probe; escalation issues and red scheduled workflows page an agent instead of a void; four speed metrics, replayed from real incidents, gate the loop.'
+---
+
+## Summary
+
+An agent that clears a roadblock today leaves one artifact: the fix.
+The wrong turns, the decisive probe, and the mechanism evaporate with
+the session, so the next agent that hits the same class pays full price
+again. This plan makes a second artifact mandatory. Every cleared
+roadblock ends with a lesson (a memory topic, a lint or gate, a skill,
+or an issue) plus a named consumer that loads it when the class recurs.
+Two supporting rules: when elapsed time exceeds expectation, escalate
+reasoning depth and parallelism rather than re-running the same probe;
+and every standing alarm pages an agent, never a void. A replay eval
+over real incidents keeps the loop honest.
+
+## Motivation: the morning of 2026-07-19
+
+The fleet pin froze at 00:43 and stayed frozen all morning. Pulling
+that one thread surfaced five stacked root causes; the full account is
+`packages/site/src/lib/updates/pin-freeze-postmortem.svx`. Three of the
+five are this plan's case study:
+
+- Union gap
+  ([index#3669](https://github.com/indexable-inc/index/issues/3669)).
+  Two green PRs merged into a red main: required checks are non-strict,
+  nothing built the union, and main's own Check runs cancelled each
+  other on every push, so no run ever finished and named the bad
+  commit. The site build stayed red for 8.5 hours while the
+  publish-hole gate correctly held the pin.
+- Wedge reaper
+  ([ix#7851](https://github.com/indexable-inc/ix/issues/7851)). A
+  zero-CPU wedge heuristic shipped two days earlier killed five healthy
+  network-bound cache jobs in one morning; a pure-network
+  `nix-store --realise` sits below the reaper's own measured wedge
+  floor. The first bridge (imperative `systemctl stop`) was silently
+  undone by a deploy that re-armed the timer at 12:32:56Z, and its
+  first pass killed the next push lane one second later. The durable
+  bridge, a runtime mask that survives deploys, lives in an issue
+  comment.
+- Stuck updater
+  ([index#3692](https://github.com/indexable-inc/index/issues/3692)).
+  The hourly flake updater produced the correct nixpkgs bump for 159
+  hours, but its rolling PR is bot-authored and bot PRs never trigger
+  CI, so nothing could land it. The stale pin then downgraded
+  TigerBeetle under a one-way-upgraded data file
+  ([ix#7844](https://github.com/indexable-inc/ix/issues/7844)): 1446
+  crash-loops, billing dispatch down. A human re-authoring the
+  identical bump got CI instantly.
+
+The bugs differ; the meta-failure is shared. Loud signals existed for
+hours or days and nothing consumed them. The updater's own escalation
+issue ([index#3438](https://github.com/indexable-inc/index/issues/3438))
+refreshed itself every hour from 2026-07-12 20:34Z and posted to Slack
+at 03:28Z; the first action it produced was a human re-typing the bump
+later that morning, nine hours after the page and 160 hours after
+first-detected. And each roadblock was solved fresh, in session, from
+zero prior. Sightings of the same classes existed
+([index#2952](https://github.com/indexable-inc/index/issues/2952) for
+main runs cancelling each other,
+[index#2728](https://github.com/indexable-inc/index/issues/2728) for
+the unlandable bot PR), and none of them was in the path of the agents
+debugging the freeze.
+
+## Detailed design
+
+### The loop: every roadblock pays out a lesson with a consumer
+
+Closing a roadblock requires two artifacts: the fix, and a lesson in
+one of four forms, ordered by preference:
+
+1. a gate or lint, when the class is machine-checkable (the plan-number
+   union gap becomes a pure-eval uniqueness assertion);
+2. a skill, when the class is a procedure (the runtime-mask-over-deploy
+   bridge from ix#7851);
+3. a memory topic, when the class is a fact about the world (bot PRs
+   never trigger CI);
+4. an issue with the mechanism named, when the fix is structural and
+   pending (index#3669 itself).
+
+Each lesson names its consumer: the specific thing that loads it at the
+moment the class recurs. A lint fires in CI; a skill matches on its
+trigger phrases; a memory topic is keyed by the error string an agent
+would grep for; an issue is linked from the alarm that will re-fire.
+"A postmortem exists" is not consumption. The SRE literature is blunt
+about this: without a formalized process of learning from incidents,
+they recur ad infinitum. The `session-retro` skill already mines
+transcripts for friction and files issues; it gains the closing check
+that any session containing a detected roadblock must name where the
+lesson landed and who consumes it, or state why the class is one-shot.
+Lessons stay blameless in the Allspaw sense: they name mechanisms, not
+agents, because the account of why the action made sense at the time is
+exactly the part a future agent needs.
+
+### Detection: elapsed over expectation, then widen
+
+A roadblock is declared when elapsed time on a step exceeds its stated
+expectation, and the declared response is to change the shape of the
+search, never to run the same probe a third time. Snell et al. show
+test-time compute is most effective when allocation tracks difficulty:
+easy prompts want one cheap sequential pass, hard prompts want parallel
+exploration. Applied at an impasse: raise reasoning depth, fan out
+decorrelated subagents on competing hypotheses, and re-read the priors
+(memory topics, open issues, postmortems) before generating new probes.
+Plan 0020 owns the in-session stall signal and its escalation ladder;
+this plan takes the moment 0020 fires as its detection input and owns
+what must exist after the session ends. The reaper incident is the
+model trace: the responder measured the kill pattern across five jobs,
+read the reaper source, and filed the mechanism inside 45 minutes; the
+updater incident is the anti-trace, 160 hours of an unchanged probe.
+
+### Consumption: alarms page an agent, not a void
+
+Every standing alarm names an agent dispatch as its consumer:
+
+- An escalation issue refresh (the index#3438 pattern) dispatches a
+  fleet agent with the issue as the task and a deadline; the dispatch
+  posts back what it did or why it stopped.
+- A scheduled workflow that goes red on main pages the same dispatcher
+  within one tick. Per-commit verdicts on main
+  ([index#3670](https://github.com/indexable-inc/index/issues/3670),
+  [ix#7846](https://github.com/indexable-inc/ix/issues/7846)) make the
+  red attributable to a commit; the dispatch starts from that commit.
+- An alarm that cannot name its consumer is deleted or wired. An alarm
+  whose consumer ignored it twice is itself an incident.
+
+This is the DORA instinct imported into agent operations: recovery
+time only improves when it is measured from the failure signal to the
+restore, per class, and treated as a first-order outcome.
+
+### Evals
+
+Four metrics, all computable from timestamps the org already records
+(workflow runs, issue events, pin movements, journal lines):
+
+- time-to-green after red main: minutes from the first red check on a
+  main commit to the pin advancing again. Baseline 2026-07-19: 8.5
+  hours red, pin held from 00:43.
+- time-to-root-cause per incident class: first red signal to an issue
+  naming the mechanism rather than the symptom. Baselines: 45 minutes
+  for the reaper (first kill 11:36:48Z, ix#7851 filed 12:21Z), 160
+  hours for the updater.
+- repeat-incident rate: the same class recurring within 30 days. The
+  reaper timer re-arming after a deploy and killing again the same
+  morning counts; so does a second union-gap red.
+- lesson-consumption rate: fraction of landed lessons that were loaded
+  by a later session facing the same class (lint fired, skill invoked,
+  memory topic read, issue linked from the new occurrence). A lesson
+  unconsumed after 90 days is a deletion candidate, same hygiene as
+  alarms.
+
+The harness composes two things the repo already ships.
+`packages/agent/system-prompt-eval` spawns fresh `claude -p` rollouts
+and has an LLM judge score transcripts into diffable JSON under
+`eval-results/`. `packages/indexbench` has the Metric schema, durable
+run history, and a comparator that exits non-zero on regression
+(`doc/indexbench/overview.md`). The replay battery:
+
+- An incident becomes an eval case: repo pinned at the incident commit,
+  the symptom as the task ("cache-ready has not advanced since 00:43;
+  find the mechanism"), tools sandboxed the way system-prompt-eval's
+  safe mode already runs.
+- The judge grades mechanism-found against the postmortem as ground
+  truth, and the speed metric is tool calls to first correct mechanism
+  statement; wall clock is recorded but call count is the stable unit
+  across machines, matching indexbench's machine-id discipline.
+- Each case runs two arms, lesson store loaded and absent. The loaded
+  arm must reach the mechanism in fewer calls, otherwise the lesson
+  failed to teach and the case fails.
+- Scores flow through indexbench as `suite = roadblocks`, so nightly
+  history and the regression gate come for free, and a behavioral PR
+  that regresses the suite is handled like a perf regression (plan
+  0023's per-surface lane is the vehicle).
+
+The first three cases are the union gap, the reaper, and the updater,
+judged against `pin-freeze-postmortem.svx`.
+
+### Staged rollout
+
+1. Measure only: compute the four metrics over the last 90 days from
+   existing timestamps; publish the baseline as a site update. No
+   behavior changes.
+2. Lesson contract: closing an incident issue requires the lesson
+   artifact and consumer line; `session-retro` enforces the same for
+   agent sessions. Today's three incidents become the first replay
+   cases.
+3. Consumers: the escalation-issue and red-scheduled-workflow
+   dispatcher, plus the alarm-hygiene rule.
+4. Gate: the replay battery runs nightly through the indexbench
+   comparator; regressions block behavioral PRs.
+
+### Relation to existing plans
+
+- 0016 makes red checks carry their evidence; this plan consumes that
+  evidence at dispatch time.
+- 0020 is the in-session half (feel the stall); this plan is the
+  retrospective half (never pay full price twice) and shares its
+  detection.
+- 0023 is the eval discipline; the roadblocks suite is one of its
+  lanes.
+- 0026, 0028, and 0039 name stores where lessons could live; this plan
+  is agnostic about the store and strict about the consumer.
+- 0034's fleet fixer is a natural consumer for mechanical lessons.
+
+## Prior art
+
+- [Reflexion](https://arxiv.org/abs/2303.11366) (Shinn et al., NeurIPS
+  2023): failure signals become verbal lessons in an episodic memory
+  buffer, raising HumanEval pass@1 from 80 to 91 percent without weight
+  updates. The lesson artifact is this idea made durable across
+  sessions.
+- [ExpeL](https://arxiv.org/abs/2308.10144) (Zhao et al., AAAI 2024):
+  insights extracted from a cross-task success/failure pool and
+  replayed at inference, with add/edit/upvote/downvote curation. The
+  closest published shape to a lessons-learned store; it lacks the
+  consumer contract.
+- [Voyager](https://arxiv.org/abs/2305.16291) (Wang et al., 2023):
+  lessons as executable code in an ever-growing skill library that
+  compounds and transfers to new worlds. Our skills and lints are the
+  same move: a lesson you can run beats a lesson you can read.
+- [Scaling LLM test-time compute optimally](https://arxiv.org/abs/2408.03314)
+  (Snell et al., 2024): allocating inference compute by difficulty
+  beats uniform best-of-N by roughly 4x. The stall rule is this result
+  applied at the moment of impasse.
+- [Postmortem Culture: Learning from Failure](https://sre.google/sre-book/postmortem-culture/)
+  (Google SRE book, ch. 15): unlearned incidents recur ad infinitum;
+  postmortems exist to prevent recurrence and get aggregated for trend
+  analysis. The lesson-consumption metric operationalizes the chapter.
+- [Blameless PostMortems and a Just Culture](https://www.etsy.com/codeascraft/blameless-postmortems)
+  (Allspaw, Etsy, 2012): mechanism accounts require blamelessness, and
+  remediation comes from the people closest to the failure. Lessons
+  name mechanisms, never agents.
+- [DORA's software delivery performance metrics](https://dora.dev/guides/dora-metrics/):
+  failed-deployment recovery time and change-fail rate as the standard
+  speed/stability pair, refined over a decade of research. The four
+  metrics above are the agent-ops analogue.
+- [Measuring AI Ability to Complete Long Tasks](https://arxiv.org/abs/2503.14499)
+  (METR, 2025): agent capability as a task-length time horizon, with
+  growth driven substantially by the ability to recover from mistakes.
+  Per-class time-to-root-cause is the org-local version of that curve;
+  if a better model costs the same minutes on a known class, the loop
+  is broken.
+
+## Open questions
+
+- Class identity: classes start hand-labeled, but what assigns a new
+  incident to an old class (the judge, embedding match, or the human
+  closing the issue)?
+- Expectation source for stall detection: stated per-step estimates, or
+  priors learned from transcript history?
+- Lesson placement: memory topics are per-user today; weave claims
+  (plan 0039) are fleet-wide but have no read surface yet. Start with
+  both writable and let the consumption metric pick?
+- Replay drift: incident commits age with toolchains and pins; how long
+  does a replayed case stay a fair test?
+
+Drafted by Claude Code (Fable); comments wanted, hence the RFC flag.
