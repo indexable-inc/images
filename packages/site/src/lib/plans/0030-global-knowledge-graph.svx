@@ -6,7 +6,7 @@ status: Sketch
 rfc: true
 authors: andrewgazelka
 created: '2026-07-18'
-updated: '2026-07-18'
+updated: '2026-07-19'
 trackingIssue: null
 supersedes: null
 supersededBy: null
@@ -18,7 +18,7 @@ scores:
   maturity: { value: 1, why: 'unbuilt; the substrate pieces (memory files, contacts, playbook people pages) exist separately' }
   leverage: { value: 9, why: 'each new entity class and each new consumer makes every existing node more connected and more useful' }
   taste: { value: 8, why: 'which classes deserve to exist and when two nodes are the same entity are judgment calls all the way down' }
-description: 'Org knowledge lives in disconnected piles: agent memory facts, a contacts directory, playbook people pages, blog essays, plan documents. Each names the same people, tools, concepts, and failure modes with no shared identity. Sketch one global ontology, a typed entity graph whose classes span people, orgs, tools, concepts, cognitive biases, incidents, decisions, facts, and posts, shared by every consumer, with the shared agent memory of plans 0026 and 0028 as the seed corpus and the ix.dev blog of plan 0029 as the first public consumer.'
+description: 'Org knowledge lives in disconnected piles: agent memory facts, a contacts directory, playbook people pages, blog essays, plan documents. Each names the same people, tools, concepts, and failure modes with no shared identity. Sketch one global ontology, a typed entity graph whose classes span people, orgs, tools, concepts, cognitive biases, incidents, decisions, facts, and posts, shared by every consumer, with the shared agent memory of plans 0026 and 0028 as the seed corpus and the ix.dev blog of plan 0029 as the first public consumer. Agents communicate through it too: subscriptions on nodes, classes, or standing queries turn every write into a notification, so ideas sync across agents instead of waiting to be re-grepped.'
 ---
 
 ## Summary
@@ -38,12 +38,24 @@ Biases earn a class of their own: agents and humans both make recurring judgment
 - **Seed corpora.** Shared memory facts (0028), the contacts directory, playbook people pages, plan documents, and blog posts (0029) each get a one-time migration that stamps ids and extracts the edges already implicit in their prose and links.
 - **Consumers.** Agent recall follows edges instead of grepping flat files. The blog renders margin notes by resolving entity links. Plan pages show who decided what and which incidents motivated them. Session provenance (plan 0027) gives `learned-in` edges real targets.
 
+## Agents communicating over the graph
+
+Storage alone leaves agents polling. The graph also wants to be the medium agents talk through: an agent publishes an idea by writing a node, and other agents hear about it because they subscribed to the part of the graph it landed in.
+
+- **Subscriptions are queries, not channels.** An agent subscribes to a node and its neighborhood (this incident and everything within two edges), to a class (any new `bias` node), or to a standing datalog-style query (any new `fact` whose `about` edge reaches a tool my current task touches). No topic naming, no fan-out lists: the graph structure is the routing table.
+- **Publish is just write.** Writing a node or edge is the only publish primitive. A subscription matching the write produces a notification to the subscriber: a kernel-workspace message for live agents, a queued digest for sessions that start later. Two concurrent agents converging on the same concept discover each other because each one's write trips the other's subscription.
+- **Ideas propagate as nodes, not messages.** An agent that wants input publishes an `idea` node with edges to what it concerns; agents subscribed nearby respond by attaching their own nodes (supporting fact, refuting fact, prior incident) rather than replying in a channel. The conversation is the subgraph it leaves behind, which means it is durable, citable, and greppable after both agents are gone, unlike a chat thread.
+- **Standing queries replace polling loops.** Today a long-running agent re-greps memory hoping something changed. A standing query with a notification callback inverts that: the agent declares what part of the world it cares about once, and the graph pushes deltas.
+
+This is deliberately not a message bus with a graph bolted on. The kernel workspace and task lists remain the sub-minute coordination surface; graph notifications carry durable knowledge events (a node appeared, an edge changed) at the minutes-fresh cadence plan 0028 already accepts for memory.
+
 ## Relationship to other plans
 
 - **0028 cross-agent memory** is the transport and format substrate; this plan gives its facts identity and edges.
 - **0026 shared agent brain** is the ranking layer (reinforcement, decay) over this graph; this plan is its schema.
 - **0029 blog on ix.dev** is the first public consumer: posts as nodes, margin links as edges. The two plans land independently but are designed together; a blog outside index could not join the graph.
 - **0027 session provenance** supplies the citation targets for `learned-in` and `decided-in` edges.
+- **0025 agent gossip** carries friction and complaints below the bar of a durable node; a gossip item that gets verified graduates into the graph, and subscriptions are the delivery mechanism gossip lacked.
 
 ## Drawbacks
 
@@ -55,5 +67,7 @@ Ontologies are where knowledge projects go to die: schema debates replace writin
 - Entity resolution: who merges two nodes that turn out to be the same person or concept, and what happens to inbound edges?
 - Public and private views: blog margin notes must not leak person nodes sourced from private memory. Is visibility a node attribute or a repo boundary?
 - Is a bias catalog seeded from the literature, or only from biases actually observed in incidents here?
+- Query language for subscriptions: real datalog, a fixed menu of patterns (node, class, k-hop neighborhood), or start with the menu and grow into datalog when a consumer needs a join?
+- Notification transport: kernel workspace messages exist today, but what wakes an agent that subscribed and then went idle?
 
 Drafted by an AI agent via Claude Code; comments wanted, hence the RFC flag.
