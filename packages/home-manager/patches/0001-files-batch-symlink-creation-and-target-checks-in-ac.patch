@@ -25,10 +25,10 @@ identical resulting tree.
 Refs indexable-inc/index#3689
 
 diff --git a/modules/files.nix b/modules/files.nix
-index 121b72e24..97261fd93 100644
+index 121b72e24..4bda944b8 100644
 --- a/modules/files.nix
 +++ b/modules/files.nix
-@@ -191,7 +191,73 @@ in
+@@ -191,7 +191,80 @@ in
  
            newGenFiles="$1"
            shift
@@ -45,7 +45,14 @@ index 121b72e24..97261fd93 100644
            for sourcePath in "$@" ; do
 +            relativePath="''${sourcePath#$newGenFiles/}"
 +            targetPath="$HOME/$relativePath"
-+            if [[ -L "$targetPath" ]] ; then
++            if [[ -L "''${targetPath%/*}" ]] ; then
++              # The parent directory is itself a symlink (e.g. a stale
++              # whole-directory link from an older layout). The batched
++              # `ln -n -t` below would refuse it ("Not a directory"), while
++              # the original per-file `ln -T` traverses it; keep upstream
++              # behavior on the slow path.
++              slowSources+=("$sourcePath")
++            elif [[ -L "$targetPath" ]] ; then
 +              symlinkTargets+=("$targetPath")
 +              symlinkSources+=("$sourcePath")
 +            elif [[ -e "$targetPath" ]] ; then
@@ -102,7 +109,7 @@ index 121b72e24..97261fd93 100644
              relativePath="''${sourcePath#$newGenFiles/}"
              targetPath="$HOME/$relativePath"
              if [[ -e "$targetPath" && ! -L "$targetPath" ]] ; then
-@@ -209,7 +275,7 @@ in
+@@ -209,7 +282,7 @@ in
              fi
  
              if [[ -e "$targetPath" && ! -L "$targetPath" ]] && cmp -s "$sourcePath" "$targetPath" ; then
