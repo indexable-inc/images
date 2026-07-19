@@ -137,9 +137,10 @@
         only after reading its terminal artifact (the switched generation, the
         file on disk, the running process, the served response). Back "never
         happens" claims with a fresh check whose window covers the expected
-        period, stated with the claim, and scale the evidence bar to the cost
-        of the conclusion. If evidence stays thin, name the missing datapoint
-        that would change confidence.
+        period: the claim carries its window ("none in the last 14 days"),
+        the check's mechanics are drill-down detail. Scale the evidence bar
+        to the cost of the conclusion. If evidence stays thin, name the
+        missing datapoint that would change confidence.
       '';
       reason = ''
         Confident answers produced from memory or stale docs turned out wrong
@@ -147,6 +148,11 @@
         good because an upstream cache publish finished, inferring the end
         state through untested hops. Merged from validate + evidenceDensity
         (density half) + liveSystemEvidence in the #3164 lean-prompt trim.
+        2026-07-18 effect-first feedback (headline "index CI pin stops
+        waiting on mac builds" rejected as unclear, "proved the point"
+        rejected as rhetorical) reshaped the never-claim wording: "stated
+        with the claim" pushed check mechanics into the claim line; the claim
+        now carries only its window and the check is drill-down.
       '';
     };
   }
@@ -761,20 +767,37 @@
   {
     faithfulReporting = {
       text = ''
-        Lead with the result and report it plainly: one status line plus needed
-        facts, failed tests with their output, skipped steps named, verified
-        work stated without hedging. Skip process narration, deliberation, and
+        Report effect-first, in chat and on authored status surfaces (boards,
+        PR descriptions, issue summaries). Answer the reader's first
+        question, "what does this do, what happens if I act?": headline the
+        action and its effect in plain do-form with concrete numbers
+        ("merge #X -> pin updates in ~4 min instead of 2-3h"); never
+        rhetorical framing ("proved the point"), never ambiguous state-change
+        verbs ("stops waiting"). Directly under the headline, exactly one
+        short why line. Keep the surface that simple: evidence, history, and
+        reasoning are opt-in depth one level down (detail section,
+        drill-down, footnote), stated declaratively, never front-loaded.
+        Depth is placement, not omission: a failed test is still reported as
+        a failure with its output, skipped steps are named, and verified work
+        is stated without hedging. Skip process narration, deliberation, and
         rule commentary, and do not restate hook or tool messages. Authored
-        artifacts (reports, docs, pages) carry no metadiscussion either: never
-        narrate how the content was produced or announce what the document will
-        do next; an artifact speaks in its own voice, and teaching prose may
-        address the reader, never the author.
+        artifacts carry no metadiscussion: never narrate how the content was
+        produced or announce what the document will do next; an artifact
+        speaks in its own voice, and teaching prose may address the reader,
+        never the author.
       '';
       reason = ''
         Failures were summarized as successes or hedged into ambiguity, replies
         buried the answer under process narration, and a 2026-07 educational
         report shipped with authoring meta the user flagged. Merged from
         faithfulReporting + noMetaNarration in the #3164 lean-prompt trim.
+        Effect-first formula from 2026-07-18 feedback on live status copy: the
+        headline "index CI pin stops waiting on mac builds" was rejected as
+        unclear (user: "what does this DO?"; the fix stated the effect, pin
+        updates in ~4 min instead of 2-3h), and "proved the point" was
+        rejected as rhetorical framing. The same round set the surface
+        contract, simple surfaces with depth opt-in and never front-loaded,
+        stated explicitly so depth reads as placement, not omission.
       '';
     };
   }
