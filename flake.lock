@@ -832,11 +832,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1784469527,
-        "narHash": "sha256-KEHzrBRiB5CQ/qsy2MWMZxgV4MF0FqsQO/iUmqyi+/8=",
+        "lastModified": 1784488930,
+        "narHash": "sha256-9HvIk/s+k6ptwRbAkbzdzeX4P/ChlZVnV4befgAG+Gw=",
         "owner": "indexable-inc",
         "repo": "zed",
-        "rev": "2cdcb7caf34fdf158a302ea38549c379bf161a87",
+        "rev": "b72cf7701e5cbfbcaa3324da8fd7b8895476e346",
         "type": "github"
       },
       "original": {
