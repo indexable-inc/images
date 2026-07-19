@@ -6,7 +6,7 @@
 
 One build graph for everything.
 
-index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): packages, patched toolchains (Nix, Clippy), NixOS and Home Manager modules, VM images, and the CI that builds them all live together, so they move together.
+index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): packages, patched toolchains (Nix, Clippy), NixOS and Home Manager modules, VM images, and CI, together in one graph.
 
 ## Why
 
@@ -16,7 +16,7 @@ index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixp
   <img src=".github/readme/one-graph.svg" alt="one patch fans out to every package in the graph" width="720">
 </p>
 
-Patch a compiler, fix a library, tighten a lint: every package in the graph rebuilds against it. Nothing quietly runs last year's version of anything.
+Patch a compiler, fix a library, tighten a lint: nothing quietly runs last year's version of anything.
 
 ### Never blocked on upstream
 
@@ -24,7 +24,7 @@ Patch a compiler, fix a library, tighten a lint: every package in the graph rebu
   <img src=".github/readme/upstream.svg" alt="patches live in the repo next to the code; no waiting on upstream" width="720">
 </p>
 
-Patches live here, next to the code that needs them. A slow, wrong, or abandoned upstream never blocks a fix, and no dependency has a bus factor outside the repo.
+Patches live next to the code that needs them. No dependency has a bus factor outside the repo.
 
 ### One standard for everything
 
@@ -32,7 +32,7 @@ Patches live here, next to the code that needs them. A slow, wrong, or abandoned
   <img src=".github/readme/one-standard.svg" alt="custom clippy lints, cve scans, and license checks cover the whole graph" width="720">
 </p>
 
-Security scans, license checks, custom Clippy lints: every rule runs over the whole graph. Add a rule and every package meets it, in the same change.
+Add a rule and every package meets it, in the same change.
 
 ### No stable APIs required
 
@@ -40,7 +40,7 @@ Security scans, license checks, custom Clippy lints: every rule runs over the wh
   <img src=".github/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
 </p>
 
-Every consumer of every internal API lives here, and agents make repo-wide refactors cheap. An API is free to be correct instead of compatible: change it, migrate every call site, land one commit.
+Every consumer of an API lives in this repo, and agents make repo-wide refactors cheap, so an API can be correct instead of compatible.
 
 ### Prebuilt everywhere
 
@@ -48,11 +48,7 @@ Every consumer of every internal API lives here, and agents make repo-wide refac
   <img src=".github/readme/prebuilt.svg" alt="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos" width="720">
 </p>
 
-CI builds the graph for Linux, cross-compiles it for macOS, and pushes to `cache.ix.dev`. Binaries download instead of compile.
-
-## The flywheel
-
-These compound. Better tools make agents more capable; capable agents make sweeping changes cheap; cheap changes keep everything at the newest standard; the improved tools feed straight back in. The repo gets easier to improve the more it improves.
+You download binaries instead of compiling them.
 
 ## Layout
 
