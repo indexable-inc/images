@@ -4,7 +4,7 @@
   pkgs ? ix.pkgs,
 }: let
   catalog = ./catalog.json;
-  cards = (lib.importJSON catalog).cards;
+  inherit (lib.importJSON catalog) cards;
   # Hashes live in catalog.json, not inline here (repo pin policy).
   pdfFor = card:
     pkgs.fetchurl {
