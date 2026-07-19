@@ -57,7 +57,7 @@ function tokenize(input: string): Token[] | { error: string } {
   const tokens: Token[] = [];
   let i = 0;
   while (i < input.length) {
-    const c = input[i];
+    const c = input.charAt(i);
     if (/\s/.test(c)) {
       i++;
       continue;
@@ -89,7 +89,7 @@ function tokenize(input: string): Token[] | { error: string } {
     }
     if (/[a-zA-Z0-9_-]/.test(c)) {
       let j = i;
-      while (j < input.length && /[a-zA-Z0-9_-]/.test(input[j])) j++;
+      while (j < input.length && /[a-zA-Z0-9_-]/.test(input.charAt(j))) j++;
       tokens.push({ kind: 'tag', name: input.slice(i, j).toLowerCase() });
       i = j;
       continue;
@@ -182,10 +182,10 @@ export function highlightExpression(input: string): HighlightToken[] {
   const out: HighlightToken[] = [];
   let i = 0;
   while (i < input.length) {
-    const c = input[i];
+    const c = input.charAt(i);
     if (/\s/.test(c)) {
       let j = i;
-      while (j < input.length && /\s/.test(input[j])) j++;
+      while (j < input.length && /\s/.test(input.charAt(j))) j++;
       out.push({ text: input.slice(i, j), kind: 'space' });
       i = j;
     } else if (c === '&') {
@@ -202,7 +202,7 @@ export function highlightExpression(input: string): HighlightToken[] {
       i++;
     } else if (/[a-zA-Z0-9_-]/.test(c)) {
       let j = i;
-      while (j < input.length && /[a-zA-Z0-9_-]/.test(input[j])) j++;
+      while (j < input.length && /[a-zA-Z0-9_-]/.test(input.charAt(j))) j++;
       out.push({ text: input.slice(i, j), kind: 'tag' });
       i = j;
     } else {

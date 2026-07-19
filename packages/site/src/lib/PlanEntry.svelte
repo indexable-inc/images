@@ -5,6 +5,7 @@
   import StatusBadge from './StatusBadge.svelte';
   import { planDimensions } from './plans';
   import ScoreMeter from './ScoreMeter.svelte';
+  import { scoreOf } from './scores';
   import type { Plan } from './plans';
 
   const { plan }: { plan: Plan } = $props();
@@ -48,11 +49,12 @@
       {/if}
     </dd>
     {#each planDimensions as dim (dim.key)}
+      {@const score = scoreOf(plan.id, plan.scores, dim.key)}
       <dt>{dim.label}</dt>
       <dd class="score">
-        <ScoreMeter value={plan.scores[dim.key].value} />
-        <span class="value">{plan.scores[dim.key].value}</span>
-        <span class="why">{plan.scores[dim.key].why}</span>
+        <ScoreMeter value={score.value} />
+        <span class="value">{score.value}</span>
+        <span class="why">{score.why}</span>
       </dd>
     {/each}
     <dt>Authors</dt>
@@ -66,9 +68,9 @@
     </dd>
     <dt>Created</dt><dd><time datetime={plan.created}>{day(plan.created)}</time></dd>
     <dt>Updated</dt><dd><time datetime={plan.updated}>{day(plan.updated)}</time></dd>
-    <dt>Tracking issue</dt><dd>{plan.trackingIssue ?? '—'}</dd>
-    <dt>Supersedes</dt><dd>{plan.supersedes ?? '—'}</dd>
-    <dt>Superseded by</dt><dd>{plan.supersededBy ?? '—'}</dd>
+    <dt>Tracking issue</dt><dd>{plan.trackingIssue ?? '-'}</dd>
+    <dt>Supersedes</dt><dd>{plan.supersedes ?? '-'}</dd>
+    <dt>Superseded by</dt><dd>{plan.supersededBy ?? '-'}</dd>
   </dl>
   <div class="body">
     <Body />
@@ -77,46 +79,49 @@
 
 <style>
   .eyebrow {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
     color: var(--fg-faint);
     text-transform: uppercase;
-    margin: 0 0 -0.5rem;
+    margin: 0;
   }
 
   .authors {
     display: flex;
     align-items: center;
-    gap: 0.9rem;
+    gap: 0 2ch;
     flex-wrap: wrap;
   }
 
   .author {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 1ch;
+    text-decoration: none;
   }
 
+  .author:hover {
+    background: var(--fg);
+    color: var(--bg);
+  }
+
+  /* One cell square, minus the hairline so the row stays one cell tall. */
   .avatar {
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
+    width: calc(var(--cell-h) - 2px);
+    height: calc(var(--cell-h) - 2px);
+    border-radius: var(--radius);
     border: 1px solid var(--rule);
   }
 
   .score {
     display: flex;
-    align-items: center;
-    gap: 0.6rem;
+    align-items: baseline;
+    gap: 2ch;
   }
 
   .score .value {
-    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
-    font-size: 0.85em;
     color: var(--fg-muted);
-    min-width: 1.4em;
+    min-width: 2ch;
   }
 
   .score .why {

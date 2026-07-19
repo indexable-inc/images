@@ -17,16 +17,20 @@
   <link rel="alternate" type="application/rss+xml" title="index" href={siteFeedUrl} />
 </svelte:head>
 
-<header>
-  <a class="wordmark" href={homeHref}>index</a>
-  <nav>
-    <a href={philosophyHref}>philosophy</a>
-    <a href={storiesHref}>stories</a>
-    <a href={rfcsHref}>rfcs</a>
-    <a href="https://github.com/indexable-inc/index">github</a>
-    <a href="https://ix.dev">ix.dev</a>
-    <a href={feedHref}>rss</a>
-  </nav>
+<header class="site-header">
+  <div class="bar">
+    <a class="brand" href={homeHref} aria-label="index home">
+      <span class="brand-mark">index</span>
+    </a>
+    <nav aria-label="Primary">
+      <a href={philosophyHref}>philosophy</a>
+      <a href={storiesHref}>stories</a>
+      <a href={rfcsHref}>rfcs</a>
+      <a href="https://github.com/indexable-inc/index">github</a>
+      <a href="https://ix.dev">ix.dev</a>
+      <a href={feedHref}>rss</a>
+    </nav>
+  </div>
 </header>
 
 <main>

@@ -22,11 +22,13 @@
     edges: [string, string][];
   } = $props();
 
+  // Cell-grid geometry: node height and row pitch are whole multiples of
+  // the 21px --cell-h so the diagram sits on the page's character grid.
   const CW = 210;
-  const RH = 96;
+  const RH = 105;
   const NW = 180;
-  const NH = 60;
-  const PAD = 12;
+  const NH = 63;
+  const PAD = 21;
 
   function cx(node: DagNode): number {
     return PAD + node.col * CW + NW / 2;
@@ -54,7 +56,9 @@
 </script>
 
 <figure class="dag">
-  <svg viewBox="0 0 {width} {height}" role="img" aria-label="Plan structure diagram">
+  <!-- Fixed 1:1 pixels, not viewBox scaling: labels keep the site's one
+       14px cell everywhere; narrow screens scroll like a wide terminal pane. -->
+  <svg {width} {height} viewBox="0 0 {width} {height}" role="img" aria-label="Plan structure diagram">
     <defs>
       <marker id="dag-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
         <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--fg-faint)" />
@@ -65,8 +69,8 @@
     {/each}
     {#each nodes as node (node.id)}
       <g class={`node ${node.state ?? 'todo'}`}>
-        <rect x={cx(node) - NW / 2} y={cy(node) - NH / 2} width={NW} height={NH} rx="10" />
-        <text class="label" x={cx(node)} y={node.sub ? cy(node) - 4 : cy(node) + 4} text-anchor="middle">
+        <rect x={cx(node) - NW / 2} y={cy(node) - NH / 2} width={NW} height={NH} rx="0" />
+        <text class="label" x={cx(node)} y={node.sub ? cy(node) - 5 : cy(node) + 5} text-anchor="middle">
           {node.label}
         </text>
         {#if node.sub}
@@ -79,19 +83,18 @@
 
 <style>
   .dag {
-    margin: 1.5rem 0;
+    margin: var(--cell-h) 0;
+    overflow-x: auto;
   }
 
   svg {
     display: block;
-    width: 100%;
-    height: auto;
   }
 
   .edge {
     fill: none;
     stroke: var(--fg-faint);
-    stroke-width: 1.5;
+    stroke-width: 1;
   }
 
   .node rect {
@@ -111,13 +114,13 @@
 
   .label {
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 14px;
     fill: var(--fg);
   }
 
   .sub {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 14px;
     fill: var(--fg-muted);
   }
 </style>

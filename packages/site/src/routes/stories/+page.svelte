@@ -26,15 +26,15 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 1.1rem;
+    gap: var(--cell-h);
   }
 
   .stories a {
-    font-weight: 600;
+    font-weight: 700;
   }
 
   .hook {
-    margin: 0.15rem 0 0;
+    margin: 0;
     color: var(--fg-muted);
     max-width: 65ch;
   }

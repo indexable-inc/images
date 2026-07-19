@@ -9,7 +9,7 @@ links:
 ---
 
 <script>
-  import IxMcpDiagram from '$lib/diagrams/IxMcpDiagram.svelte';
+  import IxMcpDiagram from '../diagrams/IxMcpDiagram.svelte';
 </script>
 
 `nix run .#mcp` speaks MCP over stdio and exposes a Python interpreter as a small set of tools. Sessions live across calls, so an agent can load a dataset once with `python_exec` and ask `python_eval` questions against the cached globals on later turns. No notebook server, no kernel manager, just stdin / stdout.

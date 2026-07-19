@@ -1,0 +1,95 @@
+/* Design tokens for the index site, cloned from ix's design language
+   (ix repo packages/web/src/styles/tokens-{light,dark}.css): monochrome
+   terminal on zinc grounds, everything monospace, accent = ink. Emphasis
+   comes from weight, case, and spacing, never from hue. Only the semantic
+   status ladder and the filter-expression syntax tokens carry color, the
+   same way ix reserves color for code syntax.
+
+   Berkeley Mono is commercially licensed, so the woff2 files live in the
+   ix repo only; this public repo ships the stack and falls back to
+   ui-monospace on github.io. Single source of truth: app.css imports this
+   file, and consumers import `@indexable/site/styles/tokens.css`. */
+
+:root {
+  color-scheme: light dark;
+
+  --radius: 2px;
+
+  /* The character cell. 14px mono with an exact 21px line-height; every
+     vertical distance on the site is a whole multiple of --cell-h and every
+     horizontal distance is in ch, so the page renders on a TUI grid. */
+  --cell-h: 21px;
+
+  /* Terminal aesthetic: everything is monospace. */
+  --font-sans:
+    'Berkeley Mono', 'Symbols Nerd Font Mono', ui-monospace, 'SF Mono',
+    'JetBrains Mono', monospace;
+  --font-mono:
+    'Berkeley Mono', 'Symbols Nerd Font Mono', ui-monospace, 'SF Mono',
+    'JetBrains Mono', monospace;
+
+  /* Light: zinc grounds, near-black ink. */
+  --bg: #fafafa;
+  --bg-secondary: #f4f4f5;
+  --fg: #18181b;
+  --fg-strong: #09090b;
+  --fg-muted: #71717a;
+  --fg-faint: #a1a1aa;
+  --rule: #e4e4e7;
+  --code: #f4f4f5;
+  --destructive: #dc2626;
+
+  /* Plan status ladder, faint to saturated as a Plan gains weight. A
+     semantic family (like ix's code-syntax tokens) so it keeps color;
+     values are tuned to sit on the zinc grounds above. Consumed by
+     StatusBadge and the /plans chart; one source of truth. */
+  --status-sketch: #a1a1aa;
+  --status-draft: #71717a;
+  --status-input-wanted: #a16207;
+  --status-last-call: #7c3aed;
+  --status-accepted: #0969da;
+  --status-load-bearing: #0f7b53;
+  --status-rejected: #dc2626;
+  --status-withdrawn: #a1a1aa;
+  --status-superseded: #71717a;
+  /* Chip for plans that actively request comments. */
+  --status-rfc: #0891b2;
+
+  /* Filter-expression syntax tokens (FilterBar operators), drawn from the
+     same palette ix uses for code syntax. */
+  --syntax-and: #0891b2;
+  --syntax-or: #c2410c;
+  --syntax-not: #7c3aed;
+  --syntax-error: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Dark: near-black grounds, zinc ink. */
+    --bg: #09090b;
+    --bg-secondary: #131316;
+    --fg: #e4e4e7;
+    --fg-strong: #fafafa;
+    --fg-muted: #8b8b96;
+    --fg-faint: #636370;
+    --rule: #27272a;
+    --code: #131316;
+    --destructive: #f87171;
+
+    --status-sketch: #52525b;
+    --status-draft: #a1a1aa;
+    --status-input-wanted: #f0c674;
+    --status-last-call: #a78bfa;
+    --status-accepted: #6cb6ff;
+    --status-load-bearing: #3dd68c;
+    --status-rejected: #f87171;
+    --status-withdrawn: #52525b;
+    --status-superseded: #a1a1aa;
+    --status-rfc: #50c8e8;
+
+    --syntax-and: #50c8e8;
+    --syntax-or: #f0c674;
+    --syntax-not: #a78bfa;
+    --syntax-error: #f87171;
+  }
+}

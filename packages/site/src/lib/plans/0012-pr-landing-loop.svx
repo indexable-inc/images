@@ -21,7 +21,7 @@ description: 'One owned primitive that takes a PR from pushed to merged: state a
 ---
 
 <script>
-  import Dag from '$lib/Dag.svelte';
+  import Dag from '../Dag.svelte';
 </script>
 
 ## Summary

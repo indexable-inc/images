@@ -61,50 +61,52 @@
 </section>
 
 <style>
+  /* A TUI panel: 1px frame with the title sitting inline in the top rule.
+     Interior is exactly one cell tall; the frame's vertical 1px rules are
+     absorbed into the paddings so following content stays on the grid. */
   .filter {
-    margin-bottom: 2.5rem;
-    padding-bottom: 1.75rem;
-    border-bottom: 1px solid var(--rule);
+    position: relative;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    margin-bottom: calc(var(--cell-h) * 2);
+  }
+
+  .filter:focus-within {
+    border-color: var(--fg-muted);
+  }
+
+  .prompt {
+    position: absolute;
+    top: calc(var(--cell-h) / -2);
+    left: 2ch;
+    padding: 0 1ch;
+    background: var(--bg);
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
   }
 
   .row {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    font-family: var(--font-mono);
-    font-size: 0.8125rem;
-  }
-
-  .prompt {
-    color: var(--fg-faint);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    gap: 2ch;
+    padding: calc(var(--cell-h) - 1px) 2ch;
   }
 
   .field {
     flex: 1;
     min-width: 0;
     position: relative;
-    border: 1px solid var(--rule);
-    border-radius: 4px;
-    background: var(--bg);
-    transition: border-color 0.15s ease;
-  }
-
-  .field:focus-within {
-    border-color: var(--fg-muted);
   }
 
   /* The overlay paints the syntax-highlighted text. The input above it has
    * transparent text and a visible caret, so users see the highlighted
-   * version of what they type. Padding, font, and line-height must match
-   * pixel-for-pixel between the two layers. */
+   * version of what they type. The two layers share the base cell exactly. */
   .overlay,
   input {
-    padding: 0.45rem 0.6rem;
+    padding: 0;
     font-family: var(--font-mono);
-    font-size: 0.8125rem;
-    line-height: 1.4;
     letter-spacing: 0;
   }
 
@@ -141,18 +143,18 @@
   }
 
   .tok-op-and {
-    color: light-dark(#0a7484, #5ec5d5);
-    font-weight: 600;
+    color: var(--syntax-and);
+    font-weight: 700;
   }
 
   .tok-op-or {
-    color: light-dark(#a8651e, #e0a467);
-    font-weight: 600;
+    color: var(--syntax-or);
+    font-weight: 700;
   }
 
   .tok-op-not {
-    color: light-dark(#7a3e8f, #c89be0);
-    font-weight: 600;
+    color: var(--syntax-not);
+    font-weight: 700;
   }
 
   .tok-paren {
@@ -160,7 +162,7 @@
   }
 
   .tok-error {
-    color: light-dark(#b91c1c, #fb7185);
+    color: var(--syntax-error);
     text-decoration: underline wavy;
     text-decoration-thickness: 1px;
   }
@@ -172,10 +174,8 @@
   }
 
   .error {
-    margin-top: 0.5rem;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    color: var(--fg-muted);
+    margin: 0;
+    padding: 0 2ch;
+    color: var(--syntax-error);
   }
-
 </style>

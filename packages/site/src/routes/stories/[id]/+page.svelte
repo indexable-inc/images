@@ -22,14 +22,18 @@
 
 <style>
   .eyebrow {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    margin: 0 0 -0.5rem;
+    margin: 0;
   }
 
   .eyebrow a {
     color: var(--fg-faint);
+    text-decoration: none;
+  }
+
+  .eyebrow a:hover {
+    background: var(--fg);
+    color: var(--bg);
   }
 </style>

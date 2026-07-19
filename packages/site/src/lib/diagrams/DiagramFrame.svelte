@@ -15,14 +15,16 @@
   type Props = {
     nodes: Node[];
     edges: Edge[];
-    height?: number;
+    // Inline canvas height in whole 21px cells; border-box sizing keeps the
+    // frame's 1px rules inside, so it occupies exactly that many grid rows.
+    heightCells?: number;
     caption?: string;
   };
 
   const {
     nodes: initialNodes,
     edges: initialEdges,
-    height = 300,
+    heightCells = 15,
     caption
   }: Props = $props();
 
@@ -96,14 +98,16 @@
     }
 
     const focusable = modalFocusableElements();
-    if (focusable.length === 0) {
+    // `.at()` includes undefined in its return type under any tsconfig, so
+    // the emptiness guard type-checks for strict consumers and this app alike.
+    const first = focusable.at(0);
+    const last = focusable.at(-1);
+    if (first === undefined || last === undefined) {
       event.preventDefault();
       overlay?.focus();
       return;
     }
 
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
     const active = document.activeElement;
 
     if (!(active instanceof HTMLElement) || !overlay?.contains(active)) {
@@ -146,7 +150,7 @@
 </script>
 
 <figure class="diagram-figure">
-  <div class="diagram" style="height: {height}px" aria-hidden={mounted ? undefined : 'true'}>
+  <div class="diagram" style="height: calc(var(--cell-h) * {heightCells})" aria-hidden={mounted ? undefined : 'true'}>
     {#if mounted}
       <SvelteFlow
         bind:nodes={inlineNodes}
@@ -260,56 +264,53 @@
 
 <style>
   .diagram-figure {
-    margin: 1.5rem 0;
+    margin: var(--cell-h) 0;
   }
 
   .diagram {
     position: relative;
     border: 1px solid var(--rule);
-    border-radius: 6px;
+    border-radius: var(--radius);
     overflow: hidden;
     background: var(--bg);
   }
 
   figcaption {
-    margin-top: 0.55rem;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
+    margin-top: var(--cell-h);
     color: var(--fg-faint);
     text-align: center;
   }
 
+  /* [+] expand control, sized to the cell. */
   .expand-button {
     position: absolute;
-    top: 0.5rem;
-    right: 0.5rem;
+    top: var(--cell-h);
+    right: 2ch;
     z-index: 5;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.75rem;
-    height: 1.75rem;
+    width: var(--cell-h);
+    height: var(--cell-h);
     padding: 0;
     border: 1px solid var(--rule);
-    border-radius: 4px;
+    border-radius: var(--radius);
     background: var(--bg);
     color: var(--fg-muted);
     cursor: pointer;
-    transition:
-      color 0.15s ease,
-      border-color 0.15s ease;
   }
 
   .expand-button:hover,
   .expand-button:focus-visible {
-    color: var(--fg);
-    border-color: var(--fg-muted);
+    color: var(--bg);
+    background: var(--fg);
+    border-color: var(--fg);
     outline: none;
   }
 
   .expand-button svg {
-    width: 0.95rem;
-    height: 0.95rem;
+    width: 12px;
+    height: 12px;
   }
 
   .overlay {
@@ -319,7 +320,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 2rem;
+    padding: var(--cell-h) 2ch;
   }
 
   .backdrop {
@@ -338,12 +339,11 @@
     z-index: 1;
     display: flex;
     flex-direction: column;
-    width: min(100%, 1100px);
-    height: min(100%, 720px);
+    width: min(100%, 132ch);
+    height: min(100%, calc(var(--cell-h) * 34));
     background: var(--bg);
-    border: 1px solid var(--rule);
-    border-radius: 8px;
-    box-shadow: 0 14px 38px rgb(0 0 0 / 0.18);
+    border: 1px solid var(--fg-muted);
+    border-radius: var(--radius);
     overflow: hidden;
   }
 
@@ -351,26 +351,26 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
-    padding: 0.55rem 0.75rem 0.55rem 1rem;
+    gap: 2ch;
+    padding: calc(var(--cell-h) - 1px) 2ch var(--cell-h);
     border-bottom: 1px solid var(--rule);
   }
 
   .modal-caption {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
     color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .close-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.85rem;
-    height: 1.85rem;
+    width: var(--cell-h);
+    height: var(--cell-h);
     padding: 0;
     border: 1px solid var(--rule);
-    border-radius: 4px;
+    border-radius: var(--radius);
     background: var(--bg);
     color: var(--fg-muted);
     cursor: pointer;
@@ -378,14 +378,15 @@
 
   .close-button:hover,
   .close-button:focus-visible {
-    color: var(--fg);
-    border-color: var(--fg-muted);
+    color: var(--bg);
+    background: var(--fg);
+    border-color: var(--fg);
     outline: none;
   }
 
   .close-button svg {
-    width: 1rem;
-    height: 1rem;
+    width: 12px;
+    height: 12px;
   }
 
   .modal-body {
@@ -435,7 +436,7 @@
 
   .modal-body :global(.svelte-flow__controls) {
     border: 1px solid var(--rule);
-    border-radius: 4px;
+    border-radius: var(--radius);
     overflow: hidden;
     box-shadow: none;
   }

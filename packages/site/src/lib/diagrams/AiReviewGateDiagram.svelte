@@ -58,4 +58,4 @@
   ];
 </script>
 
-<DiagramFrame {nodes} {edges} height={320} caption="Same-repo PRs run Codex; fork PRs wait for a trusted approval, both ending at the same gate." />
+<DiagramFrame {nodes} {edges} heightCells={16} caption="Same-repo PRs run Codex; fork PRs wait for a trusted approval, both ending at the same gate." />

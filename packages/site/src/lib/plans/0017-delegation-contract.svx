@@ -21,7 +21,7 @@ description: 'One contract for handing work to another agent: identity (which se
 ---
 
 <script>
-  import Dag from '$lib/Dag.svelte';
+  import Dag from '../Dag.svelte';
 </script>
 
 ## Summary

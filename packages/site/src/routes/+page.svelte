@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { resolve } from '$app/paths';
   import FilterBar from '$lib/FilterBar.svelte';
   import UpdateEntry from '$lib/UpdateEntry.svelte';
   import { parseFilter } from '$lib/filter-expression';
@@ -47,7 +48,7 @@
 <ol class="log">
   {#each filtered as update (update.id)}
     <li>
-      <UpdateEntry {update} {timeZone} />
+      <UpdateEntry {update} {timeZone} permalinkBase={resolve('/')} />
     </li>
   {/each}
 </ol>

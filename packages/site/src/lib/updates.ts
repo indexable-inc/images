@@ -91,8 +91,9 @@ export function updateScript(update: SiteUpdate): string {
   return `${plainText(update.title)}. ${plainText(update.rawBody)}`;
 }
 
-// Absolute URL for one entry. The base path lives in `siteUrl`, which
-// already carries the trailing slash, so the slug just appends.
-export function updateUrl(id: string): string {
-  return `${siteUrl}${id}`;
+// Absolute URL for one entry. The base defaults to this deployment's
+// `siteUrl` and already carries the trailing slash, so the slug just
+// appends; a consumer serving the same content elsewhere passes its own.
+export function updateUrl(id: string, base: string = siteUrl): string {
+  return `${base}${id}`;
 }

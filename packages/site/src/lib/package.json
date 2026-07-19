@@ -1,0 +1,27 @@
+{
+  "name": "@indexable/site",
+  "version": "0.1.0",
+  "description": "Raw-source Svelte library for the index public site: updates, plans, stories, and philosophy collections with their loaders, page-level components, feed.xml builder, and the design-token CSS. Consumers compile the .svx/.svelte/.ts sources with their own SvelteKit 2 + Svelte 5 + mdsvex toolchain.",
+  "license": "MIT",
+  "type": "module",
+  "svelte": "./components.ts",
+  "exports": {
+    "./updates": "./updates.ts",
+    "./plans": "./plans.ts",
+    "./stories": "./stories.ts",
+    "./scores": "./scores.ts",
+    "./feed": "./feed.ts",
+    "./filter-expression": "./filter-expression.ts",
+    "./format-posted-at": "./format-posted-at.ts",
+    "./philosophy": "./philosophy/philosophy.svx",
+    "./components": "./components.ts",
+    "./styles/tokens.css": "./styles/tokens.css"
+  },
+  "peerDependencies": {
+    "@sveltejs/kit": "^2.0.0",
+    "svelte": "^5.0.0"
+  },
+  "dependencies": {
+    "@xyflow/svelte": "^1.5.2"
+  }
+}
