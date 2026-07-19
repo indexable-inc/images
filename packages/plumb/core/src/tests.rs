@@ -310,6 +310,23 @@ fn structured_run_paths() {
 }
 
 #[test]
+fn timing_is_recorded() {
+    let before = crate::report::now_ms();
+    let sh = shell();
+    let report = sh
+        .eval("sh -c 'i=0; while [ $i -lt 100000 ]; do i=$((i+1)); done'")
+        .expect("busy loop");
+    let after = crate::report::now_ms();
+    assert!(report.started_at_ms >= before && report.ended_at_ms <= after);
+    assert!(report.started_at_ms <= report.ended_at_ms);
+    let stage = &report.pipelines[0].stages[0];
+    assert!(stage.started_at_ms >= before && stage.ended_at_ms <= after);
+    assert!(stage.user_ms >= 1, "busy loop burned user cpu: {}", stage.user_ms);
+    let path = sh.eval("echo ${runs[1].stages[0].user_ms}").expect("path");
+    assert_eq!(path.output().trim_end(), stage.user_ms.to_string());
+}
+
+#[test]
 fn negative_run_references() {
     let sh = shell();
     sh.eval("echo newest").expect("run 1");

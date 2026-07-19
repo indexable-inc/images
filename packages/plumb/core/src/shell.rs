@@ -284,6 +284,8 @@ impl Shell {
             pipelines: Vec::new(),
             substitutions: Vec::new(),
             background_started: Vec::new(),
+            started_at_ms: crate::report::now_ms(),
+            ended_at_ms: 0,
             duration_ms: 0,
             aborted: None,
         };
@@ -301,6 +303,7 @@ impl Shell {
             }
         }
         report.status = report.pipelines.last().map_or(0, |p| p.status);
+        report.ended_at_ms = crate::report::now_ms();
         report.duration_ms = crate::report::duration_millis(started.elapsed());
         if commit {
             self.commit(&report);
@@ -461,13 +464,18 @@ impl Shell {
                 let _ = std::io::stderr().write_all(message.as_bytes());
             }
         }
+        let now = crate::report::now_ms();
         report.pipelines.push(PipelineRun {
             stages: vec![Stage {
                 index: first_index,
                 argv,
                 builtin: true,
                 status,
+                started_at_ms: now,
+                ended_at_ms: now,
                 duration_ms: 0,
+                user_ms: 0,
+                sys_ms: 0,
                 stdout: Capture::new(0),
                 stderr,
                 stderr_merged: false,
@@ -1008,10 +1016,12 @@ fn run_leaf(run: &Report, stages: &[&Stage], field: &str) -> Result<String, Erro
         "id" => run.id.to_string(),
         "source" => run.source.clone(),
         "duration_ms" => run.duration_ms.to_string(),
+        "started_at_ms" => run.started_at_ms.to_string(),
+        "ended_at_ms" => run.ended_at_ms.to_string(),
         _ => {
             return Err(Error::RunRef {
                 message: format!(
-                    "unknown run field `{field}` (have: output, stderr, status, id, source, duration_ms, stages)"
+                    "unknown run field `{field}` (have: output, stderr, status, id, source, duration_ms, started_at_ms, ended_at_ms, stages)"
                 ),
             });
         }
@@ -1030,10 +1040,14 @@ fn stage_leaf(stage: &Stage, field: &str) -> Result<String, Error> {
         "index" => stage.index.to_string(),
         "stdout_bytes" => stage.stdout.total_bytes().to_string(),
         "stderr_bytes" => stage.stderr.total_bytes().to_string(),
+        "user_ms" => stage.user_ms.to_string(),
+        "sys_ms" => stage.sys_ms.to_string(),
+        "started_at_ms" => stage.started_at_ms.to_string(),
+        "ended_at_ms" => stage.ended_at_ms.to_string(),
         _ => {
             return Err(Error::RunRef {
                 message: format!(
-                    "unknown stage field `{field}` (have: stdout, stderr, status, argv, duration_ms, index, stdout_bytes, stderr_bytes)"
+                    "unknown stage field `{field}` (have: stdout, stderr, status, argv, duration_ms, index, stdout_bytes, stderr_bytes, user_ms, sys_ms, started_at_ms, ended_at_ms)"
                 ),
             });
         }

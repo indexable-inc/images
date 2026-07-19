@@ -159,11 +159,13 @@ fn summarize(report: &Report) {
     }
     for stage in &stages {
         println!(
-            "[{}] {}  exit {}  {}ms  out {}  err {}",
+            "[{}] {}  exit {}  {}ms (cpu {}+{}ms)  out {}  err {}",
             stage.index,
             stage.argv.join(" "),
             stage.status,
             stage.duration_ms,
+            stage.user_ms,
+            stage.sys_ms,
             human_bytes(stage.stdout.total_bytes()),
             human_bytes(stage.stderr.total_bytes()),
         );
