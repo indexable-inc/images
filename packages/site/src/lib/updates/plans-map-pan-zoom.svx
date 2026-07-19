@@ -1,0 +1,28 @@
+---
+id: plans-map-pan-zoom
+postedAt: 2026-07-19T12:00:00-07:00
+title: "The Plans map now pans and zooms like a real map"
+links:
+  - { label: "Plans", href: "https://ix.dev/plans" }
+  - { label: "issue #3712", href: "https://github.com/indexable-inc/index/issues/3712" }
+tags:
+  - site
+  - plans
+---
+
+The scatter on the Plans page used to be a static picture. It is now a
+direct-manipulation map. Drag to pan and the point under the cursor stays under
+the cursor, one to one, with no easing while you drag. Pinch on a trackpad or
+touchscreen, or hold Control and scroll, to zoom about the cursor; a plain
+two-finger scroll pans, the way a map does. Double-click zooms in on the spot
+you clicked.
+
+Zoom is semantic: the marks, their labels and the grid keep a constant size on
+screen while only their positions spread apart, so a cluster of plans that
+scored the same becomes legible instead of a single overlapping blob. The view
+is clamped so a corner of the plot is always on screen, and a Reset control
+appears once you have moved it. An Expand button grows the map to fill the
+window; Escape brings it back.
+
+Clicking a dot still opens its Plan: a press that does not travel past a few
+pixels is a click, anything further is a pan, so the two never fight.
