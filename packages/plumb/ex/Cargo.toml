@@ -18,4 +18,3 @@ serde.workspace = true
 rustler.workspace = true
 serde_json.workspace = true
 unibind = { workspace = true, features = ["ex"] }
-unibind-ex-runtime.workspace = true

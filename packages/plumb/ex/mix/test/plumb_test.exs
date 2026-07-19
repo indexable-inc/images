@@ -10,8 +10,12 @@ defmodule PlumbTest do
 
   defp poll(fun, deadline) do
     cond do
-      fun.() -> true
-      System.monotonic_time(:millisecond) > deadline -> false
+      fun.() ->
+        true
+
+      System.monotonic_time(:millisecond) > deadline ->
+        false
+
       true ->
         Process.sleep(20)
         poll(fun, deadline)
@@ -21,7 +25,11 @@ defmodule PlumbTest do
   defp decode!({:ok, json}), do: JSON.decode!(json)
 
   defp final_stdout(report) do
-    report["pipelines"] |> List.last() |> Map.fetch!("stages") |> List.last() |> get_in(["stdout", "text"])
+    report["pipelines"]
+    |> List.last()
+    |> Map.fetch!("stages")
+    |> List.last()
+    |> get_in(["stdout", "text"])
   end
 
   test "eval returns a report with per-stage captures" do
@@ -52,6 +60,7 @@ defmodule PlumbTest do
 
   test "parse errors carry the :parse variant" do
     {:ok, shell} = Plumb.Shell.new()
+
     assert {:error, %Plumb.PlumbError{variant: :parse}} =
              Plumb.Shell.eval(shell, "echo `date`")
   end
