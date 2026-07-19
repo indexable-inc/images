@@ -20,6 +20,12 @@
     src = source;
     workspaceRoot = source;
     cargoLock = source + "/Cargo.lock";
+    # Upstream nushell pins reedline to a git rev on its main branch; the key
+    # must match the Cargo.lock source string exactly, rev included. Refresh
+    # after a nushell-src bump when eval reports a missing hash (index#3723).
+    outputHashes = {
+      "git+https://github.com/nushell/reedline?branch=main#f776f5079e49d075c071660ae0f9b040b3ff909b" = "sha256-Gy9OQJ2oAaZvy0XZ4dTDXEJa8caVHEh2yS5PovA8oi8=";
+    };
     cargoArgs = [
       "-p"
       "nu"
