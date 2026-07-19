@@ -47,6 +47,7 @@
     # `passthru.crossHaskellClosure`).
     deps,
     patches ? [],
+    extraConfigureFlags ? [],
     # "" = configure every component (the root package); dependencies
     # configure only their library, mirroring cabal-install's per-component
     # setup -- their executables' deps are deliberately outside the closure.
@@ -134,6 +135,7 @@
           --disable-executable-stripping \
           --disable-library-stripping \
           --ghc-options=-j"$NIX_BUILD_CORES" \
+          ${lib.concatStringsSep " " extraConfigureFlags} \
           ${component}
 
         runHook postConfigure
@@ -184,6 +186,8 @@ in {
   build = {
     root,
     patchesFor ? {},
+    # Extra `Setup configure` flags per closure package, keyed by pname.
+    configureFlagsFor ? {},
     postInstall ? "",
     extraNativeBuildInputs ? [],
   }: let
@@ -211,6 +215,7 @@ in {
             hsDrv = item.drv;
             deps = map (d: self.${d.pname}) (libDepsOf item.drv);
             patches = patchesFor.${item.key} or [];
+            extraConfigureFlags = configureFlagsFor.${item.key} or [];
           };
         })
         closureItems));
@@ -219,6 +224,7 @@ in {
       hsDrv = root;
       deps = map (d: crossSet.${d.pname}) rootDeps;
       patches = patchesFor.${root.pname} or [];
+      extraConfigureFlags = configureFlagsFor.${root.pname} or [];
       component = "";
       inherit extraNativeBuildInputs postInstall;
     };

@@ -127,6 +127,13 @@
   in
     crossHaskell.build {
       root = rawNom;
+      # streamly-core's own cabal ghc-options say -O2, tuned for
+      # fusion-critical streaming pipelines; that -O2 tail (SpecConstr on a
+      # few giant modules) runs ~2h single-threaded on the CI runners and
+      # dominates the whole lane's build time. nom only walks log lines
+      # through it, so cap it at -O1 (Cabal appends configure-time
+      # --ghc-option after the package's own flags; GHC honours the last -O).
+      configureFlagsFor.streamly-core = ["--ghc-option=-O1"];
       extraNativeBuildInputs = [pkgs.installShellFiles];
       # Mirror the by-name package's postInstall (symlinked aliases plus shell
       # completions); the completions are architecture-independent text.
