@@ -255,7 +255,6 @@
       100.000% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
     }
     .tool { opacity: 0; }
-    .old { fill: var(--line); }
     .r0 { animation: r0 13.09s steps(1, end) infinite; }
     .r1 { animation: r1 13.09s steps(1, end) infinite; }
     .r2 { animation: r2 13.09s steps(1, end) infinite; }
@@ -372,7 +371,7 @@
     }
     @media (prefers-reduced-motion: reduce) {
       .tool { animation: none; }
-      #s0, #s1, #s2 { opacity: 1; }
+      #s0 { opacity: 1; }
     }
   </style>
   <defs>
@@ -395,30 +394,6 @@
   <text class="m tool r9" x="80" y="112">vt'</text>
   <text class="m tool r10" x="80" y="112">ci'</text>
   <text class="m tool r11" x="80" y="112">site'</text>
-  <text class="m tool old r1" x="80" y="128">nix'</text>
-  <text id="s1" class="m tool old r2" x="80" y="128">clippy'</text>
-  <text class="m tool old r3" x="80" y="128">fmt'</text>
-  <text class="m tool old r4" x="80" y="128">mgrep'</text>
-  <text class="m tool old r5" x="80" y="128">astlog'</text>
-  <text class="m tool old r6" x="80" y="128">cargo'</text>
-  <text class="m tool old r7" x="80" y="128">kernel'</text>
-  <text class="m tool old r8" x="80" y="128">tui'</text>
-  <text class="m tool old r9" x="80" y="128">sdk'</text>
-  <text class="m tool old r10" x="80" y="128">vt'</text>
-  <text class="m tool old r11" x="80" y="128">ci'</text>
-  <text class="m tool old r0" x="80" y="128">site'</text>
-  <text class="m tool old r2" x="80" y="144">nix'</text>
-  <text class="m tool old r3" x="80" y="144">clippy'</text>
-  <text id="s2" class="m tool old r4" x="80" y="144">fmt'</text>
-  <text class="m tool old r5" x="80" y="144">mgrep'</text>
-  <text class="m tool old r6" x="80" y="144">astlog'</text>
-  <text class="m tool old r7" x="80" y="144">cargo'</text>
-  <text class="m tool old r8" x="80" y="144">kernel'</text>
-  <text class="m tool old r9" x="80" y="144">tui'</text>
-  <text class="m tool old r10" x="80" y="144">sdk'</text>
-  <text class="m tool old r11" x="80" y="144">vt'</text>
-  <text class="m tool old r0" x="80" y="144">ci'</text>
-  <text class="m tool old r1" x="80" y="144">site'</text>
   <text x="440" y="92">it reaches everything</text>
   <text x="456" y="172">everything improves</text>
   <text x="80" y="172">the next change is cheaper</text>

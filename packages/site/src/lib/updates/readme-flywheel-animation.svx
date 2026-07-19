@@ -1,7 +1,7 @@
 ---
 id: readme-flywheel-animation
 postedAt: 2026-07-19T14:00:00-07:00
-title: "The README flywheel rolls a live log of the tools it sharpens"
+title: "The README flywheel cycles the tools this repo actually sharpens"
 tags: [readme, svg, animation]
 links:
   - label: readme heroes
@@ -9,10 +9,9 @@ links:
 ---
 
 The flywheel hero animates its own thesis: a pulse circles the loop and each
-lap is shorter than the last. Under "a change lands once", the slot that named
-the landing tool cycled four generic entries, one of them a literal
-placeholder. It now rolls a three-line log of twelve tools this repo actually
-improves, primed to mark the new version: nix', clippy', fmt', mgrep',
-astlog', cargo', kernel', tui', sdk', vt', ci', site'. The newest land sits on
-top and pushes older ones down, still keyed to the same accelerating loop
-boundaries, and reduced-motion readers get the static top three.
+lap is shorter than the last. Under "a change lands once", a slot names the
+tool that just landed, primed to mark the new version, and swaps once per full
+loop. It cycled four generic entries, one of them a literal placeholder; it
+now draws from twelve tools this repo actually improves: nix', clippy', fmt',
+mgrep', astlog', cargo', kernel', tui', sdk', vt', ci', site'. Reduced-motion
+readers get a static nix'.
