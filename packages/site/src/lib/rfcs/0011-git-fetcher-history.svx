@@ -2,11 +2,18 @@
 id: 0011-git-fetcher-history
 number: '0011'
 title: Structured commit history from the Nix git fetcher
-status: Draft
+status: Load-bearing
 authors: andrewgazelka
 created: '2026-07-06'
 updated: '2026-07-07'
 trackingIssue: '#2108'
+scores:
+  ambition: { value: 5, why: 'extends the Nix fetcher itself, carried as a fork patch' }
+  impact: { value: 5, why: 'changelogs become a pure function of locked inputs' }
+  effort: { value: 4, why: 'fetcher patch, caching, tests' }
+  risk: { value: 4, why: 'a fork patch to the core fetcher that upstream may never take' }
+  maturity: { value: 6, why: 'patch and example landed in the nix-ix series' }
+  leverage: { value: 6, why: 'any flake input can grow structured-history consumers' }
 supersedes: null
 supersededBy: null
 description: 'Git inputs opt into `exportHistory = true` and evaluation sees `inputs.foo.history`: a deterministic, depth-bounded list of commits (rev, parents, author, message, optionally paths touched), cached by rev, never in lock files. Changelogs become a pure function of a locked input.'

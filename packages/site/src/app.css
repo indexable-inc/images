@@ -10,6 +10,18 @@
   --fg-faint: #a0a0a0;
   --rule: #ebe7e0;
   --code: #f1ede5;
+
+  /* RFC status ladder, faint -> saturated as an RFC gains weight.
+     Consumed by RfcStatusBadge and RfcChart; one source of truth. */
+  --status-sketch: #a0a0a0;
+  --status-draft: #6b6b6b;
+  --status-input-wanted: #b45309;
+  --status-last-call: #7c3aed;
+  --status-accepted: #1d4ed8;
+  --status-load-bearing: #15803d;
+  --status-rejected: #b91c1c;
+  --status-withdrawn: #a0a0a0;
+  --status-superseded: #6b6b6b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -20,6 +32,16 @@
     --fg-faint: #5d5a55;
     --rule: #1d1d1d;
     --code: #1a1a1a;
+
+    --status-sketch: #5d5a55;
+    --status-draft: #9a9690;
+    --status-input-wanted: #fbbf24;
+    --status-last-call: #a78bfa;
+    --status-accepted: #60a5fa;
+    --status-load-bearing: #4ade80;
+    --status-rejected: #f87171;
+    --status-withdrawn: #5d5a55;
+    --status-superseded: #9a9690;
   }
 }
 

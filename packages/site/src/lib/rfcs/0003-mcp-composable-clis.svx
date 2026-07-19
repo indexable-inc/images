@@ -7,6 +7,13 @@ authors: andrewgazelka
 created: '2026-06-02'
 updated: '2026-06-02'
 trackingIssue: '#598'
+scores:
+  ambition: { value: 4, why: 'a packaging discipline for integrations, not new machinery' }
+  impact: { value: 6, why: 'every MCP capability doubles as a pipeable CLI for free' }
+  effort: { value: 4, why: 'per-integration refactor into core crates over time' }
+  risk: { value: 3, why: 'worst case is boilerplate, not breakage' }
+  maturity: { value: 2, why: 'pattern exists piecemeal, first target not landed' }
+  leverage: { value: 8, why: 'every future integration inherits both surfaces by construction' }
 supersedes: null
 supersededBy: null
 ---

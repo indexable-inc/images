@@ -1,10 +1,10 @@
 <script lang="ts">
   const { status }: { status: string } = $props();
-  // 'Last call' -> 'last-call': the class hook each status colors from.
+  // 'Last call' -> 'last-call': keys the shared --status-* palette in app.css.
   const slug = $derived(status.toLowerCase().replace(/\s+/g, '-'));
 </script>
 
-<span class="badge {slug}">{status}</span>
+<span class="badge {slug}" style:--c={`var(--status-${slug})`}>{status}</span>
 
 <style>
   .badge {
@@ -23,66 +23,10 @@
     vertical-align: middle;
   }
 
-  /* The ladder runs faint -> saturated as an RFC gains weight:
-     a sketch barely registers; load-bearing is unmissable. */
-  .sketch {
-    --c: #a0a0a0;
-    border-style: dashed;
-  }
-  .draft {
-    --c: #6b6b6b;
-  }
-  .input-wanted {
-    --c: #b45309;
-  }
-  .last-call {
-    --c: #7c3aed;
-  }
-  .accepted {
-    --c: #1d4ed8;
-  }
-  .load-bearing {
-    --c: #15803d;
-  }
-  .rejected {
-    --c: #b91c1c;
-  }
-  .withdrawn {
-    --c: #a0a0a0;
-    border-style: dashed;
-  }
+  /* Not-going-anywhere states read as hollow. */
+  .sketch,
+  .withdrawn,
   .superseded {
-    --c: #6b6b6b;
     border-style: dashed;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .sketch {
-      --c: #5d5a55;
-    }
-    .draft {
-      --c: #9a9690;
-    }
-    .input-wanted {
-      --c: #fbbf24;
-    }
-    .last-call {
-      --c: #a78bfa;
-    }
-    .accepted {
-      --c: #60a5fa;
-    }
-    .load-bearing {
-      --c: #4ade80;
-    }
-    .rejected {
-      --c: #f87171;
-    }
-    .withdrawn {
-      --c: #5d5a55;
-    }
-    .superseded {
-      --c: #9a9690;
-    }
   }
 </style>

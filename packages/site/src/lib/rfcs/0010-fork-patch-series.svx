@@ -2,11 +2,18 @@
 id: 0010-fork-patch-series
 number: '0010'
 title: Fork patch-series machinery vs the state of the art
-status: Draft
+status: Load-bearing
 authors: andrewgazelka
 created: '2026-07-06'
 updated: '2026-07-06'
 trackingIssue: '#2098'
+scores:
+  ambition: { value: 3, why: 'benchmark and selective adoption, not new machinery' }
+  impact: { value: 4, why: 'three adoptions, mostly confirms the existing design' }
+  effort: { value: 3, why: 'survey plus three bounded changes' }
+  risk: { value: 2, why: 'analysis document, worst case is wasted reading' }
+  maturity: { value: 7, why: 'the machinery it documents is in daily use' }
+  leverage: { value: 5, why: 'keeps the fork loop healthy, which everything vendored rides on' }
 supersedes: null
 supersededBy: null
 description: 'The de-fork patch machinery benchmarked against Debian DEP-3, Yocto, the kernel/b4 workflow, Gerrit, jujutsu, and friends: the format/DAG/rerere core already matches or exceeds the state of the art. Three adoptions, reasoned rejections for the rest.'

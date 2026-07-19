@@ -7,6 +7,13 @@ authors: wyattgill9
 created: '2026-05-29'
 updated: '2026-05-30'
 trackingIssue: '#45'
+scores:
+  ambition: { value: 5, why: 'new contract plus control-plane sketch, but explicitly stops at a mock provider' }
+  impact: { value: 5, why: 'unblocks partner-mediated services in general while naming none' }
+  effort: { value: 5, why: 'claim schema, scoped credential provisioning, mock end to end' }
+  risk: { value: 6, why: 'credential scoping and an ix-side control plane touch the trust model' }
+  maturity: { value: 1, why: 'proposal only, nothing implemented' }
+  leverage: { value: 6, why: 'one contract every future vendor integration reuses' }
 supersedes: null
 supersededBy: null
 ---

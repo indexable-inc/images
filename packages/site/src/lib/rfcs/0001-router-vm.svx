@@ -7,6 +7,13 @@ authors: andrewgazelka
 created: '2026-05-13'
 updated: '2026-05-13'
 trackingIssue: null
+scores:
+  ambition: { value: 6, why: 'reshapes fleet networking around a user-owned router guest, but stays one subsystem' }
+  impact: { value: 6, why: 'unlocks arbitrary egress policy without teaching ix any L3+ semantics' }
+  effort: { value: 6, why: 'route wiring, egress cutoff, a stock NAT module, and migration for existing fleets' }
+  risk: { value: 5, why: 'a misconfigured router bricks group egress, though blast radius stays per group' }
+  maturity: { value: 1, why: 'proposal only, nothing implemented' }
+  leverage: { value: 7, why: 'one primitive replaces a stream of per-feature networking asks' }
 supersedes: null
 supersededBy: null
 ---

@@ -1,4 +1,5 @@
 import type { Component } from 'svelte';
+import { validateScores, type Score, type ScoreDimension } from './scores';
 
 // Ordered by weight: from a vibe someone wrote down to a design the whole
 // repo depends on, plus the terminal states. The index badge colors ramp
@@ -16,6 +17,17 @@ export const rfcStatuses = [
 ] as const;
 export type RfcStatus = (typeof rfcStatuses)[number];
 
+// Score axes every RFC carries in frontmatter under `scores:`, each with a
+// 1-10 value and a why. The chart on /rfcs plots any two against each other.
+export const rfcDimensions: readonly ScoreDimension[] = [
+  { key: 'ambition', label: 'Ambition', low: 'Incremental', high: 'Moonshot' },
+  { key: 'impact', label: 'Impact', low: 'Marginal', high: 'Transformative' },
+  { key: 'effort', label: 'Effort', low: 'Weekend', high: 'Quarter' },
+  { key: 'risk', label: 'Risk', low: 'Safe', high: 'Hairy' },
+  { key: 'maturity', label: 'Maturity', low: 'Rough', high: 'Battle-tested' },
+  { key: 'leverage', label: 'Leverage', low: 'One-off', high: 'Flywheel' }
+];
+
 export type RfcMeta = {
   id: string;
   number: string;
@@ -26,6 +38,8 @@ export type RfcMeta = {
   // YYYY-MM-DD.
   created: string;
   updated: string;
+  // 1-10 scores with rationale for the /rfcs chart. Seed estimates; tune via PR.
+  scores: Record<string, Score>;
   trackingIssue: string | null;
   supersedes: string | null;
   supersededBy: string | null;
@@ -67,6 +81,7 @@ for (const [path, mod] of Object.entries(modules)) {
   if (mod.metadata.id !== stem) {
     throw new Error(`RFC ${path}: frontmatter id '${mod.metadata.id}' disagrees with filename '${stem}'`);
   }
+  validateScores(`RFC ${path}`, rfcDimensions, mod.metadata.scores);
   if (!(rfcStatuses as readonly string[]).includes(mod.metadata.status)) {
     throw new Error(
       `RFC ${path}: unknown status '${mod.metadata.status}'; expected one of ${rfcStatuses.join(', ')}`

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { inlineTitleHtml } from './updates';
   import RfcStatusBadge from './RfcStatusBadge.svelte';
+  import { rfcDimensions } from './rfcs';
   import type { Rfc } from './rfcs';
 
   const { rfc }: { rfc: Rfc } = $props();
@@ -23,6 +24,10 @@
   {/if}
   <dl class="frontmatter">
     <dt>Status</dt><dd><RfcStatusBadge status={rfc.status} /></dd>
+    {#each rfcDimensions as dim (dim.key)}
+      <dt>{dim.label}</dt>
+      <dd>{rfc.scores[dim.key].value}/10 · {rfc.scores[dim.key].why}</dd>
+    {/each}
     <dt>Authors</dt><dd>{rfc.authors}</dd>
     <dt>Created</dt><dd>{rfc.created}</dd>
     <dt>Updated</dt><dd>{rfc.updated}</dd>

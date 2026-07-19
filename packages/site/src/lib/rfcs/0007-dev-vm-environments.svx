@@ -2,11 +2,18 @@
 id: 0007-dev-vm-environments
 number: '0007'
 title: Forkable dev VM environments
-status: Draft
+status: Accepted
 authors: hari
 created: '2026-06-15'
 updated: '2026-06-15'
 trackingIssue: null
+scores:
+  ambition: { value: 7, why: 'one file spans single VM, declared fleet, and shared login, recursively' }
+  impact: { value: 7, why: 'forkable personal environments are the daily-driver surface' }
+  effort: { value: 6, why: 'mkDev, the SMB volume, and credential carry across guests' }
+  risk: { value: 5, why: 'a shared home volume concentrates credentials in one place' }
+  maturity: { value: 4, why: 'dev.nix and mkDev exist, the shared-volume story is partial' }
+  leverage: { value: 8, why: 'every user forks the same seed, improvements flow to all fleets' }
 supersedes: null
 supersededBy: null
 description: 'One `dev.nix` a user owns and forks: the default config for new VMs, a declarative fleet, and an opt-in shared SMB volume that carries one Claude/ix login across the whole fleet.'

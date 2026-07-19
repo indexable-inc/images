@@ -2,11 +2,18 @@
 id: 0008-module-typed-builders
 number: '0008'
 title: Module-typed builders
-status: Draft
+status: Accepted
 authors: andrewgazelka
 created: '2026-07-01'
 updated: '2026-07-01'
 trackingIssue: 'index#1673'
+scores:
+  ambition: { value: 4, why: 'applies the existing module system to builder arguments' }
+  impact: { value: 6, why: 'typo rejection and an introspectable schema for every builder' }
+  effort: { value: 4, why: 'migrate builders one at a time' }
+  risk: { value: 3, why: 'failures surface at eval time, immediately' }
+  maturity: { value: 5, why: 'wrapPackage landed typed, the remaining builders have not' }
+  leverage: { value: 7, why: 'each migrated builder gives every caller the same guarantees' }
 supersedes: null
 supersededBy: null
 description: 'Type the argument surface of repo-owned builders in `lib/build/` with the NixOS module system, so defaults, argument merging, typo rejection, and an introspectable schema all come from one declaration.'

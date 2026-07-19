@@ -3,6 +3,24 @@
   import { inlineTitleHtml } from '$lib/updates';
   import { rfcs } from '$lib/rfcs';
   import RfcStatusBadge from '$lib/RfcStatusBadge.svelte';
+  import ScoreChart from '$lib/ScoreChart.svelte';
+  import { rfcDimensions } from '$lib/rfcs';
+
+  function statusSlug(status: string): string {
+    return status.toLowerCase().replace(/\s+/g, '-');
+  }
+
+  const chartItems = rfcs.map((rfc) => ({
+    id: rfc.id,
+    label: rfc.number,
+    title: rfc.title,
+    detail: rfc.status,
+    colorVar: `var(--status-${statusSlug(rfc.status)})`,
+    href: resolve('/rfcs/[id]', { id: rfc.id }),
+    scores: rfc.scores
+  }));
+
+  const chartStatuses = [...new Set(rfcs.map((rfc) => rfc.status))];
 </script>
 
 <svelte:head>
@@ -17,6 +35,20 @@
   RFCs capture <em>why</em> a decision was made and what alternatives were considered, which <code
   >git log</code> does not.
 </p>
+
+<h2>Map</h2>
+<p>
+  Every RFC scores itself 1-10 in frontmatter along six axes: ambition (incremental to moonshot),
+  impact, effort, risk, maturity (rough to battle-tested), and leverage (one-off to flywheel).
+  Every score carries a one-clause why, so a number you disagree with is a PR away from a better
+  one. Pick any two axes; click a dot to read the RFC.
+</p>
+<div class="chart-legend">
+  {#each chartStatuses as status (status)}
+    <RfcStatusBadge {status} />
+  {/each}
+</div>
+<ScoreChart items={chartItems} dimensions={rfcDimensions} initialX="ambition" initialY="impact" />
 
 <h2>Index</h2>
 <ul class="rfc-index">
@@ -47,7 +79,10 @@
     Copy <a href={resolve('/rfcs/[id]', { id: '0000-template' })}><code>0000-template.svx</code></a>
     to <code>packages/site/src/lib/rfcs/NNNN-short-slug.svx</code>, using the next free number.
   </li>
-  <li>Fill in the frontmatter (status starts at <code>Draft</code>) and the body.</li>
+  <li>
+    Fill in the frontmatter (status starts at <code>Draft</code>, or <code>Sketch</code> if it is
+    mostly a vibe; score the four 1-10 axes honestly) and the body.
+  </li>
   <li>Open a PR titled <code>RFC NNNN: &lt;short title&gt;</code>.</li>
   <li>PR review is the discussion. Line comments are the unit of feedback.</li>
   <li>
@@ -133,6 +168,13 @@
     align-items: baseline;
     gap: 0.65rem;
     margin: 0.45rem 0;
+  }
+
+  .chart-legend {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.25rem;
   }
 
   .num {

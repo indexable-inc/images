@@ -2,11 +2,18 @@
 id: 0009-cross-compiled-darwin-packages
 number: '0009'
 title: Cross-compiled Darwin packages from Linux
-status: Draft
+status: Load-bearing
 authors: andrewgazelka
 created: '2026-07-01'
 updated: '2026-07-01'
 trackingIssue: null
+scores:
+  ambition: { value: 7, why: 'darwin closures built entirely on the linux fleet' }
+  impact: { value: 8, why: 'macs stop compiling, one line opts a package in' }
+  effort: { value: 6, why: 'cross toolchains, cache aliasing, CI wiring' }
+  risk: { value: 5, why: 'cross-built artifacts can diverge from native darwin builds' }
+  maturity: { value: 6, why: 'landed and in daily use, native-parity gaps remain' }
+  leverage: { value: 8, why: 'every new package gets a mac binary for free' }
 supersedes: null
 supersededBy: null
 description: 'A package opts into macOS with one `cross = true` line; the Linux CI fleet cross-compiles it for Apple silicon, caches the closure, and a Mac substitutes the prebuilt binary instead of compiling anything.'

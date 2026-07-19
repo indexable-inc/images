@@ -7,6 +7,13 @@ authors: wyattgill
 created: '2026-06-04'
 updated: '2026-06-04'
 trackingIssue: null
+scores:
+  ambition: { value: 9, why: 'dynamic derivations are bleeding-edge Nix with few production users anywhere' }
+  impact: { value: 8, why: 'deletes the IFD eval boundary under every Rust build in the repo' }
+  effort: { value: 8, why: 'backend swap under the whole workspace build with strict compatibility' }
+  risk: { value: 7, why: 'leans on experimental Nix features the fleet must then carry' }
+  maturity: { value: 1, why: 'proposal only, nothing implemented' }
+  leverage: { value: 6, why: 'every crate build benefits, but it is one backend, not a new primitive' }
 supersedes: null
 supersededBy: null
 ---

@@ -7,6 +7,13 @@ authors: <github-handle>
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 trackingIssue: null
+scores:
+  ambition: { value: 5, why: 'one clause defending the number' }
+  impact: { value: 5, why: 'one clause defending the number' }
+  effort: { value: 5, why: 'one clause defending the number' }
+  risk: { value: 5, why: 'one clause defending the number' }
+  maturity: { value: 5, why: 'one clause defending the number' }
+  leverage: { value: 5, why: 'one clause defending the number' }
 supersedes: null
 supersededBy: null
 description: Template. Copy to `NNNN-short-slug.svx`, update the `title` frontmatter field, fill in the rest of the frontmatter and the body.
