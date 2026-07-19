@@ -2270,7 +2270,26 @@ in {
   # so they key identically in both views.
   ciChecks = catalogFor rustPackageTestSets.sharded // forkChecks;
 
-  formatter = pkgs.alejandra;
+  # `nix fmt` runs alejandra directly on the paths it is given. A single `-q`
+  # (`--quiet`) drops alejandra's informational chatter -- the
+  # "Congratulations! Your code complies with the Alejandra style." success
+  # line and the rotating "Special thanks ... for being a sponsor of
+  # Alejandra" promo -- while still surfacing genuine formatting/parse errors
+  # (a second `-q` would suppress those too, which we do not want). The
+  # lint-fix `nix` lane above already runs `alejandra --quiet`; this wraps the
+  # interactive `nix fmt` entrypoint the same way. A makeWrapper wrapper (not a
+  # hand-rolled shell script, per no-write-shell-application) over the cached
+  # `pkgs.alejandra` store path, so there is nothing extra to rebuild.
+  formatter = pkgs.symlinkJoin {
+    name = "alejandra-quiet";
+    paths = [pkgs.alejandra];
+    nativeBuildInputs = [pkgs.makeWrapper];
+    postBuild = ''
+      # shell
+      wrapProgram $out/bin/alejandra --add-flags --quiet
+    '';
+    meta.mainProgram = "alejandra";
+  };
 
   # Per-TU content-addressed kernel build (kbuild-unit, #3411), exposed under
   # `legacyPackages` so `nix build .#kernel-unit.vmlinux` resolves while the
