@@ -19,4 +19,11 @@
   overlay = false;
   passthruTests = true;
   updateScript = true;
+  # RFC 0009 cross lane (#3585): on a Linux build host, also expose nix-ix
+  # cross-compiled to Darwin (default target aarch64-apple-darwin) so the
+  # darwin cache lane substitutes the fork daemon instead of cold-building
+  # the modular C++ closure on a Mac. default.nix reads the `ix.cross`
+  # signal and swaps the component scope to the nixpkgs Linux -> Darwin
+  # cross scope (lib/darwin/nixpkgs-cross.nix).
+  cross = true;
 }

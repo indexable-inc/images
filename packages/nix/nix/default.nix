@@ -31,6 +31,24 @@ let
   # nix/* packages read `pkgs` off their argument the same way.
   inherit (ix) pkgs;
 
+  # Cross lane (RFC 0009, #3585): when the registry cross lane instantiates
+  # this package (`cross = true` in package.nix), swap the component scope to
+  # the Linux -> Darwin nixpkgs cross scope so the whole modular C++ closure
+  # builds on the linux fleet and a Mac only substitutes the fork daemon.
+  # Everything modular below reads `componentPkgs`; `pkgs` stays the native
+  # package set for build-platform helpers (provenance JSON, update script,
+  # test tooling). See lib/darwin/nixpkgs-cross.nix for the scope.
+  isCross = ix.cross.isCross or false;
+  componentPkgs =
+    if isCross
+    then ix.cross.pkgs
+    else pkgs;
+  # `file -bL` prints the architecture in Mach-O spelling.
+  machoArch =
+    if lib.hasPrefix "aarch64-" (ix.cross.target or "")
+    then "arm64"
+    else "x86_64";
+
   bootstrapLockPath = ix.paths.root + "/.github/actions/bootstrap-patched-nix/lock.json";
   bootstrapLock = lib.importJSON bootstrapLockPath;
   updateScriptArgs = {
@@ -83,7 +101,7 @@ let
   # narHash), so swapping the fetched source for our patched tree via the same
   # modular `overrideSource` handle rebuilds every component from the patched
   # tree while keeping nixpkgs' interdependency scope and build wiring intact.
-  base = pkgs.nixVersions.nixComponents_2_34;
+  base = componentPkgs.nixVersions.nixComponents_2_34;
   upstreamVersion = lib.removeSuffix "\n" (builtins.readFile (ix.nixSrc + "/.version"));
 
   # nixpkgs' own whole-source patches for this version: currently just the
@@ -94,10 +112,10 @@ let
   # nixpkgs 26.11pre dropped it, and a flake that instantiates this package
   # with such a nixpkgs must still evaluate (we already skip test suites on
   # darwin, so losing the flaky-test skip changes nothing we run).
-  flakySkipPatch = pkgs.path + "/pkgs/tools/package-management/nix/patches/skip-flaky-darwin-tests.patch";
+  flakySkipPatch = componentPkgs.path + "/pkgs/tools/package-management/nix/patches/skip-flaky-darwin-tests.patch";
   patchesCommon =
     lib.optional
-    (pkgs.stdenv.hostPlatform.isDarwin && builtins.pathExists flakySkipPatch)
+    (componentPkgs.stdenv.hostPlatform.isDarwin && builtins.pathExists flakySkipPatch)
     flakySkipPatch;
 
   # The whole patched pipeline as a function of the applied series, so the
@@ -187,10 +205,25 @@ let
       # darwin lane (3-core hosted mac) blew its 4 h job budget cold-building
       # this package and froze `cache-ready` (run 28772327218, index#1967).
       doCheck = false;
+      # The cross build cannot execute its result (the `smoke` passthru is
+      # native-only below), so assert the container format in-build: a
+      # mislinked binary (ELF, wrong arch) fails on the linux builder instead
+      # of on the first Mac that substitutes it.
+      nativeBuildInputs = (old.nativeBuildInputs or []) ++ lib.optional isCross pkgs.file;
       installPhase =
         (old.installPhase or "")
         + ''
           install -Dm444 ${provenanceJson} "$out/share/nix/ix-provenance.json"
+        ''
+        + lib.optionalString isCross ''
+          format=$(file -bL "$out/bin/nix")
+          case $format in
+          "Mach-O 64-bit executable ${machoArch}"*) ;;
+          *)
+            echo "expected a Mach-O 64-bit ${machoArch} executable, got: $format" >&2
+            exit 1
+            ;;
+          esac
         '';
       meta =
         (old.meta or {})
@@ -274,9 +307,13 @@ in
       (old.passthru or {})
       // {
         inherit bootstrapLock closureGates;
+        # Execution tests are native-only: the cross package's binary cannot
+        # run on the linux build host (its format is asserted in-build
+        # instead), and the check catalog collects tests from the native
+        # `repoPackages` entry only.
         tests =
           (old.passthru.tests or old.tests or {})
-          // {
+          // lib.optionalAttrs (!isCross) {
             inherit autoGcInterrupt buildStatus daemonSignal smoke;
           };
       }

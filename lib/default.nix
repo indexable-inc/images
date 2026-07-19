@@ -595,6 +595,15 @@
   macosSdk = import ./darwin/macos-sdk.nix {inherit pins;};
 
   /**
+  Linux -> Darwin nixpkgs cross scope for C/C++ closures that build through
+  upstream nixpkgs packaging (`nix-ix`), with the linux-unbuildable apple
+  toolchain pieces shimmed by llvm equivalents and SDK-lifted stubs.
+  `{ pkgs, target }: package set`.
+  See [`lib/darwin/nixpkgs-cross.nix`](lib/darwin/nixpkgs-cross.nix).
+  */
+  darwinCrossPkgs = import ./darwin/nixpkgs-cross.nix {inherit macosSdk;};
+
+  /**
   Verified Mac App Store `name -> numeric ID` catalog for nix-darwin
   `homebrew.masApps`. Select entries with `lib.getAttrs [names] ix.masApps`
   so a typo is an eval error instead of a zap-uninstall.
@@ -827,6 +836,7 @@
         bunLockFor
         cargoUnitFor
         cargoUnitExternal
+        darwinCrossPkgs
         discoverModules
         discoverTree
         errors
