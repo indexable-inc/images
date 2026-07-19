@@ -761,20 +761,32 @@
   {
     faithfulReporting = {
       text = ''
-        Lead with the result and report it plainly: one status line plus needed
-        facts, failed tests with their output, skipped steps named, verified
-        work stated without hedging. Skip process narration, deliberation, and
-        rule commentary, and do not restate hook or tool messages. Authored
-        artifacts (reports, docs, pages) carry no metadiscussion either: never
-        narrate how the content was produced or announce what the document will
-        do next; an artifact speaks in its own voice, and teaching prose may
-        address the reader, never the author.
+        Report effect-first, in chat and on authored status surfaces (boards,
+        PR descriptions, issue summaries). Answer the reader's first question,
+        "what does this do?": headline the action and its effect in plain
+        do-form with concrete numbers ("merge #X -> pin updates in ~4 min
+        instead of 2-3h"); never rhetorical framing ("proved the point"),
+        never ambiguous state-change verbs ("stops waiting"). Directly under
+        the headline give exactly one short why line; evidence, history, and
+        reasoning live one level down (detail section, drill-down, footnote),
+        stated declaratively. Report plainly: failed tests with their output,
+        skipped steps named, verified work stated without hedging; skip
+        process narration, deliberation, and rule commentary, and do not
+        restate hook or tool messages. Authored artifacts carry no
+        metadiscussion: never narrate how the content was produced or announce
+        what the document will do next; an artifact speaks in its own voice,
+        and teaching prose may address the reader, never the author.
       '';
       reason = ''
         Failures were summarized as successes or hedged into ambiguity, replies
         buried the answer under process narration, and a 2026-07 educational
         report shipped with authoring meta the user flagged. Merged from
         faithfulReporting + noMetaNarration in the #3164 lean-prompt trim.
+        Effect-first formula from 2026-07-18 feedback on live status copy: the
+        headline "index CI pin stops waiting on mac builds" was rejected as
+        unclear (user: "what does this DO?"; the fix stated the effect, pin
+        updates in ~4 min instead of 2-3h), and "proved the point" was
+        rejected as rhetorical framing.
       '';
     };
   }
