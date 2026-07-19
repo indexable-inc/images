@@ -68,6 +68,7 @@
           nativeGhc
           hp.alex
           hp.happy
+          hp.jailbreak-cabal
           # llvm-ar & co. for Cabal's own archive handling of Mach-O members.
           bintools
         ]
@@ -102,6 +103,22 @@
         fi
         ${lib.getExe' nativeGhc "ghc"} --make Setup -o Setup -v0
 
+        # --disable-library-for-ghci: the GHCi object (HS<pkg>.o) is produced
+        # by an `ld -r` merge, which resolves to the host's ELF lld and dies
+        # on Mach-O members ("unknown file type"); no Mach-O `ld -r` exists in
+        # this lane (the compiler itself runs with MergeObjsCmd="", the
+        # ar-join path) and nothing can load GHCi objects here anyway -- no
+        # Darwin iserv runs on the Linux host.
+        # Strip version bounds first (nixpkgs' jailbreak mechanism): sdist
+        # tarballs carry the original bounds, while the relaxations nixpkgs
+        # relies on live in hackage cabal-file *revisions* (hackage2nix's
+        # editedCabalFile), which a plain unpack never sees. The version set
+        # is exactly the pinned nixpkgs one, already proven coherent by the
+        # native build, so bounds carry no information here.
+        for cabalFile in ./*.cabal; do
+          jailbreak-cabal "$cabalFile"
+        done
+
         ./Setup configure \
           --with-compiler=${targetTool "ghc"} \
           --with-hc-pkg=${targetTool "ghc-pkg"} \
@@ -113,6 +130,7 @@
           --prefix="$out" \
           --libdir='$prefix/lib' \
           --disable-shared \
+          --disable-library-for-ghci \
           --disable-executable-stripping \
           --disable-library-stripping \
           --ghc-options=-j"$NIX_BUILD_CORES" \
