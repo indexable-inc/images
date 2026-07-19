@@ -37,6 +37,22 @@ PR.
 2. Agent methods and harness changes (0020's gate).
 3. UI properties (0022's gate).
 
+## Triggering
+
+The lane runs exactly when it can change a decision:
+
+- A PR that touches a behavioral surface (prompt rules, skills, agent
+  definitions, harness code) runs the full eval lane on that PR, and the
+  baseline-vs-change comparison lands as the review artifact. Everything
+  else skips it.
+- A nightly cron run executes only when a behavioral surface changed
+  since the last recorded run, catching drift no PR diff names (model
+  and dependency bumps). Unchanged days cost nothing.
+
+Both paths record what they ran against (surface hash, model matrix), so
+"did evals cover this change" is answerable from the record rather than
+CI archaeology.
+
 ## Eval gate, applied to itself
 
 The paved road wins if plan-gated changes actually use it instead of
