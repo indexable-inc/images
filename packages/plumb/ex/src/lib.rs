@@ -80,6 +80,7 @@ mod _plumb {
             | Error::GlobNoMatch { .. }
             | Error::BuiltinInPipeline { .. }
             | Error::BuiltinUsage { .. }
+            | Error::RunRef { .. }
             | Error::SubstitutionOverflow { .. } => PlumbError::Strict { message },
             Error::Redirect { .. } | Error::Io { .. } => PlumbError::Io { message },
             Error::ExitRequested { .. } => PlumbError::Exit { message },
