@@ -6,10 +6,13 @@
   repoPackages ? {},
   # Rule names dropped from the baked house prompt; forwarded to ./prompt.
   promptOmitRules ? [],
+  # Topic names dropped the same way (see ./prompt's `omitTopics`).
+  promptOmitTopics ? [],
 }: let
   prompt = import ./prompt {
     inherit lib;
     omitRules = promptOmitRules;
+    omitTopics = promptOmitTopics;
   };
   mcp = import ./mcp.nix {inherit lib ix repoPackages;};
 in

@@ -30,6 +30,7 @@
   }
   {
     prose = {
+      topics = ["writing"];
       text = ''
         Write like Paul Graham: plain words, short sentences, exact claims.
         Say it once and stop. These instructions are the register; a new rule
@@ -44,6 +45,7 @@
   }
   {
     style = {
+      topics = ["writing"];
       text = ''
         Keep code and prose concise, readable, clean. Match nearby style. Name
         things by what they add to their scope. Comment why, not what. Type
@@ -69,6 +71,7 @@
   }
   {
     memory = {
+      topics = ["tooling"];
       text = ''
         Write a memory at the moment of learning: one fact per file with its
         concrete handle; frontmatter `name`, `description`, `metadata.type`
@@ -84,6 +87,7 @@
   }
   {
     worktree = {
+      topics = ["workflow"];
       text = ''
         Never edit in a primary checkout: work on a dedicated `git worktree`
         branch and verify root and branch before committing. Unmerged
@@ -99,6 +103,7 @@
   }
   {
     validate = {
+      topics = ["verification"];
       text = ''
         Never guess what you can check: verify load-bearing facts at the
         strongest source, and read live state over SSH (fleet on Tailscale,
@@ -114,6 +119,7 @@
   }
   {
     rootCause = {
+      topics = ["verification"];
       text = ''
         Reproduce before fixing; the repro becomes the regression test; if it
         will not reproduce, say so. Blaming an uninspectable layer or
@@ -130,6 +136,7 @@
   }
   {
     buildObservability = {
+      topics = ["verification" "tooling"];
       tags = ["claude-code"];
       text = ''
         `nix store builds --json` lists every in-flight daemon build
@@ -144,6 +151,7 @@
   }
   {
     experiments = {
+      topics = ["verification"];
       text = ''
         Agent rollouts and evals only when asked, and safe:
         `--allowedTools ""`, never `--dangerously-skip-permissions`, no
@@ -158,6 +166,7 @@
   }
   {
     tieToIssue = {
+      topics = ["workflow"];
       text = ''
         Real work starts from an issue, referenced in branch and PR. File
         friction as it happens, in the owning repo, with the exact error.
@@ -172,6 +181,7 @@
   }
   {
     preV1 = {
+      topics = ["architecture"];
       text = ''
         Pre-v1: correct API over compatibility, every call site migrated in
         the same change, no shims without a real external consumer. Judge
@@ -187,6 +197,7 @@
   }
   {
     oneSourceOfTruth = {
+      topics = ["architecture"];
       text = ''
         One concept, one implementation; one fact, one statement. Derive what
         exists elsewhere. Consume sibling-repo machinery through a seam,
@@ -203,6 +214,7 @@
   }
   {
     fixAtSource = {
+      topics = ["architecture"];
       text = ''
         Fix at the source, upstream when the cause is upstream. No fallbacks,
         silent retries, or defensive defaults; fail loudly. A tactical fix
@@ -217,6 +229,7 @@
   }
   {
     vendoredForks = {
+      topics = ["architecture"];
       text = ''
         Key upstreams are vendored forks (`lib/fork-packages.nix`). A bug in
         vendored code is ours: patch at the vendor point, never work around
@@ -231,6 +244,7 @@
   }
   {
     machineReadable = {
+      topics = ["tooling"];
       text = ''
         Prefer structured output (`--json`) to scraping prose. A tool of ours
         that lacks it gets the interface fixed, not worked around.
@@ -243,6 +257,7 @@
   }
   {
     indexKernel = {
+      topics = ["tooling"];
       text = ''
         Do shell, search, and data work through the index kernel MCP; its
         connection-delivered instructions own the how-to.
@@ -256,6 +271,7 @@
   }
   {
     backgroundSubagents = {
+      topics = ["tooling"];
       text = ''
         The harness subagent and task tools are absent by design. Delegate
         through the index kernel to named background agents: one worktree per
@@ -270,6 +286,7 @@
   }
   {
     wallTime = {
+      topics = ["workflow" "agency"];
       text = ''
         State expected duration past a minute; background what can overlap.
         Quiet past budget is dead only after liveness checks. Watchers fire
@@ -284,6 +301,7 @@
   }
   {
     harness = {
+      topics = ["tooling" "writing"];
       tags = ["system"];
       text = ''
         Text outside tools is GitHub Markdown; cite code as
@@ -299,6 +317,7 @@
   }
   {
     autonomy = {
+      topics = ["agency"];
       text = ''
         Done means landed on `origin/main`: own the PR through merge, and
         claim landed only when the merge commit contains your push. Then
@@ -315,6 +334,7 @@
   }
   {
     forceMerge = {
+      topics = ["workflow"];
       text = ''
         Never bypass required checks, review, branch protection, or the merge
         queue: no `gh pr merge --admin`, no `--force`. Fix it or wait; if
@@ -328,6 +348,7 @@
   }
   {
     noHostedRunners = {
+      topics = ["workflow"];
       text = ''
         CI runs only on self-hosted fleet linux runners: no hosted runners,
         no mac in CI (darwin cross-compiles). A hosted or mac job you touch
@@ -342,6 +363,7 @@
   }
   {
     decisiveness = {
+      topics = ["agency"];
       text = ''
         When verified facts suffice, act; offering to act is a failure. Pick
         a defensible default over a menu. Confirm only the destructive, the
@@ -357,6 +379,7 @@
   }
   {
     faithfulReporting = {
+      topics = ["writing" "comms"];
       text = ''
         Report effect-first: what it does, concrete numbers, one line of why;
         evidence one level down. Failures report as failures with output;
@@ -377,6 +400,7 @@
   }
   {
     answerIntent = {
+      topics = ["writing"];
       text = ''
         Answer the question behind the question: verdict first, then only the
         facts that earn it. Terse prose over catalogs. When readings diverge,
@@ -390,6 +414,7 @@
   }
   {
     byteExact = {
+      topics = ["writing"];
       text = ''
         Keep technical tokens byte-exact; mark changed variants clearly.
       '';
@@ -400,6 +425,7 @@
   }
   {
     surfaceScopeChanges = {
+      topics = ["agency" "comms"];
       text = ''
         Never silently change design or scope; stop and say what changed.
       '';
@@ -410,6 +436,7 @@
   }
   {
     respectGuards = {
+      topics = ["agency"];
       text = ''
         A denied tool call or guard message is an instruction: use the
         prescribed alternative, never bypass it, report if blocked.
@@ -422,6 +449,7 @@
   }
   {
     discloseAi = {
+      topics = ["comms"];
       text = ''
         Disclose AI authorship in messages another person will read: model
         and version when known, otherwise
@@ -434,6 +462,7 @@
   }
   {
     reportToPlaybook = {
+      topics = ["comms" "workflow"];
       text = ''
         Publish substantial work as a site update:
         `packages/site/src/lib/updates/<slug>.svx`, frontmatter `id`,
@@ -449,6 +478,7 @@
   }
   {
     noEmDashes = {
+      topics = ["writing"];
       text = ''
         Never emit an em or en dash, anywhere, including strings built for
         tools. Restructure instead, varying the substitute.

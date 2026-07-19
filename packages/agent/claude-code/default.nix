@@ -166,6 +166,8 @@
   # consumer bake a variant minus a rule without restating the whole prompt, e.g.
   # `claude-code.override { omitRules = [ "htmlDeliverable" ]; }`. `[ ]` keeps all.
   omitRules ? [],
+  # Topic names dropped from the baked house prompt (prompt `omitTopics`).
+  omitTopics ? [],
   # Text used AS Claude Code's system prompt, REPLACING the stock prompt. The
   # string is materialized to a store file and baked into the wrapper as
   # `--system-prompt-file=<path>`: passing by path (not inline text) keeps
@@ -185,6 +187,7 @@
     (import (ix.paths.packagesRoot + "/agent/common.nix") {
       inherit lib ix repoPackages;
       promptOmitRules = omitRules;
+      promptOmitTopics = omitTopics;
     }).systemPrompt,
   # Writer used to build `passthru.updateScript`. Only the flake package set
   # supplies it (lib/packages.nix); the overlay eval context leaves it null. The
