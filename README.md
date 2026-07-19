@@ -4,7 +4,7 @@
   <img src=".github/readme/flywheel.svg" alt="the flywheel: a patch lands once, the whole graph rebuilds, everything is prebuilt for linux and macos, agents migrate every consumer, and the loop repeats" width="720">
 </p>
 
-One build graph for an entire stack.
+One build graph for everything.
 
 index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): packages, patched toolchains (Nix, Clippy), NixOS and Home Manager modules, VM images, and the CI that builds them all live together, so they move together.
 
