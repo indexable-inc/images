@@ -7,6 +7,7 @@
   sdk-prebuilt-nixpkgs,
   sdk-prebuilt-rust-overlay,
   home-manager,
+  home-manager-src,
   hermes-agent,
   btop-src,
   nushell-src,
@@ -748,6 +749,7 @@
       writeRustApplication
       ;
     btopSrc = btop-src;
+    "home-managerSrc" = home-manager-src;
     gitSrc = git-src;
     nushell = nushell-src;
     nushellSrc = nushell-src;
