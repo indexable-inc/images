@@ -1,0 +1,50 @@
+---
+id: 0022-bombadil-ui-properties
+number: '0022'
+title: Property-based UI testing with Bombadil
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 5, why: 'adopts an existing tool across every UI surface rather than inventing one' }
+  impact: { value: 6, why: 'UI regressions currently ship silently; nothing exercises rendered output' }
+  effort: { value: 5, why: 'property specs per surface plus CI wiring; the explorer is Bombadil' }
+  risk: { value: 3, why: 'experimental 0.x API; worst case the specs age with it' }
+  maturity: { value: 1, why: 'idea stage, tool unevaluated in this repo' }
+  leverage: { value: 7, why: 'one property catalog covers every page and TUI screen, present and future' }
+  taste: { value: 5, why: 'choosing properties worth asserting is the judgment; wiring is mechanical' }
+description: 'Try Bombadil (Antithesis property-based UI testing, browser and terminal drivers) across the repo: autonomous exploration asserting layout and correctness properties on the site and the TUI. First property: text never overflows its SVG container, with an explicit exception list.'
+---
+
+## Summary
+
+Nothing in CI looks at rendered output. A diagram shipped with its caption
+overflowing the box it labels, and no check could have objected, because
+every gate reads source, not pixels. [Bombadil](https://github.com/antithesishq/bombadil)
+is property-based testing for web and terminal UIs: it autonomously
+explores the surface and asserts correctness properties, locally, in CI,
+and inside Antithesis. This plan is perhaps the way to get real UI testing:
+try it everywhere the repo renders anything, the site first, the TUI after.
+
+## First properties
+
+1. **Text never overflows its SVG container** (the shipped bug: a story
+   diagram's subtitle ran past its box). Exceptions are declared, not
+   silent.
+2. No horizontal page scroll at any viewport.
+3. Every internal link on the built site resolves.
+
+Bombadil likely earns more on interactive surfaces (the TUI, the chart
+axis pickers) than on static layout; the trial should measure both.
+
+## Eval gate
+
+Adopt if the trial catches real regressions the existing gates miss, at CI
+cost that does not dominate the site build.
+
+Drafted by Claude Code (Fable); comments wanted, hence the RFC flag.
