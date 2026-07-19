@@ -34,11 +34,11 @@
   <text x="40" y="95">agents</text>
   <path class="mwire" d="M 100 90 H 440"/>
   <path class="wire" d="M 448 58 V 122" stroke-width="2.5"/>
-  <text class="m cap" x="448" y="48" text-anchor="middle">upstream review</text>
+  <text x="448" y="46" text-anchor="middle">upstream review</text>
   <path class="mwire dash" marker-end="url(#am)" d="M 456 90 H 600"/>
-  <text class="m cap" x="530" y="82" text-anchor="middle">someday</text>
+  <text class="m cap" x="528" y="78" text-anchor="middle">someday</text>
   <text class="m" x="612" y="95">ship</text>
-  <text class="m cap" x="210" y="132">waiting on review</text>
+  <text class="m cap" x="270" y="78" text-anchor="middle">waiting on review</text>
   <rect class="mblk" opacity="0" x="-4" y="-4" width="8" height="8">
     <animateMotion dur="8s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;1" keyTimes="0;0.154;1" path="M 100 90 L 432 90"/>
     <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.02;0.92;1" dur="8s" repeatCount="indefinite"/>
@@ -59,7 +59,7 @@
   <!-- bottom lane: index -->
   <text x="40" y="235">agents</text>
   <path class="wire" d="M 100 230 H 250"/>
-  <text class="m cap" x="180" y="218" text-anchor="middle">now</text>
+  <text class="m cap" x="175" y="218" text-anchor="middle">now</text>
   <rect class="wire" x="258" y="210" width="70" height="40" rx="4"/>
   <text x="293" y="235" text-anchor="middle">main</text>
   <path class="wire" d="M 328 230 H 360"/>
@@ -69,7 +69,7 @@
   <path class="mwire" d="M 360 230 H 634"/>
   <path class="mwire" d="M 360 252 H 634"/>
   <path class="mwire" d="M 360 275 H 634"/>
-  <text class="m cap" x="645" y="174" text-anchor="middle">everyone</text>
+  <text class="m cap" x="645" y="168" text-anchor="middle">everyone</text>
   <g mask="url(#under-main)">
   <rect class="blk" opacity="0" x="-4" y="-4" width="8" height="8">
     <animateMotion dur="2.2s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;1" keyTimes="0;0.975;1" path="M 100 230 L 360 230 L 360 185 L 634 185"/>
