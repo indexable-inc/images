@@ -656,6 +656,21 @@
   */
   appleSdkToolchain = import ./darwin/apple-sdk-toolchain.nix;
 
+  /**
+  GHC as a Linux-hosted cross compiler targeting Darwin, built with the
+  apple-sdk toolchain above; args are the exact nixpkgs deps it needs (see
+  the file) plus `{ target, toolchain }`, returning the compiler derivation. See [`lib/darwin/cross-ghc.nix`](lib/darwin/cross-ghc.nix).
+  */
+  crossGhc = import ./darwin/cross-ghc.nix;
+
+  /**
+  Setup-based builder that compiles a Haskell package plus its library
+  closure with `crossGhc`, reusing the pinned nixpkgs haskellPackages for
+  sources and the dependency graph. `{ crossGhc, haskellPackages, lib, llvmPackages, stdenv }`
+  returns `{ build }`. See [`lib/darwin/cross-haskell.nix`](lib/darwin/cross-haskell.nix).
+  */
+  crossHaskell = import ./darwin/cross-haskell.nix;
+
   # Single source of truth for the ix public binary cache identity (URL + the
   # `ix-workspace:` trusted key that verifies its narinfos). See ./cache.nix.
   cache = import ./cache.nix;
@@ -839,6 +854,8 @@
       inherit
         appleSdkToolchain
         bunLockFor
+        crossGhc
+        crossHaskell
         cargoUnitFor
         cargoUnitExternal
         darwinCrossPkgs
