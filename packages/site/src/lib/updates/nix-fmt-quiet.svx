@@ -1,0 +1,13 @@
+---
+id: nix-fmt-quiet
+postedAt: 2026-07-19T09:00:00-07:00
+title: "nix fmt drops Alejandra's promo output"
+tags: [nix, tooling, formatter]
+links:
+  - label: formatter
+    href: https://github.com/indexable-inc/index/blob/main/lib/per-system.nix
+---
+
+Running `nix fmt` used to end with Alejandra's marketing: a "Congratulations! Your code complies with the Alejandra style." line and a rotating "Special thanks to <sponsor> for being a sponsor of Alejandra" plug on every invocation. That noise is gone. The `formatter` flake output now wraps `pkgs.alejandra` with a single `-q` (`--quiet`) flag, which Alejandra treats as "hide informational messages".
+
+Real output survives. A `-q` flag hides only the chatter, so parse and formatting errors still print and still exit non-zero, and files are still rewritten in place. A second `-q` would also swallow errors, so the wrapper stops at one. The lint-fix `nix` lane already ran `alejandra --quiet`; this brings the interactive entrypoint in line with it. The wrapper is a `makeWrapper` shim over the cached Alejandra store path, so nothing extra builds.

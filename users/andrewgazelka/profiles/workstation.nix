@@ -509,7 +509,7 @@ in {
       websocat # `curl` for WebSockets
 
       # Git and version control
-      git # the version control system itself
+      indexPkgs.git # git with the linked-worktree submodule alternates patch (packages/git, #3610); same pinned `index` input
       git-lfs # large-file storage extension for git
       gitoxide # pure-Rust git implementation (`gix`, used by the `gix clone` helper)
       libgit2 # C library implementing git core methods (linked against by other tools)
@@ -526,7 +526,7 @@ in {
       # each over the network. See scripts/git-wt-submodules.sh.
       (ix.writeBashApplication pkgs {
         name = "git-wt-submodules";
-        runtimeInputs = [git];
+        runtimeInputs = [indexPkgs.git];
         text = builtins.readFile (configRoot + "/scripts/git-wt-submodules.sh");
       })
 
@@ -1258,6 +1258,11 @@ in {
     # On darwin both resolve to the same derivation, so this is a no-op there.
     package = fishNoTests;
   };
+
+  # portable.nix (imported alongside this profile on hydra) enables
+  # programs.git, whose package defaults to nixpkgs git; align it with the
+  # patched home.packages entry so the profile holds one bin/git (#3610).
+  programs.git.package = indexPkgs.git;
 
   programs.yazi = {
     enable = true;

@@ -1,0 +1,70 @@
+---
+id: 0029-blog-on-ix-dev
+number: '0029'
+title: 'Blog on ix.dev: fold the margins site into index'
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 2, why: 'moving an existing SvelteKit blog into an existing SvelteKit site; no new machinery' }
+  impact: { value: 5, why: 'ix.dev gets a real editorial voice and twelve finished posts on day one instead of an empty blog route' }
+  effort: { value: 3, why: 'port twelve svx posts into a lib collection, reconcile two mdsvex pipelines, one redirect page' }
+  risk: { value: 2, why: 'content-only change behind the site build; the old repo stays recoverable until archived' }
+  maturity: { value: 1, why: 'unbuilt; both source and destination sites are live, only the move is new' }
+  leverage: { value: 5, why: 'every future post inherits the index publishing pipeline, review, and domain instead of a side repo' }
+  taste: { value: 6, why: 'what a personal-voice blog looks like on a company domain is an editorial call, not a technical one' }
+description: 'The margins blog (margins-ink.github.io) is a separate SvelteKit repo with twelve finished essays and its own publishing pipeline. The index site already ships updates, plans, and stories, and is slated to serve at ix.dev. Fold the blog in as one more svx collection so ix.dev has a blog with real content, one publishing pipeline, and no second site to operate.'
+---
+
+## Summary
+
+Move the margins blog, currently the standalone repo `margins-ink/margins-ink.github.io` checked out at `~/Projects/margins-ink/site`, into `packages/site` as a blog collection rendered at `/blog` on ix.dev. Twelve posts exist today as mdsvex pages under `src/routes/(site)/thoughts/*/+page.svx`. They become `src/lib/blog/*.svx` entries following the same eager-glob-plus-validation pattern as `plans.ts` and the updates feed, and the old GitHub Pages site becomes a redirect.
+
+## Motivation
+
+Two SvelteKit sites exist with one author and one audience. The margins repo has its own mdsvex config, its own remark and rehype plugins (`remark-inline-shiki.js`, `rehype-pages.js`), its own deploy, and its own domain, all duplicating what `packages/site` already does with more review and better CI. Meanwhile the index site is becoming the ix.dev front door (index#3616) and has updates, plans, RFCs, and stories, but no blog: no place for essays that are neither an operator-facing update nor a design document.
+
+The margins README pitches the blog as out-of-distribution ideas about software and systems. That is exactly the editorial surface ix.dev wants, and it already has twelve finished posts: bounty-pricing, commit, deferred-ecs, filesystems, ifd, initial-thought, introspection, mcp-not-enough, nix-cycles, nushell-tui, rerun-million-tasks, snuon.
+
+## Detailed design
+
+- **Content collection, not route port.** Posts land as `packages/site/src/lib/blog/<slug>.svx` with typed frontmatter (`id`, `title`, `postedAt`, `updated`, `tags`, `description`), validated by a `blog.ts` module that mirrors `plans.ts`: eager glob, throw at module scope on schema violations, so `nix build .#site` fails on a bad post. One concept, one implementation: the site already has this pattern twice.
+- **Routes.** `/blog` lists posts newest first; `/blog/[slug]` renders one. Both prerendered like the plans routes. The existing `feed.xml` gains blog entries or a `/blog/feed.xml` sibling, whichever the current feed code makes cheaper.
+- **Pipeline reconciliation.** The margins repo carries `remark-inline-shiki.js` for inline code highlighting. If the index mdsvex config lacks an equivalent, the plugin moves with the posts; otherwise it is dropped. The `rehype-pages.js` collection plugin is superseded by the `blog.ts` glob and does not move.
+- **History.** Import with `git subtree` (the playbook refresh already uses subtree filtering) so post authorship history survives; a flat copy is the fallback if the subtree graft fights the commit hooks.
+- **Redirect and archive.** `margins-ink.github.io` gets a final commit: every thought URL meta-refreshes to `https://ix.dev/blog/<slug>`, then the repo is archived. Out of scope: the repo's `artifact` and `lmllmtfy` routes, which are not blog content and stay behind or die with the archive.
+
+## Drawbacks
+
+- A personal-voice blog now lives on a company domain and inside company review: every post costs a PR through index CI, and the voice question (byline, disclaimer, whose opinions) has to be answered once.
+- The margins repo advertised outside contributions; contributions now require touching a large private-ish monorepo instead of a small public one.
+- Twelve posts of prose enter the repo lint and site build surface; any strictness the hooks apply to prose applies to them.
+
+## Alternatives
+
+- **Do nothing.** Two sites, two pipelines, and ix.dev launches without a blog while finished essays sit on a domain nobody visits.
+- **blog.ix.dev pointing at the existing repo.** Keeps the split pipeline forever and adds DNS and TLS surface for zero consolidation.
+- **Cross-post.** Worst of both: duplicate content, two canonical URLs, both pipelines still alive.
+
+## Prior art
+
+- `plans.ts` and the updates collection in `packages/site/src/lib`: the exact glob-validate-prerender pattern the blog copies.
+- The playbook subtree refresh: repo-history import machinery already exists in-house.
+- Company engineering blogs folded into product monorepo sites are the industry default; the standalone-blog-repo era ended when static site pipelines converged.
+
+## Unresolved questions
+
+- Route name: `/blog` or keep `/thoughts`? The old URLs say thoughts; the front door says blog.
+- Byline and disclosure: posts as `andrewgazelka`, as ix, or per-post authors with an open-contribution note?
+- Does post history justify a subtree graft, or is a flat copy with a link to the archived repo enough?
+
+## Future possibilities
+
+Plan 0030 sketches a global knowledge graph with one ontology across people, biases, concepts, and facts. Blog posts are the most natural public nodes in that graph: each post is an entity, its margin links resolve against the ontology, and the concepts a post argues about link back to the shared agent memory facts (plan 0028) that cite them. Landing the blog inside index is what makes that wiring possible; a blog in a separate repo could never join the graph.
+
+Drafted by an AI agent via Claude Code; comments wanted, hence the RFC flag.

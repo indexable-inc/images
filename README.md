@@ -1,12 +1,12 @@
 # index
 
 <p align="center">
-  <img src=".github/readme/unblocked.svg" alt="agents write code faster than upstream review can take it; index lands the change on main now and fans it out to everyone" width="720">
+  <img src=".github/readme/globe.svg" alt="a spinning globe: the whole world, rendered as braille text" width="480">
 </p>
 
-Agents made writing code cheap. Shipping it is still expensive: review queues, maintainer bus factors, projects that will not take AI-written patches at all. The bottleneck moved from writing the change to landing it.
+index is a Nix monorepo in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions): one shared definition of the software everyone here runs. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/). It is also the default world an [ix.dev](https://ix.dev) VM boots: ix is the runtime, index is what runs on it.
 
-index is the other path: one Nix monorepo, in the spirit of [nixpkgs](https://github.com/NixOS/nixpkgs) and [Raycast extensions](https://github.com/raycast/extensions), where every change lands on main now and upstream can take it someday. Inside: [packages](packages/), patched toolchains ([Nix](packages/nix/nix/), [Clippy](packages/llm-clippy/)), [NixOS and Home Manager modules](modules/), [VM images](images/), and [CI](.github/workflows/). See the [philosophy](https://indexable-inc.github.io/index/philosophy/) for more.
+It exists because agents now write patches faster than upstream review can absorb them. A fix that takes an agent minutes can wait months in a review queue, and some projects refuse AI-written patches outright. Here the same change lands on main today, and upstream can adopt it whenever it wants. The [philosophy](https://indexable-inc.github.io/index/philosophy/) page has the full argument.
 
 ## Why
 

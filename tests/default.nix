@@ -4371,13 +4371,16 @@
             exaSearchBaked = true;
           };
         in
-          # Without the kernel only the merge protections and the
-          # exa-superseded web pair remain: the stock shell/file/search tools
-          # are that agent's whole surface.
+          # Without the kernel only the merge protections, the unconditional
+          # bundled-skill denies (#3607) and the exa-superseded web pair
+          # remain: the stock shell/file/search tools are that agent's whole
+          # surface.
           overlay.claude.deniedToolPatterns
           == [
             "Bash(gh pr merge*--admin*)"
             "Bash(gh pr merge*--force*)"
+            "Skill(artifact-design)"
+            "Skill(dataviz)"
             "WebSearch"
             "WebFetch"
           ]
