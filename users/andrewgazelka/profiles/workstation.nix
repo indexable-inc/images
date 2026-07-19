@@ -1296,9 +1296,10 @@ in {
     # module's shell integrations stay off.
     enableNushellIntegration = false;
     # Settings are pure nix (home/starship.nix): one source of truth that can
-    # reference flake inputs directly, e.g. the index/ix pin ages segment.
+    # bake eval-time facts, e.g. the ix pin age segment.
     settings = import (configRoot + "/home/starship.nix") {
-      inherit (cfg) pinTimestamps;
+      inherit (cfg) ixPinTimestamp;
+      indexPinRepo = "${cfg.paths.privateConfigDirectory}/index";
     };
   };
 

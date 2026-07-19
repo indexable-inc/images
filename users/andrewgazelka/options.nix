@@ -89,17 +89,9 @@
       };
     };
 
-    pinTimestamps = {
-      index = lib.mkOption {
-        type = lib.types.ints.unsigned;
-        default = 0;
-        description = "Index flake commit epoch displayed by Starship.";
-      };
-      ix = lib.mkOption {
-        type = lib.types.ints.unsigned;
-        default = 0;
-        description = "ix flake commit epoch displayed by Starship.";
-      };
+    ixPinTimestamp = lib.mkOption {
+      type = lib.types.ints.positive;
+      description = "ix flake pin commit epoch baked into the Starship prompt.";
     };
 
     sshSigningPublicKey = lib.mkOption {

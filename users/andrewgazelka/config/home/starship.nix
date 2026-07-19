@@ -2,10 +2,19 @@
 # ~/.config/starship.toml (store-backed) and nushell loads that file via its
 # vendor autoload. Nix rather than a committed TOML so the prompt can bake
 # eval-time facts, like the flake pin ages below.
-{pinTimestamps}: let
-  # Ages of the index/ix flake pins shown in the prompt. Each pin's commit
-  # epoch is baked at switch time and sh computes the age at prompt time, so
-  # the segment shows live staleness, not a string frozen at the last switch.
+{
+  # index pin repo: the submodule checkout under the private config. Its
+  # path: input carries no lastModified (git+file fetch canonicalizes
+  # mtimes, index#3733), so the segment asks git for the commit epoch at
+  # prompt time; it also tracks bumps without a switch.
+  indexPinRepo,
+  # ix pin: a git flake input, so its commit epoch is real at eval time and
+  # baked at switch time.
+  ixPinTimestamp,
+}: let
+  # Ages of the index/ix flake pins shown in the prompt. Each pin's epoch
+  # reaches sh as a shell expression and sh computes the age at prompt time,
+  # so the segment shows live staleness, not a string frozen at the switch.
   pinStyles = {
     index = {
       icon = "󰏗";
@@ -18,10 +27,13 @@
   };
   # POSIX-sh helper: seconds since a baked epoch rendered as 3d/5h/12m.
   ageFn = ''age() { d=$(( $(date +%s) - $1 )); if [ "$d" -ge 86400 ]; then echo "$((d / 86400))d"; elif [ "$d" -ge 3600 ]; then echo "$((d / 3600))h"; else echo "$((d / 60))m"; fi; }'';
-  pinModule = name: timestamp: let
+  # epochSh: shell expression producing the pin's commit epoch; a failing
+  # substitution (host without the checkout) short-circuits the echo so the
+  # segment renders empty instead of a bogus age.
+  pinModule = name: epochSh: let
     pin = pinStyles.${name};
   in {
-    command = "${ageFn}; echo \"${pin.icon} $(age ${toString timestamp})\"";
+    command = "${ageFn}; epoch=${epochSh} && echo \"${pin.icon} $(age $epoch)\"";
     shell = [
       "sh"
       "-c"
@@ -330,7 +342,7 @@ in {
     #
     # jj: command = "jj-starship"; detect_folders = [".jj"]
     # ix: command = "ix-starship" (branch and sync status: ↻ syncing, ⏸ stopped, ✗ crashed)
-    flake_pin_index = pinModule "index" pinTimestamps.index;
-    flake_pin_ix = pinModule "ix" pinTimestamps.ix;
+    flake_pin_index = pinModule "index" "$(git -C '${indexPinRepo}' log -1 --format=%ct 2>/dev/null)";
+    flake_pin_ix = pinModule "ix" (toString ixPinTimestamp);
   };
 }
