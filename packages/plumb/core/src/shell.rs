@@ -8,8 +8,8 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use plumb_syntax::{
-    AndOr, Command as AstCommand, Connector, Part, Pipeline as AstPipeline, Program, RedirOp,
-    Word, parse,
+    AndOr, Command as AstCommand, Connector, Part, PathSeg, Pipeline as AstPipeline, Program,
+    RedirOp, Word, parse,
 };
 
 use crate::engine::{
@@ -795,9 +795,9 @@ impl Shell {
                         }
                     }
                 }
-                Part::Var { name, indices, .. } => {
-                    let value = if !indices.is_empty() {
-                        self.run_ref(name, indices, report)?
+                Part::Var { name, path, .. } => {
+                    let value = if !path.is_empty() {
+                        self.run_ref(name, path, report)?
                     } else if name == "?" {
                         self.lock().last_status.to_string()
                     } else {
@@ -852,18 +852,27 @@ impl Shell {
         Ok(value.trim_end_matches('\n').to_owned())
     }
 
-    /// Resolve a `${o[run]}` / `${o[run][stage]}` reference. A non-negative
-    /// run index is a run id; a negative one counts back from the latest
-    /// (`-1` = latest). The run being evaluated participates once it has
-    /// stages, so `a | b; use ${o[1][0]}` works within one eval. The stage
-    /// index is a stage number as shown in summaries, negative counting
-    /// from the last stage.
-    fn run_ref(&self, name: &str, indices: &[i64], current: &Report) -> Result<String, Error> {
-        if !matches!(name, "o" | "e" | "s") {
+    /// Resolve a run reference: the terse `${o[run]}` / `${o[run][stage]}`
+    /// shorthands and the structured `${runs[run]...}` paths whose field
+    /// names mirror the report JSON. A non-negative run index is a run id;
+    /// a negative one counts back from the latest (`-1` = latest). The run
+    /// being evaluated participates once it has stages, so
+    /// `a | b; use ${o[1][0]}` works within one eval. Stage indexes are the
+    /// numbers shown in summaries, negative counting from the last stage.
+    fn run_ref(&self, name: &str, path: &[PathSeg], current: &Report) -> Result<String, Error> {
+        let shorthand = matches!(name, "o" | "e" | "s");
+        if !shorthand && name != "runs" {
             return Err(Error::RunRef {
-                message: format!("`{name}` is not indexable; only ${{o[..]}}, ${{e[..]}}, ${{s[..]}}"),
+                message: format!(
+                    "`{name}` is not structured; use ${{o[..]}}, ${{e[..]}}, ${{s[..]}} or ${{runs[..]}} paths"
+                ),
             });
         }
+        let Some(PathSeg::Index(run_index)) = path.first() else {
+            return Err(Error::RunRef {
+                message: "select a run first: ${runs[7]...} or ${runs[-1]...}".to_owned(),
+            });
+        };
         let retained: Vec<Arc<Report>> = {
             let state = self.lock();
             state.runs.iter().cloned().collect()
@@ -872,19 +881,15 @@ impl Shell {
         if current.stages().next().is_some() {
             candidates.push(current);
         }
-        let run_index = indices[0];
-        let run = if run_index < 0 {
-            let back = usize::try_from(-(run_index + 1)).map_err(|_| Error::RunRef {
-                message: format!("index {run_index} out of range"),
-            })?;
-            candidates
-                .len()
-                .checked_sub(back + 1)
+        let run = if *run_index < 0 {
+            usize::try_from(-(run_index + 1))
+                .ok()
+                .and_then(|back| candidates.len().checked_sub(back + 1))
                 .and_then(|position| candidates.get(position))
         } else {
             candidates
                 .iter()
-                .find(|report| i64::try_from(report.id) == Ok(run_index))
+                .find(|report| i64::try_from(report.id) == Ok(*run_index))
         };
         let Some(run) = run else {
             return Err(Error::RunRef {
@@ -892,39 +897,51 @@ impl Shell {
             });
         };
         let stages: Vec<&Stage> = run.stages().collect();
-        let stage = match indices.get(1) {
-            None => stages.last().copied(),
-            Some(stage_index) if *stage_index < 0 => usize::try_from(-(stage_index + 1))
-                .ok()
-                .and_then(|back| stages.len().checked_sub(back + 1))
-                .and_then(|position| stages.get(position).copied()),
-            Some(stage_index) => stages
-                .iter()
-                .find(|stage| i64::try_from(stage.index) == Ok(*stage_index))
-                .copied(),
-        };
-        let Some(stage) = stage else {
-            return Err(Error::RunRef {
-                message: format!("run {} has no stage {}", run.id, indices[1]),
-            });
-        };
-        let value = match (name, indices.len()) {
-            // For the in-progress run, `status` is not final yet; the last
-            // pipeline's status is the honest answer for both cases.
-            ("s", 1) => run
-                .pipelines
-                .last()
-                .map_or(run.status, |pipeline| pipeline.status)
-                .to_string(),
-            ("s", _) => stage.status.to_string(),
-            ("o", _) => trimmed(&stage.stdout.render()),
-            (_, _) => trimmed(&stage.stderr.render()),
-        };
-        Ok(value)
+        if shorthand {
+            let stage_index = match &path[1..] {
+                [] => None,
+                [PathSeg::Index(stage_index)] => Some(*stage_index),
+                _ => {
+                    return Err(Error::RunRef {
+                        message: format!(
+                            "the `{name}` shorthand takes indexes only: ${{{name}[7]}} or ${{{name}[7][0]}}"
+                        ),
+                    });
+                }
+            };
+            let stage = select_stage(&stages, stage_index).ok_or_else(|| Error::RunRef {
+                message: format!("run {} has no stage {:?}", run.id, stage_index),
+            })?;
+            let value = match (name, stage_index) {
+                ("s", None) => pipeline_status(run).to_string(),
+                ("s", Some(_)) => stage.status.to_string(),
+                ("o", _) => trimmed(&stage.stdout.render()),
+                (_, _) => trimmed(&stage.stderr.render()),
+            };
+            return Ok(value);
+        }
+        match &path[1..] {
+            [] => Err(Error::RunRef {
+                message: "pick a run field: .output, .stderr, .status, .id, .source, .duration_ms, or .stages[K].<field>"
+                    .to_owned(),
+            }),
+            [PathSeg::Field(field)] if field != "stages" => run_leaf(run, &stages, field),
+            [PathSeg::Field(stages_field), PathSeg::Index(stage_index), PathSeg::Field(field)]
+                if stages_field == "stages" =>
+            {
+                let stage =
+                    select_stage(&stages, Some(*stage_index)).ok_or_else(|| Error::RunRef {
+                        message: format!("run {} has no stage {stage_index}", run.id),
+                    })?;
+                stage_leaf(stage, field)
+            }
+            _ => Err(Error::RunRef {
+                message: "unsupported path; shapes: ${runs[N].output} or ${runs[N].stages[K].stdout}"
+                    .to_owned(),
+            }),
+        }
     }
 
-    /// Commit a finished run: store the report and auto-bind its outputs.
-    ///
     /// The run history itself is the addressable surface: `${o[N]}` /
     /// `${e[N]}` / `${s[N]}` (and `[N][K]` per stage) resolve against it in
     /// [`Self::run_ref`]. Only the unnumbered `$o` / `$e` / `$s` aliases
@@ -950,6 +967,78 @@ impl Shell {
         }
         drop(state);
     }
+}
+
+/// Select a stage by summary index (negative from the end); `None` picks
+/// the final stage.
+fn select_stage<'stages>(
+    stages: &[&'stages Stage],
+    selector: Option<i64>,
+) -> Option<&'stages Stage> {
+    match selector {
+        None => stages.last().copied(),
+        Some(index) if index < 0 => usize::try_from(-(index + 1))
+            .ok()
+            .and_then(|back| stages.len().checked_sub(back + 1))
+            .and_then(|position| stages.get(position).copied()),
+        Some(index) => stages
+            .iter()
+            .find(|stage| i64::try_from(stage.index) == Ok(index))
+            .copied(),
+    }
+}
+
+/// The honest status for finished and in-progress runs alike: the last
+/// pipeline's status.
+fn pipeline_status(run: &Report) -> i32 {
+    run.pipelines
+        .last()
+        .map_or(run.status, |pipeline| pipeline.status)
+}
+
+/// A `${runs[N].<field>}` leaf.
+fn run_leaf(run: &Report, stages: &[&Stage], field: &str) -> Result<String, Error> {
+    let value = match field {
+        "output" => trimmed(&run.output()),
+        "stderr" => stages
+            .last()
+            .map(|stage| trimmed(&stage.stderr.render()))
+            .unwrap_or_default(),
+        "status" => pipeline_status(run).to_string(),
+        "id" => run.id.to_string(),
+        "source" => run.source.clone(),
+        "duration_ms" => run.duration_ms.to_string(),
+        _ => {
+            return Err(Error::RunRef {
+                message: format!(
+                    "unknown run field `{field}` (have: output, stderr, status, id, source, duration_ms, stages)"
+                ),
+            });
+        }
+    };
+    Ok(value)
+}
+
+/// A `${runs[N].stages[K].<field>}` leaf.
+fn stage_leaf(stage: &Stage, field: &str) -> Result<String, Error> {
+    let value = match field {
+        "stdout" => trimmed(&stage.stdout.render()),
+        "stderr" => trimmed(&stage.stderr.render()),
+        "status" => stage.status.to_string(),
+        "argv" => stage.argv.join(" "),
+        "duration_ms" => stage.duration_ms.to_string(),
+        "index" => stage.index.to_string(),
+        "stdout_bytes" => stage.stdout.total_bytes().to_string(),
+        "stderr_bytes" => stage.stderr.total_bytes().to_string(),
+        _ => {
+            return Err(Error::RunRef {
+                message: format!(
+                    "unknown stage field `{field}` (have: stdout, stderr, status, argv, duration_ms, index, stdout_bytes, stderr_bytes)"
+                ),
+            });
+        }
+    };
+    Ok(value)
 }
 
 /// Capture text with trailing newlines trimmed, the ergonomic form for

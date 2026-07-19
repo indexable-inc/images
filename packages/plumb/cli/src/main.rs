@@ -19,7 +19,8 @@ use plumb_core::{Config, Error, Shell};
                   argv, status, timing, and captured stdout/stderr (including what each pipe \
                   stage fed the next). Runs stay addressable afterwards: ${o[N]}/${e[N]}/${s[N]} \
                   for run N, ${o[N][K]} per pipe stage, negative indexes count from the latest, \
-                  and $o/$e/$s alias the last run."
+                  and $o/$e/$s alias the last run. Structured paths ${runs[N].stages[K].stdout} \
+                  mirror the report JSON field names."
 )]
 struct Args {
     /// Evaluate this source string and exit.

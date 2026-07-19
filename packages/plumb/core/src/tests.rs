@@ -283,6 +283,33 @@ fn same_eval_self_reference() {
 }
 
 #[test]
+fn structured_run_paths() {
+    let sh = shell();
+    sh.eval("echo alpha | tr a-z A-Z").expect("run 1");
+    let report = sh
+        .eval("echo ${runs[1].output} ${runs[1].stages[0].stdout} ${runs[1].status} ${runs[-1].stages[-1].argv}")
+        .expect("paths");
+    assert_eq!(report.output(), "ALPHA alpha 0 tr a-z A-Z\n");
+    let bytes = sh
+        .eval("echo ${runs[1].stages[0].stdout_bytes}")
+        .expect("bytes");
+    assert_eq!(bytes.output(), "6\n");
+    for src in [
+        "echo ${runs[1]}",
+        "echo ${runs[1].nope}",
+        "echo ${runs[1].stages[0].nope}",
+        "echo ${runs[1].stages[0]}",
+        "echo ${runs.output}",
+        "echo ${HOME[0]}",
+    ] {
+        assert!(
+            matches!(sh.eval(src), Err(Error::RunRef { .. })),
+            "{src} should be a run-reference error"
+        );
+    }
+}
+
+#[test]
 fn negative_run_references() {
     let sh = shell();
     sh.eval("echo newest").expect("run 1");
