@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 180" role="img" aria-label="custom clippy lints, cve scans, and license checks cover the whole graph">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 180" role="img" aria-label="clippy, cve scan, and licenses applied to every package in the graph">
   <style>
     :root { --fg: #18181b; --muted: #8a8f98; --line: #d4d4d8; }
     @media (prefers-color-scheme: dark) {
@@ -15,22 +15,57 @@
     .mhead { fill: var(--muted); }
     .ink { fill: var(--fg); }
   </style>
-  <defs>
-    <marker id="a" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path class="head" d="M 0 0 L 8 4 L 0 8 z"/>
-    </marker>
-    <marker id="am" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
-    </marker>
-  </defs>
   <rect class="frame" x="1" y="14" width="718" height="152" rx="8"/>
-  <text class="m cap" x="48" y="68">CLIPPY</text>
-  <rect class="ink" x="160" y="57" width="360" height="12"/>
-  <text class="m" x="672" y="68" text-anchor="end">every crate</text>
-  <text class="m cap" x="48" y="104">CVE SCAN</text>
-  <rect class="ink" x="160" y="93" width="360" height="12"/>
-  <text class="m" x="672" y="104" text-anchor="end">every package</text>
-  <text class="m cap" x="48" y="140">LICENSES</text>
-  <rect class="ink" x="160" y="129" width="360" height="12"/>
-  <text class="m" x="672" y="140" text-anchor="end">every dep</text>
+  <text class="m cap" x="348" y="58" text-anchor="middle">EVERY PACKAGE</text>
+  <text class="m cap" x="48" y="85">CLIPPY</text>
+  <text class="m cap" x="48" y="111">CVE SCAN</text>
+  <text class="m cap" x="48" y="137">LICENSES</text>
+  <rect class="ink" x="200" y="74" width="12" height="12"/>
+  <rect class="ink" x="219" y="74" width="12" height="12"/>
+  <rect class="ink" x="238" y="74" width="12" height="12"/>
+  <rect class="ink" x="257" y="74" width="12" height="12"/>
+  <rect class="ink" x="276" y="74" width="12" height="12"/>
+  <rect class="ink" x="295" y="74" width="12" height="12"/>
+  <rect class="ink" x="314" y="74" width="12" height="12"/>
+  <rect class="ink" x="333" y="74" width="12" height="12"/>
+  <rect class="ink" x="352" y="74" width="12" height="12"/>
+  <rect class="ink" x="371" y="74" width="12" height="12"/>
+  <rect class="ink" x="390" y="74" width="12" height="12"/>
+  <rect class="ink" x="409" y="74" width="12" height="12"/>
+  <rect class="ink" x="428" y="74" width="12" height="12"/>
+  <rect class="ink" x="447" y="74" width="12" height="12"/>
+  <rect class="ink" x="466" y="74" width="12" height="12"/>
+  <rect class="ink" x="485" y="74" width="12" height="12"/>
+  <rect class="ink" x="200" y="100" width="12" height="12"/>
+  <rect class="ink" x="219" y="100" width="12" height="12"/>
+  <rect class="ink" x="238" y="100" width="12" height="12"/>
+  <rect class="ink" x="257" y="100" width="12" height="12"/>
+  <rect class="ink" x="276" y="100" width="12" height="12"/>
+  <rect class="ink" x="295" y="100" width="12" height="12"/>
+  <rect class="ink" x="314" y="100" width="12" height="12"/>
+  <rect class="ink" x="333" y="100" width="12" height="12"/>
+  <rect class="ink" x="352" y="100" width="12" height="12"/>
+  <rect class="ink" x="371" y="100" width="12" height="12"/>
+  <rect class="ink" x="390" y="100" width="12" height="12"/>
+  <rect class="ink" x="409" y="100" width="12" height="12"/>
+  <rect class="ink" x="428" y="100" width="12" height="12"/>
+  <rect class="ink" x="447" y="100" width="12" height="12"/>
+  <rect class="ink" x="466" y="100" width="12" height="12"/>
+  <rect class="ink" x="485" y="100" width="12" height="12"/>
+  <rect class="ink" x="200" y="126" width="12" height="12"/>
+  <rect class="ink" x="219" y="126" width="12" height="12"/>
+  <rect class="ink" x="238" y="126" width="12" height="12"/>
+  <rect class="ink" x="257" y="126" width="12" height="12"/>
+  <rect class="ink" x="276" y="126" width="12" height="12"/>
+  <rect class="ink" x="295" y="126" width="12" height="12"/>
+  <rect class="ink" x="314" y="126" width="12" height="12"/>
+  <rect class="ink" x="333" y="126" width="12" height="12"/>
+  <rect class="ink" x="352" y="126" width="12" height="12"/>
+  <rect class="ink" x="371" y="126" width="12" height="12"/>
+  <rect class="ink" x="390" y="126" width="12" height="12"/>
+  <rect class="ink" x="409" y="126" width="12" height="12"/>
+  <rect class="ink" x="428" y="126" width="12" height="12"/>
+  <rect class="ink" x="447" y="126" width="12" height="12"/>
+  <rect class="ink" x="466" y="126" width="12" height="12"/>
+  <rect class="ink" x="485" y="126" width="12" height="12"/>
 </svg>

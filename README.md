@@ -1,7 +1,7 @@
 # index
 
 <p align="center">
-  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper" width="720">
+  <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
 </p>
 
 One build graph for everything.
@@ -21,7 +21,7 @@ Patch a compiler, fix a library, tighten a lint: nothing quietly runs last year'
 ### Never blocked on upstream
 
 <p align="center">
-  <img src=".github/readme/upstream.svg" alt="patches live in the repo next to the code; no waiting on upstream" width="720">
+  <img src=".github/readme/upstream.svg" alt="a fix lands in this repo now; upstream can take it someday" width="720">
 </p>
 
 Patches live next to the code that needs them. No dependency has a bus factor outside the repo.
@@ -29,7 +29,7 @@ Patches live next to the code that needs them. No dependency has a bus factor ou
 ### One standard for everything
 
 <p align="center">
-  <img src=".github/readme/one-standard.svg" alt="custom clippy lints, cve scans, and license checks cover the whole graph" width="720">
+  <img src=".github/readme/one-standard.svg" alt="clippy, cve scan, and licenses applied to every package in the graph" width="720">
 </p>
 
 Add a rule and every package meets it, in the same change.

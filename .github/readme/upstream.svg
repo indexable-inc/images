@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 180" role="img" aria-label="patches live in the repo next to the code; no waiting on upstream">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 180" role="img" aria-label="a fix lands in this repo now; upstream can take it someday">
   <style>
     :root { --fg: #18181b; --muted: #8a8f98; --line: #d4d4d8; }
     @media (prefers-color-scheme: dark) {
@@ -23,12 +23,16 @@
       <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
     </marker>
   </defs>
+
   <rect class="frame" x="1" y="14" width="718" height="152" rx="8"/>
-  <rect class="mwire dash" x="60" y="68" width="150" height="46" rx="4"/>
-  <text class="m" x="135" y="95" text-anchor="middle">upstream</text>
-  <path class="mwire dash" marker-end="url(#am)" d="M 222 91 H 318"/>
-  <text class="m cap" x="270" y="118" text-anchor="middle">no waiting</text>
-  <rect class="wire" x="330" y="58" width="330" height="66" rx="4"/>
-  <text class="m cap" x="495" y="84" text-anchor="middle">this repo</text>
-  <text x="495" y="108" text-anchor="middle">code/ + patches/</text>
+  <text x="60" y="95">fix</text>
+  <path class="wire" marker-end="url(#a)" d="M 96 90 H 140 V 68 H 320"/>
+  <text class="m cap" x="230" y="60" text-anchor="middle">now</text>
+  <rect class="wire" x="330" y="40" width="330" height="56" rx="4"/>
+  <text class="m cap" x="495" y="62" text-anchor="middle">this repo</text>
+  <text x="495" y="84" text-anchor="middle">code/ + patches/</text>
+  <path class="mwire dash" marker-end="url(#am)" d="M 96 96 H 140 V 132 H 320"/>
+  <text class="m cap" x="230" y="124" text-anchor="middle">someday</text>
+  <rect class="mwire dash" x="330" y="112" width="200" height="40" rx="4"/>
+  <text class="m" x="430" y="137" text-anchor="middle">upstream</text>
 </svg>
