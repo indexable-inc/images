@@ -1,0 +1,118 @@
+---
+id: 0027-session-provenance
+number: '0027'
+title: 'Session provenance: agent history uploads keyed by session id'
+status: Draft
+authors: andrewgazelka
+created: 2026-07-18
+updated: 2026-07-18
+trackingIssue: null
+scores:
+  ambition: { value: 4, why: 'one uploader, one hook, one directory convention' }
+  impact: { value: 6, why: 'every landed commit gains a link to the reasoning that produced it' }
+  effort: { value: 4, why: 'transcript locating and sanitizing exist; the new work is the gate and layout' }
+  risk: { value: 6, why: 'publishing transcripts from a public repo is a privacy cliff if sanitization misses' }
+  maturity: { value: 3, why: 'layout and gate are designed; privacy default and refresh semantics are open' }
+  leverage: { value: 6, why: 'session-id keying is the same stable-identity trick jj sells, for free on git' }
+  taste: { value: 6, why: 'reuses the existing commit-msg gate shape instead of inventing a new workflow' }
+supersedes: null
+supersededBy: null
+description: Publish the sanitized transcript of the agent session that produced a change under a session-id-keyed path, and link commits to sessions with a trailer the existing commit-msg gate can enforce. Session ids, not commit SHAs, are the durable key, because rebase rewrites SHAs and Nix needs paths it can reference statically.
+---
+
+## Summary
+
+Add a history uploader, `nix run .#claude-history-upload -- [session-id]`, that copies the agent transcript for a session into the repo at `history/<session-id>/` (sanitized, idempotent, never overwriting), and extend the commit-msg hook to require a `Session: <session-id>` trailer on agent commits. When the trailer references a session whose directory does not exist, the hook fails with the exact upload command to run. The key design decision: files are keyed by session id, and commits point at sessions through message trailers, never the other way around.
+
+## Motivation
+
+The transcript of the session that produced a change is the real design record: the alternatives weighed, the dead ends hit, the constraint that forced the final shape. Today it lives in `~/.claude` on one machine and in the fleet history archive (searchable, but private and unlinked). A commit on `main` answers *what* changed; nothing durable answers *why*, even though the answer was written down, in full, at authoring time.
+
+The repo already enforces the sibling idea: every commit must reference a site page (`commit-site-page-links`). This plan is the same gate shape pointed at provenance instead of narrative.
+
+## Detailed design
+
+### Why session ids and not commit SHAs
+
+Two facts kill SHA keying:
+
+1. A commit's SHA does not exist when the pre-commit and commit-msg hooks run, and Nix evaluation cannot reference "the current commit" statically at all.
+2. This repo rebases and squashes constantly. Every rewrite mints new SHAs, so any SHA-keyed directory goes stale on the first `git rebase`.
+
+Session ids have neither problem. The harness mints them before any commit exists, they never change, and `history/<session-id>/` is an ordinary path Nix can reference at eval time. The commit-to-session mapping rides in a `Session:` message trailer, and trailers survive rewrites: rebase preserves messages verbatim, and squash concatenates them, so the mapping only ever accumulates.
+
+This is the property jj sells as change-ids: a stable identity that survives amend and rebase while the commit hash churns underneath. A session-id trailer is a poor-man's change-id that needs no VCS migration. If the repo ever adopts jj, the trailer maps 1:1 onto a change-id and the layout does not move.
+
+### Layout
+
+```
+history/
+  <session-id>/
+    meta.json         # machine, repo path, branch, model, started/ended, harness version
+    transcript.jsonl  # sanitized transcript
+```
+
+One directory per session. A session that spans many commits uploads once; many trailers point at it. A commit built from several sessions carries several trailers.
+
+### Uploader
+
+`nix run .#claude-history-upload -- [session-id]`, defaulting to `$CLAUDE_SESSION_ID`, then to the most recent session for the current project directory.
+
+1. Locate the transcript under `~/.claude/projects/`.
+2. Sanitize (below). Refuse to write on findings.
+3. Write `history/<session-id>/` and `git add` it. If the directory already exists, exit 0 without touching it; only-if-absent is the contract that makes the hook loop terminate.
+
+### Sanitization, on by default
+
+The transcript is scanned before anything is written: the repo secret scanner plus a transcript-aware pass (authorization headers, `env` output, key-shaped strings, paths under `~/.ssh`). Findings block the upload and are printed with locations. `--redact` masks the findings and proceeds; there is no `--force` that writes unscanned content. Publishing an unreviewed transcript is the one irreversible step in this design, so the default is the paranoid one.
+
+### The gate
+
+The existing commit-msg hook grows one check, active only when `$CLAUDE_SESSION_ID` is set (agent commits; human commits are untouched):
+
+- No `Session:` trailer: fail, print the trailer to add.
+- Trailer present but `history/<session-id>/` absent: fail with `run: nix run .#claude-history-upload -- <session-id>`.
+
+The failure message is the documentation, exactly like the site-page gate.
+
+### Rebase interaction
+
+None, by construction. History files are ordinary committed files keyed by an id no rewrite touches; rebasing code commits neither moves nor invalidates them. The one real interaction is benign: a session uploaded mid-stream continues after upload. The uploader may be re-run to refresh the transcript before the branch merges; refresh semantics are an open question below.
+
+### Size
+
+Transcripts run to megabytes. Start plain (sanitized JSONL in-repo). If growth hurts, the escape hatch is already deployed: the fleet history ship (MinIO). The directory then holds `meta.json` plus a content-addressed pointer, and the layout, trailers, and gate do not change. That migration is mechanical, so it is deliberately not front-loaded.
+
+## Drawbacks
+
+- **Privacy is the sharp edge.** This is a public repo; transcripts contain prompts, file excerpts from anything the session read, and whatever the user typed. A secret scanner has false negatives. Shipping this with upload-by-default may be wrong; see unresolved questions.
+- Repo growth: tens of MB per active week in the plain-file phase.
+- Friction: every agent commit gains a trailer and possibly an upload step. The gate must stay under a second.
+- The transcript is the raw record, not a curated one; readers get dead ends and noise along with the reasoning.
+
+## Alternatives
+
+- **Do nothing**: the fleet archive already makes history searchable. Rejected because search answers "has anyone done this", not "why does this landed line exist"; the commit link is the product.
+- **Key by commit SHA via git notes**: notes attach to SHAs, need `notes.rewriteRef` babysitting through every rebase, are invisible to Nix eval, and GitHub barely renders them.
+- **Adopt jj for real change-ids**: solves identity elegantly, costs a VCS migration for the whole fleet and every hook; the trailer gets the same property for one line of message discipline.
+- **Separate private history repo as a flake input**: solves privacy cleanly, costs a second repo, a lock bump per upload, and breaks "the transcript rides the same PR as the change".
+
+## Prior art
+
+- The commit-msg site-page gate: same enforce-a-reference-at-commit-time shape (`commit-site-page-links`).
+- Fleet history sync and semantic search over transcripts (`packages/search`, the searchable-history story).
+- `users/andrewgazelka/scripts/claude-history-sftp.py`: ad-hoc transcript shipping this plan replaces with a repo convention.
+- jj change-ids: the stable-identity-across-rewrites model the trailer imitates.
+
+## Unresolved questions
+
+- **Default posture in a public repo**: upload every agent session, or opt-in per session (say, only sessions that touched `main`)? A private history repo pointer is the fallback if "public by default" is wrong.
+- Refresh semantics for a session that continues after upload: immutable-once-uploaded, or refresh-until-merge?
+- Should the gate also run on human commits when a session demonstrably produced the change?
+- Retention: does `history/` ever get pruned, and does pruning break the trailer contract?
+
+## Future possibilities
+
+- The site renders `history/<session-id>/` as a readable session page; update entries and PRs link straight into the reasoning.
+- `git blame` to session lookup: a one-liner that walks blame, then trailers, then opens the transcript at the relevant turn.
+- Cross-linking with the semantic index so search results cite landed commits, not just transcripts.
