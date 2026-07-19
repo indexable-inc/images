@@ -55,6 +55,13 @@
   #    silent auto-upgrade, the context-1m beta header) is ~5x input price;
   #    past-the-window work belongs in subagents.
   #  - cron = false: drops the scheduling/loop tools.
+  #  - fableFallback = true: stock behavior. When Fable 5's safety classifiers
+  #    flag a turn, the CLI re-serves it on Opus 4.8 and keeps the session
+  #    there (Fable 5 system card sec 1.5; the /config toggle "switch models
+  #    when a message is flagged"). false bakes
+  #    CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK so a flagged turn stops visibly
+  #    instead: on eval or perf-sensitive work a visible failure beats a
+  #    silent Opus 4.8 degradation.
   #  - autoCompactWindow = 300000: native-1M models (Fable 5, Sonnet 5,
   #    Opus 4.8) otherwise autocompact near the 1M cliff; 300K matches the
   #    standard (non-[1m]) working window the picker labels "300K High".
@@ -243,10 +250,14 @@
   featureToggleEnvVars = {
     context1M = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
     cron = "CLAUDE_CODE_DISABLE_CRON";
+    # Read by the CLI (verified via strings on 2.1.215: gates the refusal
+    # fallback path alongside the switchModelsOnFlag setting).
+    fableFallback = "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK";
   };
   defaultFeatures = {
     context1M = false;
     cron = false;
+    fableFallback = true;
     autoCompactWindow = 300000;
   };
   unknownFeatures = lib.subtractLists (builtins.attrNames defaultFeatures) (builtins.attrNames features);
