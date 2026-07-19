@@ -56,31 +56,7 @@ pub fn render_units_nix(plan: &Plan, content_addressed: bool) -> color_eyre::Res
         .filter(|target| !reachable.contains(target))
         .collect();
 
-    // Thin archives resolve members by path at read time, so a consumer's
-    // build tree must materialize the archive's members, recursively through
-    // nested thin archives. Everything else a saved command reads (`ld -r`
-    // outputs, compiled objects, modpost dumps) is self-contained, so direct
-    // deps suffice. Carrying the full transitive closure instead re-linked
-    // every `.ko` after any single-module body edit: the dep list rode
-    // through `Module.symvers` to every module object (#3413).
-    let mut expansions: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    let mut closures: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    let mut dep_sets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for &target in &reachable {
-        // The vmlinux link is the one exception to the trim:
-        // scripts/link-vmlinux.sh links the KBUILD_VMLINUX_OBJS/LIBS
-        // archives directly (vmlinux.a, lib/lib.a, ... -- an env-driven
-        // list no argv or .cmd records; x86_64 defconfig under IBT links
-        // vmlinux.o instead), so its tree keeps the full transitive
-        // closure, exactly what every unit carried before the trim.
-        let deps = if units[target].1 == UnitKind::Link {
-            full_closure(target, &direct_deps, &mut closures)?;
-            closures[target].clone()
-        } else {
-            unit_dep_set(target, &units, &direct_deps, &mut expansions)?
-        };
-        dep_sets.insert(target, deps);
-    }
+    let dep_sets = compute_dep_sets(&reachable, &units, &direct_deps)?;
 
     let srcarch = detect_srcarch(&units)?;
 
@@ -370,6 +346,39 @@ fn unit_dep_set<'plan>(
         }
     }
     Ok(deps)
+}
+
+/// The dep units each build tree materializes. Thin archives resolve
+/// members by path at read time, so a consumer's tree must carry the
+/// archive's members, recursively through nested thin archives; everything
+/// else a saved command reads (`ld -r` outputs, compiled objects, modpost
+/// dumps) is self-contained, so direct deps suffice. Carrying the full
+/// transitive closure instead re-linked every `.ko` after any single-module
+/// body edit: the dep list rode through `Module.symvers` to every module
+/// object (#3413). The vmlinux link is the one exception:
+/// scripts/link-vmlinux.sh links the `KBUILD_VMLINUX_OBJS`/`LIBS` archives
+/// directly (vmlinux.a, lib/lib.a, ... -- an env-driven list no argv or
+/// .cmd records; `x86_64` defconfig under IBT links vmlinux.o instead), so
+/// its tree keeps the full transitive closure, exactly what every unit
+/// carried before the trim.
+fn compute_dep_sets<'plan>(
+    reachable: &BTreeSet<&'plan str>,
+    units: &BTreeMap<&'plan str, (&'plan CmdEntry, UnitKind)>,
+    direct_deps: &BTreeMap<&'plan str, BTreeSet<&'plan str>>,
+) -> color_eyre::Result<BTreeMap<&'plan str, BTreeSet<&'plan str>>> {
+    let mut expansions: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut closures: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut dep_sets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for &target in reachable {
+        let deps = if units[target].1 == UnitKind::Link {
+            full_closure(target, direct_deps, &mut closures)?;
+            closures[target].clone()
+        } else {
+            unit_dep_set(target, units, direct_deps, &mut expansions)?
+        };
+        dep_sets.insert(target, deps);
+    }
+    Ok(dep_sets)
 }
 
 /// Memoized full transitive dep closure (the vmlinux link unit's dep set).
