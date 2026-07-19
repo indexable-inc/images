@@ -2163,6 +2163,29 @@
             esac
             mkdir -p "$out"
           '';
+          # nom rides the same lane one level deeper: a Linux-hosted cross GHC
+          # (ix.crossGhc) compiles the whole Haskell closure to Mach-O arm64
+          # (#3606). Assert the Haskell lane emits a real Mach-O arm64 nom and
+          # that the by-name alias symlinks survived the reimplementation.
+          cross-darwin-nom-smoke = pkgs.runCommand "cross-darwin-nom-smoke" {nativeBuildInputs = [pkgs.file];} ''
+            pkg=${crossPackages.nix-output-monitor-aarch64-apple-darwin}
+            info=$(file -b "$pkg/bin/nom")
+            echo "$info"
+            case "$info" in
+              *Mach-O*arm64*) ;;
+              *)
+                echo "expected Mach-O arm64, got: $info" >&2
+                exit 1
+                ;;
+            esac
+            for alias in nom-build nom-shell; do
+              if [ ! -e "$pkg/bin/$alias" ]; then
+                echo "missing alias $alias" >&2
+                exit 1
+              fi
+            done
+            mkdir -p "$out"
+          '';
           site-test = siteTests.all;
         };
         checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);

@@ -235,7 +235,11 @@
   # linker flags ride along at compile time (unused there, hence
   # -Wno-unused-command-line-argument) so one wrapper serves both CMake's
   # compile and link steps.
-  standaloneFlags = "--target=${target} -mmacosx-version-min=11.0 -isysroot ${appleSdk} -B${pkgs.lld}/bin -fuse-ld=lld -Wno-unused-command-line-argument";
+  # -Wno-incompatible-sysroot: clang infers an SDK platform from the sysroot
+  # directory basename; a nix store path (`<hash>-MacOSX15.4.sdk`) confuses the
+  # inference and the warning turns fatal under configure probes that compile
+  # with -Werror (GHC's do, #3606).
+  standaloneFlags = "--target=${target} -mmacosx-version-min=11.0 -isysroot ${appleSdk} -B${pkgs.lld}/bin -fuse-ld=lld -Wno-unused-command-line-argument -Wno-incompatible-sysroot";
   appleStandaloneCcPackage = writeBashApplication pkgs {
     name = standaloneCcName;
     text = ''
@@ -321,6 +325,12 @@ in
     # SDK libc++, linking through ld64.lld. See the standalone lane comment
     # above for why this is not the zig toolchain.
     standaloneCmakeToolchain = appleStandaloneCmakeToolchain;
+
+    # The standalone clang/clang++ driver paths themselves, for build systems
+    # that take a compiler path instead of a CMake toolchain file (GHC's
+    # ./configure is the first consumer, #3606).
+    standaloneCc = appleStandaloneCc;
+    standaloneCxx = appleStandaloneCxx;
 
     env = {
       MACOSX_DEPLOYMENT_TARGET = "11.0";

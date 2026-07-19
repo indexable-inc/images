@@ -34,18 +34,21 @@
   # `overrideSrc` also drops the hackage cabal-revision overlay
   # (editedCabalFile), which is safe because the pinned tree already carries
   # the revisions' dependency-bound relaxations (see flake.nix).
+  overrideNixDerivation = hprev:
+    assert lib.assertMsg (hprev.nix-derivation.version == "1.1.3") ''
+      packages/nix/nix-output-monitor: haskellPackages.nix-derivation is
+      ${hprev.nix-derivation.version} but nix-derivation-src pins 1.1.3.
+      Repin the nix-derivation-src input to the matching upstream rev and
+      run `nix run .#rebase-patches -- nix-derivation`.'';
+      compose.overrideSrc {
+        src = patchedNixDerivationSrc;
+        version = hprev.nix-derivation.version;
+      }
+      hprev.nix-derivation;
+
   haskellPackages = pkgs.haskellPackages.extend (
     _hfinal: hprev: {
-      nix-derivation = assert lib.assertMsg (hprev.nix-derivation.version == "1.1.3") ''
-        packages/nix/nix-output-monitor: haskellPackages.nix-derivation is
-        ${hprev.nix-derivation.version} but nix-derivation-src pins 1.1.3.
-        Repin the nix-derivation-src input to the matching upstream rev and
-        run `nix run .#rebase-patches -- nix-derivation`.'';
-        compose.overrideSrc {
-          src = patchedNixDerivationSrc;
-          version = hprev.nix-derivation.version;
-        }
-        hprev.nix-derivation;
+      nix-derivation = overrideNixDerivation hprev;
     }
   );
 
@@ -74,8 +77,8 @@
       esac
       mkdir -p "$out"
     '';
-in
-  package.overrideAttrs (old: {
+
+  nativeNom = package.overrideAttrs (old: {
     passthru =
       (old.passthru or {})
       // {
@@ -89,4 +92,52 @@ in
         description = "nix-output-monitor with nix-derivation patched to parse content-addressed derivations";
         mainProgram = "nom";
       };
-  })
+  });
+
+  # Linux->Darwin cross build (#3606): nom is Haskell, so unlike btop (#3584)
+  # the toolchain alone is not enough -- this lane rides ix.crossGhc, a
+  # Linux-hosted GHC targeting Darwin built against the same apple-sdk clang
+  # toolchain, and ix.crossHaskell, which compiles nom 2.1.8's 62-package
+  # closure with it (rung 0 of #3606 verified the closure executes no Template
+  # Haskell splices, so no Darwin iserv is needed). The same registry-fork
+  # nix-derivation source applies via srcFor, so a Mac substituting this
+  # output parses this repo's CA derivations exactly like a native build.
+  crossNom = let
+    inherit (ix.cross) target;
+    toolchain = ix.appleSdkToolchain {
+      appleSdk = ix.macosSdk {inherit (ix) pkgs;};
+      inherit lib target;
+      inherit (ix) pkgs writeBashApplication;
+    };
+    crossGhc = ix.crossGhc {
+      inherit lib target toolchain;
+      inherit (ix.pkgs) autoconf automake haskellPackages libffi lld llvmPackages perl python3 stdenv;
+      nixpkgsPath = ix.pkgs.path;
+    };
+    crossHaskell = ix.crossHaskell {
+      inherit crossGhc lib;
+      inherit (ix.pkgs) haskellPackages llvmPackages stdenv;
+    };
+    # Same source/version/dependency metadata nixpkgs' by-name package uses,
+    # with the forked nix-derivation source swapped in (same override as the
+    # native lane, so the two lanes cannot drift).
+    rawNom = (pkgs.haskellPackages.extend (_hfinal: hprev: {
+      nix-derivation = overrideNixDerivation hprev;
+    })).callPackage (pkgs.path + "/pkgs/by-name/ni/nix-output-monitor/generated-package.nix") {};
+  in
+    crossHaskell.build {
+      root = rawNom;
+      extraNativeBuildInputs = [pkgs.installShellFiles];
+      # Mirror the by-name package's postInstall (symlinked aliases plus shell
+      # completions); the completions are architecture-independent text.
+      postInstall = ''
+        # shell
+        ln -s nom "$out/bin/nom-build"
+        ln -s nom "$out/bin/nom-shell"
+        installShellCompletion completions/*
+      '';
+    };
+in
+  if ix != null && (ix.cross.isCross or false)
+  then crossNom
+  else nativeNom

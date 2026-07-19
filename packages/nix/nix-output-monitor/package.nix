@@ -17,5 +17,10 @@
         inherit ix;
       };
   };
+  # Linux->Darwin cross lane (RFC 0009, #3606): CI cross-compiles nom via a
+  # Linux-hosted cross GHC (ix.crossGhc) and aliases the Mach-O arm64 result
+  # into `packages.aarch64-darwin.nix-output-monitor`, so Macs substitute it
+  # from the cache instead of the native darwin lane building GHC + nom.
+  cross = true;
   passthruTests = true;
 }
