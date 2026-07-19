@@ -276,7 +276,13 @@
   # The MCP resource browsers are kernel-superseded the same way.
   defaultSystemTools = {
     Agent = false;
-    Artifact = true;
+    # Off: no real benefit in this harness (previews ship as files or URLs),
+    # and enabling it surfaces Claude-bundled design skills that inject
+    # Anthropic style guidelines we do not want steering output. Denying the
+    # bare name also drops the companion `artifact-design` skill from the
+    # skills listing (verified 2026-07, index#3607); the sibling `dataviz`
+    # skill is invocation-blocked in policy/permissions.nix.
+    Artifact = false;
     AskUserQuestion = false;
     DesignSync = false;
     EnterPlanMode = false;
