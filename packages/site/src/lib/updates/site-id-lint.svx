@@ -1,0 +1,18 @@
+---
+id: site-id-lint
+postedAt: '2026-07-19T04:45:00-07:00'
+title: plan and update id collisions now fail the merge gate
+links:
+  - label: 'index#3669'
+    href: 'https://github.com/indexable-inc/index/issues/3669'
+  - label: 'the collision renumber'
+    href: 'https://github.com/indexable-inc/index/pull/3668'
+  - label: 'per-commit main Check'
+    href: 'https://github.com/indexable-inc/index/pull/3670'
+tags:
+  - ci
+---
+
+The lint suite now validates plan, update, and story identity directly: within each of `packages/site/src/lib/{plans,updates,stories}`, a four-digit filename prefix may be claimed only once, frontmatter `id` must equal the filename stem, and a frontmatter `number` must agree with the prefix. Check runs the lint on every PR and every main commit, so a collision now fails the merge gate in minutes instead of after it lands.
+
+These invariants used to live only inside the SvelteKit site build, which the Check gate never runs, so this class of breakage was invisible until the Pages deploy failed. Two individually-green PRs merged into a duplicate plan number 0031 and main's site build stayed red for 8.5 hours (#3669); the renumber that fixed the collision (#3668) itself left the old `number: '0031'` frontmatter behind, which the new stage caught on its first local run, and this change repairs.

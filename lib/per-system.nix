@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | ruff | clone); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | svg-dark | site-ids | ruff | clone); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -254,6 +254,85 @@
           exit 1
         }
       }
+      # Plan/update/story identity (packages/site/src/lib/plans, updates,
+      # stories) is enforced at SvelteKit build time -- plans.ts throws on a
+      # duplicate plan number or a frontmatter/filename mismatch -- but the
+      # Check gate never builds the site, so two individually-green PRs merged
+      # into a duplicate plan number 0031 and main's site build stayed red for
+      # 8.5h before the Pages workflow surfaced it (#3669). This stage
+      # front-loads the pure file-scan invariants into the gate every PR and
+      # main commit runs: within each content directory a four-digit filename
+      # prefix is claimed at most once, frontmatter `id` equals the filename
+      # stem (stems are unique per directory, so ids stay unique), and a
+      # frontmatter `number` agrees with the prefix (the #3668 rename fixed
+      # the collision but left the old `number` behind, which kept the site
+      # build red). The site build remains the full validator.
+      def frontmatter-field [front: list<string>, key: string] {
+        let matches = ($front | parse --regex ('^' + $key + ': *(?<value>.+)$'))
+        if ($matches | is-empty) { null } else {
+          $matches | get 0.value | str trim | str trim --char "'"
+        }
+      }
+      def "main site-ids" [] {
+        let errors = (
+          [plans updates stories]
+          | each {|kind|
+              let entries = (
+                fd --extension svx . $"packages/site/src/lib/($kind)"
+                | lines
+                | sort
+                | each {|path|
+                    let stem = ($path | path parse | get stem)
+                    let front = (open --raw $path | lines | skip 1 | take until {|line| $line == '---'})
+                    {
+                      path: $path
+                      stem: $stem
+                      id: (frontmatter-field $front id)
+                      number: (frontmatter-field $front number)
+                      prefix: ($stem | parse --regex '^(?<n>\d{4})-' | get -o 0.n)
+                    }
+                  }
+              )
+              let id_mismatches = (
+                $entries
+                | where {|e| $e.id != $e.stem}
+                | each {|e| $"  ($e.path): frontmatter id '($e.id)' disagrees with filename '($e.stem)'"}
+              )
+              let number_mismatches = (
+                $entries
+                | where {|e| $e.number != null and $e.number != $e.prefix}
+                | each {|e| $"  ($e.path): frontmatter number '($e.number)' disagrees with filename prefix '($e.prefix)'"}
+              )
+              let numbered = ($entries | where {|e| $e.prefix != null})
+              let duplicate_prefixes = (
+                if ($numbered | is-empty) { [] } else {
+                  $numbered
+                  | group-by prefix
+                  | transpose prefix claimants
+                  | where {|row| ($row.claimants | length) > 1}
+                  | each {|row| $"  number ($row.prefix) claimed by (($row.claimants | get path | str join ' and '))"}
+                }
+              )
+              let identified = ($entries | where {|e| $e.id != null})
+              let duplicate_ids = (
+                if ($identified | is-empty) { [] } else {
+                  $identified
+                  | group-by id
+                  | transpose id claimants
+                  | where {|row| ($row.claimants | length) > 1}
+                  | each {|row| $"  id ($row.id) claimed by (($row.claimants | get path | str join ' and '))"}
+                }
+              )
+              [$id_mismatches $number_mismatches $duplicate_prefixes $duplicate_ids] | flatten
+            }
+          | flatten
+        )
+        if ($errors | is-not-empty) {
+          print --stderr "site content identity is enforced by the SvelteKit build, which the Check gate never runs (#3669); keep filenames and frontmatter agreeing so collisions fail fast:"
+          $errors | each {|line| print --stderr $line }
+          exit 1
+        }
+      }
       # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
       # pathlib + pytest + explicit annotations + no `typing.cast`; see
       # lib/ruff-ann.nix) over EVERY tracked .py, so non-package dirs
@@ -283,7 +362,7 @@
         clone . out> /dev/null
       }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | svg-dark | ruff | clone" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | svg-dark | site-ids | ruff | clone" }
       }
     '';
   };
@@ -301,6 +380,7 @@
     "filenames"
     "dirnames"
     "svg-dark"
+    "site-ids"
     "ruff"
     "clone"
   ];
