@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 19 Jul 2026 01:30:58 -0700
+Subject: [PATCH] workers: make --skip-cached skip locally-realized outputs
+
+nix-fast-build's --skip-cached drops a job only when nix-eval-jobs
+reports its cacheStatus as `cached` (present in a configured *remote*
+substituter). A `local` status (output already realized in this
+runner's store, but never pushed anywhere) falls through to the build
+queue and gets re-realized every run (workers.py, the `elif
+cache_status == "local"` arm).
+
+On a persistent warm CI runner that is almost everything: index's rust
+workspace units default to contentAddressed = true and its image checks
+are floating-CA system closures, none pushed to a remote cache, so a
+status-accurate nix-eval-jobs (nix-eval-jobs#403 / nix#12128) resolves
+them to `local` -- at which point stock nix-fast-build re-realizes all
+~1450 of them. Each realize is a warm no-op (0.05-0.4s measured), but
+the per-derivation dispatch is an ~85s build-step floor on every run.
+
+Make `local` skip the build exactly like `cached` (still queueing an
+upload first when a binary-cache target is set): a locally-present
+output never needs (re)building. Upstream fixed what the *status* says;
+this fixes what --skip-cached does with it.
+
+Refs indexable-inc/index#1351
+Refs indexable-inc/index#3638
+
+diff --git a/nix_fast_build/workers.py b/nix_fast_build/workers.py
+index cf16c73..4853aa9 100644
+--- a/nix_fast_build/workers.py
++++ b/nix_fast_build/workers.py
+@@ -66,8 +66,18 @@ async def run_evaluation(
+         # them for pushing if they are cached locally
+         elif cache_status == "cached":
+             continue
+-        elif cache_status == "local" and upload_queue is not None:
+-            upload_queue.put_nowait(Build(attr, job["drvPath"], _job_outputs(job)))
++        elif cache_status == "local":
++            # The output is already realized in the local store, so it never
++            # needs (re)building -- skip it like a remotely-cached job. Still
++            # queue it for upload first if a binary-cache target is configured.
++            # Without this, --skip-cached re-realizes every locally-present
++            # floating-CA derivation on a persistent warm runner (index CI:
++            # ~1450 rust units + image closures), because upstream only
++            # continues on "cached" and falls through to the build queue for
++            # "local". See packages/nix/nix-fast-build/default.nix.
++            if upload_queue is not None:
++                upload_queue.put_nowait(Build(attr, job["drvPath"], _job_outputs(job)))
++            continue
+         system = job.get("system")
+         if system and system not in opts.systems:
+             continue

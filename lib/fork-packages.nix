@@ -558,5 +558,111 @@
         };
       };
     }
+    {
+      # nix-fast-build is the CI build engine (the `check` app): the package
+      # overlays this patched source onto nixpkgs' nix-fast-build recipe
+      # (packages/nix/nix-fast-build), so the base must equal the nixpkgs
+      # package version (tag 1.6.0), never free-float under the fork-sync
+      # cron. On a nixpkgs nix-fast-build bump, repin the input to the
+      # matching tag and run `nix run .#rebase-patches -- nix-fast-build`.
+      name = "nix-fast-build";
+      input = "nix-fast-build-src";
+      url = "https://github.com/Mic92/nix-fast-build.git";
+      patchDir = "packages/nix/nix-fast-build/patches";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/Mic92/nix-fast-build";
+        notes = "No CONTRIBUTING or AI policy published as of 2026-07-19; small focused PRs with tests are the observed norm.";
+      };
+      patches = {
+        "0001-workers-make-skip-cached-skip-locally-realized-outpu.patch" = {
+          upstream = "hold";
+          reason = "Changes what --skip-cached means for `local` outputs for every user; upstream would plausibly want it opt-in, so it needs reshaping as a flag before a PR.";
+        };
+        "0002-build-add-a-typed-per-derivation-no-progress-deadlin.patch" = {
+          upstream = "never";
+          reason = "Depends on index's nix fork (build-status directory, patches 0003-0009/0021) that upstream Nix does not have; unmergeable until that daemon interface exists upstream.";
+        };
+      };
+    }
+    {
+      # nix-derivation is the Haskell .drv parser nix-output-monitor links;
+      # packages/nix/nix-output-monitor feeds this patched source into a
+      # haskellPackages.extend override. The base is upstream main while its
+      # cabal version still reads 1.1.3 (the hackage release nixpkgs builds,
+      # plus the bound-relaxation cabal revisions hackage layers on top), so
+      # it must not free-float: repin when nixpkgs moves past 1.1.3, then
+      # `nix run .#rebase-patches -- nix-derivation`.
+      name = "nix-derivation";
+      input = "nix-derivation-src";
+      url = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library.git";
+      patchDir = "packages/nix/nix-output-monitor/patches";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library";
+        notes = "No CONTRIBUTING or AI policy; the CA gap is tracked upstream as issue #28 with PR #26 proposing a sum-type DerivationOutput.";
+      };
+      patches = {
+        "0001-Parser-accept-empty-output-paths-in-floating-CA-deri.patch" = {
+          upstream = "hold";
+          reason = "Upstream PR #26 already proposes the larger sum-type fix for issue #28; ours is the deliberately smaller parser widening, so engage on #26/#28 rather than file a competing PR.";
+        };
+      };
+    }
+    {
+      # rnix (nix-community/rnix-parser) is patched as a *vendored cargo
+      # crate*, not as a package source: lib/util/rnix-digit-separators
+      # rewrites the crate inside each consuming tool's cargo vendor dir at
+      # build time, selecting the series matching the vendored version
+      # (0.11/0.12 share one tokenizer shape, 0.13/0.14 the other). These two
+      # entries pin the upstream tags the in-use crates were cut from --
+      # v0.12.0 (alejandra, deadnix) here, v0.14.0 (statix) below -- so each
+      # series gets the standard canonical form, patched-src apply gate, and
+      # dag/reason checks; the build-time patcher reads the same patch files
+      # from these patchDirs. Repin alongside the vendored-version change on a
+      # nixpkgs bump (the build fails loudly on an unknown rnix version).
+      name = "rnix-0-12";
+      input = "rnix-0-12-src";
+      url = "https://github.com/nix-community/rnix-parser.git";
+      patchDir = "lib/util/rnix-digit-separators/patches-0.12";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/nix-community/rnix-parser";
+        notes = "nix-community project, PRs welcome, no stated AI policy; the patched dialect is gated on the Nix language itself changing, and 0.12 is a historical tag that upstream would not amend anyway.";
+      };
+      patches = {
+        "0001-tokenizer-accept-underscore-digit-separators-in-nume.patch" = {
+          upstream = "hold";
+          reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
+        };
+      };
+    }
+    {
+      # See the rnix-0-12 entry above: same logical patch on the v0.14.0
+      # tokenizer generation (statix's vendored rnix).
+      name = "rnix-0-14";
+      input = "rnix-0-14-src";
+      url = "https://github.com/nix-community/rnix-parser.git";
+      patchDir = "lib/util/rnix-digit-separators/patches-0.14";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/nix-community/rnix-parser";
+        notes = "nix-community project, PRs welcome, no stated AI policy; the patched dialect is gated on the Nix language itself changing.";
+      };
+      patches = {
+        "0001-tokenizer-accept-underscore-digit-separators-in-nume.patch" = {
+          upstream = "hold";
+          reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
+        };
+      };
+    }
   ];
 }
