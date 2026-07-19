@@ -22,11 +22,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: check-${{ github.ref }}
-  # A newer PR synchronization or main push makes the older revision's result
-  # unusable. Cancel it immediately so obsolete work never waits in front of,
-  # or consumes a runner after, the current head. Tag refs remain independent.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+  # PR refs supersede: a newer synchronization makes the older revision's
+  # result unusable, so group per-ref and cancel it. Main is the opposite:
+  # required checks are non-strict, so two individually-green PRs can rebase
+  # into a red union that no PR run ever validated (#3669: every main Check
+  # from 10:56Z-11:08Z on 2026-07-19 was cancelled by the next push, so an
+  # 8.5h site breakage surfaced as a frozen cache-ready pin instead of a
+  # named commit). Main groups per-commit and never cancels, so every merged
+  # commit carries its own completed verdict. Tag refs remain independent.
+  group: check-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && (github.event_name == 'pull_request' || github.event_name == 'push') }}
 
 env:
   # The self-hosted runner's Nix daemon owns substituters (cache.ix.dev plus the
