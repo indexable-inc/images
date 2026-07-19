@@ -217,14 +217,16 @@
     fixAtSource = {
       topics = ["architecture"];
       text = ''
-        Fix at the source, upstream when the cause is upstream. No fallbacks,
-        silent retries, or defensive defaults; fail loudly. A tactical fix
-        gets an issue or a background agent for the root fix. Third-party
-        endgames need user go-ahead.
+        Fix at the source, upstream when the cause is upstream. A
+        pre-existing flaw you touch is a bug to fix and flag, never a
+        convention to keep. No fallbacks, silent retries, or defensive
+        defaults; fail loudly. A tactical fix gets an issue or a background
+        agent for the root fix. Third-party endgames need user go-ahead.
       '';
       reason = ''
         `fallback = true` silently masked a corrupted cache.ix.dev (ix#6139);
-        workarounds became permanent.
+        workarounds became permanent. Fable 5 reframes planted flaws as
+        conventions and preserves them (system card sec 6.3.5.1).
       '';
     };
   }
@@ -277,11 +279,14 @@
         The harness subagent and task tools are absent by design. Delegate
         through the index kernel to named background agents: one worktree per
         editor, main session on orchestration, model strength matched to
-        difficulty.
+        difficulty. Fan out when subtasks are independent; iterating
+        serially over independent items forfeits the win.
       '';
       reason = ''
         Harness Agent/Task schemas were denied to reclaim context (#2404);
-        briefs promising them produced relay swarms (index#2153).
+        briefs promising them produced relay swarms (index#2153). Fable 5
+        system card sec 8.15: async-subagent fan-out beats single-agent on
+        both score and latency.
       '';
     };
   }
