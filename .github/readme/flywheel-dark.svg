@@ -251,8 +251,125 @@
       99.795% { stroke-dashoffset: 14; animation-timing-function: linear; }
       100.000% { stroke-dashoffset: -140; animation-timing-function: steps(1); }
     }
+    .tool { opacity: 0; }
+    .old { fill: var(--line); }
+    .r0 { animation: r0 13.09s steps(1, end) infinite; }
+    .r1 { animation: r1 13.09s steps(1, end) infinite; }
+    .r2 { animation: r2 13.09s steps(1, end) infinite; }
+    .r3 { animation: r3 13.09s steps(1, end) infinite; }
+    .r4 { animation: r4 13.09s steps(1, end) infinite; }
+    .r5 { animation: r5 13.09s steps(1, end) infinite; }
+    .r6 { animation: r6 13.09s steps(1, end) infinite; }
+    .r7 { animation: r7 13.09s steps(1, end) infinite; }
+    .r8 { animation: r8 13.09s steps(1, end) infinite; }
+    .r9 { animation: r9 13.09s steps(1, end) infinite; }
+    .r10 { animation: r10 13.09s steps(1, end) infinite; }
+    .r11 { animation: r11 13.09s steps(1, end) infinite; }
+    @keyframes r0 {
+      0% { opacity: 1; }
+      27.512% { opacity: 0; }
+      85.938% { opacity: 1; }
+      86.817% { opacity: 0; }
+      96.485% { opacity: 1; }
+      97.363% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r1 {
+      0% { opacity: 0; }
+      27.512% { opacity: 1; }
+      46.236% { opacity: 0; }
+      86.817% { opacity: 1; }
+      87.696% { opacity: 0; }
+      97.363% { opacity: 1; }
+      98.242% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r2 {
+      0% { opacity: 0; }
+      46.236% { opacity: 1; }
+      58.922% { opacity: 0; }
+      87.696% { opacity: 1; }
+      88.575% { opacity: 0; }
+      98.242% { opacity: 1; }
+      99.121% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r3 {
+      0% { opacity: 0; }
+      58.922% { opacity: 1; }
+      67.558% { opacity: 0; }
+      88.575% { opacity: 1; }
+      89.454% { opacity: 0; }
+      99.121% { opacity: 1; }
+      100% { opacity: 1; }
+    }
+    @keyframes r4 {
+      0% { opacity: 0; }
+      67.558% { opacity: 1; }
+      73.443% { opacity: 0; }
+      89.454% { opacity: 1; }
+      90.332% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r5 {
+      0% { opacity: 0; }
+      73.443% { opacity: 1; }
+      77.417% { opacity: 0; }
+      90.332% { opacity: 1; }
+      91.211% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r6 {
+      0% { opacity: 0; }
+      77.417% { opacity: 1; }
+      80.168% { opacity: 0; }
+      91.211% { opacity: 1; }
+      92.090% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r7 {
+      0% { opacity: 0; }
+      80.168% { opacity: 1; }
+      82.002% { opacity: 0; }
+      92.090% { opacity: 1; }
+      92.969% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r8 {
+      0% { opacity: 0; }
+      82.002% { opacity: 1; }
+      83.301% { opacity: 0; }
+      92.969% { opacity: 1; }
+      93.848% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r9 {
+      0% { opacity: 0; }
+      83.301% { opacity: 1; }
+      84.180% { opacity: 0; }
+      93.848% { opacity: 1; }
+      94.727% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r10 {
+      0% { opacity: 0; }
+      84.180% { opacity: 1; }
+      85.059% { opacity: 0; }
+      94.727% { opacity: 1; }
+      95.606% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    @keyframes r11 {
+      0% { opacity: 0; }
+      85.059% { opacity: 1; }
+      85.938% { opacity: 0; }
+      95.606% { opacity: 1; }
+      96.485% { opacity: 0; }
+      100% { opacity: 0; }
+    }
     @media (prefers-reduced-motion: reduce) {
-      .pulse { display: none; }
+      .tool { animation: none; }
+      #s0, #s1, #s2 { opacity: 1; }
     }
   </style>
   <defs>
@@ -263,6 +380,42 @@
   <path class="frame" d="M 136 14 H 711 Q 719 14 719 22 V 218 Q 719 226 711 226 H 9 Q 1 226 1 218 V 22 Q 1 14 9 14 H 22"/>
   <text x="28" y="18.5">[-] flywheel</text>
   <text x="80" y="92">a change lands once</text>
+  <text id="s0" class="m tool r0" x="80" y="112">nix'</text>
+  <text class="m tool r1" x="80" y="112">clippy'</text>
+  <text class="m tool r2" x="80" y="112">fmt'</text>
+  <text class="m tool r3" x="80" y="112">mgrep'</text>
+  <text class="m tool r4" x="80" y="112">astlog'</text>
+  <text class="m tool r5" x="80" y="112">cargo'</text>
+  <text class="m tool r6" x="80" y="112">kernel'</text>
+  <text class="m tool r7" x="80" y="112">tui'</text>
+  <text class="m tool r8" x="80" y="112">sdk'</text>
+  <text class="m tool r9" x="80" y="112">vt'</text>
+  <text class="m tool r10" x="80" y="112">ci'</text>
+  <text class="m tool r11" x="80" y="112">site'</text>
+  <text class="m tool old r1" x="80" y="128">nix'</text>
+  <text id="s1" class="m tool old r2" x="80" y="128">clippy'</text>
+  <text class="m tool old r3" x="80" y="128">fmt'</text>
+  <text class="m tool old r4" x="80" y="128">mgrep'</text>
+  <text class="m tool old r5" x="80" y="128">astlog'</text>
+  <text class="m tool old r6" x="80" y="128">cargo'</text>
+  <text class="m tool old r7" x="80" y="128">kernel'</text>
+  <text class="m tool old r8" x="80" y="128">tui'</text>
+  <text class="m tool old r9" x="80" y="128">sdk'</text>
+  <text class="m tool old r10" x="80" y="128">vt'</text>
+  <text class="m tool old r11" x="80" y="128">ci'</text>
+  <text class="m tool old r0" x="80" y="128">site'</text>
+  <text class="m tool old r2" x="80" y="144">nix'</text>
+  <text class="m tool old r3" x="80" y="144">clippy'</text>
+  <text id="s2" class="m tool old r4" x="80" y="144">fmt'</text>
+  <text class="m tool old r5" x="80" y="144">mgrep'</text>
+  <text class="m tool old r6" x="80" y="144">astlog'</text>
+  <text class="m tool old r7" x="80" y="144">cargo'</text>
+  <text class="m tool old r8" x="80" y="144">kernel'</text>
+  <text class="m tool old r9" x="80" y="144">tui'</text>
+  <text class="m tool old r10" x="80" y="144">sdk'</text>
+  <text class="m tool old r11" x="80" y="144">vt'</text>
+  <text class="m tool old r0" x="80" y="144">ci'</text>
+  <text class="m tool old r1" x="80" y="144">site'</text>
   <text x="440" y="92">it reaches everything</text>
   <text x="456" y="172">everything improves</text>
   <text x="80" y="172">the next change is cheaper</text>
