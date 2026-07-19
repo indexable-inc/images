@@ -54,11 +54,11 @@
 <ul class="rfc-index">
   {#each rfcs as rfc (rfc.id)}
     <li>
-      <span class="num">{rfc.number}</span>
       <a href={resolve('/rfcs/[id]', { id: rfc.id })}>
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
         {@html inlineTitleHtml(rfc.title)}
       </a>
+      <span class="num">{rfc.number}</span>
       <RfcStatusBadge status={rfc.status} />
     </li>
   {/each}

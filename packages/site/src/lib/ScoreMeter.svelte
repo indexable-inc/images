@@ -3,7 +3,7 @@
 </script>
 
 <span class="meter" role="img" aria-label={`${String(value)} of ${String(max)}`}>
-  {#each Array.from({ length: max }) as unused, i (i)}
+  {#each Array.from(Array(max).keys()) as i (i)}
     <span class="cell" class:filled={i < value}></span>
   {/each}
 </span>
