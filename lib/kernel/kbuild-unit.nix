@@ -181,16 +181,26 @@ only to make the plan's inputs body-independent.
   # subprocesses need, so the helper reads its own environment. KBUILD_UNIT_*
   # stays out: those carry plan-only shim store paths, and a snapshot that
   # shifts with shim tweaks would re-execute every unit.
-  linkEnvVarPattern = "^(KBUILD_[A-Za-z0-9_]+|CONFIG_SHELL|CC|LD|NM|AR|OBJCOPY|OBJDUMP|READELF|STRIP|PAHOLE|RESOLVE_BTFIDS|SRCARCH|ARCH|srctree|objtree|LINUXINCLUDE|NOSTDINC_FLAGS|LDFLAGS_vmlinux|CFLAGS_vmlinux|KALLSYMS[A-Za-z0-9_]*|MAKE|HOSTCC)$";
   linkEnvDump = writeBashApplication {
     name = "kbuild-unit-link-env-dump";
+    runtimeInputs = [pkgs.coreutils];
     text = ''
       # shell
-      compgen -A export | LC_ALL=C sort | grep -E '${linkEnvVarPattern}' \
-        | grep -vE '^KBUILD_UNIT_' \
-        | while IFS= read -r name; do
-            printf 'export %s=%q\n' "$name" "''${!name}"
-          done
+      # Prefix expansion, not compgen: writeBashApplication's bash builds
+      # without programmable completion. Every variable in this fresh
+      # process came from the environ, so "is set" is "is exported".
+      names=()
+      for name in "''${!KBUILD_@}" "''${!KALLSYMS@}" \
+        CONFIG_SHELL CC LD NM AR OBJCOPY OBJDUMP READELF STRIP PAHOLE \
+        RESOLVE_BTFIDS SRCARCH ARCH srctree objtree LINUXINCLUDE \
+        NOSTDINC_FLAGS LDFLAGS_vmlinux CFLAGS_vmlinux MAKE HOSTCC; do
+        [ -n "''${!name+x}" ] || continue
+        case $name in KBUILD_UNIT_*) continue ;; esac
+        names+=("$name")
+      done
+      while IFS= read -r name; do
+        printf 'export %s=%q\n' "$name" "''${!name}"
+      done < <(printf '%s\n' "''${names[@]}" | LC_ALL=C sort -u)
     '';
   };
 
@@ -364,6 +374,12 @@ only to make the plan's inputs body-independent.
         installPhase = ''
           # shell
           runHook preInstall
+          # The link-env dump is written mid-link by the helper call patched
+          # into link-vmlinux.sh at configure time, whose failures are muted
+          # for unit replays; catch a plan-side regression loudly before an
+          # empty dump ships in the snapshot and breaks the link unit's
+          # replay.
+          test -s .kbuild-unit-link-env
           mkdir -p $out
           ${
             # Under skeleton the plan's vmlinux and .ko files are stub garbage;
