@@ -1,0 +1,17 @@
+---
+id: kbuild-unit-fleet-cache
+postedAt: 2026-07-19T12:00:00-07:00
+title: "Kernel units ride the fleet cache, and plan reruns cut off"
+tags: [nix, kernel, kbuild-unit, cache]
+links:
+  - label: library
+    href: https://github.com/indexable-inc/index/blob/main/lib/kernel/kbuild-unit.nix
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/3413
+---
+
+kbuild-unit's per-TU kernel builds now share over the ordinary Nix cache. Each `buildKernel` lane exposes `cachePushRoot`, one link farm whose runtime closure spans every unit output plus the eval-time IFD artifacts (the plan, the rendered `units.nix`, the generated snapshot, the skeleton tree). Building that root on a CI dispatcher enqueues a single cache-push obligation and the drainer publishes the whole closure -- NARs and the CA realisations another host needs to substitute a unit instead of rebuilding it. This replaces the per-derivation `post-build-hook` path for mass unit builds, which enqueued each of defconfig's 3.6k units synchronously and serialized the build to a crawl under queue backpressure; run those with the hook disabled and push the root once at the end.
+
+Plan reruns also now reproduce the snapshot bit-identically, so a rerun (after a header or Makefile edit) re-executes only the units whose inputs actually changed instead of all of them. Three nondeterminism carriers are pinned: the build tree always unpacks to a fixed `kbuild-tree` directory name (DWARF `comp_dir` and the vdso build-id record the absolute build path, and the name used to shift with the src derivation -- which also made the skeleton plan's embedded vdso diverge from the reference kernel's), snapshotted host tools under `tools/` are stripped of debug info (objtool differed only in `.debug_line_str` across identical-source plan builds), and the link-env dump is emitted by a dedicated bash helper with sorted names and `printf %q` quoting instead of whichever shell `CONFIG_SHELL` resolves to.
+
+Finally, unit dep lists shrank to what a replay actually reads: only thin-archive consumers carry the archive's member expansion, everything else stops at direct deps. A one-module body edit now rebuilds that module's TU, its `.ko` link, and the modpost pass -- the other modules no longer re-link at all.
