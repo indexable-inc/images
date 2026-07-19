@@ -3141,8 +3141,8 @@
       {
         # Untagged rules render everywhere, including context files.
         assertion =
-          lib.hasInfix "shokunin" sampleClaudeContextPrompt
-          && lib.hasInfix "shokunin" sampleCodexContextPrompt;
+          lib.hasInfix "question behind the question" sampleClaudeContextPrompt
+          && lib.hasInfix "question behind the question" sampleCodexContextPrompt;
         message = "Untagged rules should render into context files";
       }
     ];
@@ -4483,7 +4483,7 @@
       }
       {
         assertion =
-          !lib.strings.hasInfix "Publish substantial investigations" (
+          !lib.strings.hasInfix "Publish substantial work" (
             builtins.readFile homeAgentConfig.programs.codex.finalPackage.passthru.modelInstructionsFile
           );
         message = "Codex Home Manager module should thread systemPrompt.omitRules into the package wrapper";
@@ -4493,7 +4493,7 @@
         # is left defaulted here, so the module's omitRules fold must strip
         # the omitted rule's text from the baked prompt (index#3537).
         assertion =
-          !lib.strings.hasInfix "Publish substantial investigations"
+          !lib.strings.hasInfix "Publish substantial work"
           homeAgentConfig.programs.claude-code.package.passthru.systemPrompt;
         message = "Claude Code Home Manager module should thread systemPrompt.omitRules into the package wrapper";
       }
@@ -4511,9 +4511,9 @@
         # When explicitly enabled, the native `context` option carries the
         # context render (house rules without the system-tagged basics).
         assertion =
-          lib.hasInfix "shokunin" homeAgentConfig.programs.claude-code.context
+          lib.hasInfix "question behind the question" homeAgentConfig.programs.claude-code.context
           && !(lib.hasInfix "You are Claude Code" homeAgentConfig.programs.claude-code.context)
-          && lib.hasInfix "shokunin" homeAgentConfig.programs.codex.context
+          && lib.hasInfix "question behind the question" homeAgentConfig.programs.codex.context
           && !(lib.hasInfix "You are Codex" homeAgentConfig.programs.codex.context);
         message = "agent Home Manager modules should default the global context files to the house context render";
       }
