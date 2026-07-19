@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted  { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .accent-stroke { stroke: #8250df; }
+    .box    { stroke: currentColor; fill: none; rx: 6; }
+    text    { fill: currentColor; font-size: 14px; }
+    .mono   { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 13px; }
+    .small  { font-size: 11px; }
+    .edge   { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .tap    { stroke: #8250df; fill: none; stroke-dasharray: 4 3; marker-end: url(#arrow-accent); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted  { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+      .accent-stroke { stroke: #a371f7; }
+      .tap    { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="accent"/>
+    </marker>
+  </defs>
+
+  <!-- pipeline row -->
+  <rect class="box" x="30" y="40" width="150" height="40"/>
+  <text class="mono" x="105" y="65" text-anchor="middle">cargo clippy</text>
+  <line class="edge" x1="180" y1="60" x2="270" y2="60"/>
+  <rect class="box" x="270" y="40" width="120" height="40"/>
+  <text class="mono" x="330" y="65" text-anchor="middle">tail -n 5</text>
+  <line class="edge" x1="390" y1="60" x2="470" y2="60"/>
+  <text class="mono muted" x="478" y="65">stdout</text>
+
+  <!-- taps from every stream -->
+  <line class="tap" x1="105" y1="80" x2="105" y2="140"/>
+  <line class="tap" x1="225" y1="60" x2="225" y2="140"/>
+  <line class="tap" x1="330" y1="80" x2="330" y2="140"/>
+
+  <!-- the run-as-value box -->
+  <rect class="box accent-stroke" x="60" y="140" width="360" height="60"/>
+  <text class="accent" x="75" y="162">run 7 = a value</text>
+  <text class="mono" x="75" y="184">$o7_0 full clippy  $o7 last 5  $e7  $s7</text>
+
+  <!-- reuse edge -->
+  <line class="edge" x1="420" y1="170" x2="500" y2="170"/>
+  <rect class="box" x="500" y="150" width="190" height="40"/>
+  <text class="mono" x="595" y="175" text-anchor="middle">echo $o7_0 | rg dead</text>
+  <text class="small muted" x="595" y="212" text-anchor="middle">re-use any stream later, without re-running</text>
+</svg>

@@ -1,0 +1,19 @@
+[package]
+name = "plumb"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "An inspectable bash-subset shell: every run is a value; pipe stages are captured and auto-bound to variables"
+
+[lints]
+workspace = true
+
+[dependencies]
+plumb-core.workspace = true
+clap = { workspace = true, features = ["derive"] }
+reedline.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "plumb"
+path = "src/main.rs"
