@@ -32,10 +32,14 @@ pub enum Part {
         /// True when the text originated inside quotes or a backslash escape.
         quoted: bool,
     },
-    /// `$NAME` / `${NAME}` / `$?` variable reference.
+    /// `$NAME` / `${NAME}` / `$?` variable reference, or an indexed run
+    /// reference `${o[7]}` / `${o[7][0]}` (braced form only).
     Var {
         /// Variable name (`?` for the last-status special).
         name: String,
+        /// Indexes from `${NAME[i]}` / `${NAME[i][j]}`; empty for a plain
+        /// reference. Negative values count back from the latest.
+        indices: Vec<i64>,
         /// Location of the reference in the source.
         span: Span,
     },

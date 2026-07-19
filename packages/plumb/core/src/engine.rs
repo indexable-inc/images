@@ -186,7 +186,7 @@ fn open_sink(sink: &FileSink) -> Result<File, Error> {
 }
 
 /// Run one pipeline to completion. `first_stage_index` numbers the stages
-/// across the whole run for `$oN_K` addressing.
+/// across the whole run for `${o[N][K]}` addressing.
 pub fn run_pipeline(
     stages: Vec<StageSpec>,
     config: &EngineConfig,

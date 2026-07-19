@@ -795,8 +795,10 @@ impl Shell {
                         }
                     }
                 }
-                Part::Var { name, .. } => {
-                    let value = if name == "?" {
+                Part::Var { name, indices, .. } => {
+                    let value = if !indices.is_empty() {
+                        self.run_ref(name, indices, report)?
+                    } else if name == "?" {
                         self.lock().last_status.to_string()
                     } else {
                         self.var(name).ok_or_else(|| Error::UnsetVar {
@@ -850,18 +852,88 @@ impl Shell {
         Ok(value.trim_end_matches('\n').to_owned())
     }
 
+    /// Resolve a `${o[run]}` / `${o[run][stage]}` reference. A non-negative
+    /// run index is a run id; a negative one counts back from the latest
+    /// (`-1` = latest). The run being evaluated participates once it has
+    /// stages, so `a | b; use ${o[1][0]}` works within one eval. The stage
+    /// index is a stage number as shown in summaries, negative counting
+    /// from the last stage.
+    fn run_ref(&self, name: &str, indices: &[i64], current: &Report) -> Result<String, Error> {
+        if !matches!(name, "o" | "e" | "s") {
+            return Err(Error::RunRef {
+                message: format!("`{name}` is not indexable; only ${{o[..]}}, ${{e[..]}}, ${{s[..]}}"),
+            });
+        }
+        let retained: Vec<Arc<Report>> = {
+            let state = self.lock();
+            state.runs.iter().cloned().collect()
+        };
+        let mut candidates: Vec<&Report> = retained.iter().map(Arc::as_ref).collect();
+        if current.stages().next().is_some() {
+            candidates.push(current);
+        }
+        let run_index = indices[0];
+        let run = if run_index < 0 {
+            let back = usize::try_from(-(run_index + 1)).map_err(|_| Error::RunRef {
+                message: format!("index {run_index} out of range"),
+            })?;
+            candidates
+                .len()
+                .checked_sub(back + 1)
+                .and_then(|position| candidates.get(position))
+        } else {
+            candidates
+                .iter()
+                .find(|report| i64::try_from(report.id) == Ok(run_index))
+        };
+        let Some(run) = run else {
+            return Err(Error::RunRef {
+                message: format!("run {run_index} is not retained"),
+            });
+        };
+        let stages: Vec<&Stage> = run.stages().collect();
+        let stage = match indices.get(1) {
+            None => stages.last().copied(),
+            Some(stage_index) if *stage_index < 0 => usize::try_from(-(stage_index + 1))
+                .ok()
+                .and_then(|back| stages.len().checked_sub(back + 1))
+                .and_then(|position| stages.get(position).copied()),
+            Some(stage_index) => stages
+                .iter()
+                .find(|stage| i64::try_from(stage.index) == Ok(*stage_index))
+                .copied(),
+        };
+        let Some(stage) = stage else {
+            return Err(Error::RunRef {
+                message: format!("run {} has no stage {}", run.id, indices[1]),
+            });
+        };
+        let value = match (name, indices.len()) {
+            // For the in-progress run, `status` is not final yet; the last
+            // pipeline's status is the honest answer for both cases.
+            ("s", 1) => run
+                .pipelines
+                .last()
+                .map_or(run.status, |pipeline| pipeline.status)
+                .to_string(),
+            ("s", _) => stage.status.to_string(),
+            ("o", _) => trimmed(&stage.stdout.render()),
+            (_, _) => trimmed(&stage.stderr.render()),
+        };
+        Ok(value)
+    }
+
     /// Commit a finished run: store the report and auto-bind its outputs.
     ///
-    /// Variables bound for run N: `$oN` / `$eN` (final stdout / stderr),
-    /// `$sN` (status), `$oN_K` / `$eN_K` per stage K, plus the unnumbered
-    /// aliases `$o` / `$e` / `$s` for the most recently finished run.
+    /// The run history itself is the addressable surface: `${o[N]}` /
+    /// `${e[N]}` / `${s[N]}` (and `[N][K]` per stage) resolve against it in
+    /// [`Self::run_ref`]. Only the unnumbered `$o` / `$e` / `$s` aliases
+    /// for the most recently finished run live in the variable map.
     fn commit(&self, report: &Report) {
         let arc = Arc::new(report.clone());
-        let id = arc.id;
-        let trim = |text: String| text.trim_end_matches('\n').to_owned();
-        let out = trim(arc.output());
-        let err = trim(
-            arc.pipelines
+        let out = trimmed(&arc.output());
+        let err = trimmed(
+            &arc.pipelines
                 .last()
                 .and_then(|p| p.stages.last())
                 .map(|s| s.stderr.render())
@@ -869,35 +941,21 @@ impl Shell {
         );
         let status = arc.status.to_string();
         let mut state = self.lock();
-        state.vars.insert(format!("o{id}"), out.clone());
-        state.vars.insert(format!("e{id}"), err.clone());
-        state.vars.insert(format!("s{id}"), status.clone());
         state.vars.insert("o".to_owned(), out);
         state.vars.insert("e".to_owned(), err);
         state.vars.insert("s".to_owned(), status);
-        for stage in arc.stages() {
-            state
-                .vars
-                .insert(format!("o{id}_{}", stage.index), trim(stage.stdout.render()));
-            state
-                .vars
-                .insert(format!("e{id}_{}", stage.index), trim(stage.stderr.render()));
-        }
         state.runs.push_back(arc);
         while state.runs.len() > self.inner.config.keep_runs {
-            if let Some(evicted) = state.runs.pop_front() {
-                let old = evicted.id;
-                state.vars.remove(&format!("o{old}"));
-                state.vars.remove(&format!("e{old}"));
-                state.vars.remove(&format!("s{old}"));
-                for stage in evicted.stages() {
-                    state.vars.remove(&format!("o{old}_{}", stage.index));
-                    state.vars.remove(&format!("e{old}_{}", stage.index));
-                }
-            }
+            state.runs.pop_front();
         }
         drop(state);
     }
+}
+
+/// Capture text with trailing newlines trimmed, the ergonomic form for
+/// variable-shaped reuse (mirrors `$(...)` trimming).
+fn trimmed(text: &str) -> String {
+    text.trim_end_matches('\n').to_owned()
 }
 
 /// A word after variable/substitution expansion, with the parallel glob

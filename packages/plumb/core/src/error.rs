@@ -69,6 +69,14 @@ pub enum Error {
         message: String,
     },
 
+    /// An indexed run reference (dollar-brace `o[N]` form) could not
+    /// resolve.
+    #[snafu(display("run reference: {message}"))]
+    RunRef {
+        /// What failed to resolve.
+        message: String,
+    },
+
     /// A `$(...)` substitution produced more output than the configured
     /// budget; its value would have been silently wrong.
     #[snafu(display("command substitution output exceeded {limit} bytes"))]

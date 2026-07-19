@@ -25,11 +25,12 @@ fn pipeline_captures_every_stage() {
     assert_eq!(stages.len(), 2);
     assert_eq!(stages[0].stdout.render(), "hello\n");
     assert_eq!(stages[1].stdout.render(), "HELLO\n");
-    // Auto-bound variables, including the intermediate pipe data.
-    assert_eq!(sh.var("o1").as_deref(), Some("HELLO"));
-    assert_eq!(sh.var("o1_0").as_deref(), Some("hello"));
-    assert_eq!(sh.var("s1").as_deref(), Some("0"));
+    // The run is addressable afterwards, including intermediate pipe data.
     assert_eq!(sh.var("o").as_deref(), Some("HELLO"));
+    let reuse = sh
+        .eval("echo ${o[1][0]} then ${o[1]} exit ${s[1]}")
+        .expect("reuse");
+    assert_eq!(reuse.output(), "hello then HELLO exit 0\n");
 }
 
 #[test]
@@ -53,7 +54,9 @@ fn stderr_capture_and_merge() {
     let sh = shell();
     let report = sh.eval("sh -c 'echo oops >&2'").expect("eval");
     assert_eq!(report.pipelines[0].stages[0].stderr.render(), "oops\n");
-    assert_eq!(sh.var("e1").as_deref(), Some("oops"));
+    assert_eq!(sh.var("e").as_deref(), Some("oops"));
+    let reuse = sh.eval("echo saw:${e[1]}").expect("reuse");
+    assert_eq!(reuse.output(), "saw:oops\n");
 
     let merged = sh.eval("sh -c 'echo mixed >&2' 2>&1 | cat").expect("eval");
     let stages = &merged.pipelines[0].stages;
@@ -74,8 +77,9 @@ fn redirections_write_and_read_files() {
     sh.eval("echo second >> f.txt").expect("append");
     let report = sh.eval("cat < f.txt").expect("read");
     assert_eq!(report.output(), "first\nsecond\n");
-    // The redirected stream was still captured.
-    assert_eq!(sh.var("o1").as_deref(), Some("first"));
+    // The redirected stream was still captured and stays addressable.
+    let captured = sh.eval("echo ${o[1]}").expect("reuse");
+    assert_eq!(captured.output(), "first\n");
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
 
@@ -122,7 +126,7 @@ fn command_substitution_feeds_arguments() {
 fn auto_bound_variables_cross_runs() {
     let sh = shell();
     sh.eval("echo alpha | tr a-z A-Z").expect("first");
-    let report = sh.eval("echo $o1 and $o1_0").expect("second");
+    let report = sh.eval("echo ${o[1]} and ${o[1][0]}").expect("second");
     assert_eq!(report.output(), "ALPHA and alpha\n");
 }
 
@@ -196,7 +200,10 @@ fn background_runs_share_state_and_wait_joins() {
     let bg_id = report.background_started[0];
     let bg = sh.report(bg_id).expect("background report committed");
     assert_eq!(bg.output(), "bg-value\n");
-    assert_eq!(sh.var(&format!("o{bg_id}")).as_deref(), Some("bg-value"));
+    let reuse = sh
+        .eval(&format!("echo ${{o[{bg_id}]}}"))
+        .expect("background run addressable");
+    assert_eq!(reuse.output(), "bg-value\n");
 }
 
 #[test]
@@ -249,7 +256,7 @@ fn quoting_reaches_argv_intact() {
 }
 
 #[test]
-fn keep_runs_evicts_old_variables() {
+fn keep_runs_evicts_old_runs() {
     let sh = Shell::new(Config {
         keep_runs: 2,
         ..Config::default()
@@ -258,9 +265,32 @@ fn keep_runs_evicts_old_variables() {
     sh.eval("echo one").expect("run 1");
     sh.eval("echo two").expect("run 2");
     sh.eval("echo three").expect("run 3");
-    assert_eq!(sh.var("o1"), None, "run 1 evicted");
-    assert_eq!(sh.var("o3").as_deref(), Some("three"));
+    assert!(
+        matches!(sh.eval("echo ${o[1]}"), Err(Error::RunRef { .. })),
+        "run 1 evicted"
+    );
+    let ok = sh.eval("echo ${o[3]}").expect("run 3 retained");
+    assert_eq!(ok.output(), "three\n");
     assert_eq!(sh.reports().len(), 2);
+}
+
+#[test]
+fn same_eval_self_reference() {
+    let report = shell()
+        .eval("echo alpha | tr a-z A-Z; echo again=${o[1][0]}")
+        .expect("eval");
+    assert_eq!(report.output(), "again=alpha\n");
+}
+
+#[test]
+fn negative_run_references() {
+    let sh = shell();
+    sh.eval("echo newest").expect("run 1");
+    let previous = sh.eval("echo prev=${o[-1]}").expect("run 2");
+    assert_eq!(previous.output(), "prev=newest\n");
+    sh.eval("echo hi | tr a-z A-Z").expect("run 3");
+    let stage = sh.eval("echo ${o[-1][-2]}").expect("run 4");
+    assert_eq!(stage.output(), "hi\n");
 }
 
 #[test]

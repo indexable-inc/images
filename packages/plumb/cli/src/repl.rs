@@ -53,7 +53,7 @@ pub fn run(shell: &Shell) -> ExitCode {
     };
     println!(
         "plumb: runs are values. `:runs` lists them, `:json N` dumps one, \
-         `$oN`/`$eN`/`$oN_K` reuse their output. ctrl-d exits."
+         `${{o[N]}}`/`${{e[N]}}`/`${{o[N][K]}}` reuse their output. ctrl-d exits."
     );
     loop {
         for report in shell.finished_background() {
@@ -169,7 +169,7 @@ fn summarize(report: &Report) {
         );
     }
     let id = report.id;
-    println!("run {id}: exit {}  ${{o{id}}} ${{e{id}}} ${{s{id}}}", report.status);
+    println!("run {id}: exit {}  ${{o[{id}]}} ${{e[{id}]}} ${{s[{id}]}}", report.status);
 }
 
 fn human_bytes(count: u64) -> String {

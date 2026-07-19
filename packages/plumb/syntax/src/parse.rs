@@ -482,6 +482,7 @@ impl Parser<'_> {
                         None | Some(' ' | '\t' | '\n' | ';' | '|' | '&' | '<' | '>' | '/') => {
                             acc.push_part(Part::Var {
                                 name: "HOME".to_owned(),
+                                indices: Vec::new(),
                                 span: Span {
                                     start,
                                     end: self.byte_pos(),
@@ -572,6 +573,67 @@ impl Parser<'_> {
         }
     }
 
+    /// The braced form after `${`: a plain name, optionally indexed as a
+    /// run reference (`${o[7]}`, `${o[7][0]}`, negative from the latest).
+    fn braced(&mut self, acc: &mut WordAcc, start: usize) -> Result<bool, ParseError> {
+        let name = self.ident_run();
+        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+            return self.fail_at(
+                start,
+                "unsupported parameter expansion: only a plain variable name in braces"
+                    .to_owned(),
+            );
+        }
+        let mut indices = Vec::new();
+        while self.peek() == Some('[') {
+            if indices.len() == 2 {
+                return self.fail_at(
+                    start,
+                    "run references take at most two indexes: ${o[run][stage]}".to_owned(),
+                );
+            }
+            self.pos += 1;
+            let negative = self.peek() == Some('-');
+            if negative {
+                self.pos += 1;
+            }
+            let mut digits = String::new();
+            while let Some(c) = self.peek() {
+                if c.is_ascii_digit() {
+                    digits.push(c);
+                    self.pos += 1;
+                } else {
+                    break;
+                }
+            }
+            let (Ok(magnitude), Some(']')) = (digits.parse::<i64>(), self.peek()) else {
+                return self.fail_at(
+                    start,
+                    "run reference indexes are integers: ${o[7]} or ${o[-1]}".to_owned(),
+                );
+            };
+            self.pos += 1;
+            indices.push(if negative { -magnitude } else { magnitude });
+        }
+        if self.peek() != Some('}') {
+            return self.fail_at(
+                start,
+                "unsupported parameter expansion: only a plain variable name in braces"
+                    .to_owned(),
+            );
+        }
+        self.pos += 1;
+        acc.push_part(Part::Var {
+            name,
+            indices,
+            span: Span {
+                start,
+                end: self.byte_pos(),
+            },
+        });
+        Ok(true)
+    }
+
     /// Consume a run of identifier characters (`[A-Za-z0-9_]*`).
     fn ident_run(&mut self) -> String {
         let mut name = String::new();
@@ -614,31 +676,13 @@ impl Parser<'_> {
             }
             Some('{') => {
                 self.pos += 2;
-                let name = self.ident_run();
-                let plain = self.peek() == Some('}')
-                    && !name.is_empty()
-                    && !name.starts_with(|c: char| c.is_ascii_digit());
-                if !plain {
-                    return self.fail_at(
-                        start,
-                        "unsupported parameter expansion: only a plain variable name in braces"
-                            .to_owned(),
-                    );
-                }
-                self.pos += 1;
-                acc.push_part(Part::Var {
-                    name,
-                    span: Span {
-                        start,
-                        end: self.byte_pos(),
-                    },
-                });
-                Ok(true)
+                self.braced(acc, start)
             }
             Some('?') => {
                 self.pos += 2;
                 acc.push_part(Part::Var {
                     name: "?".to_owned(),
+                    indices: Vec::new(),
                     span: Span {
                         start,
                         end: self.byte_pos(),
@@ -651,6 +695,7 @@ impl Parser<'_> {
                 let name = self.ident_run();
                 acc.push_part(Part::Var {
                     name,
+                    indices: Vec::new(),
                     span: Span {
                         start,
                         end: self.byte_pos(),
@@ -761,6 +806,48 @@ mod tests {
         assert_eq!(names, ["FOO", "BAR", "?"]);
     }
 
+    /// Each source must fail to parse with a message naming the construct.
+    fn assert_parse_errors(cases: &[(&str, &str)]) {
+        for (src, needle) in cases {
+            let error = parse(src).expect_err(src);
+            assert!(
+                error.message.contains(needle),
+                "{src:?}: {} should mention {needle:?}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn run_references() {
+        let command = one_command("echo ${o[7]} ${e[7][0]} ${s[-1]}");
+        let refs: Vec<(&str, &[i64])> = command.words[1..]
+            .iter()
+            .map(|w| match &w.parts[0] {
+                Part::Var { name, indices, .. } => (name.as_str(), indices.as_slice()),
+                other => panic!("expected var, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            refs,
+            [
+                ("o", [7_i64].as_slice()),
+                ("e", [7_i64, 0].as_slice()),
+                ("s", [-1_i64].as_slice())
+            ]
+        );
+    }
+
+    #[test]
+    fn run_reference_errors() {
+        assert_parse_errors(&[
+            ("echo ${o[1][2][3]}", "at most two"),
+            ("echo ${o[x]}", "integers"),
+            ("echo ${o[1}", "integers"),
+            ("echo ${o[]}", "integers"),
+        ]);
+    }
+
     #[test]
     fn tilde_is_home() {
         let command = one_command("ls ~/src");
@@ -851,7 +938,7 @@ mod tests {
     #[test]
     fn unsupported_constructs_error_loudly() {
         let fancy_expansion = concat!("echo ${", "X:-default}");
-        for (src, needle) in [
+        assert_parse_errors(&[
             ("if true; then echo hi; fi", "keyword `if`"),
             ("for x in a b; do echo $x; done", "keyword `for`"),
             ("echo `date`", "backtick"),
@@ -866,14 +953,7 @@ mod tests {
             ("a |& b", "|&"),
             ("case x in esac", "keyword `case`"),
             ("diff <(sort a) <(sort b)", "process substitution"),
-        ] {
-            let error = parse(src).expect_err(src);
-            assert!(
-                error.message.contains(needle),
-                "{src:?}: {} should mention {needle:?}",
-                error.message
-            );
-        }
+        ]);
     }
 
     #[test]
