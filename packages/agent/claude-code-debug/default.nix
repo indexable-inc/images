@@ -9,8 +9,6 @@
 # banner (printed to stderr), so this wrapper prints the connect URL ITSELF
 # before handing the terminal to the real binary.
 {
-  ix,
-  lib,
   writeNushellApplication,
   repoPackages ? {},
 }: let

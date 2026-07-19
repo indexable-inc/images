@@ -8,7 +8,6 @@
 # timer alone will not repaint an idle screen; replaying the frame does).
 {
   ix,
-  lib,
   repoPackages ? {},
 }: let
   claude-code =

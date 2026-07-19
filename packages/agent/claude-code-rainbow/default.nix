@@ -22,10 +22,11 @@
   python3,
   autoPatchelfHook,
   darwin,
+  makeBinaryWrapper,
 }: let
   # Single source of truth for the pin: reuse the stock package's manifest so
   # the rainbow build tracks the exact same version/hash Anthropic shipped.
-  manifest = lib.importJSON ../claude-code/manifest.json;
+  manifest = lib.importJSON (ix.paths.packagesRoot + "/agent/claude-code/manifest.json");
   inherit (manifest) version;
   inherit (stdenv.hostPlatform) system;
   target =
@@ -52,7 +53,7 @@
   # stripping rewrites the file length and corrupts the Bun trailer.
   applyMapping = {
     name,
-    mapping,
+    rules,
     input,
   }:
     runCommand "claude-code-rainbow-${name}"
@@ -60,9 +61,15 @@
       nativeBuildInputs = [python3];
       dontStrip = true;
       dontFixup = true;
+      # The mapping rides the derivation env as JSON (the patcher's input
+      # format), so the rules stay typed Nix here instead of a committed
+      # serialized file.
+      mappingJson = builtins.toJSON rules;
+      passAsFile = ["mappingJson"];
     }
     ''
-      python3 ${patcher} ${input} ${mapping} $out
+      # shell
+      python3 ${patcher} ${input} "$mappingJsonPath" $out
     '';
 
   # The rainbow chain. Order is irrelevant to correctness (finds and replaces
@@ -71,11 +78,58 @@
   mappings = [
     {
       name = "banner";
-      mapping = ./mappings/banner.json;
+      rules = [
+        {
+          find = "Welcome to Claude Code";
+          replace = "Rainbow!!! Claude Code";
+          expect = 10;
+        }
+      ];
     }
     {
       name = "colors";
-      mapping = ./mappings/colors.json;
+      rules = [
+        {
+          find = "rgb(215,119,87)";
+          replace = "rgb(255,20,255)";
+          expect = 9;
+        }
+        {
+          find = "rgb(245,149,117)";
+          replace = "rgb(255,120,255)";
+          expect = 2;
+        }
+        {
+          find = "rgb(87,105,247)";
+          replace = "rgb(20,255,120)";
+          expect = 5;
+        }
+        {
+          find = "rgb(0,102,102)";
+          replace = "rgb(0,255,255)";
+          expect = 2;
+        }
+        {
+          find = "rgb(71,130,200)";
+          replace = "rgb(255,120,20)";
+          expect = 5;
+        }
+        {
+          find = "rgb(255,0,135)";
+          replace = "rgb(255,255,0)";
+          expect = 2;
+        }
+        {
+          find = "rgb(153,153,153)";
+          replace = "rgb(255,100,255)";
+          expect = 5;
+        }
+        {
+          find = "rgb(135,0,255)";
+          replace = "rgb(255,0,100)";
+          expect = 9;
+        }
+      ];
     }
   ];
 
@@ -83,7 +137,7 @@
     lib.foldl'
     (input: m:
       applyMapping {
-        inherit (m) name mapping;
+        inherit (m) name rules;
         inherit input;
       })
     nativeBinary
@@ -92,7 +146,7 @@ in
   # Same unfree binary as the stock package, so wrap identically:
   # `allowVendoredUnfree` strips `meta.license` so the per-system flake package
   # set (evaluated without `allowUnfree`) can still build this.
-  ix.allowVendoredUnfree (stdenv.mkDerivation (finalAttrs: {
+  ix.allowVendoredUnfree (stdenv.mkDerivation {
     pname = "claude-code-rainbow";
     inherit version;
 
@@ -107,12 +161,24 @@ in
     # during fixup (dropping the now-meaningless hardened-runtime + Developer-ID
     # signature), which is what makes the patched CLI runnable again.
     nativeBuildInputs =
-      lib.optional stdenv.hostPlatform.isElf autoPatchelfHook
+      [makeBinaryWrapper]
+      ++ lib.optional stdenv.hostPlatform.isElf autoPatchelfHook
       ++ lib.optional stdenv.hostPlatform.isDarwin darwin.autoSignDarwinBinariesHook;
 
+    # The stock `claude-code` package launches through a spec that sets
+    # DISABLE_UPDATES=1; this POC used to ship the raw patched binary instead.
+    # Running that raw binary let Claude Code's self-installer run: with
+    # `installMethod: native` in ~/.claude.json it downloaded a stock native
+    # build and wrote a `~/.local/bin/claude` launcher that shadowed the
+    # wrapped `claude` on PATH, so new sessions silently lost the wrapper's
+    # MCP config, system prompt, and flags (2026-07-19 incident). Bake the
+    # same guard here: real binary in libexec, wrapper on PATH.
     installPhase = ''
+      # shell
       runHook preInstall
-      install -D -m755 ${patched} $out/bin/claude
+      install -D -m755 ${patched} $out/libexec/claude
+      makeWrapper $out/libexec/claude $out/bin/claude \
+        --set DISABLE_UPDATES 1
       runHook postInstall
     '';
 
@@ -131,12 +197,13 @@ in
     # out-of-band there (see the report / `nix run .#claude-code-rainbow`).
     installCheckPhase =
       ''
+        # shell
         runHook preInstallCheck
 
         echo "== rainbow byte proof =="
-        new=$(grep -c "Rainbow!!! Claude Code" "$out/bin/claude" || true)
-        old=$(grep -c "Welcome to Claude Code" "$out/bin/claude" || true)
-        hex=$(grep -c "rgb(255,20,255)" "$out/bin/claude" || true)
+        new=$(grep -c "Rainbow!!! Claude Code" "$out/libexec/claude" || true)
+        old=$(grep -c "Welcome to Claude Code" "$out/libexec/claude" || true)
+        hex=$(grep -c "rgb(255,20,255)" "$out/libexec/claude" || true)
         echo "new banner count: $new"
         echo "old banner count: $old"
         echo "rainbow rgb count: $hex"
@@ -146,12 +213,12 @@ in
       ''
       + lib.optionalString (!stdenv.hostPlatform.isDarwin) ''
         echo "== version smoke =="
-        DISABLE_UPDATES=1 $out/bin/claude --version
+        $out/bin/claude --version
       ''
       + lib.optionalString stdenv.hostPlatform.isDarwin ''
         echo "== version smoke: skipped in darwin sandbox =="
         echo "AMFI blocks exec of a just-ad-hoc-signed Mach-O inside the build"
-        echo "sandbox; run 'DISABLE_UPDATES=1 result/bin/claude --version' after build."
+        echo "sandbox; run 'result/bin/claude --version' after build."
       ''
       + ''
         runHook postInstallCheck
@@ -172,4 +239,4 @@ in
       platforms = builtins.attrNames manifest.platforms;
       sourceProvenance = [lib.sourceTypes.binaryNativeCode];
     };
-  }))
+  })
