@@ -1408,7 +1408,6 @@ in {
           writeCommitGraph = true;
           auto = 256;
           autopacklimit = 10;
-          autodetach = true;
           pruneExpire = "2.weeks.ago";
           reflogExpire = "90.days.ago";
           reflogExpireUnreachable = "30.days.ago";
@@ -1527,6 +1526,24 @@ in {
             update = "merge";
           };
         });
+        # Fetch-time background maintenance is for real project repos only.
+        # Nix-internal git cache repos (~/.cache/nix/tarball-cache-v2,
+        # ~/.cache/nix/gitv3/*) inherit this global file, and with
+        # maintenance.auto + gc.autodetach set every fetch spawned a
+        # detached `git maintenance run --auto` that SIGSEGVs on macOS
+        # (gettext locale init -> CFLocaleCopyPreferredLanguages -> NULL CF
+        # distributed-notification center), so the caches never got
+        # maintained (#3755). Scoping by gitdir keeps today's behavior for
+        # everything under ~/Projects/ (linked worktrees too: their gitdir
+        # resolves into the main checkout's .git) while ~/.cache repos fall
+        # back to git defaults.
+        "includeIf \"gitdir:~/Projects/\"".path = pkgs.writeText "projects-git-maintenance" (lib.generators.toGitINI {
+          gc.autodetach = true;
+          maintenance = {
+            auto = true;
+            strategy = "incremental";
+          };
+        });
         push = {
           default = "simple";
           autoSetupRemote = true;
@@ -1554,15 +1571,6 @@ in {
           allowAnySHA1InWant = true;
         };
         feature.manyFiles = true;
-        maintenance =
-          {
-            auto = true;
-            strategy = "incremental";
-          }
-          # Registered maintenance repo lives on the workstation only.
-          // lib.optionalAttrs pkgs.stdenv.isDarwin {
-            repo = cfg.paths.ixCheckout;
-          };
         sparse.expectFilesOutsideOfPatterns = true;
         "branchless.restack" = {
           preserveTimestamps = false;
@@ -1572,6 +1580,14 @@ in {
         pager.log = true;
       }
       // gitCredentialHelpers
+      # Registered maintenance repo lives on the workstation only. The
+      # maintenance scheduling knobs (maintenance.auto/strategy,
+      # gc.autodetach) live in the ~/Projects/ includeIf above: they are
+      # for real project repos, not the git cache repos tools keep under
+      # ~/.cache (#3755).
+      // lib.optionalAttrs pkgs.stdenv.isDarwin {
+        maintenance.repo = cfg.paths.ixCheckout;
+      }
     );
 
   programs.ssh = let
