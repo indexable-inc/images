@@ -161,6 +161,57 @@ fn push_lines(output: &mut String, lines: &[&str]) {
     }
 }
 
+/// Walks one side's hunks in lockstep with the shared base cursor. Left and
+/// right are structurally symmetric (each just diffs its own lines against
+/// the same base), so `based()` drives two of these instead of duplicating
+/// the grow-and-measure logic per side.
+struct SideCursor<'a> {
+    hunks: &'a [Hunk],
+    next: usize,
+    last: Option<&'a Hunk>,
+    pos: usize,
+}
+
+impl<'a> SideCursor<'a> {
+    fn new(hunks: &'a [Hunk]) -> Self {
+        Self {
+            hunks,
+            next: 0,
+            last: None,
+            pos: 0,
+        }
+    }
+
+    fn peek_start(&self) -> Option<usize> {
+        self.hunks.get(self.next).map(|hunk| hunk.base.start)
+    }
+
+    /// Consumes every not-yet-seen hunk starting at or before `end`, growing
+    /// `end` to cover it. Returns whether it consumed anything, so the
+    /// caller can alternate sides until neither grows the region further.
+    fn consume(&mut self, end: &mut usize) -> bool {
+        let mut grew = false;
+        while let Some(hunk) = self.hunks.get(self.next)
+            && hunk.base.start <= *end
+        {
+            *end = (*end).max(hunk.base.end);
+            self.last = Some(hunk);
+            self.next += 1;
+            grew = true;
+        }
+        grew
+    }
+
+    /// This side's text end for the region `[region_start, end)`: the last
+    /// consumed hunk's replacement end plus any stable tail up to `end`, or
+    /// (no hunk touched this region) `pos` tracking the base 1:1.
+    fn region_end(&self, region_start: usize, end: usize) -> usize {
+        self.last.map_or(self.pos + (end - region_start), |hunk| {
+            hunk.side.end + (end - hunk.base.end)
+        })
+    }
+}
+
 /// Three-way line merge with diff3 alignment.
 ///
 /// Each side is diffed against the base (patience diff), so an insertion
@@ -192,68 +243,39 @@ pub fn based(base: &str, left: &str, right: &str) -> Result {
     let mut output = String::new();
     let mut conflicts = Vec::new();
 
-    // `cursor` walks base lines; `left_pos`/`right_pos` are the side line
-    // indices aligned with `cursor` whenever `cursor` sits outside any hunk.
+    // `cursor` walks base lines; each side's cursor tracks `pos`, its own
+    // line index, staying aligned with `cursor` whenever `cursor` sits
+    // outside any hunk.
     let mut cursor = 0;
-    let mut left_pos = 0;
-    let mut right_pos = 0;
-    let mut li = 0;
-    let mut ri = 0;
+    let mut left = SideCursor::new(&left_hunks);
+    let mut right = SideCursor::new(&right_hunks);
 
     loop {
-        let next = [left_hunks.get(li), right_hunks.get(ri)]
+        let next = [left.peek_start(), right.peek_start()]
             .into_iter()
             .flatten()
-            .map(|hunk| hunk.base.start)
             .min();
         let Some(next) = next else { break };
 
         push_lines(&mut output, &base_lines[cursor..next]);
-        left_pos += next - cursor;
-        right_pos += next - cursor;
+        left.pos += next - cursor;
+        right.pos += next - cursor;
         let region_start = next;
 
         // Grow the unstable region to a maximal chunk: consuming a hunk from
         // one side can extend `end` into range of the other side's next hunk,
         // so repeat until neither side adds one.
         let mut end = region_start;
-        let mut last_left: Option<&Hunk> = None;
-        let mut last_right: Option<&Hunk> = None;
-        loop {
-            let mut grew = false;
-            while let Some(hunk) = left_hunks.get(li)
-                && hunk.base.start <= end
-            {
-                end = end.max(hunk.base.end);
-                last_left = Some(hunk);
-                li += 1;
-                grew = true;
-            }
-            while let Some(hunk) = right_hunks.get(ri)
-                && hunk.base.start <= end
-            {
-                end = end.max(hunk.base.end);
-                last_right = Some(hunk);
-                ri += 1;
-                grew = true;
-            }
-            if !grew {
-                break;
-            }
-        }
+        left.last = None;
+        right.last = None;
+        while left.consume(&mut end) | right.consume(&mut end) {}
 
-        // A side's region text ends at its last hunk's replacement plus the
-        // stable tail up to `end`; a side with no hunk here tracks the base.
-        let left_end = last_left.map_or(left_pos + (end - region_start), |hunk| {
-            hunk.side.end + (end - hunk.base.end)
-        });
-        let right_end = last_right.map_or(right_pos + (end - region_start), |hunk| {
-            hunk.side.end + (end - hunk.base.end)
-        });
+        let left_end = left.region_end(region_start, end);
+        let right_end = right.region_end(region_start, end);
 
         let base_seg = &base_lines[region_start..end];
-        let left_seg = &left_lines[left_pos..left_end];
-        let right_seg = &right_lines[right_pos..right_end];
+        let left_seg = &left_lines[left.pos..left_end];
+        let right_seg = &right_lines[right.pos..right_end];
 
         if left_seg == right_seg {
             push_lines(&mut output, left_seg);
@@ -272,14 +294,14 @@ pub fn based(base: &str, left: &str, right: &str) -> Result {
             conflicts.push(Conflict {
                 base: (!base_seg.is_empty())
                     .then(|| Region::new(region_start, end, base_seg.join("\n"))),
-                left: Region::new(left_pos, left_end, left_seg.join("\n")),
-                right: Region::new(right_pos, right_end, right_seg.join("\n")),
+                left: Region::new(left.pos, left_end, left_seg.join("\n")),
+                right: Region::new(right.pos, right_end, right_seg.join("\n")),
             });
         }
 
         cursor = end;
-        left_pos = left_end;
-        right_pos = right_end;
+        left.pos = left_end;
+        right.pos = right_end;
     }
 
     push_lines(&mut output, &base_lines[cursor..]);
