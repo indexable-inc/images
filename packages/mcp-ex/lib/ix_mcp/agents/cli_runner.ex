@@ -192,25 +192,8 @@ defmodule IxMcp.Agents.CliRunner do
         Events.record(id, :init, %{session: tid})
         {:cont, state}
 
-      %{"type" => "item.completed", "item" => %{"type" => "agent_message", "text" => text}} ->
-        Events.record(id, :text, %{snippet: String.slice(text, 0, 300)})
-        {:cont, %{state | last_text: text}}
-
-      %{"type" => "item.completed", "item" => %{"type" => "command_execution"} = item} ->
-        Events.record(id, :tool_use, %{
-          tool: "command",
-          snippet: String.slice(item["command"] || "", 0, 200)
-        })
-
-        {:cont, state}
-
-      %{"type" => "item.completed", "item" => %{"type" => "error", "message" => message}} ->
-        Events.record(id, :meta, %{subtype: "error_item", snippet: String.slice(message, 0, 200)})
-        {:cont, state}
-
-      %{"type" => "item.completed", "item" => %{"type" => other}} ->
-        Events.record(id, :tool_use, %{tool: other})
-        {:cont, state}
+      %{"type" => "item.completed", "item" => item} ->
+        codex_item(id, item, state)
 
       %{"type" => "turn.completed"} = turn ->
         add_usage(state, codex_tokens(turn))
@@ -232,6 +215,33 @@ defmodule IxMcp.Agents.CliRunner do
         {:cont, state}
     end
   end
+
+  defp codex_item(id, %{"type" => "agent_message", "text" => text}, state) do
+    Events.record(id, :text, %{snippet: String.slice(text, 0, 300)})
+    {:cont, %{state | last_text: text}}
+  end
+
+  defp codex_item(id, %{"type" => "command_execution"} = item, state) do
+    Events.record(id, :tool_use, %{
+      tool: "command",
+      snippet: String.slice(item["command"] || "", 0, 200)
+    })
+
+    {:cont, state}
+  end
+
+  defp codex_item(id, %{"type" => "error", "message" => message}, state) do
+    Events.record(id, :meta, %{subtype: "error_item", snippet: String.slice(message, 0, 200)})
+    {:cont, state}
+  end
+
+  defp codex_item(id, %{"type" => other}, state) do
+    Events.record(id, :tool_use, %{tool: other})
+    {:cont, state}
+  end
+
+  # An item without a "type" used to fall through dispatch's catch-all.
+  defp codex_item(_id, _item, state), do: {:cont, state}
 
   defp record_block(id, %{"type" => "text", "text" => text}) do
     Events.record(id, :text, %{snippet: String.slice(text, 0, 300)})
