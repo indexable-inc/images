@@ -172,7 +172,7 @@
     }
     ''
       set +e
-      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
         '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_set_name","arguments":{"name":"smoke"}}}' \
@@ -181,6 +181,7 @@
         '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"connection survives binary output","budget":60,"code":"\"alive-after-binary\""}}}' \
         '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"crash dump routing probe","budget":60,"code":"System.fetch_env!(\"ERL_CRASH_DUMP\")"}}}' \
         '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"local pty drive probe","budget":60,"code":"{:ok, t} = TuiLocal.spawn(\"cat\", []); :ok = TuiLocal.send(t, \"pty-smoke\\r\"); {:ok, s} = TuiLocal.wait_for(t, \"pty-smoke\"); :ok = TuiLocal.close(t); s"}}}' \
+        '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"otp batteries present","budget":60,"code":"{:ok, _} = Application.ensure_all_started([:inets, :ssl, :xmerl, :runtime_tools, :tools]); \"otp-batteries-ok\""}}}' \
         | IX_MCP_ACTIONS_DB="$PWD/actions.db" ix-mcp-ex > response.jsonl 2> server-stderr.log
       rc=$?
       set -e
@@ -272,6 +273,17 @@
         *'pty-smoke'*) ;;
         *)
           echo "exec did not drive a local PTY through TuiLocal" >&2
+          printf '%s\n' "$out_lines" >&2
+          exit 1
+          ;;
+      esac
+      # #3798: the release must carry the standard OTP batteries; this probe
+      # proves :inets/:ssl/:xmerl/:runtime_tools/:tools boot in the shipped
+      # release, not just in a full OTP install.
+      case "$out_lines" in
+        *'otp-batteries-ok'*) ;;
+        *)
+          echo "release is missing standard OTP applications" >&2
           printf '%s\n' "$out_lines" >&2
           exit 1
           ;;

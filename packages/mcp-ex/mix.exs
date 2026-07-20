@@ -14,7 +14,19 @@ defmodule IxMcp.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :crypto],
+      # Beyond the app's own needs, carry the standard OTP batteries into
+      # the release: agents run arbitrary cells, and a REPL kernel without
+      # :inets/:ssl cannot make an HTTPS call (#3798). :xmerl for XML,
+      # :runtime_tools for dbg/tracing, :tools for fprof/eprof/cover.
+      extra_applications: [
+        :logger,
+        :crypto,
+        :inets,
+        :ssl,
+        :xmerl,
+        :runtime_tools,
+        :tools
+      ],
       mod: {IxMcp.Application, []}
     ]
   end
