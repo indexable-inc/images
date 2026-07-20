@@ -17,63 +17,32 @@
   lib,
   ix,
   stdenv,
-  fetchurl,
   runCommand,
   python3,
   autoPatchelfHook,
   darwin,
   makeBinaryWrapper,
+  repoPackages ? {},
 }: let
-  # Single source of truth for the pin: reuse the stock package's manifest so
-  # the rainbow build tracks the exact same version/hash Anthropic shipped.
-  manifest = lib.importJSON (ix.paths.packagesRoot + "/agent/claude-code/manifest.json");
-  inherit (manifest) version;
-  inherit (stdenv.hostPlatform) system;
-  target =
-    manifest.platforms.${system}
-      or (throw "claude-code-rainbow: no prebuilt binary for ${system}");
+  claude-code =
+    repoPackages.claude-code
+      or (throw "claude-code-rainbow: needs the claude-code sibling (flake package set only)");
+  inherit (claude-code) version;
 
-  # The raw Bun binary, fetched directly (same bytes as the stock package's
-  # `nativeBinary`). Depending on the fetch rather than the wrapped
-  # `claude-code` package keeps each mapping derivation tiny: its only input is
-  # the binary itself, nothing else in the wrapper closure.
-  nativeBinary = fetchurl {
-    urls = [
-      "https://downloads.claude.ai/claude-code-releases/${version}/${target.slug}/claude"
-      "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/${version}/${target.slug}/claude"
-    ];
-    inherit (target) hash;
-  };
+  # The single fetched upstream binary, shared with the stock package: one
+  # `fetchurl` derivation, one download, one store path (claude-code exposes it
+  # as `passthru.nativeBinary`). Depending on this FOD rather than the wrapped
+  # claude-code closure keeps each mapping derivation's input tiny -- just the
+  # binary, nothing else from the wrapper.
+  inherit (claude-code) nativeBinary;
 
-  # Shared equal-length byte patcher, owned by the canonical claude-code
-  # package (which now bakes its own gate patch through it); reached via the
-  # threaded packages root rather than a `../` climb.
-  patcher = ix.paths.packagesRoot + "/agent/claude-code/patch-binary.py";
-
-  # One cacheable derivation per mapping. `input` is a store path to a single
-  # binary file (the fetched binary, or the previous mapping's output); `$out`
-  # is likewise a single patched binary file. `dontStrip`/`dontFixup` because
-  # stripping rewrites the file length and corrupts the Bun trailer.
-  applyMapping = {
-    name,
-    rules,
-    input,
-  }:
-    runCommand "claude-code-rainbow-${name}"
-    {
-      nativeBuildInputs = [python3];
-      dontStrip = true;
-      dontFixup = true;
-      # The mapping rides the derivation env as JSON (the patcher's input
-      # format), so the rules stay typed Nix here instead of a committed
-      # serialized file.
-      mappingJson = builtins.toJSON rules;
-      passAsFile = ["mappingJson"];
-    }
-    ''
-      # shell
-      python3 ${patcher} ${input} "$mappingJsonPath" $out
-    '';
+  # Shared equal-length byte-patch layer primitive, owned by the canonical
+  # claude-code package (which bakes its own dev-channels gate patch through the
+  # same primitive); reached via the threaded packages root rather than a `../`
+  # climb. One cacheable layer per mapping, so the fold below is a DAG.
+  applyBytePatch =
+    import (ix.paths.packagesRoot + "/agent/claude-code/byte-patch.nix")
+    {inherit runCommand python3;};
 
   # The rainbow chain. Order is irrelevant to correctness (finds and replaces
   # are disjoint), but the fold makes the caching layers explicit:
@@ -139,7 +108,7 @@
   patched =
     lib.foldl'
     (input: m:
-      applyMapping {
+      applyBytePatch {
         inherit (m) name rules;
         inherit input;
       })
@@ -239,7 +208,7 @@ in
       # Stripped by `ix.allowVendoredUnfree` above; kept honest here.
       license = lib.licenses.unfree;
       mainProgram = "claude";
-      platforms = builtins.attrNames manifest.platforms;
+      inherit (claude-code.meta) platforms;
       sourceProvenance = [lib.sourceTypes.binaryNativeCode];
     };
   })
