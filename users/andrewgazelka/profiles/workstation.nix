@@ -115,8 +115,6 @@
 
   claudeSettings = {
     autoMemoryDirectory = "~/.config/nix/claude/auto-memory";
-    # Full tool output in the transcript (house posture defaults verbose = false).
-    verbose = true;
     enabledPlugins = {
       "ix-docs@ix" = true;
       "ix@ix" = true;
