@@ -1487,7 +1487,11 @@ in {
           conflictstyle = "diff3";
           renormalize = true;
           stat = false;
-          # ff = false: always create a merge commit, never fast-forward.
+          # Always create a merge commit, never fast-forward. The merge commit
+          # is a distinct node recording both parents, so a whole branch reverts
+          # atomically with `git revert -m 1 <merge>` and the branch boundary
+          # stays visible in history. A fast-forward leaves no such node: undoing
+          # a feature means reverting each commit and the topology is lost.
           ff = false;
         };
         "merge \"ast-merge\"" = {
