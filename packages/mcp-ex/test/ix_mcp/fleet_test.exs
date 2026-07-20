@@ -63,6 +63,17 @@ defmodule IxMcp.FleetTest do
       assert Fleet.exec_least_loaded(fn -> 1 + 1 end) == {:error, :no_nodes}
     end
 
+    test "compat_error is :ok on matching md5 and instructive on divergence" do
+      md5 = :erl_eval.module_info(:md5)
+      assert Fleet.compat_error(md5, md5, :"beamd@a.ts.net") == :ok
+
+      assert {:error, {:erl_eval_mismatch, msg}} =
+               Fleet.compat_error(md5, <<0::128>>, :"beamd@a.ts.net")
+
+      assert msg =~ "erlang pins have diverged"
+      assert msg =~ "beamd@a.ts.net"
+    end
+
     test "non-code payloads are rejected" do
       assert_raise FunctionClauseError, fn -> Fleet.exec_any(~c"1 + 1") end
       assert_raise FunctionClauseError, fn -> Fleet.exec_any(fn x -> x end) end

@@ -29,6 +29,14 @@ defmodule IxMcp.Fleet do
   fails there with `:undef`. Strings sidestep module resolution entirely, so
   use them when the code leans on locally defined modules.
 
+  An interpreted fun also carries the md5 of the local `erl_eval` bytecode
+  and the remote node raises `badfun` unless its `erl_eval` is byte-identical.
+  Both ends of this fleet are nix-controlled and expected to share the erlang
+  pin, so that md5 matching is the supported contract; fun dispatch verifies
+  it per node up front (an MFA `:erpc` probe, itself version-safe, cached in
+  `:persistent_term`) and returns `{:error, {:erl_eval_mismatch, ...}}` with
+  update instructions instead of letting `badfun` escape mid-task.
+
       Fleet.exec(:"beamd@host-a.tailnet.ts.net", fn -> System.schedulers_online() end)
       Fleet.exec_any("node() |> to_string()")            # a random node
       Fleet.multicall(Fleet.nodes(), fn -> node() end, timeout: 10_000)
@@ -92,7 +100,8 @@ defmodule IxMcp.Fleet do
   def exec(target, code, opts \\ []) when is_atom(target) and is_code(code) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
-    with {:ok, _} <- ensure_dist() do
+    with {:ok, _} <- ensure_dist(),
+         :ok <- code_compat(target, code, timeout) do
       try do
         {:ok, remote_call(target, code, timeout)}
       catch
@@ -164,6 +173,58 @@ defmodule IxMcp.Fleet do
     :erpc.call(target, fun, timeout)
   end
 
+  # Strings need no compatibility: the remote node evaluates them with its
+  # own erl_eval. Funs do (see moduledoc); probe before dispatch.
+  @spec code_compat(node(), code(), timeout()) :: :ok | {:error, term()}
+  defp code_compat(_target, code, _timeout) when is_binary(code), do: :ok
+  defp code_compat(target, fun, timeout) when is_function(fun, 0), do: fun_compat(target, timeout)
+
+  # Probed once per node with a plain MFA call (version-safe) and cached in
+  # :persistent_term; a node bounce with a changed pin re-registers under a
+  # fresh md5, so the stale cache entry can only produce a false mismatch,
+  # never a false pass.
+  @spec fun_compat(node(), timeout()) :: :ok | {:error, term()}
+  defp fun_compat(target, timeout) do
+    local = :erl_eval.module_info(:md5)
+
+    if :persistent_term.get(cache_key(target), nil) == local do
+      :ok
+    else
+      try do
+        register_probe(target, :erpc.call(target, :erl_eval, :module_info, [:md5], timeout), local)
+      catch
+        kind, reason -> {:error, {kind, reason}}
+      end
+    end
+  end
+
+  @spec cache_key(node()) :: tuple()
+  defp cache_key(target), do: {__MODULE__, :erl_eval_md5, target}
+
+  @spec register_probe(node(), binary(), binary()) :: :ok | {:error, term()}
+  defp register_probe(target, remote, local) do
+    with :ok <- compat_error(local, remote, target) do
+      :persistent_term.put(cache_key(target), local)
+      :ok
+    end
+  end
+
+  @doc false
+  # Exposed for the unit test; not part of the API surface.
+  @spec compat_error(binary(), binary(), node()) :: :ok | {:error, term()}
+  def compat_error(local, remote, target) do
+    if local == remote do
+      :ok
+    else
+      {:error,
+       {:erl_eval_mismatch,
+        "erl_eval md5 differs between this kernel (#{Base.encode16(local)}) and #{target} " <>
+          "(#{Base.encode16(remote)}): the erlang pins have diverged. Update the stale side " <>
+          "(rebuild/switch the kernel, or redeploy the fleet) so both run the same nix erlang, " <>
+          "or pass the code as a string, which needs no matching bytecode."}}
+    end
+  end
+
   @spec remote_multicall([node()], code(), timeout()) :: [term()]
   defp remote_multicall(targets, code, timeout) when is_binary(code) do
     # Unwrap eval's {value, binding} here, on the string path only: a fun
@@ -177,7 +238,34 @@ defmodule IxMcp.Fleet do
   end
 
   defp remote_multicall(targets, fun, timeout) when is_function(fun, 0) do
-    :erpc.multicall(targets, fun, timeout)
+    # Per-node compat split: stale nodes get the instructive error, compatible
+    # ones run the fun; one bad node cannot poison the batch. The md5 probe
+    # fans out in parallel (cached nodes skip it).
+    local = :erl_eval.module_info(:md5)
+    {cached, unchecked} = Enum.split_with(targets, &(:persistent_term.get(cache_key(&1), nil) == local))
+
+    probes = :erpc.multicall(unchecked, :erl_eval, :module_info, [:md5], timeout)
+
+    checks =
+      Map.new(Enum.zip_with(unchecked, probes, fn t, probe ->
+        result =
+          case normalize(probe) do
+            {:ok, remote} -> register_probe(t, remote, local)
+            {:error, reason} -> {:error, reason}
+          end
+
+        {t, result}
+      end))
+
+    ok_targets = cached ++ for {t, :ok} <- checks, do: t
+    results = Map.new(Enum.zip(ok_targets, :erpc.multicall(ok_targets, fun, timeout)))
+
+    Enum.map(targets, fn t ->
+      case Map.get(checks, t, :ok) do
+        :ok -> Map.fetch!(results, t)
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @spec least_loaded([node()], timeout()) :: {:ok, node()} | {:error, :no_reachable_nodes}
