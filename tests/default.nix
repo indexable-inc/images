@@ -2930,7 +2930,7 @@
       }
       {
         assertion =
-          ix.forkClosureGates.closureOf clippyDag.nodes "0014-Add-anonymous-tuple-return-type-lint.patch"
+          ix.forkClosureGates.closureOf clippyDag.nodes "0012-Add-anonymous-tuple-return-type-lint.patch"
           == [
             "0002-Add-module_file_count-lint.patch"
             "0003-Add-excessive_file_length-lint.patch"
@@ -2938,9 +2938,9 @@
             "0007-Add-fallible_int_fallback-lint.patch"
             "0008-Add-magic_number-lint.patch"
             "0009-Add-drop_must_use-lint.patch"
-            "0014-Add-anonymous-tuple-return-type-lint.patch"
+            "0012-Add-anonymous-tuple-return-type-lint.patch"
           ];
-        message = "closureOf should reproduce the committed clippy dag.json transitive closure of 0014";
+        message = "closureOf should reproduce the committed clippy dag.json transitive closure of 0012";
       }
       {
         # Crosses the fork-packages.nix intent <-> package passthru boundary:

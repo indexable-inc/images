@@ -1,0 +1,296 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 19 Jul 2026 15:30:29 -0700
+Subject: [PATCH] libstore: prove build-status writers alive with a lifetime
+ lock
+
+`nix store builds` already prunes entries whose writer pid is gone, but
+its probe is kill(pid, 0) -- which still succeeds when the writer
+survives only as a zombie. A daemon worker that dies without unwinding
+(SIGKILL, a crash) leaks its status files, and if its parent never
+reaps it, every leaked entry keeps reporting a build "in flight"
+forever. That is exactly the observed incident shape on hydra: 33
+phantom "building" entries owned by three zombie daemon workers under
+an unreapable parent survived for 10.5 hours and misled every observer
+(nwm, agents, humans) until the daemon was kickstarted; killing another
+client mid-incident minted a second batch (index#3752).
+
+Liveness now rests on the kernel instead of pid semantics: the writer
+takes a lifetime flock on the entry (acquired on the temp file, before
+the rename makes it visible, so no reader can catch an unlocked live
+entry), and stamps "livenessLock": true in the JSON. Any kind of death
+-- SIGKILL, crash, or surviving as a zombie -- releases the lock, so a
+reader that can acquire it has proof the writer is gone; pid reuse
+cannot fake liveness either. Entries from older writers keep the pid
+probe as a fallback, now zombie-aware on Linux (/proc stat state) and
+Darwin (KERN_PROC p_stat), so mixed-version fleets still shed corpse
+entries.
+
+The functional test grows both staleness cases: a legacy entry owned by
+a real zombie, and a livenessLock entry whose lock nobody holds while
+its recorded pid is alive.
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/libstore/build/build-status.cc b/src/libstore/build/build-status.cc
+index 54f1fedef..a3b5326a0 100644
+--- a/src/libstore/build/build-status.cc
++++ b/src/libstore/build/build-status.cc
+@@ -21,6 +21,11 @@
+ #include <sstream>
+ #include <unistd.h>
+ 
++#ifndef _WIN32
++#  include <fcntl.h>
++#  include <sys/file.h>
++#endif
++
+ namespace nix {
+ 
+ /**
+@@ -269,6 +274,10 @@ std::unique_ptr<BuildStatus> BuildStatus::forBuild(
+         j["uid"] = currentClientInfo.uid ? nlohmann::json(*currentClientInfo.uid) : nlohmann::json(nullptr);
+         j["logFile"] = logFile ? nlohmann::json(logFile->string()) : nlohmann::json(nullptr);
+         j["why"] = whyJSON(goal, store, isTopGoal(goal) ? "requested" : "outputsMissing");
++#ifndef _WIN32
++        /* Tell readers the file carries a lifetime flock (see `lockFd`). */
++        j["livenessLock"] = true;
++#endif
+ 
+         self->path = buildStatusDir() / (std::string(drvPath.to_string()) + "-" + std::to_string(getpid()) + ".json");
+         self->write(j.dump());
+@@ -377,6 +386,10 @@ std::unique_ptr<BuildStatus> BuildStatus::forSubstitution(Goal & goal, Store & s
+         j["uid"] = currentClientInfo.uid ? nlohmann::json(*currentClientInfo.uid) : nlohmann::json(nullptr);
+         j["logFile"] = nullptr;
+         j["why"] = whyJSON(goal, store, isTopGoal(goal) ? "requested" : "outputInvalid");
++#ifndef _WIN32
++        /* Tell readers the file carries a lifetime flock (see `lockFd`). */
++        j["livenessLock"] = true;
++#endif
+ 
+         self->path = buildStatusDir() / (std::string(storePath.to_string()) + "-" + std::to_string(getpid()) + ".json");
+         self->write(j.dump());
+@@ -395,6 +408,16 @@ void BuildStatus::write(std::string_view json)
+     auto tmp = path;
+     tmp += ".tmp";
+     writeFile(tmp, json);
++#ifndef _WIN32
++    /* Lock the entry before the rename makes it visible, so there is no
++       window in which a reader can mistake a live entry for a stale one.
++       The lock lives on the inode and thus follows the rename. */
++    lockFd = AutoCloseFD{open(tmp.c_str(), O_RDWR | O_CLOEXEC)};
++    if (!lockFd)
++        throw SysError("opening build status file %s", PathFmt(tmp));
++    if (flock(lockFd.get(), LOCK_EX | LOCK_NB) != 0)
++        throw SysError("locking build status file %s", PathFmt(tmp));
++#endif
+     std::filesystem::rename(tmp, path);
+     active = true;
+ }
+diff --git a/src/libstore/include/nix/store/build/build-status.hh b/src/libstore/include/nix/store/build/build-status.hh
+index 2d4d64983..fb00e3d9b 100644
+--- a/src/libstore/include/nix/store/build/build-status.hh
++++ b/src/libstore/include/nix/store/build/build-status.hh
+@@ -3,6 +3,7 @@
+ 
+ #include "nix/store/path.hh"
+ #include "nix/store/build/goal.hh"
++#include "nix/util/file-descriptor.hh"
+ 
+ #include <chrono>
+ #include <optional>
+@@ -97,6 +98,14 @@ class BuildStatus
+     std::filesystem::path path;
+     bool active = false;
+ 
++    /**
++     * Held (`flock`ed) for the lifetime of this object so readers can tell
++     * a live writer from a corpse: the kernel releases the lock on any kind
++     * of process death -- SIGKILL, a crash, or surviving only as a zombie --
++     * whereas the recorded pid keeps passing `kill(pid, 0)` for zombies.
++     */
++    AutoCloseFD lockFd;
++
+     std::optional<pid_t> builderPid;
+     std::string drvPath;
+     std::optional<std::filesystem::path> logFile;
+diff --git a/src/nix/store-builds.cc b/src/nix/store-builds.cc
+index 73ea8da98..7ebe2ccd8 100644
+--- a/src/nix/store-builds.cc
++++ b/src/nix/store-builds.cc
+@@ -2,6 +2,7 @@
+ #include "nix/main/common-args.hh"
+ #include "nix/store/globals.hh"
+ #include "nix/util/experimental-features.hh"
++#include "nix/util/file-descriptor.hh"
+ #include "nix/util/file-system.hh"
+ #include "nix/util/logging.hh"
+ 
+@@ -9,6 +10,14 @@
+ 
+ #include <csignal>
+ 
++#ifndef _WIN32
++#  include <fcntl.h>
++#  include <sys/file.h>
++#endif
++#ifdef __APPLE__
++#  include <sys/sysctl.h>
++#endif
++
+ using namespace nix;
+ 
+ /**
+@@ -35,6 +44,68 @@ static bool pidAlive(pid_t pid)
+     return errno != ESRCH;
+ }
+ 
++/**
++ * Is @p pid a zombie? `kill(pid, 0)` still succeeds for a zombie, so
++ * `pidAlive` alone keeps reporting builds "in flight" for workers that died
++ * unreaped -- the observed incident shape: 33 phantom entries owned by three
++ * zombie daemon workers under an unreapable parent, misleading every
++ * observer for 10.5 hours.
++ */
++static bool pidZombie(pid_t pid)
++{
++#ifdef __APPLE__
++    struct kinfo_proc info;
++    size_t len = sizeof(info);
++    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
++    if (sysctl(mib, 4, &info, &len, nullptr, 0) != 0 || len < sizeof(info))
++        return false;
++    return info.kp_proc.p_stat == SZOMB;
++#elif defined(__linux__)
++    try {
++        auto stat = readFile(std::filesystem::path{"/proc"} / std::to_string(pid) / "stat");
++        /* The state field follows the parenthesized, possibly
++           space-containing command name. */
++        auto close = stat.rfind(')');
++        if (close == std::string::npos || close + 2 >= stat.size())
++            return false;
++        return stat[close + 2] == 'Z';
++    } catch (...) {
++        return false;
++    }
++#else
++    return false;
++#endif
++}
++
++/**
++ * Is the writer of the status file @p p still alive?
++ *
++ * Writers that set `livenessLock` hold an `flock` on the file for their
++ * lifetime; the kernel releases it on any kind of death (SIGKILL, crash,
++ * zombie), so an acquirable lock proves the writer is gone. Older entries
++ * fall back to probing the recorded pid, treating zombies as dead.
++ */
++static bool writerAlive(const std::filesystem::path & p, const nlohmann::json & j)
++{
++#ifndef _WIN32
++    if (j.value("livenessLock", false)) {
++        AutoCloseFD fd{open(p.c_str(), O_RDONLY | O_CLOEXEC)};
++        if (!fd)
++            return false;
++        /* Only a successful acquisition proves the writer gone; any flock
++           failure (EWOULDBLOCK from the live writer's lock, or a freak
++           EINTR/ENOLCK) keeps the entry. A genuinely stale file is pruned
++           on the next read. */
++        return flock(fd.get(), LOCK_SH | LOCK_NB) != 0;
++    }
++#endif
++    auto pidIt = j.find("pid");
++    if (pidIt == j.end() || !pidIt->is_number())
++        return true; /* no way to probe; keep the entry */
++    auto pid = pidIt->get<pid_t>();
++    return pidAlive(pid) && !pidZombie(pid);
++}
++
+ struct CmdStoreBuilds : Command, MixJSON
+ {
+     std::string description() override
+@@ -85,15 +156,12 @@ struct CmdStoreBuilds : Command, MixJSON
+                 }
+ 
+                 /* Drop entries whose writer is no longer alive. */
+-                auto pidIt = j.find("pid");
+-                if (pidIt != j.end() && pidIt->is_number()) {
+-                    if (!pidAlive(pidIt->get<pid_t>())) {
+-                        try {
+-                            std::filesystem::remove(p);
+-                        } catch (...) {
+-                        }
+-                        continue;
++                if (!writerAlive(p, j)) {
++                    try {
++                        std::filesystem::remove(p);
++                    } catch (...) {
+                     }
++                    continue;
+                 }
+ 
+                 entries.push_back(std::move(j));
+diff --git a/tests/functional/build-status.sh b/tests/functional/build-status.sh
+index ff7c9271b..99eead8f9 100644
+--- a/tests/functional/build-status.sh
++++ b/tests/functional/build-status.sh
+@@ -179,4 +179,58 @@ nix build --file build-status-liveness.nix --argstr mode silent \
+ 
+ [[ -z $daemonStarted ]] || killDaemon
+ 
++# Staleness: an entry whose writer survives only as a zombie is a corpse and
++# must not be reported (kill(pid, 0) still succeeds for zombies, which kept 33
++# phantom builds "in flight" for 10.5 hours in the motivating incident).
++statusDir=$TEST_ROOT/var/nix/status
++mkdir -p "$statusDir"
++
++# A process that leaves a never-reaped child: the inner sleep exits while its
++# parent has exec'd into a long sleep and never calls wait(2).
++zombiePidFile=$TEST_ROOT/zombie.pid
++sh -c 'sh -c "exit 0" & echo $! > '"$zombiePidFile"'; exec sleep 60' &
++keeperPid=$!
++zombiePid=
++for _ in $(seq 1 100); do
++    [[ -s $zombiePidFile ]] && zombiePid=$(cat "$zombiePidFile") && break
++    sleep 0.1
++done
++[[ -n $zombiePid ]]
++# Read the state from /proc where available (the Linux sandbox has no full
++# ps(1)); fall back to ps -o state= elsewhere (Darwin).
++processState() {
++    if [[ -r /proc/$1/stat ]]; then
++        local stat
++        stat=$(< "/proc/$1/stat")
++        stat=${stat##*) }
++        echo "${stat%% *}"
++    else
++        ps -o state= -p "$1" 2> /dev/null | tr -d ' '
++    fi
++}
++isZombie=
++for _ in $(seq 1 100); do
++    if [[ $(processState "$zombiePid" || true) == Z* ]]; then
++        isZombie=1
++        break
++    fi
++    sleep 0.1
++done
++[[ -n $isZombie ]]
++
++cat > "$statusDir/zzzz-fake-zombie.drv-$zombiePid.json" << EOF
++{"type": "build", "drvPath": "$NIX_STORE_DIR/zzzz-fake-zombie.drv", "pid": $zombiePid}
++EOF
++nix store builds --json | jq -e --argjson pid "$zombiePid" 'all(.[]; .pid != $pid)'
++[[ ! -e "$statusDir/zzzz-fake-zombie.drv-$zombiePid.json" ]]
++kill "$keeperPid" 2> /dev/null || true
++
++# Staleness: an entry that claims a liveness lock nobody holds is a corpse,
++# even if its recorded pid is alive (pids get reused).
++cat > "$statusDir/zzzz-fake-unlocked.drv-$$.json" << EOF
++{"type": "build", "drvPath": "$NIX_STORE_DIR/zzzz-fake-unlocked.drv", "pid": $$, "livenessLock": true}
++EOF
++nix store builds --json | jq -e 'all(.[]; .drvPath | endswith("zzzz-fake-unlocked.drv") | not)'
++[[ ! -e "$statusDir/zzzz-fake-unlocked.drv-$$.json" ]]
++
+ echo "build-status.sh: OK"
