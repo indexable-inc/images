@@ -665,8 +665,124 @@
       # apply; anything else is a diff failure.
       [ "$status" -le 1 ]
     '';
+
+    # The whole-repo consumer view (#3435): the full tracked tree with every
+    # lane's fixed output overlaid -- the tree the repo becomes once CI's
+    # autofix commit lands. The lint check judges this tree, so fixable
+    # drift produces the autofix commit instead of a red run, and a failure
+    # on it is genuinely unresolvable by the fixers.
+    appliedTo = src:
+      pkgs.runCommand "lint-fixed-tree" contentAddressed ''
+        cp -R ${src} "$out"
+        chmod -R u+w "$out"
+        cp -R ${fixed}/. "$out"/
+      '';
   in {
-    inherit lanes unite fixed patch rustFmtToolchain;
+    inherit
+      appliedTo
+      fixed
+      lanes
+      patch
+      rustFmtToolchain
+      unite
+      ;
+  };
+
+  # CI's autofix committer (#3435): apply a lane-built fix patch to the
+  # checked-out PR head, commit it as `style: autofix`, and push it back to
+  # the PR branch -- race-checked against the head SHA the run validated,
+  # and never forced. Deliberately free of GitHub specifics (the patch and
+  # push URL arrive as arguments) so the `lint-autofix` flake check drives
+  # the whole commit/push flow against local bare remotes; check.yml owns
+  # the CI glue and supplies app-token auth via $AUTOFIX_PUSH_TOKEN.
+  lintAutofix = ix.writeNushellApplication pkgs {
+    name = "lint-autofix";
+    meta.description = "Commit a lint fixer patch as one `style: autofix` commit and push it to a PR branch (race-checked, never forced)";
+    runtimeInputs = [pkgs.git];
+    text = ''
+      # nu
+      def remote-head [push_url: string, branch: string] {
+        ^git ls-remote $push_url $"refs/heads/($branch)"
+        | lines
+        | get -o 0
+        | default ""
+        | split row "\t"
+        | get -o 0
+        | default ""
+      }
+
+      def main [
+        --patch: string # unified diff (a/ -> b/), from `nix build .#lint-fix-patch`
+        --push-url: string # remote to push to (URL or local path)
+        --branch: string # remote branch name to update
+        --expected-head: string # the head SHA this CI run checked out and validated
+      ] {
+        for arg in [
+          [name value];
+          ["--patch" $patch]
+          ["--push-url" $push_url]
+          ["--branch" $branch]
+          ["--expected-head" $expected_head]
+        ] {
+          if ($arg.value | is-empty) {
+            error make {msg: $"($arg.name) is required"}
+          }
+        }
+        cd (^git rev-parse --show-toplevel | str trim)
+        if (open --raw $patch | is-empty) {
+          print "lint-autofix: empty patch, tree already clean"
+          return
+        }
+        # Loop guard: a non-empty patch on top of an autofix commit means a
+        # fixer is not idempotent (its output still differs after one
+        # pass). Pushing again would ping-pong CI forever; fail loudly.
+        if (^git log -1 --format=%s | str trim) == "style: autofix" {
+          error make {msg: "head commit is already `style: autofix` but the fixed tree still differs: a fixer lane is not idempotent; refusing to push another autofix commit"}
+        }
+        # actions/checkout persists the default GITHUB_TOKEN as an
+        # http.<host>.extraheader in the shared repo config, and git sends
+        # every configured extraheader on a request -- so a push from a CI
+        # checkout would authenticate as github-actions, whose pushes never
+        # retrigger workflows, leaving the autofix commit checkless. When
+        # the caller provides an app token, reset the inherited header list
+        # (an empty extraheader value clears it) and install the app
+        # credential, via GIT_CONFIG_* so the token reaches neither argv
+        # nor on-disk config.
+        if ($env.AUTOFIX_PUSH_TOKEN? | default "" | is-not-empty) {
+          $env.GIT_CONFIG_COUNT = "2"
+          $env.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader"
+          $env.GIT_CONFIG_VALUE_0 = ""
+          $env.GIT_CONFIG_KEY_1 = "http.https://github.com/.extraheader"
+          let credential = ($"x-access-token:($env.AUTOFIX_PUSH_TOKEN)" | encode base64)
+          $env.GIT_CONFIG_VALUE_1 = $"AUTHORIZATION: basic ($credential)"
+        }
+        ^git apply --index $patch
+        ^git commit --quiet -m "style: autofix"
+        # Race check: the branch moving while this run validated means a
+        # newer run exists that redoes the fix against the new head, and an
+        # empty ls-remote is a deleted branch (PR closed) -- both a skip,
+        # never something to push over. An author push racing the autofix
+        # is the only acceptable "conflict".
+        let remote = (remote-head $push_url $branch)
+        if $remote != $expected_head {
+          print $"lint-autofix: ($branch) is no longer at ($expected_head); skipping, the newer run redoes the fix"
+          return
+        }
+        # Plain push, never --force: a move inside the window since the
+        # check above is rejected by git itself; treat exactly that
+        # rejection as the same skip, and anything else as a real failure.
+        let push = (do {^git push --quiet $push_url $"HEAD:refs/heads/($branch)"} | complete)
+        if $push.exit_code != 0 {
+          if (remote-head $push_url $branch) != $expected_head {
+            print $"lint-autofix: ($branch) moved during the push; skipping, the newer run redoes the fix"
+            return
+          }
+          print --stderr $push.stderr
+          error make {msg: $"push to ($branch) failed"}
+        }
+        print $"lint-autofix: pushed `style: autofix` to ($branch)"
+      }
+    '';
   };
 
   # `check` is the full CI gate as one repo-owned command: check.yml runs
@@ -1855,8 +1971,15 @@
           # timing/RSS, so it earns a flake check; the timing/RSS perf job lives
           # under `apps.bench` instead.
           indexbench-self-demo-alloc = indexbenchSelfDemo.check;
+          # Judged over the composed FIXED tree, not the head tree (#3435):
+          # head drift the fixer lanes repair no longer fails this check --
+          # on PRs, check.yml pushes it back as a `style: autofix` commit
+          # instead (see `lintAutofix`) -- so a failure here is genuinely
+          # unresolvable by the fixers. The fixable stages still run, now
+          # over the lanes' own output: a lane emitting code its check stage
+          # rejects turns this red (a live idempotence gate).
           lint = pkgs.runCommand "ix-lint" {nativeBuildInputs = [pkgs.coreutils];} ''
-            cp -R ${lintSource} source
+            cp -R ${lintFix.appliedTo lintSource} source
             chmod -R u+w source
             cd source
             ${lib.getExe lint}
@@ -1975,6 +2098,91 @@
               diff -r ${fixedNix} ${lintFix.lanes.nix fixedNix}
               diff -r ${fixedPython} ${lintFix.lanes.python fixedPython}
               diff -r ${fixedRust} ${lintFix.lanes.rust fixedRust}
+              mkdir -p "$out"
+            '';
+          # The autofix committer's whole commit/push flow (#3435) against
+          # local bare remotes, through the same `lint-autofix` binary
+          # check.yml runs: an empty patch is a no-op, a real patch becomes
+          # exactly one `style: autofix` commit fast-forwarding the branch
+          # head, a moved remote is a silent skip (the newer CI run redoes
+          # the fix, so pushing over it could drop an author's work), and a
+          # non-empty patch on top of an existing autofix head fails loudly
+          # (the non-idempotent-fixer loop guard). AUTOFIX_PUSH_TOKEN is set
+          # on the pushing case to prove the github.com-scoped credential
+          # override leaves a non-GitHub push untouched.
+          lint-autofix =
+            pkgs.runCommand "lint-autofix-check"
+            {
+              nativeBuildInputs = [
+                pkgs.diffutils
+                pkgs.git
+              ];
+            }
+            ''
+              export HOME="$TMPDIR"
+              git config --global user.name fixture
+              git config --global user.email fixture@example.invalid
+              git config --global init.defaultBranch main
+              tool=${lib.getExe lintAutofix}
+
+              # A "PR branch" origin seeded with one badly formatted file.
+              git init --quiet seed
+              printf 'hello   world\n' > seed/file.txt
+              git -C seed add file.txt
+              git -C seed commit --quiet -m 'seed: violating file'
+              git clone --quiet --bare seed origin.git
+              remote="$PWD/origin.git"
+              head=$(git -C origin.git rev-parse refs/heads/main)
+
+              # The fix patch, byte-shaped like `lint-fix-patch` (a/ -> b/).
+              mkdir a b
+              cp seed/file.txt a/
+              printf 'hello world\n' > b/file.txt
+              status=0
+              diff -ruN a b > fix.patch || status=$?
+              [ "$status" -eq 1 ]
+              patch="$PWD/fix.patch"
+
+              # Two checkouts of the same head: `ci` pushes first, so `stale`
+              # models the older run whose branch moved under it.
+              git clone --quiet origin.git ci
+              git clone --quiet origin.git stale
+
+              # Empty patch: a no-op that pushes nothing.
+              : > empty.patch
+              (cd ci && "$tool" --patch "$OLDPWD/empty.patch" --push-url "$remote" --branch main --expected-head "$head")
+              [ "$(git -C origin.git rev-parse refs/heads/main)" = "$head" ]
+
+              # Real patch: exactly one autofix commit on top of the head.
+              (cd ci && AUTOFIX_PUSH_TOKEN=fixture "$tool" --patch "$patch" --push-url "$remote" --branch main --expected-head "$head")
+              fixed_head=$(git -C origin.git rev-parse refs/heads/main)
+              [ "$fixed_head" != "$head" ]
+              [ "$(git -C origin.git rev-parse "$fixed_head^")" = "$head" ]
+              [ "$(git -C origin.git log -1 --format=%s "$fixed_head")" = "style: autofix" ]
+              [ "$(git -C origin.git show "$fixed_head:file.txt")" = "hello world" ]
+
+              # Race: the stale run expected $head but the branch moved; it
+              # must skip without touching the remote.
+              # `skip_out`, not `out`: assigning `out` would clobber the
+              # derivation's output path and the build could never produce it.
+              skip_out=$(cd stale && "$tool" --patch "$patch" --push-url "$remote" --branch main --expected-head "$head")
+              echo "$skip_out" | grep -q "skipping"
+              [ "$(git -C origin.git rev-parse refs/heads/main)" = "$fixed_head" ]
+
+              # Loop guard: head is already `style: autofix`, yet the fixed
+              # tree still differs. Refuse loudly, push nothing.
+              git clone --quiet origin.git loop
+              mkdir a2 b2
+              cp b/file.txt a2/file.txt
+              printf 'hello world again\n' > b2/file.txt
+              status=0
+              diff -ruN a2 b2 > loop.patch || status=$?
+              [ "$status" -eq 1 ]
+              if (cd loop && "$tool" --patch "$OLDPWD/loop.patch" --push-url "$remote" --branch main --expected-head "$fixed_head"); then
+                echo "loop guard did not fire on a second autofix" >&2
+                exit 1
+              fi
+              [ "$(git -C origin.git rev-parse refs/heads/main)" = "$fixed_head" ]
               mkdir -p "$out"
             '';
           filename-policy =
@@ -2219,7 +2427,10 @@
       # Fixer-lane outputs (#3432): `lint-fixed` is the union of the lanes'
       # fixed trees; `lint-fix-patch` is diff(snapshot, fixed), the artifact
       # `nix run .#lint -- --fix` builds and git-applies. An empty patch
-      # means the tree is already clean.
+      # means the tree is already clean. `lint-autofix` (#3435) is CI's
+      # consumer of the patch: commit it as `style: autofix` and push it to
+      # the PR branch (check.yml).
+      lint-autofix = lintAutofix;
       lint-fixed = lintFix.fixed;
       lint-fix-patch = lintFix.patch;
       site-dev = site.passthru.devServer;

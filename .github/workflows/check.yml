@@ -157,6 +157,44 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # Autofix push (#3435): the lint check above judged the composed FIXED
+      # tree (lib/per-system.nix `lintFix`), so a green gate plus a non-empty
+      # `.#lint-fix-patch` means the PR head carries drift the fixer lanes
+      # repair; push that diff back to the PR branch as one `style: autofix`
+      # commit instead of failing. The new head SHA goes through the normal
+      # required checks -- green by construction, since the gate already
+      # passed on the fixed tree. Pushed with a token minted from the
+      # ix-mirror-sync GitHub App (the repo's only push-capable CI
+      # credential; AUTOBUMP_TOKEN was never configured), narrowed to
+      # contents:write: a default-GITHUB_TOKEN push never retriggers
+      # workflows, which would leave the fix commit checkless. These steps
+      # run after the artifact upload on purpose: the push retriggers this
+      # workflow on the new head, whose concurrency group cancels the rest
+      # of this run.
+      - name: Mint autofix push token
+        id: autofix-token
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.MIRROR_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MIRROR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push lint autofix commit
+        if: github.event_name == 'pull_request'
+        env:
+          AUTOFIX_PUSH_TOKEN: ${{ steps.autofix-token.outputs.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The app's bot identity, so the commit is attributed to the app
+          # that pushed it. 300601727 is ix-mirror-sync[bot]'s stable user id
+          # (https://api.github.com/users/ix-mirror-sync%5Bbot%5D).
+          GIT_AUTHOR_NAME: ix-mirror-sync[bot]
+          GIT_AUTHOR_EMAIL: 300601727+ix-mirror-sync[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: ix-mirror-sync[bot]
+          GIT_COMMITTER_EMAIL: 300601727+ix-mirror-sync[bot]@users.noreply.github.com
+        run: bash .github/scripts/push-lint-autofix.sh
+
   # Keep the existing required context while consuming no second self-hosted
   # runner. The single gate above builds closure roots and checks together;
   # this hosted terminal job fails closed for every non-success conclusion,
