@@ -26,9 +26,11 @@ defmodule IxMcp.PrWatchTest do
 
     assert {:ok, _} = PrWatch.start("1", File.cwd!())
 
-    assert_receive {:mcp_send, %{"method" => "notifications/message", "params" => params}}, 5_000
-    assert %{"level" => "error", "logger" => "ix_mcp.pr_watch", "data" => data} = params
-    assert %{"event" => "pr_watch", "pr" => "1", "state" => "error"} = data
-    assert data["detail"] =~ "enoent"
+    assert_receive {:mcp_send, %{"method" => "notifications/claude/channel", "params" => params}},
+                   5_000
+
+    assert %{"content" => content, "meta" => meta} = params
+    assert %{"source" => "pr_watch", "pr" => "1", "state" => "error", "level" => "error"} = meta
+    assert content =~ "enoent"
   end
 end

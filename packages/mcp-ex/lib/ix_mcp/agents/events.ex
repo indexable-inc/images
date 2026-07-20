@@ -163,29 +163,20 @@ defmodule IxMcp.Agents.Events do
         {:error, reason} -> {"error", inspect_text(reason)}
       end
 
-    Notifier.notify("notifications/message", %{
-      "level" => if(status == "done", do: "info", else: "error"),
-      "logger" => "ix_mcp.agents",
-      "data" => %{
-        "event" => "agent_finished",
-        "agent" => id,
-        "status" => status,
-        "backend" => meta && Atom.to_string(meta.backend),
-        "result" => String.slice(text, 0, @notify_result_cap)
-      }
-    })
+    attrs = %{"source" => "agents", "event" => "agent_finished", "agent" => id, "status" => status}
+    attrs = if meta, do: Map.put(attrs, "backend", Atom.to_string(meta.backend)), else: attrs
+
+    Notifier.channel(
+      "agent #{id} finished: #{status}\n#{String.slice(text, 0, @notify_result_cap)}",
+      attrs
+    )
   end
 
   defp notify_message(state, msg) do
-    Notifier.notify("notifications/message", %{
-      "level" => "info",
-      "logger" => "ix_mcp.agents",
-      "data" => %{
-        "event" => "agent_message",
-        "agent" => msg.from,
-        "text" => String.slice(msg.text, 0, @notify_result_cap)
-      }
-    })
+    Notifier.channel(
+      String.slice(msg.text, 0, @notify_result_cap),
+      %{"source" => "agents", "event" => "agent_message", "agent" => msg.from}
+    )
 
     state
   end
