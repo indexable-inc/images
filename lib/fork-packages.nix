@@ -724,6 +724,27 @@
           upstream = "hold";
           reason = "Fixes the lazy-trees mid-eval mutation race for mutable local trees (indexable-inc/index#3749). Upstream-nix candidate once lazy trees settle there, held: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # 0033: a daemon worker whose client dies can sleep forever in
+        # waitForInput's poll (interrupt delivery is edge-triggered; a
+        # trigger landing between the last checkInterrupt and the poll
+        # syscall is a lost wakeup), surviving its client for hours while
+        # holding goals, builders, and locks (indexable-inc/index#3752).
+        # Upstream master has the same gap: its Waker self-pipe only serves
+        # cross-thread goal wakeups and is not wired to triggerInterrupt.
+        "0033-libstore-wake-the-goal-loop-when-the-process-is-inte.patch" = {
+          upstream = "hold";
+          reason = "Level-triggered interrupt wakeup for the goal loop (indexable-inc/index#3752); upstream master's Waker pipe is not interrupt-wired, so the bug exists there too. Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0034: `nix store builds` pruned dead writers with kill(pid, 0),
+        # which still succeeds for zombies -- 33 phantom "in flight" builds
+        # owned by three zombie workers survived 10.5h on hydra
+        # (indexable-inc/index#3752). Writers now hold a lifetime flock on
+        # their entry; readers treat an acquirable lock (or, for legacy
+        # entries, a dead-or-zombie pid) as proof the writer is gone.
+        "0034-libstore-prove-build-status-writers-alive-with-a-lif.patch" = {
+          upstream = "hold";
+          reason = "Build-status series follow-up (zombie-proof staleness, indexable-inc/index#3752): engage on #15979 rather than open a competing PR.";
+        };
       };
     }
     {
