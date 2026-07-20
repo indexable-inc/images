@@ -714,6 +714,16 @@
           upstream = "hold";
           reason = "Keeps user git auto-maintenance out of nix-internal cache repos; fetch-spawned detached `git maintenance run --auto` SIGSEGVs on macOS (indexable-inc/index#3755). Upstream-nix candidate, held: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # With lazy-trees on, path inputs and dirty git worktrees are read
+        # from the live filesystem for the whole eval, so a concurrent
+        # writer kills long evals with "contents have changed" (exit 102).
+        # Snapshot such trees at mount time via clonefile(2) (~70ms) and
+        # evaluate from the snapshot; fall back to an eager copy where
+        # cloning is unavailable.
+        "0032-libexpr-snapshot-mutable-source-trees-at-mount-time-.patch" = {
+          upstream = "hold";
+          reason = "Fixes the lazy-trees mid-eval mutation race for mutable local trees (indexable-inc/index#3749). Upstream-nix candidate once lazy trees settle there, held: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
     {
