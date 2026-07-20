@@ -189,6 +189,89 @@ fn test_line_based_same_change() {
     assert!(result.content.contains("changed"));
 }
 
+#[test]
+fn line_based_disjoint_inserts_merge_clean() {
+    // index#3762: an early insertion on one side used to desync the
+    // positional walk and conflict nearly every following line.
+    let base = "a\nb\nc\nd\ne\nf\ng\nh\n";
+    let left = "top\na\nb\nc\nd\ne\nf\ng\nh\n";
+    let right = "a\nb\nc\nd\nmid\ne\nf\ng\nh\ntail\n";
+
+    let result = based(base, left, right);
+    assert!(
+        result.success,
+        "disjoint inserts must merge clean, got:\n{}",
+        result.content
+    );
+    assert_eq!(result.content, "top\na\nb\nc\nd\nmid\ne\nf\ng\nh\ntail\n");
+}
+
+#[test]
+fn line_based_overlapping_edits_conflict_with_context() {
+    let base = "a\nb\nc\n";
+    let left = "a\nB1\nc\n";
+    let right = "a\nB2\nc\n";
+
+    let result = based(base, left, right);
+    assert!(!result.success);
+    assert_eq!(
+        result.content,
+        "a\n<<<<<<< LEFT\nB1\n||||||| BASE\nb\n=======\nB2\n>>>>>>> RIGHT\nc\n"
+    );
+    assert_eq!(result.conflicts.len(), 1);
+}
+
+#[test]
+fn line_based_delete_vs_edit_conflicts() {
+    let base = "a\nb\nc\n";
+    let left = "a\nc\n";
+    let right = "a\nB\nc\n";
+
+    let result = based(base, left, right);
+    assert!(!result.success);
+    assert_eq!(
+        result.content,
+        "a\n<<<<<<< LEFT\n||||||| BASE\nb\n=======\nB\n>>>>>>> RIGHT\nc\n"
+    );
+}
+
+#[test]
+fn line_based_same_insert_plus_one_sided_tail_merges_clean() {
+    let base = "a\nb\n";
+    let left = "a\nx\nb\n";
+    let right = "a\nx\nb\nz\n";
+
+    let result = based(base, left, right);
+    assert!(result.success);
+    assert_eq!(result.content, "a\nx\nb\nz\n");
+}
+
+#[test]
+fn line_based_adjacent_edits_conflict() {
+    // Touching edit regions coalesce into one conflict (GNU diff3 / `git
+    // merge-file` semantics): with no stable line between them, their
+    // relative order is ambiguous.
+    let base = "a\nb\nc\nd\n";
+    let left = "a\nB\nc\nd\n";
+    let right = "a\nb\nC\nd\n";
+
+    let result = based(base, left, right);
+    assert!(!result.success);
+    assert_eq!(result.conflicts.len(), 1);
+}
+
+#[test]
+fn line_based_one_sided_change_passes_through_verbatim() {
+    // Fast path: byte-exact passthrough, trailing-newline-less input stays so.
+    let base = "a\nb";
+    let left = "a\nb";
+    let right = "a\nB";
+
+    let result = based(base, left, right);
+    assert!(result.success);
+    assert_eq!(result.content, "a\nB");
+}
+
 fn rust(base: &str, left: &str, right: &str) -> Result {
     let ts_lang = ast_merge_langs::Lang::Rust.to_tree_sitter();
 
