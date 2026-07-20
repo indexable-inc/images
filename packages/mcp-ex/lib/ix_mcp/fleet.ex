@@ -22,14 +22,16 @@ defmodule IxMcp.Fleet do
   `ensure_dist/0`): the release ships with distribution off so its sandboxed
   build and tests never try to open an epmd listen socket.
 
-  Code is sent to remote nodes as **source strings** evaluated with
-  `Code.eval_string/1`, not as closures. Closures would serialize as
-  module + hash and only resolve if both sides run byte-identical modules;
-  strings sidestep that entirely and keep ad-hoc cells simple.
+  Code ships to remote nodes as a **source string** evaluated with
+  `Code.eval_string/1` or as a **zero-arity fun** run via `:erpc`. Funs keep
+  compile-time checking and need no escaping, but they resolve against the
+  remote node's code: a fun calling a module defined only in this workspace
+  fails there with `:undef`. Strings sidestep module resolution entirely, so
+  use them when the code leans on locally defined modules.
 
-      Fleet.exec(:"beamd@host-a.tailnet.ts.net", "System.schedulers_online()")
+      Fleet.exec(:"beamd@host-a.tailnet.ts.net", fn -> System.schedulers_online() end)
       Fleet.exec_any("node() |> to_string()")            # a random node
-      Fleet.multicall(Fleet.nodes(), "node()", timeout: 10_000)
+      Fleet.multicall(Fleet.nodes(), fn -> node() end, timeout: 10_000)
 
   When to reach for this: expensive work of any kind -- compiling, builds,
   test suites, large data crunching (fan out with `multicall/3`) -- plus
@@ -48,6 +50,11 @@ defmodule IxMcp.Fleet do
   @default_timeout 15_000
 
   @type exec_result :: {:ok, term()} | {:error, term()}
+
+  @typedoc "Remote work: Elixir source, or a zero-arity fun (see moduledoc caveat)."
+  @type code :: String.t() | (-> term())
+
+  defguardp is_code(code) when is_binary(code) or is_function(code, 0)
 
   @doc """
   The configured fleet nodes, parsed from `IX_BEAM_NODES`. Returns `[]` when
@@ -76,18 +83,18 @@ defmodule IxMcp.Fleet do
   end
 
   @doc """
-  Evaluate `code` on `target` and return `{:ok, value}` or `{:error, reason}`.
+  Run `code` (source string or zero-arity fun) on `target` and return
+  `{:ok, value}` or `{:error, reason}`.
   A dead or unreachable node fails only this call. `:timeout` (ms) defaults to
   #{@default_timeout}.
   """
-  @spec exec(node(), String.t(), keyword()) :: exec_result()
-  def exec(target, code, opts \\ []) when is_atom(target) and is_binary(code) do
+  @spec exec(node(), code(), keyword()) :: exec_result()
+  def exec(target, code, opts \\ []) when is_atom(target) and is_code(code) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
     with {:ok, _} <- ensure_dist() do
       try do
-        {value, _binding} = :erpc.call(target, Code, :eval_string, [code], timeout)
-        {:ok, value}
+        {:ok, remote_call(target, code, timeout)}
       catch
         kind, reason -> {:error, {kind, reason}}
       end
@@ -98,8 +105,8 @@ defmodule IxMcp.Fleet do
   Evaluate `code` on one random configured node. `{:error, :no_nodes}` when
   `IX_BEAM_NODES` is empty.
   """
-  @spec exec_any(String.t(), keyword()) :: exec_result()
-  def exec_any(code, opts \\ []) when is_binary(code) do
+  @spec exec_any(code(), keyword()) :: exec_result()
+  def exec_any(code, opts \\ []) when is_code(code) do
     case nodes() do
       [] -> {:error, :no_nodes}
       ns -> exec(Enum.random(ns), code, opts)
@@ -110,8 +117,8 @@ defmodule IxMcp.Fleet do
   Evaluate `code` on the least-loaded reachable node (by scheduler run-queue
   length). `{:error, :no_nodes}` when none are configured.
   """
-  @spec exec_least_loaded(String.t(), keyword()) :: exec_result()
-  def exec_least_loaded(code, opts \\ []) when is_binary(code) do
+  @spec exec_least_loaded(code(), keyword()) :: exec_result()
+  def exec_least_loaded(code, opts \\ []) when is_code(code) do
     case nodes() do
       [] ->
         {:error, :no_nodes}
@@ -129,14 +136,14 @@ defmodule IxMcp.Fleet do
   reason}}` per node. One dead node cannot poison the batch. `:timeout` (ms)
   is enforced per node.
   """
-  @spec multicall([node()], String.t(), keyword()) :: [{node(), exec_result()}]
-  def multicall(targets, code, opts \\ []) when is_list(targets) and is_binary(code) do
+  @spec multicall([node()], code(), keyword()) :: [{node(), exec_result()}]
+  def multicall(targets, code, opts \\ []) when is_list(targets) and is_code(code) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
     case ensure_dist() do
       {:ok, _} ->
         targets
-        |> :erpc.multicall(Code, :eval_string, [code], timeout)
+        |> remote_multicall(code, timeout)
         |> Enum.zip(targets)
         |> Enum.map(fn {result, target} -> {target, normalize(result)} end)
 
@@ -146,6 +153,32 @@ defmodule IxMcp.Fleet do
   end
 
   # -- internals ------------------------------------------------------------
+
+  @spec remote_call(node(), code(), timeout()) :: term()
+  defp remote_call(target, code, timeout) when is_binary(code) do
+    {value, _binding} = :erpc.call(target, Code, :eval_string, [code], timeout)
+    value
+  end
+
+  defp remote_call(target, fun, timeout) when is_function(fun, 0) do
+    :erpc.call(target, fun, timeout)
+  end
+
+  @spec remote_multicall([node()], code(), timeout()) :: [term()]
+  defp remote_multicall(targets, code, timeout) when is_binary(code) do
+    # Unwrap eval's {value, binding} here, on the string path only: a fun
+    # returning a 2-tuple must come through untouched.
+    targets
+    |> :erpc.multicall(Code, :eval_string, [code], timeout)
+    |> Enum.map(fn
+      {:ok, {value, _binding}} -> {:ok, value}
+      other -> other
+    end)
+  end
+
+  defp remote_multicall(targets, fun, timeout) when is_function(fun, 0) do
+    :erpc.multicall(targets, fun, timeout)
+  end
 
   @spec least_loaded([node()], timeout()) :: {:ok, node()} | {:error, :no_reachable_nodes}
   defp least_loaded(targets, timeout) do
@@ -222,7 +255,7 @@ defmodule IxMcp.Fleet do
   end
 
   @spec normalize(term()) :: exec_result()
-  defp normalize({:ok, {value, _binding}}), do: {:ok, value}
+  defp normalize({:ok, value}), do: {:ok, value}
   defp normalize({:error, reason}), do: {:error, reason}
   defp normalize({:throw, value}), do: {:error, {:throw, value}}
   defp normalize({:exit, reason}), do: {:error, {:exit, reason}}
