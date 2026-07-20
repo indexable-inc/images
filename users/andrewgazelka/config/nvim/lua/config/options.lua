@@ -62,11 +62,11 @@ vim.opt.cmdheight = 0  -- Hide command line when not in use
 
 -- Footer: single global statusline (one bar at the very bottom, not per-split)
 vim.opt.laststatus = 3
--- Show the absolute, normalized, symlink-resolved path of the current buffer.
--- fnamemodify(':p') makes it absolute; fs_realpath follows symlinks so editing
--- a linked file (e.g. ~/.claude/CLAUDE.md -> the nix store) shows the real
--- target instead of the link; vim.fs.normalize tidies ./.. and ~. Empty name
--- for unnamed/special buffers.
+-- Show the shortest readable path of the current buffer. fs_realpath follows
+-- symlinks so editing a linked file (e.g. ~/.claude/CLAUDE.md -> the nix store)
+-- shows the real target; ":~:." makes it relative to cwd, else to ~; pathshorten
+-- collapses each intervening directory to its first letter, keeping the filename
+-- full. Empty name for unnamed/special buffers.
 function _G.statusline_path()
   local name = vim.api.nvim_buf_get_name(0)
   if name == "" then
@@ -74,7 +74,8 @@ function _G.statusline_path()
   end
   local abs = vim.fn.fnamemodify(name, ":p")
   local real = (vim.uv or vim.loop).fs_realpath(abs) or abs
-  return vim.fs.normalize(real)
+  local short = vim.fn.fnamemodify(vim.fs.normalize(real), ":~:.")
+  return vim.fn.pathshorten(short)
 end
 vim.opt.statusline = "%{v:lua.statusline_path()}%m%=%l:%c"
 vim.opt.number = true
