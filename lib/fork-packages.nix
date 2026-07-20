@@ -700,6 +700,20 @@
           upstream = "hold";
           reason = "Submodule metadata for relative path inputs (indexable-inc/index#3737); companion to 0024 in the sparseNodes direction (NixOS/nix#7730). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # 0031: every GitRepoImpl::fetch targets a nix-internal cache repo
+        # (~/.cache/nix/gitv3/*, tarball-cache-v2) that inherits the user's
+        # global gitconfig. With maintenance.auto=true + gc.autodetach=true
+        # there, each unguarded fetch spawned a detached `git maintenance
+        # run --auto` that SIGSEGVs on macOS (gettext locale init ->
+        # CFLocaleCopyPreferredLanguages -> NULL CF distributed-notification
+        # center -> PAC check at 0x8), so cache maintenance never completed
+        # (tarball-cache-v2: 3700 packs / 932MB). Extends the guard patch
+        # 0013 already applied to packfilesOnly fetches to every cache-repo
+        # fetch.
+        "0031-fix-libfetchers-keep-user-git-auto-maintenance-out-o.patch" = {
+          upstream = "hold";
+          reason = "Keeps user git auto-maintenance out of nix-internal cache repos; fetch-spawned detached `git maintenance run --auto` SIGSEGVs on macOS (indexable-inc/index#3755). Upstream-nix candidate, held: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
     {
