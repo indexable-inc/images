@@ -291,6 +291,33 @@
       };
     }
     {
+      # Full ghostty application source (index#3768), distinct from the bare
+      # `ghostty` input `packages/tui/vt/libghostty-vt` consumes unpatched: this
+      # is the fork's actual patch point. No patches yet -- `packages/ghostty`
+      # builds the pinned base as-is; the surface-teardown fix (kill the child
+      # process group and waitpid-reap on close_surface) lands here as a
+      # follow-up patch.
+      name = "ghostty";
+      input = "ghostty-src";
+      url = "https://github.com/ghostty-org/ghostty.git";
+      patchDir = "packages/ghostty/patches";
+      # Pinned by rev (see flake.nix's ghostty-src comment): a routine bump
+      # can silently break the darwin-only build with no CI to catch it.
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        # AI_POLICY.md: AI-assisted contributions are welcome with full
+        # disclosure and human review. CONTRIBUTING.md additionally runs a
+        # vouch system: any first-time contributor's PR is auto-closed until
+        # a maintainer comments `!vouch` on a "Vouch Request" discussion, so
+        # `upstream-sync` cannot open a PR here until that human step happens.
+        aiPrsAllowed = "true";
+        citation = "https://github.com/ghostty-org/ghostty/blob/main/AI_POLICY.md";
+        notes = "AI-assisted PRs welcome with disclosure (AI_POLICY.md) but gated by CONTRIBUTING.md's vouch system: unvouched contributors are auto-closed, so a human must request and receive a maintainer's `!vouch` before upstream-sync can open a PR.";
+      };
+      patches = {};
+    }
+    {
       # clippy is nightly-toolchain-coupled: its input is pinned by rev and must
       # move only with the pinned nightly, so `rebase-patches` is run explicitly
       # alongside a toolchain bump, never under a blanket `nix flake update` or
