@@ -146,12 +146,13 @@ mod tests {
         ((minor & 0xff) | (major << 8) | ((minor & !0xff) << 12)).cast_signed()
     }
 
-    fn write_stat(proc_root: &Path, pid: u32, comm: &str, parent_pid: u32, tty_nr: i32) {
+    #[expect(clippy::similar_names, reason = "pid/ppid are the proc(5) field names")]
+    fn write_stat(proc_root: &Path, pid: u32, comm: &str, ppid: u32, tty_nr: i32) {
         let dir = proc_root.join(pid.to_string());
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join("stat"),
-            format!("{pid} ({comm}) S {parent_pid} {pid} {pid} {tty_nr} 0 4194304"),
+            format!("{pid} ({comm}) S {ppid} {pid} {pid} {tty_nr} 0 4194304"),
         )
         .unwrap();
     }
