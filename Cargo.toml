@@ -65,6 +65,7 @@ members = [
   "packages/indexbench/filesystem",
   "packages/ix-dev-diagnose",
   "packages/ix-windows",
+  "packages/ixterm",
   "packages/mcp/server-info",
   "packages/minecraft/bot",
   "packages/minecraft/nbt",
