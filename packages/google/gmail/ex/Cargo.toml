@@ -1,0 +1,20 @@
+[package]
+name = "google-gmail-ex"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Elixir NIF for Gmail via unibind: send, search, and read the signed-in user's mail from the BEAM"
+
+[lib]
+name = "google_gmail_ex"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+google-auth.workspace = true
+google-gmail.workspace = true
+rustler.workspace = true
+unibind = { workspace = true, features = ["ex"] }
+unibind-ex-runtime.workspace = true

@@ -4587,12 +4587,22 @@ name = "google-gmail-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64",
  "clap",
  "google-auth",
  "google-gmail",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "google-gmail-ex"
+version = "0.1.0"
+dependencies = [
+ "google-auth",
+ "google-gmail",
+ "rustler",
+ "unibind",
+ "unibind-ex-runtime",
 ]
 
 [[package]]

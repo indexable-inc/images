@@ -47,6 +47,11 @@ defmodule IxMcp.MCP.Tools do
                                             .send_key(term, "enter" | "ctrl+c" | ...),
                                             .wait_for(term, pattern),
                                             .snapshot/1, .close/1
+      Gmail.send(to, subject, body)         send mail as the signed-in user
+                                            (cc:/bcc:/html:/thread: opts);
+                                            Gmail.search("from:x newer_than:7d",
+                                            limit: 5), Gmail.show(id),
+                                            Gmail.status() for the auth state
       Agents.spawn(brief, backend: :claude | :codex | :kimi)
                                             spawn a real agent CLI as an async depth-1
                                             subagent (Fable 5 card sec 8.15.3, #3700);

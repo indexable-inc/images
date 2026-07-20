@@ -101,55 +101,8 @@ defmodule IxMcp.TuiLocal do
   # would warn (module unavailable at compile time) and this app compiles
   # warnings-as-errors.
   defp call(fun, args) do
-    with :ok <- ensure_loaded() do
+    with :ok <- IxMcp.NifApp.ensure_loaded(@tui_ex, @app, @env_var) do
       apply(@tui_ex, fun, args)
-    end
-  end
-
-  # Idempotent and race-tolerant: every step tolerates an already-loaded
-  # app, so concurrent cells can both take this path.
-  defp ensure_loaded do
-    if Code.ensure_loaded?(@tui_ex) do
-      :ok
-    else
-      load()
-    end
-  end
-
-  defp load do
-    case System.get_env(@env_var) do
-      nil ->
-        {:error,
-         "#{@env_var} is not set; it must point at the compiled tui_ex app " <>
-           "(nix build .#tui-ex, then <out>/lib/tui_ex)"}
-
-      root ->
-        load_from(root)
-    end
-  end
-
-  # The release boots in embedded mode (no code-path autoload), so putting
-  # ebin on the path is not enough: load the app and every module of it
-  # explicitly. Module load is also what fires the NIF's @on_load, so a
-  # broken native library fails here, loudly, not at first call.
-  defp load_from(root) do
-    ebin = Path.join(root, "ebin")
-
-    with true <- Code.append_path(ebin),
-         :ok <- load_app(),
-         {:ok, modules} <- :application.get_key(@app, :modules),
-         :ok <- :code.ensure_modules_loaded(modules) do
-      :ok
-    else
-      failure -> {:error, "loading #{@app} from #{root} failed: #{inspect(failure)}"}
-    end
-  end
-
-  defp load_app do
-    case Application.load(@app) do
-      :ok -> :ok
-      {:error, {:already_loaded, @app}} -> :ok
-      {:error, _} = error -> error
     end
   end
 end

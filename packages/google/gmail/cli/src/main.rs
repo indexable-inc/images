@@ -8,8 +8,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::{Args, Parser, Subcommand};
 use google_gmail::{
     ALL_KNOWN_SCOPES, Attachment, Authenticator, Client, ClientSecrets, GMAIL_MODIFY, GMAIL_SEND,
@@ -736,32 +734,11 @@ fn message_block(message: &Message) -> String {
         lines.push(format!("  thread:   {thread}"));
     }
 
-    if let Some(body) = message.payload.as_ref().and_then(first_text_body) {
+    if let Some(body) = message.payload.as_ref().and_then(MessagePart::text_body) {
         lines.push(String::new());
         lines.push(body);
     }
     lines.join("\n")
-}
-
-/// Walk the part tree and return the first decoded text/plain (falling
-/// back to text/html when no plain body exists).
-fn first_text_body(payload: &MessagePart) -> Option<String> {
-    fn walk(part: &MessagePart, want: &str) -> Option<String> {
-        if part.mime_type.as_deref() == Some(want)
-            && let Some(body) = &part.body
-            && let Some(data) = &body.data
-        {
-            let bytes = URL_SAFE_NO_PAD.decode(data).ok()?;
-            return Some(String::from_utf8_lossy(&bytes).into_owned());
-        }
-        for child in &part.parts {
-            if let Some(found) = walk(child, want) {
-                return Some(found);
-            }
-        }
-        None
-    }
-    walk(payload, "text/plain").or_else(|| walk(payload, "text/html"))
 }
 
 /// Take the page of `MessageStub`s and fetch each one's metadata projection

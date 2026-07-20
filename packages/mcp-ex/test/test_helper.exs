@@ -9,4 +9,8 @@ exclude =
 exclude =
   if System.get_env("IX_MCP_TUI_EX"), do: exclude, else: [:tui_local | exclude]
 
+# Same contract for the Gmail binding (IX_MCP_GMAIL_EX).
+exclude =
+  if System.get_env("IX_MCP_GMAIL_EX"), do: exclude, else: [:gmail_ex | exclude]
+
 ExUnit.start(exclude: exclude)

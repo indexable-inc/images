@@ -22,7 +22,8 @@ defmodule IxMcp.Api do
     IxMcp.Read,
     IxMcp.PrWatch,
     IxMcp.Tui,
-    IxMcp.TuiLocal
+    IxMcp.TuiLocal,
+    IxMcp.Gmail
   ]
 
   @type row :: %{
