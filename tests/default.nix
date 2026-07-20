@@ -2875,8 +2875,8 @@
         assertion =
           macosGuestAgent.config.KeepAlive
           && macosGuestAgent.config.RunAtLoad
-          && macosGuestAgent.config.ExitTimeOut == 60;
-        message = "launchd should keep the guest alive while allowing a clean shutdown window";
+          && macosGuestAgent.config.ExitTimeOut == 20;
+        message = "launchd should keep the guest alive with the SIGKILL backstop above vmkit's 10s+5s shutdown escalation (index#3766)";
       }
     ];
     security-roots = [
