@@ -1,4 +1,4 @@
-{lib}:
+_:
 /**
 zig-warm-cache: seed zig's content-addressed compile cache from a base build.
 

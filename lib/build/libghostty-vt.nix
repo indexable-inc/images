@@ -3,7 +3,7 @@
   writeNushellApplication,
 }: let
   darwinXcrunShimFor = import ./darwin-xcrun-shim.nix {inherit lib writeNushellApplication;};
-  zigWarmCacheFor = import ./zig-warm-cache.nix {inherit lib;};
+  zigWarmCacheFor = import ./zig-warm-cache.nix {};
 in
   /**
   Build libghostty-vt: ghostty's terminal VT engine as a standalone C library.
