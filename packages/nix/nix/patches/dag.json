@@ -164,6 +164,10 @@
         "0007-nix-add-nix-store-builds-command.patch",
         "0021-libstore-enforce-derivation-no-progress-deadlines.patch"
       ]
+    },
+    {
+      "patch": "0035-libutil-treat-POLLERR-POLLNVAL-as-fd-death-in-Monito.patch",
+      "deps": []
     }
   ]
 }

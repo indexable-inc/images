@@ -772,6 +772,14 @@
           upstream = "hold";
           reason = "Build-status series follow-up (zombie-proof staleness, indexable-inc/index#3752): engage on #15979 rather than open a competing PR.";
         };
+        # 0035: MonitorFdHup's poll branch watched only POLLHUP, but POLLERR/
+        # POLLNVAL arrive regardless of the events mask, so an error-state
+        # client socket spun the monitor thread at 100% CPU without ever
+        # signalling client death (linux poll path only; darwin uses kqueue).
+        "0035-libutil-treat-POLLERR-POLLNVAL-as-fd-death-in-Monito.patch" = {
+          upstream = "hold";
+          reason = "Port of the MonitorFdHup half of NixOS/nix#15691 (open since 2026-04, indexable-inc/index#3769); retire if that PR merges. Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
     {
