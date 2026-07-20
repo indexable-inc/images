@@ -62,11 +62,10 @@ vim.opt.cmdheight = 0  -- Hide command line when not in use
 
 -- Footer: single global statusline (one bar at the very bottom, not per-split)
 vim.opt.laststatus = 3
--- Show the shortest readable path of the current buffer. fs_realpath follows
--- symlinks so editing a linked file (e.g. ~/.claude/CLAUDE.md -> the nix store)
--- shows the real target; ":~:." makes it relative to cwd, else to ~; pathshorten
--- collapses each intervening directory to its first letter, keeping the filename
--- full. Empty name for unnamed/special buffers.
+-- Show the current buffer's path home-relative: fs_realpath follows symlinks so
+-- a linked file (e.g. ~/.claude/CLAUDE.md -> the nix store) shows its real
+-- target, then ":~" swaps the home prefix for ~ while keeping full directory
+-- names. Empty name for unnamed/special buffers.
 function _G.statusline_path()
   local name = vim.api.nvim_buf_get_name(0)
   if name == "" then
@@ -74,8 +73,7 @@ function _G.statusline_path()
   end
   local abs = vim.fn.fnamemodify(name, ":p")
   local real = (vim.uv or vim.loop).fs_realpath(abs) or abs
-  local short = vim.fn.fnamemodify(vim.fs.normalize(real), ":~:.")
-  return vim.fn.pathshorten(short)
+  return vim.fn.fnamemodify(vim.fs.normalize(real), ":~")
 end
 vim.opt.statusline = "%{v:lua.statusline_path()}%m%=%l:%c"
 vim.opt.number = true
