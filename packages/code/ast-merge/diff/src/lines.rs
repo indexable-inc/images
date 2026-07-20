@@ -134,81 +134,155 @@ pub fn inner(base: &str, left: &str, right: &str) -> Outcome {
     }
 }
 
+/// One side's edit to the base: the base line range it replaces and the
+/// replacement line range in that side's file.
+struct Hunk {
+    base: std::ops::Range<usize>,
+    side: std::ops::Range<usize>,
+}
+
+fn hunks(base: &[&str], side: &[&str]) -> Vec<Hunk> {
+    use similar::{Algorithm, DiffOp, capture_diff_slices};
+
+    capture_diff_slices(Algorithm::Patience, base, side)
+        .into_iter()
+        .filter(|op| !matches!(op, DiffOp::Equal { .. }))
+        .map(|op| Hunk {
+            base: op.old_range(),
+            side: op.new_range(),
+        })
+        .collect()
+}
+
+fn push_lines(output: &mut String, lines: &[&str]) {
+    for line in lines {
+        output.push_str(line);
+        output.push('\n');
+    }
+}
+
+/// Three-way line merge with diff3 alignment.
+///
+/// Each side is diffed against the base (patience diff), so an insertion
+/// early in one side shifts nothing: disjoint edits apply cleanly and only
+/// overlapping or touching edits that disagree become conflicts. Touching
+/// edit regions coalesce into one conflict, matching GNU diff3 / `git
+/// merge-file`, because their relative order is ambiguous (index#3762: the
+/// previous positional walk conflicted nearly every line of a file after a
+/// single early insertion).
 #[must_use]
 pub fn based(base: &str, left: &str, right: &str) -> Result {
-    let base_lines: Vec<_> = base.lines().collect();
-    let left_lines: Vec<_> = left.lines().collect();
-    let right_lines: Vec<_> = right.lines().collect();
+    if left == right {
+        return Result::success(left.to_owned());
+    }
+    if base == left {
+        return Result::success(right.to_owned());
+    }
+    if base == right {
+        return Result::success(left.to_owned());
+    }
+
+    let base_lines: Vec<&str> = base.lines().collect();
+    let left_lines: Vec<&str> = left.lines().collect();
+    let right_lines: Vec<&str> = right.lines().collect();
+
+    let left_hunks = hunks(&base_lines, &left_lines);
+    let right_hunks = hunks(&base_lines, &right_lines);
 
     let mut output = String::new();
     let mut conflicts = Vec::new();
-    let mut i = 0;
 
-    while i < base_lines.len() || i < left_lines.len() || i < right_lines.len() {
-        let base_line = base_lines.get(i).copied();
-        let left_line = left_lines.get(i).copied();
-        let right_line = right_lines.get(i).copied();
+    // `cursor` walks base lines; `left_pos`/`right_pos` are the side line
+    // indices aligned with `cursor` whenever `cursor` sits outside any hunk.
+    let mut cursor = 0;
+    let mut left_pos = 0;
+    let mut right_pos = 0;
+    let mut li = 0;
+    let mut ri = 0;
 
-        match (base_line, left_line, right_line) {
-            (Some(_), Some(l), Some(r)) if l == r => {
-                output.push_str(l);
-                output.push('\n');
+    loop {
+        let next = [left_hunks.get(li), right_hunks.get(ri)]
+            .into_iter()
+            .flatten()
+            .map(|hunk| hunk.base.start)
+            .min();
+        let Some(next) = next else { break };
+
+        push_lines(&mut output, &base_lines[cursor..next]);
+        left_pos += next - cursor;
+        right_pos += next - cursor;
+        let region_start = next;
+
+        // Grow the unstable region to a maximal chunk: consuming a hunk from
+        // one side can extend `end` into range of the other side's next hunk,
+        // so repeat until neither side adds one.
+        let mut end = region_start;
+        let mut last_left: Option<&Hunk> = None;
+        let mut last_right: Option<&Hunk> = None;
+        loop {
+            let mut grew = false;
+            while let Some(hunk) = left_hunks.get(li)
+                && hunk.base.start <= end
+            {
+                end = end.max(hunk.base.end);
+                last_left = Some(hunk);
+                li += 1;
+                grew = true;
             }
-            (Some(b), Some(l), Some(r)) if l == b => {
-                output.push_str(r);
-                output.push('\n');
+            while let Some(hunk) = right_hunks.get(ri)
+                && hunk.base.start <= end
+            {
+                end = end.max(hunk.base.end);
+                last_right = Some(hunk);
+                ri += 1;
+                grew = true;
             }
-            (Some(b), Some(l), Some(r)) if r == b => {
-                output.push_str(l);
-                output.push('\n');
+            if !grew {
+                break;
             }
-            (Some(b), Some(l), Some(r)) => {
-                output.push_str("<<<<<<< LEFT\n");
-                output.push_str(l);
-                output.push('\n');
-                output.push_str("||||||| BASE\n");
-                output.push_str(b);
-                output.push('\n');
-                output.push_str("=======\n");
-                output.push_str(r);
-                output.push('\n');
-                output.push_str(">>>>>>> RIGHT\n");
-                conflicts.push(Conflict {
-                    base: Some(Region::new(0, b.len(), b.to_owned())),
-                    left: Region::new(0, l.len(), l.to_owned()),
-                    right: Region::new(0, r.len(), r.to_owned()),
-                });
-            }
-            (None, Some(l), Some(r)) if l == r => {
-                output.push_str(l);
-                output.push('\n');
-            }
-            (None, Some(l), Some(r)) => {
-                output.push_str("<<<<<<< LEFT\n");
-                output.push_str(l);
-                output.push('\n');
-                output.push_str("=======\n");
-                output.push_str(r);
-                output.push('\n');
-                output.push_str(">>>>>>> RIGHT\n");
-                conflicts.push(Conflict {
-                    base: None,
-                    left: Region::new(0, l.len(), l.to_owned()),
-                    right: Region::new(0, r.len(), r.to_owned()),
-                });
-            }
-            (Some(_) | None, None, Some(r)) => {
-                output.push_str(r);
-                output.push('\n');
-            }
-            (Some(_) | None, Some(l), None) => {
-                output.push_str(l);
-                output.push('\n');
-            }
-            _ => {}
         }
-        i += 1;
+
+        // A side's region text ends at its last hunk's replacement plus the
+        // stable tail up to `end`; a side with no hunk here tracks the base.
+        let left_end = last_left.map_or(left_pos + (end - region_start), |hunk| {
+            hunk.side.end + (end - hunk.base.end)
+        });
+        let right_end = last_right.map_or(right_pos + (end - region_start), |hunk| {
+            hunk.side.end + (end - hunk.base.end)
+        });
+
+        let base_seg = &base_lines[region_start..end];
+        let left_seg = &left_lines[left_pos..left_end];
+        let right_seg = &right_lines[right_pos..right_end];
+
+        if left_seg == right_seg {
+            push_lines(&mut output, left_seg);
+        } else if left_seg == base_seg {
+            push_lines(&mut output, right_seg);
+        } else if right_seg == base_seg {
+            push_lines(&mut output, left_seg);
+        } else {
+            output.push_str("<<<<<<< LEFT\n");
+            push_lines(&mut output, left_seg);
+            output.push_str("||||||| BASE\n");
+            push_lines(&mut output, base_seg);
+            output.push_str("=======\n");
+            push_lines(&mut output, right_seg);
+            output.push_str(">>>>>>> RIGHT\n");
+            conflicts.push(Conflict {
+                base: (!base_seg.is_empty())
+                    .then(|| Region::new(region_start, end, base_seg.join("\n"))),
+                left: Region::new(left_pos, left_end, left_seg.join("\n")),
+                right: Region::new(right_pos, right_end, right_seg.join("\n")),
+            });
+        }
+
+        cursor = end;
+        left_pos = left_end;
+        right_pos = right_end;
     }
+
+    push_lines(&mut output, &base_lines[cursor..]);
 
     if conflicts.is_empty() {
         Result::success(output)
