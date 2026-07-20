@@ -118,11 +118,10 @@ in {
     guestsModule
   ];
 
-  # Consolidate onto the submodule checkout that home-manager evaluates and
-  # that main-sync does not reset. nushell, ghostty, and the neovim lua tree
-  # all live-symlink into it, so edits take effect without a home-manager
-  # switch (nvim mechanism in profiles/development.nix).
-  users.andrewgazelka.paths.indexCheckout = "${config.home.homeDirectory}/.config/nix/index";
+  # Deploy the neovim lua tree as out-of-store symlinks into the mutable
+  # checkout (paths.indexCheckout, chosen in the private config) so editing
+  # lua/config or lua/plugins takes effect on the next nvim start with no
+  # home-manager switch. Mechanism in profiles/development.nix.
   users.andrewgazelka.mutableNvimCheckout = "${cfg.paths.indexCheckout}/users/andrewgazelka/config";
 
   home.sessionPath = ["$HOME/.lmstudio/bin"];
