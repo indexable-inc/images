@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 19 Jul 2026 17:32:57 -0700
+Subject: [PATCH] fix: libfetchers: keep user git auto-maintenance out of cache
+ fetches
+
+Every GitRepoImpl::fetch targets a Nix-internal cache repository (the
+per-URL caches under ~/.cache/nix/gitv3/*, or the tarball cache), and
+those repos inherit the user's global gitconfig. The tarball-cache
+(packfilesOnly) fetch already passed `-c gc.auto=0
+-c maintenance.auto=false`, but the gitv3 fetches did not: with
+`maintenance.auto=true` plus `gc.autodetach=true` in the user's global
+config, every such fetch spawned a detached `git maintenance run
+--auto` (double-forked, reparented to launchd). On macOS that detached,
+session-less process crashes in gettext locale initialization --
+CFLocaleCopyPreferredLanguages hits a NULL CoreFoundation
+distributed-notification center and dies on the PAC check at offset
+0x8 -- so maintenance never completes: 65 git SIGSEGV reports on
+2026-07-19 alone on one workstation, and the caches never got
+consolidated (tarball-cache-v2 had accumulated 3700 packs / 932MB).
+Full forensics: indexable-inc/index#3755.
+
+Hoist the guard out of the packfilesOnly branch so every cache-repo
+fetch runs with `-c maintenance.auto=false -c gc.auto=0`, keeping
+`fetch.unpackLimit=1` packfilesOnly-specific. `fetch` is the only git
+subprocess Nix runs against its cache repos that can trigger
+auto-maintenance (ls-remote, symbolic-ref, and verify-commit cannot),
+so this closes the whole class: tool-internal repos never run the
+user's background maintenance.
+
+Refs indexable-inc/index#3755
+
+diff --git a/src/libfetchers/git-utils.cc b/src/libfetchers/git-utils.cc
+index e1bcb0bdf..51e239dd0 100644
+--- a/src/libfetchers/git-utils.cc
++++ b/src/libfetchers/git-utils.cc
+@@ -966,15 +966,25 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
+             OS_STR("--git-dir"),
+             OS_STR("."),
+         };
++        /* This fetch always targets a Nix-internal cache repository (the
++           per-URL git cache or the tarball cache), which inherits the
++           user's global gitconfig. Never let it start the user's
++           background maintenance there: a background gc could prune
++           objects the cache still wants (most objects in the tarball
++           cache are unreferenced by design), and on macOS the detached
++           `git maintenance run --auto` that `maintenance.auto=true`
++           spawns crashes outright (gettext locale init calls
++           CFLocaleCopyPreferredLanguages, which dereferences a null
++           CoreFoundation notification center in the session-less,
++           launchd-reparented context). */
++        for (auto opt : {OS_STR("gc.auto=0"), OS_STR("maintenance.auto=false")}) {
++            gitArgs.push_back(OS_STR("-c"));
++            gitArgs.push_back(opt);
++        }
+         if (packfilesOnly) {
+-            /* Keep the fetched objects packed however few they are, and
+-               don't let the fetch trigger an auto-gc: most objects in the
+-               tarball cache are unreferenced by design, so a gc would
+-               prune them. */
+-            for (auto opt : {OS_STR("fetch.unpackLimit=1"), OS_STR("gc.auto=0"), OS_STR("maintenance.auto=false")}) {
+-                gitArgs.push_back(OS_STR("-c"));
+-                gitArgs.push_back(opt);
+-            }
++            /* Keep the fetched objects packed however few they are. */
++            gitArgs.push_back(OS_STR("-c"));
++            gitArgs.push_back(OS_STR("fetch.unpackLimit=1"));
+         }
+         gitArgs.push_back(OS_STR("fetch"));
+         gitArgs.push_back(OS_STR("--progress"));

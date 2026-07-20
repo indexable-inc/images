@@ -139,6 +139,12 @@
     {
       "patch": "0030-libflake-stamp-submodule-metadata-on-relative-path-f.patch",
       "deps": []
+    },
+    {
+      "patch": "0031-fix-libfetchers-keep-user-git-auto-maintenance-out-o.patch",
+      "deps": [
+        "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch"
+      ]
     }
   ]
 }
