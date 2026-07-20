@@ -7,6 +7,7 @@
   makeBinaryWrapper,
   runCommand,
   autoPatchelfHook,
+  darwin,
   procps,
   ripgrep,
   git,
@@ -576,6 +577,48 @@
     inherit (target) hash;
   };
 
+  # Shared equal-length byte-patch layer primitive (also used by
+  # claude-code-rainbow), so patches compose as a cacheable DAG over the single
+  # download. See ./byte-patch.nix.
+  applyBytePatch = import ./byte-patch.nix {inherit runCommand python3;};
+
+  # The DevChannelsDialog gate. Because this wrapper bakes our own trusted
+  # `index` stdio server as a `--dangerously-load-development-channels` channel
+  # (see `developmentChannels`), every interactive launch otherwise stops on a
+  # full-screen "WARNING: Loading development channels" confirm before the
+  # session starts. Upstream already loads the channels either way (the dialog
+  # is only a confirmation UI): the onboarding flow renders it solely in the
+  # `else` of
+  #   if(!g()||En()!=="firstParty"||_(y("policySettings"))) <load silently>
+  #   else <show DevChannelsDialog, load on accept>
+  # so forcing that condition true always takes the silent-load branch. The
+  # swap is equal-length (`!g()` -> `true`, both 4 bytes): the only safe edit to
+  # a Bun single-file executable, since it leaves every downstream offset and
+  # the appended trailer byte-identical (see ./patch-binary.py). The `expect`
+  # count gate fails the build loudly if a version bump reminifies the
+  # surrounding identifiers so the anchor no longer lands exactly once; re-derive
+  # the find/replace against the new binary when that happens.
+  devChannelsGatePatch = [
+    {
+      find = ''if(!g()||En()!=="firstParty"||_(y("policySettings")))'';
+      replace = ''if(true||En()!=="firstParty"||_(y("policySettings")))'';
+      expect = 1;
+    }
+  ];
+
+  # The one-mapping byte-patch layer that disables the gate: fold it over the
+  # single download. Shared primitive with claude-code-rainbow (./byte-patch.nix)
+  # -- both express their patches as cacheable layers rooted at `nativeBinary`.
+  # The layer is raw bytes; the wrapper leaf below interpreter-patches (Linux)
+  # and ad-hoc re-signs (darwin) the result, since the byte edit invalidates
+  # Anthropic's Developer-ID signature. Only this launched helper is patched;
+  # `stockCli` above keeps the unmodified download for the prompt/env extractors.
+  patchedBinary = applyBytePatch {
+    name = "dev-channels-gate";
+    input = nativeBinary;
+    rules = devChannelsGatePatch;
+  };
+
   stockCli = stdenv.mkDerivation {
     pname = "claude-code-stock";
     inherit version;
@@ -624,7 +667,12 @@ in
       [
         makeBinaryWrapper
       ]
-      ++ lib.optional stdenv.hostPlatform.isElf autoPatchelfHook;
+      ++ lib.optional stdenv.hostPlatform.isElf autoPatchelfHook
+      # The helper carries the byte patch, so its vendor signature is invalid;
+      # re-sign ad-hoc on darwin (AMFI SIGKILLs an unsigned Mach-O). The argv
+      # install checks run against a stub and never exec this helper, so the
+      # darwin re-sign-then-exec-in-sandbox AMFI caveat does not bite here.
+      ++ lib.optional stdenv.hostPlatform.isDarwin darwin.autoSignDarwinBinariesHook;
 
     installPhase = ''
       # shell
@@ -641,7 +689,7 @@ in
       # example, iTerm2 or Terminal)", not the code signature or CFBundleName:
       # https://developer.1password.com/docs/cli/app-integration-security/
       helper="$out/libexec/Claude Code"
-      install -m755 ${nativeBinary} "$helper"
+      install -m755 ${patchedBinary} "$helper"
 
       # All flag/env/PATH injection lives in `launchSpec` (see its let-binding and
       # `wrapperFlags` for the per-flag rationale); bake the helper's real path
@@ -692,6 +740,32 @@ in
         # JSON file for non-HM consumers and the install checks.
         settings = settingsDefaults;
         settingsFile = settingsDefaultsFile;
+
+        # The single fetched upstream binary (a fixed-output derivation) and its
+        # runnable stock wrapping. Exposed so sibling packages that customize or
+        # inspect the same download -- claude-code-rainbow's byte patches,
+        # claude-code-debug's inspector -- reuse ONE download derivation instead
+        # of re-declaring `fetchurl`. `nativeBinary` is the raw bytes;
+        # `stockCli` is the same bytes, unpatched and unwrapped (autopatchelfed
+        # on Linux), i.e. genuinely stock behavior.
+        inherit nativeBinary stockCli;
+
+        # Byte proof that the dev-channels gate is disabled in the SHIPPED helper
+        # (post-sign, post-fixup): the silent-load branch is forced
+        # (`if(true||En()` present) and the original gated condition
+        # (`if(!g()||En()`) is gone. Grep needs no exec, so it runs on darwin too
+        # (the AMFI re-sign-then-exec caveat that blocks a runtime smoke does not
+        # apply to byte inspection). The patcher's `expect` gate already fails the
+        # build if the swap does not land exactly once; this additionally proves
+        # signing did not disturb the JS region.
+        tests.dev-channels-gate-disabled = pkgs.runCommand "claude-code-dev-channels-gate-disabled" {} ''
+          helper="${finalAttrs.finalPackage}/libexec/Claude Code"
+          patched=$(grep -c 'if(true||En()' "$helper" || true)
+          gated=$(grep -c 'if(!g()||En()' "$helper" || true)
+          [ "$patched" -ge 1 ] || { echo "FAIL: gate-disabled bytes absent" >&2; exit 1; }
+          [ "$gated" -eq 0 ] || { echo "FAIL: original gate condition present ($gated)" >&2; exit 1; }
+          touch "$out"
+        '';
 
         # Machine-readable knob tables for the commented knob reference at
         # the Home Manager consumption site

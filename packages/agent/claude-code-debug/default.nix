@@ -15,10 +15,12 @@
   claude-code =
     repoPackages.claude-code
       or (throw "claude-code-debug: needs the claude-code sibling (flake package set only)");
-  # The unwrapped upstream binary (unmodified, still Anthropic-signed, so it runs
-  # as-is). Debugging the raw binary keeps the house system-prompt/MCP wrapper out
-  # of the picture while inspecting internals.
-  claudeBin = "${claude-code}/libexec/Claude Code";
+  # The stock upstream binary as Anthropic shipped it (autopatchelfed on Linux),
+  # exposed by claude-code as `passthru.stockCli`. Debugging the stock bytes
+  # keeps both the house wrapper AND the byte patches the wrapped binary now
+  # carries (the dev-channels gate swap) out of the picture while inspecting
+  # internals.
+  claudeBin = "${claude-code.stockCli}/bin/claude";
 in
   writeNushellApplication {
     name = "claude-debug";
