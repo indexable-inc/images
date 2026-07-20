@@ -193,15 +193,17 @@
     # protectedMergeGuard below already allowed force-merging (index#3537).
     # The task-list tools below are re-enabled (progress boards use them),
     # so the backgroundSubagents rule (which claims subagent AND task tools
-    # absent) stays omitted. Agent itself is back to the repo default
-    # (denied): delegation now goes through the kernel's depth-1 Agents.*
-    # surface (index#3700).
+    # absent) stays omitted. Agent is re-enabled below too: native subagents
+    # are preferred here over routing every delegation through the kernel's
+    # depth-1 Agents.* surface (reverses the index#3700 default). The kernel
+    # still owns shell/file/search.
     omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
     # Matches agentPromptOmitRules `forceMerge` above: without this the baked
     # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
     # rule permits.
     protectedMergeGuard = false;
     systemTools = {
+      Agent = true;
       TaskCreate = true;
       TaskGet = true;
       TaskList = true;
