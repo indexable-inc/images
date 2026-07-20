@@ -598,12 +598,29 @@
   # count gate fails the build loudly if a version bump reminifies the
   # surrounding identifiers so the anchor no longer lands exactly once; re-derive
   # the find/replace against the new binary when that happens.
+  #
+  # Each platform build minifies the expression differently, so the anchor is
+  # keyed by system. Every entry was counted exactly once against the pinned
+  # 2.1.215 binaries (index#3788):
+  devChannelsGateAnchor = {
+    aarch64-darwin = ''if(!g()||En()!=="firstParty"||_(y("policySettings")))'';
+    x86_64-darwin = ''if(!g()||Sn()!=="firstParty"||_(y("policySettings")))'';
+    x86_64-linux = ''if(!g()||vn()!=="firstParty"||y(_("policySettings")))'';
+    aarch64-linux = ''if(!g()||vn()!=="firstParty"||y(_("policySettings")))'';
+  };
+
   devChannelsGatePatch = [
-    {
-      find = ''if(!g()||En()!=="firstParty"||_(y("policySettings")))'';
-      replace = ''if(true||En()!=="firstParty"||_(y("policySettings")))'';
-      expect = 1;
-    }
+    (
+      let
+        find =
+          devChannelsGateAnchor.${system}
+            or (throw "claude-code: no dev-channels gate anchor for ${system}; re-derive it from the pinned binary (index#3788)");
+      in {
+        inherit find;
+        replace = lib.replaceStrings [''!g()''] [''true''] find;
+        expect = 1;
+      }
+    )
   ];
 
   # The one-mapping byte-patch layer that disables the gate: fold it over the
