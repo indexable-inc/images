@@ -139,6 +139,9 @@ members = [
   "packages/unibind/runtime",
   "packages/unibind/test-support",
   "packages/upstream-sync",
+  "packages/usage/cli",
+  "packages/usage/core",
+  "packages/usage/wrap",
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
   "packages/vm/panes/guest-transport",
@@ -233,6 +236,7 @@ google-gmail = { path = "packages/google/gmail" }
 indexbench = { path = "packages/indexbench" }
 ix-vt = { path = "packages/tui/vt/ix-vt" }
 ix-vt-sys = { path = "packages/tui/vt/ix-vt-sys", version = "0.1.0" }
+ix-usage-core = { path = "packages/usage/core" }
 kitty = { path = "packages/terminal/kitty" }
 lake-iceberg = { path = "packages/search/lake/iceberg" }
 color-eyre = "0.6"

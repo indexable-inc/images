@@ -5722,6 +5722,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "ix-usage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ix-usage-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
+]
+
+[[package]]
+name = "ix-usage-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.2+spec-1.1.0",
+ "uuid",
+]
+
+[[package]]
 name = "ix-vt"
 version = "0.1.0"
 dependencies = [
@@ -5748,6 +5777,19 @@ dependencies = [
  "tokio",
  "uuid",
  "wry",
+]
+
+[[package]]
+name = "ix-wrap"
+version = "0.1.0"
+dependencies = [
+ "ix-usage-core",
+ "libc",
+ "nix 0.31.3",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
