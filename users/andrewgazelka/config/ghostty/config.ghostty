@@ -41,6 +41,13 @@ background-opacity-cells = true
 
 confirm-close-surface = false
 
+# Interim mitigation for index#3768: tip's undo-close retention (upstream
+# ghostty#7535) fails to expire, so closed surfaces stay fully alive -
+# measured 69 live sessions vs 6 visible windows, some 21h old. 0 skips undo
+# registration so close tears the surface down immediately. Remove once the
+# vendored ghostty teardown patch lands.
+undo-timeout = 0
+
 # Track Ghostty nightlies. The declared Homebrew cask is `ghostty@tip`, so keep
 # the in-app Sparkle updater OFF but pinned to the matching `tip` channel so any
 # reload reports the right track. Updates come from the cask
