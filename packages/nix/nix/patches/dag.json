@@ -145,6 +145,12 @@
       "deps": [
         "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch"
       ]
+    },
+    {
+      "patch": "0032-libexpr-snapshot-mutable-source-trees-at-mount-time-.patch",
+      "deps": [
+        "0029-libexpr-gate-lazy-input-mounting-behind-an-off-by-de.patch"
+      ]
     }
   ]
 }
