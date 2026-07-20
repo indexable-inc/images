@@ -29,6 +29,7 @@
   rnix-0-12-src,
   rnix-0-14-src,
   ghostty,
+  ghostty-src,
   mesa-src,
   # The flake's own source (`self`), carrying `.outPath` (a `-source` store
   # path with string context, so it roots into a closure like `nixpkgs`) and
@@ -783,6 +784,7 @@
     launchkSrc = launchk-src;
     nixNinjaSrc = nix-ninja-src;
     snixSrc = snix-src;
+    ghosttySrc = ghostty-src;
     mesaSrc = mesa-src;
     # Pinned toolchain evaluation context for the prebuilt public-SDK rlib:
     # the exact nixpkgs + rust-overlay sources whose evaluation reproduces the

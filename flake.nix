@@ -325,6 +325,34 @@
       flake = false;
     };
 
+    # Ghostty's terminal application, patched in-repo (packages/ghostty/patches,
+    # empty for now: index#3768 vendors the fork source and build; the
+    # surface-teardown fix -- killing the child process group on close_surface
+    # -- lands as a follow-up patch in this series). Distinct from the
+    # `ghostty` input above: that one pins a single rev unpatched, consumed
+    # only by `packages/tui/vt/libghostty-vt` for the VT-engine-only
+    # `-Demit-lib-vt` build. This input is the full application source that
+    # `packages/ghostty` builds against -- currently the same recipe, since
+    # the rest of ghostty's darwin core is not buildable in the sandbox (see
+    # `lib/build/libghostty-vt.nix`'s doc comment).
+    #
+    # Pinned BY REV (autoUpdate = false in lib/fork-packages.nix), same as
+    # `nix-src`/`clippy-src`: ghostty's own `build.zig` changed, somewhere
+    # after this rev, to unconditionally attempt a fat-archive combine for
+    # the VT static lib via hardcoded `/usr/bin/ranlib`/`/bin/cp` (absolute
+    # paths, so not PATH-shimmable), which the Nix darwin sandbox correctly
+    # denies. Confirmed by building this exact rev (succeeds) versus
+    # upstream main as of 2026-07-20 (fails at that step). ghostty is
+    # darwin-only and darwin has no CI (index-workstation-profile-no-ci-eval,
+    # zed-src-patch-lock-drift-darwin-only-guard document the same class of
+    # silent-drift risk for zed), so nothing catches a routine bump breaking
+    # this build; move this rev only with `nix run .#rebase-patches --
+    # ghostty` followed by a manual `nix build .#ghostty` on darwin.
+    ghostty-src = {
+      url = "github:ghostty-org/ghostty/fd49716ea2084108aa098db390931c007495a1ab";
+      flake = false;
+    };
+
     # Upstream mesa (gitlab.freedesktop.org), patched in-repo for the panes GPU
     # guest (packages/vm/panes/guest-image/mesa/patches): the venus driver-side
     # external-semaphore delta (index#1742). De-forking replacement for the old
@@ -377,6 +405,7 @@
     rnix-0-12-src,
     rnix-0-14-src,
     ghostty,
+    ghostty-src,
     mesa-src,
     skills,
     examples,
@@ -456,6 +485,7 @@
         rnix-0-12-src
         rnix-0-14-src
         ghostty
+        ghostty-src
         mesa-src
         ;
     };
