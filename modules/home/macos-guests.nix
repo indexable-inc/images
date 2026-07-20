@@ -310,7 +310,10 @@
       RunAtLoad = true;
       ProcessType = "Background";
       ThrottleInterval = 10;
-      ExitTimeOut = 60;
+      # Backstop only: must exceed vmkit's 10s shutdown-request grace plus 5s
+      # force-stop grace, so the in-process escalation runs before launchd
+      # SIGKILLs the VMM (index#3766).
+      ExitTimeOut = 20;
       StandardOutPath = guest.lifecycle.logPath;
       StandardErrorPath = guest.lifecycle.logPath;
     };

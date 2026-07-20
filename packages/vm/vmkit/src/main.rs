@@ -213,7 +213,8 @@ enum Command {
         disk_flags: blockdev::DiskFlags,
     },
     /// Run an installed macOS guest headlessly until it stops. SIGTERM and
-    /// SIGINT request a clean shutdown from the guest.
+    /// SIGINT request a clean shutdown from the guest, then force-stop it if
+    /// the guest has not complied within a grace period.
     #[cfg(target_os = "macos")]
     RunMacos {
         /// Guest bundle directory.

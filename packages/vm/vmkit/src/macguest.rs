@@ -48,6 +48,18 @@ const PIXEL_FORMAT_BGRA: u32 = 0x4247_5241;
 
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// How long the guest gets to honor a shutdown request before the VMM
+/// force-stops it. `requestStopWithError` is the virtual power button; a guest
+/// sitting at the login window ignores it, so without a deadline the process
+/// only dies by launchd's `ExitTimeOut` SIGKILL, a dirty power-off that also
+/// stalls `launchctl bootout --wait` callers for the full timeout (index#3766).
+const SHUTDOWN_REQUEST_GRACE: Duration = Duration::from_secs(10);
+
+/// How long a force stop gets before the VMM gives up and exits. launchd's
+/// `ExitTimeOut` must exceed `SHUTDOWN_REQUEST_GRACE + FORCE_STOP_GRACE`, or
+/// the escalation never gets to run.
+const FORCE_STOP_GRACE: Duration = Duration::from_secs(5);
+
 extern "C" fn request_stop(_signal: libc::c_int) {
     STOP_REQUESTED.store(true, Ordering::Relaxed);
 }
@@ -182,14 +194,37 @@ pub fn run_macos(
         DispatchQueue::main().exec_async(move || {
             let vm = unsafe { &*(vm_ptr as *const VZVirtualMachine) };
             eprintln!("vmkit: requesting guest shutdown");
+            // Not fatal: the force stop below is the real deadline.
             if let Err(error) = unsafe { vm.requestStopWithError() } {
                 eprintln!(
                     "vmkit: guest shutdown request failed: {}",
                     ns_error_message(&error)
                 );
-                std::process::exit(1);
             }
         });
+        std::thread::sleep(SHUTDOWN_REQUEST_GRACE);
+        DispatchQueue::main().exec_async(move || {
+            let vm = unsafe { &*(vm_ptr as *const VZVirtualMachine) };
+            eprintln!("vmkit: guest did not stop in time; force-stopping");
+            let completion = RcBlock::new(|error: *mut NSError| {
+                if error.is_null() {
+                    eprintln!("vmkit: guest force-stopped");
+                    std::process::exit(0);
+                }
+                eprintln!(
+                    "vmkit: force stop failed: {}",
+                    ns_error_message(unsafe { &*error })
+                );
+                std::process::exit(1);
+            });
+            unsafe { vm.stopWithCompletionHandler(&completion) };
+            // Leaked on purpose: the process exits from the completion (or the
+            // timeout below) before the block could be dropped safely.
+            std::mem::forget(completion);
+        });
+        std::thread::sleep(FORCE_STOP_GRACE);
+        eprintln!("vmkit: force stop timed out; exiting");
+        std::process::exit(1);
     });
 
     std::mem::forget(delegate);
