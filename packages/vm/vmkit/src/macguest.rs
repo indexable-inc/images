@@ -141,6 +141,20 @@ pub fn start_guest_offscreen(
     Ok(start_vm_offscreen(mtm, &config))
 }
 
+/// Completion block for a VM lifecycle transition: runs `on_ok` on success,
+/// logs `err_context` with the error and exits on failure. Lifecycle failures
+/// are process failures for a supervisor-owned VMM.
+fn lifecycle_completion(on_ok: fn(), err_context: &'static str) -> RcBlock<dyn Fn(*mut NSError)> {
+    RcBlock::new(move |error: *mut NSError| {
+        if error.is_null() {
+            on_ok();
+        } else {
+            eprintln!("{err_context}: {}", ns_error_message(unsafe { &*error }));
+            std::process::exit(1);
+        }
+    })
+}
+
 /// Run a macOS guest as a supervisor-owned foreground process.
 pub fn run_macos(
     bundle: &Path,
@@ -162,17 +176,10 @@ pub fn run_macos(
         vm.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     }
 
-    let completion = RcBlock::new(|error: *mut NSError| {
-        if error.is_null() {
-            eprintln!("vmkit: guest started");
-        } else {
-            eprintln!(
-                "vmkit: guest failed to start: {}",
-                ns_error_message(unsafe { &*error })
-            );
-            std::process::exit(1);
-        }
-    });
+    let completion = lifecycle_completion(
+        || eprintln!("vmkit: guest started"),
+        "vmkit: guest failed to start",
+    );
     unsafe { vm.startWithCompletionHandler(&completion) };
 
     STOP_REQUESTED.store(false, Ordering::Relaxed);
@@ -206,17 +213,13 @@ pub fn run_macos(
         DispatchQueue::main().exec_async(move || {
             let vm = unsafe { &*(vm_ptr as *const VZVirtualMachine) };
             eprintln!("vmkit: guest did not stop in time; force-stopping");
-            let completion = RcBlock::new(|error: *mut NSError| {
-                if error.is_null() {
+            let completion = lifecycle_completion(
+                || {
                     eprintln!("vmkit: guest force-stopped");
                     std::process::exit(0);
-                }
-                eprintln!(
-                    "vmkit: force stop failed: {}",
-                    ns_error_message(unsafe { &*error })
-                );
-                std::process::exit(1);
-            });
+                },
+                "vmkit: force stop failed",
+            );
             unsafe { vm.stopWithCompletionHandler(&completion) };
             // Leaked on purpose: the process exits from the completion (or the
             // timeout below) before the block could be dropped safely.
