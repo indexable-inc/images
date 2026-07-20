@@ -57,5 +57,15 @@ defmodule IxMcp.FleetTest do
     test "exec_least_loaded/2 reports :no_nodes" do
       assert Fleet.exec_least_loaded("1 + 1") == {:error, :no_nodes}
     end
+
+    test "zero-arity funs pass the code guard" do
+      assert Fleet.exec_any(fn -> 1 + 1 end) == {:error, :no_nodes}
+      assert Fleet.exec_least_loaded(fn -> 1 + 1 end) == {:error, :no_nodes}
+    end
+
+    test "non-code payloads are rejected" do
+      assert_raise FunctionClauseError, fn -> Fleet.exec_any(~c"1 + 1") end
+      assert_raise FunctionClauseError, fn -> Fleet.exec_any(fn x -> x end) end
+    end
   end
 end
