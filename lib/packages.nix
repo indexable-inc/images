@@ -49,6 +49,12 @@
     # packages need not re-thread `ix` through callPackage. The overlay path
     # leaves it unset, which is the signal to omit the updater.
     updateScriptWriter = ixForPackages.writeNushellApplication pkgs;
+    # Usage-telemetry wrapper (index#3802): rewrap a package's bin/* with
+    # ix-wrap so invocations and failures land in the local usage store.
+    withUsage = import ./with-usage.nix {
+      inherit lib pkgs;
+      ix = ixForPackages;
+    };
   };
   mkPackageSet = import ./mk-package-set.nix {inherit lib;};
 in

@@ -1,0 +1,25 @@
+[package]
+name = "ix-wrap"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Transparent usage-counting exec wrapper: spawn the IX_USAGE_SPEC target with inherited stdio/argv0, forward signals, record one spool line after exit, exit with the child's status"
+
+[lints]
+workspace = true
+
+[dependencies]
+ix-usage-core.workspace = true
+libc.workspace = true
+nix = { workspace = true, features = ["signal"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+ix-usage-core.workspace = true
+rusqlite.workspace = true
+tempfile.workspace = true
+
+[[bin]]
+name = "ix-wrap"
+path = "src/main.rs"
