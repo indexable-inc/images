@@ -64,6 +64,7 @@ members = [
   "packages/indexbench",
   "packages/indexbench/filesystem",
   "packages/ix-dev-diagnose",
+  "packages/ix-term/server",
   "packages/ix-windows",
   "packages/ixterm",
   "packages/mcp/server-info",

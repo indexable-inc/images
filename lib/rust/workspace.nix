@@ -317,6 +317,9 @@
           # ix-vt's tests dlopen the libghostty-vt dylib at runtime; make its lib
           # dir available so the loader resolves `@rpath`/`-l ghostty-vt`.
           ix-vt = [libghosttyVt];
+          # ix-term-server's test binaries link the same dylib (its VT engine
+          # is ix-vt), so the loader needs the lib dir at test runtime too.
+          ix-term-server = [libghosttyVt];
           # clone-cli's diff-gate integration tests build temp git repos and run
           # `git` (directly and via the `clone` binary's diff gate). The test
           # sandbox has no git otherwise, so the tests panic spawning it.

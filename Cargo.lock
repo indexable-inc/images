@@ -5701,6 +5701,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ix-term-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "futures",
+ "ix-vt",
+ "libc",
+ "pty-process",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "ix-vt"
 version = "0.1.0"
 dependencies = [
