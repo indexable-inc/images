@@ -44,6 +44,9 @@ in {
       # broken-IPv4 network (e.g. hotel wifi with dead DHCPv4) can still reach
       # IPv4-only hosts like github and Apple's APNs. Needs UDP egress to work.
       "cloudflare-warp"
+      # Ghostty-based terminal with programmable browser panes (cmux.com);
+      # the agent rules open response HTML as a cmux browser split.
+      "cmux"
       "codex-app"
       "contexts"
       "cursor"

@@ -455,9 +455,11 @@
       topics = ["writing" "comms"];
       text = ''
         Respond as HTML, not chat text: write each response to one HTML
-        file per session, open it on the first write, and keep rewriting
-        that same file so it always shows the current state of the
-        response.
+        file per session and keep rewriting that same file so it always
+        shows the current state of the response. On the first write open
+        it as a cmux browser split (`cmux browser open-split
+        "file://<path>"`); fall back to plain `open` when there is no
+        cmux socket.
       '';
       reason = ''
         Requested 2026-07-19: the user reads responses as a live HTML page
