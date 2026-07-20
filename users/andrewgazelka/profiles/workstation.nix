@@ -1487,7 +1487,8 @@ in {
           conflictstyle = "diff3";
           renormalize = true;
           stat = false;
-          ff = "only";
+          # ff = false: always create a merge commit, never fast-forward.
+          ff = false;
         };
         "merge \"ast-merge\"" = {
           name = "AST-aware merge driver";
