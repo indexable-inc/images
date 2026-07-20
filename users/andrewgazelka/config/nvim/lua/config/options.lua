@@ -62,18 +62,33 @@ vim.opt.cmdheight = 0  -- Hide command line when not in use
 
 -- Footer: single global statusline (one bar at the very bottom, not per-split)
 vim.opt.laststatus = 3
--- Show the current buffer's path home-relative: fs_realpath follows symlinks so
--- a linked file (e.g. ~/.claude/CLAUDE.md -> the nix store) shows its real
--- target, then ":~" swaps the home prefix for ~ while keeping full directory
--- names. Empty name for unnamed/special buffers.
+-- Buffer path for the statusline, starship-style. fs_realpath follows symlinks
+-- so a linked file (e.g. an out-of-store config symlink) shows its real target;
+-- inside a git repo we print <repo dir name>/<path from repo root>, else the
+-- home-relative path (":~"). Cached per buffer so the upward ".git" search does
+-- not run on every statusline redraw. Empty name for unnamed/special buffers.
 function _G.statusline_path()
-  local name = vim.api.nvim_buf_get_name(0)
+  local buf = vim.api.nvim_get_current_buf()
+  local name = vim.api.nvim_buf_get_name(buf)
   if name == "" then
     return "[No Name]"
   end
+  local cache = vim.b[buf].statusline_path
+  if cache and cache.name == name then
+    return cache.text
+  end
   local abs = vim.fn.fnamemodify(name, ":p")
-  local real = (vim.uv or vim.loop).fs_realpath(abs) or abs
-  return vim.fn.fnamemodify(vim.fs.normalize(real), ":~")
+  local real = vim.fs.normalize((vim.uv or vim.loop).fs_realpath(abs) or abs)
+  local git = vim.fs.find(".git", {upward = true, path = vim.fs.dirname(real)})[1]
+  local text
+  if git then
+    local root = vim.fs.dirname(git)
+    text = vim.fs.basename(root) .. real:sub(#root + 1)
+  else
+    text = vim.fn.fnamemodify(real, ":~")
+  end
+  vim.b[buf].statusline_path = {name = name, text = text}
+  return text
 end
 vim.opt.statusline = "%{v:lua.statusline_path()}%m%=%l:%c"
 vim.opt.number = true
