@@ -269,11 +269,27 @@ export def github-pr-prompt-refresh [
     rm --force $lock_file
 }
 
-export def github-pr-prompt-refresh-current-if-stale [
+# Memoize the repo lookup per directory. Prompt hooks call the refresh check on
+# every REPL iteration, and `github-current-repo` forks git twice; unmemoized,
+# a runaway prompt loop turns that into a machine-wide fork storm
+# (andrewgazelka/nix#116). Closure hooks preserve env via redirect_env
+# (nu crates/nu-cmd-base/src/hook.rs), so $env memoization sticks across
+# prompts. Goes stale only if the repo changes under an unchanged PWD.
+export def --env github-current-repo-for-prompt [] {
+    if ($env.__GITHUB_PROMPT_REPO_PWD? | default "") == $env.PWD {
+        return ($env.__GITHUB_PROMPT_REPO? | default "")
+    }
+    let repo = (github-current-repo)
+    $env.__GITHUB_PROMPT_REPO_PWD = $env.PWD
+    $env.__GITHUB_PROMPT_REPO = $repo
+    $repo
+}
+
+export def --env github-pr-prompt-refresh-current-if-stale [
     --max-age: duration = 1min
     --lock-max-age: duration = 2min
 ] {
-    let repo = (github-current-repo)
+    let repo = (github-current-repo-for-prompt)
     if ($repo | is-empty) {
         return
     }
