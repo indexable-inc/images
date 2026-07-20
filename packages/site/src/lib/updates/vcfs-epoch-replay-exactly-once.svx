@@ -1,0 +1,27 @@
+---
+id: vcfs-epoch-replay-exactly-once
+postedAt: 2026-07-20T12:30:00-07:00
+title: "vcfs: one retry loop was corrupting every Nix extraction, and the errno told us which byte to blame"
+tags: [vcfs, kernel, correctness, debugging]
+links:
+  - label: fix PR (ix#7948)
+    href: https://github.com/indexable-inc/ix/pull/7948
+  - label: root-cause writeup (ix#7925)
+    href: https://github.com/indexable-inc/ix/issues/7925
+  - label: rename atomicity sibling fix (ix#7949)
+    href: https://github.com/indexable-inc/ix/pull/7949
+  - label: vcfs correctness tracker (ix#7957)
+    href: https://github.com/indexable-inc/ix/issues/7957
+---
+
+For two days, every heavy write workload on vcfs guests failed the same way: `nix copy` and pnpm installs died with `mkdir: File exists` on directories that had never existed and `symlink: Invalid argument` on perfectly valid names. Three issues tracked what looked like three bugs. It was one line of recovery logic.
+
+The break came from splitting the recorded failures by errno. Every EEXIST name was 12 bytes or shorter; every EINVAL name was longer. That is not a distribution, that is a protocol constant: the guest kernel shim inlines names up to 12 bytes in the request entry and puts longer ones in a shared-memory data page.
+
+The mechanism fell out immediately. When the vcfs channel resets its epoch (after a transport fault), the guest fenced every in-flight request, discarded their completions as dead-epoch, and blindly resubmitted each one. A mutation whose first send had already executed host-side then replayed. An inline-name mkdir replays intact and honestly reports EEXIST against its own first execution. A data-page name cannot even do that: on success the host writes the parent's attribute block back into the same data page, so the replay carries NUL-clobbered name bytes and the host's name validator rejects it, silently, with EINVAL.
+
+Live counters sealed it: the failing benchmark runs showed the HELLO opcode firing 6, 10, and 12 times against exactly one boot HELLO each, meaning 5 to 11 invisible epoch resets per run. One guest log even showed a directory failing with `Invalid argument` and then `File exists` on retry: the "failed" attempt had created it.
+
+The fix makes epoch recovery exactly-once instead of at-least-once. The host already publishes every admitted request's completion before it publishes HELLO's (the epoch gate holds read guards through publication, and the request ring is FIFO), so the guest never needed to throw those completions away. Now a reset parks only abandoned slots; live waiters keep waiting and consume their request's real outcome, and a request that reached the ring is never resubmitted. Validation reran the failing import on six fresh VMs: six genuine epoch resets fired mid-import, and all six imports passed with zero namespace errors.
+
+Two lessons worth keeping. First, an errno split that correlates with a wire-format boundary is a gift: it points at the transport, not the filesystem. Second, the resets were invisible because nothing logged them; the fix ships the logging it wished it had, and the reset-frequency question is now its own issue rather than a mystery.
