@@ -109,8 +109,8 @@ in {
     ./infra.nix
     optionsModule
     raycastModule
-    # Ghostty config, generated from Nix (home/ghostty.nix). Replaces the former
-    # out-of-store symlink to ghostty/config.
+    # Ghostty config: out-of-store symlink to config/ghostty/config.ghostty
+    # (home/ghostty.nix).
     ghosttyModule
     # vmkit macOS guests: general push machinery + the personal guest specs
     # (macos-primary / the Beeper iMessage bridge, ENG-7746).
@@ -303,7 +303,7 @@ in {
   # macOS-specific paths (Library/Application Support)
   # ============================================
 
-  # Ghostty main config: generated from Nix in home/ghostty.nix (imported above).
+  # Ghostty main config: symlinked to the checkout in home/ghostty.nix (imported above).
 
   # Claude Desktop rewrites its config file and carries a runtime
   # Authorization header. The `mutable.files` declaration below seeds only
