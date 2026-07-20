@@ -7,6 +7,7 @@
   makeBinaryWrapper,
   runCommand,
   autoPatchelfHook,
+  darwin,
   procps,
   ripgrep,
   git,
@@ -576,6 +577,75 @@
     inherit (target) hash;
   };
 
+  # The DevChannelsDialog gate. Because this wrapper bakes our own trusted
+  # `index` stdio server as a `--dangerously-load-development-channels` channel
+  # (see `developmentChannels`), every interactive launch otherwise stops on a
+  # full-screen "WARNING: Loading development channels" confirm before the
+  # session starts. Upstream already loads the channels either way (the dialog
+  # is only a confirmation UI): the onboarding flow renders it solely in the
+  # `else` of
+  #   if(!g()||En()!=="firstParty"||_(y("policySettings"))) <load silently>
+  #   else <show DevChannelsDialog, load on accept>
+  # so forcing that condition true always takes the silent-load branch. The
+  # swap is equal-length (`!g()` -> `true`, both 4 bytes): the only safe edit to
+  # a Bun single-file executable, since it leaves every downstream offset and
+  # the appended trailer byte-identical (see ./patch-binary.py). The `expect`
+  # count gate fails the build loudly if a version bump reminifies the
+  # surrounding identifiers so the anchor no longer lands exactly once; re-derive
+  # the find/replace against the new binary when that happens.
+  devChannelsGatePatch = [
+    {
+      find = ''if(!g()||En()!=="firstParty"||_(y("policySettings")))'';
+      replace = ''if(true||En()!=="firstParty"||_(y("policySettings")))'';
+      expect = 1;
+    }
+  ];
+
+  # The launched helper binary with the gate patch applied. Only the binary the
+  # wrapper actually execs is patched; `stockCli` above keeps the unmodified
+  # download so the system-prompt extractor still probes stock behavior. The
+  # byte edit invalidates Anthropic's Developer-ID signature, so on darwin
+  # `autoSignDarwinBinariesHook` re-signs the Mach-O ad-hoc (else AMFI SIGKILLs
+  # it); on Linux `autoPatchelfHook` fixes the interpreter as it does for the
+  # stock binary.
+  patchedBinary = stdenv.mkDerivation {
+    pname = "claude-code-patched-binary";
+    inherit version;
+    dontUnpack = true;
+    dontStrip = true;
+    strictDeps = true;
+    nativeBuildInputs =
+      [python3]
+      ++ lib.optional stdenv.hostPlatform.isElf autoPatchelfHook
+      ++ lib.optional stdenv.hostPlatform.isDarwin darwin.autoSignDarwinBinariesHook;
+    # The mapping rides the derivation env as JSON (the patcher's input format),
+    # so the rules stay typed Nix here instead of a committed serialized file.
+    mappingJson = builtins.toJSON devChannelsGatePatch;
+    passAsFile = ["mappingJson"];
+    installPhase = ''
+      # shell
+      runHook preInstall
+      mkdir -p $out/libexec
+      python3 ${./patch-binary.py} ${nativeBinary} "$mappingJsonPath" "$out/libexec/claude"
+      chmod +x "$out/libexec/claude"
+      runHook postInstall
+    '';
+    # Byte proof: the silent-load branch must now be forced (`if(true||` present)
+    # and the original gated condition (`if(!g()||`) gone. A grep needs no exec,
+    # so this runs in-sandbox on darwin too (the re-sign-then-exec AMFI caveat
+    # that blocks a runtime smoke does not apply to byte inspection).
+    doInstallCheck = true;
+    installCheckPhase = ''
+      # shell
+      runHook preInstallCheck
+      patched=$(grep -c 'if(true||En()' "$out/libexec/claude" || true)
+      gated=$(grep -c 'if(!g()||En()' "$out/libexec/claude" || true)
+      [ "$patched" -ge 1 ] || { echo "FAIL: gate-disabled bytes not present" >&2; exit 1; }
+      [ "$gated" -eq 0 ] || { echo "FAIL: original gate condition still present ($gated)" >&2; exit 1; }
+      runHook postInstallCheck
+    '';
+  };
+
   stockCli = stdenv.mkDerivation {
     pname = "claude-code-stock";
     inherit version;
@@ -641,7 +711,7 @@ in
       # example, iTerm2 or Terminal)", not the code signature or CFBundleName:
       # https://developer.1password.com/docs/cli/app-integration-security/
       helper="$out/libexec/Claude Code"
-      install -m755 ${nativeBinary} "$helper"
+      install -m755 "${patchedBinary}/libexec/claude" "$helper"
 
       # All flag/env/PATH injection lives in `launchSpec` (see its let-binding and
       # `wrapperFlags` for the per-flag rationale); bake the helper's real path

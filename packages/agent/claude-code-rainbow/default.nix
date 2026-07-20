@@ -45,7 +45,10 @@
     inherit (target) hash;
   };
 
-  patcher = ./patch-binary.py;
+  # Shared equal-length byte patcher, owned by the canonical claude-code
+  # package (which now bakes its own gate patch through it); reached via the
+  # threaded packages root rather than a `../` climb.
+  patcher = ix.paths.packagesRoot + "/agent/claude-code/patch-binary.py";
 
   # One cacheable derivation per mapping. `input` is a store path to a single
   # binary file (the fetched binary, or the previous mapping's output); `$out`
