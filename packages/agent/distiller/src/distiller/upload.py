@@ -50,7 +50,8 @@ def upload_slice(
     import boto3
 
     access, secret = resolve_credentials(env_file)
-    client = boto3.client(
+    # boto3 ships no inline types (stubs live in boto3-stubs, not vendored here).
+    client = boto3.client(  # type: ignore[no-untyped-call]
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=access,

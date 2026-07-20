@@ -256,7 +256,8 @@ def write_slice(rows: list[Row], slice_dir: Path) -> dict[str, Path]:
     table = pa.Table.from_pydict(columns, schema=SCHEMA)
     data_path = slice_dir / "data.parquet"
     manifest_path = slice_dir / "_manifest.json"
-    pq.write_table(table, data_path)
+    # pyarrow ships no inline types; parquet io is untyped.
+    pq.write_table(table, data_path)  # type: ignore[no-untyped-call]
     manifest = {
         "content_hash": corpus_hash([(r.external_id, r.content_hash) for r in rows])
     }
@@ -332,7 +333,7 @@ def validate_slice(slice_dir: Path, source: str = SOURCE) -> int:
         )
     # The Rust reader requires Utf8 (not LargeUtf8/Utf8View) string columns;
     # check the physical arrow schema pyarrow reads back.
-    arrow_schema = pq.read_schema(data_path)
+    arrow_schema = pq.read_schema(data_path)  # type: ignore[no-untyped-call]
     for name in SCHEMA.names:
         got = arrow_schema.field(name).type
         want = SCHEMA.field(name).type
