@@ -101,11 +101,10 @@ defmodule IxMcp.PrWatch do
   end
 
   defp notify(pr, state, detail) do
-    Notifier.notify("notifications/message", %{
-      "level" => level(state),
-      "logger" => "ix_mcp.pr_watch",
-      "data" => %{"event" => "pr_watch", "pr" => pr, "state" => state, "detail" => detail}
-    })
+    Notifier.channel(
+      "PR ##{pr} #{state}: #{detail}",
+      %{"source" => "pr_watch", "pr" => pr, "state" => state, "level" => level(state)}
+    )
   end
 
   # "error" rode as "warning" before #3553; a watch that will never report

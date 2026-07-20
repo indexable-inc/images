@@ -1,9 +1,11 @@
 defmodule IxMcp.MCP.Notifier do
   @moduledoc """
-  Fan-out point for server-initiated MCP notifications (the "channel"): job
-  completions and failures are pushed to every connected transport, carrying
-  the full crash reason -- on the BEAM the exit reason is already a crash
-  report with state, so nothing has to be reconstructed after the fact.
+  Fan-out point for server-initiated MCP notifications. Session wakes ride
+  the Claude Code channel contract: `notifications/claude/channel` events,
+  paired with the experimental `claude/channel` capability the server
+  declares at initialize. Claude Code receives `notifications/message` (MCP
+  logging) but never surfaces it, so nothing user-facing may depend on that
+  method (#3785).
 
   Transports register themselves; when none is connected (tests, IEx),
   notifying is a no-op rather than an error.
@@ -21,20 +23,25 @@ defmodule IxMcp.MCP.Notifier do
     GenServer.cast(__MODULE__, {:register, transport})
   end
 
+  @doc """
+  Push one event into the connected Claude session. `content` becomes the
+  body of the `<channel>` tag the client injects; each `meta` entry becomes
+  a tag attribute, so values must be short scalars.
+  """
+  @spec channel(String.t(), %{optional(String.t()) => String.t() | number()}) :: :ok
+  def channel(content, meta) do
+    notify("notifications/claude/channel", %{"content" => content, "meta" => meta})
+  end
+
   @spec job_finished(IxMcp.Jobs.Job.summary()) :: :ok
   def job_finished(summary) do
-    notify("notifications/message", %{
-      "level" => level_for(summary.status),
-      "logger" => "ix_mcp.jobs",
-      "data" => %{
-        "event" => "job_finished",
-        "job" => summary.id,
-        "status" => Atom.to_string(summary.status),
-        "intent" => summary.intent,
-        "elapsed_s" => summary.elapsed_s,
-        "result" => summary.result
-      }
-    })
+    status = Atom.to_string(summary.status)
+
+    channel(
+      "job #{summary.id} (#{summary.intent || "no intent"}) finished: #{status} " <>
+        "in #{summary.elapsed_s}s\n#{String.slice(summary.result || "", 0, 2_000)}",
+      %{"source" => "jobs", "job" => summary.id, "status" => status}
+    )
   end
 
   @spec notify(String.t(), map()) :: :ok
@@ -65,6 +72,4 @@ defmodule IxMcp.MCP.Notifier do
     {:noreply, %{state | transports: List.delete(state.transports, pid)}}
   end
 
-  defp level_for(:done), do: "info"
-  defp level_for(_), do: "error"
 end

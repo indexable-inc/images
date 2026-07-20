@@ -18,7 +18,15 @@ defmodule IxMcp.MCP.Server do
       {"initialize", id} when id != nil ->
         result(id, %{
           "protocolVersion" => negotiate_version(params),
-          "capabilities" => %{"tools" => %{"listChanged" => false}, "logging" => %{}},
+          # The experimental "claude/channel" key is what makes this server a
+          # channel: Claude Code registers a push listener only when it sees it
+          # at initialize, and otherwise drops every notifications/claude/channel
+          # event (https://code.claude.com/docs/en/channels-reference, #3785).
+          "capabilities" => %{
+            "tools" => %{"listChanged" => false},
+            "logging" => %{},
+            "experimental" => %{"claude/channel" => %{}}
+          },
           "serverInfo" => %{"name" => "ix-mcp-ex", "version" => version()},
           "instructions" => instructions()
         })
