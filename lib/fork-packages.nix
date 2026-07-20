@@ -315,7 +315,18 @@
         citation = "https://github.com/ghostty-org/ghostty/blob/main/AI_POLICY.md";
         notes = "AI-assisted PRs welcome with disclosure (AI_POLICY.md) but gated by CONTRIBUTING.md's vouch system: unvouched contributors are auto-closed, so a human must request and receive a maintainer's `!vouch` before upstream-sync can open a PR.";
       };
-      patches = {};
+      patches = {
+        "0001-macos-fire-undo-close-expiry-via-main-queue-GCD-time.patch" = {
+          upstream = "attempt";
+          reason = "Undo-close retention (ghostty-org/ghostty#7535) leaks live sessions when the run-loop expiry Timer never fires; a main-queue GCD timer fires regardless of arming thread and run-loop mode.";
+          prExtra = "Context: undo-close design in ghostty-org/ghostty#7535; observed dozens of hidden surfaces tens of hours old against a 5s undo-timeout.";
+        };
+        "0002-termio-hang-up-child-process-groups-when-spawn-time-.patch" = {
+          upstream = "attempt";
+          reason = "Darwin killpg EPERM at surface close can mean the hangup reached nobody (root-owned login(1) alone in the spawn-time group; the shell moved to its own job-control group), leaving shells alive against a revoked tty.";
+          prExtra = "Related earlier lifecycle issues: ghostty-org/ghostty#2273, ghostty-org/ghostty#4554.";
+        };
+      };
     }
     {
       # clippy is nightly-toolchain-coupled: its input is pinned by rev and must

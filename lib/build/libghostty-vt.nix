@@ -3,6 +3,7 @@
   writeNushellApplication,
 }: let
   darwinXcrunShimFor = import ./darwin-xcrun-shim.nix {inherit lib writeNushellApplication;};
+  zigWarmCacheFor = import ./zig-warm-cache.nix {inherit lib;};
 in
   /**
   Build libghostty-vt: ghostty's terminal VT engine as a standalone C library.
@@ -117,48 +118,21 @@ in
       -Doptimize=ReleaseFast \
       -fsys=zlib --search-prefix ${pkgs.zlib}'';
 
+    zigWarmCache = zigWarmCacheFor pkgs;
+
     warmCache =
       if baseSource == ghosttySource
       then null
       else
-        stdenv.mkDerivation {
-          pname = "libghostty-vt-warm-cache";
-          inherit version;
-
-          src = builtins.path {
-            name = "ghostty-base-source";
-            path = baseSource;
-          };
-
-          strictDeps = true;
+        zigWarmCache.mkWarmCache {
+          pname = "libghostty-vt";
+          inherit version baseSource;
+          setup = seedGlobalCache;
+          zigArgs = ''
+            --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
+            ${zigInstallArgs}'';
           nativeBuildInputs = commonNativeBuildInputs;
           buildInputs = commonBuildInputs;
-
-          dontConfigure = true;
-          dontBuild = true;
-
-          installPhase = ''
-            # shell
-            runHook preInstall
-
-            ${seedGlobalCache}
-            mkdir -p "$TMPDIR/zig-local-cache"
-
-            zig build \
-              --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
-              --cache-dir "$TMPDIR/zig-local-cache" \
-              ${zigInstallArgs} \
-              --prefix "$TMPDIR/warm-install" \
-              --summary all
-
-            cp -R "$TMPDIR/zig-local-cache" "$out"
-
-            runHook postInstall
-          '';
-
-          doCheck = false;
-
-          meta.description = "Warm zig incremental-compile cache for libghostty-vt, keyed on the unpatched base source";
         };
   in
     stdenv.mkDerivation {
@@ -183,10 +157,7 @@ in
 
         ${seedGlobalCache}
         mkdir -p "$TMPDIR/zig-local-cache"
-        ${lib.optionalString (warmCache != null) ''
-          cp -R --no-preserve=mode ${warmCache}/. "$TMPDIR/zig-local-cache/"
-          chmod -R u+w "$TMPDIR/zig-local-cache"
-        ''}
+        ${zigWarmCache.seedFrom warmCache}
 
         buildCores=1
         if [ "''${enableParallelBuilding-1}" ]; then
