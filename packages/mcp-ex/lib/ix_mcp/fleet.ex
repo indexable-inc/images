@@ -191,7 +191,11 @@ defmodule IxMcp.Fleet do
       :ok
     else
       try do
-        register_probe(target, :erpc.call(target, :erl_eval, :module_info, [:md5], timeout), local)
+        register_probe(
+          target,
+          :erpc.call(target, :erl_eval, :module_info, [:md5], timeout),
+          local
+        )
       catch
         kind, reason -> {:error, {kind, reason}}
       end
@@ -242,20 +246,24 @@ defmodule IxMcp.Fleet do
     # ones run the fun; one bad node cannot poison the batch. The md5 probe
     # fans out in parallel (cached nodes skip it).
     local = :erl_eval.module_info(:md5)
-    {cached, unchecked} = Enum.split_with(targets, &(:persistent_term.get(cache_key(&1), nil) == local))
+
+    {cached, unchecked} =
+      Enum.split_with(targets, &(:persistent_term.get(cache_key(&1), nil) == local))
 
     probes = :erpc.multicall(unchecked, :erl_eval, :module_info, [:md5], timeout)
 
     checks =
-      Map.new(Enum.zip_with(unchecked, probes, fn t, probe ->
-        result =
-          case normalize(probe) do
-            {:ok, remote} -> register_probe(t, remote, local)
-            {:error, reason} -> {:error, reason}
-          end
+      Map.new(
+        Enum.zip_with(unchecked, probes, fn t, probe ->
+          result =
+            case normalize(probe) do
+              {:ok, remote} -> register_probe(t, remote, local)
+              {:error, reason} -> {:error, reason}
+            end
 
-        {t, result}
-      end))
+          {t, result}
+        end)
+      )
 
     ok_targets = cached ++ for {t, :ok} <- checks, do: t
     results = Map.new(Enum.zip(ok_targets, :erpc.multicall(ok_targets, fun, timeout)))

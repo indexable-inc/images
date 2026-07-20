@@ -163,7 +163,13 @@ defmodule IxMcp.Agents.Events do
         {:error, reason} -> {"error", inspect_text(reason)}
       end
 
-    attrs = %{"source" => "agents", "event" => "agent_finished", "agent" => id, "status" => status}
+    attrs = %{
+      "source" => "agents",
+      "event" => "agent_finished",
+      "agent" => id,
+      "status" => status
+    }
+
     attrs = if meta, do: Map.put(attrs, "backend", Atom.to_string(meta.backend)), else: attrs
 
     Notifier.channel(
