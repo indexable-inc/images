@@ -46,8 +46,15 @@ on:
       slack-bot-token:
         description: "Slack bot token (chat:write) for escalation posts; empty escalates through the tracking issue only."
         required: false
-  schedule:
-    - cron: "17 * * * *"
+  # Scheduled self-bumps are DISABLED for index (operator decision,
+  # 2026-07-20): an unattended nixpkgs/input bump invalidates huge build
+  # closures (fork patch DAGs, the znver5 base, every dependent check) and,
+  # done often, drifts CI ahead of the nix-controlled workstation and fleet
+  # pins, so local funs/builds fall out of sync with what main expects.
+  # Bump deliberately via workflow_dispatch instead; may be re-enabled once
+  # the rebuild cost and pin-sync story are solved.
+  # schedule:
+  #   - cron: "17 * * * *"
 
 permissions:
   contents: read
