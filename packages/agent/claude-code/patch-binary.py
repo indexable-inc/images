@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Equal-length, count-gated byte patcher for the Claude Code Bun binary.
 
-The load-bearing idea behind the whole "rainbow" chain lives here:
+Used to bake small, verifiable edits into the prebuilt binary without
+recompiling Bun: the claude-code package disables the development-channels
+confirmation gate this way, and claude-code-rainbow recolors the theme. The
+load-bearing idea behind every such swap lives here:
 
   * Claude Code ships as a prebuilt Bun single-file executable: a Mach-O/ELF
     with the minified app JS embedded as text inside it, plus a trailer Bun
