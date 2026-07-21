@@ -332,6 +332,14 @@
   systemdHardening = import ./services/systemd-hardening.nix;
 
   /**
+  TigerBeetle's documented deployment contract (memory floor, reference
+  `--cache-grid`, `CAP_IPC_LOCK`) as data, so consumers running a replica
+  (ix billing-ledger) size units from the vendor doc instead of re-deriving
+  it. See [`lib/services/tigerbeetle.nix`](lib/services/tigerbeetle.nix).
+  */
+  tigerbeetle = import ./services/tigerbeetle.nix;
+
+  /**
   The pinned fabric/Ray execution environment as data: env tag, node
   resources, cluster env vars, wrapped `ray` CLI. One owner shared by the
   ray modules and the mcp wrappers. See [`lib/fabric.nix`](lib/fabric.nix).
@@ -753,6 +761,7 @@
       selfVersionFor
       skills
       systemdHardening
+      tigerbeetle
       toml
       unibind
       unibindFor
