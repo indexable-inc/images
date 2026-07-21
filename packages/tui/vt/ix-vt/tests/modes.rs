@@ -82,3 +82,54 @@ fn scrollbar_reports_history_and_bottom() {
     let bar = term.scrollbar().expect("query");
     assert_eq!(bar.offset + bar.len, bar.total, "back at the bottom");
 }
+
+#[test]
+fn bracketed_paste_focus_and_synchronized_output_track_decset() {
+    let mut term = Terminal::new(24, 80, 1000).expect("create terminal");
+    assert!(!term.bracketed_paste().expect("query 2004"));
+    assert!(!term.focus_events().expect("query 1004"));
+    assert!(!term.synchronized_output().expect("query 2026"));
+
+    // What a modern shell/TUI sets on entry: bracketed paste + focus
+    // reporting; 2026 wraps a batched redraw.
+    term.vt_write(b"\x1b[?2004h\x1b[?1004h\x1b[?2026h");
+    assert!(term.bracketed_paste().expect("query 2004 after set"));
+    assert!(term.focus_events().expect("query 1004 after set"));
+    assert!(term.synchronized_output().expect("query 2026 after set"));
+
+    term.vt_write(b"\x1b[?2004l\x1b[?1004l\x1b[?2026l");
+    assert!(!term.bracketed_paste().expect("query 2004 after reset"));
+    assert!(!term.focus_events().expect("query 1004 after reset"));
+    assert!(!term.synchronized_output().expect("query 2026 after reset"));
+}
+
+#[test]
+fn kitty_keyboard_flags_track_csi_u_set_and_push_pop() {
+    let mut term = Terminal::new(24, 80, 1000).expect("create terminal");
+    assert!(term.kitty_keyboard_flags().expect("query").is_empty());
+
+    // CSI = 5 ; 1 u: set flags to disambiguate + report-alternates.
+    term.vt_write(b"\x1b[=5;1u");
+    let flags = term.kitty_keyboard_flags().expect("query after set");
+    assert_eq!(flags.bits(), 5);
+    assert!(flags.contains(ix_vt::KittyKeyboardFlags::DISAMBIGUATE));
+    assert!(flags.contains(ix_vt::KittyKeyboardFlags::REPORT_ALTERNATES));
+    assert!(!flags.contains(ix_vt::KittyKeyboardFlags::REPORT_EVENTS));
+
+    // CSI > 3 u: push disambiguate + report-events (what kitten and modern
+    // TUIs emit for progressive enhancement).
+    term.vt_write(b"\x1b[>3u");
+    assert_eq!(
+        term.kitty_keyboard_flags()
+            .expect("query after push")
+            .bits(),
+        3
+    );
+
+    // CSI < u: pop back to the previous entry.
+    term.vt_write(b"\x1b[<u");
+    assert_eq!(
+        term.kitty_keyboard_flags().expect("query after pop").bits(),
+        5
+    );
+}

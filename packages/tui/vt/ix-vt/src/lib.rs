@@ -301,6 +301,104 @@ pub struct Scrollbar {
     pub len: u64,
 }
 
+/// Kitty keyboard protocol progressive-enhancement flags.
+///
+/// Set by the application via `CSI = flags ; mode u` / `CSI > flags u` (see
+/// [`Terminal::kitty_keyboard_flags`]). A zero value means the protocol is
+/// disabled and legacy encoding applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct KittyKeyboardFlags(u8);
+
+impl KittyKeyboardFlags {
+    /// Disambiguate escape codes (`GHOSTTY_KITTY_KEY_DISAMBIGUATE`).
+    pub const DISAMBIGUATE: Self = Self(1);
+    /// Report key repeat and release events (`GHOSTTY_KITTY_KEY_REPORT_EVENTS`).
+    pub const REPORT_EVENTS: Self = Self(2);
+    /// Report shifted and base-layout alternate keys
+    /// (`GHOSTTY_KITTY_KEY_REPORT_ALTERNATES`).
+    pub const REPORT_ALTERNATES: Self = Self(4);
+    /// Report all keys as escape codes (`GHOSTTY_KITTY_KEY_REPORT_ALL`).
+    pub const REPORT_ALL: Self = Self(8);
+    /// Report associated text with key events
+    /// (`GHOSTTY_KITTY_KEY_REPORT_ASSOCIATED`).
+    pub const REPORT_ASSOCIATED: Self = Self(16);
+
+    /// The raw bitmask (`GhosttyKittyKeyFlags`), e.g. for shipping on a wire.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Rebuild from a raw bitmask (the inverse of [`bits`](Self::bits)).
+    #[must_use]
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits)
+    }
+
+    /// Whether every flag in `other` is set.
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Whether no flag is set (legacy keyboard encoding).
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// The OSC 133 semantic-prompt classification of a row (shell integration
+/// marks; see [`Terminal::row_semantic_prompt`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum RowSemanticPrompt {
+    /// No prompt cells in the row (regular output or input).
+    #[default]
+    None,
+    /// A primary prompt line (the row an `OSC 133;A` mark opened).
+    Prompt,
+    /// A continuation line of a multi-row prompt.
+    PromptContinuation,
+}
+
+/// Addresses one row of the terminal grid for state queries, in one of
+/// ghostty's coordinate spaces (`GhosttyPointTag`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RowLocation {
+    /// A row of the active area (where the cursor can move), 0-indexed from
+    /// its top.
+    Active(u16),
+    /// A row of the visible viewport (moves when scrolled), 0-indexed from
+    /// its top.
+    Viewport(u16),
+    /// A row of the full screen including scrollback, 0-indexed from the
+    /// oldest history row.
+    Screen(u32),
+    /// A row of the scrollback history only (before the active area).
+    History(u32),
+}
+
+impl RowLocation {
+    /// The raw tagged point at column 0 of the addressed row.
+    fn point(self) -> sys::GhosttyPoint {
+        let (tag, y) = match self {
+            Self::Active(y) => (sys::GhosttyPointTag::GHOSTTY_POINT_TAG_ACTIVE, u32::from(y)),
+            Self::Viewport(y) => (
+                sys::GhosttyPointTag::GHOSTTY_POINT_TAG_VIEWPORT,
+                u32::from(y),
+            ),
+            Self::Screen(y) => (sys::GhosttyPointTag::GHOSTTY_POINT_TAG_SCREEN, y),
+            Self::History(y) => (sys::GhosttyPointTag::GHOSTTY_POINT_TAG_HISTORY, y),
+        };
+        sys::GhosttyPoint {
+            tag,
+            value: sys::GhosttyPointValue {
+                coordinate: sys::GhosttyPointCoordinate { x: 0, y },
+            },
+        }
+    }
+}
+
 /// Options for creating a [`Terminal`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalOptions {
@@ -341,6 +439,15 @@ const MOUSE_EVENT_ANY: sys::GhosttyMode = 1003;
 /// DECSET 1006: report mouse events in the SGR encoding (`CSI < b;x;y M/m`),
 /// which is unambiguous and unbounded, unlike the legacy X10 byte encoding.
 const MOUSE_FORMAT_SGR: sys::GhosttyMode = 1006;
+/// DECSET 2004: bracketed paste. When set, the application expects pasted
+/// text wrapped in `ESC [ 200 ~` / `ESC [ 201 ~` guards.
+const BRACKETED_PASTE: sys::GhosttyMode = 2004;
+/// DECSET 1004: focus event reporting. When set, the application expects
+/// `ESC [ I` / `ESC [ O` on terminal focus gain/loss.
+const FOCUS_EVENT: sys::GhosttyMode = 1004;
+/// DEC private mode 2026: synchronized output. While set, a renderer should
+/// hold frames so the application can update the screen atomically.
+const SYNCHRONIZED_OUTPUT: sys::GhosttyMode = 2026;
 
 impl Terminal {
     /// Create a terminal sized `rows` by `cols` with `scrollback` lines of
@@ -512,6 +619,140 @@ impl Terminal {
         self.mode_enabled(MOUSE_FORMAT_SGR)
     }
 
+    /// Whether DECSET 2004 (bracketed paste) is set. When it is, an input
+    /// driver wraps pasted text in `ESC [ 200 ~` / `ESC [ 201 ~` so the
+    /// application (shells, editors) can treat the paste atomically instead
+    /// of executing embedded newlines.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidValue`] if ghostty rejects the mode query.
+    pub fn bracketed_paste(&self) -> Result<bool> {
+        self.mode_enabled(BRACKETED_PASTE)
+    }
+
+    /// Whether DECSET 1004 (focus event reporting) is set. When it is, an
+    /// input driver sends `ESC [ I` on focus gain and `ESC [ O` on focus
+    /// loss.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidValue`] if ghostty rejects the mode query.
+    pub fn focus_events(&self) -> Result<bool> {
+        self.mode_enabled(FOCUS_EVENT)
+    }
+
+    /// Whether DEC private mode 2026 (synchronized output) is set. While it
+    /// is, a renderer should hold frames: the application is batching screen
+    /// updates and will reset the mode when the frame is complete. Pair the
+    /// read with a timeout — a crashed application must not freeze the
+    /// display.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidValue`] if ghostty rejects the mode query.
+    pub fn synchronized_output(&self) -> Result<bool> {
+        self.mode_enabled(SYNCHRONIZED_OUTPUT)
+    }
+
+    /// The kitty keyboard protocol flags the application has set
+    /// (`CSI = flags ; mode u`, `CSI > flags u`). An empty value means the
+    /// legacy encoding applies; any set flag means an input driver must
+    /// encode keys per the kitty progressive-enhancement spec.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if ghostty rejects the state query.
+    pub fn kitty_keyboard_flags(&self) -> Result<KittyKeyboardFlags> {
+        let bits: u8 = unsafe {
+            self.get(sys::GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS)
+        }?;
+        Ok(KittyKeyboardFlags::from_bits(bits))
+    }
+
+    /// The OSC 133 semantic-prompt state of one row, addressed in any of
+    /// ghostty's coordinate spaces. [`RowLocation::Screen`] covers the
+    /// scrollback, so a caller can walk prompt marks across history (e.g.
+    /// jump-to-previous-prompt).
+    ///
+    /// Resolving an arbitrary row is not free (ghostty documents grid
+    /// references as unfit for per-frame render loops); query on demand, not
+    /// per rendered frame across the whole scrollback.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidValue`] if the row is out of range for its
+    /// coordinate space, or another [`Error`] if ghostty rejects the query.
+    pub fn row_semantic_prompt(&self, row: RowLocation) -> Result<RowSemanticPrompt> {
+        // A grid ref is a "sized" struct: `size` must be set before the call
+        // so the library can detect the caller's struct layout.
+        let mut grid_ref: sys::GhosttyGridRef = unsafe { std::mem::zeroed() };
+        grid_ref.size = std::mem::size_of::<sys::GhosttyGridRef>();
+        check(unsafe { sys::ghostty_terminal_grid_ref(self.raw, row.point(), &raw mut grid_ref) })?;
+        let mut raw_row: sys::GhosttyRow = 0;
+        check(unsafe { sys::ghostty_grid_ref_row(&raw const grid_ref, &raw mut raw_row) })?;
+        // Read the enum as its raw u32 and map known values instead of
+        // materializing the C enum from FFI output (an out-of-range tag
+        // would be UB to form as a Rust enum).
+        let mut semantic: u32 = 0;
+        check(unsafe {
+            sys::ghostty_row_get(
+                raw_row,
+                sys::GhosttyRowData::GHOSTTY_ROW_DATA_SEMANTIC_PROMPT,
+                (&raw mut semantic).cast::<c_void>(),
+            )
+        })?;
+        Ok(match semantic {
+            1 => RowSemanticPrompt::Prompt,
+            2 => RowSemanticPrompt::PromptContinuation,
+            _ => RowSemanticPrompt::None,
+        })
+    }
+
+    /// Dump the terminal's full text — scrollback plus the active screen —
+    /// as plain text, with soft-wrapped lines joined and trailing whitespace
+    /// trimmed (select-all-copy semantics). Escape sequences and styling are
+    /// not included.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if ghostty cannot allocate the formatter or
+    /// rejects a format call.
+    pub fn dump_text(&self) -> Result<String> {
+        // The extra structs are "sized" like GhosttyStyle: their `size`
+        // fields must be set even with every extra disabled.
+        let mut options: sys::GhosttyFormatterTerminalOptions = unsafe { std::mem::zeroed() };
+        options.size = std::mem::size_of::<sys::GhosttyFormatterTerminalOptions>();
+        options.emit = sys::GhosttyFormatterFormat::GHOSTTY_FORMATTER_FORMAT_PLAIN;
+        options.unwrap = true;
+        options.trim = true;
+        options.extra.size = std::mem::size_of::<sys::GhosttyFormatterTerminalExtra>();
+        options.extra.screen.size = std::mem::size_of::<sys::GhosttyFormatterScreenExtra>();
+
+        let formatter = Formatter::new(self, options)?;
+
+        // Size query: NULL buffer returns OUT_OF_SPACE with the required
+        // size (or SUCCESS when there is nothing to emit).
+        let mut needed: usize = 0;
+        let query = unsafe {
+            sys::ghostty_formatter_format_buf(formatter.raw, ptr::null_mut(), 0, &raw mut needed)
+        };
+        match query {
+            sys::GhosttyResult::GHOSTTY_SUCCESS => return Ok(String::new()),
+            sys::GhosttyResult::GHOSTTY_OUT_OF_SPACE => {}
+            other => return Err(check(other).unwrap_err()),
+        }
+
+        let mut buf = vec![0u8; needed];
+        let mut written: usize = 0;
+        check(unsafe {
+            sys::ghostty_formatter_format_buf(
+                formatter.raw,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &raw mut written,
+            )
+        })?;
+        buf.truncate(written);
+        // Ghostty stores codepoints, so the dump is UTF-8; lossy conversion
+        // is a no-op safety net rather than an expected path.
+        Ok(String::from_utf8_lossy(&buf).into_owned())
+    }
+
     /// Whether the alternate screen is active (DECSET 47/1047/1049), read
     /// from the terminal's active-screen state rather than any single mode
     /// bit, so every enter/leave path is covered.
@@ -552,6 +793,36 @@ impl Terminal {
 impl Drop for Terminal {
     fn drop(&mut self) {
         unsafe { sys::ghostty_terminal_free(self.raw) };
+    }
+}
+
+/// Owned wrapper over a `GhosttyFormatter`, freed on drop. The formatter
+/// borrows the terminal (the C API stores a reference), so the lifetime ties
+/// it to the [`Terminal`] it formats.
+struct Formatter<'terminal> {
+    raw: sys::GhosttyFormatter_ptr,
+    _terminal: std::marker::PhantomData<&'terminal Terminal>,
+}
+
+impl<'terminal> Formatter<'terminal> {
+    fn new(
+        terminal: &'terminal Terminal,
+        options: sys::GhosttyFormatterTerminalOptions,
+    ) -> Result<Self> {
+        let mut raw: sys::GhosttyFormatter_ptr = ptr::null_mut();
+        check(unsafe {
+            sys::ghostty_formatter_terminal_new(ptr::null(), &raw mut raw, terminal.raw, options)
+        })?;
+        Ok(Self {
+            raw,
+            _terminal: std::marker::PhantomData,
+        })
+    }
+}
+
+impl Drop for Formatter<'_> {
+    fn drop(&mut self) {
+        unsafe { sys::ghostty_formatter_free(self.raw) };
     }
 }
 
