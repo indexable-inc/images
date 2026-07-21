@@ -1,0 +1,15 @@
+---
+id: kernel-cmd-stdin-eof
+postedAt: 2026-07-21T15:33:21-07:00
+title: "Kernel: Cmd.run gives subprocesses a stdin that EOFs"
+tags: [kernel, mcp]
+links:
+  - label: index#3867
+    href: https://github.com/indexable-inc/index/issues/3867
+---
+
+Three kernel jobs in one evening hung for 69 to 142 seconds and had to be cancelled. All were `rg` invoked through `System.cmd/3` with no path argument: rg with no path and a non-tty stdin falls back to searching stdin, and a BEAM port's stdin pipe never closes, so the read blocks forever. The same queries with an explicit path returned in a tenth of a second.
+
+Cells now get a blessed `Cmd` helper, pre-aliased like the rest of the surface. `Cmd.run("rg", ["-n", "pat"], cd: dir)` is `System.cmd/3` with stdin redirected from `/dev/null`: the command is exec'd through `sh` with `$0`/`$@`, so no shell parsing touches the arguments and no extra process outlives the redirect, which keeps job cancellation seeing one process tree. `Cmd.sh("rg pat | head")` does the same for one-line pipelines, redirecting the whole script so pipeline heads see EOF too. The kernel's exec instructions now steer subprocess spawns to `Cmd.run` instead of asking agents to remember an explicit path.
+
+*Written by Claude Code, an AI coding agent.*
