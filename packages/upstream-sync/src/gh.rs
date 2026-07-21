@@ -10,11 +10,95 @@ use crate::mapping::Slug;
 use crate::status::{Duplicate, Pr, utc_stamp};
 use crate::style::{YELLOW, paint};
 
+/// One entry of gh's `statusCheckRollup`: a mix of `CheckRun` entries
+/// carrying name/status/conclusion and commit-status contexts carrying
+/// context/state. Every field is optional because each kind carries only its
+/// own subset.
+#[derive(Debug, Default, Deserialize)]
+struct RollupItem {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    context: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+/// The collapsed upstream CI verdict of one PR head, with the failing check
+/// names kept so a red verdict is actionable without opening the PR.
+struct CiVerdict {
+    /// failing | pending | passing | none.
+    verdict: &'static str,
+    /// Names of the failing checks (check-run `name` or status `context`).
+    failing: Vec<String>,
+}
+
+/// Collapse a `statusCheckRollup` into one verdict. CANCELLED counts as
+/// failing: on fail-fast matrices (nushell) the cancelled jobs ride along
+/// with a real failure, and a required check that was cancelled is not green
+/// either way.
+fn ci_verdict(rollup: &[RollupItem]) -> CiVerdict {
+    const FAILING_CONCLUSIONS: [&str; 5] = [
+        "FAILURE",
+        "TIMED_OUT",
+        "CANCELLED",
+        "ACTION_REQUIRED",
+        "STARTUP_FAILURE",
+    ];
+    const FAILING_STATES: [&str; 2] = ["FAILURE", "ERROR"];
+    let is_failing = |item: &RollupItem| {
+        item.conclusion
+            .as_deref()
+            .is_some_and(|c| FAILING_CONCLUSIONS.contains(&c))
+            || item
+                .state
+                .as_deref()
+                .is_some_and(|s| FAILING_STATES.contains(&s))
+    };
+    let is_pending = |item: &RollupItem| {
+        item.status
+            .as_deref()
+            .is_some_and(|s| !s.is_empty() && s != "COMPLETED")
+            || item
+                .state
+                .as_deref()
+                .is_some_and(|s| s == "PENDING" || s == "EXPECTED")
+    };
+    let failing: Vec<String> = rollup
+        .iter()
+        .filter(|item| is_failing(item))
+        .map(|item| {
+            item.name
+                .clone()
+                .or_else(|| item.context.clone())
+                .unwrap_or_else(|| "unknown".to_owned())
+        })
+        .collect();
+    let verdict = if rollup.is_empty() {
+        "none"
+    } else if failing.is_empty() {
+        if rollup.iter().any(is_pending) {
+            "pending"
+        } else {
+            "passing"
+        }
+    } else {
+        "failing"
+    };
+    CiVerdict { verdict, failing }
+}
+
 /// Refresh a tracked PR's live state, or `None` if the PR can no longer be
 /// read (deleted/renamed).
 ///
 /// The result's `state` collapses gh's separate `state` (OPEN/CLOSED/MERGED)
-/// and `isDraft` into one of open|draft|merged|closed.
+/// and `isDraft` into one of open|draft|merged|closed; its `ci` collapses the
+/// head commit's `statusCheckRollup` into failing | pending | passing | none
+/// (see [`ci_verdict`]), with the failing check names kept.
 ///
 /// # Errors
 /// Fails only when `gh` cannot be spawned.
@@ -26,6 +110,8 @@ pub fn refresh_pr(slug: &Slug, number: u64) -> Result<Option<Pr>> {
         is_draft: bool,
         url: String,
         number: u64,
+        #[serde(default)]
+        status_check_rollup: Option<Vec<RollupItem>>,
     }
 
     let res = cmd::complete(
@@ -37,7 +123,7 @@ pub fn refresh_pr(slug: &Slug, number: u64) -> Result<Option<Pr>> {
             "--repo",
             &format!("{}/{}", slug.owner, slug.repo),
             "--json",
-            "state,isDraft,url,number",
+            "state,isDraft,url,number,statusCheckRollup",
         ],
     )?;
     if !res.ok() {
@@ -52,10 +138,13 @@ pub fn refresh_pr(slug: &Slug, number: u64) -> Result<Option<Pr>> {
         _ if view.is_draft => "draft",
         _ => "open",
     };
+    let ci = ci_verdict(&view.status_check_rollup.unwrap_or_default());
     Ok(Some(Pr {
         url: view.url,
         number: view.number,
         state: state.to_owned(),
+        ci: ci.verdict.to_owned(),
+        failing_checks: ci.failing,
         checked_at: utc_stamp(),
     }))
 }
@@ -169,5 +258,46 @@ mod tests {
     #[test]
     fn tokenless_subject_yields_empty() {
         assert!(subject_tokens("fix the a of").is_empty());
+    }
+
+    fn rollup(raw: &str) -> Vec<RollupItem> {
+        serde_json::from_str(raw).unwrap()
+    }
+
+    #[test]
+    fn ci_verdict_collapses_the_rollup() {
+        // Empty rollup: no CI configured upstream.
+        assert_eq!(ci_verdict(&[]).verdict, "none");
+
+        // A failure wins over green and pending; CANCELLED counts as failing
+        // (fail-fast matrices cancel the rest of the wall); failing names
+        // come from the check-run `name` or the status `context`.
+        let red = ci_verdict(&rollup(
+            r#"[{"name":"cargo fmt","status":"COMPLETED","conclusion":"FAILURE"},
+                {"name":"cargo test","status":"COMPLETED","conclusion":"CANCELLED"},
+                {"context":"ci/other","state":"SUCCESS"},
+                {"name":"docs","status":"IN_PROGRESS"}]"#,
+        ));
+        assert_eq!(red.verdict, "failing");
+        assert_eq!(red.failing, vec!["cargo fmt", "cargo test"]);
+
+        // No failure but an unfinished check-run or a pending context.
+        let pending = ci_verdict(&rollup(
+            r#"[{"name":"build","status":"IN_PROGRESS"},
+                {"context":"ci/other","state":"SUCCESS"}]"#,
+        ));
+        assert_eq!(pending.verdict, "pending");
+        assert!(pending.failing.is_empty());
+        assert_eq!(
+            ci_verdict(&rollup(r#"[{"context":"ci/x","state":"EXPECTED"}]"#)).verdict,
+            "pending"
+        );
+
+        // Everything completed green.
+        let green = ci_verdict(&rollup(
+            r#"[{"name":"build","status":"COMPLETED","conclusion":"SUCCESS"},
+                {"context":"ci/other","state":"SUCCESS"}]"#,
+        ));
+        assert_eq!(green.verdict, "passing");
     }
 }

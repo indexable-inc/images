@@ -1,5 +1,5 @@
-//! `upstream-pr <pkg> <patch> [--open] [--dry-run]`: contribute ONE of our
-//! fork patches upstream without carrying the rest of the series.
+//! `upstream-pr <pkg> <patch> [--open] [--draft] [--dry-run]`: contribute
+//! ONE of our fork patches upstream without carrying the rest of the series.
 //!
 //! We keep a de-forked patch series (packages/<pkg>/patches, see
 //! `lib/util/patched-src.nix`) pinned at an OLDER upstream base. To send a
@@ -17,27 +17,45 @@
 //!      mechanical drift between our old base and the upstream tip; a real
 //!      collision fails loudly (this is exactly where old-base-vs-tip drift
 //!      surfaces, and a human must rebase the patch).
-//!   4. Pushes the branch to an indexable-inc fork of the upstream repo
+//!   4. Runs the fork's `preflight` commands (lib/fork-packages.nix) in the
+//!      patched scratch checkout: the target repo's own cheap pre-submit
+//!      gates (fmt-level, mirroring the first steps of its CI). A red
+//!      preflight aborts the contribution loudly BEFORE anything is pushed;
+//!      an upstream PR that fails `cargo fmt` in its first CI step reads as
+//!      low-effort to maintainers (nushell/nushell#18549).
+//!   5. Pushes the branch to an indexable-inc fork of the upstream repo
 //!      (created with `gh repo fork --clone=false` if absent). Pushing to
 //!      OUR fork is fine; it is not the outward act.
-//!   5. Prints the ready-to-open compare URL. With `--open`, additionally
-//!      opens a DRAFT PR upstream. Default is prepare-only: opening the
-//!      upstream PR is the outward act and stays behind an explicit `--open`
-//!      a human invokes.
+//!   6. Prints the ready-to-open compare URL. With `--open`, additionally
+//!      opens the PR upstream READY FOR REVIEW (pass `--draft` to open a
+//!      draft instead). Ready is the default because the preflight and
+//!      template rendering above are exactly the pre-submit bar; a PR parked
+//!      as a draft signals not-ready and sits unreviewed. Default is
+//!      prepare-only: opening the upstream PR is the outward act and stays
+//!      behind an explicit `--open` a human invokes.
 //!
 //! The PR's title and body come FROM THE PATCH ITSELF: subject = title,
 //! commit message body = PR body (one fact, one home; the fork mapping
 //! deliberately has no duplicate description field), plus AI attribution and
-//! a link back to the patch file of record. An optional
-//! `patches.<patch>.prExtra` in the mapping is appended after the body for
-//! upstream-specific PR-template content (issue refs, checklists) that does
-//! not belong in a commit message. A body-less commit is refused; the
+//! a link back to the patch file of record. When the target repo ships a PR
+//! template (.github/pull_request_template.md and the standard fallback
+//! locations, read from the scratch checkout), the body is RENDERED INTO the
+//! template's `## ` sections instead: Description <- the commit body, a
+//! release-notes section <- the patch's `releaseNotes` from the mapping, an
+//! additional-notes section <- `prExtra` + the attribution block (see
+//! [`upstream_sync::template`]). A template section this tool cannot fill
+//! refuses loudly rather than opening a noncompliant PR; a repo with no
+//! template keeps the plain composition (body + `prExtra` + attribution). An
+//! optional `patches.<patch>.prExtra` in the mapping carries
+//! upstream-specific PR content (issue refs, checklists) that does not
+//! belong in a commit message. A body-less commit is refused; the
 //! `patch-dag-<name>` check enforces the same for every attempt-marked patch
 //! so the failure happens in CI, not mid-contribution.
 //!
-//! `--dry-run` runs the whole flow (closure, fetch, am, branch) but skips
-//! the push and PR, printing what it WOULD push. Used to validate content
-//! without touching any remote.
+//! `--dry-run` runs the whole flow (closure, fetch, am, branch, preflight,
+//! body composition including template rendering) but skips the push and PR,
+//! printing what it WOULD push and open. Used to validate content without
+//! touching any remote.
 
 use std::collections::HashMap;
 use std::fs;
@@ -49,7 +67,7 @@ use color_eyre::eyre::{Result, WrapErr, bail, eyre};
 use lazy_regex::regex;
 use upstream_sync::mapping::{self, Fork, Slug};
 use upstream_sync::style::{CYAN, GREEN, YELLOW, paint};
-use upstream_sync::{cmd, dag, patch};
+use upstream_sync::{cmd, dag, patch, template};
 
 /// The GitHub org whose forks host the contribution branches.
 const ORG: &str = "indexable-inc";
@@ -61,9 +79,14 @@ struct Cli {
     pkg: String,
     /// patch file name (or its NNNN prefix / unique substring)
     patch: String,
-    /// also open a DRAFT PR upstream (outward act; default: prepare only)
+    /// also open the PR upstream (outward act; default: prepare only)
     #[arg(long)]
     open: bool,
+    /// with --open: open the PR as a draft (default: ready for review; the
+    /// preflight + template rendering are the pre-submit bar, and a draft
+    /// parked on a maintainer's queue signals not-ready and sits unreviewed)
+    #[arg(long)]
+    draft: bool,
     /// run the whole flow but skip push + PR (validate content)
     #[arg(long)]
     dry_run: bool,
@@ -123,9 +146,21 @@ fn main() -> Result<()> {
         )
     );
 
+    run_preflight(&scratch, &fork, &cli.pkg)?;
+
     if cli.dry_run {
-        return dry_run_report(&scratch, &tip, &branch, &slug.repo);
+        let content = compose_pr_content(&cli.pkg, &fork, &scratch, &target)?;
+        return dry_run_report(&scratch, &tip, &branch, &slug.repo, &content);
     }
+
+    // Compose (and, when the target repo ships a template, render) the PR
+    // content BEFORE the push: an unfillable template section refuses here,
+    // leaving no half-done outward state behind.
+    let content = if cli.open {
+        Some(compose_pr_content(&cli.pkg, &fork, &scratch, &target)?)
+    } else {
+        None
+    };
 
     // Ensure an indexable-inc fork of the upstream exists, then push.
     ensure_fork(&slug)?;
@@ -158,13 +193,11 @@ fn main() -> Result<()> {
     );
     println!("  {compare}");
 
-    if cli.open {
-        open_draft_pr(
-            &cli.pkg, &fork, &scratch, &slug, &head_ref, &branch, &target,
-        )?;
+    if let Some(content) = content {
+        open_pr(&slug, &head_ref, &branch, &content, cli.draft)?;
     } else {
         println!(
-            "upstream-pr: prepare-only. Re-run with `--open` to open a DRAFT PR upstream, or open the compare URL by hand."
+            "upstream-pr: prepare-only. Re-run with `--open` to open the PR upstream (add `--draft` for a draft), or open the compare URL by hand."
         );
     }
 
@@ -235,10 +268,48 @@ fn resolve_closure(pkg: &str, requested: &str, doc: &dag::Doc) -> Result<Closure
     Ok(Closure { target, ordered })
 }
 
-/// Print what `--dry-run` would have pushed (branch, commits, scratch repo
-/// location); split out of [`main`] to keep it within clippy's
-/// function-length budget.
-fn dry_run_report(scratch: &Path, tip: &str, branch: &str, repo: &str) -> Result<()> {
+/// Per-repo preflight (`preflight` in the fork mapping): the target repo's
+/// own cheap pre-submit gates (fmt-level checks mirroring the first steps of
+/// its CI, never full test suites), run in the patched scratch checkout so
+/// the EXACT tree we would push passes them. A red preflight aborts the
+/// contribution loudly before anything is pushed: nushell/nushell#18549
+/// shipped a `cargo fmt` failure that turned the whole upstream CI matrix
+/// red in seconds. Commands run via `bash -ec` with the invoking
+/// environment's toolchain; a missing tool fails the same way (loudly),
+/// never skips.
+fn run_preflight(scratch: &Path, fork: &Fork, pkg: &str) -> Result<()> {
+    for command in &fork.preflight {
+        println!("upstream-pr: {pkg}: preflight: {command}");
+        let res = cmd::complete_in(scratch, "bash", &["-ec", command])?;
+        if !res.ok() {
+            println!("{}", res.stdout);
+            println!("{}", res.stderr);
+            bail!(
+                "upstream-pr: {pkg}: preflight `{command}` FAILED in the patched checkout; the upstream PR would open with red CI. Fix the patch series first. Scratch repo: {}",
+                scratch.display()
+            );
+        }
+        println!(
+            "{}",
+            paint(
+                GREEN,
+                &format!("upstream-pr: {pkg}: preflight `{command}` passed")
+            )
+        );
+    }
+    Ok(())
+}
+
+/// Print what `--dry-run` would have pushed and opened (branch, commits,
+/// composed PR content, scratch repo location); split out of [`main`] to
+/// keep it within clippy's function-length budget.
+fn dry_run_report(
+    scratch: &Path,
+    tip: &str,
+    branch: &str,
+    repo: &str,
+    content: &PrContent,
+) -> Result<()> {
     println!(
         "{}",
         paint(
@@ -256,6 +327,11 @@ fn dry_run_report(scratch: &Path, tip: &str, branch: &str, repo: &str) -> Result
             &["log", "--oneline", &format!("{tip}..HEAD")]
         )?
     );
+    println!(
+        "upstream-pr: --dry-run: with --open the PR would be titled \"{}\" with body:",
+        content.title
+    );
+    println!("{}", content.body);
     println!(
         "upstream-pr: scratch repo left for inspection: {}",
         scratch.display()
@@ -404,20 +480,22 @@ fn origin_blob_link(patch_dir_rel: &str, patch: &str) -> Result<Option<String>> 
     )))
 }
 
-/// The outward act, gated behind --open. Draft only. Title and body come
-/// from the patch's own commit message (one fact, one home: nix carries no
-/// duplicate description field), so a body-less commit is refused loudly;
-/// the `patch-dag-<name>` check enforces the same for attempt-marked patches
-/// before it ever gets here.
-fn open_draft_pr(
-    pkg: &str,
-    fork: &Fork,
-    scratch: &Path,
-    slug: &Slug,
-    head_ref: &str,
-    branch: &str,
-    target: &str,
-) -> Result<()> {
+/// The composed PR content: subject = title, body = the commit-message body
+/// rendered into the target repo's template when it ships one, plus
+/// `prExtra` and the AI attribution.
+struct PrContent {
+    title: String,
+    body: String,
+}
+
+/// Compose the PR title and body from the patch's own commit message (one
+/// fact, one home: nix carries no duplicate description field), so a
+/// body-less commit is refused loudly; the `patch-dag-<name>` check enforces
+/// the same for attempt-marked patches before it ever gets here. Follows the
+/// target repo's conventions: the body is rendered into its PR template when
+/// it ships one (refusing loudly on any section we cannot fill); the plain
+/// composition applies when it does not.
+fn compose_pr_content(pkg: &str, fork: &Fork, scratch: &Path, target: &str) -> Result<PrContent> {
     let title = cmd::run_in(scratch, "git", &["log", "-1", "--format=%s", "HEAD"])?;
     let commit_body = cmd::run_in(scratch, "git", &["log", "-1", "--format=%b", "HEAD"])?;
     if commit_body.is_empty() {
@@ -426,10 +504,13 @@ fn open_draft_pr(
         );
     }
 
-    // Optional upstream-specific PR-template content (issue refs,
-    // checklists) that does not belong in a commit message, declared as
-    // `patches.<patch>.prExtra` in the fork mapping.
-    let pr_extra = fork.patches.get(target).and_then(|m| m.pr_extra.clone());
+    // Optional upstream-specific PR content that does not belong in a commit
+    // message: `prExtra` (issue refs, checklists) and `releaseNotes`
+    // (user-facing release-note text for templates that require it),
+    // declared per patch in the fork mapping.
+    let patch_meta = fork.patches.get(target);
+    let pr_extra = patch_meta.and_then(|m| m.pr_extra.clone());
+    let release_notes = patch_meta.and_then(|m| m.release_notes.clone());
     // Link back to the patch file of record in OUR repo, derived from the
     // invoking repo's origin remote so a downstream mapping links to its own
     // repo. Best-effort but loud: no parseable origin means no link.
@@ -443,39 +524,82 @@ fn open_draft_pr(
         "Prepared with AI assistance (Claude); directed and reviewed by a human maintainer.".to_owned(),
     ]
     .join("\n\n");
-    let mut parts = vec![commit_body];
-    parts.extend(pr_extra);
-    parts.push(attribution);
-    let body = parts.join("\n\n");
+    // prExtra + attribution together are the "anything else reviewers should
+    // know" content: under the template's additional-notes section when the
+    // repo has a template, appended after the body otherwise.
+    let mut note_parts: Vec<String> = Vec::new();
+    note_parts.extend(pr_extra);
+    note_parts.push(attribution);
+    let notes = note_parts.join("\n\n");
 
+    let body = match template::find(scratch) {
+        Some(template_path) => {
+            let shown = template_path
+                .strip_prefix(scratch)
+                .unwrap_or(&template_path);
+            println!(
+                "upstream-pr: {pkg}: rendering the PR body into the target repo's template ({})",
+                shown.display()
+            );
+            let raw = fs::read_to_string(&template_path)
+                .wrap_err_with(|| format!("cannot read {}", template_path.display()))?;
+            template::render(
+                &raw,
+                pkg,
+                target,
+                &template::Sections {
+                    description: commit_body,
+                    release_notes,
+                    notes,
+                },
+            )?
+        }
+        None => [commit_body, notes].join("\n\n"),
+    };
+    Ok(PrContent { title, body })
+}
+
+/// The outward act, gated behind --open: open the PR upstream, READY FOR
+/// REVIEW unless `--draft` was passed. Ready is the default because the
+/// preflight and template rendering ARE the pre-submit bar this tool
+/// enforces before it gets here, and a draft parked on a maintainer's queue
+/// signals not-ready and sits unreviewed (exactly how nushell/nushell#18549
+/// was received).
+fn open_pr(
+    slug: &Slug,
+    head_ref: &str,
+    branch: &str,
+    content: &PrContent,
+    draft: bool,
+) -> Result<()> {
+    let kind = if draft { "DRAFT" } else { "ready-for-review" };
     println!(
         "{}",
         paint(
             YELLOW,
             &format!(
-                "upstream-pr: opening DRAFT PR upstream {}/{} <- {ORG}:{branch}...",
+                "upstream-pr: opening {kind} PR upstream {}/{} <- {ORG}:{branch}...",
                 slug.owner, slug.repo
             )
         )
     );
-    let created = cmd::run(
-        "gh",
-        &[
-            "pr",
-            "create",
-            "--repo",
-            &format!("{}/{}", slug.owner, slug.repo),
-            "--base",
-            head_ref,
-            "--head",
-            &format!("{ORG}:{branch}"),
-            "--title",
-            &title,
-            "--draft",
-            "--body",
-            &body,
-        ],
-    )?;
+    let mut args: Vec<String> = vec![
+        "pr".to_owned(),
+        "create".to_owned(),
+        "--repo".to_owned(),
+        format!("{}/{}", slug.owner, slug.repo),
+        "--base".to_owned(),
+        head_ref.to_owned(),
+        "--head".to_owned(),
+        format!("{ORG}:{branch}"),
+        "--title".to_owned(),
+        content.title.clone(),
+    ];
+    if draft {
+        args.push("--draft".to_owned());
+    }
+    args.extend(["--body".to_owned(), content.body.clone()]);
+    let created = cmd::run("gh", &args)?;
     println!("{created}");
     Ok(())
 }

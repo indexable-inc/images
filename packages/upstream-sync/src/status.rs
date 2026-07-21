@@ -42,14 +42,29 @@ pub struct Entry {
     pub duplicates: Vec<Duplicate>,
 }
 
-/// A tracked PR's last-known state: open|draft|merged|closed.
+/// A tracked PR's last-known state (open|draft|merged|closed) plus its
+/// upstream CI verdict.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pr {
     pub url: String,
     pub number: u64,
     pub state: String,
+    /// Upstream CI verdict from the head commit's `statusCheckRollup`:
+    /// passing | failing | pending | none. Pre-CI-tracking entries carry no
+    /// `ci` field and deserialize to "none", so the first refresh logs the
+    /// real verdict as a visible transition.
+    #[serde(default = "ci_none")]
+    pub ci: String,
+    /// Names of the failing checks when `ci` is "failing", so a red verdict
+    /// is actionable without opening the PR.
+    #[serde(rename = "failingChecks", default)]
+    pub failing_checks: Vec<String>,
     #[serde(rename = "checkedAt")]
     pub checked_at: String,
+}
+
+fn ci_none() -> String {
+    "none".to_owned()
 }
 
 /// A detected possibly-duplicate upstream PR (field order matches gh's
@@ -170,5 +185,17 @@ mod tests {
 
         let reparsed: Doc = serde_json::from_str(&bytes).unwrap();
         assert_eq!(reparsed.to_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn pre_ci_tracking_pr_defaults_to_none() {
+        // Committed status files written before CI tracking carry no `ci` /
+        // `failingChecks`; they must load as "none" with no failing checks.
+        let pr: Pr = serde_json::from_str(
+            r#"{"url":"u","number":1,"state":"draft","checkedAt":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(pr.ci, "none");
+        assert!(pr.failing_checks.is_empty());
     }
 }

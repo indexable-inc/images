@@ -1,5 +1,5 @@
-//! `upstream-sync [<pkg> [<patch>]] [--open] [--dry-run] [--check-stale]`:
-//! drive the de-fork UPSTREAMING loop. This is the layer above `upstream-pr`
+//! `upstream-sync [<pkg> [<patch>]] [--open] [--dry-run] [--check-stale]
+//! [--fail-on-red-ci]`: drive the de-fork UPSTREAMING loop. This is the layer above `upstream-pr`
 //! (the per-patch branch/am/push/PR mechanism) and `rebase-patches` (the
 //! base-bump regenerator): it decides which patches to act on from the
 //! hand-written declarative intent, tracks the live state of the PRs we
@@ -18,18 +18,27 @@
 //!     [`upstream_sync::status`].
 //!
 //! The loop, per `attempt` patch of each selected fork:
-//!   1. If we already track a PR: refresh its state via `gh pr view`. If
-//!      merged, mark `retired = true` and record it: the NEXT base bump's
-//!      `rebase-patches` run should drop the patch (it becomes an empty
-//!      cherry against the new base), and this tool wires a retirement note
-//!      into the plan so a human/agent verifies the drop.
+//!   1. If we already track a PR: refresh its state via `gh pr view` (open /
+//!      draft / merged / closed) AND its upstream CI verdict
+//!      (`statusCheckRollup` -> ci = passing | failing | pending | none,
+//!      plus the failing check names), logging transitions. A red upstream
+//!      PR is reported loudly in the plan summary; with `--fail-on-red-ci`
+//!      the run exits nonzero so a cron
+//!      (.github/workflows/upstream-pr-watch.yml) surfaces it as a failed
+//!      workflow instead of letting it sit unnoticed (nushell/nushell#18549
+//!      sat red for days). If merged, mark `retired = true` and record it:
+//!      the NEXT base bump's `rebase-patches` run should drop the patch (it
+//!      becomes an empty cherry against the new base), and this tool wires a
+//!      retirement note into the plan so a human/agent verifies the drop.
 //!   2. Else search the upstream repo for a DUPLICATE/related PR by the
 //!      patch's title keywords. If found, RECORD it and SKIP loudly (a human
 //!      or agent can comment on the existing PR instead of opening a
 //!      competing one).
 //!   3. Else, if `--open` was passed, open the PR by delegating to
-//!      `upstream-pr --open` (its DAG-closure/am/push/draft-PR mechanism,
-//!      one owner). For forks opted into the closure build gates
+//!      `upstream-pr --open` (its DAG-closure/am/preflight/push/PR
+//!      mechanism, one owner; PRs open ready for review, with the body
+//!      rendered into the target repo's PR template when it ships one).
+//!      For forks opted into the closure build gates
 //!      (`closureGates = true`; RFC 0010 A3), the patch's gate derivation
 //!      (`forkClosureGates.<system>.<fork>.<patch>`) is built FIRST and a
 //!      red gate aborts that patch's PR-opening: `upstream-pr` ships the
@@ -53,7 +62,7 @@ use std::path::{Path, PathBuf};
 use anstream::println;
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
-use color_eyre::eyre::{Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, bail};
 use lazy_regex::regex;
 use upstream_sync::mapping::{self, Fork, Slug};
 use upstream_sync::style::{CYAN, GREEN, RED, YELLOW, paint};
@@ -104,6 +113,9 @@ struct SyncArgs {
     /// warn if a fork has attempt patches but no status file, or a stale lastChecked
     #[arg(long)]
     check_stale: bool,
+    /// exit nonzero when any tracked open/draft upstream PR has failing CI (for the watch cron)
+    #[arg(long)]
+    fail_on_red_ci: bool,
     /// fork-package JSON to drive (default: the baked-in list)
     #[arg(long)]
     mapping: Option<PathBuf>,
@@ -115,6 +127,23 @@ struct PlanEntry {
     patch: String,
     action: String,
     detail: String,
+}
+
+/// One tracked open/draft PR whose upstream CI is failing, collected for the
+/// end-of-run red report (and the `--fail-on-red-ci` verdict).
+struct RedPr {
+    fork: String,
+    patch: String,
+    url: String,
+    failing: Vec<String>,
+}
+
+/// The run's accumulated decisions: the plan summary plus the tracked PRs
+/// with red upstream CI.
+#[derive(Default)]
+struct Report {
+    plan: Vec<PlanEntry>,
+    red: Vec<RedPr>,
 }
 
 /// Per-fork context threaded through the patch loop.
@@ -149,12 +178,12 @@ fn run_sync(args: &SyncArgs) -> Result<()> {
         args.pkg.as_deref(),
         "upstream-sync",
     )?;
-    let mut plan: Vec<PlanEntry> = Vec::new();
+    let mut report = Report::default();
     for fork in &forks {
-        process_fork(fork, args, &mut plan)?;
+        process_fork(fork, args, &mut report)?;
     }
-    print_plan(&plan, args);
-    Ok(())
+    print_plan(&report.plan, args);
+    report_red(&report.red, args.fail_on_red_ci)
 }
 
 /// Repo-level gates: a non-github host has no gh path; PRs unwelcome or AI
@@ -183,7 +212,7 @@ fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool) -> RepoGate {
     RepoGate { blocked, reason }
 }
 
-fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Result<()> {
+fn process_fork(fork: &Fork, args: &SyncArgs, report: &mut Report) -> Result<()> {
     let slug = Slug::parse(&fork.url)?;
     let patch_dir = fork.patch_dir_abs();
     let policy = fork.policy();
@@ -283,7 +312,7 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
         open: args.open,
     };
     for pf in &selected {
-        handle_patch(&ctx, pf, &mut doc, plan)?;
+        handle_patch(&ctx, pf, &mut doc, report)?;
     }
 
     doc.save(&fork.name, &status_path, args.dry_run)?;
@@ -293,12 +322,7 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     Ok(())
 }
 
-fn handle_patch(
-    ctx: &ForkCtx,
-    pf: &str,
-    doc: &mut status::Doc,
-    plan: &mut Vec<PlanEntry>,
-) -> Result<()> {
+fn handle_patch(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, report: &mut Report) -> Result<()> {
     let stance = ctx.fork.stance(pf);
 
     // Ensure a status entry exists (mirror intent for legibility).
@@ -315,7 +339,7 @@ fn handle_patch(
 
     if stance != "attempt" {
         // Not authorized for the outward act; record intent, no action.
-        plan.push(PlanEntry {
+        report.plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
             action: "skip".to_owned(),
@@ -326,7 +350,7 @@ fn handle_patch(
 
     // attempt patch. Repo-level block still wins (defense in depth).
     if ctx.repo_blocked {
-        plan.push(PlanEntry {
+        report.plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
             action: "blocked".to_owned(),
@@ -337,7 +361,7 @@ fn handle_patch(
 
     // 1. Already tracking a PR? Refresh its state.
     if let Some(tracked) = doc.patches.get(pf).and_then(|e| e.pr.clone()) {
-        return refresh_tracked(ctx, pf, &tracked, doc, plan);
+        return refresh_tracked(ctx, pf, &tracked, doc, report);
     }
 
     // 2. No tracked PR: search for a duplicate before opening.
@@ -352,7 +376,7 @@ fn handle_patch(
         doc.append_log(&format!(
             "{pf}: found {count} possible duplicate upstream PRs; NOT opening. First: {first_url}"
         ));
-        plan.push(PlanEntry {
+        report.plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
             action: "duplicate".to_owned(),
@@ -365,7 +389,7 @@ fn handle_patch(
     // it (the safe default) this is a would-open plan entry: the status file
     // still records the pending attempt, but no PR is created.
     if !ctx.open {
-        plan.push(PlanEntry {
+        report.plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
             action: "would-open".to_owned(),
@@ -376,7 +400,7 @@ fn handle_patch(
         });
         return Ok(());
     }
-    open_one(ctx, pf, doc, plan)
+    open_one(ctx, pf, doc, report)
 }
 
 fn refresh_tracked(
@@ -384,14 +408,14 @@ fn refresh_tracked(
     pf: &str,
     tracked: &status::Pr,
     doc: &mut status::Doc,
-    plan: &mut Vec<PlanEntry>,
+    report: &mut Report,
 ) -> Result<()> {
     let Some(fresh) = gh::refresh_pr(ctx.slug, tracked.number)? else {
         doc.append_log(&format!(
             "{pf}: tracked PR #{} no longer readable, deleted or renamed; leaving last-known state",
             tracked.number
         ));
-        plan.push(PlanEntry {
+        report.plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
             action: "stale-pr".to_owned(),
@@ -406,6 +430,33 @@ fn refresh_tracked(
             "{pf}: PR #{} {} -> {} ({})",
             fresh.number, tracked.state, fresh.state, fresh.url
         ));
+    }
+
+    // Log CI transitions while the PR is live (a merged/closed PR's checks
+    // no longer matter). Pre-CI-tracking entries deserialize with
+    // `ci = "none"`, so the first refresh logs the real verdict as a visible
+    // transition. A failing verdict joins the end-of-run red report.
+    let live = fresh.state == "open" || fresh.state == "draft";
+    if live {
+        if fresh.ci != tracked.ci {
+            let ci_detail = if fresh.ci == "failing" {
+                format!(" [{}]", fresh.failing_checks.join(", "))
+            } else {
+                String::new()
+            };
+            doc.append_log(&format!(
+                "{pf}: PR #{} CI {} -> {}{ci_detail}",
+                fresh.number, tracked.ci, fresh.ci
+            ));
+        }
+        if fresh.ci == "failing" {
+            report.red.push(RedPr {
+                fork: ctx.fork.name.clone(),
+                patch: pf.to_owned(),
+                url: fresh.url.clone(),
+                failing: fresh.failing_checks.clone(),
+            });
+        }
     }
 
     // Merged upstream -> retire. The next base bump's rebase-patches run
@@ -427,11 +478,16 @@ fn refresh_tracked(
     } else {
         format!("tracked:{}", fresh.state)
     };
-    plan.push(PlanEntry {
+    let detail = if live {
+        format!("{} [ci: {}]", fresh.url, fresh.ci)
+    } else {
+        fresh.url
+    };
+    report.plan.push(PlanEntry {
         fork: ctx.fork.name.clone(),
         patch: pf.to_owned(),
         action,
-        detail: fresh.url,
+        detail,
     });
     Ok(())
 }
@@ -445,7 +501,7 @@ fn closure_gate_passes(
     ctx: &ForkCtx,
     pf: &str,
     doc: &mut status::Doc,
-    plan: &mut Vec<PlanEntry>,
+    report: &mut Report,
 ) -> Result<bool> {
     let system = cmd::run("nix", &["config", "show", "system"])?;
     let gate = format!(".#forkClosureGates.{system}.{}.\"{pf}\"", ctx.fork.name);
@@ -477,7 +533,7 @@ fn closure_gate_passes(
     doc.append_log(&format!(
         "{pf}: closure gate build FAILED; PR-opening aborted"
     ));
-    plan.push(PlanEntry {
+    report.plan.push(PlanEntry {
         fork: ctx.fork.name.clone(),
         patch: pf.to_owned(),
         action: "gate-failed".to_owned(),
@@ -487,15 +543,11 @@ fn closure_gate_passes(
 }
 
 /// The outward act, only for attempt patches on a non-blocked repo, only
-/// when --open was passed. `upstream-pr` owns the branch/am/push/draft-PR
-/// mechanism; --mapping is threaded so a downstream repo's list is used.
-fn open_one(
-    ctx: &ForkCtx,
-    pf: &str,
-    doc: &mut status::Doc,
-    plan: &mut Vec<PlanEntry>,
-) -> Result<()> {
-    if ctx.fork.closure_gates && !closure_gate_passes(ctx, pf, doc, plan)? {
+/// when --open was passed. `upstream-pr` owns the
+/// branch/am/preflight/push/PR mechanism (ready for review by default);
+/// --mapping is threaded so a downstream repo's list is used.
+fn open_one(ctx: &ForkCtx, pf: &str, doc: &mut status::Doc, report: &mut Report) -> Result<()> {
+    if ctx.fork.closure_gates && !closure_gate_passes(ctx, pf, doc, report)? {
         return Ok(());
     }
 
@@ -531,7 +583,7 @@ fn open_one(
         doc.append_log(&format!(
             "{pf}: upstream-pr --open FAILED; see output above"
         ));
-        plan.push(PlanEntry {
+        report.plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: pf.to_owned(),
             action: "open-failed".to_owned(),
@@ -552,23 +604,28 @@ fn open_one(
             .captures(url)
             .and_then(|c| c.get(1))
             .map_or(0, |m| m.as_str().parse().unwrap_or(0));
+        // upstream-pr opens ready for review (its preflight + template
+        // rendering are the pre-submit bar); CI has not reported yet, so the
+        // verdict starts pending and the next refresh settles it.
         let fresh = status::Pr {
             url: url.trim().to_owned(),
             number,
-            state: "draft".to_owned(),
+            state: "open".to_owned(),
+            ci: "pending".to_owned(),
+            failing_checks: Vec::new(),
             checked_at: status::utc_stamp(),
         };
         let opened_url = fresh.url.clone();
         if let Some(entry) = doc.patches.get_mut(pf) {
             entry.pr = Some(fresh);
         }
-        doc.append_log(&format!("{pf}: opened draft PR {opened_url}"));
+        doc.append_log(&format!("{pf}: opened PR {opened_url}"));
     } else {
         doc.append_log(&format!(
             "{pf}: upstream-pr --open succeeded but PR URL was not parseable from output"
         ));
     }
-    plan.push(PlanEntry {
+    report.plan.push(PlanEntry {
         fork: ctx.fork.name.clone(),
         patch: pf.to_owned(),
         action: "opened".to_owned(),
@@ -695,4 +752,35 @@ fn print_plan(plan: &[PlanEntry], args: &SyncArgs) {
             )
         );
     }
+}
+
+/// Red upstream CI is always reported loudly; with `--fail-on-red-ci` it
+/// also fails the run, so the scheduled watch workflow
+/// (.github/workflows/upstream-pr-watch.yml) turns red instead of letting a
+/// failing upstream PR sit unnoticed under our name.
+fn report_red(red: &[RedPr], fail_on_red_ci: bool) -> Result<()> {
+    if red.is_empty() {
+        return Ok(());
+    }
+    println!();
+    println!(
+        "{}",
+        paint(
+            RED,
+            &format!(
+                "upstream CI is RED on {} tracked PR(s) we opened:",
+                red.len()
+            )
+        )
+    );
+    for r in red {
+        println!("  - {} / {}: {}", r.fork, r.patch, r.url);
+        println!("      failing: {}", r.failing.join(", "));
+    }
+    if fail_on_red_ci {
+        bail!(
+            "upstream-sync: tracked upstream PRs have failing CI (listed above); fix the patch series and force-push via upstream-pr, or close the PR. A red PR under our name is a negative signal upstream."
+        );
+    }
+    Ok(())
 }

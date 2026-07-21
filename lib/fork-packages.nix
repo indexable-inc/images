@@ -72,6 +72,14 @@
 #                series applied as commits, so an upstream PR is one push away.
 #                Absent = no fork repo is maintained (the in-repo series stays
 #                the only serialization).
+#   preflight  : optional, default []. The upstream repo's own cheap pre-submit
+#                commands (from its CONTRIBUTING/CI: fmt-level checks, never
+#                full test suites), run by `upstream-pr` via `bash -ec` in the
+#                patched scratch checkout BEFORE pushing or opening a PR, with
+#                the invoking environment's toolchain. A failing command aborts
+#                the contribution loudly: nushell/nushell#18549 opened with a
+#                `cargo fmt` failure that turned the whole upstream CI matrix
+#                red in seconds. The heavyweight complement is `closureGates`.
 #
 # Upstreaming intent (hand-written declarative intent; the human gate on the
 # outward act). `packages/upstream-sync` reads these; the LIVE state it tracks
@@ -98,9 +106,21 @@
 #                        never   = repo-specific delta or unmergeable upstream; the
 #                                  tool never opens a PR for it.
 #                      reason   : one line explaining the mark.
-#                      prExtra  : OPTIONAL upstream-specific PR-template content
-#                                 (issue refs, checklists) that does not belong in
-#                                 a commit message; appended after the PR body.
+#                      prExtra  : OPTIONAL upstream-specific PR content (issue
+#                                 refs, checklists) that does not belong in a
+#                                 commit message; rendered into the target
+#                                 template's additional-notes section, or
+#                                 appended after the PR body when the target
+#                                 repo has no template.
+#                      releaseNotes : OPTIONAL user-facing release-note text
+#                                 (or "n/a"), for target PR templates that
+#                                 require a "User-facing changes"/release-notes
+#                                 section. Not a duplicate of the commit body:
+#                                 the body says what/why for reviewers, this is
+#                                 the changelog entry the upstream publishes.
+#                                 `upstream-pr` refuses to open a PR against a
+#                                 template demanding that section when the
+#                                 patch declares none.
 #                    A patch with no entry defaults to `hold` with an "unclassified"
 #                    reason (fail-safe: an unclassified patch is never sent upstream
 #                    automatically) -- but for a fork that declares any intent, the
@@ -112,8 +132,9 @@
 #
 # There is deliberately NO per-patch description field: the upstream PR's title
 # and body come from the patch's own commit message (subject = title, body = PR
-# body, plus AI attribution and a link to the patch of record; see
-# packages/upstream-pr). A nix copy would duplicate the commit message and
+# body, plus AI attribution and a link to the patch of record; when the target
+# repo ships a PR template, the same pieces are rendered into its sections --
+# see packages/upstream-pr). A nix copy would duplicate the commit message and
 # drift. One fact, one home: the commit message IS the patch's description and
 # its reason of record, and the `patch-dag-<name>` check fails any patch whose
 # commit message states no reason (attribution trailers and bare issue refs do
@@ -272,6 +293,12 @@
       url = "https://github.com/nushell/nushell.git";
       patchDir = "packages/nushell/patches";
       autoUpdate = true;
+      # `cargo fmt` is the FIRST step of every job in nushell's CI matrix
+      # (fail-fast, so one fmt error cancels the whole wall of checks) and the
+      # first command of its `toolkit check pr` pre-submit ritual. Exactly this
+      # turned nushell/nushell#18549 red. Kept to fmt (cheap, deterministic);
+      # clippy/tests stay on the upstream CI's dime.
+      preflight = ["cargo fmt --all --check"];
       upstreamPolicy = {
         prsWelcome = true;
         aiPrsAllowed = "unknown";
@@ -283,6 +310,9 @@
           upstream = "attempt";
           reason = "General filesystem feature requested in nushell/nushell#7106; prior PR #7158 was abandoned and explicitly left open for takeover.";
           prExtra = "Related issue: nushell/nushell#7106. Prior closed attempt: nushell/nushell#7158.";
+          # nushell's PR template requires a "User-facing changes (Release
+          # notes)" section that feeds the release blog mostly as-is.
+          releaseNotes = "On Unix platforms, `ls -l` now includes an `xattrs` column listing each entry's extended-attribute names (the metadata native `ls -l` marks with `@`). Entries without readable attributes show an empty list, so existing long-listing table shapes keep working.";
         };
         "0002-Derive-feature-list-for-cargo-unit-builds.patch" = {
           upstream = "never";
