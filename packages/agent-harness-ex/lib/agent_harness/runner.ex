@@ -1,6 +1,6 @@
 defmodule AgentHarness.Runner do
   @moduledoc """
-  The model-call seam: the one behaviour a host implements to plug a real
+  Model-call seam: the one behaviour a host implements to plug a real
   LLM client into the harness. The library never talks to any API itself.
 
   `c:run/2` executes one full working phase of an agent, in a supervised

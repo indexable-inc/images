@@ -391,7 +391,6 @@ defmodule IxMcp.ActionLogTest do
 
     # Every v1 action survives, remapped onto ids (recent/2 is newest first).
     entries = ActionLog.recent(10, log)
-    assert length(entries) == 6
 
     assert Enum.map(entries, &{&1.session, &1.topic, &1.tool, &1.elapsed_ms}) == [
              {"beta", "build", "elixir_exec", 6},
@@ -446,8 +445,19 @@ defmodule IxMcp.ActionLogTest do
     :ok = Sqlite3.close(conn)
 
     reopened = start_supervised!({ActionLog, path: path, name: :action_log_remigration})
-    assert length(ActionLog.sessions(reopened)) == 3
-    assert length(ActionLog.recent(10, reopened)) == 6
+    reopened_sessions = ActionLog.sessions(reopened)
+
+    assert reopened_sessions |> Enum.map(& &1.name) |> Enum.sort() ==
+             Enum.sort([nil, "alpha", "beta"])
+
+    assert ActionLog.recent(10, reopened) |> Enum.map(&{&1.session, &1.tool}) == [
+             {"beta", "elixir_exec"},
+             {"alpha", "kernel_trace"},
+             {"alpha", "elixir_exec"},
+             {"alpha", "elixir_exec"},
+             {nil, "read"},
+             {nil, "elixir_exec"}
+           ]
   end
 
   test "a fresh database is created stamped with the current schema version" do

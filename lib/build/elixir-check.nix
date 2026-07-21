@@ -14,7 +14,8 @@ reproducible:
      checker runs here, so type findings (and any warning) fail the build.
   2. `mix format --check-formatted` — formatting is enforced, not advisory.
   3. `mix credo --strict` against the shared `credoConfig` — the static-analysis
-     gate (security/perf/modernization/readability), single source of truth.
+     gate (security/perf/modernization/readability, plus the ExSlop plugin's
+     LLM-slop checks), single source of truth.
   4. `mix test` — the package's ExUnit suite.
 
 The result is meant to be attached as `passthru.tests.elixir` on the package

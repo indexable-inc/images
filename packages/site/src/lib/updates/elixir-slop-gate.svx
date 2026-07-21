@@ -1,0 +1,17 @@
+---
+id: elixir-slop-gate
+postedAt: 2026-07-21T12:00:00-07:00
+title: "The shared Credo policy now runs ExSlop's LLM-slop checks"
+tags: [elixir, lint, quality, kernel]
+links:
+  - label: credo.exs
+    href: https://github.com/indexable-inc/index/tree/main/lib/elixir/credo.exs
+  - label: elixir-vibe/ex_slop
+    href: https://github.com/elixir-vibe/ex_slop
+---
+
+Every repo-owned Elixir package runs one shared quality lane (`lib/build/elixir-check.nix`): compile with warnings as errors, format check, `mix credo --strict` against a single injected policy, then the ExUnit suite. The Credo step now loads [ExSlop](https://github.com/elixir-vibe/ex_slop) as a plugin, registered once in `lib/elixir/credo.exs` so the policy still cannot drift between packages (#3876).
+
+ExSlop's checks target patterns LLMs produce but experienced Elixir developers do not: blanket rescues, narrator docs, identity passthrough, `try/rescue` around non-raising calls, anti-idiomatic `Enum` chains. The kernel (`packages/mcp-ex`) and the agent harness (`packages/agent-harness-ex`) are agent-written Elixir, which is exactly the code these checks were built for.
+
+Surveying the same [elixir-vibe](https://github.com/elixir-vibe) ecosystem, ExDNA's zero-clone gate was deliberately not adopted: the repo's own `nix run .#clone` ratchet already scans `.ex/.exs` through the shared tree-sitter language table, and a second clone detector would duplicate the concept. ExDNA's Elixir-aware normalization ideas (pipe canonicalization, multi-clause `def` grouping) are filed as clone-detect improvements instead.

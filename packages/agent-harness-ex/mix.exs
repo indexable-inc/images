@@ -23,7 +23,12 @@ defmodule AgentHarness.MixProject do
       # Static-analysis gate, test-only so the library carries zero runtime
       # deps; the sandboxed check runs `mix credo` in :test where the deps
       # FOD provides it.
-      {:credo, "~> 1.7", only: :test, runtime: false}
+      {:credo, "~> 1.7", only: :test, runtime: false},
+      # ExSlop rides the same Credo run as a plugin (lib/elixir/credo.exs):
+      # checks aimed at LLM failure modes, which agent-written code needs
+      # most (#3876). Clone detection is NOT added here: the tree-wide
+      # `nix run .#clone` ratchet already scans .ex/.exs.
+      {:ex_slop, "~> 0.4", only: :test, runtime: false}
     ]
   end
 end

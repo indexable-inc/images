@@ -17,6 +17,13 @@
   configs: [
     %{
       name: "default",
+      # ExSlop (elixir-vibe/ex_slop): Credo plugin whose checks target LLM
+      # failure modes (blanket rescues, narrator docs, identity passthrough,
+      # try/rescue around non-raising calls). This repo's Elixir is
+      # agent-written, exactly the code those checks were built for. The
+      # default plugin config enables the high-signal checks and leaves the
+      # noisy style ones off (#3876).
+      plugins: [{ExSlop, []}],
       files: %{
         included: ["lib/", "test/", "config/", "mix.exs"],
         excluded: [~r"/_build/", ~r"/deps/"]

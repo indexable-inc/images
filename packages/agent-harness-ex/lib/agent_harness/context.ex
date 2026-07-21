@@ -1,6 +1,6 @@
 defmodule AgentHarness.Context do
   @moduledoc """
-  The handle a `AgentHarness.Runner` receives alongside its instructions.
+  Per-agent handle passed to a `AgentHarness.Runner` alongside its instructions.
 
   It carries everything the runner needs to talk back to the harness
   (`harness` + `agent_id` address the agent's own mailbox through the public
