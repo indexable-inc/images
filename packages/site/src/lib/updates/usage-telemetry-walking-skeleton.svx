@@ -1,0 +1,25 @@
+---
+id: usage-telemetry-walking-skeleton
+postedAt: 2026-07-20T17:10:00-07:00
+title: "Anonymous usage telemetry, end to end: spool-hot-path client, ix-wrap, and the usage.ix.dev collector"
+tags: [telemetry, rust, nix, clickhouse]
+links:
+  - label: client (index#3804)
+    href: https://github.com/indexable-inc/index/pull/3804
+  - label: collector (ix#7983)
+    href: https://github.com/indexable-inc/ix/pull/7983
+  - label: design issue
+    href: https://github.com/indexable-inc/index/issues/3802
+---
+
+ix tools can now count their own usage, opt-out-able and counts-only. The whole pipeline landed today and was proven end to end on a workstation: a wrapped tool ran, and its day-bucketed count arrived in ClickHouse through the real client, the real HTTP collector, and the real schema file.
+
+**The hot path never touches a database.** Measured first: a SQLite/WAL upsert costs 8.7us warm but 10ms p99 under 8 parallel writers. So the wrapper appends one JSON line to a spool file with a single `O_APPEND` write (1.8us, lock-free, flat under any parallelism), and a flock-singleton compactor folds the spool into SQLite (WAL) at `~/.local/state/ix/usage.db`. Wrapped-tool overhead measured at ~5.9ms per invocation, and a `count-only` mode records then `exec()`s for tools in tight loops.
+
+**Privacy is structural, not promised.** Failing invocations keep argv and cwd in the local database for agents to query (`ix-usage errors --json`), but the upload payload builder reads only the `counts` and `meta` tables; tests assert the wire bytes never carry argv, cwd, or error text. Consent precedence is `IX_USAGE` then `DO_NOT_TRACK` then CI then `~/.config/ix/usage.toml` then default-on with a one-time stderr notice; interactive first runs get a prompt that shows the literal payload instead of describing it. A "no" is permanent silence, and local recording continues either way so a later opt-in has history.
+
+**The wrapper is transparent by test.** `ix-wrap` mirrors exit codes (`128+signal` for signal deaths), leaves ctrl-C to the child, forwards SIGTERM/SIGHUP, and passes stdout through byte-identical; seven transparency tests plus a nix `withUsage` seam that rewraps any package's `bin/*` (walking skeleton: `git-log-pretty` as `.#usage-demo`).
+
+**The collector is a ledger first.** `usage.ix.dev` (leader nginx, loopback axum service) writes every accepted POST verbatim to `usage.reports_raw` as the anti-abuse audit trail, then upserts `usage.counts` (ReplacingMergeTree keyed install/pkg/version/day) so re-sent 7-day windows are idempotent: in the E2E run, three POSTs produced three ledger rows and exactly one counts row. Anonymous by design, so the defenses are caps (64KiB body, 512 rows, sane count ceilings) and retroactive exclusion by install id.
+
+Not live yet: the Cloudflare record and fleet deploy ride the next terraform apply and deploy run (CI infra was down today, both PRs were validated locally and force-merged per standing decree). Follow-ups tracked in the design issue: tree-wide default-on wrapping via a central policy map, stderr-tail capture, `ix report` for defects only humans or agents can see, and the adoption-by-version dashboard.
