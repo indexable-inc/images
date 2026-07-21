@@ -97,6 +97,10 @@
     doCheck = false;
   });
 
+  # One statement of the store location: the digest script and the
+  # WEAVE_MEMORY_STORE session variable both derive from it.
+  memoryStore = "${"$"}{config.home.homeDirectory}/.config/nix/claude/memory/.weave";
+
   # SessionStart memory digest: the derived replacement for the retired
   # MEMORY.md flat index (index#3849). One-shot weave queries against the
   # private store; stdout becomes session context via the wrappers'
@@ -105,7 +109,7 @@
   memoryDigest = ix.writeBashApplication pkgs {
     name = "claude-memory-digest";
     text = ''
-      store="$HOME/.config/nix/claude/memory/.weave"
+      store=${lib.escapeShellArg memoryStore}
       if [ ! -d "$store" ]; then
         echo "Memory store missing at $store; create it with: weave --store \"$store\" init"
         exit 0
@@ -476,7 +480,7 @@ in {
       # and manual `weave` calls address the same private store. Device-level
       # for the same reason as IX_MCP_HOST: inherited by claude/codex and
       # every kernel they spawn.
-      WEAVE_MEMORY_STORE = "${config.home.homeDirectory}/.config/nix/claude/memory/.weave";
+      WEAVE_MEMORY_STORE = memoryStore;
 
       # Skim configuration
       SKIM_CTRL_T_COMMAND = "fd --type f --hidden --follow";
