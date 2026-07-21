@@ -1,0 +1,13 @@
+---
+id: kernel-file-edit-helpers
+postedAt: 2026-07-21T02:55:00-07:00
+title: Kernel cells get Claude Code's Edit/Write file semantics
+tags: [kernel, mcp]
+links:
+  - label: index#3819
+    href: https://github.com/indexable-inc/index/issues/3819
+---
+
+Editing a file from a kernel cell used to mean hand-rolled `String.replace` plus `File.write!`, which silently rewrites whatever matched, zero times included. Claude Code's native Edit tool solved this for LLM callers long ago: exact-string replacement that errors on zero matches and on ambiguity, an explicit `replace_all`, and a numbered snippet of the changed region.
+
+The kernel now ships those semantics in-language. `Edit.replace(path, old, new)` raises on a missing or ambiguous match (`replace_all: true` to change every occurrence) and returns a `cat -n` style snippet of the edited region; `Edit.write(path, content)` creates parent directories and says whether it created or updated. Error and success texts were lifted byte-for-byte from the Claude Code 2.1.215 binary rather than reconstructed from memory, so agents trained against the native tools see familiar failure shapes. The native stale-read guard is subsumed by exactness: content that drifted since you copied the old string no longer matches, and the call raises instead of clobbering.
