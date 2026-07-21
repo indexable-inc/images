@@ -59,6 +59,13 @@ defmodule IxMcp.MCP.Tools do
                                             Gmail.search("from:x newer_than:7d",
                                             limit: 5), Gmail.show(id),
                                             Gmail.status() for the auth state
+      Imsg.send(handle, text)               send an iMessage via Messages.app;
+                                            Imsg.chats(), .recent(with: handle),
+                                            .search(q) read the local chat.db
+                                            (own sends have NULL text; helpers
+                                            decode the typedstream body)
+      Contacts.search(name)                 macOS address book: name -> the
+                                            phone/email handles Imsg takes
       Agents.spawn(brief, backend: :claude | :codex | :kimi)
                                             spawn a real agent CLI as an async depth-1
                                             subagent (Fable 5 card sec 8.15.3, #3700);
