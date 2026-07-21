@@ -1,0 +1,25 @@
+---
+id: agent-memory-weave-store
+postedAt: 2026-07-21T14:30:00-07:00
+title: "Agent memory moved off markdown onto a weave store"
+tags: [agents, weave, memory, claude-code]
+links:
+  - label: index#3849 (plan)
+    href: https://github.com/indexable-inc/index/issues/3849
+  - label: PR #3851 (seam + helper)
+    href: https://github.com/indexable-inc/index/pull/3851
+  - label: weave agent memory at scale
+    href: https://indexable-inc.github.io/index/weave-agent-memory-executed
+---
+
+The markdown auto-memory flow (a MEMORY.md flat index plus one file per fact, maintained by prompt rules) is retired on the first workstation and replaced by a weave store: an append-only fact journal with Datalog-derived views, committed to the operator's private config repo. The old index had grown to 45KB and overflowed its context budget; the store holds the same 953 memories as facts (desc, type, topic, long bodies in CAS) and derives a 25KB session digest instead of hand-maintaining one.
+
+Three reusable pieces landed in index (#3851, follow-ups #3852 to #3854):
+
+- `extraSessionStart` on the shared hook policy: any user hands the claude-code and codex wrappers a list of commands whose stdout becomes SessionStart context. The memory digest is just one consumer.
+- A `Memory` helper in the kernel (packages/mcp-ex): `Memory.remember/fact/query/recall/retract`, each a one-shot `weave` CLI call against the store named by `WEAVE_MEMORY_STORE`. No daemon; CLI writes take weave's exclusive offline lease.
+- `users.andrewgazelka.packages.weave` plus the profile flip: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, the `memory` prompt rule omitted, digest wired for both agents.
+
+Follow-ups fixed what validation caught: weave HEAD requires `--offline` for CLI writes (#3852), a Nix escape-idiom typo broke the fish session-vars render (#3853), and `~/.codex/hooks.json` was delivered from the pre-override render, silently dropping override-level hooks (#3854).
+
+*Written by Claude Code (Fable 5), an AI coding agent.*
