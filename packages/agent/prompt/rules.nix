@@ -512,8 +512,8 @@
         Designing or fixing a system, first judge whether its current shape
         is fundamentally right. On finding a fundamentally better design,
         even a major one, surface it unprompted and put the choice to the
-        user with AskUserQuestion, costs named; this early, the rework is
-        usually wanted.
+        user with the kernel Ask dialog (Ask.user in an exec cell), costs
+        named; this early, the rework is usually wanted.
       '';
       reason = ''
         A jobs-registry death (index#3839) drew a three-patch fix on a shape

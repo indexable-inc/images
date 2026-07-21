@@ -17,6 +17,7 @@ defmodule IxMcp.MCP.Stdio do
 
   use GenServer
 
+  alias IxMcp.MCP.ClientRequests
   alias IxMcp.MCP.Notifier
   alias IxMcp.MCP.Server
 
@@ -37,6 +38,7 @@ defmodule IxMcp.MCP.Stdio do
     # binary makes stdio a transparent byte pipe in both directions.
     :ok = :io.setopts(:standard_io, binary: true, encoding: :latin1)
     Notifier.register(self())
+    ClientRequests.register(self())
     reader = self()
     spawn_link(fn -> read_loop(reader) end)
     {:ok, %{pending: %{}, eof: false}}
@@ -52,6 +54,13 @@ defmodule IxMcp.MCP.Stdio do
     # exactly the silent hang #3538 diagnosed. Decoding is cheap; the slow
     # part (Server.handle) stays off this process.
     case JSON.decode(line) do
+      # An id without a method is the client answering one of OUR requests
+      # (elicitation and friends); it gets no reply, so it skips the
+      # reply-always pending bookkeeping entirely.
+      {:ok, %{"id" => _} = message} when not is_map_key(message, "method") ->
+        ClientRequests.resolve(message)
+        {:noreply, state}
+
       {:ok, message} ->
         {:ok, pid} =
           Task.start(fn ->

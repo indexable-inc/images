@@ -323,11 +323,11 @@
     # skills listing (verified 2026-07, index#3607); the sibling `dataviz`
     # skill is removed via `skillOverrides` in houseSettingsDefaults below.
     Artifact = false;
-    # On: the redesign-at-the-root rule (prompt/rules.nix) routes fundamental
-    # design forks through this dialog instead of silently patching the old
-    # shape (index#3841); the AFK auto-continue env keeps an unanswered
-    # dialog from blocking unattended runs.
-    AskUserQuestion = true;
+    # Off: superseded by the kernel's Ask (index#3856). Ask.user in an exec
+    # cell raises the same native dialog through MCP elicitation, so the
+    # redesign-at-the-root rule (prompt/rules.nix, index#3841) keeps its
+    # user-facing fork without this tool's schema riding in every context.
+    AskUserQuestion = false;
     DesignSync = false;
     EnterPlanMode = false;
     EnterWorktree = false;

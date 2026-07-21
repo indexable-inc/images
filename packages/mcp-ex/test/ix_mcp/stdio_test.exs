@@ -40,6 +40,27 @@ defmodule IxMcp.MCP.StdioTest do
     assert output == ""
   end
 
+  test "a client response (id, no method) routes to ClientRequests, not the handler" do
+    IxMcp.MCP.ClientRequests.register(self())
+
+    task =
+      Task.async(fn -> IxMcp.MCP.ClientRequests.request("elicitation/create", %{}, 5_000) end)
+
+    assert_receive {:mcp_send, %{"id" => id}}, 1_000
+
+    state = %{pending: %{}, eof: false}
+    line = JSON.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => %{"action" => "decline"}})
+
+    output =
+      capture_io(fn ->
+        assert {:noreply, ^state} = Stdio.handle_info({:mcp_recv, line}, state)
+        assert Task.await(task) == {:ok, %{"action" => "decline"}}
+      end)
+
+    # No reply goes back out for a response, and no handler task is spawned.
+    assert output == ""
+  end
+
   test "an unencodable response degrades to an error reply instead of killing the transport" do
     state = %{pending: %{}, eof: false}
     message = %{"jsonrpc" => "2.0", "id" => 3, "result" => %{"content" => <<0xFF>>}}
