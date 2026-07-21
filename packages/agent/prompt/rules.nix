@@ -171,12 +171,16 @@
       text = ''
         Real work starts from an issue, referenced in branch and PR. File
         friction as it happens, in the owning repo, with the exact error.
-        Spawn a background agent named for an issue you could fix yourself.
+        On finding an issue separate from the task at hand, file it and in
+        the same breath spawn a background subagent to fix it, the issue
+        number in its brief and branch; filing without dispatching is a
+        dropped ball unless the fix needs the user.
       '';
       reason = ''
         Root-cause notes died with sessions (#1941 through #1946); filed
-        problems were forgotten. Sub-issue mechanics moved to memories
-        (index#3594).
+        problems were forgotten even when filed (a deploy-verify defect sat
+        as ix#8055 while its noise reddened every deploy). Sub-issue
+        mechanics moved to memories (index#3594).
       '';
     };
   }
