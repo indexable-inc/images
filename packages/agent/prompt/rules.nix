@@ -461,11 +461,22 @@
         Respond as HTML, not chat text: write each response to one HTML
         file per session and keep rewriting that same file so it always
         shows the current state of the response. On the first write open
-        it with plain `open`.
+        it with plain `open`. The user reads only the page; chat text is
+        one pointer line at most. Layer the page: the surface is a short
+        causal story in plain words (we thought X, but Y, so Z) with named
+        actors, ordered what broke / damage / fix / lesson for incidents;
+        a reader who knows none of the jargon can follow it. Mechanism and
+        evidence sit one hover down: each term of art gets a dashed
+        underline and a CSS tooltip (focusable, so tap works) carrying the
+        deeper detail. Expand dense notes, never paste them.
       '';
       reason = ''
         Requested 2026-07-19: the user reads responses as a live HTML page
-        that updates while the agent works.
+        that updates while the agent works. Layering added 2026-07-21
+        (index#3872): the terse register made incident notes like the hc2
+        store-copy note unreadable; the hover-explainer rewrite was the
+        format the user wanted as default, and duplicate chat answers were
+        noise.
       '';
     };
   }
