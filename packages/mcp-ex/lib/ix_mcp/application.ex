@@ -9,6 +9,7 @@ defmodule IxMcp.Application do
       ├── IxMcp.Workspace       the shared binding + Macro.Env every cell sees
       ├── IxMcp.Jobs.Registry   id -> job process
       ├── IxMcp.MCP.Notifier    server-initiated notification fan-out (+ outbox replay)
+      ├── IxMcp.MCP.ClientRequests  server-initiated requests (elicitation) awaiting client replies
       ├── IxMcp.Jobs.Reaper     monitors job processes; finalizes any that die unreported
       ├── IxMcp.Jobs.Supervisor (DynamicSupervisor)  one child per cell/job
       │   └── IxMcp.Jobs.Job*   runs one evaluation in a monitored process
@@ -42,6 +43,7 @@ defmodule IxMcp.Application do
         # the reaper and publishes through the notifier, so both must be up
         # before any job can start (#3839).
         IxMcp.MCP.Notifier,
+        IxMcp.MCP.ClientRequests,
         IxMcp.Jobs.Reaper,
         {DynamicSupervisor, name: IxMcp.Jobs.Supervisor, strategy: :one_for_one},
         {Task.Supervisor, name: IxMcp.PrWatch.Supervisor},

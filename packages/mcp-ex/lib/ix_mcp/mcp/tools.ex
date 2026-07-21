@@ -66,6 +66,12 @@ defmodule IxMcp.MCP.Tools do
                                             decode the typedstream body)
       Contacts.search(name)                 macOS address book: name -> the
                                             phone/email handles Imsg takes
+      Ask.user("Redesign or patch?", options: ["Redesign", {"Patch", "keep shape"}])
+                                            put one question to the human as a
+                                            native dialog (MCP elicitation);
+                                            blocks the cell, returns {:ok, answer}
+                                            | :declined | :cancelled | :timeout.
+                                            Omit options: for free text
       Memory.remember("slug", "hook", topic: "nix")
                                             durable memory: append facts to the
                                             weave store named by

@@ -509,8 +509,8 @@ in {
       type = lib.types.attrsOf lib.types.bool;
       default = {};
       example = {
-        AskUserQuestion = true;
         DesignSync = true;
+        EnterPlanMode = true;
       };
       description = ''
         Overrides for Claude Code built-in orchestration and hosted-service
