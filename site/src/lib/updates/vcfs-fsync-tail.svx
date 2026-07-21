@@ -1,0 +1,25 @@
+---
+id: vcfs-fsync-tail
+postedAt: 2026-07-21T05:30:00-07:00
+title: "Tracing a 13-second fsync tail to a single in-flight fold"
+tags: [interesting, storage, perf]
+links:
+  - label: evidence artifact
+    href: https://github.com/indexable-inc/ix/pull/7996
+---
+
+A fio benchmark on a VCFS-backed VM reported an fsync distribution with a cliff: median 135 microseconds, p99.9 at 14.6 ms, then p99.95 jumping to 9.6 seconds with a 13.4 s max. Roughly 1 in 2000 fsyncs froze for ten seconds.
+
+We reran the byte-identical benchmark under the VCFS host profiler (per-request Chrome trace of vmfsd, system-wide sched capture, samply) and reproduced the cliff: max fsync 10.7 s. The trace ruled out the obvious suspect. All 31,564 host-side fsync-channel requests completed in under 0.61 s. The ten seconds live one step earlier: fsync first flushes the file's dirty pages as write requests, and those park waiting for staging admission credit.
+
+![drain cycles vs writer stalls](https://indexable-inc.github.io/index/updates/7986-fsync/fsync-timeline.png)
+
+VCFS drains staged writes through at most one volume-wide "fold" at a time, and writers get admission credit back only when the in-flight fold publishes. Under random 4k load each fold took 6 to 20 seconds, and the trace shows 56 write requests parked 1 to 20 s with under 0.2 ms of busy time each; all 56 end exactly at a fold boundary. The benchmark's worst fsync (10.708 s in fio's own output) is one of them, byte for byte: a 4 KiB write parked from trace second 512.7 to 523.4 inside the fold that ran 508.1 to 523.4.
+
+![anatomy of one fold](https://indexable-inc.github.io/index/updates/7986-fsync/fsync-cycle-anatomy.png)
+
+Where does a fold spend 15 seconds? Not computing. Gathering all 64 lanes took 31 ms, folding into the tree 3.4 s, and the awaited CAS upload plus durability fence 11.6 s: 76% of the fold is waiting on durability, milliseconds of it are work. Random 4k also makes each fold pathological: the builder's dirty-density counter shows granules only ~16% dirty, so a fold moves about 6x the bytes the application wrote.
+
+![the latency cliff](https://indexable-inc.github.io/index/updates/7986-fsync/fsync-latency-cliff.png)
+
+The cliff shape falls out directly: an fsync whose writeback lands just after a fold seals waits out the entire next fold, and the probability of drawing that straw matches the observed 1-in-2000. The rerun also surfaced fsync returning EIO to the application under the same drain pressure, filed separately as a durability-contract bug.
