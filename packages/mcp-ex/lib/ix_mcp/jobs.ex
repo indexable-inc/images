@@ -8,10 +8,29 @@ defmodule IxMcp.Jobs do
       Jobs.await("ab12")        # block this cell (only this cell) until done
       Jobs.cancel("ab12")       # kill it, and every OS process it spawned
       Jobs.history()            # recent runs, newest first
+
+  Runs live in a durable ledger (`IxMcp.ActionLog`), not just in memory
+  (#3839): `tail/head/grep/output/history/get` fall back to the SQLite tables
+  when the job process is gone, so a crashed or killed run is still readable
+  and still on record. `history/1` is a view over the `jobs` table scoped to
+  this server instance's session.
   """
 
-  alias IxMcp.Jobs.History
+  alias IxMcp.ActionLog
   alias IxMcp.Jobs.Job
+  alias IxMcp.Session
+
+  @typedoc "A recorded run, as `history/1` returns it."
+  @type entry :: %{
+          id: String.t(),
+          intent: String.t() | nil,
+          session: String.t() | nil,
+          topic: String.t() | nil,
+          code: String.t(),
+          status: Job.status(),
+          started_at: DateTime.t() | nil,
+          elapsed_s: float() | nil
+        }
 
   @doc """
   Start `code` as a new job and wait up to `budget_s` seconds. Finished or
@@ -26,7 +45,7 @@ defmodule IxMcp.Jobs do
     {:ok, pid} =
       DynamicSupervisor.start_child(
         IxMcp.Jobs.Supervisor,
-        {Job, {id, code, Keyword.take(opts, [:intent, :action_id])}}
+        {Job, {id, code, Keyword.take(opts, [:intent, :action_id, :watch])}}
       )
 
     case Job.await(pid, round(budget_s * 1000)) do
@@ -44,8 +63,11 @@ defmodule IxMcp.Jobs do
     end
   end
 
+  @doc "Summary of a job -- live from its process, or reconstructed from the ledger."
   @spec get(String.t()) :: Job.summary()
-  def get(id), do: with_job(id, &Job.summary/1)
+  def get(id) do
+    live_or_ledger(id, &Job.summary/1, &summary_from_ledger/1)
+  end
 
   @doc "Block the calling process (a cell, never the server) until the job finishes."
   @spec await(String.t(), timeout()) :: Job.summary() | :timeout
@@ -76,23 +98,44 @@ defmodule IxMcp.Jobs do
     end
   end
 
-  # A job whose process is gone cannot be cancelled, but it may still be on
-  # record: #3538 killed job processes out from under their ids, and raising
-  # "no such job" -- about an id `history/1` still listed -- sent the
-  # operator chasing a phantom. Report the recorded state; raise only for
-  # ids this server never ran.
+  # A job whose process is gone cannot be cancelled, but the ledger still
+  # holds its terminal state (#3839): report it. Raise only for ids this
+  # server never ran -- #3538 showed that raising "no such job" about an id
+  # `history/1` still listed sent the operator chasing a phantom.
   defp report_dead(id) do
-    case History.get(id) do
+    case ActionLog.job(id) do
       %{status: status} -> {:error, status}
       nil -> raise ArgumentError, "no such job: #{inspect(id)}"
     end
   end
 
   @spec result(String.t()) :: {:ok, term()} | {:error, :running | String.t()}
-  def result(id), do: with_job(id, &Job.result/1)
+  def result(id) do
+    live_or_ledger(id, &Job.result/1, &result_from_ledger/1)
+  end
 
+  # The result term dies with the process; the ledger keeps only its rendered
+  # form, so a gone job answers with that string, never a live term.
+  defp result_from_ledger(id) do
+    case ActionLog.job(id) do
+      nil -> raise ArgumentError, "no such job: #{inspect(id)}"
+      %{status: :running} -> {:error, :running}
+      %{result: result} -> {:error, result || "job no longer resident"}
+    end
+  end
+
+  @doc "Full captured output -- from the live buffer, or the durable table if the job is gone."
   @spec output(String.t()) :: String.t()
-  def output(id), do: with_job(id, &Job.output/1)
+  def output(id) do
+    live_or_ledger(id, &Job.output/1, &output_from_ledger/1)
+  end
+
+  defp output_from_ledger(id) do
+    case ActionLog.job(id) do
+      nil -> raise ArgumentError, "no such job: #{inspect(id)}"
+      _job -> ActionLog.job_output(id)
+    end
+  end
 
   @doc "Last `n` lines of the job's output."
   @spec tail(String.t(), pos_integer()) :: String.t()
@@ -140,9 +183,15 @@ defmodule IxMcp.Jobs do
     |> Enum.filter(& &1.running)
   end
 
-  @doc "Recent runs, newest first."
-  @spec history(pos_integer()) :: [History.entry()]
-  def history(n \\ 20), do: History.list(n)
+  @doc "Recent runs of this server instance, newest first."
+  @spec history(pos_integer()) :: [entry()]
+  def history(n \\ 20) do
+    %{session_id: session_id} = Session.ids()
+
+    session_id
+    |> ActionLog.recent_jobs(n)
+    |> Enum.map(&to_entry/1)
+  end
 
   defp lines(id) do
     id |> output() |> String.split("\n")
@@ -152,6 +201,66 @@ defmodule IxMcp.Jobs do
     case lookup(id) do
       {:ok, pid} -> fun.(pid)
       {:error, :not_found} -> raise ArgumentError, "no such job: #{inspect(id)}"
+    end
+  end
+
+  # Read from the live process, falling back to the durable ledger when it is
+  # gone -- including the registered-but-dead-pid window: the Registry
+  # unregisters dead pids asynchronously (#3538), so a lookup can hand back a
+  # corpse whose GenServer.call exits :noproc. That means the same as a
+  # missing process (#3839).
+  defp live_or_ledger(id, live_fun, dead_fun) do
+    case lookup(id) do
+      {:ok, pid} ->
+        try do
+          live_fun.(pid)
+        catch
+          :exit, {reason, _call} when reason in [:noproc, :normal] -> dead_fun.(id)
+        end
+
+      {:error, :not_found} ->
+        dead_fun.(id)
+    end
+  end
+
+  defp summary_from_ledger(id) do
+    case ActionLog.job(id) do
+      nil ->
+        raise ArgumentError, "no such job: #{inspect(id)}"
+
+      job ->
+        %{
+          id: job.id,
+          status: job.status,
+          running: job.status == :running,
+          intent: job.intent,
+          elapsed_s: (job.elapsed_ms || 0) / 1000,
+          output_bytes: job.output_bytes,
+          diagnostics: [],
+          result: job.result
+        }
+    end
+  end
+
+  defp to_entry(job) do
+    %{
+      id: job.id,
+      intent: job.intent,
+      session: job.session,
+      topic: job.topic,
+      code: job.code,
+      status: job.status,
+      started_at: parse_dt(job.started_at),
+      elapsed_s: if(job.elapsed_ms, do: job.elapsed_ms / 1000)
+    }
+  end
+
+  defp parse_dt(nil), do: nil
+
+  defp parse_dt(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, dt, _} -> dt
+      _ -> nil
     end
   end
 

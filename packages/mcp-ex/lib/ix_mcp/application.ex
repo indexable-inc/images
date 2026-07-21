@@ -8,10 +8,10 @@ defmodule IxMcp.Application do
       ├── IxMcp.Checkpoint      ETS keeper for workspace state (survives Workspace restarts)
       ├── IxMcp.Workspace       the shared binding + Macro.Env every cell sees
       ├── IxMcp.Jobs.Registry   id -> job process
+      ├── IxMcp.MCP.Notifier    server-initiated notification fan-out (+ outbox replay)
+      ├── IxMcp.Jobs.Reaper     monitors job processes; finalizes any that die unreported
       ├── IxMcp.Jobs.Supervisor (DynamicSupervisor)  one child per cell/job
       │   └── IxMcp.Jobs.Job*   runs one evaluation in a monitored process
-      ├── IxMcp.Jobs.History    ordered record of every run
-      ├── IxMcp.MCP.Notifier    server-initiated notification fan-out
       ├── IxMcp.PrWatch.Supervisor (Task.Supervisor)  one task per PR watch
       ├── IxMcp.Agents.Harness     (AgentHarness) depth-1 subagent processes (#3700)
       ├── IxMcp.Agents.Events      subagent ledger: events, finals, graph, notifications
@@ -28,6 +28,7 @@ defmodule IxMcp.Application do
   @impl true
   def start(_type, _args) do
     route_crash_dumps()
+    install_crash_log()
 
     children =
       [
@@ -37,9 +38,12 @@ defmodule IxMcp.Application do
         IxMcp.Checkpoint,
         IxMcp.Workspace,
         {Registry, keys: :unique, name: IxMcp.Jobs.Registry},
-        {DynamicSupervisor, name: IxMcp.Jobs.Supervisor, strategy: :one_for_one},
-        IxMcp.Jobs.History,
+        # Notifier and Reaper before the job supervisor: a job registers with
+        # the reaper and publishes through the notifier, so both must be up
+        # before any job can start (#3839).
         IxMcp.MCP.Notifier,
+        IxMcp.Jobs.Reaper,
+        {DynamicSupervisor, name: IxMcp.Jobs.Supervisor, strategy: :one_for_one},
         {Task.Supervisor, name: IxMcp.PrWatch.Supervisor},
         # The depth-1 subagent surface (index#3700): harness first, then the
         # ledger that drains its lead mailbox.
@@ -70,6 +74,53 @@ defmodule IxMcp.Application do
     :ok
   end
 
+  # index#3839: a persistent crash log next to the action log. The incident
+  # left no SASL report anywhere -- the config :logger handler writes to
+  # stderr, which the MCP client discards. A file handler (rotated, a few
+  # MiB) means the next kernel-internal crash leaves an on-disk record of
+  # every process that died, state and all. Adding it must never break boot,
+  # so a failure here is swallowed -- a tool server must not die over its own
+  # log. The in-memory test database has no directory to write into and opts
+  # out.
+  defp install_crash_log do
+    db = IxMcp.ActionLog.db_path()
+
+    if db != ":memory:" do
+      dir = Path.dirname(db)
+      File.mkdir_p!(dir)
+
+      _ =
+        :logger.add_handler(:ix_mcp_crash_log, :logger_std_h, %{
+          level: :error,
+          config: %{
+            type: :file,
+            file: String.to_charlist(Path.join(dir, "kernel.log")),
+            max_no_bytes: 4_000_000,
+            max_no_files: 3
+          },
+          formatter:
+            Logger.Formatter.new(
+              format: "$dateT$time $metadata[$level] $message\n",
+              metadata: [:pid, :mfa, :crash_reason]
+            )
+        })
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  # TODO(#3839): watch-job re-arm on kernel start. `Jobs.run(code, watch:
+  # true)` already records the `watch` flag and the code on the durable jobs
+  # row, so a future kernel could, at boot, re-arm its own unfinished watch
+  # jobs from their recorded code and stamp every other unfinished job
+  # `killed: kernel restart`. It is deferred deliberately: several server
+  # instances share one actions.db, so a blanket startup sweep would clobber
+  # a live sibling's running jobs (the same reason ActionLog does no startup
+  # sweep of leftover `running` action rows). A safe implementation must
+  # scope strictly to this instance's own jobs (by session), which needs a
+  # durable instance identity that outlives a restart -- out of scope here.
   defp transport do
     case System.get_env("IX_MCP_STDIO") do
       "1" -> [IxMcp.MCP.Stdio]

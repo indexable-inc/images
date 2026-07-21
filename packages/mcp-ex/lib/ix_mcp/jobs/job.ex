@@ -1,15 +1,27 @@
 defmodule IxMcp.Jobs.Job do
   @moduledoc """
-  One cell run. The GenServer is the job's record and control point; the
-  evaluation itself happens in a separate spawned process so that a blocking
-  cell blocks only itself -- the scheduler preempts it, other jobs and the
-  server keep running, and cancellation is `Process.exit(pid, :kill)` plus OS
+  One cell run. The GenServer is the job's control point; the evaluation
+  itself happens in a separate spawned process so that a blocking cell blocks
+  only itself -- the scheduler preempts it, other jobs and the server keep
+  running, and cancellation is `Process.exit(pid, :kill)` plus OS
   subprocess-tree cleanup rather than a signal hack against a wedged loop.
 
-  The process stays alive after the run finishes: it holds the output buffer
-  (an ETS table) and the result term, so paging (`tail/head/grep/...`) and
-  `Jobs.result/1` work for as long as the server lives, like the Python
-  `jobs` dict.
+  Processes compute; data remembers (#3839). Every terminal transition
+  (`done`/`failed`/`cancelled`/`killed`) is one atomic write to the durable
+  ledger (`IxMcp.ActionLog`): the `jobs` row and its `actions` row go terminal
+  together and a notification lands in the outbox, so no death is silent and
+  the two logs can never disagree. Output streams into the `job_output` table
+  as it is produced, so `Jobs.tail/output/result` keep working after the
+  process is gone. A hot ETS buffer stays for fast live reads.
+
+  The control process is deliberately survivable. It traps exits and only
+  *links* its IOProxy, so an IOProxy crash -- the shared-component failure
+  that in #3839 killed every linked job brutally, skipping finish and
+  notification -- arrives as a trappable EXIT and becomes a recorded `killed`
+  transition with the output captured so far. A hard external kill of the
+  control process itself (which trapping cannot catch) is caught by the
+  single reaper (`IxMcp.Jobs.Reaper`), which writes the `killed` transition
+  from outside.
   """
 
   use GenServer, restart: :temporary
@@ -17,7 +29,7 @@ defmodule IxMcp.Jobs.Job do
   alias IxMcp.ActionLog
   alias IxMcp.Evaluator
   alias IxMcp.Evaluator.IOProxy
-  alias IxMcp.Jobs.History
+  alias IxMcp.Jobs.Reaper
   alias IxMcp.MCP.Notifier
   alias IxMcp.OsProc
   alias IxMcp.Session
@@ -28,15 +40,28 @@ defmodule IxMcp.Jobs.Job do
   # wedged process). Tests shrink it via app env to keep the suite fast.
   @stack_sample_interval_ms Application.compile_env(:ix_mcp, :stack_sample_interval_ms, 1000)
 
+  # How often buffered output is flushed from the hot ETS buffer to the
+  # durable `job_output` table. A hard kill loses at most this window of the
+  # very latest output (already-flushed output survives, which is the point).
+  @flush_interval_ms Application.compile_env(:ix_mcp, :output_flush_interval_ms, 250)
+
+  # Per-job output cap. Beyond it, output is dropped (head kept) and the drop
+  # is recorded, so one runaway cell cannot fill the ledger. 8 MiB is far
+  # above any legitimate cell's output.
+  @output_cap 8 * 1024 * 1024
+
   @enforce_keys [:id, :code]
   defstruct [
     :id,
     :code,
     :intent,
     :action_id,
+    :session_id,
     :session,
     :topic,
+    :watch,
     :buffer,
+    :counter,
     :io_proxy,
     :eval_pid,
     :eval_ref,
@@ -46,19 +71,25 @@ defmodule IxMcp.Jobs.Job do
     :result,
     status: :running,
     diagnostics: [],
-    subscribers: []
+    subscribers: [],
+    flushed_seq: nil,
+    flushed_dropped: 0,
+    flush_scheduled: false
   ]
 
-  @type status :: :running | :done | :failed | :cancelled
+  @type status :: :running | :done | :failed | :cancelled | :killed
 
   @type t :: %__MODULE__{
           id: String.t(),
           code: String.t(),
           intent: String.t() | nil,
           action_id: integer() | nil,
+          session_id: integer() | nil,
           session: String.t() | nil,
           topic: String.t() | nil,
+          watch: boolean(),
           buffer: :ets.tid() | nil,
+          counter: :counters.counters_ref() | nil,
           io_proxy: pid() | nil,
           eval_pid: pid() | nil,
           eval_ref: reference() | nil,
@@ -68,7 +99,10 @@ defmodule IxMcp.Jobs.Job do
           result: {:value, term()} | {:failure, String.t()} | nil,
           status: status(),
           diagnostics: [String.t()],
-          subscribers: [pid()]
+          subscribers: [pid()],
+          flushed_seq: integer() | nil,
+          flushed_dropped: non_neg_integer(),
+          flush_scheduled: boolean()
         }
 
   @type summary :: %{
@@ -134,7 +168,7 @@ defmodule IxMcp.Jobs.Job do
     end
   end
 
-  @doc "Full captured output of the job as one binary."
+  @doc "Full captured output of the job as one binary (from the hot buffer)."
   @spec output(GenServer.server()) :: String.t()
   def output(server) do
     server
@@ -148,16 +182,25 @@ defmodule IxMcp.Jobs.Job do
 
   @impl true
   def init({id, code, opts}) do
+    # Trapping exits is what makes the control process survivable: a linked
+    # IOProxy crash arrives as {:EXIT, io_proxy, reason} instead of taking
+    # this process down with it (#3839).
+    Process.flag(:trap_exit, true)
+
     session = Session.get()
+    %{session_id: session_id} = Session.ids()
 
     state = %__MODULE__{
       id: id,
       code: code,
       intent: Keyword.get(opts, :intent),
       action_id: Keyword.get(opts, :action_id),
+      watch: Keyword.get(opts, :watch, false),
+      session_id: session_id,
       session: session.name,
       topic: session.topic,
       buffer: :ets.new(:job_output, [:ordered_set, :public]),
+      counter: :counters.new(2, [:write_concurrency]),
       started_mono: System.monotonic_time(:millisecond),
       started_at: DateTime.utc_now()
     }
@@ -167,8 +210,26 @@ defmodule IxMcp.Jobs.Job do
 
   @impl true
   def handle_continue(:spawn_eval, state) do
+    # Record the durable jobs row and arm the reaper before anything can die,
+    # so a death in the first instants is still finalized (#3839).
+    ActionLog.job_started(%{
+      id: state.id,
+      session_id: state.session_id,
+      action_id: state.action_id,
+      intent: state.intent,
+      session_name: state.session,
+      topic_name: state.topic,
+      code: state.code,
+      watch: state.watch,
+      started_at: DateTime.to_iso8601(state.started_at)
+    })
+
+    Reaper.watch(state.id, self())
+
     buffer = state.buffer
-    {:ok, io_proxy} = IOProxy.start_link(fn chunk -> append(buffer, chunk) end)
+    counter = state.counter
+    sink = fn chunk -> capture(buffer, counter, chunk) end
+    {:ok, io_proxy} = IOProxy.start_link(sink)
 
     job = self()
     code = state.code
@@ -194,9 +255,11 @@ defmodule IxMcp.Jobs.Job do
         send(job, {:eval_finished, self(), outcome})
       end)
 
-    History.record(initial_history(state))
     if state.action_id, do: Process.send_after(self(), :sample_stack, @stack_sample_interval_ms)
-    {:noreply, %{state | io_proxy: io_proxy, eval_pid: eval_pid, eval_ref: eval_ref}}
+    schedule_flush()
+
+    {:noreply,
+     %{state | io_proxy: io_proxy, eval_pid: eval_pid, eval_ref: eval_ref, flush_scheduled: true}}
   end
 
   @impl true
@@ -261,21 +324,45 @@ defmodule IxMcp.Jobs.Job do
         %{eval_ref: ref, status: :running} = state
       ) do
     # The cell's process died without reporting: a crash (exit, throw from a
-    # linked process, kill). The exit reason IS the crash report, state and
-    # all -- format it whole.
+    # linked process). The exit reason IS the crash report, state and all --
+    # format it whole. This is the cell author's failure, hence `failed`
+    # (distinct from `killed`, which is the machinery dying under the job).
     {:noreply, finish(state, :failed, {:failure, Exception.format_exit(reason)}, [])}
   end
+
+  # The IOProxy (linked) crashed under a running job. Trapping exits turned
+  # what #3839 made a brutal linked death into this trappable signal: record
+  # a `killed` transition with the output captured so far, rather than
+  # vanishing silently.
+  def handle_info(
+        {:EXIT, io_proxy, reason},
+        %{io_proxy: io_proxy, status: :running} = state
+      )
+      when reason != :normal do
+    Process.demonitor(state.eval_ref, [:flush])
+    if is_pid(state.eval_pid), do: Process.exit(state.eval_pid, :kill)
+
+    {:noreply,
+     finish(state, :killed, {:failure, "killed: io proxy exited: " <> inspect(reason)}, [])}
+  end
+
+  # Any other linked EXIT (our own supervisor shutdown, a :normal io proxy
+  # exit after finish) is not a job death we report.
+  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+
+  def handle_info(:flush, %{status: :running} = state) do
+    state = %{flush(state) | flush_scheduled: true}
+    schedule_flush()
+    {:noreply, state}
+  end
+
+  def handle_info(:flush, state), do: {:noreply, %{state | flush_scheduled: false}}
 
   # Sampling stops itself once the run finished (no reschedule); the
   # status='running' guard in the log makes a racing last sample harmless.
   def handle_info(:sample_stack, %{status: :running} = state) do
     case Process.info(state.eval_pid, :current_stacktrace) do
       {:current_stacktrace, frames} ->
-        # The machinery below the eval boundary (:erl_eval, :elixir, Code) is
-        # plumbing the cell author did not write; cut it like the error path
-        # does so the innermost stored frame is one the author can act on. A
-        # stack with no author frames at all (a cell still compiling, say)
-        # keeps the raw frames rather than storing an empty stack.
         shown =
           case Evaluator.prune_stacktrace(frames) do
             [] -> frames
@@ -285,8 +372,6 @@ defmodule IxMcp.Jobs.Job do
         stack = JSON.encode!(Enum.map(shown, &Exception.format_stacktrace_entry/1))
         ActionLog.update_stack(state.action_id, stack, cell_line(frames))
 
-      # The eval exited between the tick and the probe; the finish path owns
-      # the row now.
       nil ->
         :ok
     end
@@ -301,13 +386,6 @@ defmodule IxMcp.Jobs.Job do
 
   # -- internals ---------------------------------------------------------------
 
-  # The 1-based line of cell source the eval currently sits on, from the
-  # deepest frame the cell itself owns: Workspace evals with
-  # `Code.env_for_eval(file: "cell")`, so frames from code compiled in the
-  # cell (a module the cell defined) carry `file: ~c"cell"`. Top-level cell
-  # statements and anonymous fns run interpreted through :erl_eval and leave
-  # no such frame -- then there is no cell line and the viewer falls back to
-  # the formatted top frame (#3546).
   defp cell_line(frames) do
     Enum.find_value(frames, fn {_mod, _fun, _arity, meta} ->
       line = meta[:line]
@@ -324,33 +402,75 @@ defmodule IxMcp.Jobs.Job do
         finished_mono: System.monotonic_time(:millisecond)
     }
 
-    # Finalize the action row before waking subscribers: a caller that saw
-    # the run finish must find the row already final, never still running.
-    if state.action_id do
-      ActionLog.finish_action(
-        state.action_id,
-        Atom.to_string(status),
-        status == :failed,
-        state.finished_mono - state.started_mono
-      )
+    # Persist all captured output before the transition, so a reader that
+    # sees the job finish finds its output already complete on disk.
+    state = flush(state)
+
+    # The one atomic terminal transition: jobs row + actions row + outbox,
+    # committed together (#3839). Whoever writes it first wins; the reaper's
+    # racing `killed` attempt then no-ops.
+    case ActionLog.finish_job(state.id, status, render_result(state)) do
+      {:notify, outbox} -> Notifier.publish(outbox)
+      :already_final -> :ok
     end
+
+    Reaper.reported(state.id)
 
     summary = build_summary(state)
     Enum.each(state.subscribers, fn pid -> send(pid, {:ix_job_finished, state.id, summary}) end)
-    History.finished(state.id, status, summary.elapsed_s)
-    Notifier.job_finished(summary)
     %{state | subscribers: []}
   end
 
-  # Only binaries may enter the buffer (IOProxy's convert/2 guarantees valid
-  # UTF-8): a non-binary chunk resurfaces as a `byte_size/1` crash in
-  # build_summary/1 -- after the eval already succeeded -- which is how
-  # #3538 orphaned history rows at :running. The guard turns any regression
-  # into a failed put_chars at the offending call site instead of a poisoned
-  # job record.
-  defp append(buffer, chunk) when is_binary(chunk) do
-    :ets.insert(buffer, {System.unique_integer([:monotonic]), chunk})
+  # Capture one output chunk into the hot buffer, honoring the per-job cap.
+  # Only binaries enter the buffer (IOProxy's convert/2 guarantees valid
+  # UTF-8); the guard turns any regression into a failed put_chars at the
+  # call site rather than a poisoned job record (#3538).
+  defp capture(buffer, counter, chunk) when is_binary(chunk) do
+    if :counters.get(counter, 1) < @output_cap do
+      :ets.insert(buffer, {System.unique_integer([:monotonic]), chunk})
+      :counters.add(counter, 1, byte_size(chunk))
+    else
+      :counters.add(counter, 2, byte_size(chunk))
+    end
   end
+
+  # Move buffer rows not yet persisted into the durable table, in one batch.
+  defp flush(state) do
+    after_seq = state.flushed_seq
+
+    match =
+      case after_seq do
+        nil -> [{{:"$1", :"$2"}, [], [{{:"$1", :"$2"}}]}]
+        seq -> [{{:"$1", :"$2"}, [{:>, :"$1", seq}], [{{:"$1", :"$2"}}]}]
+      end
+
+    case :ets.select(state.buffer, match) do
+      [] ->
+        maybe_flush_dropped(state)
+
+      rows ->
+        rows = Enum.sort(rows)
+        dropped_now = :counters.get(state.counter, 2)
+        ActionLog.append_job_output(state.id, rows, dropped_now - state.flushed_dropped)
+        {last_seq, _} = List.last(rows)
+        %{state | flushed_seq: last_seq, flushed_dropped: dropped_now}
+    end
+  end
+
+  # No new rows, but the drop counter may have advanced (output over the cap
+  # is counted, not buffered) -- record the delta so truncation is durable.
+  defp maybe_flush_dropped(state) do
+    dropped_now = :counters.get(state.counter, 2)
+
+    if dropped_now > state.flushed_dropped do
+      ActionLog.append_job_output(state.id, [], dropped_now - state.flushed_dropped)
+      %{state | flushed_dropped: dropped_now}
+    else
+      state
+    end
+  end
+
+  defp schedule_flush, do: Process.send_after(self(), :flush, @flush_interval_ms)
 
   defp build_summary(state) do
     finished = state.finished_mono || System.monotonic_time(:millisecond)
@@ -361,8 +481,7 @@ defmodule IxMcp.Jobs.Job do
       running: state.status == :running,
       intent: state.intent,
       elapsed_s: (finished - state.started_mono) / 1000,
-      output_bytes:
-        :ets.foldl(fn {_seq, chunk}, acc -> acc + byte_size(chunk) end, 0, state.buffer),
+      output_bytes: :counters.get(state.counter, 1),
       diagnostics: state.diagnostics,
       result: render_result(state)
     }
@@ -371,16 +490,4 @@ defmodule IxMcp.Jobs.Job do
   defp render_result(%{result: {:value, value}}), do: Evaluator.render(value)
   defp render_result(%{result: {:failure, message}}), do: message
   defp render_result(_), do: nil
-
-  defp initial_history(state) do
-    %{
-      id: state.id,
-      intent: state.intent,
-      session: state.session,
-      topic: state.topic,
-      code: String.slice(state.code, 0, 200),
-      status: :running,
-      started_at: state.started_at
-    }
-  end
 end
