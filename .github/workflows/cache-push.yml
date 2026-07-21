@@ -32,7 +32,8 @@ concurrency:
 
 env:
   # Shared with check.yml; restricted settings are daemon-owned and ignored here.
-  # `fallback` is push-only (not in check.yml): a poisoned substitute -- a
+  # `fallback` is shared with check.yml (since the 2026-07-21 cache-plane
+  # cutover incident, indexable-inc/ix#8026): a poisoned substitute -- a
   # truncated HTTP 200 NAR from a cache incident (ix#6139) -- otherwise aborts
   # realising a push root, and that root silently never publishes. Run
   # 28657772825 lost the cross-IFD `cargo-vendor-dir` root exactly this way,
