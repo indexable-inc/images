@@ -269,6 +269,38 @@ pub enum ScrollViewport {
     Delta(isize),
 }
 
+/// The mouse-reporting flavor an application has requested via DEC private
+/// modes 9/1000/1002/1003 (see [`Terminal::mouse_reporting`]). The variants
+/// are ordered by how much the application asked to see; when several modes
+/// are set at once the strongest wins, matching how terminals dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MouseReporting {
+    /// No mouse mode set: the terminal owns the mouse (scrollback, selection).
+    None,
+    /// X10 compatibility mode (DECSET 9): presses only, no release events.
+    X10,
+    /// Normal tracking (DECSET 1000): presses and releases.
+    Normal,
+    /// Button-event tracking (DECSET 1002): 1000 plus drag motion while a
+    /// button is held.
+    Button,
+    /// Any-event tracking (DECSET 1003): 1002 plus all motion.
+    Any,
+}
+
+/// Scrollbar geometry for the terminal viewport, in rows: `total` scrollable
+/// rows, the viewport's `offset` from the top, and its `len`. The viewport is
+/// at the live bottom iff `offset + len == total`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Scrollbar {
+    /// Total rows in the scrollable area (scrollback plus active screen).
+    pub total: u64,
+    /// Rows above the top of the viewport.
+    pub offset: u64,
+    /// Viewport height in rows.
+    pub len: u64,
+}
+
 /// Options for creating a [`Terminal`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalOptions {
@@ -298,6 +330,17 @@ pub struct Terminal {
 /// `(value & 0x7FFF) | ((ansi as u16) << 15)`, which for value 1 / DEC-private
 /// is simply `1`. See `ghostty/vt/modes.h` (`GHOSTTY_MODE_DECCKM`).
 const DECCKM: sys::GhosttyMode = 1;
+
+/// The DEC private mouse modes, in libghostty's packed mode encoding (the
+/// DEC-private packing is the value itself; see [`DECCKM`]). Names follow
+/// ghostty's `modes.zig` table.
+const MOUSE_EVENT_X10: sys::GhosttyMode = 9;
+const MOUSE_EVENT_NORMAL: sys::GhosttyMode = 1000;
+const MOUSE_EVENT_BUTTON: sys::GhosttyMode = 1002;
+const MOUSE_EVENT_ANY: sys::GhosttyMode = 1003;
+/// DECSET 1006: report mouse events in the SGR encoding (`CSI < b;x;y M/m`),
+/// which is unambiguous and unbounded, unlike the legacy X10 byte encoding.
+const MOUSE_FORMAT_SGR: sys::GhosttyMode = 1006;
 
 impl Terminal {
     /// Create a terminal sized `rows` by `cols` with `scrollback` lines of
@@ -434,6 +477,68 @@ impl Terminal {
     /// Returns [`Error::InvalidValue`] if ghostty rejects the mode query.
     pub fn application_cursor_keys(&self) -> Result<bool> {
         self.mode_enabled(DECCKM)
+    }
+
+    /// The mouse-reporting flavor the application has requested (DEC private
+    /// modes 9/1000/1002/1003). [`MouseReporting::None`] means the terminal
+    /// keeps the mouse: wheel input should scroll scrollback rather than be
+    /// forwarded. When set, an input driver forwards encoded mouse events —
+    /// in the SGR encoding iff [`sgr_mouse`](Self::sgr_mouse) is also set.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidValue`] if ghostty rejects a mode query.
+    pub fn mouse_reporting(&self) -> Result<MouseReporting> {
+        // Strongest first: TUIs commonly set several (vim sets 1000+1002),
+        // and the strongest one determines which events they expect.
+        for (mode, reporting) in [
+            (MOUSE_EVENT_ANY, MouseReporting::Any),
+            (MOUSE_EVENT_BUTTON, MouseReporting::Button),
+            (MOUSE_EVENT_NORMAL, MouseReporting::Normal),
+            (MOUSE_EVENT_X10, MouseReporting::X10),
+        ] {
+            if self.mode_enabled(mode)? {
+                return Ok(reporting);
+            }
+        }
+        Ok(MouseReporting::None)
+    }
+
+    /// Whether DECSET 1006 (SGR mouse encoding) is set. Meaningful only when
+    /// [`mouse_reporting`](Self::mouse_reporting) is not `None`.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidValue`] if ghostty rejects the mode query.
+    pub fn sgr_mouse(&self) -> Result<bool> {
+        self.mode_enabled(MOUSE_FORMAT_SGR)
+    }
+
+    /// Whether the alternate screen is active (DECSET 47/1047/1049), read
+    /// from the terminal's active-screen state rather than any single mode
+    /// bit, so every enter/leave path is covered.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if ghostty rejects the state query.
+    pub fn alternate_screen(&self) -> Result<bool> {
+        let screen: sys::GhosttyTerminalScreen =
+            unsafe { self.get(sys::GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN) }?;
+        Ok(screen == sys::GhosttyTerminalScreen::GHOSTTY_TERMINAL_SCREEN_ALTERNATE)
+    }
+
+    /// Scrollbar geometry of the current viewport (ghostty's terminal
+    /// scrollbar data). Ghostty documents this query as potentially
+    /// expensive when the viewport is pinned into scrollback; call it per
+    /// rendered frame, not per byte fed.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if ghostty rejects the state query.
+    pub fn scrollbar(&self) -> Result<Scrollbar> {
+        let bar: sys::GhosttyTerminalScrollbar =
+            unsafe { self.get(sys::GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_SCROLLBAR) }?;
+        Ok(Scrollbar {
+            total: bar.total,
+            offset: bar.offset,
+            len: bar.len,
+        })
     }
 
     /// Read a DEC/ANSI mode's current state via `ghostty_terminal_mode_get`.
