@@ -35,6 +35,12 @@ defmodule IxMcp.MCP.Tools do
                                             numbered snippet of the edited region
       Edit.write(path, content)             write a file, creating parent dirs;
                                             the return names created vs updated
+      Cmd.run("rg", ["-n", "pat"], cd: dir) System.cmd/3 with stdin from /dev/null,
+                                            so pathless rg/grep see EOF instead of
+                                            hanging forever on the port's
+                                            never-closing stdin pipe (#3867);
+                                            Cmd.sh("rg pat | head") runs a one-line
+                                            pipeline with the same EOF stdin
       Ix.trace()                            stack dump of every running job's processes,
                                             taken from outside with Process.info/2
       Ix.restart()                          cancel running jobs (sparing the calling
@@ -141,12 +147,14 @@ defmodule IxMcp.MCP.Tools do
         an existing file, reach for Edit.replace/4 before hand-rolled
         String.replace rewrites: it fails loudly on zero or ambiguous
         matches and confirms what changed. Reserve
-        System.cmd/3 for real external programs (git, nix, gh), and always
-        pass its arguments as a list: System.cmd("git", ["-C", dir, "status"]).
-        A subprocess's stdin is a pipe that never closes, so tools that read
+        subprocesses for real external programs (git, nix, gh), spawn them
+        with Cmd.run/3, and always pass arguments as a list:
+        Cmd.run("git", ["-C", dir, "status"]). Cmd is System.cmd/3 with
+        stdin redirected from /dev/null: a raw System.cmd subprocess gets a
+        stdin pipe that never closes, so tools that fall back to reading
         stdin when given no input path -- rg and grep especially -- hang
-        forever, even with cd: set. Always pass an explicit path argument:
-        System.cmd("rg", ["-n", "pat", "."], cd: dir).
+        forever, even with cd: set (#3867). Cmd.sh("rg pat | head") runs a
+        one-line pipeline with the same EOF stdin.
         Never build shell command strings, and never use bash here-docs or
         nested quoting to pass multi-line text -- they are brittle and can
         wedge this transport. To hand multi-line text to a program, write it
