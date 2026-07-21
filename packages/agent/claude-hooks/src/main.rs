@@ -12,6 +12,7 @@
 
 mod friction;
 mod guards;
+mod mcp_dispatch;
 mod retro;
 mod review;
 mod session_banner;

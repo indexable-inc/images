@@ -133,6 +133,13 @@
         command = hookCommands.stopWakeupGate;
         agents = ["claude"];
       }
+      # Mines the session's transcript delta for friction, out-of-band like the
+      # retro gate: a detached worker condenses the new delta locally (per-
+      # session byte offset), ships it to the ix-mcp HTTP kernel (weave CAS
+      # blob), and opens a `fabric.claude.session` agent to extract items, dedupe
+      # against open issues in the Linear "Shitty" project, and file the new
+      # ones. Nothing model- or credential-shaped runs locally; without fleet
+      # creds (IX_MCP_API_KEY[_FILE]) it fails open and does nothing.
       {
         command = hookCommands.frictionIssueReporter;
       }
