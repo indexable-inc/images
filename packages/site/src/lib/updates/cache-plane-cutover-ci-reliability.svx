@@ -1,0 +1,57 @@
+---
+id: cache-plane-cutover-ci-reliability
+postedAt: 2026-07-21
+title: "Cache plane on hil-stor-2 + three CI livelocks fixed: hot narinfo at 1ms, queues at zero"
+links:
+  - https://github.com/indexable-inc/ix/pull/8026
+  - https://github.com/indexable-inc/ix/pull/8018
+  - https://github.com/indexable-inc/ix/pull/8032
+  - https://github.com/indexable-inc/ix/pull/8037
+  - https://github.com/indexable-inc/ix/issues/8031
+  - https://github.com/indexable-inc/ix/issues/8033
+tags: [fleet, ci, cache, incident]
+---
+
+The ix cache plane (atticd + Garage + ncps + `cache.ix.dev` + `cache-internal.ix.dev`)
+now serves from hil-stor-2 (695T ZFS), and the three separate livelocks that had CI
+red and deploys starving are fixed at source. Measured after cutover: hot narinfo
+reads from a builder at 0.97ms per request (keepalive), pull-through of
+cache.nixos.org at 381ms cold / 1.6ms hot, and all five builder queues at zero.
+
+## What was actually wrong (three independent wedges)
+
+1. **Admission watermark livelock** (ix#7712): all five builders pinned above the
+   4096-entry watermark, so every CI build paid 7 to 8 serialized 600-second
+   admission stalls: 70 to 180 minutes per run, measured across the last 21 runs;
+   4 hit the 180-minute timeout. Fixed operationally by archive-aside on all five
+   builders, and at source by [PR #8018](https://github.com/indexable-inc/ix/pull/8018)
+   (drv sidecars get GC roots at enqueue, killing the GC-poison feedback loop).
+
+2. **Disk-floor dead band** ([ix#8031](https://github.com/indexable-inc/ix/issues/8031)):
+   the enqueue hook blocks forever below 256GiB free while auto-GC only engages at
+   64GiB, so any host parked between the two wedged every build silently (38 deploy
+   builds stuck on hil-compute-2 at 146GiB free). Fixed by
+   [PR #8032](https://github.com/indexable-inc/ix/pull/8032): min-free 300GiB /
+   max-free 400GiB, the floor now obeys the 600s deadline, and blocks log to journald.
+
+3. **CAS blue/green strand** ([ix#8033](https://github.com/indexable-inc/ix/issues/8033)):
+   a failed handoff on vin-compute-2 left two stale generations holding the QUIC
+   peer ports; the incoming instance crash-looped 57 times and every deploy died at
+   image push. Healed by stopping the stale holder and re-running the handoff.
+
+## The cutover
+
+[PR #8026](https://github.com/indexable-inc/ix/pull/8026) moved the plane behind a
+single `ix.sharedCacheOwner` inventory flag. The pre-staged Garage meta replica
+turned out corrupt, so the plane bootstrapped empty (wipe was pre-approved):
+`ix-attic-bootstrap` recreates both attic caches, drains republish the world from
+the builders, and ncps pulls through cache.nixos.org for everything else. Cloudflare
+records for both fronts now point at hil-stor-2.
+
+Deploy-time systemd warnings from the same audit (a silently ignored `NonBlocking=`
+socket key, duplicate swap units failing the fstab generator, world-inaccessible
+drop-ins) landed as [PR #8037](https://github.com/indexable-inc/ix/pull/8037), and
+the prod deploy timeout rose to 150 minutes (PR #8045) after two auto-deploys died
+at exactly 60 minutes doing the post-wipe warm-up.
+
+Written by an AI agent (Claude Code) operating the incident end to end.
