@@ -79,6 +79,16 @@ defmodule IxMcp.ActionLog do
   CREATE TABLE outbox (id INTEGER PRIMARY KEY, job_id TEXT, intent TEXT, status TEXT NOT NULL, elapsed_ms INTEGER, result TEXT, created_at TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0)
   """
 
+  # index#3880: the arbiter for issue pickup. Every kernel instance on a host
+  # shares this database, so the UNIQUE(repo, number) constraint IS the
+  # atomic claim: the winning INSERT gets the row, every later attempt reads
+  # the winner back. Known limit, by design: the database is per host, so
+  # cross-machine claims race; the GitHub assignee mirror in `IxMcp.Issues`
+  # is not compare-and-set, so it stays a mirror, not the arbiter.
+  @create_issue_claims """
+  CREATE TABLE issue_claims (id INTEGER PRIMARY KEY, repo TEXT NOT NULL, number INTEGER NOT NULL, session_id INTEGER REFERENCES sessions(id), claimed_at TEXT NOT NULL, UNIQUE(repo, number))
+  """
+
   # index#3539: the schema version is stamped into SQLite's `PRAGMA
   # user_version` header field instead of being re-derived by column
   # sniffing on every open. Sniffing can only classify shapes this binary
@@ -89,8 +99,9 @@ defmodule IxMcp.ActionLog do
   # version makes older shapes migratable in order, the current shape a
   # no-op, and a future shape explicitly detectable. The ladder: 1 = the
   # flat #3512 log, 2 = the #3532 normalization, 3 = the #3536 live rows,
-  # 4 = the #3546 live cell line, 5 = the #3839 durable job ledger.
-  @user_version 5
+  # 4 = the #3546 live cell line, 5 = the #3839 durable job ledger,
+  # 6 = the #3880 issue-claim arbiter.
+  @user_version 6
 
   # Frozen historical DDL for the 1 -> 2 step: the actions shape exactly as
   # #3532 shipped it, before the live-row columns. A migration must never
@@ -150,6 +161,10 @@ defmodule IxMcp.ActionLog do
   # tables are simply created empty, so pre-#3839 rows are untouched.
   @migrate_v4_to_v5 [@create_jobs, @create_job_output, @create_outbox]
 
+  # A v5 database predates the issue-claim arbiter (#3880): the table is
+  # simply created empty.
+  @migrate_v5_to_v6 [@create_issue_claims]
+
   # Ordered migrations keyed by the user_version each upgrades FROM. Every
   # step runs in one immediate transaction that also stamps the version it
   # produces, so an interrupted migration leaves the previous consistent,
@@ -158,7 +173,8 @@ defmodule IxMcp.ActionLog do
     {1, @migrate_v1_to_v2},
     {2, @migrate_v2_to_v3},
     {3, @migrate_v3_to_v4},
-    {4, @migrate_v4_to_v5}
+    {4, @migrate_v4_to_v5},
+    {5, @migrate_v5_to_v6}
   ]
 
   @insert """
@@ -188,6 +204,12 @@ defmodule IxMcp.ActionLog do
   @select_job """
   SELECT id, intent, session_name, topic_name, code, status, watch, result, output_bytes, output_dropped, started_at, finished_at, elapsed_ms
   FROM jobs
+  """
+
+  @select_issue_claim """
+  SELECT c.id, c.repo, c.number, c.session_id, s.name, c.claimed_at
+  FROM issue_claims c
+  LEFT JOIN sessions s ON s.id = c.session_id
   """
 
   @type entry :: %{
@@ -232,6 +254,19 @@ defmodule IxMcp.ActionLog do
           started_at: String.t(),
           finished_at: String.t() | nil,
           elapsed_ms: non_neg_integer() | nil
+        }
+
+  @typedoc """
+  A recorded issue claim (#3880): `session` is the claiming sessions row's
+  name (nil when that session never named itself).
+  """
+  @type issue_claim :: %{
+          id: integer(),
+          repo: String.t(),
+          number: integer(),
+          session_id: integer() | nil,
+          session: String.t() | nil,
+          claimed_at: String.t()
         }
 
   @typedoc "A terminal-transition notification awaiting delivery (#3839)."
@@ -366,6 +401,40 @@ defmodule IxMcp.ActionLog do
   @spec recent_jobs(integer() | nil, pos_integer(), GenServer.server()) :: [job()]
   def recent_jobs(session_id, n \\ 20, server \\ __MODULE__) do
     GenServer.call(server, {:recent_jobs, session_id, n})
+  end
+
+  # -- issue-claim arbiter (#3880) --------------------------------------------
+
+  @doc """
+  Atomically claim `repo#number` for `session_id`. The shared database's
+  UNIQUE(repo, number) is the arbiter: the winning insert returns
+  `{:ok, claim}`, a conflict returns `{:error, winner}` with the standing
+  claim (including the winning session's name) so the loser can say who got
+  there first. `:disabled` when the log is degraded (#3539) -- with no
+  arbiter there is no claim to win.
+  """
+  @spec claim_issue(String.t(), integer(), integer() | nil, GenServer.server()) ::
+          {:ok, issue_claim()} | {:error, issue_claim()} | :disabled
+  def claim_issue(repo, number, session_id, server \\ __MODULE__)
+      when is_binary(repo) and is_integer(number) do
+    GenServer.call(server, {:claim_issue, repo, number, session_id, now()})
+  end
+
+  @doc """
+  Claims with id greater than `id`, oldest first. The cursor is the caller's
+  own watermark, per instance on purpose: several kernel instances share this
+  database and each must announce every claim to its own client, so a shared
+  announced flag (first sweeper wins) would silence all but one (#3880).
+  """
+  @spec issue_claims_after(integer(), GenServer.server()) :: [issue_claim()]
+  def issue_claims_after(id, server \\ __MODULE__) do
+    GenServer.call(server, {:issue_claims_after, id})
+  end
+
+  @doc "The highest issue-claim id (0 when none): a fresh watermark for `issue_claims_after/2`."
+  @spec last_issue_claim_id(GenServer.server()) :: integer()
+  def last_issue_claim_id(server \\ __MODULE__) do
+    GenServer.call(server, :last_issue_claim_id)
   end
 
   @doc """
@@ -645,6 +714,36 @@ defmodule IxMcp.ActionLog do
     {:reply, Enum.map(rows, &job_row_to_map/1), state}
   end
 
+  # The INSERT OR IGNORE plus the changes count is the whole race (#3880):
+  # a unique-constraint winner changes one row, every loser changes zero and
+  # reads the winner back. The single-writer GenServer serializes claims from
+  # this instance; claims from sibling instances serialize on SQLite itself.
+  def handle_call({:claim_issue, repo, number, session_id, at}, _from, %{conn: conn} = state) do
+    run(
+      conn,
+      "INSERT OR IGNORE INTO issue_claims (repo, number, session_id, claimed_at) VALUES (?, ?, ?, ?)",
+      [repo, number, session_id, at]
+    )
+
+    {:ok, changes} = Sqlite3.changes(conn)
+
+    [row] =
+      fetch(conn, @select_issue_claim <> " WHERE c.repo = ? AND c.number = ?", [repo, number])
+
+    claim = issue_claim_row_to_map(row)
+    {:reply, if(changes == 1, do: {:ok, claim}, else: {:error, claim}), state}
+  end
+
+  def handle_call({:issue_claims_after, id}, _from, %{conn: conn} = state) do
+    rows = fetch(conn, @select_issue_claim <> " WHERE c.id > ? ORDER BY c.id", [id])
+    {:reply, Enum.map(rows, &issue_claim_row_to_map/1), state}
+  end
+
+  def handle_call(:last_issue_claim_id, _from, %{conn: conn} = state) do
+    [[id]] = fetch(conn, "SELECT COALESCE(MAX(id), 0) FROM issue_claims", [])
+    {:reply, id, state}
+  end
+
   def handle_call({:unacked_outbox, session_id}, _from, %{conn: conn} = state) do
     {sql, params} =
       case session_id do
@@ -721,6 +820,7 @@ defmodule IxMcp.ActionLog do
           "status" not in columns -> 2
           "line" not in columns -> 3
           not table_exists?(conn, "jobs") -> 4
+          not table_exists?(conn, "issue_claims") -> 5
           true -> @user_version
         end
     end
@@ -741,6 +841,7 @@ defmodule IxMcp.ActionLog do
         @create_jobs,
         @create_job_output,
         @create_outbox,
+        @create_issue_claims,
         stamp(),
         "COMMIT"
       ]
@@ -764,6 +865,9 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:create_topic, _session_id, _name, _at}), do: 0
   defp disabled_reply({:start_action, _action}), do: 0
   defp disabled_reply({:finish_job, _id, _status, _result, _at}), do: :already_final
+  defp disabled_reply({:claim_issue, _repo, _number, _session_id, _at}), do: :disabled
+  defp disabled_reply({:issue_claims_after, _id}), do: []
+  defp disabled_reply(:last_issue_claim_id), do: 0
   defp disabled_reply({:job, _id}), do: nil
   defp disabled_reply({:job_output, _id}), do: ""
   defp disabled_reply({:recent_jobs, _session_id, _n}), do: []
@@ -856,6 +960,17 @@ defmodule IxMcp.ActionLog do
       started_at: started_at,
       finished_at: finished_at,
       elapsed_ms: elapsed_ms
+    }
+  end
+
+  defp issue_claim_row_to_map([id, repo, number, session_id, session, claimed_at]) do
+    %{
+      id: id,
+      repo: repo,
+      number: number,
+      session_id: session_id,
+      session: session,
+      claimed_at: claimed_at
     }
   end
 

@@ -319,8 +319,8 @@ defmodule IxMcp.ActionLogTest do
     :ok = ActionLog.finish_action(action_id, "done", false, 3, log)
     assert [%{status: "done", stack: nil, line: nil} | _] = ActionLog.recent(10, log)
 
-    # The 2 -> 3 -> 4 -> 5 steps stamped the file on their way through (index#3539).
-    assert user_version(path) == 5
+    # The 2 -> 3 -> 4 -> 5 -> 6 steps stamped the file on their way through (index#3539).
+    assert user_version(path) == 6
   end
 
   test "a v1 database migrates losslessly to the normalized schema, once" do
@@ -403,8 +403,8 @@ defmodule IxMcp.ActionLogTest do
 
     stop_supervised!(:migrate)
 
-    # The ladder ran 1 -> 2 -> 3 -> 4 -> 5 and left the stamp behind (index#3539).
-    assert user_version(path) == 5
+    # The ladder ran 1 -> 2 -> 3 -> 4 -> 5 -> 6 and left the stamp behind (index#3539).
+    assert user_version(path) == 6
 
     # The migrated file is the v2 shape on disk: normalized columns, no v1
     # leftovers, and a reopen (no-op detection) does not duplicate rows.
@@ -440,7 +440,15 @@ defmodule IxMcp.ActionLogTest do
     :ok = Sqlite3.release(conn, statement)
 
     assert tables ==
-             [["actions"], ["job_output"], ["jobs"], ["outbox"], ["sessions"], ["topics"]]
+             [
+               ["actions"],
+               ["issue_claims"],
+               ["job_output"],
+               ["jobs"],
+               ["outbox"],
+               ["sessions"],
+               ["topics"]
+             ]
 
     :ok = Sqlite3.close(conn)
 
@@ -463,7 +471,7 @@ defmodule IxMcp.ActionLogTest do
   test "a fresh database is created stamped with the current schema version" do
     path = tmp_db()
     start_supervised!({ActionLog, path: path, name: :action_log_fresh_stamp})
-    assert user_version(path) == 5
+    assert user_version(path) == 6
   end
 
   test "an unstamped file already at the current schema is stamped, not rewritten" do
@@ -488,7 +496,7 @@ defmodule IxMcp.ActionLogTest do
 
     reopened = start_supervised!({ActionLog, path: path, name: :action_log_stamp_b})
     assert [%{intent: "keep"}] = ActionLog.recent(10, reopened)
-    assert user_version(path) == 5
+    assert user_version(path) == 6
   end
 
   test "an unstamped pre-line file (the #3536 shape) sniffs as v3 and gains the line column" do
@@ -513,7 +521,34 @@ defmodule IxMcp.ActionLogTest do
     log = start_supervised!({ActionLog, path: path, name: :action_log_pre_line})
 
     assert [%{intent: "pre-line row", status: "done", line: nil}] = ActionLog.recent(10, log)
-    assert user_version(path) == 5
+    assert user_version(path) == 6
+  end
+
+  test "the unique constraint arbitrates issue claims (#3880)" do
+    log = start_supervised!({ActionLog, path: ":memory:", name: :action_log_claims})
+
+    winner = ActionLog.create_session("winner", log)
+    loser = ActionLog.create_session(nil, log)
+
+    assert ActionLog.last_issue_claim_id(log) == 0
+
+    assert {:ok, claim} = ActionLog.claim_issue("indexable-inc/index", 3880, winner, log)
+    assert %{repo: "indexable-inc/index", number: 3880, session: "winner"} = claim
+    assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(claim.claimed_at)
+
+    # The loser reads the standing claim back, name included.
+    assert {:error, standing} = ActionLog.claim_issue("indexable-inc/index", 3880, loser, log)
+    assert standing.id == claim.id
+    assert standing.session == "winner"
+
+    # Same number on another repo is a different claim.
+    assert {:ok, other} = ActionLog.claim_issue("indexable-inc/ix", 3880, loser, log)
+    assert other.session == nil
+
+    # The watermark cursor sees exactly the claims past it, oldest first.
+    assert [%{number: 3880}, %{repo: "indexable-inc/ix"}] = ActionLog.issue_claims_after(0, log)
+    assert [%{repo: "indexable-inc/ix"}] = ActionLog.issue_claims_after(claim.id, log)
+    assert ActionLog.last_issue_claim_id(log) == other.id
   end
 
   test "a database stamped by a newer server disables logging instead of crashing" do
@@ -530,7 +565,7 @@ defmodule IxMcp.ActionLogTest do
 
     # The refusal names both versions, so the operator knows which side moves.
     assert output =~ "user_version 9000"
-    assert output =~ "supported 5"
+    assert output =~ "supported 6"
     assert output =~ "index#3539"
 
     # The server stays useful: writes are absorbed, reads answer empty.
@@ -548,6 +583,11 @@ defmodule IxMcp.ActionLogTest do
     assert ActionLog.recent(10, log) == []
     assert ActionLog.sessions(log) == []
     assert ActionLog.topics(log) == []
+
+    # With no arbiter there is no claim to win (#3880).
+    assert ActionLog.claim_issue("indexable-inc/index", 1, session_id, log) == :disabled
+    assert ActionLog.issue_claims_after(0, log) == []
+    assert ActionLog.last_issue_claim_id(log) == 0
 
     # The newer file is left exactly as found, for the newer server.
     assert user_version(path) == 9000
