@@ -289,6 +289,23 @@ MODULES: tuple[Module, ...] = (
         ),
     ),
     Module(
+        "discord",
+        "read Discord guilds, channels, threads, and messages into polars and send as the team "
+        "bot (`await discord.guilds()` / `channels(guild_id)` / `messages(channel_id)` / "
+        "`thread(thread_id)` / `send(channel_id, text, reply_to=)`); a sent message's channel is "
+        "watched and human replies are pushed back into the session; `discord.login(token)` "
+        "stores the bot token (mode 0600); `status()` / `logout()` manage it",
+        # Mirrors discord._token()'s documented resolution order. A shared team
+        # bot token (not a personal account), so no incognito-only guard.
+        credential=Credential(
+            service="Discord",
+            env=("DISCORD_BOT_TOKEN",),
+            token_path="~/.config/discord/token",  # noqa: S106 -- path to token file, not a hardcoded secret
+            login="call `discord.login(token)` in a cell",
+            url="https://discord.com/developers/applications",
+        ),
+    ),
+    Module(
         "beeper",
         "read chats and messages across every network (WhatsApp, Telegram, Signal, iMessage, "
         "Discord, Slack, X, ...) into polars from the local Beeper Desktop API, search, and send "
