@@ -3,6 +3,7 @@ defmodule IxMcp.MCP.StdioTest do
 
   import ExUnit.CaptureIO
 
+  alias IxMcp.MCP.ClientRequests
   alias IxMcp.MCP.Stdio
 
   # These drive the GenServer callbacks directly in the test process: the
@@ -41,10 +42,10 @@ defmodule IxMcp.MCP.StdioTest do
   end
 
   test "a client response (id, no method) routes to ClientRequests, not the handler" do
-    IxMcp.MCP.ClientRequests.register(self())
+    ClientRequests.register(self())
 
     task =
-      Task.async(fn -> IxMcp.MCP.ClientRequests.request("elicitation/create", %{}, 5_000) end)
+      Task.async(fn -> ClientRequests.request("elicitation/create", %{}, 5_000) end)
 
     assert_receive {:mcp_send, %{"id" => id}}, 1_000
 
