@@ -26,7 +26,14 @@ defmodule IxMcp.PrWatchTest do
 
     assert {:ok, _} = PrWatch.start("1", File.cwd!())
 
-    assert_receive {:mcp_send, %{"method" => "notifications/claude/channel", "params" => params}},
+    # Pin the pr_watch event: registering a transport can also replay a jobs
+    # outbox digest (#3839), which shares this method but carries source
+    # "jobs" -- match past it to this watcher's own error notification.
+    assert_receive {:mcp_send,
+                    %{
+                      "method" => "notifications/claude/channel",
+                      "params" => %{"meta" => %{"source" => "pr_watch"}} = params
+                    }},
                    5_000
 
     assert %{"content" => content, "meta" => meta} = params
