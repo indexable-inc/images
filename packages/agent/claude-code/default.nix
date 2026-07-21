@@ -317,7 +317,11 @@
     # skills listing (verified 2026-07, index#3607); the sibling `dataviz`
     # skill is removed via `skillOverrides` in houseSettingsDefaults below.
     Artifact = false;
-    AskUserQuestion = false;
+    # On: the redesign-at-the-root rule (prompt/rules.nix) routes fundamental
+    # design forks through this dialog instead of silently patching the old
+    # shape (index#3841); the AFK auto-continue env keeps an unanswered
+    # dialog from blocking unattended runs.
+    AskUserQuestion = true;
     DesignSync = false;
     EnterPlanMode = false;
     EnterWorktree = false;
