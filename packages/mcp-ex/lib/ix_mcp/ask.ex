@@ -43,11 +43,15 @@ defmodule IxMcp.Ask do
       "requestedSchema" => schema(Keyword.get(opts, :options))
     }
 
-    case ClientRequests.request(
-           "elicitation/create",
-           params,
-           Keyword.get(opts, :timeout_ms, @default_timeout_ms)
-         ) do
+    "elicitation/create"
+    |> ClientRequests.request(params, Keyword.get(opts, :timeout_ms, @default_timeout_ms))
+    |> interpret()
+  end
+
+  # The wire-result decode lives apart from user/2 so each half stays under
+  # credo's complexity ceiling.
+  defp interpret(result) do
+    case result do
       {:ok, %{"action" => "accept", "content" => %{"answer" => answer}}} when is_binary(answer) ->
         {:ok, answer}
 

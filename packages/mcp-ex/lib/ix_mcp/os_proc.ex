@@ -3,9 +3,9 @@ defmodule IxMcp.OsProc do
   Finds and kills the OS processes a job's cells spawned, so cancelling a job
   never leaks orphan subprocesses.
 
-  There is no blessed shell helper in this server -- a cell that needs a
-  subprocess writes `System.cmd/3` or opens a `Port` itself -- but the
-  cancellation contract survives the cut: every port opened by any process in
+  Whether a cell spawns through the blessed `IxMcp.Cmd` helper, raw
+  `System.cmd/3`, or a `Port` it opens itself, the cancellation contract is
+  the same: every port opened by any process in
   the job's process tree (identified by the job's group leader, which spawned
   processes inherit) is resolved to its OS pid, and that pid's whole descendant
   tree is killed.
