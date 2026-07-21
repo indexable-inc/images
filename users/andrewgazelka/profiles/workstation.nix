@@ -101,6 +101,16 @@
   # WEAVE_MEMORY_STORE session variable both derive from it.
   memoryStore = "${config.home.homeDirectory}/.config/nix/claude/memory/.weave";
 
+  # One statement of the protected primary checkouts: the claude-code
+  # wrapper's worktree-guard hook and the kernel's Edit guard
+  # (IX_DEFAULT_PRIMARY_CHECKOUTS session variable, index#3871) both derive
+  # from it. The package default is `/home/*/{index,ix}` (Linux fleet); on
+  # this Mac the long-lived checkouts live under ~/Projects.
+  primaryCheckouts = [
+    "/Users/*/Projects/*/index"
+    "/Users/*/Projects/*/ix"
+  ];
+
   # SessionStart memory digest: the derived replacement for the retired
   # MEMORY.md flat index (index#3849). One-shot weave queries against the
   # private store; stdout becomes session context via the wrappers'
@@ -207,13 +217,9 @@
     # `skills` option (see programs.claude-code below). Hooks are baked by the
     # package itself; agents/commands ride bare via the module. Nothing else
     # used the plugin, so no `pluginDirs` here anymore.
-    # The worktree-guard's protected primary checkouts. The package default is
-    # `/home/*/{index,ix}` (Linux fleet); on this Mac the long-lived checkouts
-    # live under ~/Projects, so point the guard there.
-    primaryCheckouts = [
-      "/Users/*/Projects/*/index"
-      "/Users/*/Projects/*/ix"
-    ];
+    # The worktree-guard's protected primary checkouts (shared statement in
+    # the let above, which also feeds the kernel's Edit guard, index#3871).
+    inherit primaryCheckouts;
     # Personal settings keys (memory dir, plugins, marketplaces), merged into
     # the wrapper's computed render between the house defaults and the
     # controlled keys; the module materializes the result into the writable
@@ -480,6 +486,16 @@ in {
       # for the same reason as IX_MCP_HOST: inherited by claude/codex and
       # every kernel they spawn.
       WEAVE_MEMORY_STORE = memoryStore;
+
+      # The primary-checkout globs the kernel's Edit guard enforces
+      # (index#3871), the same list the claude-code wrapper bakes into its
+      # worktree-guard hook. Device-level for the same reason as
+      # WEAVE_MEMORY_STORE: hooks never see kernel writes, so the kernel
+      # needs the denylist in its own environment, and inheriting one
+      # statement beats a per-server env override. Same name and
+      # colon-separated shape the hook binary reads; an operator
+      # CLAUDE_CODE_PRIMARY_CHECKOUTS still overrides both consumers.
+      IX_DEFAULT_PRIMARY_CHECKOUTS = lib.concatStringsSep ":" primaryCheckouts;
 
       # Skim configuration
       SKIM_CTRL_T_COMMAND = "fd --type f --hidden --follow";

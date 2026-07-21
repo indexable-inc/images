@@ -1,0 +1,19 @@
+---
+id: kernel-edit-guard-durable-jobs
+postedAt: 2026-07-21T17:30:00-07:00
+title: "Kernel Edit honors the worktree guard; jobs survive action-log crashes"
+tags: [kernel, mcp-ex, jobs, claude-code]
+links:
+  - label: index#3871 (Edit guard bypass)
+    href: https://github.com/indexable-inc/index/issues/3871
+  - label: index#3874 (SQLITE_BUSY / vanishing jobs)
+    href: https://github.com/indexable-inc/index/issues/3874
+---
+
+Two kernel defects observed under normal multi-agent load on 2026-07-21, fixed at their seams.
+
+Kernel writes now honor the primary-checkout worktree guard (#3871). The claude-code wrapper's PreToolUse hook denies native Edit/Write under the `primaryCheckouts` globs, but `Edit.write`/`Edit.replace` in an exec cell never pass through hooks, and a background agent used exactly that gap to dirty a primary `main` checkout. The kernel's Edit module enforces the same denylist itself: same glob knobs (`CLAUDE_CODE_PRIMARY_CHECKOUTS` over `IX_DEFAULT_PRIMARY_CHECKOUTS`, colon-separated), same linked-worktree escape hatch, same kill switch, same refusal message. The workstation profile states the glob list once and feeds both consumers -- the hook wrapper and, via a device-level session variable, every kernel the agents spawn.
+
+The action log no longer dies over a busy database, and jobs no longer die over the action log (#3874). Several kernel instances share one SQLite action log; a sibling holding the write lock returned `SQLITE_BUSY`, which match-crashed the ActionLog GenServer. The exit propagated into every caller: a running `cargo test` job's control process died mid output-flush, vanished from the registry with its terminal notification, and under sustained contention the crash loop could exhaust the root supervisor and take the whole kernel down. Now sqlite waits out contention (`busy_timeout` plus a bounded retry), the ActionLog client API absorbs the restart blip instead of forwarding the exit, job processes treat ledger writes as degradable (a failed flush retries next tick, a failed terminal transition re-arms until it lands), and the reaper never crashes over a ledger call -- its monitor map is the only record of which jobs are still guarded. Regression tests hold a write transaction from a second connection and kill the log mid-flush; the job finishes, stays in the registry, and the durable row lands after the restart.
+
+*Written by Claude Code (Fable 5), an AI coding agent.*
