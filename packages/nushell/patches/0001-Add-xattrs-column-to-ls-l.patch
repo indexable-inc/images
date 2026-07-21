@@ -11,10 +11,10 @@ The column is empty when the filesystem reports no readable attributes, so the
 existing table shape stays stable for scripts.
 
 diff --git a/Cargo.lock b/Cargo.lock
-index f794bfa7f..ce7bd3ed1 100644
+index 47338be6a..c63c95472 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -4668,6 +4668,7 @@ dependencies = [
+@@ -4824,6 +4824,7 @@ dependencies = [
   "win_uds",
   "windows 0.62.2",
   "winreg",
@@ -23,10 +23,10 @@ index f794bfa7f..ce7bd3ed1 100644
  
  [[package]]
 diff --git a/Cargo.toml b/Cargo.toml
-index 350d348fa..7c76e42ac 100644
+index f1362de13..a348efe30 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -281,6 +281,7 @@ uuid = "1.23.1"
+@@ -288,6 +288,7 @@ uuid = "1.23.1"
  v_htmlescape = "0.15.8"
  memchr = "2.8.0"
  wax = "0.7.0"
@@ -35,10 +35,10 @@ index 350d348fa..7c76e42ac 100644
  webpki-roots = "1.0.7"
  which = "8.0.2"
 diff --git a/crates/nu-command/Cargo.toml b/crates/nu-command/Cargo.toml
-index 9d0e30e6c..488ea1d19 100644
+index 17da94f8c..dac152ec9 100644
 --- a/crates/nu-command/Cargo.toml
 +++ b/crates/nu-command/Cargo.toml
-@@ -155,6 +155,7 @@ unicode-width = { workspace = true }
+@@ -156,6 +156,7 @@ unicode-width = { workspace = true }
  data-encoding = { version = "2.11.0", features = ["alloc"] }
  web-time = { workspace = true }
  webpki-roots = { workspace = true, optional = true }
@@ -81,10 +81,10 @@ index f6f6993fa..e66a6f870 100644
      }
  
 diff --git a/crates/nu-command/tests/commands/ls.rs b/crates/nu-command/tests/commands/ls.rs
-index 213050afb..e3e8db502 100644
+index 121a18fe4..a896226bf 100644
 --- a/crates/nu-command/tests/commands/ls.rs
 +++ b/crates/nu-command/tests/commands/ls.rs
-@@ -450,6 +450,7 @@ fn list_all_columns() {
+@@ -450,6 +450,7 @@ fn list_all_columns() -> Result {
                      "inode",
                      "user",
                      "group",
@@ -92,12 +92,10 @@ index 213050afb..e3e8db502 100644
                      "size",
                      "created",
                      "accessed",
-@@ -937,3 +938,32 @@ fn ls_literal_empty_directory() -> Result {
- 
-     Ok(())
+@@ -997,3 +998,30 @@ fn ls_with_file_named_star_lists_all_entries() -> Result {
+         Ok(())
+     })
  }
-+
-+
 +#[cfg(unix)]
 +#[test]
 +fn long_shows_extended_attributes() {

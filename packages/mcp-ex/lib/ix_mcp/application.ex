@@ -14,6 +14,7 @@ defmodule IxMcp.Application do
       ├── IxMcp.Jobs.Supervisor (DynamicSupervisor)  one child per cell/job
       │   └── IxMcp.Jobs.Job*   runs one evaluation in a monitored process
       ├── IxMcp.PrWatch.Supervisor (Task.Supervisor)  one task per PR watch
+      ├── IxMcp.IssueWatch      (only when IX_MCP_STDIO=1) new-issue channel feed
       ├── IxMcp.Agents.Harness     (AgentHarness) depth-1 subagent processes (#3700)
       ├── IxMcp.Agents.Events      subagent ledger: events, finals, graph, notifications
       └── IxMcp.MCP.Stdio       (only when IX_MCP_STDIO=1) the stdio transport
@@ -51,7 +52,7 @@ defmodule IxMcp.Application do
         # ledger that drains its lead mailbox.
         {AgentHarness, name: IxMcp.Agents.Harness, runner: IxMcp.Agents.CliRunner},
         {IxMcp.Agents.Events, harness: IxMcp.Agents.Harness}
-      ] ++ transport()
+      ] ++ issue_watch() ++ transport()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: IxMcp.Supervisor)
   end
@@ -123,6 +124,16 @@ defmodule IxMcp.Application do
   # sweep of leftover `running` action rows). A safe implementation must
   # scope strictly to this instance's own jobs (by session), which needs a
   # durable instance identity that outlives a restart -- out of scope here.
+  # The issue feed announces into a user-facing transport and polls GitHub,
+  # so it rides the same flag as the transport: `mix test` and IEx sessions
+  # get neither (#3877).
+  defp issue_watch do
+    case System.get_env("IX_MCP_STDIO") do
+      "1" -> [IxMcp.IssueWatch]
+      _ -> []
+    end
+  end
+
   defp transport do
     case System.get_env("IX_MCP_STDIO") do
       "1" -> [IxMcp.MCP.Stdio]

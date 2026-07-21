@@ -52,7 +52,11 @@ defmodule IxMcp.MCP.Tools do
                                             CI? Pair it with `gh pr checks <pr>
                                             --watch --fail-fast`: checks alone hang
                                             forever on a CONFLICTING PR (dirty PRs
-                                            skip CI) and never show a merge (#3548)
+                                            skip CI) and never show a merge (#3548).
+                                            Issues need no watcher: every issue
+                                            filed in a watched org (default
+                                            indexable-inc) arrives unprompted as a
+                                            source="issues" channel notification
       Tui.act(uri, send_keys)               drive a federated TUI resource (optional
                                             peer arg)
       TuiLocal.spawn(cmd, args)             spawn a local PTY program (vim, less, a

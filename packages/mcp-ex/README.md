@@ -140,6 +140,7 @@ IxMcp.Supervisor (one_for_one)
 ├── IxMcp.Jobs.History     ordered record of every run
 ├── IxMcp.MCP.Notifier     server-initiated notification fan-out
 ├── IxMcp.PrWatch.Supervisor (Task.Supervisor) one task per PR watch
+├── IxMcp.IssueWatch       new-issue channel feed (stdio-gated, `gh search issues`)
 └── IxMcp.MCP.Stdio        newline-delimited JSON-RPC on stdin/stdout
 ```
 
