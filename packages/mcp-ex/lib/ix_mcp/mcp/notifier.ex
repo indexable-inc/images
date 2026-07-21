@@ -19,6 +19,7 @@ defmodule IxMcp.MCP.Notifier do
   use GenServer
 
   alias IxMcp.ActionLog
+  alias IxMcp.Session
 
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(_opts) do
@@ -77,15 +78,21 @@ defmodule IxMcp.MCP.Notifier do
   end
 
   def handle_cast({:publish, outbox}, state) do
-    {content, meta} = render(outbox)
+    # Claim the row before delivering: a register-replay may already have
+    # delivered and acked it (both paths run in this process, but in
+    # nondeterministic mailbox order), so the ack flip is the single arbiter
+    # that prevents announcing the same finish twice (#3839). With no
+    # transport connected we neither deliver nor claim -- the row waits for
+    # replay.
+    if state.transports != [] and ActionLog.ack_outbox([outbox.id]) > 0 do
+      {content, meta} = render(outbox)
 
-    deliver(state.transports, "notifications/claude/channel", %{
-      "content" => content,
-      "meta" => meta
-    })
+      deliver(state.transports, "notifications/claude/channel", %{
+        "content" => content,
+        "meta" => meta
+      })
+    end
 
-    # Delivered to a live transport: ack it. Otherwise leave it for replay.
-    if state.transports != [], do: ActionLog.ack_outbox([outbox.id])
     {:noreply, state}
   end
 
@@ -100,9 +107,11 @@ defmodule IxMcp.MCP.Notifier do
   end
 
   # Replay every unacked outbox row as one digest so a reconnecting session
-  # sees "while you were away: ..." rather than nothing (#3839).
+  # sees "while you were away: ..." rather than nothing (#3839). Scoped to
+  # this instance's session, so a transport connecting here never drains a
+  # sibling instance's notifications out of the shared database.
   defp replay_unacked(transports) do
-    case ActionLog.unacked_outbox() do
+    case ActionLog.unacked_outbox(Session.ids().session_id) do
       [] ->
         :ok
 

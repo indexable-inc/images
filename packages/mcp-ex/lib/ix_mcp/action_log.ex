@@ -368,14 +368,23 @@ defmodule IxMcp.ActionLog do
     GenServer.call(server, {:recent_jobs, session_id, n})
   end
 
-  @doc "Unacked outbox rows (terminal-transition notifications), oldest first."
-  @spec unacked_outbox(GenServer.server()) :: [outbox()]
-  def unacked_outbox(server \\ __MODULE__) do
-    GenServer.call(server, :unacked_outbox)
+  @doc """
+  Unacked outbox rows (terminal-transition notifications), oldest first.
+  Scoped to `session_id` when given -- replay must never touch a sibling
+  instance's rows, the same isolation the shared database demands
+  everywhere else (#3839). `nil` returns every unacked row (introspection).
+  """
+  @spec unacked_outbox(integer() | nil, GenServer.server()) :: [outbox()]
+  def unacked_outbox(session_id \\ nil, server \\ __MODULE__) do
+    GenServer.call(server, {:unacked_outbox, session_id})
   end
 
-  @doc "Mark outbox rows delivered."
-  @spec ack_outbox([integer()], GenServer.server()) :: :ok
+  @doc """
+  Claim outbox rows as delivered; returns how many this call actually
+  flipped from unacked to acked. A zero flip means someone already delivered
+  the row, which is how a racing publish and replay avoid a double announce.
+  """
+  @spec ack_outbox([integer()], GenServer.server()) :: non_neg_integer()
   def ack_outbox(ids, server \\ __MODULE__) do
     GenServer.call(server, {:ack_outbox, ids})
   end
@@ -636,20 +645,40 @@ defmodule IxMcp.ActionLog do
     {:reply, Enum.map(rows, &job_row_to_map/1), state}
   end
 
-  def handle_call(:unacked_outbox, _from, %{conn: conn} = state) do
-    rows =
-      fetch(
-        conn,
-        "SELECT id, job_id, intent, status, elapsed_ms, result FROM outbox WHERE acked = 0 ORDER BY id",
-        []
-      )
+  def handle_call({:unacked_outbox, session_id}, _from, %{conn: conn} = state) do
+    {sql, params} =
+      case session_id do
+        nil ->
+          {"SELECT id, job_id, intent, status, elapsed_ms, result FROM outbox WHERE acked = 0 ORDER BY id",
+           []}
 
-    {:reply, Enum.map(rows, &outbox_row_to_map/1), state}
+        sid ->
+          {"SELECT o.id, o.job_id, o.intent, o.status, o.elapsed_ms, o.result FROM outbox o " <>
+             "JOIN jobs j ON j.id = o.job_id WHERE j.session_id IS ? AND o.acked = 0 ORDER BY o.id",
+           [sid]}
+      end
+
+    {:reply, Enum.map(fetch(conn, sql, params), &outbox_row_to_map/1), state}
   end
 
+  # Claim each row that is still unacked; the count of rows this call flips is
+  # the arbiter that keeps a racing publish and replay from double-announcing
+  # (#3839). The SELECT-then-UPDATE is atomic here because it runs inside one
+  # call on the single-writer GenServer.
   def handle_call({:ack_outbox, ids}, _from, %{conn: conn} = state) do
-    Enum.each(ids, fn id -> run(conn, "UPDATE outbox SET acked = 1 WHERE id = ?", [id]) end)
-    {:reply, :ok, state}
+    claimed =
+      Enum.reduce(ids, 0, fn id, acc ->
+        case fetch(conn, "SELECT acked FROM outbox WHERE id = ?", [id]) do
+          [[0]] ->
+            run(conn, "UPDATE outbox SET acked = 1 WHERE id = ?", [id])
+            acc + 1
+
+          _ ->
+            acc
+        end
+      end)
+
+    {:reply, claimed, state}
   end
 
   defp ensure_version(conn) do
@@ -738,7 +767,8 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:job, _id}), do: nil
   defp disabled_reply({:job_output, _id}), do: ""
   defp disabled_reply({:recent_jobs, _session_id, _n}), do: []
-  defp disabled_reply(:unacked_outbox), do: []
+  defp disabled_reply({:unacked_outbox, _session_id}), do: []
+  defp disabled_reply({:ack_outbox, _ids}), do: 0
   defp disabled_reply({:recent, _n}), do: []
   defp disabled_reply(:sessions), do: []
   defp disabled_reply(:topics), do: []

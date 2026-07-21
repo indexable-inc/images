@@ -177,8 +177,12 @@ defmodule IxMcp.JobsTest do
 
     assert running.running
 
-    # A connected transport hears the death.
+    # A connected transport hears the death. Register and sync on the
+    # Notifier first, so its replay of any already-unacked rows drains before
+    # the kill -- then this death arrives as its own published event, not
+    # folded into a replay digest.
     :ok = Notifier.register(self())
+    _ = :sys.get_state(Notifier)
 
     {:ok, pid} = Jobs.lookup(running.id)
     Process.exit(pid, :kill)

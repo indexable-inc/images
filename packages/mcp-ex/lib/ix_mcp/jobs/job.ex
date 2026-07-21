@@ -346,8 +346,19 @@ defmodule IxMcp.Jobs.Job do
      finish(state, :killed, {:failure, "killed: io proxy exited: " <> inspect(reason)}, [])}
   end
 
-  # Any other linked EXIT (our own supervisor shutdown, a :normal io proxy
-  # exit after finish) is not a job death we report.
+  # A supervisor shutdown (or a normal linked exit) is not a job death we
+  # record, but we must still terminate: trapping exits means the signal no
+  # longer stops us automatically, and ignoring it would stall whole-tree
+  # shutdown until the supervisor's timeout brutally kills us.
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:stop, :normal, state}
+  def handle_info({:EXIT, _pid, :shutdown}, state), do: {:stop, :shutdown, state}
+
+  def handle_info({:EXIT, _pid, {:shutdown, _} = reason}, state),
+    do: {:stop, reason, state}
+
+  # Any other linked EXIT under a still-running job is machinery we don't
+  # model dying; leave the job alone (the reaper covers a true control-process
+  # death).
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(:flush, %{status: :running} = state) do

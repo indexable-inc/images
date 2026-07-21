@@ -111,7 +111,7 @@ defmodule IxMcp.Application do
     _ -> :ok
   end
 
-  # TODO(#3839): watch-job re-arm on kernel start. `Jobs.run(code, watch:
+  # Deferred (#3839): watch-job re-arm on kernel start. `Jobs.run(code, watch:
   # true)` already records the `watch` flag and the code on the durable jobs
   # row, so a future kernel could, at boot, re-arm its own unfinished watch
   # jobs from their recorded code and stamp every other unfinished job
