@@ -1,0 +1,15 @@
+---
+id: kernel-ask-user-elicitation
+postedAt: 2026-07-21T14:00:00-07:00
+title: Kernel Ask.user replaces the built-in AskUserQuestion tool
+tags: [kernel, mcp]
+links:
+  - label: index#3857
+    href: https://github.com/indexable-inc/index/pull/3857
+  - label: index#3856
+    href: https://github.com/indexable-inc/index/issues/3856
+---
+
+Agents can now ask the human a question from an exec cell. `Ask.user("Redesign or patch?", options: ["Redesign", {"Patch", "keep the shape"}])` raises the client's native dialog through MCP `elicitation/create` and returns `{:ok, answer}`, `:declined`, `:cancelled`, or `:timeout`, so the answer lands as an ordinary value the cell can branch on. A question still pending when the cell's budget runs out becomes a background job like any other long call, and the job's finish notification carries the answer, so the agent keeps working instead of blocking on the human.
+
+A 30-minute deadline cancels the dialog, so unattended runs park as `:timeout` rather than holding a stale prompt open. With the kernel path in place, Claude Code's built-in AskUserQuestion tool is denied again, and its schema no longer costs tokens in every session. Under the hood, a new `IxMcp.MCP.ClientRequests` handles server-initiated JSON-RPC over the stdio transport, which is what lets the server originate `elicitation/create` at all.
