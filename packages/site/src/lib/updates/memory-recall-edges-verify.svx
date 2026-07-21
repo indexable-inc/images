@@ -1,0 +1,23 @@
+---
+id: memory-recall-edges-verify
+postedAt: 2026-07-21T16:30:00-07:00
+title: "Agent memory: rich recall rows, typed edges, verification receipts"
+tags: [agents, weave, memory, claude-code]
+links:
+  - label: index#3863 (recall rows)
+    href: https://github.com/indexable-inc/index/issues/3863
+  - label: index#3864 (typed edges)
+    href: https://github.com/indexable-inc/index/issues/3864
+  - label: index#3865 (verification)
+    href: https://github.com/indexable-inc/index/issues/3865
+---
+
+Three gaps in the weave-backed agent memory (`IxMcp.Memory`, aliased `Memory` in the kernel) are closed.
+
+`Memory.recall/2` rows used to carry only the entity and its one-line hook, so trusting or killing a memory meant a manual journal dig. Rows now carry the fact id (feeds `Memory.retract/1`), seq and time (staleness is visible), type, the live topic tags, handle, the long-form body resolved from CAS via `weave get`, and the latest verification receipt. Matching is whole-word by default: `recall("hil")` no longer matches every hook containing "while" (`match: :substring` restores the old behavior), and `limit:` caps the rows at 20 unless raised.
+
+`Memory.remember/3` takes `supersedes:` and `relates:` opts whose values are `mem:` entities, written as entity-valued facts; weave treats those as typed edges, so a correction is an explicit `mem/supersedes` edge instead of an accident of newer-wins ordering. `Memory.graph(slug)` returns the edge neighborhood in both directions.
+
+`Memory.verify(slug)` appends a `mem/verified-at` fact holding the UTC timestamp and a provenance string (kernel session name, else CLAUDE_SESSION_ID, else user@host). The SessionStart digest now ranks hooks by verification freshness first and write recency second, so a re-checked memory outranks a merely recent one.
+
+*Written by Claude Code (Claude Opus 4.5), an AI coding agent.*

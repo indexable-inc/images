@@ -117,10 +117,13 @@
       echo "## Memory"
       echo "Durable memory is a weave store at $store: append-only facts, Datalog-derived views."
       echo "Save at the moment of learning: Memory.remember(\"slug\", \"one-line hook\", type: \"project\", topic: \"nix\", handle: \"cmd/path\", body: long_md) in the index kernel."
-      echo "Recall: Memory.recall(\"regex\") or Memory.query(datalog). Recalled facts go stale; verify before use. Never edit history: newer facts win, Memory.retract(id) kills a wrong one."
+      echo "Recall: Memory.recall(\"regex\") (rich rows: id, time, type, topic, handle, body) or Memory.query(datalog). Recalled facts go stale; verify before use and record the re-check with Memory.verify(\"slug\") -- verified memories rank first below. Never edit history: newer facts win, Memory.retract(id) kills a wrong one."
       echo
-      echo "### Hooks (most recent first)"
-      ${lib.getExe cfg.packages.weave} --store "$store" query 'recent(S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S). ?- recent(S, E, D) order S desc limit 150.'
+      echo "### Hooks (freshest verification first, then recency)"
+      # Rank by the newest mem/verified-at seq per entity (0 when never
+      # verified), then by the desc fact's own seq: a re-checked memory
+      # outranks a merely recent one (index#3865).
+      ${lib.getExe cfg.packages.weave} --store "$store" query 'vseq(E, max(S)) :- fact_id(I, E, "mem/verified-at", V), fact_seq(I, S). rank(V, S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S), vseq(E, V). rank(0, S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S), not vseq(E, _). ?- rank(V, S, E, D) order V desc, S desc limit 150.'
       echo
       echo "### Counts by type"
       ${lib.getExe cfg.packages.weave} --store "$store" query 'per_type(T, count(E)) :- latest(E, "mem/type", T). ?- per_type(T, N) order N desc.'
@@ -240,12 +243,10 @@
     omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
     # SessionStart memory digest from the weave store; replaces the retired
     # MEMORY.md load (index#3849).
-    extraSessionStart = lib.optionals (cfg.packages.weave != null) [
-      {
-        package = memoryDigest;
-        timeout = 15;
-      }
-    ];
+    extraSessionStart = lib.optional (cfg.packages.weave != null) {
+      package = memoryDigest;
+      timeout = 15;
+    };
     # Matches agentPromptOmitRules `forceMerge` above: without this the baked
     # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
     # rule permits.
@@ -359,12 +360,10 @@
       # discarded it, shipping prompts WITH the forceMerge rule (index#3537).
       omitRules = agentPromptOmitRules;
       # Same SessionStart memory digest as claudeCode above (index#3849).
-      extraSessionStart = lib.optionals (cfg.packages.weave != null) [
-        {
-          package = memoryDigest;
-          timeout = 15;
-        }
-      ];
+      extraSessionStart = lib.optional (cfg.packages.weave != null) {
+        package = memoryDigest;
+        timeout = 15;
+      };
     })
     // {
       # Upstream main keeps Cargo's workspace version at 0.0.0. Home Manager
