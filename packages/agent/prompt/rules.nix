@@ -523,6 +523,23 @@
     };
   }
   {
+    commentDensityRewrite = {
+      topics = ["architecture" "agency"];
+      text = ''
+        When explaining a piece of code takes more than a couple of
+        sentences of comments, suspect the code, not the docs: it is
+        likely wrong-shaped. Sketch the rewrite that would make the
+        comment unnecessary and put it to the user unprompted, before
+        settling for the explanation.
+      '';
+      reason = ''
+        Requested 2026-07-21: long explanatory comments were papering
+        over spaghetti; the user wants the rewrite proposed proactively,
+        with the choice left to them.
+      '';
+    };
+  }
+  {
     respectGuards = {
       topics = ["agency"];
       text = ''
