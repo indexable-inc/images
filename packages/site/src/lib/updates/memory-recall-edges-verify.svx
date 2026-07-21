@@ -10,6 +10,8 @@ links:
     href: https://github.com/indexable-inc/index/issues/3864
   - label: index#3865 (verification)
     href: https://github.com/indexable-inc/index/issues/3865
+  - label: PR #3870
+    href: https://github.com/indexable-inc/index/pull/3870
 ---
 
 Three gaps in the weave-backed agent memory (`IxMcp.Memory`, aliased `Memory` in the kernel) are closed.
