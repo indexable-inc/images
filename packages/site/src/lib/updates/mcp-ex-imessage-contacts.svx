@@ -1,0 +1,19 @@
+---
+id: mcp-ex-imessage-contacts
+postedAt: 2026-07-21T13:05:00-07:00
+title: "The kernel speaks iMessage: `Imsg` and `Contacts` cell helpers"
+tags: [mcp-ex, imessage, macos]
+links:
+  - label: Imsg
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/imsg.ex
+  - label: Contacts
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/contacts.ex
+  - label: PR 3845
+    href: https://github.com/indexable-inc/index/pull/3845
+---
+
+Workspace cells on a mac can now send and read iMessages and look people up in the address book. `Imsg.send("+14155551212", "on my way")` goes through Messages.app via osascript; `Imsg.chats()`, `Imsg.recent(with: handle)`, and `Imsg.search(q)` read `~/Library/Messages/chat.db` read-only over the exqlite NIF the action log already ships.
+
+The awkward parts are handled where they belong: your own sends land with a NULL `text` column, so the helpers decode the `attributedBody` typedstream and always return real text, and group chats have opaque hex identifiers, so `with:` resolves membership through `chat_handle_join` instead of chat names. `Contacts.search("hari")` unions every `AddressBook-v22.abcddb` (the populated one hides under `Sources/<uuid>/`) and returns the phone and email handles `Imsg` takes.
+
+Darwin-only by nature; on other hosts the helpers return errors instead of pretending.
