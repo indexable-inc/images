@@ -50,7 +50,10 @@ defmodule IxMcp.JobsTest do
   end
 
   test "result/1 returns the value term, or :running while unfinished" do
-    {running, _out} = Jobs.run("Process.sleep(200); %{a: 1}", budget: 0.05, intent: "slow map")
+    # A long sleep against a tiny budget keeps the "still running" window wide
+    # enough that a loaded CI builder cannot let the job finish before the
+    # assertion (the 200ms/50ms margin flaked under load).
+    {running, _out} = Jobs.run("Process.sleep(2000); %{a: 1}", budget: 0.05, intent: "slow map")
     assert {:error, :running} = Jobs.result(running.id)
 
     Jobs.await(running.id, 5_000)
