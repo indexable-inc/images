@@ -168,6 +168,16 @@
     {
       "patch": "0035-libutil-treat-POLLERR-POLLNVAL-as-fd-death-in-Monito.patch",
       "deps": []
+    },
+    {
+      "patch": "0036-libmain-emit-terminal-progress-OSC-9-4-from-the-prog.patch",
+      "deps": []
+    },
+    {
+      "patch": "0037-libmain-repaint-the-progress-bar-on-terminal-resize.patch",
+      "deps": [
+        "0036-libmain-emit-terminal-progress-OSC-9-4-from-the-prog.patch"
+      ]
     }
   ]
 }
