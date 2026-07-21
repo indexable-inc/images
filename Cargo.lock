@@ -5701,27 +5701,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ix-term-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "clap",
- "futures",
- "ix-vt",
- "libc",
- "pty-process",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "ix-usage"
 version = "0.1.0"
 dependencies = [
@@ -5789,15 +5768,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "ixterm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
  "tempfile",
 ]
 
