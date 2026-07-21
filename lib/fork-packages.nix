@@ -791,6 +791,22 @@
           upstream = "hold";
           reason = "Port of the MonitorFdHup half of NixOS/nix#15691 (open since 2026-04, indexable-inc/index#3769); retire if that PR merges. Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # 0036: the progress bar emits the ConEmu-style progress OSC (9;4) so
+        # terminals that understand it (Ghostty, WezTerm, Windows Terminal,
+        # ConEmu) show a native build-progress indicator; percent mirrors the
+        # build + copy counters of the textual status line.
+        "0036-libmain-emit-terminal-progress-OSC-9-4-from-the-prog.patch" = {
+          upstream = "hold";
+          reason = "UX feature (indexable-inc/index#3830) upstream may want behind a setting or with broader terminal detection. Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0037: the status line never repaints on SIGWINCH (redraw() dedupes
+        # and nothing invalidates on resize), so resizing the terminal leaves
+        # a stale truncated or wrapped line; adds a window-size callback in
+        # libutil and registers the progress bar to repaint through it.
+        "0037-libmain-repaint-the-progress-bar-on-terminal-resize.patch" = {
+          upstream = "hold";
+          reason = "Real upstream bug worth a PR (stale progress line after resize, indexable-inc/index#3830). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
     {

@@ -1,0 +1,19 @@
+---
+id: nix-terminal-progress-osc
+postedAt: 2026-07-21T06:20:00-07:00
+title: "nix builds now drive the terminal's native progress indicator"
+tags: [nix, fork, terminal, ux]
+links:
+  - label: patch 0036 (OSC 9;4)
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix/patches/0036-libmain-emit-terminal-progress-OSC-9-4-from-the-prog.patch
+  - label: patch 0037 (resize repaint)
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix/patches/0037-libmain-repaint-the-progress-bar-on-terminal-resize.patch
+  - label: issue 3830
+    href: https://github.com/indexable-inc/index/issues/3830
+---
+
+Two new patches in the nix fork series improve the progress bar's terminal integration.
+
+Patch 0036 emits the ConEmu-style progress OSC (`ESC ] 9 ; 4 ; state ; percent BEL`) on every redraw. Terminals that understand it, including Ghostty, WezTerm, Windows Terminal, and ConEmu, show a native progress indicator for the foreground command: percent is the overall build plus copy completion, the same counters the textual `[3/47 built, 12 copied]` status renders. Failures flip the indicator to the error state, unknown totals report indeterminate, and the indicator is removed when the bar stops or pauses. Terminals are recognized by identity (`TERM_PROGRAM`, `WT_SESSION`, `ConEmuANSI`) since there is no capability query; everything else sees the same bytes as before.
+
+Patch 0037 fixes a longstanding upstream wart the first patch made more visible: the status line never repainted on `SIGWINCH`. The line is truncated to the window width at draw time and the redraw path dedupes identical output, so growing the window kept the old truncation and shrinking it left a soft-wrapped leftover row. `updateWindowSize()` already runs on the signal handler thread; it now takes a callback, and the progress bar registers one that invalidates the last drawn output and wakes the update thread, so the line redraws at the new width immediately.
