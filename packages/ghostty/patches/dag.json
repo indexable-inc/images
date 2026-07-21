@@ -9,6 +9,10 @@
     {
       "patch": "0002-termio-hang-up-child-process-groups-when-spawn-time-.patch",
       "deps": []
+    },
+    {
+      "patch": "0003-terminal-expose-per-cell-OSC-8-hyperlink-URIs-throug.patch",
+      "deps": []
     }
   ]
 }

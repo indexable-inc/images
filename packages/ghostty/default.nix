@@ -43,6 +43,10 @@ in
           (old.passthru.tests or {})
           // {
             inherit layout;
+            # Runs ghostty's vt/vt_c Zig unit tests from the PATCHED tree, so
+            # fork-patch test additions execute in CI instead of only
+            # upstream.
+            unit = package.unitTests;
           };
       };
   })

@@ -197,6 +197,11 @@ pub struct Cell {
     /// The resolved background RGB, with palette indices already looked up.
     /// `None` means the cell uses the terminal default background.
     pub bg: Option<Rgb>,
+    /// The cell's OSC 8 hyperlink URI, or `None` when the cell is not part
+    /// of a hyperlink. Per-cell and exact: unlike the row-level
+    /// `GHOSTTY_ROW_DATA_HYPERLINK` flag (which may false-positive), this is
+    /// only `Some` when the library resolved a real URI for the cell.
+    pub hyperlink: Option<String>,
 }
 
 /// The terminal cursor's visual style (the shape requested via DECSCUSR).
@@ -1003,15 +1008,48 @@ fn read_row(cells: &RowCells, cols: u16) -> Result<Vec<Cell>> {
             CellData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
         )?;
 
+        let hyperlink = read_hyperlink(cells)?;
+
         row.push(Cell {
             ch,
             combining,
             style,
             fg,
             bg,
+            hyperlink,
         });
     }
     Ok(row)
+}
+
+/// Read the selected cell's OSC 8 hyperlink URI, `None` when it has none.
+///
+/// Two-call convention like [`read_graphemes`]: a length query sizes the
+/// caller-provided buffer the URI bytes are copied into. A zero length is
+/// the library's "no hyperlink" signal (it also covers a set hyperlink flag
+/// whose id resolved to no entry, which the C API reports as an empty URI).
+fn read_hyperlink(cells: &RowCells) -> Result<Option<String>> {
+    use sys::GhosttyRenderStateRowCellsData as CellData;
+
+    let len: u32 =
+        unsafe { cells.get(CellData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_LEN) }?;
+    if len == 0 {
+        return Ok(None);
+    }
+
+    let mut buf = vec![0u8; len as usize];
+    check(unsafe {
+        sys::ghostty_render_state_row_cells_get(
+            cells.raw,
+            CellData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_BUF,
+            buf.as_mut_ptr().cast::<c_void>(),
+        )
+    })?;
+
+    // Ghostty stores the URI bytes as the application sent them; OSC 8
+    // payloads are ASCII-restricted in practice but not enforced, so decode
+    // lossily rather than erroring the whole row on a weird sequence.
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 
 /// A cell's grapheme: its base codepoint plus any trailing combining marks.

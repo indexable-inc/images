@@ -9,8 +9,10 @@
 #   nix shell nixpkgs#rust-bindgen nixpkgs#clang nixpkgs#rustfmt \
 #     -c packages/tui/vt/ix-vt-sys/regen-bindings.sh
 #
-# It builds libghostty-vt through the flake to locate the headers, so it needs a
-# working Nix and the `ghostty` flake input.
+# It builds libghostty-vt through the flake to locate the headers (the
+# PATCHED fork source, packages/ghostty/patches -- the fork's C-API additions
+# are part of the generated surface), so it needs a working Nix and the
+# `ghostty-src` flake input.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

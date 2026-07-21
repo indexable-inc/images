@@ -291,12 +291,11 @@
       };
     }
     {
-      # Full ghostty application source (index#3768), distinct from the bare
-      # `ghostty` input `packages/tui/vt/libghostty-vt` consumes unpatched: this
-      # is the fork's actual patch point. No patches yet -- `packages/ghostty`
-      # builds the pinned base as-is; the surface-teardown fix (kill the child
-      # process group and waitpid-reap on close_surface) lands here as a
-      # follow-up patch.
+      # Full ghostty application source (index#3768), the fork's single patch
+      # point: `packages/ghostty`, `packages/tui/vt/libghostty-vt`, and the
+      # Rust workspace's ix-vt link all build the VT-only subtree from this
+      # series. 0003 adds C API that ix-vt's checked-in bindings reference,
+      # so the patched source is load-bearing, not just validated.
       name = "ghostty";
       input = "ghostty-src";
       url = "https://github.com/ghostty-org/ghostty.git";
@@ -325,6 +324,11 @@
           upstream = "attempt";
           reason = "Darwin killpg EPERM at surface close can mean the hangup reached nobody (root-owned login(1) alone in the spawn-time group; the shell moved to its own job-control group), leaving shells alive against a revoked tty.";
           prExtra = "Related earlier lifecycle issues: ghostty-org/ghostty#2273, ghostty-org/ghostty#4554.";
+        };
+        "0003-terminal-expose-per-cell-OSC-8-hyperlink-URIs-throug.patch" = {
+          upstream = "attempt";
+          reason = "The render-state C API exposes only a per-cell has-hyperlink bool (the row flag may false-positive), so a libghostty-vt embedder cannot learn a cell's OSC 8 link target; the URI must be duplicated out of page memory during update() like graphemes and styles already are.";
+          prExtra = "Motivating embedder: ix-term (indexable-inc/ix#8008), which renders the terminal grid in a browser and needs real anchors for OSC 8 hyperlinks.";
         };
       };
     }
