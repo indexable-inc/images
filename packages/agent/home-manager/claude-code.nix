@@ -88,6 +88,7 @@
   #   pluginDirs = [ ];  option pluginDirs; --plugin-dir=<dir> flags: namespaced plugin bundles (the house plugin rides this layer)
   #   primaryCheckouts = <"/home/*/index", "/home/*/ix">;  option primaryCheckouts; globs the PreToolUse worktree guard denies edits under
   #   personalStartupContext = false;  option personalStartupContext; Andrew-only startup context hooks
+  #   extraSessionStart = [ ];  option extraSessionStart; SessionStart context commands ({ package, exeName ? null, args ? [ ], timeout ? 10 }): each runs at session start with stdout injected as session context (#3849)
   #   repoPackages = { };  plumbing: sibling repo packages threaded by lib/packages.nix, not a config knob
   #   mcpServers = <ix.mcp default pair: index + exa>;  option defaultMcpServers; baked --mcp-config layer (CLI layers merge, additions only)
   #   developmentChannels = <"server:index" when the index server is baked>;  channel specs for --dangerously-load-development-channels
