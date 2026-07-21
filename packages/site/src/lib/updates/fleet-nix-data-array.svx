@@ -1,0 +1,39 @@
+---
+id: fleet-nix-data-array
+postedAt: 2026-07-21T22:10:00Z
+title: "Compute fleet: /nix moved to the RAID10 data arrays, root arrays freed"
+links:
+  - https://github.com/indexable-inc/ix/issues/8035
+  - https://github.com/indexable-inc/ix/pull/8036
+  - https://github.com/indexable-inc/index/pull/3850
+tags: [fleet, storage, incident-prevention]
+---
+
+hil-compute-2's 1.7T root mirror hit 92% this morning with the Nix store
+(1.2T) as the main tenant, sitting next to a 42T RAID10 data array at 40%.
+By tonight every a5 compute host runs its store from the data array and the
+root mirrors hold 1.2-1.6T free.
+
+Mechanism (ix#8036): an initrd-only systemd mount binds
+`/var/lib/ix/nix` over `/sysroot/nix` before switch-root, gated on a
+per-host migration marker. Deliberately not a `fileSystems."/nix"` entry:
+every merge auto-deploys a live switch, which would have mounted a
+half-copied store over the running one. Unmigrated hosts boot unchanged.
+Migration per host: staged rsync while live, quiesced final delta with
+nix-daemon masked, atomic rename, reboot, verify, delete the old copy.
+
+Also in the change: `/tmp` tmpfiles age dropped 10d to 1d with a 6h clean
+timer (hil-compute-2 carried 137G of dead bench dirs), and the compute
+MinIO history archive + Forgejo mirror were decommissioned (59G freed;
+their readers gate off until the archive re-homes to a storage host).
+
+Fallout fixed along the way: the attic-start-graph seam and a billing
+test had been red on main since the #8023/#8026 force merges; the deploy
+verify script could not resolve fleet hosts from CI runners (ix#8057);
+and a kernel crash mid-rollout silently killed every background watcher
+across four sessions, which became index#3839 and the durable jobs
+ledger (index#3850): job deaths now write terminal transitions and
+notifications replay on reconnect.
+
+Open thread: ix.dev cert renewal has been failing since June 12
+(ix#8068, agent dispatched); serving cert is valid into late August.
