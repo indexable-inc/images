@@ -240,12 +240,10 @@
     omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
     # SessionStart memory digest from the weave store; replaces the retired
     # MEMORY.md load (index#3849).
-    extraSessionStart = lib.optionals (cfg.packages.weave != null) [
-      {
-        package = memoryDigest;
-        timeout = 15;
-      }
-    ];
+    extraSessionStart = lib.optional (cfg.packages.weave != null) {
+      package = memoryDigest;
+      timeout = 15;
+    };
     # Matches agentPromptOmitRules `forceMerge` above: without this the baked
     # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
     # rule permits.
@@ -359,12 +357,10 @@
       # discarded it, shipping prompts WITH the forceMerge rule (index#3537).
       omitRules = agentPromptOmitRules;
       # Same SessionStart memory digest as claudeCode above (index#3849).
-      extraSessionStart = lib.optionals (cfg.packages.weave != null) [
-        {
-          package = memoryDigest;
-          timeout = 15;
-        }
-      ];
+      extraSessionStart = lib.optional (cfg.packages.weave != null) {
+        package = memoryDigest;
+        timeout = 15;
+      };
     })
     // {
       # Upstream main keeps Cargo's workspace version at 0.0.0. Home Manager

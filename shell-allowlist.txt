@@ -182,7 +182,7 @@ users/andrewgazelka/config/scripts/git-wt-submodules.sh
 users/andrewgazelka/config/scripts/main-sync.sh
 users/andrewgazelka/home.nix:writeBashApplication:5
 users/andrewgazelka/profiles/darwin-home.nix:writeBashApplication:4
-users/andrewgazelka/profiles/workstation.nix:writeBashApplication:5
+users/andrewgazelka/profiles/workstation.nix:writeBashApplication:6
 users/andrewgazelka/scripts/ci-triage.sh
 users/andrewgazelka/scripts/ix-downtime.sh
 users/andrewgazelka/scripts/pr-watch.sh
