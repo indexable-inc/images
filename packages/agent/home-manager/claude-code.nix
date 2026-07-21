@@ -423,6 +423,7 @@
         (cfg)
         addDirs
         dangerouslySkipPermissions
+        extraSessionStart
         features
         personalStartupContext
         primaryCheckouts
@@ -543,6 +544,34 @@ in {
       type = lib.types.bool;
       default = false;
       description = "Enable Andrew-only startup context hooks in the rendered Claude Code policy.";
+    };
+
+    extraSessionStart = lib.mkOption {
+      type = lib.types.listOf (lib.types.submodule {
+        options = {
+          package = lib.mkOption {
+            type = lib.types.package;
+            description = "Program run at SessionStart; its stdout is injected as session context.";
+          };
+          exeName = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Executable name inside the package; null uses the package main program.";
+          };
+          args = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [];
+            description = "Arguments passed to the command.";
+          };
+          timeout = lib.mkOption {
+            type = lib.types.ints.positive;
+            default = 10;
+            description = "Hook timeout in seconds.";
+          };
+        };
+      });
+      default = [];
+      description = "Extra SessionStart context commands folded into the rendered hook policy (index#3849).";
     };
 
     defaultMcpServers = lib.mkOption {

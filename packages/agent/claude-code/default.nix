@@ -136,6 +136,12 @@
   # Disabled for the shared wrapper because those hooks print workstation-local
   # context that is not meaningful for other users.
   personalStartupContext ? false,
+  # Consumer-supplied SessionStart context commands
+  # ({ package, exeName ? null, args ? [], timeout ? 10 }): each runs at
+  # session start and its stdout is injected as session context. The generic
+  # seam per-user startup context (e.g. a memory digest) hangs off
+  # (index#3849).
+  extraSessionStart ? [],
   # Sibling repo packages from the flake package set. lib/packages.nix threads
   # the lazily-recursive set in under this one name so a repo package can
   # depend on another by id without a flat merge into callPackage's top-level
@@ -427,6 +433,7 @@
       hookRunner
       primaryCheckouts
       personalStartupContext
+      extraSessionStart
       ;
   };
 

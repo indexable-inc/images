@@ -97,6 +97,36 @@
     doCheck = false;
   });
 
+  # One statement of the store location: the digest script and the
+  # WEAVE_MEMORY_STORE session variable both derive from it.
+  memoryStore = "${"$"}{config.home.homeDirectory}/.config/nix/claude/memory/.weave";
+
+  # SessionStart memory digest: the derived replacement for the retired
+  # MEMORY.md flat index (index#3849). One-shot weave queries against the
+  # private store; stdout becomes session context via the wrappers'
+  # extraSessionStart seam. Exits 0 with a pointer when the store is missing
+  # so a fresh machine still boots.
+  memoryDigest = ix.writeBashApplication pkgs {
+    name = "claude-memory-digest";
+    text = ''
+      store=${lib.escapeShellArg memoryStore}
+      if [ ! -d "$store" ]; then
+        echo "Memory store missing at $store; create it with: weave --store \"$store\" init"
+        exit 0
+      fi
+      echo "## Memory"
+      echo "Durable memory is a weave store at $store: append-only facts, Datalog-derived views."
+      echo "Save at the moment of learning: Memory.remember(\"slug\", \"one-line hook\", type: \"project\", topic: \"nix\", handle: \"cmd/path\", body: long_md) in the index kernel."
+      echo "Recall: Memory.recall(\"regex\") or Memory.query(datalog). Recalled facts go stale; verify before use. Never edit history: newer facts win, Memory.retract(id) kills a wrong one."
+      echo
+      echo "### Hooks (most recent first)"
+      ${lib.getExe cfg.packages.weave} --store "$store" query 'recent(S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S). ?- recent(S, E, D) order S desc limit 150.'
+      echo
+      echo "### Counts by type"
+      ${lib.getExe cfg.packages.weave} --store "$store" query 'per_type(T, count(E)) :- latest(E, "mem/type", T). ?- per_type(T, N) order N desc.'
+    '';
+  };
+
   # Personal-only Claude config, folded into the wrapper's settings render
   # via `extraSettings` (see the claudeCode override below): the index
   # claude-code Home Manager module materializes the full render into the
@@ -114,7 +144,13 @@
   # `codex.passthru.hooksJson` (Codex, delivered to ~/.codex/hooks.json below).
 
   claudeSettings = {
-    autoMemoryDirectory = "~/.config/nix/claude/auto-memory";
+    # Native markdown auto-memory is retired (index#3849): durable memory now
+    # lives in the weave store at ~/.config/nix/claude/memory/.weave (private
+    # repo), loaded via the memoryDigest SessionStart hook below and written
+    # through the kernel's Memory helper. The env knob matters: merely
+    # dropping autoMemoryDirectory would silently revert to the per-project
+    # ~/.claude/projects/<slug>/memory default instead of disabling.
+    env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
     enabledPlugins = {
       "ix-docs@ix" = true;
       "ix@ix" = true;
@@ -145,7 +181,11 @@
   # into their defaulted package, and this profile sets `package =` explicitly,
   # which discarded the fold and shipped prompts WITH the forceMerge rule
   # (index#3537).
-  agentPromptOmitRules = ["forceMerge"];
+  # memory: the shared rule prescribes markdown-file memories plus a
+  # MEMORY.md index; this workstation replaced that flow with the weave
+  # store (index#3849), whose usage instructions ride the SessionStart
+  # digest instead.
+  agentPromptOmitRules = ["forceMerge" "memory"];
 
   # claude-code from the index FLAKE PACKAGE SET (packages/claude-code in the
   # indexable-inc/index monorepo), not the overlay's pkgs.claude-code: only the
@@ -198,6 +238,14 @@
     # depth-1 Agents.* surface (reverses the index#3700 default). The kernel
     # still owns shell/file/search.
     omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
+    # SessionStart memory digest from the weave store; replaces the retired
+    # MEMORY.md load (index#3849).
+    extraSessionStart = lib.optionals (cfg.packages.weave != null) [
+      {
+        package = memoryDigest;
+        timeout = 15;
+      }
+    ];
     # Matches agentPromptOmitRules `forceMerge` above: without this the baked
     # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
     # rule permits.
@@ -310,6 +358,13 @@
       # into its defaulted package, and the explicit `package = codex` below
       # discarded it, shipping prompts WITH the forceMerge rule (index#3537).
       omitRules = agentPromptOmitRules;
+      # Same SessionStart memory digest as claudeCode above (index#3849).
+      extraSessionStart = lib.optionals (cfg.packages.weave != null) [
+        {
+          package = memoryDigest;
+          timeout = 15;
+        }
+      ];
     })
     // {
       # Upstream main keeps Cargo's workspace version at 0.0.0. Home Manager
@@ -420,6 +475,12 @@ in {
       # plus any manual `ix-mcp serve`) keeps the policy in one place and the two
       # agents identical, instead of a per-server env override on each.
       IX_MCP_HOST = "127.0.0.1";
+
+      # Weave-backed agent memory (index#3849): the kernel's Memory helper
+      # and manual `weave` calls address the same private store. Device-level
+      # for the same reason as IX_MCP_HOST: inherited by claude/codex and
+      # every kernel they spawn.
+      WEAVE_MEMORY_STORE = memoryStore;
 
       # Skim configuration
       SKIM_CTRL_T_COMMAND = "fd --type f --hidden --follow";

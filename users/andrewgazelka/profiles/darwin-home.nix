@@ -143,6 +143,7 @@ in {
   home.packages = [
     # pkgs.notify
     cfg.packages.lifelog # `lifelog top` / `sqlite3 "$(lifelog db-path)"`; the recorder runs as the services.portable.lifelog launchd agent
+    cfg.packages.weave # `weave`: the agent memory store CLI (query/fact/log against $WEAVE_MEMORY_STORE); supplied by the consuming flake (index#3849)
     pkgs.duti
     pkgs.iproute2mac
     pkgs.libimobiledevice # `idevice_id -l` / `ideviceinfo` / `idevicepair`: talk to a USB-attached iPhone over Apple's usbmuxd
@@ -196,6 +197,10 @@ in {
     {
       assertion = cfg.packages.lifelog != null;
       message = "users.andrewgazelka.packages.lifelog must be set for the Darwin home profile.";
+    }
+    {
+      assertion = cfg.packages.weave != null;
+      message = "users.andrewgazelka.packages.weave must be set for the Darwin home profile (agent memory store CLI, index#3849).";
     }
     {
       assertion = cfg.rbw.email != null && cfg.rbw.baseUrl != null;

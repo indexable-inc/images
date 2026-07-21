@@ -66,6 +66,15 @@ defmodule IxMcp.MCP.Tools do
                                             decode the typedstream body)
       Contacts.search(name)                 macOS address book: name -> the
                                             phone/email handles Imsg takes
+      Memory.remember("slug", "hook", topic: "nix")
+                                            durable memory: append facts to the
+                                            weave store named by
+                                            WEAVE_MEMORY_STORE (loud error when
+                                            unset). Recall with
+                                            Memory.recall("regex") or raw Datalog
+                                            via Memory.query/1;
+                                            Memory.retract(id) kills a wrong
+                                            fact, newer facts win over stale ones
       Agents.spawn(brief, backend: :claude | :codex | :kimi)
                                             spawn a real agent CLI as an async depth-1
                                             subagent (Fable 5 card sec 8.15.3, #3700);
