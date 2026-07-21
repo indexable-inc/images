@@ -40,8 +40,10 @@ defmodule IxMcp.Memory do
   @doc "Append one fact; returns the fact id (`blake3:<hex>`)."
   @spec fact(String.t(), String.t(), String.t()) :: String.t()
   def fact(entity, attr, value) do
+    # CLI writes need the exclusive offline writer lease (no daemon owns the
+    # store here); `--` keeps values that start with `-` positional.
     # `weave fact` prints "seq <n>  <fact-id>".
-    ["fact", entity, attr, value] |> run!() |> String.split() |> List.last()
+    ["fact", "--offline", "--", entity, attr, value] |> run!() |> String.split() |> List.last()
   end
 
   @doc "Run a Datalog query program; returns the decoded result rows."
@@ -66,7 +68,7 @@ defmodule IxMcp.Memory do
 
   @doc "Retract a wrong fact by id (staleness prefers newer facts instead)."
   @spec retract(String.t()) :: String.t()
-  def retract(fact_id), do: ["retract", fact_id] |> run!() |> String.trim()
+  def retract(fact_id), do: ["retract", "--offline", "--", fact_id] |> run!() |> String.trim()
 
   @doc "Store long-form content in the CAS; returns its `blake3:<hex>`."
   @spec put(String.t()) :: String.t()
