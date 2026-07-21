@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | svg-dark | site-ids | ruff | clone); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -121,6 +121,58 @@
         if ($files | is-not-empty) {
           astlog scan astlog-rules/elixir.astlog ...$files
         }
+      }
+      # The shell fence (#3823, phase 1): no NEW generated shell or nushell.
+      # Call sites of the write*Application / write*Script builders (matched
+      # as AST identifiers by astlog-rules/shell-fence.astlog, so comments
+      # never count) and committed .sh/.bash/.nu files are frozen behind
+      # shell-allowlist.txt: an entry is `path` for a script file or
+      # `path:identifier:count` for the call sites in one .nix file. A
+      # scanned occurrence with no matching entry fails (write a compiled
+      # Rust tool instead), and an entry whose target shrank or vanished
+      # fails too, so the allowlist only shrinks as scripts migrate to Rust.
+      # Counts rather than line numbers so unrelated edits that shift lines
+      # do not churn the allowlist, while a new call site in an already
+      # listed file still trips the fence.
+      def "main shell-fence" [] {
+        let allowed = (
+          open --raw shell-allowlist.txt
+          | lines
+          | each {|line| $line | str trim }
+          | where {|line| $line != "" and not ($line | str starts-with "#") }
+        )
+        let scripts = (
+          fd --hidden --type file --exclude .git --exclude .claude/worktrees
+            --extension sh --extension bash --extension nu
+          | lines
+        )
+        let nix_files = (fd --extension nix | lines)
+        # `astlog scan` exits nonzero on findings by design; capture the JSON
+        # (an empty corpus still prints `[]`) instead of failing the stage.
+        let scan = (do { astlog scan astlog-rules/shell-fence.astlog --json ...$nix_files } | complete)
+        if ($scan.stdout | str trim | is-empty) {
+          print --stderr $scan.stderr
+          error make { msg: "astlog scan emitted no JSON" }
+        }
+        let call_sites = (
+          $scan.stdout
+          | from json
+          | group-by {|f| $"($f.file):($f.text)" }
+          | transpose site findings
+          | each {|row| $"($row.site):($row.findings | length)" }
+        )
+        let actual = ($scripts | append $call_sites | sort)
+        let new = ($actual | where {|entry| $entry not-in $allowed })
+        let stale = ($allowed | where {|entry| $entry not-in $actual })
+        if ($new | is-not-empty) {
+          print --stderr "new shell/nushell is fenced (#3823); write a compiled Rust tool instead (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks). Not in shell-allowlist.txt:"
+          $new | each {|entry| print --stderr $"  ($entry)" }
+        }
+        if ($stale | is-not-empty) {
+          print --stderr "stale shell-allowlist.txt entries (script gone or call-site count changed); the allowlist only shrinks, update it:"
+          $stale | each {|entry| print --stderr $"  ($entry)" }
+        }
+        if (($new | is-not-empty) or ($stale | is-not-empty)) { exit 1 }
       }
       # Repository configuration belongs in composable Nix expressions. Keep
       # serialized files only where an external consumer owns the filename or
@@ -365,7 +417,7 @@
         clone . out> /dev/null
       }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | svg-dark | site-ids | ruff | clone" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone" }
       }
     '';
   };
@@ -380,6 +432,7 @@
     "astlog"
     "astlog-rust"
     "astlog-elixir"
+    "shell-fence"
     "filenames"
     "dirnames"
     "svg-dark"
@@ -468,7 +521,7 @@
           } else {
             ^git apply --stat $patch
             ^git apply $patch
-            print "lint --fix: applied; the verdict-only stages (astlog, filenames, dirnames, clone) and unfixable findings still need `nix run .#lint`"
+            print "lint --fix: applied; the verdict-only stages (astlog, shell-fence, filenames, dirnames, clone) and unfixable findings still need `nix run .#lint`"
           }
           exit 0
         }
@@ -1761,10 +1814,11 @@
               check_ruleset "$root/rust.astlog" rs
               check_ruleset "$root/cargo.astlog" toml
               check_ruleset "$root/elixir.astlog" ex
+              check_ruleset "$root/shell-fence.astlog" nix
               # Every fixture dir must back a lint in one of the rulesets.
               for dir in "$tests"/*/; do
                 rule=$(basename "$dir")
-                if ! grep -q "^(lint $rule " "$root/nix.astlog" "$root/rust.astlog" "$root/cargo.astlog" "$root/elixir.astlog"; then
+                if ! grep -q "^(lint $rule " "$root/nix.astlog" "$root/rust.astlog" "$root/cargo.astlog" "$root/elixir.astlog" "$root/shell-fence.astlog"; then
                   echo "fixture dir astlog-rules/tests/$rule matches no lint" >&2
                   fail=1
                 fi

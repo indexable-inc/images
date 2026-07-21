@@ -48,9 +48,9 @@ truth. **101 lints total: 97 `error`, 4 `warning`.**
 | 24 | [`runcommand-missing-structured-attrs`](#runcommand-missing-structured-attrs) | warn | runCommand with empty attrs {}; add { __structuredAttrs = true; } for consistent derivation behavior |
 | 25 | [`no-handrolled-shell-script`](#no-handrolled-shell-script) | warn | `writeText "*.sh"` hand-rolls an unchecked shell script; prefer a compiled Rust launcher (ix.rustWorkspace, see packages/config-launch / packages/agent/codex) or ix.writeNushellApplication / ix.writePythonApplication, or keep it with an `astlog-ignore: no-handrolled-shell-script` comment + reason |
 | 26 | [`no-nix-in-generated-shell`](#no-nix-in-generated-shell) | err | Nix-generated shell applications must not call nix again; pass realized store paths into the script instead |
-| 27 | [`no-write-shell-application`](#no-write-shell-application) | err | writeShellApplication is banned; use ix.writeNushellApplication instead |
+| 27 | [`no-write-shell-application`](#no-write-shell-application) | err | writeShellApplication is banned (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks) |
 | 28 | [`no-write-shell-script`](#no-write-shell-script) | err | writeShellScript is unchecked (no shellcheck, no declared deps); prefer a compiled Rust launcher/tool (ix.rustWorkspace, see packages/config-launch / packages/claude-hooks), else ix.writeNushellApplication / ix.writePythonApplication for logic, else ix.writeBashApplication (checked) for must-be-bash |
-| 29 | [`no-write-shell-script-bin`](#no-write-shell-script-bin) | err | writeShellScriptBin is banned; use ix.writeNushellApplication instead |
+| 29 | [`no-write-shell-script-bin`](#no-write-shell-script-bin) | err | writeShellScriptBin is banned (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks) |
 | 30 | [`no-mkforce`](#no-mkforce) | err | mkForce is banned; use priority composition (mkDefault, mkOverride) instead |
 | 31 | [`no-mkoverride-numeric`](#no-mkoverride-numeric) | err | `mkOverride <literal>` is the back-door for `mkForce`; use module priority composition (`mkDefault`, `mkOptionDefault`, `mkBefore`, `mkAfter`) or fix the module boundary |
 | 32 | [`no-mkoption-conditional-default`](#no-mkoption-conditional-default) | err | a conditional `mkOption.default` couples the declaration to a sibling option; keep `default` self-contained and move the branch into `config` as `mkIf <cond> (mkDefault ...)` |
@@ -792,7 +792,7 @@ pkgs.writeShellApplication {
 
 **🔴 error**
 
-writeShellApplication is banned. Use ix.writeNushellApplication instead.
+writeShellApplication is banned (#3823). Write a compiled Rust tool instead (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks).
 
 *Matches:* `identifier` · *predicates:* `text` · *1 pattern variant*
 
@@ -836,7 +836,7 @@ writeShellScript hand-rolls an UNCHECKED shell script (no shellcheck, no declare
 
 **🔴 error**
 
-writeShellScriptBin is banned. Use ix.writeNushellApplication instead.
+writeShellScriptBin is banned (#3823). Write a compiled Rust tool instead (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks).
 
 *Matches:* `identifier` · *predicates:* `text` · *1 pattern variant*
 
