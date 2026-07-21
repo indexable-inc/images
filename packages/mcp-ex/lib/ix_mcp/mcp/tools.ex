@@ -118,6 +118,10 @@ defmodule IxMcp.MCP.Tools do
         seconds; if the code is still running it keeps going in the background
         as a job and this returns a job handle. Bindings persist across calls:
         variables, aliases, imports, and modules you define stay defined.
+        Jobs are durable: a backgrounded run's output, final status, and
+        history survive even a crash or kill, readable later with
+        Jobs.tail(id) / Jobs.output(id) / Jobs.history(); every finish
+        (including a death) is announced on the channel.
 
         #{@surface_guide}
         Write plain Elixir, not shell. For files and data use the standard

@@ -41,6 +41,7 @@ defmodule IxMcp.ActionLog do
   use GenServer
 
   alias Exqlite.Sqlite3
+  alias IxMcp.Jobs.Job
 
   require Logger
 
@@ -58,6 +59,26 @@ defmodule IxMcp.ActionLog do
   CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'done', stack TEXT, stack_at TEXT, line INTEGER)
   """
 
+  # index#3839: a durable ledger for background jobs. Every job status
+  # transition (running -> done|failed|cancelled|killed) is one atomic write
+  # here, in the same transaction that drives the job's `actions` row terminal
+  # and inserts an outbox row -- so no job death can leave the log disagreeing
+  # with itself or notify silently. Output streams into `job_output` (batched
+  # by the job process) so `Jobs.tail/output/result` read from disk after the
+  # job process is gone; `outbox` holds terminal-transition notifications for
+  # replay to a transport that (re)connects.
+  @create_jobs """
+  CREATE TABLE jobs (id TEXT PRIMARY KEY, session_id INTEGER REFERENCES sessions(id), action_id INTEGER REFERENCES actions(id), intent TEXT, session_name TEXT, topic_name TEXT, code TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running', watch INTEGER NOT NULL DEFAULT 0, result TEXT, output_bytes INTEGER NOT NULL DEFAULT 0, output_dropped INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL, finished_at TEXT, elapsed_ms INTEGER)
+  """
+
+  @create_job_output """
+  CREATE TABLE job_output (job_id TEXT NOT NULL REFERENCES jobs(id), seq INTEGER NOT NULL, chunk TEXT NOT NULL, PRIMARY KEY (job_id, seq))
+  """
+
+  @create_outbox """
+  CREATE TABLE outbox (id INTEGER PRIMARY KEY, job_id TEXT, intent TEXT, status TEXT NOT NULL, elapsed_ms INTEGER, result TEXT, created_at TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0)
+  """
+
   # index#3539: the schema version is stamped into SQLite's `PRAGMA
   # user_version` header field instead of being re-derived by column
   # sniffing on every open. Sniffing can only classify shapes this binary
@@ -68,8 +89,8 @@ defmodule IxMcp.ActionLog do
   # version makes older shapes migratable in order, the current shape a
   # no-op, and a future shape explicitly detectable. The ladder: 1 = the
   # flat #3512 log, 2 = the #3532 normalization, 3 = the #3536 live rows,
-  # 4 = the #3546 live cell line.
-  @user_version 4
+  # 4 = the #3546 live cell line, 5 = the #3839 durable job ledger.
+  @user_version 5
 
   # Frozen historical DDL for the 1 -> 2 step: the actions shape exactly as
   # #3532 shipped it, before the live-row columns. A migration must never
@@ -125,11 +146,20 @@ defmodule IxMcp.ActionLog do
     "ALTER TABLE actions ADD COLUMN line INTEGER"
   ]
 
+  # A v4 database predates the durable job ledger (#3839): the three new
+  # tables are simply created empty, so pre-#3839 rows are untouched.
+  @migrate_v4_to_v5 [@create_jobs, @create_job_output, @create_outbox]
+
   # Ordered migrations keyed by the user_version each upgrades FROM. Every
   # step runs in one immediate transaction that also stamps the version it
   # produces, so an interrupted migration leaves the previous consistent,
   # correctly-stamped version on disk.
-  @migrations [{1, @migrate_v1_to_v2}, {2, @migrate_v2_to_v3}, {3, @migrate_v3_to_v4}]
+  @migrations [
+    {1, @migrate_v1_to_v2},
+    {2, @migrate_v2_to_v3},
+    {3, @migrate_v3_to_v4},
+    {4, @migrate_v4_to_v5}
+  ]
 
   @insert """
   INSERT INTO actions (at, session_id, topic_id, tool, intent, arguments, is_error, elapsed_ms, status)
@@ -155,6 +185,11 @@ defmodule IxMcp.ActionLog do
   ORDER BY a.id DESC LIMIT ?
   """
 
+  @select_job """
+  SELECT id, intent, session_name, topic_name, code, status, watch, result, output_bytes, output_dropped, started_at, finished_at, elapsed_ms
+  FROM jobs
+  """
+
   @type entry :: %{
           at: String.t(),
           session: String.t() | nil,
@@ -167,6 +202,46 @@ defmodule IxMcp.ActionLog do
           status: String.t(),
           stack: String.t() | nil,
           line: pos_integer() | nil
+        }
+
+  @typedoc "Fields for inserting a fresh `jobs` row (#3839)."
+  @type job_start :: %{
+          id: String.t(),
+          session_id: integer() | nil,
+          action_id: integer() | nil,
+          intent: String.t() | nil,
+          session_name: String.t() | nil,
+          topic_name: String.t() | nil,
+          code: String.t(),
+          watch: boolean(),
+          started_at: String.t()
+        }
+
+  @typedoc "A recorded job row (#3839)."
+  @type job :: %{
+          id: String.t(),
+          intent: String.t() | nil,
+          session: String.t() | nil,
+          topic: String.t() | nil,
+          code: String.t(),
+          status: Job.status(),
+          watch: boolean(),
+          result: String.t() | nil,
+          output_bytes: non_neg_integer(),
+          output_dropped: non_neg_integer(),
+          started_at: String.t(),
+          finished_at: String.t() | nil,
+          elapsed_ms: non_neg_integer() | nil
+        }
+
+  @typedoc "A terminal-transition notification awaiting delivery (#3839)."
+  @type outbox :: %{
+          id: integer(),
+          job_id: String.t(),
+          intent: String.t() | nil,
+          status: Job.status(),
+          elapsed_ms: non_neg_integer() | nil,
+          result: String.t() | nil
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -235,6 +310,83 @@ defmodule IxMcp.ActionLog do
           [%{id: integer(), session_id: integer(), name: String.t(), started_at: String.t()}]
   def topics(server \\ __MODULE__) do
     GenServer.call(server, :topics)
+  end
+
+  # -- durable job ledger (#3839) --------------------------------------------
+
+  @doc "Insert a `jobs` row as `running` when a job starts; idempotent per id."
+  @spec job_started(job_start(), GenServer.server()) :: :ok
+  def job_started(job, server \\ __MODULE__) do
+    GenServer.call(server, {:job_started, job})
+  end
+
+  @doc """
+  Append output `chunks` (`[{seq, chunk}]`) to a job, recording `dropped`
+  bytes discarded by the per-job cap. Batched by the job process so the hot
+  path is not one call per `put_chars`.
+  """
+  @spec append_job_output(
+          String.t(),
+          [{integer(), binary()}],
+          non_neg_integer(),
+          GenServer.server()
+        ) ::
+          :ok
+  def append_job_output(id, chunks, dropped \\ 0, server \\ __MODULE__) do
+    GenServer.call(server, {:append_job_output, id, chunks, dropped})
+  end
+
+  @doc """
+  Commit a terminal job transition atomically: drive the `jobs` row terminal,
+  drive its `actions` row terminal in the same transaction, and insert an
+  outbox row for the notification. Returns `{:notify, outbox}` for the caller
+  to deliver, or `:already_final` when the job already transitioned -- which
+  is how the executor and the reaper race harmlessly (#3839).
+  """
+  @spec finish_job(String.t(), Job.status(), String.t() | nil, GenServer.server()) ::
+          {:notify, outbox()} | :already_final
+  def finish_job(id, status, result, server \\ __MODULE__)
+      when status in [:done, :failed, :cancelled, :killed] do
+    GenServer.call(server, {:finish_job, id, Atom.to_string(status), result, now()})
+  end
+
+  @doc "The recorded job row, or nil."
+  @spec job(String.t(), GenServer.server()) :: job() | nil
+  def job(id, server \\ __MODULE__) do
+    GenServer.call(server, {:job, id})
+  end
+
+  @doc "The full recorded output of a job, from the durable table."
+  @spec job_output(String.t(), GenServer.server()) :: binary()
+  def job_output(id, server \\ __MODULE__) do
+    GenServer.call(server, {:job_output, id})
+  end
+
+  @doc "Recent jobs for a session (nil = all), newest first."
+  @spec recent_jobs(integer() | nil, pos_integer(), GenServer.server()) :: [job()]
+  def recent_jobs(session_id, n \\ 20, server \\ __MODULE__) do
+    GenServer.call(server, {:recent_jobs, session_id, n})
+  end
+
+  @doc """
+  Unacked outbox rows (terminal-transition notifications), oldest first.
+  Scoped to `session_id` when given -- replay must never touch a sibling
+  instance's rows, the same isolation the shared database demands
+  everywhere else (#3839). `nil` returns every unacked row (introspection).
+  """
+  @spec unacked_outbox(integer() | nil, GenServer.server()) :: [outbox()]
+  def unacked_outbox(session_id \\ nil, server \\ __MODULE__) do
+    GenServer.call(server, {:unacked_outbox, session_id})
+  end
+
+  @doc """
+  Claim outbox rows as delivered; returns how many this call actually
+  flipped from unacked to acked. A zero flip means someone already delivered
+  the row, which is how a racing publish and replay avoid a double announce.
+  """
+  @spec ack_outbox([integer()], GenServer.server()) :: non_neg_integer()
+  def ack_outbox(ids, server \\ __MODULE__) do
+    GenServer.call(server, {:ack_outbox, ids})
   end
 
   @doc """
@@ -370,6 +522,165 @@ defmodule IxMcp.ActionLog do
     {:reply, rows, state}
   end
 
+  def handle_call({:job_started, job}, _from, %{conn: conn} = state) do
+    run(
+      conn,
+      "INSERT OR IGNORE INTO jobs (id, session_id, action_id, intent, session_name, topic_name, code, status, watch, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)",
+      [
+        job.id,
+        job.session_id,
+        job.action_id,
+        job.intent,
+        job.session_name,
+        job.topic_name,
+        job.code,
+        bool_to_int(job.watch),
+        job.started_at
+      ]
+    )
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:append_job_output, id, chunks, dropped}, _from, %{conn: conn} = state) do
+    :ok = Sqlite3.execute(conn, "BEGIN IMMEDIATE")
+
+    added =
+      Enum.reduce(chunks, 0, fn {seq, chunk}, acc ->
+        run(conn, "INSERT OR IGNORE INTO job_output (job_id, seq, chunk) VALUES (?, ?, ?)", [
+          id,
+          seq,
+          chunk
+        ])
+
+        acc + byte_size(chunk)
+      end)
+
+    run(
+      conn,
+      "UPDATE jobs SET output_bytes = output_bytes + ?, output_dropped = output_dropped + ? WHERE id = ?",
+      [added, dropped, id]
+    )
+
+    :ok = Sqlite3.execute(conn, "COMMIT")
+    {:reply, :ok, state}
+  end
+
+  # The one atomic terminal transition (#3839): the SELECT is the idempotency
+  # guard (only a still-running job transitions), and the jobs row, its
+  # actions row, and the outbox insert all commit together, so a reader can
+  # never catch the two logs disagreeing and no terminal transition escapes
+  # the outbox. The single-writer GenServer serializes this against every
+  # other write, so the guard needs no locking of its own.
+  def handle_call({:finish_job, id, status, result, at}, _from, %{conn: conn} = state) do
+    reply =
+      case fetch(
+             conn,
+             "SELECT action_id, intent, started_at FROM jobs WHERE id = ? AND status = 'running'",
+             [id]
+           ) do
+        [] ->
+          :already_final
+
+        [[action_id, intent, started_at]] ->
+          elapsed = elapsed_ms(started_at, at)
+          is_error = if status in ["failed", "killed"], do: 1, else: 0
+          :ok = Sqlite3.execute(conn, "BEGIN IMMEDIATE")
+
+          run(
+            conn,
+            "UPDATE jobs SET status = ?, result = ?, finished_at = ?, elapsed_ms = ? WHERE id = ?",
+            [status, result, at, elapsed, id]
+          )
+
+          if action_id do
+            run(conn, @finish, [action_status(status), is_error, elapsed, action_id])
+          end
+
+          run(
+            conn,
+            "INSERT INTO outbox (job_id, intent, status, elapsed_ms, result, created_at, acked) VALUES (?, ?, ?, ?, ?, ?, 0)",
+            [id, intent, status, elapsed, result, at]
+          )
+
+          {:ok, outbox_id} = Sqlite3.last_insert_rowid(conn)
+          :ok = Sqlite3.execute(conn, "COMMIT")
+
+          {:notify,
+           %{
+             id: outbox_id,
+             job_id: id,
+             intent: intent,
+             status: status_atom(status),
+             elapsed_ms: elapsed,
+             result: result
+           }}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:job, id}, _from, %{conn: conn} = state) do
+    reply =
+      case fetch(conn, @select_job <> " WHERE id = ?", [id]) do
+        [] -> nil
+        [row] -> job_row_to_map(row)
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:job_output, id}, _from, %{conn: conn} = state) do
+    rows = fetch(conn, "SELECT chunk FROM job_output WHERE job_id = ? ORDER BY seq", [id])
+    {:reply, Enum.map_join(rows, "", fn [chunk] -> chunk end), state}
+  end
+
+  def handle_call({:recent_jobs, session_id, n}, _from, %{conn: conn} = state) do
+    rows =
+      fetch(conn, @select_job <> " WHERE session_id IS ? ORDER BY rowid DESC LIMIT ?", [
+        session_id,
+        n
+      ])
+
+    {:reply, Enum.map(rows, &job_row_to_map/1), state}
+  end
+
+  def handle_call({:unacked_outbox, session_id}, _from, %{conn: conn} = state) do
+    {sql, params} =
+      case session_id do
+        nil ->
+          {"SELECT id, job_id, intent, status, elapsed_ms, result FROM outbox WHERE acked = 0 ORDER BY id",
+           []}
+
+        sid ->
+          {"SELECT o.id, o.job_id, o.intent, o.status, o.elapsed_ms, o.result FROM outbox o " <>
+             "JOIN jobs j ON j.id = o.job_id WHERE j.session_id IS ? AND o.acked = 0 ORDER BY o.id",
+           [sid]}
+      end
+
+    {:reply, Enum.map(fetch(conn, sql, params), &outbox_row_to_map/1), state}
+  end
+
+  # Claim each row that is still unacked; the count of rows this call flips is
+  # the arbiter that keeps a racing publish and replay from double-announcing
+  # (#3839). The SELECT-then-UPDATE is atomic here because it runs inside one
+  # call on the single-writer GenServer.
+  def handle_call({:ack_outbox, ids}, _from, %{conn: conn} = state) do
+    claimed =
+      Enum.reduce(ids, 0, fn id, acc ->
+        case fetch(conn, "SELECT acked FROM outbox WHERE id = ?", [id]) do
+          [[0]] ->
+            run(conn, "UPDATE outbox SET acked = 1 WHERE id = ?", [id])
+            acc + 1
+
+          _ ->
+            acc
+        end
+      end)
+
+    {:reply, claimed, state}
+  end
+
   defp ensure_version(conn) do
     case user_version(conn) do
       @user_version ->
@@ -409,15 +720,30 @@ defmodule IxMcp.ActionLog do
           "session_id" not in columns -> 1
           "status" not in columns -> 2
           "line" not in columns -> 3
+          not table_exists?(conn, "jobs") -> 4
           true -> @user_version
         end
     end
   end
 
+  defp table_exists?(conn, table) do
+    fetch(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [table]) != []
+  end
+
   defp create(conn) do
     execute_all(
       conn,
-      ["BEGIN IMMEDIATE", @create_sessions, @create_topics, @create_actions, stamp(), "COMMIT"]
+      [
+        "BEGIN IMMEDIATE",
+        @create_sessions,
+        @create_topics,
+        @create_actions,
+        @create_jobs,
+        @create_job_output,
+        @create_outbox,
+        stamp(),
+        "COMMIT"
+      ]
     )
   end
 
@@ -437,6 +763,12 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:create_session, _name, _at}), do: 0
   defp disabled_reply({:create_topic, _session_id, _name, _at}), do: 0
   defp disabled_reply({:start_action, _action}), do: 0
+  defp disabled_reply({:finish_job, _id, _status, _result, _at}), do: :already_final
+  defp disabled_reply({:job, _id}), do: nil
+  defp disabled_reply({:job_output, _id}), do: ""
+  defp disabled_reply({:recent_jobs, _session_id, _n}), do: []
+  defp disabled_reply({:unacked_outbox, _session_id}), do: []
+  defp disabled_reply({:ack_outbox, _ids}), do: 0
   defp disabled_reply({:recent, _n}), do: []
   defp disabled_reply(:sessions), do: []
   defp disabled_reply(:topics), do: []
@@ -473,6 +805,70 @@ defmodule IxMcp.ActionLog do
 
   defp bool_to_int(true), do: 1
   defp bool_to_int(false), do: 0
+
+  defp elapsed_ms(started_at, at) do
+    case {DateTime.from_iso8601(started_at), DateTime.from_iso8601(at)} do
+      {{:ok, started, _}, {:ok, finished, _}} ->
+        max(DateTime.diff(finished, started, :millisecond), 0)
+
+      _ ->
+        0
+    end
+  end
+
+  # A killed or crashed job's action row is a failure; cancelled stays
+  # cancelled, done stays done. The actions vocabulary has no 'killed'.
+  defp action_status("killed"), do: "failed"
+  defp action_status(status), do: status
+
+  defp status_atom("running"), do: :running
+  defp status_atom("done"), do: :done
+  defp status_atom("failed"), do: :failed
+  defp status_atom("cancelled"), do: :cancelled
+  defp status_atom("killed"), do: :killed
+
+  defp job_row_to_map([
+         id,
+         intent,
+         session,
+         topic,
+         code,
+         status,
+         watch,
+         result,
+         output_bytes,
+         output_dropped,
+         started_at,
+         finished_at,
+         elapsed_ms
+       ]) do
+    %{
+      id: id,
+      intent: intent,
+      session: session,
+      topic: topic,
+      code: code,
+      status: status_atom(status),
+      watch: watch == 1,
+      result: result,
+      output_bytes: output_bytes,
+      output_dropped: output_dropped,
+      started_at: started_at,
+      finished_at: finished_at,
+      elapsed_ms: elapsed_ms
+    }
+  end
+
+  defp outbox_row_to_map([id, job_id, intent, status, elapsed_ms, result]) do
+    %{
+      id: id,
+      job_id: job_id,
+      intent: intent,
+      status: status_atom(status),
+      elapsed_ms: elapsed_ms,
+      result: result
+    }
+  end
 
   defp row_to_entry([
          at,

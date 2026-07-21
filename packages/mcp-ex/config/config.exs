@@ -15,4 +15,7 @@ if config_env() == :test do
   config :ix_mcp, actions_db: ":memory:"
   # Fast stack samples so the live-row tests observe one without real waits.
   config :ix_mcp, stack_sample_interval_ms: 25
+  # Flush output to the durable table quickly so tests can read a dead job's
+  # output without long waits (#3839).
+  config :ix_mcp, output_flush_interval_ms: 20
 end

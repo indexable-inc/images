@@ -319,8 +319,8 @@ defmodule IxMcp.ActionLogTest do
     :ok = ActionLog.finish_action(action_id, "done", false, 3, log)
     assert [%{status: "done", stack: nil, line: nil} | _] = ActionLog.recent(10, log)
 
-    # The 2 -> 3 -> 4 steps stamped the file on their way through (index#3539).
-    assert user_version(path) == 4
+    # The 2 -> 3 -> 4 -> 5 steps stamped the file on their way through (index#3539).
+    assert user_version(path) == 5
   end
 
   test "a v1 database migrates losslessly to the normalized schema, once" do
@@ -404,8 +404,8 @@ defmodule IxMcp.ActionLogTest do
 
     stop_supervised!(:migrate)
 
-    # The ladder ran 1 -> 2 -> 3 -> 4 and left the stamp behind (index#3539).
-    assert user_version(path) == 4
+    # The ladder ran 1 -> 2 -> 3 -> 4 -> 5 and left the stamp behind (index#3539).
+    assert user_version(path) == 5
 
     # The migrated file is the v2 shape on disk: normalized columns, no v1
     # leftovers, and a reopen (no-op detection) does not duplicate rows.
@@ -439,7 +439,10 @@ defmodule IxMcp.ActionLogTest do
 
     {:ok, tables} = Sqlite3.fetch_all(conn, statement)
     :ok = Sqlite3.release(conn, statement)
-    assert tables == [["actions"], ["sessions"], ["topics"]]
+
+    assert tables ==
+             [["actions"], ["job_output"], ["jobs"], ["outbox"], ["sessions"], ["topics"]]
+
     :ok = Sqlite3.close(conn)
 
     reopened = start_supervised!({ActionLog, path: path, name: :action_log_remigration})
@@ -450,7 +453,7 @@ defmodule IxMcp.ActionLogTest do
   test "a fresh database is created stamped with the current schema version" do
     path = tmp_db()
     start_supervised!({ActionLog, path: path, name: :action_log_fresh_stamp})
-    assert user_version(path) == 4
+    assert user_version(path) == 5
   end
 
   test "an unstamped file already at the current schema is stamped, not rewritten" do
@@ -475,7 +478,7 @@ defmodule IxMcp.ActionLogTest do
 
     reopened = start_supervised!({ActionLog, path: path, name: :action_log_stamp_b})
     assert [%{intent: "keep"}] = ActionLog.recent(10, reopened)
-    assert user_version(path) == 4
+    assert user_version(path) == 5
   end
 
   test "an unstamped pre-line file (the #3536 shape) sniffs as v3 and gains the line column" do
@@ -500,7 +503,7 @@ defmodule IxMcp.ActionLogTest do
     log = start_supervised!({ActionLog, path: path, name: :action_log_pre_line})
 
     assert [%{intent: "pre-line row", status: "done", line: nil}] = ActionLog.recent(10, log)
-    assert user_version(path) == 4
+    assert user_version(path) == 5
   end
 
   test "a database stamped by a newer server disables logging instead of crashing" do
@@ -517,7 +520,7 @@ defmodule IxMcp.ActionLogTest do
 
     # The refusal names both versions, so the operator knows which side moves.
     assert output =~ "user_version 9000"
-    assert output =~ "supported 4"
+    assert output =~ "supported 5"
     assert output =~ "index#3539"
 
     # The server stays useful: writes are absorbed, reads answer empty.

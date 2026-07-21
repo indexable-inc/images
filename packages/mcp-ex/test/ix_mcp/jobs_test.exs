@@ -1,7 +1,10 @@
 defmodule IxMcp.JobsTest do
   use ExUnit.Case, async: false
 
+  alias IxMcp.ActionLog
   alias IxMcp.Jobs
+  alias IxMcp.MCP.Notifier
+  alias IxMcp.Session
 
   setup do
     IxMcp.Workspace.reset()
@@ -47,7 +50,10 @@ defmodule IxMcp.JobsTest do
   end
 
   test "result/1 returns the value term, or :running while unfinished" do
-    {running, _out} = Jobs.run("Process.sleep(200); %{a: 1}", budget: 0.05, intent: "slow map")
+    # A long sleep against a tiny budget keeps the "still running" window wide
+    # enough that a loaded CI builder cannot let the job finish before the
+    # assertion (the 200ms/50ms margin flaked under load).
+    {running, _out} = Jobs.run("Process.sleep(2000); %{a: 1}", budget: 0.05, intent: "slow map")
     assert {:error, :running} = Jobs.result(running.id)
 
     Jobs.await(running.id, 5_000)
@@ -139,16 +145,124 @@ defmodule IxMcp.JobsTest do
         Enum.find(Jobs.history(10), &(&1.id == running.id && &1.status != :running))
       end)
 
-    assert entry.status == :failed
+    # A control process killed without reporting is `killed`, not `failed`:
+    # the machinery died under the job, it was not the cell's own crash. The
+    # reaper writes the transition from outside (#3839).
+    assert entry.status == :killed
     assert is_float(entry.elapsed_s)
 
     # The job process is gone but the run is on record: report its state
     # (pre-fix this raised "no such job" about an id history still listed).
-    assert Jobs.cancel(running.id) == {:error, :failed}
+    assert Jobs.cancel(running.id) == {:error, :killed}
   end
 
   test "cancel on an id that never existed still raises" do
     assert_raise ArgumentError, ~r/no such job/, fn -> Jobs.cancel("00000000") end
+  end
+
+  # -- #3839: durable ledger, every death notifies -----------------------------
+
+  test "killing a job's process drives the ledger terminal and notifies the channel" do
+    %{session_id: session_id, topic_id: topic_id} = Session.ids()
+    intent = "killed-notify-#{System.unique_integer([:positive])}"
+
+    action_id =
+      ActionLog.start_action(%{
+        session_id: session_id,
+        topic_id: topic_id,
+        tool: "exec",
+        intent: intent,
+        arguments: "{}"
+      })
+
+    {running, _out} =
+      Jobs.run("Process.sleep(:infinity)", budget: 0.05, intent: intent, action_id: action_id)
+
+    assert running.running
+
+    # A connected transport hears the death. Register and sync on the
+    # Notifier first, so its replay of any already-unacked rows drains before
+    # the kill -- then this death arrives as its own published event, not
+    # folded into a replay digest.
+    :ok = Notifier.register(self())
+    _ = :sys.get_state(Notifier)
+
+    {:ok, pid} = Jobs.lookup(running.id)
+    Process.exit(pid, :kill)
+
+    id = running.id
+
+    assert_receive {:mcp_send, %{"params" => %{"meta" => %{"job" => ^id, "status" => "killed"}}}},
+                   2_000
+
+    # The jobs row is terminal at `killed`...
+    assert %{status: :killed} = ActionLog.job(id)
+
+    # ...and its actions row went terminal in the same transition (killed
+    # jobs record as a failed action -- the actions vocabulary has no killed).
+    action = eventually(fn -> Enum.find(ActionLog.recent(50), &(&1.intent == intent)) end)
+    assert action.status == "failed"
+    assert action.is_error
+  end
+
+  test "output is readable via the ledger after the job process is dead" do
+    {running, _out} =
+      Jobs.run(
+        ~s|IO.puts("durable-line-1"); IO.puts("durable-line-2"); Process.sleep(:infinity)|,
+        budget: 0.05,
+        intent: "durable output"
+      )
+
+    assert running.running
+
+    # Give the flush timer (20ms under test config) a beat to persist output.
+    Process.sleep(120)
+
+    {:ok, pid} = Jobs.lookup(running.id)
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+
+    # The process is gone (the Registry may still be unregistering the dead
+    # pid asynchronously); reads fall back to the durable table either way.
+    assert Jobs.output(running.id) == "durable-line-1\ndurable-line-2\n"
+    assert Jobs.tail(running.id, 3) == "durable-line-1\ndurable-line-2\n"
+    assert Jobs.grep(running.id, "durable-line-1") == "durable-line-1"
+  end
+
+  test "outbox replay: a transport registering after a job finished gets a digest" do
+    # A job whose terminal transition was recorded while no transport was
+    # connected leaves an unacked outbox row.
+    %{session_id: session_id} = Session.ids()
+    id = "rp" <> Base.encode16(:crypto.strong_rand_bytes(3), case: :lower)
+    intent = "replayed-#{System.unique_integer([:positive])}"
+
+    :ok =
+      ActionLog.job_started(%{
+        id: id,
+        session_id: session_id,
+        action_id: nil,
+        intent: intent,
+        session_name: nil,
+        topic_name: nil,
+        code: ":ok",
+        watch: false,
+        started_at: DateTime.to_iso8601(DateTime.utc_now())
+      })
+
+    assert {:notify, _outbox} = ActionLog.finish_job(id, :done, "the result")
+    assert Enum.any?(ActionLog.unacked_outbox(), &(&1.job_id == id))
+
+    # Registering a transport replays the unacked rows as one digest.
+    :ok = Notifier.register(self())
+
+    assert_receive {:mcp_send, %{"params" => %{"content" => content, "meta" => meta}}}, 2_000
+    assert content =~ id
+    assert content =~ "while you were away"
+    assert Map.has_key?(meta, "replay")
+
+    # And the replayed row is now acked, so it will not replay again.
+    refute Enum.any?(ActionLog.unacked_outbox(), &(&1.job_id == id))
   end
 
   defp eventually(probe, tries \\ 50) do
