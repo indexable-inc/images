@@ -1173,7 +1173,7 @@ in {
     # prompt is the single source of agent instructions.
     houseContext.enable = false;
     # hooks.json stays owned by the manual home.file declaration below (from
-    # `codexBase.passthru.hooksJson`, matching the package on PATH). Without
+    # `codex.passthru.hooksJson`, matching the package on PATH). Without
     # this the imported codex module also claims ~/.codex/hooks.json with
     # `finalPackage.hooksJson`, and the two sources conflict as soon as any
     # hook-affecting option diverges from the wrapper defaults.
@@ -1241,7 +1241,10 @@ in {
   # claude-hooks commands are absolute store paths, so a switch bakes the wiring;
   # codex's hash-pinned trust gate means a one-time `/hooks` trust after a bump.
   home.file.".codex/hooks.json" = {
-    source = codexBase.passthru.hooksJson;
+    # The OVERRIDDEN package's render: codexBase's would drop every
+    # override-level hook input (extraSessionStart lost the memory digest
+    # here, index#3849); `codex` is what programs.codex puts on PATH.
+    source = codex.passthru.hooksJson;
     force = true;
   };
 
