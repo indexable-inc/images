@@ -99,7 +99,7 @@
 
   # One statement of the store location: the digest script and the
   # WEAVE_MEMORY_STORE session variable both derive from it.
-  memoryStore = "${"$"}{config.home.homeDirectory}/.config/nix/claude/memory/.weave";
+  memoryStore = "${config.home.homeDirectory}/.config/nix/claude/memory/.weave";
 
   # SessionStart memory digest: the derived replacement for the retired
   # MEMORY.md flat index (index#3849). One-shot weave queries against the
