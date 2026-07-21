@@ -7,6 +7,8 @@
 //! fields the surfaces actually use are modeled; unknown upstream fields
 //! are ignored on read and never invented on write.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone as _, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +83,27 @@ impl MessagePart {
             .iter()
             .find(|header| header.name.eq_ignore_ascii_case(name))
             .map(|header| header.value.as_str())
+    }
+
+    /// The first decoded `text/plain` body in the part tree, falling back
+    /// to `text/html` when no plain body exists. `None` when the tree
+    /// carries no inline text (a `metadata` projection, an attachments-only
+    /// message) or the inline data is not valid base64url. Shared by the
+    /// CLI's `show` rendering and the Elixir binding, so the two surfaces
+    /// cannot disagree about what "the body" of a message is.
+    #[must_use]
+    pub fn text_body(&self) -> Option<String> {
+        fn walk(part: &MessagePart, want: &str) -> Option<String> {
+            if part.mime_type.as_deref() == Some(want)
+                && let Some(body) = &part.body
+                && let Some(data) = &body.data
+            {
+                let bytes = URL_SAFE_NO_PAD.decode(data).ok()?;
+                return Some(String::from_utf8_lossy(&bytes).into_owned());
+            }
+            part.parts.iter().find_map(|child| walk(child, want))
+        }
+        walk(self, "text/plain").or_else(|| walk(self, "text/html"))
     }
 }
 
@@ -290,5 +313,35 @@ mod tests {
         assert_eq!(part.header("subject"), Some("Hi"));
         assert_eq!(part.header("SUBJECT"), Some("Hi"));
         assert_eq!(part.header("missing"), None);
+    }
+
+    #[test]
+    fn text_body_prefers_plain_and_falls_back_to_html() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+        let encode = |text: &str| URL_SAFE_NO_PAD.encode(text.as_bytes());
+        let json = format!(
+            r#"{{"mimeType":"multipart/alternative","parts":[
+                {{"mimeType":"text/html","body":{{"data":"{html}","size":1}}}},
+                {{"mimeType":"text/plain","body":{{"data":"{plain}","size":1}}}}
+            ]}}"#,
+            html = encode("<b>hi</b>"),
+            plain = encode("hi")
+        );
+        let part: super::MessagePart = serde_json::from_str(&json).expect("parses");
+        assert_eq!(part.text_body().as_deref(), Some("hi"));
+
+        let html_only = format!(
+            r#"{{"mimeType":"text/html","body":{{"data":"{html}","size":1}}}}"#,
+            html = encode("<b>hi</b>")
+        );
+        let part: super::MessagePart = serde_json::from_str(&html_only).expect("parses");
+        assert_eq!(part.text_body().as_deref(), Some("<b>hi</b>"));
+
+        // A metadata projection has headers but no bodies.
+        let bare: super::MessagePart =
+            serde_json::from_str(r#"{"mimeType":"text/plain"}"#).expect("parses");
+        assert_eq!(bare.text_body(), None);
     }
 }

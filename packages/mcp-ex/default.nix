@@ -1,9 +1,10 @@
 {
   lib,
   ix,
-  # The sibling package set: the compiled :tui_ex OTP app (packages/tui/ex)
-  # rides into the release and the check env as `IX_MCP_TUI_EX`, never as a
-  # mix dep, so the kernel and the NIF binding ship independently.
+  # The sibling package set: the compiled :tui_ex and :gmail_ex OTP apps
+  # (packages/tui/ex, packages/google/gmail/ex) ride into the release and
+  # the check env as `IX_MCP_TUI_EX`/`IX_MCP_GMAIL_EX`, never as mix deps,
+  # so the kernel and the NIF bindings ship independently.
   repoPackages,
 }: let
   # Read the package set from `ix` rather than a `pkgs` callPackage formal
@@ -67,6 +68,9 @@
   # ($IX_MCP_TUI_EX/ebin goes on the code path, priv/ holds the NIF).
   tuiExApp = "${repoPackages.tui-ex}/lib/tui_ex";
 
+  # Same pattern for IxMcp.Gmail: the compiled :gmail_ex app.
+  gmailExApp = "${repoPackages.google-gmail-ex}/lib/gmail_ex";
+
   # The required Elixir quality lane: compile --warnings-as-errors (Elixir
   # 1.18's set-theoretic type checker), format, `mix credo --strict` against
   # the shared lib/elixir/credo.exs, and the ExUnit suite.
@@ -75,9 +79,14 @@
     inherit version src elixir erlang;
     mixDeps = mixFodDeps;
     setupHook = stageAgentHarness;
-    # IX_MCP_TUI_EX makes the suite's local-TUI tests run in the sandbox
-    # (test_helper.exs skips them when it is unset).
-    extraEnv = rebar3Env // {IX_MCP_TUI_EX = tuiExApp;};
+    # IX_MCP_TUI_EX / IX_MCP_GMAIL_EX make the suite's NIF-binding tests
+    # run in the sandbox (test_helper.exs skips them when unset).
+    extraEnv =
+      rebar3Env
+      // {
+        IX_MCP_TUI_EX = tuiExApp;
+        IX_MCP_GMAIL_EX = gmailExApp;
+      };
   };
 
   meta = {
@@ -154,6 +163,7 @@
         --set-default RELEASE_TMP /tmp \
         --set-default IX_MCP_GH ${lib.getExe pkgs.gh} \
         --set-default IX_MCP_TUI_EX ${tuiExApp} \
+        --set-default IX_MCP_GMAIL_EX ${gmailExApp} \
         --add-flags start
       runHook postInstall
     '';
@@ -172,7 +182,7 @@
     }
     ''
       set +e
-      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
         '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_set_name","arguments":{"name":"smoke"}}}' \
@@ -182,6 +192,7 @@
         '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"crash dump routing probe","budget":60,"code":"System.fetch_env!(\"ERL_CRASH_DUMP\")"}}}' \
         '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"local pty drive probe","budget":60,"code":"{:ok, t} = TuiLocal.spawn(\"cat\", []); :ok = TuiLocal.send(t, \"pty-smoke\\r\"); {:ok, s} = TuiLocal.wait_for(t, \"pty-smoke\"); :ok = TuiLocal.close(t); s"}}}' \
         '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"otp batteries present","budget":60,"code":"{:ok, _} = Application.ensure_all_started([:inets, :ssl, :xmerl, :runtime_tools, :tools]); \"otp-batteries-ok\""}}}' \
+        '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"gmail nif runtime load probe","budget":60,"code":"false = Gmail.status().signed_in; \"gmail-nif-ok\""}}}' \
         | IX_MCP_ACTIONS_DB="$PWD/actions.db" ix-mcp-ex > response.jsonl 2> server-stderr.log
       rc=$?
       set -e
@@ -273,6 +284,19 @@
         *'pty-smoke'*) ;;
         *)
           echo "exec did not drive a local PTY through TuiLocal" >&2
+          printf '%s\n' "$out_lines" >&2
+          exit 1
+          ;;
+      esac
+      # The Gmail sibling of the TuiLocal probe: proves IxMcp.Gmail's
+      # runtime load of the :gmail_ex app (code path, app load, NIF
+      # @on_load) works in the shipped release. The sandbox is signed out
+      # by construction, so status() returning signed_in: false is also the
+      # proof the auth state crosses as data, offline.
+      case "$out_lines" in
+        *'gmail-nif-ok'*) ;;
+        *)
+          echo "exec did not load the gmail NIF app through IxMcp.Gmail" >&2
           printf '%s\n' "$out_lines" >&2
           exit 1
           ;;

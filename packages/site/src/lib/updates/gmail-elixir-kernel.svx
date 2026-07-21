@@ -1,0 +1,17 @@
+---
+id: gmail-elixir-kernel
+postedAt: 2026-07-20T12:00:00-07:00
+title: "Gmail from any kernel cell"
+tags: [mcp, elixir, gmail, unibind]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/3803
+  - label: binding
+    href: https://github.com/indexable-inc/index/blob/main/packages/google/gmail/ex
+  - label: cell surface
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/gmail.ex
+---
+
+The Elixir kernel (ix-mcp-ex) had no Google surface after the Python cutover: sending mail from a cell meant hand-building the `gcal` CLI and curling the Gmail REST API with a minted token. Now `Gmail` is aliased into every cell: `Gmail.send("dev@ix.dev", "subject", "body")` sends as the signed-in user (with `cc:`/`bcc:`/`html:`/`thread:` options), `Gmail.search("from:github newer_than:7d", limit: 5)` returns typed summaries, `Gmail.show(id)` decodes one message down to its text body, and `Gmail.status()` reports the auth state -- credentials present, grant stored, scopes covered -- as data. The refresh token and client secret never cross into a cell; they stay inside the NIF, the same property the shell-out had.
+
+The seam is one thin unibind export: `packages/google/gmail/ex` re-exposes the existing `google-gmail` client (send, metadata-hydrated search, full-message reads) and `google-auth` grant store as the `:gmail_ex` NIF app -- async NIFs on unibind's shared tokio runtime, records for every value that crosses. Like the TUI binding, the app is not a mix dep: the release bakes its store path into `IX_MCP_GMAIL_EX` and a shared loader (`IxMcp.NifApp`, factored out of `TuiLocal`) puts it on the code path at first use. The signed-out auth boundary is proven offline by `checks.*.google-gmail-ex-run`, and the mcp-ex smoke test drives `Gmail.status()` through the shipped release.

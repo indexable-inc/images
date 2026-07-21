@@ -58,6 +58,7 @@ members = [
   "packages/google/calendar/cli",
   "packages/google/gmail",
   "packages/google/gmail/cli",
+  "packages/google/gmail/ex",
   "packages/google/mcp",
   "packages/google/py",
   "packages/index-delta",

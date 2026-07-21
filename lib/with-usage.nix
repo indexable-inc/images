@@ -33,7 +33,7 @@
     // lib.optionalAttrs uploader {
       uploader = "${ixUsage}/bin/ix-usage";
     };
-  specBaseFile = pkgs.writeText "ix-usage-spec-${id}.json" (builtins.toJSON specBase);
+  specBaseFile = (pkgs.formats.json {}).generate "ix-usage-spec-${id}.json" specBase;
 in
   pkgs.runCommand "${id}-with-usage"
   {
