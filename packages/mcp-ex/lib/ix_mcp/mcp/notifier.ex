@@ -78,19 +78,26 @@ defmodule IxMcp.MCP.Notifier do
   end
 
   def handle_cast({:publish, outbox}, state) do
-    # Claim the row before delivering: a register-replay may already have
-    # delivered and acked it (both paths run in this process, but in
-    # nondeterministic mailbox order), so the ack flip is the single arbiter
-    # that prevents announcing the same finish twice (#3839). With no
-    # transport connected we neither deliver nor claim -- the row waits for
+    # Deliver before acking (#3874). The old order claimed the ack first as
+    # the dedup arbiter, but the log's client API now retries a call whose
+    # server died mid-request: an ack that committed without a reply looks
+    # already-claimed on retry, and skipping delivery on that evidence
+    # would silence the notification permanently -- the exact silence the
+    # outbox exists to prevent. Publish and register-replay both run in
+    # this process, so checking the row is still unacked before delivering
+    # keeps the same-finish dedup (#3839) race-free; the residual worst
+    # case is a duplicate announce, which beats a lost one. With no
+    # transport connected we neither deliver nor ack -- the row waits for
     # replay.
-    if state.transports != [] and ActionLog.ack_outbox([outbox.id]) > 0 do
+    if state.transports != [] and unacked?(outbox.id) do
       {content, meta} = render(outbox)
 
       deliver(state.transports, "notifications/claude/channel", %{
         "content" => content,
         "meta" => meta
       })
+
+      ack_all([outbox.id])
     end
 
     {:noreply, state}
@@ -111,7 +118,7 @@ defmodule IxMcp.MCP.Notifier do
   # this instance's session, so a transport connecting here never drains a
   # sibling instance's notifications out of the shared database.
   defp replay_unacked(transports) do
-    case ActionLog.unacked_outbox(Session.ids().session_id) do
+    case unacked_rows(Session.ids().session_id) do
       [] ->
         :ok
 
@@ -125,8 +132,30 @@ defmodule IxMcp.MCP.Notifier do
           "meta" => meta
         })
 
-        ActionLog.ack_outbox(Enum.map(rows, & &1.id))
+        rows |> Enum.map(& &1.id) |> ack_all()
     end
+  end
+
+  defp unacked_rows(session_id) do
+    ActionLog.unacked_outbox(session_id)
+  catch
+    :exit, _reason -> []
+  end
+
+  defp ack_all(ids) do
+    ActionLog.ack_outbox(ids)
+  catch
+    :exit, _reason -> 0
+  end
+
+  # The ledger interactions must never crash the notifier: its state is the
+  # live transport registry, and losing it silences every future
+  # notification until the transports reconnect (#3874). A row whose ack
+  # was lost stays unacked and may replay as a duplicate later -- accepted.
+  defp unacked?(outbox_id) do
+    Enum.any?(ActionLog.unacked_outbox(), &(&1.id == outbox_id))
+  catch
+    :exit, _reason -> false
   end
 
   defp deliver(transports, method, params) do

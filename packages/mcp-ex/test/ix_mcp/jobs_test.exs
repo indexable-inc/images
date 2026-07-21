@@ -265,6 +265,70 @@ defmodule IxMcp.JobsTest do
     refute Enum.any?(ActionLog.unacked_outbox(), &(&1.job_id == id))
   end
 
+  test "a running job survives an ActionLog crash mid-flush (#3874)" do
+    # File-backed ledger for this test: the suite's default :memory:
+    # database would come back empty after the crash-restart and prove
+    # nothing about durability.
+    path = Path.join(System.tmp_dir!(), "ix-jobs-3874-#{System.unique_integer([:positive])}.db")
+    previous = Application.get_env(:ix_mcp, :actions_db)
+    Application.put_env(:ix_mcp, :actions_db, path)
+    restart_action_log()
+
+    on_exit(fn ->
+      Application.put_env(:ix_mcp, :actions_db, previous)
+      restart_action_log()
+      File.rm(path)
+    end)
+
+    {summary, _out} =
+      Jobs.run(
+        "for i <- 1..40 do IO.puts(\"tick \#{i}\"); Process.sleep(25) end; :ok",
+        budget: 0.05,
+        intent: "ticker"
+      )
+
+    assert summary.running
+    {:ok, control} = Jobs.lookup(summary.id)
+    ref = Process.monitor(control)
+
+    # Suspend the log so the next output flush parks inside GenServer.call,
+    # then kill it: the incident shape (#3874) -- that call exit used to
+    # take the job control process, its registry entry, and any terminal
+    # notification down with it.
+    log = Process.whereis(ActionLog)
+    :sys.suspend(log)
+    Process.sleep(100)
+    Process.exit(log, :kill)
+
+    final = Jobs.await(summary.id, 10_000)
+    assert final.status == :done
+    refute_received {:DOWN, ^ref, :process, ^control, _reason}
+    assert {:ok, _pid} = Jobs.lookup(summary.id)
+
+    # The restarted log caught the terminal transition and the output.
+    assert %{status: :done} =
+             eventually(fn ->
+               case ActionLog.job(summary.id) do
+                 %{status: :done} = job -> job
+                 _not_yet -> nil
+               end
+             end)
+
+    assert Jobs.tail(summary.id, 2) =~ "tick 40"
+  end
+
+  # Graceful stop/start through the supervisor: unlike a kill, this does
+  # not count against restart intensity, so the test's one real crash is
+  # the only one on the books. Session restarts too: its lazily-created
+  # session/topic row ids belong to the previous database, and stale ids
+  # would leave every later row orphaned from the joins (recent/history).
+  defp restart_action_log do
+    :ok = Supervisor.terminate_child(IxMcp.Supervisor, ActionLog)
+    {:ok, _pid} = Supervisor.restart_child(IxMcp.Supervisor, ActionLog)
+    :ok = Supervisor.terminate_child(IxMcp.Supervisor, Session)
+    {:ok, _pid} = Supervisor.restart_child(IxMcp.Supervisor, Session)
+  end
+
   defp eventually(probe, tries \\ 50) do
     case probe.() do
       nil when tries > 0 ->
