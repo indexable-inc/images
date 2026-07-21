@@ -61,6 +61,11 @@
         default = null;
         description = "Host-native typenix package supplied by the consuming flake.";
       };
+      weave = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = null;
+        description = "Host-native weave binary (indexable-inc/weave) supplied by the consuming flake; backs the agent memory store.";
+      };
     };
 
     paths = {

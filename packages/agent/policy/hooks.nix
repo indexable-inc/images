@@ -4,6 +4,11 @@
   hookRunner,
   primaryCheckouts ? [],
   personalStartupContext ? false,
+  # Consumer-supplied SessionStart context commands: each entry
+  # ({ package, exeName ? null, args ? [], timeout ? 10 }) runs at session
+  # start and its stdout is injected as session context. The generic seam
+  # personal memory/notes wiring hangs off (index#3849).
+  extraSessionStart ? [],
 }: let
   hookRunnerSubcommand = sub: {
     package = hookRunner;
@@ -33,30 +38,44 @@
   renderCommand = command:
     lib.escapeShellArgs (
       [
-        (lib.getExe' command.package command.exeName)
+        (
+          if command.exeName or null != null
+          then lib.getExe' command.package command.exeName
+          else lib.getExe command.package
+        )
       ]
       ++ command.args
     );
 
   declarations = {
-    SessionStart = [
-      # Unconditional: agents key session-scoped artifacts (status boards,
-      # scratch dirs) by session id, and nothing else tells them their own id.
-      {
-        command = hookCommands.sessionIdContext;
-        timeout = 5;
-      }
-      {
-        command = hookCommands.cachedStartupNotes;
-        enable = personalStartupContext;
-        timeout = 5;
-      }
-      {
-        command = hookCommands.hostInventoryBanner;
-        enable = personalStartupContext;
-        timeout = 5;
-      }
-    ];
+    SessionStart =
+      [
+        # Unconditional: agents key session-scoped artifacts (status boards,
+        # scratch dirs) by session id, and nothing else tells them their own id.
+        {
+          command = hookCommands.sessionIdContext;
+          timeout = 5;
+        }
+        {
+          command = hookCommands.cachedStartupNotes;
+          enable = personalStartupContext;
+          timeout = 5;
+        }
+        {
+          command = hookCommands.hostInventoryBanner;
+          enable = personalStartupContext;
+          timeout = 5;
+        }
+      ]
+      ++ map (extra: {
+        command = {
+          inherit (extra) package;
+          exeName = extra.exeName or null;
+          args = extra.args or [];
+        };
+        timeout = extra.timeout or 10;
+      })
+      extraSessionStart;
 
     PreToolUse = [
       # Claude edit tools carry file paths; Codex edits through apply_patch.

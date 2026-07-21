@@ -22,6 +22,10 @@
   # Disabled for the shared wrapper because those hooks print workstation-local
   # context that is not meaningful for other users.
   personalStartupContext ? false,
+  # Consumer-supplied SessionStart context commands
+  # ({ package, exeName ? null, args ? [], timeout ? 10 }); same seam as the
+  # claude-code wrapper (index#3849).
+  extraSessionStart ? [],
   # Sibling repo packages from the flake package set (threaded by
   # lib/packages.nix), used to locate the `ix-mcp` entrypoint for the baked
   # `index` MCP server. `{ }` in the overlay package set, where the `mcp`
@@ -197,6 +201,7 @@
           hookRunner
           primaryCheckouts
           personalStartupContext
+          extraSessionStart
           ;
       }).codex;
   };
