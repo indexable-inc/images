@@ -57,6 +57,12 @@ defmodule IxMcp.MCP.Tools do
                                             filed in a watched org (default
                                             indexable-inc) arrives unprompted as a
                                             source="issues" channel notification
+      Issues.pickup(3880)                   claim an issue atomically BEFORE working
+                                            it (also "owner/repo#n"); won claims
+                                            assign @me on GitHub and announce as
+                                            event="picked_up"; a lost claim returns
+                                            {:error, "claimed by session ..."} --
+                                            pick a different issue
       Tui.act(uri, send_keys)               drive a federated TUI resource (optional
                                             peer arg)
       TuiLocal.spawn(cmd, args)             spawn a local PTY program (vim, less, a

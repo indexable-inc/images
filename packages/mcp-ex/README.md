@@ -69,6 +69,7 @@ list):
 | `Ix.trace()` | stack dump of every job's processes, from outside |
 | `Ix.restart()` | cancel jobs (sparing the calling cell), restart the workspace, restore bindings |
 | `PrWatch.start(pr, cwd, interval \\ 15, timeout \\ 3600)` | watch a PR via `gh`, notify on merge/close/timeout |
+| `Issues.pickup(3880)` | claim an issue atomically before working it (also `"owner/repo#n"`); a lost claim names the session that won |
 | `Tui.act(uri, send_keys, peer \\ nil)` | drive a federated TUI resource via `ix-resource-cli` |
 
 Because cells are separate BEAM processes, `Ix.trace/0` and `Ix.restart/0`
@@ -140,7 +141,7 @@ IxMcp.Supervisor (one_for_one)
 ├── IxMcp.Jobs.History     ordered record of every run
 ├── IxMcp.MCP.Notifier     server-initiated notification fan-out
 ├── IxMcp.PrWatch.Supervisor (Task.Supervisor) one task per PR watch
-├── IxMcp.IssueWatch       new-issue channel feed (stdio-gated, `gh search issues`)
+├── IxMcp.IssueWatch       new-issue + pickup-claim channel feed (stdio-gated, `gh search issues`)
 └── IxMcp.MCP.Stdio        newline-delimited JSON-RPC on stdin/stdout
 ```
 
