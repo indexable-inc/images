@@ -85,6 +85,35 @@ fn compute_total(x: i32, y: i32) -> i32 {
     );
 }
 
+/// Struct-literal field order is canonicalized before hashing (issue #3878),
+/// so a reordering that survives review as "different code" is still caught
+/// as a Type-2 clone end to end.
+#[test]
+fn type2_reordered_struct_literal_fields() {
+    let dir = TempDir::new().unwrap();
+    create_temp_file(
+        &dir,
+        "builders.rs",
+        r"
+fn build_user(name: u32, age: u32) -> User {
+    let user = User { name, age };
+    user
+}
+
+fn build_user_reordered(name: u32, age: u32) -> User {
+    let user = User { age, name };
+    user
+}
+",
+    );
+
+    let result = scan_and_run(&dir, &DetectConfig::default());
+    assert!(
+        result.stats.type2_groups > 0,
+        "reordered struct literal fields should hash as a Type-2 clone"
+    );
+}
+
 #[test]
 fn no_clones_unique_files() {
     let dir = TempDir::new().unwrap();

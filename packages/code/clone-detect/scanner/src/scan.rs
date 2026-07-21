@@ -219,7 +219,12 @@ impl Scanner {
             return Ok(None);
         }
 
-        let nodes = significant_nodes(&tree.tree, self.config.min_lines, self.config.min_nodes)
+        let nodes = significant_nodes(
+            &tree.tree,
+            language,
+            self.config.min_lines,
+            self.config.min_nodes,
+        )
             .into_iter()
             .filter(|node| !pragma_info.is_ignored(&node.byte_range))
             .collect();

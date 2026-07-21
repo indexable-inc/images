@@ -1,4 +1,6 @@
-use super::helpers::{parse_python, parse_rust};
+use ast_merge_langs::Lang;
+
+use super::helpers::{parse, parse_rust};
 use crate::significant_nodes;
 
 #[test]
@@ -20,7 +22,7 @@ struct Foo {
 ";
 
     let tree = parse_rust(source);
-    let nodes = significant_nodes(&tree, 3, 5);
+    let nodes = significant_nodes(&tree, Lang::Rust, 3, 5);
 
     assert!(!nodes.is_empty());
     for node in &nodes {
@@ -33,7 +35,7 @@ struct Foo {
 fn empty_file() {
     let source = "";
     let tree = parse_rust(source);
-    let nodes = significant_nodes(&tree, 3, 5);
+    let nodes = significant_nodes(&tree, Lang::Rust, 3, 5);
     assert!(nodes.is_empty());
 }
 
@@ -41,7 +43,7 @@ fn empty_file() {
 fn only_small_functions() {
     let source = "fn a() {} fn b() {} fn c() {}";
     let tree = parse_rust(source);
-    let nodes = significant_nodes(&tree, 5, 10);
+    let nodes = significant_nodes(&tree, Lang::Rust, 5, 10);
 
     assert!(nodes.is_empty());
 }
@@ -50,7 +52,7 @@ fn only_small_functions() {
 fn significant_nodes_cover_rust_impls_and_python_classes() {
     let cases = [
         (
-            parse_rust as fn(&str) -> ast_merge_ast::Tree,
+            Lang::Rust,
             r"
 impl Foo {
     fn method1(&self) {
@@ -68,7 +70,7 @@ impl Foo {
 ",
         ),
         (
-            parse_python as fn(&str) -> ast_merge_ast::Tree,
+            Lang::Python,
             r"
 def small():
     pass
@@ -87,9 +89,9 @@ class Foo:
         ),
     ];
 
-    for (parse, source) in cases {
-        let tree = parse(source);
-        assert!(!significant_nodes(&tree, 3, 5).is_empty());
+    for (lang, source) in cases {
+        let tree = parse(lang, source);
+        assert!(!significant_nodes(&tree, lang, 3, 5).is_empty());
     }
 }
 
@@ -104,7 +106,7 @@ fn test_function() {
 }
 ";
     let tree = parse_rust(source);
-    let nodes = significant_nodes(&tree, 3, 5);
+    let nodes = significant_nodes(&tree, Lang::Rust, 3, 5);
 
     assert!(!nodes.is_empty());
     let node = nodes.first().unwrap();

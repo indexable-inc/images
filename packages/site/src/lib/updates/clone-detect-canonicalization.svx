@@ -1,0 +1,49 @@
+---
+id: clone-detect-canonicalization
+postedAt: 2026-07-21T12:00:00-07:00
+title: "Clone detection sees through Elixir pipes and field order"
+tags: [rust, lint, tooling]
+links:
+  - label: "#3878: adopt ExDNA-style AST canonicalization"
+    href: https://github.com/indexable-inc/index/issues/3878
+  - label: "elixir-vibe/ex_dna, where these normalizations come from"
+    href: https://github.com/elixir-vibe/ex_dna
+---
+
+The clone ratchet (`nix run .#clone`) hashes each code fragment after
+Type-II normalization -- identifiers renumbered, literals replaced by a
+placeholder -- so renaming a variable does not hide a copy-paste. But the
+hash still followed the parse tree literally, so surface rewrites that any
+reviewer reads as the same code produced different hashes and escaped the
+gate: `x |> f(a)` versus `f(x, a)` in Elixir, or a struct literal with its
+fields listed in a different order.
+
+The hash crate now runs a per-language canonicalization pass ahead of the
+generic normalizer, adopted from elixir-vibe's ExDNA. Language knowledge
+lives in one seam (`clone-hash`'s `canon` module) keyed off the detected
+language; the generic recursion only sees canonical views:
+
+- **Elixir pipes hash as plain calls.** `x |> f(a)` views as `f(x, a)`,
+  bare stages (`x |> f`) as `f(x)`, and chains fold up recursively. Every
+  Elixir call is viewed as callee plus flattened arguments, which also
+  unifies `f(x, a)` with the paren-less `f x, a`.
+- **Keyword and struct-literal field order is ignored.** Elixir `keywords`
+  nodes (map and struct literals, keyword lists, trailing keyword
+  arguments) and Rust `field_initializer_list` nodes hash their pairs
+  sorted by key text, so `%User{name: x, age: y}` matches
+  `%User{age: y, name: x}` and `User { age, name }` matches
+  `User { name, age }`.
+
+Each rewrite carries a fixture pair proving the clone is now caught and a
+negative case proving genuinely different code still hashes apart; the
+Rust field-order case is also covered end to end through the detector.
+
+Two ExDNA ideas were deliberately left out. Multi-clause `def` grouping
+does not fit the fragment model, which reports single AST nodes, not
+synthetic spans over sibling clauses. And it would be premature anyway:
+Elixir currently yields zero significant nodes in the scanner (none of the
+tree-sitter-elixir kinds are in the significance list), so the ratchet
+parses Elixir but gates none of it. Lighting that up is a separate change
+with its own budget consequences. Tree-wide duplication measured 0.3619%
+before and 0.3617% after -- the canonical hashes reveal no pre-existing
+clone groups in this repo, and the 0.45% ceiling is untouched.
