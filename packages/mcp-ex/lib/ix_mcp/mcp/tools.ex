@@ -28,6 +28,13 @@ defmodule IxMcp.MCP.Tools do
       Jobs.tail("ab12", 20)   Jobs.await("ab12")   Jobs.cancel("ab12")   Jobs.history()
       Read.file(path)                       a file; Read.file(path, first, last) slices
                                             a 1-based inclusive line range
+      Edit.replace(path, old, new)          exact-string find/replace with native
+                                            Claude Code Edit semantics: raises on
+                                            zero or ambiguous matches (replace_all:
+                                            true replaces every one), returns a
+                                            numbered snippet of the edited region
+      Edit.write(path, content)             write a file, creating parent dirs;
+                                            the return names created vs updated
       Ix.trace()                            stack dump of every running job's processes,
                                             taken from outside with Process.info/2
       Ix.restart()                          cancel running jobs (sparing the calling
@@ -99,7 +106,10 @@ defmodule IxMcp.MCP.Tools do
         #{@surface_guide}
         Write plain Elixir, not shell. For files and data use the standard
         library directly -- File.read!/1, File.write!/2, Path.wildcard/1,
-        File.ls!/1, File.stat!/1 -- instead of shelling out. Reserve
+        File.ls!/1, File.stat!/1 -- instead of shelling out. To change
+        an existing file, reach for Edit.replace/4 before hand-rolled
+        String.replace rewrites: it fails loudly on zero or ambiguous
+        matches and confirms what changed. Reserve
         System.cmd/3 for real external programs (git, nix, gh), and always
         pass its arguments as a list: System.cmd("git", ["-C", dir, "status"]).
         A subprocess's stdin is a pipe that never closes, so tools that read

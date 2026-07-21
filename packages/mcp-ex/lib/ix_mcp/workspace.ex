@@ -15,7 +15,7 @@ defmodule IxMcp.Workspace do
 
   # `Kernel` would shadow Elixir's; cells reach trace/restart as `Ix`.
   @prelude "alias IxMcp.Jobs; alias IxMcp.Api; alias IxMcp.Fleet; " <>
-             "alias IxMcp.Read; alias IxMcp.PrWatch; alias IxMcp.Tui; " <>
+             "alias IxMcp.Read; alias IxMcp.Edit; alias IxMcp.PrWatch; alias IxMcp.Tui; " <>
              "alias IxMcp.TuiLocal; alias IxMcp.Gmail; " <>
              "alias IxMcp.Kernel, as: Ix; alias IxMcp.Agents"
 

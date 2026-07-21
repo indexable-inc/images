@@ -20,6 +20,7 @@ defmodule IxMcp.Api do
     IxMcp.Workspace,
     IxMcp.Checkpoint,
     IxMcp.Read,
+    IxMcp.Edit,
     IxMcp.PrWatch,
     IxMcp.Tui,
     IxMcp.TuiLocal,
