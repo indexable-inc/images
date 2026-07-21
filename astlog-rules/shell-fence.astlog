@@ -1,0 +1,42 @@
+;; The shell fence (#3823, phase 1): no NEW generated shell or nushell.
+;; The `shell-fence` lint stage (lib/per-system.nix) runs this ruleset over
+;; every tracked .nix file, aggregates the findings per file:identifier,
+;; and compares those counts against the committed shell-allowlist.txt --
+;; a call site missing from the allowlist fails, and an allowlist entry
+;; whose target shrank or vanished fails too, so the list only shrinks as
+;; scripts migrate to compiled Rust tools (ix.rustWorkspace; see
+;; packages/config-launch and packages/claude-hooks).
+;;
+;; The three legacy builders are also banned outright by nix.astlog in the
+;; blanket `astlog` stage; they repeat here (same rule names, same
+;; fixtures) so this ruleset states the whole fenced surface.
+
+(rule (no-write-shell-application n)
+  (match nix "(identifier) @n")
+  (text n "writeShellApplication"))
+(lint no-write-shell-application error
+  "writeShellApplication is fenced (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks)")
+
+(rule (no-write-shell-script n)
+  (match nix "(identifier) @n")
+  (text n "writeShellScript"))
+(lint no-write-shell-script error
+  "writeShellScript is fenced (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks)")
+
+(rule (no-write-shell-script-bin n)
+  (match nix "(identifier) @n")
+  (text n "writeShellScriptBin"))
+(lint no-write-shell-script-bin error
+  "writeShellScriptBin is fenced (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks)")
+
+(rule (no-write-bash-application n)
+  (match nix "(identifier) @n")
+  (text n "writeBashApplication"))
+(lint no-write-bash-application error
+  "new bash scripts are fenced (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks); existing call sites are pinned in shell-allowlist.txt")
+
+(rule (no-write-nushell-application n)
+  (match nix "(identifier) @n")
+  (text n "writeNushellApplication"))
+(lint no-write-nushell-application error
+  "new nushell scripts are fenced (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks); existing call sites are pinned in shell-allowlist.txt")

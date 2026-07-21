@@ -791,13 +791,13 @@
 (lint no-with-pkgs error
   "file-scope `with pkgs;` is banned; use explicit pkgs.foo qualifications")
 
-;; no-write-shell-application: writeShellApplication is banned. Use
-;; ix.writeNushellApplication instead.
+;; no-write-shell-application: writeShellApplication is banned (#3823).
+;; Write a compiled Rust tool instead (ix.rustWorkspace).
 (rule (no-write-shell-application n)
   (match nix "(identifier) @n")
   (text n "writeShellApplication"))
 (lint no-write-shell-application error
-  "writeShellApplication is banned; use ix.writeNushellApplication instead")
+  "writeShellApplication is banned (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks)")
 
 ;; no-write-shell-script: writeShellScript hand-rolls an UNCHECKED shell script
 ;; (no shellcheck, no declared runtime deps, the same gap that bans
@@ -812,13 +812,13 @@
 (lint no-write-shell-script error
   "writeShellScript is unchecked (no shellcheck, no declared deps); prefer a compiled Rust launcher/tool (ix.rustWorkspace, see packages/config-launch / packages/claude-hooks), else ix.writeNushellApplication / ix.writePythonApplication for logic, else ix.writeBashApplication (checked) for must-be-bash")
 
-;; no-write-shell-script-bin: writeShellScriptBin is banned. Use
-;; ix.writeNushellApplication instead.
+;; no-write-shell-script-bin: writeShellScriptBin is banned (#3823).
+;; Write a compiled Rust tool instead (ix.rustWorkspace).
 (rule (no-write-shell-script-bin n)
   (match nix "(identifier) @n")
   (text n "writeShellScriptBin"))
 (lint no-write-shell-script-bin error
-  "writeShellScriptBin is banned; use ix.writeNushellApplication instead")
+  "writeShellScriptBin is banned (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks)")
 
 ;; prefer-attrvalues-over-mapattrs-identity: `lib.mapAttrsToList (_: v: v) X`
 ;; is `builtins.attrValues X`. Drop the identity map.
