@@ -28,7 +28,6 @@
   nix-derivation-src,
   rnix-0-12-src,
   rnix-0-14-src,
-  ghostty,
   ghostty-src,
   mesa-src,
   # The flake's own source (`self`), carrying `.outPath` (a `-source` store
@@ -548,7 +547,6 @@
       goUnitFor
       rustWorkspaceFor
       clippy-src
-      ghostty
       zed-src
       ;
   };
@@ -572,12 +570,13 @@
       cargoUnitFor
       buildSvelteSite
       buildLibghosttyVt
-      ghostty
+      patchedSrcFor
       writeBashApplication
       macosSdk
       appleSdkToolchain
       pins
       ;
+    ghosttySrc = ghostty-src;
     rustToolchainFor = languages.rust.toolchain;
   };
   rustWorkspace = rustWorkspaceFor pkgs;

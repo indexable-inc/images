@@ -6,7 +6,6 @@
   goUnitFor,
   rustWorkspaceFor,
   clippy-src,
-  ghostty,
   zed-src,
 }: pkgs: let
   packageSystem = pkgs.stdenv.hostPlatform.system;
@@ -34,7 +33,6 @@
       pkgs
       packageSystem
       clippy-src
-      ghostty
       ixForPackages
       ;
     ix = ixForPackages;

@@ -1,17 +1,31 @@
-# libghostty-vt: ghostty's VT engine built as a standalone C library.
+# libghostty-vt: ghostty's VT engine built as a standalone C library, from the
+# PATCHED fork source (packages/ghostty/patches). The patch series includes
+# C-API additions -- per-cell OSC 8 hyperlink URIs (index#3835) -- that
+# `ix-vt-sys` binds, so the artifact every consumer links (this flake output,
+# the Rust workspace's unit graph, and indexable-inc/ix via
+# `index.packages.<system>.libghostty-vt`) must carry them.
 #
 # The build recipe (zon2nix-vendored deps, the `-Demit-lib-vt=true` zig build,
-# and the darwin SDK shim) lives in `lib/libghostty-vt.nix` so the Rust
+# and the darwin SDK shim) lives in `lib/build/libghostty-vt.nix` so the Rust
 # workspace can reuse the exact same artifact when linking `ix-vt-sys`. This
-# package is the thin flake-output wrapper plus a smoke test.
+# package is the thin flake-output wrapper plus a smoke test. `baseSource`
+# warms zig's content-addressed cache from the unpatched pin, so a
+# patch-series edit recompiles only what it touches.
 {
   ix,
   pkgs,
-  ghostty,
   ...
 }: let
   inherit (pkgs) lib;
-  package = ix.buildLibghosttyVt pkgs {ghosttySource = ghostty;};
+  source = ix.patchedSrc {
+    name = "ghostty";
+    src = ix.ghosttySrc;
+    patchDir = ix.paths.packagesRoot + "/ghostty/patches";
+  };
+  package = ix.buildLibghosttyVt pkgs {
+    ghosttySource = source;
+    baseSource = ix.ghosttySrc;
+  };
 
   # Confirm the build emitted the artifacts `ix-vt-sys` links against and the
   # headers `bindgen` parses, rather than re-asserting the build recipe.
@@ -31,6 +45,13 @@
       test -f ${package}/lib/libghostty-vt.a
       test -f ${package}/include/ghostty/vt.h
       test -d ${package}/include/ghostty/vt
+
+      # The patched header surface is what ix-vt-sys' checked-in bindings
+      # were generated from; assert the fork's C-API addition is present so
+      # a silent repoint to an unpatched source fails here, not at ix link
+      # time.
+      grep -q GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_LEN \
+        ${package}/include/ghostty/vt/render.h
 
       # A versioned self-contained shared library (libghostty-vt.<ver>.<ext>)
       # is what ix-vt-sys links; assert one exists rather than the bare

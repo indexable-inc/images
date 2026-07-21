@@ -313,28 +313,19 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
-    # `packages/tui/vt/libghostty-vt` owns the build. Pinned to the commit the
-    # local clone validated against; `requireZig` in `build.zig.zon` is exact
-    # minor (0.15.x), so the build uses `pkgs.zig_0_15`. The pinned tree ships
-    # `build.zig.zon.nix` (zon2nix output), which vendors every lazy Zig
-    # dependency with SRI hashes for a network-free build. Bump by repointing
-    # this rev and running `nix flake update ghostty`.
-    ghostty = {
-      url = "github:ghostty-org/ghostty/fd49716ea2084108aa098db390931c007495a1ab";
-      flake = false;
-    };
-
-    # Ghostty's terminal application, patched in-repo (packages/ghostty/patches,
-    # empty for now: index#3768 vendors the fork source and build; the
-    # surface-teardown fix -- killing the child process group on close_surface
-    # -- lands as a follow-up patch in this series). Distinct from the
-    # `ghostty` input above: that one pins a single rev unpatched, consumed
-    # only by `packages/tui/vt/libghostty-vt` for the VT-engine-only
-    # `-Demit-lib-vt` build. This input is the full application source that
-    # `packages/ghostty` builds against -- currently the same recipe, since
-    # the rest of ghostty's darwin core is not buildable in the sandbox (see
-    # `lib/build/libghostty-vt.nix`'s doc comment).
+    # Ghostty's full application source, patched in-repo
+    # (packages/ghostty/patches, the vendored fork of index#3768). The one
+    # ghostty input: `packages/ghostty` and `packages/tui/vt/libghostty-vt`
+    # (plus the Rust workspace's ix-vt link) all build the VT-engine-only
+    # `-Demit-lib-vt` subtree from this tree WITH the patch series applied --
+    # the series includes C-API additions (per-cell hyperlink URIs,
+    # index#3835) that ix-vt binds, so an unpatched build no longer links.
+    # The rest of ghostty's darwin core is not buildable in the sandbox (see
+    # `lib/build/libghostty-vt.nix`'s doc comment). `requireZig` in
+    # `build.zig.zon` is exact minor (0.15.x), so builds use `pkgs.zig_0_15`;
+    # the pinned tree ships `build.zig.zon.nix` (zon2nix output), which
+    # vendors every lazy Zig dependency with SRI hashes for a network-free
+    # build.
     #
     # Pinned BY REV (autoUpdate = false in lib/fork-packages.nix), same as
     # `nix-src`/`clippy-src`: ghostty's own `build.zig` changed, somewhere
@@ -404,7 +395,6 @@
     nix-derivation-src,
     rnix-0-12-src,
     rnix-0-14-src,
-    ghostty,
     ghostty-src,
     mesa-src,
     skills,
@@ -484,7 +474,6 @@
         nix-derivation-src
         rnix-0-12-src
         rnix-0-14-src
-        ghostty
         ghostty-src
         mesa-src
         ;

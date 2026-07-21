@@ -55,8 +55,8 @@ in
 
   Arguments:
   - `pkgs`: package set to build against; the artifact is host-system specific.
-  - `ghosttySource`: ghostty source tree (the `ghostty` flake input, or a
-    patched fork source). Must ship `build.zig`, `build.zig.zon`, and
+  - `ghosttySource`: ghostty source tree (in this repo always the patched
+    fork source: `ix.patchedSrc` over the `ghostty-src` input). Must ship `build.zig`, `build.zig.zon`, and
     `build.zig.zon.nix` (the zon2nix output that vendors every lazy Zig
     dependency with SRI hashes for a network-free build).
   - `baseSource`: optional. When set, zig's own `--cache-dir` (a
@@ -68,9 +68,8 @@ in
     builds per-crate, without needing a per-translation-unit Nix decomposition
     zig's build graph has no boundary for. `warmCache` is keyed on `baseSource`
     alone, so it survives every patch-series change and rebuilds only when the
-    upstream pin moves. Omit (the default) when `ghosttySource` never diverges
-    from `baseSource` -- the existing unpatched `packages/tui/vt/libghostty-vt`
-    consumer -- where warming a separate cache buys nothing.
+    upstream pin moves. Omit (the default) only when `ghosttySource` never
+    diverges from `baseSource`, where warming a separate cache buys nothing.
   - `version`: derivation version. Defaults to the value in `build.zig.zon`.
 
   The static archive does not bundle its C++ dependencies (`libhighway`,
@@ -177,7 +176,58 @@ in
 
       doCheck = false;
 
-      passthru = lib.optionalAttrs (warmCache != null) {inherit warmCache;};
+      passthru =
+        lib.optionalAttrs (warmCache != null) {inherit warmCache;}
+        // {
+          # Ghostty's own vt/vt_c module unit tests (`zig build test-lib-vt`).
+          # Unlike the full `zig build test` exe this step never goes through
+          # `deps.add()`, so it has no `/usr/bin/xcrun metal` dependency and
+          # runs inside the sandbox on every platform -- the one lane that
+          # executes fork-patch test additions to the VT engine (e.g. the
+          # per-cell hyperlink URI patch, index#3835).
+          unitTests = stdenv.mkDerivation {
+            pname = "libghostty-vt-unit-tests";
+            inherit version;
+
+            src = builtins.path {
+              name = "ghostty-source";
+              path = ghosttySource;
+            };
+
+            strictDeps = true;
+            nativeBuildInputs = commonNativeBuildInputs;
+            buildInputs = commonBuildInputs;
+
+            dontConfigure = true;
+            dontBuild = true;
+
+            installPhase = ''
+              # shell
+              runHook preInstall
+
+              ${seedGlobalCache}
+              mkdir -p "$TMPDIR/zig-local-cache"
+              ${zigWarmCache.seedFrom warmCache}
+
+              buildCores=1
+              if [ "''${enableParallelBuilding-1}" ]; then
+                buildCores="$NIX_BUILD_CORES"
+              fi
+
+              zig build test-lib-vt \
+                "-j$buildCores" \
+                --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
+                --cache-dir "$TMPDIR/zig-local-cache" \
+                -Dcpu=baseline \
+                -fsys=zlib --search-prefix ${pkgs.zlib} \
+                --summary all
+
+              mkdir -p "$out"
+
+              runHook postInstall
+            '';
+          };
+        };
 
       meta = {
         description = "Ghostty's terminal VT engine as a standalone C library (parser, screen, render state)";

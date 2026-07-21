@@ -692,6 +692,8 @@ pub enum GhosttyRenderStateRowCellsData {
     GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF = 4,
     GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR = 5,
     GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR = 6,
+    GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_LEN = 7,
+    GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_BUF = 8,
 }
 unsafe extern "C" {
     pub fn ghostty_render_state_row_cells_next(cells: GhosttyRenderStateRowCells_ptr) -> bool;

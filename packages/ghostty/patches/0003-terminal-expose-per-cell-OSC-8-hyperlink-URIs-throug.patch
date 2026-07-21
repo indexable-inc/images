@@ -1,0 +1,350 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Tue, 21 Jul 2026 08:21:29 -0700
+Subject: [PATCH] terminal: expose per-cell OSC 8 hyperlink URIs through the
+ render state
+
+The C API exposes only GHOSTTY_CELL_DATA_HAS_HYPERLINK (a bool) and the
+row-level GHOSTTY_ROW_DATA_HYPERLINK flag (which may have false
+positives), so an embedder rendering from the render state cannot learn
+a cell's actual link target: the URI lives in page memory
+(hyperlink_map -> hyperlink_set), unreachable through the value-typed
+GhosttyCell/GhosttyRow handles.
+
+Duplicate the resolved URI into RenderState.Cell during update() -- the
+same arena-copy treatment graphemes and styles already get, and the
+arena's own comment already names hyperlinks as an intended use -- and
+surface it through the row-cells C API as
+GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_LEN/_BUF, following
+the GRAPHEMES_LEN/_BUF two-call convention. The per-cell result is
+exact (only the row flag has false positives), so callers get an
+honest URI or nothing.
+
+Needed by ix-term (a libghostty-vt embedder) to render OSC 8 anchors
+as clickable links; any render-state consumer that wants clickable
+hyperlinks needs this surface.
+
+Refs indexable-inc/index#3835
+(patch authored by an AI agent via Claude Code, model Claude Sonnet)
+
+diff --git a/include/ghostty/vt/render.h b/include/ghostty/vt/render.h
+index 0a300dde0..b85674de2 100644
+--- a/include/ghostty/vt/render.h
++++ b/include/ghostty/vt/render.h
+@@ -530,6 +530,17 @@ typedef enum {
+    *  color, in which case the caller should use whatever default foreground
+    *  color it wants (e.g. the terminal foreground). */
+   GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR = 6,
++
++  /** The byte length of the cell's OSC 8 hyperlink URI (uint32_t).
++   *  Returns 0 if the cell has no hyperlink. Unlike the row-level
++   *  GHOSTTY_ROW_DATA_HYPERLINK flag this is exact: a nonzero length
++   *  means the URI resolved, never a false positive. */
++  GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_LEN = 7,
++
++  /** Write the cell's OSC 8 hyperlink URI into a caller-provided buffer
++   *  (uint8_t*). The buffer must be at least hyperlink_uri_len bytes; the
++   *  bytes are UTF-8 and not NUL-terminated. */
++  GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_BUF = 8,
+ } GhosttyRenderStateRowCellsData;
+ 
+ /**
+diff --git a/src/terminal/c/render.zig b/src/terminal/c/render.zig
+index 020dbc202..188851fb9 100644
+--- a/src/terminal/c/render.zig
++++ b/src/terminal/c/render.zig
+@@ -45,6 +45,7 @@ const RowCellsWrapper = struct {
+     raws: []const page.Cell,
+     graphemes: []const []const u21,
+     styles: []const Style,
++    hyperlink_uris: []const []const u8,
+ 
+     /// The color palette, needed to resolve palette-indexed background colors.
+     palette: *const colorpkg.Palette,
+@@ -401,6 +402,7 @@ pub fn row_cells_new(
+         .raws = undefined,
+         .graphemes = undefined,
+         .styles = undefined,
++        .hyperlink_uris = undefined,
+         .palette = undefined,
+     };
+     result.* = ptr;
+@@ -438,6 +440,15 @@ pub const RowCellsData = enum(c_int) {
+     bg_color = 5,
+     fg_color = 6,
+ 
++    /// The byte length of the cell's OSC 8 hyperlink URI.
++    /// Output type: uint32_t. 0 if the cell has no hyperlink.
++    hyperlink_uri_len = 7,
++
++    /// Write the cell's OSC 8 hyperlink URI bytes (UTF-8, not
++    /// NUL-terminated) into a caller-provided buffer of at least
++    /// hyperlink_uri_len bytes.
++    hyperlink_uri_buf = 8,
++
+     /// Output type expected for querying the data of the given kind.
+     pub fn OutType(comptime self: RowCellsData) type {
+         return switch (self) {
+@@ -447,6 +458,8 @@ pub const RowCellsData = enum(c_int) {
+             .graphemes_len => u32,
+             .graphemes_buf => u32,
+             .bg_color, .fg_color => colorpkg.RGB.C,
++            .hyperlink_uri_len => u32,
++            .hyperlink_uri_buf => u8,
+         };
+     }
+ };
+@@ -505,6 +518,19 @@ fn rowCellsGetTyped(
+                 buf[i] = cp;
+             }
+         },
++        .hyperlink_uri_len => {
++            if (!cell.hyperlink) {
++                out.* = 0;
++                return .success;
++            }
++            out.* = @intCast(cells.hyperlink_uris[x].len);
++        },
++        .hyperlink_uri_buf => {
++            if (!cell.hyperlink) return .success;
++            const uri = cells.hyperlink_uris[x];
++            const buf: [*]u8 = @ptrCast(out);
++            @memcpy(buf[0..uri.len], uri);
++        },
+         .bg_color => {
+             const s: Style = if (cell.hasStyling()) cells.styles[x] else .{};
+             const bg = s.bg(&cell, cells.palette) orelse return .invalid_value;
+@@ -593,6 +619,7 @@ fn rowGetTyped(
+                 .raws = cell_data.items(.raw),
+                 .graphemes = cell_data.items(.grapheme),
+                 .styles = cell_data.items(.style),
++                .hyperlink_uris = cell_data.items(.hyperlink_uri),
+                 .palette = it.palette,
+             };
+         },
+@@ -1385,3 +1412,136 @@ test "render: colors get supports truncated sized struct" {
+     try testing.expectEqual(state_colors.palette[1].cval(), colors.palette[1]);
+     try testing.expectEqual(sentinel, colors.palette[2]);
+ }
++
++test "render: row cells hyperlink uri" {
++    var terminal: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(
++        &lib_alloc.test_allocator,
++        &terminal,
++        .{
++            .cols = 80,
++            .rows = 24,
++            .max_scrollback = 10_000,
++        },
++    ));
++    defer terminal_c.free(terminal);
++
++    // Write an OSC 8 hyperlink whose anchor text differs from the URI.
++    const seq = "\x1b]8;;http://example.com\x1b\\LINK\x1b]8;;\x1b\\";
++    terminal_c.vt_write(terminal, seq, seq.len);
++
++    var state: RenderState = null;
++    try testing.expectEqual(Result.success, new(
++        &lib_alloc.test_allocator,
++        &state,
++    ));
++    defer free(state);
++
++    try testing.expectEqual(Result.success, update(state, terminal));
++
++    var it: RowIterator = null;
++    try testing.expectEqual(Result.success, row_iterator_new(
++        &lib_alloc.test_allocator,
++        &it,
++    ));
++    defer row_iterator_free(it);
++
++    try testing.expectEqual(Result.success, get(state, .row_iterator, @ptrCast(&it)));
++    try testing.expect(row_iterator_next(it));
++
++    var cells: RowCells = null;
++    try testing.expectEqual(Result.success, row_cells_new(
++        &lib_alloc.test_allocator,
++        &cells,
++    ));
++    defer row_cells_free(cells);
++
++    try testing.expectEqual(Result.success, row_get(it, .cells, @ptrCast(&cells)));
++
++    // Every cell of the anchor text carries the URI.
++    for (0..4) |x| {
++        try testing.expectEqual(Result.success, row_cells_select(
++            cells,
++            @intCast(x),
++        ));
++
++        var len: u32 = 0;
++        try testing.expectEqual(Result.success, row_cells_get(
++            cells,
++            .hyperlink_uri_len,
++            @ptrCast(&len),
++        ));
++        try testing.expectEqual(@as(u32, "http://example.com".len), len);
++
++        var buf: [64]u8 = undefined;
++        try testing.expectEqual(Result.success, row_cells_get(
++            cells,
++            .hyperlink_uri_buf,
++            @ptrCast(&buf),
++        ));
++        try testing.expectEqualStrings("http://example.com", buf[0..len]);
++    }
++
++    // The cell after the anchor has no hyperlink: len reads 0.
++    try testing.expectEqual(Result.success, row_cells_select(cells, 4));
++    var len: u32 = 99;
++    try testing.expectEqual(Result.success, row_cells_get(
++        cells,
++        .hyperlink_uri_len,
++        @ptrCast(&len),
++    ));
++    try testing.expectEqual(@as(u32, 0), len);
++}
++
++test "render: row cells hyperlink uri without any links" {
++    var terminal: terminal_c.Terminal = null;
++    try testing.expectEqual(Result.success, terminal_c.new(
++        &lib_alloc.test_allocator,
++        &terminal,
++        .{
++            .cols = 80,
++            .rows = 24,
++            .max_scrollback = 10_000,
++        },
++    ));
++    defer terminal_c.free(terminal);
++
++    terminal_c.vt_write(terminal, "plain", 5);
++
++    var state: RenderState = null;
++    try testing.expectEqual(Result.success, new(
++        &lib_alloc.test_allocator,
++        &state,
++    ));
++    defer free(state);
++
++    try testing.expectEqual(Result.success, update(state, terminal));
++
++    var it: RowIterator = null;
++    try testing.expectEqual(Result.success, row_iterator_new(
++        &lib_alloc.test_allocator,
++        &it,
++    ));
++    defer row_iterator_free(it);
++
++    try testing.expectEqual(Result.success, get(state, .row_iterator, @ptrCast(&it)));
++    try testing.expect(row_iterator_next(it));
++
++    var cells: RowCells = null;
++    try testing.expectEqual(Result.success, row_cells_new(
++        &lib_alloc.test_allocator,
++        &cells,
++    ));
++    defer row_cells_free(cells);
++
++    try testing.expectEqual(Result.success, row_get(it, .cells, @ptrCast(&cells)));
++    try testing.expect(row_cells_next(cells));
++
++    var len: u32 = 99;
++    try testing.expectEqual(Result.success, row_cells_get(
++        cells,
++        .hyperlink_uri_len,
++        @ptrCast(&len),
++    ));
++    try testing.expectEqual(@as(u32, 0), len);
++}
+diff --git a/src/terminal/render.zig b/src/terminal/render.zig
+index 09e0c6b93..7e1da05e1 100644
+--- a/src/terminal/render.zig
++++ b/src/terminal/render.zig
+@@ -223,6 +223,13 @@ pub const RenderState = struct {
+         /// The style data for the cell. This is undefined unless
+         /// the style_id is non-default on raw.
+         style: Style,
++
++        /// The OSC 8 hyperlink URI for the cell, duplicated out of page
++        /// memory (like grapheme/style above) so it stays valid after the
++        /// terminal updates. This is undefined unless `raw.hyperlink` is
++        /// set. An empty slice means the flag was set but the id resolved
++        /// to no entry, which callers should treat as "no hyperlink".
++        hyperlink_uri: []const u8,
+     };
+ 
+     // Dirty state.
+@@ -510,6 +517,7 @@ pub const RenderState = struct {
+             const arena_alloc = arena.allocator();
+             const cells_grapheme = cells_slice.items(.grapheme);
+             const cells_style = cells_slice.items(.style);
++            const cells_hyperlink = cells_slice.items(.hyperlink_uri);
+             for (page_cells, 0..) |*page_cell, x| {
+                 // Append assuming its a single-codepoint, styled cell
+                 // (most common by far).
+@@ -518,6 +526,20 @@ pub const RenderState = struct {
+                     page_cell.style_id,
+                 ).*;
+ 
++                // Duplicate the hyperlink URI out of page memory so render
++                // consumers can read the link target without dereferencing
++                // page pins (which are invalid once the terminal updates).
++                if (page_cell.hyperlink) {
++                    @branchHint(.unlikely);
++                    cells_hyperlink[x] = if (p.lookupHyperlink(page_cell)) |link_id|
++                        try arena_alloc.dupe(u8, p.hyperlink_set.get(
++                            p.memory,
++                            link_id,
++                        ).uri.slice(p.memory))
++                    else
++                        &.{};
++                }
++
+                 // Switch on our content tag to handle less likely cases.
+                 switch (page_cell.content_tag) {
+                     .codepoint => {
+@@ -1297,6 +1319,41 @@ test "linkCells" {
+     try testing.expectEqual(0, cells2.count());
+ }
+ 
++test "hyperlink uri duplicated per cell" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++
++    var t = try Terminal.init(alloc, .{
++        .cols = 10,
++        .rows = 5,
++    });
++    defer t.deinit(alloc);
++
++    var s = t.vtStream();
++    defer s.deinit();
++
++    var state: RenderState = .empty;
++    defer state.deinit(alloc);
++
++    // Create a hyperlink
++    s.nextSlice("\x1b]8;;http://example.com\x1b\\LINK\x1b]8;;\x1b\\");
++    try state.update(alloc, &t);
++
++    const cells = state.row_data.items(.cells)[0];
++    for (0..4) |x| {
++        const cell = cells.get(x);
++        try testing.expect(cell.raw.hyperlink);
++        try testing.expectEqualStrings("http://example.com", cell.hyperlink_uri);
++    }
++    try testing.expect(!cells.get(4).raw.hyperlink);
++
++    // The URI must survive the source terminal changing: overwrite the
++    // link on screen, then read the copy captured by the earlier update.
++    const first = cells.get(0).hyperlink_uri;
++    s.nextSlice("\x1b[H\x1b[2Jplain");
++    try testing.expectEqualStrings("http://example.com", first);
++}
++
+ test "string" {
+     const testing = std.testing;
+     const alloc = testing.allocator;
