@@ -7,6 +7,18 @@
 # fast-forward. WIP, detached heads, or a non-ff divergence are left untouched.
 set -euo pipefail
 
+# A 60-second cron must never kick off background repo maintenance: with
+# fetch.writeCommitGraph + gc.autoDetach + maintenance.auto enabled in the
+# global gitdefaults, every fetch here forked detached commit-graph writers
+# that overlapped across runs, collided on commit-graph-chain.lock, and piled
+# up 50+ concurrent gits (index#3831). Command-scope config outranks global,
+# so these apply to every git call below. Graph/gc upkeep stays with
+# interactive use.
+export GIT_CONFIG_COUNT=3
+export GIT_CONFIG_KEY_0=fetch.writeCommitGraph GIT_CONFIG_VALUE_0=false
+export GIT_CONFIG_KEY_1=maintenance.auto GIT_CONFIG_VALUE_1=false
+export GIT_CONFIG_KEY_2=gc.auto GIT_CONFIG_VALUE_2=0
+
 repos=(
   "$HOME/Projects/indexable-inc/ix"
   "$HOME/Projects/indexable-inc/index"
