@@ -321,7 +321,6 @@
   }
   {
     machineReadable = {
-
       topics = ["tooling"];
       text = ''
         Prefer structured output (`--json`) to scraping prose. A tool of ours

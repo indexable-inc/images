@@ -41,8 +41,7 @@ in
       (old.passthru or {})
       // {
         inherit workspace;
-      }
-;
+      };
     meta =
       (old.meta or {})
       // {
