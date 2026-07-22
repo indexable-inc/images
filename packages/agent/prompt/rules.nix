@@ -291,7 +291,37 @@
     };
   }
   {
+    jjMegamergeForks = {
+      topics = ["architecture" "workflow"];
+      text = ''
+        Fork repos are jj-maintained megamerges: every patch is a commit
+        whose parents are its true dependencies, the `ix-patched` bookmark
+        sits on the megamerge commit (tree = the full series applied
+        linearly, parents = the DAG heads), and the flake input pins that
+        commit, so consumers never need jj. jj rebases rewrite history, so
+        any rev flake.lock has ever pinned must stay reachable: every
+        bookmark push carries a permanent `refs/pins/<date>-<sha12>` ref in
+        the same operation that bumps the lock. Never push a conflicted jj
+        commit; git readers (GitHub, fetchers) cannot parse jj's conflict
+        encoding. Locally jj is the sanctioned frontend as a colocated
+        clone (`jj git init --colocate`); the remote stays plain git;
+        recover with `jj op log` / `jj op restore`, not reflog spelunking.
+        A bare `jj workspace add` workspace has no `.git`, so flake eval
+        falls back to the unfiltered path fetcher until the vendored jj
+        input scheme (nix#15651) lands in the nix fork.
+      '';
+      reason = ''
+        The 2026-07-22 megamerge migration replaced in-repo patch series
+        (dag.json + rebase-patches) with fork-repo commit DAGs. The pin-ref
+        rule exists because GitHub GCs commits reachable from no ref, which
+        would strand every previously locked megamerge; the conflicted
+        commit ban is jj's storage format, not etiquette.
+      '';
+    };
+  }
+  {
     machineReadable = {
+
       topics = ["tooling"];
       text = ''
         Prefer structured output (`--json`) to scraping prose. A tool of ours
