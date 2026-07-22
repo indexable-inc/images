@@ -234,6 +234,12 @@ jobs:
             || fail_loud "reading main ref failed"
           ready_sha=""
           if ! ready_sha="$(gh api "repos/${REPOSITORY}/git/ref/heads/${PIN_REF}" --jq '.object.sha')"; then
+            # gh api prints the HTTP error body to STDOUT, so the failed
+            # substitution still assigns the 404 JSON to ready_sha; clear it
+            # or the [ -n ] guard below feeds that JSON into the compare URL
+            # (every darwin-lane sweep failed this way until the first
+            # cache-ready-darwin publish, exactly the case the note covers).
+            ready_sha=""
             note "${PIN_REF} ref does not exist yet; nothing to compare"
           fi
           if [ -n "$ready_sha" ]; then
