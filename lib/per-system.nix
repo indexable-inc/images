@@ -1653,6 +1653,12 @@
             # `nix` command does not re-copy the tree through VCFS (ix
             # #1748/#1749/#1815). Its own check because it builds an image.
             base-image-nix-db = tests.baseImageNixDb;
+            # Holds the `nix.registry.index.to` construction against both
+            # shapes of `self` (narHash-bearing git consumption vs the
+            # path-locked submodule seam), the boundary that broke twice on
+            # 2026-07-22 (index#3981, fixed in #3988). Pure eval; its own
+            # check so a regression fails by name, not inside `eval`.
+            image-registry-pin = tests.imageRegistryPin;
             # The commented knob/env reference at the Home Manager consumption
             # site (index#3710) is asserted, at eval, against what the
             # claude-code wrapper actually accepts (functionArgs plus

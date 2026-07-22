@@ -15,6 +15,9 @@
   # flake; the pin is then omitted.
   self ? null,
 }: let
+  # The `nix.registry.index.to` construction, shared with the
+  # `image-registry-pin` check (tests/default.nix). See its doc comment.
+  registryPin = import ./registry-pin.nix {inherit lib;};
   /**
   One nixpkgs instance shared by every image evaluation. `lib.nixosSystem`
   otherwise instantiates a fresh nixpkgs PER node, and a consumer that
@@ -140,22 +143,12 @@
           #
           # `self.outPath` is the ORIGINAL `-source` path and carries string
           # context, so it roots into the image closure once (no duplicate
-          # copy — the #1748 trap). `self.narHash` locks the pin. Only this
-          # flake scope sees `self`, so it is plumbed down from `flake.nix`.
-          # `self.narHash` is absent when index is consumed as a path-locked
-          # flake input (ix's ./index submodule seam, ix#8142): path-type lock
-          # nodes carry no narHash, and recomputing via fetchTree is rejected
-          # in pure eval (the source is a lazy-tree subpath, index#3981). Pin
-          # without narHash on that seam: in-guest `nix run index#...` then
-          # re-ingests the baked source once (the #1748-era cost) instead of
-          # failing every consumer eval. Images published by index's own CI
-          # consume self via git and keep the locked, narHash-matched pin.
-          nix.registry.index.to =
-            {
-              type = "path";
-              path = self.outPath;
-            }
-            // lib.optionalAttrs (self ? narHash) {inherit (self) narHash;};
+          # copy — the #1748 trap). Only this flake scope sees `self`, so it
+          # is plumbed down from `flake.nix`. The pin's `narHash` is
+          # conditional — present locks the pin, absent tolerates the
+          # path-locked submodule seam (index#3981) — see ./registry-pin.nix;
+          # the `image-registry-pin` check holds both shapes.
+          nix.registry.index.to = registryPin self;
         }
         ++ [
           ./platform.nix
