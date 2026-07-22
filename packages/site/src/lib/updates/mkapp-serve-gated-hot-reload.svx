@@ -1,0 +1,33 @@
+---
+id: mkapp-serve-gated-hot-reload
+postedAt: 2026-07-22T12:00:00-07:00
+title: mkapp + Serve.app, check-gated hot reload for AI-built web apps
+tags: [kernel, mcp, agents, web]
+links:
+  - label: issue #4015
+    href: https://github.com/indexable-inc/index/issues/4015
+  - label: ix #8185
+    href: https://github.com/indexable-inc/ix/issues/8185
+---
+
+An agent building a web page for the user used to hand over a file, or worse,
+a screenshot. Now it hands over a live URL. `mkapp` scaffolds a Svelte 5 +
+Vite + TypeScript app whose store survives hot reloads (an
+`import.meta.hot` handoff plus a debounced sessionStorage mirror), with
+shadcn-style Button/Card/Skeleton primitives on the dashboard's Obsidian
+tokens and an AgentStatus strip that narrates what the agent is doing.
+
+The kernel's `Serve.app(dir)` runs `npm run dev` and a gate loop as
+supervised jobs. The agent edits the app's `staging/` tree only; when an
+edit settles (~300ms), the gate runs `npm run check:staging` (svelte-check
+plus tsc) and promotes green code into the live `src/`, which Vite
+hot-reloads without losing the store. A red check leaves the last good page
+up and records the compiler output where `Serve.status(dir)` shows it, so a
+typo never replaces a working page with a blank one.
+
+Once vite prints its port, the kernel writes `ESC ]5522;open-url;<url> BEL`
+to the ix-term session pts (or `/dev/tty`), and the terminal opens the app
+in its split-view doc pane (ix#8185). A new prompt rule tells agents to
+narrate through the store's status field, mark still-generating sections
+loading so skeletons show, and keep updating the page until the work is
+done.
