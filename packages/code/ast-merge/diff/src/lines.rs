@@ -173,7 +173,7 @@ struct SideCursor<'a> {
 }
 
 impl<'a> SideCursor<'a> {
-    fn new(hunks: &'a [Hunk]) -> Self {
+    const fn new(hunks: &'a [Hunk]) -> Self {
         Self {
             hunks,
             next: 0,
