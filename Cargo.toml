@@ -77,6 +77,7 @@ members = [
   "packages/minecraft/sync-managed",
   "packages/mirror",
   "packages/mynoise",
+  "packages/net-trace",
   "packages/nix/ix2nix",
   "packages/nix/ix2nix/wasm",
   "packages/nix/nix-web-monitor/parser",
