@@ -3,7 +3,10 @@ defmodule IxMcp.Memory do
   Durable agent memory over a weave store (append-only fact journal with
   Datalog-derived views), aliased in the workspace prelude as `Memory`.
   Every call is a one-shot `weave` CLI invocation against the store named
-  by the WEAVE_MEMORY_STORE environment variable; there is no daemon. A
+  by the WEAVE_MEMORY_STORE environment variable; no daemon owns the
+  store. The one resident process is `semantic/2`'s embedding recall
+  (`IxMcp.Memory.Semantic` keeps `weave recall --stdin` warm because
+  model load dominates its latency; it opens the store read-only). A
   host without the env set gets a loud error naming the knob and pays
   nothing otherwise.
 
@@ -19,7 +22,10 @@ defmodule IxMcp.Memory do
   edited: newer facts win, `retract/1` kills a wrong one.
   """
 
+  alias IxMcp.Memory.Semantic
+
   @recall_limit 20
+  @semantic_limit 8
 
   @doc """
   Save a memory: `Memory.remember("slug", "hook", type: "project",
@@ -104,22 +110,45 @@ defmodule IxMcp.Memory do
 
     attrs = attrs(Enum.map(hits, & &1["E"]))
 
-    for %{"E" => entity, "D" => desc, "I" => id, "S" => seq, "T" => time} <-
-          Enum.uniq_by(hits, & &1["E"]) do
-      entity_attrs = Map.get(attrs, entity, %{})
+    for %{"E" => entity} = row <- Enum.uniq_by(hits, & &1["E"]) do
+      enriched_row(entity, row, Map.get(attrs, entity, %{}))
+    end
+  end
 
-      %{
-        entity: entity,
-        id: id,
-        seq: seq,
-        time: DateTime.from_unix!(time, :millisecond),
-        desc: desc,
-        type: newest_value(entity_attrs, "mem/type"),
-        topic: live_values(entity_attrs, "mem/topic"),
-        handle: newest_value(entity_attrs, "mem/handle"),
-        body: body_text(entity_attrs),
-        verified_at: newest_value(entity_attrs, "mem/verified-at")
-      }
+  @doc """
+  Embedding-similarity recall: ranks entities by exact cosine between the
+  query and their composed documents (qwen3-embedding-4b by default,
+  WEAVE_EMBED_MODEL overrides), so it finds what `recall/2` misses when
+  no word matches. `limit: 8` entry points by default.
+
+  Rows are `recall/2`'s enriched shape plus `similarity` (cosine, higher
+  is closer), best first. A hit without `mem/desc` (the store embeds
+  non-`mem:` entities too) keeps `entity` and `similarity`, borrows the
+  embedded document's label as `desc`, and carries the fact-derived
+  fields as nil. Superseded memories never surface: weave drops
+  `mem/supersedes` targets from the search matrix.
+
+  The first call pays the model load (~1.2s warm-cache); later calls
+  ride the resident `weave recall --stdin` process (~76ms, see
+  `IxMcp.Memory.Semantic`). Needs a weave with semantic recall
+  (indexable-inc/weave#339).
+  """
+  @spec semantic(String.t(), keyword()) :: [map()]
+  def semantic(query, opts \\ []) do
+    opts = Keyword.validate!(opts, limit: @semantic_limit)
+    entries = Semantic.entries(query, Keyword.fetch!(opts, :limit))
+    entities = Enum.map(entries, & &1["entity"])
+    descs = desc_rows(entities)
+    attrs = attrs(entities)
+
+    for %{"entity" => entity, "similarity" => similarity} = entry <- entries do
+      row =
+        case descs do
+          %{^entity => desc_row} -> enriched_row(entity, desc_row, Map.get(attrs, entity, %{}))
+          _ -> label_row(entity, entry["label"])
+        end
+
+      Map.put(row, :similarity, similarity)
     end
   end
 
@@ -189,15 +218,9 @@ defmodule IxMcp.Memory do
   defp attrs([]), do: %{}
 
   defp attrs(entities) do
-    anchor =
-      entities
-      |> Enum.uniq()
-      |> Enum.map_join("|", &Regex.escape/1)
-      |> then(&dl_string("^(?:#{&1})$"))
-
     rows =
       query("""
-      attr(S, E, A, V) :- fact(E, A, V), fact_id(I, E, A, V), fact_seq(I, S), regex(E, "#{anchor}"), regex(A, "^mem/").
+      attr(S, E, A, V) :- fact(E, A, V), fact_id(I, E, A, V), fact_seq(I, S), regex(E, "#{anchor(entities)}"), regex(A, "^mem/").
       ?- attr(S, E, A, V).
       """)
 
@@ -206,6 +229,67 @@ defmodule IxMcp.Memory do
     |> Map.new(fn {entity, entity_rows} ->
       {entity, Enum.group_by(entity_rows, & &1["A"], &{&1["S"], &1["V"]})}
     end)
+  end
+
+  # The `mem/desc` anchor rows (id, seq, time, hook) for exactly these
+  # entities, keyed by entity: semantic hits arrive as bare ids, unlike
+  # recall's regex hits, which carry their row already.
+  @spec desc_rows([String.t()]) :: %{String.t() => map()}
+  defp desc_rows([]), do: %{}
+
+  defp desc_rows(entities) do
+    rows =
+      query("""
+      row(S, T, I, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S), fact_time(I, T), regex(E, "#{anchor(entities)}").
+      ?- row(S, T, I, E, D).
+      """)
+
+    Map.new(rows, &{&1["E"], &1})
+  end
+
+  # The rich row recall/2 and semantic/2 share: identity fields from the
+  # mem/desc anchor fact, the rest from the entity's live mem/ attributes.
+  @spec enriched_row(String.t(), map(), %{String.t() => [{integer(), String.t()}]}) :: map()
+  defp enriched_row(entity, %{"D" => desc, "I" => id, "S" => seq, "T" => time}, entity_attrs) do
+    %{
+      entity: entity,
+      id: id,
+      seq: seq,
+      time: DateTime.from_unix!(time, :millisecond),
+      desc: desc,
+      type: newest_value(entity_attrs, "mem/type"),
+      topic: live_values(entity_attrs, "mem/topic"),
+      handle: newest_value(entity_attrs, "mem/handle"),
+      body: body_text(entity_attrs),
+      verified_at: newest_value(entity_attrs, "mem/verified-at")
+    }
+  end
+
+  # Same shape for a semantic hit that has no mem/desc fact, so callers
+  # can treat every row uniformly.
+  @spec label_row(String.t(), String.t() | nil) :: map()
+  defp label_row(entity, label) do
+    %{
+      entity: entity,
+      id: nil,
+      seq: nil,
+      time: nil,
+      desc: label,
+      type: nil,
+      topic: [],
+      handle: nil,
+      body: nil,
+      verified_at: nil
+    }
+  end
+
+  # Regex matching exactly these entity ids, escaped for a Datalog string.
+  @spec anchor([String.t()]) :: String.t()
+  defp anchor(entities) do
+    entities
+    |> Enum.uniq()
+    |> Enum.map_join("|", &Regex.escape/1)
+    |> then(&dl_string("^(?:#{&1})$"))
   end
 
   @spec body_text(%{String.t() => [{integer(), String.t()}]}) :: String.t() | nil
@@ -263,18 +347,24 @@ defmodule IxMcp.Memory do
     "#{System.get_env("USER") || "unknown"}@#{host}"
   end
 
+  @doc false
+  @spec store!() :: String.t()
+  def store! do
+    System.get_env("WEAVE_MEMORY_STORE") ||
+      raise "WEAVE_MEMORY_STORE is unset: point it at a weave store " <>
+              "(create one with `weave --store <dir> init`) to enable Memory"
+  end
+
+  @doc false
+  @spec weave_bin!() :: String.t()
+  def weave_bin! do
+    System.get_env("WEAVE_BIN") || System.find_executable("weave") ||
+      raise "weave binary not found: install weave on PATH or set WEAVE_BIN"
+  end
+
   @spec run!([String.t()]) :: String.t()
   defp run!(args) do
-    store =
-      System.get_env("WEAVE_MEMORY_STORE") ||
-        raise "WEAVE_MEMORY_STORE is unset: point it at a weave store " <>
-                "(create one with `weave --store <dir> init`) to enable Memory"
-
-    bin =
-      System.get_env("WEAVE_BIN") || System.find_executable("weave") ||
-        raise "weave binary not found: install weave on PATH or set WEAVE_BIN"
-
-    case System.cmd(bin, ["--store", store] ++ args, stderr_to_stdout: true) do
+    case System.cmd(weave_bin!(), ["--store", store!()] ++ args, stderr_to_stdout: true) do
       {out, 0} -> out
       {out, code} -> raise "weave #{Enum.join(args, " ")} exited #{code}: #{out}"
     end

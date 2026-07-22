@@ -97,7 +97,11 @@ defmodule IxMcp.MCP.Tools do
                                             walks. Recall with
                                             Memory.recall("regex") -- whole-word
                                             rows with id, time, type, topic,
-                                            handle, body -- or raw Datalog via
+                                            handle, body -- with
+                                            Memory.semantic("question") -- the
+                                            same rows plus similarity, ranked by
+                                            embedding when no word matches --
+                                            or raw Datalog via
                                             Memory.query/1. Memory.verify(slug)
                                             records a re-check receipt;
                                             Memory.retract(id) kills a wrong
