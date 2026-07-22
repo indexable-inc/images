@@ -61,7 +61,20 @@ defmodule IxMcp.Evaluator do
     line = Keyword.get(meta, :line, 1)
     column = Keyword.get(meta, :column, 1)
     rendered_message = render_parse_message(message, token)
-    "cell:#{line}:#{column}: #{rendered_message}"
+    "cell:#{line}:#{column}: #{rendered_message}#{heredoc_hint(rendered_message)}"
+  end
+
+  # Agents writing cells with embedded source keep opening `"""text"""` on one
+  # line, which Elixir forbids; each occurrence costs a full cell retry
+  # (#3914). The compiler's two messages for the mistake are stable, so match
+  # them exactly instead of rewriting errors broadly.
+  @heredoc_hint "\nhint: Elixir heredocs need a newline after the opening triple quote; " <>
+                  "for inline strings use ~S(...) or ~s(...)"
+
+  defp heredoc_hint("heredoc allows only whitespace characters" <> _), do: @heredoc_hint
+
+  defp heredoc_hint(message) do
+    if message =~ "(for heredoc starting at", do: @heredoc_hint, else: ""
   end
 
   # `Code.string_to_quoted/2` reports the message either as a binary or as a

@@ -49,6 +49,31 @@ defmodule IxMcp.EvaluatorTest do
     refute :x in IxMcp.Workspace.names()
   end
 
+  test "heredoc parse errors carry the exact hint; other parse errors do not" do
+    hint = "hint: Elixir heredocs need a newline after the opening triple quote"
+
+    {summary, _out} = Jobs.run(~s("""inline"""), intent: "inline heredoc")
+    assert summary.status == :failed
+    assert summary.result =~ "heredoc allows only whitespace"
+    assert summary.result =~ hint
+
+    {summary, _out} = Jobs.run(~s("""\nunterminated), intent: "unterminated heredoc")
+    assert summary.status == :failed
+    assert summary.result =~ "missing terminator"
+    assert summary.result =~ hint
+
+    # An ordinary syntax error and an unterminated plain string ("for string",
+    # not "for heredoc") must stay hint-free.
+    {summary, _out} = Jobs.run("x = ) nonsense", intent: "ordinary parse error")
+    assert summary.status == :failed
+    refute summary.result =~ "hint:"
+
+    {summary, _out} = Jobs.run(~s("unterminated), intent: "unterminated string")
+    assert summary.status == :failed
+    assert summary.result =~ "missing terminator"
+    refute summary.result =~ "hint:"
+  end
+
   test "runtime errors report a formatted exception and keep prior bindings" do
     {_summary, _out} = Jobs.run("kept = :safe", intent: "bind")
     {summary, _out} = Jobs.run("1 / 0", intent: "raise")
