@@ -635,7 +635,7 @@
         Publish substantial work as a site update:
         `packages/site/src/lib/updates/<slug>.svx`, frontmatter `id`,
         `postedAt`, `title`, `links`, `tags`; mdsvex, so fence `{` and
-        `<...>`. It renders at `https://indexable-inc.github.io/index/<slug>`;
+        `<...>`. It renders at `https://ix.dev/updates/<slug>`;
         post that link to Slack `#general` with AI attribution.
       '';
       reason = ''

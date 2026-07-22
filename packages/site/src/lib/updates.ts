@@ -58,7 +58,7 @@ export const siteUpdates: SiteUpdate[] = Object.entries(modules)
   })
   .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt));
 
-export const siteUrl = 'https://indexable-inc.github.io/index/';
+export const siteUrl = 'https://ix.dev/';
 export const siteFeedUrl = `${siteUrl}feed.xml`;
 export const siteIntro =
   'Agents made writing code cheap; waiting on review queues and upstreams is now the expensive part. index is one open monorepo where every change lands now and reaches everyone: packages, NixOS modules, VM images, patched toolchains, and the agent infrastructure that ties them together.';

@@ -18,11 +18,12 @@ const config = {
       precompress: false,
       strict: true
     }),
-    // Site is served at https://indexable-inc.github.io/index/, so every
-    // emitted URL needs the `/index` prefix. Override with BASE_PATH="" for
-    // user.github.io-style deployments or a custom domain.
+    // No deployment serves this app under a path prefix: GitHub Pages (the
+    // only consumer of the old `/index` base) is gone (#3975, #3978), and
+    // ix.dev serves this package's content at the domain root via the web
+    // app in the ix repo. Override with BASE_PATH for a prefixed deployment.
     paths: {
-      base: process.env.BASE_PATH ?? '/index'
+      base: process.env.BASE_PATH ?? ''
     }
   }
 };

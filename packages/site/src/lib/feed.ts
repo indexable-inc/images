@@ -10,8 +10,9 @@ import {
 
 // RSS 2.0 builder for the updates feed. Lives in the library (not the
 // feed.xml route) so ix.dev renders the same feed from the same
-// implementation; the defaults reproduce the github.io output byte for
-// byte, and a consumer overrides `siteUrl` to emit its own permalinks.
+// implementation; the defaults reproduce the live ix.dev output, and a
+// consumer serving the content elsewhere overrides `siteUrl` to emit its
+// own permalinks.
 export type FeedOptions = {
   // Absolute site root with a trailing slash; entry permalinks append ids.
   siteUrl?: string;
