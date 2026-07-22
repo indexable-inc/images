@@ -20,6 +20,7 @@ if IPHONE_SRC.is_dir() and str(IPHONE_SRC) not in sys.path:
     sys.path.insert(0, str(IPHONE_SRC))
 
 import iphone
+from type_hint_support import assert_type_hints_explicit
 
 # Public callables = everything exported except the error class.
 _PUBLIC_FUNCS = [
@@ -44,17 +45,7 @@ def test_public_funcs_are_async() -> None:
 
 
 def test_type_hints_explicit() -> None:
-    # Mirrors the ruff ANN gate: every public function fully annotates its params
-    # and return type.
-    for func in _PUBLIC_FUNCS:
-        sig = inspect.signature(func)
-        assert sig.return_annotation is not inspect.Signature.empty, (
-            f"{func.__name__} missing return annotation"
-        )
-        for param in sig.parameters.values():
-            assert param.annotation is not inspect.Parameter.empty, (
-                f"{func.__name__}({param.name}) missing annotation"
-            )
+    assert_type_hints_explicit(_PUBLIC_FUNCS)
 
 
 def test_pmd3_argv_resolves() -> None:

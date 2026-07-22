@@ -5,9 +5,11 @@
 //! by every unibind NIF library in the node, the [`spawn_reply`] plumbing
 //! that runs an `async fn` and messages the calling process, and the
 //! [`spawn_stream`] plumbing that drives a [`unibind_runtime::UniStream`]
-//! under consumer demand. User crates never name this crate in their own
-//! code (streams are `UniStream<T>` from `unibind-runtime`, shared with
-//! every backend); everything here is called by generated code.
+//! under consumer demand. Aside from [`ensure_sigchld_default`], which a NIF
+//! that spawns OS child processes calls by hand before its first spawn, user
+//! crates never name this crate in their own code (streams are `UniStream<T>`
+//! from `unibind-runtime`, shared with every backend); the rest is called by
+//! generated code.
 //!
 //! # Wire protocol
 //!
@@ -32,3 +34,21 @@ mod stream;
 pub use reply::{InFlight, Never, spawn_reply};
 pub use runtime::runtime;
 pub use stream::{StreamHandle, grant, spawn_stream};
+
+/// Restore `SIGCHLD` to its default disposition, once per process.
+///
+/// The BEAM's main VM process ignores `SIGCHLD` (its ports fork from
+/// `erl_child_setup`, so the VM expects to own no children), and `SIG_IGN`
+/// auto-reaps a NIF's own child processes before it can `waitpid` their exit
+/// statuses (`ECHILD`). A NIF that spawns OS child processes and reaps them
+/// itself calls this before its first spawn: with `erl_child_setup` in the
+/// picture the VM process has no other children to reap.
+pub fn ensure_sigchld_default() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: signal(2) with a standard disposition; no handler code runs.
+        unsafe {
+            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+        }
+    });
+}

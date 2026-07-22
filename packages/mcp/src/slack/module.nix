@@ -94,6 +94,10 @@
     name = "ix-mcp-slack-test";
     path = testsRoot + "/test_slack.py";
   };
+  typeHintSupport = builtins.path {
+    name = "ix-mcp-slack-type-hint-support";
+    path = testsRoot + "/type_hint_support.py";
+  };
   slackTests =
     pkgs.runCommand "ix-mcp-slack-tests"
     {
@@ -104,6 +108,7 @@
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
       cp ${slackTestSource} "$TMPDIR/test_slack.py"
+      cp ${typeHintSupport} "$TMPDIR/type_hint_support.py"
       ${lib.getExe slackTestPython} -m pytest "$TMPDIR/test_slack.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp slack tests failed:" >&2
         cat stdout stderr >&2

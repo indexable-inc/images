@@ -20,6 +20,12 @@
         name = "ix-mcp-weave-test";
         path = ./test_weave.py;
       };
+      # Shared pytest fixtures for test_weave.py and the fabric tests that run
+      # it; fabricTests copies this in as conftest.py (src/fabric/module.nix).
+      passthru.ixConftestSource = builtins.path {
+        name = "ix-mcp-weave-conftest";
+        path = ./conftest.py;
+      };
       meta.description = "Weave 2 async client bundled into the ix-mcp interpreter";
     }
     ''

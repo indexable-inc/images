@@ -13,9 +13,9 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
-libc.workspace = true
 plumb-core.workspace = true
 serde.workspace = true
 rustler.workspace = true
 serde_json.workspace = true
 unibind = { workspace = true, features = ["ex"] }
+unibind-ex-runtime.workspace = true

@@ -52,19 +52,6 @@ const SHIMMER_PERIOD: Duration = Duration::from_millis(2000);
 /// lock into one motion.
 const BOB_PERIOD: Duration = Duration::from_millis(2600);
 
-/// Open the orb's click URL with the platform opener, detached so the overlay
-/// never blocks on the launch. A spawn failure is reported but not fatal.
-fn open_url(url: &str) {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
-        eprintln!("xp-orb-overlay: failed to open {url}: {e}");
-    }
-}
-
 struct WinState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -335,7 +322,7 @@ impl ApplicationHandler<Orb> for App {
                     false
                 };
                 if clicked && !self.orb.url.trim().is_empty() {
-                    open_url(&self.orb.url);
+                    overlay_core::open_url("xp-orb-overlay", &self.orb.url);
                 }
             }
             WindowEvent::MouseInput {

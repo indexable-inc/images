@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import sys
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -185,20 +185,6 @@ def test_result_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # --- record / spool (durable-local-first, index#3418) ---------------------------
-
-
-from weave import spool as weave_spool
-
-
-@pytest.fixture(autouse=True)
-def _spool_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """Every test spools under its own tmp dir; teardown joins flusher
-    threads BEFORE monkeypatched transports revert (a live flusher must
-    never fall back to a real URL)."""
-    monkeypatch.setenv("WEAVE_SPOOL", str(tmp_path / "spool"))
-    yield tmp_path / "spool"
-    weave_spool.close_all()
-    weave_spool._down_urls.clear()
 
 
 def _journal_transport(monkeypatch: pytest.MonkeyPatch, *, down: dict[str, bool]) -> tuple[list[tuple[str, str, Any]], dict[str, bytes]]:

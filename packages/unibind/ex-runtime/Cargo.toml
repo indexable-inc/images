@@ -9,6 +9,7 @@ description = "BEAM-side support for unibind's rustler backend: the shared tokio
 workspace = true
 
 [dependencies]
+libc.workspace = true
 rustler.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 unibind-runtime.workspace = true

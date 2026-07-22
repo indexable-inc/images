@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
-libc.workspace = true
 rustler.workspace = true
 tui.workspace = true
 unibind = { workspace = true, features = ["ex"] }
+unibind-ex-runtime.workspace = true

@@ -9034,12 +9034,12 @@ dependencies = [
 name = "plumb-ex"
 version = "0.1.0"
 dependencies = [
- "libc",
  "plumb-core",
  "rustler",
  "serde",
  "serde_json",
  "unibind",
+ "unibind-ex-runtime",
 ]
 
 [[package]]
@@ -13181,10 +13181,10 @@ dependencies = [
 name = "tui-ex"
 version = "0.1.0"
 dependencies = [
- "libc",
  "rustler",
  "tui",
  "unibind",
+ "unibind-ex-runtime",
 ]
 
 [[package]]
@@ -13444,6 +13444,7 @@ name = "unibind-ex-runtime"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "libc",
  "rustler",
  "tokio",
  "unibind-runtime",

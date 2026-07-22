@@ -67,6 +67,9 @@
   # no other derivation runs them. The file is weave's, riding its module drv
   # as passthru (src/weave/module.nix).
   weaveTestSource = weaveModule.ixTestSource;
+  # Shared spool-teardown fixture, copied in as conftest.py so both
+  # test_fabric.py and test_weave.py pick it up (src/weave/conftest.py).
+  weaveConftestSource = weaveModule.ixConftestSource;
   fabricTests =
     pkgs.runCommand "ix-mcp-fabric-tests"
     {
@@ -82,6 +85,7 @@
       mkdir -p "$HOME"
       cp ${fabricTestSource} "$TMPDIR/test_fabric.py"
       cp ${weaveTestSource} "$TMPDIR/test_weave.py"
+      cp ${weaveConftestSource} "$TMPDIR/conftest.py"
       ${lib.getExe fabricTestPython} -m pytest "$TMPDIR/test_fabric.py" "$TMPDIR/test_weave.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp fabric tests failed:" >&2
         cat stdout stderr >&2

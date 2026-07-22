@@ -10,7 +10,6 @@ to NotionError mapping.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -25,6 +24,7 @@ if NOTION_SRC.is_dir() and str(NOTION_SRC) not in sys.path:
     sys.path.insert(0, str(NOTION_SRC))
 
 import notion
+from type_hint_support import assert_type_hints_explicit
 
 # Public callables = everything exported except the error class and the model.
 _NON_CALLABLE = {"NotionError", "Page"}
@@ -46,17 +46,7 @@ def test_public_funcs_are_async() -> None:
 
 
 def test_type_hints_explicit() -> None:
-    # Mirrors the ruff ANN gate: every public function fully annotates its params
-    # and return type.
-    for func in _PUBLIC_FUNCS:
-        sig = inspect.signature(func)
-        assert sig.return_annotation is not inspect.Signature.empty, (
-            f"{func.__name__} missing return annotation"
-        )
-        for pname, param in sig.parameters.items():
-            assert param.annotation is not inspect.Parameter.empty, (
-                f"{func.__name__}({pname}) missing annotation"
-            )
+    assert_type_hints_explicit(_PUBLIC_FUNCS)
 
 
 def _install_handler(

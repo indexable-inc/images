@@ -83,20 +83,6 @@ fn now_unix() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
-/// Open a bar's click URL with the platform's opener (a URL, file, or any URI it
-/// accepts), detached so the overlay never blocks on the browser launch. A spawn
-/// failure is reported but not fatal: a bad URL should not take down the HUD.
-fn open_url(url: &str) {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
-        eprintln!("bossbar-overlay: failed to open {url}: {e}");
-    }
-}
-
 /// One bar's window and its surface.
 struct BarWin {
     window: Arc<Window>,
@@ -663,7 +649,7 @@ impl ApplicationHandler<Vec<BossBar>> for App {
                     (clicked && !win.bar.url.trim().is_empty()).then(|| win.bar.url.clone())
                 });
                 if let Some(url) = url {
-                    open_url(&url);
+                    overlay_core::open_url("bossbar-overlay", &url);
                 }
             }
             WindowEvent::MouseInput {
