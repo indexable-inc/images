@@ -33,6 +33,10 @@ As a flake input:
 
 Supported platforms: `aarch64-darwin` and `x86_64-linux`.
 
+A binary installed by the script updates itself in place with `ix update`. A
+Nix-managed binary lives in the read-only store and is refused: update the
+`ix-cli` flake input or profile instead.
+
 ## Mental model
 
 - **You own VMs.** A VM is a boot image wrapped in an ix boundary: networking,
@@ -84,6 +88,7 @@ actions show as `verb <action>`.
 | Secrets | `secret <set\|check\|ls\|rm>` | Store write-only secrets; `set` reads the value from a prompt/stdin/file, never the command line. |
 | Account | `login` | Sign in through the ix website; also switches profiles. |
 | | `billing <status\|top-up\|usage>` | View balance, add funds, inspect usage. |
+| | `update` | Replace this binary with the latest published release (script installs only; Nix installs update through the flake). |
 | Federated | `resources <ls\|get\|act\|attach>` | Drive remote federated TUI resources (agent terminals) over QUIC. |
 
 Hidden verbs exist for debugging (`doctor`, `reload`, `sysrq`, `trace`, `config`,
