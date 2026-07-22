@@ -140,8 +140,21 @@ struct SwitchSpec {
 #[derive(clap::Subcommand)]
 enum SwitchAction {
     /// Build the configuration and activate it.
-    Switch(SwitchArgs),
-    /// Build the configuration only, without activating.
+    Switch {
+        #[command(flatten)]
+        args: SwitchArgs,
+
+        /// Switch even if the flake directory has uncommitted git changes.
+        ///
+        /// Without this a dirty tree (any `git status --porcelain` output,
+        /// untracked files included) aborts the switch before anything builds:
+        /// Nix copies dirty tracked files into the eval, so switching from a
+        /// dirty repo deploys uncommitted WIP with no record of what ran.
+        #[arg(long)]
+        allow_dirty: bool,
+    },
+    /// Build the configuration only, without activating. Never guarded: a
+    /// build activates nothing, so a dirty tree deploys nothing.
     Build(SwitchArgs),
 }
 
@@ -771,9 +784,9 @@ async fn build_job(command: NwmCommand) -> Result<Job> {
 }
 
 async fn build_switch_job(kind: SwitchKind, spec: SwitchSpec) -> Result<Job> {
-    let (args, do_switch) = match spec.action {
-        SwitchAction::Switch(args) => (args, true),
-        SwitchAction::Build(args) => (args, false),
+    let (args, do_switch, allow_dirty) = match spec.action {
+        SwitchAction::Switch { args, allow_dirty } => (args, true, allow_dirty),
+        SwitchAction::Build(args) => (args, false, false),
     };
     // `dir#name` overrides the configuration name; a bare value is the flake dir.
     let (flake_dir, name_override) = args.flake.map_or_else(
@@ -783,6 +796,11 @@ async fn build_switch_job(kind: SwitchKind, spec: SwitchSpec) -> Result<Job> {
             None => (value, None),
         },
     );
+    // Guard a switch (not a build) while planning, before the update, build,
+    // and activation phases run and before the web UI even starts.
+    if do_switch && !allow_dirty {
+        ensure_clean_flake_dir(&flake_dir).await?;
+    }
     let config_name = match name_override {
         Some(name) => name,
         None => match kind {
@@ -809,6 +827,38 @@ async fn build_switch_job(kind: SwitchKind, spec: SwitchSpec) -> Result<Job> {
             update: args.update,
         }),
     })
+}
+
+/// Refuse to switch from a dirty flake tree. Nix copies dirty tracked files
+/// into the eval, so a switch from a dirty repo silently deploys uncommitted
+/// WIP; untracked files count because they are one `git add` away from the
+/// same. Any `git status --porcelain` output at all is dirty. A flake dir that
+/// is not a git work tree (a plain directory or a remote flake ref) has no
+/// working tree to be dirty, so it is not guarded; `--allow-dirty` is the
+/// explicit override.
+async fn ensure_clean_flake_dir(flake_dir: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["-C", flake_dir, "status", "--porcelain"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .with_context(|| format!("running `git -C {flake_dir} status --porcelain`"))?;
+    // `git status` exits nonzero when `flake_dir` is not a git work tree
+    // (or not a local directory at all); that flake has nothing to guard.
+    if !output.status.success() {
+        return Ok(());
+    }
+    let status = String::from_utf8_lossy(&output.stdout);
+    let status = status.trim_end();
+    if status.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "flake dir `{flake_dir}` has uncommitted changes, and a switch would \
+         silently deploy them (Nix copies the dirty tree into the eval); \
+         commit or stash first, or pass --allow-dirty to switch anyway:\n\
+         {status}"
+    );
 }
 
 /// Run a planned job to completion and return its exit code.
@@ -1538,6 +1588,94 @@ mod tests {
             panic!("expected the external passthrough");
         };
         assert_eq!(nix_args, ["build", ".#hello"]);
+    }
+
+    /// A scratch git repository under the temp dir, isolated from the user's
+    /// git config. No commit is needed: `git status --porcelain` works (and
+    /// prints nothing) in a fresh repo.
+    fn scratch_git_repo(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("create scratch repo dir");
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", &dir)
+            .output()
+            .expect("git init runs");
+        assert!(init.status.success(), "git init failed: {init:?}");
+        dir
+    }
+
+    /// The switch dirty-tree guard: any `git status --porcelain` output at all
+    /// (an untracked file is enough) must abort with the flake dir and the
+    /// status listing in the error, and must name the `--allow-dirty` override.
+    #[tokio::test]
+    async fn switch_guard_rejects_a_dirty_flake_tree() {
+        let dir = scratch_git_repo("nwm-dirty-guard-dirty");
+        std::fs::write(dir.join("wip.nix"), b"{ }\n").expect("write untracked file");
+
+        let error = ensure_clean_flake_dir(dir.to_str().expect("utf-8 path"))
+            .await
+            .expect_err("an untracked file must trip the guard");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(dir.to_str().expect("utf-8 path")),
+            "error names the flake dir: {message}"
+        );
+        assert!(
+            message.contains("wip.nix"),
+            "error lists the status: {message}"
+        );
+        assert!(
+            message.contains("--allow-dirty"),
+            "error names the override: {message}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The guard must stay quiet for a clean work tree and for a flake dir
+    /// that is no git repo at all (a plain directory, or a remote flake ref).
+    #[tokio::test]
+    async fn switch_guard_passes_clean_trees_and_non_repos() {
+        let clean = scratch_git_repo("nwm-dirty-guard-clean");
+        ensure_clean_flake_dir(clean.to_str().expect("utf-8 path"))
+            .await
+            .expect("a clean tree passes");
+        std::fs::remove_dir_all(&clean).ok();
+
+        let plain =
+            std::env::temp_dir().join(format!("nwm-dirty-guard-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&plain).expect("create plain dir");
+        ensure_clean_flake_dir(plain.to_str().expect("utf-8 path"))
+            .await
+            .expect("a non-repo passes");
+        std::fs::remove_dir_all(&plain).ok();
+    }
+
+    /// `--allow-dirty` is a switch-only override: `switch` parses it, `build`
+    /// rejects it (a build is never guarded, so the flag would be a lie there).
+    #[test]
+    fn allow_dirty_parses_on_switch_only() {
+        let args = Args::try_parse_from(["nwm", "home", "switch", "--allow-dirty"])
+            .expect("switch takes --allow-dirty");
+        let NwmCommand::Home(spec) = args.command else {
+            panic!("expected the home subcommand");
+        };
+        assert!(matches!(
+            spec.action,
+            SwitchAction::Switch {
+                allow_dirty: true,
+                ..
+            }
+        ));
+        assert!(
+            Args::try_parse_from(["nwm", "os", "build", "--allow-dirty"]).is_err(),
+            "build takes no --allow-dirty"
+        );
     }
 
     /// `/api/state` must be a wired route that serializes the live snapshot to

@@ -332,6 +332,10 @@
           # stub via CLOUDFLARE_API_BASE in the integration tests). The test
           # sandbox has no curl otherwise, so the executors fail spawning it.
           efx = [workspacePkgs.curl];
+          # nix-web-monitor's switch dirty-tree-guard tests build scratch git
+          # repos and run `git status` against them. The test sandbox has no
+          # git otherwise, so the tests panic spawning it.
+          nix-web-monitor = [workspacePkgs.git];
           # upstream-sync's upstream-pr integration test builds a local git
           # upstream and runs the real fetch/am/branch mechanism against it.
           upstream-sync = [workspacePkgs.git];
