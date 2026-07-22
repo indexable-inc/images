@@ -142,6 +142,20 @@ jobs:
       # rolling branch the flake bump uses, so the escalate watcher below works
       # identically in both modes. Manual branch/commit/PR because the DS
       # action can only write flake.lock.
+      # ix's self-hosted runner jobs expose a minimal PATH (git + nix, no gh,
+      # jq, curl, awk; see indexable-inc/ix run 29892367191). Extend PATH from
+      # nixpkgs via the preinstalled nix only for what is missing, so hosted
+      # runners (ubuntu-latest, everything native) skip the builds.
+      - name: Provision missing CLI tools
+        run: |
+          set -euo pipefail
+          ensure() {
+            command -v "$1" >/dev/null 2>&1 && return
+            local out
+            out="$(nix build "nixpkgs#$1" --no-link --print-out-paths)"
+            echo "${out}/bin" >> "$GITHUB_PATH"
+          }
+          ensure gh
       - name: Bump submodules
         if: ${{ inputs.submodule-paths != '' }}
         env:
@@ -241,6 +255,20 @@ jobs:
       SLACK_CHANNEL: ${{ inputs.slack-channel || 'C0A4TD9G7HR' }}
       SLACK_BOT_TOKEN: ${{ secrets.slack-bot-token }}
     steps:
+      # Same minimal-PATH provisioning as the update job above; the escalate
+      # script needs gh, jq, and curl.
+      - name: Provision missing CLI tools
+        run: |
+          set -euo pipefail
+          ensure() {
+            command -v "$1" >/dev/null 2>&1 && return
+            local out
+            out="$(nix build "nixpkgs#$1" --no-link --print-out-paths)"
+            echo "${out}/bin" >> "$GITHUB_PATH"
+          }
+          ensure gh
+          ensure jq
+          ensure curl
       - name: Escalate a stuck flake bump
         run: |
           set -euo pipefail
