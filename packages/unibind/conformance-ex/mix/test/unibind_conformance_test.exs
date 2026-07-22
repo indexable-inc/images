@@ -6,26 +6,7 @@ defmodule UnibindConformanceTest do
   alias UnibindConformance, as: Conf
   alias UnibindConformance.{ConformanceError, Native, Sample}
 
-  # Poll `fun` until true or `timeout_ms` elapses; cancellation and GC are
-  # asynchronous on the runtime/BEAM side, so observables need a grace window.
-  defp eventually(fun, timeout_ms \\ 2_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    poll(fun, deadline)
-  end
-
-  defp poll(fun, deadline) do
-    cond do
-      fun.() ->
-        true
-
-      System.monotonic_time(:millisecond) > deadline ->
-        false
-
-      true ->
-        Process.sleep(20)
-        poll(fun, deadline)
-    end
-  end
+  import UnibindTest.Eventually
 
   defp sample(id) do
     %Sample{
