@@ -268,9 +268,13 @@
       text = ''
         Browser and web-app work goes through `agent-browser` (vercel-labs):
         take a `snapshot` and act on its `@eN` refs, not screenshots or DOM
-        dumps. Read `agent-browser skills get core` before the first
-        command; the CLI serves guides matched to its own version
-        (`skills list` for electron, slack, dogfood and friends).
+        dumps. Attach before launching: the user runs Chrome with
+        `--remote-debugging-port=9222`, so try `--auto-connect` (or
+        `connect 9222`) first and act in their session; launch a fresh
+        browser only when no CDP Chrome answers. Read
+        `agent-browser skills get core` before the first command; the CLI
+        serves guides matched to its own version (`skills list` for
+        electron, slack, dogfood and friends).
       '';
       reason = ''
         agent-browser ships in every dev environment (lib/dev/base) and the
