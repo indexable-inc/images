@@ -214,7 +214,7 @@ def _journal_transport(monkeypatch: pytest.MonkeyPatch, *, down: dict[str, bool]
 
 
 def test_record_is_durable_before_delivery_and_drains_in_order(
-    _spool_home: Path, monkeypatch: pytest.MonkeyPatch
+    spool_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     down = {"is": True}
     facts, blobs = _journal_transport(monkeypatch, down=down)
@@ -223,7 +223,7 @@ def test_record_is_durable_before_delivery_and_drains_in_order(
     run(weave.record([("task:1", "state", "running")]))
 
     # Durable on disk while the server is unreachable; nothing delivered.
-    segments = list(_spool_home.glob("*.jsonl"))
+    segments = list(spool_home.glob("*.jsonl"))
     assert len(segments) == 1
     lines = [weave.json.loads(line) for line in segments[0].read_text().splitlines()]
     assert [item.get("fact", {}).get("attr", "blob") for item in lines] == ["state", "blob", "state"]
@@ -259,10 +259,10 @@ def test_spool_transition_prints_exactly_one_loud_line(
     assert err.count("reachable again") == 1
 
 
-def test_spool_orphan_segment_adopted_and_drained(_spool_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_spool_orphan_segment_adopted_and_drained(spool_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     down = {"is": False}
     facts, _blobs = _journal_transport(monkeypatch, down=down)
-    orphan = _spool_home
+    orphan = spool_home
     orphan.mkdir(parents=True, exist_ok=True)
     # A crashed writer's segment: two committed lines plus one torn append
     # (never fsync-completed, so never intent) - no live flock holder.

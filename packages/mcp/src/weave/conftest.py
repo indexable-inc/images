@@ -13,7 +13,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _spool_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+def spool_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Every test spools under its own tmp dir; teardown joins flusher
     threads BEFORE monkeypatched transports revert (a live flusher must
     never fall back to a real URL)."""
