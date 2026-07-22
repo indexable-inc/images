@@ -83,9 +83,10 @@ fn needs_signal(interface: &ir::Interface) -> bool {
 
 /// The bridge from a JavaScript `AbortSignal` onto the tokio side. napi's
 /// own `AbortSignal` type only cancels `AsyncTask` work queue entries, so
-/// the glue registers an `on_abort` callback that wakes a `Notify`; the
-/// wrapper `select!`s on it and dropping the user future is the
-/// cancellation.
+/// the glue registers an `on_abort` callback that wakes a `Notify`;
+/// `__unibind_with_abort` `select!`s on it and dropping the user future
+/// is the cancellation. Every async wrapper routes through that one
+/// helper rather than repeating the race per binding.
 fn abort_signal() -> TokenStream {
     quote! {
         /// One trailing optional argument on every async export; `undefined`
@@ -119,6 +120,31 @@ fn abort_signal() -> TokenStream {
 
         fn __unibind_aborted() -> ::napi::Error {
             ::napi::Error::new(::napi::Status::Cancelled, "__unibind__:aborted")
+        }
+
+        /// Race `future` against `signal`; the shared body of every async
+        /// export. The `biased` arm keeps an abort that raced completion
+        /// deterministic (the abort wins), and dropping the user future is
+        /// the cancellation.
+        async fn __unibind_with_abort<__UnibindOutput>(
+            signal: ::std::option::Option<__UnibindAbortSignal>,
+            future: impl ::std::future::Future<Output = __UnibindOutput>,
+        ) -> ::napi::Result<__UnibindOutput> {
+            match signal {
+                ::std::option::Option::Some(signal) => {
+                    if signal.already_aborted {
+                        return ::std::result::Result::Err(__unibind_aborted());
+                    }
+                    ::tokio::select! {
+                        biased;
+                        () = signal.notify.notified() => {
+                            ::std::result::Result::Err(__unibind_aborted())
+                        }
+                        value = future => ::std::result::Result::Ok(value),
+                    }
+                }
+                ::std::option::Option::None => ::std::result::Result::Ok(future.await),
+            }
         }
     }
 }

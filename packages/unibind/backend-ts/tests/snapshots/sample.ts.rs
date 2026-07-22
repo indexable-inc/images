@@ -43,6 +43,28 @@ mod __unibind_ts_sample_ts {
     fn __unibind_aborted() -> ::napi::Error {
         ::napi::Error::new(::napi::Status::Cancelled, "__unibind__:aborted")
     }
+    /// Race `future` against `signal`; the shared body of every async
+    /// export. The `biased` arm keeps an abort that raced completion
+    /// deterministic (the abort wins), and dropping the user future is
+    /// the cancellation.
+    async fn __unibind_with_abort<__UnibindOutput>(
+        signal: ::std::option::Option<__UnibindAbortSignal>,
+        future: impl ::std::future::Future<Output = __UnibindOutput>,
+    ) -> ::napi::Result<__UnibindOutput> {
+        match signal {
+            ::std::option::Option::Some(signal) => {
+                if signal.already_aborted {
+                    return ::std::result::Result::Err(__unibind_aborted());
+                }
+                ::tokio::select! {
+                    biased; () = signal.notify.notified() => {
+                    ::std::result::Result::Err(__unibind_aborted()) } value = future =>
+                    ::std::result::Result::Ok(value),
+                }
+            }
+            ::std::option::Option::None => ::std::result::Result::Ok(future.await),
+        }
+    }
     ///Map `SampleError` onto a decodable napi rejection reason, message from `Display`.
     impl ::std::convert::From<super::sample_ts::SampleError> for ::napi::Error {
         fn from(error: super::sample_ts::SampleError) -> Self {
@@ -114,23 +136,12 @@ mod __unibind_ts_sample_ts {
         b: i64,
         __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
     ) -> ::napi::Result<i64> {
-        let __unibind_future = super::sample_ts::slow_add(a, b);
-        match __unibind_signal {
-            ::std::option::Option::Some(__unibind_signal) => {
-                if __unibind_signal.already_aborted {
-                    return ::std::result::Result::Err(__unibind_aborted());
-                }
-                ::tokio::select! {
-                    biased; () = __unibind_signal.notify.notified() => {
-                    ::std::result::Result::Err(__unibind_aborted()) } value =
-                    __unibind_future => ::std::result::Result::Ok(value),
-                }
-            }
-            ::std::option::Option::None => {
-                let value = __unibind_future.await;
-                ::std::result::Result::Ok(value)
-            }
-        }
+        let value = __unibind_with_abort(
+                __unibind_signal,
+                super::sample_ts::slow_add(a, b),
+            )
+            .await?;
+        ::std::result::Result::Ok(value)
     }
     ///Fetch one row.
     #[::napi_derive::napi]
@@ -138,28 +149,15 @@ mod __unibind_ts_sample_ts {
         store: ::std::string::String,
         __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
     ) -> ::napi::Result<super::sample_ts::Row> {
-        let __unibind_future = super::sample_ts::fetch(store);
-        match __unibind_signal {
-            ::std::option::Option::Some(__unibind_signal) => {
-                if __unibind_signal.already_aborted {
-                    return ::std::result::Result::Err(__unibind_aborted());
-                }
-                ::tokio::select! {
-                    biased; () = __unibind_signal.notify.notified() => {
-                    ::std::result::Result::Err(__unibind_aborted()) } value =
-                    __unibind_future => match value { ::std::result::Result::Ok(value) =>
-                    ::std::result::Result::Ok(value), ::std::result::Result::Err(error)
-                    => { ::std::result::Result::Err(::napi::Error::from(error)) } },
-                }
-            }
-            ::std::option::Option::None => {
-                let value = __unibind_future.await;
-                match value {
-                    ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
-                    ::std::result::Result::Err(error) => {
-                        ::std::result::Result::Err(::napi::Error::from(error))
-                    }
-                }
+        let value = __unibind_with_abort(
+                __unibind_signal,
+                super::sample_ts::fetch(store),
+            )
+            .await?;
+        match value {
+            ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
+            ::std::result::Result::Err(error) => {
+                ::std::result::Result::Err(::napi::Error::from(error))
             }
         }
     }
@@ -172,29 +170,15 @@ mod __unibind_ts_sample_ts {
     ///Pull handle over the stream returned by `tail`.
     #[::napi_derive::napi(js_name = "TailStream")]
     pub struct __UnibindStreamTail {
-        stream: ::std::sync::Mutex<
-            ::std::option::Option<::unibind_runtime::UniStream<super::sample_ts::Row>>,
-        >,
-        pull: ::tokio::sync::Mutex<()>,
-        closed: ::tokio::sync::watch::Sender<bool>,
+        stream: ::unibind_runtime::PullStream<super::sample_ts::Row>,
     }
     impl __UnibindStreamTail {
         fn __unibind_from(
             stream: ::unibind_runtime::UniStream<super::sample_ts::Row>,
         ) -> Self {
             Self {
-                stream: ::std::sync::Mutex::new(::std::option::Option::Some(stream)),
-                pull: ::tokio::sync::Mutex::new(()),
-                closed: ::tokio::sync::watch::Sender::new(false),
+                stream: ::unibind_runtime::PullStream::new(stream),
             }
-        }
-        fn __unibind_slot(
-            &self,
-        ) -> ::std::sync::MutexGuard<
-            '_,
-            ::std::option::Option<::unibind_runtime::UniStream<super::sample_ts::Row>>,
-        > {
-            self.stream.lock().unwrap_or_else(::std::sync::PoisonError::into_inner)
         }
     }
     #[::napi_derive::napi]
@@ -202,25 +186,14 @@ mod __unibind_ts_sample_ts {
         /// The next element, or `null` once the stream ends or closes.
         #[::napi_derive::napi]
         pub async fn next(&self) -> ::std::option::Option<super::sample_ts::Row> {
-            let _pull = self.pull.lock().await;
-            let mut stream = self.__unibind_slot().take()?;
-            let mut closed = self.closed.subscribe();
-            let item = ::tokio::select! {
-                biased; _ = closed.wait_for(| closed | * closed) =>
-                ::std::option::Option::None, item = stream.next() => item,
-            };
-            if item.is_some() && !*self.closed.borrow() {
-                self.__unibind_slot().replace(stream);
-            }
-            let value = item?;
+            let value = self.stream.next().await?;
             ::std::option::Option::Some(value)
         }
         /// Drop the stream early; a pull in flight resolves `null`, and
         /// the producer sees its stream dropped.
         #[::napi_derive::napi]
         pub fn close(&self) {
-            let _ = self.closed.send(true);
-            self.__unibind_slot().take();
+            self.stream.close();
         }
     }
     ///Tail rows once the store opens (an async stream function).
@@ -229,62 +202,34 @@ mod __unibind_ts_sample_ts {
         store: ::std::string::String,
         __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
     ) -> ::napi::Result<__UnibindStreamTailLater> {
-        let __unibind_future = super::sample_ts::tail_later(store);
-        match __unibind_signal {
-            ::std::option::Option::Some(__unibind_signal) => {
-                if __unibind_signal.already_aborted {
-                    return ::std::result::Result::Err(__unibind_aborted());
-                }
-                ::tokio::select! {
-                    biased; () = __unibind_signal.notify.notified() => {
-                    ::std::result::Result::Err(__unibind_aborted()) } value =
-                    __unibind_future => match value { ::std::result::Result::Ok(value) =>
-                    ::std::result::Result::Ok(__UnibindStreamTailLater::__unibind_from(value)),
-                    ::std::result::Result::Err(error) => {
-                    ::std::result::Result::Err(::napi::Error::from(error)) } },
-                }
+        let value = __unibind_with_abort(
+                __unibind_signal,
+                super::sample_ts::tail_later(store),
+            )
+            .await?;
+        match value {
+            ::std::result::Result::Ok(value) => {
+                ::std::result::Result::Ok(
+                    __UnibindStreamTailLater::__unibind_from(value),
+                )
             }
-            ::std::option::Option::None => {
-                let value = __unibind_future.await;
-                match value {
-                    ::std::result::Result::Ok(value) => {
-                        ::std::result::Result::Ok(
-                            __UnibindStreamTailLater::__unibind_from(value),
-                        )
-                    }
-                    ::std::result::Result::Err(error) => {
-                        ::std::result::Result::Err(::napi::Error::from(error))
-                    }
-                }
+            ::std::result::Result::Err(error) => {
+                ::std::result::Result::Err(::napi::Error::from(error))
             }
         }
     }
     ///Pull handle over the stream returned by `tail_later`.
     #[::napi_derive::napi(js_name = "TailLaterStream")]
     pub struct __UnibindStreamTailLater {
-        stream: ::std::sync::Mutex<
-            ::std::option::Option<::unibind_runtime::UniStream<super::sample_ts::Row>>,
-        >,
-        pull: ::tokio::sync::Mutex<()>,
-        closed: ::tokio::sync::watch::Sender<bool>,
+        stream: ::unibind_runtime::PullStream<super::sample_ts::Row>,
     }
     impl __UnibindStreamTailLater {
         fn __unibind_from(
             stream: ::unibind_runtime::UniStream<super::sample_ts::Row>,
         ) -> Self {
             Self {
-                stream: ::std::sync::Mutex::new(::std::option::Option::Some(stream)),
-                pull: ::tokio::sync::Mutex::new(()),
-                closed: ::tokio::sync::watch::Sender::new(false),
+                stream: ::unibind_runtime::PullStream::new(stream),
             }
-        }
-        fn __unibind_slot(
-            &self,
-        ) -> ::std::sync::MutexGuard<
-            '_,
-            ::std::option::Option<::unibind_runtime::UniStream<super::sample_ts::Row>>,
-        > {
-            self.stream.lock().unwrap_or_else(::std::sync::PoisonError::into_inner)
         }
     }
     #[::napi_derive::napi]
@@ -292,25 +237,14 @@ mod __unibind_ts_sample_ts {
         /// The next element, or `null` once the stream ends or closes.
         #[::napi_derive::napi]
         pub async fn next(&self) -> ::std::option::Option<super::sample_ts::Row> {
-            let _pull = self.pull.lock().await;
-            let mut stream = self.__unibind_slot().take()?;
-            let mut closed = self.closed.subscribe();
-            let item = ::tokio::select! {
-                biased; _ = closed.wait_for(| closed | * closed) =>
-                ::std::option::Option::None, item = stream.next() => item,
-            };
-            if item.is_some() && !*self.closed.borrow() {
-                self.__unibind_slot().replace(stream);
-            }
-            let value = item?;
+            let value = self.stream.next().await?;
             ::std::option::Option::Some(value)
         }
         /// Drop the stream early; a pull in flight resolves `null`, and
         /// the producer sees its stream dropped.
         #[::napi_derive::napi]
         pub fn close(&self) {
-            let _ = self.closed.send(true);
-            self.__unibind_slot().take();
+            self.stream.close();
         }
     }
     ///Open a counter from a free function (the non-constructor path).
@@ -360,35 +294,18 @@ mod __unibind_ts_sample_ts {
             amount: i64,
             __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
         ) -> ::napi::Result<i64> {
-            let __unibind_future = {
-                let __unibind_inner = ::std::sync::Arc::clone(&self.inner);
-                async move { __unibind_inner.add(amount).await }
-            };
-            match __unibind_signal {
-                ::std::option::Option::Some(__unibind_signal) => {
-                    if __unibind_signal.already_aborted {
-                        return ::std::result::Result::Err(__unibind_aborted());
-                    }
-                    ::tokio::select! {
-                        biased; () = __unibind_signal.notify.notified() => {
-                        ::std::result::Result::Err(__unibind_aborted()) } value =
-                        __unibind_future => match value {
-                        ::std::result::Result::Ok(value) =>
-                        ::std::result::Result::Ok(value),
-                        ::std::result::Result::Err(error) => {
-                        ::std::result::Result::Err(::napi::Error::from(error)) } },
-                    }
-                }
-                ::std::option::Option::None => {
-                    let value = __unibind_future.await;
-                    match value {
-                        ::std::result::Result::Ok(value) => {
-                            ::std::result::Result::Ok(value)
-                        }
-                        ::std::result::Result::Err(error) => {
-                            ::std::result::Result::Err(::napi::Error::from(error))
-                        }
-                    }
+            let value = __unibind_with_abort(
+                    __unibind_signal,
+                    {
+                        let __unibind_inner = ::std::sync::Arc::clone(&self.inner);
+                        async move { __unibind_inner.add(amount).await }
+                    },
+                )
+                .await?;
+            match value {
+                ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
+                ::std::result::Result::Err(error) => {
+                    ::std::result::Result::Err(::napi::Error::from(error))
                 }
             }
         }
@@ -413,3 +330,4 @@ mod __unibind_ts_sample_ts {
         }
     }
 }
+

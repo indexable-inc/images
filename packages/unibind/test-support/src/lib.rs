@@ -1,5 +1,7 @@
 //! Shared assertions for Unibind integration and snapshot tests.
 
+pub mod fixtures;
+
 use std::fmt::Write as _;
 
 pub struct RecordAttributes<'a> {
@@ -71,6 +73,26 @@ pub fn assert_ir_json_snapshot(
 ) {
     let json = serde_json::to_string_pretty(interface).expect("serializes");
     assert_snapshot(&json, expected, name);
+}
+
+/// Assert emitted host files: the paths in emit order, then each file's
+/// contents against its committed snapshot. `expected` rows are
+/// `(path, snapshot name, snapshot contents)`; the emitter snapshot tests
+/// share this walk so the assertion flow lives once.
+///
+/// # Panics
+/// Panics when the path list differs or any snapshot drifted.
+pub fn assert_host_snapshots<'a>(
+    files: impl IntoIterator<Item = (&'a str, &'a str)>,
+    expected: &[(&'a str, &'a str, &'a str)],
+) {
+    let files: Vec<(&str, &str)> = files.into_iter().collect();
+    let paths: Vec<&str> = files.iter().map(|(path, _)| *path).collect();
+    let want: Vec<&str> = expected.iter().map(|(path, _, _)| *path).collect();
+    assert_eq!(paths, want);
+    for ((_, contents), (_, name, snapshot)) in files.iter().zip(expected) {
+        assert_snapshot(contents, snapshot, name);
+    }
 }
 
 /// Compare rendered output while printing a copy-ready replacement on drift.

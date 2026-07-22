@@ -8,7 +8,8 @@
 use unibind_core::ir;
 use unibind_gen::ex::ExEmitter;
 use unibind_gen::host::HostEmitter as _;
-use unibind_test_support::assert_snapshot;
+use unibind_test_support::assert_host_snapshots;
+use unibind_test_support::fixtures::{self, arg, docs};
 
 fn names(ex: Option<&str>) -> ir::Names {
     ir::Names {
@@ -17,30 +18,8 @@ fn names(ex: Option<&str>) -> ir::Names {
     }
 }
 
-fn docs(lines: &[&str]) -> Vec<String> {
-    lines.iter().map(|line| (*line).to_owned()).collect()
-}
-
-fn arg(name: &str, ty: ir::Type, default: Option<ir::Literal>) -> ir::Arg {
-    ir::Arg {
-        name: name.to_owned(),
-        names: names(None),
-        ty,
-        default,
-    }
-}
-
 fn function(name: &str, doc_lines: &[&str], args: Vec<ir::Arg>) -> ir::Function {
-    ir::Function {
-        name: name.to_owned(),
-        names: names(None),
-        docs: docs(doc_lines),
-        asyncness: ir::Asyncness::Sync,
-        blocking: false,
-        args,
-        ret: None,
-        throws: None,
-    }
+    fixtures::function(name, names(None), doc_lines, args)
 }
 
 const fn owned_string() -> ir::Type {
@@ -195,17 +174,22 @@ fn ex_host_files_snapshot() {
         nif_soname: "libsample.so".to_owned(),
     };
     let files = emitter.emit(&sample_interface()).expect("emits");
-    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
-    assert_eq!(paths, ["lib/sample/native.ex", "lib/sample.ex"]);
-    assert_snapshot(
-        &files[0].contents,
-        include_str!("snapshots/sample.native.ex"),
-        "sample.native.ex",
-    );
-    assert_snapshot(
-        &files[1].contents,
-        include_str!("snapshots/sample.wrapper.ex"),
-        "sample.wrapper.ex",
+    assert_host_snapshots(
+        files
+            .iter()
+            .map(|file| (file.path.as_str(), file.contents.as_str())),
+        &[
+            (
+                "lib/sample/native.ex",
+                "sample.native.ex",
+                include_str!("snapshots/sample.native.ex"),
+            ),
+            (
+                "lib/sample.ex",
+                "sample.wrapper.ex",
+                include_str!("snapshots/sample.wrapper.ex"),
+            ),
+        ],
     );
 }
 

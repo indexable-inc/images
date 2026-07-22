@@ -8,7 +8,7 @@ use proc_macro2::TokenStream;
 use unibind_core::ir;
 use unibind_gen::host::HostEmitter as _;
 use unibind_gen::jvm::JvmEmitter;
-use unibind_test_support::assert_snapshot;
+use unibind_test_support::assert_host_snapshots;
 
 fn sample_interface() -> ir::Interface {
     let source = include_str!("../../backend-jvm/tests/fixtures/sample.rs");
@@ -25,12 +25,15 @@ fn jvm_host_file_lands_at_the_package_path() {
         package: Some("com.example.sample".to_owned()),
     };
     let files = emitter.emit(&sample_interface()).expect("emits");
-    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
-    assert_eq!(paths, ["com/example/sample/Sample.java"]);
-    assert_snapshot(
-        &files[0].contents,
-        include_str!("../../backend-jvm/tests/snapshots/Sample.java"),
-        "Sample.java",
+    assert_host_snapshots(
+        files
+            .iter()
+            .map(|file| (file.path.as_str(), file.contents.as_str())),
+        &[(
+            "com/example/sample/Sample.java",
+            "Sample.java",
+            include_str!("../../backend-jvm/tests/snapshots/Sample.java"),
+        )],
     );
 }
 

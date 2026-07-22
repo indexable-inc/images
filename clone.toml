@@ -55,7 +55,16 @@ ignore = [
 # type2 triple is gone (dead method deleted, pure field dumps now
 # dataclasses.asdict); measured 0.3593%. The 13-line _read_lines type1 twin
 # stays in the scan as a documented pair (see both data.py docstrings).
+#
+# 2026-07-22 (#3996): lowered 0.36 -> 0.30. The unibind ts/py emitters no
+# longer inline the async scaffold per binding: ts async exports share one
+# __unibind_with_abort per glue module, the ts stream handle guts moved to
+# unibind_runtime::PullStream, py __anext__ moved to
+# SharedStream::next_into_py, and the gen emitter tests share their fixture
+# builders and host-file walk through unibind-test-support; measured
+# 0.2941%. The residual per-export class shells (napi/pyo3 need concrete
+# classes) stay in the scan.
 [budget]
-global_pct = 0.36
+global_pct = 0.30
 diff_pct = 0.0
 diff_base = "origin/main"

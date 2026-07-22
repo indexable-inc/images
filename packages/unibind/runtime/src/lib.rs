@@ -54,3 +54,66 @@ impl<T> fmt::Debug for UniStream<T> {
         formatter.debug_struct("UniStream").finish_non_exhaustive()
     }
 }
+
+/// One consumer's pull handle over a [`UniStream`]: checked-out pull
+/// state, a gate serializing concurrent pulls, and a level-triggered
+/// closed flag. The shared body of every generated handle class, so the
+/// per-export types stay thin shells.
+///
+/// `close` is synchronous and race-free: the watch channel flips to
+/// closed, which both wakes a pull blocked inside `next` (dropping the
+/// checked-out stream) and keeps later pulls from checking the stream
+/// back in.
+pub struct PullStream<T> {
+    stream: std::sync::Mutex<Option<UniStream<T>>>,
+    pull: tokio::sync::Mutex<()>,
+    closed: tokio::sync::watch::Sender<bool>,
+}
+
+impl<T> PullStream<T> {
+    /// Wrap `stream` for one consumer's serialized pulls.
+    #[must_use]
+    pub fn new(stream: UniStream<T>) -> Self {
+        Self {
+            stream: std::sync::Mutex::new(Some(stream)),
+            pull: tokio::sync::Mutex::new(()),
+            closed: tokio::sync::watch::Sender::new(false),
+        }
+    }
+
+    fn slot(&self) -> std::sync::MutexGuard<'_, Option<UniStream<T>>> {
+        self.stream
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The next element, or `None` once the stream ends or closes.
+    pub async fn next(&self) -> Option<T> {
+        let _pull = self.pull.lock().await;
+        let mut stream = self.slot().take()?;
+        let mut closed = self.closed.subscribe();
+        let item = tokio::select! {
+            biased;
+            _ = closed.wait_for(|closed| *closed) => None,
+            item = stream.next() => item,
+        };
+        if item.is_some() && !*self.closed.borrow() {
+            self.slot().replace(stream);
+        }
+        item
+    }
+
+    /// Drop the stream early; a pull in flight resolves `None`, and the
+    /// producer sees its stream dropped.
+    pub fn close(&self) {
+        let _ = self.closed.send(true);
+        self.slot().take();
+    }
+}
+
+// Opaque like `UniStream`, and for the same reason.
+impl<T> fmt::Debug for PullStream<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("PullStream").finish_non_exhaustive()
+    }
+}

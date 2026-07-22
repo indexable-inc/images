@@ -97,6 +97,28 @@ impl<T> SharedStream<T> {
         let inner = Arc::clone(&self.inner);
         async move { inner.lock().await.next().await }
     }
+
+    /// The body of every generated `__anext__`: the next item as an
+    /// awaitable Python object, with stream end mapped to
+    /// `StopAsyncIteration`. Lives here so the per-export iterator classes
+    /// stay one call deep instead of each repeating the bridge.
+    ///
+    /// # Errors
+    ///
+    /// Fails when no asyncio event loop can be resolved for the calling
+    /// context.
+    pub fn next_into_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>
+    where
+        T: for<'a> pyo3::IntoPyObject<'a> + Send + 'static,
+    {
+        let next = self.next();
+        future_into_py(py, async move {
+            match next.await {
+                Some(item) => Ok(item),
+                None => Err(pyo3::exceptions::PyStopAsyncIteration::new_err(())),
+            }
+        })
+    }
 }
 
 impl<T> fmt::Debug for SharedStream<T> {
