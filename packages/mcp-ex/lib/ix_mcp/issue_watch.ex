@@ -1,14 +1,16 @@
 defmodule IxMcp.IssueWatch do
   @moduledoc """
-  Always-on feed of newly filed GitHub issues, announced on the channel the
+  Opt-in feed of newly filed GitHub issues, announced on the channel the
   way job finishes are. Background agents (retros, auto-fix dispatches) file
   issues from sessions nobody watches, so without a push they sit unseen
   until someone happens to run `gh issue list` (#3877). One loop per kernel
   instance polls `gh search issues` for issues created since the last sweep
   and pushes each new one as a `source="issues"` channel notification.
 
-  Watched owners come from `IX_MCP_ISSUE_WATCH_OWNERS` (comma-separated,
-  default `indexable-inc`); an empty value disables the feed. The loop
+  Watched owners come from `IX_MCP_ISSUE_WATCH_OWNERS` (comma-separated);
+  unset or empty disables the feed. Off by default: broadcasting every new
+  issue to every session made each listener dispatch its own fixer, two
+  full parallel implementations per issue (#4002, #4054). The loop
   starts only alongside the stdio transport (`IxMcp.Application`), so
   `mix test` and IEx sessions never poll GitHub.
 
@@ -26,7 +28,6 @@ defmodule IxMcp.IssueWatch do
 
   require Logger
 
-  @default_owners ["indexable-inc"]
   @interval_ms 60_000
   # One page bounds a sweep; more issues than this filed inside one interval
   # is a storm, and the next sweep's >= window picks up the remainder anyway.
@@ -138,10 +139,9 @@ defmodule IxMcp.IssueWatch do
   end
 
   defp env_owners do
-    case System.get_env("IX_MCP_ISSUE_WATCH_OWNERS") do
-      nil -> @default_owners
-      value -> value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
-    end
+    System.get_env("IX_MCP_ISSUE_WATCH_OWNERS", "")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
   end
 
   defp default_gh do

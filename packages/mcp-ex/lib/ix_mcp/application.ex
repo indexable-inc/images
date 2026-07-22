@@ -15,7 +15,7 @@ defmodule IxMcp.Application do
       ├── IxMcp.Jobs.Supervisor (DynamicSupervisor)  one child per cell/job
       │   └── IxMcp.Jobs.Job*   runs one evaluation in a monitored process
       ├── IxMcp.PrWatch.Supervisor (Task.Supervisor)  one task per PR watch
-      ├── IxMcp.IssueWatch      (only when IX_MCP_STDIO=1) new-issue channel feed
+      ├── IxMcp.IssueWatch      (stdio + IX_MCP_ISSUE_WATCH_OWNERS set) new-issue channel feed
       ├── IxMcp.SessionWatch    (only when IX_MCP_STDIO=1) heartbeat + message/request-feed delivery
       ├── IxMcp.Agents.Harness     (AgentHarness) depth-1 subagent processes (#3700)
       ├── IxMcp.Agents.Events      subagent ledger: events, finals, graph, notifications
