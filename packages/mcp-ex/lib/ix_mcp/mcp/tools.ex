@@ -66,6 +66,17 @@ defmodule IxMcp.MCP.Tools do
                                             event="picked_up"; a lost claim returns
                                             {:error, "claimed by session ..."} --
                                             pick a different issue
+      Sessions.list()                       the session directory: every kernel
+                                            instance on this host with its name,
+                                            topic, and heartbeat liveness -- check
+                                            who else is working before delegating
+                                            or duplicating another session's work
+      Sessions.send(12, "text")             message another session by directory id
+                                            (or unique live name); it lands in that
+                                            agent's context as a source="sessions"
+                                            channel event, sender named, within
+                                            seconds. Sessions.broadcast("text")
+                                            reaches every session on the host
       Tui.act(uri, send_keys)               drive a federated TUI resource (optional
                                             peer arg)
       TuiLocal.spawn(cmd, args)             spawn a local PTY program (vim, less, a

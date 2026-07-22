@@ -61,7 +61,7 @@ defmodule IxMcp.ActionLog do
   # The schema is a published contract (#3532): the action-log UI is built
   # against these exact tables, so changes here must be coordinated.
   @create_sessions """
-  CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL)
+  CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL, last_seen_at TEXT)
   """
 
   @create_topics """
@@ -102,6 +102,15 @@ defmodule IxMcp.ActionLog do
   CREATE TABLE issue_claims (id INTEGER PRIMARY KEY, repo TEXT NOT NULL, number INTEGER NOT NULL, session_id INTEGER REFERENCES sessions(id), claimed_at TEXT NOT NULL, UNIQUE(repo, number))
   """
 
+  # index#3881: the per-host bus between kernel instances. A NULL to_session
+  # is a broadcast. Delivery is each instance's own business: `IxMcp.SessionWatch`
+  # sweeps rows addressed to its session (or to everyone) past a per-instance
+  # watermark -- the claim-feed cursor pattern (#3880), and per instance for
+  # the same reason: every instance must deliver to its own client.
+  @create_session_messages """
+  CREATE TABLE session_messages (id INTEGER PRIMARY KEY, from_session INTEGER NOT NULL REFERENCES sessions(id), to_session INTEGER REFERENCES sessions(id), body TEXT NOT NULL, created_at TEXT NOT NULL)
+  """
+
   # index#3539: the schema version is stamped into SQLite's `PRAGMA
   # user_version` header field instead of being re-derived by column
   # sniffing on every open. Sniffing can only classify shapes this binary
@@ -113,8 +122,9 @@ defmodule IxMcp.ActionLog do
   # no-op, and a future shape explicitly detectable. The ladder: 1 = the
   # flat #3512 log, 2 = the #3532 normalization, 3 = the #3536 live rows,
   # 4 = the #3546 live cell line, 5 = the #3839 durable job ledger,
-  # 6 = the #3880 issue-claim arbiter.
-  @user_version 6
+  # 6 = the #3880 issue-claim arbiter, 7 = the #3881 session heartbeat and
+  # message bus.
+  @user_version 7
 
   # How long a statement waits for a sibling instance's write lock before
   # step!/fetch/execute! give up and crash with a diagnosis (#3890). A
@@ -171,6 +181,12 @@ defmodule IxMcp.ActionLog do
   CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL)
   """
 
+  # Same freeze for sessions: the shape #3532 shipped, before the #3881
+  # last_seen_at heartbeat column (which the 6 -> 7 step adds).
+  @create_sessions_v2 """
+  CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL)
+  """
+
   # The v1 shape kept session/topic as TEXT per action row. The backfill
   # makes one session per distinct v1 session string (NULLs collapse into
   # one unnamed session, hence the NULL-safe `IS` joins), one topic per
@@ -179,7 +195,7 @@ defmodule IxMcp.ActionLog do
   # stand in for the started_at v1 never stored.
   @migrate_v1_to_v2 [
     "ALTER TABLE actions RENAME TO actions_v1",
-    @create_sessions,
+    @create_sessions_v2,
     @create_topics,
     @create_actions_v2,
     """
@@ -225,6 +241,14 @@ defmodule IxMcp.ActionLog do
   # simply created empty.
   @migrate_v5_to_v6 [@create_issue_claims]
 
+  # A v6 database predates the session heartbeat and message bus (#3881):
+  # existing sessions gain a NULL last_seen_at (they never heartbeat), and
+  # the messages table is created empty.
+  @migrate_v6_to_v7 [
+    "ALTER TABLE sessions ADD COLUMN last_seen_at TEXT",
+    @create_session_messages
+  ]
+
   # Ordered migrations keyed by the user_version each upgrades FROM. Every
   # step runs in one immediate transaction that also stamps the version it
   # produces, so an interrupted migration leaves the previous consistent,
@@ -234,7 +258,8 @@ defmodule IxMcp.ActionLog do
     {2, @migrate_v2_to_v3},
     {3, @migrate_v3_to_v4},
     {4, @migrate_v4_to_v5},
-    {5, @migrate_v5_to_v6}
+    {5, @migrate_v5_to_v6},
+    {6, @migrate_v6_to_v7}
   ]
 
   @insert """
@@ -270,6 +295,21 @@ defmodule IxMcp.ActionLog do
   SELECT c.id, c.repo, c.number, c.session_id, s.name, c.claimed_at
   FROM issue_claims c
   LEFT JOIN sessions s ON s.id = c.session_id
+  """
+
+  @select_session_message """
+  SELECT m.id, m.from_session, s.name, m.to_session, m.body, m.created_at
+  FROM session_messages m
+  LEFT JOIN sessions s ON s.id = m.from_session
+  """
+
+  # The latest topics row is the session's current topic: topics are a
+  # timeline (#3532), so the newest row per session is what it works on now.
+  @select_directory """
+  SELECT s.id, s.name,
+         (SELECT t.name FROM topics t WHERE t.session_id = s.id ORDER BY t.id DESC LIMIT 1),
+         s.started_at, s.last_seen_at
+  FROM sessions s ORDER BY s.id
   """
 
   @type entry :: %{
@@ -327,6 +367,33 @@ defmodule IxMcp.ActionLog do
           session_id: integer() | nil,
           session: String.t() | nil,
           claimed_at: String.t()
+        }
+
+  @typedoc """
+  A cross-session message (#3881): `from` is the sending sessions row's name
+  (nil when that session never named itself); a nil `to_session` is a
+  broadcast.
+  """
+  @type session_message :: %{
+          id: integer(),
+          from_session: integer(),
+          from: String.t() | nil,
+          to_session: integer() | nil,
+          body: String.t(),
+          created_at: String.t()
+        }
+
+  @typedoc """
+  A session-directory row (#3881): `topic` is the session's latest topics
+  row, `last_seen_at` its heartbeat (nil = it never heartbeat: a pre-#3881
+  row or an instance that never ran the watch).
+  """
+  @type directory_entry :: %{
+          id: integer(),
+          name: String.t() | nil,
+          topic: String.t() | nil,
+          started_at: String.t(),
+          last_seen_at: String.t() | nil
         }
 
   @typedoc "A terminal-transition notification awaiting delivery (#3839)."
@@ -500,6 +567,56 @@ defmodule IxMcp.ActionLog do
   @spec last_issue_claim_id(GenServer.server()) :: integer()
   def last_issue_claim_id(server \\ __MODULE__) do
     call(server, :last_issue_claim_id)
+  end
+
+  # -- session directory + message bus (#3881) --------------------------------
+
+  @doc """
+  Stamp `session_id`'s liveness heartbeat (`last_seen_at = now`). Stamped on
+  transport register (`IxMcp.MCP.Notifier`) and on every `IxMcp.SessionWatch`
+  tick, so the directory can tell a live instance from a dead one's row.
+  """
+  @spec heartbeat_session(integer(), GenServer.server()) :: :ok
+  def heartbeat_session(session_id, server \\ __MODULE__) when is_integer(session_id) do
+    GenServer.call(server, {:heartbeat_session, session_id, now()})
+  end
+
+  @doc """
+  Every sessions row joined with its current topic and heartbeat, oldest
+  first: the raw directory `IxMcp.Sessions.list/1` filters and flags.
+  """
+  @spec session_directory(GenServer.server()) :: [directory_entry()]
+  def session_directory(server \\ __MODULE__) do
+    GenServer.call(server, :session_directory)
+  end
+
+  @doc """
+  Record a message from `from_session` to `to_session` (nil = broadcast).
+  Returns the recorded message; `:disabled` when the log is degraded (#3539)
+  -- with no shared database there is no bus to carry it.
+  """
+  @spec send_session_message(integer(), integer() | nil, String.t(), GenServer.server()) ::
+          {:ok, session_message()} | :disabled
+  def send_session_message(from_session, to_session, body, server \\ __MODULE__)
+      when is_integer(from_session) and is_binary(body) do
+    GenServer.call(server, {:send_session_message, from_session, to_session, body, now()})
+  end
+
+  @doc """
+  Messages for `session_id` past the `id` watermark, oldest first: rows
+  addressed to it plus broadcasts, never its own sends. The cursor is per
+  instance for the same reason as `issue_claims_after/2`: every instance
+  must deliver to its own client (#3880).
+  """
+  @spec session_messages_after(integer(), integer(), GenServer.server()) :: [session_message()]
+  def session_messages_after(id, session_id, server \\ __MODULE__) do
+    GenServer.call(server, {:session_messages_after, id, session_id})
+  end
+
+  @doc "The highest session-message id (0 when none): a fresh watermark for `session_messages_after/3`."
+  @spec last_session_message_id(GenServer.server()) :: integer()
+  def last_session_message_id(server \\ __MODULE__) do
+    GenServer.call(server, :last_session_message_id)
   end
 
   @doc """
@@ -881,6 +998,49 @@ defmodule IxMcp.ActionLog do
     {:reply, id, state}
   end
 
+  def handle_call({:heartbeat_session, session_id, at}, _from, %{db: db} = state) do
+    run(db, "UPDATE sessions SET last_seen_at = ? WHERE id = ?", [at, session_id])
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:session_directory, _from, %{db: db} = state) do
+    entries =
+      for [id, name, topic, started_at, last_seen_at] <- fetch(db, @select_directory, []) do
+        %{id: id, name: name, topic: topic, started_at: started_at, last_seen_at: last_seen_at}
+      end
+
+    {:reply, entries, state}
+  end
+
+  def handle_call({:send_session_message, from, to, body, at}, _from, %{db: db} = state) do
+    run(
+      db,
+      "INSERT INTO session_messages (from_session, to_session, body, created_at) VALUES (?, ?, ?, ?)",
+      [from, to, body, at]
+    )
+
+    {:ok, id} = Sqlite3.last_insert_rowid(db.conn)
+    [row] = fetch(db, @select_session_message <> " WHERE m.id = ?", [id])
+    {:reply, {:ok, session_message_row_to_map(row)}, state}
+  end
+
+  def handle_call({:session_messages_after, id, session_id}, _from, %{db: db} = state) do
+    rows =
+      fetch(
+        db,
+        @select_session_message <>
+          " WHERE m.id > ? AND m.from_session != ? AND (m.to_session IS NULL OR m.to_session = ?) ORDER BY m.id",
+        [id, session_id, session_id]
+      )
+
+    {:reply, Enum.map(rows, &session_message_row_to_map/1), state}
+  end
+
+  def handle_call(:last_session_message_id, _from, %{db: db} = state) do
+    [[id]] = fetch(db, "SELECT COALESCE(MAX(id), 0) FROM session_messages", [])
+    {:reply, id, state}
+  end
+
   def handle_call({:unacked_outbox, session_id}, _from, %{db: db} = state) do
     {sql, params} =
       case session_id do
@@ -948,18 +1108,22 @@ defmodule IxMcp.ActionLog do
 
   defp unstamped_version(db) do
     case table_columns(db, "actions") do
-      [] ->
-        :fresh
+      [] -> :fresh
+      columns -> sniff_version(db, columns)
+    end
+  end
 
-      columns ->
-        cond do
-          "session_id" not in columns -> 1
-          "status" not in columns -> 2
-          "line" not in columns -> 3
-          not table_exists?(db, "jobs") -> 4
-          not table_exists?(db, "issue_claims") -> 5
-          true -> @user_version
-        end
+  # Ordered shape probes, oldest first: the first missing piece names the
+  # version the file stopped at.
+  defp sniff_version(db, columns) do
+    cond do
+      "session_id" not in columns -> 1
+      "status" not in columns -> 2
+      "line" not in columns -> 3
+      not table_exists?(db, "jobs") -> 4
+      not table_exists?(db, "issue_claims") -> 5
+      not table_exists?(db, "session_messages") -> 6
+      true -> @user_version
     end
   end
 
@@ -979,6 +1143,7 @@ defmodule IxMcp.ActionLog do
         @create_job_output,
         @create_outbox,
         @create_issue_claims,
+        @create_session_messages,
         stamp(),
         "COMMIT"
       ]
@@ -1005,6 +1170,11 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:claim_issue, _repo, _number, _session_id, _at}), do: :disabled
   defp disabled_reply({:issue_claims_after, _id}), do: []
   defp disabled_reply(:last_issue_claim_id), do: 0
+  defp disabled_reply({:heartbeat_session, _session_id, _at}), do: :ok
+  defp disabled_reply(:session_directory), do: []
+  defp disabled_reply({:send_session_message, _from, _to, _body, _at}), do: :disabled
+  defp disabled_reply({:session_messages_after, _id, _session_id}), do: []
+  defp disabled_reply(:last_session_message_id), do: 0
   defp disabled_reply({:job, _id}), do: nil
   defp disabled_reply({:job_output, _id}), do: ""
   defp disabled_reply({:recent_jobs, _session_id, _n}), do: []
@@ -1166,6 +1336,17 @@ defmodule IxMcp.ActionLog do
       started_at: started_at,
       finished_at: finished_at,
       elapsed_ms: elapsed_ms
+    }
+  end
+
+  defp session_message_row_to_map([id, from_session, from, to_session, body, created_at]) do
+    %{
+      id: id,
+      from_session: from_session,
+      from: from,
+      to_session: to_session,
+      body: body,
+      created_at: created_at
     }
   end
 

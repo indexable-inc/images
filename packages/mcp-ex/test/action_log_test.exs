@@ -319,8 +319,8 @@ defmodule IxMcp.ActionLogTest do
     :ok = ActionLog.finish_action(action_id, "done", false, 3, log)
     assert [%{status: "done", stack: nil, line: nil} | _] = ActionLog.recent(10, log)
 
-    # The 2 -> 3 -> 4 -> 5 -> 6 steps stamped the file on their way through (index#3539).
-    assert user_version(path) == 6
+    # The 2 -> ... -> 7 steps stamped the file on their way through (index#3539).
+    assert user_version(path) == 7
   end
 
   test "a v1 database migrates losslessly to the normalized schema, once" do
@@ -403,8 +403,8 @@ defmodule IxMcp.ActionLogTest do
 
     stop_supervised!(:migrate)
 
-    # The ladder ran 1 -> 2 -> 3 -> 4 -> 5 -> 6 and left the stamp behind (index#3539).
-    assert user_version(path) == 6
+    # The ladder ran 1 -> 2 -> ... -> 7 and left the stamp behind (index#3539).
+    assert user_version(path) == 7
 
     # The migrated file is the v2 shape on disk: normalized columns, no v1
     # leftovers, and a reopen (no-op detection) does not duplicate rows.
@@ -446,6 +446,7 @@ defmodule IxMcp.ActionLogTest do
                ["job_output"],
                ["jobs"],
                ["outbox"],
+               ["session_messages"],
                ["sessions"],
                ["topics"]
              ]
@@ -471,7 +472,7 @@ defmodule IxMcp.ActionLogTest do
   test "a fresh database is created stamped with the current schema version" do
     path = tmp_db()
     start_supervised!({ActionLog, path: path, name: :action_log_fresh_stamp})
-    assert user_version(path) == 6
+    assert user_version(path) == 7
   end
 
   test "an unstamped file already at the current schema is stamped, not rewritten" do
@@ -496,7 +497,7 @@ defmodule IxMcp.ActionLogTest do
 
     reopened = start_supervised!({ActionLog, path: path, name: :action_log_stamp_b})
     assert [%{intent: "keep"}] = ActionLog.recent(10, reopened)
-    assert user_version(path) == 6
+    assert user_version(path) == 7
   end
 
   test "an unstamped pre-line file (the #3536 shape) sniffs as v3 and gains the line column" do
@@ -521,7 +522,7 @@ defmodule IxMcp.ActionLogTest do
     log = start_supervised!({ActionLog, path: path, name: :action_log_pre_line})
 
     assert [%{intent: "pre-line row", status: "done", line: nil}] = ActionLog.recent(10, log)
-    assert user_version(path) == 6
+    assert user_version(path) == 7
   end
 
   test "the unique constraint arbitrates issue claims (#3880)" do
@@ -571,6 +572,53 @@ defmodule IxMcp.ActionLogTest do
     assert standing.id == claim.id
   end
 
+  test "the message cursor delivers addressed mail and broadcasts, never own sends (#3881)" do
+    log = start_supervised!({ActionLog, path: ":memory:", name: :action_log_messages})
+
+    alice = ActionLog.create_session("alice", log)
+    bob = ActionLog.create_session("bob", log)
+    carol = ActionLog.create_session(nil, log)
+
+    assert ActionLog.last_session_message_id(log) == 0
+
+    assert {:ok, direct} = ActionLog.send_session_message(alice, bob, "for bob", log)
+    assert %{from: "alice", from_session: ^alice, to_session: ^bob, body: "for bob"} = direct
+    assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(direct.created_at)
+
+    assert {:ok, blast} = ActionLog.send_session_message(carol, nil, "for everyone", log)
+    assert %{from: nil, to_session: nil} = blast
+
+    # Bob hears both; carol hears nothing (the direct row is not hers and a
+    # sender never hears her own broadcast); alice hears the broadcast only.
+    assert [%{body: "for bob"}, %{body: "for everyone"}] =
+             ActionLog.session_messages_after(0, bob, log)
+
+    assert [] = ActionLog.session_messages_after(0, carol, log)
+    assert [%{body: "for everyone", from: nil}] = ActionLog.session_messages_after(0, alice, log)
+
+    # The watermark cursor sees exactly the rows past it.
+    assert [%{body: "for everyone"}] = ActionLog.session_messages_after(direct.id, bob, log)
+    assert ActionLog.last_session_message_id(log) == blast.id
+  end
+
+  test "the heartbeat stamps the directory and the directory joins the current topic (#3881)" do
+    log = start_supervised!({ActionLog, path: ":memory:", name: :action_log_directory})
+
+    quiet = ActionLog.create_session("quiet", log)
+    busy = ActionLog.create_session("busy", log)
+    _first = ActionLog.create_topic(busy, "warmup", log)
+    _second = ActionLog.create_topic(busy, "the real work", log)
+
+    assert [%{id: ^quiet, last_seen_at: nil, topic: nil}, before_beat] =
+             ActionLog.session_directory(log)
+
+    assert %{id: ^busy, name: "busy", topic: "the real work", last_seen_at: nil} = before_beat
+
+    :ok = ActionLog.heartbeat_session(busy, log)
+    [_quiet, beaten] = ActionLog.session_directory(log)
+    assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(beaten.last_seen_at)
+  end
+
   test "a database stamped by a newer server disables logging instead of crashing" do
     path = tmp_db()
 
@@ -585,7 +633,7 @@ defmodule IxMcp.ActionLogTest do
 
     # The refusal names both versions, so the operator knows which side moves.
     assert output =~ "user_version 9000"
-    assert output =~ "supported 6"
+    assert output =~ "supported 7"
     assert output =~ "index#3539"
 
     # The server stays useful: writes are absorbed, reads answer empty.
@@ -608,6 +656,13 @@ defmodule IxMcp.ActionLogTest do
     assert ActionLog.claim_issue("indexable-inc/index", 1, session_id, log) == :disabled
     assert ActionLog.issue_claims_after(0, log) == []
     assert ActionLog.last_issue_claim_id(log) == 0
+
+    # And no bus to carry a message (#3881).
+    assert ActionLog.heartbeat_session(session_id, log) == :ok
+    assert ActionLog.session_directory(log) == []
+    assert ActionLog.send_session_message(session_id, nil, "hello?", log) == :disabled
+    assert ActionLog.session_messages_after(0, session_id, log) == []
+    assert ActionLog.last_session_message_id(log) == 0
 
     # The newer file is left exactly as found, for the newer server.
     assert user_version(path) == 9000

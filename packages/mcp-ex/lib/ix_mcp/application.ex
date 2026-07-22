@@ -15,6 +15,7 @@ defmodule IxMcp.Application do
       │   └── IxMcp.Jobs.Job*   runs one evaluation in a monitored process
       ├── IxMcp.PrWatch.Supervisor (Task.Supervisor)  one task per PR watch
       ├── IxMcp.IssueWatch      (only when IX_MCP_STDIO=1) new-issue channel feed
+      ├── IxMcp.SessionWatch    (only when IX_MCP_STDIO=1) heartbeat + cross-session message delivery
       ├── IxMcp.Agents.Harness     (AgentHarness) depth-1 subagent processes (#3700)
       ├── IxMcp.Agents.Events      subagent ledger: events, finals, graph, notifications
       └── IxMcp.MCP.Stdio       (only when IX_MCP_STDIO=1) the stdio transport
@@ -144,10 +145,12 @@ defmodule IxMcp.Application do
   # durable instance identity that outlives a restart -- out of scope here.
   # The issue feed announces into a user-facing transport and polls GitHub,
   # so it rides the same flag as the transport: `mix test` and IEx sessions
-  # get neither (#3877).
+  # get neither (#3877). The session watch (#3881) rides it too: its
+  # heartbeat would otherwise register every test run in the directory and
+  # its delivery loop would announce into a transport that is not there.
   defp issue_watch do
     case System.get_env("IX_MCP_STDIO") do
-      "1" -> [IxMcp.IssueWatch]
+      "1" -> [IxMcp.IssueWatch, IxMcp.SessionWatch]
       _ -> []
     end
   end
