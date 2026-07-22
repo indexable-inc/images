@@ -450,7 +450,14 @@ in {
               recurse = true;
               fetchJobs = 16;
             };
-            maintenance.auto = true;
+            # Never let ordinary git commands spawn background `git
+            # maintenance run --auto`: each auto run detaches an uncapped
+            # `git repack --cruft`, and at agent-fleet commit/fetch volume
+            # those stack without bound -- 1,033 of them piled up in ~12
+            # minutes and swapped a 128 GB workstation (ix#8161, #4001).
+            # Repos that want maintenance get scheduled runs via
+            # `git maintenance register` (maintenance.repo) instead.
+            maintenance.auto = false;
           };
         };
       };
