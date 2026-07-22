@@ -151,9 +151,11 @@ jobs:
           set -euo pipefail
           ensure() {
             command -v "$1" >/dev/null 2>&1 && return
-            local out
-            out="$(nix build "nixpkgs#$1" --no-link --print-out-paths)"
-            echo "${out}/bin" >> "$GITHUB_PATH"
+            # --print-out-paths prints one line per output (jq: bin + man);
+            # add /bin per path, not to the joined string.
+            while IFS= read -r p; do
+              echo "${p}/bin" >> "$GITHUB_PATH"
+            done < <(nix build "nixpkgs#$1" --no-link --print-out-paths)
           }
           ensure gh
       - name: Bump submodules
@@ -262,9 +264,11 @@ jobs:
           set -euo pipefail
           ensure() {
             command -v "$1" >/dev/null 2>&1 && return
-            local out
-            out="$(nix build "nixpkgs#$1" --no-link --print-out-paths)"
-            echo "${out}/bin" >> "$GITHUB_PATH"
+            # --print-out-paths prints one line per output (jq: bin + man);
+            # add /bin per path, not to the joined string.
+            while IFS= read -r p; do
+              echo "${p}/bin" >> "$GITHUB_PATH"
+            done < <(nix build "nixpkgs#$1" --no-link --print-out-paths)
           }
           ensure gh
           ensure jq
