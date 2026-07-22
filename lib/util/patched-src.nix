@@ -21,7 +21,7 @@
 # created, exactly as its stored-diff predecessor did. Because the diff is
 # recomputed against whatever that tree is, a derived patch can never conflict
 # on rebase -- so
-# `rebase-patches`, dag.json, and the commit-body reason check ignore them by
+# fork-repo rebases and the commit-body reason check ignore them by
 # construction (they are not `*.patch` files; the registry `reason` field is
 # their reason of record). The registry is bound into `patchedSrcFor` once and
 # matched here by `patchDir`, so the package build and the
@@ -72,7 +72,7 @@
   # bare base, so that closure must build as a standalone series.
   patchNames ? null,
 }: let
-  # `rebase-patches` exports the series with `git format-patch --zero-commit
+  # A conforming series is written with `git format-patch --zero-commit
   # --no-signature --no-stat -N`, so a conforming file is byte-stable across
   # regenerations: no commit-hash, `[PATCH N/M]` count, diffstat, or
   # git-version churn in the diff. Hand-added patches drift from that shape,

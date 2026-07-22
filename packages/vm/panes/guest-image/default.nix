@@ -61,7 +61,7 @@
             # De-forked (index#1894): the delta is an in-repo patch series
             # (./mesa/patches) applied to the upstream `mesa-src` input through
             # `ix.patchedSrc`, replacing the old `indexable-inc/mesa` snapshot
-            # fork tarball. `packages/rebase-patches` regenerates the series on a
+            # fork tarball. A jj rebase of indexable-inc/mesa moves the delta on a
             # base bump; `checks.<system>.patched-src-mesa` gates that it still
             # applies. `hardware.graphics.enable` in ./nixos.nix consumes
             # `pkgs.mesa`, so this override is what /run/opengl-driver (and the

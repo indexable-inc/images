@@ -6,7 +6,7 @@
 # that lives next to this generator (./Cargo.lock).
 #
 # Refresh policy: the lockfile moves ONLY with the pinned nightly / clippy-src
-# bump, exactly as the stored-diff predecessor did. When `rebase-patches`
+# bump, exactly as the stored-diff predecessor did. When a fork rebase
 # moves the clippy base, regenerate ./Cargo.lock with the pinned toolchain
 # (`cargo generate-lockfile` in the patched tree) and commit it here in the
 # same change.

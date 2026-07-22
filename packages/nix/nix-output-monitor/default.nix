@@ -37,7 +37,7 @@
       packages/nix/nix-output-monitor: haskellPackages.nix-derivation is
       ${hprev.nix-derivation.version} but nix-derivation-src pins 1.1.3.
       Repin the nix-derivation-src input to the matching upstream rev and
-      run `nix run .#rebase-patches -- nix-derivation`.'';
+      jj-rebase indexable-inc/Haskell-Nix-Derivation-Library and repin.'';
       compose.overrideSrc {
         src = patchedNixDerivationSrc;
         version = hprev.nix-derivation.version;

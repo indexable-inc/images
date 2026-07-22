@@ -208,7 +208,7 @@
       # flake input at that branch. Pinned by rev (autoUpdate = false): there
       # is no `.#home-manager.updateScript` package for the fork-sync cron to
       # drive; bump by hand with `nix flake update home-manager-src` + `nix
-      # run .#rebase-patches -- home-manager`, then re-push the fork branch.
+      # jj-rebase indexable-inc/home-manager, push bookmark + pin ref, repin.
       name = "home-manager";
       input = "home-manager-src";
       upstreamUrl = "https://github.com/nix-community/home-manager.git";
@@ -332,7 +332,7 @@
     }
     {
       # clippy is nightly-toolchain-coupled: its input is pinned by rev and must
-      # move only with the pinned nightly, so `rebase-patches` is run explicitly
+      # move only with the pinned nightly, so the fork is jj-rebased explicitly
       # alongside a toolchain bump, never under a blanket `nix flake update` or
       # the scheduled fork-sync. `name` is `clippy` (not the `llm-clippy` package
       # id) so the check reads `patched-src-clippy` and the rebase arg is `clippy`.
@@ -437,7 +437,7 @@
       # sync-fd patch (index#1742) is validated by BOOTING the panes guest on a
       # linux GPU host and exercising the WSI acquire path, not by CI, so a base
       # bump is a rebase-plus-boot event, not a routine cron. `url` is the
-      # gitlab git remote so `rebase-patches`' scratch-clone fetch works; the
+      # gitlab remote stays the rebase target for indexable-inc/mesa; the
       # build consumes `ix.mesaSrc` (the shallow git input) through patchedSrc.
       name = "mesa";
       input = "mesa-src";
@@ -481,7 +481,7 @@
       # change that moves the daemon version, never under a routine
       # `nix flake update` or the scheduled fork-sync -- hence `autoUpdate =
       # false`, which pins `nix-src` by rev and keeps it out of the cron. Bump the
-      # `nix-src` rev, then `nix run .#rebase-patches -- nix`.
+      # `nix-src` rev after jj-rebasing indexable-inc/nix.
       name = "nix";
       input = "nix-src";
       upstreamUrl = "https://github.com/NixOS/nix.git";
@@ -818,7 +818,7 @@
       # (packages/nix/nix-fast-build), so the base must equal the nixpkgs
       # package version (tag 1.6.0), never free-float under the fork-sync
       # cron. On a nixpkgs nix-fast-build bump, repin the input to the
-      # matching tag and run `nix run .#rebase-patches -- nix-fast-build`.
+      # matching tag after jj-rebasing indexable-inc/nix-fast-build.
       name = "nix-fast-build";
       input = "nix-fast-build-src";
       upstreamUrl = "https://github.com/Mic92/nix-fast-build.git";
@@ -849,7 +849,7 @@
       # cabal version still reads 1.1.3 (the hackage release nixpkgs builds,
       # plus the bound-relaxation cabal revisions hackage layers on top), so
       # it must not free-float: repin when nixpkgs moves past 1.1.3, then
-      # `nix run .#rebase-patches -- nix-derivation`.
+      # jj-rebasing indexable-inc/Haskell-Nix-Derivation-Library.
       name = "nix-derivation";
       input = "nix-derivation-src";
       upstreamUrl = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library.git";
