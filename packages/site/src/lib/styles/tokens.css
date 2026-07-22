@@ -7,7 +7,7 @@
 
    Berkeley Mono is commercially licensed, so the woff2 files live in the
    ix repo only; this public repo ships the stack and falls back to
-   ui-monospace on github.io. Single source of truth: app.css imports this
+   ui-monospace elsewhere. Single source of truth: app.css imports this
    file, and consumers import `@indexable/site/styles/tokens.css`. */
 
 :root {

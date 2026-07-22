@@ -1,7 +1,7 @@
 // Page-level components of the index site, exported for consumers of the
 // raw-source package (`@indexable/site/components`). The index app's own
 // routes import the same files through `$lib`, which aliases this package
-// source dir, so one implementation serves github.io and ix.dev.
+// source dir, so one implementation serves ix.dev and local previews.
 export { default as BenchCompareTable } from './BenchCompareTable.svelte';
 export { default as Dag } from './Dag.svelte';
 export { default as FilterBar } from './FilterBar.svelte';

@@ -5,7 +5,6 @@
   siteBuild = ix.buildSvelteSite pkgs {
     sourceRoot = ix.paths.packagesRoot + "/site";
     distDir = "build";
-    serve.routePrefix = "/index";
   };
 in
   siteBuild.overrideAttrs (old: {

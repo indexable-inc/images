@@ -9,7 +9,7 @@ links:
   - label: PR #3851 (seam + helper)
     href: https://github.com/indexable-inc/index/pull/3851
   - label: weave agent memory at scale
-    href: https://indexable-inc.github.io/index/weave-agent-memory-executed
+    href: https://ix.dev/updates/weave-agent-memory-executed
 ---
 
 The markdown auto-memory flow (a MEMORY.md flat index plus one file per fact, maintained by prompt rules) is retired on the first workstation and replaced by a weave store: an append-only fact journal with Datalog-derived views, committed to the operator's private config repo. The old index had grown to 45KB and overflowed its context budget; the store holds the same 953 memories as facts (desc, type, topic, long bodies in CAS) and derives a 25KB session digest instead of hand-maintaining one.

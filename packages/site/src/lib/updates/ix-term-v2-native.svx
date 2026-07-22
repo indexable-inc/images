@@ -15,12 +15,12 @@ links:
   - label: index removal (3811)
     href: https://github.com/indexable-inc/index/pull/3811
   - label: v1 update
-    href: https://indexable-inc.github.io/index/ix-term-web-terminal
+    href: https://ix.dev/updates/ix-term-web-terminal
 ---
 
 term.ix.dev now scrolls, renders in Berkeley Mono, answers the operator's
 Ghostty keybinds byte for byte, and runs as a real NixOS service. This is
-the sequel to [the v1 post](https://indexable-inc.github.io/index/ix-term-web-terminal):
+the sequel to [the v1 post](https://ix.dev/updates/ix-term-web-terminal):
 development moved to the private ix repo ([index#3810](https://github.com/indexable-inc/index/issues/3810)
 removed the index packages), and v2 landed there as
 [ix#7991](https://github.com/indexable-inc/ix/pull/7991) with follow-ups
