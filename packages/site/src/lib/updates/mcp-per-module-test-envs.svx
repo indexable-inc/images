@@ -1,0 +1,28 @@
+---
+id: mcp-per-module-test-envs
+postedAt: 2026-07-21T21:30:00-07:00
+title: "editing one mcp module no longer reruns all ~60 bundled test derivations"
+tags: [nix, mcp, incremental]
+links:
+  - label: "#3897"
+    href: https://github.com/indexable-inc/index/issues/3897
+  - label: packages/mcp
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp/default.nix
+---
+
+The mcp package's import/smoke/typecheck derivations all consumed one
+mega-interpreter carrying every bundled Python module, so a one-line edit to
+any module rebuilt that env and reran every module's tests. Each bundled
+module now declares its first-party imports on its own definition
+(`passthru.ixFirstPartyDeps`), and every per-module test gets an interpreter
+holding the shared third-party base plus only the modules under test and
+their declared-dep closure. Touching `src/linear` now re-derives the linear
+and nox_autotriage tests and the strict-typecheck gate; the other 70-odd test
+derivations keep their store paths and stay cached.
+
+`strictTypecheck` also stopped copying all of `src/`: its check tree is
+assembled from the green modules' build outputs plus that same closure, so a
+module outside the allowlist and its imports can no longer invalidate the
+gate. The view smoke stopped interpolating the whole package directory as its
+fixture and plants a temp tree instead. The shipped `ix-mcp` artifact is
+untouched -- its derivation hash is byte-identical to before.

@@ -280,6 +280,7 @@
     pkgs.runCommand "ix-mcp-fsearch-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [shModule];
       meta.description = "rg/fd/Spotlight-backed grep/find/spotlight bundled into the ix-mcp interpreter";
     }
     ''
@@ -370,6 +371,19 @@
       # store.py rides the durable weave spool (index#3419), so every env
       # that bundles this package needs the weave client alongside it.
       propagatedBuildInputs = [weaveModule];
+      # The server's full first-party import surface (store.py's weave is the
+      # only top-level one; the rest are lazy/guarded in runtime.py and the
+      # ipython bootstrap), declared for the per-module test-env closure below.
+      passthru.ixFirstPartyDeps = [
+        fleetModule
+        fsearchModule
+        nuPyModule
+        shModule
+        tuiModule
+        viewModule
+        vmkitModule
+        weaveModule
+      ];
       meta.description = "The ix notebook-first MCP server package";
     }
     ''
@@ -415,6 +429,7 @@
     pkgs.runCommand "ix-mcp-google-auth-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [privateSessionModule];
       meta.description = "Google OAuth credentials helper bundled into the ix-mcp interpreter";
     }
     ''
@@ -443,6 +458,7 @@
     pkgs.runCommand "ix-mcp-view-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [ixNotebookMcpModule];
       meta.description = "Pretty composable file/search views bundled into the ix-mcp interpreter";
     }
     ''
@@ -485,6 +501,7 @@
     pkgs.runCommand "ix-mcp-nix-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [ixNotebookMcpModule];
       meta.description = "nix internal-json -> polars + live build-DAG, bundled into the ix-mcp interpreter";
     }
     ''
@@ -527,6 +544,7 @@
     pkgs.runCommand "ix-mcp-mesh-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [ixNotebookMcpModule];
       meta.description = "Tailnet mesh discovery of live ix-mcp servers, bundled into the ix-mcp interpreter";
     }
     ''
@@ -568,6 +586,12 @@
     pkgs.runCommand "ix-mcp-fabric-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [
+        fleetModule
+        ixNotebookMcpModule
+        viewModule
+        weaveModule
+      ];
       meta.description = "Call-first fabric delegation bundled into the ix-mcp interpreter";
     }
     ''
@@ -592,6 +616,7 @@
     pkgs.runCommand "ix-mcp-sh-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [ixNotebookMcpModule];
       meta.description = "Async shell-out helper bundled into the ix-mcp interpreter";
     }
     ''
@@ -613,6 +638,7 @@
     pkgs.runCommand "ix-mcp-svelte-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [ixNotebookMcpModule];
       meta.description = "Svelte 5 resource components bundled into the ix-mcp interpreter";
     }
     ''
@@ -635,6 +661,7 @@
     pkgs.runCommand "ix-mcp-browser-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [ixNotebookMcpModule];
       meta.description = "Playwright-over-CDP browser helper bundled into the ix-mcp interpreter";
     }
     ''
@@ -656,6 +683,10 @@
     pkgs.runCommand "ix-mcp-x-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [
+        browserModule
+        privateSessionModule
+      ];
       meta.description = "Read recent X posts to polars via the logged-in browser, bundled into the ix-mcp interpreter";
     }
     ''
@@ -677,6 +708,10 @@
     pkgs.runCommand "ix-mcp-slack-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [
+        ixNotebookMcpModule
+        privateSessionModule
+      ];
       meta.description = "Per-user Slack channels/messages/search bundled into the ix-mcp interpreter";
     }
     ''
@@ -699,6 +734,7 @@
     pkgs.runCommand "ix-mcp-beeper-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [privateSessionModule];
       meta.description = "Per-user Beeper Desktop chats/messages/search/send bundled into the ix-mcp interpreter";
     }
     ''
@@ -719,6 +755,10 @@
     pkgs.runCommand "ix-mcp-worktree-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [
+        nixModule
+        shModule
+      ];
       meta.description = "Git-worktree helper bundled into the ix-mcp interpreter";
     }
     ''
@@ -743,6 +783,10 @@
     pkgs.runCommand "ix-mcp-claude-history-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [
+        distillerModule
+        fsearchModule
+      ];
       meta.description = "Local Claude Code history search bundled into the ix-mcp interpreter";
     }
     ''
@@ -757,7 +801,6 @@
   # `claude_history` imports `distiller.transcripts` (stdlib-only); the
   # distiller's optional deps (pyarrow/boto3) stay out of this interpreter.
   distillerModule = pkgs.ix-distiller.passthru.pythonModule;
-  distillerPythonSource = pkgs.ix-distiller.passthru.pythonSource;
   # Drive the Ghostty terminal over its AppleScript dictionary (Ghostty 1.3.2+):
   # `import ghostty`, then `await ghostty.surfaces()` reads every open surface
   # (id/tty/pid/cwd/name) into polars and `await ghostty.close_me()` closes the
@@ -831,6 +874,7 @@
     pkgs.runCommand "ix-mcp-nox-autotriage-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [linearModule];
       meta.description = "nox conformance -> Linear triage adapter bundled into the ix-mcp interpreter";
     }
     ''
@@ -852,6 +896,7 @@
     pkgs.runCommand "ix-mcp-mcp-client-python-module"
     {
       strictDeps = true;
+      passthru.ixFirstPartyDeps = [ixNotebookMcpModule];
       meta.description = "MCP client helper bundled into the ix-mcp interpreter";
     }
     ''
@@ -1027,33 +1072,48 @@
   # the PIL image type capture returns. `coreLocationModule` adds the Core
   # Location binding so location reads work out of the box, and
   # `scriptingBridgeModule` the Scripting Bridge binding for app automation.
-  darwinExtraPackages = ps:
+  # Split from the darwin-only first-party modules below so the per-module test
+  # base (third-party only) can reuse these without dragging module sources in.
+  darwinFrameworkPackages = ps:
     lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       ps.pyobjc-framework-Quartz
       coreLocationModule
       scriptingBridgeModule
       mapKitModule
-      mapsModule
-      screenModule
-      vmkitModule
-      imessageModule
-      ghosttyModule
-      # `embed` (code embeddings, index#3417) infers on torch/MPS, so its
-      # heavyweight runtime joins the interpreter only on Darwin; the module
-      # itself is bundled everywhere and imports these lazily with a clear
-      # error where they are absent. `torch` substitutes from the official
-      # cache. `sentence-transformers` is overridden because the stock package
-      # folds every optional-dependencies extra into its nativeCheckInputs and
-      # the `audio` extra carries phonemizer -> dlinfo, which this nixpkgs
-      # marks broken, refusing evaluation outright. The extras are test-only:
-      # drop the test run rather than allowlist a broken leaf; runtime
-      # dependencies are untouched.
+    ];
+  # The darwin-only bundled first-party modules.
+  darwinBundledModules = lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+    mapsModule
+    screenModule
+    vmkitModule
+    imessageModule
+    ghosttyModule
+  ];
+  # `embed` (code embeddings, index#3417) infers on torch/MPS, so its
+  # heavyweight runtime joins the interpreter only on Darwin; the module
+  # itself is bundled everywhere and imports these lazily with a clear
+  # error where they are absent. `torch` substitutes from the official
+  # cache. `sentence-transformers` is overridden because the stock package
+  # folds every optional-dependencies extra into its nativeCheckInputs and
+  # the `audio` extra carries phonemizer -> dlinfo, which this nixpkgs
+  # marks broken, refusing evaluation outright. The extras are test-only:
+  # drop the test run rather than allowlist a broken leaf; runtime
+  # dependencies are untouched.
+  darwinTorchPackages = ps:
+    lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       ps.torch
       (ps.sentence-transformers.overridePythonAttrs (_: {
         doCheck = false;
         nativeCheckInputs = [];
       }))
     ];
+  # Concatenated in the shipped env's historical order (frameworks, modules,
+  # torch) so the interpreter's buildEnv input order -- and store path -- do
+  # not move.
+  darwinExtraPackages = ps:
+    darwinFrameworkPackages ps
+    ++ darwinBundledModules
+    ++ darwinTorchPackages ps;
 
   # htpy: build HTML in plain Python (`div(class_="x")[ ... ]`), auto-escaping
   # every text node and attribute via markupsafe. Bundled so a session — and the
@@ -1302,161 +1362,172 @@
   # (incl. Postgres via psycopg + SQLAlchemy), duckdb, httpx, htpy, and playwright
   # are importable by default while an in-session `pip install` still writes to
   # the per-session venv.
-  # The bundled-package set the pinned interpreter carries. Named so a sibling
-  # interpreter (the vdom property-test runner below) can reuse the exact same
-  # modules and only add its test deps, instead of duplicating the long list.
+  # The bundled-package set the pinned interpreter carries, split in two: the
+  # third-party base (PyPI/nixpkgs packages, which change rarely) and the
+  # first-party module block (repo sources, which churn). The per-module test
+  # envs below reuse the third-party base plus only the modules under test;
+  # the shipped env concatenates both, in the historical order, so the store
+  # path of the shipped interpreter does not move.
+  mcpThirdPartyPackages = ps: [
+    ps.asyncssh
+    ps.numpy
+    ps.polars
+    # psycopg (v3) + SQLAlchemy so `polars.read_database` reaches Postgres out
+    # of the box: `pl.read_database(sql, create_engine("postgresql+psycopg://…"))`.
+    # connectorx and the ADBC drivers (what `read_database_uri` wants) are not
+    # packaged in nixpkgs, so the SQLAlchemy-engine path is the supported one
+    # here; psycopg also works as a raw DBAPI connection for `read_database`.
+    ps.psycopg
+    ps.sqlalchemy
+    # duckdb: in-process analytical SQL over CSV/Parquet with no external
+    # service; `duckdb.sql(q).pl()` hands results straight back to polars.
+    # pyarrow is deliberately not bundled: it pulls arrow-cpp + grpc + the
+    # aws/gcp/azure C++ SDKs (~300 MB) that this use case never touches, and
+    # the polars/duckdb paths return frames natively. A session that needs
+    # explicit Arrow tables (`pl.to_arrow()`) can `pip install pyarrow`.
+    ps.duckdb
+    # httpx: an HTTP client for the shared async loop (the session already speaks
+    # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
+    # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
+    ps.httpx
+    # githubkit: typed async GitHub API client generated from GitHub's OpenAPI
+    # spec, so a session does GitHub reads/writes as direct API calls instead
+    # of `gh` subprocesses (index#3258: a REST call answers in under a second
+    # where each `gh` fork costs several; `gh` stays for auth bootstrap via
+    # `gh auth token`).
+    ps.githubkit
+    # pydantic (v2): the boundary parser for untrusted/JSON data. The bundled
+    # `linear` and `google_auth` modules parse their GraphQL/CLI JSON responses
+    # into typed models with it instead of threading untyped dicts. (The MCP SDK
+    # pulls it transitively too, but linear/google_auth depend on it directly,
+    # so declare it explicitly.)
+    ps.pydantic
+    # htpy: compose HTML in Python with automatic escaping (see the module
+    # definition above). The preferred way to build any dashboard markup.
+    htpyModule
+    # exa-py: the official Exa (exa.ai) SDK, so a session can run neural web
+    # search, get page contents, and `answer(...)` over the live web with no
+    # install step (`from exa_py import Exa`). It is a thin client over the Exa
+    # REST API. No key is bundled: the caller brings `EXA_API_KEY` (sourced
+    # from rbw/op per the secrets split), e.g. `Exa(os.environ["EXA_API_KEY"])`.
+    ps.exa-py
+    # cursor-sdk: Cursor's official agent SDK (see the module definition
+    # above) so a session can run local/cloud Cursor agents with no install
+    # step.
+    cursorSdkModule
+    # Gmail / Google Workspace, the "third surface" for an integration alongside
+    # the MCP binding and the index CLI (RFC 0003): a session can drive the
+    # Gmail and Calendar APIs directly with no install step. This is the official
+    # client. Gmail is a Workspace API with no dedicated Cloud Client Library, so
+    # google-api-python-client is the supported path (simplegmail rides on the
+    # deprecated oauth2client with known token-refresh bugs). google-auth-oauthlib
+    # carries the OAuth user-consent flow and google-auth-httplib2 the transport.
+    # No credentials or tokens are bundled: the caller brings its own, sourced
+    # from rbw/op per the secrets split.
+    ps.google-api-python-client
+    ps.google-auth-oauthlib
+    ps.google-auth-httplib2
+    # matplotlib (and Pillow, pulled in transitively) so plots and images are
+    # capturable out of the box: the worker renders any open figure / object
+    # with a `_repr_png_` back as an MCP image block.
+    ps.matplotlib
+    # pygments: syntax highlighting for `view`'s Code views (cat/json/diff).
+    ps.pygments
+    # ansi2html: render a shell command's ANSI color to HTML for the `sh`
+    # helper's human/dashboard view (the model view is escape-stripped).
+    ps.ansi2html
+    # playwright for browser automation out of the box. The Nix python package
+    # is patched to use `playwright-driver` as its node driver, and the wrapper
+    # below points PLAYWRIGHT_BROWSERS_PATH at the matching browser bundle, so
+    # `from playwright.async_api import async_playwright` works with no
+    # `playwright install` step. Driver and browsers are version-locked in
+    # nixpkgs; keep them sourced from the same `playwright-driver` to stay in
+    # sync. https://playwright.dev/python/docs/library
+    ps.playwright
+    # Execution engine: code runs on ONE real ipykernel on THIS interpreter
+    # (driven over jupyter-client), so every bundled module (tui, search, the
+    # data libraries) is importable with no install step.
+    #   - ipykernel: the kernel the single shared session runs on.
+    #   - jupyter-client: the client protocol the server drives it with.
+    #   - nbformat: build the output dicts from kernel IOPub messages.
+    #   - aiohttp: the tiny read-only dashboard over the execution store.
+    #   - mcp: the Python MCP SDK that serves the tool surface over stdio/HTTP.
+    ps.ipykernel
+    ps.jupyter-client
+    ps.nbformat
+    ps.aiohttp
+    ps.mcp
+    # dill: serializes functions and classes defined in cells, which stdlib
+    # pickle cannot -- the session-file namespace checkpoints
+    # (runtime.__ix_snapshot / __ix_restore) depend on it to bring an agent's
+    # helpers back instantly when a session file is reopened.
+    ps.dill
+    # ray: the distributed-execution engine the `fleet` module drives. One Ray
+    # cluster spans the tailnet (a head node holds the GCS, the rest join as
+    # workers, all bound to their Tailscale IPv4); `fleet.run`/`fleet.submit`
+    # ship cloudpickled callables to it and the shared object store (Plasma,
+    # zero-copy on-node, peer-to-peer transfer between nodes, spill-to-disk
+    # under memory pressure) carries args and results. We use Ray rather than
+    # reinvent Plasma/Arrow/refcount-GC. It bundles its own cloudpickle, so a
+    # function defined in a cell ships by value without a separate serializer.
+    # nixpkgs ray builds on aarch64-darwin + {aarch64,x86_64}-linux, the exact
+    # platforms the fleet and dev boxes run, so it joins the pinned interpreter
+    # like any other module.
+    ps.ray
+    # The Spark Connect client `fleet.spark()` drives (defined above): a 3.5.5
+    # pyspark pinned to the services.ix-spark cluster's Spark, jars stripped,
+    # carrying its Arrow/gRPC connect deps. Lets a cell open a SparkSession on
+    # the cluster master with no local JVM.
+    pysparkConnect
+    # pypdf: extract text from a PDF in-kernel, so a downloaded file can be
+    # read/searched without shelling out or falling back to a host tool. Pure
+    # Python, small (`from pypdf import PdfReader`).
+    ps.pypdf
+    # claude-agent-sdk: the Claude Agent SDK the `fabric.claude` session
+    # helper drives (streaming input + native interrupt over the Claude Code
+    # CLI subprocess), replacing PTY scraping for programmatic claudes.
+    ps.claude-agent-sdk
+  ];
+  # The bundled first-party modules (each defined above with its
+  # ixFirstPartyDeps declaration).
+  mcpBundledModules = [
+    tuiModule
+    searchModule
+    nuPyModule
+    astlogModule
+    scipqlModule
+    flecsQueryModule
+    fsearchModule
+    embedModule
+    privateSessionModule
+    googleAuthModule
+    ixGoogleModule
+    ixNotebookMcpModule
+    viewModule
+    nixModule
+    sharedaudioModule
+    fleetModule
+    meshModule
+    weaveModule
+    fabricModule
+    shModule
+    svelteModule
+    worktreeModule
+    claudeHistoryModule
+    distillerModule
+    browserModule
+    xModule
+    slackModule
+    beeperModule
+    linearModule
+    notionModule
+    noxAutotriageModule
+    mcpClientModule
+  ];
   mcpPythonPackages = ps:
-    [
-      ps.asyncssh
-      ps.numpy
-      ps.polars
-      # psycopg (v3) + SQLAlchemy so `polars.read_database` reaches Postgres out
-      # of the box: `pl.read_database(sql, create_engine("postgresql+psycopg://…"))`.
-      # connectorx and the ADBC drivers (what `read_database_uri` wants) are not
-      # packaged in nixpkgs, so the SQLAlchemy-engine path is the supported one
-      # here; psycopg also works as a raw DBAPI connection for `read_database`.
-      ps.psycopg
-      ps.sqlalchemy
-      # duckdb: in-process analytical SQL over CSV/Parquet with no external
-      # service; `duckdb.sql(q).pl()` hands results straight back to polars.
-      # pyarrow is deliberately not bundled: it pulls arrow-cpp + grpc + the
-      # aws/gcp/azure C++ SDKs (~300 MB) that this use case never touches, and
-      # the polars/duckdb paths return frames natively. A session that needs
-      # explicit Arrow tables (`pl.to_arrow()`) can `pip install pyarrow`.
-      ps.duckdb
-      # httpx: an HTTP client for the shared async loop (the session already speaks
-      # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
-      # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
-      ps.httpx
-      # githubkit: typed async GitHub API client generated from GitHub's OpenAPI
-      # spec, so a session does GitHub reads/writes as direct API calls instead
-      # of `gh` subprocesses (index#3258: a REST call answers in under a second
-      # where each `gh` fork costs several; `gh` stays for auth bootstrap via
-      # `gh auth token`).
-      ps.githubkit
-      # pydantic (v2): the boundary parser for untrusted/JSON data. The bundled
-      # `linear` and `google_auth` modules parse their GraphQL/CLI JSON responses
-      # into typed models with it instead of threading untyped dicts. (The MCP SDK
-      # pulls it transitively too, but linear/google_auth depend on it directly,
-      # so declare it explicitly.)
-      ps.pydantic
-      # htpy: compose HTML in Python with automatic escaping (see the module
-      # definition above). The preferred way to build any dashboard markup.
-      htpyModule
-      # exa-py: the official Exa (exa.ai) SDK, so a session can run neural web
-      # search, get page contents, and `answer(...)` over the live web with no
-      # install step (`from exa_py import Exa`). It is a thin client over the Exa
-      # REST API. No key is bundled: the caller brings `EXA_API_KEY` (sourced
-      # from rbw/op per the secrets split), e.g. `Exa(os.environ["EXA_API_KEY"])`.
-      ps.exa-py
-      # cursor-sdk: Cursor's official agent SDK (see the module definition
-      # above) so a session can run local/cloud Cursor agents with no install
-      # step.
-      cursorSdkModule
-      # Gmail / Google Workspace, the "third surface" for an integration alongside
-      # the MCP binding and the index CLI (RFC 0003): a session can drive the
-      # Gmail and Calendar APIs directly with no install step. This is the official
-      # client. Gmail is a Workspace API with no dedicated Cloud Client Library, so
-      # google-api-python-client is the supported path (simplegmail rides on the
-      # deprecated oauth2client with known token-refresh bugs). google-auth-oauthlib
-      # carries the OAuth user-consent flow and google-auth-httplib2 the transport.
-      # No credentials or tokens are bundled: the caller brings its own, sourced
-      # from rbw/op per the secrets split.
-      ps.google-api-python-client
-      ps.google-auth-oauthlib
-      ps.google-auth-httplib2
-      # matplotlib (and Pillow, pulled in transitively) so plots and images are
-      # capturable out of the box: the worker renders any open figure / object
-      # with a `_repr_png_` back as an MCP image block.
-      ps.matplotlib
-      # pygments: syntax highlighting for `view`'s Code views (cat/json/diff).
-      ps.pygments
-      # ansi2html: render a shell command's ANSI color to HTML for the `sh`
-      # helper's human/dashboard view (the model view is escape-stripped).
-      ps.ansi2html
-      # playwright for browser automation out of the box. The Nix python package
-      # is patched to use `playwright-driver` as its node driver, and the wrapper
-      # below points PLAYWRIGHT_BROWSERS_PATH at the matching browser bundle, so
-      # `from playwright.async_api import async_playwright` works with no
-      # `playwright install` step. Driver and browsers are version-locked in
-      # nixpkgs; keep them sourced from the same `playwright-driver` to stay in
-      # sync. https://playwright.dev/python/docs/library
-      ps.playwright
-      # Execution engine: code runs on ONE real ipykernel on THIS interpreter
-      # (driven over jupyter-client), so every bundled module (tui, search, the
-      # data libraries) is importable with no install step.
-      #   - ipykernel: the kernel the single shared session runs on.
-      #   - jupyter-client: the client protocol the server drives it with.
-      #   - nbformat: build the output dicts from kernel IOPub messages.
-      #   - aiohttp: the tiny read-only dashboard over the execution store.
-      #   - mcp: the Python MCP SDK that serves the tool surface over stdio/HTTP.
-      ps.ipykernel
-      ps.jupyter-client
-      ps.nbformat
-      ps.aiohttp
-      ps.mcp
-      # dill: serializes functions and classes defined in cells, which stdlib
-      # pickle cannot -- the session-file namespace checkpoints
-      # (runtime.__ix_snapshot / __ix_restore) depend on it to bring an agent's
-      # helpers back instantly when a session file is reopened.
-      ps.dill
-      # ray: the distributed-execution engine the `fleet` module drives. One Ray
-      # cluster spans the tailnet (a head node holds the GCS, the rest join as
-      # workers, all bound to their Tailscale IPv4); `fleet.run`/`fleet.submit`
-      # ship cloudpickled callables to it and the shared object store (Plasma,
-      # zero-copy on-node, peer-to-peer transfer between nodes, spill-to-disk
-      # under memory pressure) carries args and results. We use Ray rather than
-      # reinvent Plasma/Arrow/refcount-GC. It bundles its own cloudpickle, so a
-      # function defined in a cell ships by value without a separate serializer.
-      # nixpkgs ray builds on aarch64-darwin + {aarch64,x86_64}-linux, the exact
-      # platforms the fleet and dev boxes run, so it joins the pinned interpreter
-      # like any other module.
-      ps.ray
-      # The Spark Connect client `fleet.spark()` drives (defined above): a 3.5.5
-      # pyspark pinned to the services.ix-spark cluster's Spark, jars stripped,
-      # carrying its Arrow/gRPC connect deps. Lets a cell open a SparkSession on
-      # the cluster master with no local JVM.
-      pysparkConnect
-      # pypdf: extract text from a PDF in-kernel, so a downloaded file can be
-      # read/searched without shelling out or falling back to a host tool. Pure
-      # Python, small (`from pypdf import PdfReader`).
-      ps.pypdf
-      # claude-agent-sdk: the Claude Agent SDK the `fabric.claude` session
-      # helper drives (streaming input + native interrupt over the Claude Code
-      # CLI subprocess), replacing PTY scraping for programmatic claudes.
-      ps.claude-agent-sdk
-      tuiModule
-      searchModule
-      nuPyModule
-      astlogModule
-      scipqlModule
-      flecsQueryModule
-      fsearchModule
-      embedModule
-      privateSessionModule
-      googleAuthModule
-      ixGoogleModule
-      ixNotebookMcpModule
-      viewModule
-      nixModule
-      sharedaudioModule
-      fleetModule
-      meshModule
-      weaveModule
-      fabricModule
-      shModule
-      svelteModule
-      worktreeModule
-      claudeHistoryModule
-      distillerModule
-      browserModule
-      xModule
-      slackModule
-      beeperModule
-      linearModule
-      notionModule
-      noxAutotriageModule
-      mcpClientModule
+    mcpThirdPartyPackages ps
+    ++ mcpBundledModules
+    ++ [
       # pymobiledevice3 9.27.0 (defined above) + the `iphone` wrapper that drives
       # its CLI. The wrapper resolves the `pymobiledevice3` console script next to
       # the interpreter, so both ride in the same env. Cross-platform: a USB
@@ -1472,6 +1543,50 @@
     ++ ps.ray.optional-dependencies.client
     ++ darwinExtraPackages ps;
   mcpPython = mcpPythonInterp.withPackages mcpPythonPackages;
+
+  # Per-module test envs (issue #3897). Every bundled module declares its
+  # first-party imports as `passthru.ixFirstPartyDeps` on its own definition;
+  # the transitive closure over those declarations is the single source of
+  # truth for what a module's tests need, so editing one module re-runs only
+  # the tests whose closure contains it instead of every bundled test. The
+  # import graph is cyclic where modules integrate with the kernel runtime in
+  # both directions (`sh` <-> `ix_notebook_mcp`), which genericClosure's
+  # key-dedup handles and a propagatedBuildInputs edge could not.
+  firstPartyClosure = modules:
+    map (entry: entry.value) (builtins.genericClosure {
+      startSet =
+        map (m: {
+          key = m.outPath;
+          value = m;
+        })
+        modules;
+      operator = entry:
+        map (m: {
+          key = m.outPath;
+          value = m;
+        }) (entry.value.ixFirstPartyDeps or []);
+    });
+  # The third-party base every per-module test env shares: exactly the shipped
+  # interpreter's non-first-party packages, so a module's PyPI/nixpkgs deps
+  # resolve in tests precisely as they do at runtime, while edits to sibling
+  # first-party modules cannot invalidate the env.
+  mcpTestBasePackages = ps:
+    mcpThirdPartyPackages ps
+    ++ [pymobiledevice3_927]
+    ++ ps.ray.optional-dependencies.client
+    ++ darwinFrameworkPackages ps
+    ++ darwinTorchPackages ps;
+  bundledTestPythonWith = extras: modules:
+    mcpPythonInterp.withPackages (
+      ps:
+        mcpTestBasePackages ps
+        ++ firstPartyClosure modules
+        ++ extras ps
+    );
+  bundledTestPython = bundledTestPythonWith (_: []);
+  # The kernel/server package's own test env, shared by every smoke test that
+  # imports or boots ix_notebook_mcp.
+  serverTestPython = bundledTestPython [ixNotebookMcpModule];
 
   # Browser bundle that matches the playwright-driver the python package is
   # patched to use. Exposed to the worker through PLAYWRIGHT_BROWSERS_PATH on the
@@ -1574,16 +1689,21 @@
 
   # Import a module in the pinned interpreter and assert a marker line. Used by
   # the bundled-module tests: the thing each guards is that the module is
-  # importable in the very interpreter the kernels run on, which is a plain
-  # interpreter import (no kernel, no network), so the build sandbox can prove it.
-  importTest = name: code:
+  # importable on the same interpreter and third-party base the kernels run on,
+  # which is a plain interpreter import (no kernel, no network), so the build
+  # sandbox can prove it. `modules` names the first-party modules under test;
+  # the env carries the shared third-party base plus their declared-dep closure
+  # only, so editing an unrelated module does not re-run this test.
+  importTest = modules: name: code: let
+    testPython = bundledTestPython modules;
+  in
     pkgs.runCommand "ix-mcp-${name}"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [testPython];
       strictDeps = true;
     }
     ''
-      ${lib.getExe mcpPython} -c ${lib.escapeShellArg code} >stdout 2>stderr || {
+      ${lib.getExe testPython} -c ${lib.escapeShellArg code} >stdout 2>stderr || {
         echo "import test ${name} failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -1601,31 +1721,35 @@
   # copied into the pinned interpreter), so the check runs directly: `zuban check
   # --strict` for correctness + `zuban`'s disallow-untyped-defs, and `ruff check
   # --select ANN` for the explicit-annotation gate the type checker does not own.
-  # `mcpPython` is passed as `--python-executable` so every bundled dependency
-  # (polars, mcp, jupyter, ...) resolves exactly as it does at runtime.
+  # A third-party-only interpreter is passed as `--python-executable` so every
+  # bundled PyPI/nixpkgs dependency (polars, mcp, jupyter, ...) resolves exactly
+  # as it does at runtime, while the first-party sources resolve from the check
+  # tree assembled below.
   #
   # Scoped, not all-or-nothing: only the modules under `strictGreenModules` are
-  # checked, so a module is migrated by adding its name here once its source is
-  # fully annotated and clean. The whole `src/` tree is on MYPYPATH regardless,
-  # so a checked module's first-party cross-imports (e.g. `x` -> `browser`,
-  # `nox_autotriage` -> `linear`) resolve even before those deps are migrated.
-  # The `ix_notebook_mcp` server package and the remaining `src/*` modules are
-  # added here as they are brought up to strict.
+  # checked, so a module is migrated by adding it here once its source is fully
+  # annotated and clean. The check tree carries the green modules plus their
+  # transitive first-party imports (`ixFirstPartyDeps`, the same declarations
+  # the per-module test envs use), so a checked module's cross-imports (e.g.
+  # `x` -> `browser`, `nox_autotriage` -> `linear`) resolve even before those
+  # deps are migrated -- and editing a module outside that closure cannot
+  # invalidate the gate. The `ix_notebook_mcp` server package and the remaining
+  # `src/*` modules are added here as they are brought up to strict.
   strictGreenModules = [
-    "x"
-    "nix"
-    "nox_autotriage"
-    "linear"
-    "notion"
-    "google_auth"
-    "slack"
-    "beeper"
-    "view"
-    "worktree"
-    "mesh"
-    "fabric"
-    "claude_history"
-    "embed"
+    xModule
+    nixModule
+    noxAutotriageModule
+    linearModule
+    notionModule
+    googleAuthModule
+    slackModule
+    beeperModule
+    viewModule
+    worktreeModule
+    meshModule
+    fabricModule
+    claudeHistoryModule
+    embedModule
   ];
   # The `ix_notebook_mcp` server package is migrated file-by-file (the package
   # as a whole is still ~200 errors from strict-clean, index#1902): each file
@@ -1642,61 +1766,75 @@
     # lexer/highlight helpers remain untyped in its partial stubs.
     "mypy-pygments.*".disallow_untyped_calls = false;
   };
+  # Third-party deps only: the first-party sources come from the check tree, so
+  # editing a module outside the green closure leaves this env untouched.
+  strictTypecheckPython = mcpPythonInterp.withPackages mcpTestBasePackages;
   strictTypecheck = let
-    # All src module package dirs go on MYPYPATH so first-party cross-imports
-    # resolve; the green subset are the actual check targets.
-    allSrcModules = builtins.attrNames (builtins.readDir ./src);
-    # `claude_history` imports the distiller's transcript reader, so the
-    # distiller source rides MYPYPATH alongside the src module dirs.
-    mypypath = lib.concatMapStringsSep ":" (m: "src/${m}") allSrcModules + ":distiller-src";
-    targets = lib.concatStringsSep " " (
-      map (m: "src/${m}/${m}") strictGreenModules
-      ++ map (f: "ix_notebook_mcp/${f}") strictGreenServerFiles
-    );
+    # The check tree: each bundled module's build output IS its source in
+    # site-packages layout, so the tree is assembled from the green modules
+    # plus their declared-dep closure and nothing else.
+    checkTree = firstPartyClosure strictGreenModules;
+    sitePackagesOf = modules: map (m: "${m}/${pkgs.python3.sitePackages}") modules;
   in
     pkgs.runCommand "ix-mcp-strict-typecheck"
     {
       nativeBuildInputs = [
         pkgs.zuban
         pkgs.ruff
-        mcpPython
+        strictTypecheckPython
       ];
       strictDeps = true;
       meta.description = "zuban --strict + ruff ANN over the migrated ix-mcp Python sources";
     }
     ''
-      cp -r ${ixNotebookMcpSource} ix_notebook_mcp
-      cp -r ${./src} src
-      cp -r ${distillerPythonSource} distiller-src
+      mkdir checkroot
+      closure=(${lib.escapeShellArgs (sitePackagesOf checkTree)})
+      for tree in "''${closure[@]}"; do
+        cp -r "$tree"/. checkroot/
+      done
+      chmod -R u+w checkroot
       cp ${zubanConfig} zuban.ini
-      chmod -R u+w ix_notebook_mcp src distiller-src
 
-      export MYPYPATH=${lib.escapeShellArg mypypath}:.
-      echo "zuban check --strict over: ${toString strictGreenModules} + ix_notebook_mcp: ${toString strictGreenServerFiles}"
+      # Targets are the green modules' package dirs (one site-packages entry
+      # per module output) plus the migrated server files.
+      targets=()
+      green=(${lib.escapeShellArgs (sitePackagesOf strictGreenModules)})
+      for tree in "''${green[@]}"; do
+        for pkg in "$tree"/*; do
+          targets+=("checkroot/$(basename "$pkg")")
+        done
+      done
+      serverfiles=(${lib.escapeShellArgs strictGreenServerFiles})
+      for serverfile in "''${serverfiles[@]}"; do
+        targets+=("checkroot/ix_notebook_mcp/$serverfile")
+      done
+
+      export MYPYPATH=checkroot:.
+      echo "zuban check --strict over: ''${targets[*]}"
       zuban check --strict \
         --config-file zuban.ini \
-        --python-executable ${mcpPython.interpreter} \
+        --python-executable ${strictTypecheckPython.interpreter} \
         --python-version ${pkgs.python3.pythonVersion} \
         --platform linux \
-        ${targets}
-      echo "ruff check (ANN + TID251 no-cast) over: ${toString strictGreenModules} + ix_notebook_mcp: ${toString strictGreenServerFiles}"
-      ruff check ${ix.ruffAnnArgs} ${targets}
+        "''${targets[@]}"
+      echo "ruff check (ANN + TID251 no-cast) over: ''${targets[*]}"
+      ruff check ${ix.ruffAnnArgs} "''${targets[@]}"
 
       mkdir -p "$out"
     '';
 
-  tuiBundled = importTest "tui" "import tui; print('tui-ok', tui.__version__)";
+  tuiBundled = importTest [tuiModule] "tui" "import tui; print('tui-ok', tui.__version__)";
   # `embed` imports everywhere (its torch/MPS runtime loads lazily inside the
   # embedding calls), so the import test runs on Linux too.
-  embedBundled = importTest "embed" "import embed; print('embed-ok', embed.__version__)";
+  embedBundled = importTest [embedModule] "embed" "import embed; print('embed-ok', embed.__version__)";
   # htpy must import and auto-escape: a `<` in a text node comes out as `&lt;`.
-  htpyBundled = importTest "htpy" "import htpy; print('htpy-ok' if '&lt;' in str(htpy.div['<']) else 'htpy-bad')";
-  searchBundled = importTest "search" "import search; print('search-ok', search.__version__)";
+  htpyBundled = importTest [] "htpy" "import htpy; print('htpy-ok' if '&lt;' in str(htpy.div['<']) else 'htpy-bad')";
+  searchBundled = importTest [searchModule] "search" "import search; print('search-ok', search.__version__)";
   # The astlog surface is callable and its public API returns polars frames:
   # `scan`/`fixes`/`suppressed` are DataFrames and `query` a dict of them. A
   # trivial inline rules string against one temp file keeps it fast and offline;
   # an `astlog-ignore` comment exercises the suppression-listing path end to end.
-  astlogBundled = importTest "astlog" ''
+  astlogBundled = importTest [astlogModule] "astlog" ''
     import os, tempfile
     import polars as pl
     import astlog
@@ -1825,10 +1963,10 @@
     asyncio.run(main())
   '';
   # fsearch's grep/find run real ripgrep/fd, so the check needs them on PATH
-  # (the same two added to the interpreter wrapper). A dedicated interpreter with
-  # all bundled modules + the planted tree proves the helpers end to end in the
-  # Linux sandbox; spotlight only asserts its darwin guard there.
-  fsearchTestPython = mcpPythonInterp.withPackages mcpPythonPackages;
+  # (the same two added to the interpreter wrapper). The fsearch closure + the
+  # planted tree prove the helpers end to end in the Linux sandbox; spotlight
+  # only asserts its darwin guard there.
+  fsearchTestPython = bundledTestPython [fsearchModule];
   fsearchBundled =
     pkgs.runCommand "ix-mcp-fsearch"
     {
@@ -1855,24 +1993,24 @@
       }
       mkdir -p "$out"
     '';
-  dataLibsBundled = importTest "data-libs" (
+  dataLibsBundled = importTest [] "data-libs" (
     "import psycopg, sqlalchemy, duckdb, httpx; "
     + "from sqlalchemy import create_engine; create_engine('postgresql+psycopg://u@h/db'); "
     + "from pypdf import PdfReader; "
     + "print('data-libs-ok')"
   );
-  gmailLibsBundled = importTest "gmail-libs" (
+  gmailLibsBundled = importTest [] "gmail-libs" (
     "from googleapiclient.discovery import build; from google.oauth2.credentials import Credentials; "
     + "import google_auth_oauthlib, google_auth_httplib2; "
     + "build('gmail', 'v1', credentials=Credentials(token='x'), static_discovery=True); "
     + "print('gmail-libs-ok')"
   );
-  cursorSdkBundled = importTest "cursor-sdk" (
+  cursorSdkBundled = importTest [] "cursor-sdk" (
     "import cursor_sdk; from cursor_sdk import AsyncAgent, AsyncClient; "
     + "assert callable(getattr(AsyncAgent, 'create', None)); "
     + "print('cursor-sdk-ok')"
   );
-  exaBundled = importTest "exa" (
+  exaBundled = importTest [] "exa" (
     "from exa_py import Exa; e = Exa('dummy-key'); "
     + "assert callable(e.search) and callable(e.answer); "
     + "print('exa-ok')"
@@ -1881,7 +2019,7 @@
   # builders. A real token mint needs IX_GCAL_BIN + a prior `gcal auth`, so the
   # sandbox-safe assertion is the unset path: it must raise a clear, typed error
   # naming the missing piece rather than hanging or crashing vaguely.
-  googleAuthBundled = importTest "google-auth" ''
+  googleAuthBundled = importTest [googleAuthModule] "google-auth" ''
     import os
 
     import google_auth
@@ -1932,7 +2070,7 @@
   # callable. A real call would need GOOGLE_OAUTH_CLIENT_ID/SECRET and a
   # token file, so the sandbox-safe assertion is the import and the
   # class-shape check.
-  ixGoogleBundled = importTest "ix-google" (
+  ixGoogleBundled = importTest [ixGoogleModule] "ix-google" (
     "import ix_google; from ix_google import gmail, calendar; "
     + "assert callable(gmail.Client) and callable(calendar.Client); "
     + "print('ix-google-ok', ix_google.__version__)"
@@ -1941,7 +2079,7 @@
   # needs SLACK_USER_TOKEN + network, so the sandbox-safe assertions are: the
   # module imports, the public callables exist, an unconfigured session raises
   # SlackError with a helpful message, and IX_MCP_SHARED=1 refuses access.
-  slackBundled = importTest "slack" ''
+  slackBundled = importTest [slackModule] "slack" ''
     import os
 
     import slack
@@ -1990,7 +2128,7 @@
   # assertions are: the module imports, the public callables exist, an
   # unconfigured session raises BeeperError naming the token, and IX_MCP_SHARED=1
   # refuses access.
-  beeperBundled = importTest "beeper" ''
+  beeperBundled = importTest [beeperModule] "beeper" ''
     import os
 
     import beeper
@@ -2122,7 +2260,7 @@
       }
       mkdir -p "$out"
     '';
-  engineBundled = importTest "engine" "import ipykernel, jupyter_client, nbformat, aiohttp, mcp; print('engine-ok')";
+  engineBundled = importTest [] "engine" "import ipykernel, jupyter_client, nbformat, aiohttp, mcp; print('engine-ok')";
 
   # The server package imports and registers its full tool surface. Exercises the
   # FastMCP registration (schemas from type hints) without starting a kernel or
@@ -2136,7 +2274,7 @@
   srcModules = builtins.attrNames (
     lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./src)
   );
-  serverTools = importTest "server" (
+  serverTools = importTest [ixNotebookMcpModule] "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
     # This set drifts silently: session_set_name (#1615) and kernel_restart
@@ -2247,13 +2385,13 @@
   bindDefaultSmoke =
     pkgs.runCommand "ix-mcp-bind-default-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [serverTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${mcpPython}/bin/python3 ${bindDefaultTest} >stdout 2>stderr || {
+      ${lib.getExe serverTestPython} ${bindDefaultTest} >stdout 2>stderr || {
         echo "ix-mcp bind-default smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -2318,13 +2456,13 @@
   sshAuthSockSmoke =
     pkgs.runCommand "ix-mcp-ssh-auth-sock-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [serverTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${mcpPython}/bin/python3 ${sshAuthSockTest} >stdout 2>stderr || {
+      ${lib.getExe serverTestPython} ${sshAuthSockTest} >stdout 2>stderr || {
         echo "ix-mcp ssh-auth-sock smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -2666,7 +2804,7 @@
       # throwaway repo; without it that path falls back to the denylist (still
       # covered by the no-git case in the same test).
       nativeBuildInputs = [
-        mcpPython
+        serverTestPython
         pkgs.git
         pkgs.nushell
       ];
@@ -2675,7 +2813,7 @@
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${runtimeTestPy} >stdout 2>stderr || {
+      ${lib.getExe serverTestPython} ${runtimeTestPy} >stdout 2>stderr || {
         echo "ix-mcp runtime smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -2693,8 +2831,13 @@
   # symmetry; fsearch partial-on-timeout + limit short-circuit). The type-check
   # tests need ty resolvable and its diagnostics stable, so ty is provided on the
   # env exactly as the wrapper sets it; rg/fd back the fsearch limit assertion.
-  # A dedicated interpreter adds pytest (the bare mcpPython omits it).
-  typecheckTestPython = mcpPythonInterp.withPackages (ps: (mcpPythonPackages ps) ++ [ps.pytest]);
+  # A dedicated interpreter adds pytest (the bare test envs omit it). The
+  # battery imports ix_notebook_mcp, fsearch, sh, nu, weave (all in the server
+  # closure) plus claude_history.
+  typecheckTestPython = bundledTestPythonWith (ps: [ps.pytest]) [
+    ixNotebookMcpModule
+    claudeHistoryModule
+  ];
   typecheckSmoke =
     pkgs.runCommand "ix-mcp-typecheck-smoke"
     {
@@ -2711,7 +2854,7 @@
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
       export IX_MCP_TY_BIN=${lib.escapeShellArg tyBin}
-      export IX_MCP_TY_PYTHON=${lib.escapeShellArg mcpPython.interpreter}
+      export IX_MCP_TY_PYTHON=${lib.escapeShellArg typecheckTestPython.interpreter}
       # The edited ix_notebook_mcp / fsearch / sh live in the interpreter's
       # site-packages (built from this worktree's source), so the tests import
       # them from there; only the test files are copied in (a bare store path of
@@ -2860,7 +3003,7 @@
   sessionSmoke =
     pkgs.runCommand "ix-mcp-session-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [serverTestPython];
       strictDeps = true;
     }
     ''
@@ -2871,7 +3014,7 @@
         name = "ix-mcp-weave-stub";
         path = ./tests/weave_stub.py;
       }} weave_stub.py
-      ${lib.getExe mcpPython} ${sessionTestPy} >stdout 2>stderr || {
+      ${lib.getExe serverTestPython} ${sessionTestPy} >stdout 2>stderr || {
         echo "ix-mcp session smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -3009,13 +3152,13 @@
   wedgeSmoke =
     pkgs.runCommand "ix-mcp-wedge-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [serverTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${wedgeTestPy} >stdout 2>stderr || {
+      ${lib.getExe serverTestPython} ${wedgeTestPy} >stdout 2>stderr || {
         echo "ix-mcp wedge smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -3391,13 +3534,13 @@
   yieldSmoke =
     pkgs.runCommand "ix-mcp-yield-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [serverTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${yieldTestPy} >stdout 2>stderr || {
+      ${lib.getExe serverTestPython} ${yieldTestPy} >stdout 2>stderr || {
         echo "ix-mcp yield smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -3413,13 +3556,13 @@
   richSmoke =
     pkgs.runCommand "ix-mcp-rich-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [serverTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${richTestPy} >stdout 2>stderr || {
+      ${lib.getExe serverTestPython} ${richTestPy} >stdout 2>stderr || {
         echo "ix-mcp rich smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -3511,13 +3654,13 @@
   bindingsSmoke =
     pkgs.runCommand "ix-mcp-bindings-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [serverTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${bindingsTestPy} >stdout 2>stderr || {
+      ${lib.getExe serverTestPython} ${bindingsTestPy} >stdout 2>stderr || {
         echo "ix-mcp bindings smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -3620,16 +3763,20 @@
 
     print("vmkit-resource-ok")
   '';
+  vmkitResourceTestPython = bundledTestPython [
+    vmkitModule
+    ixNotebookMcpModule
+  ];
   vmkitResourceSmoke =
     pkgs.runCommand "ix-mcp-vmkit-resource-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [vmkitResourceTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${vmkitResourceTestPy} >stdout 2>stderr || {
+      ${lib.getExe vmkitResourceTestPython} ${vmkitResourceTestPy} >stdout 2>stderr || {
         echo "ix-mcp vmkit resource smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -3866,16 +4013,17 @@
 
     print("imessage-ok")
   '';
+  imessageTestPython = bundledTestPython [imessageModule];
   imessageSmoke =
     pkgs.runCommand "ix-mcp-imessage-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [imessageTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${imessageTestPy} >stdout 2>stderr || {
+      ${lib.getExe imessageTestPython} ${imessageTestPy} >stdout 2>stderr || {
         echo "ix-mcp imessage smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -3928,14 +4076,15 @@
 
     print("maps-ok")
   '';
+  mapsTestPython = bundledTestPython [mapsModule];
   mapsSmoke =
     pkgs.runCommand "ix-mcp-maps-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [mapsTestPython];
       strictDeps = true;
     }
     ''
-      ${lib.getExe mcpPython} ${mapsTestPy} >stdout 2>stderr || {
+      ${lib.getExe mapsTestPython} ${mapsTestPy} >stdout 2>stderr || {
         echo "ix-mcp maps smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -4007,14 +4156,15 @@
 
     print("ghostty-ok")
   '';
+  ghosttyTestPython = bundledTestPython [ghosttyModule];
   ghosttySmoke =
     pkgs.runCommand "ix-mcp-ghostty-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [ghosttyTestPython];
       strictDeps = true;
     }
     ''
-      ${lib.getExe mcpPython} ${ghosttyTestPy} >stdout 2>stderr || {
+      ${lib.getExe ghosttyTestPython} ${ghosttyTestPy} >stdout 2>stderr || {
         echo "ix-mcp ghostty smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -4033,16 +4183,26 @@
   # FS over the bundled view/polars/pygments, so the sandbox runs it.
   viewTestPy = pkgs.writeText "ix-mcp-view-test.py" ''
     # python
+    import os
+    import tempfile
+
     import polars as pl
 
     import view
 
-    base = "${./.}"
+    # A planted fixture tree, not an interpolation of the whole package dir,
+    # which made every file edit in packages/mcp re-run this smoke (#3897).
+    base = tempfile.mkdtemp()
+    os.makedirs(os.path.join(base, "sub"))
+    with open(os.path.join(base, "default.nix"), "w") as fh:
+        fh.write("{\n  # fixture\n  x = 1;\n}\n")
+    with open(os.path.join(base, "sub", "notes.txt"), "w") as fh:
+        fh.write("hello fixture\n")
 
     lsdf = view.ls(base)
     assert isinstance(lsdf, pl.DataFrame) and "kind" in lsdf.columns, lsdf.columns
     # ls flags git-ignored entries in an `ignored` Boolean column rather than
-    # dropping them; outside a git work tree (this store path) nothing is ignored.
+    # dropping them; outside a git work tree (this temp dir) nothing is ignored.
     assert lsdf.schema["ignored"] == pl.Boolean, lsdf.schema
     assert not lsdf["ignored"].any(), lsdf
     # A DataFrame stays a DataFrame through polars ops (composable).
@@ -4119,16 +4279,17 @@
 
     print("view-ok")
   '';
+  viewTestPython = bundledTestPython [viewModule];
   viewSmoke =
     pkgs.runCommand "ix-mcp-view-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [viewTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${viewTestPy} >stdout 2>stderr || {
+      ${lib.getExe viewTestPython} ${viewTestPy} >stdout 2>stderr || {
         echo "ix-mcp view smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -4362,11 +4523,12 @@
 
     asyncio.run(main())
   '';
+  shTestPython = bundledTestPython [shModule];
   shSmoke =
     pkgs.runCommand "ix-mcp-sh-smoke"
     {
       nativeBuildInputs = [
-        mcpPython
+        shTestPython
         pkgs.zsh
       ];
       strictDeps = true;
@@ -4374,7 +4536,7 @@
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${shTestPy} >stdout 2>stderr || {
+      ${lib.getExe shTestPython} ${shTestPy} >stdout 2>stderr || {
         echo "ix-mcp sh smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -4485,16 +4647,17 @@
 
     asyncio.run(main())
   '';
+  fleetSmokeTestPython = bundledTestPython [fleetModule];
   fleetSmoke =
     pkgs.runCommand "ix-mcp-fleet-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [fleetSmokeTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${fleetTestPy} >stdout 2>stderr || {
+      ${lib.getExe fleetSmokeTestPython} ${fleetTestPy} >stdout 2>stderr || {
         echo "ix-mcp fleet smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -4509,18 +4672,22 @@
 
   # The cluster surface (discovery merge, Ray submit return-shape, /api/exec
   # auth) with the two discovery sources, the Ray remote, and the kernel all
-  # stubbed -- no live cluster or network. mcpPython carries both `fleet` and
+  # stubbed -- no live cluster or network. The env carries both `fleet` and
   # `ix_notebook_mcp`, so the script imports them with no PYTHONPATH.
+  fleetClusterTestPython = bundledTestPython [
+    fleetModule
+    ixNotebookMcpModule
+  ];
   fleetClusterSmoke =
     pkgs.runCommand "ix-mcp-fleet-cluster-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [fleetClusterTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${./tests/fleet_cluster_check.py} >stdout 2>stderr || {
+      ${lib.getExe fleetClusterTestPython} ${./tests/fleet_cluster_check.py} >stdout 2>stderr || {
         echo "ix-mcp fleet cluster smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -4651,14 +4818,15 @@
 
     print("nix-ok", nix.__version__)
   '';
+  nixTestPython = bundledTestPython [nixModule];
   nixSmoke =
     pkgs.runCommand "ix-mcp-nix-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [nixTestPython];
       strictDeps = true;
     }
     ''
-      ${lib.getExe mcpPython} ${nixTestPy} >stdout 2>stderr || {
+      ${lib.getExe nixTestPython} ${nixTestPy} >stdout 2>stderr || {
         echo "ix-mcp nix smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -4742,11 +4910,12 @@
 
     asyncio.run(main())
   '';
+  worktreeTestPython = bundledTestPython [worktreeModule];
   worktreeSmoke =
     pkgs.runCommand "ix-mcp-worktree-smoke"
     {
       nativeBuildInputs = [
-        mcpPython
+        worktreeTestPython
         pkgs.git
       ];
       strictDeps = true;
@@ -4754,7 +4923,7 @@
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${worktreeTestPy} >stdout 2>stderr || {
+      ${lib.getExe worktreeTestPython} ${worktreeTestPy} >stdout 2>stderr || {
         echo "ix-mcp worktree smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -4967,16 +5136,18 @@
 
     print("browser-ok", browser.__version__)
   '';
+  # Shared by browserSmoke and browserVdomSmoke below.
+  browserTestPython = bundledTestPython [browserModule];
   browserSmoke =
     pkgs.runCommand "ix-mcp-browser-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [browserTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${browserTestPy} >stdout 2>stderr || {
+      ${lib.getExe browserTestPython} ${browserTestPy} >stdout 2>stderr || {
         echo "ix-mcp browser smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -5114,18 +5285,18 @@
   browserVdomSmoke =
     pkgs.runCommand "ix-mcp-browser-vdom-smoke"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [browserTestPython];
       strictDeps = true;
     }
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
       # `vdom()` launches a (headless) browser, so point Playwright at the bundled
-      # browser bundle -- the bare mcpPython has no wrapper to set this (only the
+      # browser bundle -- the bare test env has no wrapper to set this (only the
       # `ix-mcp` entrypoint does).
       export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
       export FONTCONFIG_FILE=${fontsConf}
-      ${lib.getExe mcpPython} ${browserVdomTestPy} >stdout 2>stderr || {
+      ${lib.getExe browserTestPython} ${browserVdomTestPy} >stdout 2>stderr || {
         echo "ix-mcp browser vdom smoke failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -5145,18 +5316,14 @@
   # subset relation, geometry, and read()/vdom() agreement against a real
   # headless Chromium. Like browserVdomSmoke, vdom() only reads the DOM, so it
   # runs headless on set_content fixtures in the sandbox with no display or
-  # network. The interpreter is mcpPython (the bundled browser module +
-  # playwright) plus pytest and hypothesis, which the bare mcpPython omits.
-  # Reuses the full mcp module set (which includes the asn1-pinned pymobiledevice3
-  # override), so it must build from the same asn1-pinned interpreter.
-  vdomTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-        ps.hypothesis
-      ]
-  );
+  # network. The interpreter carries the browser closure + playwright (base)
+  # plus pytest and hypothesis, which the bare test envs omit. The test file
+  # reaches `browser` through pytest.importorskip, so the module must be in the
+  # env or the whole suite silently skips.
+  vdomTestPython = bundledTestPythonWith (ps: [
+    ps.pytest
+    ps.hypothesis
+  ]) [browserModule];
   vdomPropertiesSource = builtins.path {
     name = "ix-mcp-vdom-properties-test";
     path = ./tests/test_vdom_properties.py;
@@ -5189,15 +5356,9 @@
   # Interactive input: the browser -> kernel write path behind interactive
   # resources (packages/mcp/tests/test_inputs.py). Covers the store queue, the
   # dashboard `/api/input` gate + CORS (over a real aiohttp TestServer), and the
-  # kernel-side drain into an awaiting `Input` / `ask`. Needs the full mcp
-  # interpreter (ix_notebook_mcp + aiohttp) plus pytest, which bare mcpPython omits.
-  inputsTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-      ]
-  );
+  # kernel-side drain into an awaiting `Input` / `ask`. Needs the server
+  # closure (ix_notebook_mcp + aiohttp) plus pytest, which bare test envs omit.
+  inputsTestPython = bundledTestPythonWith (ps: [ps.pytest]) [ixNotebookMcpModule];
   inputsTestSource = builtins.path {
     name = "ix-mcp-inputs-test";
     path = ./tests/test_inputs.py;
@@ -5285,13 +5446,7 @@
   # notifications/claude/channel, the reply tool, and the dashboard's SSE feed.
   # Same interpreter needs as inputsTests (ix_notebook_mcp + aiohttp + the mcp
   # SDK) plus pytest.
-  channelTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-      ]
-  );
+  channelTestPython = bundledTestPythonWith (ps: [ps.pytest]) [ixNotebookMcpModule];
   channelTestSource = builtins.path {
     name = "ix-mcp-channel-test";
     path = ./tests/test_channel.py;
@@ -5351,13 +5506,7 @@
   # fetch must reach the real aiohttp `/api/input` and drain into the awaiting
   # channel (packages/mcp/tests/test_input_browser.py). Same interpreter + bundled
   # browser as the vdom smoke, plus pytest.
-  inputBrowserTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-      ]
-  );
+  inputBrowserTestPython = bundledTestPythonWith (ps: [ps.pytest]) [ixNotebookMcpModule];
   inputBrowserTestSource = builtins.path {
     name = "ix-mcp-input-browser-test";
     path = ./tests/test_input_browser.py;
@@ -5388,14 +5537,8 @@
   # iframe renders the kernel-embedded state, `act` rides the real /api/input,
   # and the action_result re-renders the page. Same interpreter + browser needs
   # as inputBrowserSmoke, plus the CLI on IX_SVELTE_BUNDLE_BIN.
-  svelteBundled = importTest "svelte" "import svelte; print('svelte-ok', callable(svelte.bundle), callable(svelte.component))";
-  svelteTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-      ]
-  );
+  svelteBundled = importTest [svelteModule] "svelte" "import svelte; print('svelte-ok', callable(svelte.bundle), callable(svelte.component))";
+  svelteTestPython = bundledTestPythonWith (ps: [ps.pytest]) [svelteModule];
   svelteTestSource = builtins.path {
     name = "ix-mcp-svelte-test";
     path = ./tests/test_svelte.py;
@@ -5422,18 +5565,18 @@
       mkdir -p "$out"
     '';
 
-  screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
-  coreLocationBundled = importTest "corelocation" "import CoreLocation; print('corelocation-ok', callable(CoreLocation.CLLocationManager.alloc))";
-  scriptingBridgeBundled = importTest "scriptingbridge" "import ScriptingBridge; print('scriptingbridge-ok', callable(ScriptingBridge.SBApplication.applicationWithBundleIdentifier_))";
-  mapsBundled = importTest "maps" "import maps, MapKit; print('maps-ok', all(callable(getattr(maps, n)) for n in ('nearby', 'geocode', 'reverse_geocode')), callable(MapKit.MKLocalSearch.alloc))";
-  vmkitBundled = importTest "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
-  imessageBundled = importTest "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
-  ghosttyBundled = importTest "ghostty" "import ghostty; print('ghostty-ok', all(callable(getattr(ghostty, n)) for n in ('surfaces', 'my_tty', 'my_surface', 'close', 'close_me', 'focus', 'activate', 'is_running')), ghostty.__version__)";
-  xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
-  meshBundled = importTest "mesh" "import mesh, asyncio; print('mesh-ok', all(asyncio.iscoroutinefunction(getattr(mesh, n)) for n in ('peers', 'sessions')), mesh.__version__)";
-  fabricBundled = importTest "fabric" "import fabric, asyncio; print('fabric-ok', asyncio.iscoroutinefunction(fabric.run), asyncio.iscoroutinefunction(fabric.claude.session), fabric.__version__)";
-  linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
-  notionBundled = importTest "notion" "import notion, asyncio; print('notion-ok', all(asyncio.iscoroutinefunction(getattr(notion, n)) for n in ('search', 'page', 'blocks', 'db_query', 'page_create', 'blocks_append', 'page_update')), notion.__version__)";
+  screenBundled = importTest [screenModule] "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
+  coreLocationBundled = importTest [] "corelocation" "import CoreLocation; print('corelocation-ok', callable(CoreLocation.CLLocationManager.alloc))";
+  scriptingBridgeBundled = importTest [] "scriptingbridge" "import ScriptingBridge; print('scriptingbridge-ok', callable(ScriptingBridge.SBApplication.applicationWithBundleIdentifier_))";
+  mapsBundled = importTest [mapsModule] "maps" "import maps, MapKit; print('maps-ok', all(callable(getattr(maps, n)) for n in ('nearby', 'geocode', 'reverse_geocode')), callable(MapKit.MKLocalSearch.alloc))";
+  vmkitBundled = importTest [vmkitModule] "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
+  imessageBundled = importTest [imessageModule] "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
+  ghosttyBundled = importTest [ghosttyModule] "ghostty" "import ghostty; print('ghostty-ok', all(callable(getattr(ghostty, n)) for n in ('surfaces', 'my_tty', 'my_surface', 'close', 'close_me', 'focus', 'activate', 'is_running')), ghostty.__version__)";
+  xBundled = importTest [xModule] "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
+  meshBundled = importTest [meshModule] "mesh" "import mesh, asyncio; print('mesh-ok', all(asyncio.iscoroutinefunction(getattr(mesh, n)) for n in ('peers', 'sessions')), mesh.__version__)";
+  fabricBundled = importTest [fabricModule] "fabric" "import fabric, asyncio; print('fabric-ok', asyncio.iscoroutinefunction(fabric.run), asyncio.iscoroutinefunction(fabric.claude.session), fabric.__version__)";
+  linearBundled = importTest [linearModule] "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
+  notionBundled = importTest [notionModule] "notion" "import notion, asyncio; print('notion-ok', all(asyncio.iscoroutinefunction(getattr(notion, n)) for n in ('search', 'page', 'blocks', 'db_query', 'page_create', 'blocks_append', 'page_update')), notion.__version__)";
   notionTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
     ps.httpx
@@ -5463,7 +5606,7 @@
       cat stdout
       mkdir -p "$out"
     '';
-  nuBundled = importTest "nu" "import nu; print('nu-ok', callable(nu), callable(nu.value), nu.NuError.__name__ == 'NuError', nu.__version__)";
+  nuBundled = importTest [nuPyModule] "nu" "import nu; print('nu-ok', callable(nu), callable(nu.value), nu.NuError.__name__ == 'NuError', nu.__version__)";
   # Behavior tests for the embedded nushell engine: the normalization matrix,
   # persistent REPL state, native datetime/duration crossing, the NuError
   # diagnostic surface, `exit` safety, and interrupt-based timeout. Everything
@@ -5496,7 +5639,7 @@
       cat stdout
       mkdir -p "$out"
     '';
-  noxAutotriageBundled = importTest "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
+  noxAutotriageBundled = importTest [noxAutotriageModule] "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
   linearTriageTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
     ps.httpx
@@ -5570,7 +5713,7 @@
   # The `iphone` helper imports in the real interpreter and exposes its surface.
   # Cross-platform: pulls in the vendored pymobiledevice3 CLI, so it also proves
   # that uv closure builds on Linux CI.
-  iphoneBundled = importTest "iphone" "import iphone; print('iphone-ok', all(callable(getattr(iphone, n)) for n in ('devices', 'apps', 'screenshot', 'launch', 'start_tunneld', 'tap', 'swipe')))";
+  iphoneBundled = importTest [iphoneModule] "iphone" "import iphone; print('iphone-ok', all(callable(getattr(iphone, n)) for n in ('devices', 'apps', 'screenshot', 'launch', 'start_tunneld', 'tap', 'swipe')))";
 
   # Device-free behaviour tests (exports, async signatures, explicit type hints,
   # CLI-path resolution, the sudo guard, the no-device error).
