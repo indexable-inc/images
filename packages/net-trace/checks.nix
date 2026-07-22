@@ -38,25 +38,27 @@ in {
       pkgs.yq-go
     ];
     script = ''
-      # The default check cwd is not writable; every artifact below (extracted
-      # jq scripts, summary copies, comment.md) goes to scratch space.
+      # Scratch space for every artifact below (extracted jq scripts, summary
+      # copies, comment.md). install -m, not cp: fixtures are 0444 store
+      # files, and a plain cp of one leaves a read-only destination the next
+      # overwrite cannot open (root builders mask this; CI's nixbld does not).
       cd "$TMPDIR"
       fixtures=${testSource}/packages/net-trace/tests/fixtures
       workflow=${testSource}/.github/workflows/check.yml
       yq '.jobs.net-trace-comment.steps[] | select(.name == "Validate summary schema").run' "$workflow" > validate.sh
       yq '.jobs.net-trace-comment.steps[] | select(.name == "Render comment").run' "$workflow" > render.sh
 
-      cp "$fixtures/good.json" net-trace-summary.json
+      install -m 0644 "$fixtures/good.json" net-trace-summary.json
       bash validate.sh
       for bad in bad-host bad-label bad-newline bad-scheme missing; do
-        cp "$fixtures/$bad.json" net-trace-summary.json
+        install -m 0644 "$fixtures/$bad.json" net-trace-summary.json
         if bash validate.sh 2>/dev/null; then
           echo "validate $bad: accepted a hostile summary" >&2
           exit 1
         fi
       done
 
-      cp "$fixtures/good.json" net-trace-summary.json
+      install -m 0644 "$fixtures/good.json" net-trace-summary.json
       bash render.sh
       diff -u "$fixtures/golden.md" comment.md
     '';
