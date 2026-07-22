@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use google_auth::scopes::{CALENDAR_EVENTS, GMAIL_MODIFY, GMAIL_SEND};
 use google_auth::{Authenticator, ClientSecrets, TokenStore};
-use google_calendar::{AttendeeDraft, EventDraft, EventQuery, EventTime, SendUpdates};
+use google_calendar::{
+    AttendeeDraft, EventDraft, EventQuery, SendUpdates, parse_event_end, parse_event_time,
+};
 use google_gmail::{Attachment, MessageFormat, MessageQuery, OutgoingMessage};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -121,32 +123,6 @@ fn parse_send_updates(name: Option<&str>) -> PyResult<SendUpdates> {
             .parse()
             .map_err(|err| PyValueError::new_err(format!("notify: {err}")))
     })
-}
-
-fn parse_event_time(input: &str, all_day: bool, field: &'static str) -> PyResult<EventTime> {
-    if all_day {
-        let date = input
-            .parse()
-            .map_err(|err| PyValueError::new_err(format!("{field}: not a date: {err}")))?;
-        Ok(EventTime::AllDay { date })
-    } else {
-        let date_time = chrono::DateTime::parse_from_rfc3339(input)
-            .map_err(|err| PyValueError::new_err(format!("{field}: not RFC 3339: {err}")))?;
-        Ok(EventTime::Timed {
-            date_time,
-            time_zone: None,
-        })
-    }
-}
-
-/// Parse the `end` of an event. All-day input is the inclusive last day;
-/// Google's all-day `end.date` is exclusive, so convert at this boundary.
-fn parse_event_end(input: &str, all_day: bool) -> PyResult<EventTime> {
-    match parse_event_time(input, all_day, "end")? {
-        EventTime::AllDay { date } => EventTime::all_day_end_from_inclusive(date)
-            .ok_or_else(|| PyValueError::new_err(format!("end: no day follows {date}"))),
-        timed @ EventTime::Timed { .. } => Ok(timed),
-    }
 }
 
 // ---------------------------------------------------------------------
@@ -634,8 +610,8 @@ impl CalendarClient {
         calendar_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
-        let start_time = parse_event_time(&start, all_day, "start")?;
-        let end_time = parse_event_end(&end, all_day)?;
+        let start_time = parse_event_time(&start, all_day, "start").map_err(into_py_value_error)?;
+        let end_time = parse_event_end(&end, all_day).map_err(into_py_value_error)?;
         let draft = EventDraft {
             summary,
             description,
