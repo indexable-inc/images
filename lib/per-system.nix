@@ -1628,10 +1628,6 @@
             cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
             cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
             sdk-rust-prebuilt = tests.sdkRustPrebuilt;
-            # Strict zuban + ruff ANN gate over the public ix-sdk Python sources
-            # (ENG-3131); the SDK is setuptools-built, so this is its build-time
-            # enforcement in place of a buildUvApplication pyChecker flag.
-            sdk-python-strict = tests.sdkPythonStrict;
           }
           // rustPackageSet;
         explicitChecks =

@@ -7,25 +7,27 @@
 
 # ix SDK
 
-Building on ix and wondering which SDK to grab? This directory is the public
-source for all three. Each links or bundles the same precompiled, proprietary
-`ix-sdk` core distributed by Indexable, so behavior is identical across
-languages and each binding only adds ecosystem-native surface.
+Building on ix and wondering which SDK to grab? The SDKs ship as compiled
+artifacts only; there is no SDK source in this repository. Every artifact
+bundles the same precompiled, proprietary `ix-sdk` core built in the ix
+monorepo, so behavior is identical across languages.
 
-| SDK | Source | Get it |
-| --- | --- | --- |
-| Rust | [`rust/`](./rust) | the core crates; built via Nix, the other SDKs bind it |
-| Python | [`python/`](./python) | `nix build .#ix-sdk-python` |
-| TypeScript | [`typescript/`](./typescript) | `npm install @indexable/sdk` |
+| SDK | Get it |
+| --- | --- |
+| TypeScript | `npm install @indexable/sdk` |
+| Python | `pip install ix-sdk` |
+| Rust | prebuilt rlib boundary in [`rust/`](./rust), consumed in-repo via Nix |
 
-The Nix build assumes a clone: `git clone https://github.com/indexable-inc/index`.
+This directory holds only the artifact-consumption boundary: [`rust/`](./rust)
+pins and wraps the prebuilt `ix-sdk-wire` rlib published to R2 so in-repo
+consumers can link it. The Python wheel consumer lives at
+`packages/ix-sdk-python`.
 
 ## License
 
-Everything under `sdk/` is proprietary and source-available, governed by
-[`sdk/LICENSE`](./LICENSE) (the Indexable SDK License), NOT the repository-root
-MIT license. The SDK license supersedes the root MIT for this directory and its
-subdirectories, including the compiled components the SDK fetches or bundles. In
-short: you may use the SDK to build applications that access the hosted ix
-service, but you may not reverse-engineer, modify, redistribute, or use it to
-build a competing service. See `sdk/LICENSE` for the full terms.
+The npm and PyPI artifacts carry their license inside the package. Everything
+under `packages/sdk/`, including the prebuilt components `rust/` fetches, is
+proprietary and governed by [`LICENSE`](./LICENSE) (the Indexable SDK License),
+NOT the repository-root MIT license. In short: you may use the SDK to build
+applications that access the hosted ix service, but you may not
+reverse-engineer, modify, redistribute, or use it to build a competing service.
