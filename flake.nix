@@ -146,11 +146,6 @@
       flake = false;
     };
 
-    # The maintained jj megamerge fork is the application source. Its own
-    # flake owns the Rust lock, toolchain, and platform build; `ix-patched`
-    # is the megamerge bookmark (upstream v1.10.x base plus the patch DAG).
-    zed-src.url = "github:indexable-inc/zed/ix-patched";
-
     # jj megamerge fork of NixOS/nix. The base stays at tag 2.34.7, the
     # version the hydra daemon runs (`nix store info` -> `Version: 2.34.7`):
     # nix is our daemon toolchain, so the patched package must stay a
@@ -322,12 +317,11 @@
     # vendors SIMD deps and combines archives via hardcoded
     # `/usr/bin/ranlib`/`/bin/cp` (absolute paths the Nix darwin sandbox
     # correctly denies) and build.zig hangs a vt xcframework (xcodebuild)
-    # off every darwin install; fork patch
-    # 0004-build-keep-Demit-lib-vt-buildable-without-Apple-abso carries the
+    # off every darwin install; the fork's "build: keep -Demit-lib-vt
+    # buildable without Apple-absolute tools" patch commit carries the
     # sandbox fix. ghostty is darwin-only and darwin has no CI
-    # (index-workstation-profile-no-ci-eval,
-    # zed-src-patch-lock-drift-darwin-only-guard document the same class of
-    # silent-drift risk for zed), so nothing catches a routine bump breaking
+    # (index-workstation-profile-no-ci-eval documents the class of
+    # silent-drift risk), so nothing catches a routine bump breaking
     # this build; move this rev only via a jj rebase of indexable-inc/ghostty
     # followed by a manual `nix build .#ghostty` on darwin. The rev is the
     # `ix-patched` megamerge (upstream base 49a43bf5 plus the patch DAG).
@@ -373,7 +367,6 @@
     snix-src,
     clippy-src,
     codex-src,
-    zed-src,
     nix-src,
     nix-fast-build-src,
     nix-derivation-src,
@@ -451,7 +444,6 @@
         snix-src
         clippy-src
         codex-src
-        zed-src
         nix-src
         nix-fast-build-src
         nix-derivation-src

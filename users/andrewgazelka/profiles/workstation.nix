@@ -879,7 +879,22 @@ in {
       # wezterm # GPU terminal emulator; disabled 2026-07-01: aarch64-darwin output was absent from cache.nixos.org and rebuilt locally for ~46m during a routine flake update. Use Alacritty or `nix run nixpkgs#wezterm -- ...` when needed.
       cfg.packages.mercuryCli # Mercury CLI (custom flake input)
       indexPkgs.elevenlabs-say # ElevenLabs say-style TTS CLI (-r/-v, streaming); key via ELEVENLABS_API_KEY
-      indexPkgs.zed # Maintained fork carries reference filtering unavailable upstream.
+      # zed (the maintained fork with reference filtering) removed from the
+      # repo entirely: its flake builds with crane, which vendors every git dep in
+      # zed's Cargo.lock via eval-time `builtins.fetchGit`. That put 16 serial
+      # network `git ls-remote`/fetch round trips to github.com into EVERY
+      # home-manager eval (40-100s of a 58-120s eval; cpuTime is only ~18s),
+      # because of three compounding nix fetcher flaws (index#4028):
+      #   1. nix resolves the remote default branch (network ls-remote) before
+      #      checking whether the pinned rev is already in its local git cache;
+      #   2. that HEAD answer is cached with a 1h TTL but the cache is only
+      #      (re)written on an actual fetch, so once every rev is cached the
+      #      TTL expires once and every later eval re-asks GitHub, forever;
+      #   3. crane marks Cargo.lock git deps without a branch `allRefs = true`,
+      #      which forces a fetch on every eval even when the rev is present.
+      # Re-add the package (see git history, packages/zed) once the nix-ix
+      # fetcher patch from index#4028 lands (skip default-ref resolution and
+      # allRefs fetch when the rev is cached).
       # vfkit guest helpers intentionally not installed: they force the
       # aarch64-linux microvm system into every Home Manager switch, so a stale
       # or stopped VM remote builder breaks unrelated macOS profile updates.

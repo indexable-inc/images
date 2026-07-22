@@ -144,34 +144,6 @@
       };
     }
     {
-      name = "zed";
-      input = "zed-src";
-      upstreamUrl = "https://github.com/zed-industries/zed.git";
-      forkRepo = "indexable-inc/zed";
-      bookmark = "ix-patched";
-      autoUpdate = false;
-      upstreamPolicy = {
-        prsWelcome = true;
-        aiPrsAllowed = "false";
-        citation = "https://github.com/zed-industries/zed/blob/main/CONTRIBUTING.md#ai-policy";
-        notes = "Zed permits human-directed LLM assistance but rejects autonomous-agent contributions; keep this patch in the maintained fork unless a human takes it upstream.";
-      };
-      patches = {
-        "editor: optionally exclude the invocation reference" = {
-          upstream = "never";
-          reason = "Useful general editor behavior, but Zed's contribution policy rejects autonomous-agent submissions.";
-        };
-        "nix: expose stable application package" = {
-          upstream = "never";
-          reason = "Required to install the stable app from Zed's own flake, but Zed's contribution policy rejects autonomous-agent submissions.";
-        };
-        "editor: navigate directly to a single reference" = {
-          upstream = "never";
-          reason = "General editor behavior fix (indexable-inc/index#2976), but Zed's contribution policy rejects autonomous-agent submissions.";
-        };
-      };
-    }
-    {
       name = "btop";
       input = "btop-src";
       upstreamUrl = "https://github.com/aristocratos/btop.git";
