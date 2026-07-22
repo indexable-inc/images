@@ -70,6 +70,8 @@ list):
 | `Ix.restart()` | cancel jobs (sparing the calling cell), restart the workspace, restore bindings |
 | `PrWatch.start(pr, cwd, interval \\ 15, timeout \\ 3600)` | watch a PR via `gh`, notify on merge/close/timeout |
 | `Issues.pickup(3880)` | claim an issue atomically before working it (also `"owner/repo#n"`); a lost claim names the session that won |
+| `Sessions.list()` | the session directory: every kernel instance on this host, with heartbeat liveness |
+| `Sessions.send(id_or_name, text)` | message another session (`Sessions.broadcast/1` for all); arrives as a `source="sessions"` channel event within seconds |
 | `Tui.act(uri, send_keys, peer \\ nil)` | drive a federated TUI resource via `ix-resource-cli` |
 
 Because cells are separate BEAM processes, `Ix.trace/0` and `Ix.restart/0`
@@ -142,6 +144,7 @@ IxMcp.Supervisor (one_for_one)
 ├── IxMcp.MCP.Notifier     server-initiated notification fan-out
 ├── IxMcp.PrWatch.Supervisor (Task.Supervisor) one task per PR watch
 ├── IxMcp.IssueWatch       new-issue + pickup-claim channel feed (stdio-gated, `gh search issues`)
+├── IxMcp.SessionWatch     session heartbeat + cross-session message delivery (stdio-gated)
 └── IxMcp.MCP.Stdio        newline-delimited JSON-RPC on stdin/stdout
 ```
 

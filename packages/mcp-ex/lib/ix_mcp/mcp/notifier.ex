@@ -73,6 +73,9 @@ defmodule IxMcp.MCP.Notifier do
   def handle_cast({:register, transport}, state) do
     Process.monitor(transport)
     state = %{state | transports: [transport | state.transports]}
+    # A connecting transport is proof of life: stamp the session-directory
+    # heartbeat (#3881) here, without waiting for the first watch tick.
+    ActionLog.heartbeat_session(Session.ids().session_id)
     replay_unacked([transport])
     {:noreply, state}
   end
