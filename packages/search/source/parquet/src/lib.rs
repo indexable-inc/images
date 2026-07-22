@@ -29,7 +29,6 @@
 use arrow::array::{Array as _, StringArray};
 use arrow::record_batch::RecordBatch;
 use futures::stream::StreamExt as _;
-use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path as ObjectPath;
 use object_store::{ObjectStore, ObjectStoreExt as _};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -49,18 +48,9 @@ const COL_CONTENT_HASH: &str = "content_hash";
 const COL_BODY: &str = "body";
 const COL_META_JSON: &str = "meta_json";
 
-/// Connection and layout for reading the parquet corpus log.
-#[derive(Debug, Clone)]
-pub struct Config {
-    /// Bucket the parquet sink writes to.
-    pub bucket: String,
-    /// S3 endpoint URL. `None` uses AWS S3; for a self-hosted store pass its endpoint.
-    pub endpoint: Option<String>,
-    /// Region (`auto` for non-AWS stores).
-    pub region: String,
-    /// Key prefix under the bucket to read parquet objects from.
-    pub prefix: String,
-}
+/// Connection and layout for reading the parquet corpus log: the same `Config`
+/// (bucket, endpoint, region, prefix) the sink wrote it with.
+pub use sink_parquet::Config;
 
 /// Failures from the parquet reader.
 #[derive(Debug, Snafu)]
@@ -154,7 +144,9 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Returns an error if the client cannot be built, the prefix cannot be listed,
 /// or any object cannot be read, decoded, or reconstructed.
 pub async fn read_documents(config: &Config) -> Result<Vec<Document>> {
-    let store = build_store(config)?;
+    let store = config.build_store().context(BuildStoreSnafu {
+        bucket: config.bucket.clone(),
+    })?;
     read_from_store(&store, &config.prefix).await
 }
 
@@ -251,7 +243,9 @@ fn parse_slice_key(key: &str) -> Option<SliceId> {
 /// Returns an error if the client cannot be built, the prefix cannot be listed,
 /// or any object cannot be read or decoded.
 pub async fn read_slices(config: &Config) -> Result<Vec<Slice>> {
-    let store = build_store(config)?;
+    let store = config.build_store().context(BuildStoreSnafu {
+        bucket: config.bucket.clone(),
+    })?;
     read_slices_from_store(&store, &config.prefix).await
 }
 
@@ -292,20 +286,6 @@ pub async fn read_slices_from_store(store: &dyn ObjectStore, prefix: &str) -> Re
         });
     }
     Ok(slices)
-}
-
-/// Build the S3 client. Credentials come from the environment
-/// (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`).
-fn build_store(config: &Config) -> Result<AmazonS3> {
-    let mut builder = AmazonS3Builder::from_env()
-        .with_bucket_name(&config.bucket)
-        .with_region(&config.region);
-    if let Some(endpoint) = &config.endpoint {
-        builder = builder.with_endpoint(endpoint);
-    }
-    builder.build().context(BuildStoreSnafu {
-        bucket: config.bucket.clone(),
-    })
 }
 
 /// Parse one parquet object's record batches into documents, appending to `out`.

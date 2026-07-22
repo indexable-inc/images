@@ -11481,6 +11481,7 @@ dependencies = [
  "object_store",
  "parquet 59.1.0",
  "serde_json",
+ "sink-parquet",
  "snafu",
  "source-meta",
  "tokio",

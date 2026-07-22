@@ -326,6 +326,32 @@ struct CiJob {
 // Projection: item -> Document.
 // ---------------------------------------------------------------------------
 
+/// The common metadata envelope every `github` grain shares: source tag,
+/// identity, content hash, title, url, and timestamp when known.
+///
+/// Each grain's `build_meta` layers its extras on top.
+fn common_envelope(
+    external_id: &str,
+    content_hash: &str,
+    title: &str,
+    url: &str,
+    timestamp: Option<i64>,
+) -> Map<String, Value> {
+    let mut meta = Map::new();
+    meta.insert(
+        keys::SOURCE.to_owned(),
+        json!(Source::new("github").as_str()),
+    );
+    meta.insert(keys::EXTERNAL_ID.to_owned(), json!(external_id));
+    meta.insert(keys::CONTENT_HASH.to_owned(), json!(content_hash));
+    meta.insert(keys::TITLE.to_owned(), json!(title));
+    meta.insert(keys::URL.to_owned(), json!(url));
+    if let Some(ts) = timestamp {
+        meta.insert(keys::TIMESTAMP.to_owned(), json!(ts));
+    }
+    meta
+}
+
 impl Item {
     /// Render this item into a [`Document`]: build the body, the flat metadata,
     /// validate the metadata against the store limits, then assemble.
@@ -367,20 +393,7 @@ impl Item {
         title: &str,
         timestamp: Option<i64>,
     ) -> Value {
-        let mut meta = Map::new();
-
-        // Common envelope.
-        meta.insert(
-            keys::SOURCE.to_owned(),
-            json!(Source::new("github").as_str()),
-        );
-        meta.insert("external_id".to_owned(), json!(external_id));
-        meta.insert(keys::CONTENT_HASH.to_owned(), json!(content_hash));
-        meta.insert(keys::TITLE.to_owned(), json!(title));
-        meta.insert("url".to_owned(), json!(self.url));
-        if let Some(ts) = timestamp {
-            meta.insert(keys::TIMESTAMP.to_owned(), json!(ts));
-        }
+        let mut meta = common_envelope(external_id, content_hash, title, &self.url, timestamp);
 
         // GitHub extras.
         meta.insert(keys::REPO.to_owned(), json!(self.repo));
@@ -580,20 +593,7 @@ impl CiRun {
         title: &str,
         timestamp: Option<i64>,
     ) -> Value {
-        let mut meta = Map::new();
-
-        // Common envelope.
-        meta.insert(
-            keys::SOURCE.to_owned(),
-            json!(Source::new("github").as_str()),
-        );
-        meta.insert(keys::EXTERNAL_ID.to_owned(), json!(external_id));
-        meta.insert(keys::CONTENT_HASH.to_owned(), json!(content_hash));
-        meta.insert(keys::TITLE.to_owned(), json!(title));
-        meta.insert(keys::URL.to_owned(), json!(self.url));
-        if let Some(ts) = timestamp {
-            meta.insert(keys::TIMESTAMP.to_owned(), json!(ts));
-        }
+        let mut meta = common_envelope(external_id, content_hash, title, &self.url, timestamp);
 
         // CI-run extras. `kind` separates this grain from issues/PRs within the
         // shared `github` source.

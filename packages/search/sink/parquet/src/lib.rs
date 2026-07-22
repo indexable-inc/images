@@ -32,7 +32,11 @@ use sha2::{Digest as _, Sha256};
 use snafu::{IntoError as _, ResultExt as _, Snafu};
 use source_meta::{Document, Reconciler, Source, keys};
 
-/// Connection and layout for the S3/R2 parquet sink.
+/// Connection and layout for the S3/R2 parquet corpus log.
+///
+/// Shared by both halves of the log: this crate writes it, and `source-parquet`
+/// re-exports this type to read it back with the same bucket, endpoint, region,
+/// and prefix.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Target bucket name.
@@ -133,9 +137,30 @@ impl Config {
     /// environment.
     pub fn connect(&self) -> Result<ParquetReconciler> {
         Ok(ParquetReconciler {
-            store: build_store(self)?,
+            store: self.build_store().context(BuildStoreSnafu {
+                bucket: self.bucket.clone(),
+            })?,
             prefix: self.prefix.clone(),
         })
+    }
+
+    /// Build the raw S3 client for this config. Credentials come from the
+    /// environment (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`).
+    ///
+    /// Shared with `source-parquet`, the consumer half of the corpus log, so
+    /// both halves connect to the store the same way.
+    ///
+    /// # Errors
+    /// Returns the underlying `object_store` error when the client cannot be
+    /// built from the config and environment; callers add their own context.
+    pub fn build_store(&self) -> Result<AmazonS3, object_store::Error> {
+        let mut builder = AmazonS3Builder::from_env()
+            .with_bucket_name(&self.bucket)
+            .with_region(&self.region);
+        if let Some(endpoint) = &self.endpoint {
+            builder = builder.with_endpoint(endpoint);
+        }
+        builder.build()
     }
 }
 
@@ -193,20 +218,6 @@ impl<S: ObjectStore> Reconciler for ParquetReconciler<S> {
             skipped: false,
         })
     }
-}
-
-/// Build the S3 client. Credentials come from the environment
-/// (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`).
-fn build_store(config: &Config) -> Result<AmazonS3> {
-    let mut builder = AmazonS3Builder::from_env()
-        .with_bucket_name(&config.bucket)
-        .with_region(&config.region);
-    if let Some(endpoint) = &config.endpoint {
-        builder = builder.with_endpoint(endpoint);
-    }
-    builder.build().context(BuildStoreSnafu {
-        bucket: config.bucket.clone(),
-    })
 }
 
 /// The flat corpus schema: identity, the common header fields, the embedded

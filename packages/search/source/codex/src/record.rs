@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value, json};
 use snafu::ResultExt as _;
-use source_meta::{Document, keys};
+use source_meta::{Document, insert_some, keys};
 
 use crate::SOURCE_TAG;
 use crate::error::{MetadataSnafu, Result};
@@ -175,14 +175,6 @@ impl RolloutItem {
             meta_json,
             content_hash,
         })
-    }
-}
-
-/// Insert `key` only when a value is present, keeping absent tags off the
-/// record rather than serializing nulls.
-fn insert_some(meta: &mut Map<String, Value>, key: &str, value: Option<Value>) {
-    if let Some(value) = value {
-        meta.insert(key.to_owned(), value);
     }
 }
 

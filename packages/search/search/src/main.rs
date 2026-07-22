@@ -513,15 +513,6 @@ fn print_answer(
     }
 }
 
-/// The projection mode for a `--compact` flag.
-const fn render_mode(compact: bool) -> RenderMode {
-    if compact {
-        RenderMode::Compact
-    } else {
-        RenderMode::Full
-    }
-}
-
 async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
     let pattern = require_pattern(&cli);
 
@@ -594,7 +585,7 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
             top_k,
             filter.as_ref(),
             &sort,
-            render_mode(cli.compact),
+            RenderMode::from_compact(cli.compact),
         )
         .await;
         finish(bar);
@@ -633,7 +624,7 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
             cli.web,
             filter.as_ref(),
             CodeScope::ServerFiltered,
-            render_mode(cli.compact),
+            RenderMode::from_compact(cli.compact),
         )
         .await;
         finish(bar);
@@ -664,7 +655,7 @@ async fn run_recent(cli: RecentArgs) -> anyhow::Result<()> {
         &store_name,
         cli.max_count.max(1),
         filter.as_ref(),
-        render_mode(cli.compact),
+        RenderMode::from_compact(cli.compact),
     )
     .await;
     finish(bar);
@@ -1036,7 +1027,7 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
         grep_options,
         filter.as_ref(),
         CodeScope::ServerFiltered,
-        render_mode(cli.compact),
+        RenderMode::from_compact(cli.compact),
     )
     .await;
     finish(bar);

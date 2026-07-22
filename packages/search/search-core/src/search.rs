@@ -44,6 +44,15 @@ pub enum RenderMode {
     Compact,
 }
 
+impl RenderMode {
+    /// The projection mode for a caller-facing `compact` flag (the CLI's
+    /// `--compact`, the Python binding's `compact=`).
+    #[must_use]
+    pub const fn from_compact(compact: bool) -> Self {
+        if compact { Self::Compact } else { Self::Full }
+    }
+}
+
 /// A search result projected for display.
 ///
 /// Serializes to the stable `search --json` object. `label` is renamed to `path`
