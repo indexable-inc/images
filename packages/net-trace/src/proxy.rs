@@ -97,6 +97,9 @@ impl Recorder {
         connection.bytes_down = transfer.down;
         connection.failed = failed;
         connection.finished = true;
+        // Explicit: release the recorder before any tail work the compiler
+        // might add here later (significant_drop_tightening).
+        drop(connections);
     }
 
     fn elapsed_ms(&self) -> u64 {

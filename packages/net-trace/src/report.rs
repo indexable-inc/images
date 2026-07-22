@@ -247,7 +247,10 @@ fn waterfall(summary: &Summary) -> Option<String> {
     let max = rows.first().map(|row| row.connection.dur_ms.max(1))?;
     let mut out = String::new();
     for row in &rows {
-        let width = usize::try_from(row.connection.dur_ms * 24 / max).unwrap_or(24);
+        // Clamp before converting: the bar is capped at 24 cells by design,
+        // so the conversion can never actually be out of range.
+        let width = usize::try_from((row.connection.dur_ms * 24 / max).min(24))
+            .expect("clamped bar width fits usize");
         write_fmt(&mut out, format_args!(
             "{:<24} {:>9} {} {} [{}]{}\n",
             format!("{}:{}", row.connection.host, row.connection.port),
