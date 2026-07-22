@@ -4,26 +4,19 @@
 //! (trybuild/macrotest would invoke cargo at test runtime, which the nix
 //! test sandbox cannot do, so the render output is snapshotted directly.)
 
-use proc_macro2::TokenStream;
 use unibind_core::ir;
-use unibind_test_support::{assert_render_snapshot, assert_snapshot};
+use unibind_test_support::{assert_ir_json_snapshot, assert_render_snapshot, lower_module_source};
 
 const GLUE_SNAPSHOT: &str = include_str!("snapshots/sample.ts.rs");
 
 fn interface() -> ir::Interface {
-    let file: syn::File =
-        syn::parse_str(include_str!("fixtures/sample.rs")).expect("fixture parses");
-    let Some(syn::Item::Mod(module)) = file.items.first() else {
-        panic!("fixture starts with a module");
-    };
-    unibind_core::lower_module(TokenStream::new(), module).expect("fixture lowers")
+    lower_module_source(include_str!("fixtures/sample.rs"))
 }
 
 #[test]
 fn ir_json_snapshot() {
-    let json = serde_json::to_string_pretty(&interface()).expect("serializes");
-    assert_snapshot(
-        &json,
+    assert_ir_json_snapshot(
+        &interface(),
         include_str!("snapshots/sample.ir.json"),
         "sample.ir.json",
     );
@@ -51,12 +44,7 @@ fn unsupported_surface_is_named() {
             "BigInt",
         ),
     ] {
-        let file: syn::File = syn::parse_str(source).expect("fixture parses");
-        let Some(syn::Item::Mod(module)) = file.items.first() else {
-            panic!("fixture starts with a module");
-        };
-        let interface =
-            unibind_core::lower_module(TokenStream::new(), module).expect("fixture lowers");
+        let interface = lower_module_source(source);
         let ::std::result::Result::Err(error) = unibind_backend_ts::render(&interface) else {
             panic!("ts render accepts unsupported surface");
         };

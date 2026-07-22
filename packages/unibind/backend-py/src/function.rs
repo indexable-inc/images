@@ -6,8 +6,8 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::RenderError;
 
-use crate::RenderError;
 use crate::ctx::Ctx;
 use crate::sig::{self, BodyAndRet};
 

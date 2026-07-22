@@ -5,7 +5,6 @@
 //! and (unless skipped) the wrapper `__init__.py` re-exporting the module's
 //! public names.
 
-mod streams;
 mod stub;
 mod types;
 mod wrapper;

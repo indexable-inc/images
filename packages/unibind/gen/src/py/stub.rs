@@ -8,9 +8,9 @@
 
 use std::fmt::Write as _;
 
+use unibind_backend_py::stream::{self as streams, StreamExport};
 use unibind_core::ir;
 
-use crate::py::streams::{self, StreamExport};
 use crate::py::types::{self, Position};
 
 /// The complete `.pyi` text.

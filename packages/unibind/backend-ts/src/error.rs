@@ -13,10 +13,9 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::{RenderError, name_ident};
 
-use crate::RenderError;
 use crate::function::doc_attrs;
-use crate::ty::name_ident;
 
 /// The reason prefix of every error the glue raises on purpose.
 pub const REASON_PREFIX: &str = "__unibind__";

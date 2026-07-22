@@ -7,8 +7,8 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::RenderError;
 
-use crate::RenderError;
 use crate::function::doc_attrs;
 
 pub fn render_error(

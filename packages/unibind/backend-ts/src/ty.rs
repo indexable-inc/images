@@ -3,8 +3,7 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
-
-use crate::RenderError;
+use unibind_core::render::{RenderError, name_ident, pascal_case};
 
 /// Interface-wide context the type mapping needs: the exported module's
 /// identifier (named types resolve through `super::<user>::`) and the
@@ -169,27 +168,6 @@ pub fn stream_class_ident(name: &str) -> Ident {
         &format!("__UnibindStream{}", pascal_case(name)),
         Span::call_site(),
     )
-}
-
-/// `snake_case` or `camelCase` to `PascalCase`, for generated class names.
-pub fn pascal_case(name: &str) -> String {
-    name.split('_')
-        .filter(|segment| !segment.is_empty())
-        .map(|segment| {
-            let mut chars = segment.chars();
-            chars.next().map_or_else(String::new, |first| {
-                first.to_ascii_uppercase().to_string() + chars.as_str()
-            })
-        })
-        .collect()
-}
-
-/// An identifier for a possibly-keyword name (renames like `type` fall back
-/// to raw identifiers).
-pub fn name_ident(name: &str) -> Result<Ident, RenderError> {
-    syn::parse_str::<Ident>(name)
-        .or_else(|_| syn::parse_str::<Ident>(&format!("r#{name}")))
-        .map_err(|_| RenderError::new(format!("`{name}` is not usable as an identifier")))
 }
 
 fn int_tokens(kind: ir::IntKind) -> TokenStream {

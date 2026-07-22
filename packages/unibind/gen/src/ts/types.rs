@@ -117,15 +117,6 @@ fn named_type_name<'a>(interface: &'a ir::Interface, name: &'a str) -> &'a str {
         .map_or(name, |object| type_name(&object.names, &object.name))
 }
 
-/// Whether the interface returns any stream, which pulls the shared
-/// `UnibindStream<T>` shape into both emitted files.
-pub fn has_streams(interface: &ir::Interface) -> bool {
-    interface
-        .functions
-        .iter()
-        .any(|function| matches!(function.ret, Some(ir::Type::Stream(_))))
-}
-
 /// Whether any signature spells `Buffer`, which pulls the `node:buffer`
 /// type import into `index.d.ts`.
 pub fn uses_buffer(interface: &ir::Interface) -> bool {

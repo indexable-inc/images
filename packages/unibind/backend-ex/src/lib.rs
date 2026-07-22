@@ -22,37 +22,3 @@ mod ty;
 
 pub use host::{HostModules, host_modules};
 pub use module::render;
-
-/// The rendered output for one interface.
-pub struct RenderedInterface {
-    /// Sibling items for the exported module: the hidden glue module with
-    /// the error terms, resource registrations, NIF wrappers, and the
-    /// `rustler::init!` invocation.
-    pub glue: proc_macro2::TokenStream,
-    /// Attributes to attach to each record struct, index-aligned with the
-    /// interface's records.
-    pub records: Vec<RenderedRecord>,
-}
-
-/// `NifStruct`-shaped attributes for one record struct.
-pub struct RenderedRecord {
-    /// Outer attributes for the struct itself.
-    pub outer: Vec<syn::Attribute>,
-    /// Attributes for each field, index-aligned with the record's fields.
-    pub fields: Vec<Vec<syn::Attribute>>,
-}
-
-/// A rendering failure; the macro positions it at the exported module.
-#[derive(Debug)]
-pub struct RenderError {
-    /// What went wrong and what to do instead.
-    pub message: String,
-}
-
-impl RenderError {
-    pub(crate) fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}

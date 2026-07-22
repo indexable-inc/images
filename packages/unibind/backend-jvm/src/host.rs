@@ -10,8 +10,9 @@ mod plumbing;
 use std::fmt::Write as _;
 
 use unibind_core::ir;
+use unibind_core::render::RenderError;
 
-use crate::{RenderError, module, names};
+use crate::{module, names};
 
 /// One generated Java source file.
 pub struct HostClass {

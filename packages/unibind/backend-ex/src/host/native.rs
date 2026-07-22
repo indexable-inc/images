@@ -5,7 +5,7 @@ use std::path::Path;
 
 use unibind_core::ir;
 
-use crate::{module, names};
+use crate::names;
 
 /// Render the `<Ns>.Native` module. `nif_soname` is the built library's
 /// file name; the load path drops its extension.
@@ -53,7 +53,7 @@ pub fn render(interface: &ir::Interface, nif_soname: &str) -> String {
             );
         }
     }
-    if module::has_streams(interface) {
+    if interface.has_streams() {
         stub(
             &mut out,
             "unibind_demand",

@@ -10,5 +10,6 @@
 pub mod embed;
 pub mod ir;
 mod lower;
+pub mod render;
 
 pub use lower::{Backend, LowerError, export_backends, lower_module, strip_unibind_attrs};

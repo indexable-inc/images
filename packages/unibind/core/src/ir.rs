@@ -43,6 +43,19 @@ pub struct Interface {
     pub objects: Vec<Object>,
 }
 
+impl Interface {
+    /// Whether any free function returns a stream, which pulls the
+    /// backend's shared stream plumbing into the generated code. Object
+    /// members do not count: the backends that reject stream methods never
+    /// see them, and the ones that accept them collect exports separately.
+    #[must_use]
+    pub fn has_streams(&self) -> bool {
+        self.functions
+            .iter()
+            .any(|function| matches!(function.ret, Some(Type::Stream(_))))
+    }
+}
+
 /// Per-language name overrides, from `#[unibind(py(name = "..."))]`,
 /// `#[unibind(ts(name = "..."))]`, `#[unibind(ex(name = "..."))]`, and
 /// `#[unibind(jvm(name = "..."))]`.

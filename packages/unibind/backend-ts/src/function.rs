@@ -3,9 +3,10 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::{RenderError, name_ident};
 
+use crate::defaults;
 use crate::ty::{self, Level, TyCtx};
-use crate::{RenderError, defaults};
 
 /// The pieces of one callable's wrapper signature and call, shared between
 /// free functions, object methods, and constructors.
@@ -24,7 +25,7 @@ pub fn wrapper_parts(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<Wrapper
             &arg.ty,
             &format!("argument `{}` of `{}`", arg.name, function.name),
         )?;
-        let ident = ty::name_ident(&arg.name)?;
+        let ident = name_ident(&arg.name)?;
         let declared = ty::decl(&arg.ty, ctx, Level::Top)?;
         match &arg.default {
             // An `Option` argument is already optional from JavaScript;
@@ -55,7 +56,7 @@ pub fn wrapper_parts(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<Wrapper
 /// Python's GIL, and JavaScript has no equivalent to free -- a sync export
 /// occupies the event loop either way.
 pub fn render_fn(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
-    let name = ty::name_ident(&function.name)?;
+    let name = name_ident(&function.name)?;
     let user = ctx.user;
     let wrapper = wrapper_parts(function, ctx)?;
     let call = {
@@ -77,7 +78,7 @@ pub fn render_callable(
     if let Some(ret) = &function.ret {
         ty::check(ret, &format!("the return type of `{}`", function.name))?;
     }
-    let name = ty::name_ident(&function.name)?;
+    let name = name_ident(&function.name)?;
     let napi_attr = napi_attr(function.names.ts.as_deref());
     let docs = doc_attrs(&function.docs);
     let params = &wrapper.params;

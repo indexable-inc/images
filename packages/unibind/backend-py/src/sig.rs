@@ -6,9 +6,10 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
+use unibind_core::render::{self, RenderError};
 
 use crate::ctx::Ctx;
-use crate::{RenderError, stream, ty};
+use crate::stream;
 
 /// A wrapper's argument surface, ready to splice into the generated `fn`.
 pub struct Args {
@@ -37,14 +38,14 @@ pub fn lower_args(function: &ir::Function, ctx: &Ctx<'_>) -> Result<Args, Render
         fallible: false,
     };
     for arg in &function.args {
-        let ident = ty::name_ident(arg.names.py.as_ref().unwrap_or(&arg.name))?;
+        let ident = render::name_ident(arg.names.py.as_ref().unwrap_or(&arg.name))?;
         if matches!(arg.ty, ir::Type::Bytes { owned: false }) {
             args.params
                 .push(quote!(#ident: ::pyo3::buffer::PyBuffer<u8>));
             args.prologue.extend(buffer_prologue(&ident, arg));
             args.fallible = true;
         } else {
-            let ty = ty::rust_type(&arg.ty, ctx.user);
+            let ty = render::rust_type(&arg.ty, ctx.user, render::Ownership::Declared);
             args.params.push(quote!(#ident: #ty));
         }
         args.signature.push(signature_entry(arg, &ident));
@@ -90,7 +91,7 @@ fn buffer_prologue(ident: &Ident, arg: &ir::Arg) -> TokenStream {
 
 fn signature_entry(arg: &ir::Arg, ident: &Ident) -> TokenStream {
     if let Some(default) = &arg.default {
-        let default = ty::default_tokens(default);
+        let default = default_tokens(default);
         return quote!(#ident = #default);
     }
     if matches!(arg.ty, ir::Type::Option(_)) {
@@ -129,7 +130,7 @@ pub fn ret_spec(function: &ir::Function, owner: Option<&str>, ctx: &Ctx<'_>) -> 
             }
         }
         Some(other) => RetSpec {
-            ok_ty: ty::rust_type(other, ctx.user),
+            ok_ty: render::rust_type(other, ctx.user, render::Ownership::Declared),
             wrap: None,
         },
     }
@@ -176,5 +177,22 @@ pub fn finish_sync(raw: &TokenStream, throws: bool, fallible: bool, ret: &RetSpe
     BodyAndRet {
         ret: quote!(#ok_ty),
         body: wrapped,
+    }
+}
+
+/// The default-value expression for a `#[pyo3(signature = ...)]` entry.
+fn default_tokens(literal: &ir::Literal) -> TokenStream {
+    match literal {
+        ir::Literal::Bool(value) => quote!(#value),
+        ir::Literal::Int(value) => {
+            let value = proc_macro2::Literal::i64_unsuffixed(*value);
+            quote!(#value)
+        }
+        ir::Literal::Float(value) => {
+            let value = proc_macro2::Literal::f64_unsuffixed(*value);
+            quote!(#value)
+        }
+        ir::Literal::Str(value) => quote!(#value),
+        ir::Literal::None => quote!(None),
     }
 }

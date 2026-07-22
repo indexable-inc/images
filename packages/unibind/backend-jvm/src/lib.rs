@@ -21,38 +21,3 @@ mod ty;
 
 pub use host::{HostClass, host_class};
 pub use module::render;
-
-/// The rendered output for one interface.
-pub struct RenderedInterface {
-    /// Sibling items for the exported module: the hidden glue module with
-    /// the record codecs, error mappers, `extern "C"` shims, and the
-    /// buffer-free symbol.
-    pub glue: proc_macro2::TokenStream,
-    /// Attributes to attach to each record struct, index-aligned with the
-    /// interface's records. The jvm backend reads records with plain field
-    /// access, so every entry is empty.
-    pub records: Vec<RenderedRecord>,
-}
-
-/// Attributes for one record struct; empty for this backend.
-pub struct RenderedRecord {
-    /// Outer attributes for the struct itself.
-    pub outer: Vec<syn::Attribute>,
-    /// Attributes for each field, index-aligned with the record's fields.
-    pub fields: Vec<Vec<syn::Attribute>>,
-}
-
-/// A rendering failure; the macro positions it at the exported module.
-#[derive(Debug)]
-pub struct RenderError {
-    /// What went wrong and what to do instead.
-    pub message: String,
-}
-
-impl RenderError {
-    pub(crate) fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}

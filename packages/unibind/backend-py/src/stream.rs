@@ -2,22 +2,27 @@
 //!
 //! Every stream-returning export gets its own `#[pyclass]`: the item type
 //! is baked into the class, so `__anext__` needs no downcasts and Python
-//! `isinstance` checks work per export.
+//! `isinstance` checks work per export. `unibind-gen`'s `.pyi` emitter
+//! consumes this module too: the stub declares exactly the classes the
+//! glue registers, so the collection and the naming live here once.
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
+use unibind_core::render::{self, pascal_case};
 
 use crate::ctx::Ctx;
-use crate::ty;
 
 /// One stream-returning export: the callable that produced it plus the
 /// item type its class yields.
 pub struct StreamExport<'a> {
-    /// `None` for free functions, the owning object's name for methods.
-    owner: Option<&'a str>,
-    function: &'a ir::Function,
-    item: &'a ir::Type,
+    /// `None` for free functions, the owning object's Rust name for
+    /// methods; scopes the class name.
+    pub owner: Option<&'a str>,
+    /// The stream-returning callable.
+    pub function: &'a ir::Function,
+    /// The yielded item type.
+    pub item: &'a ir::Type,
 }
 
 /// Every stream-returning export in the interface, in render order (free
@@ -57,8 +62,8 @@ impl StreamExport<'_> {
 
     pub fn render(&self, ctx: &Ctx<'_>) -> TokenStream {
         let ident = self.class_ident();
-        let py_name = python_name(self.owner, &self.function.name);
-        let item_ty = ty::rust_type(self.item, ctx.user);
+        let py_name = class_name(self.owner, &self.function.name);
+        let item_ty = render::rust_type(self.item, ctx.user, render::Ownership::Declared);
         let produced = self.owner.map_or_else(
             || self.function.name.clone(),
             |object| format!("{object}.{}", self.function.name),
@@ -118,23 +123,14 @@ pub fn class_ident(owner: Option<&str>, export: &str) -> Ident {
     )
 }
 
-/// The Python-visible class name: `TailStream` / `StoreRowsStream`.
-fn python_name(owner: Option<&str>, export: &str) -> String {
+/// The Python-visible class name: `TailStream` for a free `tail`,
+/// `StoreWatchStream` for `Store::watch`. Built from the Rust names;
+/// renames never reach these classes.
+#[must_use]
+pub fn class_name(owner: Option<&str>, export: &str) -> String {
     let export = pascal_case(export);
     owner.map_or_else(
         || format!("{export}Stream"),
         |object| format!("{object}{export}Stream"),
     )
-}
-
-/// `snake_case` -> `PascalCase` for export names.
-fn pascal_case(name: &str) -> String {
-    name.split('_')
-        .map(|segment| {
-            let mut chars = segment.chars();
-            chars.next().map_or_else(String::new, |first| {
-                first.to_ascii_uppercase().to_string() + chars.as_str()
-            })
-        })
-        .collect()
 }

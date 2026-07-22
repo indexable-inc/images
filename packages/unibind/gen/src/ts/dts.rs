@@ -51,7 +51,7 @@ pub fn render(interface: &ir::Interface) -> Result<String, EmitError> {
     for error in &interface.errors {
         error_decl(&mut out, error);
     }
-    if types::has_streams(interface) {
+    if interface.has_streams() {
         out.push_str(STREAM_DECL);
     }
     for object in &interface.objects {

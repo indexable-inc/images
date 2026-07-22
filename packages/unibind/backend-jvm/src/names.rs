@@ -2,10 +2,8 @@
 //! `extern "C"` symbol names both sides agree on.
 
 use heck::{ToLowerCamelCase as _, ToShoutySnakeCase as _, ToUpperCamelCase as _};
-use proc_macro2::Ident;
 use unibind_core::ir;
-
-use crate::RenderError;
+use unibind_core::render::RenderError;
 
 /// Java keywords and reserved literals that cannot name a method, argument,
 /// or record component; a colliding name needs a `jvm(name = ...)` rename.
@@ -205,12 +203,4 @@ pub fn symbol(interface: &ir::Interface, function: &ir::Function) -> String {
 /// The `extern "C"` symbol reclaiming reply buffers for this interface.
 pub fn free_symbol(interface: &ir::Interface) -> String {
     format!("unibind_jvm_{}_free", interface.name)
-}
-
-/// An identifier for a possibly-keyword Rust name (renames like `end` fall
-/// back to raw identifiers).
-pub fn name_ident(name: &str) -> Result<Ident, RenderError> {
-    syn::parse_str::<Ident>(name)
-        .or_else(|_| syn::parse_str::<Ident>(&format!("r#{name}")))
-        .map_err(|_| RenderError::new(format!("`{name}` is not usable as an identifier")))
 }

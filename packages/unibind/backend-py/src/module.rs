@@ -3,9 +3,10 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
+use unibind_core::render::{self, RenderError, RenderedInterface};
 
 use crate::ctx::Ctx;
-use crate::{RenderError, RenderedInterface, error, function, object, record, stream, ty};
+use crate::{error, function, object, record, stream};
 
 /// Render `pyo3` glue for one interface.
 ///
@@ -22,13 +23,13 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         )));
     }
 
-    let user = ty::name_ident(&interface.name)?;
+    let user = render::name_ident(&interface.name)?;
     let module_name = interface
         .names
         .py
         .clone()
         .unwrap_or_else(|| interface.name.clone());
-    let module_ident = ty::name_ident(&module_name)?;
+    let module_ident = render::name_ident(&module_name)?;
     let glue_ident = format_ident!("__unibind_py_{}", interface.name.trim_start_matches('_'));
     let ctx = Ctx {
         user: &user,
@@ -121,13 +122,13 @@ fn registration(
     }
     for err in &interface.errors {
         let base_name = err.names.py.as_deref().unwrap_or(&err.name);
-        let base_ident = ty::name_ident(base_name)?;
+        let base_ident = render::name_ident(base_name)?;
         statements.push(quote! {
             module.add(#base_name, module.py().get_type::<#base_ident>())?;
         });
         for variant in &err.variants {
             let class_name = variant.names.py.as_deref().unwrap_or(&variant.name);
-            let class_ident = ty::name_ident(class_name)?;
+            let class_ident = render::name_ident(class_name)?;
             statements.push(quote! {
                 module.add(#class_name, module.py().get_type::<#class_ident>())?;
             });

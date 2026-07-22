@@ -7,9 +7,9 @@
 
 use std::fmt::Write as _;
 
+use unibind_backend_py::stream as streams;
 use unibind_core::ir;
 
-use crate::py::streams;
 use crate::py::stub;
 use crate::py::types;
 
