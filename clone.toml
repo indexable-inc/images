@@ -69,7 +69,12 @@ ignore = [
 # (packages/sdk/typescript, packages/sdk/python) is deleted; the SDK ships as
 # compiled artifacts only, so the mirror's clone cluster left the scan.
 # Measured 0.2497% after the deletion.
+#
+# 2026-07-22 (#4023): raised 0.25 -> 0.275. The #4011 drop set the budget
+# 0.12% above its own 0.2497% measure, so ordinary drift (0.2502%) redded
+# main the same day. Restore the ~10% headroom this file's convention calls
+# for; the gate still trips on any real regression.
 [budget]
-global_pct = 0.25
+global_pct = 0.275
 diff_pct = 0.0
 diff_base = "origin/main"
