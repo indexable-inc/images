@@ -46,7 +46,7 @@
     description = "Age of the ${name} flake pin baked into this config";
   };
 in {
-  format = "$all$line_break$character";
+  format = "\${custom.submodule_chain}$all$line_break$character";
   aws = {
     disabled = true;
     symbol = "  ";
@@ -325,6 +325,33 @@ in {
       format = "[$output]($style) ";
       style = "italic dimmed";
       description = "Relative time since the latest git commit";
+    };
+
+    # Breadcrumb of the git superproject chain, shown only when the cwd is
+    # inside a submodule. This config nests three repos (config > ix > index,
+    # nix#147 / ix#8119), and truncate_to_repo collapses the prompt to just the
+    # innermost repo name, hiding where you actually are. The module walks
+    # `--show-superproject-working-tree` outward and joins the ancestor repo
+    # basenames with a dimmed chevron, so `index/packages` reads as
+    # `nix › ix › index/packages`. Ancestors only; the innermost repo is the
+    # directory module that follows. Gating is free: require_repo skips
+    # non-repo dirs natively, and the conditional format group drops the
+    # module when the walk prints nothing (empty output alone does not hide a
+    # custom module; it would leave a stray chevron). Runs under sh for the
+    # same cwd-inheritance reason as git_commit_age above.
+    submodule_chain = {
+      command = ''sup=$(git rev-parse --show-superproject-working-tree 2>/dev/null); names=""; while [ -n "$sup" ]; do b=$(basename "$sup"); if [ -z "$names" ]; then names="$b"; else names="$b › $names"; fi; sup=$(git -C "$sup" rev-parse --show-superproject-working-tree 2>/dev/null); done; printf "%s" "$names"'';
+      shell = [
+        "sh"
+        "-c"
+      ];
+      use_stdin = false;
+      require_repo = true;
+      when = true;
+      ignore_timeout = true;
+      format = "([$output ›]($style) )";
+      style = "dimmed";
+      description = "Breadcrumb of git superproject repos when inside a submodule";
     };
 
     # Retired custom modules, kept from the TOML era for reference:
