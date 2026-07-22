@@ -21,8 +21,6 @@
   snix-src,
   clippy-src,
   codex-src,
-  zed-src,
-  zed-upstream,
   nix-src,
   nix-fast-build-src,
   nix-derivation-src,
@@ -547,7 +545,6 @@
       goUnitFor
       rustWorkspaceFor
       clippy-src
-      zed-src
       ;
   };
 
@@ -779,7 +776,6 @@
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
-    zedSrc = zed-upstream;
     clippySrc = clippy-src;
     nixSrc = nix-src;
     nix-fast-buildSrc = nix-fast-build-src;

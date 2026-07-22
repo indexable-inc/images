@@ -149,17 +149,6 @@
       flake = false;
     };
 
-    # The maintained fork is the application source. Its own flake owns the
-    # Rust lock, toolchain, and platform build.
-    zed-src.url = "github:indexable-inc/zed/ix-patched";
-
-    # Unmodified upstream base for validating and regenerating the patch series
-    # that produces zed-src's ix-patched branch.
-    zed-upstream = {
-      url = "github:zed-industries/zed/v1.10.x";
-      flake = false;
-    };
-
     # Upstream NixOS/nix, patched in-repo (packages/nix/nix/patches). Pinned BY
     # REV at tag 2.34.7, the version the hydra daemon runs (`nix store info` ->
     # `Version: 2.34.7`): nix is our daemon toolchain, so the patched package
@@ -339,9 +328,8 @@
     # off every darwin install; fork patch
     # 0004-build-keep-Demit-lib-vt-buildable-without-Apple-abso carries the
     # sandbox fix. ghostty is darwin-only and darwin has no CI
-    # (index-workstation-profile-no-ci-eval,
-    # zed-src-patch-lock-drift-darwin-only-guard document the same class of
-    # silent-drift risk for zed), so nothing catches a routine bump breaking
+    # (index-workstation-profile-no-ci-eval documents this class of
+    # silent-drift risk), so nothing catches a routine bump breaking
     # this build; move this rev only with `nix run .#rebase-patches --
     # ghostty` followed by a manual `nix build .#ghostty` on darwin.
     ghostty-src = {
@@ -393,8 +381,6 @@
     snix-src,
     clippy-src,
     codex-src,
-    zed-src,
-    zed-upstream,
     nix-src,
     nix-fast-build-src,
     nix-derivation-src,
@@ -472,8 +458,6 @@
         snix-src
         clippy-src
         codex-src
-        zed-src
-        zed-upstream
         nix-src
         nix-fast-build-src
         nix-derivation-src

@@ -6,7 +6,6 @@
   goUnitFor,
   rustWorkspaceFor,
   clippy-src,
-  zed-src,
 }: pkgs: let
   packageSystem = pkgs.stdenv.hostPlatform.system;
   ixForPackages =
@@ -36,8 +35,6 @@
       ixForPackages
       ;
     ix = ixForPackages;
-    zedPackage = zed-src.packages.${packageSystem}.stable;
-    zedSource = zed-src.outPath;
     # The Nushell writer pre-applied to the caller's pkgs, for packages that
     # build a checked Nushell command directly (e.g. chrome-vm, astlog scan).
     writeNushellApplication = ixForPackages.writeNushellApplication pkgs;
