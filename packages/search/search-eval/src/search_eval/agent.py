@@ -157,7 +157,7 @@ class LocalBackend:
 class IxVmBackend:
     """Deferred: run each agent inside a disposable ix VM.
 
-    The production isolation boundary. Creating it would: ``ix new`` a VM from a
+    The production isolation boundary. Creating it would: ``ix apply`` a VM from a
     claude-code image, mount or clone the corpus in, run the same headless
     ``claude -p`` against an in-VM ``corpus-search``, collect the answer, then
     destroy the VM by id. ix VMs run on x86_64-linux compute nodes, so this

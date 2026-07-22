@@ -14,7 +14,7 @@ share name, directory, and the elected server node; it does not configure
 Samba itself.
 
 Security note: `guestOk` defaults to `true` so the example fleet comes up
-with `ix up` and no secrets plumbing, the same tradeoff
+with `ix apply` and no secrets plumbing, the same tradeoff
 `examples/multi-client/file-sharing` documents. The share is only reachable
 on the fleet's private east-west group (mkDev joins one), never publicly.
 A production identity volume should set `guestOk = false`, add a Samba user

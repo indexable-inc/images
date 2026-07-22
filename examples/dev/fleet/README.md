@@ -17,17 +17,17 @@ agent logs in the whole fleet.
 ## Run
 
 ```sh
-ix up
+ix apply
 ```
 
 Run that from a copied example flake. In this repo root
 (`git clone https://github.com/indexable-inc/index`), the aggregate example
 wrapper still exposes `nix run .#dev-fleet-up`; the standalone example shape is
-what `ix up` consumes.
+what `ix apply` consumes.
 
 This example declares a multi-node `ix.dev.fleet`. Omit that block and the same
 `dev.nix` is a **single VM named `dev`** that `index.lib.mkDev` builds and
-creates through `ix up`; `ix.nix` shows the composition. The fleet below is the
+creates through `ix apply`; `ix.nix` shows the composition. The fleet below is the
 scale-up.
 
 ## Shape
@@ -74,7 +74,7 @@ notes; this example places the source.)
 ## Tradeoffs
 
 - The share is **guest-writable** by default (`ix.dev.shared.guestOk`) so
-  `ix up` works without secrets plumbing, the same tradeoff
+  `ix apply` works without secrets plumbing, the same tradeoff
   [`multi-client-file-sharing`](../multi-client-file-sharing) documents. It is
   only reachable on the private group, never public. A real shared-auth volume
   should set `guestOk = false`, add a Samba user, and pass `credentials=`

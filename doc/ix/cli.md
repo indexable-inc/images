@@ -38,14 +38,17 @@ Supported platforms: `aarch64-darwin` and `x86_64-linux`.
 - **You own VMs.** A VM is a boot image wrapped in an ix boundary: networking,
   logs, shell, snapshots, lifecycle. Name them with
   `--name`, list with `ix ls`, address every later command by that name.
-- **`ix up` is declarative.** It builds your repo's NixOS config and converges the
-  VM in place, the same contract as `nixos-rebuild switch`: re-running
-  reconverges, with no separate switch command. Default
-  target is `.`.
-- **`ix new` / `ix run` are imperative one-offs.** `new` boots an OCI image as a
-  long-running VM; `run` boots a fresh VM, runs one command,
-  streams its output, and leaves the VM up. Reach for `up`
-  for a config you own and re-converge; reach for `new`/`run` for a quick image.
+- **`ix apply` is the one create-and-converge verb.** Each positional target is
+  classified by shape. A Nix installable (`.`, `.#web`, a `github:` ref, a
+  `/nix/store` path) builds your repo's NixOS config and converges the VM in
+  place, the same contract as `nixos-rebuild switch`: re-running reconverges,
+  with no separate switch command. A snapshot UUID warm-restores that snapshot.
+  Anything else (`ix/base:latest`, `ubuntu:24.04`) boots an OCI image as a
+  long-running VM. Bare `ix apply` defaults to `.`: the config push is the
+  common case.
+- **`ix run` is the imperative one-off.** It boots a fresh VM, runs one command,
+  streams its output, and leaves the VM up. Reach for `apply`
+  for a config you own and re-converge; reach for `run` for a quick command.
 - **Fleets are a separate tool.** Multi-VM declarative fleets live in `ix-fleet`
   (`nix run .#ix-fleet -- --plan plan.json <verb>`), not in `ix`. See
   [fleet.md](fleet.md). There is no `ix down`, `ix health`, `ix diff`, or
@@ -58,9 +61,8 @@ actions show as `verb <action>`.
 
 | group | verb | what it does |
 | --- | --- | --- |
-| Provision | `new [image]` | Boot an OCI image (default `ix/base:latest`) as a long-running VM, or warm-restore a snapshot UUID. |
+| Provision | `apply [targets]` | One create-and-converge verb, classified by target shape: a Nix installable builds + converges VMs from your NixOS config like `nixos-rebuild switch` (bare `apply` defaults to `.`), a snapshot UUID warm-restores, any other ref boots that OCI image as a long-running VM. |
 | | `run -- <cmd>` | Boot a fresh VM, run `<cmd>`, stream output, leave the VM up; exits with the command's code. |
-| | `up [targets]` | Declaratively build + converge VMs from your NixOS config, like `nixos-rebuild switch`. |
 | | `init` | Write a minimal `flake.nix` + `ix.nix` in the current dir; existing files untouched. |
 | Inventory | `ls` | List your VMs: name, state, region, address, usage. Read-only inventory. |
 | | `start <vm>` | Resume stopped VMs; does not create or change the image. |

@@ -1835,12 +1835,12 @@ in {
   inherit updatablePackages;
 
   # CI-only push roots for cache-push.yml. Two adjustments to `packages` keep the
-  # cache useful to `ix up` while cutting the monolithic `*-oci.tar` archives that
+  # cache useful to `ix apply` while cutting the monolithic `*-oci.tar` archives that
   # dominate the run -- each is one uncompressed blob that never dedups, cold
   # every run since check.yml only eval-validates packages:
   #
   #   1. Every NixOS image is replaced by its `toplevel` closure -- the artifact
-  #      `ix up` substitutes (consumers reconstruct the archive on demand via
+  #      `ix apply` substitutes (consumers reconstruct the archive on demand via
   #      streamLayeredImage). Non-image packages, and non-NixOS OCI images (which
   #      expose no `toplevel`), pass through unchanged. See lib/image/oci-layer.nix.
   #   2. The `health-check-*` packages (and the `health-checks{,-zellij}` runners)

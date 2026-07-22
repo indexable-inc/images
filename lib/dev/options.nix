@@ -224,7 +224,7 @@ in {
         type = types.bool;
         default = true;
         description = ''
-          Serve the share without authentication. The default keeps `ix up`
+          Serve the share without authentication. The default keeps `ix apply`
           working with no secrets plumbing (the share is still private to the
           group). Set false and add a Samba user for a production identity
           volume - see RFC 0007.

@@ -34,7 +34,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
 
   moduleList = spec: toList (spec.modules or spec.module or []);
 
-  # Default `switch.sourceInstallable`. The remote path goes through `ix up`,
+  # Default `switch.sourceInstallable`. The remote path goes through `ix apply`,
   # which rewrites a bare `.#<node>` to `nixosConfigurations.<node>...` and (for
   # the native multi-VM switch) derives the VM name from that attr. The local
   # path runs a plain `nix build <installable>` with no such rewrite, so it must
@@ -299,7 +299,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
         replacementDestination = deploy.destination or "${imageName}:latest";
         switchBuildOn = deploy.switch.buildOn or "remote";
         ipv4HealthChecks = lib.filterAttrs (_: check: check.requiresIpv4) config.ix.healthChecks;
-        # ix up expects a system out-path for local copy and a .drv for remote
+        # ix apply expects a system out-path for local copy and a .drv for remote
         # build. Picking the wrong shape uploads the build-time closure and tries
         # to run `<drv>/bin/switch-to-configuration`, which deadlocks.
         switchTarget = deploy.switch.target or unsafeDiscardStringContext (
@@ -331,7 +331,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
             buildOn = switchBuildOn;
             buildVm = deploy.switch.buildVm or null;
             # Remote switches default to the bare `.#<node>` so the native multi-VM
-            # `ix up` can derive each VM name from the attr; local switches keep the
+            # `ix apply` can derive each VM name from the attr; local switches keep the
             # `.#<node>-system` package alias (see `defaultSourceInstallable`).
             sourceInstallable =
               deploy.switch.sourceInstallable or (defaultSourceInstallable name switchBuildOn);
@@ -383,7 +383,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
   # (`.#${prefix}${name}`) still resolve to the shared base closure because
   # `nixosConfigurations.<external>` and `packages.<external>` are thin
   # renames over the once-evaluated `nodeConfigs.<name>`
-  # (see `resultFor`), so the native multi-VM `ix up` can name the prefixed VM
+  # (see `resultFor`), so the native multi-VM `ix apply` can name the prefixed VM
   # without a second eval. The health-check
   # runner relies on this so the 10 example fleets are evaluated once per
   # `nix flake check`/`.#packages` eval instead of twice (ENG-2411). The
@@ -506,8 +506,8 @@ rendered fleet plan, image attrset, and wrapped CLI app.
         name: config: lib.nameValuePair "${externalName name}-system" config.system.build.toplevel
       )
       nodeConfigs;
-    # Each node's NixOS system under its bare external name, so `ix up .#<node>`
-    # (and the native multi-VM `ix up .#a .#b --build-vm <builder>`) resolves
+    # Each node's NixOS system under its bare external name, so `ix apply .#<node>`
+    # (and the native multi-VM `ix apply .#a .#b --build-vm <builder>`) resolves
     # `nixosConfigurations.<node>.config.system.build.toplevel`. `nodeConfigs`
     # is already the evaluated `config` (`evalImageConfig` returns `.config`),
     # so the `{ config }` wrapper reuses that closure with no second eval; this

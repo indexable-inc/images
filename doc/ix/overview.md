@@ -2,7 +2,7 @@
 
 `ix` is a platform for running your own VMs: boot an image and you get a VM
 you own, with networking, secrets, logs, snapshots, a shell, and declarative
-config converged by name. You drive it with the `ix` CLI (`ix new`, `ix up`,
+config converged by name. You drive it with the `ix` CLI (`ix apply`,
 `ix ls`, ...) over a hosted control plane. This page is the map for agents and
 people: what is open vs hosted, how to get a first VM, and which page answers
 each "how do I do X".
@@ -44,11 +44,13 @@ declaratively:
 
 ```
 ix init          # write a minimal flake.nix + ix.nix
-ix up            # build your NixOS config and converge the VM in place
+ix apply         # build your NixOS config and converge the VM in place
 ```
 
-`ix up` is the declarative path: re-running it reconverges, the same contract as
-`nixos-rebuild switch`. See [lifecycle.md](lifecycle.md) for when to use which.
+`ix apply` is the declarative path: re-running it reconverges, the same contract
+as `nixos-rebuild switch`. The same verb also boots OCI images and warm-restores
+snapshots, classified by target shape. See [lifecycle.md](lifecycle.md) for when
+to use which.
 
 ## The map
 

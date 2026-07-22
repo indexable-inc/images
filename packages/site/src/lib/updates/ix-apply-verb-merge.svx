@@ -1,0 +1,31 @@
+---
+id: ix-apply-verb-merge
+postedAt: "2026-07-21T12:00:00-07:00"
+title: "docs move to the merged ix apply verb"
+links:
+  - label: "ix#8134 (verb decision)"
+    href: "https://github.com/indexable-inc/ix/issues/8134"
+  - label: "ix#8144 (CLI merge PR)"
+    href: "https://github.com/indexable-inc/ix/pull/8144"
+  - label: "doc/ix/cli.md"
+    href: "https://github.com/indexable-inc/index/blob/main/doc/ix/cli.md"
+tags:
+  - docs
+---
+
+The ix CLI merged `ix up` and `ix new` into one create-and-converge verb,
+`ix apply` (ix#8134). What it does follows from each positional target's
+shape: a Nix installable (`.`, `.#web`, a `github:` ref, a `/nix/store`
+path) builds and converges your NixOS config in place, the old `ix up`; a
+snapshot UUID warm-restores, the old `ix new <uuid>`; anything else, like
+`ix/base:latest`, boots that OCI image as a long-running VM, the old
+`ix new`. Bare `ix apply` defaults to `.`, since pushing a config change to
+machines that already exist is the common case. The old verbs are gone, not
+aliased: one verb, one doc surface.
+
+This repo's ix-facing prose now teaches the merged verb: the `doc/ix/`
+pages, the ix-fleet overview, the `switch`/`switch-multi`/`dev-fleet`
+examples (hero SVGs included), and the comments that cite the verb in
+`lib/` and `modules/profiles/base`. `ix-fleet`'s remote source switch also
+invokes `ix apply` now, so fleets keep converging once the pinned CLI drops
+the old verbs. Dated posts and plans stay as written.
