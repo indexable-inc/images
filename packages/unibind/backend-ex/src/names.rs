@@ -2,10 +2,7 @@
 //! and identifiers for the generated Rust glue.
 
 use heck::{ToSnakeCase as _, ToUpperCamelCase as _};
-use proc_macro2::Ident;
 use unibind_core::ir;
-
-use crate::RenderError;
 
 /// The Elixir namespace module: the `ex(name = ...)` override, else the
 /// `UpperCamelCase` of the Rust module name with the customary leading
@@ -91,12 +88,4 @@ pub fn member_nif_name(object: &ir::Object, function: &ir::Function) -> String {
         ex_object_name(object).to_snake_case(),
         ex_fn_name(function)
     )
-}
-
-/// An identifier for a possibly-keyword name (renames like `end` fall back
-/// to raw identifiers).
-pub fn name_ident(name: &str) -> Result<Ident, RenderError> {
-    syn::parse_str::<Ident>(name)
-        .or_else(|_| syn::parse_str::<Ident>(&format!("r#{name}")))
-        .map_err(|_| RenderError::new(format!("`{name}` is not usable as an identifier")))
 }

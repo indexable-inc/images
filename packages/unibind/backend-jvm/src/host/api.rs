@@ -6,9 +6,10 @@ use std::fmt::Write as _;
 
 use heck::ToLowerCamelCase as _;
 use unibind_core::ir;
+use unibind_core::render::RenderError;
 
 use super::java;
-use crate::{RenderError, names};
+use crate::names;
 
 /// Render every public method, primaries first, then their
 /// trailing-default overloads.

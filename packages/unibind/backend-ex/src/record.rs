@@ -2,8 +2,9 @@
 
 use syn::parse_quote;
 use unibind_core::ir;
+use unibind_core::render::{RenderError, RenderedRecord};
 
-use crate::{RenderError, RenderedRecord, names, ty};
+use crate::{names, ty};
 
 /// The attributes the exported struct gains: a `NifStruct` derive mapping
 /// it onto `%<Ns>.<Record>{}` (rustler prepends the `Elixir.` itself).

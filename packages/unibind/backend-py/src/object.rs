@@ -7,10 +7,11 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::RenderError;
 
 use crate::ctx::Ctx;
 use crate::function::{doc_attrs, render_method};
-use crate::{RenderError, resource, sig};
+use crate::{resource, sig};
 
 pub fn render_object(object: &ir::Object, ctx: &Ctx<'_>) -> Result<TokenStream, RenderError> {
     let user = ctx.user;

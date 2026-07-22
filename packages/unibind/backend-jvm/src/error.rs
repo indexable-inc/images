@@ -6,8 +6,9 @@ use heck::ToSnakeCase as _;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
+use unibind_core::render::{RenderError, name_ident};
 
-use crate::{RenderError, names};
+use crate::names;
 
 /// Java exception classes an error enum may extend via `jvm(base = ...)`.
 /// The default is `RuntimeException`; the checked bases make the generated
@@ -51,7 +52,7 @@ pub fn render_error(error: &ir::ErrorType, user: &Ident) -> Result<TokenStream, 
         )?;
     }
 
-    let rust_name = names::name_ident(&error.name)?;
+    let rust_name = name_ident(&error.name)?;
     let fail = fail_ident(&error.name);
     let arms = error.variants.iter().enumerate().map(|(index, variant)| {
         let variant_ident = format_ident!("{}", &variant.name);

@@ -4,8 +4,9 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::{RenderError, RenderedRecord, name_ident};
 
-use crate::{RenderError, RenderedRecord, names, ty};
+use crate::{names, ty};
 
 /// Render `__read_<record>` and `__write_<record>` for one record. Fields
 /// travel in declaration order with no framing, mirroring the generated
@@ -15,7 +16,7 @@ pub fn render_codecs(
     interface: &ir::Interface,
     user: &Ident,
 ) -> Result<TokenStream, RenderError> {
-    let rust_name = names::name_ident(&record.name)?;
+    let rust_name = name_ident(&record.name)?;
     // Validate the Java side alongside the glue: one validator for both.
     names::checked(
         names::record_name(record).to_owned(),
@@ -31,7 +32,7 @@ pub fn render_codecs(
             .map_err(|error| at_field(record, field, &error))?;
         // Validate the Java side too: one validator for both halves.
         names::component_name(record, field)?;
-        let field_ident = names::name_ident(&field.name)?;
+        let field_ident = name_ident(&field.name)?;
         let decode = ty::decode_expr(&field.ty, 0);
         reads.push(quote!(#field_ident: #decode,));
         writes.push(ty::encode_stmts(&field.ty, &quote!(value.#field_ident), 0));

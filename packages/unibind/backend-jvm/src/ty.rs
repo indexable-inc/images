@@ -5,8 +5,7 @@ use heck::ToSnakeCase as _;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
-
-use crate::RenderError;
+use unibind_core::render::RenderError;
 
 /// Reject the types the jvm backend cannot carry across the boundary.
 /// Streams have no synchronous C-ABI shape; a `Named` type must be a

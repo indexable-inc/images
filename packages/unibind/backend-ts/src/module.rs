@@ -3,9 +3,10 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use unibind_core::ir;
+use unibind_core::render::{RenderError, RenderedInterface, name_ident};
 
 use crate::ty::TyCtx;
-use crate::{RenderError, RenderedInterface, error, function, object, record, stream};
+use crate::{error, function, object, record, stream};
 
 /// Render `napi-rs` glue for one interface.
 ///
@@ -22,7 +23,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         )));
     }
 
-    let user = crate::ty::name_ident(&interface.name)?;
+    let user = name_ident(&interface.name)?;
     let ctx = TyCtx {
         user: &user,
         objects: &interface.objects,

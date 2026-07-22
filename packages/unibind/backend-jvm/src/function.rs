@@ -3,8 +3,9 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
+use unibind_core::render::{RenderError, name_ident};
 
-use crate::{RenderError, error, names, ty};
+use crate::{error, names, ty};
 
 /// Render one function's shim: decode the arguments in declaration order,
 /// call the user function, and encode the outcome through the runtime's
@@ -39,7 +40,7 @@ pub fn render_fn(
         ty::check_boundary(&arg.ty, interface).map_err(|error| {
             RenderError::new(format!("argument `{}`: {}", arg.name, error.message))
         })?;
-        let ident = names::name_ident(&arg.name)?;
+        let ident = name_ident(&arg.name)?;
         let decode = ty::decode_expr(&arg.ty, 0);
         decodes.push(quote!(let #ident = #decode;));
         forwarded.push(quote!(#ident));
@@ -51,7 +52,7 @@ pub fn render_fn(
         })?;
     }
 
-    let rust_name = names::name_ident(&function.name)?;
+    let rust_name = name_ident(&function.name)?;
     let symbol = format_ident!("{}", names::symbol(interface, function));
     let call = quote!(super::#user::#rust_name(#(#forwarded),*));
     let outcome = function.throws.as_ref().map_or_else(

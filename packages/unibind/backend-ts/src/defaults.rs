@@ -3,8 +3,8 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::RenderError;
 
-use crate::RenderError;
 use crate::ty;
 
 /// The call-site expression for an argument JavaScript may omit: `None`

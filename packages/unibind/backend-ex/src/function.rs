@@ -3,8 +3,9 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::{RenderError, name_ident};
 
-use crate::{RenderError, error, names, ty};
+use crate::{error, names, ty};
 
 pub fn render_fn(function: &ir::Function, user: &Ident) -> Result<TokenStream, RenderError> {
     if matches!(function.asyncness, ir::Asyncness::Async) {
@@ -54,7 +55,7 @@ pub fn borrowed_params(function: &ir::Function, user: &Ident) -> Result<Params, 
     let mut params = Vec::new();
     let mut forwarded = Vec::new();
     for arg in &function.args {
-        let ident = names::name_ident(&names::ex_arg_name(arg))?;
+        let ident = name_ident(&names::ex_arg_name(arg))?;
         let spelled = ty::rust_type(&arg.ty, user).map_err(|error| at_arg(arg, &error))?;
         params.push(quote!(#ident: #spelled));
         forwarded.push(quote!(#ident));
@@ -68,7 +69,7 @@ fn owned_params(function: &ir::Function, user: &Ident) -> Result<Params, RenderE
     let mut params = Vec::new();
     let mut forwarded = Vec::new();
     for arg in &function.args {
-        let ident = names::name_ident(&names::ex_arg_name(arg))?;
+        let ident = name_ident(&names::ex_arg_name(arg))?;
         let spelled = ty::owned_type(&arg.ty, user).map_err(|error| at_arg(arg, &error))?;
         params.push(quote!(#ident: #spelled));
         forwarded.push(ty::reborrow(&ident, &arg.ty));

@@ -4,9 +4,9 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::parse_quote;
 use unibind_core::ir;
+use unibind_core::render::{self, RenderError, RenderedRecord};
 
 use crate::function::doc_attrs;
-use crate::{RenderError, RenderedRecord, ty};
 
 /// The attributes the exported struct gains: `#[pyclass]` on the item and a
 /// read-only getter per field.
@@ -41,8 +41,8 @@ pub fn constructor(record: &ir::Record, user: &Ident) -> Result<TokenStream, Ren
     let mut signature = Vec::new();
     for field in &record.fields {
         let ident = Ident::new(&field.name, Span::call_site());
-        let py_ident = ty::name_ident(field.names.py.as_ref().unwrap_or(&field.name))?;
-        let ty = ty::rust_type(&field.ty, user);
+        let py_ident = render::name_ident(field.names.py.as_ref().unwrap_or(&field.name))?;
+        let ty = render::rust_type(&field.ty, user, render::Ownership::Declared);
         params.push(quote!(#py_ident: #ty));
         signature.push(quote!(#py_ident));
         field_idents.push(quote!(#ident: #py_ident));

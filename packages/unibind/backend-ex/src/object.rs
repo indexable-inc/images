@@ -4,9 +4,10 @@ use heck::ToSnakeCase as _;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::RenderError;
 
 use crate::function::{Params, borrowed_params, nif_attr};
-use crate::{RenderError, error, names, ty};
+use crate::{error, names, ty};
 
 /// One `resource_impl` registration plus a NIF per constructor and method.
 /// The user's struct itself gains nothing: `ResourceArc` wraps it as an

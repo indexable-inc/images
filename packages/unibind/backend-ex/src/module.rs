@@ -3,8 +3,9 @@
 use quote::format_ident;
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::{RenderError, RenderedInterface, name_ident};
 
-use crate::{RenderError, RenderedInterface, error, function, names, object, record};
+use crate::{error, function, names, object, record};
 
 /// Render `rustler` glue for one interface.
 ///
@@ -32,7 +33,7 @@ pub fn render(
         )));
     }
 
-    let user = names::name_ident(&interface.name)?;
+    let user = name_ident(&interface.name)?;
     let ns = names::ns_name(interface);
     let glue_ident = format_ident!("__unibind_ex_{}", interface.name.trim_start_matches('_'));
 
@@ -51,7 +52,7 @@ pub fn render(
         .iter()
         .map(|func| function::render_fn(func, &user))
         .collect::<Result<Vec<_>, _>>()?;
-    let demand = has_streams(interface).then(function::demand_nif);
+    let demand = interface.has_streams().then(function::demand_nif);
     let records = interface
         .records
         .iter()
@@ -83,12 +84,4 @@ pub fn render(
         }
     };
     Ok(RenderedInterface { glue, records })
-}
-
-/// Whether any free function returns a stream (object members cannot yet).
-pub fn has_streams(interface: &ir::Interface) -> bool {
-    interface
-        .functions
-        .iter()
-        .any(|function| matches!(function.ret, Some(ir::Type::Stream(_))))
 }

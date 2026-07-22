@@ -8,8 +8,9 @@
 
 use syn::parse_quote;
 use unibind_core::ir;
+use unibind_core::render::{RenderError, RenderedRecord};
 
-use crate::{RenderedRecord, ty};
+use crate::ty;
 
 /// The attributes the exported struct gains: `#[napi(object)]` on the item
 /// and a `js_name` per renamed field. The bare `napi` field attributes are
@@ -37,7 +38,7 @@ pub fn record_attrs(record: &ir::Record) -> RenderedRecord {
 
 /// Field types must be napi-representable in both directions; check them
 /// before the struct picks up attributes that would miscompile.
-pub fn check_record(record: &ir::Record) -> Result<(), crate::RenderError> {
+pub fn check_record(record: &ir::Record) -> Result<(), RenderError> {
     for field in &record.fields {
         ty::check(
             &field.ty,

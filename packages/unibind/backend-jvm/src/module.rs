@@ -3,8 +3,9 @@
 
 use quote::{format_ident, quote};
 use unibind_core::ir;
+use unibind_core::render::{RenderError, RenderedInterface, name_ident};
 
-use crate::{RenderError, RenderedInterface, error, function, names, record};
+use crate::{error, function, record};
 
 /// Render the C-ABI glue for one interface.
 ///
@@ -28,7 +29,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         )));
     }
 
-    let user = names::name_ident(&interface.name)?;
+    let user = name_ident(&interface.name)?;
     let glue_ident = format_ident!("__unibind_jvm_{}", interface.name.trim_start_matches('_'));
 
     let codecs = interface

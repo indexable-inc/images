@@ -1,11 +1,10 @@
 //! Render IR types back into Rust token streams for the generated glue,
 //! and validate that a type is representable on the BEAM boundary.
 
-use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use unibind_core::ir;
-
-use crate::RenderError;
+use unibind_core::render::{self, Ownership, RenderError};
 
 /// The Rust spelling of a boundary type, as the wrapper signatures use it.
 /// `user` is the exported module's identifier; named types resolve through
@@ -14,7 +13,7 @@ use crate::RenderError;
 /// Rejects the types rustler cannot carry: see [`check_boundary`].
 pub fn rust_type(ty: &ir::Type, user: &Ident) -> Result<TokenStream, RenderError> {
     check_boundary(ty)?;
-    Ok(spell(ty, user, Ownership::Declared))
+    Ok(render::rust_type(ty, user, Ownership::Declared))
 }
 
 /// Like [`rust_type`], but with every borrow owned: async wrappers move
@@ -22,61 +21,7 @@ pub fn rust_type(ty: &ir::Type, user: &Ident) -> Result<TokenStream, RenderError
 /// and is re-borrowed at the call site.
 pub fn owned_type(ty: &ir::Type, user: &Ident) -> Result<TokenStream, RenderError> {
     check_boundary(ty)?;
-    Ok(spell(ty, user, Ownership::Owned))
-}
-
-/// How to spell borrowed boundary types.
-#[derive(Clone, Copy)]
-enum Ownership {
-    /// As the IR declares them (`&str` stays `&str`).
-    Declared,
-    /// Owned (`&str` becomes `String`).
-    Owned,
-}
-
-fn spell(ty: &ir::Type, user: &Ident, ownership: Ownership) -> TokenStream {
-    match ty {
-        ir::Type::Bool => quote!(bool),
-        ir::Type::Int(kind) => int_tokens(*kind),
-        ir::Type::Float(ir::FloatKind::F32) => quote!(f32),
-        ir::Type::Float(ir::FloatKind::F64) => quote!(f64),
-        ir::Type::String { owned } => {
-            if matches!((ownership, owned), (Ownership::Declared, false)) {
-                quote!(&str)
-            } else {
-                quote!(::std::string::String)
-            }
-        }
-        ir::Type::Path { owned } => {
-            if matches!((ownership, owned), (Ownership::Declared, false)) {
-                quote!(&::std::path::Path)
-            } else {
-                quote!(::std::path::PathBuf)
-            }
-        }
-        ir::Type::Option(inner) => {
-            let inner = spell(inner, user, ownership);
-            quote!(::std::option::Option<#inner>)
-        }
-        ir::Type::Vec(inner) => {
-            let inner = spell(inner, user, ownership);
-            quote!(::std::vec::Vec<#inner>)
-        }
-        ir::Type::Map { key, value } => {
-            let key = spell(key, user, ownership);
-            let value = spell(value, user, ownership);
-            quote!(::std::collections::HashMap<#key, #value>)
-        }
-        ir::Type::Named(name) => {
-            let name = Ident::new(name, Span::call_site());
-            quote!(super::#user::#name)
-        }
-        // Unrepresentable variants are rejected by `check_boundary` before
-        // anything is spelled.
-        ir::Type::Bytes { .. } | ir::Type::Stream(_) => {
-            unreachable!("rejected by check_boundary")
-        }
-    }
+    Ok(render::rust_type(ty, user, Ownership::Owned))
 }
 
 /// The call-site expression forwarding an owned wrapper argument to a user
@@ -122,9 +67,4 @@ pub fn check_boundary(ty: &ir::Type) -> Result<(), RenderError> {
         | ir::Type::Path { .. }
         | ir::Type::Named(_) => Ok(()),
     }
-}
-
-fn int_tokens(kind: ir::IntKind) -> TokenStream {
-    let ident = Ident::new(kind.rust_name(), Span::call_site());
-    quote!(#ident)
 }

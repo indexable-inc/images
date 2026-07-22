@@ -7,7 +7,7 @@ use heck::ToSnakeCase as _;
 use unibind_core::ir;
 
 use crate::host::{calls, typespec};
-use crate::{module, names};
+use crate::names;
 
 /// Render the `<Ns>` wrapper module. Validation happens in
 /// [`crate::host_modules`], which rejects everything the glue renderer
@@ -42,7 +42,7 @@ pub fn render(interface: &ir::Interface) -> String {
         };
         calls::render_fn(&mut out, function, &target, interface, &ns, "  ");
     }
-    if module::has_streams(interface) {
+    if interface.has_streams() {
         calls::stream_helper(&mut out);
     }
     out.push_str("end\n");

@@ -11,8 +11,9 @@ use heck::ToSnakeCase as _;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
+use unibind_core::render::{RenderError, name_ident};
 
-use crate::{RenderError, names};
+use crate::names;
 
 /// The glue-module struct name carrying `error` over the boundary.
 pub fn term_ident(error_name: &str) -> Ident {
@@ -33,7 +34,7 @@ pub fn render_error(
     let mut arms = Vec::new();
     for variant in &error.variants {
         let variant_ident = Ident::new(&variant.name, Span::call_site());
-        let atom = names::name_ident(&names::variant_atom(variant))?;
+        let atom = name_ident(&names::variant_atom(variant))?;
         atom_defs.push(quote!(#atom));
         arms.push(quote! {
             super::#user::#rust_name::#variant_ident { .. } => #atoms_module::#atom(),

@@ -13365,7 +13365,6 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.118",
  "unibind-core",
  "unibind-test-support",
@@ -13378,7 +13377,6 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.118",
  "unibind-core",
  "unibind-test-support",
@@ -13462,6 +13460,7 @@ dependencies = [
  "syn 2.0.118",
  "unibind-backend-ex",
  "unibind-backend-jvm",
+ "unibind-backend-py",
  "unibind-core",
  "unibind-test-support",
 ]

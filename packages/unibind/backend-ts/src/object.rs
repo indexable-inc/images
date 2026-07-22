@@ -11,14 +11,14 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::{RenderError, name_ident};
 
-use crate::RenderError;
 use crate::function::{doc_attrs, render_callable, wrapper_parts};
 use crate::ty::{self, TyCtx};
 
 pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
     let user = ctx.user;
-    let name = ty::name_ident(&object.name)?;
+    let name = name_ident(&object.name)?;
     let handle = ty::object_handle_ident(object);
     let js_name = object
         .names
@@ -97,7 +97,7 @@ pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream
 /// bodies call through the handle's `Arc` directly; async bodies clone the
 /// `Arc` into the future so the receiver outlives a collected handle.
 fn render_method(method: &ir::Function, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
-    let method_name = ty::name_ident(&method.name)?;
+    let method_name = name_ident(&method.name)?;
     let wrapper = wrapper_parts(method, ctx)?;
     let exprs = &wrapper.exprs;
     let call = match method.asyncness {
@@ -121,8 +121,8 @@ fn render_constructor(
     ctx: &TyCtx<'_>,
 ) -> Result<TokenStream, RenderError> {
     let user = ctx.user;
-    let object_ident = ty::name_ident(&object.name)?;
-    let ctor_name = ty::name_ident(&ctor.name)?;
+    let object_ident = name_ident(&object.name)?;
+    let ctor_name = name_ident(&ctor.name)?;
     let docs = doc_attrs(&ctor.docs);
     let wrapper = wrapper_parts(ctor, ctx)?;
     let params = &wrapper.params;

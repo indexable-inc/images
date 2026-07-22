@@ -12,7 +12,7 @@ use std::fmt::Write as _;
 
 use unibind_core::ir;
 
-use super::types::{self, doc_block, resource_close, type_name, value_name};
+use super::types::{doc_block, resource_close, type_name, value_name};
 
 pub fn render(interface: &ir::Interface, addon: &str) -> String {
     let mut out = String::new();
@@ -21,7 +21,7 @@ pub fn render(interface: &ir::Interface, addon: &str) -> String {
         error_classes(&mut out, error);
     }
     decoder(&mut out, interface);
-    if types::has_streams(interface) {
+    if interface.has_streams() {
         out.push_str(STREAM_HELPER);
     }
     if !interface.objects.is_empty() {

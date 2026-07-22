@@ -12,8 +12,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use unibind_core::ir;
+use unibind_core::render::{RenderError, pascal_case};
 
-use crate::RenderError;
 use crate::function::{self, doc_attrs};
 use crate::ty::{self, Level, TyCtx};
 
@@ -42,7 +42,7 @@ pub fn render_stream_fn(
     let class = ty::stream_class_ident(&function.name);
     let js_class = format!(
         "{}Stream",
-        ty::pascal_case(function.names.ts.as_deref().unwrap_or(&function.name))
+        pascal_case(function.names.ts.as_deref().unwrap_or(&function.name))
     );
     // Storage spells the user's own element type; only the value handed to
     // JavaScript picks up the top-level `Buffer` shape.
