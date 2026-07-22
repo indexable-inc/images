@@ -15,6 +15,7 @@ members = [
   "packages/audio/net",
   "packages/audio/score",
   "packages/blast-radius",
+  "packages/chromium-cookies",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",
@@ -187,6 +188,7 @@ anonymous_tuple_return_type = "deny"
 fallible_int_fallback = "deny"
 
 [workspace.dependencies]
+aes = "0.8"
 anstream = "1"
 anstyle = "1"
 anyhow = "1"
@@ -207,6 +209,7 @@ astlog-core = { path = "packages/code/astlog/core" }
 axum = "0.8"
 base64 = "0.22"
 bytes = "1"
+cbc = "0.1"
 # Pure-Rust bzip2 (the 0.6 default backend is libbz2-rs-sys), used to read
 # Nix's build logs, which are bzip2-compressed on disk while being written.
 bzip2 = "0.6"
@@ -312,6 +315,7 @@ panes-protocol = { path = "packages/vm/panes/protocol" }
 panes-guest-transport = { path = "packages/vm/panes/guest-transport" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
+pbkdf2 = { version = "0.12", default-features = false }
 percent-encoding = "2"
 # Apple property lists for index-delta's logical-diff engines: macOS `defaults`
 # domains and LaunchAgents are plists (XML and binary), so drift in them must be
@@ -353,6 +357,7 @@ source-meta = { path = "packages/search/source/meta" }
 serde = "1"
 serde_json = "1"
 serde_norway = "0.9"
+sha1 = "0.10"
 sha2 = "0.11"
 shlex = "1"
 similar = "3"
