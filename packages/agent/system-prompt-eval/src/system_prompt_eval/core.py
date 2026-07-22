@@ -9,7 +9,7 @@ share one command.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .judge import Judge
@@ -56,10 +56,8 @@ class EvalReport:
     longest_streak: int | None = None
 
     def to_json(self) -> dict[str, object]:
-        return {
-            "name": self.name,
-            "headline": self.headline,
-            "summary": self.summary,
-            "longest_streak": self.longest_streak,
-            "cases": self.cases,
-        }
+        """Every field except the rendered ``table``, so adding a field cannot
+        silently leave it out of the JSON report."""
+        data = asdict(self)
+        del data["table"]
+        return data
