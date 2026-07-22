@@ -127,7 +127,10 @@ defmodule UnibindConformanceTest do
       assert_receive :started, 1_000
       Process.exit(pid, :kill)
 
-      assert eventually(fn -> Conf.cancelled_count() >= baseline + 1 end),
+      # 15s, not the 2s default: this ran on CI hosts saturated by parallel
+      # nix builds, where caller-exit cancellation took over 2s to surface
+      # (main run 29889948013 missed the window by a hair).
+      assert eventually(fn -> Conf.cancelled_count() >= baseline + 1 end, 15_000),
              "cancelled_count never reached baseline + 1"
     end
 
