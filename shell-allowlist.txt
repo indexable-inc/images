@@ -105,12 +105,8 @@ packages/nix/oci-image-builder/bench.sh
 packages/nix/push-cache/default.nix:writeNushellApplication:2
 packages/nix/whence/default.nix:writeNushellApplication:2
 packages/nushell/default.nix:writeNushellApplication:1
-packages/rebase-patches/dag-check.nu
-packages/rebase-patches/dag-lib.nu
-packages/rebase-patches/default.nix:writeNushellApplication:2
-packages/rebase-patches/resume-test.sh
-packages/rebase-patches/seed-test.nu
-packages/rebase-patches/seed-test.sh
+lib/util/fork-dag-check/dag-check.nu
+lib/util/fork-dag-check/dag-lib.nu
 packages/search/lake/iceberg/fixture/rest-fixture.sh
 packages/search/source/github/export.sh
 packages/spark/spark-gluten/default.nix:writeNushellApplication:1

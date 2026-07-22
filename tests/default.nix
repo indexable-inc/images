@@ -2831,46 +2831,9 @@
     }
   ];
 
-  # --- fork closure gates (RFC 0010 A3, #2098) -------------------------------
-  # Pure-eval facts about the per-attempt-patch closure machinery: the dag.json
-  # closure computation (`ix.forkClosureGates.closureOf`) and `patchedSrc`'s
-  # optional series restriction. The gate derivations themselves are heavy
-  # full-package builds owned by the scheduled fork-closure-gates workflow,
-  # never checks; nothing here forces one (attrNames stays shallow).
-  syntheticDagNodes = [
-    {
-      patch = "0001-a.patch";
-      deps = [];
-    }
-    {
-      patch = "0002-b.patch";
-      deps = ["0001-a.patch"];
-    }
-    {
-      patch = "0003-c.patch";
-      deps = [];
-    }
-    {
-      patch = "0004-d.patch";
-      deps = [
-        "0002-b.patch"
-        "0003-c.patch"
-      ];
-    }
-  ];
-  # The committed clippy DAG is the known fork with real transitive chains
-  # (0014 -> 0005 -> 0003 -> 0002 and 0014 -> 0009 -> 0008 -> 0007), so it
-  # exercises closure computation against live data, not just the synthetic
-  # fixture. A rebase that reshapes these edges legitimately updates this
-  # expectation.
-  clippyDag = lib.importJSON (paths.packagesRoot + "/llm-clippy/patches/dag.json");
-  nixAttemptPatches = lib.attrNames (
-    lib.filterAttrs (_: mark: (mark.upstream or "hold") == "attempt")
-    (
-      lib.findFirst (fork: fork.name == "nix") (throw "no nix fork entry") ix.forkPackages
-    )
-    .patches
-  );
+  # --- patched-src series restriction ----------------------------------------
+  # Pure-eval facts about `patchedSrc`'s optional series restriction, still
+  # exercised by downstream patch-dir forks (ix) and the test fixtures here.
   patchedSrcFixture = args:
     ix.patchedSrc ({
         name = "patched-src-fixture";
@@ -2970,43 +2933,7 @@
     # exactly the golden plan IR the efx CLI's tests parse, and everything the
     # translator cannot express must throw. See tests/efx-plan.nix.
     efx = import ./efx-plan.nix {inherit lib ix paths;};
-    fork-closure-gates = [
-      {
-        assertion =
-          ix.forkClosureGates.closureOf syntheticDagNodes "0004-d.patch"
-          == [
-            "0001-a.patch"
-            "0002-b.patch"
-            "0003-c.patch"
-            "0004-d.patch"
-          ];
-        message = "closureOf should return the patch plus its transitive dag deps in NNNN order";
-      }
-      {
-        assertion = ix.forkClosureGates.closureOf syntheticDagNodes "0001-a.patch" == ["0001-a.patch"];
-        message = "closureOf of a root patch should be just the patch itself";
-      }
-      {
-        assertion =
-          ix.forkClosureGates.closureOf clippyDag.nodes "0012-Add-anonymous-tuple-return-type-lint.patch"
-          == [
-            "0002-Add-module_file_count-lint.patch"
-            "0003-Add-excessive_file_length-lint.patch"
-            "0005-Add-underscore_in_module_filename-lint.patch"
-            "0007-Add-fallible_int_fallback-lint.patch"
-            "0008-Add-magic_number-lint.patch"
-            "0009-Add-drop_must_use-lint.patch"
-            "0012-Add-anonymous-tuple-return-type-lint.patch"
-          ];
-        message = "closureOf should reproduce the committed clippy dag.json transitive closure of 0012";
-      }
-      {
-        # Crosses the fork-packages.nix intent <-> package passthru boundary:
-        # the nix package must expose exactly one gate per attempt-marked
-        # patch (attrNames only; forcing a gate would eval a full package).
-        assertion = lib.attrNames repoPackages.nix-ix.closureGates == nixAttemptPatches;
-        message = "nix-ix should expose one closure gate per attempt-marked patch in lib/fork-packages.nix";
-      }
+    patched-src-series = [
       {
         assertion = patchedSrcSubsetEval.success;
         message = "patchedSrc should accept a patchNames subset of the discovered series";
