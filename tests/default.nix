@@ -2388,6 +2388,44 @@
   # once wrote the customisation blob as a symlink into /nix/store, so the
   # archive depended on out-of-tar store state and this check failed whenever
   # the referenced path was not visible at read time (index#2058).
+  # Both shapes of `self` the guest `index` registry pin must serve
+  # (lib/image/registry-pin.nix). The boundary broke twice on 2026-07-22:
+  # unconditional `inherit (self) narHash` failed eval on the narHash-less
+  # path-locked seam shape (index#3981), and the fetchTree fallback tried
+  # next (#3984) was rejected by pure eval on lazy-tree subpaths. #3988
+  # landed the conditional-omit shape; these assertions hold it. Mock selves
+  # because the real `self` only ever has one shape per evaluation.
+  imageRegistryPinAssertions = let
+    registryPin = import (paths.root + "/lib/image/registry-pin.nix") {inherit lib;};
+    # The construction never validates `narHash`, so a labeled mock keeps the
+    # fixture honest; a plausible SRI literal would read as a real pin.
+    mockNarHash = "sha256-mock+image-registry-pin";
+    mockPath = "/nix/store/mock-index-source";
+  in [
+    {
+      assertion =
+        registryPin {
+          outPath = mockPath;
+          narHash = mockNarHash;
+        }
+        == {
+          type = "path";
+          path = mockPath;
+          narHash = mockNarHash;
+        };
+      message = "a narHash-bearing self must keep narHash in the registry pin: an unlocked path pin re-hashes and re-copies the source tree on every in-guest eval (#1748)";
+    }
+    {
+      assertion =
+        registryPin {outPath = mockPath;}
+        == {
+          type = "path";
+          path = mockPath;
+        };
+      message = "a narHash-less self (path-locked seam input, index#3981) must yield a pin that omits narHash; the whole-attrset equality also proves the construction evaluates on that shape";
+    }
+  ];
+
   baseImageNixDb = let
     # Every `path`-type registry pin the image ships. Guard on the type so a
     # non-path entry (e.g. a default indirect/github registry row) can't break
@@ -6439,6 +6477,8 @@
   cargoUnitPrebuiltTest =
     mkTest "cargo-unit-prebuilt-library" cargoUnitPrebuiltAssertions
     cargoUnitPrebuiltScript;
+
+  imageRegistryPinTest = mkTest "image-registry-pin" imageRegistryPinAssertions "";
 in {
   inherit
     groupTests
@@ -6457,6 +6497,7 @@ in {
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
   inherit baseImageNixDb;
+  imageRegistryPin = imageRegistryPinTest;
 
   # Aggregate. Pulls every group test into one derivation so
   # `nix flake check` covers the whole suite.
