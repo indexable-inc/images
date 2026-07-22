@@ -16,15 +16,13 @@
 # our own copy of the store vendor dir, patch that, and repoint the cargo
 # config -- either way no new fixed-output hash.
 #
-# The tokenizer moved across rnix releases, so the patch series is selected
+# The tokenizer moved across rnix releases, so the overlay source is selected
 # by the vendored version, and an unknown version fails the build with
 # instructions (a nixpkgs bump onto a new rnix minor adds a flavor here, not
-# silence). Each flavor's series is a registry fork of
-# nix-community/rnix-parser (lib/fork-packages.nix entries `rnix-0-12` /
-# `rnix-0-14`, pinned to the tags the in-use crates were cut from), so the
-# same patch files this reads get the canonical format-patch form, the
-# seconds-fast `patched-src-rnix-0-1{2,4}` apply gates, and the dag/reason
-# checks; drift surfaces in flake checks, not in a consumer build. The
+# silence). Each flavor is a registry fork of nix-community/rnix-parser
+# (lib/fork-packages.nix entries `rnix-0-12` / `rnix-0-14`): a jj megamerge
+# on the tag the in-use crate was cut from, so the flavor's `src/` tree IS
+# the patched tokenizer and this overlays it over the vendored crate. The
 # `.cargo-checksum.json` files the nixpkgs vendorers write carry no per-file
 # hashes (`"files": {}`), so the edit needs no checksum rewrite; the guard
 # keeps that assumption loud instead of latent.
@@ -34,19 +32,14 @@
 # (`_1_000` stays an identifier) or trailing (`1_` still lexes as `1` then
 # `_`). Token text keeps the separators, so a formatter passes them through
 # verbatim.
-{lib}: let
-  # Ordered `*.patch` series of a flavor's patchDir, discovered exactly like
-  # lib/util/patched-src.nix discovers a fork series (the folder is the single
-  # source of truth), rendered as one space-separated string of store paths
-  # for the preBuild loop below.
-  seriesFor = patchDir:
-    lib.pipe (builtins.readDir patchDir) [
-      (lib.filterAttrs (fileName: type: type == "regular" && lib.hasSuffix ".patch" fileName))
-      builtins.attrNames
-      lib.naturalSort
-      (lib.concatMapStringsSep " " (fileName: "${patchDir + "/${fileName}"}"))
-    ];
-in
+{
+  lib,
+  # The two patched rnix-parser source trees (jj megamerge fork inputs,
+  # lib/fork-packages.nix `rnix-0-12` / `rnix-0-14`); their `src/` dirs
+  # replace the vendored crate's.
+  rnix012Src,
+  rnix014Src,
+}:
   tool:
     tool.overrideAttrs (old: {
       preBuild =
@@ -114,11 +107,11 @@ in
             [ -d "$rnixDir" ] || continue
             version=$(basename "$rnixDir")
             case "$version" in
-              rnix-0.11.* | rnix-0.12.*) rnixSeries="${seriesFor ./patches-0.12}" ;;
-              rnix-0.13.* | rnix-0.14.*) rnixSeries="${seriesFor ./patches-0.14}" ;;
+              rnix-0.11.* | rnix-0.12.*) rnixOverlay="${rnix012Src}" ;;
+              rnix-0.13.* | rnix-0.14.*) rnixOverlay="${rnix014Src}" ;;
               *)
-                echo "rnix-digit-separators: no patch flavor for vendored $version;" >&2
-                echo "add a registry fork (lib/fork-packages.nix) with a patchDir under lib/util/rnix-digit-separators/" >&2
+                echo "rnix-digit-separators: no overlay flavor for vendored $version;" >&2
+                echo "add a registry fork (lib/fork-packages.nix) pinned to the matching rnix-parser tag" >&2
                 exit 1
                 ;;
             esac
@@ -127,9 +120,10 @@ in
               echo "teach lib/util/rnix-digit-separators to rewrite .cargo-checksum.json" >&2
               exit 1
             fi
-            for rnixPatch in $rnixSeries; do
-              patch --silent -p1 -d "$rnixDir" < "$rnixPatch"
-            done
+            # Overlay the patched fork tree's src/ over the vendored crate's:
+            # the fork base is the exact tag the crate was cut from, so the
+            # only delta is the patch DAG (tokenizer separators).
+            cp -r --no-preserve=mode "$rnixOverlay"/src/. "$rnixDir/src/"
             patchedRnix=1
           done
           if [ "$patchedRnix" = 0 ]; then
