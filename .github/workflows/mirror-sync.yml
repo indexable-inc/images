@@ -11,7 +11,6 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "LICENSE"
-      - "lib/fork-packages.nix"
       - ".github/workflows/mirror-sync.yml"
   schedule:
     # Daily safety net: a mirror repo deleted or drifted out-of-band converges
@@ -91,59 +90,3 @@ jobs:
             echo "::endgroup::"
           done
 
-  # For each de-forked package that opted into a real GitHub fork repo
-  # (`forkRepo` in its lib/fork-packages.nix entry), rebuild and force-push
-  # the `ix-patched` branch: pinned upstream base + the in-repo patch series
-  # applied as commits, so opening an upstream PR is one click away.
-  fork-branches:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Install Determinate Nix
-        uses: ./.github/actions/install-nix
-
-      # Underscore digit separators: every nix invocation that evaluates this
-      # tree must go through the patched client (see the action's description).
-      - name: Bootstrap patched Nix client
-        uses: ./.github/actions/bootstrap-patched-nix
-
-      # MIRROR_TOKEN is minted per run from the org-owned ix-mirror-sync
-      # GitHub App (repo Administration + Contents write): short-lived, no
-      # long-lived PAT to rotate. When the app secrets are absent the step is
-      # skipped and the shell guard below skips loudly instead of half-running.
-      - name: Mint mirror token
-        id: mirror-token
-        if: ${{ vars.MIRROR_APP_CLIENT_ID != '' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.MIRROR_APP_CLIENT_ID }}
-          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
-          owner: indexable-inc
-
-      - name: Push fork branches
-        env:
-          MIRROR_TOKEN: ${{ steps.mirror-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          if [ -z "$MIRROR_TOKEN" ]; then
-            echo "MIRROR_TOKEN is not configured; skipping fork branches." \
-                 "See packages/mirror/README.md (Permissions)."
-            exit 0
-          fi
-          mapfile -t forks < <(
-            nix eval --json '.#lib.forkPackages' \
-              --apply 'fs: builtins.filter (f: f ? forkRepo) fs' \
-              | nix run nixpkgs#jq -- -r '.[].name'
-          )
-          if [ "${#forks[@]}" -eq 0 ]; then
-            echo "no fork package opts into a forkRepo; nothing to push."
-            exit 0
-          fi
-          for fork in "${forks[@]}"; do
-            echo "::group::mirror fork-branch: $fork"
-            nix run .#mirror -- fork-branch --name "$fork" --push
-            echo "::endgroup::"
-          done
