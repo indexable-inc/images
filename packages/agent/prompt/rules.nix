@@ -151,6 +151,23 @@
     };
   }
   {
+    provenanceLookup = {
+      topics = ["verification" "tooling"];
+      text = ''
+        "What installed this, which .nix file defined it": start with
+        `whence <path>`; it reads the live generation's provenance.json
+        with zero eval. It covers deployed files only; for packages, grep
+        the config repo, with `options.<name>.definitionsWithLocations`
+        as the eval-time tie-breaker.
+      '';
+      reason = ''
+        A session re-derived file provenance by hand, ending in an 85s
+        full-config eval that whence answers instantly (index#3947);
+        index#3942 extends whence to packages.
+      '';
+    };
+  }
+  {
     experiments = {
       topics = ["verification"];
       text = ''
