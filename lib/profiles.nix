@@ -9,6 +9,10 @@
   indexPackages,
   home-manager,
   nixpkgs,
+  # Wraps `import <path> args` with the path as `_file` so consumers'
+  # `definitionsWithLocations` attribute definitions to the module's own
+  # source file (#3938). Shared from lib/home-modules.nix.
+  importApply,
   claudeCodeModule,
   codexModule,
   mutableFilesModule,
@@ -18,18 +22,18 @@
   personalRoot = paths.users + "/andrewgazelka";
   configRoot = personalRoot + "/config";
   optionsModule = personalRoot + "/options.nix";
-  personalServicesModule = import (personalRoot + "/home.nix") {
+  personalServicesModule = importApply (personalRoot + "/home.nix") {
     inherit indexPackages ix claudeCodeModule;
     portableServicesModule = ix.portableServices.homeModule;
   };
   portableModule = personalRoot + "/profiles/portable.nix";
-  developmentModule = import (personalRoot + "/profiles/development.nix") {
+  developmentModule = importApply (personalRoot + "/profiles/development.nix") {
     agentLua = paths.modules + "/profiles/base/nvim/agent.lua";
     inherit configRoot;
   };
 in {
   inherit personalServicesModule portableModule developmentModule;
-  workstationModule = import (personalRoot + "/profiles/workstation.nix") {
+  workstationModule = importApply (personalRoot + "/profiles/workstation.nix") {
     inherit
       indexPackages
       personalServicesModule
@@ -44,7 +48,7 @@ in {
     tmuxModule = paths.modules + "/home/tmux.nix";
     activationTimingModule = paths.modules + "/home/activation-timing.nix";
   };
-  darwinHomeModule = import (personalRoot + "/profiles/darwin-home.nix") {
+  darwinHomeModule = importApply (personalRoot + "/profiles/darwin-home.nix") {
     inherit
       indexPackages
       ix
@@ -54,7 +58,7 @@ in {
     ghosttyModule = configRoot + "/home/ghostty.nix";
     raycastModule = paths.modules + "/home/raycast.nix";
     inherit macosGuestsModule;
-    guestsModule = import (personalRoot + "/guests") {inherit indexPackages;};
+    guestsModule = importApply (personalRoot + "/guests/default.nix") {inherit indexPackages;};
   };
   # The dependency-light personal profile pair (portable + development),
   # composed as a real homeManagerConfiguration so `checks` can force its
