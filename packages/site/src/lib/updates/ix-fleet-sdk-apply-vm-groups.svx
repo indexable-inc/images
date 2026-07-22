@@ -3,7 +3,8 @@ id: ix-fleet-sdk-apply-vm-groups
 postedAt: 2026-07-22T00:40:00Z
 title: "ix-fleet builds again: SDK wheel pins bumped for apply_vm_groups"
 links:
-  - https://github.com/indexable-inc/index/issues/3889
+  - label: "index#3889"
+    href: https://github.com/indexable-inc/index/issues/3889
 tags: [fleet, sdk, fix]
 ---
 

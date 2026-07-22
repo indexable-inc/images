@@ -3,9 +3,12 @@ id: fleet-nix-data-array
 postedAt: 2026-07-21T22:10:00Z
 title: "Compute fleet: /nix moved to the RAID10 data arrays, root arrays freed"
 links:
-  - https://github.com/indexable-inc/ix/issues/8035
-  - https://github.com/indexable-inc/ix/pull/8036
-  - https://github.com/indexable-inc/index/pull/3850
+  - label: "ix#8035"
+    href: https://github.com/indexable-inc/ix/issues/8035
+  - label: "ix#8036"
+    href: https://github.com/indexable-inc/ix/pull/8036
+  - label: "index#3850"
+    href: https://github.com/indexable-inc/index/pull/3850
 tags: [fleet, storage, incident-prevention]
 ---
 

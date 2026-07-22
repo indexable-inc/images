@@ -4,7 +4,8 @@ postedAt: 2026-07-21
 title: unibind ex suites share one staged eventually helper
 tags: [elixir, unibind, clone-detect]
 links:
-  - https://github.com/indexable-inc/index/issues/3901
+  - label: "index#3901"
+    href: https://github.com/indexable-inc/index/issues/3901
 ---
 
 The three unibind Elixir binding suites (plumb, tui, the conformance crate)
