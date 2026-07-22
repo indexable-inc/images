@@ -73,12 +73,12 @@ downstream:
 - module-level `Client`, `Group`, `GroupMember`;
 - `Client` methods `create_group`, `add_group_member`, `create`, `branches`.
 
-Note: `Group`, `GroupMember`, `create_group`, and `add_group_member` are NOT
-present in the source-available `packages/sdk/python/ix_sdk/__init__.py` in this tree
-(verified absent). They exist in the prebuilt wheel, which is compiled from a
-newer/fuller private `crates/ix/sdk-py`. The packaging test therefore validates
-the wheel's surface, which is a superset of the public source mirror. See the
-domain NOTES.
+The wheel is the SDK's only Python surface on the index side: it is compiled
+from ix's private `crates/ix/sdk-py`, and this repo carries no SDK source. A
+hand-copied source mirror used to live at `packages/sdk/python`; it drifted
+stale and was deliberately partial (it never gained `Group`/`GroupMember`), so
+it was deleted (#4011). The packaging test validates the wheel's surface
+directly.
 
 ## Consumers
 
