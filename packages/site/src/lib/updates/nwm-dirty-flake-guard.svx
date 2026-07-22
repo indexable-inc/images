@@ -1,0 +1,25 @@
+---
+id: nwm-dirty-flake-guard
+postedAt: "2026-07-22"
+title: nwm home|os switch refuses a dirty flake tree by default
+links:
+  - label: "index#4052"
+    href: https://github.com/indexable-inc/index/issues/4052
+tags:
+  - nix
+  - cli
+---
+
+`nwm home switch` and `nwm os switch` used to build and activate whatever
+was sitting in the flake working tree. Nix copies dirty tracked files into
+the eval, so a switch from a dirty repo deployed uncommitted WIP with no
+record of what actually ran.
+
+Both switch subcommands now check the flake directory before anything
+builds: if it is a git repo and `git status --porcelain` prints anything at
+all (untracked files included), the switch aborts with the flake dir and
+the status listing on stderr. Pass `--allow-dirty` to switch anyway. `home
+build` / `os build`, `nwm flake update`, and the plain `nix` passthrough
+are unchanged, and a flake dir that is not a git repo is not guarded. This
+mirrors the guard andrewgazelka/nix#148 added to that repo's
+`scripts/switch.sh`.
