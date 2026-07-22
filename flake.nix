@@ -496,334 +496,70 @@
             ;
         }
     );
-    collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
-    linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or {};
-    # Graft the Linux-to-Darwin cross aliases over a collected per-system set so
-    # a Darwin namespace resolves an aliased attr to the cross-compiled
-    # x86_64-linux derivation instead of a native rebuild. Applied to both
-    # `packages` (the consumer surface) and `cachePushRoots` (what
-    # cache-push.yml publishes): the Darwin cache lane realises the post-alias
-    # set filtered to native aarch64-darwin drvs, so an alias-shadowed native
-    # variant (e.g. dag-runner) is neither built nor published. Consumers can
-    # never install it (#1890).
-    withDarwinAliases = raw:
-      raw
-      // lib.genAttrs [
-        "aarch64-darwin"
-      ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
-    packages = withDarwinAliases (collect "packages");
-    ciChecks = collect "ciChecks";
-    cachePushRoots = withDarwinAliases (collect "cachePushRoots");
-    # One evaluator pool owns every required Linux build root. Prefix closure
-    # roots so a package and a check may share their natural name without one
-    # silently replacing the other. The explicit collision guard keeps a
-    # future check named `closure-*` from weakening the gate.
-    requiredGateRoots =
-      lib.mapAttrs (
-        system: systemChecks: let
-          closureRoots =
-            lib.mapAttrs' (
-              name: root: lib.nameValuePair "closure-${name}" root
-            )
-            cachePushRoots.${system};
-          collisions = builtins.attrNames (lib.intersectAttrs systemChecks closureRoots);
-        in
-          assert lib.assertMsg (collisions == [])
-          "requiredGateRoots.${system}: prefixed cache roots collide with ciChecks: ${builtins.concatStringsSep ", " collisions}";
-            systemChecks // closureRoots
-      )
-      ciChecks;
-    rawSecurityRoots = collect "securityRoots";
-    rawSecurityRootPaths = collect "securityRootPaths";
-    securityRoots =
-      rawSecurityRoots
-      // {
-        aarch64-darwin =
-          rawSecurityRoots.aarch64-darwin
-          // lib.mapAttrs (
-            name: _:
-              (rawSecurityRoots.aarch64-darwin.${name} or rawSecurityRoots.x86_64-linux.${name})
-              // {
-                attr = "packages.aarch64-darwin.${name}";
-              }
-          ) (linuxDarwinAliases.aarch64-darwin or {});
-      };
-    securityRootPaths =
-      rawSecurityRootPaths
-      // {
-        aarch64-darwin = rawSecurityRootPaths.aarch64-darwin // (linuxDarwinAliases.aarch64-darwin or {});
-      };
-    indexPackages = system: packages.${system};
-    personalConfigRoot = ./users/andrewgazelka/config;
-    personalOptionsModule = ./users/andrewgazelka/options.nix;
-    mutableFilesHomeModule = import ./modules/home/mutable-files.nix {
-      inherit indexPackages;
-      portableServicesModule = ix.portableServices.homeModule;
+    # Cross-system output assembly (per-system collection, the
+    # Linux-to-Darwin alias graft, the required-gate root union, the
+    # security-root alias surface): lib/flake-outputs.nix.
+    collected = import ./lib/flake-outputs.nix {inherit lib perSystem;};
+    # homeModules / darwinModules composition and the personal profile
+    # surfaces: lib/home-modules.nix (personal wiring in lib/profiles.nix).
+    homeSurface = import ./lib/home-modules.nix {
+      inherit lib ix paths home-manager nixpkgs;
+      indexPackages = system: collected.packages."${system}";
     };
-    # One instance shared by every wiring site (the workstation profile and
-    # homeModules.provenance); the module's `key` also dedups the instances a
-    # consumer combines, but there is no reason to make them re-apply the
-    # walker.
-    provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
-    # Declarative in-guest state push for vmkit macOS guest VMs (launchd
-    # agents from structured attrs, pinned binaries, idempotent ssh apply).
-    # One instance shared by homeModules.macos-guests and the personal darwin
-    # profile. See modules/home/macos-guests.nix.
-    macosGuestsHomeModule = import ./modules/home/macos-guests.nix {
-      inherit indexPackages ix;
-    };
-    claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
-      inherit indexPackages;
-      promptModule = ./packages/agent/prompt;
-      mutableJsonModule = ix.mutableJson.homeModule;
-    };
-    codexHomeModule = import ./packages/agent/home-manager/codex.nix {
-      inherit indexPackages;
-      promptModule = ./packages/agent/prompt;
-    };
-    personalServicesModule = import ./users/andrewgazelka/home.nix {
-      inherit indexPackages ix;
-      claudeCodeModule = claudeCodeHomeModule;
-      portableServicesModule = ix.portableServices.homeModule;
-    };
-    personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
-      inherit indexPackages personalServicesModule ix;
-      codexModule = codexHomeModule;
-      configRoot = personalConfigRoot;
-      mutableFilesModule = mutableFilesHomeModule;
-      provenanceModule = provenanceHomeModule;
-      optionsModule = personalOptionsModule;
-      indexSkillsSrc = paths.skills;
-      tmuxModule = ./modules/home/tmux.nix;
-      activationTimingModule = ./modules/home/activation-timing.nix;
-    };
-    personalDarwinHomeModule = import ./users/andrewgazelka/profiles/darwin-home.nix {
-      inherit indexPackages ix;
-      configRoot = personalConfigRoot;
-      ghosttyModule = ./users/andrewgazelka/config/home/ghostty.nix;
-      raycastModule = ./modules/home/raycast.nix;
-      optionsModule = personalOptionsModule;
-      macosGuestsModule = macosGuestsHomeModule;
-      guestsModule = import ./users/andrewgazelka/guests {inherit indexPackages;};
-    };
-    personalLightProfile = system:
-      home-manager.lib.homeManagerConfiguration {
-        pkgs = import nixpkgs {
-          inherit system;
-          config = {};
-        };
-        extraSpecialArgs = {
-          inputs = throw "light personal profiles must not access consumer inputs";
-          self = throw "light personal profiles must not access the consuming flake";
-          indexPackages = throw "light personal profiles must not access index packages";
-        };
-        modules = [
-          ./users/andrewgazelka/profiles/portable.nix
-          (import ./users/andrewgazelka/profiles/development.nix {
-            agentLua = ./modules/profiles/base/nvim/agent.lua;
-            configRoot = personalConfigRoot;
-          })
-          {
-            home = {
-              username = "profile-test";
-              homeDirectory =
-                if lib.hasSuffix "darwin" system
-                then "/Users/profile-test"
-                else "/home/profile-test";
-            };
-          }
-        ];
-      };
   in {
     lib = ix;
     inherit (ix) nixosModules;
-    darwinModules = {
-      # Personal-but-shareable nix-darwin module for github:andrewgazelka: the
-      # Homebrew package set (GUI casks, the `mas` brew, Mac App Store apps).
-      # Companion to homeModules.andrewgazelka (which owns the home-manager
-      # services); import it from a darwin host to get the casks merged in. See
-      # users/andrewgazelka/darwin.nix.
-      andrewgazelka = ./users/andrewgazelka/darwin.nix;
-      # Per-generation provenance manifest for nix-darwin: bake deployed-path
-      # -> defining nix file:line backlinks (provenance.json) into the system
-      # closure so `whence </etc/...>` answers from /run/current-system with
-      # zero eval. Set `provenance.rev = self.rev or self.dirtyRev or null`
-      # in the consuming flake. See modules/darwin/provenance.nix.
-      provenance = import ./modules/darwin/provenance.nix {inherit (ix) provenance;};
-      # System-level (root, /etc) adapter for declarative-but-writable files:
-      # same model as homeModules.mutable-files, state under
-      # /var/db/index-delta, boot-time reseed daemon. See
-      # modules/darwin/mutable-files.nix.
-      mutable-files = import ./modules/darwin/mutable-files.nix {
-        indexPackages = system: packages.${system};
-      };
-      # Fabric Ray worker for macs (index#3192): join the fleet cluster as a
-      # worker behind `services.ix-ray.enable`, same pinned ports and env as
-      # the NixOS module. See modules/darwin/ray.nix.
-      ray = import ./modules/darwin/ray.nix {indexLib = ix;};
-      # Declarative NFS automounts via macOS autofs: each entry renders a
-      # direct-map line, /etc/auto_master gains the include idempotently, and
-      # activation reloads automountd. See modules/darwin/nfs.nix.
-      nfs = ./modules/darwin/nfs.nix;
-    };
-    homeModules = {
-      # Workstation-facing home-manager module: declare a service once, get a
-      # native launchd agent on macOS and native systemd user units on Linux.
-      portable-services = ix.portableServices.homeModule;
-      tmux = ./modules/home/tmux.nix;
-      # Shared modern-CLI package baseline (bat, delta, eza, fd, ripgrep, ...).
-      # Import it and set `cliBaseline.enable = true`; override
-      # `cliBaseline.packages` to trim or swap tools. See
-      # modules/home/cli-baseline.nix.
-      cli-baseline = ./modules/home/cli-baseline.nix;
-      # Per-project nvim-server multiplexer (tmux replacement): one headless
-      # nvim server per git root, `mux` attaches with --remote-ui, and the
-      # optional zsh integration makes bare `ssh <host>`/`mosh <host>`
-      # auto-attach the remote's mux. Import it and set
-      # `programs.mux.enable = true`; needs an nvim config shipping a `mux`
-      # lua module. See modules/home/mux.nix.
-      mux = import ./modules/home/mux.nix {inherit ix;};
-      # XDG hygiene: point tool state/caches/config (cargo, go, npm/pnpm,
-      # python, docker, aws, psql/sqlite histories, wget/less) at the XDG
-      # base directories instead of $HOME. Import it and set
-      # `xdgTidy.enable = true`. See modules/home/xdg-tidy.nix.
-      xdg-tidy = ./modules/home/xdg-tidy.nix;
-
-      # Wall time on every `Activating <name>` line plus a slowest-steps
-      # summary at the end of activation. See
-      # modules/home/activation-timing.nix.
-      activation-timing = ./modules/home/activation-timing.nix;
-      # Cursor-shape feedback for zsh vi mode (beam insert, block command,
-      # reset around every prompt/command). Import it and set
-      # `zshViCursor.enable = true`. See modules/home/zsh-vi-cursor.nix.
-      zsh-vi-cursor = ./modules/home/zsh-vi-cursor.nix;
-      # Declarative-but-writable JSON config files (last-applied 3-way merge),
-      # for config an app rewrites at runtime. See lib/mutable-json.nix.
-      # Prefer `mutable-files` below for new config: it never auto-merges,
-      # covers more formats, and queues drift for explicit resolution.
-      mutable-json = ix.mutableJson.homeModule;
-      # Declarative-but-writable files with logical (format-aware) drift
-      # tracking and a model-oriented resolution queue — no auto-merge.
-      # Declared content seeds a plain writable file; ephemeral files reset
-      # at login (drift journaled), durable files queue base-vs-drift
-      # conflicts in `index-delta status --json` for discard / adopt /
-      # absorb-into-Nix via `index-delta apply-ops`. See
-      # modules/home/mutable-files.nix and packages/index-delta.
-      mutable-files = mutableFilesHomeModule;
-      # Reusable workstation module (macOS): declare vmkit macOS guest VMs
-      # (ssh endpoint, launchd agents from structured attrs, pinned binaries)
-      # and get a `macos-guest-<name>` apply/status/ssh command per guest.
-      # Import it and set `macosGuests.<name> = { ssh = ...; ... }`. Manual
-      # TCC bootstrap: modules/home/macos-guests/tcc-bootstrap.md. See
-      # modules/home/macos-guests.nix (index#3206, toward index#2682).
-      macos-guests = macosGuestsHomeModule;
-      # Reusable workstation module (macOS): declare Raycast Focus session
-      # defaults (title, filter mode, duration) and have them written to the
-      # com.raycast.macos defaults domain at switch time. Import it and set
-      # `programs.raycast.focus = { enable = true; ... }`. See
-      # modules/home/raycast.nix.
-      raycast = ./modules/home/raycast.nix;
-      # Per-generation provenance manifest: every home-manager generation
-      # carries provenance.json mapping deployed files back to the nix
-      # file:line that defined them, and `whence <path>` reads it with zero
-      # eval. Set `provenance.rev = self.rev or self.dirtyRev or null` in
-      # the consuming flake. See modules/home/provenance.nix.
-      provenance = provenanceHomeModule;
-      # Agent CLI modules: Home Manager is the user-facing configuration
-      # surface, while the package wrappers remain the implementation detail.
-      claude-code = claudeCodeHomeModule;
-      codex = codexHomeModule;
-      # Personal-but-shareable workstation module for github:andrewgazelka: the
-      # ix.dev downtime watcher + boss bar overlay + the shared say-detached
-      # sound helper, all as portable services. Closed over the per-system
-      # flake packages so it resolves bossbar / minecraft-sound for the host it
-      # runs on. See users/andrewgazelka/home.nix.
-      andrewgazelka-portable = ./users/andrewgazelka/profiles/portable.nix;
-      andrewgazelka-development = import ./users/andrewgazelka/profiles/development.nix {
-        agentLua = ./modules/profiles/base/nvim/agent.lua;
-        configRoot = personalConfigRoot;
-      };
-      andrewgazelka-workstation = personalWorkstationModule;
-      andrewgazelka-darwin = personalDarwinHomeModule;
-      # Personal-but-shareable server module for github:harivansh-afk: the
-      # dotfiles hari runs as the `hari` user on hari-compute-1 (zsh, git,
-      # neovim plus the mux nvim multiplexer, and the CLI tool set around
-      # them), ported from his personal nix repo. Consumes the shared
-      # cli-baseline, mux, xdg-tidy, and zsh-vi-cursor modules above; the
-      # source repo's secrets/theme machinery is deliberately absent. See
-      # users/harivansh-afk/home.nix.
-      harivansh-afk = import ./users/harivansh-afk/home.nix {inherit ix;};
-      # Reusable workstation module: draw one Minecraft boss bar per in-flight
-      # GitHub Actions run across a set of repos (green = running, filled by
-      # elapsed / average duration; purple = queued/unpicked). Import it and set
-      # `services.ciBars = { enable = true; repos = [ ... ]; }`. Closed over the
-      # per-system packages so it resolves the `bossbar` CLI for the host. See
-      # packages/minecraft/bossbar-overlay/ci-bars-home-module.nix.
-      ci-bars = import ./packages/minecraft/bossbar-overlay/ci-bars-home-module.nix {
-        indexPackages = system: packages.${system};
-        portableServicesModule = ix.portableServices.homeModule;
-        inherit ix;
-      };
-      # Workstation-facing module to sync corpus sources (agent/shell history,
-      # Slack/Linear exports, git repos) to an S3/R2 parquet archive and/or
-      # Mixedbread, as a portable timer service. Closed over the per-system
-      # packages so it resolves the `indexer` for the host. See
-      # packages/search/indexer/home-module.nix.
-      indexer = import ./packages/search/indexer/home-module.nix {
-        indexPackages = system: packages.${system};
-        portableServicesModule = ix.portableServices.homeModule;
-      };
-    };
+    inherit (homeSurface) darwinModules homeModules;
     overlays.default = ix.overlay;
     templates = {};
-    inherit packages;
+    inherit (collected) packages;
     checks = lib.mapAttrs (
       system: systemChecks:
         systemChecks
         // {
-          personal-light-profile = (personalLightProfile system).activationPackage;
+          personal-light-profile = (homeSurface.personalLightProfile system).activationPackage;
         }
-    ) (collect "checks");
+    ) (collected.collect "checks");
     # Sharded keying of the same check derivations for the memory-bounded CI
     # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
     # (ENG-2201). Kept separate from `checks` because its per-package
     # `recurseForDerivations` groups are not derivations, which the flake
     # `checks` schema requires.
-    inherit ciChecks;
+    inherit (collected) ciChecks;
     # Registry-derived map of package directory -> flake attr for every
     # `updateScript` package exposed on a system. update.yml's "Build changed
     # packages" step evaluates this to find which attr owns each file the
     # updaters changed, instead of deriving an attr from path segments
     # (#2036). Non-schema, so surfaced through `collect` like `ciChecks`.
-    updatablePackages = collect "updatablePackages";
+    updatablePackages = collected.collect "updatablePackages";
     # Per-attempt-patch closure build gates (RFC 0010 A3, #2098), keyed
     # `<system>.<fork>.<patch>`: the fork package rebuilt with the series
     # restricted to that patch's dag.json closure. Deliberately NOT under
     # `checks` (per-PR flake-check cost stays flat): built post-merge by the
     # scheduled fork-closure-gates workflow and by the `upstream-sync --open`
     # preflight. Non-schema, so surfaced through `collect` like `ciChecks`.
-    forkClosureGates = collect "forkClosureGates";
+    forkClosureGates = collected.collect "forkClosureGates";
     # CI-only view of `packages` with each NixOS image swapped for its
     # `toplevel` closure; cache-push.yml publishes this instead of the
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
     # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
-    inherit cachePushRoots;
+    inherit (collected) cachePushRoots;
     # Union consumed by `nix run .#check -- required`: one bounded
     # nix-fast-build evaluator replaces the former flake-check and closure-gate
     # self-hosted jobs without dropping either required status context.
-    inherit requiredGateRoots;
+    inherit (collected) requiredGateRoots;
     # Typed security exposure roots consumed as JSON by the runtime DAG scanner.
     # Unlike cachePushRoots, every entry carries policy metadata and names only
     # a shipped runtime output or an example service closure. securityRootPaths
     # carries the derivations separately so callers realize terminal store paths
     # instead of trusting content-addressed placeholders from evaluation.
-    inherit securityRoots securityRootPaths;
+    inherit (collected) securityRoots securityRootPaths;
     # Opt-in heavy roots (kbuild-unit #3411): `nix build .#kernel-unit.vmlinux`
     # resolves through legacyPackages on x86_64-linux. Deliberately not in
     # `packages`, so no CI gate closure picks up its eval-time IFD kbuild.
-    legacyPackages = collect "legacyPackages";
-    formatter = collect "formatter";
-    apps = collect "apps";
-    devShells = collect "devShells";
+    legacyPackages = collected.collect "legacyPackages";
+    formatter = collected.collect "formatter";
+    apps = collected.collect "apps";
+    devShells = collected.collect "devShells";
   };
 }
