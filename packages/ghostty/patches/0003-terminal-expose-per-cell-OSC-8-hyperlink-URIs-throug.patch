@@ -28,10 +28,10 @@ Refs indexable-inc/index#3835
 (patch authored by an AI agent via Claude Code, model Claude Sonnet)
 
 diff --git a/include/ghostty/vt/render.h b/include/ghostty/vt/render.h
-index 0a300dde0..b85674de2 100644
+index d1a3687d9..f636071c0 100644
 --- a/include/ghostty/vt/render.h
 +++ b/include/ghostty/vt/render.h
-@@ -530,6 +530,17 @@ typedef enum {
+@@ -571,6 +571,18 @@ typedef enum GHOSTTY_ENUM_TYPED {
     *  color, in which case the caller should use whatever default foreground
     *  color it wants (e.g. the terminal foreground). */
    GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR = 6,
@@ -46,14 +46,15 @@ index 0a300dde0..b85674de2 100644
 +   *  (uint8_t*). The buffer must be at least hyperlink_uri_len bytes; the
 +   *  bytes are UTF-8 and not NUL-terminated. */
 +  GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_BUF = 8,
++
+   GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
  } GhosttyRenderStateRowCellsData;
  
- /**
 diff --git a/src/terminal/c/render.zig b/src/terminal/c/render.zig
-index 020dbc202..188851fb9 100644
+index af82ddfa1..35965e705 100644
 --- a/src/terminal/c/render.zig
 +++ b/src/terminal/c/render.zig
-@@ -45,6 +45,7 @@ const RowCellsWrapper = struct {
+@@ -44,6 +44,7 @@ const RowCellsWrapper = struct {
      raws: []const page.Cell,
      graphemes: []const []const u21,
      styles: []const Style,
@@ -61,7 +62,7 @@ index 020dbc202..188851fb9 100644
  
      /// The color palette, needed to resolve palette-indexed background colors.
      palette: *const colorpkg.Palette,
-@@ -401,6 +402,7 @@ pub fn row_cells_new(
+@@ -417,6 +418,7 @@ pub fn row_cells_new(
          .raws = undefined,
          .graphemes = undefined,
          .styles = undefined,
@@ -69,7 +70,7 @@ index 020dbc202..188851fb9 100644
          .palette = undefined,
      };
      result.* = ptr;
-@@ -438,6 +440,15 @@ pub const RowCellsData = enum(c_int) {
+@@ -454,6 +456,15 @@ pub const RowCellsData = enum(c_int) {
      bg_color = 5,
      fg_color = 6,
  
@@ -85,7 +86,7 @@ index 020dbc202..188851fb9 100644
      /// Output type expected for querying the data of the given kind.
      pub fn OutType(comptime self: RowCellsData) type {
          return switch (self) {
-@@ -447,6 +458,8 @@ pub const RowCellsData = enum(c_int) {
+@@ -463,6 +474,8 @@ pub const RowCellsData = enum(c_int) {
              .graphemes_len => u32,
              .graphemes_buf => u32,
              .bg_color, .fg_color => colorpkg.RGB.C,
@@ -94,7 +95,7 @@ index 020dbc202..188851fb9 100644
          };
      }
  };
-@@ -505,6 +518,19 @@ fn rowCellsGetTyped(
+@@ -542,6 +555,19 @@ fn rowCellsGetTyped(
                  buf[i] = cp;
              }
          },
@@ -114,7 +115,7 @@ index 020dbc202..188851fb9 100644
          .bg_color => {
              const s: Style = if (cell.hasStyling()) cells.styles[x] else .{};
              const bg = s.bg(&cell, cells.palette) orelse return .invalid_value;
-@@ -593,6 +619,7 @@ fn rowGetTyped(
+@@ -651,6 +677,7 @@ fn rowGetTyped(
                  .raws = cell_data.items(.raw),
                  .graphemes = cell_data.items(.grapheme),
                  .styles = cell_data.items(.style),
@@ -122,15 +123,15 @@ index 020dbc202..188851fb9 100644
                  .palette = it.palette,
              };
          },
-@@ -1385,3 +1412,136 @@ test "render: colors get supports truncated sized struct" {
-     try testing.expectEqual(state_colors.palette[1].cval(), colors.palette[1]);
-     try testing.expectEqual(sentinel, colors.palette[2]);
+@@ -1577,3 +1604,136 @@ test "render: row_cells_get_multi null returns invalid_value" {
+     var values = [_]?*anyopaque{@ptrCast(&raw)};
+     try testing.expectEqual(Result.invalid_value, row_cells_get_multi(null, 1, null, &values, null));
  }
 +
 +test "render: row cells hyperlink uri" {
 +    var terminal: terminal_c.Terminal = null;
 +    try testing.expectEqual(Result.success, terminal_c.new(
-+        &lib_alloc.test_allocator,
++        &lib.alloc.test_allocator,
 +        &terminal,
 +        .{
 +            .cols = 80,
@@ -146,7 +147,7 @@ index 020dbc202..188851fb9 100644
 +
 +    var state: RenderState = null;
 +    try testing.expectEqual(Result.success, new(
-+        &lib_alloc.test_allocator,
++        &lib.alloc.test_allocator,
 +        &state,
 +    ));
 +    defer free(state);
@@ -155,7 +156,7 @@ index 020dbc202..188851fb9 100644
 +
 +    var it: RowIterator = null;
 +    try testing.expectEqual(Result.success, row_iterator_new(
-+        &lib_alloc.test_allocator,
++        &lib.alloc.test_allocator,
 +        &it,
 +    ));
 +    defer row_iterator_free(it);
@@ -165,7 +166,7 @@ index 020dbc202..188851fb9 100644
 +
 +    var cells: RowCells = null;
 +    try testing.expectEqual(Result.success, row_cells_new(
-+        &lib_alloc.test_allocator,
++        &lib.alloc.test_allocator,
 +        &cells,
 +    ));
 +    defer row_cells_free(cells);
@@ -210,7 +211,7 @@ index 020dbc202..188851fb9 100644
 +test "render: row cells hyperlink uri without any links" {
 +    var terminal: terminal_c.Terminal = null;
 +    try testing.expectEqual(Result.success, terminal_c.new(
-+        &lib_alloc.test_allocator,
++        &lib.alloc.test_allocator,
 +        &terminal,
 +        .{
 +            .cols = 80,
@@ -224,7 +225,7 @@ index 020dbc202..188851fb9 100644
 +
 +    var state: RenderState = null;
 +    try testing.expectEqual(Result.success, new(
-+        &lib_alloc.test_allocator,
++        &lib.alloc.test_allocator,
 +        &state,
 +    ));
 +    defer free(state);
@@ -233,7 +234,7 @@ index 020dbc202..188851fb9 100644
 +
 +    var it: RowIterator = null;
 +    try testing.expectEqual(Result.success, row_iterator_new(
-+        &lib_alloc.test_allocator,
++        &lib.alloc.test_allocator,
 +        &it,
 +    ));
 +    defer row_iterator_free(it);
@@ -243,7 +244,7 @@ index 020dbc202..188851fb9 100644
 +
 +    var cells: RowCells = null;
 +    try testing.expectEqual(Result.success, row_cells_new(
-+        &lib_alloc.test_allocator,
++        &lib.alloc.test_allocator,
 +        &cells,
 +    ));
 +    defer row_cells_free(cells);
@@ -260,10 +261,10 @@ index 020dbc202..188851fb9 100644
 +    try testing.expectEqual(@as(u32, 0), len);
 +}
 diff --git a/src/terminal/render.zig b/src/terminal/render.zig
-index 09e0c6b93..7e1da05e1 100644
+index 98e142245..3aea5e5cc 100644
 --- a/src/terminal/render.zig
 +++ b/src/terminal/render.zig
-@@ -223,6 +223,13 @@ pub const RenderState = struct {
+@@ -221,6 +221,13 @@ pub const RenderState = struct {
          /// The style data for the cell. This is undefined unless
          /// the style_id is non-default on raw.
          style: Style,
@@ -277,7 +278,7 @@ index 09e0c6b93..7e1da05e1 100644
      };
  
      // Dirty state.
-@@ -510,6 +517,7 @@ pub const RenderState = struct {
+@@ -508,6 +515,7 @@ pub const RenderState = struct {
              const arena_alloc = arena.allocator();
              const cells_grapheme = cells_slice.items(.grapheme);
              const cells_style = cells_slice.items(.style);
@@ -285,7 +286,7 @@ index 09e0c6b93..7e1da05e1 100644
              for (page_cells, 0..) |*page_cell, x| {
                  // Append assuming its a single-codepoint, styled cell
                  // (most common by far).
-@@ -518,6 +526,20 @@ pub const RenderState = struct {
+@@ -516,6 +524,20 @@ pub const RenderState = struct {
                      page_cell.style_id,
                  ).*;
  
@@ -306,7 +307,7 @@ index 09e0c6b93..7e1da05e1 100644
                  // Switch on our content tag to handle less likely cases.
                  switch (page_cell.content_tag) {
                      .codepoint => {
-@@ -1297,6 +1319,41 @@ test "linkCells" {
+@@ -1295,6 +1317,41 @@ test "linkCells" {
      try testing.expectEqual(0, cells2.count());
  }
  

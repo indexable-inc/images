@@ -98,7 +98,15 @@ in
     # this one is shimmable to the pinned nixpkgs apple-sdk.
     inherit (darwinXcrunShimFor pkgs) appleSdk appleSdkRoot darwinSdkInputs;
 
-    commonNativeBuildInputs = [pkgs.zig_0_15 pkgs.pkg-config] ++ darwinSdkInputs;
+    # Since the 49a43bf5 ghostty pin the vt static lib vendors SIMD deps
+    # (simdutf, highway, utfcpp) and combines the archives on darwin with
+    # `libtool`/`ranlib` resolved from PATH (fork patch
+    # 0004-build-keep-Demit-lib-vt-buildable-without-Apple-abso); cctools
+    # supplies both in the sandbox.
+    commonNativeBuildInputs =
+      [pkgs.zig_0_15 pkgs.pkg-config]
+      ++ darwinSdkInputs
+      ++ lib.optional isDarwin pkgs.darwin.cctools;
     commonBuildInputs = [pkgs.zlib] ++ lib.optional isDarwin appleSdk;
 
     seedGlobalCache = ''

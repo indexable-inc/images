@@ -6,6 +6,7 @@
 #![allow(non_upper_case_globals, non_camel_case_types, non_snake_case)]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
 
+pub const GHOSTTY_ENUM_MAX_VALUE: u32 = 2147483647;
 pub const GHOSTTY_COLOR_NAMED_BLACK: u32 = 0;
 pub const GHOSTTY_COLOR_NAMED_RED: u32 = 1;
 pub const GHOSTTY_COLOR_NAMED_GREEN: u32 = 2;
@@ -22,6 +23,51 @@ pub const GHOSTTY_COLOR_NAMED_BRIGHT_BLUE: u32 = 12;
 pub const GHOSTTY_COLOR_NAMED_BRIGHT_MAGENTA: u32 = 13;
 pub const GHOSTTY_COLOR_NAMED_BRIGHT_CYAN: u32 = 14;
 pub const GHOSTTY_COLOR_NAMED_BRIGHT_WHITE: u32 = 15;
+pub const GHOSTTY_DA_CONFORMANCE_VT100: u32 = 1;
+pub const GHOSTTY_DA_CONFORMANCE_VT101: u32 = 1;
+pub const GHOSTTY_DA_CONFORMANCE_VT102: u32 = 6;
+pub const GHOSTTY_DA_CONFORMANCE_VT125: u32 = 12;
+pub const GHOSTTY_DA_CONFORMANCE_VT131: u32 = 7;
+pub const GHOSTTY_DA_CONFORMANCE_VT132: u32 = 4;
+pub const GHOSTTY_DA_CONFORMANCE_VT220: u32 = 62;
+pub const GHOSTTY_DA_CONFORMANCE_VT240: u32 = 62;
+pub const GHOSTTY_DA_CONFORMANCE_VT320: u32 = 63;
+pub const GHOSTTY_DA_CONFORMANCE_VT340: u32 = 63;
+pub const GHOSTTY_DA_CONFORMANCE_VT420: u32 = 64;
+pub const GHOSTTY_DA_CONFORMANCE_VT510: u32 = 65;
+pub const GHOSTTY_DA_CONFORMANCE_VT520: u32 = 65;
+pub const GHOSTTY_DA_CONFORMANCE_VT525: u32 = 65;
+pub const GHOSTTY_DA_CONFORMANCE_LEVEL_2: u32 = 62;
+pub const GHOSTTY_DA_CONFORMANCE_LEVEL_3: u32 = 63;
+pub const GHOSTTY_DA_CONFORMANCE_LEVEL_4: u32 = 64;
+pub const GHOSTTY_DA_CONFORMANCE_LEVEL_5: u32 = 65;
+pub const GHOSTTY_DA_FEATURE_COLUMNS_132: u32 = 1;
+pub const GHOSTTY_DA_FEATURE_PRINTER: u32 = 2;
+pub const GHOSTTY_DA_FEATURE_REGIS: u32 = 3;
+pub const GHOSTTY_DA_FEATURE_SIXEL: u32 = 4;
+pub const GHOSTTY_DA_FEATURE_SELECTIVE_ERASE: u32 = 6;
+pub const GHOSTTY_DA_FEATURE_USER_DEFINED_KEYS: u32 = 8;
+pub const GHOSTTY_DA_FEATURE_NATIONAL_REPLACEMENT: u32 = 9;
+pub const GHOSTTY_DA_FEATURE_TECHNICAL_CHARACTERS: u32 = 15;
+pub const GHOSTTY_DA_FEATURE_LOCATOR: u32 = 16;
+pub const GHOSTTY_DA_FEATURE_TERMINAL_STATE: u32 = 17;
+pub const GHOSTTY_DA_FEATURE_WINDOWING: u32 = 18;
+pub const GHOSTTY_DA_FEATURE_HORIZONTAL_SCROLLING: u32 = 21;
+pub const GHOSTTY_DA_FEATURE_ANSI_COLOR: u32 = 22;
+pub const GHOSTTY_DA_FEATURE_RECTANGULAR_EDITING: u32 = 28;
+pub const GHOSTTY_DA_FEATURE_ANSI_TEXT_LOCATOR: u32 = 29;
+pub const GHOSTTY_DA_FEATURE_CLIPBOARD: u32 = 52;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT100: u32 = 0;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT220: u32 = 1;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT240: u32 = 2;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT330: u32 = 18;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT340: u32 = 19;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT320: u32 = 24;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT382: u32 = 32;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT420: u32 = 41;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT510: u32 = 61;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT520: u32 = 64;
+pub const GHOSTTY_DA_DEVICE_TYPE_VT525: u32 = 65;
 pub const GHOSTTY_MODS_SHIFT: u32 = 1;
 pub const GHOSTTY_MODS_CTRL: u32 = 2;
 pub const GHOSTTY_MODS_ALT: u32 = 4;
@@ -46,6 +92,83 @@ pub enum GhosttyResult {
     GHOSTTY_OUT_OF_MEMORY = -1,
     GHOSTTY_INVALID_VALUE = -2,
     GHOSTTY_OUT_OF_SPACE = -3,
+    GHOSTTY_NO_VALUE = -4,
+    GHOSTTY_RESULT_MAX_VALUE = 2147483647,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyTerminalImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyTerminal = *mut GhosttyTerminalImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyKittyGraphicsImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyKittyGraphics = *mut GhosttyKittyGraphicsImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyKittyGraphicsImageImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyKittyGraphicsImage = *const GhosttyKittyGraphicsImageImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyKittyGraphicsPlacementIteratorImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyKittyGraphicsPlacementIterator = *mut GhosttyKittyGraphicsPlacementIteratorImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyRenderStateImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyRenderState = *mut GhosttyRenderStateImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyRenderStateRowIteratorImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyRenderStateRowIterator = *mut GhosttyRenderStateRowIteratorImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyRenderStateRowCellsImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyRenderStateRowCells = *mut GhosttyRenderStateRowCellsImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttySgrParserImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttySgrParser = *mut GhosttySgrParserImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyFormatterImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyFormatter = *mut GhosttyFormatterImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyOscParserImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyOscParser = *mut GhosttyOscParserImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyOscCommandImpl {
+    _unused: [u8; 0],
+}
+pub type GhosttyOscCommand = *mut GhosttyOscCommandImpl;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyString {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+unsafe extern "C" {
+    pub fn ghostty_type_json() -> *const ::std::os::raw::c_char;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -94,6 +217,12 @@ pub struct GhosttyAllocator {
     pub ctx: *mut ::std::os::raw::c_void,
     pub vtable: *const GhosttyAllocatorVtable,
 }
+unsafe extern "C" {
+    pub fn ghostty_alloc(allocator: *const GhosttyAllocator, len: usize) -> *mut u8;
+}
+unsafe extern "C" {
+    pub fn ghostty_free(allocator: *const GhosttyAllocator, ptr: *mut u8, len: usize);
+}
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyOptimizeMode {
@@ -101,6 +230,7 @@ pub enum GhosttyOptimizeMode {
     GHOSTTY_OPTIMIZE_RELEASE_SAFE = 1,
     GHOSTTY_OPTIMIZE_RELEASE_SMALL = 2,
     GHOSTTY_OPTIMIZE_RELEASE_FAST = 3,
+    GHOSTTY_OPTIMIZE_MODE_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -110,6 +240,13 @@ pub enum GhosttyBuildInfo {
     GHOSTTY_BUILD_INFO_KITTY_GRAPHICS = 2,
     GHOSTTY_BUILD_INFO_TMUX_CONTROL_MODE = 3,
     GHOSTTY_BUILD_INFO_OPTIMIZE = 4,
+    GHOSTTY_BUILD_INFO_VERSION_STRING = 5,
+    GHOSTTY_BUILD_INFO_VERSION_MAJOR = 6,
+    GHOSTTY_BUILD_INFO_VERSION_MINOR = 7,
+    GHOSTTY_BUILD_INFO_VERSION_PATCH = 8,
+    GHOSTTY_BUILD_INFO_VERSION_PRE = 9,
+    GHOSTTY_BUILD_INFO_VERSION_BUILD = 10,
+    GHOSTTY_BUILD_INFO_MAX_VALUE = 2147483647,
 }
 unsafe extern "C" {
     pub fn ghostty_build_info(
@@ -130,32 +267,47 @@ unsafe extern "C" {
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyColorScheme {
+    GHOSTTY_COLOR_SCHEME_LIGHT = 0,
+    GHOSTTY_COLOR_SCHEME_DARK = 1,
+    GHOSTTY_COLOR_SCHEME_MAX_VALUE = 2147483647,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyDeviceAttributesPrimary {
+    pub conformance_level: u16,
+    pub features: [u16; 64usize],
+    pub num_features: usize,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyDeviceAttributesSecondary {
+    pub device_type: u16,
+    pub firmware_version: u16,
+    pub rom_cartridge: u16,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyDeviceAttributesTertiary {
+    pub unit_id: u32,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyDeviceAttributes {
+    pub primary: GhosttyDeviceAttributesPrimary,
+    pub secondary: GhosttyDeviceAttributesSecondary,
+    pub tertiary: GhosttyDeviceAttributesTertiary,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyFocusEvent {
     GHOSTTY_FOCUS_GAINED = 0,
     GHOSTTY_FOCUS_LOST = 1,
+    GHOSTTY_FOCUS_MAX_VALUE = 2147483647,
 }
 unsafe extern "C" {
     pub fn ghostty_focus_encode(
         event: GhosttyFocusEvent,
-        buf: *mut ::std::os::raw::c_char,
-        buf_len: usize,
-        out_written: *mut usize,
-    ) -> GhosttyResult;
-}
-pub type GhosttyMode = u16;
-#[repr(u32)]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum GhosttyModeReportState {
-    GHOSTTY_MODE_REPORT_NOT_RECOGNIZED = 0,
-    GHOSTTY_MODE_REPORT_SET = 1,
-    GHOSTTY_MODE_REPORT_RESET = 2,
-    GHOSTTY_MODE_REPORT_PERMANENTLY_SET = 3,
-    GHOSTTY_MODE_REPORT_PERMANENTLY_RESET = 4,
-}
-unsafe extern "C" {
-    pub fn ghostty_mode_report_encode(
-        mode: GhosttyMode,
-        state: GhosttyModeReportState,
         buf: *mut ::std::os::raw::c_char,
         buf_len: usize,
         out_written: *mut usize,
@@ -170,6 +322,7 @@ pub enum GhosttyCellContentTag {
     GHOSTTY_CELL_CONTENT_CODEPOINT_GRAPHEME = 1,
     GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE = 2,
     GHOSTTY_CELL_CONTENT_BG_COLOR_RGB = 3,
+    GHOSTTY_CELL_CONTENT_TAG_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -178,6 +331,7 @@ pub enum GhosttyCellWide {
     GHOSTTY_CELL_WIDE_WIDE = 1,
     GHOSTTY_CELL_WIDE_SPACER_TAIL = 2,
     GHOSTTY_CELL_WIDE_SPACER_HEAD = 3,
+    GHOSTTY_CELL_WIDE_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -185,6 +339,7 @@ pub enum GhosttyCellSemanticContent {
     GHOSTTY_CELL_SEMANTIC_OUTPUT = 0,
     GHOSTTY_CELL_SEMANTIC_INPUT = 1,
     GHOSTTY_CELL_SEMANTIC_PROMPT = 2,
+    GHOSTTY_CELL_SEMANTIC_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -201,6 +356,7 @@ pub enum GhosttyCellData {
     GHOSTTY_CELL_DATA_SEMANTIC_CONTENT = 9,
     GHOSTTY_CELL_DATA_COLOR_PALETTE = 10,
     GHOSTTY_CELL_DATA_COLOR_RGB = 11,
+    GHOSTTY_CELL_DATA_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -208,6 +364,7 @@ pub enum GhosttyRowSemanticPrompt {
     GHOSTTY_ROW_SEMANTIC_NONE = 0,
     GHOSTTY_ROW_SEMANTIC_PROMPT = 1,
     GHOSTTY_ROW_SEMANTIC_PROMPT_CONTINUATION = 2,
+    GHOSTTY_ROW_SEMANTIC_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -221,6 +378,7 @@ pub enum GhosttyRowData {
     GHOSTTY_ROW_DATA_SEMANTIC_PROMPT = 6,
     GHOSTTY_ROW_DATA_KITTY_VIRTUAL_PLACEHOLDER = 7,
     GHOSTTY_ROW_DATA_DIRTY = 8,
+    GHOSTTY_ROW_DATA_MAX_VALUE = 2147483647,
 }
 unsafe extern "C" {
     pub fn ghostty_cell_get(
@@ -230,10 +388,28 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    pub fn ghostty_cell_get_multi(
+        cell: GhosttyCell,
+        count: usize,
+        keys: *const GhosttyCellData,
+        values: *mut *mut ::std::os::raw::c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     pub fn ghostty_row_get(
         row: GhosttyRow,
         data: GhosttyRowData,
         out: *mut ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_row_get_multi(
+        row: GhosttyRow,
+        count: usize,
+        keys: *const GhosttyRowData,
+        values: *mut *mut ::std::os::raw::c_void,
+        out_written: *mut usize,
     ) -> GhosttyResult;
 }
 pub type GhosttyStyleId = u16;
@@ -243,6 +419,7 @@ pub enum GhosttyStyleColorTag {
     GHOSTTY_STYLE_COLOR_NONE = 0,
     GHOSTTY_STYLE_COLOR_PALETTE = 1,
     GHOSTTY_STYLE_COLOR_RGB = 2,
+    GHOSTTY_STYLE_COLOR_TAG_MAX_VALUE = 2147483647,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -309,9 +486,279 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    pub fn ghostty_grid_ref_hyperlink_uri(
+        ref_: *const GhosttyGridRef,
+        buf: *mut u8,
+        buf_len: usize,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     pub fn ghostty_grid_ref_style(
         ref_: *const GhosttyGridRef,
         out_style: *mut GhosttyStyle,
+    ) -> GhosttyResult;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttySelection {
+    pub size: usize,
+    pub start: GhosttyGridRef,
+    pub end: GhosttyGridRef,
+    pub rectangle: bool,
+}
+pub type GhosttyMode = u16;
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyModeReportState {
+    GHOSTTY_MODE_REPORT_NOT_RECOGNIZED = 0,
+    GHOSTTY_MODE_REPORT_SET = 1,
+    GHOSTTY_MODE_REPORT_RESET = 2,
+    GHOSTTY_MODE_REPORT_PERMANENTLY_SET = 3,
+    GHOSTTY_MODE_REPORT_PERMANENTLY_RESET = 4,
+    GHOSTTY_MODE_REPORT_MAX_VALUE = 2147483647,
+}
+unsafe extern "C" {
+    pub fn ghostty_mode_report_encode(
+        mode: GhosttyMode,
+        state: GhosttyModeReportState,
+        buf: *mut ::std::os::raw::c_char,
+        buf_len: usize,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttySizeReportStyle {
+    GHOSTTY_SIZE_REPORT_MODE_2048 = 0,
+    GHOSTTY_SIZE_REPORT_CSI_14_T = 1,
+    GHOSTTY_SIZE_REPORT_CSI_16_T = 2,
+    GHOSTTY_SIZE_REPORT_CSI_18_T = 3,
+    GHOSTTY_SIZE_REPORT_STYLE_MAX_VALUE = 2147483647,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttySizeReportSize {
+    pub rows: u16,
+    pub columns: u16,
+    pub cell_width: u32,
+    pub cell_height: u32,
+}
+unsafe extern "C" {
+    pub fn ghostty_size_report_encode(
+        style: GhosttySizeReportStyle,
+        size: GhosttySizeReportSize,
+        buf: *mut ::std::os::raw::c_char,
+        buf_len: usize,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyKittyGraphicsData {
+    GHOSTTY_KITTY_GRAPHICS_DATA_INVALID = 0,
+    GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR = 1,
+    GHOSTTY_KITTY_GRAPHICS_DATA_MAX_VALUE = 2147483647,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyKittyGraphicsPlacementData {
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_INVALID = 0,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID = 1,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID = 2,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IS_VIRTUAL = 3,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_X_OFFSET = 4,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Y_OFFSET = 5,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_SOURCE_X = 6,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_SOURCE_Y = 7,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_SOURCE_WIDTH = 8,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_SOURCE_HEIGHT = 9,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_COLUMNS = 10,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_ROWS = 11,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z = 12,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_MAX_VALUE = 2147483647,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyKittyPlacementLayer {
+    GHOSTTY_KITTY_PLACEMENT_LAYER_ALL = 0,
+    GHOSTTY_KITTY_PLACEMENT_LAYER_BELOW_BG = 1,
+    GHOSTTY_KITTY_PLACEMENT_LAYER_BELOW_TEXT = 2,
+    GHOSTTY_KITTY_PLACEMENT_LAYER_ABOVE_TEXT = 3,
+    GHOSTTY_KITTY_PLACEMENT_LAYER_MAX_VALUE = 2147483647,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyKittyGraphicsPlacementIteratorOption {
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_ITERATOR_OPTION_LAYER = 0,
+    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_ITERATOR_OPTION_MAX_VALUE = 2147483647,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyKittyImageFormat {
+    GHOSTTY_KITTY_IMAGE_FORMAT_RGB = 0,
+    GHOSTTY_KITTY_IMAGE_FORMAT_RGBA = 1,
+    GHOSTTY_KITTY_IMAGE_FORMAT_PNG = 2,
+    GHOSTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA = 3,
+    GHOSTTY_KITTY_IMAGE_FORMAT_GRAY = 4,
+    GHOSTTY_KITTY_IMAGE_FORMAT_MAX_VALUE = 2147483647,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyKittyImageCompression {
+    GHOSTTY_KITTY_IMAGE_COMPRESSION_NONE = 0,
+    GHOSTTY_KITTY_IMAGE_COMPRESSION_ZLIB_DEFLATE = 1,
+    GHOSTTY_KITTY_IMAGE_COMPRESSION_MAX_VALUE = 2147483647,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyKittyGraphicsImageData {
+    GHOSTTY_KITTY_IMAGE_DATA_INVALID = 0,
+    GHOSTTY_KITTY_IMAGE_DATA_ID = 1,
+    GHOSTTY_KITTY_IMAGE_DATA_NUMBER = 2,
+    GHOSTTY_KITTY_IMAGE_DATA_WIDTH = 3,
+    GHOSTTY_KITTY_IMAGE_DATA_HEIGHT = 4,
+    GHOSTTY_KITTY_IMAGE_DATA_FORMAT = 5,
+    GHOSTTY_KITTY_IMAGE_DATA_COMPRESSION = 6,
+    GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR = 7,
+    GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN = 8,
+    GHOSTTY_KITTY_IMAGE_DATA_MAX_VALUE = 2147483647,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyKittyGraphicsPlacementRenderInfo {
+    pub size: usize,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub grid_cols: u32,
+    pub grid_rows: u32,
+    pub viewport_col: i32,
+    pub viewport_row: i32,
+    pub viewport_visible: bool,
+    pub source_x: u32,
+    pub source_y: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_get(
+        graphics: GhosttyKittyGraphics,
+        data: GhosttyKittyGraphicsData,
+        out: *mut ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_image(
+        graphics: GhosttyKittyGraphics,
+        image_id: u32,
+    ) -> GhosttyKittyGraphicsImage;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_image_get(
+        image: GhosttyKittyGraphicsImage,
+        data: GhosttyKittyGraphicsImageData,
+        out: *mut ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_image_get_multi(
+        image: GhosttyKittyGraphicsImage,
+        count: usize,
+        keys: *const GhosttyKittyGraphicsImageData,
+        values: *mut *mut ::std::os::raw::c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_iterator_new(
+        allocator: *const GhosttyAllocator,
+        out_iterator: *mut GhosttyKittyGraphicsPlacementIterator,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_iterator_free(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+    );
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_iterator_set(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        option: GhosttyKittyGraphicsPlacementIteratorOption,
+        value: *const ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_next(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+    ) -> bool;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_get(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        data: GhosttyKittyGraphicsPlacementData,
+        out: *mut ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_get_multi(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        count: usize,
+        keys: *const GhosttyKittyGraphicsPlacementData,
+        values: *mut *mut ::std::os::raw::c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_rect(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        image: GhosttyKittyGraphicsImage,
+        terminal: GhosttyTerminal,
+        out_selection: *mut GhosttySelection,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_pixel_size(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        image: GhosttyKittyGraphicsImage,
+        terminal: GhosttyTerminal,
+        out_width: *mut u32,
+        out_height: *mut u32,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_grid_size(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        image: GhosttyKittyGraphicsImage,
+        terminal: GhosttyTerminal,
+        out_cols: *mut u32,
+        out_rows: *mut u32,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_viewport_pos(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        image: GhosttyKittyGraphicsImage,
+        terminal: GhosttyTerminal,
+        out_col: *mut i32,
+        out_row: *mut i32,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_source_rect(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        image: GhosttyKittyGraphicsImage,
+        out_x: *mut u32,
+        out_y: *mut u32,
+        out_width: *mut u32,
+        out_height: *mut u32,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_kitty_graphics_placement_render_info(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        image: GhosttyKittyGraphicsImage,
+        terminal: GhosttyTerminal,
+        out_info: *mut GhosttyKittyGraphicsPlacementRenderInfo,
     ) -> GhosttyResult;
 }
 #[repr(C)]
@@ -327,6 +774,7 @@ pub enum GhosttyPointTag {
     GHOSTTY_POINT_TAG_VIEWPORT = 1,
     GHOSTTY_POINT_TAG_SCREEN = 2,
     GHOSTTY_POINT_TAG_HISTORY = 3,
+    GHOSTTY_POINT_TAG_MAX_VALUE = 2147483647,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -342,12 +790,6 @@ pub struct GhosttyPoint {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct GhosttyTerminal {
-    _unused: [u8; 0],
-}
-pub type GhosttyTerminal_ptr = *mut GhosttyTerminal;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
 pub struct GhosttyTerminalOptions {
     pub cols: u16,
     pub rows: u16,
@@ -359,6 +801,7 @@ pub enum GhosttyTerminalScrollViewportTag {
     GHOSTTY_SCROLL_VIEWPORT_TOP = 0,
     GHOSTTY_SCROLL_VIEWPORT_BOTTOM = 1,
     GHOSTTY_SCROLL_VIEWPORT_DELTA = 2,
+    GHOSTTY_SCROLL_VIEWPORT_MAX_VALUE = 2147483647,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -377,6 +820,7 @@ pub struct GhosttyTerminalScrollViewport {
 pub enum GhosttyTerminalScreen {
     GHOSTTY_TERMINAL_SCREEN_PRIMARY = 0,
     GHOSTTY_TERMINAL_SCREEN_ALTERNATE = 1,
+    GHOSTTY_TERMINAL_SCREEN_MAX_VALUE = 2147483647,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -384,6 +828,77 @@ pub struct GhosttyTerminalScrollbar {
     pub total: u64,
     pub offset: u64,
     pub len: u64,
+}
+pub type GhosttyTerminalBellFn = ::std::option::Option<
+    unsafe extern "C" fn(terminal: GhosttyTerminal, userdata: *mut ::std::os::raw::c_void),
+>;
+pub type GhosttyTerminalColorSchemeFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        terminal: GhosttyTerminal,
+        userdata: *mut ::std::os::raw::c_void,
+        out_scheme: *mut GhosttyColorScheme,
+    ) -> bool,
+>;
+pub type GhosttyTerminalDeviceAttributesFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        terminal: GhosttyTerminal,
+        userdata: *mut ::std::os::raw::c_void,
+        out_attrs: *mut GhosttyDeviceAttributes,
+    ) -> bool,
+>;
+pub type GhosttyTerminalEnquiryFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        terminal: GhosttyTerminal,
+        userdata: *mut ::std::os::raw::c_void,
+    ) -> GhosttyString,
+>;
+pub type GhosttyTerminalSizeFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        terminal: GhosttyTerminal,
+        userdata: *mut ::std::os::raw::c_void,
+        out_size: *mut GhosttySizeReportSize,
+    ) -> bool,
+>;
+pub type GhosttyTerminalTitleChangedFn = ::std::option::Option<
+    unsafe extern "C" fn(terminal: GhosttyTerminal, userdata: *mut ::std::os::raw::c_void),
+>;
+pub type GhosttyTerminalWritePtyFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        terminal: GhosttyTerminal,
+        userdata: *mut ::std::os::raw::c_void,
+        data: *const u8,
+        len: usize,
+    ),
+>;
+pub type GhosttyTerminalXtversionFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        terminal: GhosttyTerminal,
+        userdata: *mut ::std::os::raw::c_void,
+    ) -> GhosttyString,
+>;
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttyTerminalOption {
+    GHOSTTY_TERMINAL_OPT_USERDATA = 0,
+    GHOSTTY_TERMINAL_OPT_WRITE_PTY = 1,
+    GHOSTTY_TERMINAL_OPT_BELL = 2,
+    GHOSTTY_TERMINAL_OPT_ENQUIRY = 3,
+    GHOSTTY_TERMINAL_OPT_XTVERSION = 4,
+    GHOSTTY_TERMINAL_OPT_TITLE_CHANGED = 5,
+    GHOSTTY_TERMINAL_OPT_SIZE = 6,
+    GHOSTTY_TERMINAL_OPT_COLOR_SCHEME = 7,
+    GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES = 8,
+    GHOSTTY_TERMINAL_OPT_TITLE = 9,
+    GHOSTTY_TERMINAL_OPT_PWD = 10,
+    GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND = 11,
+    GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND = 12,
+    GHOSTTY_TERMINAL_OPT_COLOR_CURSOR = 13,
+    GHOSTTY_TERMINAL_OPT_COLOR_PALETTE = 14,
+    GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT = 15,
+    GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_FILE = 16,
+    GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE = 17,
+    GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_SHARED_MEM = 18,
+    GHOSTTY_TERMINAL_OPT_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -400,62 +915,108 @@ pub enum GhosttyTerminalData {
     GHOSTTY_TERMINAL_DATA_SCROLLBAR = 9,
     GHOSTTY_TERMINAL_DATA_CURSOR_STYLE = 10,
     GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING = 11,
+    GHOSTTY_TERMINAL_DATA_TITLE = 12,
+    GHOSTTY_TERMINAL_DATA_PWD = 13,
+    GHOSTTY_TERMINAL_DATA_TOTAL_ROWS = 14,
+    GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS = 15,
+    GHOSTTY_TERMINAL_DATA_WIDTH_PX = 16,
+    GHOSTTY_TERMINAL_DATA_HEIGHT_PX = 17,
+    GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND = 18,
+    GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND = 19,
+    GHOSTTY_TERMINAL_DATA_COLOR_CURSOR = 20,
+    GHOSTTY_TERMINAL_DATA_COLOR_PALETTE = 21,
+    GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT = 22,
+    GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT = 23,
+    GHOSTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT = 24,
+    GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT = 25,
+    GHOSTTY_TERMINAL_DATA_KITTY_IMAGE_STORAGE_LIMIT = 26,
+    GHOSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_FILE = 27,
+    GHOSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_TEMP_FILE = 28,
+    GHOSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_SHARED_MEM = 29,
+    GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS = 30,
+    GHOSTTY_TERMINAL_DATA_MAX_VALUE = 2147483647,
 }
 unsafe extern "C" {
     pub fn ghostty_terminal_new(
         allocator: *const GhosttyAllocator,
-        terminal: *mut GhosttyTerminal_ptr,
+        terminal: *mut GhosttyTerminal,
         options: GhosttyTerminalOptions,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_terminal_free(terminal: GhosttyTerminal_ptr);
+    pub fn ghostty_terminal_free(terminal: GhosttyTerminal);
 }
 unsafe extern "C" {
-    pub fn ghostty_terminal_reset(terminal: GhosttyTerminal_ptr);
+    pub fn ghostty_terminal_reset(terminal: GhosttyTerminal);
 }
 unsafe extern "C" {
     pub fn ghostty_terminal_resize(
-        terminal: GhosttyTerminal_ptr,
+        terminal: GhosttyTerminal,
         cols: u16,
         rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_terminal_vt_write(terminal: GhosttyTerminal_ptr, data: *const u8, len: usize);
+    pub fn ghostty_terminal_set(
+        terminal: GhosttyTerminal,
+        option: GhosttyTerminalOption,
+        value: *const ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_terminal_vt_write(terminal: GhosttyTerminal, data: *const u8, len: usize);
 }
 unsafe extern "C" {
     pub fn ghostty_terminal_scroll_viewport(
-        terminal: GhosttyTerminal_ptr,
+        terminal: GhosttyTerminal,
         behavior: GhosttyTerminalScrollViewport,
     );
 }
 unsafe extern "C" {
     pub fn ghostty_terminal_mode_get(
-        terminal: GhosttyTerminal_ptr,
+        terminal: GhosttyTerminal,
         mode: GhosttyMode,
         out_value: *mut bool,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
     pub fn ghostty_terminal_mode_set(
-        terminal: GhosttyTerminal_ptr,
+        terminal: GhosttyTerminal,
         mode: GhosttyMode,
         value: bool,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
     pub fn ghostty_terminal_get(
-        terminal: GhosttyTerminal_ptr,
+        terminal: GhosttyTerminal,
         data: GhosttyTerminalData,
         out: *mut ::std::os::raw::c_void,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    pub fn ghostty_terminal_get_multi(
+        terminal: GhosttyTerminal,
+        count: usize,
+        keys: *const GhosttyTerminalData,
+        values: *mut *mut ::std::os::raw::c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     pub fn ghostty_terminal_grid_ref(
-        terminal: GhosttyTerminal_ptr,
+        terminal: GhosttyTerminal,
         point: GhosttyPoint,
         out_ref: *mut GhosttyGridRef,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_terminal_point_from_grid_ref(
+        terminal: GhosttyTerminal,
+        ref_: *const GhosttyGridRef,
+        tag: GhosttyPointTag,
+        out: *mut GhosttyPointCoordinate,
     ) -> GhosttyResult;
 }
 #[repr(u32)]
@@ -464,6 +1025,7 @@ pub enum GhosttyFormatterFormat {
     GHOSTTY_FORMATTER_FORMAT_PLAIN = 0,
     GHOSTTY_FORMATTER_FORMAT_VT = 1,
     GHOSTTY_FORMATTER_FORMAT_HTML = 2,
+    GHOSTTY_FORMATTER_FORMAT_MAX_VALUE = 2147483647,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -490,30 +1052,25 @@ pub struct GhosttyFormatterTerminalExtra {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct GhosttyFormatter {
-    _unused: [u8; 0],
-}
-pub type GhosttyFormatter_ptr = *mut GhosttyFormatter;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
 pub struct GhosttyFormatterTerminalOptions {
     pub size: usize,
     pub emit: GhosttyFormatterFormat,
     pub unwrap: bool,
     pub trim: bool,
     pub extra: GhosttyFormatterTerminalExtra,
+    pub selection: *const GhosttySelection,
 }
 unsafe extern "C" {
     pub fn ghostty_formatter_terminal_new(
         allocator: *const GhosttyAllocator,
-        formatter: *mut GhosttyFormatter_ptr,
-        terminal: GhosttyTerminal_ptr,
+        formatter: *mut GhosttyFormatter,
+        terminal: GhosttyTerminal,
         options: GhosttyFormatterTerminalOptions,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
     pub fn ghostty_formatter_format_buf(
-        formatter: GhosttyFormatter_ptr,
+        formatter: GhosttyFormatter,
         buf: *mut u8,
         buf_len: usize,
         out_written: *mut usize,
@@ -521,39 +1078,22 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn ghostty_formatter_format_alloc(
-        formatter: GhosttyFormatter_ptr,
+        formatter: GhosttyFormatter,
         allocator: *const GhosttyAllocator,
         out_ptr: *mut *mut u8,
         out_len: *mut usize,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_formatter_free(formatter: GhosttyFormatter_ptr);
+    pub fn ghostty_formatter_free(formatter: GhosttyFormatter);
 }
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttyRenderState {
-    _unused: [u8; 0],
-}
-pub type GhosttyRenderState_ptr = *mut GhosttyRenderState;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttyRenderStateRowIterator {
-    _unused: [u8; 0],
-}
-pub type GhosttyRenderStateRowIterator_ptr = *mut GhosttyRenderStateRowIterator;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttyRenderStateRowCells {
-    _unused: [u8; 0],
-}
-pub type GhosttyRenderStateRowCells_ptr = *mut GhosttyRenderStateRowCells;
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyRenderStateDirty {
     GHOSTTY_RENDER_STATE_DIRTY_FALSE = 0,
     GHOSTTY_RENDER_STATE_DIRTY_PARTIAL = 1,
     GHOSTTY_RENDER_STATE_DIRTY_FULL = 2,
+    GHOSTTY_RENDER_STATE_DIRTY_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -562,6 +1102,7 @@ pub enum GhosttyRenderStateCursorVisualStyle {
     GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK = 1,
     GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE = 2,
     GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW = 3,
+    GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -584,11 +1125,13 @@ pub enum GhosttyRenderStateData {
     GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X = 15,
     GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y = 16,
     GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_WIDE_TAIL = 17,
+    GHOSTTY_RENDER_STATE_DATA_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyRenderStateOption {
     GHOSTTY_RENDER_STATE_OPTION_DIRTY = 0,
+    GHOSTTY_RENDER_STATE_OPTION_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -597,11 +1140,13 @@ pub enum GhosttyRenderStateRowData {
     GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY = 1,
     GHOSTTY_RENDER_STATE_ROW_DATA_RAW = 2,
     GHOSTTY_RENDER_STATE_ROW_DATA_CELLS = 3,
+    GHOSTTY_RENDER_STATE_ROW_DATA_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyRenderStateRowOption {
     GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY = 0,
+    GHOSTTY_RENDER_STATE_ROW_OPTION_MAX_VALUE = 2147483647,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -616,62 +1161,78 @@ pub struct GhosttyRenderStateColors {
 unsafe extern "C" {
     pub fn ghostty_render_state_new(
         allocator: *const GhosttyAllocator,
-        state: *mut GhosttyRenderState_ptr,
+        state: *mut GhosttyRenderState,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_render_state_free(state: GhosttyRenderState_ptr);
+    pub fn ghostty_render_state_free(state: GhosttyRenderState);
 }
 unsafe extern "C" {
     pub fn ghostty_render_state_update(
-        state: GhosttyRenderState_ptr,
-        terminal: GhosttyTerminal_ptr,
+        state: GhosttyRenderState,
+        terminal: GhosttyTerminal,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
     pub fn ghostty_render_state_get(
-        state: GhosttyRenderState_ptr,
+        state: GhosttyRenderState,
         data: GhosttyRenderStateData,
         out: *mut ::std::os::raw::c_void,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    pub fn ghostty_render_state_get_multi(
+        state: GhosttyRenderState,
+        count: usize,
+        keys: *const GhosttyRenderStateData,
+        values: *mut *mut ::std::os::raw::c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     pub fn ghostty_render_state_set(
-        state: GhosttyRenderState_ptr,
+        state: GhosttyRenderState,
         option: GhosttyRenderStateOption,
         value: *const ::std::os::raw::c_void,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
     pub fn ghostty_render_state_colors_get(
-        state: GhosttyRenderState_ptr,
+        state: GhosttyRenderState,
         out_colors: *mut GhosttyRenderStateColors,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
     pub fn ghostty_render_state_row_iterator_new(
         allocator: *const GhosttyAllocator,
-        out_iterator: *mut GhosttyRenderStateRowIterator_ptr,
+        out_iterator: *mut GhosttyRenderStateRowIterator,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_render_state_row_iterator_free(iterator: GhosttyRenderStateRowIterator_ptr);
+    pub fn ghostty_render_state_row_iterator_free(iterator: GhosttyRenderStateRowIterator);
 }
 unsafe extern "C" {
-    pub fn ghostty_render_state_row_iterator_next(
-        iterator: GhosttyRenderStateRowIterator_ptr,
-    ) -> bool;
+    pub fn ghostty_render_state_row_iterator_next(iterator: GhosttyRenderStateRowIterator) -> bool;
 }
 unsafe extern "C" {
     pub fn ghostty_render_state_row_get(
-        iterator: GhosttyRenderStateRowIterator_ptr,
+        iterator: GhosttyRenderStateRowIterator,
         data: GhosttyRenderStateRowData,
         out: *mut ::std::os::raw::c_void,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    pub fn ghostty_render_state_row_get_multi(
+        iterator: GhosttyRenderStateRowIterator,
+        count: usize,
+        keys: *const GhosttyRenderStateRowData,
+        values: *mut *mut ::std::os::raw::c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     pub fn ghostty_render_state_row_set(
-        iterator: GhosttyRenderStateRowIterator_ptr,
+        iterator: GhosttyRenderStateRowIterator,
         option: GhosttyRenderStateRowOption,
         value: *const ::std::os::raw::c_void,
     ) -> GhosttyResult;
@@ -679,7 +1240,7 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn ghostty_render_state_row_cells_new(
         allocator: *const GhosttyAllocator,
-        out_cells: *mut GhosttyRenderStateRowCells_ptr,
+        out_cells: *mut GhosttyRenderStateRowCells,
     ) -> GhosttyResult;
 }
 #[repr(u32)]
@@ -694,38 +1255,36 @@ pub enum GhosttyRenderStateRowCellsData {
     GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR = 6,
     GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_LEN = 7,
     GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HYPERLINK_URI_BUF = 8,
+    GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_MAX_VALUE = 2147483647,
 }
 unsafe extern "C" {
-    pub fn ghostty_render_state_row_cells_next(cells: GhosttyRenderStateRowCells_ptr) -> bool;
+    pub fn ghostty_render_state_row_cells_next(cells: GhosttyRenderStateRowCells) -> bool;
 }
 unsafe extern "C" {
     pub fn ghostty_render_state_row_cells_select(
-        cells: GhosttyRenderStateRowCells_ptr,
+        cells: GhosttyRenderStateRowCells,
         x: u16,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
     pub fn ghostty_render_state_row_cells_get(
-        cells: GhosttyRenderStateRowCells_ptr,
+        cells: GhosttyRenderStateRowCells,
         data: GhosttyRenderStateRowCellsData,
         out: *mut ::std::os::raw::c_void,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_render_state_row_cells_free(cells: GhosttyRenderStateRowCells_ptr);
+    pub fn ghostty_render_state_row_cells_get_multi(
+        cells: GhosttyRenderStateRowCells,
+        count: usize,
+        keys: *const GhosttyRenderStateRowCellsData,
+        values: *mut *mut ::std::os::raw::c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
 }
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttyOscParser {
-    _unused: [u8; 0],
+unsafe extern "C" {
+    pub fn ghostty_render_state_row_cells_free(cells: GhosttyRenderStateRowCells);
 }
-pub type GhosttyOscParser_ptr = *mut GhosttyOscParser;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttyOscCommand {
-    _unused: [u8; 0],
-}
-pub type GhosttyOscCommand_ptr = *mut GhosttyOscCommand;
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyOscCommandType {
@@ -752,47 +1311,43 @@ pub enum GhosttyOscCommandType {
     GHOSTTY_OSC_COMMAND_CONEMU_XTERM_EMULATION = 20,
     GHOSTTY_OSC_COMMAND_CONEMU_COMMENT = 21,
     GHOSTTY_OSC_COMMAND_KITTY_TEXT_SIZING = 22,
+    GHOSTTY_OSC_COMMAND_TYPE_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyOscCommandData {
     GHOSTTY_OSC_DATA_INVALID = 0,
     GHOSTTY_OSC_DATA_CHANGE_WINDOW_TITLE_STR = 1,
+    GHOSTTY_OSC_DATA_MAX_VALUE = 2147483647,
 }
 unsafe extern "C" {
     pub fn ghostty_osc_new(
         allocator: *const GhosttyAllocator,
-        parser: *mut GhosttyOscParser_ptr,
+        parser: *mut GhosttyOscParser,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_osc_free(parser: GhosttyOscParser_ptr);
+    pub fn ghostty_osc_free(parser: GhosttyOscParser);
 }
 unsafe extern "C" {
-    pub fn ghostty_osc_reset(parser: GhosttyOscParser_ptr);
+    pub fn ghostty_osc_reset(parser: GhosttyOscParser);
 }
 unsafe extern "C" {
-    pub fn ghostty_osc_next(parser: GhosttyOscParser_ptr, byte: u8);
+    pub fn ghostty_osc_next(parser: GhosttyOscParser, byte: u8);
 }
 unsafe extern "C" {
-    pub fn ghostty_osc_end(parser: GhosttyOscParser_ptr, terminator: u8) -> GhosttyOscCommand_ptr;
+    pub fn ghostty_osc_end(parser: GhosttyOscParser, terminator: u8) -> GhosttyOscCommand;
 }
 unsafe extern "C" {
-    pub fn ghostty_osc_command_type(command: GhosttyOscCommand_ptr) -> GhosttyOscCommandType;
+    pub fn ghostty_osc_command_type(command: GhosttyOscCommand) -> GhosttyOscCommandType;
 }
 unsafe extern "C" {
     pub fn ghostty_osc_command_data(
-        command: GhosttyOscCommand_ptr,
+        command: GhosttyOscCommand,
         data: GhosttyOscCommandData,
         out: *mut ::std::os::raw::c_void,
     ) -> bool;
 }
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttySgrParser {
-    _unused: [u8; 0],
-}
-pub type GhosttySgrParser_ptr = *mut GhosttySgrParser;
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttySgrAttributeTag {
@@ -827,6 +1382,7 @@ pub enum GhosttySgrAttributeTag {
     GHOSTTY_SGR_ATTR_BRIGHT_FG_8 = 28,
     GHOSTTY_SGR_ATTR_BG_256 = 29,
     GHOSTTY_SGR_ATTR_FG_256 = 30,
+    GHOSTTY_SGR_ATTR_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -837,6 +1393,7 @@ pub enum GhosttySgrUnderline {
     GHOSTTY_SGR_UNDERLINE_CURLY = 3,
     GHOSTTY_SGR_UNDERLINE_DOTTED = 4,
     GHOSTTY_SGR_UNDERLINE_DASHED = 5,
+    GHOSTTY_SGR_UNDERLINE_MAX_VALUE = 2147483647,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -872,25 +1429,25 @@ pub struct GhosttySgrAttribute {
 unsafe extern "C" {
     pub fn ghostty_sgr_new(
         allocator: *const GhosttyAllocator,
-        parser: *mut GhosttySgrParser_ptr,
+        parser: *mut GhosttySgrParser,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_sgr_free(parser: GhosttySgrParser_ptr);
+    pub fn ghostty_sgr_free(parser: GhosttySgrParser);
 }
 unsafe extern "C" {
-    pub fn ghostty_sgr_reset(parser: GhosttySgrParser_ptr);
+    pub fn ghostty_sgr_reset(parser: GhosttySgrParser);
 }
 unsafe extern "C" {
     pub fn ghostty_sgr_set_params(
-        parser: GhosttySgrParser_ptr,
+        parser: GhosttySgrParser,
         params: *const u16,
         separators: *const ::std::os::raw::c_char,
         len: usize,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_sgr_next(parser: GhosttySgrParser_ptr, attr: *mut GhosttySgrAttribute) -> bool;
+    pub fn ghostty_sgr_next(parser: GhosttySgrParser, attr: *mut GhosttySgrAttribute) -> bool;
 }
 unsafe extern "C" {
     pub fn ghostty_sgr_unknown_full(unknown: GhosttySgrUnknown, ptr: *mut *const u16) -> usize;
@@ -908,16 +1465,77 @@ unsafe extern "C" {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct GhosttyKeyEvent {
+pub struct GhosttySysImage {
+    pub width: u32,
+    pub height: u32,
+    pub data: *mut u8,
+    pub data_len: usize,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttySysLogLevel {
+    GHOSTTY_SYS_LOG_LEVEL_ERROR = 0,
+    GHOSTTY_SYS_LOG_LEVEL_WARNING = 1,
+    GHOSTTY_SYS_LOG_LEVEL_INFO = 2,
+    GHOSTTY_SYS_LOG_LEVEL_DEBUG = 3,
+    GHOSTTY_SYS_LOG_LEVEL_MAX_VALUE = 2147483647,
+}
+pub type GhosttySysLogFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        userdata: *mut ::std::os::raw::c_void,
+        level: GhosttySysLogLevel,
+        scope: *const u8,
+        scope_len: usize,
+        message: *const u8,
+        message_len: usize,
+    ),
+>;
+pub type GhosttySysDecodePngFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        userdata: *mut ::std::os::raw::c_void,
+        allocator: *const GhosttyAllocator,
+        data: *const u8,
+        data_len: usize,
+        out: *mut GhosttySysImage,
+    ) -> bool,
+>;
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GhosttySysOption {
+    GHOSTTY_SYS_OPT_USERDATA = 0,
+    GHOSTTY_SYS_OPT_DECODE_PNG = 1,
+    GHOSTTY_SYS_OPT_LOG = 2,
+    GHOSTTY_SYS_OPT_MAX_VALUE = 2147483647,
+}
+unsafe extern "C" {
+    pub fn ghostty_sys_set(
+        option: GhosttySysOption,
+        value: *const ::std::os::raw::c_void,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
+    pub fn ghostty_sys_log_stderr(
+        userdata: *mut ::std::os::raw::c_void,
+        level: GhosttySysLogLevel,
+        scope: *const u8,
+        scope_len: usize,
+        message: *const u8,
+        message_len: usize,
+    );
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyKeyEventImpl {
     _unused: [u8; 0],
 }
-pub type GhosttyKeyEvent_ptr = *mut GhosttyKeyEvent;
+pub type GhosttyKeyEvent = *mut GhosttyKeyEventImpl;
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyKeyAction {
     GHOSTTY_KEY_ACTION_RELEASE = 0,
     GHOSTTY_KEY_ACTION_PRESS = 1,
     GHOSTTY_KEY_ACTION_REPEAT = 2,
+    GHOSTTY_KEY_ACTION_MAX_VALUE = 2147483647,
 }
 pub type GhosttyMods = u16;
 #[repr(u32)]
@@ -1099,74 +1717,72 @@ pub enum GhosttyKey {
     GHOSTTY_KEY_COPY = 173,
     GHOSTTY_KEY_CUT = 174,
     GHOSTTY_KEY_PASTE = 175,
+    GHOSTTY_KEY_MAX_VALUE = 2147483647,
 }
 unsafe extern "C" {
     pub fn ghostty_key_event_new(
         allocator: *const GhosttyAllocator,
-        event: *mut GhosttyKeyEvent_ptr,
+        event: *mut GhosttyKeyEvent,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_free(event: GhosttyKeyEvent_ptr);
+    pub fn ghostty_key_event_free(event: GhosttyKeyEvent);
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_set_action(event: GhosttyKeyEvent_ptr, action: GhosttyKeyAction);
+    pub fn ghostty_key_event_set_action(event: GhosttyKeyEvent, action: GhosttyKeyAction);
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_get_action(event: GhosttyKeyEvent_ptr) -> GhosttyKeyAction;
+    pub fn ghostty_key_event_get_action(event: GhosttyKeyEvent) -> GhosttyKeyAction;
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_set_key(event: GhosttyKeyEvent_ptr, key: GhosttyKey);
+    pub fn ghostty_key_event_set_key(event: GhosttyKeyEvent, key: GhosttyKey);
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_get_key(event: GhosttyKeyEvent_ptr) -> GhosttyKey;
+    pub fn ghostty_key_event_get_key(event: GhosttyKeyEvent) -> GhosttyKey;
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_set_mods(event: GhosttyKeyEvent_ptr, mods: GhosttyMods);
+    pub fn ghostty_key_event_set_mods(event: GhosttyKeyEvent, mods: GhosttyMods);
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_get_mods(event: GhosttyKeyEvent_ptr) -> GhosttyMods;
+    pub fn ghostty_key_event_get_mods(event: GhosttyKeyEvent) -> GhosttyMods;
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_set_consumed_mods(
-        event: GhosttyKeyEvent_ptr,
-        consumed_mods: GhosttyMods,
-    );
+    pub fn ghostty_key_event_set_consumed_mods(event: GhosttyKeyEvent, consumed_mods: GhosttyMods);
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_get_consumed_mods(event: GhosttyKeyEvent_ptr) -> GhosttyMods;
+    pub fn ghostty_key_event_get_consumed_mods(event: GhosttyKeyEvent) -> GhosttyMods;
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_set_composing(event: GhosttyKeyEvent_ptr, composing: bool);
+    pub fn ghostty_key_event_set_composing(event: GhosttyKeyEvent, composing: bool);
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_get_composing(event: GhosttyKeyEvent_ptr) -> bool;
+    pub fn ghostty_key_event_get_composing(event: GhosttyKeyEvent) -> bool;
 }
 unsafe extern "C" {
     pub fn ghostty_key_event_set_utf8(
-        event: GhosttyKeyEvent_ptr,
+        event: GhosttyKeyEvent,
         utf8: *const ::std::os::raw::c_char,
         len: usize,
     );
 }
 unsafe extern "C" {
     pub fn ghostty_key_event_get_utf8(
-        event: GhosttyKeyEvent_ptr,
+        event: GhosttyKeyEvent,
         len: *mut usize,
     ) -> *const ::std::os::raw::c_char;
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_set_unshifted_codepoint(event: GhosttyKeyEvent_ptr, codepoint: u32);
+    pub fn ghostty_key_event_set_unshifted_codepoint(event: GhosttyKeyEvent, codepoint: u32);
 }
 unsafe extern "C" {
-    pub fn ghostty_key_event_get_unshifted_codepoint(event: GhosttyKeyEvent_ptr) -> u32;
+    pub fn ghostty_key_event_get_unshifted_codepoint(event: GhosttyKeyEvent) -> u32;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct GhosttyKeyEncoder {
+pub struct GhosttyKeyEncoderImpl {
     _unused: [u8; 0],
 }
-pub type GhosttyKeyEncoder_ptr = *mut GhosttyKeyEncoder;
+pub type GhosttyKeyEncoder = *mut GhosttyKeyEncoderImpl;
 pub type GhosttyKittyKeyFlags = u8;
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -1175,6 +1791,7 @@ pub enum GhosttyOptionAsAlt {
     GHOSTTY_OPTION_AS_ALT_TRUE = 1,
     GHOSTTY_OPTION_AS_ALT_LEFT = 2,
     GHOSTTY_OPTION_AS_ALT_RIGHT = 3,
+    GHOSTTY_OPTION_AS_ALT_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -1186,33 +1803,35 @@ pub enum GhosttyKeyEncoderOption {
     GHOSTTY_KEY_ENCODER_OPT_MODIFY_OTHER_KEYS_STATE_2 = 4,
     GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS = 5,
     GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT = 6,
+    GHOSTTY_KEY_ENCODER_OPT_BACKARROW_KEY_MODE = 7,
+    GHOSTTY_KEY_ENCODER_OPT_MAX_VALUE = 2147483647,
 }
 unsafe extern "C" {
     pub fn ghostty_key_encoder_new(
         allocator: *const GhosttyAllocator,
-        encoder: *mut GhosttyKeyEncoder_ptr,
+        encoder: *mut GhosttyKeyEncoder,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_key_encoder_free(encoder: GhosttyKeyEncoder_ptr);
+    pub fn ghostty_key_encoder_free(encoder: GhosttyKeyEncoder);
 }
 unsafe extern "C" {
     pub fn ghostty_key_encoder_setopt(
-        encoder: GhosttyKeyEncoder_ptr,
+        encoder: GhosttyKeyEncoder,
         option: GhosttyKeyEncoderOption,
         value: *const ::std::os::raw::c_void,
     );
 }
 unsafe extern "C" {
     pub fn ghostty_key_encoder_setopt_from_terminal(
-        encoder: GhosttyKeyEncoder_ptr,
-        terminal: GhosttyTerminal_ptr,
+        encoder: GhosttyKeyEncoder,
+        terminal: GhosttyTerminal,
     );
 }
 unsafe extern "C" {
     pub fn ghostty_key_encoder_encode(
-        encoder: GhosttyKeyEncoder_ptr,
-        event: GhosttyKeyEvent_ptr,
+        encoder: GhosttyKeyEncoder,
+        event: GhosttyKeyEvent,
         out_buf: *mut ::std::os::raw::c_char,
         out_buf_size: usize,
         out_len: *mut usize,
@@ -1220,16 +1839,17 @@ unsafe extern "C" {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct GhosttyMouseEvent {
+pub struct GhosttyMouseEventImpl {
     _unused: [u8; 0],
 }
-pub type GhosttyMouseEvent_ptr = *mut GhosttyMouseEvent;
+pub type GhosttyMouseEvent = *mut GhosttyMouseEventImpl;
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyMouseAction {
     GHOSTTY_MOUSE_ACTION_PRESS = 0,
     GHOSTTY_MOUSE_ACTION_RELEASE = 1,
     GHOSTTY_MOUSE_ACTION_MOTION = 2,
+    GHOSTTY_MOUSE_ACTION_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -1246,6 +1866,7 @@ pub enum GhosttyMouseButton {
     GHOSTTY_MOUSE_BUTTON_NINE = 9,
     GHOSTTY_MOUSE_BUTTON_TEN = 10,
     GHOSTTY_MOUSE_BUTTON_ELEVEN = 11,
+    GHOSTTY_MOUSE_BUTTON_MAX_VALUE = 2147483647,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1256,51 +1877,51 @@ pub struct GhosttyMousePosition {
 unsafe extern "C" {
     pub fn ghostty_mouse_event_new(
         allocator: *const GhosttyAllocator,
-        event: *mut GhosttyMouseEvent_ptr,
+        event: *mut GhosttyMouseEvent,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_event_free(event: GhosttyMouseEvent_ptr);
+    pub fn ghostty_mouse_event_free(event: GhosttyMouseEvent);
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_event_set_action(event: GhosttyMouseEvent_ptr, action: GhosttyMouseAction);
+    pub fn ghostty_mouse_event_set_action(event: GhosttyMouseEvent, action: GhosttyMouseAction);
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_event_get_action(event: GhosttyMouseEvent_ptr) -> GhosttyMouseAction;
+    pub fn ghostty_mouse_event_get_action(event: GhosttyMouseEvent) -> GhosttyMouseAction;
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_event_set_button(event: GhosttyMouseEvent_ptr, button: GhosttyMouseButton);
+    pub fn ghostty_mouse_event_set_button(event: GhosttyMouseEvent, button: GhosttyMouseButton);
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_event_clear_button(event: GhosttyMouseEvent_ptr);
+    pub fn ghostty_mouse_event_clear_button(event: GhosttyMouseEvent);
 }
 unsafe extern "C" {
     pub fn ghostty_mouse_event_get_button(
-        event: GhosttyMouseEvent_ptr,
+        event: GhosttyMouseEvent,
         out_button: *mut GhosttyMouseButton,
     ) -> bool;
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_event_set_mods(event: GhosttyMouseEvent_ptr, mods: GhosttyMods);
+    pub fn ghostty_mouse_event_set_mods(event: GhosttyMouseEvent, mods: GhosttyMods);
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_event_get_mods(event: GhosttyMouseEvent_ptr) -> GhosttyMods;
+    pub fn ghostty_mouse_event_get_mods(event: GhosttyMouseEvent) -> GhosttyMods;
 }
 unsafe extern "C" {
     pub fn ghostty_mouse_event_set_position(
-        event: GhosttyMouseEvent_ptr,
+        event: GhosttyMouseEvent,
         position: GhosttyMousePosition,
     );
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_event_get_position(event: GhosttyMouseEvent_ptr) -> GhosttyMousePosition;
+    pub fn ghostty_mouse_event_get_position(event: GhosttyMouseEvent) -> GhosttyMousePosition;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct GhosttyMouseEncoder {
+pub struct GhosttyMouseEncoderImpl {
     _unused: [u8; 0],
 }
-pub type GhosttyMouseEncoder_ptr = *mut GhosttyMouseEncoder;
+pub type GhosttyMouseEncoder = *mut GhosttyMouseEncoderImpl;
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum GhosttyMouseTrackingMode {
@@ -1309,6 +1930,7 @@ pub enum GhosttyMouseTrackingMode {
     GHOSTTY_MOUSE_TRACKING_NORMAL = 2,
     GHOSTTY_MOUSE_TRACKING_BUTTON = 3,
     GHOSTTY_MOUSE_TRACKING_ANY = 4,
+    GHOSTTY_MOUSE_TRACKING_MAX_VALUE = 2147483647,
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -1318,6 +1940,7 @@ pub enum GhosttyMouseFormat {
     GHOSTTY_MOUSE_FORMAT_SGR = 2,
     GHOSTTY_MOUSE_FORMAT_URXVT = 3,
     GHOSTTY_MOUSE_FORMAT_SGR_PIXELS = 4,
+    GHOSTTY_MOUSE_FORMAT_MAX_VALUE = 2147483647,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1340,36 +1963,37 @@ pub enum GhosttyMouseEncoderOption {
     GHOSTTY_MOUSE_ENCODER_OPT_SIZE = 2,
     GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED = 3,
     GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL = 4,
+    GHOSTTY_MOUSE_ENCODER_OPT_MAX_VALUE = 2147483647,
 }
 unsafe extern "C" {
     pub fn ghostty_mouse_encoder_new(
         allocator: *const GhosttyAllocator,
-        encoder: *mut GhosttyMouseEncoder_ptr,
+        encoder: *mut GhosttyMouseEncoder,
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_encoder_free(encoder: GhosttyMouseEncoder_ptr);
+    pub fn ghostty_mouse_encoder_free(encoder: GhosttyMouseEncoder);
 }
 unsafe extern "C" {
     pub fn ghostty_mouse_encoder_setopt(
-        encoder: GhosttyMouseEncoder_ptr,
+        encoder: GhosttyMouseEncoder,
         option: GhosttyMouseEncoderOption,
         value: *const ::std::os::raw::c_void,
     );
 }
 unsafe extern "C" {
     pub fn ghostty_mouse_encoder_setopt_from_terminal(
-        encoder: GhosttyMouseEncoder_ptr,
-        terminal: GhosttyTerminal_ptr,
+        encoder: GhosttyMouseEncoder,
+        terminal: GhosttyTerminal,
     );
 }
 unsafe extern "C" {
-    pub fn ghostty_mouse_encoder_reset(encoder: GhosttyMouseEncoder_ptr);
+    pub fn ghostty_mouse_encoder_reset(encoder: GhosttyMouseEncoder);
 }
 unsafe extern "C" {
     pub fn ghostty_mouse_encoder_encode(
-        encoder: GhosttyMouseEncoder_ptr,
-        event: GhosttyMouseEvent_ptr,
+        encoder: GhosttyMouseEncoder,
+        event: GhosttyMouseEvent,
         out_buf: *mut ::std::os::raw::c_char,
         out_buf_size: usize,
         out_len: *mut usize,
@@ -1378,26 +2002,11 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn ghostty_paste_is_safe(data: *const ::std::os::raw::c_char, len: usize) -> bool;
 }
-#[repr(u32)]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum GhosttySizeReportStyle {
-    GHOSTTY_SIZE_REPORT_MODE_2048 = 0,
-    GHOSTTY_SIZE_REPORT_CSI_14_T = 1,
-    GHOSTTY_SIZE_REPORT_CSI_16_T = 2,
-    GHOSTTY_SIZE_REPORT_CSI_18_T = 3,
-}
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct GhosttySizeReportSize {
-    pub rows: u16,
-    pub columns: u16,
-    pub cell_width: u32,
-    pub cell_height: u32,
-}
 unsafe extern "C" {
-    pub fn ghostty_size_report_encode(
-        style: GhosttySizeReportStyle,
-        size: GhosttySizeReportSize,
+    pub fn ghostty_paste_encode(
+        data: *mut ::std::os::raw::c_char,
+        data_len: usize,
+        bracketed: bool,
         buf: *mut ::std::os::raw::c_char,
         buf_len: usize,
         out_written: *mut usize,

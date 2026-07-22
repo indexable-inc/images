@@ -328,19 +328,24 @@
     # build.
     #
     # Pinned BY REV (autoUpdate = false in lib/fork-packages.nix), same as
-    # `nix-src`/`clippy-src`: ghostty's own `build.zig` changed, somewhere
-    # after this rev, to unconditionally attempt a fat-archive combine for
-    # the VT static lib via hardcoded `/usr/bin/ranlib`/`/bin/cp` (absolute
-    # paths, so not PATH-shimmable), which the Nix darwin sandbox correctly
-    # denies. Confirmed by building this exact rev (succeeds) versus
-    # upstream main as of 2026-07-20 (fails at that step). ghostty is
-    # darwin-only and darwin has no CI (index-workstation-profile-no-ci-eval,
+    # `nix-src`/`clippy-src`. This rev matches indexable-inc/ix's ghostty-src
+    # pin (one rev across both repos) and is the earliest surface carrying
+    # the terminal C API's write_pty/query-response callbacks
+    # (`ghostty_terminal_set`, GHOSTTY_TERMINAL_OPT_WRITE_PTY) that ix-vt's
+    # `drain_responses` binds (ix#8117). At this rev the VT static lib
+    # vendors SIMD deps and combines archives via hardcoded
+    # `/usr/bin/ranlib`/`/bin/cp` (absolute paths the Nix darwin sandbox
+    # correctly denies) and build.zig hangs a vt xcframework (xcodebuild)
+    # off every darwin install; fork patch
+    # 0004-build-keep-Demit-lib-vt-buildable-without-Apple-abso carries the
+    # sandbox fix. ghostty is darwin-only and darwin has no CI
+    # (index-workstation-profile-no-ci-eval,
     # zed-src-patch-lock-drift-darwin-only-guard document the same class of
     # silent-drift risk for zed), so nothing catches a routine bump breaking
     # this build; move this rev only with `nix run .#rebase-patches --
     # ghostty` followed by a manual `nix build .#ghostty` on darwin.
     ghostty-src = {
-      url = "github:ghostty-org/ghostty/fd49716ea2084108aa098db390931c007495a1ab";
+      url = "github:ghostty-org/ghostty/49a43bf560322eac0ba5d30c20a8b212106e3883";
       flake = false;
     };
 

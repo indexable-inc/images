@@ -11,6 +11,11 @@ digests, not absolute paths. A full build of the UNPATCHED base source
 therefore produces a cache a patched build can seed from, recompiling only
 the modules an edit actually touches, across differing store paths.
 
+Warming is best-effort: if the base build fails partway (an unpatched base
+that only builds WITH the fork series applied, see the installPhase note),
+the cache still holds every module compiled before the failure and the
+derivation succeeds loudly-with-a-warning rather than failing the graph.
+
 Measured on libghostty-vt (aarch64-darwin, index#3768): cold 2m01s; warm-
 seeded rebuild 1m03s, with or without a patch delta (the residual is
 linking, install, and the cache copy, not recompilation).
@@ -68,11 +73,22 @@ pkgs: {
         ${setup}
         mkdir -p "$TMPDIR/zig-local-cache"
 
-        zig build \
+        # Best-effort: a failed base build still seeds the cache with every
+        # module it compiled before failing, and compile artifacts are what
+        # the cache is for. Concretely, ghostty pins >= 49a43bf5 cannot
+        # complete `-Demit-lib-vt` on darwin UNPATCHED (the vt static-lib
+        # archive combine shells to hardcoded /usr/bin/ranlib; the fork
+        # series carries the fix), but every Zig module compiles first, so
+        # the warm hit rate is unaffected. The real, patched build is the
+        # correctness gate and stays strict.
+        if ! zig build \
           --cache-dir "$TMPDIR/zig-local-cache" \
           ${zigArgs} \
           --prefix "$TMPDIR/warm-install" \
-          --summary all
+          --summary all; then
+          echo "zig-warm-cache: base build FAILED; seeding from the partial cache." >&2
+          echo "zig-warm-cache: the real (patched) build is the correctness gate." >&2
+        fi
 
         cp -R "$TMPDIR/zig-local-cache" "$out"
 

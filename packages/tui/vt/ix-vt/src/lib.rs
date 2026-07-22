@@ -14,6 +14,7 @@
 //! [`uzaaft/libghostty-rs`]: https://github.com/uzaaft/libghostty-rs
 //! [`resize`]: Terminal::resize
 
+use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_void};
 use std::fmt;
 use std::os::raw::c_char;
@@ -32,6 +33,9 @@ pub enum Error {
     InvalidValue,
     /// A fixed-size output buffer was too small (`GHOSTTY_OUT_OF_SPACE`).
     OutOfSpace,
+    /// The call succeeded but there was no value to return
+    /// (`GHOSTTY_NO_VALUE`).
+    NoValue,
     /// A result code outside the documented enum.
     Unknown(i32),
 }
@@ -42,6 +46,7 @@ impl fmt::Display for Error {
             Self::OutOfMemory => f.write_str("libghostty-vt: out of memory"),
             Self::InvalidValue => f.write_str("libghostty-vt: invalid value"),
             Self::OutOfSpace => f.write_str("libghostty-vt: out of space"),
+            Self::NoValue => f.write_str("libghostty-vt: no value"),
             Self::Unknown(code) => write!(f, "libghostty-vt: unknown result code {code}"),
         }
     }
@@ -59,6 +64,10 @@ const fn check(result: sys::GhosttyResult) -> Result<()> {
         sys::GhosttyResult::GHOSTTY_OUT_OF_MEMORY => Err(Error::OutOfMemory),
         sys::GhosttyResult::GHOSTTY_INVALID_VALUE => Err(Error::InvalidValue),
         sys::GhosttyResult::GHOSTTY_OUT_OF_SPACE => Err(Error::OutOfSpace),
+        sys::GhosttyResult::GHOSTTY_NO_VALUE => Err(Error::NoValue),
+        // The `_MAX_VALUE` sentinel only pins the enum's ABI width; the
+        // library never returns it.
+        sys::GhosttyResult::GHOSTTY_RESULT_MAX_VALUE => Err(Error::Unknown(i32::MAX)),
     }
 }
 
@@ -113,6 +122,8 @@ impl StyleColor {
             sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_RGB => {
                 Self::Rgb(unsafe { color.value.rgb }.into())
             }
+            // ABI-width sentinel; never a real tag.
+            sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_TAG_MAX_VALUE => Self::None,
         }
     }
 }
@@ -225,6 +236,8 @@ impl From<sys::GhosttyRenderStateCursorVisualStyle> for CursorVisualStyle {
             Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK => Self::Block,
             Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => Self::Underline,
             Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => Self::BlockHollow,
+            // ABI-width sentinel; never a real style.
+            Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_MAX_VALUE => Self::Block,
         }
     }
 }
@@ -421,7 +434,46 @@ pub struct TerminalOptions {
 ///
 /// Owns the underlying `GhosttyTerminal` and frees it on drop.
 pub struct Terminal {
-    raw: sys::GhosttyTerminal_ptr,
+    raw: sys::GhosttyTerminal,
+    /// Bytes the terminal wants written back to the PTY: query replies (DSR
+    /// cursor position, DA1, DECRQM, XTVERSION, the kitty-keyboard flags
+    /// query) and in-band size reports. Filled by the `write_pty` callback,
+    /// which ghostty invokes synchronously inside [`vt_write`]/[`resize`] on
+    /// the owning thread, and emptied by [`drain_responses`].
+    ///
+    /// Boxed so the address handed to C as userdata survives moves of
+    /// `Terminal`; `UnsafeCell` because the C side writes through that
+    /// pointer while no Rust reference to the buffer exists.
+    ///
+    /// [`vt_write`]: Terminal::vt_write
+    /// [`resize`]: Terminal::resize
+    /// [`drain_responses`]: Terminal::drain_responses
+    responses: Box<UnsafeCell<Vec<u8>>>,
+}
+
+/// The `write_pty` callback registered on every [`Terminal`]: appends the
+/// response bytes to the buffer behind `userdata`.
+///
+/// # Safety
+/// `userdata` must be the `UnsafeCell<Vec<u8>>` registered at construction,
+/// and the call must not race a Rust borrow of that buffer. Both hold:
+/// ghostty only invokes the callback synchronously inside
+/// `ghostty_terminal_vt_write`/`ghostty_terminal_resize` (the C header
+/// forbids reentrancy), `Terminal` is `!Send`/`!Sync`, and no Rust reference
+/// to the buffer is live across those calls.
+unsafe extern "C" fn collect_response(
+    _terminal: sys::GhosttyTerminal,
+    userdata: *mut c_void,
+    data: *const u8,
+    len: usize,
+) {
+    if data.is_null() || len == 0 {
+        return;
+    }
+    let buffer = userdata.cast::<UnsafeCell<Vec<u8>>>();
+    // SAFETY: see the function docs; `buffer` points at the live
+    // `UnsafeCell<Vec<u8>>` owned by the `Terminal` being written to.
+    unsafe { (*(*buffer).get()).extend_from_slice(std::slice::from_raw_parts(data, len)) };
 }
 
 // `Terminal` is intentionally left `!Send` and `!Sync` (the raw pointer makes it
@@ -481,7 +533,7 @@ impl Terminal {
     /// Returns [`Error::OutOfMemory`] if ghostty cannot allocate the terminal,
     /// or [`Error::InvalidValue`] if it rejects the options.
     pub fn with_options(options: TerminalOptions) -> Result<Self> {
-        let mut raw: sys::GhosttyTerminal_ptr = ptr::null_mut();
+        let mut raw: sys::GhosttyTerminal = ptr::null_mut();
         let opts = sys::GhosttyTerminalOptions {
             cols: options.cols,
             rows: options.rows,
@@ -489,7 +541,49 @@ impl Terminal {
         };
         // Passing a null allocator selects the default (libc malloc/free).
         check(unsafe { sys::ghostty_terminal_new(ptr::null(), &raw mut raw, opts) })?;
-        Ok(Self { raw })
+        let terminal = Self {
+            raw,
+            responses: Box::new(UnsafeCell::new(Vec::new())),
+        };
+
+        // Answer terminal queries (ix#8117): without a `write_pty` callback
+        // ghostty silently drops every sequence that needs a reply, and
+        // anything that queries the terminal at startup (reedline reading
+        // the cursor position, for one) hangs forever. Register the
+        // collector unconditionally; `drain_responses` is the read side.
+        check(unsafe {
+            sys::ghostty_terminal_set(
+                terminal.raw,
+                sys::GhosttyTerminalOption::GHOSTTY_TERMINAL_OPT_USERDATA,
+                terminal.responses.as_ref().get().cast::<c_void>().cast_const(),
+            )
+        })?;
+        let write_pty: unsafe extern "C" fn(sys::GhosttyTerminal, *mut c_void, *const u8, usize) =
+            collect_response;
+        // Function-pointer options take the pointer itself as the value.
+        check(unsafe {
+            sys::ghostty_terminal_set(
+                terminal.raw,
+                sys::GhosttyTerminalOption::GHOSTTY_TERMINAL_OPT_WRITE_PTY,
+                write_pty as *const c_void,
+            )
+        })?;
+        Ok(terminal)
+    }
+
+    /// Take the bytes the terminal wants written back to the PTY.
+    ///
+    /// Feeding VT input with [`vt_write`](Self::vt_write) (or resizing with
+    /// mode 2048 enabled) can make the terminal emit replies: DSR cursor
+    /// position, DA1/DA2 device attributes, DECRQM mode reports, XTVERSION,
+    /// the kitty-keyboard flags reply, and in-band size reports. They
+    /// accumulate here in emission order; draining returns everything
+    /// buffered and empties the buffer. The caller owns writing them to the
+    /// application's input (the PTY master in a server).
+    ///
+    /// Returns an empty vector when nothing queried the terminal.
+    pub fn drain_responses(&mut self) -> Vec<u8> {
+        std::mem::take(self.responses.get_mut())
     }
 
     /// Feed raw VT bytes (escape sequences and text) into the terminal.
@@ -503,7 +597,10 @@ impl Terminal {
     /// Returns [`Error::InvalidValue`] if `rows` or `cols` is zero, or another
     /// [`Error`] if ghostty rejects the resize.
     pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
-        check(unsafe { sys::ghostty_terminal_resize(self.raw, cols, rows) })
+        // Cell pixel dimensions are unknown to a headless embedder; zero is
+        // the protocol convention for "unknown" in the size reports ghostty
+        // derives from them (mode 2048, XTWINOPS).
+        check(unsafe { sys::ghostty_terminal_resize(self.raw, cols, rows, 0, 0) })
     }
 
     /// Move the viewport over the scrollback history.
@@ -807,7 +904,7 @@ impl Drop for Terminal {
 /// borrows the terminal (the C API stores a reference), so the lifetime ties
 /// it to the [`Terminal`] it formats.
 struct Formatter<'terminal> {
-    raw: sys::GhosttyFormatter_ptr,
+    raw: sys::GhosttyFormatter,
     _terminal: std::marker::PhantomData<&'terminal Terminal>,
 }
 
@@ -816,7 +913,7 @@ impl<'terminal> Formatter<'terminal> {
         terminal: &'terminal Terminal,
         options: sys::GhosttyFormatterTerminalOptions,
     ) -> Result<Self> {
-        let mut raw: sys::GhosttyFormatter_ptr = ptr::null_mut();
+        let mut raw: sys::GhosttyFormatter = ptr::null_mut();
         check(unsafe {
             sys::ghostty_formatter_terminal_new(ptr::null(), &raw mut raw, terminal.raw, options)
         })?;
@@ -835,12 +932,12 @@ impl Drop for Formatter<'_> {
 
 /// Owned wrapper over a `GhosttyRenderState`, freed on drop.
 struct RenderState {
-    raw: sys::GhosttyRenderState_ptr,
+    raw: sys::GhosttyRenderState,
 }
 
 impl RenderState {
     fn new() -> Result<Self> {
-        let mut raw: sys::GhosttyRenderState_ptr = ptr::null_mut();
+        let mut raw: sys::GhosttyRenderState = ptr::null_mut();
         check(unsafe { sys::ghostty_render_state_new(ptr::null(), &raw mut raw) })?;
         Ok(Self { raw })
     }
@@ -919,12 +1016,12 @@ impl Drop for RenderState {
 
 /// Owned wrapper over a `GhosttyRenderStateRowIterator`, freed on drop.
 struct RowIterator {
-    raw: sys::GhosttyRenderStateRowIterator_ptr,
+    raw: sys::GhosttyRenderStateRowIterator,
 }
 
 impl RowIterator {
     fn new() -> Result<Self> {
-        let mut raw: sys::GhosttyRenderStateRowIterator_ptr = ptr::null_mut();
+        let mut raw: sys::GhosttyRenderStateRowIterator = ptr::null_mut();
         check(unsafe { sys::ghostty_render_state_row_iterator_new(ptr::null(), &raw mut raw) })?;
         Ok(Self { raw })
     }
@@ -938,12 +1035,12 @@ impl Drop for RowIterator {
 
 /// Owned wrapper over a `GhosttyRenderStateRowCells`, freed on drop.
 struct RowCells {
-    raw: sys::GhosttyRenderStateRowCells_ptr,
+    raw: sys::GhosttyRenderStateRowCells,
 }
 
 impl RowCells {
     fn new() -> Result<Self> {
-        let mut raw: sys::GhosttyRenderStateRowCells_ptr = ptr::null_mut();
+        let mut raw: sys::GhosttyRenderStateRowCells = ptr::null_mut();
         check(unsafe { sys::ghostty_render_state_row_cells_new(ptr::null(), &raw mut raw) })?;
         Ok(Self { raw })
     }
@@ -1149,7 +1246,7 @@ enum FrameState {
 /// opener, `BEL` or `ESC \` terminator, `CAN`/`SUB` abort); the 8-bit C1 forms
 /// (`0x9d` opener, `0x9c` ST) are not recognized.
 pub struct OscTitleTracker {
-    parser: sys::GhosttyOscParser_ptr,
+    parser: sys::GhosttyOscParser,
     frame: FrameState,
     title: Option<String>,
 }
@@ -1160,7 +1257,7 @@ impl OscTitleTracker {
     /// # Errors
     /// Returns [`Error::OutOfMemory`] if ghostty cannot allocate the parser.
     pub fn new() -> Result<Self> {
-        let mut parser: sys::GhosttyOscParser_ptr = ptr::null_mut();
+        let mut parser: sys::GhosttyOscParser = ptr::null_mut();
         check(unsafe { sys::ghostty_osc_new(ptr::null(), &raw mut parser) })?;
         Ok(Self {
             parser,
