@@ -17,6 +17,12 @@ defmodule IxMcp.Cmd do
   `cd:` is the cwd captured once at application boot (`capture_launch_cwd/0`,
   called before any cell can run), immutable for the life of the instance.
   Working anywhere else takes an explicit `cd:` (or `git -C`).
+
+  A `cd:` that no longer exists -- the launch directory deleted mid-session,
+  or a caller naming a removed worktree -- raises `IxMcp.Cmd.DeadCwdError`
+  before the spawn. Left to `System.cmd/3`, the port child's failed `chdir`
+  exits 2 with nothing on stdout, so every command appears to fail as
+  `{"", 2}` with no diagnostics (#3979).
   """
 
   @launch_cwd_key {__MODULE__, :launch_cwd}
@@ -52,7 +58,7 @@ defmodule IxMcp.Cmd do
     System.cmd(
       "/bin/sh",
       ["-c", ~S(exec "$0" "$@" </dev/null), cmd | args],
-      Keyword.put_new(opts, :cd, launch_cwd())
+      put_live_cd!(opts)
     )
   end
 
@@ -67,7 +73,52 @@ defmodule IxMcp.Cmd do
     System.cmd(
       "/bin/sh",
       ["-c", "exec </dev/null\n" <> script],
-      Keyword.put_new(opts, :cd, launch_cwd())
+      put_live_cd!(opts)
     )
+  end
+
+  # `System.cmd/3` with a dead `cd:` does not raise: the port child's chdir
+  # fails after the fork, the child exits 2 with nothing on stdout, and the
+  # caller reads `{"", 2}` as if the command itself ran and failed. That is
+  # how a deleted launch directory silently broke every command mid-session
+  # while `:os.cmd/1` (no chdir) kept working (#3979). Checking here turns
+  # the dead directory into a named error; a concurrent delete can still
+  # race the spawn, but the window shrinks from "any time since boot" to
+  # one syscall.
+  defp put_live_cd!(opts) do
+    {cd, default?} =
+      case Keyword.fetch(opts, :cd) do
+        {:ok, cd} -> {cd, false}
+        :error -> {launch_cwd(), true}
+      end
+
+    if !File.dir?(cd) do
+      raise IxMcp.Cmd.DeadCwdError, path: cd, default?: default?
+    end
+
+    Keyword.put(opts, :cd, cd)
+  end
+end
+
+defmodule IxMcp.Cmd.DeadCwdError do
+  @moduledoc """
+  The directory a command would run in does not exist.
+
+  Raised by `IxMcp.Cmd.run/3` and `IxMcp.Cmd.sh/2` before the spawn, because
+  `System.cmd/3` reports a failed port-child `chdir` as `{"", 2}` --
+  indistinguishable from the command's own exit (#3979).
+  """
+  defexception [:path, :default?]
+
+  @impl true
+  def message(%{path: path, default?: true}) do
+    "launch directory #{path} no longer exists: it was deleted after the " <>
+      "kernel booted, so every pathless Cmd.run/Cmd.sh would spawn-fail as " <>
+      ~S({"", 2}) <> " (#3979); pass cd: naming a live directory"
+  end
+
+  def message(%{path: path, default?: false}) do
+    "cd: #{path} is not a directory, so the spawn would fail as " <>
+      ~S({"", 2}) <> " masquerading as the command's own exit (#3979)"
   end
 end

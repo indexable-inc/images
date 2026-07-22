@@ -35,6 +35,38 @@ defmodule IxMcp.CmdCwdTest do
     end
   end
 
+  # The #3979 incident: the directory the kernel booted in was deleted
+  # mid-session, and from then on every Cmd.run/Cmd.sh -- `echo` included --
+  # returned {"", 2} in ~0s with no diagnostics, while :os.cmd/1 in the same
+  # cells kept working. The port child's failed chdir masquerades as the
+  # command's own exit code; the wrapper must name the dead layer instead.
+  test "a launch cwd deleted after boot raises a named error, not {\"\", 2} (#3979)" do
+    live = Cmd.launch_cwd()
+    before = File.cwd!()
+
+    doomed = Path.join(System.tmp_dir!(), "ix-dead-launch-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(doomed)
+    File.cd!(doomed)
+    Cmd.capture_launch_cwd()
+    File.cd!(before)
+
+    on_exit(fn ->
+      File.cd!(live)
+      Cmd.capture_launch_cwd()
+      File.cd!(before)
+    end)
+
+    File.rm_rf!(doomed)
+
+    assert_raise Cmd.DeadCwdError, ~r/launch directory .* no longer exists/, fn ->
+      Cmd.run("echo", ["hi"])
+    end
+
+    assert_raise Cmd.DeadCwdError, ~r/launch directory .* no longer exists/, fn ->
+      Cmd.sh("echo hi")
+    end
+  end
+
   test "the launch cwd is captured at boot, before any cell can move it" do
     # Application.start/2 captured File.cwd!() before the supervision tree;
     # nothing in this suite has moved the OS cwd, so the two still agree.

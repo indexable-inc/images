@@ -1,0 +1,26 @@
+---
+id: cmd-dead-launch-cwd
+postedAt: 2026-07-21T12:00:00-07:00
+title: Kernel commands name a deleted working directory instead of failing as exit 2
+tags: [kernel, mcp, reliability]
+links:
+  - label: issue #3979
+    href: https://github.com/indexable-inc/index/issues/3979
+  - label: Cmd
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/cmd.ex
+---
+
+Kernel commands default to the directory captured at boot, so pathless
+`Cmd.run` and `Cmd.sh` always resolve against the launch checkout. When that
+directory was deleted mid-session -- a removed worktree, a recreated config
+repo -- every command from then on returned `{"", 2}` in about zero seconds,
+`echo` included, while `:os.cmd/1` and the File helpers kept working. The
+port child's failed `chdir` exits 2 with nothing on stdout, indistinguishable
+from the command itself failing, so nothing pointed at the real culprit.
+
+Both entry points now check the effective `cd:` before spawning and raise
+`IxMcp.Cmd.DeadCwdError`, whose message says which layer died: the boot-time
+launch directory that no longer exists (and to pass an explicit `cd:`), or a
+caller-supplied `cd:` that names a missing directory. The silent failure mode
+is gone; a vanished directory is one loud error naming its path, not a
+session's worth of empty exit-2s.

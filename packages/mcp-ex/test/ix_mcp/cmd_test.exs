@@ -46,4 +46,12 @@ defmodule IxMcp.CmdTest do
     assert {out, 0} = await_5s(fn -> Cmd.sh("cat | wc -c") end)
     assert String.trim(out) == "0"
   end
+
+  test "an explicit cd: naming a missing directory raises, not {\"\", 2} (#3979)" do
+    gone = Path.join(System.tmp_dir!(), "ix-cmd-gone-#{System.unique_integer([:positive])}")
+
+    assert_raise Cmd.DeadCwdError, ~r/is not a directory/, fn ->
+      Cmd.run("echo", ["hi"], cd: gone)
+    end
+  end
 end
