@@ -1461,6 +1461,9 @@
   blastRadiusChecks = import (paths.packagesRoot + "/blast-radius/checks.nix") {
     inherit lib pkgs paths mkCheck;
   };
+  netTraceChecks = import (paths.packagesRoot + "/net-trace/checks.nix") {
+    inherit lib pkgs paths mkCheck;
+  };
   scipqlChecks = import (paths.packagesRoot + "/code/scipql/checks.nix") {
     inherit mkCheck;
     inherit (repoPackages) scipql;
@@ -1651,6 +1654,7 @@
           // astlogRuleChecks
           // blastRadiusChecks
           // crossDarwinChecks
+          // netTraceChecks
           // libServiceChecks
           // libUtilChecks
           // personalConfigChecks

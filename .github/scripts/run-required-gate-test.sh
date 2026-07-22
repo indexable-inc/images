@@ -13,7 +13,7 @@ mkdir -p "${bin_dir}" "${scratch}/runner-temp"
 
 bash_bin="$(command -v bash)"
 env_bin="$(command -v env)"
-for command in cat install; do
+for command in cat install mkdir; do
   ln -s "$(command -v "${command}")" "${bin_dir}/${command}"
 done
 ln -s "${bash_bin}" "${bin_dir}/bash"
@@ -61,27 +61,60 @@ EOF
 chmod +x "${bin_dir}/git" "${bin_dir}/nix"
 
 run_gate() {
-  local event_name=$1 expected_base=$2
-  shift 2
+  local event_name=$1 expected_base=$2 expected_calls=$3
+  shift 3
   : >"${calls}"
-  "${env_bin}" -i \
-    PATH="${bin_dir}" \
-    CALLS="${calls}" \
-    EXPECTED_BASE_SHA="${expected_base}" \
-    GITHUB_EVENT_NAME="${event_name}" \
-    GITHUB_RUN_ATTEMPT=1 \
-    GITHUB_RUN_ID=1234 \
-    GITHUB_WORKFLOW=Check \
-    IX_CI_RUN_LOG_ROOT="${scratch}/logs" \
-    RUNNER_NAME=ix-ci-test-runner \
-    RUNNER_TEMP="${scratch}/runner-temp" \
-    "$@" \
-    "${bash_bin}" "${repo_root}/.github/scripts/run-required-gate.sh"
-  [[ "$(<"${calls}")" == $'clone\ncheck' ]]
+  (
+    cd "${repo_root}" &&
+      "${env_bin}" -i \
+        PATH="${bin_dir}" \
+        CALLS="${calls}" \
+        EXPECTED_BASE_SHA="${expected_base}" \
+        GITHUB_EVENT_NAME="${event_name}" \
+        GITHUB_RUN_ATTEMPT=1 \
+        GITHUB_RUN_ID=1234 \
+        GITHUB_WORKFLOW=Check \
+        IX_CI_RUN_LOG_ROOT="${scratch}/logs" \
+        RUNNER_NAME=ix-ci-test-runner \
+        RUNNER_TEMP="${scratch}/runner-temp" \
+        "$@" \
+        "${bash_bin}" "${repo_root}/.github/scripts/run-required-gate.sh"
+  )
+  [[ "$(<"${calls}")" == "${expected_calls}" ]]
 }
 
-run_gate pull_request "${pr_base}"
-run_gate push "${push_base}" EVENT_BASE_SHA="${push_base}"
+run_gate pull_request "${pr_base}" $'clone\ncheck'
+run_gate push "${push_base}" $'clone\ncheck' EVENT_BASE_SHA="${push_base}"
+
+# Traced path (#4031): with NET_TRACE set (check.yml's bootstrap step), the
+# wrapper must see both gate phases, preserve the underlying call order, and
+# the EXIT trap must leave a summary in the working directory.
+cat >"${bin_dir}/net-trace" <<EOF
+#!${bash_bin}
+set -euo pipefail
+mode="\${1:?net-trace stub needs a subcommand}"
+shift
+if [[ "\${mode}" == run ]]; then
+  while [[ "\$1" != -- ]]; do
+    # The real tracer creates --dir; the EXIT trap's render only fires when
+    # that directory exists.
+    if [[ "\$1" == --dir ]]; then mkdir -p "\$2"; fi
+    shift
+  done
+  shift
+  printf 'traced\n' >>"\${CALLS:?}"
+  exec "\$@"
+fi
+[[ "\${mode}" == render ]]
+printf '{"phases":[]}\n'
+EOF
+chmod +x "${bin_dir}/net-trace"
+
+run_gate pull_request "${pr_base}" $'traced\nclone\ntraced\ncheck' NET_TRACE="${bin_dir}/net-trace"
+# The EXIT trap writes the summary into the working directory (the CI
+# workspace); here that is the repo root, so assert and clean it up.
+[[ "$(<"${repo_root}/net-trace-summary.json")" == '{"phases":[]}' ]]
+rm -f "${repo_root}/net-trace-summary.json"
 
 if "${env_bin}" -i \
   PATH="${bin_dir}" \

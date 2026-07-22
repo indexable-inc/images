@@ -125,6 +125,20 @@ jobs:
       - name: Bootstrap patched Nix client
         uses: ./.github/actions/bootstrap-patched-nix
 
+      # Build the gate's network tracer (#4031) from main's flake ref, outside
+      # the validation clock below so tracing never eats PR budget. From main,
+      # not this PR's tree: a PR-tree build would eval the PR's flake untraced
+      # and warm exactly the fetches the tracer exists to catch. Fail open: a
+      # missing attr (first run after landing) or any build error just leaves
+      # NET_TRACE unset and the gate runs untraced.
+      - name: Bootstrap net-trace
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if out="$(nix build 'github:${{ github.repository }}/main#net-trace' --no-link --print-out-paths 2>/dev/null)"; then
+            echo "NET_TRACE=${out}/bin/net-trace" >> "$GITHUB_ENV"
+          fi
+
       # One budgeted process group owns both the changed-line clone gate and the
       # required-root Nix gate. The worker action starts a fresh validation clock
       # after setup, terminates the whole descendant group on timeout or cancel,
@@ -157,10 +171,138 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # Client-side network profile of the gate (#4031), written by
+      # run-required-gate.sh's EXIT trap. Data-only; the trusted comment job
+      # below validates and renders it. Uploaded even on failure because a red
+      # run's network profile is the most interesting one. `ignore`: the file
+      # is absent whenever the gate ran untraced (tracer bootstrap fails open).
+      - name: Upload net-trace summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: net-trace-${{ github.run_id }}
+          path: net-trace-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Keep the existing required context while consuming no second self-hosted
   # runner. The single gate above builds closure roots and checks together;
   # this hosted terminal job fails closed for every non-success conclusion,
   # including cancellation and a missing upstream result.
+  # Sticky PR comment with the required gate's client-side network profile
+  # (#4031). Trust split mirrors blast-radius.yml: net-trace-summary.json is
+  # produced by PR-controlled code inside the gate, so the write-token job
+  # never executes PR code; it validates the shape fail-closed and renders the
+  # Markdown itself. Hosted terminal job by the closure-gate precedent above:
+  # it consumes no self-hosted runner and runs no build.
+  net-trace-comment:
+    needs: flake-check
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # continue-on-error: the artifact is missing whenever the gate ran
+      # untraced (tracer bootstrap fails open) or died before its EXIT trap;
+      # a missing profile must not mark the run red.
+      - name: Download summary
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: net-trace-${{ github.run_id }}
+          path: .
+
+      # Fail closed on shape: every number is type-checked, labels and hosts
+      # pass a conservative charset, schemes are enumerated, and array lengths
+      # are capped, so a hostile summary cannot inject Markdown, mentions, or
+      # a megabyte comment through the write token.
+      - name: Validate summary schema
+        if: steps.download.outcome == 'success'
+        run: |
+          set -euo pipefail
+          jq -e -s '
+            def label_ok: type == "string" and test("^[a-z][a-z0-9-]{0,63}$");
+            def host_ok: type == "string" and test("^[A-Za-z0-9._:-]{1,253}$");
+            def num: type == "number";
+            length == 1 and
+            (.[0].phases | type == "array" and length <= 16 and all(
+              (.label | label_ok) and
+              (.wallMs | num) and (.networkWallMs | num) and
+              (.connections | num) and (.failed | num) and
+              (.bytesUp | num) and (.bytesDown | num) and
+              (.topHosts | type == "array" and length <= 16 and all(
+                (.host | host_ok) and (.port | num) and (.connections | num) and
+                (.connectedMs | num) and (.bytesUp | num) and (.bytesDown | num) and
+                (.failed | num))) and
+              (.longest | type == "array" and length <= 16 and all(
+                (.host | host_ok) and (.port | num) and (.startMs | num) and
+                (.durMs | num) and (.bytesUp | num) and (.bytesDown | num) and
+                (.scheme == "connect" or .scheme == "http") and
+                ((.failed | type) == "boolean")))
+            ))
+          ' net-trace-summary.json > /dev/null \
+            || { echo "::error::malformed net-trace-summary.json"; exit 1; }
+
+      # Rebuild the Markdown from validated data only; the marker matches the
+      # Rust renderer's so local `net-trace render` and this comment key the
+      # same sticky slot.
+      - name: Render comment
+        if: steps.download.outcome == 'success'
+        run: |
+          set -euo pipefail
+          jq -r '
+            def fmt_ms: if . < 1000 then "\(round)ms" elif . < 60000 then "\(. / 100 | round / 10)s" else "\(. / 6000 | round / 10)m" end;
+            def fmt_bytes: if . < 1024 then "\(round)B" elif . < 1048576 then "\(. / 102.4 | round / 10)KiB" else "\(. / 104857.6 | round / 10)MiB" end;
+            def bar(n): if n <= 0 then "#" else reduce range(0; n) as $i (""; . + "#") end;
+            "<!-- net-trace -->",
+            "### Client-side network during CI",
+            "",
+            "| phase | wall | network wall | conns | failed | down | up |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+            (.phases[] | "| \(.label) | \(.wallMs | fmt_ms) | \(.networkWallMs | fmt_ms) | \(.connections) | \(.failed) | \(.bytesDown | fmt_bytes) | \(.bytesUp | fmt_bytes) |"),
+            (.phases[] | select((.topHosts | length) > 0) |
+              "", "**\(.label): top hosts**", "",
+              "| host | conns | time | down | up |",
+              "| --- | --- | --- | --- | --- |",
+              (.topHosts[] | "| \(.host):\(.port) | \(.connections) | \(.connectedMs | fmt_ms) | \(.bytesDown | fmt_bytes) | \(.bytesUp | fmt_bytes) |")),
+            (([.phases[] | . as $phase | .longest[] | {phase: $phase.label, conn: .}]
+              | sort_by(-.conn.durMs) | .[0:8]) as $rows
+             | if ($rows | length) == 0 then empty
+               else (if $rows[0].conn.durMs < 1 then 1 else $rows[0].conn.durMs end) as $max
+               | "", "```text",
+                 ($rows[] | "\(.conn.host):\(.conn.port) +\(.conn.startMs | fmt_ms) \(bar(.conn.durMs * 24 / $max | floor)) \(.conn.durMs | fmt_ms) [\(.phase)]\(if .conn.failed then " FAILED" else "" end)"),
+                 "```"
+               end),
+            "",
+            "<sub>Client-side connections only (proxy env): eval fetches, gh, git. Daemon-side substitutions and fixed-output builders are not visible here.</sub>"
+          ' net-trace-summary.json > comment.md
+
+      # One sticky comment per PR, keyed by the `<!-- net-trace -->` marker;
+      # pagination and the bot-author restriction mirror blast-radius.yml.
+      - name: Post sticky comment
+        if: steps.download.outcome == 'success'
+        run: |
+          set -euo pipefail
+          id="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+                  | jq -r 'map(.[] | select((.user.login == "github-actions[bot]" or .user.login == "github-actions") and ((.body // "") | startswith("<!-- net-trace -->")))) | .[0].id // empty')"
+          if [ -n "${id}" ]; then
+            gh api -X PATCH "repos/${REPOSITORY}/issues/comments/${id}" -F body=@comment.md
+          else
+            gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -F body=@comment.md
+          fi
+
   closure-gate:
     needs: flake-check
     if: ${{ always() }}
