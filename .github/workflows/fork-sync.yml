@@ -68,6 +68,37 @@ jobs:
           private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
           owner: indexable-inc
 
+      # Every fork input is fetched by Nix's UNAUTHENTICATED github fetcher,
+      # so a fork repo that is private (or a pinned rev whose pin ref was
+      # lost to GC) breaks flake eval everywhere with a bare HTTP 404. That
+      # exact failure shipped with the migration itself: indexable-inc/ghostty
+      # was created private and the first post-merge Check on #4032 died in
+      # eval. Probe each locked rev's archive URL anonymously -- the
+      # fetcher's own view, before any token exists in this job -- and fail
+      # naming the repo and the remedy.
+      - name: Verify fork repos are anonymously fetchable
+        run: |
+          set -euo pipefail
+          mapfile -t rows < <(
+            nix eval --json '.#lib.forkPackages' \
+              | nix run nixpkgs#jq -- -c '.[] | {name, input, forkRepo}'
+          )
+          failed=0
+          for row in "${rows[@]}"; do
+            name=$(nix run nixpkgs#jq -- -r '.name' <<<"$row")
+            input=$(nix run nixpkgs#jq -- -r '.input' <<<"$row")
+            fork_repo=$(nix run nixpkgs#jq -- -r '.forkRepo' <<<"$row")
+            rev=$(nix run nixpkgs#jq -- -r --arg i "$input" \
+              '.nodes[$i].locked.rev' flake.lock)
+            url="https://github.com/${fork_repo}/archive/${rev}.tar.gz"
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 60 "$url")
+            if [ "$code" != "200" ]; then
+              echo "::error::fork-sync: $name: $url is not anonymously fetchable (HTTP $code). A private fork repo must be made public (gh repo edit $fork_repo --visibility public); a vanished rev needs its refs/pins/* ref restored."
+              failed=1
+            fi
+          done
+          [ "$failed" = 0 ]
+
       # Per auto-updatable fork: colocated jj clone, rebase the series onto
       # the upstream tip, refuse to push any conflicted commit (git readers,
       # including GitHub and the Nix fetchers, cannot parse jj's conflict
