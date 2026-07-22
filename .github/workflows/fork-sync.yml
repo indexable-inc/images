@@ -54,6 +54,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # ix's self-hosted runner jobs expose a minimal PATH (git + nix +
+      # coreutils; no awk, curl -- the first two live runs died 127 on each
+      # in turn). Same ensure idiom as update-flake-lock.yml: extend PATH
+      # from nixpkgs via the preinstalled nix only for what is missing.
+      - name: Provision missing CLI tools
+        run: |
+          set -euo pipefail
+          ensure() {
+            command -v "$1" >/dev/null 2>&1 && return
+            while IFS= read -r p; do
+              echo "${p}/bin" >> "$GITHUB_PATH"
+            done < <(nix build "nixpkgs#$2" --no-link --print-out-paths)
+          }
+          ensure awk gawk
+          ensure curl curl
+
       # MIRROR_TOKEN is minted per run from the org-owned ix-mirror-sync
       # GitHub App (Contents write on the org's repos): short-lived, no
       # long-lived PAT to rotate. The default GITHUB_TOKEN cannot push to
@@ -91,10 +107,7 @@ jobs:
             rev=$(nix run nixpkgs#jq -- -r --arg i "$input" \
               '.nodes[$i].locked.rev' flake.lock)
             url="https://github.com/${fork_repo}/archive/${rev}.tar.gz"
-            # The ephemeral fleet runner ships no curl on PATH (exit 127 on
-            # the first live run); resolve it the way every other tool in
-            # this workflow is resolved.
-            code=$(nix run nixpkgs#curl -- -sIL -o /dev/null -w '%{http_code}' --max-time 60 "$url")
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 60 "$url")
             if [ "$code" != "200" ]; then
               echo "::error::fork-sync: $name: $url is not anonymously fetchable (HTTP $code). A private fork repo must be made public (gh repo edit $fork_repo --visibility public); a vanished rev needs its refs/pins/* ref restored."
               failed=1
