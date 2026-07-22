@@ -180,18 +180,18 @@ jobs:
           git checkout -B update-flake-lock origin/main
           git submodule update --init -- "${paths[@]}"
           git submodule update --remote -- "${paths[@]}"
-          if git diff --quiet; then
-            echo "submodules already at their remote HEADs; nothing to bump"
-            exit 0
-          fi
           # Plain git/bash: the self-hosted runner PATH has git and gh but
           # not awk (run 29892186766 died on it).
           summary=""
           for p in "${paths[@]}"; do
             summary="${summary:+${summary}, }${p}@$(git -C "$p" rev-parse --short=8 HEAD)"
           done
-          git commit -am "submodules: bump ${summary}"
-          # Relock every flake input pinned by a bumped gitlink (path:./<sub>
+          bumped=""
+          if ! git diff --quiet; then
+            git commit -am "submodules: bump ${summary}"
+            bumped=1
+          fi
+          # Relock every flake input pinned by a listed gitlink (path:./<sub>
           # locked with a rev, as ix pins `index`; ix#8180): flake.lock
           # records the gitlink rev plus the input's own nested locks, so a
           # gitlink-only commit ships a stale lock that fails ix's
@@ -199,28 +199,101 @@ jobs:
           # landed, an unrelocked bump PR can never go green. Relock AFTER
           # committing: nix resolves the path input's rev from the committed
           # HEAD tree, not the submodule worktree or the git index, so a
-          # pre-commit `nix flake update` silently no-ops. Amend so gitlink
-          # and lock move in the same commit (ix#8143: a gitlink-only commit
-          # on main makes the first nix command rewrite flake.lock and dirty
-          # the checkout that prod deploys require clean).
+          # pre-commit `nix flake update` silently no-ops (ix#8143: a
+          # gitlink-only commit on main makes the first nix command rewrite
+          # flake.lock and dirty the checkout that prod deploys require
+          # clean). Staleness decides, not this run's gitlink move: a pin
+          # left stale by an earlier gitlink-only push to main is relocked
+          # and pushed even when the submodule did not move this run.
           relock=()
           if [ -f flake.lock ]; then
             for p in "${paths[@]}"; do
+              gitlink="$(git rev-parse "HEAD:${p}")"
               while IFS= read -r name; do
                 relock+=("$name")
-              done < <(jq -r --arg path "./$p" '.nodes as $n
+              done < <(jq -r --arg path "./$p" --arg rev "$gitlink" '.nodes as $n
                 | $n[.root].inputs // {} | to_entries[]
                 | select(.value | type == "string")
                 | select(($n[.value].locked.type? == "path")
                          and ($n[.value].locked.path? == $path)
-                         and ($n[.value].locked | has("rev")))
+                         and (($n[.value].locked.rev? // "") != $rev))
                 | .key' flake.lock)
             done
           fi
+          if [ -z "$bumped" ] && [ "${#relock[@]}" -eq 0 ]; then
+            echo "submodules already at their remote HEADs and every pin locked; nothing to bump"
+            exit 0
+          fi
           if [ "${#relock[@]}" -gt 0 ]; then
             nix flake update "${relock[@]}"
+            # Re-stamp the gitlink pin on the relocked node(s). The runner's
+            # nix is the immutable fleet client built from whatever index rev
+            # the host last deployed; a client older than index patch 0030
+            # (libflake: stamp submodule metadata on relative path inputs)
+            # locks a relative path input as bare {path,type}, silently
+            # DROPPING the pin (run 29912321315 shipped exactly that to ix;
+            # #3982) -- and bootstrap-patched-nix cannot save it: its pin
+            # predates p30 and its probe only checks underscore parsing. Both
+            # pin fields are pure git facts (the gitlink sha and its
+            # committer time), so stamping them here makes the lock
+            # client-independent; on a >= p30 client the stamp is a
+            # byte-identical no-op (verified against `nix flake lock`
+            # output). Keys re-sorted because nix serializes JSON objects
+            # with sorted keys.
+            for p in "${paths[@]}"; do
+              rev="$(git -C "$p" rev-parse HEAD)"
+              ts="$(git -C "$p" show -s --format=%ct HEAD)"
+              jq --arg path "./${p}" --arg rev "$rev" --argjson ts "$ts" '
+                (.nodes[.root].inputs // {} | [to_entries[]
+                  | select(.value | type == "string") | .value]) as $rootNodes
+                | .nodes |= with_entries(
+                    if (.key as $k | ($rootNodes | index($k)))
+                       and .value.locked.type? == "path" and .value.locked.path? == $path
+                    then .value.locked = ((.value.locked + {rev: $rev, lastModified: $ts})
+                                          | to_entries | sort_by(.key) | from_entries)
+                    else . end)
+              ' flake.lock > flake.lock.tmp
+              mv flake.lock.tmp flake.lock
+            done
             git add flake.lock
-            git commit --amend --no-edit
+            if [ -n "$bumped" ]; then
+              git commit --amend --no-edit
+            else
+              git commit -m "flake.lock: relock ${relock[*]} to the ${summary} gitlink"
+            fi
+          fi
+          # Refuse to push a lock that disagrees with a gitlink pin: a miss
+          # above (renamed input, unexpected lock shape, a client dropping
+          # the pin) is exactly the stale-lock bug the relock exists to
+          # prevent, and the caller's CI (ix's check-submodule-lock-sync)
+          # would reject the commit anyway.
+          if [ -f flake.lock ]; then
+            for p in "${paths[@]}"; do
+              rev="$(git rev-parse "HEAD:${p}")"
+              bad="$(jq -r --arg path "./${p}" --arg rev "$rev" '
+                (.nodes[.root].inputs // {} | [to_entries[]
+                  | select(.value | type == "string") | .value]) as $rootNodes
+                | [.nodes | to_entries[]
+                   | select((.key as $k | ($rootNodes | index($k)))
+                            and .value.locked.type? == "path" and .value.locked.path? == $path)
+                   | select((.value.locked.rev? // "missing") != $rev)
+                   | .key] | join(", ")' flake.lock)"
+              if [ -n "$bad" ]; then
+                echo "::error::flake.lock node(s) ${bad} do not pin ./${p} at gitlink ${rev}; refusing to push a stale lock (#3982)"
+                exit 1
+              fi
+            done
+            jq -r '.nodes | to_entries[]
+                | select(.value.locked.type? == "path" and (.value.locked | has("rev")))
+                | "\(.key) \(.value.locked.path) \(.value.locked.rev)"' flake.lock \
+            | while read -r name lock_path lock_rev; do
+                entry="$(git ls-tree HEAD -- "${lock_path#./}")"
+                read -r mode _type oid _rest <<< "$entry" || true
+                if [ "${mode:-}" != 160000 ] || [ "$oid" != "$lock_rev" ]; then
+                  echo "::error::flake.lock node '${name}' pins ${lock_path} at ${lock_rev} but the tree has '${entry:-nothing}'; refusing to push a stale lock (#3982)"
+                  exit 1
+                fi
+              done
           fi
           git push -f origin update-flake-lock
           if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
