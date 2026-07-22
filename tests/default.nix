@@ -5411,6 +5411,29 @@
         message = "cargo-unit should keep unrelated locked dependency derivations stable when another transitive dependency changes";
       }
       {
+        # The planner runs against a manifest-scoped stub of `src` (#3900):
+        # base and alphaChanged differ only in one crate's source body, so
+        # they must plan through the SAME unit-graph derivation.
+        assertion =
+          cargoUnitScopeWorkspaces.base.unitGraphJson.drvPath
+          == cargoUnitScopeWorkspaces.alphaChanged.unitGraphJson.drvPath;
+        message = "cargo-unit should keep the unit-graph planner derivation stable when only a crate source body changes (#3900)";
+      }
+      {
+        # The render stage include-scans real file contents, so it must
+        # still re-run on a source body change.
+        assertion =
+          cargoUnitScopeWorkspaces.base.unitsNix.drvPath
+          != cargoUnitScopeWorkspaces.alphaChanged.unitsNix.drvPath;
+        message = "cargo-unit should re-render units.nix when a crate source body changes";
+      }
+      {
+        assertion =
+          cargoUnitScopeWorkspaces.base.unitGraphJson.drvPath
+          != cargoUnitScopeWorkspaces.lockChanged.unitGraphJson.drvPath;
+        message = "cargo-unit should re-plan the unit graph when Cargo.lock changes";
+      }
+      {
         assertion = builtins.any (
           source: source.base == "workspace" && source.scope == "package" && source.relative == "crates/alpha"
         ) (builtins.attrValues cargoUnitScopeWorkspaces.base.sourceAudit);
