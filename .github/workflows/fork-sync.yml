@@ -91,7 +91,10 @@ jobs:
             rev=$(nix run nixpkgs#jq -- -r --arg i "$input" \
               '.nodes[$i].locked.rev' flake.lock)
             url="https://github.com/${fork_repo}/archive/${rev}.tar.gz"
-            code=$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 60 "$url")
+            # The ephemeral fleet runner ships no curl on PATH (exit 127 on
+            # the first live run); resolve it the way every other tool in
+            # this workflow is resolved.
+            code=$(nix run nixpkgs#curl -- -sIL -o /dev/null -w '%{http_code}' --max-time 60 "$url")
             if [ "$code" != "200" ]; then
               echo "::error::fork-sync: $name: $url is not anonymously fetchable (HTTP $code). A private fork repo must be made public (gh repo edit $fork_repo --visibility public); a vanished rev needs its refs/pins/* ref restored."
               failed=1
