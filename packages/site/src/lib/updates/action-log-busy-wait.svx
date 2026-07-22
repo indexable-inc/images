@@ -1,0 +1,23 @@
+---
+id: action-log-busy-wait
+postedAt: 2026-07-21T17:30:00-07:00
+title: Kernel action log waits out sqlite write contention instead of killing the job
+tags: [kernel, mcp, sqlite, reliability]
+links:
+  - label: issue #3890
+    href: https://github.com/indexable-inc/index/issues/3890
+  - label: ActionLog
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/action_log.ex
+---
+
+Every kernel instance on a machine appends to one shared `actions.db`. When two
+jobs wrote at once, sqlite could report `:busy` to one of them after exqlite's
+default 2-second wait, and the ActionLog GenServer crashed on a bare pattern
+match -- taking the caller's job down over a log write nothing on the hot path
+reads.
+
+The connection now opens with a 5-second busy timeout, and a step that still
+comes back `:busy` after that bound fails with an error naming the blocked
+statement instead of a `badmatch`. There are no unbounded retries: the wait is
+the bound, the supervisor reopens the log after a crash, and concurrent jobs no
+longer die to each other's write locks.
