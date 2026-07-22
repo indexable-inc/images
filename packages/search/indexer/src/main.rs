@@ -1217,17 +1217,8 @@ async fn run_replace<S: Store + Sync>(
     };
     for (source, documents) in state.sources {
         let label = format!("replace:{source}");
-        let result = mixedbread
-            .replace(&Source::new(source), &documents)
-            .await
-            .map(|report| {
-                eprintln!(
-                    "[{label}] mixedbread: uploaded {}, skipped {}, deleted {} of {}",
-                    report.uploaded, report.skipped, report.deleted, report.total
-                );
-            })
-            .with_context(|| format!("[{label}] Mixedbread replace"));
-        record(&label, result, &mut counts);
+        let result = mixedbread.replace(&Source::new(source), &documents).await;
+        record_report(&label, "replace", result, &mut counts);
     }
     counts
 }
@@ -1258,17 +1249,8 @@ async fn run_consume(documents: Vec<Document>, mixedbread: Mixedbread<'_>) -> Co
 
     for (source, documents) in by_source {
         let label = format!("consume:{source}");
-        let result = mixedbread
-            .reconcile(&Source::new(source), &documents)
-            .await
-            .map(|report| {
-                eprintln!(
-                    "[{label}] mixedbread: uploaded {}, skipped {} of {}",
-                    report.uploaded, report.skipped, report.total
-                );
-            })
-            .with_context(|| format!("[{label}] Mixedbread reconcile"));
-        record(&label, result, &mut counts);
+        let result = mixedbread.reconcile(&Source::new(source), &documents).await;
+        record_report(&label, "reconcile", result, &mut counts);
     }
     counts
 }
@@ -1305,26 +1287,22 @@ async fn index_user(
     let parquet = user_parquet.as_ref();
     let user_lake = lake.map(|reconciler| reconciler.with_user(name));
     let lake = user_lake.as_ref();
-    if let Some(claude_dir) = safe_path_under(home, &[".claude", "projects"], true) {
-        let label = format!("claude:{name}");
-        let spec = GatedSource {
-            label: &label,
-            user: Some(name),
+    index_user_dir_source(
+        UserDirSource {
             source: "claude",
-            inputs: &[claude_dir.as_path()],
-        };
-        let open = || {
-            source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name).with_context(
-                || {
-                    format!(
-                        "parsing Claude transcripts for {name} at {}",
-                        claude_dir.display()
-                    )
-                },
-            )
-        };
-        run_gated_source(spec, scan, open, mixedbread, parquet, lake, counts).await;
-    }
+            dir: &[".claude", "projects"],
+            doing: "parsing Claude transcripts",
+            name,
+            home,
+        },
+        |dir| source_claude::ClaudeHistoryExport::open_with(dir, host, name),
+        scan,
+        mixedbread,
+        parquet,
+        lake,
+        counts,
+    )
+    .await;
 
     // Codex: the flat prompt log plus the full session rollouts, one adapter
     // (and one parquet overwrite) for both, like the `--local` path.
@@ -1360,24 +1338,77 @@ async fn index_user(
     // Claude debug logs (`~/.claude/debug/<session>.txt`), present only for
     // sessions run with `--debug`. The adapter indexes regular files only, so a
     // planted symlink in the debug dir is skipped rather than followed.
-    if let Some(debug_dir) = safe_path_under(home, &[".claude", "debug"], true) {
-        let label = format!("debug:{name}");
-        let spec = GatedSource {
-            label: &label,
-            user: Some(name),
+    index_user_dir_source(
+        UserDirSource {
             source: "debug",
-            inputs: &[debug_dir.as_path()],
-        };
-        let open = || {
-            source_debug::DebugLogs::open_with(&debug_dir, host, name).with_context(|| {
-                format!(
-                    "reading Claude debug logs for {name} at {}",
-                    debug_dir.display()
-                )
-            })
-        };
-        run_gated_source(spec, scan, open, mixedbread, parquet, lake, counts).await;
-    }
+            dir: &[".claude", "debug"],
+            doing: "reading Claude debug logs",
+            name,
+            home,
+        },
+        |dir| source_debug::DebugLogs::open_with(dir, host, name),
+        scan,
+        mixedbread,
+        parquet,
+        lake,
+        counts,
+    )
+    .await;
+}
+
+/// One per-user history source rooted at a single directory under the user's
+/// home: the shared shape of [`index_user`]'s Claude-transcripts and debug-logs
+/// blocks (codex is gated inline there because it spans two roots).
+struct UserDirSource<'a> {
+    /// Cursor key and label prefix (the `claude` in `claude:<name>`).
+    source: &'static str,
+    /// The directory's path components under the user's home.
+    dir: &'a [&'a str],
+    /// Verb phrase naming the work in an open failure's context, e.g.
+    /// "parsing Claude transcripts" ("<doing> for <name> at <dir>").
+    doing: &'a str,
+    /// The account's user name.
+    name: &'a str,
+    /// The account's home directory.
+    home: &'a Path,
+}
+
+/// Resolve one [`UserDirSource`]'s directory and run it through the scan gate;
+/// an absent directory is a silent skip. The path is resolved with
+/// [`safe_path_under`], so a symlink at any component refuses the read rather
+/// than following it. `open` builds the adapter from the resolved directory.
+async fn index_user_dir_source<A, E, F>(
+    spec: UserDirSource<'_>,
+    open: F,
+    scan: Option<&ScanCursor>,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
+    counts: &mut Counts,
+) where
+    A: SourceAdapter + Sync,
+    E: std::error::Error + Send + Sync + 'static,
+    F: FnOnce(&Path) -> Result<A, E>,
+{
+    let UserDirSource {
+        source,
+        dir,
+        doing,
+        name,
+        home,
+    } = spec;
+    let Some(dir) = safe_path_under(home, dir, true) else {
+        return;
+    };
+    let label = format!("{source}:{name}");
+    let spec = GatedSource {
+        label: &label,
+        user: Some(name),
+        source,
+        inputs: &[dir.as_path()],
+    };
+    let open = || open(&dir).with_context(|| format!("{doing} for {name} at {}", dir.display()));
+    run_gated_source(spec, scan, open, mixedbread, parquet, lake, counts).await;
 }
 
 /// Index one user's atuin shell history; split out of [`index_user`] to keep
@@ -1567,6 +1598,21 @@ async fn index_code(
     Ok(())
 }
 
+/// Record one source's Mixedbread outcome: log the report's one-line summary
+/// under `label` on success, name the failed `operation` in the error context
+/// otherwise. The shared tail of the [`run_replace`] and [`run_consume`]
+/// per-source loops.
+fn record_report<R, E>(label: &str, operation: &str, result: Result<R, E>, counts: &mut Counts)
+where
+    R: std::fmt::Display,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let result = result
+        .map(|report| eprintln!("[{label}] mixedbread: {report}"))
+        .with_context(|| format!("[{label}] Mixedbread {operation}"));
+    record(label, result, counts);
+}
+
 /// Record one source's outcome. A failure is logged and counted but does not
 /// abort the run, so one broken source cannot starve the others.
 fn record(label: &str, result: anyhow::Result<()>, counts: &mut Counts) {
@@ -1686,10 +1732,7 @@ async fn run_source<A: SourceAdapter + Sync>(
 
     if let Some(reconciler) = mixedbread {
         match reconciler.reconcile(&source, &documents).await {
-            Ok(report) => eprintln!(
-                "[{label}] mixedbread: uploaded {}, skipped {} of {}",
-                report.uploaded, report.skipped, report.total
-            ),
+            Ok(report) => eprintln!("[{label}] mixedbread: {report}"),
             Err(error) => {
                 errors
                     .push(anyhow::Error::new(error).context(format!("[{label}] Mixedbread sync")));
