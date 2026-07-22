@@ -468,14 +468,21 @@ defmodule IxMcp.ActionLog do
           last_seen_at: String.t() | nil
         }
 
-  @typedoc "A terminal-transition notification awaiting delivery (#3839)."
+  @typedoc """
+  A terminal-transition notification awaiting delivery (#3839). `session_id`
+  is the owning job's session: live delivery is scoped to it, exactly like
+  replay (#3934). `acked` rides along so a row born delivered (a quiet
+  wrapper's, #3934) is never published.
+  """
   @type outbox :: %{
           id: integer(),
           job_id: String.t(),
           intent: String.t() | nil,
           status: Job.status(),
           elapsed_ms: non_neg_integer() | nil,
-          result: String.t() | nil
+          result: String.t() | nil,
+          session_id: integer() | nil,
+          acked: boolean()
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -578,12 +585,30 @@ defmodule IxMcp.ActionLog do
   outbox row for the notification. Returns `{:notify, outbox}` for the caller
   to deliver, or `:already_final` when the job already transitioned -- which
   is how the executor and the reaper race harmlessly (#3839).
+
+  `quiet: true` marks the job an await wrapper (#3934): a clean finish is a
+  read of another job's terminal state, not news, so its outbox row is born
+  acked -- on the record, never announced. Only `done` goes quiet; a
+  wrapper's own failure or death still announces (the invariant).
   """
-  @spec finish_job(String.t(), Job.status(), String.t() | nil, GenServer.server()) ::
+  @spec finish_job(String.t(), Job.status(), String.t() | nil, keyword(), GenServer.server()) ::
           {:notify, outbox()} | :already_final
-  def finish_job(id, status, result, server \\ __MODULE__)
+  def finish_job(id, status, result, opts \\ [], server \\ __MODULE__)
       when status in [:done, :failed, :cancelled, :killed] do
-    call(server, {:finish_job, id, Atom.to_string(status), result, now()})
+    quiet = Keyword.get(opts, :quiet, false)
+    call(server, {:finish_job, id, Atom.to_string(status), result, quiet, now()})
+  end
+
+  @doc """
+  Ack every unacked outbox row of `job_id`; returns the flipped count. The
+  exec reply path calls this once its reply carries the job's outcome, so
+  the finish is never announced twice (#3934). Suppression must not outrun
+  delivery: this runs strictly after the reply is rendered, so a death
+  before that point leaves the row unacked and the announcement fires.
+  """
+  @spec ack_job_outbox(String.t(), GenServer.server()) :: non_neg_integer()
+  def ack_job_outbox(job_id, server \\ __MODULE__) when is_binary(job_id) do
+    call(server, {:ack_job_outbox, job_id})
   end
 
   @doc "The recorded job row, or nil."
@@ -1025,19 +1050,25 @@ defmodule IxMcp.ActionLog do
   # never catch the two logs disagreeing and no terminal transition escapes
   # the outbox. The single-writer GenServer serializes this against every
   # other write, so the guard needs no locking of its own.
-  def handle_call({:finish_job, id, status, result, at}, _from, %{db: db} = state) do
+  def handle_call({:finish_job, id, status, result, quiet, at}, _from, %{db: db} = state) do
     reply =
       case fetch(
              db,
-             "SELECT action_id, intent, started_at FROM jobs WHERE id = ? AND status = 'running'",
+             "SELECT action_id, intent, started_at, session_id FROM jobs WHERE id = ? AND status = 'running'",
              [id]
            ) do
         [] ->
           :already_final
 
-        [[action_id, intent, started_at]] ->
+        [[action_id, intent, started_at, session_id]] ->
           elapsed = elapsed_ms(started_at, at)
           is_error = if status in ["failed", "killed"], do: 1, else: 0
+
+          # A quiet wrapper's clean finish is born acked (#3934): the row
+          # stays on the record but no delivery path will ever pick it up.
+          # Anything but `done` stays announceable -- a wrapper's own death
+          # is still a death.
+          acked = if quiet and status == "done", do: 1, else: 0
           :ok = execute!(db, "BEGIN IMMEDIATE")
 
           run(
@@ -1052,8 +1083,8 @@ defmodule IxMcp.ActionLog do
 
           run(
             db,
-            "INSERT INTO outbox (job_id, intent, status, elapsed_ms, result, created_at, acked) VALUES (?, ?, ?, ?, ?, ?, 0)",
-            [id, intent, status, elapsed, result, at]
+            "INSERT INTO outbox (job_id, intent, status, elapsed_ms, result, created_at, acked) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [id, intent, status, elapsed, result, at, acked]
           )
 
           {:ok, outbox_id} = Sqlite3.last_insert_rowid(db.conn)
@@ -1066,7 +1097,9 @@ defmodule IxMcp.ActionLog do
              intent: intent,
              status: status_atom(status),
              elapsed_ms: elapsed,
-             result: result
+             result: result,
+             session_id: session_id,
+             acked: acked == 1
            }}
       end
 
@@ -1267,16 +1300,26 @@ defmodule IxMcp.ActionLog do
     {sql, params} =
       case session_id do
         nil ->
-          {"SELECT id, job_id, intent, status, elapsed_ms, result FROM outbox WHERE acked = 0 ORDER BY id",
+          {"SELECT o.id, o.job_id, o.intent, o.status, o.elapsed_ms, o.result, j.session_id " <>
+             "FROM outbox o LEFT JOIN jobs j ON j.id = o.job_id WHERE o.acked = 0 ORDER BY o.id",
            []}
 
         sid ->
-          {"SELECT o.id, o.job_id, o.intent, o.status, o.elapsed_ms, o.result FROM outbox o " <>
-             "JOIN jobs j ON j.id = o.job_id WHERE j.session_id IS ? AND o.acked = 0 ORDER BY o.id",
-           [sid]}
+          {"SELECT o.id, o.job_id, o.intent, o.status, o.elapsed_ms, o.result, j.session_id " <>
+             "FROM outbox o JOIN jobs j ON j.id = o.job_id " <>
+             "WHERE j.session_id IS ? AND o.acked = 0 ORDER BY o.id", [sid]}
       end
 
     {:reply, Enum.map(fetch(db, sql, params), &outbox_row_to_map/1), state}
+  end
+
+  # The reply-time suppression flip (#3934): one UPDATE, no read-back --
+  # a job has at most one outbox row in the normal path, and a ledger-retry
+  # duplicate deserves the same silence.
+  def handle_call({:ack_job_outbox, job_id}, _from, %{db: db} = state) do
+    run(db, "UPDATE outbox SET acked = 1 WHERE job_id = ? AND acked = 0", [job_id])
+    {:ok, changes} = Sqlite3.changes(db.conn)
+    {:reply, changes, state}
   end
 
   # Claim each row that is still unacked; the count of rows this call flips is
@@ -1392,7 +1435,7 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:create_session, _name, _at}), do: 0
   defp disabled_reply({:create_topic, _session_id, _name, _at}), do: 0
   defp disabled_reply({:start_action, _action}), do: 0
-  defp disabled_reply({:finish_job, _id, _status, _result, _at}), do: :already_final
+  defp disabled_reply({:finish_job, _id, _status, _result, _quiet, _at}), do: :already_final
 
   defp disabled_reply({:post_request, _kind, _ref, _title, _body, _session_id, _at}),
     do: :disabled
@@ -1413,6 +1456,7 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:recent_jobs, _session_id, _n}), do: []
   defp disabled_reply({:unacked_outbox, _session_id}), do: []
   defp disabled_reply({:ack_outbox, _ids}), do: 0
+  defp disabled_reply({:ack_job_outbox, _job_id}), do: 0
   defp disabled_reply({:recent, _n}), do: []
   defp disabled_reply(:sessions), do: []
   defp disabled_reply(:topics), do: []
@@ -1704,14 +1748,17 @@ defmodule IxMcp.ActionLog do
     }
   end
 
-  defp outbox_row_to_map([id, job_id, intent, status, elapsed_ms, result]) do
+  defp outbox_row_to_map([id, job_id, intent, status, elapsed_ms, result, session_id]) do
     %{
       id: id,
       job_id: job_id,
       intent: intent,
       status: status_atom(status),
       elapsed_ms: elapsed_ms,
-      result: result
+      result: result,
+      session_id: session_id,
+      # Only unacked rows are ever read back into maps.
+      acked: false
     }
   end
 

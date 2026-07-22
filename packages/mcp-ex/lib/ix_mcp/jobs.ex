@@ -8,6 +8,7 @@ defmodule IxMcp.Jobs do
       Jobs.await("ab12")        # block this cell (only this cell) until done
       Jobs.cancel("ab12")       # kill it, and every OS process it spawned
       Jobs.history()            # recent runs, newest first
+      Jobs.watch("ab12")        # announce another session's job here (#3934)
 
   Runs live in a durable ledger (`IxMcp.ActionLog`), not just in memory
   (#3839): `tail/head/grep/output/history/get` fall back to the SQLite tables
@@ -18,6 +19,7 @@ defmodule IxMcp.Jobs do
 
   alias IxMcp.ActionLog
   alias IxMcp.Jobs.Job
+  alias IxMcp.MCP.Notifier
   alias IxMcp.Session
 
   @typedoc "A recorded run, as `history/1` returns it."
@@ -69,15 +71,62 @@ defmodule IxMcp.Jobs do
     live_or_ledger(id, &Job.summary/1, &summary_from_ledger/1)
   end
 
-  @doc "Block the calling process (a cell, never the server) until the job finishes."
+  @doc """
+  Block the calling process (a cell, never the server) until the job
+  finishes. Awaiting from a cell marks that cell's own job a quiet wrapper
+  (#3934): it is reading another job's terminal state, so its own clean
+  finish is not news and announces nothing -- its failure or death still
+  does, and the awaited job announces (or is suppressed) on its own merits.
+  """
   @spec await(String.t(), timeout()) :: Job.summary() | :timeout
   def await(id, timeout_ms \\ :infinity) do
+    quiet_own_job()
+
     with_job(id, fn pid ->
       case Job.await(pid, timeout_ms) do
         {:ok, summary} -> summary
         :timeout -> :timeout
       end
     end)
+  end
+
+  @doc """
+  Subscribe this session to another job's or session's terminal
+  transitions (#3934) -- how a parent follows a child agent's work without
+  every session broadcasting to every other. `watch("ab12")` announces
+  that job's finish once (immediately, when it is already terminal);
+  `watch(session: 7)` announces every future finish of session 7 (ids via
+  `Sessions.list/0`, #3881). Watches poll the shared ledger, live until
+  this kernel exits, and are announced on the channel like any job finish.
+  """
+  @spec watch(String.t() | [session: integer()]) :: :ok
+  def watch(job_id) when is_binary(job_id) do
+    if ActionLog.job(job_id) == nil do
+      raise ArgumentError, "no such job: #{inspect(job_id)}"
+    end
+
+    Notifier.watch(Session.ids().session_id, {:job, job_id})
+  end
+
+  def watch(session: watched) when is_integer(watched) do
+    %{session_id: own} = Session.ids()
+
+    if watched == own do
+      raise ArgumentError, "session #{watched} is this session; its jobs already announce here"
+    end
+
+    Notifier.watch(own, {:session, watched})
+  end
+
+  # The cell learns its own job id from the eval process's dictionary
+  # (planted at spawn); outside a cell there is nothing to mark.
+  defp quiet_own_job do
+    with id when is_binary(id) <- Process.get(:ix_job_id),
+         {:ok, pid} <- lookup(id) do
+      Job.quiet(pid)
+    else
+      _not_a_cell -> :ok
+    end
   end
 
   @spec cancel(String.t()) :: :ok | {:error, :finished | Job.status()}

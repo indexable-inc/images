@@ -18,4 +18,10 @@ if config_env() == :test do
   # Flush output to the durable table quickly so tests can read a dead job's
   # output without long waits (#3839).
   config :ix_mcp, output_flush_interval_ms: 20
+  # Short coalesce/poll windows so the notification tests observe scoped
+  # delivery, suppression, and digests without real waits (#3934). The
+  # coalesce window still has to outlast the exec reply path's ack under CI
+  # load, so it is not arbitrarily small.
+  config :ix_mcp, notify_coalesce_ms: 150
+  config :ix_mcp, watch_poll_ms: 100
 end

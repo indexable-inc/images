@@ -192,8 +192,12 @@ defmodule IxMcp.JobsTest do
 
     id = running.id
 
-    assert_receive {:mcp_send, %{"params" => %{"meta" => %{"job" => ^id, "status" => "killed"}}}},
-                   2_000
+    # The death arrives alone (meta names the job) or pooled with a
+    # straggler finish from an earlier test into one digest (#3934); either
+    # way the channel names this job, loudly.
+    {content, meta} = receive_channel_mentioning(id)
+    assert content =~ "killed"
+    assert meta["severity"] == "failure"
 
     # The jobs row is terminal at `killed`...
     assert %{status: :killed} = ActionLog.job(id)
@@ -327,6 +331,18 @@ defmodule IxMcp.JobsTest do
     {:ok, _pid} = Supervisor.restart_child(IxMcp.Supervisor, ActionLog)
     :ok = Supervisor.terminate_child(IxMcp.Supervisor, Session)
     {:ok, _pid} = Supervisor.restart_child(IxMcp.Supervisor, Session)
+  end
+
+  # Consume channel messages until one mentions `id`: coalescing (#3934) may
+  # pool unrelated finishes ahead of the one this test is waiting on.
+  defp receive_channel_mentioning(id) do
+    assert_receive {:mcp_send, %{"params" => %{"content" => content, "meta" => meta}}}, 2_000
+
+    if content =~ id do
+      {content, meta}
+    else
+      receive_channel_mentioning(id)
+    end
   end
 
   defp eventually(probe, tries \\ 50) do

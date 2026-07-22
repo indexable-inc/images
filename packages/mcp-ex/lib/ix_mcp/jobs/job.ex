@@ -85,6 +85,7 @@ defmodule IxMcp.Jobs.Job do
     :finished_mono,
     :result,
     status: :running,
+    quiet: false,
     terminal_recorded: false,
     diagnostics: [],
     subscribers: [],
@@ -114,6 +115,7 @@ defmodule IxMcp.Jobs.Job do
           finished_mono: integer() | nil,
           result: {:value, term()} | {:failure, String.t()} | nil,
           status: status(),
+          quiet: boolean(),
           terminal_recorded: boolean(),
           diagnostics: [String.t()],
           subscribers: [pid()],
@@ -152,6 +154,14 @@ defmodule IxMcp.Jobs.Job do
 
   @spec cancel(GenServer.server()) :: :ok | {:error, :finished}
   def cancel(server), do: GenServer.call(server, :cancel)
+
+  @doc """
+  Mark this job a quiet wrapper (#3934): a cell that awaits another job is
+  a read of that job's terminal state, not a job with news of its own, so
+  its clean finish announces nothing. Its failure or death still does.
+  """
+  @spec quiet(GenServer.server()) :: :ok
+  def quiet(server), do: GenServer.cast(server, :quiet)
 
   @doc "The evaluation process and IO proxy (for tracing from outside)."
   @spec procs(GenServer.server()) :: {pid(), pid()}
@@ -255,10 +265,15 @@ defmodule IxMcp.Jobs.Job do
 
     job = self()
     code = state.code
+    id = state.id
 
     {eval_pid, eval_ref} =
       spawn_monitor(fn ->
         Process.group_leader(self(), io_proxy)
+        # The cell can learn which job it is (Jobs.await marks its own job
+        # a quiet wrapper through this, #3934). Process dictionary, not a
+        # closure: the id must be readable from inside the running cell.
+        Process.put(:ix_job_id, id)
         {binding, env} = Workspace.snapshot()
 
         outcome =
@@ -327,6 +342,8 @@ defmodule IxMcp.Jobs.Job do
   def handle_cast({:unsubscribe, pid}, state) do
     {:noreply, %{state | subscribers: List.delete(state.subscribers, pid)}}
   end
+
+  def handle_cast(:quiet, state), do: {:noreply, %{state | quiet: true}}
 
   @impl true
   def handle_info({:eval_finished, pid, outcome}, %{eval_pid: pid} = state) do
@@ -461,11 +478,15 @@ defmodule IxMcp.Jobs.Job do
   # lands, so even this process dying in the window is still finalized.
   defp record_terminal(state) do
     recorded =
-      safe_log(fn -> ActionLog.finish_job(state.id, state.status, render_result(state)) end)
+      safe_log(fn ->
+        ActionLog.finish_job(state.id, state.status, render_result(state), quiet: state.quiet)
+      end)
 
     case recorded do
       {:ok, {:notify, outbox}} ->
-        Notifier.publish(outbox)
+        # A row born acked was delivered by construction (a quiet wrapper's
+        # clean finish, #3934); publishing it would announce a non-event.
+        unless outbox.acked, do: Notifier.publish(outbox)
         Reaper.reported(state.id)
         %{state | terminal_recorded: true}
 

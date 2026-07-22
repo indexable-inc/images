@@ -26,6 +26,10 @@ defmodule IxMcp.MCP.Tools do
   Everything beyond running code is in-language, pre-aliased in every cell:
 
       Jobs.tail("ab12", 20)   Jobs.await("ab12")   Jobs.cancel("ab12")   Jobs.history()
+      Jobs.watch("ab12") / Jobs.watch(session: 7)   announce another job's or
+                                            session's finishes here (own jobs
+                                            already announce; session ids:
+                                            Sessions.list())
       Read.file(path)                       a file; Read.file(path, first, last) slices
                                             a 1-based inclusive line range
       Edit.replace(path, old, new)          exact-string find/replace with native
@@ -173,8 +177,12 @@ defmodule IxMcp.MCP.Tools do
         variables, aliases, imports, and modules you define stay defined.
         Jobs are durable: a backgrounded run's output, final status, and
         history survive even a crash or kill, readable later with
-        Jobs.tail(id) / Jobs.output(id) / Jobs.history(); every finish
-        (including a death) is announced on the channel.
+        Jobs.tail(id) / Jobs.output(id) / Jobs.history(). A backgrounded
+        run's finish is announced on the channel to this session -- one
+        line for a clean finish, the reason for a failure or death, several
+        finishes coalesced into one digest; a result this reply already
+        carried is never re-announced. Follow another session's work with
+        Jobs.watch.
 
         #{@surface_guide}
         Write plain Elixir, not shell. For files and data use the standard
@@ -255,7 +263,17 @@ defmodule IxMcp.MCP.Tools do
     intent = Map.get(args, "intent")
 
     {summary, output} = Jobs.run(code, budget: budget, intent: intent, action_id: action_id)
-    {:ok, render_run(summary, output)}
+    reply = render_run(summary, output)
+
+    # The reply just rendered carries the job's outcome, so announcing the
+    # finish on the channel would say everything twice (#3934). Ack strictly
+    # after the render: a death anywhere before this line leaves the outbox
+    # row unacked and the durable announcement still fires -- suppression
+    # must never outrun delivery. A ledger outage here degrades to a
+    # duplicate announce, which beats a lost reply.
+    unless summary.running, do: ack_delivered(summary.id)
+
+    {:ok, reply}
   end
 
   def call("exec", _args, action_id) do
@@ -282,6 +300,12 @@ defmodule IxMcp.MCP.Tools do
 
   defp clamp_budget(budget) when is_number(budget) and budget > 0, do: min(budget, @budget_cap)
   defp clamp_budget(_), do: 15
+
+  defp ack_delivered(job_id) do
+    IxMcp.ActionLog.ack_job_outbox(job_id)
+  catch
+    :exit, _reason -> 0
+  end
 
   defp render_run(summary, output) do
     header =
