@@ -536,6 +536,12 @@ defmodule IxMcp.ActionLogTest do
     assert %{repo: "indexable-inc/index", number: 3880, session: "winner"} = claim
     assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(claim.claimed_at)
 
+    # The holder re-claiming its own issue reads back as the win it already
+    # is: the client seam may retry a claim whose first attempt committed
+    # just before the server died, and that retry must not report the sole
+    # claimant as losing to itself (#3903).
+    assert {:ok, ^claim} = ActionLog.claim_issue("indexable-inc/index", 3880, winner, log)
+
     # The loser reads the standing claim back, name included.
     assert {:error, standing} = ActionLog.claim_issue("indexable-inc/index", 3880, loser, log)
     assert standing.id == claim.id
@@ -549,6 +555,20 @@ defmodule IxMcp.ActionLogTest do
     assert [%{number: 3880}, %{repo: "indexable-inc/ix"}] = ActionLog.issue_claims_after(0, log)
     assert [%{repo: "indexable-inc/ix"}] = ActionLog.issue_claims_after(claim.id, log)
     assert ActionLog.last_issue_claim_id(log) == other.id
+  end
+
+  test "a nil-session re-claim is a loss, never a win (#3903)" do
+    log = start_supervised!({ActionLog, path: ":memory:", name: :action_log_nil_claims})
+
+    assert {:ok, claim} = ActionLog.claim_issue("indexable-inc/index", 3903, nil, log)
+    assert claim.session_id == nil
+
+    # nil is every anonymous caller at once, so it can never prove the
+    # standing claim is the caller's own: the retry-across-restart carve-out
+    # that lets a holder re-claim its own issue must not apply, or two
+    # anonymous sessions would both walk away believing they won.
+    assert {:error, standing} = ActionLog.claim_issue("indexable-inc/index", 3903, nil, log)
+    assert standing.id == claim.id
   end
 
   test "a database stamped by a newer server disables logging instead of crashing" do
@@ -605,7 +625,18 @@ defmodule IxMcp.ActionLogTest do
   # used to badmatch in run/3 and kill the log and the calling job (#3890).
   test "a write blocked by a sibling's transaction waits the lock out instead of crashing" do
     path = tmp_db()
-    log = start_supervised!({ActionLog, path: path, name: :action_log_busy_wait})
+
+    # The wide busy bound is headroom, not the expected wait: the release
+    # lands ~300ms in, but a loaded sandbox can starve the releasing task
+    # for seconds, and with the 5s default the write's busy wait expired
+    # first and the test died on the caller's bound (#3903). It only has
+    # to stay below call/3's 30s timeout so a truly stuck lock still fails
+    # as the server's descriptive raise.
+    log =
+      start_supervised!(
+        {ActionLog, path: path, name: :action_log_busy_wait, busy_timeout_ms: 20_000}
+      )
+
     session_id = ActionLog.create_session("busy", log)
 
     {:ok, blocker} = Sqlite3.open(path)

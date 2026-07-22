@@ -18,7 +18,12 @@ defmodule IxMcp.ActionLogBusyTest do
   setup %{tmp_dir: dir} do
     path = Path.join(dir, "actions.db")
     name = :"action_log_busy_#{System.unique_integer([:positive])}"
-    log = start_supervised!({ActionLog, path: path, name: name})
+
+    # 20s of busy headroom (#3903): the sibling releases its lock ~150ms in,
+    # but a loaded sandbox can starve the releasing task for seconds, and
+    # the 5s default left the write racing that skew. The bound stays below
+    # call/3's 30s timeout so a truly stuck lock still fails loudly.
+    log = start_supervised!({ActionLog, path: path, name: name, busy_timeout_ms: 20_000})
 
     # A second connection standing in for a concurrent server instance.
     {:ok, holder} = Sqlite3.open(path)
@@ -42,7 +47,7 @@ defmodule IxMcp.ActionLogBusyTest do
     Process.sleep(150)
     :ok = Sqlite3.execute(ctx.holder, "COMMIT")
 
-    assert is_integer(Task.await(task, 10_000))
+    assert is_integer(Task.await(task, 30_000))
     assert Process.alive?(ctx.log)
   end
 
@@ -55,7 +60,7 @@ defmodule IxMcp.ActionLogBusyTest do
     Process.sleep(150)
     :ok = Sqlite3.execute(ctx.holder, "COMMIT")
 
-    assert :ok = Task.await(task, 10_000)
+    assert :ok = Task.await(task, 30_000)
     assert Process.alive?(ctx.log)
     assert ActionLog.job_output("j1", ctx.name) == "chunk"
   end

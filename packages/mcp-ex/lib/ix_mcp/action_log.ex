@@ -37,10 +37,11 @@ defmodule IxMcp.ActionLog do
   overhead. A failed open or write crashes this process loudly and the
   supervisor reopens the log -- with transient `SQLITE_BUSY` waited out
   first (#3874/#3890): several server instances share this database, so a
-  sibling holding the write lock is normal operation, not a fault. sqlite
-  waits inside the NIF (`set_busy_timeout` at open) and only a lock
-  outliving that bound crashes, with a diagnosis instead of a bare
-  badmatch. Before that, one busy write match-crashed the GenServer, the
+  sibling holding the write lock is normal operation, not a fault. The wait
+  is a wall-clock deadline paced by short NIF-level waits and scheduler-free
+  sleeps (#3903), and only a lock outliving that budget crashes, with a
+  diagnosis instead of a bare badmatch. Before that, one busy write
+  match-crashed the GenServer, the
   exit propagated into whichever process sat in `GenServer.call` (a job's
   output flush, an exec's `start_action`), and under sustained contention
   the crash loop could exhaust the root supervisor's restart intensity and
@@ -116,9 +117,26 @@ defmodule IxMcp.ActionLog do
   @user_version 6
 
   # How long a statement waits for a sibling instance's write lock before
-  # sqlite gives up with :busy and step!/fetch crash with a diagnosis
-  # (#3890). The NIF's own default is 2s, which live contention outlived.
+  # step!/fetch/execute! give up and crash with a diagnosis (#3890). A
+  # wall-clock deadline enforced in Elixir, not sqlite's own busy handler:
+  # exqlite runs statements on the BEAM's dirty IO schedulers, so a wait
+  # spent inside the NIF holds one of those ~10 slots for its whole
+  # duration. Stack a few concurrent waiters (the test suite runs many
+  # instances in one BEAM; a loaded host does the same across kernels) and
+  # the pool starves out the very COMMIT/ROLLBACK calls that would release
+  # the lock -- observed as waits sailing past every configured bound
+  # (#3903). Each NIF call therefore waits only @busy_nif_wait_ms inside
+  # sqlite, and the long horizon is scheduler-free Process.sleep between
+  # attempts.
   @busy_timeout_ms 5_000
+
+  # Per-attempt busy wait inside the NIF: long enough to ride out
+  # micro-contention without surfacing, short enough that a blocked
+  # statement never camps on a dirty IO scheduler.
+  @busy_nif_wait_ms 50
+
+  # Scheduler-free pause between attempts once a NIF-level wait expired.
+  @busy_poll_ms 25
 
   # How long the client API keeps retrying a call whose server died
   # mid-request or is restarting (#3874). The supervisor brings the log
@@ -133,6 +151,17 @@ defmodule IxMcp.ActionLog do
   # the same symptom #3874 fixed, just as a timeout-exit instead of a
   # crash-exit.
   @call_timeout_ms 30_000
+
+  # index#3903: the flaky-test incident was exactly these two bounds being
+  # equal -- the caller's timeout-exit always won the race against the
+  # server's descriptive raise, so a blocked write reported as a bare
+  # GenServer.call timeout instead of naming the blocked statement. The
+  # default busy wait must end comfortably before the default call bound
+  # (instances that override :busy_timeout_ms own that margin themselves).
+  if @busy_timeout_ms >= @call_timeout_ms do
+    raise CompileError,
+      description: "@busy_timeout_ms must stay below @call_timeout_ms (index#3903)"
+  end
 
   # Frozen historical DDL for the 1 -> 2 step: the actions shape exactly as
   # #3532 shipped it, before the live-row columns. A migration must never
@@ -443,14 +472,17 @@ defmodule IxMcp.ActionLog do
   UNIQUE(repo, number) is the arbiter: the winning insert returns
   `{:ok, claim}`, a conflict returns `{:error, winner}` with the standing
   claim (including the winning session's name) so the loser can say who got
-  there first. `:disabled` when the log is degraded (#3539) -- with no
-  arbiter there is no claim to win.
+  there first. Idempotent per session: re-claiming an issue this session
+  already holds is `{:ok, claim}`, which is what makes the call safe for
+  the client seam to retry across a server restart (#3903). `:disabled`
+  when the log is degraded (#3539) -- with no arbiter there is no claim to
+  win.
   """
   @spec claim_issue(String.t(), integer(), integer() | nil, GenServer.server()) ::
           {:ok, issue_claim()} | {:error, issue_claim()} | :disabled
   def claim_issue(repo, number, session_id, server \\ __MODULE__)
       when is_binary(repo) and is_integer(number) do
-    GenServer.call(server, {:claim_issue, repo, number, session_id, now()})
+    call(server, {:claim_issue, repo, number, session_id, now()})
   end
 
   @doc """
@@ -461,13 +493,13 @@ defmodule IxMcp.ActionLog do
   """
   @spec issue_claims_after(integer(), GenServer.server()) :: [issue_claim()]
   def issue_claims_after(id, server \\ __MODULE__) do
-    GenServer.call(server, {:issue_claims_after, id})
+    call(server, {:issue_claims_after, id})
   end
 
   @doc "The highest issue-claim id (0 when none): a fresh watermark for `issue_claims_after/2`."
   @spec last_issue_claim_id(GenServer.server()) :: integer()
   def last_issue_claim_id(server \\ __MODULE__) do
-    GenServer.call(server, :last_issue_claim_id)
+    call(server, :last_issue_claim_id)
   end
 
   @doc """
@@ -543,15 +575,16 @@ defmodule IxMcp.ActionLog do
     if path != ":memory:", do: File.mkdir_p!(Path.dirname(path))
 
     {:ok, conn} = Sqlite3.open(path)
-    :ok = Sqlite3.execute(conn, "PRAGMA busy_timeout = #{@busy_timeout_ms}")
 
     # Several server instances share one database file, so a step can find a
-    # sibling holding the write lock. The NIF opens with a 2s busy handler; a
-    # lock outliving it surfaced as :busy and badmatch-crashed run/3, taking
-    # the calling job down with it (#3890). Wait longer here, and let
-    # step!/fetch turn a still-busy result into a descriptive crash. The
-    # option exists so the regression test can shrink the wait.
-    :ok = Sqlite3.set_busy_timeout(conn, Keyword.get(opts, :busy_timeout_ms, @busy_timeout_ms))
+    # sibling holding the write lock (#3890). The NIF-level wait stays short
+    # on purpose -- a long in-NIF wait camps on a dirty IO scheduler and
+    # starves the sibling's releasing COMMIT/ROLLBACK (#3903) -- while
+    # step!/fetch/execute! wait out the full busy budget in Elixir and turn
+    # a lock outliving it into a descriptive crash. The :busy_timeout_ms
+    # option exists so the regression test can shrink that budget.
+    :ok = Sqlite3.set_busy_timeout(conn, min(@busy_nif_wait_ms, busy_budget(opts)))
+    db = %{conn: conn, busy_timeout_ms: busy_budget(opts)}
 
     # index#3539: on 2026-07-17 a server binary match-crashed right here
     # against an action log written under a newer schema, and the failed
@@ -560,10 +593,10 @@ defmodule IxMcp.ActionLog do
     # forward; a future version (a newer server already ran against this
     # file) refuses loudly but keeps the server up, degraded to not
     # recording, so the blast radius stays scoped to the log itself.
-    case ensure_version(conn) do
+    case ensure_version(db) do
       :ok ->
         {:ok, insert} = Sqlite3.prepare(conn, @insert)
-        {:ok, %{conn: conn, insert: insert}}
+        {:ok, %{db: db, insert: insert}}
 
       {:future, found} ->
         :ok = Sqlite3.close(conn)
@@ -579,6 +612,22 @@ defmodule IxMcp.ActionLog do
     end
   end
 
+  # A raise in a callback (a lock outliving the busy budget, #3890) restarts
+  # this server, but the dead connection is a NIF resource: its file handle
+  # -- and any RESERVED lock a transaction it began still holds -- survives
+  # until the garbage collector reclaims the resource, which has no deadline.
+  # Until then that orphaned lock can block the freshly restarted server and
+  # every sibling instance on the shared database. Close explicitly on the
+  # way down so the lock dies with the server. The degraded `:disabled`
+  # state already closed its connection in init.
+  @impl true
+  def terminate(_reason, %{db: db}) do
+    _ = Sqlite3.close(db.conn)
+    :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
+
   # index#3539 degraded mode: the file belongs to a newer server, so writes
   # are dropped and reads answer empty rather than crashing every caller.
   # Ids still come back as integers because IxMcp.Session stores them only
@@ -588,29 +637,29 @@ defmodule IxMcp.ActionLog do
     {:reply, disabled_reply(request), :disabled}
   end
 
-  def handle_call({:create_session, name, at}, _from, %{conn: conn} = state) do
-    run(conn, "INSERT INTO sessions (name, started_at) VALUES (?, ?)", [name, at])
-    {:ok, id} = Sqlite3.last_insert_rowid(conn)
+  def handle_call({:create_session, name, at}, _from, %{db: db} = state) do
+    run(db, "INSERT INTO sessions (name, started_at) VALUES (?, ?)", [name, at])
+    {:ok, id} = Sqlite3.last_insert_rowid(db.conn)
     {:reply, id, state}
   end
 
-  def handle_call({:rename_session, id, name}, _from, %{conn: conn} = state) do
-    run(conn, "UPDATE sessions SET name = ? WHERE id = ?", [name, id])
+  def handle_call({:rename_session, id, name}, _from, %{db: db} = state) do
+    run(db, "UPDATE sessions SET name = ? WHERE id = ?", [name, id])
     {:reply, :ok, state}
   end
 
-  def handle_call({:create_topic, session_id, name, at}, _from, %{conn: conn} = state) do
-    run(conn, "INSERT INTO topics (session_id, name, started_at) VALUES (?, ?, ?)", [
+  def handle_call({:create_topic, session_id, name, at}, _from, %{db: db} = state) do
+    run(db, "INSERT INTO topics (session_id, name, started_at) VALUES (?, ?, ?)", [
       session_id,
       name,
       at
     ])
 
-    {:ok, id} = Sqlite3.last_insert_rowid(conn)
+    {:ok, id} = Sqlite3.last_insert_rowid(db.conn)
     {:reply, id, state}
   end
 
-  def handle_call({:start_action, action}, _from, %{conn: conn, insert: insert} = state) do
+  def handle_call({:start_action, action}, _from, %{db: db, insert: insert} = state) do
     :ok =
       Sqlite3.bind(insert, [
         action.at,
@@ -621,53 +670,53 @@ defmodule IxMcp.ActionLog do
         action.arguments
       ])
 
-    :done = step!(conn, insert, "insert action")
-    {:ok, id} = Sqlite3.last_insert_rowid(conn)
+    :done = step!(db, insert, "insert action")
+    {:ok, id} = Sqlite3.last_insert_rowid(db.conn)
     {:reply, id, state}
   end
 
   def handle_call(
         {:finish_action, id, status, is_error, elapsed_ms},
         _from,
-        %{conn: conn} = state
+        %{db: db} = state
       ) do
-    run(conn, @finish, [status, bool_to_int(is_error), elapsed_ms, id])
+    run(db, @finish, [status, bool_to_int(is_error), elapsed_ms, id])
     {:reply, :ok, state}
   end
 
-  def handle_call({:update_stack, id, stack_json, line, at}, _from, %{conn: conn} = state) do
-    run(conn, @update_stack, [stack_json, at, line, id])
+  def handle_call({:update_stack, id, stack_json, line, at}, _from, %{db: db} = state) do
+    run(db, @update_stack, [stack_json, at, line, id])
     {:reply, :ok, state}
   end
 
-  def handle_call({:recent, n}, _from, %{conn: conn} = state) do
-    rows = fetch(conn, @select_recent, [n])
+  def handle_call({:recent, n}, _from, %{db: db} = state) do
+    rows = fetch(db, @select_recent, [n])
     {:reply, Enum.map(rows, &row_to_entry/1), state}
   end
 
-  def handle_call(:sessions, _from, %{conn: conn} = state) do
+  def handle_call(:sessions, _from, %{db: db} = state) do
     rows =
       for [id, name, started_at] <-
-            fetch(conn, "SELECT id, name, started_at FROM sessions ORDER BY id", []) do
+            fetch(db, "SELECT id, name, started_at FROM sessions ORDER BY id", []) do
         %{id: id, name: name, started_at: started_at}
       end
 
     {:reply, rows, state}
   end
 
-  def handle_call(:topics, _from, %{conn: conn} = state) do
+  def handle_call(:topics, _from, %{db: db} = state) do
     rows =
       for [id, session_id, name, started_at] <-
-            fetch(conn, "SELECT id, session_id, name, started_at FROM topics ORDER BY id", []) do
+            fetch(db, "SELECT id, session_id, name, started_at FROM topics ORDER BY id", []) do
         %{id: id, session_id: session_id, name: name, started_at: started_at}
       end
 
     {:reply, rows, state}
   end
 
-  def handle_call({:job_started, job}, _from, %{conn: conn} = state) do
+  def handle_call({:job_started, job}, _from, %{db: db} = state) do
     run(
-      conn,
+      db,
       "INSERT OR IGNORE INTO jobs (id, session_id, action_id, intent, session_name, topic_name, code, status, watch, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)",
       [
         job.id,
@@ -685,8 +734,8 @@ defmodule IxMcp.ActionLog do
     {:reply, :ok, state}
   end
 
-  def handle_call({:append_job_output, id, chunks, dropped_total}, _from, %{conn: conn} = state) do
-    :ok = execute!(conn, "BEGIN IMMEDIATE")
+  def handle_call({:append_job_output, id, chunks, dropped_total}, _from, %{db: db} = state) do
+    :ok = execute!(db, "BEGIN IMMEDIATE")
 
     # A batch can arrive twice (#3874): the job retries a flush whose reply
     # was lost, and the client seam retries a call whose server died after
@@ -695,23 +744,23 @@ defmodule IxMcp.ActionLog do
     # the drop total is an absolute high-water mark, not a delta.
     added =
       Enum.reduce(chunks, 0, fn {seq, chunk}, acc ->
-        run(conn, "INSERT OR IGNORE INTO job_output (job_id, seq, chunk) VALUES (?, ?, ?)", [
+        run(db, "INSERT OR IGNORE INTO job_output (job_id, seq, chunk) VALUES (?, ?, ?)", [
           id,
           seq,
           chunk
         ])
 
-        {:ok, inserted} = Sqlite3.changes(conn)
+        {:ok, inserted} = Sqlite3.changes(db.conn)
         acc + inserted * byte_size(chunk)
       end)
 
     run(
-      conn,
+      db,
       "UPDATE jobs SET output_bytes = output_bytes + ?, output_dropped = MAX(output_dropped, ?) WHERE id = ?",
       [added, dropped_total, id]
     )
 
-    :ok = execute!(conn, "COMMIT")
+    :ok = execute!(db, "COMMIT")
     {:reply, :ok, state}
   end
 
@@ -721,10 +770,10 @@ defmodule IxMcp.ActionLog do
   # never catch the two logs disagreeing and no terminal transition escapes
   # the outbox. The single-writer GenServer serializes this against every
   # other write, so the guard needs no locking of its own.
-  def handle_call({:finish_job, id, status, result, at}, _from, %{conn: conn} = state) do
+  def handle_call({:finish_job, id, status, result, at}, _from, %{db: db} = state) do
     reply =
       case fetch(
-             conn,
+             db,
              "SELECT action_id, intent, started_at FROM jobs WHERE id = ? AND status = 'running'",
              [id]
            ) do
@@ -734,26 +783,26 @@ defmodule IxMcp.ActionLog do
         [[action_id, intent, started_at]] ->
           elapsed = elapsed_ms(started_at, at)
           is_error = if status in ["failed", "killed"], do: 1, else: 0
-          :ok = execute!(conn, "BEGIN IMMEDIATE")
+          :ok = execute!(db, "BEGIN IMMEDIATE")
 
           run(
-            conn,
+            db,
             "UPDATE jobs SET status = ?, result = ?, finished_at = ?, elapsed_ms = ? WHERE id = ?",
             [status, result, at, elapsed, id]
           )
 
           if action_id do
-            run(conn, @finish, [action_status(status), is_error, elapsed, action_id])
+            run(db, @finish, [action_status(status), is_error, elapsed, action_id])
           end
 
           run(
-            conn,
+            db,
             "INSERT INTO outbox (job_id, intent, status, elapsed_ms, result, created_at, acked) VALUES (?, ?, ?, ?, ?, ?, 0)",
             [id, intent, status, elapsed, result, at]
           )
 
-          {:ok, outbox_id} = Sqlite3.last_insert_rowid(conn)
-          :ok = execute!(conn, "COMMIT")
+          {:ok, outbox_id} = Sqlite3.last_insert_rowid(db.conn)
+          :ok = execute!(db, "COMMIT")
 
           {:notify,
            %{
@@ -769,9 +818,9 @@ defmodule IxMcp.ActionLog do
     {:reply, reply, state}
   end
 
-  def handle_call({:job, id}, _from, %{conn: conn} = state) do
+  def handle_call({:job, id}, _from, %{db: db} = state) do
     reply =
-      case fetch(conn, @select_job <> " WHERE id = ?", [id]) do
+      case fetch(db, @select_job <> " WHERE id = ?", [id]) do
         [] -> nil
         [row] -> job_row_to_map(row)
       end
@@ -779,14 +828,14 @@ defmodule IxMcp.ActionLog do
     {:reply, reply, state}
   end
 
-  def handle_call({:job_output, id}, _from, %{conn: conn} = state) do
-    rows = fetch(conn, "SELECT chunk FROM job_output WHERE job_id = ? ORDER BY seq", [id])
+  def handle_call({:job_output, id}, _from, %{db: db} = state) do
+    rows = fetch(db, "SELECT chunk FROM job_output WHERE job_id = ? ORDER BY seq", [id])
     {:reply, Enum.map_join(rows, "", fn [chunk] -> chunk end), state}
   end
 
-  def handle_call({:recent_jobs, session_id, n}, _from, %{conn: conn} = state) do
+  def handle_call({:recent_jobs, session_id, n}, _from, %{db: db} = state) do
     rows =
-      fetch(conn, @select_job <> " WHERE session_id IS ? ORDER BY rowid DESC LIMIT ?", [
+      fetch(db, @select_job <> " WHERE session_id IS ? ORDER BY rowid DESC LIMIT ?", [
         session_id,
         n
       ])
@@ -798,33 +847,41 @@ defmodule IxMcp.ActionLog do
   # a unique-constraint winner changes one row, every loser changes zero and
   # reads the winner back. The single-writer GenServer serializes claims from
   # this instance; claims from sibling instances serialize on SQLite itself.
-  def handle_call({:claim_issue, repo, number, session_id, at}, _from, %{conn: conn} = state) do
+  def handle_call({:claim_issue, repo, number, session_id, at}, _from, %{db: db} = state) do
     run(
-      conn,
+      db,
       "INSERT OR IGNORE INTO issue_claims (repo, number, session_id, claimed_at) VALUES (?, ?, ?, ?)",
       [repo, number, session_id, at]
     )
 
-    {:ok, changes} = Sqlite3.changes(conn)
+    {:ok, changes} = Sqlite3.changes(db.conn)
 
     [row] =
-      fetch(conn, @select_issue_claim <> " WHERE c.repo = ? AND c.number = ?", [repo, number])
+      fetch(db, @select_issue_claim <> " WHERE c.repo = ? AND c.number = ?", [repo, number])
 
     claim = issue_claim_row_to_map(row)
-    {:reply, if(changes == 1, do: {:ok, claim}, else: {:error, claim}), state}
+
+    # A standing claim by the caller's own session is a win, not a loss:
+    # the client seam retries a claim whose server died after committing
+    # (#3903), and that retry must read back as the victory it already is,
+    # or the sole claimant would report losing the issue to itself. Only a
+    # real session id gets this: nil belongs to every anonymous caller at
+    # once, so it can never prove the standing claim is the caller's own.
+    won = changes == 1 or (session_id != nil and claim.session_id == session_id)
+    {:reply, if(won, do: {:ok, claim}, else: {:error, claim}), state}
   end
 
-  def handle_call({:issue_claims_after, id}, _from, %{conn: conn} = state) do
-    rows = fetch(conn, @select_issue_claim <> " WHERE c.id > ? ORDER BY c.id", [id])
+  def handle_call({:issue_claims_after, id}, _from, %{db: db} = state) do
+    rows = fetch(db, @select_issue_claim <> " WHERE c.id > ? ORDER BY c.id", [id])
     {:reply, Enum.map(rows, &issue_claim_row_to_map/1), state}
   end
 
-  def handle_call(:last_issue_claim_id, _from, %{conn: conn} = state) do
-    [[id]] = fetch(conn, "SELECT COALESCE(MAX(id), 0) FROM issue_claims", [])
+  def handle_call(:last_issue_claim_id, _from, %{db: db} = state) do
+    [[id]] = fetch(db, "SELECT COALESCE(MAX(id), 0) FROM issue_claims", [])
     {:reply, id, state}
   end
 
-  def handle_call({:unacked_outbox, session_id}, _from, %{conn: conn} = state) do
+  def handle_call({:unacked_outbox, session_id}, _from, %{db: db} = state) do
     {sql, params} =
       case session_id do
         nil ->
@@ -837,19 +894,19 @@ defmodule IxMcp.ActionLog do
            [sid]}
       end
 
-    {:reply, Enum.map(fetch(conn, sql, params), &outbox_row_to_map/1), state}
+    {:reply, Enum.map(fetch(db, sql, params), &outbox_row_to_map/1), state}
   end
 
   # Claim each row that is still unacked; the count of rows this call flips is
   # the arbiter that keeps a racing publish and replay from double-announcing
   # (#3839). The SELECT-then-UPDATE is atomic here because it runs inside one
   # call on the single-writer GenServer.
-  def handle_call({:ack_outbox, ids}, _from, %{conn: conn} = state) do
+  def handle_call({:ack_outbox, ids}, _from, %{db: db} = state) do
     claimed =
       Enum.reduce(ids, 0, fn id, acc ->
-        case fetch(conn, "SELECT acked FROM outbox WHERE id = ?", [id]) do
+        case fetch(db, "SELECT acked FROM outbox WHERE id = ?", [id]) do
           [[0]] ->
-            run(conn, "UPDATE outbox SET acked = 1 WHERE id = ?", [id])
+            run(db, "UPDATE outbox SET acked = 1 WHERE id = ?", [id])
             acc + 1
 
           _ ->
@@ -860,8 +917,8 @@ defmodule IxMcp.ActionLog do
     {:reply, claimed, state}
   end
 
-  defp ensure_version(conn) do
-    case user_version(conn) do
+  defp ensure_version(db) do
+    case user_version(db) do
       @user_version ->
         :ok
 
@@ -874,23 +931,23 @@ defmodule IxMcp.ActionLog do
         # where sniffing is sound, because 0 can only be a fresh file or a
         # shape older than stamping -- and the file leaves stamped, so every
         # later open trusts the version alone.
-        case unstamped_version(conn) do
-          :fresh -> create(conn)
-          version -> migrate(conn, version)
+        case unstamped_version(db) do
+          :fresh -> create(db)
+          version -> migrate(db, version)
         end
 
       found ->
-        migrate(conn, found)
+        migrate(db, found)
     end
   end
 
-  defp user_version(conn) do
-    [[version]] = fetch(conn, "PRAGMA user_version", [])
+  defp user_version(db) do
+    [[version]] = fetch(db, "PRAGMA user_version", [])
     version
   end
 
-  defp unstamped_version(conn) do
-    case table_columns(conn, "actions") do
+  defp unstamped_version(db) do
+    case table_columns(db, "actions") do
       [] ->
         :fresh
 
@@ -899,20 +956,20 @@ defmodule IxMcp.ActionLog do
           "session_id" not in columns -> 1
           "status" not in columns -> 2
           "line" not in columns -> 3
-          not table_exists?(conn, "jobs") -> 4
-          not table_exists?(conn, "issue_claims") -> 5
+          not table_exists?(db, "jobs") -> 4
+          not table_exists?(db, "issue_claims") -> 5
           true -> @user_version
         end
     end
   end
 
-  defp table_exists?(conn, table) do
-    fetch(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [table]) != []
+  defp table_exists?(db, table) do
+    fetch(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [table]) != []
   end
 
-  defp create(conn) do
+  defp create(db) do
     execute_all(
-      conn,
+      db,
       [
         "BEGIN IMMEDIATE",
         @create_sessions,
@@ -929,13 +986,13 @@ defmodule IxMcp.ActionLog do
   end
 
   # An already-current file from before stamping existed: mark it, move on.
-  defp migrate(conn, @user_version), do: execute_all(conn, [stamp()])
+  defp migrate(db, @user_version), do: execute_all(db, [stamp()])
 
-  defp migrate(conn, from) do
+  defp migrate(db, from) do
     @migrations
     |> Enum.drop_while(fn {version, _statements} -> version < from end)
     |> Enum.each(fn {version, statements} ->
-      execute_all(conn, ["BEGIN IMMEDIATE"] ++ statements ++ [stamp(version + 1), "COMMIT"])
+      execute_all(db, ["BEGIN IMMEDIATE"] ++ statements ++ [stamp(version + 1), "COMMIT"])
     end)
   end
 
@@ -958,72 +1015,97 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply(:topics), do: []
   defp disabled_reply(_request), do: :ok
 
-  defp table_columns(conn, table) do
-    for [_cid, name | _rest] <- fetch(conn, "PRAGMA table_info(#{table})", []), do: name
+  defp table_columns(db, table) do
+    for [_cid, name | _rest] <- fetch(db, "PRAGMA table_info(#{table})", []), do: name
   end
 
-  defp execute_all(conn, statements) do
-    Enum.each(statements, fn statement -> :ok = execute!(conn, statement) end)
+  defp execute_all(db, statements) do
+    Enum.each(statements, fn statement -> :ok = execute!(db, statement) end)
   end
 
-  defp run(conn, sql, params) do
-    {:ok, statement} = Sqlite3.prepare(conn, sql)
+  defp run(db, sql, params) do
+    {:ok, statement} = Sqlite3.prepare(db.conn, sql)
     :ok = Sqlite3.bind(statement, params)
-    :done = step!(conn, statement, sql)
-    :ok = Sqlite3.release(conn, statement)
+    :done = step!(db, statement, sql)
+    :ok = Sqlite3.release(db.conn, statement)
   end
 
-  # :busy after the connection's busy timeout (set at open) is a legitimate
-  # runtime state -- a sibling instance still holds the write lock -- not a
-  # programming error, so it fails with a diagnosis instead of a bare
-  # badmatch (#3890). No retry: the NIF already waited the full bound, and
-  # the supervisor reopens the log after the crash.
-  defp step!(conn, statement, sql) do
-    case Sqlite3.step(conn, statement) do
-      :busy ->
-        raise "action log write still blocked after the busy-timeout wait (#3890): #{sql}"
-
-      result ->
-        result
-    end
+  # :busy is a legitimate runtime state -- a sibling instance still holds
+  # the write lock -- not a programming error. Each attempt waits only the
+  # short NIF-level bound; the full busy budget is a wall-clock deadline
+  # ridden out in scheduler-free sleeps so the sibling's release can always
+  # get a dirty IO scheduler (#3903). A lock outliving the budget fails
+  # with a diagnosis instead of a bare badmatch (#3890), and the supervisor
+  # reopens the log after the crash. Re-stepping after :busy is sqlite's
+  # documented retry protocol for SQLITE_BUSY.
+  defp step!(db, statement, sql) do
+    busy_wait(db, sql, "write", fn ->
+      case Sqlite3.step(db.conn, statement) do
+        :busy -> :busy
+        result -> {:done, result}
+      end
+    end)
   end
 
-  defp fetch(conn, sql, params) do
-    {:ok, statement} = Sqlite3.prepare(conn, sql)
+  defp fetch(db, sql, params) do
+    {:ok, statement} = Sqlite3.prepare(db.conn, sql)
     :ok = Sqlite3.bind(statement, params)
 
-    case Sqlite3.fetch_all(conn, statement) do
-      {:ok, rows} ->
-        :ok = Sqlite3.release(conn, statement)
-        rows
+    busy_wait(db, sql, "read", fn ->
+      case Sqlite3.fetch_all(db.conn, statement) do
+        {:ok, rows} ->
+          :ok = Sqlite3.release(db.conn, statement)
+          {:done, rows}
 
-      # fetch_all reports a lock outliving the busy wait as this string.
-      {:error, "Database busy"} ->
-        raise "action log read still blocked after the busy-timeout wait (#3890): #{sql}"
+        # fetch_all steps to completion, so a busy result leaves the
+        # statement mid-walk; reset rewinds it for the next attempt.
+        {:error, "Database busy"} ->
+          :ok = Sqlite3.reset(statement)
+          :busy
 
-      {:error, reason} ->
-        raise "action log read failed: #{inspect(reason)}: #{sql}"
-    end
+        {:error, reason} ->
+          raise "action log read failed: #{inspect(reason)}: #{sql}"
+      end
+    end)
   end
 
   # The transaction-control sibling of step!/fetch (#3874): the job-ledger
   # writes wrap several statements in BEGIN IMMEDIATE...COMMIT through
-  # Sqlite3.execute/2, whose busy result after the timeout wait surfaced as
+  # Sqlite3.execute/2, whose busy result surfaced as
   # `{:badmatch, {:error, "database is locked"}}` in the incident. Same
-  # policy as step!: no retry, the NIF already waited the full bound; a
-  # residual lock fails with a diagnosis and the supervisor reopens the log.
-  defp execute!(conn, sql) do
-    case Sqlite3.execute(conn, sql) do
-      :ok ->
-        :ok
+  # deadline policy as step!; a residual lock fails with a diagnosis and
+  # the supervisor reopens the log.
+  defp execute!(db, sql) do
+    busy_wait(db, sql, "write", fn ->
+      case Sqlite3.execute(db.conn, sql) do
+        :ok -> {:done, :ok}
+        {:error, "database is locked"} -> :busy
+        {:error, reason} -> raise "action log execute failed: #{inspect(reason)}: #{sql}"
+      end
+    end)
+  end
 
-      {:error, "database is locked"} ->
-        raise "action log write still blocked after the busy-timeout wait (#3890): #{sql}"
+  defp busy_wait(db, sql, verb, attempt) do
+    deadline = System.monotonic_time(:millisecond) + db.busy_timeout_ms
+    busy_wait(db, sql, verb, attempt, deadline)
+  end
 
-      {:error, reason} ->
-        raise "action log execute failed: #{inspect(reason)}: #{sql}"
+  defp busy_wait(db, sql, verb, attempt, deadline) do
+    case attempt.() do
+      {:done, result} ->
+        result
+
+      :busy ->
+        if System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(@busy_poll_ms)
+          busy_wait(db, sql, verb, attempt, deadline)
+        else
+          raise "action log #{verb} still blocked after the busy-timeout wait (#3890): #{sql}"
+        end
     end
   end
+
+  defp busy_budget(opts), do: Keyword.get(opts, :busy_timeout_ms, @busy_timeout_ms)
 
   defp state_home do
     System.get_env("XDG_STATE_HOME") || Path.join(System.user_home!(), ".local/state")

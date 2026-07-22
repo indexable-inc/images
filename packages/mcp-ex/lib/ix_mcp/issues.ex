@@ -29,6 +29,11 @@ defmodule IxMcp.Issues do
   <label> at <time>"}` when another session got there first: pick a
   different issue.
 
+  Re-picking an issue this session already holds is a win, not a loss
+  (#3903): the claim reads back as `{:ok, "claimed ..."}` again and the
+  `gh` assignee mirror re-runs, which is idempotent on GitHub -- assigning
+  an existing assignee changes nothing.
+
   Options exist for tests: `:gh` (the executable to mirror the claim with;
   nil skips), `:action_log` (the arbiter server), `:session_id` (the
   claiming sessions row).
