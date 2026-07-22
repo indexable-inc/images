@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Wed, 22 Jul 2026 02:03:58 -0700
+Subject: [PATCH] libexpr: force deterministic Wasm execution in builtins.wasm
+
+The Wasm spec leaves NaN payload bits and relaxed-SIMD lowering
+implementation-defined; wasmtime therefore does not canonicalize by
+default, and upstream PR 15380 left it that way after measuring ~3.6x
+on a float-heavy benchmark. Our evaluator results cross machines (eval
+caches, fleet-shared store paths), where a single divergent bit means
+divergent hashes, so enable cranelift NaN canonicalization and
+deterministic relaxed SIMD unconditionally: eval-time plugins are
+string/AST-shaped and do not pay the float penalty.
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/libexpr/primops/wasm.cc b/src/libexpr/primops/wasm.cc
+index b1bd235..c0d2ffa 100644
+--- a/src/libexpr/primops/wasm.cc
++++ b/src/libexpr/primops/wasm.cc
+@@ -24,6 +24,17 @@ static Engine & getEngine()
+         wasmtime::Config config;
+         config.pooling_allocation_strategy(PoolAllocationConfig());
+         config.memory_init_cow(true);
++        /* Force bit-identical execution across build hosts. The Wasm spec
++           leaves NaN payload bits and relaxed-SIMD lowering
++           implementation-defined, so the same module may return different
++           bits on e.g. aarch64-darwin and x86_64-linux. builtins.wasm
++           results flow into eval caches and derivations shared fleet-wide,
++           where one divergent bit yields divergent store paths. Upstream
++           leaves NaN canonicalization off because it costs ~3.6x on a
++           float-heavy kernel (NixOS/nix#15380 discussion); evaluation-time
++           plugins are string/AST-shaped, so determinism wins here. */
++        config.cranelift_nan_canonicalization(true);
++        config.wasm_relaxed_simd_deterministic(true);
+         return Engine(std::move(config));
+     }();
+     return engine;

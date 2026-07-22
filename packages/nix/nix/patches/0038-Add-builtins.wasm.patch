@@ -1,0 +1,1370 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Eelco Dolstra <edolstra@gmail.com>
+Date: Mon, 2 Mar 2026 19:40:28 +0100
+Subject: [PATCH] Add builtins.wasm
+
+This adds a new builtin function, `builtins.wasm`, that allows Nix
+functions to be written in any language that compiles to Wasm. For
+example,
+
+```nix
+builtins.wasm { path = ./nix_wasm_plugin_fib.wasm; function = "fib"; } 40
+```
+
+The goal is to allow complex functionality (like YAML parsers) to be
+written in more convenient languages (like Rust) and executed faster,
+without having to resort to import-from-derivation.
+
+The Wasm function can lazily traverse its argument and can produce
+arbitrary Nix values (except functions). Each Wasm function call is
+executed as a fresh instance of the Wasm VM, ensuring determinism
+(i.e. you can't use the Wasm memory to pass state between function
+calls).
+
+See https://github.com/DeterminateSystems/nix-wasm-rust for examples
+of Nix functions written in Rust.
+
+Imported from the open upstream PR NixOS/nix#15380 (edolstra's
+`wasm-builtin` experimental feature, the upstream form of Determinate
+Nix's builtins.wasm) so the 2.34.7-based daemon can call Wasm
+functions at eval time (indexable-inc/index#3997). Drop when the base
+reaches a release containing it.
+
+(cherry picked from commit 7426ddbba893c24280722928e62bb94bef7134fb)
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/doc/manual/source/SUMMARY.md.in b/doc/manual/source/SUMMARY.md.in
+index 18d2478..5dc4c08 100644
+--- a/doc/manual/source/SUMMARY.md.in
++++ b/doc/manual/source/SUMMARY.md.in
+@@ -138,6 +138,7 @@
+   - [Nix Cache Info Format](protocols/nix-cache-info.md)
+   - [Derivation "ATerm" file format](protocols/derivation-aterm.md)
+   - [Nix32 Encoding](protocols/nix32.md)
++  - [`builtins.wasm` Host Interface](protocols/wasm.md)
+ - [C API](c-api.md)
+ - [Glossary](glossary.md)
+ - [Development](development/index.md)
+diff --git a/doc/manual/source/protocols/wasm.md b/doc/manual/source/protocols/wasm.md
+new file mode 100644
+index 0000000..ca67491
+--- /dev/null
++++ b/doc/manual/source/protocols/wasm.md
+@@ -0,0 +1,379 @@
++# Wasm Host Interface
++
++Nix provides a builtin for calling WebAssembly modules: `builtins.wasm`. This allows extending Nix with custom functionality written in languages that compile to WebAssembly (such as Rust).
++
++## Overview
++
++WebAssembly modules can interact with Nix values through a host interface that provides functions for creating and inspecting Nix values. The WASM module receives Nix values as opaque `ValueId` handles and uses host functions to work with them.
++
++The `builtins.wasm` builtin takes two arguments:
++1. A configuration attribute set with the following attributes:
++   - `path` - Path to the WebAssembly module (required)
++   - `function` - Name of the Wasm function to call (required for non-WASI modules, not allowed for WASI modules)
++2. The argument value to pass to the function
++
++WASI mode is automatically detected by checking if the module imports from `wasi_snapshot_preview1`. There are two calling conventions:
++
++- **Non-WASI mode** (no WASI imports) calls the Wasm export specified by `function` directly. The function receives its input as a `ValueId` parameter and returns a `ValueId`.
++- **WASI mode** (when the module imports from `wasi_snapshot_preview1`) runs the WASI module's `_start` entry point. The input `ValueId` is passed as a command-line argument (`argv[1]`), and the result is returned by calling the `return_to_nix` host function.
++
++## Value IDs
++
++Nix values are represented in Wasm code as a `u32` referred to below as a `ValueId`. These are opaque handles that reference values managed by the Nix evaluator. Value ID 0 is reserved to represent a missing attribute lookup result.
++
++## Entry Points
++
++### Non-WASI Mode
++
++Non-WASI mode is used when the module does **not** import from `wasi_snapshot_preview1`.
++
++Usage:
++```nix
++builtins.wasm {
++  path = <module>;
++  function = <function-name>;
++} <arg>
++```
++
++Every Wasm module used in non-WASI mode must export:
++- A `memory` object that the host can use to read/write data.
++- `nix_wasm_init_v1()`, a function that is called once when the module is instantiated.
++- The entry point function, whose name is specified by the `function` attribute. It takes a single `ValueId` and returns a single `ValueId` (i.e. it has type `fn(arg: u32) -> u32`).
++
++### WASI Mode
++
++WASI mode is automatically used when the module imports a `wasi_snapshot_preview1` function.
++
++Usage:
++```nix
++builtins.wasm {
++  path = <module>;
++} <arg>
++```
++
++Every WASI module must export:
++- A `memory` object that the host can use to read/write data.
++- `_start()`, the standard WASI entry point. This function takes no parameters.
++
++The input value is passed as a command-line argument: `argv[1]` is set to the decimal representation of the `ValueId` of the input value.
++
++To return a result to Nix, the module must call the `return_to_nix` host function (see below) with the `ValueId` of the result. If `_start` finishes without calling `return_to_nix`, an error is raised.
++
++Standard output and standard error from the WASI module are captured and emitted as Nix warnings (one warning per line).
++
++## Host Functions
++
++All host functions are imported from the `env` module.
++
++### Error Handling
++
++#### `panic(ptr: u32, len: u32)`
++
++Aborts execution with an error message.
++
++**Parameters:**
++- `ptr` - Pointer to UTF-8 encoded error message in Wasm memory
++- `len` - Length of the error message in bytes
++
++#### `warn(ptr: u32, len: u32)`
++
++Emits a warning message.
++
++**Parameters:**
++- `ptr` - Pointer to UTF-8 encoded warning message in Wasm memory
++- `len` - Length of the warning message in bytes
++
++### Type Inspection
++
++#### `get_type(value: ValueId) -> u32`
++
++Returns the type of a Nix value.
++
++**Parameters:**
++- `value` - ID of a Nix value
++
++**Return values:**
++- `1` - Integer
++- `2` - Float
++- `3` - Boolean
++- `4` - String
++- `5` - Path
++- `6` - Null
++- `7` - Attribute set
++- `8` - List
++- `9` - Function
++
++**Note:** Forces evaluation of the value.
++
++### Integer Operations
++
++#### `make_int(n: i64) -> ValueId`
++
++Creates a Nix integer value.
++
++**Parameters:**
++- `n` - The integer value
++
++**Returns:** Value ID of the created integer
++
++#### `get_int(value: ValueId) -> i64`
++
++Extracts an integer from a Nix value. Throws an error if the value is not an integer.
++
++**Parameters:**
++- `value` - ID of a Nix integer value
++
++**Returns:** The integer value
++
++### Float Operations
++
++#### `make_float(x: f64) -> ValueId`
++
++Creates a Nix float value.
++
++**Parameters:**
++- `x` - The float value
++
++**Returns:** Value ID of the created float
++
++#### `get_float(value: ValueId) -> f64`
++
++Extracts a float from a Nix value. Throws an error if the value is not a float.
++
++**Parameters:**
++- `value` - ID of a Nix float value
++
++**Returns:** The float value
++
++### Boolean Operations
++
++#### `make_bool(b: i32) -> ValueId`
++
++Creates a Nix Boolean value.
++
++**Parameters:**
++- `b` - Boolean value (0 = false, non-zero = true)
++
++**Returns:** Value ID of the created Boolean
++
++#### `get_bool(value: ValueId) -> i32`
++
++Extracts a Boolean from a Nix value. Throws an error if the value is not a Boolean.
++
++**Parameters:**
++- `value` - ID of a Nix Boolean value
++
++**Returns:** 0 for false, 1 for true
++
++### Null Operations
++
++#### `make_null() -> ValueId`
++
++Creates a Nix null value.
++
++**Returns:** Value ID of the null value
++
++### String Operations
++
++#### `make_string(ptr: u32, len: u32) -> ValueId`
++
++Creates a Nix string value from Wasm memory.
++
++**Parameters:**
++- `ptr` - Pointer to a string in Wasm memory
++- `len` - Length of the string in bytes
++
++**Note:** Strings do not require a null terminator.
++
++**Returns:** Value ID of the created string
++
++#### `copy_string(value: ValueId, ptr: u32, max_len: u32) -> u32`
++
++Copies a Nix string value into Wasm memory.
++
++**Parameters:**
++- `value` - ID of a string value
++- `ptr` - Pointer to buffer in Wasm memory
++- `max_len` - Maximum number of bytes to copy
++
++**Returns:** The actual length of the string in bytes
++
++**Note:** If the returned length is greater than `max_len`, no data is copied. Call again with a larger buffer to get the full string.
++
++### Path Operations
++
++#### `make_path(base: ValueId, ptr: u32, len: u32) -> ValueId`
++
++Creates a Nix path value relative to a base path.
++
++**Parameters:**
++- `base` - ID of a path value
++- `ptr` - Pointer to a string in Wasm memory
++- `len` - Length of the path string in bytes
++
++**Returns:** ID of a new path value
++
++**Note:** The path string is interpreted relative to the base path. The resulting path is in the same source tree ("source accessor") as the original path.
++
++#### `copy_path(value: ValueId, ptr: u32, max_len: u32) -> u32`
++
++Copies a Nix path value into Wasm memory as an absolute path string.
++
++**Parameters:**
++- `value` - ID of a path value
++- `ptr` - Pointer to buffer in Wasm memory
++- `max_len` - Maximum number of bytes to copy
++
++**Returns:** The actual length of the path string in bytes
++
++**Note:** If the returned length is greater than `max_len`, no data is copied.
++
++### List Operations
++
++#### `make_list(ptr: u32, len: u32) -> ValueId`
++
++Creates a Nix list from an array of value IDs in Wasm memory.
++
++**Parameters:**
++- `ptr` - Pointer to array of `ValueId` (u32) in Wasm memory
++- `len` - Number of elements in the array
++
++**Returns:** Value ID of the created list
++
++**Note:** The array must contain `len * 4` bytes (each ValueId is 4 bytes).
++
++#### `copy_list(value: ValueId, ptr: u32, max_len: u32) -> u32`
++
++Copies a Nix list into Wasm memory as an array of value IDs.
++
++**Parameters:**
++- `value` - ID of a list value
++- `ptr` - Pointer to buffer in Wasm memory
++- `max_len` - Maximum number of elements to copy
++
++**Returns:** The actual number of elements in the list
++
++**Note:** If the returned length is greater than `max_len`, no data is copied. Each element is written as a `ValueId` (4 bytes). The buffer must be `max_len * 4` bytes large.
++
++### Attribute Set Operations
++
++#### `make_attrset(ptr: u32, len: u32) -> ValueId`
++
++Creates a Nix attribute set from an array of attributes in Wasm memory.
++
++**Parameters:**
++- `ptr` - Pointer to array of attribute structures in Wasm memory
++- `len` - Number of attributes
++
++**Returns:** Value ID of the created attribute set
++
++**Attribute structure format:**
++```c
++struct Attr {
++    name_ptr: u32,   // Pointer to attribute name
++    name_len: u32,   // Length of attribute name in bytes
++    value_id: u32,   // ID of the attribute value
++}
++```
++
++Each `Attr` element is 12 bytes (3 × 4 bytes).
++
++#### `copy_attrset(value: ValueId, ptr: u32, max_len: u32) -> u32`
++
++Copies a Nix attribute set into Wasm memory as an array of attribute structures.
++
++**Parameters:**
++- `value` - ID of a Nix attribute set value
++- `ptr` - Pointer to buffer in Wasm memory
++- `max_len` - Maximum number of attributes to copy
++
++**Returns:** The actual number of attributes in the set
++
++**Note:** If the returned length is greater than `max_len`, no data is copied.
++
++**Output structure format:**
++```c
++struct Attr {
++    value_id: u32,   // ID of the attribute value
++    name_len: u32,   // Length of attribute name in bytes
++}
++```
++
++Each attribute is 8 bytes (2 × 4 bytes). Use `copy_attrname` to retrieve attribute names.
++
++#### `copy_attrname(value: ValueId, attr_idx: u32, ptr: u32, len: u32)`
++
++Copies an attribute name into Wasm memory.
++
++**Parameters:**
++- `value` - ID of a Nix attribute set value
++- `attr_idx` - Index of the attribute (from `copy_attrset`)
++- `ptr` - Pointer to buffer in Wasm memory
++- `len` - Length of the buffer (must exactly match the attribute name length)
++
++**Note:** Throws an error if `len` doesn't match the attribute name length or if `attr_idx` is out of bounds.
++
++#### `get_attr(value: ValueId, ptr: u32, len: u32) -> ValueId`
++
++Gets an attribute value from an attribute set by name.
++
++**Parameters:**
++- `value` - ID of a Nix attribute set value
++- `ptr` - Pointer to the attribute name in Wasm memory
++- `len` - Length of the attribute name in bytes
++
++**Returns:** Value ID of the attribute value, or 0 if the attribute doesn't exist
++
++### Function Operations
++
++#### `call_function(fun: ValueId, ptr: u32, len: u32) -> ValueId`
++
++Calls a Nix function with arguments.
++
++**Parameters:**
++- `fun` - ID of a Nix function value
++- `ptr` - Pointer to array of `ValueId` arguments in Wasm memory
++- `len` - Number of arguments
++
++**Returns:** Value ID of the function result
++
++#### `make_app(fun: ValueId, ptr: u32, len: u32) -> ValueId`
++
++Creates a lazy or partially applied function application.
++
++**Parameters:**
++- `fun` - ID of a Nix function value
++- `ptr` - Pointer to array of `ValueId` arguments in Wasm memory
++- `len` - Number of arguments
++
++**Returns:** Value ID of the unevaluated application
++
++### Returning Results (WASI mode only)
++
++#### `return_to_nix(value: ValueId)`
++
++Returns a result value to the Nix evaluator from a WASI module. This function is only available in WASI mode.
++
++**Parameters:**
++- `value` - ID of the Nix value to return as the result of the `builtins.wasm` call
++
++**Note:** Calling this function immediately terminates the WASI module's execution. The module must call `return_to_nix` before finishing; otherwise, an error is raised.
++
++### File I/O
++
++#### `read_file(path: ValueId, ptr: u32, len: u32) -> u32`
++
++Reads a file into Wasm memory.
++
++**Parameters:**
++- `path` - Value ID of a Nix path value
++- `ptr` - Pointer to buffer in Wasm memory
++- `len` - Maximum number of bytes to read
++
++**Returns:** The actual file size in bytes
++
++**Note:** Similar to `builtins.readFile`, but can handle files that cannot be represented as Nix strings (in particular, files containing NUL bytes). If the returned size is greater than `len`, no data is copied.
++
++## Example Usage
++
++For Rust bindings to this interface and several examples, see https://github.com/DeterminateSystems/nix-wasm-rust/.
+diff --git a/packaging/dependencies.nix b/packaging/dependencies.nix
+index 5338f70..8089251 100644
+--- a/packaging/dependencies.nix
++++ b/packaging/dependencies.nix
+@@ -65,4 +65,6 @@ scope: {
+         buildPhase = lib.replaceStrings [ "--without-python" ] [ "" ] old.buildPhase;
+         installPhase = lib.replaceStrings [ "--without-python" ] [ "" ] old.installPhase;
+       });
++
++  wasmtime = pkgs.callPackage ./wasmtime.nix { };
+ }
+diff --git a/packaging/wasmtime.nix b/packaging/wasmtime.nix
+new file mode 100644
+index 0000000..d2c2b95
+--- /dev/null
++++ b/packaging/wasmtime.nix
+@@ -0,0 +1,74 @@
++# Stripped-down version of https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/wa/wasmtime/package.nix,
++# license: https://github.com/NixOS/nixpkgs/blob/master/COPYING
++{
++  lib,
++  stdenv,
++  rust,
++  fetchFromGitHub,
++  cmake,
++  enableShared ? !stdenv.hostPlatform.isStatic,
++  enableStatic ? stdenv.hostPlatform.isStatic,
++}:
++rust.packages.stable.rustPlatform.buildRustPackage (finalAttrs: {
++  pname = "wasmtime";
++  version = "40.0.2";
++
++  src = fetchFromGitHub {
++    owner = "bytecodealliance";
++    repo = "wasmtime";
++    tag = "v${finalAttrs.version}";
++    hash = "sha256-4y9WpCdyuF/Tp2k/1d5rZxwYunWNdeibEsFgHcBC52Q=";
++    fetchSubmodules = true;
++  };
++
++  # Disable cargo-auditable until https://github.com/rust-secure-code/cargo-auditable/issues/124 is solved.
++  auditable = false;
++
++  cargoHash = "sha256-aTPgnuBvOIqg1+Sa2ZLdMTLujm8dKGK5xpZ3qHpr3f8=";
++  cargoBuildFlags = [
++    "--package"
++    "wasmtime-c-api"
++    "--no-default-features"
++    "--features cranelift,wasi,pooling-allocator,wat,demangle,gc-null"
++  ];
++
++  outputs = [
++    "out"
++    "lib"
++  ];
++
++  nativeBuildInputs = [
++    cmake
++  ];
++
++  doCheck =
++    with stdenv.buildPlatform;
++    # SIMD tests are only executed on platforms that support all
++    # required processor features (e.g. SSE3, SSSE3 and SSE4.1 on x86_64):
++    # https://github.com/bytecodealliance/wasmtime/blob/v9.0.0/cranelift/codegen/src/isa/x64/mod.rs#L220
++    (isx86_64 -> sse3Support && ssse3Support && sse4_1Support)
++    &&
++      # The dependency `wasi-preview1-component-adapter` fails to build because of:
++      # error: linker `rust-lld` not found
++      !isAarch64;
++
++  postInstall =
++    let
++      inherit (stdenv.hostPlatform.rust) cargoShortTarget;
++    in
++    ''
++      moveToOutput lib $lib
++      ${lib.optionalString (!enableShared) "rm -f $lib/lib/*.so{,.*}"}
++      ${lib.optionalString (!enableStatic) "rm -f $lib/lib/*.a"}
++
++      # copy the build.rs generated c-api headers
++      # https://github.com/rust-lang/cargo/issues/9661
++      mkdir -p $out
++      cp -r target/${cargoShortTarget}/release/build/wasmtime-c-api-impl-*/out/include $out/include
++    ''
++    + lib.optionalString stdenv.hostPlatform.isDarwin ''
++      install_name_tool -id \
++        $lib/lib/libwasmtime.dylib \
++        $lib/lib/libwasmtime.dylib
++    '';
++})
+diff --git a/src/libexpr/meson.build b/src/libexpr/meson.build
+index 0b594dc..7fd7880 100644
+--- a/src/libexpr/meson.build
++++ b/src/libexpr/meson.build
+@@ -77,6 +77,17 @@ endif
+ # Used in public header. Affects ABI!
+ configdata_pub.set('NIX_USE_BOEHMGC', bdw_gc.found().to_int())
+ 
++link_args = []
++
++wasmtime_required = get_option('wasm').disable_if(
++  get_option('default_library') == 'static',
++  error_message : 'Building with wasmtime and static linking is not supported',
++)
++
++if wasmtime_required.enabled()
++  link_args += '-lwasmtime'
++endif
++
+ toml11 = dependency(
+   'toml11',
+   version : '>=3.7.0',
+@@ -238,7 +249,7 @@ this_library = library(
+   soversion : nix_soversion,
+   dependencies : deps_public + deps_private + deps_other,
+   include_directories : include_dirs,
+-  link_args : linker_export_flags,
++  link_args : linker_export_flags + link_args,
+   link_whole : [ parser_library ],
+   prelink : true, # For C++ static initializers
+   install : true,
+diff --git a/src/libexpr/meson.options b/src/libexpr/meson.options
+index 847bb21..2defbf7 100644
+--- a/src/libexpr/meson.options
++++ b/src/libexpr/meson.options
+@@ -3,3 +3,9 @@ option(
+   type : 'feature',
+   description : 'enable garbage collection in the Nix expression evaluator (requires Boehm GC)',
+ )
++
++option(
++  'wasm',
++  type : 'feature',
++  description : 'enable wasmtime integration into the Nix expression evaluator',
++)
+diff --git a/src/libexpr/package.nix b/src/libexpr/package.nix
+index d0aef34..6ec5f54 100644
+--- a/src/libexpr/package.nix
++++ b/src/libexpr/package.nix
+@@ -14,6 +14,7 @@
+   boehmgc,
+   nlohmann_json,
+   toml11,
++  wasmtime,
+ 
+   # Configuration Options
+ 
+@@ -29,6 +30,11 @@
+   # Temporarily disabled on Windows because the `GC_throw_bad_alloc`
+   # symbol is missing during linking.
+   enableGC ? !stdenv.hostPlatform.isWindows,
++
++  # Whether to use wasmtime for wasm integration in the Nix language evaluator
++  #
++  # Temporarily disabled when static linking due to Rust not compiling
++  enableWasm ? !stdenv.hostPlatform.isStatic,
+ }:
+ 
+ let
+@@ -64,7 +70,8 @@ mkMesonLibrary (finalAttrs: {
+ 
+   buildInputs = [
+     toml11
+-  ];
++  ]
++  ++ lib.optional enableWasm wasmtime;
+ 
+   propagatedBuildInputs = [
+     nix-util
+@@ -77,6 +84,7 @@ mkMesonLibrary (finalAttrs: {
+ 
+   mesonFlags = [
+     (lib.mesonEnable "gc" enableGC)
++    (lib.mesonEnable "wasm" enableWasm)
+   ];
+ 
+   meta = {
+diff --git a/src/libexpr/primops/meson.build b/src/libexpr/primops/meson.build
+index b8abc64..d62b6df 100644
+--- a/src/libexpr/primops/meson.build
++++ b/src/libexpr/primops/meson.build
+@@ -10,3 +10,7 @@ sources += files(
+   'fetchTree.cc',
+   'fromTOML.cc',
+ )
++
++if wasmtime_required.enabled()
++  sources += files('wasm.cc')
++endif
+diff --git a/src/libexpr/primops/wasm.cc b/src/libexpr/primops/wasm.cc
+new file mode 100644
+index 0000000..b1bd235
+--- /dev/null
++++ b/src/libexpr/primops/wasm.cc
+@@ -0,0 +1,700 @@
++#include "nix/expr/primops.hh"
++#include "nix/expr/eval-inline.hh"
++
++#include <wasmtime.hh>
++#include <boost/unordered/concurrent_flat_map.hpp>
++
++using namespace wasmtime;
++
++namespace nix {
++
++using ValueId = uint32_t;
++
++template<typename T, typename E = Error>
++T unwrap(Result<T, E> && res)
++{
++    if (res)
++        return res.ok();
++    throw Error(res.err().message());
++}
++
++static Engine & getEngine()
++{
++    static Engine engine = []() {
++        wasmtime::Config config;
++        config.pooling_allocation_strategy(PoolAllocationConfig());
++        config.memory_init_cow(true);
++        return Engine(std::move(config));
++    }();
++    return engine;
++}
++
++static std::span<uint8_t> string2span(std::string_view s)
++{
++    return std::span<uint8_t>((uint8_t *) s.data(), s.size());
++}
++
++static std::string_view span2string(std::span<uint8_t> s)
++{
++    return std::string_view((char *) s.data(), s.size());
++}
++
++template<typename T>
++static std::span<T> subspan(std::span<uint8_t> s, size_t len)
++{
++    if (s.size() < len * sizeof(T))
++        throw Error("Wasm memory access out of bounds");
++    return std::span((T *) s.data(), len);
++}
++
++// FIXME: move to wasmtime C++ wrapper.
++class InstancePre
++{
++    WASMTIME_OWN_WRAPPER(InstancePre, wasmtime_instance_pre);
++
++public:
++    TrapResult<Instance> instantiate(wasmtime::Store::Context cx)
++    {
++        wasmtime_instance_t instance;
++        wasm_trap_t * trap = nullptr;
++        auto * error = wasmtime_instance_pre_instantiate(ptr.get(), cx.capi(), &instance, &trap);
++        if (error != nullptr) {
++            return TrapError(wasmtime::Error(error));
++        }
++        if (trap != nullptr) {
++            return TrapError(Trap(trap));
++        }
++        return Instance(instance);
++    }
++};
++
++TrapResult<InstancePre> instantiate_pre(Linker & linker, const Module & m)
++{
++    wasmtime_instance_pre_t * instance_pre;
++    auto * error = wasmtime_linker_instantiate_pre(linker.capi(), m.capi(), &instance_pre);
++    if (error != nullptr) {
++        return TrapError(wasmtime::Error(error));
++    }
++    return InstancePre(instance_pre);
++}
++
++static void regFuns(Linker & linker, bool useWasi);
++
++struct NixWasmInstancePre
++{
++    Engine & engine;
++    SourcePath wasmPath;
++    bool useWasi;
++    InstancePre instancePre;
++
++    NixWasmInstancePre(SourcePath _wasmPath)
++        : engine(getEngine())
++        , wasmPath(_wasmPath)
++        , useWasi(false)
++        , instancePre(({
++            // Compile the module
++            auto module = unwrap(Module::compile(engine, string2span(wasmPath.readFile())));
++
++            // Auto-detect WASI by checking for wasi_snapshot_preview1 imports.
++            for (const auto & ref : module.imports())
++                if (const_cast<std::decay_t<decltype(ref)> &>(ref).module() == "wasi_snapshot_preview1") {
++                    useWasi = true;
++                    break;
++                }
++
++            // Create linker with appropriate WASI support
++            Linker linker(engine);
++            if (useWasi)
++                unwrap(linker.define_wasi());
++            regFuns(linker, useWasi);
++
++            unwrap(instantiate_pre(linker, module));
++        }))
++    {
++    }
++};
++
++struct NixWasmInstance
++{
++    EvalState & state;
++    ref<NixWasmInstancePre> pre;
++    wasmtime::Store wasmStore;
++    wasmtime::Store::Context wasmCtx;
++    Instance instance;
++    Memory memory_;
++
++    ValueVector values;
++    std::exception_ptr ex;
++
++    std::optional<std::string> functionName;
++
++    ValueId resultId = 0;
++
++    std::string logPrefix;
++
++    NixWasmInstance(EvalState & _state, ref<NixWasmInstancePre> _pre)
++        : state(_state)
++        , pre(_pre)
++        , wasmStore(pre->engine)
++        , wasmCtx(wasmStore)
++        , instance(unwrap(pre->instancePre.instantiate(wasmCtx)))
++        , memory_(getExport<Memory>("memory"))
++        , logPrefix(pre->wasmPath.baseName())
++    {
++        wasmCtx.set_data(this);
++
++        /* Reserve value ID 0 so it can be used in functions like get_attr() to denote a missing attribute. */
++        values.push_back(nullptr);
++    }
++
++    ValueId addValue(Value * v)
++    {
++        auto id = values.size();
++        values.emplace_back(v);
++        return id;
++    }
++
++    std::pair<ValueId, Value &> allocValue()
++    {
++        auto v = state.allocValue();
++        auto id = addValue(v);
++        return {id, *v};
++    }
++
++    Value & getValue(ValueId id)
++    {
++        if (id >= values.size() || id == 0)
++            throw Error("invalid ValueId %d", id);
++        return *values[id];
++    }
++
++    template<typename T>
++    T getExport(std::string_view name)
++    {
++        auto ext = instance.get(wasmCtx, name);
++        if (!ext)
++            throw Error("Wasm module '%s' does not export '%s'", pre->wasmPath, name);
++        auto res = std::get_if<T>(&*ext);
++        if (!res)
++            throw Error("export '%s' of Wasm module '%s' does not have the right type", name, pre->wasmPath);
++        return *res;
++    }
++
++    std::vector<Val> runFunction(std::string_view name, const std::vector<Val> & args)
++    {
++        functionName = name;
++        return unwrap(getExport<Func>(name).call(wasmCtx, args));
++    }
++
++    auto memory()
++    {
++        return memory_.data(wasmCtx);
++    }
++
++    std::monostate panic(uint32_t ptr, uint32_t len)
++    {
++        throw Error("Wasm panic: %s", Uncolored(span2string(memory().subspan(ptr, len))));
++    }
++
++    std::monostate warn(uint32_t ptr, uint32_t len)
++    {
++        doWarn(span2string(memory().subspan(ptr, len)));
++        return {};
++    }
++
++    void doWarn(std::string_view s)
++    {
++        if (functionName)
++            nix::warn("'%s' function '%s': %s", logPrefix, functionName.value_or("<unknown>"), s);
++        else
++            nix::warn("'%s': %s", logPrefix, s);
++    }
++
++    uint32_t get_type(ValueId valueId)
++    {
++        auto & value = getValue(valueId);
++        state.forceValue(value, noPos);
++        auto t = value.type();
++        return t == nInt        ? 1
++               : t == nFloat    ? 2
++               : t == nBool     ? 3
++               : t == nString   ? 4
++               : t == nPath     ? 5
++               : t == nNull     ? 6
++               : t == nAttrs    ? 7
++               : t == nList     ? 8
++               : t == nFunction ? 9
++                                : []() -> int { throw Error("unsupported type"); }();
++    }
++
++    ValueId make_int(int64_t n)
++    {
++        auto [valueId, value] = allocValue();
++        value.mkInt(n);
++        return valueId;
++    }
++
++    int64_t get_int(ValueId valueId)
++    {
++        return state.forceInt(getValue(valueId), noPos, "while evaluating a value from Wasm").value;
++    }
++
++    ValueId make_float(double x)
++    {
++        auto [valueId, value] = allocValue();
++        value.mkFloat(x);
++        return valueId;
++    }
++
++    double get_float(ValueId valueId)
++    {
++        return state.forceFloat(getValue(valueId), noPos, "while evaluating a value from Wasm");
++    }
++
++    ValueId make_string(uint32_t ptr, uint32_t len)
++    {
++        auto [valueId, value] = allocValue();
++        value.mkString(span2string(memory().subspan(ptr, len)), state.mem);
++        return valueId;
++    }
++
++    uint32_t copy_string(ValueId valueId, uint32_t ptr, uint32_t maxLen)
++    {
++        auto s = state.forceString(getValue(valueId), noPos, "while evaluating a value from Wasm");
++        if (s.size() <= maxLen) {
++            auto buf = memory().subspan(ptr, maxLen);
++            memcpy(buf.data(), s.data(), s.size());
++        }
++        return s.size();
++    }
++
++    ValueId make_path(ValueId baseId, uint32_t ptr, uint32_t len)
++    {
++        auto & baseValue = getValue(baseId);
++        state.forceValue(baseValue, noPos);
++        if (baseValue.type() != nPath)
++            throw Error("make_path expects a path value");
++        auto base = baseValue.path();
++
++        auto [valueId, value] = allocValue();
++        value.mkPath({base.accessor, CanonPath(span2string(memory().subspan(ptr, len)), base.path)}, state.mem);
++        return valueId;
++    }
++
++    uint32_t copy_path(ValueId valueId, uint32_t ptr, uint32_t maxLen)
++    {
++        auto & v = getValue(valueId);
++        state.forceValue(v, noPos);
++        if (v.type() != nPath)
++            throw Error("copy_path expects a path value");
++        auto path = v.path().path;
++        auto s = path.abs();
++        if (s.size() <= maxLen) {
++            auto buf = memory().subspan(ptr, maxLen);
++            memcpy(buf.data(), s.data(), s.size());
++        }
++        return s.size();
++    }
++
++    ValueId make_bool(int32_t b)
++    {
++        return addValue(state.getBool(b));
++    }
++
++    int32_t get_bool(ValueId valueId)
++    {
++        return state.forceBool(getValue(valueId), noPos, "while evaluating a value from Wasm");
++    }
++
++    ValueId make_null()
++    {
++        return addValue(&Value::vNull);
++    }
++
++    ValueId make_list(uint32_t ptr, uint32_t len)
++    {
++        auto vs = subspan<ValueId>(memory().subspan(ptr), len);
++
++        auto [valueId, value] = allocValue();
++
++        auto list = state.buildList(len);
++        for (const auto & [n, v] : enumerate(list))
++            v = &getValue(vs[n]); // FIXME: endianness
++        value.mkList(list);
++
++        return valueId;
++    }
++
++    uint32_t copy_list(ValueId valueId, uint32_t ptr, uint32_t maxLen)
++    {
++        auto & value = getValue(valueId);
++        state.forceList(value, noPos, "while getting a list from Wasm");
++
++        if (value.listSize() <= maxLen) {
++            auto out = subspan<ValueId>(memory().subspan(ptr), value.listSize());
++
++            for (const auto & [n, elem] : enumerate(value.listView()))
++                out[n] = addValue(elem);
++        }
++
++        return value.listSize();
++    }
++
++    ValueId make_attrset(uint32_t ptr, uint32_t len)
++    {
++        auto mem = memory();
++
++        struct Attr
++        {
++            // FIXME: endianness
++            uint32_t attrNamePtr;
++            uint32_t attrNameLen;
++            ValueId value;
++        };
++
++        auto attrs = subspan<Attr>(mem.subspan(ptr), len);
++
++        auto [valueId, value] = allocValue();
++        auto builder = state.buildBindings(len);
++        for (auto & attr : attrs)
++            builder.insert(
++                state.symbols.create(span2string(mem.subspan(attr.attrNamePtr, attr.attrNameLen))),
++                &getValue(attr.value));
++        value.mkAttrs(builder);
++
++        return valueId;
++    }
++
++    uint32_t copy_attrset(ValueId valueId, uint32_t ptr, uint32_t maxLen)
++    {
++        auto & value = getValue(valueId);
++        state.forceAttrs(value, noPos, "while copying an attrset into Wasm");
++
++        if (value.attrs()->size() <= maxLen) {
++            // FIXME: endianness.
++            struct Attr
++            {
++                ValueId value;
++                uint32_t nameLen;
++            };
++
++            auto buf = subspan<Attr>(memory().subspan(ptr), maxLen);
++
++            // FIXME: for determinism, we should return attributes in lexicographically sorted order.
++            for (const auto & [n, attr] : enumerate(*value.attrs())) {
++                buf[n].value = addValue(attr.value);
++                buf[n].nameLen = state.symbols[attr.name].size();
++            }
++        }
++
++        return value.attrs()->size();
++    }
++
++    std::monostate copy_attrname(ValueId valueId, uint32_t attrIdx, uint32_t ptr, uint32_t len)
++    {
++        auto & value = getValue(valueId);
++        state.forceAttrs(value, noPos, "while copying an attr name into Wasm");
++
++        auto & attrs = *value.attrs();
++
++        if ((size_t) attrIdx >= attrs.size())
++            throw Error("copy_attrname: attribute index out of bounds");
++
++        std::string_view name = state.symbols[attrs[attrIdx].name];
++
++        if ((size_t) len != name.size())
++            throw Error("copy_attrname: buffer length does not match attribute name length");
++
++        memcpy(memory().subspan(ptr, len).data(), name.data(), name.size());
++
++        return {};
++    }
++
++    ValueId get_attr(ValueId valueId, uint32_t ptr, uint32_t len)
++    {
++        auto attrName = span2string(memory().subspan(ptr, len));
++
++        auto & value = getValue(valueId);
++        state.forceAttrs(value, noPos, "while getting an attribute from Wasm");
++
++        auto attr = value.attrs()->get(state.symbols.create(attrName));
++
++        return attr ? addValue(attr->value) : 0;
++    }
++
++    ValueId call_function(ValueId funId, uint32_t ptr, uint32_t len)
++    {
++        auto & fun = getValue(funId);
++        state.forceFunction(fun, noPos, "while calling a function from Wasm");
++
++        ValueVector args;
++        for (auto argId : subspan<ValueId>(memory().subspan(ptr), len))
++            args.push_back(&getValue(argId));
++
++        auto [valueId, value] = allocValue();
++
++        state.callFunction(fun, args, value, noPos);
++
++        return valueId;
++    }
++
++    ValueId make_app(ValueId funId, uint32_t ptr, uint32_t len)
++    {
++        if (!len)
++            return funId;
++
++        auto args = subspan<ValueId>(memory().subspan(ptr), len);
++
++        auto res = &getValue(funId);
++
++        while (!args.empty()) {
++            auto arg = &getValue(args[0]);
++            auto tmp = state.allocValue();
++            tmp->mkApp(res, {arg});
++            res = tmp;
++            args = args.subspan(1);
++        }
++
++        return addValue(res);
++    }
++
++    /**
++     * Read the contents of a file into Wasm memory. This is like calling `builtins.readFile`, except that it can handle
++     * binary files that cannot be represented as Nix strings.
++     */
++    uint32_t read_file(ValueId pathId, uint32_t ptr, uint32_t len)
++    {
++        auto & pathValue = getValue(pathId);
++        auto path = state.realisePath(noPos, pathValue);
++
++        auto contents = path.readFile();
++
++        if (contents.size() > std::numeric_limits<uint32_t>::max())
++            throw Error("file '%s' is too large to process in Wasm (size: %d)", path, contents.size());
++
++        // FIXME: this is an inefficient interface since it may cause the file to be read twice.
++        if (contents.size() <= len) {
++            auto buf = memory().subspan(ptr, len);
++            memcpy(buf.data(), contents.data(), contents.size());
++        }
++
++        return contents.size();
++    }
++};
++
++template<typename R, typename... Args>
++static void regFun(Linker & linker, std::string_view name, R (NixWasmInstance::*f)(Args...))
++{
++    unwrap(linker.func_wrap("env", name, [f](Caller caller, Args... args) -> Result<R, Trap> {
++        try {
++            auto instance = std::any_cast<NixWasmInstance *>(caller.context().get_data());
++            return (*instance.*f)(args...);
++        } catch (std::exception & e) {
++            return Trap(e.what());
++        } catch (...) {
++            return Trap("unknown exception");
++        }
++    }));
++}
++
++static void regFuns(Linker & linker, bool useWasi)
++{
++    regFun(linker, "panic", &NixWasmInstance::panic);
++    regFun(linker, "warn", &NixWasmInstance::warn);
++    regFun(linker, "get_type", &NixWasmInstance::get_type);
++    regFun(linker, "make_int", &NixWasmInstance::make_int);
++    regFun(linker, "get_int", &NixWasmInstance::get_int);
++    regFun(linker, "make_float", &NixWasmInstance::make_float);
++    regFun(linker, "get_float", &NixWasmInstance::get_float);
++    regFun(linker, "make_string", &NixWasmInstance::make_string);
++    regFun(linker, "copy_string", &NixWasmInstance::copy_string);
++    regFun(linker, "make_path", &NixWasmInstance::make_path);
++    regFun(linker, "copy_path", &NixWasmInstance::copy_path);
++    regFun(linker, "make_bool", &NixWasmInstance::make_bool);
++    regFun(linker, "get_bool", &NixWasmInstance::get_bool);
++    regFun(linker, "make_null", &NixWasmInstance::make_null);
++    regFun(linker, "make_list", &NixWasmInstance::make_list);
++    regFun(linker, "copy_list", &NixWasmInstance::copy_list);
++    regFun(linker, "make_attrset", &NixWasmInstance::make_attrset);
++    regFun(linker, "copy_attrset", &NixWasmInstance::copy_attrset);
++    regFun(linker, "copy_attrname", &NixWasmInstance::copy_attrname);
++    regFun(linker, "get_attr", &NixWasmInstance::get_attr);
++    regFun(linker, "call_function", &NixWasmInstance::call_function);
++    regFun(linker, "make_app", &NixWasmInstance::make_app);
++    regFun(linker, "read_file", &NixWasmInstance::read_file);
++
++    if (useWasi) {
++        unwrap(linker.func_wrap(
++            "env", "return_to_nix", [](Caller caller, ValueId resultId) -> Result<std::monostate, Trap> {
++                auto instance = std::any_cast<NixWasmInstance *>(caller.context().get_data());
++                instance->resultId = resultId;
++                return Trap("return_to_nix");
++            }));
++    }
++}
++
++static NixWasmInstance instantiateWasm(EvalState & state, const SourcePath & wasmPath)
++{
++    // FIXME: make this a weak Boehm GC pointer so that it can be freed during GC.
++    // FIXME: move to EvalState?
++    // Note: InstancePre in Rust is Send+Sync so it should be safe to share between threads.
++    static boost::concurrent_flat_map<SourcePath, std::shared_ptr<NixWasmInstancePre>> instancesPre;
++
++    std::shared_ptr<NixWasmInstancePre> instancePre;
++
++    instancesPre.try_emplace_and_cvisit(
++        wasmPath,
++        nullptr,
++        [&](auto & i) { instancePre = i.second = std::make_shared<NixWasmInstancePre>(wasmPath); },
++        [&](auto & i) { instancePre = i.second; });
++
++    return NixWasmInstance{state, ref(instancePre)};
++}
++
++/**
++ * Callback for WASI stdout/stderr writes. It splits the output into lines and logs each line separately.
++ */
++struct WasiLogger
++{
++    NixWasmInstance & instance;
++
++    std::string data;
++
++    ~WasiLogger()
++    {
++        if (!data.empty())
++            instance.doWarn(data);
++    }
++
++    void operator()(std::string_view s)
++    {
++        data.append(s);
++
++        while (true) {
++            auto pos = data.find('\n');
++            if (pos == std::string_view::npos)
++                break;
++            instance.doWarn(data.substr(0, pos));
++            data.erase(0, pos + 1);
++        }
++    }
++};
++
++static void prim_wasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
++{
++    state.forceAttrs(*args[0], pos, "while evaluating the first argument to `builtins.wasm`");
++
++    // Extract 'path' attribute
++    auto pathAttr = args[0]->attrs()->get(state.symbols.create("path"));
++    if (!pathAttr)
++        throw Error("missing required 'path' attribute in first argument to `builtins.wasm`");
++    auto wasmPath = state.realisePath(pos, *pathAttr->value);
++
++    // Check for unknown attributes
++    for (auto & attr : *args[0]->attrs()) {
++        auto name = state.symbols[attr.name];
++        if (name != "path" && name != "function")
++            throw Error("unknown attribute '%s' in first argument to `builtins.wasm`", name);
++    }
++
++    // Second argument is the value to pass to the function
++    auto argValue = args[1];
++
++    try {
++        auto instance = instantiateWasm(state, wasmPath);
++
++        // Extract 'function' attribute (optional for wasi, required for non-wasi)
++        std::string functionName;
++        auto functionAttr = args[0]->attrs()->get(state.symbols.create("function"));
++        if (instance.pre->useWasi) {
++            functionName = "_start";
++            if (functionAttr)
++                throw Error("'function' attribute is not allowed for WASI modules");
++        } else {
++            if (!functionAttr)
++                throw Error(
++                    "missing required 'function' attribute in first argument to `builtins.wasm` for non-WASI modules");
++            functionName = std::string(
++                state.forceStringNoCtx(*functionAttr->value, pos, "while evaluating the 'function' attribute"));
++        }
++
++        debug("calling wasm module");
++
++        auto argId = instance.addValue(argValue);
++
++        if (instance.pre->useWasi) {
++            WasiLogger logger{instance};
++
++            auto loggerTrampoline = [](void * data, const unsigned char * buf, size_t len) -> ptrdiff_t {
++                auto logger = static_cast<WasiLogger *>(data);
++                (*logger)(std::string_view((const char *) buf, len));
++                return len;
++            };
++
++            WasiConfig wasiConfig;
++            wasi_config_set_stdout_custom(wasiConfig.capi(), loggerTrampoline, &logger, nullptr);
++            wasi_config_set_stderr_custom(wasiConfig.capi(), loggerTrampoline, &logger, nullptr);
++            wasiConfig.argv({"wasi", std::to_string(argId)});
++            unwrap(instance.wasmStore.context().set_wasi(std::move(wasiConfig)));
++
++            auto res = instance.getExport<Func>(functionName).call(instance.wasmCtx, {});
++            if (!instance.resultId) {
++                unwrap(std::move(res));
++                throw Error("Wasm function '%s' from '%s' finished without returning a value", functionName, wasmPath);
++            }
++
++            auto & vRes = instance.getValue(instance.resultId);
++            state.forceValue(vRes, pos);
++            v = vRes;
++        } else {
++            // FIXME: use the "start" function if present.
++            instance.runFunction("nix_wasm_init_v1", {});
++
++            auto res = instance.runFunction(functionName, {(int32_t) argId});
++            if (res.size() != 1)
++                throw Error("Wasm function '%s' from '%s' did not return exactly one value", functionName, wasmPath);
++            if (res[0].kind() != ValKind::I32)
++                throw Error("Wasm function '%s' from '%s' did not return an i32 value", functionName, wasmPath);
++            auto & vRes = instance.getValue(res[0].i32());
++            state.forceValue(vRes, pos);
++            v = vRes;
++        }
++    } catch (Error & e) {
++        e.addTrace(state.positions[pos], "while executing the Wasm function from '%s'", wasmPath);
++        throw;
++    }
++}
++
++static RegisterPrimOp primop_wasm(
++    {.name = "__wasm",
++     .args = {"config", "arg"},
++     .doc = R"(
++      Call a Wasm function with the specified argument.
++
++      The first argument must be an attribute set with the following attributes:
++      - `path`: Path to the Wasm module (required)
++      - `function`: Function name to call (required for non-WASI modules, not allowed for WASI modules)
++
++      The second argument is the value to pass to the function.
++
++      WASI mode is automatically enabled if the module imports from `wasi_snapshot_preview1`.
++
++      Example (non-WASI):
++      ```nix
++      builtins.wasm {
++        path = ./foo.wasm;
++        function = "fib";
++      } 33
++      ```
++
++      Example (WASI):
++      ```nix
++      builtins.wasm {
++        path = ./bar.wasm;
++      } { x = 42; }
++      ```
++     )",
++     .impl = prim_wasm,
++     .experimentalFeature = Xp::WasmBuiltin});
++
++} // namespace nix
+diff --git a/src/libutil/experimental-features.cc b/src/libutil/experimental-features.cc
+index b121a9c..375d764 100644
+--- a/src/libutil/experimental-features.cc
++++ b/src/libutil/experimental-features.cc
+@@ -25,7 +25,7 @@ struct ExperimentalFeatureDetails
+  * feature, we either have no issue at all if few features are not added
+  * at the end of the list, or a proper merge conflict if they are.
+  */
+-constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::GitExportHistory);
++constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::WasmBuiltin);
+ 
+ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
+     {
+@@ -307,6 +307,15 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
+         )",
+         .trackingUrl = "https://github.com/NixOS/nix/milestone/60",
+     },
++    {
++        .tag = Xp::WasmBuiltin,
++        .name = "wasm-builtin",
++        .description = R"(
++            Enable the use of the [`builtins.wasm`](@docroot@/language/builtins.md) built-in function in the Nix language.
++            `builtins.wasm` allows calling WebAssembly functions from Nix expressions.
++        )",
++        .trackingUrl = "",
++    },
+ }};
+ 
+ static_assert(
+diff --git a/src/libutil/include/nix/util/experimental-features.hh b/src/libutil/include/nix/util/experimental-features.hh
+index ac97f5f..a15ed34 100644
+--- a/src/libutil/include/nix/util/experimental-features.hh
++++ b/src/libutil/include/nix/util/experimental-features.hh
+@@ -40,6 +40,7 @@ enum struct ExperimentalFeature {
+     BLAKE3Hashes,
+     BuildStatusDir,
+     GitExportHistory,
++    WasmBuiltin,
+ };
+ 
+ /**
