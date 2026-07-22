@@ -31,12 +31,13 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::fd::AsRawFd as _;
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+
+use crate::worker;
 
 // Linear "Shitty" project (slug b30ae521fda7) and its team (ENG). UUIDs pinned
 // so hook time needs no lookup round-trip.
@@ -87,9 +88,18 @@ fn state_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("FRICTION_STATE_DIR").filter(|v| !v.is_empty()) {
         return PathBuf::from(dir);
     }
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/var/empty"), PathBuf::from);
-    home.join(".claude/.friction-state")
+    crate::home().join(".claude/.friction-state")
 }
+
+/// This hook's detached-worker identity: `claude-hooks friction-report
+/// --analyze`, payload in `FRICTION_PAYLOAD`, log in `<state>/friction.log`.
+const WORKER: worker::Worker = worker::Worker {
+    subcommand: "friction-report",
+    flag: "--analyze",
+    payload_env: "FRICTION_PAYLOAD",
+    log_file: "friction.log",
+    state_dir,
+};
 
 fn model() -> String {
     env_or("FRICTION_MODEL", DEFAULT_MODEL)
@@ -107,19 +117,7 @@ fn min_delta_chars() -> usize {
 /// Timestamped line appended to `<state>/friction.log`; best-effort, never
 /// raises. This is the only output channel: nothing ever touches stdout/stderr.
 fn log(msg: &str) {
-    let dir = state_dir();
-    if fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("friction.log"))
-    else {
-        return;
-    };
-    let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S");
-    let _ = writeln!(f, "{ts} {msg}");
+    WORKER.log(msg);
 }
 
 // --- per-session state ---
@@ -374,7 +372,7 @@ fn ask_model(delta: &str, cwd: Option<&str>) -> Vec<Item> {
     .stderr(Stdio::null());
     // start_new_session: new session AND process group (pgid == pid), so a
     // timeout can killpg the whole node tree, not just the direct child.
-    set_new_session(&mut cmd);
+    worker::set_new_session(&mut cmd);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -515,7 +513,7 @@ fn linear_key() -> Option<String> {
 /// and returns false.
 fn file_issue(key: &str, item: &Item, session: &str, cwd: &str) -> bool {
     let model = model();
-    let host = hostname();
+    let host = crate::hostname();
     let description = format!(
         "{}\n\n---\n- kind: `{}`\n- session: `{}`\n- cwd: `{}`\n- host: `{}`\n\n_Filed automatically by the friction-report Stop hook (model: {}; sent by an AI agent via Claude Code)._",
         item.description.trim(),
@@ -580,19 +578,6 @@ fn file_issue(key: &str, item: &Item, session: &str, cwd: &str) -> bool {
     let dumped = serde_json::to_string(&res).unwrap_or_default();
     log(&format!("issueCreate failed: {}", take_chars(&dumped, 500)));
     false
-}
-
-/// Shared with `retro.rs` (its dispatch stamps the origin host into the
-/// delegated retro prompt). `pub`, not `pub(crate)`: the module is private, so
-/// the two are equivalent and clippy's `redundant_pub_crate` prefers `pub`.
-pub fn hostname() -> String {
-    Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn normalize_title(title: &str) -> String {
@@ -779,21 +764,12 @@ pub fn friction_report() {
     if !is_ix_contributor() {
         return;
     }
-    if std::env::args().skip(1).any(|a| a == "--analyze") {
-        // Detached worker: payload rides in the env. Any crash logs only.
-        let Some(raw) = std::env::var_os("FRICTION_PAYLOAD") else {
-            return;
-        };
-        let Some(raw) = raw.to_str() else { return };
-        let Ok(payload) = serde_json::from_str::<Value>(raw) else {
-            log("analyze: unparseable FRICTION_PAYLOAD");
-            return;
-        };
-        analyze(&payload);
+    // Detached worker: payload rides in the env. Any crash logs only.
+    if WORKER.run_worker(analyze) {
         return;
     }
 
-    let Some(input) = read_stdin() else {
+    let Some(input) = crate::read_stdin() else {
         return;
     };
     let Ok(payload) = serde_json::from_str::<Value>(&input) else {
@@ -836,13 +812,7 @@ pub fn friction_report() {
         return;
     }
 
-    detach_analyze(&payload);
-}
-
-fn read_stdin() -> Option<String> {
-    let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf).ok()?;
-    Some(buf)
+    WORKER.detach(&payload);
 }
 
 /// True when `basename(s) == s` and s is not `.`/`..` — i.e. a plain filename
@@ -859,61 +829,6 @@ fn is_plain_component(s: &str) -> bool {
 fn is_scratch_cwd(cwd: &str) -> bool {
     let path = cwd.strip_prefix("/private").unwrap_or(cwd);
     path == "/tmp" || path.starts_with("/tmp/") || path.starts_with("/var/folders/")
-}
-
-/// Re-spawn THIS binary as `friction-report --analyze`, detached (new session,
-/// stdin=/dev/null, stdout+stderr appended to friction.log), so Stop returns
-/// immediately. Best-effort: any failure is silent.
-fn detach_analyze(payload: &Value) {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let Ok(payload_json) = serde_json::to_string(payload) else {
-        return;
-    };
-    let dir = state_dir();
-    if fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let Ok(logf) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("friction.log"))
-    else {
-        return;
-    };
-    let Ok(logf2) = logf.try_clone() else {
-        return;
-    };
-
-    let mut detach = Command::new(exe);
-    detach
-        .args(["friction-report", "--analyze"])
-        .env("FRICTION_PAYLOAD", payload_json)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(logf))
-        .stderr(Stdio::from(logf2));
-    // start_new_session: own session so it outlives the hook's process tree.
-    set_new_session(&mut detach);
-    let _ = detach.spawn();
-    // We deliberately do NOT wait: the child owns the slow work.
-}
-
-/// `start_new_session=True` equivalent: call `setsid()` in the child between
-/// fork and exec, putting it in a brand-new session and process group (pgid ==
-/// pid), detached from the controlling terminal. Shared with `retro.rs`, whose
-/// dispatch worker detaches the same way.
-pub fn set_new_session(cmd: &mut Command) {
-    // SAFETY: setsid is async-signal-safe and the only thing we do in the
-    // child before exec; no allocation, no shared-state mutation.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
 }
 
 #[cfg(test)]
