@@ -3,7 +3,7 @@
 # the full design doc: the patch commit's fork-repo ancestry is the shipped
 # closure; push an `upstream/<slug>` branch, draft PR with AI attribution).
 #
-# The binary lives in the upstream-sync crate (shared mapping/dag/patch
+# The binary lives in the upstream-sync crate (shared mapping/series
 # modules; that package owns the crate's tests and policy checks). This
 # wrapper owns only the Nix seams: the rendered fork-package mapping
 # (UPSTREAM_SYNC_FORK_PACKAGES; downstream repos override with --mapping) and
