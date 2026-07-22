@@ -1157,6 +1157,36 @@ class StatusTests(unittest.TestCase):
         assert reports[0]["ready"] == "-"
         assert all(call[0] != "exec" for call in fake.calls)
 
+    def test_missing_host_check_binary_marks_check_unhealthy(self) -> None:
+        # A host check whose binary is absent raises OSError from
+        # create_subprocess_exec; status must report one unhealthy check, not
+        # abort the whole table.
+        node = fleet_node("web")
+        node["healthChecks"] = {
+            "reach": {
+                "description": "host-side probe",
+                "command": ["/nonexistent/ix-fleet-test-probe"],
+                "timeoutSec": 5,
+                "attempts": 1,
+                "intervalSec": 0,
+                "from": "host",
+            }
+        }
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["web"], [node]))
+        reports, code = run_status(
+            plan, RecordingClient(present=["web"]), [branch_info("web")], status_args()
+        )
+
+        assert code == 1
+        assert reports[0]["ready"] == "0/1"
+        assert "No such file" in (reports[0]["checks"][0]["detail"] or "")
+
+    def test_status_interval_rejects_non_positive_values(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()), pytest.raises(SystemExit):
+            ix_fleet.parser().parse_args(["--plan", "plan.json", "status", "--interval", "0"])
+        args = ix_fleet.parser().parse_args(["--plan", "plan.json", "status", "--interval", "3"])
+        assert args.interval == 3
+
     def test_dry_run_reports_desired_state_without_live_calls(self) -> None:
         steps: list[str] = []
 
@@ -1242,6 +1272,24 @@ class LogsTests(unittest.TestCase):
             asyncio.run(ix_fleet.cmd_logs(plan, args))
 
         assert stdout.getvalue() == "GET / 200\n"
+
+    def test_one_bad_node_still_prints_other_nodes_logs(self) -> None:
+        fake = RecordingClient(present=["web"])  # db was deleted out-of-band
+        fake.exec_results["web"] = (0, "GET / 200\n", "")
+        plan = ix_fleet.FleetPlan.model_validate(
+            fleet_plan(["db", "web"], [fleet_node("db"), fleet_node("web")])
+        )
+        args = argparse_namespace(on=[], dry_run=False, unit=None, lines=100, since=None)
+
+        stdout = io.StringIO()
+        with (
+            patch.object(ix_fleet, "client", lambda: fake),
+            contextlib.redirect_stdout(stdout),
+            pytest.raises(RuntimeError, match="db: db not found"),
+        ):
+            asyncio.run(ix_fleet.cmd_logs(plan, args))
+
+        assert stdout.getvalue() == "[web] GET / 200\n"
 
     def test_logs_selection_does_not_pull_in_dependencies(self) -> None:
         # `logs --on worker` must not also fetch web's logs the way deploy
