@@ -1,10 +1,12 @@
 defmodule IxMcp.ActionLogBusyTest do
   @moduledoc """
   Regression for #3874: several server instances share one action-log
-  database, so a sibling holding the write lock is normal operation. Ledger
-  writes must wait it out; before the fix they match-crashed the GenServer
-  (`{:badmatch, :busy}` in start_action, `{:badmatch, {:error, "database is
-  locked"}}` in the job-ledger transaction).
+  database, so a sibling holding the write lock is normal operation. #3890
+  landed the busy-timeout wait itself (see the sibling tests in
+  action_log_test.exs); these tests pin the two write paths the incident
+  crashed that those tests do not touch -- the prepared start_action insert
+  (`{:badmatch, :busy}`) and the job-ledger BEGIN IMMEDIATE transaction
+  (`{:badmatch, {:error, "database is locked"}}` through Sqlite3.execute).
   """
   use ExUnit.Case, async: true
 

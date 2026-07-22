@@ -35,17 +35,19 @@ defmodule IxMcp.ActionLog do
   session (observed live), while a call makes the row durable before the
   tool response ships; one SQLite insert is negligible against MCP wire
   overhead. A failed open or write crashes this process loudly and the
-  supervisor reopens the log -- except transient `SQLITE_BUSY` (#3874):
-  several server instances share this database, so a sibling holding the
-  write lock is normal operation, not a fault. sqlite itself waits it out
-  (`PRAGMA busy_timeout`) and a bounded retry covers the rest; before that,
-  one busy write match-crashed the GenServer, the exit propagated into
-  whichever process sat in `GenServer.call` (a job's output flush, an
-  exec's `start_action`), and under sustained contention the crash loop
-  could exhaust the root supervisor's restart intensity and take the whole
-  kernel -- and every running job -- down with it. The client API absorbs
-  the restart blip too: `call/3` retries a call that died with the server,
-  so callers survive an ActionLog restart instead of inheriting its exit.
+  supervisor reopens the log -- with transient `SQLITE_BUSY` waited out
+  first (#3874/#3890): several server instances share this database, so a
+  sibling holding the write lock is normal operation, not a fault. sqlite
+  waits inside the NIF (`set_busy_timeout` at open) and only a lock
+  outliving that bound crashes, with a diagnosis instead of a bare
+  badmatch. Before that, one busy write match-crashed the GenServer, the
+  exit propagated into whichever process sat in `GenServer.call` (a job's
+  output flush, an exec's `start_action`), and under sustained contention
+  the crash loop could exhaust the root supervisor's restart intensity and
+  take the whole kernel -- and every running job -- down with it. The
+  client API absorbs the restart blip too: `call/3` retries a call that
+  died with the server, so callers survive an ActionLog restart instead of
+  inheriting its exit.
   """
 
   use GenServer
@@ -113,14 +115,10 @@ defmodule IxMcp.ActionLog do
   # 6 = the #3880 issue-claim arbiter.
   @user_version 6
 
-  # SQLITE_BUSY tolerance (#3874). The pragma makes sqlite wait out a
-  # sibling instance's write lock inside the NIF; the bounded retry on top
-  # covers the starvation window where the timeout still expires. Only
-  # after both does a write crash loudly (a stuck-forever database is a
-  # real fault, not contention).
-  @busy_timeout_ms Application.compile_env(:ix_mcp, :busy_timeout_ms, 5_000)
-  @busy_retries 3
-  @busy_retry_sleep_ms 100
+  # How long a statement waits for a sibling instance's write lock before
+  # sqlite gives up with :busy and step!/fetch crash with a diagnosis
+  # (#3890). The NIF's own default is 2s, which live contention outlived.
+  @busy_timeout_ms 5_000
 
   # How long the client API keeps retrying a call whose server died
   # mid-request or is restarting (#3874). The supervisor brings the log
@@ -129,10 +127,11 @@ defmodule IxMcp.ActionLog do
   @call_retry_sleep_ms 100
 
   # Callers must outwait the server's own worst case, not the default 5s:
-  # one statement can legitimately occupy the single-writer GenServer for
-  # busy_timeout x retries (a slow sibling holding the lock), and a caller
-  # that times out at exactly @busy_timeout_ms would die with the same
-  # symptom #3874 fixed, just as a timeout-exit instead of a crash-exit.
+  # one statement can legitimately sit out the full busy-timeout wait
+  # inside the single-writer GenServer (a slow sibling holding the lock),
+  # and a caller that times out at exactly @busy_timeout_ms would die with
+  # the same symptom #3874 fixed, just as a timeout-exit instead of a
+  # crash-exit.
   @call_timeout_ms 30_000
 
   # Frozen historical DDL for the 1 -> 2 step: the actions shape exactly as
@@ -513,7 +512,10 @@ defmodule IxMcp.ActionLog do
       exit(reason)
 
     :exit, reason ->
-      if attempts > 0 do
+      # Retry only name-addressed servers: the restarted singleton comes
+      # back under the same name, while a pid-addressed instance (tests,
+      # ad-hoc logs) is gone for good and retrying it is a futile 2s stall.
+      if attempts > 0 and not is_pid(server) do
         Process.sleep(@call_retry_sleep_ms)
         call(server, request, attempts - 1)
       else
@@ -542,6 +544,14 @@ defmodule IxMcp.ActionLog do
 
     {:ok, conn} = Sqlite3.open(path)
     :ok = Sqlite3.execute(conn, "PRAGMA busy_timeout = #{@busy_timeout_ms}")
+
+    # Several server instances share one database file, so a step can find a
+    # sibling holding the write lock. The NIF opens with a 2s busy handler; a
+    # lock outliving it surfaced as :busy and badmatch-crashed run/3, taking
+    # the calling job down with it (#3890). Wait longer here, and let
+    # step!/fetch turn a still-busy result into a descriptive crash. The
+    # option exists so the regression test can shrink the wait.
+    :ok = Sqlite3.set_busy_timeout(conn, Keyword.get(opts, :busy_timeout_ms, @busy_timeout_ms))
 
     # index#3539: on 2026-07-17 a server binary match-crashed right here
     # against an action log written under a newer schema, and the failed
@@ -611,7 +621,7 @@ defmodule IxMcp.ActionLog do
         action.arguments
       ])
 
-    :ok = step!(conn, insert)
+    :done = step!(conn, insert, "insert action")
     {:ok, id} = Sqlite3.last_insert_rowid(conn)
     {:reply, id, state}
   end
@@ -959,88 +969,61 @@ defmodule IxMcp.ActionLog do
   defp run(conn, sql, params) do
     {:ok, statement} = Sqlite3.prepare(conn, sql)
     :ok = Sqlite3.bind(statement, params)
-    :ok = step!(conn, statement)
+    :done = step!(conn, statement, sql)
     :ok = Sqlite3.release(conn, statement)
+  end
+
+  # :busy after the connection's busy timeout (set at open) is a legitimate
+  # runtime state -- a sibling instance still holds the write lock -- not a
+  # programming error, so it fails with a diagnosis instead of a bare
+  # badmatch (#3890). No retry: the NIF already waited the full bound, and
+  # the supervisor reopens the log after the crash.
+  defp step!(conn, statement, sql) do
+    case Sqlite3.step(conn, statement) do
+      :busy ->
+        raise "action log write still blocked after the busy-timeout wait (#3890): #{sql}"
+
+      result ->
+        result
+    end
   end
 
   defp fetch(conn, sql, params) do
     {:ok, statement} = Sqlite3.prepare(conn, sql)
     :ok = Sqlite3.bind(statement, params)
-    rows = fetch_all!(conn, statement)
-    :ok = Sqlite3.release(conn, statement)
-    rows
-  end
 
-  # -- SQLITE_BUSY tolerance (#3874) ------------------------------------------
-  # sqlite already waits `@busy_timeout_ms` inside the NIF before reporting
-  # busy; these bounded retries only cover the starvation window where that
-  # timeout still expires under a slow sibling. Anything else stays a loud
-  # crash, unchanged.
+    case Sqlite3.fetch_all(conn, statement) do
+      {:ok, rows} ->
+        :ok = Sqlite3.release(conn, statement)
+        rows
 
-  defp step!(conn, statement), do: step!(conn, statement, @busy_retries)
+      # fetch_all reports a lock outliving the busy wait as this string.
+      {:error, "Database busy"} ->
+        raise "action log read still blocked after the busy-timeout wait (#3890): #{sql}"
 
-  defp step!(conn, statement, attempts) do
-    case Sqlite3.step(conn, statement) do
-      :done ->
-        :ok
-
-      :busy when attempts > 0 ->
-        Process.sleep(@busy_retry_sleep_ms)
-        step!(conn, statement, attempts - 1)
-
-      :busy ->
-        raise "action log write still blocked after the busy-timeout wait and retries (#3890)"
-
-      other ->
-        raise "action log write failed: #{inspect(other)}"
+      {:error, reason} ->
+        raise "action log read failed: #{inspect(reason)}: #{sql}"
     end
   end
 
-  defp execute!(conn, sql), do: execute!(conn, sql, @busy_retries)
-
-  defp execute!(conn, sql, attempts) do
+  # The transaction-control sibling of step!/fetch (#3874): the job-ledger
+  # writes wrap several statements in BEGIN IMMEDIATE...COMMIT through
+  # Sqlite3.execute/2, whose busy result after the timeout wait surfaced as
+  # `{:badmatch, {:error, "database is locked"}}` in the incident. Same
+  # policy as step!: no retry, the NIF already waited the full bound; a
+  # residual lock fails with a diagnosis and the supervisor reopens the log.
+  defp execute!(conn, sql) do
     case Sqlite3.execute(conn, sql) do
       :ok ->
         :ok
 
-      {:error, reason} when attempts > 0 ->
-        if busy?(reason) do
-          Process.sleep(@busy_retry_sleep_ms)
-          execute!(conn, sql, attempts - 1)
-        else
-          raise "action log execute failed: #{inspect(reason)}"
-        end
+      {:error, "database is locked"} ->
+        raise "action log write still blocked after the busy-timeout wait (#3890): #{sql}"
 
       {:error, reason} ->
-        raise "action log execute failed: #{inspect(reason)}"
+        raise "action log execute failed: #{inspect(reason)}: #{sql}"
     end
   end
-
-  defp fetch_all!(conn, statement), do: fetch_all!(conn, statement, @busy_retries)
-
-  defp fetch_all!(conn, statement, attempts) do
-    case Sqlite3.fetch_all(conn, statement) do
-      {:ok, rows} ->
-        rows
-
-      {:error, reason} when attempts > 0 ->
-        if busy?(reason) do
-          Process.sleep(@busy_retry_sleep_ms)
-          fetch_all!(conn, statement, attempts - 1)
-        else
-          raise "action log read failed: #{inspect(reason)}"
-        end
-
-      {:error, reason} ->
-        raise "action log read failed: #{inspect(reason)}"
-    end
-  end
-
-  defp busy?(reason) when is_binary(reason) do
-    reason =~ "database is locked" or reason =~ "database table is locked"
-  end
-
-  defp busy?(_reason), do: false
 
   defp state_home do
     System.get_env("XDG_STATE_HOME") || Path.join(System.user_home!(), ".local/state")
