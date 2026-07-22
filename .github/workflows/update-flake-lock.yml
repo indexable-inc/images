@@ -165,8 +165,12 @@ jobs:
             echo "submodules already at their remote HEADs; nothing to bump"
             exit 0
           fi
-          summary="$(git submodule status -- "${paths[@]}" \
-            | awk '{printf "%s%s@%s", sep, $2, substr($1, 1, 8); sep=", "}')"
+          # Plain git/bash: the self-hosted runner PATH has git and gh but
+          # not awk (run 29892186766 died on it).
+          summary=""
+          for p in "${paths[@]}"; do
+            summary="${summary:+${summary}, }${p}@$(git -C "$p" rev-parse --short=8 HEAD)"
+          done
           git commit -am "submodules: bump ${summary}"
           git push -f origin update-flake-lock
           if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
