@@ -16,27 +16,22 @@ use crate::model::EventTime;
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum ParseEventTimeError {
-    /// All-day input was not a `YYYY-MM-DD` date. `reason` is a plain field
-    /// rather than a snafu `source`: `chrono::ParseError` only implements
-    /// `std::error::Error` under chrono's `std` feature, which this crate
-    /// deliberately leaves off (default-features = false, `alloc` only).
-    #[snafu(display("{field}: could not parse {input:?} as YYYY-MM-DD: {reason}"))]
-    Date {
+    /// The boundary string did not match the shape required for its kind: a
+    /// `YYYY-MM-DD` date for an all-day boundary, an RFC 3339 instant for a
+    /// timed one.
+    ///
+    /// `reason` is a plain field rather than a snafu `source` because
+    /// `chrono::ParseError` only implements `std::error::Error` under
+    /// chrono's `std` feature, which this crate deliberately leaves off
+    /// (default-features = false, `alloc` only).
+    #[snafu(display("{field}: could not parse {input:?} as {expected}: {reason}"))]
+    Parse {
         /// Which boundary (`start` or `end`).
         field: &'static str,
         /// The rejected input.
         input: String,
-        /// Underlying parse failure.
-        reason: chrono::ParseError,
-    },
-
-    /// Timed input was not an RFC 3339 instant.
-    #[snafu(display("{field}: could not parse {input:?} as RFC 3339: {reason}"))]
-    Rfc3339 {
-        /// Which boundary (`start` or `end`).
-        field: &'static str,
-        /// The rejected input.
-        input: String,
+        /// The shape the parser expected (`YYYY-MM-DD` or `RFC 3339`).
+        expected: &'static str,
         /// Underlying parse failure.
         reason: chrono::ParseError,
     },
@@ -48,6 +43,26 @@ pub enum ParseEventTimeError {
         /// The inclusive last day with no successor.
         last: NaiveDate,
     },
+}
+
+/// The `map_err` for a boundary parse: names the field, the rejected input,
+/// and the shape that was expected. One constructor keeps the all-day and
+/// timed branches from each spelling out the same closure.
+fn parse_failure(
+    field: &'static str,
+    input: &str,
+    expected: &'static str,
+) -> impl FnOnce(chrono::ParseError) -> ParseEventTimeError {
+    let input = input.to_owned();
+    move |reason| {
+        ParseSnafu {
+            field,
+            input,
+            expected,
+            reason,
+        }
+        .build()
+    }
 }
 
 /// Parse one event boundary: an all-day `YYYY-MM-DD` date when `all_day`,
@@ -63,24 +78,13 @@ pub fn parse_event_time(
     field: &'static str,
 ) -> Result<EventTime, ParseEventTimeError> {
     if all_day {
-        let date = input.parse().map_err(|reason| {
-            DateSnafu {
-                field,
-                input: input.to_owned(),
-                reason,
-            }
-            .build()
-        })?;
+        let date = input
+            .parse()
+            .map_err(parse_failure(field, input, "YYYY-MM-DD"))?;
         Ok(EventTime::AllDay { date })
     } else {
-        let date_time = DateTime::parse_from_rfc3339(input).map_err(|reason| {
-            Rfc3339Snafu {
-                field,
-                input: input.to_owned(),
-                reason,
-            }
-            .build()
-        })?;
+        let date_time =
+            DateTime::parse_from_rfc3339(input).map_err(parse_failure(field, input, "RFC 3339"))?;
         Ok(EventTime::Timed {
             date_time,
             time_zone: None,
@@ -146,28 +150,22 @@ mod tests {
     }
 
     #[test]
-    fn bad_all_day_date_names_the_field_and_input() {
+    fn bad_all_day_date_names_the_field_and_the_expected_shape() {
         let err = parse_event_time("not-a-date", true, "start").expect_err("rejects");
         assert!(
-            matches!(err, ParseEventTimeError::Date { .. }),
+            matches!(err, ParseEventTimeError::Parse { .. }),
             "got {err:?}"
         );
         let message = err.to_string();
-        assert!(
-            message.contains("start"),
-            "message names the field: {message}"
-        );
-        assert!(
-            message.contains("YYYY-MM-DD"),
-            "message names the shape: {message}"
-        );
+        assert!(message.contains("start"), "names the field: {message}");
+        assert!(message.contains("YYYY-MM-DD"), "names the shape: {message}");
     }
 
     #[test]
     fn bad_timed_input_names_rfc_3339() {
         let err = parse_event_time("2026-06-05 09:30", false, "end").expect_err("rejects");
         assert!(
-            matches!(err, ParseEventTimeError::Rfc3339 { .. }),
+            matches!(err, ParseEventTimeError::Parse { .. }),
             "got {err:?}"
         );
         assert!(err.to_string().contains("RFC 3339"), "got: {err}");
