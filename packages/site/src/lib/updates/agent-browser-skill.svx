@@ -1,0 +1,15 @@
+---
+id: agent-browser-skill
+postedAt: 2026-07-21T12:00:00-07:00
+title: "Browser work routes through agent-browser; its skill is vendored from the pin"
+tags: [agent, skills, prompt]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/3939
+  - label: vercel-labs/agent-browser
+    href: https://github.com/vercel-labs/agent-browser
+---
+
+The house prompt now has a `browserAutomation` rule: browser and web-app work goes through `agent-browser` (vercel-labs), acting on `snapshot` accessibility refs (`@e1`, `@e2`, ...) instead of screenshots or DOM dumps, and agents read `agent-browser skills get core` before the first command. Upstream serves that guide from the CLI itself, byte-matched to the installed version, so the prompt points at it rather than restating a recipe that would drift.
+
+The skill catalog (`lib/skills.nix`) grew a `vendoredSources` seam for skills that ship inside packaged upstreams. The nixpkgs `agent-browser` package installs upstream's discovery stub at `skills/agent-browser/`, so the catalog links it straight from `pkgs.agent-browser`: no committed copy, and every consumer (the SessionStart materializer, the wrapper's skills dir, the `/index:` plugin) picks it up automatically. A name collision with a repo skill fails the build instead of silently shadowing.

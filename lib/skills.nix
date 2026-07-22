@@ -4,7 +4,8 @@
 }: let
   # Auto-discover skill directories under paths.skills. Each subdirectory is a
   # Claude Code skill (a directory containing a SKILL.md, and optionally
-  # assets/ and references/ subdirectories).
+  # assets/ and references/ subdirectories). `vendoredSources` below adds
+  # skills that ship inside packaged upstreams.
   entries = builtins.readDir paths.skills;
 
   skillNames = lib.sort lib.lessThan (
@@ -13,7 +14,25 @@
 
   sources = lib.genAttrs skillNames (name: paths.skills + "/${name}");
 
-  allSkills = skillNames;
+  # Skills vendored from packaged upstreams: the package already ships a
+  # plugin-ready skill directory, so the catalog derives it from the pin
+  # instead of committing a copy that drifts from the installed binary.
+  # Values are functions of the consumer's package set (this file has no
+  # `pkgs`), resolved inside `mkSkillsDir`. agent-browser's directory is
+  # upstream's discovery stub: it sends the agent to
+  # `agent-browser skills get core`, which the CLI serves byte-matched to
+  # its own version, so the stub itself never goes stale.
+  vendoredSources = {
+    agent-browser = pkgs: "${pkgs.agent-browser}/skills/agent-browser";
+  };
+
+  vendoredNames = lib.attrNames vendoredSources;
+
+  vendorCollisions = lib.intersectLists skillNames vendoredNames;
+
+  allSkills = assert lib.assertMsg (vendorCollisions == [])
+  "skills: vendored skill name(s) shadow repo skills: ${lib.concatStringsSep ", " vendorCollisions}";
+    lib.sort lib.lessThan (skillNames ++ vendoredNames);
 
   partitioned = lib.partition (lib.hasPrefix "antithesis") allSkills;
 
@@ -35,7 +54,7 @@
     farm = pkgs.linkFarm "claude-skills-farm" (
       (map (name: {
           inherit name;
-          path = sources.${name};
+          path = sources.${name} or (vendoredSources.${name} pkgs);
         })
         names)
       ++ (lib.mapAttrsToList (name: path: {inherit name path;}) extraSkills)
@@ -67,7 +86,9 @@ in {
   Each value is the path to a Claude Code skill directory (containing
   `SKILL.md`, and optionally `assets/` and `references/`). Discovered
   automatically from `paths.skills`, so adding a directory there is the
-  only step needed to publish a new shared skill.
+  only step needed to publish a new shared skill. Vendored skills are not
+  here: their paths depend on the consumer's package set, so `mkSkillsDir`
+  resolves them from `vendoredSources`.
   */
   inherit sources;
 
