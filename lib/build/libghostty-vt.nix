@@ -55,8 +55,8 @@ in
 
   Arguments:
   - `pkgs`: package set to build against; the artifact is host-system specific.
-  - `ghosttySource`: ghostty source tree (in this repo always the patched
-    fork source: `ix.patchedSrc` over the `ghostty-src` input). Must ship `build.zig`, `build.zig.zon`, and
+  - `ghosttySource`: ghostty source tree (in this repo the `ghostty-src`
+    jj megamerge fork input). Must ship `build.zig`, `build.zig.zon`, and
     `build.zig.zon.nix` (the zon2nix output that vendors every lazy Zig
     dependency with SRI hashes for a network-free build).
   - `baseSource`: optional. When set, zig's own `--cache-dir` (a

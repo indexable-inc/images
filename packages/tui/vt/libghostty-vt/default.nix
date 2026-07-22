@@ -8,23 +8,16 @@
 # The build recipe (zon2nix-vendored deps, the `-Demit-lib-vt=true` zig build,
 # and the darwin SDK shim) lives in `lib/build/libghostty-vt.nix` so the Rust
 # workspace can reuse the exact same artifact when linking `ix-vt-sys`. This
-# package is the thin flake-output wrapper plus a smoke test. `baseSource`
-# warms zig's content-addressed cache from the unpatched pin, so a
-# patch-series edit recompiles only what it touches.
+# package is the thin flake-output wrapper plus a smoke test. ghostty-src is
+# the jj megamerge fork tree, already patched.
 {
   ix,
   pkgs,
   ...
 }: let
   inherit (pkgs) lib;
-  source = ix.patchedSrc {
-    name = "ghostty";
-    src = ix.ghosttySrc;
-    patchDir = ix.paths.packagesRoot + "/ghostty/patches";
-  };
   package = ix.buildLibghosttyVt pkgs {
-    ghosttySource = source;
-    baseSource = ix.ghosttySrc;
+    ghosttySource = ix.ghosttySrc;
   };
 
   # Confirm the build emitted the artifacts `ix-vt-sys` links against and the

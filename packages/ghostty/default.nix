@@ -13,15 +13,10 @@
   pkgs,
   ...
 }: let
-  source = ix.patchedSrc {
-    name = "ghostty";
-    src = ix.ghosttySrc;
-    patchDir = ./patches;
-  };
-
+  # The indexable-inc/ghostty jj megamerge (ghostty-src input); the tree is
+  # already patched, so no baseSource cache-warm split remains.
   package = ix.buildLibghosttyVt pkgs {
-    ghosttySource = source;
-    baseSource = ix.ghosttySrc;
+    ghosttySource = ix.ghosttySrc;
   };
 
   # Confirm the build actually reached the artifacts the package claims
