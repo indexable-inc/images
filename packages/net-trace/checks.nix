@@ -38,6 +38,9 @@ in {
       pkgs.yq-go
     ];
     script = ''
+      # The default check cwd is not writable; every artifact below (extracted
+      # jq scripts, summary copies, comment.md) goes to scratch space.
+      cd "$TMPDIR"
       fixtures=${testSource}/packages/net-trace/tests/fixtures
       workflow=${testSource}/.github/workflows/check.yml
       yq '.jobs.net-trace-comment.steps[] | select(.name == "Validate summary schema").run' "$workflow" > validate.sh
