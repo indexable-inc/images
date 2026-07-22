@@ -15,20 +15,32 @@ use serde::Deserialize;
 /// Environment variable the Nix wrapper points at the baked-in fork list.
 pub const FORK_PACKAGES_ENV: &str = "UPSTREAM_SYNC_FORK_PACKAGES";
 
-/// One de-forked package from the mapping. Unknown fields (autoUpdate,
-/// forkRepo, ...) belong to other tools and are ignored here.
+/// One de-forked package from the mapping. The fork lives in a real GitHub
+/// fork repo (`fork_repo`) whose `bookmark` points at the megamerge commit;
+/// the patch series is that commit's ancestry down to the upstream base.
+/// Unknown fields (autoUpdate, derivedPatches, ...) belong to other tools
+/// and are ignored here.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Fork {
     pub name: String,
     pub input: String,
-    pub url: String,
-    pub patch_dir: String,
-    #[serde(default)]
-    pub closure_gates: bool,
+    /// GitHub `owner/name` of the maintained fork repo.
+    pub fork_repo: String,
+    /// Fork-repo branch holding the megamerge commit.
+    #[serde(default = "default_bookmark")]
+    pub bookmark: String,
+    /// The upstream git URL contributions target.
+    pub upstream_url: String,
+    /// Per-patch intent keyed by the patch commit's SUBJECT line (the
+    /// identity that survives jj rebases).
     #[serde(default)]
     pub patches: BTreeMap<String, PatchIntent>,
     pub upstream_policy: Option<Policy>,
+}
+
+fn default_bookmark() -> String {
+    "ix-patched".to_owned()
 }
 
 /// Hand-written per-patch intent: `attempt` is the human gate that authorizes
@@ -75,16 +87,19 @@ impl Default for Policy {
 }
 
 impl Fork {
-    /// The patch dir resolved against the CWD (the tool runs from the repo
-    /// root; a downstream `--mapping` repo resolves against its own root).
+    /// The https clone/push URL of the maintained fork repo.
     #[must_use]
-    pub fn patch_dir_abs(&self) -> PathBuf {
-        let p = Path::new(&self.patch_dir);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            env::current_dir().map_or_else(|_| p.to_path_buf(), |cwd| cwd.join(p))
-        }
+    pub fn fork_url(&self) -> String {
+        format!("https://github.com/{}.git", self.fork_repo)
+    }
+
+    /// The owner half of `fork_repo` (`gh pr create --head` wants
+    /// `<owner>:<branch>`).
+    #[must_use]
+    pub fn fork_owner(&self) -> &str {
+        self.fork_repo
+            .split_once('/')
+            .map_or(self.fork_repo.as_str(), |(owner, _)| owner)
     }
 
     /// The repo policy, defaulted when the mapping carries none.
@@ -93,21 +108,21 @@ impl Fork {
         self.upstream_policy.clone().unwrap_or_default()
     }
 
-    /// The declared stance of one patch. Fail-safe default: an unclassified
-    /// patch is `hold`, never sent.
+    /// The declared stance of one patch (by commit subject). Fail-safe
+    /// default: an unclassified patch is `hold`, never sent.
     #[must_use]
-    pub fn stance(&self, patch: &str) -> String {
+    pub fn stance(&self, subject: &str) -> String {
         self.patches
-            .get(patch)
+            .get(subject)
             .and_then(|m| m.upstream.clone())
             .unwrap_or_else(|| "hold".to_owned())
     }
 
     /// The declared reason of one patch, with the unclassified default.
     #[must_use]
-    pub fn reason(&self, patch: &str) -> String {
+    pub fn reason(&self, subject: &str) -> String {
         self.patches
-            .get(patch)
+            .get(subject)
             .and_then(|m| m.reason.clone())
             .unwrap_or_else(|| "unclassified (no intent entry in lib/fork-packages.nix)".to_owned())
     }
@@ -220,5 +235,21 @@ mod tests {
         assert!(is_github("https://github.com/o/r.git"));
         assert!(!is_github("https://gitlab.freedesktop.org/mesa/mesa"));
         assert!(is_gitlab("https://gitlab.freedesktop.org/mesa/mesa"));
+    }
+
+    #[test]
+    fn fork_defaults_bookmark_and_splits_owner() {
+        let fork: Fork = serde_json::from_str(
+            r#"{"name":"fake","input":"fake-src","forkRepo":"indexable-inc/fakerepo",
+                "upstreamUrl":"https://github.com/fakeorg/fakerepo.git","patches":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(fork.bookmark, "ix-patched");
+        assert_eq!(fork.fork_owner(), "indexable-inc");
+        assert_eq!(
+            fork.fork_url(),
+            "https://github.com/indexable-inc/fakerepo.git"
+        );
+        assert_eq!(fork.stance("anything"), "hold");
     }
 }

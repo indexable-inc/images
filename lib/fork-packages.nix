@@ -150,7 +150,6 @@
       forkRepo = "indexable-inc/zed";
       bookmark = "ix-patched";
       autoUpdate = false;
-      forkRepo = "indexable-inc/zed";
       upstreamPolicy = {
         prsWelcome = true;
         aiPrsAllowed = "false";
@@ -216,7 +215,6 @@
       forkRepo = "indexable-inc/home-manager";
       bookmark = "ix-patched";
       autoUpdate = false;
-      forkRepo = "indexable-inc/home-manager";
       upstreamPolicy = {
         prsWelcome = true;
         # The contributing manual (guidelines, getting-started) has no
