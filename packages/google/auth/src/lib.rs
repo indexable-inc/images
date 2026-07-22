@@ -17,9 +17,11 @@
 //! [`Authenticator`] carries the scopes its caller needs and refuses to mint
 //! an access token if the stored grant is missing any of them.
 
+mod api_error;
 mod error;
 pub mod scopes;
 
+pub use crate::api_error::api_message;
 pub use crate::error::{Error, Result};
 
 use std::path::{Path, PathBuf};
