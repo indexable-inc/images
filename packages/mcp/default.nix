@@ -682,7 +682,8 @@
   # (src/<name>/module.nix, plus ix_notebook_mcp/module.nix for the server
   # package itself). Same discovery idiom as packages/registry.nix's
   # package.nix walk. Each module.nix is a function returning
-  # `{ module, darwinOnly ? false, tests ? {} }`; its formals are fed by
+  # `{ module, darwinOnly ? false, tests ? {} }` (embed also returns `cli`,
+  # which the assembly surfaces as `passthru.embedCli`); its formals are fed by
   # intersection from `moduleScope`, so a module file declares exactly the
   # slice of this assembly it uses: shared helpers, third-party pins, and
   # sibling modules under their `<name>Module` bindings (which is how a
@@ -727,6 +728,11 @@
         nuPyModule
         privateSessionModule
         distillerModule
+        # The shipped interpreter, for module-owned artifacts that must run on
+        # the exact env the kernels run (embed's CLI). Anything built over it
+        # rides the whole bundled closure, so per-module tests should prefer
+        # `bundledTestPython` unless the artifact under test IS that closure.
+        mcpPython
         ;
       testsRoot = ./tests;
     }
@@ -744,6 +750,10 @@
   # The assembly below reaches a few discovered modules by name.
   ixNotebookMcpModule = bundledModule "ix_notebook_mcp";
   claudeHistoryModule = bundledModule "claude_history";
+  # The embed battery's CLI (index#3905), defined next to its module in
+  # src/embed/module.nix and surfaced as `nix run .#embed` through
+  # lib/per-system.nix.
+  embedCli = bundledEntries.embed.cli;
   bundledModuleTests = lib.mergeAttrsList (
     map (entry: entry.tests or {}) (builtins.attrValues bundledEntries)
   );
@@ -1551,6 +1561,7 @@ in
     passthru =
       (old.passthru or {})
       // {
+        inherit embedCli;
         tests =
           {
             inherit
