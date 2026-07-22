@@ -37,7 +37,7 @@ pub use model::{
 };
 pub use threads::ThreadStub;
 
-use serde::Deserialize;
+use google_auth::api_message;
 use snafu::ResultExt as _;
 use url::Url;
 
@@ -71,18 +71,6 @@ impl<T> PageParts<T> {
             next_page_token,
         }
     }
-}
-
-/// The Gmail / Google API error envelope:
-/// `{"error": {"code": …, "message": …, "status": …, "errors": [...]}}`.
-#[derive(Deserialize)]
-struct ApiErrorBody {
-    error: ApiErrorDetail,
-}
-
-#[derive(Deserialize)]
-struct ApiErrorDetail {
-    message: String,
 }
 
 /// Gmail API client over an [`Authenticator`].
@@ -253,36 +241,4 @@ pub(crate) async fn send_no_body(builder: reqwest::RequestBuilder) -> Result<()>
     let response = builder.send().await.context(HttpSnafu)?;
     check_status(response).await?;
     Ok(())
-}
-
-/// The human message from a Google error body, or the (truncated) raw body
-/// when the envelope is absent.
-fn api_message(body: &str) -> String {
-    serde_json::from_str::<ApiErrorBody>(body).map_or_else(
-        |_| {
-            let trimmed = body.trim();
-            let mut message: String = trimmed.chars().take(500).collect();
-            if message.len() < trimmed.len() {
-                message.push('…');
-            }
-            message
-        },
-        |envelope| envelope.error.message,
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::api_message;
-
-    #[test]
-    fn api_message_prefers_the_error_envelope() {
-        let body = r#"{"error":{"code":403,"message":"Insufficient Permission","status":"PERMISSION_DENIED"}}"#;
-        assert_eq!(api_message(body), "Insufficient Permission");
-    }
-
-    #[test]
-    fn api_message_falls_back_to_the_raw_body() {
-        assert_eq!(api_message(" gmail blew up "), "gmail blew up");
-    }
 }
