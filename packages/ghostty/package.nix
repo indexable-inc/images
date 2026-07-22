@@ -7,5 +7,4 @@
     systems = ["aarch64-darwin"];
   };
   overlay = false;
-  updateScript = true;
 }
