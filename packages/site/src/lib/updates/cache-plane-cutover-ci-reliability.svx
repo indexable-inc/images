@@ -3,12 +3,18 @@ id: cache-plane-cutover-ci-reliability
 postedAt: 2026-07-21
 title: "Cache plane on hil-stor-2 + three CI livelocks fixed: hot narinfo at 1ms, queues at zero"
 links:
-  - https://github.com/indexable-inc/ix/pull/8026
-  - https://github.com/indexable-inc/ix/pull/8018
-  - https://github.com/indexable-inc/ix/pull/8032
-  - https://github.com/indexable-inc/ix/pull/8037
-  - https://github.com/indexable-inc/ix/issues/8031
-  - https://github.com/indexable-inc/ix/issues/8033
+  - label: "ix#8026"
+    href: https://github.com/indexable-inc/ix/pull/8026
+  - label: "ix#8018"
+    href: https://github.com/indexable-inc/ix/pull/8018
+  - label: "ix#8032"
+    href: https://github.com/indexable-inc/ix/pull/8032
+  - label: "ix#8037"
+    href: https://github.com/indexable-inc/ix/pull/8037
+  - label: "ix#8031"
+    href: https://github.com/indexable-inc/ix/issues/8031
+  - label: "ix#8033"
+    href: https://github.com/indexable-inc/ix/issues/8033
 tags: [fleet, ci, cache, incident]
 ---
 

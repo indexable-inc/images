@@ -3,7 +3,8 @@ id: zellij-config-bind-fix
 postedAt: "2026-07-22"
 title: zellij-config check green again after backslash keybind fix
 links:
-  - https://github.com/indexable-inc/index/issues/3927
+  - label: "index#3927"
+    href: https://github.com/indexable-inc/index/issues/3927
 tags:
   - checks
   - dotfiles
