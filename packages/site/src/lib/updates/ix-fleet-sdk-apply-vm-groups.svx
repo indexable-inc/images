@@ -1,0 +1,22 @@
+---
+id: ix-fleet-sdk-apply-vm-groups
+postedAt: 2026-07-22T00:40:00Z
+title: "ix-fleet builds again: SDK wheel pins bumped for apply_vm_groups"
+links:
+  - https://github.com/indexable-inc/index/issues/3889
+tags: [fleet, sdk, fix]
+---
+
+Every fleet example's `nix run .#<example>-up` wrapper had been unbuildable
+since fc4e94a1: the group reconcile path calls
+`Client.apply_vm_groups(vm, groups)` (the region-correct, set-based
+replacement for the old `create_group` + `add_group_member` pair, ENG-2752),
+but the prebuilt `ix_sdk` wheels pinned in `packages/ix-sdk-python/pins.json`
+predated that method, so ix-fleet's type check failed with
+`"Client" has no attribute "apply_vm_groups"`.
+
+Both wheel pins (x86_64-linux via the ix `publish sdk python` workflow,
+aarch64-darwin via a local `nix run .#publish-sdk-python`) now point at
+wheels built from the same ix main commit, and the ix-sdk-python import
+check asserts `apply_vm_groups` is present so a stale wheel fails at the
+pin, not at deploy.

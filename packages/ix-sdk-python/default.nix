@@ -88,7 +88,7 @@ in
       assert ix_sdk.__version__, "missing __version__"
       for name in ("Client", "Group", "GroupMember"):
           assert hasattr(ix_sdk, name), f"missing ix_sdk.{name}"
-      for method in ("create_group", "add_group_member", "create", "branches", "list_secrets"):
+      for method in ("create_group", "add_group_member", "apply_vm_groups", "create", "branches", "list_secrets"):
           assert hasattr(ix_sdk.Client, method), f"missing Client.{method}"
       # ix-fleet declares per-VM secrets through these create kwargs; assert the
       # packaged wheel accepts them so a stale wheel fails here, not at deploy.
