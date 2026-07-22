@@ -1543,6 +1543,26 @@
 (lint filter-src warning
   "`src = ./.;` copies the whole tree into the store; filter with `lib.fileset.toSource` (or at least `lib.cleanSource`)")
 
+;; no-whole-repo-fileset-source: `fileset = gitTracked <repo-root>` binds every
+;; tracked file in the repository as one source, so any edit anywhere
+;; invalidates the consumer (index#3896; blast-radius-test was the worst case).
+;; Intersect with the owning subtree instead:
+;; `fs.intersection (fs.gitTracked root) (root + "/<dir>")`. A consumer whose
+;; subject really is the whole tree (the repo linter) carries an in-place
+;; astlog-ignore naming the reason.
+(rule (no-whole-repo-fileset-source n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (apply_expression
+        function: (select_expression) @f
+        argument: [(variable_expression) (select_expression)] @a)) @n")
+  (text p "fileset")
+  (text-match f "(^|\\.)(fileset|fs)\\.gitTracked$")
+  (text-match a "^(paths\\.)?root$"))
+(lint no-whole-repo-fileset-source error
+  "`fileset = gitTracked <repo-root>` makes every tracked edit invalidate this source; intersect with the owning subtree (index#3896)")
+
 ;; pname-with-version: a literal `name = "package"` set alongside a `version`
 ;; restates what stdenv derives; use `pname` and let stdenv build
 ;; `<pname>-<version>`. Joined on the shared `binding_set` so it fires only when

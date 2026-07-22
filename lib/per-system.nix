@@ -1456,6 +1456,10 @@
 
   lintSource = fs.toSource {
     inherit (paths) root;
+    # The repo linter's subject is the whole tracked tree, so this is the one
+    # source that legitimately spans it; every other check takes a scoped
+    # fileset (#3896).
+    # astlog-ignore: no-whole-repo-fileset-source
     fileset = fs.gitTracked paths.root;
   };
 
@@ -1475,6 +1479,19 @@
   astlogRulesSource = fs.toSource {
     inherit (paths) root;
     fileset = fs.intersection (fs.gitTracked paths.root) (paths.root + "/astlog-rules");
+  };
+
+  # Exactly what blast-radius-test reads: the test dir (script + fixtures) and
+  # the workflow whose embedded jq it pins, so the check reruns only when
+  # either changes instead of on every tracked-file edit (#3895).
+  blastRadiusTestSource = fs.toSource {
+    inherit (paths) root;
+    fileset = fs.intersection (fs.gitTracked paths.root) (
+      fs.unions [
+        (paths.root + "/packages/blast-radius/tests")
+        (paths.root + "/.github/workflows/blast-radius.yml")
+      ]
+    );
   };
 
   andrewZellij = import (paths.root + "/users/andrewgazelka/config/zellij") {
@@ -2127,7 +2144,7 @@
               ];
             }
             ''
-              cp -R ${lintSource} source
+              cp -R ${blastRadiusTestSource} source
               chmod -R u+w source
               cd source
               export HOME="$TMPDIR/home"

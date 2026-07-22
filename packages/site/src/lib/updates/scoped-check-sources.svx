@@ -1,0 +1,26 @@
+---
+id: scoped-check-sources
+postedAt: 2026-07-21T18:20:00-07:00
+title: "blast-radius-test no longer reruns on every commit, and a lint keeps it that way"
+tags: [nix, lint, incremental]
+links:
+  - label: "#3895"
+    href: https://github.com/indexable-inc/index/issues/3895
+  - label: "#3896"
+    href: https://github.com/indexable-inc/index/issues/3896
+  - label: nix.astlog
+    href: https://github.com/indexable-inc/index/blob/main/astlog-rules/nix.astlog
+---
+
+A build-DAG audit found that `blast-radius-test` copied the entire tracked
+repository into its sandbox to run one shell script that reads its own test
+directory plus `.github/workflows/blast-radius.yml`. Any tracked edit in any
+language invalidated the check, so it reran on effectively every commit. Its
+source is now a fileset scoped to exactly those two paths, so it only reruns
+when the script, its fixtures, or the workflow change.
+
+To keep the class of bug from coming back, a new astlog rule
+`no-whole-repo-fileset-source` errors on any `fileset =` binding that passes
+the repo root straight to `gitTracked` instead of intersecting with the owning
+subtree. The one legitimate whole-tree consumer, the repo linter itself, is
+annotated in place with the reason.
