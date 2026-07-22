@@ -205,6 +205,22 @@
     };
   }
   {
+    claimBeforeDispatch = {
+      topics = ["workflow"];
+      text = ''
+        A filed-issue notification reaches every session. Before dispatching
+        a fixer, check the issue for a claim (assignee or claim comment);
+        if none, post a claim comment naming your session, then dispatch.
+        An issue already claimed gets watched, not re-dispatched.
+      '';
+      reason = ''
+        Every listening session dispatched its own fixer: ix#8156 got two
+        full parallel implementations, ix#8155 two live branches, each
+        duplicate ~30 min of builds and ~140k tokens (index#4002).
+      '';
+    };
+  }
+  {
     preV1 = {
       topics = ["architecture"];
       text = ''
