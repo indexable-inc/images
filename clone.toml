@@ -46,7 +46,11 @@ ignore = [
 # is 0.3677%, including the two revealed pre-existing Elixir groups (parallel
 # NIF-binding test scaffolding, mix.exs project boilerplate) left in the scan
 # as cleanup pressure rather than ignored.
+#
+# 2026-07-21 (#3901): lowered 0.37 -> 0.365. The 26-line NIF-binding test
+# scaffolding triplicate (plumb/tui/unibind eventually+poll) is now one staged
+# helper; measured 0.3623%. The mix.exs pair stays in the scan.
 [budget]
-global_pct = 0.37
+global_pct = 0.365
 diff_pct = 0.0
 diff_base = "origin/main"

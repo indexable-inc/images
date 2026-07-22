@@ -3,24 +3,7 @@ defmodule PlumbTest do
   # the run ids in ${o[N]} assertions stay deterministic per shell.
   use ExUnit.Case, async: false
 
-  defp eventually(fun, timeout_ms \\ 2_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    poll(fun, deadline)
-  end
-
-  defp poll(fun, deadline) do
-    cond do
-      fun.() ->
-        true
-
-      System.monotonic_time(:millisecond) > deadline ->
-        false
-
-      true ->
-        Process.sleep(20)
-        poll(fun, deadline)
-    end
-  end
+  import UnibindTest.Eventually
 
   defp decode!({:ok, json}), do: JSON.decode!(json)
 

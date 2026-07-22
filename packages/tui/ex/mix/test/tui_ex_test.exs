@@ -3,24 +3,11 @@ defmodule TuiExTest do
   # spawns ordered so screens and exit states stay deterministic.
   use ExUnit.Case, async: false
 
-  defp eventually(fun, timeout_ms \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    poll(fun, deadline)
-  end
+  import UnibindTest.Eventually
 
-  defp poll(fun, deadline) do
-    cond do
-      fun.() ->
-        true
-
-      System.monotonic_time(:millisecond) > deadline ->
-        false
-
-      true ->
-        Process.sleep(20)
-        poll(fun, deadline)
-    end
-  end
+  # PTY exit propagation crosses the OS and the NIF driver; give it more
+  # room than the shared 2s default.
+  @exit_timeout_ms 5_000
 
   test "spawn + send + wait_for round-trips through a real PTY" do
     {:ok, id} = TuiEx.spawn("cat", [])
@@ -53,7 +40,7 @@ defmodule TuiExTest do
     assert screen =~ "abc\nabc"
     :ok = TuiEx.send_key(id, "ctrl+d")
 
-    assert eventually(fn -> TuiEx.is_alive(id) == {:ok, false} end),
+    assert eventually(fn -> TuiEx.is_alive(id) == {:ok, false} end, @exit_timeout_ms),
            "cat did not exit on ctrl+d"
 
     assert TuiEx.exit_code(id) == {:ok, 0}
@@ -82,7 +69,7 @@ defmodule TuiExTest do
     assert TuiEx.is_alive(id) == {:ok, true}
     :ok = TuiEx.kill(id)
 
-    assert eventually(fn -> TuiEx.is_alive(id) == {:ok, false} end),
+    assert eventually(fn -> TuiEx.is_alive(id) == {:ok, false} end, @exit_timeout_ms),
            "cat survived SIGKILL"
 
     # A signal death has no exit code.
