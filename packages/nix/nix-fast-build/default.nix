@@ -3,17 +3,12 @@
   lib,
   pkgs,
 }: let
-  # Upstream Mic92/nix-fast-build (nix-fast-build-src, pinned to the tag
-  # nixpkgs packages) with the in-repo patch series (./patches) applied:
-  # --skip-cached skipping locally-realized outputs, and the typed
-  # per-derivation no-progress deadline. The series, its upstream intent, and
-  # the seconds-fast `patched-src-nix-fast-build` apply gate are driven by
-  # lib/fork-packages.nix; each patch's commit message carries its full WHY.
-  patchedSrc = ix.patchedSrc {
-    name = "nix-fast-build";
-    src = ix.nix-fast-buildSrc;
-    patchDir = ./patches;
-  };
+  # The indexable-inc/nix-fast-build jj megamerge (nix-fast-build-src, on the
+  # tag nixpkgs packages): --skip-cached skipping locally-realized outputs,
+  # and the typed per-derivation no-progress deadline. The patch DAG and its
+  # upstream intent are driven by lib/fork-packages.nix; each patch commit's
+  # message carries its full WHY.
+  patchedSrc = ix.nix-fast-buildSrc;
 
   # The nixpkgs recipe expects nix-fast-build's version to match the source
   # it wraps; a nixpkgs bump with a stale nix-fast-build-src pin would
@@ -22,8 +17,8 @@
   package = assert lib.assertMsg (pkgs.nix-fast-build.version == "1.6.0") ''
     packages/nix/nix-fast-build: nixpkgs nix-fast-build is
     ${pkgs.nix-fast-build.version} but nix-fast-build-src pins tag 1.6.0.
-    Repin the nix-fast-build-src input to the matching upstream tag and run
-    `nix run .#rebase-patches -- nix-fast-build`.'';
+    Repin nix-fast-build-src by jj-rebasing indexable-inc/nix-fast-build
+    onto the matching upstream tag.'';
     pkgs.nix-fast-build.overrideAttrs (old: {
       src = patchedSrc;
       doCheck = true;

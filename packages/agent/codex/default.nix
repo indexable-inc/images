@@ -32,16 +32,9 @@
   # sibling is out of scope, so the wrapper bakes no MCP server there (the same
   # fallback the claude-code wrapper uses).
   repoPackages ? {},
-  # Upstream openai/codex (codex-src input) with the in-repo patch series
-  # (./patches) applied. De-forking replacement for the old
-  # `indexable-inc/codex` branch input; the single "route channel notifications
-  # into chat" commit is now 0001-*.patch.
-  codexSrc ?
-    ix.patchedSrc {
-      name = "codex";
-      src = ix.codexSrc;
-      patchDir = ./patches;
-    },
+  # The indexable-inc/codex jj megamerge (codex-src input): upstream plus the
+  # "route channel notifications into chat" patch commit.
+  codexSrc ? ix.codexSrc,
   # Rule names dropped from the default house prompt. Only affects the computed
   # `systemPrompt` default below; ignored when `systemPrompt` is passed
   # explicitly.

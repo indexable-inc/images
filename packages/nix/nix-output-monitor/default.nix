@@ -22,11 +22,9 @@
   #
   # Upstream: https://github.com/maralorn/nix-output-monitor/issues/122
   #           https://github.com/Gabriella439/Haskell-Nix-Derivation-Library/issues/28
-  patchedNixDerivationSrc = ix.patchedSrc {
-    name = "nix-derivation";
-    src = ix.nix-derivationSrc;
-    patchDir = ./patches;
-  };
+  # The indexable-inc/Haskell-Nix-Derivation-Library jj megamerge
+  # (nix-derivation-src input).
+  patchedNixDerivationSrc = ix.nix-derivationSrc;
 
   # The hackage recipe expects its source's cabal version; a haskellPackages
   # bump past 1.1.3 with a stale nix-derivation-src pin would silently build

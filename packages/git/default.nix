@@ -4,23 +4,18 @@
   ix,
   lib,
 }: let
-  # Upstream git/git (git-src input, pinned to the v2.54.0 tag) with the
-  # in-repo patch series (./patches) applied: linked worktrees borrow the
-  # common-dir submodule object store via alternates instead of re-cloning
-  # every submodule from the network (#3610).
-  patchedSrc = ix.patchedSrc {
-    name = "git";
-    src = ix.gitSrc;
-    patchDir = ./patches;
-  };
+  # The indexable-inc/git jj megamerge (git-src input, on the v2.54.0 tag
+  # base): linked worktrees borrow the common-dir submodule object store via
+  # alternates instead of re-cloning every submodule from the network (#3610).
+  patchedSrc = ix.gitSrc;
 in
   # The nixpkgs recipe expects git's version to match the source it patches;
   # a nixpkgs git bump with a stale git-src pin would silently build the old
   # tree under the new label, so fail eval until the pin is advanced.
   assert lib.assertMsg (git.version == "2.54.0") ''
     packages/git: nixpkgs git is ${git.version} but git-src pins v2.54.0.
-    Repin the git-src input to the matching upstream tag and run
-    `nix run .#rebase-patches -- dag git`.'';
+    Repin git-src by jj-rebasing indexable-inc/git onto the matching
+    upstream tag.'';
     git.overrideAttrs (old: {
       src = patchedSrc;
 
