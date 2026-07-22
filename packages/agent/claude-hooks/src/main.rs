@@ -16,6 +16,7 @@ mod retro;
 mod review;
 mod session_banner;
 mod wakeup;
+mod worker;
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -99,6 +100,19 @@ fn main() -> ExitCode {
 }
 
 // --- shared helpers ---
+
+/// Best-effort machine hostname, stamped into friction issues and retro
+/// prompts for attribution; `"unknown"` when the `hostname` binary is missing
+/// or prints nothing.
+pub(crate) fn hostname() -> String {
+    Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned())
+}
 
 /// True when an env var is present and non-empty (the kill-switch convention).
 pub(crate) fn flag_set(name: &str) -> bool {

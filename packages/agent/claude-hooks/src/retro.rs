@@ -33,15 +33,16 @@
 //! shares the loop-guard and background-work suppression policy with
 //! `review-gate` so a forced continuation can never wedge it.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde_json::{Value, json};
+
+use crate::worker;
 
 /// Below this many tool calls a session is a trivial one-question interaction not
 /// worth a retro. Overridable for tests and tuning.
@@ -84,6 +85,16 @@ fn state_dir() -> PathBuf {
         .filter(|v| !v.is_empty())
         .map_or_else(|| crate::home().join(".claude/.retro-state"), PathBuf::from)
 }
+
+/// This hook's detached-worker identity: `claude-hooks retro-gate --dispatch`,
+/// payload in `RETRO_PAYLOAD`, log in `<state>/retro.log`.
+const WORKER: worker::Worker = worker::Worker {
+    subcommand: "retro-gate",
+    flag: "--dispatch",
+    payload_env: "RETRO_PAYLOAD",
+    log_file: "retro.log",
+    state_dir,
+};
 
 fn min_tool_calls() -> usize {
     std::env::var("CLAUDE_RETRO_MIN_TOOL_CALLS")
@@ -135,21 +146,9 @@ fn read_key_file(path: &Path) -> Option<String> {
 
 /// Timestamped line appended to `<state>/retro.log`; best-effort, never raises.
 /// This is the dispatch half's only output channel: nothing ever touches
-/// stdout/stderr (mirrors `friction.rs`).
+/// stdout/stderr.
 fn log(msg: &str) {
-    let dir = state_dir();
-    if fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("retro.log"))
-    else {
-        return;
-    };
-    let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S");
-    let _ = writeln!(f, "{ts} {msg}");
+    WORKER.log(msg);
 }
 
 /// What the Stop gate should do this turn, decided from the payload alone (no
@@ -232,17 +231,8 @@ pub fn retro_gate() {
     if crate::flag_set("CLAUDE_CODE_DISABLE_RETRO_GATE") {
         return;
     }
-    if std::env::args().skip(1).any(|a| a == "--dispatch") {
-        // Detached worker: payload rides in the env. Any failure logs only.
-        let Some(raw) = std::env::var_os("RETRO_PAYLOAD") else {
-            return;
-        };
-        let Some(raw) = raw.to_str() else { return };
-        let Ok(payload) = serde_json::from_str::<Value>(raw) else {
-            log("dispatch: unparseable RETRO_PAYLOAD");
-            return;
-        };
-        dispatch(&payload);
+    // Detached worker: payload rides in the env. Any failure logs only.
+    if WORKER.run_worker(dispatch) {
         return;
     }
 
@@ -304,48 +294,9 @@ pub fn retro_gate() {
         return;
     }
 
-    detach_dispatch(&payload);
+    WORKER.detach(&payload);
     // Nothing on stdout: Stop is allowed immediately; the detached worker owns
     // the slow work and survives terminal close (own session via setsid).
-}
-
-/// Re-spawn THIS binary as `retro-gate --dispatch`, detached (new session,
-/// stdin=/dev/null, stdout+stderr appended to retro.log), so Stop returns
-/// immediately. Best-effort: any failure is silent. Same shape as
-/// `friction::detach_analyze`.
-fn detach_dispatch(payload: &Value) {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let Ok(payload_json) = serde_json::to_string(payload) else {
-        return;
-    };
-    let dir = state_dir();
-    if fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let Ok(logf) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("retro.log"))
-    else {
-        return;
-    };
-    let Ok(logf2) = logf.try_clone() else {
-        return;
-    };
-
-    let mut detach = Command::new(exe);
-    detach
-        .args(["retro-gate", "--dispatch"])
-        .env("RETRO_PAYLOAD", payload_json)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(logf))
-        .stderr(Stdio::from(logf2));
-    // start_new_session: own session so it outlives the hook's process tree.
-    crate::friction::set_new_session(&mut detach);
-    let _ = detach.spawn();
-    // We deliberately do NOT wait: the child owns the slow work.
 }
 
 // --- detached dispatch half ---
@@ -438,7 +389,7 @@ fn dispatch(payload: &Value) {
         }
     }
 
-    let prompt = retro_prompt(&session, cwd, &crate::friction::hostname());
+    let prompt = retro_prompt(&session, cwd, &crate::hostname());
     let code = finalize_code(&var, &prompt);
     let Some(result) = client.call_tool(
         "python_exec",
