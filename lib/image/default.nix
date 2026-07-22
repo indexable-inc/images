@@ -144,21 +144,18 @@
           # flake scope sees `self`, so it is plumbed down from `flake.nix`.
           # `self.narHash` is absent when index is consumed as a path-locked
           # flake input (ix's ./index submodule seam, ix#8142): path-type lock
-          # nodes carry no narHash, so nix hands the input through without
-          # one. Recompute it from the already-ingested source in that case;
-          # fetchTree on a store path is pure and yields the same NAR hash
-          # a git consumption would have carried (index#3981).
-          nix.registry.index.to = {
-            type = "path";
-            path = self.outPath;
-            narHash =
-              self.narHash
-                or (builtins.fetchTree {
-                type = "path";
-                path = self.outPath;
-              })
-                .narHash;
-          };
+          # nodes carry no narHash, and recomputing via fetchTree is rejected
+          # in pure eval (the source is a lazy-tree subpath, index#3981). Pin
+          # without narHash on that seam: in-guest `nix run index#...` then
+          # re-ingests the baked source once (the #1748-era cost) instead of
+          # failing every consumer eval. Images published by index's own CI
+          # consume self via git and keep the locked, narHash-matched pin.
+          nix.registry.index.to =
+            {
+              type = "path";
+              path = self.outPath;
+            }
+            // lib.optionalAttrs (self ? narHash) {inherit (self) narHash;};
         }
         ++ [
           ./platform.nix
