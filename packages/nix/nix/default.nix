@@ -30,7 +30,10 @@
 # from the open upstream PR NixOS/nix#15380 (experimental feature
 # `wasm-builtin`, indexable-inc/index#3997) and force deterministic Wasm
 # execution (NaN canonicalization, deterministic relaxed SIMD) so eval
-# results stay bit-identical across the mixed darwin/linux fleet. The fork's
+# results stay bit-identical across the mixed darwin/linux fleet. The
+# `libfetchers: resolve git refs lazily...` patch makes rev-pinned
+# `builtins.fetchGit` inputs evaluate without network once cached and keeps
+# the git HEAD cache fresh (indexable-inc/index#4028). The fork's
 # `codex/flake-check-eval-cache` branch (draft PR indexable-inc/nix#1) is
 # deliberately excluded: it is self-declared WIP, untested, and incomplete.
 let
@@ -301,6 +304,11 @@ let
     });
 
   autoGcInterrupt = focusedFunctionalTest {name = "gc-auto";};
+  # `libfetchers: resolve git refs lazily and refresh the cached HEAD`
+  # regression coverage: a cached rev-pinned fetchGit input must evaluate
+  # without remote git subprocesses, and the cached HEAD must refresh on a
+  # successful network lookup (indexable-inc/index#4028).
+  fetchGitHeadCache = focusedFunctionalTest {name = "fetchGit-head-cache";};
   daemonSignal = focusedFunctionalTest {
     name = "daemon-signal";
     testDaemon = package.components.nix-cli;
@@ -323,7 +331,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // lib.optionalAttrs (!isCross) {
-            inherit autoGcInterrupt buildStatus daemonSignal smoke sparseLocks;
+            inherit autoGcInterrupt buildStatus daemonSignal fetchGitHeadCache smoke sparseLocks;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {

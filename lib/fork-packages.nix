@@ -830,6 +830,12 @@
           upstream = "hold";
           reason = "Fleet determinism policy on top of the #15380 import (NaN canonicalization + deterministic relaxed SIMD keep eval bit-identical across darwin/linux); upstream measured ~3.6x on float-heavy Wasm and left it off, so propose it on the PR rather than fork-PR it.";
         };
+        # Rev-pinned fetchGit inputs stop paying a network `git ls-remote
+        # HEAD` per eval once cached (indexable-inc/index#4028).
+        "libfetchers: resolve git refs lazily and refresh the cached HEAD" = {
+          upstream = "hold";
+          reason = "Fixes the eval-time network round trips of NixOS/nix#13556 (getDefaultRef never cached effectively) for rev-pinned fetchGit inputs (indexable-inc/index#4028). Upstream-nix candidate; hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
     {
