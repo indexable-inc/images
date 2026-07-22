@@ -206,6 +206,10 @@
 
           # Generated manifests, locks, editor settings, and typed data.
           '(^|/)(package|tsconfig)\.json$'
+          # TypeScript's project-variant convention: tsconfig.VARIANT.json.
+          # Vite scaffolds ship tsconfig.node.json, mkapp adds
+          # tsconfig.staging.json; tsc owns these names via `-p`.
+          '(^|/)tsconfig\.[a-z-]+\.json$'
           '(^|/)(package-lock|lock)\.json$'
           '(^|/)(pins|manifest)\.json$'
           '^\.(claude|vscode|zed)/settings\.json$'

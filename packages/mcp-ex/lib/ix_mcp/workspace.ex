@@ -19,6 +19,7 @@ defmodule IxMcp.Workspace do
              "alias IxMcp.TuiLocal; alias IxMcp.Gmail; alias IxMcp.Imsg; alias IxMcp.Contacts; " <>
              "alias IxMcp.Kernel, as: Ix; alias IxMcp.Agents; alias IxMcp.Memory; " <>
              "alias IxMcp.Ask; alias IxMcp.Cmd; alias IxMcp.Issues; alias IxMcp.Sessions; " <>
+             "alias IxMcp.Serve; " <>
              "alias IxMcp.Requests"
 
   @spec start_link(term()) :: GenServer.on_start()

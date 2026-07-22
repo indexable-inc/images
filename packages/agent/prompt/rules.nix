@@ -669,6 +669,25 @@
     };
   }
   {
+    generatedAppUi = {
+      topics = ["tooling"];
+      text = ''
+        Building a web UI for the user: scaffold with `mkapp`, serve with
+        `Serve.app` in a kernel cell. Edit only the app's `staging/` tree;
+        the gate typechecks it and promotes green code into the live page,
+        and durable state belongs in the store so promotes keep it. Narrate
+        through the store's status field, mark still-generating sections
+        loading so skeletons show, and keep updating the live page until the
+        work is done.
+      '';
+      reason = ''
+        index#4015: the scaffold and serve machinery exists, but nothing
+        told agents to narrate progress on the page or route edits through
+        the checked staging tree instead of the live src/.
+      '';
+    };
+  }
+  {
     noEmDashes = {
       topics = ["writing"];
       text = ''
