@@ -310,11 +310,5 @@ fn export_without_ci_runs_file_still_opens() {
 /// Re-running the adapter over the same export yields identical content hashes.
 #[test]
 fn content_hash_is_deterministic() {
-    let first = collect_docs();
-    let second = collect_docs();
-    assert_eq!(first.len(), second.len());
-    for (a, b) in first.iter().zip(second.iter()) {
-        assert_eq!(a.external_id, b.external_id);
-        assert_eq!(a.content_hash, b.content_hash, "stable hash across runs");
-    }
+    source_meta::testing::assert_deterministic_hashes(&collect_docs(), &collect_docs());
 }

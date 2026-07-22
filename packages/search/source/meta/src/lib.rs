@@ -25,6 +25,7 @@
 pub mod files;
 pub mod keys;
 pub mod sanitize;
+pub mod testing;
 
 use std::fmt;
 use std::future::Future;
@@ -372,6 +373,20 @@ pub fn check_metadata(
         }
     );
     Ok(bytes)
+}
+
+/// Insert `key` only when a value is present, keeping absent tags off the
+/// record rather than serializing nulls.
+///
+/// A JSON `null` would become a bogus filter value in the store.
+pub fn insert_some(
+    meta: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: Option<serde_json::Value>,
+) {
+    if let Some(value) = value {
+        meta.insert(key.to_owned(), value);
+    }
 }
 
 #[cfg(test)]

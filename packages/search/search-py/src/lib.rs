@@ -49,15 +49,6 @@ fn resolve_time(value: Option<TimeSpec>) -> PyResult<Option<i64>> {
     }
 }
 
-/// The projection mode for a `compact=` flag.
-const fn render_mode(compact: bool) -> RenderMode {
-    if compact {
-        RenderMode::Compact
-    } else {
-        RenderMode::Full
-    }
-}
-
 /// Run a natural-language semantic search over the shared corpus store.
 ///
 /// Returns an awaitable resolving to a list of dicts, one per hit, each with
@@ -158,7 +149,7 @@ fn semantic(
         include_web: web,
         options,
         filter,
-        mode: render_mode(compact),
+        mode: RenderMode::from_compact(compact),
     };
     hits_future(py, run_search(args))
 }
@@ -220,7 +211,7 @@ fn grep(
         base,
         options,
         filter,
-        mode: render_mode(compact),
+        mode: RenderMode::from_compact(compact),
     };
     hits_future(py, run_grep(args))
 }
@@ -274,7 +265,7 @@ fn recent(
     let store_name = store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
     let base = base_url.unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
     let filter = scope_filter(source, not_source, repo, user, host, project, since, until)?;
-    let mode = render_mode(compact);
+    let mode = RenderMode::from_compact(compact);
     hits_future(py, async move {
         async {
             let store = MixedbreadStore::from_login(base).await?;

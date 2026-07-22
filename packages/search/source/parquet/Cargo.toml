@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 source-meta.workspace = true
+sink-parquet.workspace = true
 object_store = { workspace = true, features = ["aws"] }
 futures.workspace = true
 serde_json.workspace = true
