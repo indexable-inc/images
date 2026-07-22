@@ -263,6 +263,27 @@
     };
   }
   {
+    browserAutomation = {
+      topics = ["tooling"];
+      text = ''
+        Browser and web-app work goes through `agent-browser` (vercel-labs):
+        take a `snapshot` and act on its `@eN` refs, not screenshots or DOM
+        dumps. Read `agent-browser skills get core` before the first
+        command; the CLI serves guides matched to its own version
+        (`skills list` for electron, slack, dogfood and friends).
+      '';
+      reason = ''
+        agent-browser ships in every dev environment (lib/dev/base) and the
+        workstation profile, yet no rule or skill pointed at it. Upstream
+        keeps the usage guide inside the CLI, byte-matched to the installed
+        binary, so the rule points there instead of restating a recipe that
+        would drift; the vendored agent-browser skill (lib/skills.nix)
+        carries upstream's discovery stub for the same content
+        (index#3939).
+      '';
+    };
+  }
+  {
     indexKernel = {
       topics = ["tooling"];
       text = ''
