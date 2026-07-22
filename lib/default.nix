@@ -302,7 +302,6 @@
   # separators in nix numeric literals; the alejandra/statix/deadnix package
   # dirs under packages/nix/ consume this. See its doc comment.
   rnixDigitSeparators = import ./util/rnix-digit-separators {
-    inherit lib;
     rnix012Src = rnix-0-12-src;
     rnix014Src = rnix-0-14-src;
   };

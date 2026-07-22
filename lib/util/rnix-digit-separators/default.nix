@@ -33,7 +33,6 @@
 # `_`). Token text keeps the separators, so a formatter passes them through
 # verbatim.
 {
-  lib,
   # The two patched rnix-parser source trees (jj megamerge fork inputs,
   # lib/fork-packages.nix `rnix-0-12` / `rnix-0-14`); their `src/` dirs
   # replace the vendored crate's.
