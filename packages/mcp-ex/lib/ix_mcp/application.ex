@@ -29,6 +29,12 @@ defmodule IxMcp.Application do
 
   @impl true
   def start(_type, _args) do
+    # Before the tree: no cell exists yet, so the OS cwd is still the
+    # directory the MCP client launched us in. Cmd pins every pathless
+    # command to this capture -- a cell's File.cd!/1 moves the BEAM-global
+    # cwd, and with several agents on one kernel that redirected a sibling
+    # session's pathless git into a foreign worktree (#3902).
+    IxMcp.Cmd.capture_launch_cwd()
     route_crash_dumps()
     install_crash_log()
 

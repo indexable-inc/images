@@ -262,55 +262,6 @@
     ''
   );
 
-  # The `fsearch` filesystem-search module: `grep`/`find`/`spotlight`, each
-  # backed by a battle-tested CLI (ripgrep / fd / macOS Spotlight) run as a
-  # SEPARATE process via the kernel-private `sh._exec` runner, returning polars
-  # frames. Pure Python over the sh runner/polars; cross-platform (spotlight is
-  # darwin-only and guards itself). Unlike its predecessor `fff` (a ctypes cdylib
-  # that walked the tree in-process and could pin the cores for an hour with no
-  # way to interrupt short of killing the kernel), a runaway here is
-  # process-isolated and bounded by `_exec`'s timeout + process-group kill.
-  # `ripgrep`/`fd` are put on the interpreter wrapper's PATH below so the runner
-  # resolves them.
-  fsearchPythonSource = builtins.path {
-    name = "ix-mcp-fsearch-python-source";
-    path = ./src/fsearch;
-  };
-  fsearchModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-fsearch-python-module"
-    {
-      strictDeps = true;
-      meta.description = "rg/fd/Spotlight-backed grep/find/spotlight bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/fsearch"
-      mkdir -p "$site"
-      cp -r ${fsearchPythonSource}/fsearch/. "$site/"
-    ''
-  );
-
-  # `embed`: Python-native code embeddings (chunk / embed / parquet cache /
-  # similarity search) for semantic clone detection and code search
-  # (index#3417). Pure Python over the bundled numpy + polars; the inference
-  # runtime (torch + sentence-transformers on MPS) is darwin-only and gated in
-  # `darwinExtraPackages`, imported lazily inside the functions that need it.
-  embedPythonSource = builtins.path {
-    name = "ix-mcp-embed-python-source";
-    path = ./src/embed;
-  };
-  embedModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-embed-python-module"
-    {
-      strictDeps = true;
-      meta.description = "In-process code-embedding battery (torch/MPS) bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/embed"
-      mkdir -p "$site"
-      cp -r ${embedPythonSource}/embed/. "$site/"
-    ''
-  );
-
   # The `ix_google` package: typed PyO3 bindings for the google-gmail and
   # google-calendar Rust crates, baked into the pinned interpreter as a
   # complement to the (untyped) `google_auth` helper. Notebook users pick
@@ -355,30 +306,6 @@
     ''
   );
 
-  # The single-tool MCP server itself, a pure-Python package installed into the
-  # pinned interpreter so the `ix-mcp` entrypoint, the one shared kernel, and the
-  # bundled modules all share one environment. No build step: plain Python over
-  # ipykernel + jupyter-client + the bundled modules already in this interpreter.
-  ixNotebookMcpSource = builtins.path {
-    name = "ix-notebook-mcp-source";
-    path = ./ix_notebook_mcp;
-  };
-  ixNotebookMcpModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-notebook-mcp-module"
-    {
-      strictDeps = true;
-      # store.py rides the durable weave spool (index#3419), so every env
-      # that bundles this package needs the weave client alongside it.
-      propagatedBuildInputs = [weaveModule];
-      meta.description = "The ix notebook-first MCP server package";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/ix_notebook_mcp"
-      mkdir -p "$site"
-      cp -r ${ixNotebookMcpSource}/. "$site/"
-    ''
-  );
-
   # One privacy boundary shared by every helper that can expose a signed-in
   # user's personal account data. Keeping the IX_MCP_SHARED policy here makes
   # the refusal semantics impossible to drift between integrations.
@@ -399,528 +326,12 @@
     ''
   );
 
-  # `google_auth`: Gmail + Calendar for the kernel, with self-service sign-in.
-  # Pure Python (no cdylib): it shells to the bundled `gcal` binary
-  # (`IX_GCAL_BIN`, set on the wrapper below) to sign in (`login()` drives
-  # `gcal auth --json` and opens a browser), to sign out (`logout()`), and to
-  # mint short-lived access tokens from the shared grant, which it wraps as a
-  # `google.oauth2.credentials` object the official client accepts. The refresh
-  # token / client secret stay inside `gcal`; only access tokens cross into
-  # Python.
-  googleAuthPythonSource = builtins.path {
-    name = "ix-mcp-google-auth-python-source";
-    path = ./src/google_auth;
-  };
-  googleAuthModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-google-auth-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Google OAuth credentials helper bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/google_auth"
-      mkdir -p "$site"
-      cp -r ${googleAuthPythonSource}/google_auth/. "$site/"
-    ''
-  );
-
-  # Native macOS screen capture and cursor control, bundled like `tui` and
-  # `search` so every session can `import screen`. This one is pure Python (no
-  # PyO3 cdylib): it wraps the Apple-maintained pyobjc `Quartz` binding for
-  # capture and synthetic input, and probes `AXIsProcessTrusted()` through
-  # ctypes for the Accessibility (TCC) permission check. macOS-only: the module
-  # itself raises on a non-Darwin platform, and `Quartz` is not available off
-  # Darwin, so the dependency is gated below.
-  # Pretty, composable views of files and search results (view.ls/tree/grep/find
-  # return polars DataFrames; view.cat/json/diff return highlighted Code). Pure
-  # Python over the bundled polars/pygments; cross-platform, so every session
-  # can `import view`.
-  viewPythonSource = builtins.path {
-    name = "ix-mcp-view-python-source";
-    path = ./src/view;
-  };
-  viewModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-view-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Pretty composable file/search views bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/view"
-      mkdir -p "$site"
-      cp -r ${viewPythonSource}/view/. "$site/"
-    ''
-  );
-
-  # `nix`: parse a `nix --log-format internal-json` stream into polars frames (a
-  # durable event log + a folded build-DAG view) and a live, self-closing
-  # dashboard Resource. Pure Python over the bundled polars (+ the runtime's
-  # register_resource when in a kernel), cross-platform, so every session can
-  # `import nix` and `await nix.build(".#foo")`.
-  nixPythonSource = builtins.path {
-    name = "ix-mcp-nix-python-source";
-    path = ./src/nix;
-  };
-  # `sharedaudio`: drive the local shared-audio daemon (packages/audio) over
-  # its unix control socket: status, local volume, and publishing WASM
-  # instruments / control changes to every peer. Pure stdlib JSON-lines
-  # client, cross-platform, so every session can `import sharedaudio`.
-  sharedaudioPythonSource = builtins.path {
-    name = "ix-mcp-sharedaudio-python-source";
-    path = ./src/sharedaudio;
-  };
-  sharedaudioModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-sharedaudio-python-module"
-    {
-      strictDeps = true;
-      meta.description = "shared-audio daemon control client bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/sharedaudio"
-      mkdir -p "$site"
-      cp -r ${sharedaudioPythonSource}/sharedaudio/. "$site/"
-    ''
-  );
-  nixModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-nix-python-module"
-    {
-      strictDeps = true;
-      meta.description = "nix internal-json -> polars + live build-DAG, bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/nix"
-      mkdir -p "$site"
-      cp -r ${nixPythonSource}/nix/. "$site/"
-    ''
-  );
-  # Polars-returning SSH fan-out source: `import fleet`, then `await fleet.scan`
-  # runs a command on many hosts in parallel (asyncssh + a bounded semaphore on
-  # the shared loop) and combines per-host stdout into one DataFrame via
-  # `pl.concat(how="diagonal_relaxed")`. Pure Python over the bundled asyncssh +
-  # polars; cross-platform, so every session can `import fleet`.
-  fleetPythonSource = builtins.path {
-    name = "ix-mcp-fleet-python-source";
-    path = ./src/fleet;
-  };
-  fleetModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-fleet-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Polars-returning SSH fan-out source bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/fleet"
-      mkdir -p "$site"
-      cp -r ${fleetPythonSource}/fleet/. "$site/"
-    ''
-  );
-  # Tailnet mesh discovery (index#1787): `await mesh.peers()` sweeps tailscale
-  # peers for live ix-mcp `/mesh` endpoints (served by ix_notebook_mcp.mesh on
-  # the well-known mesh port) and returns one polars row per responding server;
-  # `mesh.sessions()` flattens to (host, session). Pure Python over the bundled
-  # httpx + polars; cross-platform.
-  meshPythonSource = builtins.path {
-    name = "ix-mcp-mesh-python-source";
-    path = ./src/mesh;
-  };
-  meshModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-mesh-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Tailnet mesh discovery of live ix-mcp servers, bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/mesh"
-      mkdir -p "$site"
-      cp -r ${meshPythonSource}/mesh/. "$site/"
-    ''
-  );
-  # Weave 2 async client: facts, queries, blobs, chat, and delegation verbs
-  # against the shared Weave journal. Pure Python over bundled httpx + polars.
-  weavePythonSource = builtins.path {
-    name = "ix-mcp-weave-python-source";
-    path = ./src/weave;
-  };
-  weaveModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-weave-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Weave 2 async client bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/weave"
-      mkdir -p "$site"
-      cp -r ${weavePythonSource}/weave/. "$site/"
-    ''
-  );
-  # Call-first delegation on the weave journal (index#3191, #3192): `await
-  # fabric.run(fn, *args)` executes fn on this node -- or, with node='<host>',
-  # on that fleet node's runner actor over Ray, env-handshake-checked at
-  # submit -- with the ask/started/terminal facts recorded via the bundled
-  # weave client, and `fabric.claude` opens self-recording, interruptible
-  # Claude Agent SDK sessions. Pure Python over the bundled weave +
-  # claude-agent-sdk + ray (+ fleet for cluster discovery).
-  fabricPythonSource = builtins.path {
-    name = "ix-mcp-fabric-python-source";
-    path = ./src/fabric;
-  };
-  fabricModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-fabric-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Call-first fabric delegation bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/fabric"
-      mkdir -p "$site"
-      cp -r ${fabricPythonSource}/fabric/. "$site/"
-    ''
-  );
-  # The kernel's process runner. The public `sh()`/`zsh()` are RETIRED (agents
-  # shell out through `await nu(...)`); they stay importable as disabled shims
-  # that raise a migration hint. The private `sh._exec` runs on the kernel's loop
-  # (never blocks it like a bare subprocess.run) and returns an Output that IS a
-  # Result, so the dashboard sees the command's ANSI color rendered to HTML while
-  # the model gets the same text escape-stripped. Kernel internals (the
-  # grep/find search helpers, worktree plumbing) use `_exec`. Pure Python over the
-  # bundled ansi2html; cross-platform.
-  shPythonSource = builtins.path {
-    name = "ix-mcp-sh-python-source";
-    path = ./src/sh;
-  };
-  shModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-sh-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Async shell-out helper bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/sh"
-      mkdir -p "$site"
-      cp -r ${shPythonSource}/sh/. "$site/"
-    ''
-  );
-  # Svelte 5 components as live interactive resources: `import svelte`, then
-  # `await svelte.component("Board.svelte", id=..., actions=...)` compiles via
-  # the svelte-bundle CLI and registers the result, with the virtual `ix`
-  # module (`data`/`act`/`replies`) wired to the resource event feed. Pure
-  # Python; the compiler is the wrapped Node CLI above.
-  sveltePythonSource = builtins.path {
-    name = "ix-mcp-svelte-python-source";
-    path = ./src/svelte;
-  };
-  svelteModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-svelte-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Svelte 5 resource components bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/svelte"
-      mkdir -p "$site"
-      cp -r ${sveltePythonSource}/svelte/. "$site/"
-    ''
-  );
-  # Browser automation over CDP: `import browser`, then `await browser.goto(url)`
-  # / `await browser.shot()` drive a Chromium-family browser already running with
-  # --remote-debugging-port (the standard 9222 by default). Pure Python over the
-  # bundled playwright (already in this interpreter, so no `pip`/`playwright
-  # install`); runs on the kernel loop and returns the raw Playwright objects plus
-  # a screenshot Result. Cross-platform.
-  browserPythonSource = builtins.path {
-    name = "ix-mcp-browser-python-source";
-    path = ./src/browser;
-  };
-  browserModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-browser-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Playwright-over-CDP browser helper bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/browser"
-      mkdir -p "$site"
-      cp -r ${browserPythonSource}/browser/. "$site/"
-    ''
-  );
-  # Read recent X (Twitter) posts into polars by driving the logged-in browser:
-  # `import x`, then `await x.posts("@handle")` / `x.posts("home")` navigates the
-  # browser `browser` connects to, scrolls until it has enough tweets, and parses
-  # them into a polars frame. Pure Python over the bundled browser/playwright/polars
-  # (X has no usable unauthenticated read API); cross-platform.
-  xPythonSource = builtins.path {
-    name = "ix-mcp-x-python-source";
-    path = ./src/x;
-  };
-  xModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-x-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Read recent X posts to polars via the logged-in browser, bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/x"
-      mkdir -p "$site"
-      cp -r ${xPythonSource}/x/. "$site/"
-    ''
-  );
-  # Slack: read channels, messages, threads; send messages; search -- all per-user
-  # with a self-service token flow. Pure Python over stdlib urllib + polars.
-  # Per-user credential: SLACK_USER_TOKEN/SLACK_TOKEN env or ~/.config/slack/token
-  # (mode 0600, written by slack.login(token)). Incognito sessions only (personal
-  # workspace data never reaches a shared room). Cross-platform.
-  slackPythonSource = builtins.path {
-    name = "ix-mcp-slack-python-source";
-    path = ./src/slack;
-  };
-  slackModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-slack-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Per-user Slack channels/messages/search bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/slack"
-      mkdir -p "$site"
-      cp -r ${slackPythonSource}/slack/. "$site/"
-    ''
-  );
-  # Beeper: read chats and messages across every connected network, search, and
-  # send -- a polars-shaped wrapper over the local Beeper Desktop HTTP API
-  # (default http://localhost:23373). Pure Python over the bundled httpx + polars.
-  # Per-user credential: BEEPER_ACCESS_TOKEN env or ~/.config/beeper/token
-  # (mode 0600, written by beeper.login(token)). Incognito sessions only (personal
-  # chats never reach a shared room). Cross-platform.
-  beeperPythonSource = builtins.path {
-    name = "ix-mcp-beeper-python-source";
-    path = ./src/beeper;
-  };
-  beeperModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-beeper-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Per-user Beeper Desktop chats/messages/search/send bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/beeper"
-      mkdir -p "$site"
-      cp -r ${beeperPythonSource}/beeper/. "$site/"
-    ''
-  );
-  # Git worktrees as the unit of isolated work: `import worktree`, then
-  # `wt = await worktree.add("my-fix")` checks out a new branch in its own tree,
-  # `await wt.build(".#mcp")` stages + nix-builds it, `worktree.list()` is a
-  # DataFrame. Pure Python over the bundled sh/nix/polars; cross-platform.
-  worktreePythonSource = builtins.path {
-    name = "ix-mcp-worktree-python-source";
-    path = ./src/worktree;
-  };
-  worktreeModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-worktree-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Git-worktree helper bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/worktree"
-      mkdir -p "$site"
-      cp -r ${worktreePythonSource}/worktree/. "$site/"
-    ''
-  );
-
-  # Local Claude Code history search (issue #2245): `await
-  # claude_history.search(pattern)` returns one polars row per matching session
-  # under ~/.claude/projects -- session id, un-munged cwd, start/end
-  # timestamps, hit count, first real user message -- ranked by hit count. Pure
-  # Python: ripgrep matching rides the bundled `fsearch`, transcript parsing
-  # reuses the distiller's reader (below), so the transcript schema stays owned
-  # in one place on the Python side.
-  claudeHistoryPythonSource = builtins.path {
-    name = "ix-mcp-claude-history-python-source";
-    path = ./src/claude_history;
-  };
-  claudeHistoryModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-claude-history-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Local Claude Code history search bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/claude_history"
-      mkdir -p "$site"
-      cp -r ${claudeHistoryPythonSource}/claude_history/. "$site/"
-    ''
-  );
   # The distiller's transcript reader (packages/agent/distiller), the single
   # Python-side owner of the Claude transcript schema, bundled from that
   # package's own passthru so the module recipe is not duplicated here.
   # `claude_history` imports `distiller.transcripts` (stdlib-only); the
   # distiller's optional deps (pyarrow/boto3) stay out of this interpreter.
   distillerModule = pkgs.ix-distiller.passthru.pythonModule;
-  distillerPythonSource = pkgs.ix-distiller.passthru.pythonSource;
-  # Drive the Ghostty terminal over its AppleScript dictionary (Ghostty 1.3.2+):
-  # `import ghostty`, then `await ghostty.surfaces()` reads every open surface
-  # (id/tty/pid/cwd/name) into polars and `await ghostty.close_me()` closes the
-  # window this session runs in. Pure Python shelling `osascript` on the loop; no
-  # native binding, so a plain toPythonModule like `worktree`/`tasks`. macOS-only
-  # at import; bundled only in `darwinExtraPackages`.
-  ghosttyPythonSource = builtins.path {
-    name = "ix-mcp-ghostty-python-source";
-    path = ./src/ghostty;
-  };
-  ghosttyModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-ghostty-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Ghostty AppleScript control bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/ghostty"
-      mkdir -p "$site"
-      cp -r ${ghosttyPythonSource}/ghostty/. "$site/"
-    ''
-  );
-  # Linear issue-tracker GraphQL client: `import linear`, then
-  # `await linear.issue("ENG-123")` / `issue_update` / `issue_create` /
-  # `project_create`. Pure Python over the already-bundled httpx; reads
-  # LINEAR_API_KEY from the environment at call time.
-  linearPythonSource = builtins.path {
-    name = "ix-mcp-linear-python-source";
-    path = ./src/linear;
-  };
-  linearModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-linear-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Linear GraphQL client bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/linear"
-      mkdir -p "$site"
-      cp -r ${linearPythonSource}/linear/. "$site/"
-    ''
-  );
-  # Notion REST client: `import notion`, then `await notion.search(query)` /
-  # `page(id)` / `blocks(id)` / `db_query(id)` / `page_create` / `blocks_append`
-  # / `page_update`. Pure Python over the already-bundled httpx + polars; reads
-  # NOTION_API_KEY from the environment at call time. Cross-platform.
-  notionPythonSource = builtins.path {
-    name = "ix-mcp-notion-python-source";
-    path = ./src/notion;
-  };
-  notionModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-notion-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Notion REST client bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/notion"
-      mkdir -p "$site"
-      cp -r ${notionPythonSource}/notion/. "$site/"
-    ''
-  );
-  # `nox_autotriage`: nox-aware adapter that converts a nox conformance report
-  # into linear.triage Findings and files them to Linear.  Depends on
-  # linearModule (for linear.triage).  Entry point: python -m nox_autotriage.
-  noxAutotriagePythonSource = builtins.path {
-    name = "ix-mcp-nox-autotriage-python-source";
-    path = ./src/nox_autotriage;
-  };
-  noxAutotriageModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-nox-autotriage-python-module"
-    {
-      strictDeps = true;
-      meta.description = "nox conformance -> Linear triage adapter bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/nox_autotriage"
-      mkdir -p "$site"
-      cp -r ${noxAutotriagePythonSource}/nox_autotriage/. "$site/"
-    ''
-  );
-  # `mcp_client`: connect to any Model Context Protocol server and call its tools
-  # from the kernel. Pure Python over the already-bundled `mcp` SDK (no cdylib),
-  # so it wraps the SDK's awkward `async with` transport/session context managers
-  # in a persistent `Server` driven by one background task. `import mcp_client`,
-  # then `await mcp_client.connect(url_or_command)`.
-  mcpClientPythonSource = builtins.path {
-    name = "ix-mcp-mcp-client-python-source";
-    path = ./src/mcp_client;
-  };
-  mcpClientModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-mcp-client-python-module"
-    {
-      strictDeps = true;
-      meta.description = "MCP client helper bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/mcp_client"
-      mkdir -p "$site"
-      cp -r ${mcpClientPythonSource}/mcp_client/. "$site/"
-    ''
-  );
-  screenPythonSource = builtins.path {
-    name = "ix-mcp-screen-python-source";
-    path = ./src/screen;
-  };
-  screenModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-screen-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Native macOS screen/cursor helper bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/screen"
-      mkdir -p "$site"
-      cp -r ${screenPythonSource}/screen/. "$site/"
-    ''
-  );
-
-  # Native macOS VM control, bundled like `screen` so every session can
-  # `import vmkit` on Darwin. Pure Python: it spawns the `vmkit` binary (a
-  # Rust binding over Virtualization.framework) and returns guest screenshots as
-  # PIL images. macOS-only; on a non-Darwin platform the module raises.
-  vmkitPythonSource = builtins.path {
-    name = "ix-mcp-vmkit-python-source";
-    path = ./src/vmkit;
-  };
-  vmkitModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-vmkit-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Native macOS VM control bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/vmkit"
-      mkdir -p "$site"
-      cp -r ${vmkitPythonSource}/vmkit/. "$site/"
-    ''
-  );
-  # Native macOS iMessage access, bundled like `screen`/`vmkit` so every session
-  # can `import imessage` on Darwin. Pure Python over the bundled sqlite3/polars
-  # (plus Foundation's NSUnarchiver to decode the archived message text): it reads
-  # the Messages and Contacts SQLite databases into polars frames, sends new
-  # messages through the Messages app over AppleScript, and edits contacts
-  # through the Contacts app over JXA (so edits sync to iCloud). macOS-only; the
-  # module raises off Darwin.
-  imessagePythonSource = builtins.path {
-    name = "ix-mcp-imessage-python-source";
-    path = ./src/imessage;
-  };
-  imessageModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-imessage-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Native macOS iMessage read-to-polars + send bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/imessage"
-      mkdir -p "$site"
-      cp -r ${imessagePythonSource}/imessage/. "$site/"
-    ''
-  );
-
   # The vmkit binary `vmkit` spawns. Darwin-only; referenced lazily so a Linux
   # mcp build never forces it.
   vmkitBin = ix.rustWorkspace.units.binaries.vmkit;
@@ -998,62 +409,53 @@
       };
   });
 
-  # Native macOS places & geocoding: places near a point (MapKit `MKLocalSearch`)
-  # and geocoding both ways (CoreLocation `CLGeocoder`), all returned as polars
-  # frames. Pure Python over the bundled pyobjc CoreLocation/MapKit; its async
-  # bridge drains the main run loop cooperatively so the frameworks' main-thread
-  # completion handlers fire without wedging the kernel's event loop. macOS-only
-  # (the module raises off Darwin).
-  mapsPythonSource = builtins.path {
-    name = "ix-mcp-maps-python-source";
-    path = ./src/maps;
-  };
-  mapsModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-maps-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Native macOS maps/location (MapKit + CoreLocation) bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/maps"
-      mkdir -p "$site"
-      cp -r ${mapsPythonSource}/maps/. "$site/"
-    ''
-  );
-
   # The `screen` helper is macOS-only, so its dependencies join the interpreter
   # only on Darwin. `pyobjc-framework-Quartz` is the maintained CoreGraphics
   # binding the helper wraps; Pillow (already transitive via matplotlib) carries
   # the PIL image type capture returns. `coreLocationModule` adds the Core
   # Location binding so location reads work out of the box, and
   # `scriptingBridgeModule` the Scripting Bridge binding for app automation.
-  darwinExtraPackages = ps:
+  # Split from the darwin-only first-party modules below so the per-module test
+  # base (third-party only) can reuse these without dragging module sources in.
+  darwinFrameworkPackages = ps:
     lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       ps.pyobjc-framework-Quartz
       coreLocationModule
       scriptingBridgeModule
       mapKitModule
-      mapsModule
-      screenModule
-      vmkitModule
-      imessageModule
-      ghosttyModule
-      # `embed` (code embeddings, index#3417) infers on torch/MPS, so its
-      # heavyweight runtime joins the interpreter only on Darwin; the module
-      # itself is bundled everywhere and imports these lazily with a clear
-      # error where they are absent. `torch` substitutes from the official
-      # cache. `sentence-transformers` is overridden because the stock package
-      # folds every optional-dependencies extra into its nativeCheckInputs and
-      # the `audio` extra carries phonemizer -> dlinfo, which this nixpkgs
-      # marks broken, refusing evaluation outright. The extras are test-only:
-      # drop the test run rather than allowlist a broken leaf; runtime
-      # dependencies are untouched.
+    ];
+  # The darwin-only bundled first-party modules: the discovered module dirs
+  # whose module.nix declares `darwinOnly = true`.
+  darwinBundledModules = lib.optionals pkgs.stdenv.hostPlatform.isDarwin (
+    lib.mapAttrsToList (_: entry: entry.module) (
+      lib.filterAttrs (_: entry: entry.darwinOnly or false) bundledEntries
+    )
+  );
+  # `embed` (code embeddings, index#3417) infers on torch/MPS, so its
+  # heavyweight runtime joins the interpreter only on Darwin; the module
+  # itself is bundled everywhere and imports these lazily with a clear
+  # error where they are absent. `torch` substitutes from the official
+  # cache. `sentence-transformers` is overridden because the stock package
+  # folds every optional-dependencies extra into its nativeCheckInputs and
+  # the `audio` extra carries phonemizer -> dlinfo, which this nixpkgs
+  # marks broken, refusing evaluation outright. The extras are test-only:
+  # drop the test run rather than allowlist a broken leaf; runtime
+  # dependencies are untouched.
+  darwinTorchPackages = ps:
+    lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       ps.torch
       (ps.sentence-transformers.overridePythonAttrs (_: {
         doCheck = false;
         nativeCheckInputs = [];
       }))
     ];
+  # Concatenated in the shipped env's historical order (frameworks, modules,
+  # torch) so the interpreter's buildEnv input order -- and store path -- do
+  # not move.
+  darwinExtraPackages = ps:
+    darwinFrameworkPackages ps
+    ++ darwinBundledModules
+    ++ darwinTorchPackages ps;
 
   # htpy: build HTML in plain Python (`div(class_="x")[ ... ]`), auto-escaping
   # every text node and attribute via markupsafe. Bundled so a session — and the
@@ -1274,27 +676,86 @@
     doCheck = false;
   });
 
-  # The `iphone` helper source, bundled like `screen`/`vmkit`/`imessage` so every
-  # session can `import iphone`. Pure Python: it shells out to the bundled
-  # `pymobiledevice3` console script (resolved next to the interpreter at runtime)
-  # and returns device data as polars frames and screenshots as PIL images.
-  # Cross-platform (USB + a root `tunneld` are what it needs, not macOS), so it
-  # builds and import-checks on Linux CI too.
-  iphonePythonSource = builtins.path {
-    name = "ix-mcp-iphone-python-source";
-    path = ./src/iphone;
+  # Bundled first-party modules, one directory per module (issue #3928): every
+  # directory under this package carrying a `module.nix` marker is a bundled
+  # module, its Nix definition living next to its Python source
+  # (src/<name>/module.nix, plus ix_notebook_mcp/module.nix for the server
+  # package itself). Same discovery idiom as packages/registry.nix's
+  # package.nix walk. Each module.nix is a function returning
+  # `{ module, darwinOnly ? false, tests ? {} }` (embed also returns `cli`,
+  # which the assembly surfaces as `passthru.embedCli`); its formals are fed by
+  # intersection from `moduleScope`, so a module file declares exactly the
+  # slice of this assembly it uses: shared helpers, third-party pins, and
+  # sibling modules under their `<name>Module` bindings (which is how a
+  # `passthru.ixFirstPartyDeps` declaration travels with its module).
+  discoveredModules = ix.discoverTree {
+    root = ./.;
+    requiredFiles = ["module.nix"];
   };
-  iphoneModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-iphone-python-module"
+  # A bundled module directory as a Python source tree: everything except the
+  # module.nix marker itself, so editing a module's Nix definition does not
+  # invalidate its Python module output.
+  bundledSource = {
+    name,
+    path,
+  }:
+    builtins.path {
+      inherit name path;
+      filter = filePath: _type: builtins.baseNameOf filePath != "module.nix";
+    };
+  # Module directories are snake_case on disk; the scope binds each module drv
+  # under the camelCase `<name>Module` binding the definitions historically
+  # used (src/nox_autotriage -> noxAutotriageModule).
+  camelName = name: let
+    parts = lib.splitString "_" name;
+  in
+    builtins.head parts + lib.concatMapStrings lib.toSentenceCase (builtins.tail parts);
+  moduleScope =
     {
-      strictDeps = true;
-      meta.description = "USB iOS device control (pymobiledevice3) bundled into the ix-mcp interpreter";
+      inherit
+        lib
+        pkgs
+        bundledSource
+        importTest
+        bundledTestPython
+        bundledTestPythonWith
+        serverTestPython
+        typecheckTestPython
+        playwrightBrowsers
+        fontsConf
+        svelteBundleBin
+        tuiModule
+        nuPyModule
+        privateSessionModule
+        distillerModule
+        # The shipped interpreter, for module-owned artifacts that must run on
+        # the exact env the kernels run (embed's CLI). Anything built over it
+        # rides the whole bundled closure, so per-module tests should prefer
+        # `bundledTestPython` unless the artifact under test IS that closure.
+        mcpPython
+        ;
+      testsRoot = ./tests;
     }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/iphone"
-      mkdir -p "$site"
-      cp -r ${iphonePythonSource}/iphone/. "$site/"
-    ''
+    // lib.mapAttrs' (name: entry: lib.nameValuePair "${camelName name}Module" entry.module) bundledEntries;
+  bundledEntries =
+    lib.mapAttrs (
+      _: discovered: let
+        moduleFn = import (discovered.path + "/module.nix");
+      in
+        moduleFn (builtins.intersectAttrs (builtins.functionArgs moduleFn) moduleScope)
+    )
+    discoveredModules;
+  bundledModule = name:
+    (bundledEntries."${name}" or (throw "ix-mcp: no bundled module directory named '${name}'")).module;
+  # The assembly below reaches a few discovered modules by name.
+  ixNotebookMcpModule = bundledModule "ix_notebook_mcp";
+  claudeHistoryModule = bundledModule "claude_history";
+  # The embed battery's CLI (index#3905), defined next to its module in
+  # src/embed/module.nix and surfaced as `nix run .#embed` through
+  # lib/per-system.nix.
+  embedCli = bundledEntries.embed.cli;
+  bundledModuleTests = lib.mergeAttrsList (
+    map (entry: entry.tests or {}) (builtins.attrValues bundledEntries)
   );
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
@@ -1302,168 +763,160 @@
   # (incl. Postgres via psycopg + SQLAlchemy), duckdb, httpx, htpy, and playwright
   # are importable by default while an in-session `pip install` still writes to
   # the per-session venv.
-  # The bundled-package set the pinned interpreter carries. Named so a sibling
-  # interpreter (the vdom property-test runner below) can reuse the exact same
-  # modules and only add its test deps, instead of duplicating the long list.
-  mcpPythonPackages = ps:
+  # The bundled-package set the pinned interpreter carries, split in two: the
+  # third-party base (PyPI/nixpkgs packages, which change rarely) and the
+  # first-party module block (repo sources, which churn). The per-module test
+  # envs below reuse the third-party base plus only the modules under test;
+  # the shipped env concatenates both, in the historical order, so the store
+  # path of the shipped interpreter does not move.
+  mcpThirdPartyPackages = ps: [
+    ps.asyncssh
+    ps.numpy
+    ps.polars
+    # psycopg (v3) + SQLAlchemy so `polars.read_database` reaches Postgres out
+    # of the box: `pl.read_database(sql, create_engine("postgresql+psycopg://…"))`.
+    # connectorx and the ADBC drivers (what `read_database_uri` wants) are not
+    # packaged in nixpkgs, so the SQLAlchemy-engine path is the supported one
+    # here; psycopg also works as a raw DBAPI connection for `read_database`.
+    ps.psycopg
+    ps.sqlalchemy
+    # duckdb: in-process analytical SQL over CSV/Parquet with no external
+    # service; `duckdb.sql(q).pl()` hands results straight back to polars.
+    # pyarrow is deliberately not bundled: it pulls arrow-cpp + grpc + the
+    # aws/gcp/azure C++ SDKs (~300 MB) that this use case never touches, and
+    # the polars/duckdb paths return frames natively. A session that needs
+    # explicit Arrow tables (`pl.to_arrow()`) can `pip install pyarrow`.
+    ps.duckdb
+    # httpx: an HTTP client for the shared async loop (the session already speaks
+    # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
+    # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
+    ps.httpx
+    # githubkit: typed async GitHub API client generated from GitHub's OpenAPI
+    # spec, so a session does GitHub reads/writes as direct API calls instead
+    # of `gh` subprocesses (index#3258: a REST call answers in under a second
+    # where each `gh` fork costs several; `gh` stays for auth bootstrap via
+    # `gh auth token`).
+    ps.githubkit
+    # pydantic (v2): the boundary parser for untrusted/JSON data. The bundled
+    # `linear` and `google_auth` modules parse their GraphQL/CLI JSON responses
+    # into typed models with it instead of threading untyped dicts. (The MCP SDK
+    # pulls it transitively too, but linear/google_auth depend on it directly,
+    # so declare it explicitly.)
+    ps.pydantic
+    # htpy: compose HTML in Python with automatic escaping (see the module
+    # definition above). The preferred way to build any dashboard markup.
+    htpyModule
+    # exa-py: the official Exa (exa.ai) SDK, so a session can run neural web
+    # search, get page contents, and `answer(...)` over the live web with no
+    # install step (`from exa_py import Exa`). It is a thin client over the Exa
+    # REST API. No key is bundled: the caller brings `EXA_API_KEY` (sourced
+    # from rbw/op per the secrets split), e.g. `Exa(os.environ["EXA_API_KEY"])`.
+    ps.exa-py
+    # cursor-sdk: Cursor's official agent SDK (see the module definition
+    # above) so a session can run local/cloud Cursor agents with no install
+    # step.
+    cursorSdkModule
+    # Gmail / Google Workspace, the "third surface" for an integration alongside
+    # the MCP binding and the index CLI (RFC 0003): a session can drive the
+    # Gmail and Calendar APIs directly with no install step. This is the official
+    # client. Gmail is a Workspace API with no dedicated Cloud Client Library, so
+    # google-api-python-client is the supported path (simplegmail rides on the
+    # deprecated oauth2client with known token-refresh bugs). google-auth-oauthlib
+    # carries the OAuth user-consent flow and google-auth-httplib2 the transport.
+    # No credentials or tokens are bundled: the caller brings its own, sourced
+    # from rbw/op per the secrets split.
+    ps.google-api-python-client
+    ps.google-auth-oauthlib
+    ps.google-auth-httplib2
+    # matplotlib (and Pillow, pulled in transitively) so plots and images are
+    # capturable out of the box: the worker renders any open figure / object
+    # with a `_repr_png_` back as an MCP image block.
+    ps.matplotlib
+    # pygments: syntax highlighting for `view`'s Code views (cat/json/diff).
+    ps.pygments
+    # ansi2html: render a shell command's ANSI color to HTML for the `sh`
+    # helper's human/dashboard view (the model view is escape-stripped).
+    ps.ansi2html
+    # playwright for browser automation out of the box. The Nix python package
+    # is patched to use `playwright-driver` as its node driver, and the wrapper
+    # below points PLAYWRIGHT_BROWSERS_PATH at the matching browser bundle, so
+    # `from playwright.async_api import async_playwright` works with no
+    # `playwright install` step. Driver and browsers are version-locked in
+    # nixpkgs; keep them sourced from the same `playwright-driver` to stay in
+    # sync. https://playwright.dev/python/docs/library
+    ps.playwright
+    # Execution engine: code runs on ONE real ipykernel on THIS interpreter
+    # (driven over jupyter-client), so every bundled module (tui, search, the
+    # data libraries) is importable with no install step.
+    #   - ipykernel: the kernel the single shared session runs on.
+    #   - jupyter-client: the client protocol the server drives it with.
+    #   - nbformat: build the output dicts from kernel IOPub messages.
+    #   - aiohttp: the tiny read-only dashboard over the execution store.
+    #   - mcp: the Python MCP SDK that serves the tool surface over stdio/HTTP.
+    ps.ipykernel
+    ps.jupyter-client
+    ps.nbformat
+    ps.aiohttp
+    ps.mcp
+    # dill: serializes functions and classes defined in cells, which stdlib
+    # pickle cannot -- the session-file namespace checkpoints
+    # (runtime.__ix_snapshot / __ix_restore) depend on it to bring an agent's
+    # helpers back instantly when a session file is reopened.
+    ps.dill
+    # ray: the distributed-execution engine the `fleet` module drives. One Ray
+    # cluster spans the tailnet (a head node holds the GCS, the rest join as
+    # workers, all bound to their Tailscale IPv4); `fleet.run`/`fleet.submit`
+    # ship cloudpickled callables to it and the shared object store (Plasma,
+    # zero-copy on-node, peer-to-peer transfer between nodes, spill-to-disk
+    # under memory pressure) carries args and results. We use Ray rather than
+    # reinvent Plasma/Arrow/refcount-GC. It bundles its own cloudpickle, so a
+    # function defined in a cell ships by value without a separate serializer.
+    # nixpkgs ray builds on aarch64-darwin + {aarch64,x86_64}-linux, the exact
+    # platforms the fleet and dev boxes run, so it joins the pinned interpreter
+    # like any other module.
+    ps.ray
+    # The Spark Connect client `fleet.spark()` drives (defined above): a 3.5.5
+    # pyspark pinned to the services.ix-spark cluster's Spark, jars stripped,
+    # carrying its Arrow/gRPC connect deps. Lets a cell open a SparkSession on
+    # the cluster master with no local JVM.
+    pysparkConnect
+    # pypdf: extract text from a PDF in-kernel, so a downloaded file can be
+    # read/searched without shelling out or falling back to a host tool. Pure
+    # Python, small (`from pypdf import PdfReader`).
+    ps.pypdf
+    # claude-agent-sdk: the Claude Agent SDK the `fabric.claude` session
+    # helper drives (streaming input + native interrupt over the Claude Code
+    # CLI subprocess), replacing PTY scraping for programmatic claudes.
+    ps.claude-agent-sdk
+  ];
+  # The bundled first-party modules: the externally-sourced ones defined above
+  # (their Python lives in other packages' trees), then every discovered
+  # module directory that is not darwin-only, in directory-name order. Each
+  # module declares its first-party imports as `passthru.ixFirstPartyDeps` on
+  # its own definition (issue #3897).
+  mcpBundledModules =
     [
-      ps.asyncssh
-      ps.numpy
-      ps.polars
-      # psycopg (v3) + SQLAlchemy so `polars.read_database` reaches Postgres out
-      # of the box: `pl.read_database(sql, create_engine("postgresql+psycopg://…"))`.
-      # connectorx and the ADBC drivers (what `read_database_uri` wants) are not
-      # packaged in nixpkgs, so the SQLAlchemy-engine path is the supported one
-      # here; psycopg also works as a raw DBAPI connection for `read_database`.
-      ps.psycopg
-      ps.sqlalchemy
-      # duckdb: in-process analytical SQL over CSV/Parquet with no external
-      # service; `duckdb.sql(q).pl()` hands results straight back to polars.
-      # pyarrow is deliberately not bundled: it pulls arrow-cpp + grpc + the
-      # aws/gcp/azure C++ SDKs (~300 MB) that this use case never touches, and
-      # the polars/duckdb paths return frames natively. A session that needs
-      # explicit Arrow tables (`pl.to_arrow()`) can `pip install pyarrow`.
-      ps.duckdb
-      # httpx: an HTTP client for the shared async loop (the session already speaks
-      # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
-      # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
-      ps.httpx
-      # githubkit: typed async GitHub API client generated from GitHub's OpenAPI
-      # spec, so a session does GitHub reads/writes as direct API calls instead
-      # of `gh` subprocesses (index#3258: a REST call answers in under a second
-      # where each `gh` fork costs several; `gh` stays for auth bootstrap via
-      # `gh auth token`).
-      ps.githubkit
-      # pydantic (v2): the boundary parser for untrusted/JSON data. The bundled
-      # `linear` and `google_auth` modules parse their GraphQL/CLI JSON responses
-      # into typed models with it instead of threading untyped dicts. (The MCP SDK
-      # pulls it transitively too, but linear/google_auth depend on it directly,
-      # so declare it explicitly.)
-      ps.pydantic
-      # htpy: compose HTML in Python with automatic escaping (see the module
-      # definition above). The preferred way to build any dashboard markup.
-      htpyModule
-      # exa-py: the official Exa (exa.ai) SDK, so a session can run neural web
-      # search, get page contents, and `answer(...)` over the live web with no
-      # install step (`from exa_py import Exa`). It is a thin client over the Exa
-      # REST API. No key is bundled: the caller brings `EXA_API_KEY` (sourced
-      # from rbw/op per the secrets split), e.g. `Exa(os.environ["EXA_API_KEY"])`.
-      ps.exa-py
-      # cursor-sdk: Cursor's official agent SDK (see the module definition
-      # above) so a session can run local/cloud Cursor agents with no install
-      # step.
-      cursorSdkModule
-      # Gmail / Google Workspace, the "third surface" for an integration alongside
-      # the MCP binding and the index CLI (RFC 0003): a session can drive the
-      # Gmail and Calendar APIs directly with no install step. This is the official
-      # client. Gmail is a Workspace API with no dedicated Cloud Client Library, so
-      # google-api-python-client is the supported path (simplegmail rides on the
-      # deprecated oauth2client with known token-refresh bugs). google-auth-oauthlib
-      # carries the OAuth user-consent flow and google-auth-httplib2 the transport.
-      # No credentials or tokens are bundled: the caller brings its own, sourced
-      # from rbw/op per the secrets split.
-      ps.google-api-python-client
-      ps.google-auth-oauthlib
-      ps.google-auth-httplib2
-      # matplotlib (and Pillow, pulled in transitively) so plots and images are
-      # capturable out of the box: the worker renders any open figure / object
-      # with a `_repr_png_` back as an MCP image block.
-      ps.matplotlib
-      # pygments: syntax highlighting for `view`'s Code views (cat/json/diff).
-      ps.pygments
-      # ansi2html: render a shell command's ANSI color to HTML for the `sh`
-      # helper's human/dashboard view (the model view is escape-stripped).
-      ps.ansi2html
-      # playwright for browser automation out of the box. The Nix python package
-      # is patched to use `playwright-driver` as its node driver, and the wrapper
-      # below points PLAYWRIGHT_BROWSERS_PATH at the matching browser bundle, so
-      # `from playwright.async_api import async_playwright` works with no
-      # `playwright install` step. Driver and browsers are version-locked in
-      # nixpkgs; keep them sourced from the same `playwright-driver` to stay in
-      # sync. https://playwright.dev/python/docs/library
-      ps.playwright
-      # Execution engine: code runs on ONE real ipykernel on THIS interpreter
-      # (driven over jupyter-client), so every bundled module (tui, search, the
-      # data libraries) is importable with no install step.
-      #   - ipykernel: the kernel the single shared session runs on.
-      #   - jupyter-client: the client protocol the server drives it with.
-      #   - nbformat: build the output dicts from kernel IOPub messages.
-      #   - aiohttp: the tiny read-only dashboard over the execution store.
-      #   - mcp: the Python MCP SDK that serves the tool surface over stdio/HTTP.
-      ps.ipykernel
-      ps.jupyter-client
-      ps.nbformat
-      ps.aiohttp
-      ps.mcp
-      # dill: serializes functions and classes defined in cells, which stdlib
-      # pickle cannot -- the session-file namespace checkpoints
-      # (runtime.__ix_snapshot / __ix_restore) depend on it to bring an agent's
-      # helpers back instantly when a session file is reopened.
-      ps.dill
-      # ray: the distributed-execution engine the `fleet` module drives. One Ray
-      # cluster spans the tailnet (a head node holds the GCS, the rest join as
-      # workers, all bound to their Tailscale IPv4); `fleet.run`/`fleet.submit`
-      # ship cloudpickled callables to it and the shared object store (Plasma,
-      # zero-copy on-node, peer-to-peer transfer between nodes, spill-to-disk
-      # under memory pressure) carries args and results. We use Ray rather than
-      # reinvent Plasma/Arrow/refcount-GC. It bundles its own cloudpickle, so a
-      # function defined in a cell ships by value without a separate serializer.
-      # nixpkgs ray builds on aarch64-darwin + {aarch64,x86_64}-linux, the exact
-      # platforms the fleet and dev boxes run, so it joins the pinned interpreter
-      # like any other module.
-      ps.ray
-      # The Spark Connect client `fleet.spark()` drives (defined above): a 3.5.5
-      # pyspark pinned to the services.ix-spark cluster's Spark, jars stripped,
-      # carrying its Arrow/gRPC connect deps. Lets a cell open a SparkSession on
-      # the cluster master with no local JVM.
-      pysparkConnect
-      # pypdf: extract text from a PDF in-kernel, so a downloaded file can be
-      # read/searched without shelling out or falling back to a host tool. Pure
-      # Python, small (`from pypdf import PdfReader`).
-      ps.pypdf
-      # claude-agent-sdk: the Claude Agent SDK the `fabric.claude` session
-      # helper drives (streaming input + native interrupt over the Claude Code
-      # CLI subprocess), replacing PTY scraping for programmatic claudes.
-      ps.claude-agent-sdk
       tuiModule
       searchModule
       nuPyModule
       astlogModule
       scipqlModule
       flecsQueryModule
-      fsearchModule
-      embedModule
       privateSessionModule
-      googleAuthModule
       ixGoogleModule
-      ixNotebookMcpModule
-      viewModule
-      nixModule
-      sharedaudioModule
-      fleetModule
-      meshModule
-      weaveModule
-      fabricModule
-      shModule
-      svelteModule
-      worktreeModule
-      claudeHistoryModule
       distillerModule
-      browserModule
-      xModule
-      slackModule
-      beeperModule
-      linearModule
-      notionModule
-      noxAutotriageModule
-      mcpClientModule
-      # pymobiledevice3 9.27.0 (defined above) + the `iphone` wrapper that drives
-      # its CLI. The wrapper resolves the `pymobiledevice3` console script next to
-      # the interpreter, so both ride in the same env. Cross-platform: a USB
-      # iDevice + a root `tunneld` are what the developer commands need, not macOS,
-      # so CI builds the whole closure and import-checks it on Linux too.
+    ]
+    ++ lib.mapAttrsToList (_: entry: entry.module) (
+      lib.filterAttrs (_: entry: !(entry.darwinOnly or false)) bundledEntries
+    );
+  mcpPythonPackages = ps:
+    mcpThirdPartyPackages ps
+    ++ mcpBundledModules
+    ++ [
+      # pymobiledevice3 9.27.0 (defined above), whose CLI the bundled `iphone`
+      # module drives. The wrapper resolves the `pymobiledevice3` console
+      # script next to the interpreter, so both ride in the same env.
       pymobiledevice3_927
-      iphoneModule
     ]
     # Ray's `client` extra (grpcio): `fabric.remote` attaches to the fleet head
     # over `ray://` (Ray Client), which plain ps.ray refuses without it. Derived
@@ -1472,6 +925,50 @@
     ++ ps.ray.optional-dependencies.client
     ++ darwinExtraPackages ps;
   mcpPython = mcpPythonInterp.withPackages mcpPythonPackages;
+
+  # Per-module test envs (issue #3897). Every bundled module declares its
+  # first-party imports as `passthru.ixFirstPartyDeps` on its own definition;
+  # the transitive closure over those declarations is the single source of
+  # truth for what a module's tests need, so editing one module re-runs only
+  # the tests whose closure contains it instead of every bundled test. The
+  # import graph is cyclic where modules integrate with the kernel runtime in
+  # both directions (`sh` <-> `ix_notebook_mcp`), which genericClosure's
+  # key-dedup handles and a propagatedBuildInputs edge could not.
+  firstPartyClosure = modules:
+    map (entry: entry.value) (builtins.genericClosure {
+      startSet =
+        map (m: {
+          key = m.outPath;
+          value = m;
+        })
+        modules;
+      operator = entry:
+        map (m: {
+          key = m.outPath;
+          value = m;
+        }) (entry.value.ixFirstPartyDeps or []);
+    });
+  # The third-party base every per-module test env shares: exactly the shipped
+  # interpreter's non-first-party packages, so a module's PyPI/nixpkgs deps
+  # resolve in tests precisely as they do at runtime, while edits to sibling
+  # first-party modules cannot invalidate the env.
+  mcpTestBasePackages = ps:
+    mcpThirdPartyPackages ps
+    ++ [pymobiledevice3_927]
+    ++ ps.ray.optional-dependencies.client
+    ++ darwinFrameworkPackages ps
+    ++ darwinTorchPackages ps;
+  bundledTestPythonWith = extras: modules:
+    mcpPythonInterp.withPackages (
+      ps:
+        mcpTestBasePackages ps
+        ++ firstPartyClosure modules
+        ++ extras ps
+    );
+  bundledTestPython = bundledTestPythonWith (_: []);
+  # The kernel/server package's own test env, shared by every smoke test that
+  # imports or boots ix_notebook_mcp.
+  serverTestPython = bundledTestPython [ixNotebookMcpModule];
 
   # Browser bundle that matches the playwright-driver the python package is
   # patched to use. Exposed to the worker through PLAYWRIGHT_BROWSERS_PATH on the
@@ -1574,16 +1071,21 @@
 
   # Import a module in the pinned interpreter and assert a marker line. Used by
   # the bundled-module tests: the thing each guards is that the module is
-  # importable in the very interpreter the kernels run on, which is a plain
-  # interpreter import (no kernel, no network), so the build sandbox can prove it.
-  importTest = name: code:
+  # importable on the same interpreter and third-party base the kernels run on,
+  # which is a plain interpreter import (no kernel, no network), so the build
+  # sandbox can prove it. `modules` names the first-party modules under test;
+  # the env carries the shared third-party base plus their declared-dep closure
+  # only, so editing an unrelated module does not re-run this test.
+  importTest = modules: name: code: let
+    testPython = bundledTestPython modules;
+  in
     pkgs.runCommand "ix-mcp-${name}"
     {
-      nativeBuildInputs = [mcpPython];
+      nativeBuildInputs = [testPython];
       strictDeps = true;
     }
     ''
-      ${lib.getExe mcpPython} -c ${lib.escapeShellArg code} >stdout 2>stderr || {
+      ${lib.getExe testPython} -c ${lib.escapeShellArg code} >stdout 2>stderr || {
         echo "import test ${name} failed:" >&2
         cat stdout stderr >&2
         exit 1
@@ -1601,17 +1103,21 @@
   # copied into the pinned interpreter), so the check runs directly: `zuban check
   # --strict` for correctness + `zuban`'s disallow-untyped-defs, and `ruff check
   # --select ANN` for the explicit-annotation gate the type checker does not own.
-  # `mcpPython` is passed as `--python-executable` so every bundled dependency
-  # (polars, mcp, jupyter, ...) resolves exactly as it does at runtime.
+  # A third-party-only interpreter is passed as `--python-executable` so every
+  # bundled PyPI/nixpkgs dependency (polars, mcp, jupyter, ...) resolves exactly
+  # as it does at runtime, while the first-party sources resolve from the check
+  # tree assembled below.
   #
   # Scoped, not all-or-nothing: only the modules under `strictGreenModules` are
-  # checked, so a module is migrated by adding its name here once its source is
-  # fully annotated and clean. The whole `src/` tree is on MYPYPATH regardless,
-  # so a checked module's first-party cross-imports (e.g. `x` -> `browser`,
-  # `nox_autotriage` -> `linear`) resolve even before those deps are migrated.
-  # The `ix_notebook_mcp` server package and the remaining `src/*` modules are
-  # added here as they are brought up to strict.
-  strictGreenModules = [
+  # checked, so a module is migrated by adding it here once its source is fully
+  # annotated and clean. The check tree carries the green modules plus their
+  # transitive first-party imports (`ixFirstPartyDeps`, the same declarations
+  # the per-module test envs use), so a checked module's cross-imports (e.g.
+  # `x` -> `browser`, `nox_autotriage` -> `linear`) resolve even before those
+  # deps are migrated -- and editing a module outside that closure cannot
+  # invalidate the gate. The `ix_notebook_mcp` server package and the remaining
+  # `src/*` modules are added here as they are brought up to strict.
+  strictGreenModules = map bundledModule [
     "x"
     "nix"
     "nox_autotriage"
@@ -1642,61 +1148,72 @@
     # lexer/highlight helpers remain untyped in its partial stubs.
     "mypy-pygments.*".disallow_untyped_calls = false;
   };
+  # Third-party deps only: the first-party sources come from the check tree, so
+  # editing a module outside the green closure leaves this env untouched.
+  strictTypecheckPython = mcpPythonInterp.withPackages mcpTestBasePackages;
   strictTypecheck = let
-    # All src module package dirs go on MYPYPATH so first-party cross-imports
-    # resolve; the green subset are the actual check targets.
-    allSrcModules = builtins.attrNames (builtins.readDir ./src);
-    # `claude_history` imports the distiller's transcript reader, so the
-    # distiller source rides MYPYPATH alongside the src module dirs.
-    mypypath = lib.concatMapStringsSep ":" (m: "src/${m}") allSrcModules + ":distiller-src";
-    targets = lib.concatStringsSep " " (
-      map (m: "src/${m}/${m}") strictGreenModules
-      ++ map (f: "ix_notebook_mcp/${f}") strictGreenServerFiles
-    );
+    # The check tree: each bundled module's build output IS its source in
+    # site-packages layout, so the tree is assembled from the green modules
+    # plus their declared-dep closure and nothing else.
+    checkTree = firstPartyClosure strictGreenModules;
+    sitePackagesOf = modules: map (m: "${m}/${pkgs.python3.sitePackages}") modules;
   in
     pkgs.runCommand "ix-mcp-strict-typecheck"
     {
       nativeBuildInputs = [
         pkgs.zuban
         pkgs.ruff
-        mcpPython
+        strictTypecheckPython
       ];
       strictDeps = true;
       meta.description = "zuban --strict + ruff ANN over the migrated ix-mcp Python sources";
     }
     ''
-      cp -r ${ixNotebookMcpSource} ix_notebook_mcp
-      cp -r ${./src} src
-      cp -r ${distillerPythonSource} distiller-src
+      mkdir checkroot
+      closure=(${lib.escapeShellArgs (sitePackagesOf checkTree)})
+      for tree in "''${closure[@]}"; do
+        cp -r "$tree"/. checkroot/
+      done
+      chmod -R u+w checkroot
       cp ${zubanConfig} zuban.ini
-      chmod -R u+w ix_notebook_mcp src distiller-src
 
-      export MYPYPATH=${lib.escapeShellArg mypypath}:.
-      echo "zuban check --strict over: ${toString strictGreenModules} + ix_notebook_mcp: ${toString strictGreenServerFiles}"
+      # Targets are the green modules' package dirs (one site-packages entry
+      # per module output) plus the migrated server files.
+      targets=()
+      green=(${lib.escapeShellArgs (sitePackagesOf strictGreenModules)})
+      for tree in "''${green[@]}"; do
+        for pkg in "$tree"/*; do
+          targets+=("checkroot/$(basename "$pkg")")
+        done
+      done
+      serverfiles=(${lib.escapeShellArgs strictGreenServerFiles})
+      for serverfile in "''${serverfiles[@]}"; do
+        targets+=("checkroot/ix_notebook_mcp/$serverfile")
+      done
+
+      export MYPYPATH=checkroot:.
+      echo "zuban check --strict over: ''${targets[*]}"
       zuban check --strict \
         --config-file zuban.ini \
-        --python-executable ${mcpPython.interpreter} \
+        --python-executable ${strictTypecheckPython.interpreter} \
         --python-version ${pkgs.python3.pythonVersion} \
         --platform linux \
-        ${targets}
-      echo "ruff check (ANN + TID251 no-cast) over: ${toString strictGreenModules} + ix_notebook_mcp: ${toString strictGreenServerFiles}"
-      ruff check ${ix.ruffAnnArgs} ${targets}
+        "''${targets[@]}"
+      echo "ruff check (ANN + TID251 no-cast) over: ''${targets[*]}"
+      ruff check ${ix.ruffAnnArgs} "''${targets[@]}"
 
       mkdir -p "$out"
     '';
 
-  tuiBundled = importTest "tui" "import tui; print('tui-ok', tui.__version__)";
-  # `embed` imports everywhere (its torch/MPS runtime loads lazily inside the
-  # embedding calls), so the import test runs on Linux too.
-  embedBundled = importTest "embed" "import embed; print('embed-ok', embed.__version__)";
+  tuiBundled = importTest [tuiModule] "tui" "import tui; print('tui-ok', tui.__version__)";
   # htpy must import and auto-escape: a `<` in a text node comes out as `&lt;`.
-  htpyBundled = importTest "htpy" "import htpy; print('htpy-ok' if '&lt;' in str(htpy.div['<']) else 'htpy-bad')";
-  searchBundled = importTest "search" "import search; print('search-ok', search.__version__)";
+  htpyBundled = importTest [] "htpy" "import htpy; print('htpy-ok' if '&lt;' in str(htpy.div['<']) else 'htpy-bad')";
+  searchBundled = importTest [searchModule] "search" "import search; print('search-ok', search.__version__)";
   # The astlog surface is callable and its public API returns polars frames:
   # `scan`/`fixes`/`suppressed` are DataFrames and `query` a dict of them. A
   # trivial inline rules string against one temp file keeps it fast and offline;
   # an `astlog-ignore` comment exercises the suppression-listing path end to end.
-  astlogBundled = importTest "astlog" ''
+  astlogBundled = importTest [astlogModule] "astlog" ''
     import os, tempfile
     import polars as pl
     import astlog
@@ -1725,325 +1242,37 @@
     print("astlog-ok", astlog.__version__)
   '';
 
-  # End-to-end through the bundled `fsearch` module: plant a temp tree (with a
-  # .gitignore'd file), then prove `grep` (ripgrep) and `find` (fd) return the
-  # planted hits, respect .gitignore by default, and that `spotlight` raises its
-  # darwin guard off macOS. Runs real rg/fd (on the check's PATH); pure local FS,
-  # no network, so the build sandbox runs it.
-  fsearchTestPy = pkgs.writeText "ix-mcp-fsearch-test.py" ''
-    # python
-    import asyncio
-    import os
-    import subprocess
-    import sys
-    import tempfile
-
-    import polars as pl
-
-    import fsearch
-
-    root = tempfile.mkdtemp()
-    os.makedirs(os.path.join(root, "src"))
-    with open(os.path.join(root, "hello_world.txt"), "w") as fh:
-        fh.write("greetings\nfind me on this line\n")
-    with open(os.path.join(root, "src", "main.rs"), "w") as fh:
-        fh.write('fn main() {\n    println!("find me on this line");\n}\n')
-    # A .gitignore'd file must be skipped by default and surfaced with no_ignore.
-    # ripgrep only honors .gitignore inside a git repo, so init one.
-    with open(os.path.join(root, ".gitignore"), "w") as fh:
-        fh.write("ignored.txt\n")
-    with open(os.path.join(root, "ignored.txt"), "w") as fh:
-        fh.write("find me on this line\n")
-    subprocess.run(["git", "init", "-q", root], check=True)
-
-
-    async def main() -> None:
-        g = await fsearch.grep("find me on this line", root)
-        assert isinstance(g, pl.DataFrame), type(g)
-        assert list(g.columns) == ["path", "line_number", "col", "match", "line", "abs_offset"], g.columns
-        files = set(g["path"].to_list())
-        assert all(files), "a match row had an empty path (rg bytes field not decoded?)"
-        assert any("hello_world" in f for f in files), files
-        assert any("main.rs" in f for f in files), files
-        assert not any("ignored.txt" in f for f in files), f"gitignore not respected: {files}"
-
-        # no_ignore surfaces the ignored file; fixed treats the alternation literally.
-        gi = await fsearch.grep("find me on this line", root, no_ignore=True)
-        assert any("ignored.txt" in f for f in gi["path"].to_list()), gi["path"].to_list()
-        plain = await fsearch.grep("greetings|fn main", root, fixed=True)
-        assert plain.height == 0, "fixed=True must treat the alternation literally"
-
-        f = await fsearch.find(ext="rs", root=root)
-        assert isinstance(f, pl.DataFrame), type(f)
-        assert list(f.columns) == ["path", "name", "type", "size", "mtime"], f.columns
-        assert any(n == "main.rs" for n in f["name"].to_list()), f["name"].to_list()
-        assert set(f["type"].to_list()) == {"file"}, f["type"].to_list()
-
-        d = await fsearch.find(kind="dir", root=root)
-        assert any(n == "src" for n in d["name"].to_list()), d["name"].to_list()
-
-        # spotlight is darwin-only: it must raise a clear error elsewhere.
-        if sys.platform != "darwin":
-            try:
-                await fsearch.spotlight("anything", root)
-            except fsearch.FsearchError as exc:
-                assert "macOS" in str(exc), exc
-            else:
-                raise AssertionError("spotlight should raise off macOS")
-
-        # issue #1754 bug 3: limit= short-circuits and flags the partial scan.
-        # Plant a tree with many matches so a small limit truncates it.
-        big = tempfile.mkdtemp()
-        for i in range(50):
-            with open(os.path.join(big, f"f{i}.txt"), "w") as fh:
-                fh.write("needle here\n" * 20)  # 20 matches per file, 1000 total
-        capped = await fsearch.grep("needle", big, limit=5)
-        assert isinstance(capped, pl.DataFrame), type(capped)  # still a usable frame
-        assert isinstance(capped, fsearch.PartialFrame), "a capped scan must be a PartialFrame"
-        assert capped.truncated is True
-        assert capped.height == 5, capped.height
-        assert "limit" in capped.reason, capped.reason
-        assert "partial" in repr(capped).lower(), "the repr must surface truncation"
-
-        # A full scan under the limit is a plain frame with no truncated flag.
-        full = await fsearch.grep("needle", big, limit=100000)
-        assert full.height == 1000, full.height
-        assert not isinstance(full, fsearch.PartialFrame)
-        assert not hasattr(full, "truncated")
-
-        # A timeout returns the matches found before the deadline, not nothing.
-        # A tiny timeout over the big tree is very likely to trip; if the machine
-        # is fast enough to finish, the assertion below tolerates a complete scan.
-        timed = await fsearch.grep("needle", big, limit=10000000, timeout=0.001)
-        if isinstance(timed, fsearch.PartialFrame):
-            assert timed.truncated is True
-            assert "timed out" in timed.reason, timed.reason
-
-        print("fsearch-ok", fsearch.__version__)
-
-
-    asyncio.run(main())
-  '';
-  # fsearch's grep/find run real ripgrep/fd, so the check needs them on PATH
-  # (the same two added to the interpreter wrapper). A dedicated interpreter with
-  # all bundled modules + the planted tree proves the helpers end to end in the
-  # Linux sandbox; spotlight only asserts its darwin guard there.
-  fsearchTestPython = mcpPythonInterp.withPackages mcpPythonPackages;
-  fsearchBundled =
-    pkgs.runCommand "ix-mcp-fsearch"
-    {
-      nativeBuildInputs = [
-        fsearchTestPython
-        pkgs.ripgrep
-        pkgs.fd
-        pkgs.git
-      ];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe fsearchTestPython} ${fsearchTestPy} >stdout 2>stderr || {
-        echo "ix-mcp fsearch test failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -q '^fsearch-ok' stdout || {
-        echo "ix-mcp fsearch test did not print its ok marker:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-  dataLibsBundled = importTest "data-libs" (
+  dataLibsBundled = importTest [] "data-libs" (
     "import psycopg, sqlalchemy, duckdb, httpx; "
     + "from sqlalchemy import create_engine; create_engine('postgresql+psycopg://u@h/db'); "
     + "from pypdf import PdfReader; "
     + "print('data-libs-ok')"
   );
-  gmailLibsBundled = importTest "gmail-libs" (
+  gmailLibsBundled = importTest [] "gmail-libs" (
     "from googleapiclient.discovery import build; from google.oauth2.credentials import Credentials; "
     + "import google_auth_oauthlib, google_auth_httplib2; "
     + "build('gmail', 'v1', credentials=Credentials(token='x'), static_discovery=True); "
     + "print('gmail-libs-ok')"
   );
-  cursorSdkBundled = importTest "cursor-sdk" (
+  cursorSdkBundled = importTest [] "cursor-sdk" (
     "import cursor_sdk; from cursor_sdk import AsyncAgent, AsyncClient; "
     + "assert callable(getattr(AsyncAgent, 'create', None)); "
     + "print('cursor-sdk-ok')"
   );
-  exaBundled = importTest "exa" (
+  exaBundled = importTest [] "exa" (
     "from exa_py import Exa; e = Exa('dummy-key'); "
     + "assert callable(e.search) and callable(e.answer); "
     + "print('exa-ok')"
   );
-  # The `google_auth` helper imports (pulling in google-auth) and exposes its
-  # builders. A real token mint needs IX_GCAL_BIN + a prior `gcal auth`, so the
-  # sandbox-safe assertion is the unset path: it must raise a clear, typed error
-  # naming the missing piece rather than hanging or crashing vaguely.
-  googleAuthBundled = importTest "google-auth" ''
-    import os
-
-    import google_auth
-
-    assert callable(google_auth.credentials)
-    assert callable(google_auth.gmail) and callable(google_auth.calendar)
-    # Self-service sign-in surface: login() is awaitable, status()/logout() are
-    # plain calls. These are what makes Gmail discoverable and usable with no
-    # host-side setup file.
-    import asyncio as _asyncio
-
-    assert _asyncio.iscoroutinefunction(google_auth.login)
-    assert callable(google_auth.status) and callable(google_auth.logout)
-    # The mail sender (issue #2523): awaitable, so it never blocks the loop.
-    assert _asyncio.iscoroutinefunction(google_auth.send)
-
-    # In a shared (multiplayer) room (IX_MCP_SHARED set) Gmail/Calendar are
-    # refused before minting ever looks for the grant, so a personal mailbox
-    # never reaches state other participants can see.
-    os.environ["IX_MCP_SHARED"] = "1"
-    os.environ["IX_GCAL_BIN"] = "/nonexistent/gcal"
-    try:
-        google_auth.credentials()
-    except google_auth.GoogleAuthError as exc:
-        assert "shared" in str(exc).lower(), exc
-    else:
-        raise SystemExit("expected GoogleAuthError in a shared room")
-
-    # Incognito is the default: with IX_MCP_SHARED unset the gate passes, so
-    # minting then fails on the missing binary instead -- proving the shared
-    # gate is the only thing that blocked it above.
-    os.environ.pop("IX_MCP_SHARED", None)
-    os.environ.pop("IX_GCAL_BIN", None)
-    try:
-        google_auth.credentials()
-    except google_auth.GoogleAuthError as exc:
-        assert "IX_GCAL_BIN" in str(exc), exc
-    else:
-        raise SystemExit("expected GoogleAuthError when IX_GCAL_BIN is unset")
-
-    # status() answers instead of raising: a not-signed-in session reports
-    # signed_in=False so a caller can branch on it and offer login().
-    state = google_auth.status()
-    assert state["signed_in"] is False, state
-    print("google-auth-ok")
-  '';
   # Typed PyO3 bindings: the cdylib loads and the two Client classes are
   # callable. A real call would need GOOGLE_OAUTH_CLIENT_ID/SECRET and a
   # token file, so the sandbox-safe assertion is the import and the
   # class-shape check.
-  ixGoogleBundled = importTest "ix-google" (
+  ixGoogleBundled = importTest [ixGoogleModule] "ix-google" (
     "import ix_google; from ix_google import gmail, calendar; "
     + "assert callable(gmail.Client) and callable(calendar.Client); "
     + "print('ix-google-ok', ix_google.__version__)"
   );
-  # The `slack` helper imports and exposes its public surface. A real API call
-  # needs SLACK_USER_TOKEN + network, so the sandbox-safe assertions are: the
-  # module imports, the public callables exist, an unconfigured session raises
-  # SlackError with a helpful message, and IX_MCP_SHARED=1 refuses access.
-  slackBundled = importTest "slack" ''
-    import os
-
-    import slack
-
-    assert callable(slack.login) and callable(slack.logout) and callable(slack.status)
-    import asyncio as _asyncio
-
-    assert _asyncio.iscoroutinefunction(slack.channels)
-    assert _asyncio.iscoroutinefunction(slack.dms)
-    assert _asyncio.iscoroutinefunction(slack.messages)
-    assert _asyncio.iscoroutinefunction(slack.thread)
-    assert _asyncio.iscoroutinefunction(slack.send)
-    assert _asyncio.iscoroutinefunction(slack.search)
-
-    # In a shared (multiplayer) room Slack is refused before any network call,
-    # so personal workspace data never reaches state other participants can see.
-    os.environ["IX_MCP_SHARED"] = "1"
-    try:
-        _asyncio.run(slack.channels())
-    except slack.SlackError as exc:
-        assert "shared" in str(exc).lower(), exc
-    else:
-        raise SystemExit("expected SlackError in a shared room")
-
-    # Incognito is the default: with IX_MCP_SHARED unset the shared guard
-    # passes, so the next failure is a missing token -- proving the guard was
-    # the only thing that blocked it above.
-    os.environ.pop("IX_MCP_SHARED", None)
-    # Ensure no token env vars or file are present.
-    os.environ.pop("SLACK_USER_TOKEN", None)
-    os.environ.pop("SLACK_TOKEN", None)
-    try:
-        _asyncio.run(slack.channels())
-    except slack.SlackError as exc:
-        assert "token" in str(exc).lower(), exc
-    else:
-        raise SystemExit("expected SlackError when no token is configured")
-
-    # status() answers instead of raising when not configured.
-    state = slack.status()
-    assert state["configured"] is False, state
-    print("slack-ok")
-  '';
-  # The `beeper` helper imports and exposes its public surface. A real API call
-  # needs BEEPER_ACCESS_TOKEN + a running Beeper Desktop, so the sandbox-safe
-  # assertions are: the module imports, the public callables exist, an
-  # unconfigured session raises BeeperError naming the token, and IX_MCP_SHARED=1
-  # refuses access.
-  beeperBundled = importTest "beeper" ''
-    import os
-
-    import beeper
-
-    assert callable(beeper.login) and callable(beeper.logout)
-    import asyncio as _asyncio
-
-    assert _asyncio.iscoroutinefunction(beeper.status)
-    assert _asyncio.iscoroutinefunction(beeper.accounts)
-    assert _asyncio.iscoroutinefunction(beeper.chats)
-    assert _asyncio.iscoroutinefunction(beeper.messages)
-    assert _asyncio.iscoroutinefunction(beeper.search)
-    assert _asyncio.iscoroutinefunction(beeper.search_chats)
-    assert _asyncio.iscoroutinefunction(beeper.send)
-
-    # In a shared (multiplayer) room Beeper is refused before any network call,
-    # so personal chats never reach state other participants can see.
-    os.environ["IX_MCP_SHARED"] = "1"
-    try:
-        _asyncio.run(beeper.accounts())
-    except beeper.BeeperError as exc:
-        assert "shared" in str(exc).lower(), exc
-    else:
-        raise SystemExit("expected BeeperError in a shared room")
-
-    # Incognito is the default: with IX_MCP_SHARED unset the shared guard
-    # passes, so the next failure is a missing token -- proving the guard was
-    # the only thing that blocked it above.
-    os.environ.pop("IX_MCP_SHARED", None)
-    os.environ.pop("BEEPER_ACCESS_TOKEN", None)
-    try:
-        _asyncio.run(beeper.accounts())
-    except beeper.BeeperError as exc:
-        assert "token" in str(exc).lower(), exc
-    else:
-        raise SystemExit("expected BeeperError when no token is configured")
-
-    # Regression: a datetime column whose every value is empty/missing must not
-    # raise (polars format inference has no sample) -- _frame emits a typed null
-    # column instead. A mixed column parses the real value and nulls the empty.
-    allempty = beeper._frame([{"timestamp": ""}], {"timestamp": beeper._TS})
-    assert allempty["timestamp"].dtype == beeper._TS, allempty.schema
-    assert allempty["timestamp"].to_list() == [None], allempty
-    mixed = beeper._frame(
-        [{"timestamp": "2026-01-01T00:00:00Z"}, {"timestamp": ""}],
-        {"timestamp": beeper._TS},
-    )
-    assert mixed["timestamp"].dtype == beeper._TS, mixed.schema
-    assert mixed["timestamp"].null_count() == 1, mixed
-
-    print("beeper-ok")
-  '';
-
   # The requirements surface: local-only probes of every credential declared in
   # the registry. In the credential-less sandbox every probe must miss and the
   # remedies must be complete; planting a credential (env key, or the mgrep
@@ -2122,7 +1351,7 @@
       }
       mkdir -p "$out"
     '';
-  engineBundled = importTest "engine" "import ipykernel, jupyter_client, nbformat, aiohttp, mcp; print('engine-ok')";
+  engineBundled = importTest [] "engine" "import ipykernel, jupyter_client, nbformat, aiohttp, mcp; print('engine-ok')";
 
   # The server package imports and registers its full tool surface. Exercises the
   # FastMCP registration (schemas from type hints) without starting a kernel or
@@ -2136,7 +1365,7 @@
   srcModules = builtins.attrNames (
     lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./src)
   );
-  serverTools = importTest "server" (
+  serverTools = importTest [ixNotebookMcpModule] "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
     # This set drifts silently: session_set_name (#1615) and kernel_restart
@@ -2186,515 +1415,18 @@
       mkdir -p "$out"
     '';
 
-  # Locks the bind-address default: with a working `tailscale status --json`
-  # in PATH, `_tailscale_ip()` returns the first IPv4 from `Self.TailscaleIPs`
-  # so the Jupyter Server is reachable from any tailnet peer; with no tailscale
-  # binary, it returns None so the CLI falls through to loopback. The mock
-  # binary lives in TMP/path so we control PATH exactly without touching the
-  # real tailscale state. The mock is shell, not a subprocess of an actual
-  # tailscale, so this test runs in the Nix sandbox.
-  bindDefaultTest = pkgs.writeText "ix-mcp-bind-default-test.py" ''
-    # python
-    from unittest.mock import patch
-    from ix_notebook_mcp import cli
-
-    status = {
-        "BackendState": "Running",
-        "Self": {
-            "TailscaleIPs": ["100.64.0.7", "fd7a::1"],
-            "DNSName": "node.tail-x.ts.net.",
-        }
-    }
-
-    # Happy path: tailscale is up. The helper picks the first IPv4 and strips
-    # the trailing dot from the DNS name.
-    with patch.object(cli, "_tailscale_status", return_value=status):
-        assert cli._tailscale_ip() == "100.64.0.7", f"got {cli._tailscale_ip()!r}"
-        assert cli._tailscale_dns_name() == "node.tail-x.ts.net", f"got {cli._tailscale_dns_name()!r}"
-
-    # Tailscale installed but stopped (or needs login): it still reports its
-    # assigned IPs, but they are not bound to any interface, so the helper must
-    # treat them as unusable and fall back to loopback.
-    for state in ("Stopped", "NeedsLogin", "NoState"):
-        stopped = {**status, "BackendState": state}
-        with patch.object(cli, "_tailscale_status", return_value=stopped):
-            assert cli._tailscale_ip() is None, f"{state}: expected None, got {cli._tailscale_ip()!r}"
-
-    # No tailscale: the helpers return None so the CLI falls back to loopback.
-    # Stubbing the inner _tailscale_status is more robust than juggling PATH or
-    # the absolute fallback paths the real helper probes (which exist on hydra
-    # outside the sandbox, so a PATH-only test would still find them).
-    with patch.object(cli, "_tailscale_status", return_value=None):
-        assert cli._tailscale_ip() is None, "expected None when tailscale is unavailable"
-        assert cli._tailscale_dns_name() is None, "expected None when tailscale is unavailable"
-
-    # IPv6-only or empty IP list: still None (the bind expects IPv4).
-    with patch.object(
-        cli,
-        "_tailscale_status",
-        return_value={"BackendState": "Running", "Self": {"TailscaleIPs": ["fd7a::1"]}},
-    ):
-        assert cli._tailscale_ip() is None, "IPv6-only TailscaleIPs should yield None"
-
-    # _bindable: loopback is bindable; a reserved/unassigned address is not, so
-    # the CLI falls back to loopback instead of crashing the dashboard.
-    free = cli._free_port()
-    assert cli._bindable("127.0.0.1", free) is True, "loopback must be bindable"
-    assert cli._bindable("240.0.0.1", free) is False, "reserved address must be unbindable"
-
-    print("bind-default-ok")
-  '';
-  bindDefaultSmoke =
-    pkgs.runCommand "ix-mcp-bind-default-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${mcpPython}/bin/python3 ${bindDefaultTest} >stdout 2>stderr || {
-        echo "ix-mcp bind-default smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'bind-default-ok' stdout || {
-        echo "ix-mcp bind-default smoke did not confirm helper behaviour:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # Exercises _resolve_ssh_auth_sock: the helper must redirect SSH_AUTH_SOCK to
-  # the 1Password agent on darwin when the Apple launchd socket (or no socket)
-  # is present, must leave a custom non-Apple agent alone, and must always
-  # return None on non-darwin platforms. Dependency-free pure Python, so the
-  # build sandbox runs it.
-  sshAuthSockTest = pkgs.writeText "ix-mcp-ssh-auth-sock-test.py" ''
-    # python
-    import os
-    import tempfile
-    from pathlib import Path
-
-    from ix_notebook_mcp.cli import _resolve_ssh_auth_sock
-
-    with tempfile.TemporaryDirectory() as tmp:
-        home = Path(tmp)
-        op_dir = home / "Library" / "Group Containers" / "2BUA8C4S2C.com.1password" / "t"
-        op_dir.mkdir(parents=True)
-        op_sock = op_dir / "agent.sock"
-        op_sock.touch()
-
-        # darwin + unset SSH_AUTH_SOCK -> forward to 1Password
-        result = _resolve_ssh_auth_sock(None, home, "darwin", exists=os.path.exists)
-        assert result == str(op_sock), f"expected op_sock, got {result!r}"
-
-        # darwin + Apple launchd socket -> forward to 1Password
-        apple = "/var/run/com.apple.launchd.XYZ123/Listeners"
-        result = _resolve_ssh_auth_sock(apple, home, "darwin", exists=os.path.exists)
-        assert result == str(op_sock), f"expected op_sock for apple agent, got {result!r}"
-
-        # darwin + custom non-Apple agent -> do not override
-        custom = "/run/user/1000/gnupg/S.gpg-agent.ssh"
-        result = _resolve_ssh_auth_sock(custom, home, "darwin", exists=os.path.exists)
-        assert result is None, f"must not clobber custom agent, got {result!r}"
-
-        # non-darwin platform -> always None, even with op sock present
-        for plat in ("linux", "win32"):
-            result = _resolve_ssh_auth_sock(None, home, plat, exists=os.path.exists)
-            assert result is None, f"expected None on {plat!r}, got {result!r}"
-            result = _resolve_ssh_auth_sock(apple, home, plat, exists=os.path.exists)
-            assert result is None, f"expected None on {plat!r} with apple sock, got {result!r}"
-
-        # darwin but 1Password socket absent -> None (do not crash)
-        missing_home = Path(tmp) / "missing"
-        missing_home.mkdir()
-        result = _resolve_ssh_auth_sock(None, missing_home, "darwin", exists=os.path.exists)
-        assert result is None, f"expected None when op sock absent, got {result!r}"
-
-    print("ssh-auth-sock-ok")
-  '';
-  sshAuthSockSmoke =
-    pkgs.runCommand "ix-mcp-ssh-auth-sock-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${mcpPython}/bin/python3 ${sshAuthSockTest} >stdout 2>stderr || {
-        echo "ix-mcp ssh-auth-sock smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'ssh-auth-sock-ok' stdout || {
-        echo "ix-mcp ssh-auth-sock smoke did not confirm helper behaviour:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # Exercises the in-kernel runtime (ix_notebook_mcp/runtime.py) in-process: two
-  # jobs run concurrently on one event loop, neither blocks the other, each keeps
-  # its own captured stdout, and the trailing expression is captured as the
-  # result. This is the core "multiple async" contract, provable without a kernel
-  # or network, so the sandbox runs it.
-  runtimeTestPy = pkgs.writeText "ix-mcp-runtime-test.py" ''
-    # python
-    import asyncio
-
-    from ix_notebook_mcp import runtime
-
-    ns = {}
-    runtime.install(ns)
-    jobs = ns["jobs"]
-    run = ns["__ix_run"]
-
-    async def main():
-        a = await run("import asyncio\nfor i in range(3):\n    print('A', i)\n    await asyncio.sleep(0.05)\nResult.text('A done')", budget=0.02, name="A")
-        b = await run("import asyncio\nfor i in range(3):\n    print('B', i)\n    await asyncio.sleep(0.05)\nResult.text('B done')", budget=0.02, name="B")
-        assert a.running() and b.running(), (a.status, b.status)
-        assert len(jobs) == 2, len(jobs)
-        await asyncio.sleep(0.5)
-        assert a.status == "done" and b.status == "done", (a.status, b.status)
-        assert "A 0" in a.output and "B 0" in b.output, (a.output, b.output)
-        assert a.result.llm_result == "A done" and b.result.llm_result == "B done", (a.result, b.result)
-        # paging ops over a finished job keep a large output recoverable
-        assert "A 0" in a.head(10000) and a.slice(0, 1) == a.output[0]
-        assert a.lines(0, 1).startswith("0: ")
-        g = a.grep("A 1")
-        assert "A 1" in g and g.split(":", 1)[0].strip().isdigit(), g
-        assert "no lines match" in a.grep("nonesuch-xyz-pattern")
-        # full sizes the server uses to detect a truncated reply
-        s = runtime._job_summary(a)
-        assert s["output_chars"] == len(a.output) and s["result_chars"] == len("A done"), s
-        # elapsed_s rides every summary so the per-call reply reports the run's cost
-        assert isinstance(s["elapsed_s"], float) and s["elapsed_s"] >= 0.0, s
-        # history() indexes the runs and returns a Result naming both jobs
-        h = ns["history"]()
-        assert isinstance(h, runtime.Result) and a.id in h.llm_result and b.id in h.llm_result
-
-        # A KeyboardInterrupt the user's own code raises keeps its real traceback
-        # (it is NOT misattributed to the wedge watchdog, whose flag is unset here).
-        k = await run("raise KeyboardInterrupt", budget=1.0, name="kbi")
-        assert k.status == "error", k.status
-        assert "Traceback" in k.error and "KeyboardInterrupt" in k.error, k.error
-        assert "asyncio.to_thread" not in k.error, k.error
-
-        # When the watchdog flag IS set (as the SIGUSR2 handler does before raising),
-        # the same interrupt yields the actionable wedge message instead. The cell
-        # sets the flag on its own running job via the runtime ContextVar.
-        w = await run(
-            "import ix_notebook_mcp.runtime as _rt\n"
-            "_rt._ix_current.get().interrupted_by_watchdog = True\n"
-            "raise KeyboardInterrupt",
-            budget=1.0,
-            name="kbi-watchdog",
-        )
-        assert w.status == "error", w.status
-        assert "asyncio.to_thread" in w.error and "Traceback" not in w.error, w.error
-
-        # A print-only cell (last statement is None) returns its captured stdout,
-        # so what it printed reaches the model -- a notebook's behavior.
-        p = await run("print('hello-from-stdout')", budget=1.0, name="printed")
-        assert p.status == "done", (p.status, p.error)
-        assert isinstance(p.result, runtime.Result), type(p.result)
-        assert "hello-from-stdout" in p.result.llm_result, p.result.llm_result
-        # A silent side-effecting cell returns a quiet confirmation.
-        q = await run("x_side_effect = 1", budget=1.0, name="silent")
-        assert q.status == "done", (q.status, q.error)
-        assert "done" in q.result.llm_result, q.result.llm_result
-
-        # A bare final value that already renders richly is auto-wrapped in
-        # Result.of, so `df` on the last line just works without an explicit Result.
-        d = await run("import polars as pl\npl.DataFrame({'x': [1, 2]})", budget=2.0, name="auto-df")
-        assert d.status == "done", (d.status, d.error)
-        assert isinstance(d.result, runtime.Result), type(d.result)
-        assert d.result.llm_result.startswith("shape: (2, 1) | x:Int64"), d.result.llm_result
-        assert "[[x]; [1], [2]]" in d.result.llm_result, d.result.llm_result
-        import json as _json
-        import subprocess as _subprocess
-        import tempfile as _tempfile
-        from pathlib import Path as _Path
-
-        _nuon_path = _Path(_tempfile.mkdtemp()) / "df.nuon"
-        _nuon_path.write_text(d.result.llm_result.split("\n", 1)[1])
-        _parsed = _json.loads(_subprocess.check_output(
-            ["nu", "-c", f"open --raw {_nuon_path} | from nuon | to json -r"],
-            text=True,
-        ))
-        assert _parsed == [{"x": 1}, {"x": 2}], _parsed
-
-        class Split:
-            def __ix_html__(self):
-                return "<strong>human</strong>"
-            def __ix_llm__(self):
-                return {"answer": 42, "tags": ["nuon", "llm"]}
-
-        split = runtime.Result.of(Split())
-        assert split.user_html == "<strong>human</strong>", split.user_html
-        _split_path = _Path(_tempfile.mkdtemp()) / "split.nuon"
-        _split_path.write_text(split.llm_result)
-        _split = _json.loads(_subprocess.check_output(
-            ["nu", "-c", f"open --raw {_split_path} | from nuon | to json -r"],
-            text=True,
-        ))
-        assert _split == {"answer": 42, "tags": ["nuon", "llm"]}, (split.llm_result, _split)
-        from ix_notebook_mcp import outputs as _outputs_for_llm
-
-        _bundle = split._repr_mimebundle_()
-        assert runtime.IX_LLM_MIME in _bundle and _bundle["text/html"] == "<strong>human</strong>", _bundle
-        _content = _outputs_for_llm.to_mcp([{"output_type": "display_data", "data": _bundle}])
-        assert len(_content) == 1 and _content[0].text == split.llm_result, _content
-        # Jupyter semantics: the last expression IS the result, whatever its type.
-        sc = await run("1 + 1", budget=2.0, name="scalar")
-        assert sc.status == "done", (sc.status, sc.error)
-        assert "2" in sc.result.llm_result, sc.result.llm_result
-        # ...and stdout printed along the way rides with a bare final value.
-        both = await run("print('logged')\n40 + 2", budget=2.0, name="print-and-value")
-        assert both.status == "done", (both.status, both.error)
-        assert "logged" in both.result.llm_result and "42" in both.result.llm_result, (
-            both.result.llm_result
-        )
-
-        # A cell ending in a failed process Output is loud on every surface a
-        # watcher reads (issue #1766: a build dead on ENOSPC read as
-        # still-compiling): the streamed stdout carries the failure line, so
-        # paging a backgrounded job's .output/.tail() shows the terminal state,
-        # and the result's model text leads AND ends with the exit marker. The
-        # Output itself is falsy. (`sh` is retired; the runner is the private
-        # `_exec` the kernel's own internals still use.)
-        fsh = await run("from sh import _exec\nawait _exec('echo diag-line; exit 7')", budget=10.0, name="failed-exec")
-        assert fsh.status == "done", (fsh.status, fsh.error)
-        assert "diag-line" in fsh.output and "[exit 7]" in fsh.output, fsh.output
-        assert fsh.result.llm_result.splitlines()[0].startswith("[exit 7]"), fsh.result.llm_result
-        assert fsh.result.llm_result.rstrip().endswith("[exit 7]"), fsh.result.llm_result
-        assert fsh.result.exit_code == 7 and not fsh.result.ok, fsh.result.exit_code
-        assert bool(fsh.result) is False, "a failed Output must be falsy"
-
-        # .result raises while the job runs (a misleading None would read as
-        # "finished with no value"); .done()/.ok track the lifecycle.
-        slow = await run("import asyncio\nawait asyncio.sleep(0.4)\nResult.text('late')", budget=0.02, name="slow")
-        assert slow.running() and not slow.done(), slow.status
-        try:
-            _ = slow.result
-            raise AssertionError("expected .result to raise while running")
-        except runtime.JobStillRunning:
-            pass
-        await slow.task
-        assert slow.done() and slow.ok, slow.status
-        assert slow.result.llm_result == "late", slow.result
-
-        # Job.wait: a timed wait that never raises -- one cell replaces a
-        # sleep-and-poll loop. At a short deadline the job is still running;
-        # with no deadline it returns the finished job.
-        slow2 = await run("import asyncio\nawait asyncio.sleep(0.3)\nResult.text('w')", budget=0.02, name="wait")
-        assert (await slow2.wait(0.01)).running(), slow2.status
-        assert (await slow2.wait()).done() and slow2.result.llm_result == "w"
-
-        # A Result nested inside a Result (llm_result=Result.text(...)) is
-        # flattened to its model text at construction, so the summary/paging
-        # path never hits a non-str ("Result object is not subscriptable").
-        nested = runtime.Result(user_html="<b>x</b>", llm_result=runtime.Result.text("inner"))
-        assert nested.llm_result == "inner", nested.llm_result
-        nj = await run(
-            "Result(user_html='<b>x</b>', llm_result=Result.text('inner-e2e'))",
-            budget=2.0, name="nested",
-        )
-        assert nj.status == "done", (nj.status, nj.error)
-        assert "inner-e2e" in nj.tail(100), nj.tail(100)
-        assert runtime._job_summary(nj)["result_chars"] == len("inner-e2e")
-        # Any other non-str llm_result coerces to its repr rather than crash later.
-        odd = runtime.Result(user_html="x", llm_result=123)
-        assert odd.llm_result == "123", odd.llm_result
-
-    asyncio.run(main())
-    # api(): a discoverable catalog of kernel builtins + bundled modules. `nu`
-    # is the catalogued shell-out path; the retired `sh` is NOT listed (though it
-    # stays bound as a disabled shim so a stale call fails loudly, tested below).
-    cat = ns["api"]()
-    names = set(cat["name"].to_list())
-    assert {"Result", "cells", "jobs", "nu", "api"} <= names, names
-    assert "sh" not in names and "zsh" not in names, names
-    filt = cat.filter(cat["name"] == "cells")
-    assert filt.height == 1, filt
-
-    # grep/find/spotlight (the fsearch search helpers) and view are pre-bound in
-    # the namespace (no import needed), the way Result/cells/jobs are, so
-    # `await grep(...)` / `view.tree(...)` just work.
-    assert callable(ns.get("grep")) and callable(ns.get("find")), (ns.get("grep"), ns.get("find"))
-    assert callable(ns.get("spotlight")), ns.get("spotlight")
-
-    # `sh`/`zsh` stay bound but are DISABLED: calling either raises a migration
-    # hint pointing at `await nu(...)`, so an old transcript fails loudly rather
-    # than with a bare NameError.
-    async def _sh_disabled() -> None:
-        for expr in ("await sh('echo hi')", "await zsh('echo hi')", "await sh(['echo', 'hi'])"):
-            r = await run(expr, budget=2.0, name="sh-disabled")
-            assert r.status == "error", (expr, r.status)
-            assert "await nu" in (r.error or ""), (expr, r.error)
-
-    asyncio.run(_sh_disabled())
-    assert callable(getattr(ns.get("view"), "tree", None)), ns.get("view")
-
-    # Result.llm_images downscale a large raster to <= _IMAGE_MAX_DIM on its
-    # longest edge before base64-encoding it for the model (Pillow is present via
-    # matplotlib), so a full-page screenshot does not cost vision tokens at full
-    # resolution.
-    import base64 as _b64
-    import io as _io
-
-    from PIL import Image as _Image
-
-    _buf = _io.BytesIO()
-    _Image.new("RGB", (3000, 1500), (10, 20, 30)).save(_buf, format="PNG")
-    _coerced = runtime._coerce_image(_buf.getvalue())
-    assert _coerced is not None, _coerced
-    _w, _h = _Image.open(_io.BytesIO(_b64.b64decode(_coerced["data"]))).size
-    assert max(_w, _h) <= runtime._IMAGE_MAX_DIM, (_w, _h, runtime._IMAGE_MAX_DIM)
-
-    # The dimension cap alone does not bound bytes: a busy 1280px screenshot stays
-    # megabytes as PNG. So _fit_image_bytes also enforces _IMAGE_MAX_BYTES, falling
-    # back to JPEG (and further downscales) -- a high-entropy image comes back well
-    # under the byte cap instead of flooding the model's reply with base64.
-    import os as _osr
-
-    _noisy = _Image.frombytes("RGB", (3000, 1500), _osr.urandom(3000 * 1500 * 3))
-    _nbuf = _io.BytesIO()
-    _noisy.save(_nbuf, format="PNG")
-    assert len(_nbuf.getvalue()) > runtime._IMAGE_MAX_BYTES, len(_nbuf.getvalue())
-    _fit = runtime._coerce_image(_nbuf.getvalue())
-    _raw = _b64.b64decode(_fit["data"])
-    assert len(_raw) <= runtime._IMAGE_MAX_BYTES, ("over byte cap", len(_raw))
-    _fw, _fh = _Image.open(_io.BytesIO(_raw)).size
-    assert max(_fw, _fh) <= runtime._IMAGE_MAX_DIM, (_fw, _fh)
-    # A small lossless image fits both caps and is kept byte-for-byte (a crisp PNG
-    # for UI/diagrams is never needlessly re-encoded).
-    _sbuf = _io.BytesIO()
-    _Image.new("RGB", (200, 100), (10, 20, 30)).save(_sbuf, format="PNG")
-    _small = _sbuf.getvalue()
-    assert _b64.b64decode(runtime._coerce_image(_small)["data"]) == _small
-
-    # outputs.text() renders an over-cap block as a head+tail preview (not a
-    # one-sided clip) with paging guidance, and honours IX_MCP_MAX_RESULT_CHARS.
-    import importlib as _il
-    import os as _os
-
-    from ix_notebook_mcp import outputs as _outputs
-
-    _os.environ["IX_MCP_MAX_RESULT_CHARS"] = "1000"
-    _il.reload(_outputs)
-    _blk = _outputs.text("HEAD" + ("z" * 5000) + "TAIL").text
-    assert _blk.startswith("HEAD") and _blk.endswith("TAIL"), _blk[:40]
-    assert "output too large" in _blk and len(_blk) < 2000, len(_blk)
-    _os.environ.pop("IX_MCP_MAX_RESULT_CHARS", None)
-    _il.reload(_outputs)
-
-    # outputs._image is the final byte net for every image reaching the model: a
-    # small image becomes a real image block, but an oversize blob (e.g. a raw
-    # display(fig) bundle that never went through the kernel's fitter) is dropped
-    # with a short note rather than dumped as megabytes of base64.
-    _ok = _outputs._image("image/png", _b64.b64encode(_small).decode("ascii"))
-    assert _ok.type == "image", _ok
-    _over = _b64.b64encode(b"x" * (_outputs.MAX_IMAGE_BYTES + 5000)).decode("ascii")
-    _dropped = _outputs._image("image/png", _over)
-    assert _dropped.type == "text" and "dropped" in _dropped.text, _dropped
-    assert len(_dropped.text) < 400, len(_dropped.text)
-    # End to end: an oversize image in a display bundle yields no giant text block.
-    _rendered = _outputs.to_mcp([{"output_type": "display_data", "data": {"image/png": _over}}])
-    assert all(_c.type == "text" for _c in _rendered), [_c.type for _c in _rendered]
-    assert max(len(_c.text) for _c in _rendered) < 400, [len(_c.text) for _c in _rendered]
-
-    # view.tree lists but does not descend into heavy dirs (node_modules, ...)
-    # unless all=True, so a project's structure is not buried under vendored files.
-    import pathlib as _pl
-    import tempfile as _tf
-
-    import view as _view
-
-    _root = _tf.mkdtemp()
-    _pl.Path(_root, "src").mkdir()
-    _pkg = _pl.Path(_root, "node_modules", "pkg")
-    _pkg.mkdir(parents=True)
-    (_pkg / "index.js").write_text("x")
-    _collapsed = _view.tree(_root, depth=3)
-    _walked = _view.tree(_root, depth=3, all=True)
-    assert _walked.height > _collapsed.height, (_collapsed.height, _walked.height)
-    _names = _collapsed["name"].to_list()
-    assert any("node_modules" in n for n in _names), _names
-    assert not any("index.js" in n for n in _names), _names
-
-    # .gitignore-aware pruning (git is on PATH in this sandbox): a dir the repo
-    # ignores but that is NOT in the static denylist still collapses, and an
-    # ignored file drops entirely.
-    import shutil as _shutil
-    import subprocess as _sub
-
-    if _shutil.which("git"):
-        _g = _tf.mkdtemp()
-        _pl.Path(_g, "src").mkdir()
-        _gen = _pl.Path(_g, "generated")
-        _gen.mkdir()
-        (_gen / "big.py").write_text("x")
-        (_pl.Path(_g) / "debug.log").write_text("x")
-        (_pl.Path(_g) / ".gitignore").write_text("generated/" + chr(10) + "*.log" + chr(10))
-        _sub.run(["git", "init", "-q"], cwd=_g, check=True)
-        _gi = _view.tree(_g, depth=3)["name"].to_list()
-        assert any("generated" in n for n in _gi), _gi
-        assert not any("big.py" in n for n in _gi), _gi
-        assert not any("debug.log" in n for n in _gi), _gi
-        assert any("src" in n for n in _gi), _gi
-
-        # view.ls stays flat but flags git-ignored entries in an `ignored` column
-        # (it never drops them, unlike tree): the *.log file is ignored, src is not.
-        _lsg = _view.ls(_g)
-        assert "ignored" in _lsg.columns, _lsg.columns
-        _byname = {r["name"]: r["ignored"] for r in _lsg.iter_rows(named=True)}
-        assert _byname.get("debug.log") is True, _byname
-        assert _byname.get("src") is False, _byname
-
-    print("runtime-ok")
-  '';
-
-  runtimeSmoke =
-    pkgs.runCommand "ix-mcp-runtime-smoke"
-    {
-      # git is on PATH so the view.tree .gitignore-pruning assertion can init a
-      # throwaway repo; without it that path falls back to the denylist (still
-      # covered by the no-git case in the same test).
-      nativeBuildInputs = [
-        mcpPython
-        pkgs.git
-        pkgs.nushell
-      ];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${runtimeTestPy} >stdout 2>stderr || {
-        echo "ix-mcp runtime smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'runtime-ok' stdout || {
-        echo "ix-mcp runtime smoke did not confirm concurrent jobs:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
   # Issue #1754: per-cell static type checking (ty) before execution, plus the
   # bug 1-3 regressions (await-a-failed-job re-raises; Job/Result accessor
   # symmetry; fsearch partial-on-timeout + limit short-circuit). The type-check
   # tests need ty resolvable and its diagnostics stable, so ty is provided on the
   # env exactly as the wrapper sets it; rg/fd back the fsearch limit assertion.
-  # A dedicated interpreter adds pytest (the bare mcpPython omits it).
-  typecheckTestPython = mcpPythonInterp.withPackages (ps: (mcpPythonPackages ps) ++ [ps.pytest]);
+  # A dedicated interpreter adds pytest (the bare test envs omit it). The
+  # battery imports ix_notebook_mcp, fsearch, sh, nu, weave (all in the server
+  # closure) plus claude_history.
+  typecheckTestPython = bundledTestPythonWith (ps: [ps.pytest]) [
+    ixNotebookMcpModule
+    claudeHistoryModule
+  ];
   typecheckSmoke =
     pkgs.runCommand "ix-mcp-typecheck-smoke"
     {
@@ -2711,7 +1443,7 @@
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
       export IX_MCP_TY_BIN=${lib.escapeShellArg tyBin}
-      export IX_MCP_TY_PYTHON=${lib.escapeShellArg mcpPython.interpreter}
+      export IX_MCP_TY_PYTHON=${lib.escapeShellArg typecheckTestPython.interpreter}
       # The edited ix_notebook_mcp / fsearch / sh live in the interpreter's
       # site-packages (built from this worktree's source), so the tests import
       # them from there; only the test files are copied in (a bare store path of
@@ -2789,2681 +1521,9 @@
       mkdir -p "$out"
     '';
 
-  # The session-file contract: run cells against a session store, checkpoint,
-  # "restart" into a fresh namespace, and reopen -- the checkpoint restores the
-  # state instantly (including a function defined in a cell, which needs the
-  # bundled dill), the one cell newer than the checkpoint replays, a row left
-  # 'running' by the dead server is marked interrupted, and a second reopen has
-  # nothing to replay (the restore folds everything into a fresh checkpoint).
-  sessionTestPy = pkgs.writeText "ix-mcp-session-test.py" ''
-    # python
-    import asyncio
-    import sys
-    import tempfile
-
-    import dill  # the checkpoint serializer must be bundled in this interpreter
-
-    # Hermetic: the session contract runs over an in-memory Weave ABI double
-    # (tests/weave_stub.py, copied next to this script by the derivation);
-    # real-server fidelity is pinned by tests/test_weave_integration.py.
-    sys.path.insert(0, ".")
-    import weave_stub
-
-    weave_stub.install()
-
-    from ix_notebook_mcp import runtime, store
-
-    path = tempfile.mktemp(suffix=".ixnb")
-
-    def wire(conn, ns):
-        runtime._store = store
-        runtime._store_conn = conn
-        runtime._user_ns = ns
-        runtime._SESSION = True
-        runtime._baseline_names = frozenset(ns)
-
-    async def first_run():
-        conn = store.connect(path)
-        ns = {"Result": runtime.Result}
-        wire(conn, ns)
-        a = await runtime.__ix_run("x = 40\ndef double(n):\n    return n * 2\nResult.ok('a')")
-        assert a.status == "done", (a.status, a.error)
-        await runtime._snapshot_now()
-        b = await runtime.__ix_run("y = double(x) + 4\nResult.ok('b')")
-        assert b.status == "done", (b.status, b.error)
-        # A row left 'running' by a server that died mid-cell.
-        store.start(conn, id="dead", name="dead", code="zz", started_at=1.0)
-        conn.close()
-
-    asyncio.run(first_run())
-
-    async def reopen():
-        conn = store.connect(path)
-        assert store.mark_interrupted(conn, ended_at=2.0) == 1
-        assert store.get(conn, "dead")["status"] == "interrupted"
-        ns = {"Result": runtime.Result}
-        wire(conn, ns)
-        runtime.jobs.clear()
-        await runtime.__ix_restore()
-        snap = store.latest_snapshot(conn)
-        assert snap is not None, "restore must fold a fresh checkpoint"
-        assert store.replayable(conn, since=snap["created_at"]) == [], "second reopen must replay nothing"
-        conn.close()
-        return ns
-
-    ns = asyncio.run(reopen())
-    assert ns["x"] == 40, ns.get("x")
-    assert ns["double"](3) == 6
-    assert ns["y"] == 84, ns.get("y")
-    print("session-ok")
-  '';
-  sessionSmoke =
-    pkgs.runCommand "ix-mcp-session-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cd "$TMPDIR"
-      cp ${builtins.path {
-        name = "ix-mcp-weave-stub";
-        path = ./tests/weave_stub.py;
-      }} weave_stub.py
-      ${lib.getExe mcpPython} ${sessionTestPy} >stdout 2>stderr || {
-        echo "ix-mcp session smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'session-ok' stdout || {
-        echo "ix-mcp session smoke did not confirm the reopen contract:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # Boots a real kernel and proves the two signal-driven recoveries for a cell
-  # that blocks the kernel's event loop with a synchronous call:
-  #   1. kernel_trace (SIGUSR1 -> faulthandler) returns the kernel's stack WHILE
-  #      the loop is wedged, since it never touches the execute channel.
-  #   2. the wedge watchdog (SIGUSR2 -> KeyboardInterrupt) breaks the block past
-  #      budget+grace, returns a 'wedged' summary in about budget+grace (not the
-  #      sleep's full duration), and leaves the kernel usable for the next cell.
-  # Guards the fix for the opaque "Timeout waiting for output" a forgotten
-  # blocking call used to cause. SIGINT is NOT enough here: every cell is async
-  # (await __ix_exec), and ipykernel interrupts async cells by cancelling the
-  # asyncio task, which a synchronous call never yields to.
-  wedgeTestPy = pkgs.writeText "ix-mcp-wedge-test.py" ''
-    # python
-    import asyncio
-    import os
-    import tempfile
-    from pathlib import Path
-
-    from ix_notebook_mcp import cli
-    from ix_notebook_mcp.config import Config
-    from ix_notebook_mcp.kernel import Kernel
-
-    # Install the shipped IPython startup so the in-kernel runtime (__ix_exec,
-    # Result, jobs, the SIGUSR1/SIGUSR2 handlers) loads in the booted kernel,
-    # exactly as the CLI wires it.
-    os.environ["IPYTHONDIR"] = str(cli._prepare_ipython_startup(0))
-    config = Config(workdir=Path(tempfile.mkdtemp()), wedge_grace=1.0, max_budget=2.0)
-
-
-    async def main():
-        kernel = Kernel(config)
-        await kernel.start()
-        try:
-            loop = asyncio.get_running_loop()
-
-            # (1) A trace must come back even while a cell blocks the loop. Start a
-            # blocking cell (budget high enough that the watchdog does not fire),
-            # let it enter the sleep, then dump the kernel stack out of band.
-            blocking = asyncio.ensure_future(
-                kernel.python_exec("import time\ntime.sleep(6)\nResult.ok('slept')", budget=30.0, name="blk")
-            )
-            await asyncio.sleep(1.0)
-            trace = await kernel.dump_trace()
-            assert "Thread" in trace and 'File "' in trace, ("not a faulthandler dump", trace)
-            _, blk = await blocking
-            assert blk is not None and blk["status"] == "done", blk
-
-            # (2) A cell that blocks past budget+grace is interrupted via SIGUSR2
-            # and the kernel is usable for the next cell.
-            started = loop.time()
-            _, summary = await kernel.python_exec(
-                "import time\ntime.sleep(30)\nResult.ok('done')", budget=0.5, name="block"
-            )
-            elapsed = loop.time() - started
-            assert summary is not None and summary["status"] == "wedged", summary
-            assert elapsed < 15, ("watchdog did not fire promptly", elapsed)
-            assert "asyncio.to_thread" in summary["error"], summary
-            # a wedged reply still carries elapsed_s (the slowest case the field
-            # exists to surface), reporting the seconds the call blocked
-            assert isinstance(summary["elapsed_s"], float) and summary["elapsed_s"] >= 0.5, summary
-
-            _, after = await kernel.python_exec("Result.text('alive')", budget=10.0, name="after")
-            assert after is not None and after["status"] == "done", after
-            assert after["result"] is not None, after
-
-            # (3) Cancelling an in-flight python_exec (the client cancels the call)
-            # must not desync the shared shell channel. Start a cell that
-            # backgrounds at its small budget, cancel the foreground wait while the
-            # reply is in flight, then prove a later call still runs.
-            inflight = asyncio.ensure_future(
-                kernel.python_exec("await asyncio.sleep(5)\nResult.ok('slept')", budget=0.4, name="cancelme")
-            )
-            await asyncio.sleep(0.1)
-            inflight.cancel()
-            try:
-                await inflight
-            except asyncio.CancelledError:
-                pass
-            _, revived = await kernel.python_exec("Result.text('post-cancel')", budget=10.0, name="post-cancel")
-            assert revived is not None and revived["status"] == "done", revived
-            assert revived["result"] is not None, revived
-
-            # (4) The python_exec TOOL clamps an oversized budget to max_budget so a
-            # giant foreground wait cannot sit on the one shell channel: the call
-            # returns within the cap (not the requested 600s) and says it clamped.
-            from ix_notebook_mcp import tools
-            from ix_notebook_mcp.config import set_config
-            from ix_notebook_mcp.kernel import set_kernel
-            from mcp.shared.exceptions import McpError
-
-            set_config(config)
-            set_kernel(kernel)
-
-            try:
-                await tools.python_exec("Result.ok('blocked')", budget=1.0, intent="blocked first")
-            except McpError as exc:
-                assert "session_set_name" in str(exc), exc
-            else:
-                raise AssertionError("python_exec ran before the session was named")
-
-            named = await tools.session_set_name("wedge smoke")
-            assert "wedge smoke" in " ".join(getattr(c, "text", "") or "" for c in named), named
-            topic = await tools.topic_set("wedge validation")
-            assert "wedge validation" in " ".join(getattr(c, "text", "") or "" for c in topic), topic
-
-            started = loop.time()
-            clamped = await tools.python_exec(
-                "await asyncio.sleep(30)\nResult.ok('done')", budget=600.0, intent="bigbudget"
-            )
-            elapsed = loop.time() - started
-            assert elapsed < 10, ("budget was not clamped", elapsed)
-            # python_exec returns a CallToolResult (MCP Apps: the human view
-            # rides its _meta); the model-facing blocks live on .content.
-            note = " ".join(getattr(c, "text", "") or "" for c in clamped.content)
-            assert "clamped" in note, note
-        finally:
-            await kernel.shutdown()
-
-
-    asyncio.run(main())
-    print("wedge-ok")
-  '';
-  wedgeSmoke =
-    pkgs.runCommand "ix-mcp-wedge-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${wedgeTestPy} >stdout 2>stderr || {
-        echo "ix-mcp wedge smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'wedge-ok' stdout || {
-        echo "ix-mcp wedge smoke did not confirm the watchdog:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # An externally killed kernel must be reported as `kernel died (pid N, signal
-  # S); respawning` -- never a generic 'wedged' timeout -- with kernel_trace
-  # naming the gone process and the death watch respawning it eagerly, not on
-  # the next execute (packages/mcp/tests/test_kernel_death.py, index#2339: a
-  # broad pkill SIGTERM'd a session's kernel and every symptom read as a wedge).
-  # Boots a real kernel, so it reuses the full interpreter plus pytest.
-  kernelDeathTestSource = builtins.path {
-    name = "ix-mcp-kernel-death-test";
-    path = ./tests/test_kernel_death.py;
-  };
-  kernelDeathSmoke =
-    pkgs.runCommand "ix-mcp-kernel-death-smoke"
-    {
-      nativeBuildInputs = [typecheckTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${kernelDeathTestSource} "$TMPDIR/test_kernel_death.py"
-      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_death.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp kernel-death smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # An INTENTIONAL restart (the kernel_restart tool, index#2345) must be
-  # surgical: only this server's kernel child is bounced (old pid -> new pid,
-  # elapsed time reported), the namespace is rebuilt, the session name/topic the
-  # server pushed are re-applied, and stderr carries the requested-restart lines
-  # -- never the death watch's `kernel died` report, since the kill is on
-  # purpose (packages/mcp/tests/test_kernel_restart.py). Boots a real kernel,
-  # so it reuses the full interpreter plus pytest.
-  kernelRestartTestSource = builtins.path {
-    name = "ix-mcp-kernel-restart-test";
-    path = ./tests/test_kernel_restart.py;
-  };
-  kernelRestartSmoke =
-    pkgs.runCommand "ix-mcp-kernel-restart-smoke"
-    {
-      nativeBuildInputs = [typecheckTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${kernelRestartTestSource} "$TMPDIR/test_kernel_restart.py"
-      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_restart.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp kernel-restart smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # python_exec's wedge escalation (index#2375): the SIGUSR2 rescue only helps a
-  # Python-level block; a main thread stuck inside native code never runs the
-  # handler, so after the interrupt the server must PROBE the kernel and, when
-  # the probe hangs too, kill and respawn only the kernel child (never claim
-  # "usable again" on mere signal delivery). Boots a real kernel, so it reuses
-  # the full interpreter plus pytest.
-  wedgeEscalationTestSource = builtins.path {
-    name = "ix-mcp-wedge-escalation-test";
-    path = ./tests/test_kernel_wedge_escalation.py;
-  };
-  wedgeEscalationSmoke =
-    pkgs.runCommand "ix-mcp-wedge-escalation-smoke"
-    {
-      nativeBuildInputs = [typecheckTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${wedgeEscalationTestSource} "$TMPDIR/test_kernel_wedge_escalation.py"
-      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_wedge_escalation.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp wedge-escalation smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # Exercises the rich-output capture path: a DataFrame result is persisted to the
-  # store with its text/html bundle (so the dashboard renders a table, not a repr),
-  # a display() call made while a job runs is captured the same way, and a bytes
-  # image payload normalizes to a base64 string. Stands up an InteractiveShell
-  # in-process so the formatter runs without booting a kernel; sandbox-safe.
-  richTestPy = pkgs.writeText "ix-mcp-rich-test.py" ''
-    # python
-    import asyncio
-    import json
-    import os
-    import sqlite3
-    import tempfile
-
-    from IPython.core.interactiveshell import InteractiveShell
-
-    # A kernel always has a shell; this in-process test stands one up so the rich
-    # formatter path runs without booting a kernel.
-    InteractiveShell.instance()
-
-    store_path = tempfile.mktemp(suffix=".db")
-    os.environ["IX_MCP_STORE"] = store_path
-    os.environ["WEAVE_URL"] = "off"
-
-    import polars as pl
-
-    from ix_notebook_mcp import runtime
-
-    # A bytes image payload must normalize to a base64 string: raw bytes would not
-    # survive JSON storage or an <img> data URI.
-    bundle = runtime._normalize_bundle({"image/png": b"\x89PNG\r\n", "text/plain": "x"})
-    assert isinstance(bundle["data"]["image/png"], str), bundle
-
-    ns = {"pl": pl}
-    runtime.install(ns)
-    run = ns["__ix_run"]
-
-    # The model-facing view (IX_LLM_MIME: the exact llm_result text plus downscaled
-    # images) rides into the stored bundle so the dashboard's raw-LLM toggle can
-    # show precisely what the agent received, not just the human HTML.
-    llm_bundle = runtime._result_bundle(
-        runtime.Result(user_html="<b>chart</b>", llm_result="a chart of x", llm_images=[b"\x89PNG\r\n"])
-    )
-    assert runtime.IX_LLM_MIME in llm_bundle["data"], list(llm_bundle["data"])
-    decoded = json.loads(llm_bundle["data"][runtime.IX_LLM_MIME])
-    assert decoded["text"] == "a chart of x" and len(decoded["images"]) == 1, decoded
-    # A result with no model images still carries IX_LLM_MIME so to_mcp can prefer
-    # the explicit model view over any human HTML fallback.
-    plain_bundle = runtime._result_bundle(runtime.Result(user_html="<b>hi</b>", llm_result="hi"))
-    assert json.loads(plain_bundle["data"][runtime.IX_LLM_MIME]) == {"text": "hi", "images": []}
-    # A huge llm_result is clipped to the same cap as any other text mime, so it
-    # can never bypass the limit into the store / each dashboard poll.
-    big = runtime._result_bundle(
-        runtime.Result(user_html="<b>x</b>", llm_result="z" * 500000, llm_images=[b"\x89PNG\r\n"])
-    )
-    big_text = json.loads(big["data"][runtime.IX_LLM_MIME])["text"]
-    assert big_text.endswith("[truncated]") and len(big_text) <= runtime._MAX_TEXT_BUNDLE + 32, len(big_text)
-
-    # A tuple/list carrying a rich value (a DataFrame) renders each element with
-    # its own view, stacked, instead of stringifying the frame into a one-column
-    # table -- Result((repr_text, df)) shows the text AND the real table.
-    stacked = runtime.Result.of(("GrepResult: 0 matches", pl.DataFrame({"a": [1, 2]})))
-    assert stacked.user_html.count("<table") == 1, stacked.user_html[:200]
-    assert "GrepResult: 0 matches" in stacked.llm_result and "shape:" in stacked.llm_result, stacked.llm_result
-    direct_df = runtime.Result.of(pl.DataFrame({"a": [1, 2], "b": ["x", "y"]}))
-    assert '[[a, b]; [1, "x"], [2, "y"]]' in direct_df.llm_result, direct_df.llm_result
-    assert "┌" not in direct_df.llm_result, direct_df.llm_result
-    # A plain list of scalars is still ONE table (not stacked), unchanged.
-    scalars = runtime.Result.of([1, 2, 3])
-    assert scalars.user_html.count("<table") == 1, scalars.user_html[:200]
-    # Stacking preserves a nested Result's model images (Result.of copies a
-    # Result faithfully instead of rebuilding it from its display bundle).
-    inner = runtime.Result(user_html="<b>x</b>", llm_result="x", llm_images=[b"\x89PNG\r\n"])
-    nested = runtime.Result.of([inner, pl.DataFrame({"a": [1]})])
-    assert len(nested.llm_images) == 1, ("nested Result dropped its images", nested.llm_images)
-
-    # The table protocol: a non-DataFrame value exposing _ix_to_frame_() renders
-    # as its polars frame: a styled table for the human, compact NUON for the
-    # model -- instead of its one-line summary repr, so a rich result type shows
-    # the model the real rows, not just a count.
-    class _Framed:
-        def _ix_to_frame_(self):
-            return pl.DataFrame({"path": ["a.py"], "line": [3]})
-
-        def __repr__(self):
-            return "Framed: 1 match (summary)"
-
-    framed = runtime.Result.of(_Framed())
-    assert "<table" in framed.user_html, framed.user_html[:200]
-    assert framed.llm_result.startswith("shape: (1, 2)") and "a.py" in framed.llm_result, framed.llm_result
-    assert "summary" not in framed.llm_result, "must render the frame, not the summary repr"
-
-    # Jupyter-style rich hooks can split a bare object's human HTML from its
-    # model-facing text without manually constructing Result(...).
-    class _Widget:
-        def _repr_html_(self):
-            return "<strong>human</strong>"
-
-        def _repr_llm_(self):
-            return "model-view"
-
-    split = runtime.Result.of(_Widget())
-    assert split.user_html == "<strong>human</strong>", split.user_html
-    assert split.llm_result == "model-view", split.llm_result
-    assert runtime._nuon([{"a": 1, "b": 2}, {"a": 5, "b": 7}]) == "[[a, b]; [1, 2], [5, 7]]"
-
-    # A hook that raises or returns a non-frame is ignored: fall back to the
-    # normal repr path rather than blowing up the result.
-    class _BadFrame:
-        def _ix_to_frame_(self):
-            raise RuntimeError("nope")
-
-    assert "BadFrame" in runtime.Result.of(_BadFrame()).llm_result
-
-    # A plain string is rendered as output, not a Python literal: the model gets
-    # it verbatim with terminal escapes stripped (no `\n` / `\x1b` repr noise),
-    # and the human gets the same text as an HTML <pre>, escaped, with no raw
-    # control bytes. This is the read-tool treatment for a streamed Result.
-    s = runtime.Result.of("line1\nline2\n\x1b[0;32mgreen\x1b[0m")
-    assert s.llm_result == "line1\nline2\ngreen", repr(s.llm_result)
-    assert "\x1b" not in s.user_html and s.user_html.startswith("<pre"), s.user_html[:80]
-    # A short string carries no surrounding repr quotes.
-    assert runtime.Result.of("hello").llm_result == "hello"
-    # HTML metacharacters are escaped for the human, verbatim for the model.
-    esc = runtime.Result.of("a <b> & c")
-    assert esc.llm_result == "a <b> & c" and "&lt;b&gt;" in esc.user_html, esc.user_html
-    # An explicit llm_result still overrides the verbatim model text.
-    assert runtime.Result.of("raw", llm_result="override").llm_result == "override"
-    # The shared ANSI stripper lives in the runtime (the bundled `sh` helper
-    # imports it rather than keeping a second copy).
-    assert runtime._strip_ansi("\x1b[31mx\x1b[0m") == "x"
-
-
-    async def main():
-        # A DataFrame result is stored with its text/html bundle.
-        df_job = await run("Result.of(pl.DataFrame({'a': [1, 2], 'b': ['x', 'y']}))", budget=3.0, name="df")
-        await df_job.task
-        assert df_job.status == "done", df_job.status
-        result_mimes = {mime for out in runtime._job_outputs(df_job) for mime in out["data"]}
-        assert "text/html" in result_mimes, ("result mimes", result_mimes)
-
-        # An htpy element renders through the __html__ protocol: IPython's html
-        # formatter ignores __html__ by default, so without _register_rich_formatters
-        # cells.add/Result.of would store the element's repr instead of its HTML.
-        htpy_job = await run(
-            "import htpy\nResult.of(htpy.div(class_='x')['<hi>'])", budget=3.0, name="htpy"
-        )
-        await htpy_job.task
-        htpy_html = [out["data"].get("text/html") for out in runtime._job_outputs(htpy_job)][-1]
-        assert htpy_html == '<div class="x">&lt;hi&gt;</div>', htpy_html
-
-        # A display() call made while a job runs is captured too.
-        disp_job = await run(
-            "from IPython.display import display\ndisplay(pl.DataFrame({'z': [9]}))\nResult.ok('shown')",
-            budget=3.0,
-            name="disp",
-        )
-        await disp_job.task
-        disp_mimes = {mime for out in runtime._job_outputs(disp_job) for mime in out["data"]}
-        assert "text/html" in disp_mimes, ("display mimes", disp_mimes)
-
-        # A Result splits the human view (HTML on the dashboard) from the model
-        # view (text in the tool result): the stored bundle carries user_html as
-        # text/html, and to_mcp hands the model only the text/plain llm_result.
-        from ix_notebook_mcp import outputs
-        res_job = await run("Result(user_html='<b>hi</b>', llm_result='just-text')", budget=3.0, name="res")
-        await res_job.task
-        res_bundle = [out["data"] for out in runtime._job_outputs(res_job)][-1]
-        assert res_bundle.get("text/html") == "<b>hi</b>", res_bundle
-        mcp = outputs.to_mcp([{"output_type": "execute_result", "data": res_bundle, "metadata": {}}])
-        texts = [c.text for c in mcp if getattr(c, "text", None) is not None]
-        assert texts == ["just-text"], texts
-
-        # Result DWIM: a bare value renders like Result.of (no user_html boilerplate).
-        # A dict becomes a table -- a valid text/html string, not a raw dict that
-        # breaks nbformat -- and its keys reach the model text.
-        dwim_job = await run("Result({'alpha': 1, 'beta': 2})", budget=3.0, name="dwim")
-        await dwim_job.task
-        assert dwim_job.status == "done", dwim_job.status
-        dwim_bundle = [out["data"] for out in runtime._job_outputs(dwim_job)][-1]
-        assert isinstance(dwim_bundle.get("text/html"), str) and dwim_bundle["text/html"], dwim_bundle
-        assert "alpha" in dwim_bundle.get("text/plain", "") and "beta" in dwim_bundle["text/plain"], dwim_bundle
-
-        # Multiple values are ALL shown (not silently collapsed to the first).
-        multi_job = await run("Result(True, [1, 2, 3])", budget=3.0, name="multi")
-        await multi_job.task
-        assert multi_job.status == "done", multi_job.status
-        multi_text = [out["data"].get("text/plain", "") for out in runtime._job_outputs(multi_job)][-1]
-        # Both values are shown: the bool by its repr, the list as its one-column
-        # frame (NUON rows 1/2/3), not collapsed to just the first value.
-        assert "true" in multi_text and "[[value]; [1], [2], [3]]" in multi_text, ("multi-value dropped a value", multi_text)
-
-
-    asyncio.run(main())
-    print("rich-ok")
-  '';
-  # Proves the yielding-cell behavior end to end: a cell that `yield`s streams
-  # every yielded value to the store (the dashboard) and to the model (to_mcp),
-  # keeps its top-level names in the namespace like a normal cell, and a
-  # non-Result yield renders through Result.of. A plain (non-yielding) cell is
-  # unchanged. In process (a shell, the store), no kernel boot or network, so
-  # the sandbox runs it.
-  yieldTestPy = pkgs.writeText "ix-mcp-yield-test.py" ''
-    # python
-    import asyncio
-    import json
-    import os
-    import sqlite3
-    import tempfile
-
-    from IPython.core.interactiveshell import InteractiveShell
-
-    InteractiveShell.instance()
-
-    store_path = tempfile.mktemp(suffix=".db")
-    os.environ["IX_MCP_STORE"] = store_path
-    os.environ["WEAVE_URL"] = "off"
-
-    from ix_notebook_mcp import outputs, runtime
-
-    ns = {}
-    runtime.install(ns)
-    run = ns["__ix_run"]
-
-
-    async def main():
-
-        # A yielding cell streams multiple Results; its top-level names persist.
-        code = (
-            "acc = 0\n"
-            "for i in range(3):\n"
-            "    acc += i\n"
-            "    yield Result.ok(f'step {i}')\n"
-            "yield Result.of(acc)"
-        )
-        job = await run(code, budget=3.0, name="yield")
-        await job.task
-        assert job.status == "done", (job.status, job.error)
-        assert ns["acc"] == 3, ns.get("acc")
-        outs = runtime._job_outputs(job)
-        htmls = [o["data"].get("text/html") for o in outs if "text/html" in o["data"]]
-        assert len(htmls) == 4, ("expected 4 yielded results", len(htmls), outs)
-
-        # Each yielded Result reaches the model: to_mcp over the stored bundles
-        # hands back the llm text for every one.
-        mcp = outputs.to_mcp(
-            [{"output_type": "display_data", "data": o["data"], "metadata": {}} for o in outs]
-        )
-        texts = [c.text for c in mcp if getattr(c, "text", None) is not None]
-        assert "step 0" in texts and "3" in texts, texts
-
-        # A non-Result yield streams too: any value renders through Result.of,
-        # exactly like a trailing expression.
-        bare = await run("yield 123", budget=3.0, name="bare")
-        await bare.task
-        assert bare.status == "done", (bare.status, bare.error)
-        bare_outs = runtime._job_outputs(bare)
-        bare_mcp = outputs.to_mcp(
-            [{"output_type": "display_data", "data": o["data"], "metadata": {}} for o in bare_outs]
-        )
-        bare_texts = [c.text for c in bare_mcp if getattr(c, "text", None) is not None]
-        assert any("123" in t for t in bare_texts), bare_texts
-
-        # A normal (non-yielding) cell is unchanged.
-        plain = await run("Result.ok('plain')", budget=3.0, name="plain")
-        await plain.task
-        assert plain.status == "done", (plain.status, plain.error)
-
-
-    asyncio.run(main())
-    print("yield-ok")
-  '';
-
-  yieldSmoke =
-    pkgs.runCommand "ix-mcp-yield-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${yieldTestPy} >stdout 2>stderr || {
-        echo "ix-mcp yield smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'yield-ok' stdout || {
-        echo "ix-mcp yield smoke did not confirm yielded results:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  richSmoke =
-    pkgs.runCommand "ix-mcp-rich-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${richTestPy} >stdout 2>stderr || {
-        echo "ix-mcp rich smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'rich-ok' stdout || {
-        echo "ix-mcp rich smoke did not confirm rich-output capture:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # Exercises the live-value introspection that feeds the dashboard's hover/inlay:
-  # describe() classifies scalars, DataFrames, functions (with a source location),
-  # and modules; cell_bindings() resolves a cell's mentioned names against the
-  # namespace (excluding attribute parts); and a finished job persists those
-  # bindings to the store, which is where the dashboard reads them. In-process, no
-  # kernel or network, so the sandbox runs it.
-  bindingsTestPy = pkgs.writeText "ix-mcp-bindings-test.py" ''
-    # python
-    import asyncio
-    import inspect
-    import json
-    import os
-    import sqlite3
-    import tempfile
-
-    import polars as pl
-
-    from ix_notebook_mcp import introspect
-
-    # Direct descriptors: each kind carries the inlay summary the dashboard shows.
-    assert introspect.describe(42)["summary"] == "42"
-    df_desc = introspect.describe(pl.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]}))
-    assert df_desc["kind"] == "dataframe" and "3×2" in df_desc["summary"], df_desc
-
-    # A wide frame's schema detail is capped, not dumped whole, so the stored row
-    # and poll payload stay bounded.
-    wide = introspect.describe(pl.DataFrame({f"c{i}": [0] for i in range(30)}))
-    assert "+6 more" in wide["detail"], wide
-
-    def sample(x):
-        "a doc line"
-        return x
-
-    fn_desc = introspect.describe(sample)
-    assert fn_desc["kind"] == "callable" and fn_desc["summary"].startswith("ƒ sample"), fn_desc
-    # A function has a definition site: this is the go-to-definition payload.
-    assert ":" in fn_desc.get("def", ""), fn_desc
-
-    mod_desc = introspect.describe(inspect)
-    assert mod_desc["kind"] == "module" and mod_desc["summary"] == "module inspect", mod_desc
-
-    # cell_bindings resolves names a cell mentions; an attribute (df.height) is not
-    # a name, so only `df` and `n` are described, not `height`.
-    ns = {"df": pl.DataFrame({"a": [1]}), "n": 7}
-    bound = introspect.cell_bindings("rows = df.height\ntotal = n + 1\n", ns)
-    assert set(bound) == {"df", "n"}, bound
-    assert bound["df"]["kind"] == "dataframe" and bound["n"]["summary"] == "7", bound
-
-    # End to end: a finished job snapshots the bindings that persistence emits.
-    store_path = tempfile.mktemp(suffix=".db")
-    os.environ["IX_MCP_STORE"] = store_path
-    os.environ["WEAVE_URL"] = "off"
-
-    from IPython.core.interactiveshell import InteractiveShell
-
-    InteractiveShell.instance()
-
-    from ix_notebook_mcp import runtime
-
-    user_ns = {"pl": pl}
-    runtime.install(user_ns)
-    run = user_ns["__ix_run"]
-
-
-    async def main():
-        job = await run("frame = pl.DataFrame({'a': [1, 2]})\nResult.ok('made it')", budget=3.0, name="bind")
-        await job.task
-        stored = runtime._cell_bindings(job)
-        assert stored.get("frame", {}).get("kind") == "dataframe", stored
-        # `pl` is referenced and live, so it is described as a module.
-        assert stored.get("pl", {}).get("kind") == "module", stored
-
-
-    asyncio.run(main())
-    print("bindings-ok")
-  '';
-  bindingsSmoke =
-    pkgs.runCommand "ix-mcp-bindings-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${bindingsTestPy} >stdout 2>stderr || {
-        echo "ix-mcp bindings smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'bindings-ok' stdout || {
-        echo "ix-mcp bindings smoke did not confirm value introspection:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The vmkit guest surfaces as a live dashboard resource: a booted Driver shows
-  # up in Driver.list_all(), renders its framebuffer to inline-PNG HTML, and the
-  # runtime's resource provider discovers it. Uses a fake proc + a seeded frame
-  # so no real VM (or Virtualization.framework entitlement) is needed; pure
-  # in-process, sandbox-safe.
-  vmkitResourceTestPy = pkgs.writeText "ix-mcp-vmkit-resource-test.py" ''
-    # python
-    import asyncio
-    import os
-    import time
-    import types
-
-    import vmkit
-    from ix_notebook_mcp import runtime
-
-    d = vmkit.Driver(bundle="/tmp/guest.bundle")
-    assert d.is_alive is False
-    assert d.id and len(d.id) == 8
-    assert d.title == "vm · guest.bundle", repr(d.title)
-    # No frame yet, not booted: a placeholder, and no capture is attempted.
-    assert "booting" in d.resource_html() and "<img" not in d.resource_html()
-
-    # Pretend the guest is booted (poll() is None == running) and has a frame.
-    d._proc = types.SimpleNamespace(poll=lambda: None)
-    assert d.is_alive is True
-    d._frame_png = b"\x89PNG\r\n\x1a\nFRAME"
-    d._frame_at = time.time()
-    html = d.resource_html()
-    assert 'img src="data:image/png;base64,' in html, html[:120]
-
-    vmkit.Driver._live[d.id] = d
-    assert d in vmkit.Driver.list_all()
-
-    # The runtime provider discovers it, keyed vm:<id>, kind "vm", and renders.
-    runtime.resources.clear()
-    runtime._discover_vmkit_resources()
-    rid = "vm:" + d.id
-    assert rid in runtime.resources, list(runtime.resources)
-    res = runtime.resources[rid]
-    assert res.kind == "vm" and res.alive() is True
-    assert "<img" in asyncio.run(res.render_html())
-    # Idempotent: a second sweep does not duplicate the resource.
-    runtime._discover_vmkit_resources()
-    assert sum(1 for k in runtime.resources if k == rid) == 1
-    # The bounded grab read never holds the lockstep pipe forever, and a
-    # timed-out ack is drained before the next command (no desync). Fake pipe:
-    # stdin is a sink, stdout is a real os.pipe we feed.
-    dd = vmkit.Driver(bundle="/tmp/g")
-    rfd, wfd = os.pipe()
-    rfile = os.fdopen(rfd, "r")
-    wfile = os.fdopen(wfd, "w", buffering=1)
-
-    class _Sink:
-        def write(self, s):
-            pass
-
-        def flush(self):
-            pass
-
-    dd._proc = types.SimpleNamespace(
-        poll=lambda: None, returncode=None, stdin=_Sink(), stdout=rfile
-    )
-    # Guest serial console can share stdout (Linux guest): non-ack lines are
-    # skipped, the real ok/err ack is returned.
-    wfile.write("[  OK  ] Reached target Initrd Root Device.\n")
-    wfile.write("Starting File System Check...\n")
-    wfile.write("\n")
-    wfile.write("ok size 1280 800\n")
-    assert dd._send_locked("size") == "ok size 1280 800"
-    wfile.write("[  OK  ] Started Service.\n")
-    wfile.write("err size guest framebuffer not available yet\n")
-    try:
-        dd._send_locked("size")
-        raise AssertionError("err ack should raise")
-    except vmkit.VmkitError as exc:
-        assert "framebuffer not available" in str(exc), exc
-    try:
-        dd._send_locked("shot /tmp/x", ack_timeout=0.2)
-        raise AssertionError("bounded read should have timed out")
-    except vmkit.VmkitError as exc:
-        assert "timed out" in str(exc), exc
-    assert dd._pending_acks == 1
-    wfile.write("ok\n")    # the late ack for the timed-out shot
-    wfile.write("done\n")  # the next command's own ack
-    wfile.flush()
-    assert dd._send_locked("size") == "done"  # drained "ok", read its own ack
-    assert dd._pending_acks == 0
-
-    print("vmkit-resource-ok")
-  '';
-  vmkitResourceSmoke =
-    pkgs.runCommand "ix-mcp-vmkit-resource-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${vmkitResourceTestPy} >stdout 2>stderr || {
-        echo "ix-mcp vmkit resource smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'vmkit-resource-ok' stdout || {
-        echo "ix-mcp vmkit resource smoke did not confirm the resource path:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The imessage module: read the Messages/Contacts SQLite databases into polars
-  # and (without sending) validate the AppleScript send path. Hermetic -- it
-  # builds tiny fixture databases with the real schema subset and round-trips an
-  # archived NSAttributedString through Foundation, so the sandbox runs it.
-  imessageTestPy = pkgs.writeText "ix-mcp-imessage-test.py" ''
-    # python
-
-    import os
-    import sqlite3
-    import tempfile
-    from datetime import datetime, timezone
-
-    import polars as pl
-
-    import imessage
-
-    assert imessage.CHAT_DB.endswith("Library/Messages/chat.db"), imessage.CHAT_DB
-
-    # attributedBody round-trip: archive an NSAttributedString the way macOS does,
-    # then assert our NSUnarchiver-based decoder recovers the exact text (incl.
-    # non-ASCII), and that junk/None decode to None rather than raising.
-    import Foundation
-
-    s = Foundation.NSAttributedString.alloc().initWithString_("héllo 👋 world")
-    blob = bytes(Foundation.NSArchiver.archivedDataWithRootObject_(s))
-    assert imessage._decode_attributed_body(blob) == "héllo 👋 world"
-    assert imessage._decode_attributed_body(b"not an archive") is None
-    assert imessage._decode_attributed_body(None) is None
-
-    # normalization lines up handles with address-book entries.
-    assert imessage._norm("+1 (202) 555-0123") == imessage._norm("2025550123")
-    assert imessage._norm("Me@Example.COM ") == "me@example.com"
-
-    # reply/tapback reference parsing: strip the "p:<part>/" or "bp:" prefix to the
-    # bare GUID, and decode associated_message_type into a tapback label.
-    assert imessage._bare_guid("p:0/ABC") == "ABC"
-    assert imessage._bare_guid("bp:XYZ") == "XYZ"
-    assert imessage._bare_guid("ABC") == "ABC"
-    assert imessage._bare_guid(None) is None
-    assert imessage._tapback(2000) == "loved"
-    assert imessage._tapback(2005) == "questioned"
-    assert imessage._tapback(3003) == "removed-laughed"
-    # base outside 2xxx/3xxx is not a tapback even when the low digit collides
-    # with a reaction offset (1000 is an inline association, not a "loved").
-    assert imessage._tapback(1000) is None
-    assert imessage._tapback(2) is None
-    assert imessage._tapback(0) is None
-    assert imessage._tapback(None) is None
-
-    work = tempfile.mkdtemp()
-    chat = os.path.join(work, "chat.db")
-    con = sqlite3.connect(chat)
-    con.executescript(
-        """
-        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
-        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT, chat_identifier TEXT, service_name TEXT);
-        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, text TEXT, attributedBody BLOB, is_from_me INTEGER, is_read INTEGER, service TEXT, handle_id INTEGER, thread_originator_guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER DEFAULT 0, date_edited INTEGER DEFAULT 0, date_retracted INTEGER DEFAULT 0);
-        CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
-        CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
-        """
-    )
-    apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
-
-    def ns(dt):
-        return int((dt - apple_epoch).total_seconds() * 1000000000)
-
-    t1 = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
-    t2 = datetime(2024, 1, 2, 3, 5, 5, tzinfo=timezone.utc)
-    con.execute("INSERT INTO handle VALUES (1, '+12025550123')")
-    con.execute("INSERT INTO chat VALUES (1, NULL, '+12025550123', 'iMessage')")
-    con.execute("INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id) VALUES (1, 'm1', ?, 'plain text', NULL, 1, 1, 'iMessage', 1)", (ns(t1),))
-    con.execute("INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id) VALUES (2, 'm2', ?, NULL, ?, 0, 0, 'iMessage', 1)", (ns(t2), blob))
-    con.execute("INSERT INTO chat_message_join VALUES (1, 1), (1, 2)")
-    con.execute("INSERT INTO message_attachment_join VALUES (2, 99)")
-    con.commit()
-    con.close()
-
-    # resolve_names defaults True; with no address book under $HOME it must degrade
-    # to name=None rather than fail.
-    df = imessage.messages(db=chat, limit=10)
-    assert df.height == 2, df
-    assert df.schema["date"] == pl.Datetime("ns", "UTC"), df.schema
-    # newest first; attributedBody is decoded into `text`.
-    assert df["rowid"].to_list() == [2, 1], df
-    assert df["text"].to_list() == ["héllo 👋 world", "plain text"], df["text"].to_list()
-    assert df["is_from_me"].to_list() == [False, True], df
-    assert df["name"].to_list() == [None, None], df
-    # the relational columns default cleanly when a message is none of these.
-    assert df["reply_to_guid"].to_list() == [None, None], df
-    assert df["reply_to_rowid"].to_list() == [None, None], df
-    assert df["tapback"].to_list() == [None, None], df
-    assert df["edited"].to_list() == [False, False], df
-    assert df["unsent"].to_list() == [False, False], df
-
-    row2 = df.filter(pl.col("rowid") == 2)
-    assert row2["date"][0] == t2, (row2["date"][0], t2)
-    assert row2["n_attachments"][0] == 1, row2
-
-    # filters: from_me, contact (by handle, normalized), since, and a no-match.
-    assert imessage.messages(db=chat, from_me=True).height == 1
-    assert imessage.messages(db=chat, contact="(202) 555-0123").height == 2
-    assert imessage.messages(db=chat, contact="+19999999999").height == 0
-    since = imessage.messages(db=chat, since=t2)
-    assert since.height == 1 and since["rowid"][0] == 2, since
-    # a no-match still returns the full, typed (datetime) schema.
-    assert imessage.messages(db=chat, contact="+19999999999").schema["date"] == pl.Datetime("ns", "UTC")
-
-    chats = imessage.chats(db=chat)
-    assert chats.height == 1 and chats["n_messages"][0] == 2, chats
-    assert chats["chat_identifier"][0] == "+12025550123", chats
-    assert chats.schema["last_date"] == pl.Datetime("ns", "UTC"), chats.schema
-
-    # Reads must see un-checkpointed WAL rows: chat.db runs in WAL mode and a
-    # message you just sent sits in the -wal until a checkpoint. A writer keeps a
-    # WAL connection open (no checkpoint) after inserting; messages() must still
-    # see the new row -- it would not under immutable=1. Guards send-then-read-back.
-    writer = sqlite3.connect(chat)
-    writer.execute("PRAGMA journal_mode=WAL")
-    writer.execute(
-        "INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id) VALUES (3, 'm3', ?, 'in the wal', NULL, 1, 1, 'iMessage', 1)",
-        (ns(datetime(2024, 1, 2, 3, 6, 5, tzinfo=timezone.utc)),),
-    )
-    writer.execute("INSERT INTO chat_message_join VALUES (1, 3)")
-    writer.commit()
-    assert "in the wal" in imessage.messages(db=chat)["text"].to_list(), "WAL rows must be visible"
-    writer.close()
-
-    # reply threading, tapbacks, edits, and unsends: insert one of each and assert
-    # messages() resolves a threaded reply to its originator and decodes the rest.
-    con = sqlite3.connect(chat)
-    cols2 = "(ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id, thread_originator_guid, associated_message_guid, associated_message_type, date_edited, date_retracted)"
-    t3 = datetime(2024, 1, 2, 4, 0, 0, tzinfo=timezone.utc)
-    # a threaded reply to message 1 ("plain text"); the originator ref carries a
-    # "p:0/" part prefix that must be stripped back to the bare guid "m1".
-    con.execute("INSERT INTO message " + cols2 + " VALUES (10, 'm10', ?, 'a reply', NULL, 0, 1, 'iMessage', 1, 'p:0/m1', NULL, 0, 0, 0)", (ns(t3),))
-    # a Loved tapback on message 2, and a removed-liked on message 1.
-    con.execute("INSERT INTO message " + cols2 + " VALUES (11, 'm11', ?, 'Loved a message', NULL, 1, 1, 'iMessage', 1, NULL, 'p:0/m2', 2000, 0, 0)", (ns(t3),))
-    con.execute("INSERT INTO message " + cols2 + " VALUES (12, 'm12', ?, 'Removed a like', NULL, 1, 1, 'iMessage', 1, NULL, 'p:0/m1', 3001, 0, 0)", (ns(t3),))
-    # an edited message and an unsent (retracted) message.
-    con.execute("INSERT INTO message " + cols2 + " VALUES (13, 'm13', ?, 'fixed typo', NULL, 1, 1, 'iMessage', 1, NULL, NULL, 0, ?, 0)", (ns(t3), ns(t3)))
-    con.execute("INSERT INTO message " + cols2 + " VALUES (14, 'm14', ?, 'oops', NULL, 1, 1, 'iMessage', 1, NULL, NULL, 0, 0, ?)", (ns(t3), ns(t3)))
-    # associated_message_type 1000 is a non-tapback association: it must not be
-    # mislabeled "loved" just because its low digit is the loved offset.
-    con.execute("INSERT INTO message " + cols2 + " VALUES (15, 'm15', ?, 'inline assoc', NULL, 1, 1, 'iMessage', 1, NULL, 'p:0/m1', 1000, 0, 0)", (ns(t3),))
-    con.execute("INSERT INTO chat_message_join VALUES (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15)")
-    con.commit()
-    con.close()
-
-    thr = imessage.messages(db=chat, limit=50)
-    reply = thr.filter(pl.col("rowid") == 10).row(0, named=True)
-    assert reply["reply_to_guid"] == "m1", reply
-    assert reply["reply_to_rowid"] == 1, reply
-    assert reply["reply_to_text"] == "plain text", reply
-    love = thr.filter(pl.col("rowid") == 11).row(0, named=True)
-    assert love["tapback"] == "loved" and love["tapback_target_guid"] == "m2", love
-    removed = thr.filter(pl.col("rowid") == 12).row(0, named=True)
-    assert removed["tapback"] == "removed-liked" and removed["tapback_target_guid"] == "m1", removed
-    assert thr.filter(pl.col("rowid") == 13)["edited"][0] is True
-    assert thr.filter(pl.col("rowid") == 14)["unsent"][0] is True
-    assert thr.filter(pl.col("rowid") == 15)["tapback"][0] is None, thr.filter(pl.col("rowid") == 15)
-    # a plain message carries none of this metadata.
-    plain = thr.filter(pl.col("rowid") == 1).row(0, named=True)
-    assert plain["reply_to_guid"] is None and plain["tapback"] is None, plain
-    assert plain["edited"] is False and plain["unsent"] is False, plain
-
-    # legacy chat.db compatibility: a pre-macOS-13 schema has no
-    # thread_originator_guid / date_edited / date_retracted columns. messages()
-    # must select those only when present and degrade to empty fields, not raise.
-    legacy = os.path.join(work, "legacy.db")
-    con = sqlite3.connect(legacy)
-    con.executescript(
-        """
-        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
-        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT, chat_identifier TEXT, service_name TEXT);
-        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, text TEXT, attributedBody BLOB, is_from_me INTEGER, is_read INTEGER, service TEXT, handle_id INTEGER);
-        CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
-        CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
-        """
-    )
-    con.execute("INSERT INTO handle VALUES (1, '+12025550123')")
-    con.execute("INSERT INTO message (ROWID, guid, date, text, is_from_me, is_read, service, handle_id) VALUES (1, 'g1', ?, 'legacy', 1, 1, 'iMessage', 1)", (ns(t1),))
-    con.execute("INSERT INTO chat_message_join VALUES (1, 1)")
-    con.commit()
-    con.close()
-    leg = imessage.messages(db=legacy, limit=5)
-    assert leg.height == 1 and leg["text"][0] == "legacy", leg
-    assert leg["reply_to_guid"][0] is None and leg["tapback"][0] is None, leg
-    assert leg["edited"][0] is False and leg["unsent"][0] is False, leg
-
-    # contacts: phones/emails aggregate into list columns under one display name.
-    ab = os.path.join(work, "ab.abcddb")
-    con = sqlite3.connect(ab)
-    con.executescript(
-        """
-        CREATE TABLE ZABCDRECORD (Z_PK INTEGER PRIMARY KEY, ZFIRSTNAME TEXT, ZLASTNAME TEXT, ZORGANIZATION TEXT, ZNICKNAME TEXT);
-        CREATE TABLE ZABCDPHONENUMBER (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZFULLNUMBER TEXT);
-        CREATE TABLE ZABCDEMAILADDRESS (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZADDRESS TEXT);
-        """
-    )
-    con.execute("INSERT INTO ZABCDRECORD VALUES (1, 'Ada', 'Lovelace', NULL, NULL)")
-    con.execute("INSERT INTO ZABCDPHONENUMBER VALUES (1, 1, '+1 (202) 555-0123')")
-    con.execute("INSERT INTO ZABCDPHONENUMBER VALUES (2, 1, '+12025550124')")
-    con.execute("INSERT INTO ZABCDEMAILADDRESS VALUES (1, 1, 'ada@x.com')")
-    con.commit()
-    con.close()
-    co = imessage.contacts(db=ab)
-    assert co.height == 1, co
-    rec = co.row(0, named=True)
-    assert rec["name"] == "Ada Lovelace", rec
-    assert set(rec["phones"]) == {"+1 (202) 555-0123", "+12025550124"}, rec
-    assert rec["emails"] == ["ada@x.com"], rec
-
-    # send: rejects an unknown service and never sends here; the script carries the
-    # service token and takes recipient/body as run-arguments (no injection).
-    try:
-        imessage.send("+12025550123", "nope", service="bogus")
-    except ValueError:
-        pass
-    else:
-        raise SystemExit("send must reject an unknown service")
-    assert "service type = iMessage" in imessage._SEND_SCRIPT.format(service="iMessage")
-
-    print("imessage-ok")
-  '';
-  imessageSmoke =
-    pkgs.runCommand "ix-mcp-imessage-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${imessageTestPy} >stdout 2>stderr || {
-        echo "ix-mcp imessage smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'imessage-ok' stdout || {
-        echo "ix-mcp imessage smoke did not confirm the imessage module:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The maps module: pure-helper checks that need no network or location
-  # permission (the nix sandbox has neither). Exercises the radius->region span
-  # math (incl. the latitude cosine correction) and the polars schema shapes, and
-  # confirms the public coroutines and MapKit binding are present.
-  mapsTestPy = pkgs.writeText "ix-mcp-maps-test.py" ''
-    # python
-    import inspect
-    import math
-
-    import polars as pl
-
-    import maps
-    import MapKit
-
-    # Public coroutine surface is callable and async.
-    for name in ("nearby", "geocode", "reverse_geocode"):
-        fn = getattr(maps, name)
-        assert inspect.iscoroutinefunction(fn), name
-
-    # MapKit binding loads (the place-search class is present).
-    assert callable(MapKit.MKLocalSearch.alloc), "MKLocalSearch missing"
-
-    # region(): span is the full width/height, so twice the radius in degrees;
-    # latitude degrees are constant, longitude degrees shrink with cos(latitude).
-    (clat, clng), (lat_delta, lng_delta) = maps._region(0.0, 0.0, 1000.0)
-    assert (clat, clng) == (0.0, 0.0)
-    assert math.isclose(lat_delta, 2000.0 / 111320.0, rel_tol=1e-9), lat_delta
-    assert math.isclose(lng_delta, lat_delta, rel_tol=1e-9), (lat_delta, lng_delta)
-    # At 60 deg latitude cos=0.5, so longitude span is ~2x the latitude span.
-    (_c2, (lat60, lng60)) = maps._region(60.0, 0.0, 1000.0)
-    assert math.isclose(lng60 / lat60, 2.0, rel_tol=1e-6), (lat60, lng60)
-
-    # Schemas: nearby is the placemark schema plus the POI columns.
-    placemark = set(maps._placemark_schema(pl))
-    nearby = set(maps._nearby_schema(pl))
-    assert {"name", "latitude", "longitude", "country"} <= placemark, placemark
-    assert nearby - placemark == {"category", "phone"}, nearby - placemark
-
-    print("maps-ok")
-  '';
-  mapsSmoke =
-    pkgs.runCommand "ix-mcp-maps-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      ${lib.getExe mcpPython} ${mapsTestPy} >stdout 2>stderr || {
-        echo "ix-mcp maps smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'maps-ok' stdout || {
-        echo "ix-mcp maps smoke did not confirm the maps module:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The ghostty module: pure-logic checks that need no Ghostty, osascript, or
-  # display (the nix sandbox has none). Exercises the AppleScript-escape guard
-  # (the injection fix), the ps-ancestry parse/walk, and the surfaces readout
-  # split, and confirms the public coroutine surface.
-  ghosttyTestPy = pkgs.writeText "ix-mcp-ghostty-test.py" ''
-    # python
-    import inspect
-
-    import ghostty
-
-    # Public surface is callable and async.
-    for name in (
-        "surfaces", "my_tty", "my_surface", "close", "close_me",
-        "focus", "activate", "is_running",
-    ):
-        assert inspect.iscoroutinefunction(getattr(ghostty, name)), name
-
-    # _escape_applescript neutralises a quote-injection payload, rejects newlines.
-    assert ghostty._escape_applescript('a"b') == 'a\\"b'
-    assert ghostty._escape_applescript("c\\d") == "c\\\\d"
-    try:
-        ghostty._escape_applescript("a\nb")
-    except ghostty.GhosttyError:
-        pass
-    else:
-        raise SystemExit("escape did not reject a newline")
-
-    # _selector escapes the value: no raw quote reaches the whose-clause, so the
-    # `" or true or "` predicate-injection cannot match every surface.
-    sel = ghostty._selector(tty=None, id='" or true or "')
-    assert sel.count('\\"') == 2, sel
-    assert ghostty._selector(tty="/dev/ttys001", id=None) == (
-        '(first terminal whose tty is "/dev/ttys001")'
-    )
-    # Fails closed unless exactly one selector is given (both set or both unset).
-    for bad in ({}, {"tty": "/dev/ttys001", "id": "X"}):
-        try:
-            ghostty._selector(tty=bad.get("tty"), id=bad.get("id"))
-        except ghostty.GhosttyError:
-            pass
-        else:
-            raise SystemExit(f"_selector accepted ambiguous args: {bad}")
-
-    # _parse_ps + _walk_to_tty resolve the controlling tty from a synthetic table.
-    tree = ghostty._parse_ps("100 1 ??\n200 100 ttys003\n300 200 ??\n")
-    assert tree[200] == (100, "ttys003"), tree
-    assert ghostty._walk_to_tty(tree, 300) == "/dev/ttys003"
-    assert ghostty._walk_to_tty(tree, 100) is None
-
-    # _parse_surfaces splits the RS/FS readout and coerces pid to int.
-    raw = "ID1\x1f/dev/ttys001\x1f42\x1f/tmp\x1fTitle\x1e"
-    assert ghostty._parse_surfaces(raw) == [
-        {"id": "ID1", "tty": "/dev/ttys001", "pid": 42,
-         "working_directory": "/tmp", "name": "Title"}
-    ]
-    assert set(ghostty._surface_schema()) == set(ghostty._FIELDS)
-
-    print("ghostty-ok")
-  '';
-  ghosttySmoke =
-    pkgs.runCommand "ix-mcp-ghostty-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      ${lib.getExe mcpPython} ${ghosttyTestPy} >stdout 2>stderr || {
-        echo "ix-mcp ghostty smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'ghostty-ok' stdout || {
-        echo "ix-mcp ghostty smoke did not confirm the ghostty module:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The view module: tabular helpers return plain polars DataFrames (so they stay
-  # composable), the file helpers return a Code view whose repr is the raw text,
-  # and df_html renders the styled table the kernel installs globally. Pure local
-  # FS over the bundled view/polars/pygments, so the sandbox runs it.
-  viewTestPy = pkgs.writeText "ix-mcp-view-test.py" ''
-    # python
-    import polars as pl
-
-    import view
-
-    base = "${./.}"
-
-    lsdf = view.ls(base)
-    assert isinstance(lsdf, pl.DataFrame) and "kind" in lsdf.columns, lsdf.columns
-    # ls flags git-ignored entries in an `ignored` Boolean column rather than
-    # dropping them; outside a git work tree (this store path) nothing is ignored.
-    assert lsdf.schema["ignored"] == pl.Boolean, lsdf.schema
-    assert not lsdf["ignored"].any(), lsdf
-    # A DataFrame stays a DataFrame through polars ops (composable).
-    assert isinstance(lsdf.filter(pl.col("kind") == "dir"), pl.DataFrame)
-    # Content/file search is no longer in `view`: it lives in the top-level
-    # `grep`/`find` builtins (rg/fd-backed), exercised by the fsearch check.
-
-    tr = view.tree(base, depth=1)
-    assert isinstance(tr, pl.DataFrame) and "depth" in tr.columns
-
-    out = view.df_html(lsdf)
-    assert "<table" in out and "rows" in out and "tabular-nums" in out, out[:120]
-    # The modern grid ships a client-side filter box, a sortable (clickable,
-    # aria-sort) sticky header, and dtype-classed cells -- inline JS/CSS, no CDN.
-    assert 'input class="q"' in out and "aria-sort" in out and "sticky" in out, out[:200]
-    # Coloring lives in the ONE shared stylesheet keyed by dtype class, not a
-    # per-cell style= attribute -- that keeps a wide frame's body small enough
-    # for the dashboard's Loro pane diff. A 40x40 int frame must stay well under
-    # the ~200KB range that wedged the aggregator, and far below the old build
-    # (which repeated a full inline style on every cell).
-    wide = pl.DataFrame({f"c{j}": range(40) for j in range(40)})
-    wout = view.df_html(wide)
-    assert 'style="color:' not in wout, "cells must be class-styled, not inline"
-    assert len(wout) < 130000, len(wout)
-
-    # Nested List(Struct)/Struct cells render as boxed sub-tables, not a
-    # truncated str(value): the inner field values must reach the HTML.
-    nested = pl.DataFrame({"host": ["h1"]}).with_columns(
-        mounts=pl.lit([{"mount": "/data", "pct": 91}], dtype=pl.List(pl.Struct({"mount": pl.String, "pct": pl.Int64})))
-    )
-    nout = view.df_html(nested)
-    assert "/data" in nout and ">91<" in nout, nout[:200]
-    # A nested cell is a real sub-table (outer + inner), not a truncated repr.
-    assert nout.count("<table") >= 2 and "[{" not in nout, nout[:200]
-
-    # A struct field name is attacker-controllable (any frame built from
-    # untrusted data); it must be HTML-escaped both in the column-header dtype
-    # string and in the nested sub-table, never injected as live markup.
-    evil = pl.DataFrame({"x": [1]}).with_columns(
-        rec=pl.lit({"<img src=x>": 1}, dtype=pl.Struct({"<img src=x>": pl.Int64}))
-    )
-    eout = view.df_html(evil)
-    # The `not in` clause is the S1 regression guard: it fails on the unfixed
-    # header that interpolated the dtype string raw.
-    assert "<img src=x>" not in eout and "&lt;img src=x&gt;" in eout, eout[:300]
-
-    c = view.cat(base + "/default.nix", lines=(1, 3))
-    assert isinstance(c, view.Code)
-    assert repr(c).count("\n") <= 3
-    assert "span" in c._repr_html_().lower()
-
-    j = view.json({"a": [1, 2], "b": None})
-    assert '"a"' in repr(j) and "span" in j._repr_html_().lower()
-
-    d = view.diff("x\ny\n", "x\nz\n")
-    assert "-y" in repr(d) and "+z" in repr(d)
-
-    # edit() applies a replacement and returns it as a highlighted diff.
-    import pathlib as _pl_path
-    import tempfile as _tmp
-    ep = _pl_path.Path(_tmp.mkdtemp()) / "f.txt"
-    ep.write_text("alpha\nbeta\n")
-    ed = view.edit(ep, "beta", "gamma")
-    assert isinstance(ed, view.Code) and "-beta" in repr(ed) and "+gamma" in repr(ed), repr(ed)
-    assert ep.read_text() == "alpha\ngamma\n", ep.read_text()
-    try:
-        view.edit(ep, "missing-zzz", "q")
-    except ValueError:
-        pass
-    else:
-        raise SystemExit("edit should raise on a missing pattern")
-    prev = view.edit(ep, "gamma", "delta", dry_run=True)
-    assert "+delta" in repr(prev) and ep.read_text() == "alpha\ngamma\n", "dry_run must not write"
-
-    print("view-ok")
-  '';
-  viewSmoke =
-    pkgs.runCommand "ix-mcp-view-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${viewTestPy} >stdout 2>stderr || {
-        echo "ix-mcp view smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'view-ok' stdout || {
-        echo "ix-mcp view smoke did not confirm the view module:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The sh module: runs a real subprocess on the loop and proves the human/model
-  # split. The command emits ANSI color; the dashboard view (_repr_html_ /
-  # user_html) must carry that color as HTML while the model view (repr /
-  # llm_result) is escape-stripped. Also guards the Result contract (an Output is
-  # a Result, so a cell can end with it), exit-code capture, and check=True.
-  # Pure local subprocess over the bundled ansi2html, so the sandbox runs it.
-  shTestPy = pkgs.writeText "ix-mcp-sh-test.py" ''
-    # python
-    import asyncio
-
-    import sh
-    from ix_notebook_mcp.runtime import Result
-
-
-    async def main():
-        # A command that emits an SGR color escape around its output.
-        colored = await sh._exec(r"printf '\033[31mred\033[0m\n'", cwd=".")
-        assert colored.ok and colored.code == 0, colored.code
-        # Model view: no escape bytes, the word survives.
-        assert "\x1b" not in colored.text and "red" in colored.text, repr(colored.text)
-        assert "\x1b" not in colored.llm_result, repr(colored.llm_result)
-        # Human view: color rendered to HTML (a styled span), no raw escapes.
-        html = colored._repr_html_()
-        assert "\x1b" not in html and "span" in html.lower(), html[:200]
-        assert "color" in html.lower(), html[:200]
-        # An Output IS a Result, so ending a cell with it satisfies the contract.
-        assert isinstance(colored, Result), type(colored)
-        # The ANSI helpers are the runtime's single implementation, imported
-        # here rather than duplicated in the sh module.
-        from ix_notebook_mcp import runtime as _rt
-
-        assert sh._strip_ansi is _rt._strip_ansi and sh._ansi_to_html is _rt._ansi_to_html
-
-        # argv form, and a non-zero exit is surfaced (not swallowed): typed
-        # (.code with the .exit_code/.returncode aliases), falsy, and loud at
-        # BOTH ends of the model view so a head-read of a long log sees the
-        # failure as surely as a tail-read (issue #1766).
-        failed = await sh._exec(["false"], cwd=".")
-        assert not failed.ok and failed.code == 1, failed.code
-        assert failed.exit_code == 1 and failed.returncode == 1, failed.exit_code
-        assert bool(failed) is False, "a failed Output must be falsy"
-        assert "[exit 1]" in failed.llm_result, failed.llm_result
-        assert failed.llm_result.splitlines()[0].startswith("[exit 1]"), failed.llm_result
-        # ...and even an output-less failure both leads and TRAILS with the
-        # marker, so a tail-read never lands on command text.
-        assert failed.llm_result.rstrip().endswith("\n[exit 1]"), failed.llm_result
-        noisy = await sh._exec("echo diagnostic-text; exit 3", cwd=".")
-        first, *rest = noisy.llm_result.splitlines()
-        assert first.startswith("[exit 3]") and "exit 3" in first, noisy.llm_result
-        assert noisy.llm_result.rstrip().endswith("[exit 3]"), noisy.llm_result
-        # ...while .text stays the command's own output, marker-free, so
-        # reading diagnostics off a failure is unchanged.
-        assert noisy.text.strip() == "diagnostic-text", repr(noisy.text)
-        assert "diagnostic-text" in "\n".join(rest), noisy.llm_result
-
-        # Rendered command text is secret-redacted (#1769 post-merge P1): a
-        # failing command whose STRING carries a credential shape must not leak
-        # it into the model view, the ShellError message, or the dashboard
-        # HTML; the raw command stays on .cmd. Fixture token is repeated
-        # filler, not a real credential.
-        tok = "tok9" * 10
-        leak = await sh._exec(f"false Bearer {tok}", cwd=".")
-        assert not leak.ok, leak.code
-        assert tok not in leak.llm_result, leak.llm_result
-        assert "[redacted:bearer_token]" in leak.llm_result.splitlines()[0], leak.llm_result
-        assert leak.llm_result.splitlines()[0].split(": ", 1)[1].startswith("false"), (
-            leak.llm_result)  # argv[0] survives redaction: still identifiable
-        assert tok not in leak._repr_html_() and "[redacted:" in leak._repr_html_()
-        assert tok in leak.cmd  # programmatic surface stays raw
-        try:
-            await sh._exec(f"false token={tok}", check=True, cwd=".")
-        except sh.ShellError as exc:
-            assert tok not in str(exc), str(exc)
-            assert "token=[redacted:credential]" in str(exc), str(exc)
-        else:
-            raise SystemExit("expected ShellError from check=True")
-        # A multi-line command collapses to ONE failure line (tail-reads land
-        # on markers, not command fragments).
-        multi = await sh._exec("false a \\\n  b", cwd=".")
-        assert multi.llm_result.splitlines()[0].startswith("[exit 1]"), multi.llm_result
-        assert multi.llm_result.rstrip().endswith("[exit 1]"), multi.llm_result
-
-        # The expected-nonzero class (grep exiting 1 on no match) stays
-        # workable: branch on .ok/.code and read .text, nothing raises.
-        nomatch = await sh._exec("grep zzz-no-such /dev/null", cwd=".")
-        assert not nomatch.ok and nomatch.code == 1, nomatch.code
-        assert "[exit" not in nomatch.text, repr(nomatch.text)
-        # grep also carries a structured-owner hint; it rides INSIDE the
-        # failure markers, so the model text still ends with [exit N].
-        assert "[hint:" in nomatch.llm_result, nomatch.llm_result
-        assert nomatch.llm_result.rstrip().endswith("[exit 1]"), nomatch.llm_result
-
-        # check=True turns a non-zero exit into a typed error carrying the output.
-        try:
-            await sh._exec("exit 3", check=True, cwd=".")
-        except sh.ShellError as exc:
-            assert exc.output.code == 3, exc.output.code
-        else:
-            raise SystemExit("expected ShellError on a non-zero exit with check=True")
-
-        # An OSC-8 hyperlink (what gh/eza emit under FORCE_COLOR) is a non-CSI
-        # escape: the stripper must remove its \x1b bytes too, not just SGR color.
-        osc = await sh._exec(r"printf '\033]8;;https://x\033\\link\033]8;;\033\\\n'", cwd=".")
-        assert "\x1b" not in osc.text and "link" in osc.text, repr(osc.text)
-        assert "\x1b" not in osc.llm_result, repr(osc.llm_result)
-
-        # A timeout must terminate the command's whole group and return promptly,
-        # even when the command backgrounds a child that holds the stdout pipe
-        # (the case where a naive kill + reap hangs forever).
-        loop = asyncio.get_running_loop()
-        start = loop.time()
-        try:
-            await sh._exec("sleep 30 & echo started; wait", timeout=0.5, cwd=".")
-        except TimeoutError:
-            pass
-        else:
-            raise SystemExit("expected TimeoutError from a command that outlives its timeout")
-        elapsed = loop.time() - start
-        assert elapsed < 10, f"timeout did not return promptly: {elapsed:.1f}s"
-
-        # The PUBLIC entry points are retired: `sh()`, `sh.sh()`, `sh.zsh()`,
-        # and calling the module all raise a migration hint pointing at
-        # `await nu(...)`, so a stale transcript fails loudly rather than
-        # shelling out. The private `_exec` (exercised above) is what remains.
-        for call in (lambda: sh("printf hi"), lambda: sh.sh("printf hi"), lambda: sh.zsh("print hi")):
-            try:
-                await call()
-            except RuntimeError as exc:
-                assert "await nu" in str(exc), exc
-            else:
-                raise SystemExit("expected a disabled sh()/zsh() to raise a migration hint")
-
-        # A direct runner handle for the composition/streaming checks below.
-        direct = await sh._exec("printf hi", cwd=".")
-        assert direct.ok and direct.text == "hi", repr(direct.text)
-
-        # cwd defaults to the current directory: no required-kwarg TypeError.
-        import os
-        here = await sh._exec("pwd")
-        assert here.ok and here.text.strip() == os.path.realpath(os.getcwd()), (
-            here.text, os.getcwd())
-
-        # An Output composes like its text: slice, concat, contains, len, str.
-        assert direct[-1:] == "i" and direct[0] == "h", (direct[-1:], direct[0])
-        assert direct + "!" == "hi!" and "say " + direct == "say hi"
-        assert "hi" in direct and len(direct) == 2 and str(direct) == "hi"
-        # Truthiness is success: empty-but-successful stays truthy (test
-        # emptiness with len), and a failed Output is falsy (asserted above).
-        assert bool(await sh._exec("true")) is True
-
-        # Output streams to sys.stdout as it arrives (echo=True forces it outside
-        # a kernel job), escape-stripped -- so a long command's log lands in the
-        # job's pageable stdout even if the cell backgrounds before binding it.
-        import contextlib
-        import io
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            echoed = await sh._exec(r"printf '\033[31mstreamed\033[0m\n'", echo=True)
-        assert "streamed" in buf.getvalue() and "\x1b" not in buf.getvalue(), repr(buf.getvalue())
-        assert "streamed" in echoed.text, repr(echoed.text)
-        # And echo stays off by default outside a kernel job.
-        quiet = io.StringIO()
-        with contextlib.redirect_stdout(quiet):
-            await sh._exec("printf silent")
-        assert quiet.getvalue() == "", repr(quiet.getvalue())
-        # A failing command's stream also carries the failure line, so a watcher
-        # paging a backgrounded job's stdout (jobs['<id>'].tail()) sees the
-        # terminal state even if the Output is never bound (issue #1766).
-        fbuf = io.StringIO()
-        with contextlib.redirect_stdout(fbuf):
-            await sh._exec("echo dying; exit 5", echo=True)
-        assert "dying" in fbuf.getvalue(), repr(fbuf.getvalue())
-        assert "[exit 5]" in fbuf.getvalue(), repr(fbuf.getvalue())
-
-        # Cancelling the awaiting task kills the child's whole process group:
-        # no orphan keeps running (or holding a lock) after a .cancel().
-        import signal
-        import tempfile
-        pidfile = tempfile.mktemp()
-        task = asyncio.ensure_future(sh._exec(f"echo $$ > {pidfile}; sleep 30", cwd="."))
-        for _ in range(100):
-            await asyncio.sleep(0.05)
-            try:
-                pid = int(open(pidfile).read().strip())
-                break
-            except (FileNotFoundError, ValueError):
-                continue
-        else:
-            raise SystemExit("child never wrote its pidfile")
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        await asyncio.sleep(0.3)
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            pass  # the group is dead, as required
-        else:
-            os.kill(pid, signal.SIGKILL)
-            raise SystemExit(f"cancel orphaned the child (pid {pid} still alive)")
-
-        # Structured stdout decodes straight to Python (the polars on-ramp).
-        doc = await sh._exec("printf '%s' '{\"a\": 1, \"b\": [2, 3]}'", cwd=".")
-        assert doc.json() == {"a": 1, "b": [2, 3]}, doc.json()
-        rows = await sh._exec("printf '%s\\n%s\\n' '{\"n\": 1}' '{\"n\": 2}'", cwd=".")
-        assert rows.jsonl() == [{"n": 1}, {"n": 2}], rows.jsonl()
-        # A failed command raises ShellError from json(), never a decode error.
-        try:
-            (await sh._exec("echo nope; exit 4", cwd=".")).json()
-        except sh.ShellError as exc:
-            assert exc.output.code == 4, exc.output.code
-        else:
-            raise SystemExit("expected ShellError from json() on a non-zero exit")
-
-        print("sh-ok", sh.__version__)
-
-
-    asyncio.run(main())
-  '';
-  shSmoke =
-    pkgs.runCommand "ix-mcp-sh-smoke"
-    {
-      nativeBuildInputs = [
-        mcpPython
-        pkgs.zsh
-      ];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${shTestPy} >stdout 2>stderr || {
-        echo "ix-mcp sh smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -q '^sh-ok' stdout || {
-        echo "ix-mcp sh smoke did not confirm the sh module:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The fleet module: a mocked asyncssh connection drives the fan-out so the test
-  # never depends on a reachable host or a running sshd. It asserts the contract
-  # that matters: import works, the semaphore caps in-flight connections,
-  # tag_host adds the column, diagonal_relaxed merges mismatched schemas, and
-  # on_error="collect" survives a failing host (recording it in attrs). Pure
-  # Python over the bundled asyncssh + polars, so the sandbox runs it.
-  fleetTestPy = pkgs.writeText "ix-mcp-fleet-test.py" ''
-    # python
-    import asyncio
-    import sys
-
-    import polars as pl
-
-    import fleet
-
-    # --- Mock asyncssh so no network/sshd is needed. ---------------------------
-    inflight = {"now": 0, "max": 0}
-
-    class _Result:
-        def __init__(self, stdout):
-            self.stdout = stdout
-
-    class _Conn:
-        def __init__(self, host):
-            self.host = host
-
-        async def __aenter__(self):
-            inflight["now"] += 1
-            inflight["max"] = max(inflight["max"], inflight["now"])
-            await asyncio.sleep(0.02)  # hold the slot so overlap is observable
-            return self
-
-        async def __aexit__(self, *exc):
-            inflight["now"] -= 1
-            return False
-
-        async def run(self, command, encoding=None, check=True):
-            # One host is configured to fail, to exercise on_error="collect".
-            if self.host == "bad":
-                raise RuntimeError("boom")
-            # Two hosts return DIFFERENT schemas to exercise diagonal_relaxed:
-            # one emits {a}, the other {b}.
-            if self.host == "h1":
-                return _Result(b'{"a": 1}\n')
-            return _Result(b'{"b": 2}\n')
-
-    def _connect(**opts):
-        return _Conn(opts["host"])
-
-    fleet.asyncssh.connect = _connect
-
-    async def main():
-        hosts = ["h1", "h2", "bad"]
-        df = await fleet.scan(hosts, "noop", concurrency=2, on_error="collect")
-
-        # tag_host added the host column, first.
-        assert df.columns[0] == "host", df.columns
-        # diagonal_relaxed unioned the {a} and {b} schemas.
-        assert set(df.columns) == {"host", "a", "b"}, df.columns
-        # Two good hosts -> two rows; the bad host did not abort the batch.
-        assert df.height == 2, df.height
-        # The failing host is recorded, not raised.
-        fails = df.attrs["fleet_failures"]
-        assert list(fails) == ["bad:22"], fails
-        assert "boom" in fails["bad:22"], fails
-
-        # Semaphore actually capped concurrency at 2 even with 3 hosts.
-        assert inflight["max"] <= 2, inflight
-
-        # on_error="raise" aggregates failures into FleetError.
-        try:
-            await fleet.scan(["bad"], "noop", on_error="raise")
-        except fleet.FleetError as exc:
-            assert "bad:22" in exc.failures, exc.failures
-        else:
-            raise AssertionError("expected FleetError")
-
-        # read_text yields one row per line with host+line columns.
-        class _Text(_Conn):
-            async def run(self, command, encoding=None, check=True):
-                return _Result(b"line one\nline two\n")
-        fleet.asyncssh.connect = lambda **o: _Text(o["host"])
-        txt = await fleet.read_text(["h1"], "/var/log/x")
-        assert set(txt.columns) == {"host", "line"}, txt.columns
-        assert txt.height == 2, txt.height
-
-        # An all-empty fan-out returns an empty frame, never crashes.
-        class _Empty(_Conn):
-            async def run(self, command, encoding=None, check=True):
-                return _Result(b"")
-        fleet.asyncssh.connect = lambda **o: _Empty(o["host"])
-        empty = await fleet.scan(["x"], "noop")
-        assert isinstance(empty, pl.DataFrame) and empty.height == 0
-
-        print("fleet-ok", fleet.__version__)
-
-    asyncio.run(main())
-  '';
-  fleetSmoke =
-    pkgs.runCommand "ix-mcp-fleet-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${fleetTestPy} >stdout 2>stderr || {
-        echo "ix-mcp fleet smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -q '^fleet-ok' stdout || {
-        echo "ix-mcp fleet smoke did not confirm the fleet module:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The cluster surface (discovery merge, Ray submit return-shape, /api/exec
-  # auth) with the two discovery sources, the Ray remote, and the kernel all
-  # stubbed -- no live cluster or network. mcpPython carries both `fleet` and
-  # `ix_notebook_mcp`, so the script imports them with no PYTHONPATH.
-  fleetClusterSmoke =
-    pkgs.runCommand "ix-mcp-fleet-cluster-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${./tests/fleet_cluster_check.py} >stdout 2>stderr || {
-        echo "ix-mcp fleet cluster smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -q '^fleet-cluster-ok' stdout || {
-        echo "ix-mcp fleet cluster smoke did not confirm the cluster surface:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # macOS-only modules (`screen`, `vmkit`) are only bundled on Darwin; their
-  # import tests only exist there.
-  # The `nix` module: parse a captured internal-json stream (no subprocess, no
-  # network, so the sandbox runs it) and assert the durable event log, the folded
-  # build-DAG view, the live error capture, and the rendered tree. The fixture is
-  # a real-shaped slice of a `nix build` stream: an eval activity, a queryPathInfo
-  # with a child fileTransfer carrying progress, a build with a log line and a set
-  # phase, the matching stops, and a trailing error msg.
-  nixTestPy = pkgs.writeText "ix-mcp-nix-test.py" ''
-    # python
-    import polars as pl
-
-    import nix
-
-    stream = "\n".join(
-        [
-            '@nix {"action":"start","id":1,"level":4,"parent":0,"text":"evaluating","type":0}',
-            '@nix {"action":"start","id":2,"level":4,"parent":0,"text":"querying","type":109,"fields":["/nix/store/x","https://cache"]}',
-            '@nix {"action":"start","id":3,"level":4,"parent":2,"text":"downloading","type":101,"fields":["https://cache/x.narinfo"]}',
-            '@nix {"action":"result","id":3,"type":105,"fields":[2,3,0,0]}',
-            '@nix {"action":"stop","id":3}',
-            '@nix {"action":"stop","id":2}',
-            '@nix {"action":"start","id":4,"level":3,"parent":0,"text":"building","type":105,"fields":["/nix/store/x.drv","",1,1]}',
-            '@nix {"action":"result","id":4,"type":104,"fields":["unpackPhase"]}',
-            '@nix {"action":"result","id":4,"type":101,"fields":["compiling thing"]}',
-            "not an @nix line, ignored",
-            '@nix {"action":"stop","id":4}',
-            # Real nix escapes ANSI as \u001b (valid JSON); the parser strips it.
-            '@nix {"action":"msg","level":0,"msg":"error: \u001b[31mboom\u001b[0m","raw_msg":"error: boom"}',
-        ]
-    )
-
-    log = nix.parse(stream)
-
-    # Durable event log: one row per @nix line (the plain line is skipped), typed.
-    ev = log.events
-    assert isinstance(ev, pl.DataFrame), type(ev)
-    assert ev.height == 11, ev.height
-    assert ev.filter(pl.col("action") == "start").height == 4, ev
-    # kind decodes both activity and result enums; ANSI is stripped from msg.
-    assert set(ev["kind"].drop_nulls().to_list()) >= {"build", "fileTransfer", "progress"}, ev["kind"]
-
-    # Folded DAG view: one row per activity, with the parent edge and depth.
-    acts = log.activities
-    assert acts.height == 4, acts
-    ft = acts.filter(pl.col("kind") == "fileTransfer").row(0, named=True)
-    assert ft["parent"] == 2 and ft["depth"] == 1, ft
-    assert ft["done"] == 2 and ft["expected"] == 3, ft  # progress folded in
-
-    bld = acts.filter(pl.col("kind") == "build").row(0, named=True)
-    assert bld["status"] == "done", bld          # stop folded in
-    assert bld["phase"] == "unpackPhase", bld    # setPhase folded in
-    assert bld["last_log"] == "compiling thing", bld  # build log line folded in
-    assert bld["drv"] == "/nix/store/x.drv", bld
-
-    # Error captured from the msg line, ANSI stripped.
-    assert log.error == "error: boom", repr(log.error)
-
-    # Tree + html render don't crash and reflect the build.
-    assert "building" in log.tree()
-    assert "<pre" in log.resource_html()
-
-    # Empty parse yields well-typed empty frames, never crashes.
-    empty = nix.parse("")
-    assert empty.events.height == 0 and empty.activities.height == 0
-    assert empty.events.schema["seq"] == pl.Int64
-
-    # A warning (level 1) or an info line containing "error:" is NOT the failure.
-    warn = nix.parse(
-        '@nix {"action":"msg","level":1,"msg":"warning: deprecated"}\n'
-        '@nix {"action":"msg","level":3,"msg":"note: see error: above"}'
-    )
-    assert warn.error is None, warn.error
-
-    # Malformed parent cycle must not infinite-recurse the activities/render path.
-    cyc = nix.parse(
-        '@nix {"action":"start","id":1,"parent":2,"text":"a","type":0}\n'
-        '@nix {"action":"start","id":2,"parent":1,"text":"b","type":0}'
-    )
-    assert cyc.activities.height == 2, cyc.activities
-    assert "a" in cyc.tree()
-
-    # Non-int progress fields must not crash the Int64 activities schema.
-    bad = nix.parse(
-        '@nix {"action":"start","id":1,"parent":0,"text":"x","type":101}\n'
-        '@nix {"action":"result","id":1,"type":105,"fields":["nan","oops",0,0]}'
-    )
-    assert bad.activities.row(0, named=True)["done"] == 0, bad.activities
-
-    # attrs(): the flake-show parser flattens systemed + plain outputs, filtered
-    # to the requested system; an omitted (empty) system contributes no rows.
-    show = {
-        "packages": {
-            "aarch64-darwin": {"mcp": {"type": "derivation", "description": "the mcp"}},
-            "x86_64-linux": {},
-        },
-        "nixosConfigurations": {"host": {"type": "nixos-configuration"}},
-    }
-    rows = nix._flake_show_rows(show, "aarch64-darwin")
-    by = {(r["kind"], r["attr"]): r for r in rows}
-    assert by[("packages", "mcp")]["description"] == "the mcp", rows
-    assert ("nixosConfigurations", "host") in by, rows
-    assert all(r["attr"] for r in rows), rows
-    assert isinstance(nix._current_system(), str) and "-" in nix._current_system()
-
-    # eval(): the arg builder quotes nothing through a shell and substitutes the
-    # {system} template, so `--apply` rides as its own argv element.
-    assert nix._eval_args(".#mcp") == ["eval", ".#mcp", "--json", "--no-warn-dirty"]
-    assert nix._eval_args(".#mcp", apply="builtins.attrNames") == [
-        "eval", ".#mcp", "--json", "--no-warn-dirty", "--apply", "builtins.attrNames",
-    ]
-    assert nix._eval_args(".#x", raw=True)[2] == "--raw", nix._eval_args(".#x", raw=True)
-    sysd = nix._current_system()
-    assert nix._eval_args(".#checks.{system}.lint")[1] == f".#checks.{sysd}.lint"
-    assert nix._eval_args(".#checks.{system}", system="x86_64-linux")[1] == ".#checks.x86_64-linux"
-
-    print("nix-ok", nix.__version__)
-  '';
-  nixSmoke =
-    pkgs.runCommand "ix-mcp-nix-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      ${lib.getExe mcpPython} ${nixTestPy} >stdout 2>stderr || {
-        echo "ix-mcp nix smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -q '^nix-ok' stdout || {
-        echo "ix-mcp nix smoke did not confirm the nix module:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The worktree module: drive real `git worktree` against a throwaway repo
-  # (git is on PATH in this sandbox). Proves add() creates a new branch in its
-  # own tree (and checks out an existing branch instead of recreating it),
-  # list() is a DataFrame marking the current tree, the Worktree is os.PathLike
-  # and `wt / "x"` joins onto it, commit() stages new files, and remove() drops
-  # the tree. Pure git + the bundled sh, so the sandbox runs it.
-  worktreeTestPy = pkgs.writeText "ix-mcp-worktree-test.py" ''
-    # python
-    import asyncio
-    import os
-    import pathlib
-    import subprocess
-    import tempfile
-
-    import polars as pl
-
-    import worktree
-
-
-    def _git(*args, cwd):
-        subprocess.run(["git", "-C", cwd, *args], check=True, capture_output=True)
-
-
-    async def main():
-        repo = tempfile.mkdtemp()
-        _git("init", "-q", cwd=repo)
-        _git("config", "user.email", "t@t", cwd=repo)
-        _git("config", "user.name", "t", cwd=repo)
-        _git("commit", "--allow-empty", "-q", "-m", "init", cwd=repo)
-
-        # add() creates a NEW branch in its own tree off HEAD.
-        wt = await worktree.add("feature-x", repo=repo)
-        assert wt.branch == "feature-x", wt
-        assert wt.path.is_dir(), wt.path
-
-        # os.PathLike + `wt / "x"` join onto the tree.
-        assert os.fspath(wt) == str(wt.path), wt
-        (wt / "hello.txt").write_text("hi")
-
-        # list() is a DataFrame; exactly one tree is `current` (the main one), and
-        # the new worktree is not it.
-        lst = worktree.list(repo)
-        assert isinstance(lst, pl.DataFrame) and "current" in lst.columns, lst.columns
-        assert "feature-x" in set(lst["branch"].to_list()), lst
-        assert lst.filter(pl.col("current")).height == 1, lst
-        assert not lst.filter(pl.col("branch") == "feature-x")["current"][0], lst
-
-        # commit() stages the new (untracked) file, so it lands in the commit.
-        c = await wt.commit("add hello")
-        assert c.ok, c.text
-        tracked = subprocess.run(
-            ["git", "-C", str(wt.path), "ls-files"], capture_output=True, text=True
-        ).stdout
-        assert "hello.txt" in tracked, tracked
-
-        # An existing branch is checked out (not recreated) by add().
-        _git("branch", "existing", cwd=repo)
-        wt2 = await worktree.add("existing", repo=repo)
-        assert wt2.branch == "existing", wt2
-
-        # remove() drops the tree (force discards uncommitted changes in it);
-        # main + feature-x remain.
-        rm = await wt2.remove(force=True)
-        assert rm.ok, rm.text
-        assert worktree.list(repo).height == 2, worktree.list(repo)
-
-        print("worktree-ok")
-
-
-    asyncio.run(main())
-  '';
-  worktreeSmoke =
-    pkgs.runCommand "ix-mcp-worktree-smoke"
-    {
-      nativeBuildInputs = [
-        mcpPython
-        pkgs.git
-      ];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${worktreeTestPy} >stdout 2>stderr || {
-        echo "ix-mcp worktree smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'worktree-ok' stdout || {
-        echo "ix-mcp worktree smoke did not confirm the worktree module:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The browser module: it drives a Chromium-family browser over CDP with the
-  # bundled playwright. A real browser needs a display, and we NEVER run headless,
-  # so the sandbox cannot launch one; instead this asserts the contract that does
-  # not need a browser -- the API shape, the standard/persistent defaults, the
-  # never-headless launch argv, the clear error when nothing is on the port, and
-  # that api() now lists both the module and the bundled playwright library.
-  browserTestPy = pkgs.writeText "ix-mcp-browser-test.py" ''
-    # python
-    import asyncio
-    import sys
-
-    import browser
-    from ix_notebook_mcp import runtime
-
-    # Standard CDP port + a persistent, module-owned profile, so repeat launches
-    # reuse one instance instead of spawning a new window each time.
-    assert browser.DEFAULT_ENDPOINT == "http://127.0.0.1:9222", browser.DEFAULT_ENDPOINT
-    assert browser.DEFAULT_APP == "Google Chrome", browser.DEFAULT_APP
-    for fn in ("get_or_create_browser", "connect", "context", "page", "goto", "shot", "read", "vdom", "close"):
-        assert callable(getattr(browser, fn)), fn
-    # `vdom()` returns a Vdom: a clean, filtered, machine-readable map of the page.
-    assert isinstance(browser.Vdom, type), browser.Vdom
-
-    udd = browser._default_user_data_dir(browser.DEFAULT_APP)
-    assert udd.endswith(".cdp-google-chrome-profile"), udd
-    argv = browser._launch_argv(browser.DEFAULT_APP, 9222, udd)
-    # The launched browser is ALWAYS a visible window -- never headless.
-    assert not any("headless" in a for a in argv), ("launch must never be headless", argv)
-    assert "--remote-debugging-port=9222" in argv, argv
-    assert ("--user-data-dir=" + udd) in argv, argv
-    if sys.platform == "darwin":
-        assert argv[:3] == ["open", "-na", "Google Chrome"], argv
-    assert browser._port_of("http://127.0.0.1:9222") == 9222
-
-    async def _dead():
-        # Nothing is listening on port 1: connect() must fail clearly and point at
-        # get_or_create_browser() (which would launch one) rather than hang.
-        try:
-            await browser.connect("http://127.0.0.1:1")
-        except ConnectionError as exc:
-            assert "get_or_create_browser" in str(exc), exc
-        else:
-            raise SystemExit("connect() to a dead port should raise ConnectionError")
-
-    asyncio.run(_dead())
-
-    # Discoverability: api() lists the browser module AND playwright as a bundled
-    # library, so neither looks absent to an agent treating api() as the catalog.
-    rows = runtime._api_rows()
-    wheres = {r["where"] for r in rows}
-    assert "browser" in wheres, ("browser module missing from api()", sorted(wheres))
-    libs = {r["name"] for r in rows if r["where"] == "library"}
-    assert "playwright" in libs, ("playwright not listed as a bundled library", sorted(libs))
-
-    # shot() cost controls (no browser needed -- _encode_shot is a pure helper):
-    # a model-bound shot caps its longest edge and re-encodes, so a full-res 2x
-    # capture cannot flood context. Build a busy 1746x2406 PNG (the size the
-    # friction report measured) and check each path.
-    import io as _io
-    import os as _os
-
-    from PIL import Image as _Image
-
-    _src = _Image.frombytes("RGB", (1746, 2406), _os.urandom(1746 * 2406 * 3))
-    _buf = _io.BytesIO()
-    _src.save(_buf, format="PNG")
-    _raw = _buf.getvalue()
-
-    # Default model path: JPEG, longest edge -> _SHOT_MAX_DIM (1024).
-    _data, _mime = browser._encode_shot(
-        _raw, max_dim=browser._SHOT_MAX_DIM, fmt="jpeg", quality=72
-    )
-    assert _mime == "image/jpeg", _mime
-    assert max(_Image.open(_io.BytesIO(_data)).size) == browser._SHOT_MAX_DIM, (
-        _Image.open(_io.BytesIO(_data)).size
-    )
-    # A busy screenshot as JPEG is far smaller than the raw full-res PNG.
-    assert len(_data) < len(_raw) // 10, (len(_data), len(_raw))
-
-    # PNG path also downscales the longest edge.
-    _pdata, _pmime = browser._encode_shot(_raw, max_dim=1024, fmt="png", quality=72)
-    assert _pmime == "image/png", _pmime
-    assert max(_Image.open(_io.BytesIO(_pdata)).size) == 1024
-
-    # max_dim=0 + png is an exact passthrough (no needless re-encode).
-    _ndata, _nmime = browser._encode_shot(_raw, max_dim=0, fmt="png", quality=72)
-    assert _ndata is _raw and _nmime == "image/png", (_nmime, _ndata is _raw)
-
-    # Never raises: junk bytes come back untouched rather than blowing up a shot.
-    _gdata, _gmime = browser._encode_shot(b"not an image", max_dim=1024, fmt="jpeg", quality=72)
-    assert _gdata == b"not an image" and _gmime == "image/png", (_gmime, _gdata)
-
-    # shot() validates its enum-ish knobs up front.
-    import asyncio as _aio
-    for _bad in (dict(format="webp"), dict(scale="2x")):
-        try:
-            _aio.run(browser.shot(**_bad))
-        except ValueError:
-            pass
-        else:
-            raise SystemExit(f"shot({_bad}) should raise ValueError")
-
-    # --- live dashboard resource -------------------------------------------
-    # A connected browser publishes itself as a live resource: a throttled
-    # screenshot of the front tab. No real Chromium needed -- fake the context.
-    EP = "http://127.0.0.1:9222"
-
-    class _FakePage:
-        url = "https://example.com/"
-
-        last_screenshot_kw = {}
-
-        async def title(self):
-            return "Example"
-
-        async def screenshot(self, **_kw):
-            _FakePage.last_screenshot_kw = _kw
-            return b"NOT-A-REAL-PNG"  # _encode_shot tolerates non-images
-
-    class _FakeCtx:
-        def __init__(self, pages):
-            self.pages = pages
-
-    class _FakeBrowser:
-        def __init__(self):
-            self.connected = True
-
-        def is_connected(self):
-            return self.connected
-
-    _orig_context = browser.context
-    _pages = [_FakePage()]
-
-    async def _fake_context(endpoint=EP):
-        return _FakeCtx(_pages)
-
-    browser.context = _fake_context
-
-    # A page renders to an inline <img> with its title/url.
-    browser._resource_html_cache.clear()
-    _h = _aio.run(browser._resource_html(EP))
-    assert "<img" in _h and "example.com" in _h, _h[:200]
-
-    # Passive capture uses device scale, never css: css scale makes Playwright
-    # push a per-shot DPR Emulation override that relayouts and visibly flickers
-    # the live HiDPI window on every ~1.5s tick of this loop.
-    assert _FakePage.last_screenshot_kw.get("scale") == "device", _FakePage.last_screenshot_kw
-
-    # Throttled: a call within the TTL reuses the cache even though the tab list
-    # changed underneath it (the screenshot is the expensive part).
-    _pages.clear()
-    assert _aio.run(browser._resource_html(EP)) == _h
-
-    # No open tabs: a passive placeholder, and never creates a tab.
-    browser._resource_html_cache.clear()
-    assert "no open tabs" in _aio.run(browser._resource_html(EP))
-
-    # Render never raises: a failing capture becomes an error card.
-    async def _boom(endpoint=EP):
-        raise RuntimeError("kaboom")
-
-    browser.context = _boom
-    browser._resource_html_cache.clear()
-    _e = _aio.run(browser._resource_html(EP))
-    assert "render failed" in _e and "kaboom" in _e, _e[:200]
-
-    # connect() publishes the resource on a fresh connection; mimic that here.
-    browser.context = _fake_context
-    _pages[:] = [_FakePage()]
-    runtime.resources.clear()
-    browser._browsers.clear()
-    _fb = _FakeBrowser()
-    browser._browsers[EP] = _fb
-    _res = browser._register_resource(EP)
-    _rid = "browser:" + EP
-    assert _res is not None and _rid in runtime.resources, list(runtime.resources)
-    assert _res.kind == "browser" and _res.title == "browser · " + EP, (_res.kind, _res.title)
-    assert _res.alive() is True
-    browser._resource_html_cache.clear()
-    assert "<img" in _aio.run(_res.render_html())
-
-    # Keyed by endpoint: a reconnect refreshes the one card, never stacks.
-    browser._register_resource(EP)
-    assert sum(1 for k in runtime.resources if k == _rid) == 1
-
-    # alive() drops the card once the connection is gone (the sweep then closes it).
-    _fb.connected = False
-    assert _res.alive() is False
-    _fb.connected = True
-    browser._browsers.pop(EP)
-    assert _res.alive() is False
-
-    # Leave the module clean for any later assertions.
-    browser.context = _orig_context
-    browser._browsers.clear()
-    runtime.resources.clear()
-    browser._resource_html_cache.clear()
-
-    print("browser-ok", browser.__version__)
-  '';
-  browserSmoke =
-    pkgs.runCommand "ix-mcp-browser-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${browserTestPy} >stdout 2>stderr || {
-        echo "ix-mcp browser smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -q '^browser-ok' stdout || {
-        echo "ix-mcp browser smoke did not confirm the browser module:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The clean-vdom contract, exercised against a real (headless) browser. Unlike
-  # the launch smoke above, `vdom()` only reads the DOM, so it can run headless on
-  # a `data:` fixture with no display and no network: it asserts the filtering
-  # (hidden / aria-hidden pruned), the wrapper-chain collapse, that every kept node
-  # has geometry and a CSS selector that actually resolves, and that the
-  # interactive_only / viewport_only lean modes behave.
-  browserVdomTestPy = pkgs.writeText "ix-mcp-browser-vdom-test.py" ''
-    # python
-    import asyncio
-    import sys
-
-    import browser
-    from playwright.async_api import async_playwright
-
-    # A fixture page exercising the cleaning rules: landmarks, a collapsible wrapper
-    # chain, hidden + aria-hidden subtrees, a named image, and a form. Served as a
-    # data: URL so the test needs no network and no on-screen window.
-    FIXTURE = (
-        "data:text/html," + (
-            "<html><head><title>Fixture</title></head><body>"
-            "<header><a id='home' href='/'><img alt='Logo'></a>"
-            "<nav><a href='/a'>Alpha</a><a href='/b'>Beta</a></nav></header>"
-            "<main><h1>Heading</h1><p>Visible paragraph text.</p>"
-            "<div><div><div><button id='go' onclick='void 0'>Click me</button></div></div></div>"
-            "<form><input type='search' placeholder='Find'><button type='submit'>Go</button></form>"
-            "<div style='display:none'><a href='/hidden'>Hidden</a></div>"
-            "<span aria-hidden='true'><a href='/aria'>AriaHidden</a></span>"
-            "</main></body></html>"
-        )
-    )
-
-
-    def names(flat):
-        return {n.get("name") for n in flat if not n.get("group")}
-
-
-    def by_tag(flat, tag):
-        return [n for n in flat if n.get("tag") == tag and not n.get("group")]
-
-
-    async def main():
-        pw = await async_playwright().start()
-        b = await pw.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
-        )
-        ctx = await b.new_context(viewport={"width": 1000, "height": 800})
-        pg = await ctx.new_page()
-        await pg.goto(FIXTURE)
-
-        v = await browser.vdom(pg)
-
-        # It is the documented type, with the page's identity captured.
-        assert isinstance(v, browser.Vdom), type(v)
-        assert v.title == "Fixture", v.title
-        assert v.viewport.get("w") == 1000, v.viewport
-
-        ns = names(v.flat)
-        # Hidden (display:none) and aria-hidden subtrees are pruned entirely.
-        assert "Hidden" not in ns, ns
-        assert "AriaHidden" not in ns, ns
-        # Landmarks, heading, controls and the named image survive.
-        assert any(n.get("role") == "banner" for n in v.flat), "banner landmark missing"
-        assert any(n.get("role") == "navigation" for n in v.flat), "nav landmark missing"
-        assert any(n.get("role") == "main" for n in v.flat), "main landmark missing"
-        assert any(n.get("role") == "heading" and n.get("name") == "Heading" for n in v.flat), ns
-        assert "Logo" in ns, ("named image missing", ns)
-        assert any(n.get("name") == "Alpha" and n.get("interactive") for n in v.flat), ns
-
-        # The triple-nested wrapper <div><div><div> around the button is collapsed:
-        # the button is reached without a chain of empty group nodes above it.
-        btn = next(n for n in v.flat if n.get("tag") == "button" and n.get("name") == "Click me")
-        assert btn["depth"] <= 2, ("wrapper chain not collapsed", btn["depth"])
-
-        # Every kept node carries a usable on-screen box and a working CSS selector.
-        for n in v.flat:
-            if n.get("group"):
-                continue
-            assert n.get("w", 0) > 0 and n.get("h", 0) > 0, ("no geometry", n)
-            sel = n.get("selector")
-            assert sel, ("no selector", n)
-            assert await pg.query_selector(sel) is not None, ("selector did not resolve", sel)
-
-        # Refs are dense and 1-based; node(ref) round-trips; df/json agree on counts.
-        refs = [n["ref"] for n in v.flat if not n.get("group")]
-        assert refs == list(range(1, len(refs) + 1)), refs
-        assert v.node(refs[-1]) is not None
-        n_real = len(refs)
-        assert v.df.height == len(v.flat), (v.df.height, len(v.flat))
-        assert v.df.filter(v.df["interactive"]).height >= 4  # 4 links + 2 buttons + 1 field
-
-        # The compact glance is bounded and self-describes; the full map lives in .df.
-        txt = repr(v)
-        assert "Fixture" in txt and "nodes" in txt, txt[:200]
-
-        # interactive_only drops body text but keeps the controls.
-        vi = await browser.vdom(pg, interactive_only=True)
-        nsi = names(vi.flat)
-        assert "Visible paragraph text." not in nsi, nsi
-        assert any(n.get("name") == "Alpha" for n in vi.flat), nsi
-
-        # viewport_only keeps only on-screen nodes (all fixture nodes are on screen,
-        # so it must still find the controls -- and never error).
-        vvp = await browser.vdom(pg, viewport_only=True)
-        assert any(n.get("interactive") for n in vvp.flat), "viewport_only lost controls"
-
-        await b.close()
-        await pw.stop()
-        print("vdom-ok", browser.__version__, n_real, "nodes")
-
-
-    # A sandboxed headless chromium occasionally tears down mid-run
-    # (TargetClosedError); that is environment flake, not a vdom regression, so
-    # retry the whole run a couple of times before failing the gate.
-    for attempt in range(3):
-        try:
-            asyncio.run(main())
-            break
-        except Exception as exc:
-            if attempt == 2 or "closed" not in str(exc).lower():
-                raise
-            print(f"retry {attempt + 1}: transient browser teardown: {exc}", file=sys.stderr)
-  '';
-  browserVdomSmoke =
-    pkgs.runCommand "ix-mcp-browser-vdom-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      # `vdom()` launches a (headless) browser, so point Playwright at the bundled
-      # browser bundle -- the bare mcpPython has no wrapper to set this (only the
-      # `ix-mcp` entrypoint does).
-      export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
-      export FONTCONFIG_FILE=${fontsConf}
-      ${lib.getExe mcpPython} ${browserVdomTestPy} >stdout 2>stderr || {
-        echo "ix-mcp browser vdom smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -q '^vdom-ok' stdout || {
-        echo "ix-mcp browser vdom smoke did not confirm the clean vdom:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # Property-based (Hypothesis) tests for the vdom()/read() snapshot helpers
-  # (packages/mcp/tests/test_vdom_properties.py): they generate random HTML
-  # bodies and assert selector integrity, exclusion of hidden/script/style
-  # subtrees, name clamping, ref contiguity, determinism, the interactive_only
-  # subset relation, geometry, and read()/vdom() agreement against a real
-  # headless Chromium. Like browserVdomSmoke, vdom() only reads the DOM, so it
-  # runs headless on set_content fixtures in the sandbox with no display or
-  # network. The interpreter is mcpPython (the bundled browser module +
-  # playwright) plus pytest and hypothesis, which the bare mcpPython omits.
-  # Reuses the full mcp module set (which includes the asn1-pinned pymobiledevice3
-  # override), so it must build from the same asn1-pinned interpreter.
-  vdomTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-        ps.hypothesis
-      ]
-  );
-  vdomPropertiesSource = builtins.path {
-    name = "ix-mcp-vdom-properties-test";
-    path = ./tests/test_vdom_properties.py;
-  };
-  vdomPropertiesSmoke =
-    pkgs.runCommand "ix-mcp-vdom-properties-smoke"
-    {
-      nativeBuildInputs = [vdomTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      # `vdom()` launches a (headless) browser; point Playwright at the bundled
-      # browser bundle (no wrapper sets it for the bare interpreter).
-      export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
-      export FONTCONFIG_FILE=${fontsConf}
-      # Copy the test into a writable dir so pytest collects it as a plain file
-      # (a bare store path of a single .py is read by pytest as a directory).
-      cp ${vdomPropertiesSource} "$TMPDIR/test_vdom_properties.py"
-      ${lib.getExe vdomTestPython} -m pytest "$TMPDIR/test_vdom_properties.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp vdom property tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # Interactive input: the browser -> kernel write path behind interactive
-  # resources (packages/mcp/tests/test_inputs.py). Covers the store queue, the
-  # dashboard `/api/input` gate + CORS (over a real aiohttp TestServer), and the
-  # kernel-side drain into an awaiting `Input` / `ask`. Needs the full mcp
-  # interpreter (ix_notebook_mcp + aiohttp) plus pytest, which bare mcpPython omits.
-  inputsTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-      ]
-  );
-  inputsTestSource = builtins.path {
-    name = "ix-mcp-inputs-test";
-    path = ./tests/test_inputs.py;
-  };
-  inputsTests =
-    pkgs.runCommand "ix-mcp-inputs-tests"
-    {
-      nativeBuildInputs = [inputsTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${inputsTestSource} "$TMPDIR/test_inputs.py"
-      ${lib.getExe inputsTestPython} -m pytest "$TMPDIR/test_inputs.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp inputs tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # Background-task failure reporting (packages/mcp/tests/test_task_errors.py):
-  # a fire-and-forget task that dies with an unretrieved exception must be
-  # reported at completion into `task_errors` (asyncio's own warning only fires
-  # at GC, and never for a task a namespace variable keeps alive -- the exact
-  # watcher pattern that starved monitors silently on 2026-07-02), plus the
-  # `Result.output` alias that AttributeError'd that watcher.
-  taskErrorsTestSource = builtins.path {
-    name = "ix-mcp-task-errors-test";
-    path = ./tests/test_task_errors.py;
-  };
-  taskErrorsTests =
-    pkgs.runCommand "ix-mcp-task-errors-tests"
-    {
-      nativeBuildInputs = [channelTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${taskErrorsTestSource} "$TMPDIR/test_task_errors.py"
-      ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_task_errors.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp task-errors tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # Redundant-read tracking (packages/mcp/tests/test_readstats.py, index#1924):
-  # the per-session tracker's core contract (same-content re-read is redundant,
-  # changed content is not, a different path is not, counters are per-session) and
-  # the exact `mcp_read_stats` journald line the ix fleet pipeline parses. Only
-  # imports `ix_notebook_mcp.readstats` (pure stdlib), so it reuses the typecheck
-  # interpreter, which already carries pytest.
-  readStatsTestSource = builtins.path {
-    name = "ix-mcp-readstats-test";
-    path = ./tests/test_readstats.py;
-  };
-  readStatsTests =
-    pkgs.runCommand "ix-mcp-readstats-tests"
-    {
-      nativeBuildInputs = [typecheckTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${readStatsTestSource} "$TMPDIR/test_readstats.py"
-      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_readstats.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp readstats tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # The Claude Code channel + interactive resource actions
-  # (packages/mcp/tests/test_channel.py): the store outbox/events queues, the
-  # kernel's notify() + action dispatch, the transport pump emitting
-  # notifications/claude/channel, the reply tool, and the dashboard's SSE feed.
-  # Same interpreter needs as inputsTests (ix_notebook_mcp + aiohttp + the mcp
-  # SDK) plus pytest.
-  channelTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-      ]
-  );
-  channelTestSource = builtins.path {
-    name = "ix-mcp-channel-test";
-    path = ./tests/test_channel.py;
-  };
-  channelTests =
-    pkgs.runCommand "ix-mcp-channel-tests"
-    {
-      nativeBuildInputs = [channelTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${channelTestSource} "$TMPDIR/test_channel.py"
-      ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_channel.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp channel tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # The MCP Apps view mechanism (packages/mcp/tests/test_mcp_ui.py): the
-  # `ui://` viewer resource's spec shape (mimeType, lifecycle markers), the
-  # tool `_meta.ui.resourceUri` linkage, `ui_result`'s content-preserving
-  # `_meta` payload (proved over a real in-memory MCP session), the fragment
-  # extraction/budget, and the data API's `/api/jobs/{id}/ui` embedded view
-  # the room's sandboxed iframe loads. Same interpreter needs as channelTests
-  # (ix_notebook_mcp + the mcp SDK + aiohttp) plus pytest.
-  mcpUiTestSource = builtins.path {
-    name = "ix-mcp-ui-test";
-    path = ./tests/test_mcp_ui.py;
-  };
-  mcpUiTests =
-    pkgs.runCommand "ix-mcp-ui-tests"
-    {
-      nativeBuildInputs = [channelTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${mcpUiTestSource} "$TMPDIR/test_mcp_ui.py"
-      ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_mcp_ui.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp MCP Apps view tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # End-to-end browser proof of the interactive-input path: a real headless
-  # Chromium mounts an `Input`'s HTML in a sandboxed, opaque-origin srcdoc iframe
-  # (as HtmlBody.svelte does), clicks the button, and the cross-origin `ixSubmit`
-  # fetch must reach the real aiohttp `/api/input` and drain into the awaiting
-  # channel (packages/mcp/tests/test_input_browser.py). Same interpreter + bundled
-  # browser as the vdom smoke, plus pytest.
-  inputBrowserTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-      ]
-  );
-  inputBrowserTestSource = builtins.path {
-    name = "ix-mcp-input-browser-test";
-    path = ./tests/test_input_browser.py;
-  };
-  inputBrowserSmoke =
-    pkgs.runCommand "ix-mcp-input-browser-smoke"
-    {
-      nativeBuildInputs = [inputBrowserTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
-      export FONTCONFIG_FILE=${fontsConf}
-      cp ${inputBrowserTestSource} "$TMPDIR/test_input_browser.py"
-      ${lib.getExe inputBrowserTestPython} -m pytest "$TMPDIR/test_input_browser.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp input browser smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # The whole Svelte resource path (packages/mcp/tests/test_svelte.py): the
-  # nix-built svelte-bundle CLI compiles a Svelte 5 component, a real sandboxed
-  # iframe renders the kernel-embedded state, `act` rides the real /api/input,
-  # and the action_result re-renders the page. Same interpreter + browser needs
-  # as inputBrowserSmoke, plus the CLI on IX_SVELTE_BUNDLE_BIN.
-  svelteBundled = importTest "svelte" "import svelte; print('svelte-ok', callable(svelte.bundle), callable(svelte.component))";
-  svelteTestPython = mcpPythonInterp.withPackages (
-    ps:
-      mcpPythonPackages ps
-      ++ [
-        ps.pytest
-      ]
-  );
-  svelteTestSource = builtins.path {
-    name = "ix-mcp-svelte-test";
-    path = ./tests/test_svelte.py;
-  };
-  svelteTests =
-    pkgs.runCommand "ix-mcp-svelte-tests"
-    {
-      nativeBuildInputs = [svelteTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
-      export FONTCONFIG_FILE=${fontsConf}
-      export IX_SVELTE_BUNDLE_BIN=${lib.escapeShellArg (lib.getExe svelteBundleBin)}
-      cp ${svelteTestSource} "$TMPDIR/test_svelte.py"
-      ${lib.getExe svelteTestPython} -m pytest "$TMPDIR/test_svelte.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp svelte tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
-  coreLocationBundled = importTest "corelocation" "import CoreLocation; print('corelocation-ok', callable(CoreLocation.CLLocationManager.alloc))";
-  scriptingBridgeBundled = importTest "scriptingbridge" "import ScriptingBridge; print('scriptingbridge-ok', callable(ScriptingBridge.SBApplication.applicationWithBundleIdentifier_))";
-  mapsBundled = importTest "maps" "import maps, MapKit; print('maps-ok', all(callable(getattr(maps, n)) for n in ('nearby', 'geocode', 'reverse_geocode')), callable(MapKit.MKLocalSearch.alloc))";
-  vmkitBundled = importTest "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
-  imessageBundled = importTest "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
-  ghosttyBundled = importTest "ghostty" "import ghostty; print('ghostty-ok', all(callable(getattr(ghostty, n)) for n in ('surfaces', 'my_tty', 'my_surface', 'close', 'close_me', 'focus', 'activate', 'is_running')), ghostty.__version__)";
-  xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
-  meshBundled = importTest "mesh" "import mesh, asyncio; print('mesh-ok', all(asyncio.iscoroutinefunction(getattr(mesh, n)) for n in ('peers', 'sessions')), mesh.__version__)";
-  fabricBundled = importTest "fabric" "import fabric, asyncio; print('fabric-ok', asyncio.iscoroutinefunction(fabric.run), asyncio.iscoroutinefunction(fabric.claude.session), fabric.__version__)";
-  linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
-  notionBundled = importTest "notion" "import notion, asyncio; print('notion-ok', all(asyncio.iscoroutinefunction(getattr(notion, n)) for n in ('search', 'page', 'blocks', 'db_query', 'page_create', 'blocks_append', 'page_update')), notion.__version__)";
-  notionTestPython = pkgs.python3.withPackages (ps: [
-    ps.pytest
-    ps.httpx
-    ps.polars
-    ps.pydantic
-    notionModule
-  ]);
-  notionTestSource = builtins.path {
-    name = "ix-mcp-notion-test";
-    path = ./tests/test_notion.py;
-  };
-  notionTests =
-    pkgs.runCommand "ix-mcp-notion-tests"
-    {
-      nativeBuildInputs = [notionTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${notionTestSource} "$TMPDIR/test_notion.py"
-      ${lib.getExe notionTestPython} -m pytest "$TMPDIR/test_notion.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp notion tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-  nuBundled = importTest "nu" "import nu; print('nu-ok', callable(nu), callable(nu.value), nu.NuError.__name__ == 'NuError', nu.__version__)";
+  coreLocationBundled = importTest [] "corelocation" "import CoreLocation; print('corelocation-ok', callable(CoreLocation.CLLocationManager.alloc))";
+  scriptingBridgeBundled = importTest [] "scriptingbridge" "import ScriptingBridge; print('scriptingbridge-ok', callable(ScriptingBridge.SBApplication.applicationWithBundleIdentifier_))";
+  nuBundled = importTest [nuPyModule] "nu" "import nu; print('nu-ok', callable(nu), callable(nu.value), nu.NuError.__name__ == 'NuError', nu.__version__)";
   # Behavior tests for the embedded nushell engine: the normalization matrix,
   # persistent REPL state, native datetime/duration crossing, the NuError
   # diagnostic surface, `exit` safety, and interrupt-based timeout. Everything
@@ -5496,325 +1556,12 @@
       cat stdout
       mkdir -p "$out"
     '';
-  noxAutotriageBundled = importTest "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
-  linearTriageTestPython = pkgs.python3.withPackages (ps: [
-    ps.pytest
-    ps.httpx
-    ps.pydantic
-    linearModule
-  ]);
-  linearTriageTestSource = builtins.path {
-    name = "ix-mcp-linear-triage-test";
-    path = ./tests/test_linear_triage.py;
-  };
-  linearTestSupport = builtins.path {
-    name = "ix-mcp-linear-test-support";
-    path = ./tests/linear_test_support.py;
-  };
-  linearTriageTests =
-    pkgs.runCommand "ix-mcp-linear-triage-tests"
-    {
-      nativeBuildInputs = [linearTriageTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${linearTriageTestSource} "$TMPDIR/test_linear_triage.py"
-      cp ${linearTestSupport} "$TMPDIR/linear_test_support.py"
-      ${lib.getExe linearTriageTestPython} -m pytest "$TMPDIR/test_linear_triage.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp linear triage tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-  noxAutotriageTestPython = pkgs.python3.withPackages (ps: [
-    ps.pytest
-    ps.httpx
-    ps.pydantic
-    linearModule
-    noxAutotriageModule
-  ]);
-  noxAutotriageTestSource = builtins.path {
-    name = "ix-mcp-nox-autotriage-test";
-    path = ./tests/test_nox_autotriage.py;
-  };
-  noxAutotriageTestFixtures = builtins.path {
-    name = "ix-mcp-nox-autotriage-test-fixtures";
-    path = ./tests/fixtures;
-  };
-  noxAutotriageTests =
-    pkgs.runCommand "ix-mcp-nox-autotriage-tests"
-    {
-      nativeBuildInputs = [noxAutotriageTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      mkdir -p "$TMPDIR/fixtures"
-      cp ${noxAutotriageTestSource} "$TMPDIR/test_nox_autotriage.py"
-      cp ${linearTestSupport} "$TMPDIR/linear_test_support.py"
-      cp -r ${noxAutotriageTestFixtures}/. "$TMPDIR/fixtures/"
-      ${lib.getExe noxAutotriageTestPython} -m pytest "$TMPDIR/test_nox_autotriage.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp nox-autotriage tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # The `iphone` helper imports in the real interpreter and exposes its surface.
-  # Cross-platform: pulls in the vendored pymobiledevice3 CLI, so it also proves
-  # that uv closure builds on Linux CI.
-  iphoneBundled = importTest "iphone" "import iphone; print('iphone-ok', all(callable(getattr(iphone, n)) for n in ('devices', 'apps', 'screenshot', 'launch', 'start_tunneld', 'tap', 'swipe')))";
-
-  # Device-free behaviour tests (exports, async signatures, explicit type hints,
-  # CLI-path resolution, the sudo guard, the no-device error).
-  iphoneTestPython = pkgs.python3.withPackages (ps: [
-    ps.pytest
-    ps.polars
-    iphoneModule
-  ]);
-  iphoneTestSource = builtins.path {
-    name = "ix-mcp-iphone-test";
-    path = ./tests/test_iphone.py;
-  };
-  iphoneTests =
-    pkgs.runCommand "ix-mcp-iphone-tests"
-    {
-      nativeBuildInputs = [iphoneTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${iphoneTestSource} "$TMPDIR/test_iphone.py"
-      ${lib.getExe iphoneTestPython} -m pytest "$TMPDIR/test_iphone.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp iphone tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # Network-free unit tests for the `slack` helper: module shape plus that
-  # `send` builds the right chat.postMessage params for top-level vs. in-thread
-  # replies (stubbing the one network primitive).
-  slackTestPython = pkgs.python3.withPackages (ps: [
-    ps.pytest
-    ps.polars
-    ps.pydantic
-    privateSessionModule
-    slackModule
-  ]);
-  slackTestSource = builtins.path {
-    name = "ix-mcp-slack-test";
-    path = ./tests/test_slack.py;
-  };
-  slackTests =
-    pkgs.runCommand "ix-mcp-slack-tests"
-    {
-      nativeBuildInputs = [slackTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${slackTestSource} "$TMPDIR/test_slack.py"
-      ${lib.getExe slackTestPython} -m pytest "$TMPDIR/test_slack.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp slack tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # Network-free unit tests for the `google_auth` mail sender (issue #2523):
-  # MIME assembly, reply threading (threadId + In-Reply-To/References), and the
-  # delivered-body readback, driven against a stub Gmail Resource. Only the
-  # module's import-time deps are needed: googleapiclient itself is stubbed.
-  googleAuthTestPython = pkgs.python3.withPackages (ps: [
-    ps.pytest
-    ps.pydantic
-    ps.google-auth
-    privateSessionModule
-    googleAuthModule
-  ]);
-  googleAuthTestSource = builtins.path {
-    name = "ix-mcp-google-auth-send-test";
-    path = ./tests/test_google_auth_send.py;
-  };
-  googleAuthTests =
-    pkgs.runCommand "ix-mcp-google-auth-tests"
-    {
-      nativeBuildInputs = [googleAuthTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${googleAuthTestSource} "$TMPDIR/test_google_auth_send.py"
-      ${lib.getExe googleAuthTestPython} -m pytest "$TMPDIR/test_google_auth_send.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp google_auth tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # Network-free unit tests for the federated-resources bridge: every path of
-  # `resources_bridge` (list/read/act, peer-flag assembly, not-found -> -32002,
-  # graceful empty/clear-error when `ix-resource-cli` is absent) driven against a
-  # STUB `ix-resource-cli` script on PATH plus a nonexistent-binary path -- no
-  # real CLI or peer needed. The bridge lives in the `ix_notebook_mcp` server
-  # package, so the test imports that module (bundled here) rather than a `src/*`
-  # helper; `bash` is on PATH for the stub script's shebang.
-  resourcesBridgeTestPython = pkgs.python3.withPackages (ps: [
-    ps.pytest
-    ps.pydantic
-    ixNotebookMcpModule
-  ]);
-  resourcesBridgeTestSource = builtins.path {
-    name = "ix-mcp-resources-bridge-test";
-    path = ./tests/test_resources_bridge.py;
-  };
-  resourcesBridgeTests =
-    pkgs.runCommand "ix-mcp-resources-bridge-tests"
-    {
-      nativeBuildInputs = [
-        resourcesBridgeTestPython
-        pkgs.bash
-      ];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${resourcesBridgeTestSource} "$TMPDIR/test_resources_bridge.py"
-      ${lib.getExe resourcesBridgeTestPython} -m pytest "$TMPDIR/test_resources_bridge.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp resources-bridge tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
-  # Network-free tests for the tailnet auto-mesh (index#1787): the `/mesh`
-  # route and its skip paths (IX_MCP_MESH=0, no tailscale IP, bind conflict),
-  # the bundled `mesh` module's peer sweep against a STUB `tailscale` script
-  # plus a real loopback server, and fleet.connect's zero-config Ray-head
-  # probe against a fake GCS listener. asyncssh rides along because importing
-  # `fleet` pulls it; `bash` backs the stub script's shebang. The session-label
-  # tests import `ix_notebook_mcp.tools`, whose import chain needs the mcp SDK
-  # (pydantic rides along) and nbformat (via `outputs`).
-  meshTestPython = pkgs.python3.withPackages (ps: [
-    ps.pytest
-    ps.aiohttp
-    ps.httpx
-    ps.polars
-    ps.asyncssh
-    ps.mcp
-    ps.nbformat
-    ixNotebookMcpModule
-    meshModule
-    fleetModule
-  ]);
-  meshTestSource = builtins.path {
-    name = "ix-mcp-mesh-test";
-    path = ./tests/test_mesh.py;
-  };
-  meshTests =
-    pkgs.runCommand "ix-mcp-mesh-tests"
-    {
-      nativeBuildInputs = [
-        meshTestPython
-        pkgs.bash
-      ];
-      strictDeps = true;
-      # The tests bind loopback sockets (a real mesh server + a fake GCS
-      # listener); the darwin sandbox denies all binds without this. Linux
-      # sandboxes already provide a private loopback, so it is a no-op there.
-      __darwinAllowLocalNetworking = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${meshTestSource} "$TMPDIR/test_mesh.py"
-      ${lib.getExe meshTestPython} -m pytest "$TMPDIR/test_mesh.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp mesh tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-  # Network-free tests for the call-first fabric (index#3191, #3192, #3193): the run
-  # record contract against an httpx.MockTransport weave double (ask facts at
-  # submit with state strictly last, started/terminal facts from the worker
-  # side, a fn that raises before its first line still leaving ask + failed),
-  # claude.session's CAS-pointer turn facts plus both interrupt paths (handle
-  # and journal fact) converging on the SDK interrupt as state=interrupted,
-  # and the remote-placement submit contract with fakes (env handshake, host
-  # label existence, zero-restart runner policy, cloudpickle payload round
-  # trip through the real ray.cloudpickle, workspace materialization against
-  # a local git fixture). Live-cluster behavior is validated manually
-  # (index#3192 PR body); the sandbox proves everything submit-side.
-  fabricTestPython = pkgs.python3.withPackages (ps: [
-    ps.pytest
-    ps.httpx
-    ps.claude-agent-sdk
-    ps.ray
-    # fabric.activity.frame returns a polars frame.
-    ps.polars
-    fabricModule
-    weaveModule
-  ]);
-  fabricTestSource = builtins.path {
-    name = "ix-mcp-fabric-test";
-    path = ./src/fabric/test_fabric.py;
-  };
-  # The weave client's unit tests share this env (httpx.MockTransport fakes);
-  # no other derivation runs them.
-  weaveTestSource = builtins.path {
-    name = "ix-mcp-weave-test";
-    path = ./src/weave/test_weave.py;
-  };
-  fabricTests =
-    pkgs.runCommand "ix-mcp-fabric-tests"
-    {
-      nativeBuildInputs = [
-        fabricTestPython
-        # The workspace tests build and clone a local git fixture.
-        pkgs.git
-      ];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${fabricTestSource} "$TMPDIR/test_fabric.py"
-      cp ${weaveTestSource} "$TMPDIR/test_weave.py"
-      ${lib.getExe fabricTestPython} -m pytest "$TMPDIR/test_fabric.py" "$TMPDIR/test_weave.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp fabric tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
 in
   package.overrideAttrs (old: {
     passthru =
       (old.passthru or {})
       // {
+        inherit embedCli;
         tests =
           {
             inherit
@@ -5823,84 +1570,29 @@ in
               htpyBundled
               searchBundled
               astlogBundled
-              fsearchBundled
-              embedBundled
               dataLibsBundled
               gmailLibsBundled
               exaBundled
               cursorSdkBundled
-              googleAuthBundled
-              googleAuthTests
               ixGoogleBundled
-              slackBundled
-              slackTests
-              resourcesBridgeTests
-              meshBundled
-              meshTests
-              fabricBundled
-              fabricTests
-              beeperBundled
+              nuBundled
+              nuTests
               requirementsSmoke
               engineBundled
               serverTools
               evalSmoke
-              runtimeSmoke
               typecheckSmoke
-              sessionSmoke
-              inputsTests
-              channelTests
-              mcpUiTests
-              taskErrorsTests
-              readStatsTests
-              inputBrowserSmoke
-              svelteBundled
-              svelteTests
-              wedgeSmoke
-              kernelDeathSmoke
-              kernelRestartSmoke
-              wedgeEscalationSmoke
-              richSmoke
-              yieldSmoke
-              bindingsSmoke
-              bindDefaultSmoke
-              sshAuthSockSmoke
-              viewSmoke
-              nixSmoke
-              fleetSmoke
-              fleetClusterSmoke
-              shSmoke
-              worktreeSmoke
-              browserSmoke
-              browserVdomSmoke
-              vdomPropertiesSmoke
-              xBundled
-              nuBundled
-              nuTests
-              linearBundled
-              linearTriageTests
-              notionBundled
-              notionTests
-              noxAutotriageBundled
-              noxAutotriageTests
-              iphoneBundled
-              iphoneTests
               ;
           }
           // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
             inherit
-              screenBundled
               coreLocationBundled
               scriptingBridgeBundled
-              mapsBundled
-              mapsSmoke
-              vmkitBundled
-              vmkitResourceSmoke
-              imessageBundled
-              imessageSmoke
-              ghosttyBundled
-              ghosttySmoke
               ;
-          };
+          }
+          # Every discovered module dir's own tests (module.nix `tests`,
+          # darwin-gated inside the modules that are darwin-only).
+          // bundledModuleTests;
       }
       // lib.optionalAttrs (updateScript != null) {
         inherit updateScript;

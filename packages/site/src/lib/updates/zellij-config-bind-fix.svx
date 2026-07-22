@@ -1,0 +1,23 @@
+---
+id: zellij-config-bind-fix
+postedAt: "2026-07-22"
+title: zellij-config check green again after backslash keybind fix
+links:
+  - https://github.com/indexable-inc/index/issues/3927
+tags:
+  - checks
+  - dotfiles
+---
+
+The `zellij-config` check had been failing on main: two keybinds in
+`users/andrewgazelka/config/zellij` were written with a double-escaped
+backslash (`\\\\` in Nix source, four backslashes), so the KDL renderer,
+which escapes backslashes itself, emitted a key spec that decodes to two
+literal backslash characters. Zellij rejects that with `Invalid key: '\\'`
+because a character key must be a single character.
+
+The fix halves the escaping in the Nix source so the rendered KDL carries
+exactly one backslash: the pane-split binds are now `Ctrl \` in Normal mode
+and `\` / `|` in Pane mode, with the same NewPane actions as before. The
+rendered config now passes `zellij setup --check` (zellij 0.44.3) and the
+`checks.x86_64-linux.zellij-config` derivation builds green.

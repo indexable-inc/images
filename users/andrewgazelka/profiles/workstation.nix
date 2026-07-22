@@ -940,6 +940,19 @@ in {
           "if".app-id = "com.microsoft.Excel";
           run = "layout tiling";
         }
+        # ix-term's Tauri shell is a borderless window (decorations: false,
+        # the ghostty window-decoration = none look), and AppKit reports
+        # borderless windows with a non-standard AX subrole, so aerospace
+        # floats them by default. Force tiling; the second block catches the
+        # unbundled `cargo tauri dev` binary, which has no bundle id.
+        {
+          "if".app-id = "dev.ix.term";
+          run = "layout tiling";
+        }
+        {
+          "if".app-name-regex-substring = "ix-term";
+          run = "layout tiling";
+        }
         {
           "if".app-id = "com.paulsolt.SuperEasyTimerMac";
           run = "layout floating";

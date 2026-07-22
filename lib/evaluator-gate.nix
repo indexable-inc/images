@@ -34,6 +34,6 @@
             nix profile install github:indexable-inc/index#nix-ix
 
         The bootstrap surface stays stock-parseable by policy, enforced by
-        `checks.<system>.stock-nix-parse` (index#3635).
+        `checks.<system>.stock-nix-parse-*` (index#3635).
       '';
 }

@@ -313,6 +313,10 @@ impl GmailClient {
 
     /// Fetch one thread (with its messages) by id.
     #[pyo3(signature = (thread_id, format = None))]
+    // clone:ignore -- pyo3 twin of `get_message`: the shared logic already
+    // lives in `gmail_resource_future`; what remains is the per-method
+    // Python binding declaration, which cannot merge without changing the
+    // Python API (#3911).
     fn get_thread<'py>(
         &self,
         py: Python<'py>,

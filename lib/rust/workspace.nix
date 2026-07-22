@@ -192,7 +192,11 @@
   # graph via `ix.cargoUnit.selectBinaryWithTests`, so the unit graph + vendor
   # closure get generated once instead of per crate. `nix-cargo-unit` itself
   # stays on the bootstrap path (it's what builds this graph). `target != null`
-  # produces a separate cross graph used only to emit binaries.
+  # produces a separate cross graph used only to emit binaries. The `src`
+  # fileset above spans every crate, but a source body edit re-runs only the
+  # render IFD: cargo-unit plans the graph against a manifest-scoped stub of
+  # `src`, so the whole-workspace cargo resolve re-runs only when a manifest
+  # or the file set changes (lib/rust/cargo-unit.nix `plannerSource`, #3900).
   mkUnits = {target ? null}: let
     # `cargo` cfg-excludes platform-gated deps per target, so an Apple-Silicon
     # or Intel macOS unit graph never sees `alsa-sys`; gate the ALSA plumbing on

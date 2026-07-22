@@ -612,7 +612,7 @@
         # islands wrapped in `ix.evaluatorGate.require` (today: tests/);
         # everything else stays stock-parseable so external flake consumers
         # and the `nix-ix` bootstrap keep evaluating on upstream Nix,
-        # enforced by `checks.<system>.stock-nix-parse` (index#3635).
+        # enforced by the `checks.<system>.stock-nix-parse-*` shards (index#3635).
         # astlog's digit-grouping lints track the remaining toolchain
         # backlog (astlog-rules/nix.astlog).
         "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch" = {

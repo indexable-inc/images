@@ -1081,6 +1081,15 @@ mod tests {
         )
     }
 
+    /// Eval `source` on a fresh engine expecting it to fail, and hand back
+    /// nushell's rendered diagnostic for the caller to assert against.
+    fn eval_failure_diagnostic(source: &str, expectation: &str) -> EvalError {
+        let (mut inner, interrupt, job) = test_inner();
+        inner
+            .eval(source, None, None, None, &interrupt, &job, true)
+            .expect_err(expectation)
+    }
+
     #[test]
     fn intermediate_pipeline_values_are_returned_not_dropped() {
         let (mut inner, interrupt, job) = test_inner();
@@ -1222,35 +1231,17 @@ mod tests {
 
     #[test]
     fn intermediate_failure_aborts_the_eval() {
-        let (mut inner, interrupt, job) = test_inner();
-        let diagnostic = inner
-            .eval(
-                "error make {msg: 'boom'}; 'after'",
-                None,
-                None,
-                None,
-                &interrupt,
-                &job,
-                true,
-            )
-            .expect_err("an intermediate failure must abort");
+        let diagnostic = eval_failure_diagnostic(
+            "error make {msg: 'boom'}; 'after'",
+            "an intermediate failure must abort",
+        );
         assert!(diagnostic.contains("boom"), "diagnostic: {diagnostic}");
     }
 
     #[test]
     fn eval_failure_without_redirection_argv_stays_unannotated() {
-        let (mut inner, interrupt, job) = test_inner();
-        let diagnostic = inner
-            .eval(
-                "error make {msg: 'boom'}",
-                None,
-                None,
-                None,
-                &interrupt,
-                &job,
-                true,
-            )
-            .expect_err("error make must fail the eval");
+        let diagnostic =
+            eval_failure_diagnostic("error make {msg: 'boom'}", "error make must fail the eval");
         assert!(
             !diagnostic.contains("out+err>|"),
             "spurious hint: {diagnostic}"

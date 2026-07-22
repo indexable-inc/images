@@ -103,6 +103,12 @@
   Git dependency `outputHashes` are keyed by the exact `Cargo.lock` source
   string, including the locked rev, so multi-package git repos share one
   tree hash without losing package identity.
+  The planning stage is manifest-scoped the same way: the whole-workspace
+  `cargo --unit-graph` IFD runs in a content-stubbed tree (manifests
+  verbatim, every other source file an empty stub at its exact path), so a
+  source body edit re-runs only the cheap render IFD (whose include-scan
+  reads real contents), never the workspace-wide cargo resolve; adding or
+  removing files, or editing a manifest, re-plans (#3900).
   Pass `workspaceRoot = ./.` for local workspaces so `src` can stay a filtered
   build input while package scopes are carved from the real checkout root.
   Rendering fails when a unit path cannot be tied back to `src` or `vendorDir`.
@@ -145,8 +151,9 @@
 
   Returns the generated attrset with `sourceAudit`, `units`, `roots`, `checkedRoots`,
   `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
-  `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
-  derivations for inspection.
+  `policyChecks`, plus the intermediate `plannerSource`, `unitGraphJson`,
+  `unitsNix`, and `vendorDir` derivations for inspection (`unitGraphJson`'s
+  paths carry the planner stub's store prefix, not `src`'s).
 
   `testPolicyByPackage.<package>` accepts structured test-runner policy:
   `{ skip = [ "case_name" ]; testThreads = "1"; }`. `buildWorkspace` renders
@@ -264,10 +271,85 @@
 
     extraUnits = autoInjectedDepUnits // explicitExtraUnits;
 
+    # Planner input for the first IFD stage. Cargo's planning phase
+    # (`cargo build --unit-graph`) resolves the workspace from manifest
+    # CONTENTS (Cargo.toml, Cargo.lock, the in-tree cargo config) plus target
+    # discovery by file EXISTENCE (src/lib.rs, src/main.rs, src/bin/*.rs,
+    # tests/, benches/, build.rs); it never reads a target file's contents and
+    # runs no build script or proc macro. So the planner runs in a stub tree:
+    # manifests verbatim, every other file an empty stub at its exact relative
+    # path. The stub derivation's inputs are the manifest slice and the
+    # relative path list alone, so a source BODY edit changes neither input
+    # and the whole-workspace cargo resolve never re-runs; adding or removing
+    # files, or touching a manifest, re-plans, correctly (#3900). Relative
+    # paths must match `src` exactly: the render stage below maps the planned
+    # unit paths back onto the real tree.
+    #
+    # Symlinks are stubbed as empty regular files like everything else; a
+    # source with a symlinked manifest or member directory would mis-plan, and
+    # none of the callers has one (cargo fails loud on the unreadable
+    # manifest if one appears).
+    plannerSource = let
+      srcRoot = toString args.src;
+      # Every file in `src`, as workspace-relative paths (readDir's attr
+      # order, so deterministic). Eval-time: a derivation-produced `src` is
+      # realized here, which the units import below forces anyway.
+      filesUnder = dir:
+        lib.concatLists (
+          lib.mapAttrsToList (
+            name: type:
+              if type == "directory"
+              then map (child: "${name}/${child}") (filesUnder "${dir}/${name}")
+              else [name]
+          ) (builtins.readDir dir)
+        );
+      # The files cargo's planner reads by content: package manifests, the
+      # lockfile, and the workspace-level cargo config (cargo reads the
+      # config chain from cwd upward plus $CARGO_HOME, and configScript owns
+      # the latter).
+      plannerReadsContent = relPath:
+        elem (baseNameOf relPath) [
+          "Cargo.toml"
+          "Cargo.lock"
+        ]
+        || relPath == ".cargo/config.toml"
+        || relPath == ".cargo/config";
+      # The manifest slice re-ingested from `src`: manifest files plus the
+      # full directory skeleton (kept directories cost nothing and keep the
+      # filter one predicate). Changes only when a manifest changes or the
+      # tree's shape does.
+      manifestTree = builtins.path {
+        name = "cargo-unit-planner-manifests";
+        path = args.src;
+        filter = path: type:
+          type == "directory" || plannerReadsContent (lib.removePrefix (srcRoot + "/") path);
+      };
+      fileListFile = pkgs.writeText "cargo-unit-planner-file-list" (
+        lib.concatLines (filesUnder srcRoot)
+      );
+    in
+      pkgs.runCommand "cargo-unit-planner-src"
+      {
+        manifests = manifestTree;
+        fileList = fileListFile;
+      }
+      ''
+        cp -r "$manifests" "$out"
+        chmod -R u+w "$out"
+        while IFS= read -r relPath; do
+          if [ ! -e "$out/$relPath" ]; then
+            mkdir -p "$out/$(dirname "$relPath")"
+            : > "$out/$relPath"
+          fi
+        done < "$fileList"
+      '';
+
     # First IFD stage: emit Cargo's `--unit-graph` JSON for the vendored
     # workspace, one cargo invocation per `cargoTargets` entry merged into one
     # graph. Separate derivation from the render so both are independently
-    # inspectable on the workspace output.
+    # inspectable on the workspace output. Runs in the content-stubbed
+    # `plannerSource`, never `src`, so the paths in the emitted graph carry
+    # the stub's store prefix (the render stage rewrites them).
     unitGraphJson = let
       profile = rawArgs.profile or "release";
       target = rawArgs.target or null;
@@ -325,7 +407,7 @@
       ''
         ${configScript}
 
-        cd ${args.src}
+        cd ${plannerSource}
 
         pids=
         ${lib.concatStringsSep "\n" (
@@ -367,13 +449,21 @@
         cargoLockForRender = context.cargoLockPath;
       }
       ''
+        # The graph was planned in the content-stubbed `plannerSource`;
+        # rewrite that store prefix to the real `src` so the renderer slices
+        # unit paths from, and include-scans the contents of, the tree the
+        # units actually compile from. Planning is content-independent, so
+        # the rewritten graph is byte-identical to one planned in `src`
+        # directly. `|` and `&` never appear in a store path.
+        sed -e 's|${plannerSource}|${args.src}|g' ${unitGraphJson} > "$TMPDIR/unit-graph.json"
+
         nix-cargo-unit render \
           --workspace-root ${escapeShellArg args.src} \
           --vendor-root ${escapeShellArg args.vendorDir} \
           --toolchain-id ${escapeShellArg workspaceToolchainId} \
           ${lib.escapeShellArgs extraFlags} \
           --cargo-lock "$cargoLockForRender" \
-          < ${unitGraphJson} \
+          < "$TMPDIR/unit-graph.json" \
           > "$out"
       '';
 
@@ -695,6 +785,7 @@
     workspaceUnits
     // {
       inherit
+        plannerSource
         unitGraphJson
         unitsNix
         vendorDir

@@ -15,7 +15,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 clone-scanner = { workspace = true, features = ["test-support"] }
-clone-test-support.workspace = true
+clone-test-support = { workspace = true, features = ["detect"] }
 tempfile.workspace = true
 
 [lints]

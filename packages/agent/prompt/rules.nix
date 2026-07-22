@@ -461,7 +461,10 @@
         Respond as HTML, not chat text: write each response to one HTML
         file per session and keep rewriting that same file so it always
         shows the current state of the response. On the first write open
-        it with plain `open`. The user reads only the page; chat text is
+        it with `html-open` (the home config's live-reload viewer: it
+        serves the file and refreshes the tab on every rewrite); fall
+        back to plain `open` only when html-open is missing, and say so.
+        The user reads only the page; chat text is
         one pointer line at most. Layer the page: the surface is a short
         causal story in plain words (we thought X, but Y, so Z) with named
         actors, ordered what broke / damage / fix / lesson for incidents;
@@ -476,7 +479,10 @@
         (index#3872): the terse register made incident notes like the hc2
         store-copy note unreadable; the hover-explainer rewrite was the
         format the user wanted as default, and duplicate chat answers were
-        noise.
+        noise. html-open added 2026-07-21: plain `open` shows a dead
+        file:// snapshot, so rewrites were invisible without manual
+        reloads; html-open (config packages/html-open.nix, nixpkgs
+        live-server underneath) keeps the tab current.
       '';
     };
   }

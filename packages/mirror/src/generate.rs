@@ -155,6 +155,9 @@ fn dependency_closure(workspace: &Workspace, primary: &str) -> Result<BTreeMap<S
     Ok(closure)
 }
 
+/// One hero variant's renderer: (crate name, tagline) to SVG text.
+type HeroRender = fn(&str, Option<&str>) -> String;
+
 /// Compose the mirror README, synthesizing `assets/hero.svg` and its
 /// `assets/hero-dark.svg` twin first when the package ships no README of
 /// its own; a curated README references its own pair (already copied with
@@ -162,7 +165,7 @@ fn dependency_closure(workspace: &Workspace, primary: &str) -> Result<BTreeMap<S
 fn write_readme(out: &Path, package_dir: &Path, package: &readme::Package<'_>) -> Result<()> {
     let existing = fs::read_to_string(package_dir.join("README.md")).ok();
     if existing.is_none() {
-        let heroes: [(&str, fn(&str, Option<&str>) -> String); 2] = [
+        let heroes: [(&str, HeroRender); 2] = [
             (readme::HERO_PATH, readme::hero_svg),
             (readme::HERO_DARK_PATH, readme::hero_dark_svg),
         ];

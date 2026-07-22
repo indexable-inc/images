@@ -40,7 +40,10 @@ defmodule IxMcp.MCP.Tools do
                                             hanging forever on the port's
                                             never-closing stdin pipe (#3867);
                                             Cmd.sh("rg pat | head") runs a one-line
-                                            pipeline with the same EOF stdin
+                                            pipeline with the same EOF stdin; both
+                                            default cd: to the kernel's launch dir
+                                            (never the movable OS cwd, #3902), so
+                                            pass cd: or -C to work elsewhere
       Ix.trace()                            stack dump of every running job's processes,
                                             taken from outside with Process.info/2
       Ix.restart()                          cancel running jobs (sparing the calling
@@ -97,7 +100,11 @@ defmodule IxMcp.MCP.Tools do
                                             walks. Recall with
                                             Memory.recall("regex") -- whole-word
                                             rows with id, time, type, topic,
-                                            handle, body -- or raw Datalog via
+                                            handle, body -- with
+                                            Memory.semantic("question") -- the
+                                            same rows plus similarity, ranked by
+                                            embedding when no word matches --
+                                            or raw Datalog via
                                             Memory.query/1. Memory.verify(slug)
                                             records a re-check receipt;
                                             Memory.retract(id) kills a wrong
@@ -164,7 +171,10 @@ defmodule IxMcp.MCP.Tools do
         stdin pipe that never closes, so tools that fall back to reading
         stdin when given no input path -- rg and grep especially -- hang
         forever, even with cd: set (#3867). Cmd.sh("rg pat | head") runs a
-        one-line pipeline with the same EOF stdin.
+        one-line pipeline with the same EOF stdin. Without cd: both run in
+        the kernel's launch directory, never the OS cwd -- File.cd!/1
+        cannot aim a pathless git at another session's checkout (#3902) --
+        so name the directory with cd: (or git -C) when working elsewhere.
         Never build shell command strings, and never use bash here-docs or
         nested quoting to pass multi-line text -- they are brittle and can
         wedge this transport. To hand multi-line text to a program, write it

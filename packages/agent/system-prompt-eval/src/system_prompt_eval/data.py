@@ -3,6 +3,11 @@
 The datasets are data, not code: one JSON object per line so a diff shows exactly
 which behavior rubric or task changed. See ``datasets/behaviors.jsonl`` and
 ``datasets/tasks.jsonl``.
+
+``_read_lines`` is a deliberate twin of ``search_eval.data._read_lines`` (#3908):
+the eval harnesses ship as independent uv projects and ``buildUvApplication``
+has no local path-dependency seam, so keeping 13 lines in sync is cheaper than
+inventing one. If it grows, share it instead.
 """
 
 from __future__ import annotations

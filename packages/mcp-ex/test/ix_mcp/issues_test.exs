@@ -73,8 +73,19 @@ defmodule IxMcp.IssuesTest do
              Issues.pickup("indexable-inc/index#4004", action_log: log, session_id: sid, gh: gh)
 
     assert detail =~ "GitHub assign failed"
-    # The arbiter still holds the claim: a second attempt loses.
-    assert {:error, _message} =
+
+    # The arbiter still holds the claim: a rival session's attempt loses,
+    # while the claimant re-claiming reads back as its own standing win
+    # (idempotent per session, so the client seam can retry a claim across
+    # a server restart, #3903).
+    rival = ActionLog.create_session("rival", log)
+
+    assert {:error, message} =
+             Issues.pickup("indexable-inc/index#4004", action_log: log, session_id: rival, gh: gh)
+
+    assert message =~ "claimed by session picker at "
+
+    assert {:ok, _detail} =
              Issues.pickup("indexable-inc/index#4004", action_log: log, session_id: sid, gh: gh)
   end
 

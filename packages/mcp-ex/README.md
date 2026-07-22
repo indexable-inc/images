@@ -65,7 +65,7 @@ list):
 | in-cell callable | what it does |
 |---|---|
 | `Read.file(path, first \\ nil, last \\ nil)` | a file, optionally a 1-based line range |
-| `Memory.remember(slug, desc, opts)` | durable memory facts in the weave store at `WEAVE_MEMORY_STORE`; `supersedes:`/`relates:` write typed edges for `Memory.graph/1`; recall rich rows via `Memory.recall/2` (regex) or `Memory.query/1` (Datalog); `Memory.verify/2` records re-check receipts |
+| `Memory.remember(slug, desc, opts)` | durable memory facts in the weave store at `WEAVE_MEMORY_STORE`; `supersedes:`/`relates:` write typed edges for `Memory.graph/1`; recall rich rows via `Memory.recall/2` (regex), `Memory.semantic/2` (embedding similarity, a resident `weave recall --stdin`), or `Memory.query/1` (Datalog); `Memory.verify/2` records re-check receipts |
 | `Ix.trace()` | stack dump of every job's processes, from outside |
 | `Ix.restart()` | cancel jobs (sparing the calling cell), restart the workspace, restore bindings |
 | `PrWatch.start(pr, cwd, interval \\ 15, timeout \\ 3600)` | watch a PR via `gh`, notify on merge/close/timeout |

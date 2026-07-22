@@ -21,6 +21,7 @@ pub use model::{
     SendUpdates,
 };
 
+use google_auth::api_message;
 use serde::Deserialize;
 use snafu::ResultExt as _;
 use url::Url;
@@ -45,17 +46,6 @@ struct EventsPage {
     items: Vec<Event>,
     #[serde(default)]
     next_page_token: Option<String>,
-}
-
-/// The Google API error envelope: `{"error": {"code": …, "message": …}}`.
-#[derive(Deserialize)]
-struct ApiErrorBody {
-    error: ApiErrorDetail,
-}
-
-#[derive(Deserialize)]
-struct ApiErrorDetail {
-    message: String,
 }
 
 /// Calendar API client over an [`Authenticator`].
@@ -258,36 +248,4 @@ async fn decode<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> 
         .json()
         .await
         .context(HttpSnafu)
-}
-
-/// The human message from a Google error body, or the (truncated) raw body
-/// when the envelope is absent.
-fn api_message(body: &str) -> String {
-    serde_json::from_str::<ApiErrorBody>(body).map_or_else(
-        |_| {
-            let trimmed = body.trim();
-            let mut message: String = trimmed.chars().take(500).collect();
-            if message.len() < trimmed.len() {
-                message.push('…');
-            }
-            message
-        },
-        |envelope| envelope.error.message,
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::api_message;
-
-    #[test]
-    fn api_message_prefers_the_error_envelope() {
-        let body = r#"{"error":{"code":404,"message":"Not Found","errors":[]}}"#;
-        assert_eq!(api_message(body), "Not Found");
-    }
-
-    #[test]
-    fn api_message_falls_back_to_the_raw_body() {
-        assert_eq!(api_message(" upstream exploded "), "upstream exploded");
-    }
 }

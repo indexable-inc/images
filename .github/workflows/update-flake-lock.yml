@@ -27,6 +27,10 @@ on:
         description: Runner label for the update and escalation jobs
         type: string
         default: ubuntu-latest
+      submodule-paths:
+        description: "Space-separated git submodule paths to bump to their remote HEAD instead of updating flake inputs. Mutually exclusive with flake-inputs: the DS update-flake-lock action can only write flake.lock, and composing both PR mechanisms on one rolling branch would fight over it."
+        type: string
+        default: ""
       nix-preinstalled:
         description: Whether the selected runner already provides Nix
         type: boolean
@@ -71,8 +75,18 @@ jobs:
       id-token: write
       pull-requests: write
     steps:
+      - name: Validate inputs
+        if: ${{ inputs.submodule-paths != '' && inputs.flake-inputs != '' }}
+        run: |
+          echo "::error::submodule-paths and flake-inputs are mutually exclusive; pass one."
+          exit 1
+
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Submodule mode edits pins in the caller's tree; flake mode needs no
+          # submodules (and index itself has none).
+          submodules: ${{ inputs.submodule-paths != '' }}
 
       # Fully qualified, not `./.github/actions/install-nix`: this workflow is
       # reusable (`workflow_call`), and for a cross-repo caller (ix) the
@@ -82,7 +96,8 @@ jobs:
       # #2064 introduced the local action). Referencing the action by repo
       # resolves it from index@main regardless of which repo called the job.
       - name: Install Determinate Nix
-        if: ${{ !inputs.nix-preinstalled }}
+        # Submodule mode never evaluates the flake, so skip the Nix installs.
+        if: ${{ !inputs.nix-preinstalled && inputs.submodule-paths == '' }}
         uses: indexable-inc/index/.github/actions/install-nix@main
 
       # Underscore digit separators require the patched client in index and in
@@ -91,6 +106,7 @@ jobs:
       # to a caller. Fully qualified like install-nix above because a reusable
       # workflow checks out the caller's repository.
       - name: Bootstrap patched Nix client
+        if: ${{ inputs.submodule-paths == '' }}
         uses: indexable-inc/index/.github/actions/bootstrap-patched-nix@main
 
       # PRs authored by the default GITHUB_TOKEN never get pull_request CI on
@@ -117,7 +133,46 @@ jobs:
         id: trigger
         uses: indexable-inc/index/.github/actions/triggering-actor@main
 
+      # Submodule mode: move each listed pin to its remote HEAD on the same
+      # rolling branch the flake bump uses, so the escalate watcher below works
+      # identically in both modes. Manual branch/commit/PR because the DS
+      # action can only write flake.lock.
+      - name: Bump submodules
+        if: ${{ inputs.submodule-paths != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          SUBMODULE_PATHS: ${{ inputs.submodule-paths }}
+          TRIGGER_USER: ${{ steps.trigger.outputs.user }}
+        run: |
+          set -euo pipefail
+          read -ra paths <<< "$SUBMODULE_PATHS"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Push and submodule fetches authenticate with the minted token
+          # (private repos; the checkout token is job-scoped and may lack
+          # contents:write when the caller supplies an app).
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git checkout -B update-flake-lock origin/main
+          git submodule update --init -- "${paths[@]}"
+          git submodule update --remote -- "${paths[@]}"
+          if git diff --quiet; then
+            echo "submodules already at their remote HEADs; nothing to bump"
+            exit 0
+          fi
+          summary="$(git submodule status -- "${paths[@]}" \
+            | awk '{printf "%s%s@%s", sep, $2, substr($1, 1, 8); sep=", "}')"
+          git commit -am "submodules: bump ${summary}"
+          git push -f origin update-flake-lock
+          if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
+            gh pr create --base main --head update-flake-lock \
+              --title "Update Nix flake inputs" \
+              --body "Automated bump: ${summary}." \
+              ${TRIGGER_USER:+--assignee "$TRIGGER_USER" --reviewer "$TRIGGER_USER"}
+          fi
+
       - name: Update flake.lock
+        if: ${{ inputs.submodule-paths == '' }}
         uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
         with:
           base: main

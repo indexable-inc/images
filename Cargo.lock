@@ -1894,6 +1894,11 @@ dependencies = [
 [[package]]
 name = "clone-test-support"
 version = "0.1.0"
+dependencies = [
+ "clone-detect",
+ "clone-scanner",
+ "tempfile",
+]
 
 [[package]]
 name = "cmake"

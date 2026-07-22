@@ -44,6 +44,14 @@ pub struct SyncReport {
     pub total: usize,
 }
 
+/// The one-line summary the indexer logs per reconciled source.
+impl std::fmt::Display for SyncReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { uploaded, skipped, total } = self;
+        write!(f, "uploaded {uploaded}, skipped {skipped} of {total}")
+    }
+}
+
 /// Outcome of applying a log-derived delta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApplyReport {
@@ -64,6 +72,14 @@ pub struct ReplaceReport {
     pub deleted: usize,
     /// Total records in the desired set.
     pub total: usize,
+}
+
+/// The one-line summary the indexer logs per replaced source.
+impl std::fmt::Display for ReplaceReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { uploaded, skipped, deleted, total } = self;
+        write!(f, "uploaded {uploaded}, skipped {skipped}, deleted {deleted} of {total}")
+    }
 }
 
 /// Outcome of a garbage-collection pass over one record source.

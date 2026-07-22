@@ -54,11 +54,17 @@
       ''
     );
 
+  # One shape for every inline script check (#3898): the helper owns the
+  # success marker, callers own only the script and its tools. `script` may
+  # write extra evidence under "$out" (creating the directory itself first);
+  # it must not create "$out" as a plain file.
   mkScriptCheck = {
     pkgs,
     prefix,
+  }: name: {
     nativeBuildInputs ? [],
-  }: name: script:
+    script,
+  }:
     pkgs.runCommand "${prefix}-${name}"
     {
       __structuredAttrs = true;

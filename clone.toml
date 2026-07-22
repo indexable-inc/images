@@ -50,7 +50,12 @@ ignore = [
 # 2026-07-21 (#3901): lowered 0.37 -> 0.365. The 26-line NIF-binding test
 # scaffolding triplicate (plumb/tui/unibind eventually+poll) is now one staged
 # helper; measured 0.3623%. The mix.exs pair stays in the scan.
+#
+# 2026-07-22 (#3908): lowered 0.365 -> 0.36. The eval to_dict/to_json/as_dict
+# type2 triple is gone (dead method deleted, pure field dumps now
+# dataclasses.asdict); measured 0.3593%. The 13-line _read_lines type1 twin
+# stays in the scan as a documented pair (see both data.py docstrings).
 [budget]
-global_pct = 0.365
+global_pct = 0.36
 diff_pct = 0.0
 diff_base = "origin/main"

@@ -715,6 +715,7 @@
       checks
       claudePlugin
       deepMerge
+      discoverTree
       efx
       evalTimeSubstitutable
       evaluatorGate
@@ -870,7 +871,6 @@
         cargoUnitExternal
         darwinCrossPkgs
         discoverModules
-        discoverTree
         errors
         evalImageConfig
         exampleFleetsFor

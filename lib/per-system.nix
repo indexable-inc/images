@@ -1381,8 +1381,11 @@
     # A crate with a `packageSet` is built through `repoPackages` and carries
     # its own `passthru.tests`. A lib-only workspace crate has no `packageSet`
     # and is not in `repoPackages`, so select its library straight from the
-    # shared unit graph (same path ix-vt's default.nix uses). The library unit
-    # key is the Cargo package name with dashes underscored.
+    # shared unit graph (same path ix-vt's default.nix uses). The unit graph is
+    # keyed by the Cargo package name (library unit key: dashes underscored),
+    # which the registry id need not match (packages/usage/core is id
+    # `usage-core`, crate `ix-usage-core`), so read the name from the crate's
+    # own manifest.
     packageTestsFor = entry:
       if entry.packageSet != null
       then
@@ -1392,10 +1395,12 @@
           repoPackages
         ).passthru.tests or {
         }
-      else
+      else let
+        cargoPackageName = (lib.importTOML (entry.path + "/Cargo.toml")).package.name;
+      in
         (cargoUnit.selectLibraryWithTests rustWorkspace.units {
-          library = lib.replaceStrings ["-"] ["_"] entry.id;
-          packageName = entry.id;
+          library = lib.replaceStrings ["-"] ["_"] cargoPackageName;
+          packageName = cargoPackageName;
         }).passthru.tests or {
         };
     # Two keyings of the same leaf test derivations:
@@ -1454,53 +1459,49 @@
     sharded = collectRust shardedPackageChecks;
   };
 
-  lintSource = fs.toSource {
-    inherit (paths) root;
-    # The repo linter's subject is the whole tracked tree, so this is the one
-    # source that legitimately spans it; every other check takes a scoped
-    # fileset (#3896).
-    # astlog-ignore: no-whole-repo-fileset-source
-    fileset = fs.gitTracked paths.root;
+  # The repo's inline script checks, split out to live next to what they
+  # check (#3898). Every file takes only what its checks actually read and
+  # builds through the one shared script-check shape (lib/checks.nix), so
+  # the success-marker boilerplate exists in exactly one place. Sources are
+  # scoped filesets; the whole-tree exception (the lint gate) is documented
+  # at its binding in lib/dev/checks.nix.
+  mkCheck = (import ./checks.nix {inherit lib;}).mkScriptCheck {
+    inherit pkgs;
+    prefix = "check";
   };
-
-  # Every tracked `.nix` outside the tests/ fork-syntax island. The
-  # stock-nix-parse check below defines the stock-parseable surface as
-  # exactly this tree (index#3635).
-  stockParseSource = fs.toSource {
-    inherit (paths) root;
-    fileset = fs.difference (
-      fs.intersection (fs.gitTracked paths.root) (fs.fileFilter (file: file.hasExt "nix") paths.root)
-    ) (paths.root + "/tests");
+  repoPolicyChecks = import ./dev/checks.nix {
+    inherit lib pkgs paths mkCheck lint lintStage lintFix;
+    inherit (ix) ruffAnnArgs;
   };
-
-  # Just the astlog rules file plus its fixture pairs, so the rules self-test
-  # below only rebuilds when the rules or fixtures change, not on every
-  # tracked-file edit the way `lintSource` does.
-  astlogRulesSource = fs.toSource {
-    inherit (paths) root;
-    fileset = fs.intersection (fs.gitTracked paths.root) (paths.root + "/astlog-rules");
+  libUtilChecks = import ./util/checks.nix {
+    inherit pkgs mkCheck;
+    inherit (ix) formatProvenance artifacts;
   };
-
-  # Exactly what blast-radius-test reads: the test dir (script + fixtures) and
-  # the workflow whose embedded jq it pins, so the check reruns only when
-  # either changes instead of on every tracked-file edit (#3895).
-  blastRadiusTestSource = fs.toSource {
-    inherit (paths) root;
-    fileset = fs.intersection (fs.gitTracked paths.root) (
-      fs.unions [
-        (paths.root + "/packages/blast-radius/tests")
-        (paths.root + "/.github/workflows/blast-radius.yml")
-      ]
-    );
+  libServiceChecks = import ./services/checks.nix {
+    inherit pkgs mkCheck;
+    inherit (ix.mutableJson) mergeProgram;
   };
-
-  andrewZellij = import (paths.root + "/users/andrewgazelka/config/zellij") {
-    configRoot = paths.root + "/users/andrewgazelka/config";
-    inherit (pkgs) lib stdenvNoCC zellijPlugins;
-    xdgConfigHome = "/Users/andrewgazelka/.config";
+  crossDarwinChecks = import ./darwin/cross-checks.nix {
+    inherit pkgs mkCheck crossPackages;
   };
-  andrewZellijConfig = pkgs.writeText "andrewgazelka-zellij.kdl" (ix.kdl.render andrewZellij.settings);
-  andrewNushellConfig = paths.root + "/users/andrewgazelka/config/nushell";
+  astlogRuleChecks = import (paths.root + "/astlog-rules/checks.nix") {
+    inherit lib pkgs paths mkCheck;
+    inherit (repoPackages) astlog;
+  };
+  agentSurfaceChecks = import (paths.packagesRoot + "/agent/checks.nix") {
+    inherit mkCheck skillsDir agentsDir;
+  };
+  blastRadiusChecks = import (paths.packagesRoot + "/blast-radius/checks.nix") {
+    inherit lib pkgs paths mkCheck;
+  };
+  scipqlChecks = import (paths.packagesRoot + "/code/scipql/checks.nix") {
+    inherit mkCheck;
+    inherit (repoPackages) scipql;
+  };
+  personalConfigChecks = import (paths.users + "/andrewgazelka/checks.nix") {
+    inherit lib pkgs ix paths mkCheck;
+    inherit (repoPackages) nushell;
+  };
 
   # Fork-syntax island: tests/ may use fork-only syntax (underscore digit
   # separators), so a stock-Nix evaluator must hit the gate's install
@@ -1633,645 +1634,59 @@
             sdk-python-strict = tests.sdkPythonStrict;
           }
           // rustPackageSet;
-        explicitChecks = {
-          inherit (tests) eval;
-          # Boots a NixOS VM running the minecraft-blocks producer's Paper
-          # server and asserts the BlockEvents plugin's onEnable succeeded
-          # with no exception (ENG-2186). Paper's paperclip bootstrap is
-          # pre-run at build time so the VM never needs the network; see
-          # tests/minecraft-blocks-vm.nix.
-          minecraft-blocks-vm = tests.minecraftBlocksVm;
-          # Boots a NixOS VM running the Minestom spleef example server under
-          # `services.minestom` and asserts it serves the Minecraft protocol
-          # (readiness log line, open port, real server-list ping); see
-          # tests/minestom-spleef-vm.nix.
-          minestom-spleef-vm = tests.minestomSpleefVm;
-          # Builds the base OCI archive and asserts its baked nix store DB
-          # registers the pinned nixpkgs source as valid, so a fresh VM's first
-          # `nix` command does not re-copy the tree through VCFS (ix
-          # #1748/#1749/#1815). Its own check because it builds an image.
-          base-image-nix-db = tests.baseImageNixDb;
-          # The commented knob/env reference at the Home Manager consumption
-          # site (index#3710) is asserted, at eval, against what the
-          # claude-code wrapper actually accepts (functionArgs plus
-          # passthru.knobDefaults) and against the pinned CLI version, so
-          # the reference cannot silently go stale.
-          claude-code-knob-reference = import (paths.packagesRoot + "/agent/claude-code/knob-reference-check.nix") {
-            inherit lib pkgs;
-            claudeCode = repoPackages.claude-code;
-            hmModule = paths.packagesRoot + "/agent/home-manager/claude-code.nix";
-          };
-          # Skills and subagents are rendered live by the SessionStart hook.
-          # This gate forces both materialized directories to build.
-          agent-skills = pkgs.runCommand "agent-skills-check" {} ''
-            test -d ${skillsDir}
-            test -d ${agentsDir}
-            mkdir -p "$out"
-          '';
-          # The externally consumed surface (everything outside the tests/
-          # fork-syntax island) must stay parseable by *stock* upstream Nix:
-          # external flakes evaluate index with their own evaluator, and the
-          # `nix-ix` bootstrap only works while its import closure parses on
-          # stock Nix. CI runs the fork, so without this gate a stray
-          # fork-only literal outside tests/ would ship silently and brick
-          # onboarding and every external consumer (index#3635). `pkgs.nix`
-          # is upstream Nix from the nixpkgs pin, never the fork.
-          stock-nix-parse = pkgs.runCommand "stock-nix-parse-check" {nativeBuildInputs = [pkgs.nix];} ''
-            export HOME="$TMPDIR"
-            export NIX_STORE_DIR="$TMPDIR/store" NIX_STATE_DIR="$TMPDIR/state" NIX_CONF_DIR="$TMPDIR/conf"
-            fail=0
-            while IFS= read -r -d "" f; do
-              if ! nix-instantiate --parse "$f" > /dev/null 2> "$TMPDIR/err"; then
-                echo "not stock-parseable: ''${f#${stockParseSource}/}" >&2
-                cat "$TMPDIR/err" >&2
-                fail=1
-              fi
-            done < <(find ${stockParseSource} -name '*.nix' -print0 | sort -z)
-            [ "$fail" = 0 ]
-            mkdir -p "$out"
-          '';
-          # Pins the last-applied 3-way merge behind homeModules.mutable-json:
-          # first-install, preserve an app-written key, enforce a key the app
-          # changed, prune a key Nix stopped declaring, and keep a sibling key
-          # while a declared array is replaced atomically.
-          mutable-json-merge =
-            pkgs.runCommand "mutable-json-merge-check" {nativeBuildInputs = [pkgs.jq];}
-            ''
-              prog=${ix.mutableJson.mergeProgram}
-              run() { jq -ncS --argjson last "$1" --argjson live "$2" --argjson new "$3" -f "$prog"; }
-              check() {
-                expected=$(printf '%s' "$2" | jq -cS .)
-                if [ "$expected" != "$3" ]; then
-                  echo "FAIL $1: expected $expected got $3" >&2
-                  exit 1
-                fi
-                echo "ok $1"
-              }
-              check first-install '{"permissions":{"defaultMode":"bypass"}}' \
-                "$(run '{}' '{}' '{"permissions":{"defaultMode":"bypass"}}')"
-              check preserve-app-key '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
-                "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
-              check enforce-changed '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
-                "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"off"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
-              check prune-dropped '{"a":1,"c":3}' \
-                "$(run '{"a":1,"b":2}' '{"a":1,"b":2,"c":3}' '{"a":1}')"
-              check nested-atomic-array '{"p":{"allow":["x"]},"t":1}' \
-                "$(run '{"p":{"allow":["x"]}}' '{"p":{"allow":["x","y"]},"t":1}' '{"p":{"allow":["x"]}}')"
-              # Divergent live shape at a path we stop declaring must not abort:
-              # the app replaced object `permissions` with a scalar, Nix dropped it.
-              check divergent-live-shape '{"permissions":"all"}' \
-                "$(run '{"permissions":{"defaultMode":"x"}}' '{"permissions":"all"}' '{}')"
-              mkdir -p "$out"
-            '';
-          # Pins the formatProvenance seam (lib/util/format-provenance.nix): a
-          # wrapped comment-capable generator must emit the `# generated by
-          # <file>:<line>` header as line 1 and keep the format's own rendering
-          # intact below it, for both an unsafeGetAttrPos-shaped position and
-          # an explicit { file, line } pair.
-          format-provenance = let
-            sample = {greeting = "hello";};
-            tomlFile =
-              (ix.formatProvenance.withHeader pkgs {
-                format = pkgs.formats.toml {};
-                position = builtins.unsafeGetAttrPos "greeting" sample;
-              }).generate "sample.toml"
-              sample;
-            kvFile = (ix.formatProvenance.withHeader pkgs {
-              format = pkgs.formats.keyValue {};
-              position = {
-                file = "lib/per-system.nix";
-                line = 1;
-              };
-            }).generate "sample.env" {GREETING = "hello";};
-          in
-            pkgs.runCommand "format-provenance-check" {} ''
-              head -n1 ${tomlFile} | grep -Eqx '# generated by .+/per-system\.nix:[0-9]+'
-              grep -qx 'greeting = "hello"' ${tomlFile}
-              head -n1 ${kvFile} | grep -qx '# generated by lib/per-system\.nix:1'
-              grep -qx 'GREETING=hello' ${kvFile}
-              mkdir -p "$out"
-            '';
-          # Offline schema gate for the loader manifests. `deepSeq` forces
-          # every Paper / Velocity / Fabric per-version lock through
-          # `readLoaderManifest` in `lib/artifacts.nix`, so malformed JSON or a
-          # missing key fires here before any image starts evaluating. The
-          # forced surface is the parsed-and-validated manifest data, not the
-          # wrapped `fetchurl` derivations, to keep this check pure eval.
-          loader-manifests = let
-            forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
-          in
-            pkgs.runCommand "loader-manifests-check" {} ''
-              printf '%s\n' '${forced}' > "$out"
-            '';
-          # Rule self-test for the astlog lint rules (nix.astlog + rust.astlog):
-          # every (lint ...) declaration must have a committed fixture pair and
-          # fire exactly on the violating one, driven through the same `astlog
-          # scan --json` surface the lint gate uses. A lint that never fires in
-          # tests is unproven (its query may have silently stopped matching), so
-          # a missing or non-firing fixture fails the build, as does a rule
-          # without a lint declaration (it would silently drop out of the gate).
-          # Fixtures are stored as `.fixture` (not `.nix`/`.rs`) so the repo lint
-          # stages (alejandra / statix / deadnix / astlog itself) never scan the
-          # deliberately-violating snippets; the check stages each back to its
-          # ruleset's extension (`.nix` for nix.astlog, `.rs` for rust.astlog —
-          # astlog selects the grammar by file extension) before running the
-          # binary. `scan` exits nonzero on the violating fixture by design, so
-          # the jq pipelines deliberately take the JSON regardless of exit code.
-          astlog-rules =
-            pkgs.runCommand "astlog-rules-check"
-            {
-              nativeBuildInputs = [
-                repoPackages.astlog
-                pkgs.jq
-              ];
-            }
-            ''
-              root=${astlogRulesSource}/astlog-rules
-              tests="$root/tests"
-              fail=0
-              # Each ruleset paired with the source extension its fixtures take.
-              check_ruleset() {
-                rules="$1"
-                ext="$2"
-                # Rules without a (lint ...) are legitimate helper relations
-                # (joins/negation need intermediate relations), so they are not
-                # required to back a lint. The meaningful checks remain: every
-                # lint has a good/bad fixture pair that fires/stays-clean, and
-                # every fixture dir backs some lint. `astlog` itself rejects a
-                # lint that names an undefined relation at parse time.
-                for rule in $(sed -n 's/^(lint \([a-z0-9-]*\).*/\1/p' "$rules" | sort -u); do
-                  dir="$tests/$rule"
-                  if [ ! -f "$dir/bad.fixture" ] || [ ! -f "$dir/good.fixture" ]; then
-                    echo "lint $rule has no fixture pair under astlog-rules/tests/$rule" >&2
-                    fail=1
-                    continue
-                  fi
-                  work=$(mktemp -d)
-                  cp "$dir/bad.fixture" "$work/bad.$ext"
-                  cp "$dir/good.fixture" "$work/good.$ext"
-                  # `astlog scan` exits nonzero on a violating fixture by
-                  # design; capture its JSON (`|| true` so the by-design exit
-                  # does not abort the `set -o pipefail` build) and count
-                  # separately, rather than piping straight into jq.
-                  bad_json=$(astlog scan "$rules" "$work/bad.$ext" --json || true)
-                  good_json=$(astlog scan "$rules" "$work/good.$ext" --json || true)
-                  bad=$(jq --arg r "$rule" '[.[] | select(.rule == $r)] | length' <<<"$bad_json")
-                  good=$(jq --arg r "$rule" '[.[] | select(.rule == $r)] | length' <<<"$good_json")
-                  if [ "$bad" = 0 ]; then
-                    echo "lint $rule did not fire on its violating fixture" >&2
-                    fail=1
-                  fi
-                  if [ "$good" != 0 ]; then
-                    echo "lint $rule fired $good finding(s) on its valid fixture" >&2
-                    fail=1
-                  fi
-                done
-              }
-              check_ruleset "$root/nix.astlog" nix
-              check_ruleset "$root/rust.astlog" rs
-              check_ruleset "$root/cargo.astlog" toml
-              check_ruleset "$root/elixir.astlog" ex
-              check_ruleset "$root/shell-fence.astlog" nix
-              # Every fixture dir must back a lint in one of the rulesets.
-              for dir in "$tests"/*/; do
-                rule=$(basename "$dir")
-                if ! grep -q "^(lint $rule " "$root/nix.astlog" "$root/rust.astlog" "$root/cargo.astlog" "$root/elixir.astlog" "$root/shell-fence.astlog"; then
-                  echo "fixture dir astlog-rules/tests/$rule matches no lint" >&2
-                  fail=1
-                fi
-              done
-              if [ "$fail" != 0 ]; then
-                exit 1
-              fi
-              mkdir -p "$out"
-            '';
-          # End-to-end proof that scipql resolves SCIP monikers and acts only on
-          # the right symbol, exercising all three surfaces (query / fix /
-          # rename) of the real pipeline. The wrapped CLI bakes rust-analyzer +
-          # the pinned toolchain + souffle; the fixture is a dependency-free
-          # crate with a `net::Socket` and a same-named `mock::Socket`, so
-          # rust-analyzer's `cargo metadata` needs no network. Tree-sitter
-          # (astlog) could not tell the two `Socket`s apart; this is the
-          # semantic-disambiguation guarantee.
-          scipql-e2e =
-            pkgs.runCommand "scipql-e2e-check"
-            {
-              nativeBuildInputs = [repoPackages.scipql];
-            }
-            ''
-              export HOME="$TMPDIR/home"
-              mkdir -p "$HOME"
-              cp -r ${
-                builtins.path {
-                  name = "scipql-two-sockets-fixture";
-                  path = paths.packagesRoot + "/code/scipql/tests/fixtures/two-sockets";
-                }
-              } work
-              chmod -R u+w work
-              cd work
-              fail=0
-
-              scipql index . -o index.scip
-
-              # query: the two same-named structs resolve to distinct monikers.
-              # (printf, not a heredoc: a heredoc terminator would not sit at
-              # column 0 after Nix strips the indented string's indentation.)
-              printf '%s\n' \
-                '.decl sockets(sym:symbol)' \
-                '.output sockets' \
-                'sockets(s) :- occurrence(s, _, _, _, "definition"), symbol_info(s, _, "Socket").' \
-                > sockets.dl
-              q=$(scipql query index.scip sockets.dl)
-              echo "$q" | grep -q 'net/Socket#' || { echo "query: missing net/Socket# definition" >&2; fail=1; }
-              echo "$q" | grep -q 'mock/Socket#' || { echo "query: missing mock/Socket# definition" >&2; fail=1; }
-
-              # fix: the replacement text is COMPUTED in datalog (cat + a join to
-              # the display name), not a constant, and still scoped to net by moniker.
-              printf '%s\n' \
-                'edit(path, start, end, cat("Net", name)) :-' \
-                '  occurrence(sym, path, start, end, _),' \
-                '  symbol_info(sym, _, name),' \
-                '  substr(sym, strlen(sym) - strlen("net/Socket#"), strlen("net/Socket#")) = "net/Socket#".' \
-                > netname.dl
-              d=$(scipql fix index.scip netname.dl)
-              echo "$d" | grep -q 'NetSocket' || { echo "fix: datalog-computed replacement (cat) did not apply" >&2; fail=1; }
-              echo "$d" | grep -q 'src/mock.rs' && { echo "fix: computed edit wrongly touched mock.rs" >&2; fail=1; }
-
-              # rename: apply to disk, then assert the net struct + its reference
-              # changed while mock::Socket and the net struct's own fd field did not.
-              scipql rename index.scip 'net/Socket#' Stream --write
-              grep -q 'pub struct Stream' src/net.rs || { echo "rename: net::Socket was not renamed" >&2; fail=1; }
-              grep -q 'net::Stream' src/lib.rs || { echo "rename: the net::Socket reference was not renamed" >&2; fail=1; }
-              grep -q 'pub struct Socket' src/mock.rs || { echo "rename: mock::Socket was wrongly changed" >&2; fail=1; }
-              grep -q 'pub fd: i32' src/net.rs || { echo "rename: the struct's own fd field was wrongly renamed" >&2; fail=1; }
-
-              if [ "$fail" != 0 ]; then
-                echo "--- net.rs ---" >&2; cat src/net.rs >&2
-                echo "--- mock.rs ---" >&2; cat src/mock.rs >&2
-                echo "--- lib.rs ---" >&2; cat src/lib.rs >&2
-                exit 1
-              fi
-              mkdir -p "$out"
-            '';
-          run-records-session = repoPackages.run.passthru.tests.recordsSession;
-          # hive's quality lane through the same shared ix.buildElixirCheck:
-          # `mix compile --warnings-as-errors` (Elixir 1.18's set-theoretic type
-          # checker) plus format, `mix credo --strict`, and test. The lint half
-          # is also astlog-rules/elixir.astlog. See
-          # packages/andrewgazelka/hive/default.nix.
-          hive-elixir = repoPackages.hive.passthru.tests.elixir;
-          # Deterministic alloc-count gate for indexbench: runs the counting-
-          # allocator demo bench once through `indexbench assert` and fails if its
-          # allocation count exceeds the declared budget. Reproducible, unlike
-          # timing/RSS, so it earns a flake check; the timing/RSS perf job lives
-          # under `apps.bench` instead.
-          indexbench-self-demo-alloc = indexbenchSelfDemo.check;
-          lint = pkgs.runCommand "ix-lint" {nativeBuildInputs = [pkgs.coreutils];} ''
-            cp -R ${lintSource} source
-            chmod -R u+w source
-            cd source
-            ${lib.getExe lint}
-            mkdir -p "$out"
-          '';
-          # Acceptance for the fixer lanes (#3432), both halves in one gate: a
-          # deliberately violating tree becomes clean under the same check
-          # stages after one pass through its lane, and fixing the already-
-          # fixed tree is byte-identical (the no-op property that makes a
-          # clean tree a CA cache hit all the way down and `--fix` safe to
-          # re-run). Fixtures are built inline rather than committed:
-          # committed files with these violations would fail the repo's own
-          # lint stages (the same reason the astlog fixtures live as
-          # `.fixture`). Each fixture is first asserted to FAIL its check
-          # stage, so tool or selector drift that stops exercising a fixer
-          # turns this check red instead of silently proving nothing.
-          lint-fix = let
-            # One fixable finding per nix-lane tool: an unused binding
-            # (deadnix --edit), useless parens (statix fix), misformatting
-            # (alejandra). The unused lambda pattern also pins the lane's
-            # ordering: deadnix deletes `unusedArg` leaving `{}:`, a fresh
-            # empty_pattern finding only a statix fix run AFTER deadnix
-            # repairs, so a statix-first lane fails this check's post-fix
-            # statix stage.
-            violatingNix = pkgs.writeTextDir "fixture.nix" ''
-              {unusedArg}: let
-                unused = 1;
-                greeting = ("hello");
-              in {   inherit greeting; }
-            '';
-            # UP024 (IOError -> OSError): inside the shared selector's UP
-            # family with a SAFE autofix, so the lane's plain `--fix` applies
-            # it. Not C408 and friends: their fixes are unsafe-gated, the lane
-            # deliberately never passes `--unsafe-fixes`, and an unsafe-only
-            # fixture would survive the lane and fail this check's post-fix
-            # gate. Module-level so the ANN rules are satisfied without
-            # annotations.
-            violatingPython = pkgs.writeTextDir "fixture.py" ''
-              raise IOError("fixture")
-            '';
-            # A one-crate workspace whose main.rs cargo fmt rewrites: the
-            # manifest is what cargo-fmt's `cargo metadata --no-deps` walks,
-            # so this also proves the lane works from manifests alone (no
-            # Cargo.lock, no dependency sources, no network).
-            violatingRust = pkgs.runCommand "rust-fixture" {} ''
-              mkdir -p "$out/src"
-              cat > "$out/Cargo.toml" <<'EOF'
-              [package]
-              name = "fixture"
-              version = "0.0.0"
-              edition = "2021"
-              EOF
-              printf 'fn main(){println!("fixture") ;}\n' > "$out/src/main.rs"
-            '';
-            fixedNix = lintFix.lanes.nix violatingNix;
-            fixedPython = lintFix.lanes.python violatingPython;
-            fixedRust = lintFix.lanes.rust violatingRust;
-            fixedTree = lintFix.unite "lint-fix-fixture-fixed" [
-              fixedNix
-              fixedPython
-              fixedRust
-            ];
-          in
-            pkgs.runCommand "lint-fix-check"
-            {
-              nativeBuildInputs = [
-                pkgs.alejandra
-                pkgs.deadnix
-                pkgs.ruff
-                pkgs.statix
-                lintFix.rustFmtToolchain
-              ];
-            }
-            ''
-              # Pre-fix: every tool must find its planted violation.
-              if alejandra --check ${violatingNix}/fixture.nix; then
-                echo "fixture stopped violating alejandra" >&2
-                exit 1
-              fi
-              if statix check ${violatingNix}; then
-                echo "fixture stopped violating statix" >&2
-                exit 1
-              fi
-              if deadnix --fail ${violatingNix}; then
-                echo "fixture stopped violating deadnix" >&2
-                exit 1
-              fi
-              if ruff check ${ix.ruffAnnArgs} --no-cache ${violatingPython}/fixture.py; then
-                echo "fixture stopped violating ruff" >&2
-                exit 1
-              fi
-              # cargo wants a writable home even for `fmt --check`.
-              export CARGO_HOME="$TMPDIR/cargo-home"
-              if (cd ${violatingRust} && cargo fmt --all --check); then
-                echo "fixture stopped violating cargo fmt" >&2
-                exit 1
-              fi
-
-              # Post-fix: the united tree passes the same check stages the
-              # lint gate runs, through the same stage binary.
-              cp -R ${fixedTree} fixed
-              chmod -R u+w fixed
-              cd fixed
-              ${lib.getExe lintStage} alejandra
-              ${lib.getExe lintStage} statix
-              ${lib.getExe lintStage} deadnix
-              ${lib.getExe lintStage} ruff
-              # No rustfmt stage exists in the lint gate (#3433 ships the
-              # fixer only), so the post-fix rust gate is cargo fmt itself,
-              # from the same pinned toolchain the lane ran.
-              cargo fmt --all --check
-              cd ..
-
-              # No-op: a second pass over each already-fixed lane output must
-              # be byte-identical.
-              diff -r ${fixedNix} ${lintFix.lanes.nix fixedNix}
-              diff -r ${fixedPython} ${lintFix.lanes.python fixedPython}
-              diff -r ${fixedRust} ${lintFix.lanes.rust fixedRust}
-              mkdir -p "$out"
-            '';
-          filename-policy =
-            pkgs.runCommand "filename-policy-check"
-            {
-              nativeBuildInputs = [pkgs.coreutils];
-            }
-            ''
-              mkdir source
-              cd source
-              touch repository-config.json zellij-layout.kdl
-              if ${lib.getExe lintStage} filenames >output 2>&1; then
-                echo "filename policy accepted repository-config.json" >&2
-                exit 1
-              fi
-              grep -F "repository-config.json" output
-              grep -F "zellij-layout.kdl" output
-              touch "$out"
-            '';
-          # Both halves of the dirnames stage: a marker-less doubled segment is
-          # flagged, an eponym package root (package.nix) is exempt.
-          dirname-policy =
-            pkgs.runCommand "dirname-policy-check"
-            {
-              nativeBuildInputs = [pkgs.coreutils];
-            }
-            ''
-              mkdir source
-              cd source
-              mkdir -p packages/foo/foo packages/bar/bar
-              touch packages/bar/bar/package.nix
-              if ${lib.getExe lintStage} dirnames >output 2>&1; then
-                echo "dirname policy accepted packages/foo/foo" >&2
-                exit 1
-              fi
-              grep -F "packages/foo/foo" output
-              if grep -F "packages/bar/bar" output; then
-                echo "dirname policy exempted nothing: flagged the eponym package packages/bar/bar" >&2
-                exit 1
-              fi
-              touch "$out"
-            '';
-          zellij-config = pkgs.runCommand "zellij-config-check" {nativeBuildInputs = [pkgs.zellij];} ''
-            export HOME="$TMPDIR/home"
-            mkdir -p "$HOME" "$out"
-            zellij --config ${andrewZellijConfig} setup --check >"$out/check.txt"
-          '';
-          nushell-config =
-            pkgs.runCommand "nushell-config-check"
-            {
-              nativeBuildInputs = [
-                pkgs.binutils
-                pkgs.jq
-                # The fork package, not pkgs.nushell: the deployed shell that
-                # executes this config is newer than the repo's nixpkgs pin
-                # (0.114 names vs 0.113.1), so the check must run a
-                # repo-controlled interpreter that tracks upstream (#3428).
-                repoPackages.nushell
-              ];
-            }
-            ''
-              export HOME="$TMPDIR/home"
-              config_dir=$(nu --no-config-file -c '$nu.default-config-dir')
-              mkdir -p "$(dirname "$config_dir")"
-              cp -R ${andrewNushellConfig} "$config_dir"
-              cd "$config_dir"
-              diagnostics="$TMPDIR/diagnostics.jsonl"
-              nu --no-config-file --ide-check 100 config.nu > "$diagnostics"
-              if ! jq -s -e 'map(select(.type == "diagnostic")) | length == 0' "$diagnostics" >/dev/null; then
-                jq -s 'map(select(.type == "diagnostic"))' "$diagnostics" >&2
-                exit 1
-              fi
-              if [[ $(nu --no-config-file -c 'nu-check functions/infra/status.nu') != true ]]; then
-                echo "infra status probe did not parse" >&2
-                exit 1
-              fi
-              for test in tests/test_*.nu; do
-                nu --no-config-file "$test"
-              done
-              touch "$out"
-            '';
-          # Exercises the trusted half of the blast-radius PR comment: the
-          # validate/render jq embedded in its workflow, extracted from the YAML so
-          # the test can't drift from what the trusted comment job runs. The
-          # report-building logic lives in the `blast-radius` Rust crate and is
-          # covered by its own unit tests. See packages/blast-radius/tests/blast-radius-test.sh.
-          blast-radius-test =
-            pkgs.runCommand "blast-radius-test"
-            {
-              nativeBuildInputs = [
-                pkgs.bash
-                pkgs.coreutils
-                pkgs.diffutils
-                pkgs.jq
-                pkgs.yq-go
-              ];
-            }
-            ''
-              cp -R ${blastRadiusTestSource} source
-              chmod -R u+w source
-              cd source
-              export HOME="$TMPDIR/home"
-              mkdir -p "$HOME"
-              bash packages/blast-radius/tests/blast-radius-test.sh
-              mkdir -p "$out"
-            '';
-          # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
-          # which a successful build alone does not assert. `file` reads the Mach-O
-          # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
-          # rather than silently shipping a wrong-arch binary.
-          cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" {nativeBuildInputs = [pkgs.file];} ''
-            bin=${crossPackages.dag-runner-aarch64-apple-darwin}/bin/dag-runner
-            info=$(file -b "$bin")
-            echo "$info"
-            case "$info" in
-              *Mach-O*arm64*) ;;
-              *)
-                echo "expected Mach-O arm64, got: $info" >&2
-                exit 1
-                ;;
-            esac
-            mkdir -p "$out"
-          '';
-          cross-darwin-web-monitor-smoke =
-            pkgs.runCommand "cross-darwin-web-monitor-smoke" {nativeBuildInputs = [pkgs.file];}
-            ''
-              pkg=${crossPackages.nix-web-monitor-aarch64-apple-darwin}
-              bin=$pkg/bin/.nix-web-monitor-unwrapped
-              info=$(file -b "$bin")
-              echo "$info"
-              case "$info" in
-                *Mach-O*arm64*) ;;
-                *)
-                  echo "expected Mach-O arm64, got: $info" >&2
-                  exit 1
-                  ;;
-              esac
-              read -r shebang < "$pkg/bin/nix-web-monitor"
-              case "$shebang" in
-                "#!/bin/sh") ;;
-                *)
-                  echo "expected /bin/sh wrapper, got: $shebang" >&2
-                  exit 1
-                  ;;
-              esac
-              test -f "$pkg/share/nix-web-monitor/index.html"
-              mkdir -p "$out"
-            '';
-          # codex reaches Macs exclusively through the cross alias (#2690): the
-          # required gate already builds `codex-aarch64-apple-darwin` as a
-          # closure root, but a green build cannot assert architecture. Walk
-          # the shipped entrypoint exactly as a Mac would: the shim must be
-          # portable /bin/sh (a compiled wrapper would be a dead Linux ELF),
-          # and both binaries it execs -- config-launch and the codex-rs
-          # binary named by the launch spec -- must be Mach-O arm64 (#3583).
-          cross-darwin-codex-smoke =
-            pkgs.runCommand "cross-darwin-codex-smoke" {nativeBuildInputs = [pkgs.file pkgs.jq];}
-            ''
-              pkg=${crossPackages.codex-aarch64-apple-darwin}
-              read -r shebang < "$pkg/bin/codex"
-              case "$shebang" in
-                "#!/bin/sh") ;;
-                *)
-                  echo "expected /bin/sh shim, got: $shebang" >&2
-                  exit 1
-                  ;;
-              esac
-              spec=$(sed -n 's/^export IX_LAUNCH_SPEC=//p' "$pkg/bin/codex")
-              test -f "$spec"
-              launcher=$(grep -o '/nix/store/[^ "]*/bin/config-launch' "$pkg/bin/codex")
-              target=$(jq -r .target "$spec")
-              for bin in "$launcher" "$target"; do
-                info=$(file -b "$bin")
-                echo "$bin: $info"
-                case "$info" in
-                  *Mach-O*arm64*) ;;
-                  *)
-                    echo "expected Mach-O arm64 for $bin, got: $info" >&2
-                    exit 1
-                    ;;
-                esac
-              done
-              mkdir -p "$out"
-            '';
-          # btop is the first non-Rust cross package: a plain CMake/C++ build
-          # driven by the cross toolchain's standalone clang + macOS SDK lane,
-          # outside the cargo unit DAG the other smokes exercise. Assert the
-          # C++ lane also emits a real Mach-O arm64 binary (#3584).
-          cross-darwin-btop-smoke = pkgs.runCommand "cross-darwin-btop-smoke" {nativeBuildInputs = [pkgs.file];} ''
-            bin=${crossPackages.btop-aarch64-apple-darwin}/bin/btop
-            info=$(file -b "$bin")
-            echo "$info"
-            case "$info" in
-              *Mach-O*arm64*) ;;
-              *)
-                echo "expected Mach-O arm64, got: $info" >&2
-                exit 1
-                ;;
-            esac
-            mkdir -p "$out"
-          '';
-          # nom rides the same lane one level deeper: a Linux-hosted cross GHC
-          # (ix.crossGhc) compiles the whole Haskell closure to Mach-O arm64
-          # (#3606). Assert the Haskell lane emits a real Mach-O arm64 nom and
-          # that the by-name alias symlinks survived the reimplementation.
-          cross-darwin-nom-smoke = pkgs.runCommand "cross-darwin-nom-smoke" {nativeBuildInputs = [pkgs.file];} ''
-            pkg=${crossPackages.nix-output-monitor-aarch64-apple-darwin}
-            info=$(file -b "$pkg/bin/nom")
-            echo "$info"
-            case "$info" in
-              *Mach-O*arm64*) ;;
-              *)
-                echo "expected Mach-O arm64, got: $info" >&2
-                exit 1
-                ;;
-            esac
-            for alias in nom-build nom-shell; do
-              if [ ! -e "$pkg/bin/$alias" ]; then
-                echo "missing alias $alias" >&2
-                exit 1
-              fi
-            done
-            mkdir -p "$out"
-          '';
-          site-test = siteTests.all;
-        };
+        explicitChecks =
+          {
+            inherit (tests) eval;
+            # Boots a NixOS VM running the minecraft-blocks producer's Paper
+            # server and asserts the BlockEvents plugin's onEnable succeeded
+            # with no exception (ENG-2186). Paper's paperclip bootstrap is
+            # pre-run at build time so the VM never needs the network; see
+            # tests/minecraft-blocks-vm.nix.
+            minecraft-blocks-vm = tests.minecraftBlocksVm;
+            # Boots a NixOS VM running the Minestom spleef example server under
+            # `services.minestom` and asserts it serves the Minecraft protocol
+            # (readiness log line, open port, real server-list ping); see
+            # tests/minestom-spleef-vm.nix.
+            minestom-spleef-vm = tests.minestomSpleefVm;
+            # Builds the base OCI archive and asserts its baked nix store DB
+            # registers the pinned nixpkgs source as valid, so a fresh VM's first
+            # `nix` command does not re-copy the tree through VCFS (ix
+            # #1748/#1749/#1815). Its own check because it builds an image.
+            base-image-nix-db = tests.baseImageNixDb;
+            # The commented knob/env reference at the Home Manager consumption
+            # site (index#3710) is asserted, at eval, against what the
+            # claude-code wrapper actually accepts (functionArgs plus
+            # passthru.knobDefaults) and against the pinned CLI version, so
+            # the reference cannot silently go stale.
+            claude-code-knob-reference = import (paths.packagesRoot + "/agent/claude-code/knob-reference-check.nix") {
+              inherit lib pkgs;
+              claudeCode = repoPackages.claude-code;
+              hmModule = paths.packagesRoot + "/agent/home-manager/claude-code.nix";
+            };
+            run-records-session = repoPackages.run.passthru.tests.recordsSession;
+            # hive's quality lane through the same shared ix.buildElixirCheck:
+            # `mix compile --warnings-as-errors` (Elixir 1.18's set-theoretic type
+            # checker) plus format, `mix credo --strict`, and test. The lint half
+            # is also astlog-rules/elixir.astlog. See
+            # packages/andrewgazelka/hive/default.nix.
+            hive-elixir = repoPackages.hive.passthru.tests.elixir;
+            # Deterministic alloc-count gate for indexbench: runs the counting-
+            # allocator demo bench once through `indexbench assert` and fails if its
+            # allocation count exceeds the declared budget. Reproducible, unlike
+            # timing/RSS, so it earns a flake check; the timing/RSS perf job lives
+            # under `apps.bench` instead.
+            indexbench-self-demo-alloc = indexbenchSelfDemo.check;
+            site-test = siteTests.all;
+          }
+          // agentSurfaceChecks
+          // astlogRuleChecks
+          // blastRadiusChecks
+          // crossDarwinChecks
+          // libServiceChecks
+          // libUtilChecks
+          // personalConfigChecks
+          // repoPolicyChecks
+          // scipqlChecks;
         checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
       in
         assert lib.assertMsg (checkNameCollisions == [])
@@ -2294,6 +1709,11 @@
       lint-fixed = lintFix.fixed;
       lint-fix-patch = lintFix.patch;
       site-dev = site.passthru.devServer;
+      # Embedding duplicate-code finder CLI (index#3905): the ix-mcp kernel's
+      # bundled `embed` module run as `python -m embed` on the same pinned
+      # interpreter, so `nix run .#embed -- dupes . --k 40 --json` sees the
+      # same torch/MPS runtime and parquet cache as in-kernel `import embed`.
+      embed = repoPackages.mcp.passthru.embedCli;
       update-mods = updateMods;
       update-loaders = updateLoaders;
       inherit update;
