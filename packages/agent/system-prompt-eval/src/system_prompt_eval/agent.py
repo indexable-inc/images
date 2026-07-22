@@ -54,15 +54,6 @@ class RunMetrics:
     output_tokens: int = 0
     cost_usd: float = 0.0
 
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "duration_ms": self.duration_ms,
-            "num_turns": self.num_turns,
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-            "cost_usd": self.cost_usd,
-        }
-
 
 @dataclass(frozen=True, slots=True)
 class RunOutput:

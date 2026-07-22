@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import sandbox as sb
@@ -77,22 +77,6 @@ class ReResult:
     cost_usd: float = 0.0
     transcript: str = ""
     steps: list[dict[str, object]] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "case_id": self.case_id,
-            "rollout": self.rollout,
-            "reverse_engineered": self.reverse_engineered,
-            "evidence": self.evidence,
-            "answer": self.answer,
-            "error": self.error,
-            "duration_ms": self.duration_ms,
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-            "cost_usd": self.cost_usd,
-            "transcript": self.transcript,
-            "steps": self.steps,
-        }
 
 
 def _pinned_binary(ctx: EvalContext) -> Path:
@@ -226,7 +210,7 @@ def run(ctx: EvalContext, *, cases_path: Path | None = None) -> EvalReport:
         headline=headline,
         summary=summary,
         table=_render(results, did=did, scored=len(scored), errored=errored, headline=headline, binary=binary),
-        cases=[r.to_dict() for r in results],
+        cases=[asdict(r) for r in results],
     )
 
 

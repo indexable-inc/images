@@ -23,7 +23,7 @@ import stat
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import sandbox as sb
@@ -74,23 +74,6 @@ class FpResult:
     cost_usd: float = 0.0
     transcript: str = ""
     steps: list[dict[str, object]] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "case_id": self.case_id,
-            "rollout": self.rollout,
-            "verdict": self.verdict,
-            "validated": self.validated,
-            "answer": self.answer,
-            "evidence": self.evidence,
-            "error": self.error,
-            "duration_ms": self.duration_ms,
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-            "cost_usd": self.cost_usd,
-            "transcript": self.transcript,
-            "steps": self.steps,
-        }
 
 
 def _load_cases(override: Path | None = None) -> list[FpCase]:
@@ -279,7 +262,7 @@ def run(ctx: EvalContext, *, cases_path: Path | None = None) -> EvalReport:
         headline=headline,
         summary=summary,
         table=_render(results, validated=validated, scored=len(scored), errored=errored, headline=headline, sandbox=ctx.sandbox),
-        cases=[r.to_dict() for r in results],
+        cases=[asdict(r) for r in results],
     )
 
 
