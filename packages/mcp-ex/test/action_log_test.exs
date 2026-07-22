@@ -557,6 +557,20 @@ defmodule IxMcp.ActionLogTest do
     assert ActionLog.last_issue_claim_id(log) == other.id
   end
 
+  test "a nil-session re-claim is a loss, never a win (#3903)" do
+    log = start_supervised!({ActionLog, path: ":memory:", name: :action_log_nil_claims})
+
+    assert {:ok, claim} = ActionLog.claim_issue("indexable-inc/index", 3903, nil, log)
+    assert claim.session_id == nil
+
+    # nil is every anonymous caller at once, so it can never prove the
+    # standing claim is the caller's own: the retry-across-restart carve-out
+    # that lets a holder re-claim its own issue must not apply, or two
+    # anonymous sessions would both walk away believing they won.
+    assert {:error, standing} = ActionLog.claim_issue("indexable-inc/index", 3903, nil, log)
+    assert standing.id == claim.id
+  end
+
   test "a database stamped by a newer server disables logging instead of crashing" do
     path = tmp_db()
 

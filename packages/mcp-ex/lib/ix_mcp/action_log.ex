@@ -612,6 +612,22 @@ defmodule IxMcp.ActionLog do
     end
   end
 
+  # A raise in a callback (a lock outliving the busy budget, #3890) restarts
+  # this server, but the dead connection is a NIF resource: its file handle
+  # -- and any RESERVED lock a transaction it began still holds -- survives
+  # until the garbage collector reclaims the resource, which has no deadline.
+  # Until then that orphaned lock can block the freshly restarted server and
+  # every sibling instance on the shared database. Close explicitly on the
+  # way down so the lock dies with the server. The degraded `:disabled`
+  # state already closed its connection in init.
+  @impl true
+  def terminate(_reason, %{db: db}) do
+    _ = Sqlite3.close(db.conn)
+    :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
+
   # index#3539 degraded mode: the file belongs to a newer server, so writes
   # are dropped and reads answer empty rather than crashing every caller.
   # Ids still come back as integers because IxMcp.Session stores them only
