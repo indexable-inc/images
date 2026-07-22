@@ -115,15 +115,15 @@ impl StyleColor {
     /// which holds for any value libghostty-vt writes into a `GhosttyStyle`.
     unsafe fn from_raw(color: sys::GhosttyStyleColor) -> Self {
         match color.tag {
-            sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_NONE => Self::None,
+            // The MAX_VALUE arm is an ABI-width sentinel; never a real tag.
+            sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_NONE
+            | sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_TAG_MAX_VALUE => Self::None,
             sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_PALETTE => {
                 Self::Palette(unsafe { color.value.palette })
             }
             sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_RGB => {
                 Self::Rgb(unsafe { color.value.rgb }.into())
             }
-            // ABI-width sentinel; never a real tag.
-            sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_TAG_MAX_VALUE => Self::None,
         }
     }
 }
@@ -233,11 +233,11 @@ impl From<sys::GhosttyRenderStateCursorVisualStyle> for CursorVisualStyle {
         use sys::GhosttyRenderStateCursorVisualStyle as Raw;
         match s {
             Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => Self::Bar,
-            Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK => Self::Block,
+            // The MAX_VALUE arm is an ABI-width sentinel; never a real style.
+            Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK
+            | Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_MAX_VALUE => Self::Block,
             Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => Self::Underline,
             Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => Self::BlockHollow,
-            // ABI-width sentinel; never a real style.
-            Raw::GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_MAX_VALUE => Self::Block,
         }
     }
 }
@@ -555,7 +555,12 @@ impl Terminal {
             sys::ghostty_terminal_set(
                 terminal.raw,
                 sys::GhosttyTerminalOption::GHOSTTY_TERMINAL_OPT_USERDATA,
-                terminal.responses.as_ref().get().cast::<c_void>().cast_const(),
+                terminal
+                    .responses
+                    .as_ref()
+                    .get()
+                    .cast::<c_void>()
+                    .cast_const(),
             )
         })?;
         let write_pty: unsafe extern "C" fn(sys::GhosttyTerminal, *mut c_void, *const u8, usize) =
