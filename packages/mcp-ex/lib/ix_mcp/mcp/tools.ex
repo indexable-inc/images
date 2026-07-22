@@ -92,9 +92,14 @@ defmodule IxMcp.MCP.Tools do
                                             durable memory: append facts to the
                                             weave store named by
                                             WEAVE_MEMORY_STORE (loud error when
-                                            unset). Recall with
-                                            Memory.recall("regex") or raw Datalog
-                                            via Memory.query/1;
+                                            unset); supersedes:/relates: opts
+                                            write typed edges Memory.graph(slug)
+                                            walks. Recall with
+                                            Memory.recall("regex") -- whole-word
+                                            rows with id, time, type, topic,
+                                            handle, body -- or raw Datalog via
+                                            Memory.query/1. Memory.verify(slug)
+                                            records a re-check receipt;
                                             Memory.retract(id) kills a wrong
                                             fact, newer facts win over stale ones
       Agents.spawn(brief, backend: :claude | :codex | :kimi)
