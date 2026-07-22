@@ -330,6 +330,11 @@
           reason = "The render-state C API exposes only a per-cell has-hyperlink bool (the row flag may false-positive), so a libghostty-vt embedder cannot learn a cell's OSC 8 link target; the URI must be duplicated out of page memory during update() like graphemes and styles already are.";
           prExtra = "Motivating embedder: ix-term (indexable-inc/ix#8008), which renders the terminal grid in a browser and needs real anchors for OSC 8 hyperlinks.";
         };
+        "0004-build-keep-Demit-lib-vt-buildable-without-Apple-abso.patch" = {
+          upstream = "attempt";
+          reason = "A -Demit-lib-vt build cannot exec hardcoded /bin/cp and /usr/bin/ranlib in a hermetic (Nix darwin sandbox) build, and hanging the vt xcframework off install forces xcodebuild on every darwin build; resolving the tools from PATH and gating the xcframework on emit-xcframework (already default-false under emit-lib-vt) matches how the app xcframework is gated and changes nothing for developer Macs.";
+          prExtra = "Motivating embedder: ix-vt (indexable-inc/ix#8117), which builds the VT-only subtree fully sandboxed; lib/build/libghostty-vt.nix documents the boundary.";
+        };
       };
     }
     {
