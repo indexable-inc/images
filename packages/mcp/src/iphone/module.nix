@@ -42,6 +42,10 @@
     name = "ix-mcp-iphone-test";
     path = testsRoot + "/test_iphone.py";
   };
+  typeHintSupport = builtins.path {
+    name = "ix-mcp-iphone-type-hint-support";
+    path = testsRoot + "/type_hint_support.py";
+  };
   iphoneTests =
     pkgs.runCommand "ix-mcp-iphone-tests"
     {
@@ -52,6 +56,7 @@
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
       cp ${iphoneTestSource} "$TMPDIR/test_iphone.py"
+      cp ${typeHintSupport} "$TMPDIR/type_hint_support.py"
       ${lib.getExe iphoneTestPython} -m pytest "$TMPDIR/test_iphone.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp iphone tests failed:" >&2
         cat stdout stderr >&2

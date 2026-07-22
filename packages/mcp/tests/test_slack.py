@@ -9,7 +9,6 @@ posts vs. in-thread replies, by stubbing the one network primitive
 from __future__ import annotations
 
 import asyncio
-import inspect
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +21,7 @@ if SLACK_SRC.is_dir() and str(SLACK_SRC) not in sys.path:
     sys.path.insert(0, str(SLACK_SRC))
 
 import slack
+from type_hint_support import assert_type_hints_explicit
 
 # Public callables = everything exported except the error classes.
 _PUBLIC_FUNCS = [
@@ -45,17 +45,7 @@ def test_error_type() -> None:
 
 
 def test_type_hints_explicit() -> None:
-    # Mirrors the ruff ANN gate: every public function fully annotates its params
-    # and return type.
-    for func in _PUBLIC_FUNCS:
-        sig = inspect.signature(func)
-        assert sig.return_annotation is not inspect.Signature.empty, (
-            f"{func.__name__} missing return annotation"
-        )
-        for pname, param in sig.parameters.items():
-            assert param.annotation is not inspect.Parameter.empty, (
-                f"{func.__name__}({pname}) missing annotation"
-            )
+    assert_type_hints_explicit(_PUBLIC_FUNCS)
 
 
 @pytest.fixture

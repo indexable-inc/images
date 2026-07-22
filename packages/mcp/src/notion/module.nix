@@ -37,6 +37,10 @@
     name = "ix-mcp-notion-test";
     path = testsRoot + "/test_notion.py";
   };
+  typeHintSupport = builtins.path {
+    name = "ix-mcp-notion-type-hint-support";
+    path = testsRoot + "/type_hint_support.py";
+  };
   notionTests =
     pkgs.runCommand "ix-mcp-notion-tests"
     {
@@ -47,6 +51,7 @@
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
       cp ${notionTestSource} "$TMPDIR/test_notion.py"
+      cp ${typeHintSupport} "$TMPDIR/type_hint_support.py"
       ${lib.getExe notionTestPython} -m pytest "$TMPDIR/test_notion.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp notion tests failed:" >&2
         cat stdout stderr >&2

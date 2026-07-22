@@ -58,3 +58,18 @@ pub fn resolve_data_path(env_var: &str, app_dir: &str, file_name: &str) -> std::
         .join(app_dir)
         .join(file_name)
 }
+
+/// Open `url` with the platform's opener (`open` on macOS, `xdg-open`
+/// elsewhere), detached so the overlay never blocks on the launch. A spawn
+/// failure is logged under `app` but is not fatal: a bad URL should not take
+/// down the HUD.
+pub fn open_url(app: &str, url: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
+        eprintln!("{app}: failed to open {url}: {e}");
+    }
+}

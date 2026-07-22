@@ -121,12 +121,6 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-fn open_url(url: &str) {
-    if let Err(e) = std::process::Command::new("xdg-open").arg(url).spawn() {
-        eprintln!("bossbar-overlay: failed to open {url}: {e}");
-    }
-}
-
 fn shell_margin(pos: Pos, positioned: bool) -> (i32, i32, i32, i32) {
     let top = pos.y.max(0.0).round() as i32;
     let left = if positioned {
@@ -963,7 +957,7 @@ impl App {
                             win.press_pos = None;
                         }
                         if let Some(url) = click_url {
-                            open_url(&url);
+                            overlay_core::open_url("bossbar-overlay", &url);
                         }
                         if let Some(pos) = drag_to {
                             self.move_bar(ev, bar_id, pos, true);

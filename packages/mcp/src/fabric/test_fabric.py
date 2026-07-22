@@ -6,7 +6,7 @@ import json
 import re
 import sys
 import threading
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -31,19 +31,6 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 def run(coro: Coroutine[Any, Any, _T]) -> _T:
     return asyncio.run(coro)
-
-
-@pytest.fixture(autouse=True)
-def _spool_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """weave.record spools under the test's tmp dir; teardown joins flusher
-    threads BEFORE monkeypatched transports revert (a live flusher must never
-    fall back to a real URL)."""
-    from weave import spool as weave_spool
-
-    monkeypatch.setenv("WEAVE_SPOOL", str(tmp_path / "weave-spool"))
-    yield tmp_path / "weave-spool"
-    weave_spool.close_all()
-    weave_spool._down_urls.clear()
 
 
 def drain() -> None:

@@ -67,28 +67,12 @@ mod _tui_ex {
 
     impl std::error::Error for TuiError {}
 
-    /// The BEAM's main VM process ignores SIGCHLD (ports fork from
-    /// erl_child_setup, so the VM expects to own no children), and SIG_IGN
-    /// auto-reaps our PTY children before the manager's reaper can collect
-    /// their exit statuses. Restore the default disposition once, before
-    /// the first spawn; mirrors packages/plumb/ex.
-    fn ensure_sigchld_default() {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            // SAFETY: signal(2) with a standard disposition; no handler
-            // code runs.
-            unsafe {
-                libc::signal(libc::SIGCHLD, libc::SIG_DFL);
-            }
-        });
-    }
-
     /// One manager (and one tokio runtime) per BEAM node, alive for the
     /// process lifetime, exactly like tui-py's `global_manager`.
     fn manager() -> &'static tui::TuiManager {
         static MANAGER: OnceLock<tui::TuiManager> = OnceLock::new();
         MANAGER.get_or_init(|| {
-            ensure_sigchld_default();
+            unibind_ex_runtime::ensure_sigchld_default();
             tui::TuiManager::new()
         })
     }
