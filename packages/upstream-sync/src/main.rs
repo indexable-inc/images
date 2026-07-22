@@ -1,41 +1,41 @@
 //! `upstream-sync [<pkg> [<patch>]] [--open] [--dry-run] [--check-stale]`:
 //! drive the de-fork UPSTREAMING loop. This is the layer above `upstream-pr`
-//! (the per-patch branch/am/push/PR mechanism) and `rebase-patches` (the
-//! base-bump regenerator): it decides which patches to act on from the
-//! hand-written declarative intent, tracks the live state of the PRs we
-//! open, spots duplicate upstream PRs, and retires patches that land
+//! (the per-patch branch/push/PR mechanism): it decides which patches to act
+//! on from the hand-written declarative intent, tracks the live state of the
+//! PRs we open, spots duplicate upstream PRs, and retires patches that land
 //! upstream. `upstream-sync drift [--json|--markdown] [name]` is the
 //! read-only companion report (see [`upstream_sync::drift`]).
+//!
+//! The patch series lives in each fork repo's commit DAG (the jj megamerge
+//! layout, see [`upstream_sync::series`]): every patch is a commit whose
+//! parents are its true dependencies, and its identity is its SUBJECT line,
+//! which survives jj rebases. The loop opens a scratch commits-only clone
+//! per fork and walks that series; there are no in-repo patch files.
 //!
 //! The two-sided design the user set:
 //!   - DECLARATIVE INTENT lives in nix (`lib/fork-packages.nix`),
 //!     hand-written: each patch's `upstream = attempt|hold|never` + one-line
-//!     reason, and a per-repo `upstreamPolicy` (prsWelcome / aiPrsAllowed /
-//!     citation / notes). `attempt` is the human gate that authorizes the
-//!     outward act; the tool opens a real upstream PR ONLY for a patch
-//!     explicitly marked `attempt`.
+//!     reason (keyed by commit subject), and a per-repo `upstreamPolicy`
+//!     (prsWelcome / aiPrsAllowed / citation / notes). `attempt` is the
+//!     human gate that authorizes the outward act; the tool opens a real
+//!     upstream PR ONLY for a patch explicitly marked `attempt`.
 //!   - LIVE STATE is GENERATED, never hand-written: see
 //!     [`upstream_sync::status`].
 //!
 //! The loop, per `attempt` patch of each selected fork:
 //!   1. If we already track a PR: refresh its state via `gh pr view`. If
-//!      merged, mark `retired = true` and record it: the NEXT base bump's
-//!      `rebase-patches` run should drop the patch (it becomes an empty
-//!      cherry against the new base), and this tool wires a retirement note
+//!      merged, mark `retired = true` and record it: the NEXT fork-repo
+//!      rebase onto upstream should drop the patch (it becomes an empty
+//!      commit against the new base), and this tool wires a retirement note
 //!      into the plan so a human/agent verifies the drop.
 //!   2. Else search the upstream repo for a DUPLICATE/related PR by the
-//!      patch's title keywords. If found, RECORD it and SKIP loudly (a human
-//!      or agent can comment on the existing PR instead of opening a
+//!      patch's subject keywords. If found, RECORD it and SKIP loudly (a
+//!      human or agent can comment on the existing PR instead of opening a
 //!      competing one).
 //!   3. Else, if `--open` was passed, open the PR by delegating to
-//!      `upstream-pr --open` (its DAG-closure/am/push/draft-PR mechanism,
-//!      one owner). For forks opted into the closure build gates
-//!      (`closureGates = true`; RFC 0010 A3), the patch's gate derivation
-//!      (`forkClosureGates.<system>.<fork>.<patch>`) is built FIRST and a
-//!      red gate aborts that patch's PR-opening: `upstream-pr` ships the
-//!      patch as its dag.json closure against the bare base, so a
-//!      non-building closure means the upstream PR would be broken. Only the
-//!      `--open` path pays this build.
+//!      `upstream-pr --open` (branch push + draft PR, one owner). The
+//!      patch's commit ancestry IS its dependency closure, so what ships is
+//!      well-formed by construction; no separate build gate runs here.
 //!
 //! Opening a PR is the outward act, DOUBLY gated: the patch must be marked
 //! `attempt` in nix (intent gate) AND `--open` must be passed (invocation
@@ -48,16 +48,16 @@
 //! refuses to open any PR there regardless of a per-patch `attempt`, so a
 //! banned repo cannot leak a PR.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anstream::println;
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
-use color_eyre::eyre::{Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, eyre};
 use lazy_regex::regex;
 use upstream_sync::mapping::{self, Fork, Slug};
 use upstream_sync::style::{CYAN, GREEN, RED, YELLOW, paint};
-use upstream_sync::{cmd, dag, drift, gh, patch, status};
+use upstream_sync::{cmd, drift, gh, series, status};
 
 #[derive(Parser)]
 #[command(name = "upstream-sync")]
@@ -93,7 +93,7 @@ struct DriftArgs {
 struct SyncArgs {
     /// one fork package (nix | btop | ...); all if omitted
     pkg: Option<String>,
-    /// restrict to one patch file (name/prefix/substring)
+    /// restrict to one patch (commit subject / prefix / substring)
     patch: Option<String>,
     /// OPEN real upstream PRs for attempt patches (the outward act; default: refresh + plan only)
     #[arg(long)]
@@ -121,10 +121,9 @@ struct PlanEntry {
 struct ForkCtx<'a> {
     fork: &'a Fork,
     slug: &'a Slug,
-    patch_dir: &'a Path,
     repo_blocked: bool,
     repo_block_reason: &'a str,
-    mapping: Option<&'a Path>,
+    mapping: Option<&'a std::path::Path>,
     open: bool,
 }
 
@@ -184,10 +183,9 @@ fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool) -> RepoGate {
 }
 
 fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Result<()> {
-    let slug = Slug::parse(&fork.url)?;
-    let patch_dir = fork.patch_dir_abs();
+    let slug = Slug::parse(&fork.upstream_url)?;
     let policy = fork.policy();
-    let gh_ok = mapping::is_github(&fork.url);
+    let gh_ok = mapping::is_github(&fork.upstream_url);
     let RepoGate {
         blocked: repo_blocked,
         reason: repo_block_reason,
@@ -234,28 +232,39 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     let pre_last_checked = doc.last_checked.clone();
     doc.last_checked = Some(status::utc_stamp());
 
-    // The patch set to walk: dag.json node order (canonical), filtered by
-    // the optional `patch` arg.
-    let dag_file = patch_dir.join("dag.json");
-    if !dag_file.exists() {
-        println!(
-            "{}",
-            paint(
-                YELLOW,
-                &format!(
-                    "upstream-sync: {}: no dag.json; run `nix run .#rebase-patches -- dag {}`. Skipping.",
-                    fork.name, fork.name
-                )
-            )
-        );
-        return Ok(());
+    // The patch set to walk: the fork repo's commit series (scratch
+    // commits-only clone), filtered by the optional `patch` arg.
+    println!(
+        "upstream-sync: {}: reading series from {}@{}...",
+        fork.name, fork.fork_repo, fork.bookmark
+    );
+    let repo = series::Repo::open(fork)?;
+    let all_subjects = repo.subjects();
+
+    // Every intent key must name a real series commit: a key orphaned by a
+    // rebase that retitled or dropped its commit is dead intent, and dead
+    // `attempt` intent silently loses the authorization it encodes.
+    let orphaned: Vec<&String> = fork
+        .patches
+        .keys()
+        .filter(|key| !all_subjects.iter().any(|s| s == *key))
+        .collect();
+    if !orphaned.is_empty() {
+        return Err(eyre!(
+            "upstream-sync: {}: intent keys in lib/fork-packages.nix match no commit subject on {}@{}: {:?}. Series subjects: {:?}",
+            fork.name,
+            fork.fork_repo,
+            fork.bookmark,
+            orphaned,
+            all_subjects
+        ));
     }
-    let all_patches = dag::Doc::load(&dag_file)?.patch_names();
+
     let selected: Vec<String> = match args.patch.as_deref() {
-        None => all_patches,
-        Some(wanted) => all_patches
+        None => all_subjects,
+        Some(wanted) => all_subjects
             .into_iter()
-            .filter(|p| p == wanted || p.starts_with(wanted) || p.contains(wanted))
+            .filter(|s| s == wanted || s.starts_with(wanted) || s.contains(wanted))
             .collect(),
     };
     if selected.is_empty()
@@ -276,14 +285,13 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     let ctx = ForkCtx {
         fork,
         slug: &slug,
-        patch_dir: &patch_dir,
         repo_blocked,
         repo_block_reason: &repo_block_reason,
         mapping: args.mapping.as_deref(),
         open: args.open,
     };
-    for pf in &selected {
-        handle_patch(&ctx, pf, &mut doc, plan)?;
+    for subject in &selected {
+        handle_patch(&ctx, subject, &mut doc, plan)?;
     }
 
     doc.save(&fork.name, &status_path, args.dry_run)?;
@@ -295,16 +303,16 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
 
 fn handle_patch(
     ctx: &ForkCtx,
-    pf: &str,
+    subject: &str,
     doc: &mut status::Doc,
     plan: &mut Vec<PlanEntry>,
 ) -> Result<()> {
-    let stance = ctx.fork.stance(pf);
+    let stance = ctx.fork.stance(subject);
 
     // Ensure a status entry exists (mirror intent for legibility).
     let entry = doc
         .patches
-        .entry(pf.to_owned())
+        .entry(subject.to_owned())
         .or_insert_with(|| status::Entry {
             upstream: stance.clone(),
             pr: None,
@@ -317,9 +325,9 @@ fn handle_patch(
         // Not authorized for the outward act; record intent, no action.
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
-            patch: pf.to_owned(),
+            patch: subject.to_owned(),
             action: "skip".to_owned(),
-            detail: ctx.fork.reason(pf),
+            detail: ctx.fork.reason(subject),
         });
         return Ok(());
     }
@@ -328,7 +336,7 @@ fn handle_patch(
     if ctx.repo_blocked {
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
-            patch: pf.to_owned(),
+            patch: subject.to_owned(),
             action: "blocked".to_owned(),
             detail: ctx.repo_block_reason.to_owned(),
         });
@@ -336,25 +344,24 @@ fn handle_patch(
     }
 
     // 1. Already tracking a PR? Refresh its state.
-    if let Some(tracked) = doc.patches.get(pf).and_then(|e| e.pr.clone()) {
-        return refresh_tracked(ctx, pf, &tracked, doc, plan);
+    if let Some(tracked) = doc.patches.get(subject).and_then(|e| e.pr.clone()) {
+        return refresh_tracked(ctx, subject, &tracked, doc, plan);
     }
 
     // 2. No tracked PR: search for a duplicate before opening.
-    let subject = patch::subject(&ctx.patch_dir.join(pf))?;
-    let dupes = gh::find_duplicates(ctx.slug, &subject)?;
+    let dupes = gh::find_duplicates(ctx.slug, subject)?;
     if let Some(first) = dupes.first() {
         let first_url = first.url.clone();
         let count = dupes.len();
-        if let Some(entry) = doc.patches.get_mut(pf) {
+        if let Some(entry) = doc.patches.get_mut(subject) {
             entry.duplicates = dupes;
         }
         doc.append_log(&format!(
-            "{pf}: found {count} possible duplicate upstream PRs; NOT opening. First: {first_url}"
+            "{subject}: found {count} possible duplicate upstream PRs; NOT opening. First: {first_url}"
         ));
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
-            patch: pf.to_owned(),
+            patch: subject.to_owned(),
             action: "duplicate".to_owned(),
             detail: first_url,
         });
@@ -367,33 +374,33 @@ fn handle_patch(
     if !ctx.open {
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
-            patch: pf.to_owned(),
+            patch: subject.to_owned(),
             action: "would-open".to_owned(),
             detail: format!(
-                "run with --open to create: upstream-pr --open {} {pf}",
+                "run with --open to create: upstream-pr --open {} '{subject}'",
                 ctx.fork.name
             ),
         });
         return Ok(());
     }
-    open_one(ctx, pf, doc, plan)
+    open_one(ctx, subject, doc, plan)
 }
 
 fn refresh_tracked(
     ctx: &ForkCtx,
-    pf: &str,
+    subject: &str,
     tracked: &status::Pr,
     doc: &mut status::Doc,
     plan: &mut Vec<PlanEntry>,
 ) -> Result<()> {
     let Some(fresh) = gh::refresh_pr(ctx.slug, tracked.number)? else {
         doc.append_log(&format!(
-            "{pf}: tracked PR #{} no longer readable, deleted or renamed; leaving last-known state",
+            "{subject}: tracked PR #{} no longer readable, deleted or renamed; leaving last-known state",
             tracked.number
         ));
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
-            patch: pf.to_owned(),
+            patch: subject.to_owned(),
             action: "stale-pr".to_owned(),
             detail: format!("PR #{} unreadable", tracked.number),
         });
@@ -403,23 +410,24 @@ fn refresh_tracked(
     // Log a state transition when it changed.
     if fresh.state != tracked.state {
         doc.append_log(&format!(
-            "{pf}: PR #{} {} -> {} ({})",
+            "{subject}: PR #{} {} -> {} ({})",
             fresh.number, tracked.state, fresh.state, fresh.url
         ));
     }
 
-    // Merged upstream -> retire. The next base bump's rebase-patches run
-    // should drop the patch (it cherries empty against the new base); we
+    // Merged upstream -> retire. The next fork-repo rebase onto upstream
+    // should drop the patch (it becomes empty against the new base); we
     // wire that verification into the plan for a human/agent to confirm.
-    let newly_merged = fresh.state == "merged" && doc.patches.get(pf).is_some_and(|e| !e.retired);
-    if let Some(entry) = doc.patches.get_mut(pf) {
+    let newly_merged =
+        fresh.state == "merged" && doc.patches.get(subject).is_some_and(|e| !e.retired);
+    if let Some(entry) = doc.patches.get_mut(subject) {
         entry.pr = Some(fresh.clone());
         if newly_merged {
             entry.retired = true;
         }
     }
     if newly_merged {
-        doc.append_log(&format!("{pf}: merged upstream in PR #{}; marked retired. Verify the next base bump drops it as an empty cherry.", fresh.number));
+        doc.append_log(&format!("{subject}: merged upstream in PR #{}; marked retired. Verify the next rebase drops it as an empty commit.", fresh.number));
     }
 
     let action = if fresh.state == "merged" {
@@ -429,82 +437,28 @@ fn refresh_tracked(
     };
     plan.push(PlanEntry {
         fork: ctx.fork.name.clone(),
-        patch: pf.to_owned(),
+        patch: subject.to_owned(),
         action,
         detail: fresh.url,
     });
     Ok(())
 }
 
-/// Closure-gate preflight (RFC 0010 A3, #2098): `upstream-pr` ships this
-/// patch as its dag.json ancestor closure against the bare base, so for
-/// forks opted in via `closureGates = true` prove that closure BUILDS before
-/// the outward act. The gate attr is the current repo flake's (a downstream
-/// --mapping repo gates against its own flake).
-fn closure_gate_passes(
-    ctx: &ForkCtx,
-    pf: &str,
-    doc: &mut status::Doc,
-    plan: &mut Vec<PlanEntry>,
-) -> Result<bool> {
-    let system = cmd::run("nix", &["config", "show", "system"])?;
-    let gate = format!(".#forkClosureGates.{system}.{}.\"{pf}\"", ctx.fork.name);
-    println!(
-        "{}",
-        paint(
-            CYAN,
-            &format!(
-                "upstream-sync: {}: building closure gate {gate} before opening (heavy full-package build; cache hit when unchanged)",
-                ctx.fork.name
-            )
-        )
-    );
-    let res = cmd::complete("nix", &["build", "--no-link", &gate])?;
-    if res.ok() {
-        return Ok(true);
-    }
-    println!("{}", res.stderr);
-    println!(
-        "{}",
-        paint(
-            RED,
-            &format!(
-                "upstream-sync: {}: closure gate FAILED for {pf}: its dag.json closure does not build standalone, so the upstream PR would ship broken. Fix the series; NOT opening.",
-                ctx.fork.name
-            )
-        )
-    );
-    doc.append_log(&format!(
-        "{pf}: closure gate build FAILED; PR-opening aborted"
-    ));
-    plan.push(PlanEntry {
-        fork: ctx.fork.name.clone(),
-        patch: pf.to_owned(),
-        action: "gate-failed".to_owned(),
-        detail: gate,
-    });
-    Ok(false)
-}
-
 /// The outward act, only for attempt patches on a non-blocked repo, only
-/// when --open was passed. `upstream-pr` owns the branch/am/push/draft-PR
+/// when --open was passed. `upstream-pr` owns the branch-push/draft-PR
 /// mechanism; --mapping is threaded so a downstream repo's list is used.
 fn open_one(
     ctx: &ForkCtx,
-    pf: &str,
+    subject: &str,
     doc: &mut status::Doc,
     plan: &mut Vec<PlanEntry>,
 ) -> Result<()> {
-    if ctx.fork.closure_gates && !closure_gate_passes(ctx, pf, doc, plan)? {
-        return Ok(());
-    }
-
     println!(
         "{}",
         paint(
             GREEN,
             &format!(
-                "upstream-sync: {}: opening upstream PR for {pf} via upstream-pr --open",
+                "upstream-sync: {}: opening upstream PR for '{subject}' via upstream-pr --open",
                 ctx.fork.name
             )
         )
@@ -513,7 +467,7 @@ fn open_one(
     if let Some(m) = ctx.mapping {
         argv.extend(["--mapping".to_owned(), m.display().to_string()]);
     }
-    argv.extend([ctx.fork.name.clone(), pf.to_owned()]);
+    argv.extend([ctx.fork.name.clone(), subject.to_owned()]);
     let opened = cmd::complete("upstream-pr", &argv)?;
     println!("{}", opened.stdout);
     if !opened.ok() {
@@ -522,18 +476,18 @@ fn open_one(
             paint(
                 RED,
                 &format!(
-                    "upstream-sync: {}: upstream-pr failed for {pf}:",
+                    "upstream-sync: {}: upstream-pr failed for '{subject}':",
                     ctx.fork.name
                 )
             )
         );
         println!("{}", opened.stderr);
         doc.append_log(&format!(
-            "{pf}: upstream-pr --open FAILED; see output above"
+            "{subject}: upstream-pr --open FAILED; see output above"
         ));
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
-            patch: pf.to_owned(),
+            patch: subject.to_owned(),
             action: "open-failed".to_owned(),
             detail: "upstream-pr error".to_owned(),
         });
@@ -559,18 +513,18 @@ fn open_one(
             checked_at: status::utc_stamp(),
         };
         let opened_url = fresh.url.clone();
-        if let Some(entry) = doc.patches.get_mut(pf) {
+        if let Some(entry) = doc.patches.get_mut(subject) {
             entry.pr = Some(fresh);
         }
-        doc.append_log(&format!("{pf}: opened draft PR {opened_url}"));
+        doc.append_log(&format!("{subject}: opened draft PR {opened_url}"));
     } else {
         doc.append_log(&format!(
-            "{pf}: upstream-pr --open succeeded but PR URL was not parseable from output"
+            "{subject}: upstream-pr --open succeeded but PR URL was not parseable from output"
         ));
     }
     plan.push(PlanEntry {
         fork: ctx.fork.name.clone(),
-        patch: pf.to_owned(),
+        patch: subject.to_owned(),
         action: "opened".to_owned(),
         detail: pr_url.unwrap_or_else(|| "unknown".to_owned()),
     });
@@ -592,7 +546,7 @@ fn check_stale(fork: &Fork, pre_existed: bool, pre_last_checked: Option<&str>) -
             paint(
                 YELLOW,
                 &format!(
-                    "upstream-sync: {}: STALE: has {attempts} attempt patches but no committed upstream-status.json; run a non-dry-run sync and commit it.",
+                    "upstream-sync: {}: STALE: has {attempts} attempt patches but no committed status file; run a non-dry-run sync and commit it.",
                     fork.name
                 )
             )
@@ -614,7 +568,7 @@ fn check_stale(fork: &Fork, pre_existed: bool, pre_last_checked: Option<&str>) -
             paint(
                 YELLOW,
                 &format!(
-                    "upstream-sync: {}: STALE: committed upstream-status.json was last checked {prev}, {} days ago; re-run and commit.",
+                    "upstream-sync: {}: STALE: committed status file was last checked {prev}, {} days ago; re-run and commit.",
                     fork.name,
                     age.num_days()
                 )

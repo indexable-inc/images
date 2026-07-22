@@ -142,7 +142,11 @@ let
   # rejects a `-` suffix as a "malformed 32-bit x.y.z version number" but
   # tolerates `+`.
   patchedNix = let
-    patchedSrc = ix.nixSrc;
+    # nixpkgs' modular components.nix derives each component's sourceRoot
+    # from `patchedSrc.name`; a raw flake input (fetchTree result) carries no
+    # `name`. stdenv unpacks a store-path src into `stripHash $src`, which is
+    # "source" for a github tarball input, so declare exactly that.
+    patchedSrc = ix.nixSrc // {name = "source";};
     source =
       {
         version = upstreamVersion;
