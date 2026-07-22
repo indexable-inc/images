@@ -108,6 +108,29 @@ fn seeded_users() -> Fixture {
     f
 }
 
+/// Both sides insert the same new PK (7) with different values; merge under
+/// `policy` and assert the surviving row is exactly the `winner`'s: its `name`
+/// is `winner`, its `score` is `score`, and no duplicate row remains.
+fn assert_conflicting_insert_resolves(policy: &str, winner: &str, score: i64) {
+    let f = seeded_users();
+    build(&f.ours, "INSERT INTO users VALUES (7, 'ours', 70);");
+    build(&f.theirs, "INSERT INTO users VALUES (7, 'theirs', 77);");
+    f.run_with(&policies(policy))
+        .expect("policy resolves the insert conflict");
+    assert_eq!(
+        read_text(&f.ours, "SELECT name FROM users WHERE id = 7"),
+        winner
+    );
+    assert_eq!(
+        read_int(&f.ours, "SELECT score FROM users WHERE id = 7"),
+        score
+    );
+    assert_eq!(
+        read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 7"),
+        1
+    );
+}
+
 #[test]
 fn non_overlapping_row_edits_merge_clean() {
     let f = seeded_users();
@@ -416,21 +439,7 @@ fn theirs_policy_takes_their_value_on_data_conflict() {
 /// different values) is `REPLACEd` with theirs.
 #[test]
 fn theirs_policy_replaces_conflicting_insert() {
-    let f = seeded_users();
-    build(&f.ours, "INSERT INTO users VALUES (7, 'ours', 70);");
-    build(&f.theirs, "INSERT INTO users VALUES (7, 'theirs', 77);");
-
-    f.run_with(&policies("[policies]\n\"users\" = \"theirs\"\n"))
-        .expect("theirs policy resolves the insert conflict");
-
-    assert_eq!(
-        read_text(&f.ours, "SELECT name FROM users WHERE id = 7"),
-        "theirs"
-    );
-    assert_eq!(
-        read_int(&f.ours, "SELECT score FROM users WHERE id = 7"),
-        77
-    );
+    assert_conflicting_insert_resolves("[policies]\n\"users\" = \"theirs\"\n", "theirs", 77);
 }
 
 #[test]
@@ -464,21 +473,7 @@ fn policies_abort_conflicts_they_cannot_legally_resolve() {
 /// ours (the incoming insert is omitted).
 #[test]
 fn append_only_keeps_ours_on_conflicting_insert() {
-    let f = seeded_users();
-    build(&f.ours, "INSERT INTO users VALUES (8, 'ours', 80);");
-    build(&f.theirs, "INSERT INTO users VALUES (8, 'theirs', 88);");
-
-    f.run_with(&policies("[policies]\n\"users\" = \"append-only\"\n"))
-        .expect("append-only omits the conflicting insert");
-
-    assert_eq!(
-        read_text(&f.ours, "SELECT name FROM users WHERE id = 8"),
-        "ours"
-    );
-    assert_eq!(
-        read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 8"),
-        1
-    );
+    assert_conflicting_insert_resolves("[policies]\n\"users\" = \"append-only\"\n", "ours", 70);
 }
 
 /// A glob applies the policy to matching tables and leaves the rest on the
