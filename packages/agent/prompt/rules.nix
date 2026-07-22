@@ -91,9 +91,12 @@
       topics = ["workflow"];
       text = ''
         Never edit in a primary checkout: work on a dedicated `git worktree`
-        branch and verify root and branch before committing. Unmerged
-        branches are unfinished for reasons you may not see; check for open
-        PRs touching a file before nontrivial edits.
+        branch and verify root and branch before committing. Right after
+        `git worktree add`, run `git submodule update --init --recursive`:
+        a new worktree leaves submodules uninitialized even when the build
+        needs them. Unmerged branches are unfinished for reasons you may
+        not see; check for open PRs touching a file before nontrivial
+        edits.
       '';
       reason = ''
         Primary-checkout edits collided with concurrent work; parallel
