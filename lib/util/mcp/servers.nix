@@ -45,6 +45,14 @@
         command = indexCommand;
         args = indexArgs;
         envVars = indexApiEnvVars ++ fleetBeamEnvVars;
+        env = {
+          # New-issue channel broadcasting (IssueWatch, #3877) off for now:
+          # every kernel hears every filed issue, so unrelated agents pick
+          # them up and start working them. Empty = disabled (issue_watch.ex
+          # treats an empty owner list as "feed off"); delete this line to
+          # re-enable the default indexable-inc feed.
+          IX_MCP_ISSUE_WATCH_OWNERS = "";
+        };
       };
     }
     // {
