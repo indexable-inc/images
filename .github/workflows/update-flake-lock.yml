@@ -101,8 +101,10 @@ jobs:
       # #2064 introduced the local action). Referencing the action by repo
       # resolves it from index@main regardless of which repo called the job.
       - name: Install Determinate Nix
-        # Submodule mode never evaluates the flake, so skip the Nix installs.
-        if: ${{ !inputs.nix-preinstalled && inputs.submodule-paths == '' }}
+        # Submodule mode needs nix too: the bump step relocks flake inputs
+        # pinned by a bumped gitlink (ix#8180), and the tool-provision step's
+        # `ensure` builds missing CLIs from nixpkgs.
+        if: ${{ !inputs.nix-preinstalled }}
         uses: indexable-inc/index/.github/actions/install-nix@main
 
       # Underscore digit separators require the patched client in index and in
@@ -158,6 +160,7 @@ jobs:
             done < <(nix build "nixpkgs#$1" --no-link --print-out-paths)
           }
           ensure gh
+          ensure jq
       - name: Bump submodules
         if: ${{ inputs.submodule-paths != '' }}
         env:
@@ -188,6 +191,37 @@ jobs:
             summary="${summary:+${summary}, }${p}@$(git -C "$p" rev-parse --short=8 HEAD)"
           done
           git commit -am "submodules: bump ${summary}"
+          # Relock every flake input pinned by a bumped gitlink (path:./<sub>
+          # locked with a rev, as ix pins `index`; ix#8180): flake.lock
+          # records the gitlink rev plus the input's own nested locks, so a
+          # gitlink-only commit ships a stale lock that fails ix's
+          # check-submodule-lock-sync guard (ix#8149) -- since that guard
+          # landed, an unrelocked bump PR can never go green. Relock AFTER
+          # committing: nix resolves the path input's rev from the committed
+          # HEAD tree, not the submodule worktree or the git index, so a
+          # pre-commit `nix flake update` silently no-ops. Amend so gitlink
+          # and lock move in the same commit (ix#8143: a gitlink-only commit
+          # on main makes the first nix command rewrite flake.lock and dirty
+          # the checkout that prod deploys require clean).
+          relock=()
+          if [ -f flake.lock ]; then
+            for p in "${paths[@]}"; do
+              while IFS= read -r name; do
+                relock+=("$name")
+              done < <(jq -r --arg path "./$p" '.nodes as $n
+                | $n[.root].inputs // {} | to_entries[]
+                | select(.value | type == "string")
+                | select(($n[.value].locked.type? == "path")
+                         and ($n[.value].locked.path? == $path)
+                         and ($n[.value].locked | has("rev")))
+                | .key' flake.lock)
+            done
+          fi
+          if [ "${#relock[@]}" -gt 0 ]; then
+            nix flake update "${relock[@]}"
+            git add flake.lock
+            git commit --amend --no-edit
+          fi
           git push -f origin update-flake-lock
           if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
             gh pr create --base main --head update-flake-lock \
