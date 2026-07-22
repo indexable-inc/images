@@ -6,5 +6,4 @@
   cross = {
     exposeNativeDarwin = false;
   };
-  updateScript = true;
 }
