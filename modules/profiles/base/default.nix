@@ -44,7 +44,7 @@ in {
     # `cache.ix.dev` narinfo as unsigned ("ignoring substitute ... not signed by
     # any of the keys in 'trusted-public-keys'") and silently rebuilds the whole
     # system closure from source, which then dies on the guest's no-namespace
-    # sandbox and fails `ix up`. Both fields come from the one cache-identity
+    # sandbox and fails `ix apply`. Both fields come from the one cache-identity
     # source of truth (lib/cache.nix), exposed here as `ix.cache`.
     nix.settings = {
       substituters = lib.mkBefore [ix.cache.url];
@@ -142,7 +142,7 @@ in {
         # default `generateCompletions = true` invokes to derive completions
         # from man pages. Every `<pkg>-fish-completions` derivation then fails
         # ("python: can't open file …create_manpage_completions.py"), failing
-        # the whole system closure and breaking `ix up` for every fleet. The
+        # the whole system closure and breaking `ix apply` for every fleet. The
         # shell rc/integration wiring above is what we want from fish here;
         # man-page completions are an orthogonal nicety.
         # https://github.com/indexable-inc/index/issues/1632
@@ -580,7 +580,7 @@ in {
           file
           gdb
           # gnutar, gzip, and zstd ride along so any VM switched once stays
-          # switchable: the `ix up` source upload streams a tarball through
+          # switchable: the `ix apply` source upload streams a tarball through
           # `tar -x -I zstd` inside the guest, and these binaries are not
           # on NixOS' default system PATH.
           gnutar

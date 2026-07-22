@@ -1,12 +1,12 @@
 # secrets
 
 Give a VM a secret in two steps: **declare** it once in your account store with
-`ix secret set NAME`, then **attach** it when you create a VM with `ix new
+`ix secret set NAME`, then **attach** it when you create a VM with `ix apply
 --secret NAME` (or mark it a default). At boot ix **materializes** the attached
 secret inside the guest, as an environment variable by default or as a file, and
 your service consumes it from there. Values are write-only: they go in through
 `set` and are never shown back. For every flag, run `ix secret
---help` and `ix new --help` rather than copying flags from here.
+--help` and `ix apply --help` rather than copying flags from here.
 
 ## The model: declare, attach, materialize
 
@@ -15,10 +15,10 @@ your service consumes it from there. Values are write-only: they go in through
    PATH`: never from the command line. The name doubles as the
    env var name when delivered as an env var.
 2. **Attach.** A secret is only delivered to VMs you attach it to. Attach per VM
-   at create time with `ix new --secret NAME` (repeat for several), or `ix run
+   at create time with `ix apply --secret NAME` (repeat for several), or `ix run
    --secret NAME`. Or mark it a default with
    `ix secret set NAME --default` so it attaches to every new VM automatically;
-   opt a VM out with `ix new --no-default-secrets`.
+   opt a VM out with `ix apply --no-default-secrets`.
 3. **Materialize.** At boot, ix injects each attached secret into the guest, as an
    env var by default, or as a file when you set `--file`.
 
@@ -26,7 +26,7 @@ your service consumes it from there. Values are write-only: they go in through
 
 ```
 ix secret set GH_TOKEN            # paste the value at the hidden prompt
-ix new ix/base:latest --secret GH_TOKEN
+ix apply ix/base:latest --secret GH_TOKEN
 ```
 
 Inside the guest the value is the environment variable `GH_TOKEN`, available to
@@ -40,7 +40,7 @@ defaults to 0600):
 
 ```
 ix secret set NPM_TOKEN --file .npmrc --owner app --mode 0440
-ix new ix/base:latest --secret NPM_TOKEN
+ix apply ix/base:latest --secret NPM_TOKEN
 ```
 
 The guest gets `.npmrc` owned by `app` with mode 0440. `--owner` and `--mode`
@@ -59,7 +59,7 @@ require `--file`.
 Re-run `ix secret set NAME` with the new value. The store is updated, but VMs that
 already attached the old value keep it: attached copies are materialized at boot
 and persist until the VM is recreated. To pick up a rotated
-value, recreate the VM (delete and `ix new` again, or use a fleet `up`/`replace`).
+value, recreate the VM (delete and `ix apply` again, or use a fleet `up`/`replace`).
 
 ## Fleet plans
 

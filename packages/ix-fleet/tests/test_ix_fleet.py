@@ -637,10 +637,11 @@ class DownTests(unittest.TestCase):
 
 
 class SwitchSourceTests(unittest.TestCase):
-    def test_source_switch_runs_ix_up_from_source_root(self) -> None:
-        # `ix switch` was folded into `ix up` (indexable-inc/ix#4442): the source
-        # switch now runs `ix up <installable> --name <vm>` from the source root
-        # (which `ix up` auto-uploads), with `--workdir` relative to that root and
+    def test_source_switch_runs_ix_apply_from_source_root(self) -> None:
+        # `ix switch` was folded into `ix up` (indexable-inc/ix#4442), which merged
+        # into `ix apply` (indexable-inc/ix#8134): the source switch now runs
+        # `ix apply <installable> --name <vm>` from the source root (which
+        # `ix apply` auto-uploads), with `--workdir` relative to that root and
         # `--override-input NAME=VALUE` single-token flags.
         calls: list[list[str]] = []
         cwds: list[Path | None] = []
@@ -662,7 +663,7 @@ class SwitchSourceTests(unittest.TestCase):
         assert calls == [
             [
                 "ix",
-                "up",
+                "apply",
                 ".#api",
                 "--name",
                 "api",
@@ -681,7 +682,7 @@ class SwitchSourceTests(unittest.TestCase):
     def test_source_switch_rejects_workdir_outside_source_root(self) -> None:
         # `--workdir` is resolved relative to the uploaded source root, so an
         # absolute workdir outside that root has no valid mapping and must fail
-        # loudly rather than forwarding a path `ix up` cannot interpret.
+        # loudly rather than forwarding a path `ix apply` cannot interpret.
         node = ix_fleet.FleetNode.model_validate(fleet_node("api"))
 
         async def fail_run_cli(*args: typing.Any, **kwargs: typing.Any) -> str:  # noqa: ANN401
@@ -749,7 +750,7 @@ class SwitchBatchTests(unittest.TestCase):
         local = fleet_node("api")
         local["switch"]["buildOn"] = "local"
         assert not ix_fleet.is_batchable_switch(self._node(local))
-        # remote but no build VM: multi `ix up` requires --build-vm.
+        # remote but no build VM: multi `ix apply` requires --build-vm.
         no_vm = fleet_node("api")
         no_vm["switch"]["buildOn"] = "remote"
         assert not ix_fleet.is_batchable_switch(self._node(no_vm))
@@ -776,7 +777,7 @@ class SwitchBatchTests(unittest.TestCase):
         names = [[node.name for node in group] for group in groups]
         assert names == [["a", "b"], ["c"], ["d"], ["e"]]
 
-    def test_switch_nodes_from_source_builds_one_multi_ix_up(self) -> None:
+    def test_switch_nodes_from_source_builds_one_multi_ix_apply(self) -> None:
         nodes = [self._node(remote_node("web")), self._node(remote_node("worker"))]
         calls: list[list[str]] = []
         cwds: list[Path | None] = []
@@ -788,12 +789,12 @@ class SwitchBatchTests(unittest.TestCase):
             ),
         )
 
-        # One native multi-VM `ix up`: every installable, one shared --build-vm,
+        # One native multi-VM `ix apply`: every installable, one shared --build-vm,
         # and no --name (multi derives each VM name from its installable attr).
         assert calls == [
             [
                 "ix",
-                "up",
+                "apply",
                 ".#web",
                 ".#worker",
                 "--build-vm",

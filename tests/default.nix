@@ -1861,7 +1861,7 @@
 
   # A local-build node: its source switch runs a plain `nix build`, so the
   # default installable must be the `.#<node>-system` package alias, not the
-  # bare `.#<node>` (which only `ix up`'s resolver expands).
+  # bare `.#<node>` (which only `ix apply`'s resolver expands).
   localBuildFleet = ix.mkFleet {
     nodes.svc = {
       deployment.switch.buildOn = "local";
@@ -5718,7 +5718,7 @@
     fleet = [
       {
         assertion = builtins.pathExists (paths.examples + "/nixos/switch/flake.nix");
-        message = "native ix up examples should include the flake.nix entrypoint the CLI resolves";
+        message = "native ix apply examples should include the flake.nix entrypoint the CLI resolves";
       }
       {
         assertion =
@@ -5732,10 +5732,10 @@
             rel: let
               text = builtins.readFile (paths.examples + "/${rel}/README.md");
             in
-              lib.hasInfix "nix run .#" text && !(lib.hasInfix "\nix up\n" text)
+              lib.hasInfix "nix run .#" text && !(lib.hasInfix "\nix apply\n" text)
           )
           fleetWrapperReadmes;
-        message = "fleet-wrapper examples should point at generated nix run .#<example>-up commands, not bare ix up";
+        message = "fleet-wrapper examples should point at generated nix run .#<example>-up commands, not bare ix apply";
       }
       {
         assertion = fleet.nodes.db.networking.hostName == "db";
@@ -5773,7 +5773,7 @@
       {
         assertion =
           fleet.nixosConfigurations.web.config.system.build.toplevel == fleet.nodes.web.system.build.toplevel;
-        message = "fleet should expose nixosConfigurations.<node> so `ix up .#<node>` (native multi-VM switch) resolves the node toplevel";
+        message = "fleet should expose nixosConfigurations.<node> so `ix apply .#<node>` (native multi-VM switch) resolves the node toplevel";
       }
       {
         assertion = fleet.packages.web == fleet.nodes.web.ix.build.casImage;
@@ -5949,7 +5949,7 @@
       }
       {
         assertion = prefixedFleet.planValue.nodes.tprefix-api.switch.sourceInstallable == ".#tprefix-api";
-        message = "withNodePrefix should re-derive the default `.#<node>` installable to the prefixed attr so the native multi-VM `ix up` names the prefixed VM";
+        message = "withNodePrefix should re-derive the default `.#<node>` installable to the prefixed attr so the native multi-VM `ix apply` names the prefixed VM";
       }
       {
         assertion =
@@ -5959,7 +5959,7 @@
       }
       {
         assertion = localBuildFleet.planValue.nodes.svc.switch.sourceInstallable == ".#svc-system";
-        message = "a local-build node should default to the `.#<node>-system` package alias, since its plain `nix build` has no `ix up` rewrite";
+        message = "a local-build node should default to the `.#<node>-system` package alias, since its plain `nix build` has no `ix apply` rewrite";
       }
       {
         assertion =

@@ -746,7 +746,7 @@ in {
         # without user namespaces (hardening sets `allowNamespaces = false`)
         # and the VM is itself the isolation boundary, so a build that cannot
         # be sandboxed should degrade to an unsandboxed build with a warning,
-        # not kill `ix up`. Restore Nix's own upstream default of `true`.
+        # not kill `ix apply`. Restore Nix's own upstream default of `true`.
         # mkForce because the nixpkgs assignment is unconditional, not a
         # default. See indexable-inc/index#2453.
         # astlog-ignore: no-mkforce nixpkgs sets this unconditionally; #2453 owns the fix.

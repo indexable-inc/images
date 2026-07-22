@@ -478,7 +478,7 @@ async def create_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
 async def recreate_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
     """Delete the node if present, then create it on `image`.
 
-    `client.create` (like `ix new --name`) inserts against a UNIQUE (owner,
+    `client.create` (like `ix apply <image> --name`) inserts against a UNIQUE (owner,
     name) constraint and errors if the name is taken, so replacing a node's
     image is delete-then-create, not an in-place update. In-place updates are
     `switch`; this is the image-swap path used by `replace`/`up`/failed-node
@@ -749,9 +749,9 @@ RETRY_DELAY_SECS = 10
 
 
 def relative_source_workdir(source_root: Path, source_workdir: Path) -> Path:
-    # `ix up --workdir` is resolved relative to the uploaded source root, so an
+    # `ix apply --workdir` is resolved relative to the uploaded source root, so an
     # absolute workdir outside that root has no valid mapping. Reject it instead
-    # of forwarding a path `ix up` cannot interpret.
+    # of forwarding a path `ix apply` cannot interpret.
     workdir = source_workdir
     if workdir.is_absolute():
         try:
@@ -764,7 +764,7 @@ def relative_source_workdir(source_root: Path, source_workdir: Path) -> Path:
 
 
 async def run_source_switch(command: list[str], source_root: Path, label: str, *, dry_run: bool) -> None:
-    # `ix up` auto-uploads its working directory as the build source, so it runs
+    # `ix apply` auto-uploads its working directory as the build source, so it runs
     # from `source_root`. A `stream framing error` is a transient upload/transport
     # hiccup, so retry it; anything else fails the switch.
     for attempt in range(1, MAX_SWITCH_RETRIES + 1):
@@ -788,13 +788,14 @@ async def switch_node_from_source(
     *,
     dry_run: bool,
 ) -> None:
-    # `ix switch` was folded into `ix up` (indexable-inc/ix#4442): `ix up
-    # <installable> --name <vm>` is the single-target converge path, used for a
-    # node that cannot join a native multi-VM batch (see `switch_nodes_from_source`).
+    # `ix switch` was folded into `ix up` (indexable-inc/ix#4442), which merged
+    # into `ix apply` (indexable-inc/ix#8134): `ix apply <installable> --name <vm>`
+    # is the single-target converge path, used for a node that cannot join a
+    # native multi-VM batch (see `switch_nodes_from_source`).
     workdir = relative_source_workdir(source_root, source_workdir)
     command = [
         "ix",
-        "up",
+        "apply",
         node.switch.sourceInstallable,
         "--name",
         node.name,
@@ -815,7 +816,7 @@ async def switch_nodes_from_source(
     *,
     dry_run: bool,
 ) -> None:
-    # The native multi-VM switch: `ix up .#a .#b .#c --build-vm <builder>` builds
+    # The native multi-VM switch: `ix apply .#a .#b .#c --build-vm <builder>` builds
     # every closure on one warm builder and activates each on its own VM. The CLI
     # rejects `--name` and derives each VM name from the installable's simple attr,
     # and shares one `--build-vm`/`--workdir`/`--override-input` set across the
@@ -825,7 +826,7 @@ async def switch_nodes_from_source(
     assert build_vm is not None, "batched switch requires a shared build VM"
     command = [
         "ix",
-        "up",
+        "apply",
         *[node.switch.sourceInstallable for node in nodes],
         "--build-vm",
         build_vm,
@@ -838,11 +839,11 @@ async def switch_nodes_from_source(
 
 
 def is_batchable_switch(node: FleetNode) -> bool:
-    # The native multi-VM `ix up` builds on one shared `--build-vm` and names each
+    # The native multi-VM `ix apply` builds on one shared `--build-vm` and names each
     # VM from the installable's simple attr, so a node joins a batch only when it
     # builds remotely, names a build VM, and its installable is exactly
     # `.#<node-name>`. Anything else (local build, no build VM, a custom or dotted
-    # installable) falls back to the single-target `ix up --name` path.
+    # installable) falls back to the single-target `ix apply --name` path.
     switch = node.switch
     return (
         switch.buildOn == "remote"
@@ -852,7 +853,7 @@ def is_batchable_switch(node: FleetNode) -> bool:
 
 
 def batch_groups(nodes: list[FleetNode]) -> list[list[FleetNode]]:
-    # One native multi-VM `ix up` per (build VM, region, override-input set). The
+    # One native multi-VM `ix apply` per (build VM, region, override-input set). The
     # CLI shares one `--build-vm` and `--override-input` set across the batch, and
     # the server's multi-switch requires every target to share the builder's
     # region (CAS chunks are region-scoped). Grouping on region keeps a
@@ -1037,7 +1038,7 @@ async def switch_group_workflow(
     args: argparse.Namespace,
 ) -> None:
     # Pre-create every VM with its full fleet config (groups, region, secrets,
-    # ...) and snapshot it first, so the native multi-VM `ix up` only switches
+    # ...) and snapshot it first, so the native multi-VM `ix apply` only switches
     # existing VMs instead of creating them with bare defaults.
     for node in group:
         created = await ensure_node(node, dry_run=args.dry_run)
@@ -1057,7 +1058,7 @@ async def cmd_switch(plan: FleetPlan, args: argparse.Namespace) -> None:
     source_workdir = args.source_workdir or default_source_workdir(Path.cwd(), source_root)
     # `dependency_batches` yields dependency-ordered layers; switch them in order
     # so `dependsOn` still gates the switch. Within a layer the nodes are
-    # independent, so each native multi-VM batch (one `ix up` per build VM /
+    # independent, so each native multi-VM batch (one `ix apply` per build VM /
     # override set) and each single-node fallback run concurrently.
     for layer in dependency_batches(plan, args.on):
         batchable = [node for node in layer if is_batchable_switch(node)]

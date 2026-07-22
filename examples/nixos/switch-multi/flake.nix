@@ -1,5 +1,5 @@
 {
-  description = "ix up multi-VM switch: one build VM, several NixOS VMs switched in one command";
+  description = "ix apply multi-VM switch: one build VM, several NixOS VMs switched in one command";
 
   inputs = {
     # https://github.com/indexable-inc/index/issues/1537: every standalone

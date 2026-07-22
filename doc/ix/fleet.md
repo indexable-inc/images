@@ -49,7 +49,7 @@ verb (`up`, `switch`, `replace`, `bootstrap`, `health`, `status`, `logs`,
 command bakes in `--plan` so you run `nix run .#up` rather than passing the plan
 yourself (`lib/image/fleet.nix:405-426`). It also exposes
 `nixosConfigurations.<node>` (the bare node name -> that node's system) so
-`ix up .#<node>` resolves it; merge it into your flake's top-level
+`ix apply .#<node>` resolves it; merge it into your flake's top-level
 `nixosConfigurations` (`lib/image/fleet.nix:436-443`, see `templates/dev/flake.nix`).
 
 To run a verb against the raw tool instead of the wrapper:

@@ -46,7 +46,7 @@ subcommand would run without calling the API.
 | `bootstrap` | Create selected nodes from their `bootstrapImage`, wait for guest readiness, and ensure east-west group membership. Runs in dependency batches concurrently (`cmd_bootstrap`, `:881`). |
 | `up` | Push each node's replacement image and create-or-replace the node on it, then groups + health. Fans out via dag-runner (`cmd_up`, `:850`). |
 | `replace` | Like `up` but always delete-then-create the node on the pushed image (`cmd_replace`, `:836`). |
-| `switch` | In-place NixOS system switch of running nodes (target or build-from-source), snapshotting first. Remote source builds go through the platform's native multi-VM `ix up` in dependency layers (`cmd_switch`). |
+| `switch` | In-place NixOS system switch of running nodes (target or build-from-source), snapshotting first. Remote source builds go through the platform's native multi-VM `ix apply` in dependency layers (`cmd_switch`). |
 | `health` | Run each selected node's health checks (`cmd_health`, `:876`). |
 | `status` | kubectl-get for the fleet: one row per selected node with NODE, STATUS, READY (health checks passed/total), ADDRESS; `-o wide` adds REGION, IMAGE, DESIRED-IMAGE; `-o json` emits machine-readable reports. Exits 1 when any selected node is unhealthy (`cmd_status`). |
 | `logs` | Pull journalctl output from selected nodes via the guest exec channel; lines are prefixed `[node]` when more than one node is selected (`cmd_logs`). |
@@ -81,12 +81,12 @@ each node key matches its `name`; and that every `dependsOn` names a real node.
   default `auto`), optional `buildVm`, `sourceInstallable`, `overrideInputs`.
   `sourceInstallable` defaults to the bare node name `.#<node>` (not
   `.#<node>-system`): `mkFleet` exposes a `nixosConfigurations.<node>` output
-  (bare external name -> the node's system) so `ix up .#<node>` resolves it, and
-  the simple attr lets the native multi-VM `ix up .#a .#b --build-vm <builder>`
+  (bare external name -> the node's system) so `ix apply .#<node>` resolves it, and
+  the simple attr lets the native multi-VM `ix apply .#a .#b --build-vm <builder>`
   derive each VM name. The `<node>-system` package stays as a build alias. Merge
   the fleet's `nixosConfigurations` into your flake's top-level
   `nixosConfigurations` (see `examples/nixos/switch-multi/flake.nix` for a
-  direct `ix up` flake and `examples/dev/fleet/default.nix` for the mkDev
+  direct `ix apply` flake and `examples/dev/fleet/default.nix` for the mkDev
   wrapper).
 - **`ReplacementImage`** (`:34`): `imageName`, `destination`,
   `sourceInstallable` (the `.#<node>` flake attr of the node's CAS-manifest
@@ -153,10 +153,10 @@ are what `switch` is for.
   `selected_in_order` takes exactly the nodes you named with `--on` (all, in
   plan order, when empty) without pulling in their `dependsOn`, since observing
   a node needs nothing deployed first.
-- **`switch` batches in-process through the native multi-VM `ix up`.**
+- **`switch` batches in-process through the native multi-VM `ix apply`.**
   `cmd_switch` walks `dependency_batches` layers in order (so `dependsOn` still
   gates the switch) and, within each layer, groups the batchable nodes by
-  `(buildVm, overrideInputs)` and runs one `ix up .#a .#b --build-vm <builder>`
+  `(buildVm, overrideInputs)` and runs one `ix apply .#a .#b --build-vm <builder>`
   per group (`switch_nodes_from_source`); the platform builds every closure on
   the one warm builder and activates each on its own VM. Each group's VMs are
   pre-created with their full fleet config and snapshotted first
@@ -170,10 +170,10 @@ are what `switch` is for.
   -> ensure groups -> snapshot (if `node.snapshot` and not `--no-snapshot` and
   the node was not just created) -> switch -> health.
 - **Switch picks a path per node.** A node is batched into the native multi-VM
-  `ix up` only when it builds remotely, names a `buildVm`, and its installable is
-  exactly `.#<node-name>` (`is_batchable_switch`); the multi `ix up` derives each
+  `ix apply` only when it builds remotely, names a `buildVm`, and its installable is
+  exactly `.#<node-name>` (`is_batchable_switch`); the multi `ix apply` derives each
   VM name from that attr and rejects `--name`. Anything else falls back to the
-  single-target `ix up <installable> --name <node>` (`switch_node_from_source`,
+  single-target `ix apply <installable> --name <node>` (`switch_node_from_source`,
   `buildOn == "remote"` without a build VM or with a custom installable) or the
   SDK `switch_system` (`switch_node`, `buildOn` `local`/`auto`), bounded by
   `SWITCH_TIMEOUT_SECS = 1800`. Both source paths retry a transient

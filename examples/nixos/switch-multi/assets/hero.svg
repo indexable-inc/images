@@ -42,5 +42,5 @@
   <rect class="box" x="542" y="136" width="150" height="44" rx="8"/>
   <text x="617" y="163" text-anchor="middle" font-size="13" font-weight="600">edge</text>
 
-  <text x="20" y="172" font-size="12" class="muted">ix up .#web .#worker .#edge --build-vm builder</text>
+  <text x="20" y="172" font-size="12" class="muted">ix apply .#web .#worker .#edge --build-vm builder</text>
 </svg>

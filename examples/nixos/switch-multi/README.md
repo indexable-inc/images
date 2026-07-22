@@ -12,16 +12,16 @@ routing every closure through your laptop? This example switches three VMs in
 a single command, building every closure on one shared build-time VM: the
 source uploads once, each closure builds on the warm builder, and the
 activations fan out to their VMs through regional CAS. It is the
-colmena-style "build once, push many" loop as a first-class `ix up`.
+colmena-style "build once, push many" loop as a first-class `ix apply`.
 
 ## Run
 
 ```sh
 # 1. Bring up the build VM once.
-ix up .#builder
+ix apply .#builder
 
 # 2. Build all three app VMs on that builder and switch each in place.
-ix up .#web .#worker .#edge --build-vm builder
+ix apply .#web .#worker .#edge --build-vm builder
 ```
 
 The second command creates `web`, `worker`, and `edge` from `ix/base` if they
@@ -41,7 +41,7 @@ closures through your laptop.
 ## The loop
 
 1. Edit a configuration in [`ix.nix`](ix.nix): change a VM's package list.
-2. Run the multi-VM `ix up` again. Only the changed closures rebuild on the
+2. Run the multi-VM `ix apply` again. Only the changed closures rebuild on the
    builder; unchanged VMs are a no-op.
 3. `ix shell web -- rg --version` (or `worker -- jq`, `edge -- hello`)
    confirms the new closure is live.

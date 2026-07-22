@@ -23,7 +23,7 @@ model and the `ix image` verbs; for flags on any verb run `ix image --help`.
 3. **Push.** Send the archive to your registry namespace with
    `ix image push <source> <destination>`. A bare destination is stored under
    `registry.ix.dev/<your-username>/`.
-4. **Boot.** Create a VM from a registry ref with `ix new <ref>` (or
+4. **Boot.** Create a VM from a registry ref with `ix apply <ref>` (or
    `ix run`). See [cli.md](cli.md).
 
 ## Pushing, listing, removing
@@ -40,10 +40,11 @@ model and the `ix image` verbs; for flags on any verb run `ix image --help`.
 
 ## Base images
 
-`ix new` and `ix up --base` default to `ix/base:latest`, a NixOS system image.
+`ix apply ix/base:latest` boots the stock NixOS system image; on flake targets,
+`ix apply --base` also defaults to `ix/base:latest`.
 Use it for a general Linux VM, or
 pass your own fully-qualified registry ref to boot an application image.
-`ix up` needs a NixOS base so it can activate closures in place.
+The flake-converge path needs a NixOS base so it can activate closures in place.
 
 ## Example
 
@@ -58,7 +59,7 @@ pass your own fully-qualified registry ref to boot an application image.
 ```sh
 # build the archive (your flake exposes the mkImage output), then:
 ix image push ./result registry.ix.dev/<you>/hello:v1
-ix new registry.ix.dev/<you>/hello:v1 --name hello
+ix apply registry.ix.dev/<you>/hello:v1 --name hello
 ```
 
 ## Images in a fleet
@@ -89,7 +90,7 @@ reference is [../ix-fleet/overview.md](../ix-fleet/overview.md).
 
 ## See also
 
-- [cli.md](cli.md) - `ix new`, `ix up`, and the VM verbs.
+- [cli.md](cli.md) - `ix apply` and the VM verbs.
 - [lifecycle.md](lifecycle.md) - when an image swap recreates the VM.
 - [services.md](services.md) - the ready-made service modules you compose into an image.
 - [fleet.md](fleet.md) - multi-VM plans, bootstrap vs replacement images.

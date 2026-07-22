@@ -36,18 +36,18 @@ ix.networking.groups = [ "shared-db" ];
 
 Slugs are scoped per owner, limited to `[a-z0-9_-]`, and capped at 63 characters (the DNS label limit); the fleet eval rejects anything else before any RPC runs (`lib/image/platform.nix:341-343`). The platform sets `networking.search` to `ix.internal`, so unqualified names like `shared-db-primary` resolve within a group without the suffix.
 
-To create or manage groups and membership directly from the CLI, use `ix group` (`create`, `add`, `members`, ...) and join at VM creation with `ix new --group <slug>` (repeatable). Run `ix group --help` and `ix new --help` for the exact flags.
+To create or manage groups and membership directly from the CLI, use `ix group` (`create`, `add`, `members`, ...) and join at VM creation with `ix apply --group <slug>` (repeatable). Run `ix group --help` and `ix apply --help` for the exact flags.
 
 ## Make a VM public (north-south)
 
 Public reachability is per VM and is a plain on/off, set at creation or changed later:
 
-- `ix new --ipv4` allocates a public IPv4 address (default is IPv6/proxy-based ingress).
-- `ix new --l7-proxy-port <PORT>` publishes an application port through the HTTP/TLS proxy; repeat for several ports.
+- `ix apply --ipv4` allocates a public IPv4 address (default is IPv6/proxy-based ingress).
+- `ix apply --l7-proxy-port <PORT>` publishes an application port through the HTTP/TLS proxy; repeat for several ports.
 - `ix share <vm> <port>` publishes a guest TCP port on a public share hostname. Use `--public` for an open hostname or `--to <email>` (repeatable) for an email-gated one. Bare `ix share` lists existing shares.
 - `ix vm set --internet-ingress on|off` and `--internet-egress on|off` toggle inbound and outbound internet for an existing VM. East-west group traffic and the control plane keep working regardless.
 
-There is deliberately no per-port grammar on these toggles: finer filtering belongs in the image's `networking.firewall.*`. Run `ix vm set --help`, `ix new --help`, and `ix share --help` for the full flag set. See [lifecycle.md](lifecycle.md) for when these take effect across create/replace/switch.
+There is deliberately no per-port grammar on these toggles: finer filtering belongs in the image's `networking.firewall.*`. Run `ix vm set --help`, `ix apply --help`, and `ix share --help` for the full flag set. See [lifecycle.md](lifecycle.md) for when these take effect across create/replace/switch.
 
 ## Reach a VM from your laptop
 

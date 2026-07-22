@@ -553,7 +553,7 @@ in {
       indexPkgs.mynoise # `mynoise`: play myNoise.net generators (`mynoise RAIN`, `--list`); same pinned `index` input
       indexPkgs.htmlpage # `htmlpage`: render one-file TSX reports to self-contained HTML and open them; same pinned `index` input
       indexPkgs.whence # `whence <path>`: deployed file -> defining nix file:line, read from the generation's provenance.json manifest; same pinned `index` input
-      cfg.packages.ix # `ix`: fleet/VM CLI (ix up/shell/ls/snapshot); pinned via the `ix` flake input, bump with `nix flake update ix`
+      cfg.packages.ix # `ix`: fleet/VM CLI (ix apply/shell/ls/snapshot); pinned via the `ix` flake input, bump with `nix flake update ix`
       (callPackage (configRoot + "/home/ssh-hosts") {}) # `ssh-hosts`: list SSH aliases + recent ssh targets; backs the ssh-hosts Claude skill
       # fish: installed by programs.fish below (package = fishNoTests), not here
       # starship: installed by programs.starship (configured below)
