@@ -111,6 +111,7 @@ defmodule UnibindConformanceTest do
   describe "caller-exit cancellation" do
     test "a caller exiting mid-call drops the in-flight future (cancelled_count)" do
       baseline = Conf.cancelled_count()
+      started = Conf.started_count()
       parent = self()
 
       pid =
@@ -125,6 +126,15 @@ defmodule UnibindConformanceTest do
         end)
 
       assert_receive :started, 1_000
+
+      # Kill only once slow's body is running: the NIF returning proves the
+      # future was spawned, not polled, and an abort that lands before the
+      # first poll drops it with the cancel guard never armed, so
+      # cancelled_count would stay flat forever (index#3974; main runs
+      # 29893447304 and 29895946094 lost that race under CI load).
+      assert eventually(fn -> Conf.started_count() >= started + 1 end, 15_000),
+             "slow/1 never started executing"
+
       Process.exit(pid, :kill)
 
       # 15s, not the 2s default: this ran on CI hosts saturated by parallel
