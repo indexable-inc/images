@@ -91,7 +91,9 @@
       topics = ["workflow"];
       text = ''
         Never edit in a primary checkout: work on a dedicated `git worktree`
-        branch and verify root and branch before committing. Unmerged
+        branch and verify root and branch before committing. Run
+        `git submodule update --init --recursive` in each new worktree;
+        `git worktree add` leaves submodules uninitialized. Unmerged
         branches are unfinished for reasons you may not see; check for open
         PRs touching a file before nontrivial edits.
       '';
