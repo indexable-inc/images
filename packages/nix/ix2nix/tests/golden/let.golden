@@ -1,0 +1,9 @@
+let
+  base = 10;
+  scale = x: let
+    doubled = x * 2;
+    shifted = doubled + base;
+  in
+  shifted;
+in
+scale 16

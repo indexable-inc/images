@@ -1,0 +1,14 @@
+let
+  config = {
+    server = {
+      port = 80;
+    };
+  };
+  section = "server";
+in
+{
+  direct = config.server.port;
+  quoted = config.server;
+  dynamic = config.${section};
+  fallback = config.server.host or "localhost";
+}

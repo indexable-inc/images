@@ -77,6 +77,7 @@ members = [
   "packages/minecraft/sync-managed",
   "packages/mirror",
   "packages/mynoise",
+  "packages/nix/ix2nix",
   "packages/nix/nix-web-monitor/parser",
   "packages/nix/nix-web-monitor/server",
   "packages/nix/oci-image-builder",
@@ -308,6 +309,13 @@ objc2-security = "0.3"
 objc2-web-kit = "0.3"
 object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
+# JavaScript-syntax parser for ix2nix (packages/nix/ix2nix): .ix modules are
+# parsed as ES modules and mapped 1:1 onto a typed Nix expression tree.
+oxc_allocator = "0.141"
+oxc_ast = "0.141"
+oxc_diagnostics = "0.141"
+oxc_parser = "0.141"
+oxc_span = "0.141"
 mc-protocol = { path = "packages/minecraft/protocol" }
 mcp-server-info = { path = "packages/mcp/server-info" }
 md-5 = "0.10"

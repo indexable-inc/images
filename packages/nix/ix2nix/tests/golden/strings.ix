@@ -1,0 +1,9 @@
+const who = "world";
+
+export default {
+  plain: "say \"hi\"",
+  template: `hello ${who}, 1 + 1 = ${1 + 1}`,
+  dollars: "cost: ${notInterpolated}",
+  multiline: `line1
+line2`,
+};
