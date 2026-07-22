@@ -10,6 +10,7 @@
 
 mod error;
 mod model;
+mod parse;
 
 pub use error::{Error, Result};
 pub use google_auth::scopes::{ALL_KNOWN as ALL_KNOWN_SCOPES, CALENDAR_EVENTS as EVENTS_SCOPE};
@@ -20,6 +21,7 @@ pub use model::{
     Attendee, AttendeeDraft, Event, EventDraft, EventQuery, EventTime, InvalidSendUpdates, Person,
     SendUpdates,
 };
+pub use parse::{ParseEventTimeError, parse_event_end, parse_event_time};
 
 use google_auth::api_message;
 use serde::Deserialize;

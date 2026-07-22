@@ -221,7 +221,7 @@ impl From<Notify> for SendUpdates {
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Auth(args) => run_auth(args).await,
-        Command::Logout(args) => run_logout(args.json),
+        Command::Logout(args) => google_auth::run_logout(args.json).map_err(Into::into),
         Command::PrintAccessToken(args) => run_print_access_token(args).await,
         Command::List(args) => run_list(args).await,
         Command::Show(args) => run_show(args).await,
@@ -281,14 +281,6 @@ async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
     client.list_events(PRIMARY_CALENDAR, &probe).await?;
 
     consent.report_verified("Calendar");
-    Ok(())
-}
-
-/// Delete the stored grant. Idempotent: signing out when already signed out
-/// is a no-op, not an error.
-fn run_logout(json: bool) -> anyhow::Result<()> {
-    let removed = TokenStore::new()?.remove()?;
-    println!("{}", google_auth::logout_message(&removed, json));
     Ok(())
 }
 

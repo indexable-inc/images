@@ -19,7 +19,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use google_calendar::{
-    AttendeeDraft, EventDraft, EventQuery, EventTime, PRIMARY_CALENDAR, SendUpdates,
+    AttendeeDraft, EventDraft, EventQuery, PRIMARY_CALENDAR, SendUpdates, parse_event_end,
+    parse_event_time,
 };
 use google_gmail::{Attachment, MessageFormat, MessageQuery, OutgoingMessage};
 
@@ -150,8 +151,8 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<CalendarEventCreateArgs>,
     ) -> Result<String, ErrorData> {
-        let start = parse_event_time(&args.start, args.all_day, "start")?;
-        let end = parse_event_end(&args.end, args.all_day)?;
+        let start = parse_event_time(&args.start, args.all_day, "start").map_err(invalid_params)?;
+        let end = parse_event_end(&args.end, args.all_day).map_err(invalid_params)?;
         let draft = EventDraft {
             summary: args.summary,
             description: args.description,
@@ -716,51 +717,11 @@ fn into_tool_error<E: std::fmt::Display>(err: E) -> ErrorData {
     ErrorData::new(ErrorCode::INTERNAL_ERROR, err.to_string(), None)
 }
 
-fn parse_event_time(
-    input: &str,
-    all_day: bool,
-    field: &'static str,
-) -> Result<EventTime, ErrorData> {
-    if all_day {
-        let date = input.parse().map_err(|err| {
-            ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("{field}: could not parse {input:?} as YYYY-MM-DD: {err}"),
-                None,
-            )
-        })?;
-        Ok(EventTime::AllDay { date })
-    } else {
-        let date_time = DateTime::parse_from_rfc3339(input).map_err(|err| {
-            ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("{field}: could not parse {input:?} as RFC 3339: {err}"),
-                None,
-            )
-        })?;
-        Ok(EventTime::Timed {
-            date_time,
-            time_zone: None,
-        })
-    }
-}
-
-/// Parse the `end` of an event. All-day input is the inclusive last day
-/// (how the tools document it); Google's all-day `end.date` is exclusive,
-/// so convert at this boundary.
-fn parse_event_end(input: &str, all_day: bool) -> Result<EventTime, ErrorData> {
-    match parse_event_time(input, all_day, "end")? {
-        EventTime::AllDay { date } => {
-            EventTime::all_day_end_from_inclusive(date).ok_or_else(|| {
-                ErrorData::new(
-                    ErrorCode::INVALID_PARAMS,
-                    format!("end: no day follows {date}"),
-                    None,
-                )
-            })
-        }
-        timed @ EventTime::Timed { .. } => Ok(timed),
-    }
+/// Map a bad-input failure onto an `INVALID_PARAMS` tool error (the client
+/// sent something malformed), distinct from [`into_tool_error`]'s
+/// `INTERNAL_ERROR` for failures on our side.
+fn invalid_params<E: std::fmt::Display>(err: E) -> ErrorData {
+    ErrorData::new(ErrorCode::INVALID_PARAMS, err.to_string(), None)
 }
 
 /// `notify` defaults to `All` only when absent; an unrecognized value is
@@ -826,22 +787,11 @@ fn build_outgoing(args: MailComposeArgs) -> Result<OutgoingMessage, ErrorData> {
 
 #[cfg(test)]
 mod tests {
-    use google_calendar::{EventTime, SendUpdates};
+    use google_calendar::SendUpdates;
     use google_gmail::MessageFormat;
     use rmcp::model::ErrorCode;
 
-    use super::{message_format, parse_event_end, send_updates};
-
-    #[test]
-    fn all_day_end_is_inclusive_at_the_tool_and_exclusive_on_the_wire() {
-        let end = parse_event_end("2026-06-12", true).expect("parses");
-        assert_eq!(
-            end,
-            EventTime::AllDay {
-                date: "2026-06-13".parse().expect("date"),
-            }
-        );
-    }
+    use super::{message_format, send_updates};
 
     #[test]
     fn absent_notify_and_format_keep_their_documented_defaults() {
