@@ -90,23 +90,19 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Upstream nix-community/home-manager, patched in-repo
-    # (packages/home-manager/patches) with the batched activation linking
-    # series. Distinct from the `home-manager` flake input above: this is the
-    # de-forked SOURCE base (lib/fork-packages.nix), consumed by the
-    # `patched-src-home-manager` check and mirrored to the
-    # indexable-inc/home-manager `ix-patched` branch that workstation configs
-    # consume as their home-manager flake input. Pinned BY REV (autoUpdate =
-    # false): bump by hand with `nix flake update home-manager-src` + `nix run
-    # .#rebase-patches -- home-manager`, then re-push the fork branch
-    # (`mirror fork-branch --name home-manager --push`).
+    # jj megamerge fork of nix-community/home-manager carrying the batched
+    # activation linking series (lib/fork-packages.nix). Distinct from the
+    # `home-manager` flake input above: this pins the `ix-patched` megamerge
+    # commit that workstation configs also consume. Pinned BY REV (autoUpdate
+    # = false): bump = jj rebase in indexable-inc/home-manager, push bookmark
+    # + pin ref, repin here.
     home-manager-src = {
-      url = "github:nix-community/home-manager/f4d01c1d87c7c2ec909549165d5a8338f1bd3315";
+      url = "github:indexable-inc/home-manager/d27be2a29e5feb86a9196838b1bb0fdc44119cb8";
       flake = false;
     };
 
-    # Upstream rust-lang/rust-clippy, patched in-repo with the restriction lints
-    # tuned for LLM-assisted codebases (packages/llm-clippy/patches). Pinned BY
+    # jj megamerge fork of rust-lang/rust-clippy with the restriction lints
+    # tuned for LLM-assisted codebases (lib/fork-packages.nix). Pinned BY
     # REV, not a floating branch: clippy-driver links rustc_private and must match
     # the repo's pinned nightly (root rust-toolchain.toml) exactly, or every
     # per-unit clippy gate fails with E0514 "compiled by an incompatible version
@@ -118,95 +114,86 @@
     # that gap (toolchain file + rustc_private adaptations). Bump this rev only
     # inside the same change that bumps the repo rust toolchain; if the new
     # nightly matches an upstream sync commit, drop the bridge patch, otherwise
-    # regenerate it. Then `nix run .#rebase-patches -- clippy` for the rest.
+    # regenerate it. Then jj-rebase the fork repo onto the new base. The rev is
+    # the indexable-inc/rust-clippy `ix-patched` megamerge (upstream base
+    # 512551c8 plus the lint patch DAG).
     clippy-src = {
-      url = "github:rust-lang/rust-clippy/512551c839fc711fc925c8a862a9abd4bde0812f";
+      url = "github:indexable-inc/rust-clippy/cd551e2408a75638f6b0ac7ea88aa0dd18b8aea3";
       flake = false;
     };
 
-    # Upstream git/git, patched in-repo (packages/git/patches): linked
-    # worktrees borrow the common-dir submodule object store instead of
-    # re-cloning every submodule from the network (#3610). Pinned by rev to
-    # the v2.54.0 tag because the package overlays nixpkgs' git recipe, so
-    # the base must track nixpkgs' git version, never free-float: on a
-    # nixpkgs git bump, repin to the matching tag and run
-    # `nix run .#rebase-patches -- dag git`.
+    # jj megamerge fork of git/git: linked worktrees borrow the common-dir
+    # submodule object store instead of re-cloning every submodule from the
+    # network (#3610). The base tracks nixpkgs' git version (v2.54.0 tag)
+    # because the package overlays nixpkgs' git recipe, so it never
+    # free-floats: on a nixpkgs git bump, jj-rebase indexable-inc/git onto
+    # the matching tag and repin.
     git-src = {
-      url = "github:git/git/94f057755b7941b321fd11fec1b2e3ca5313a4e0";
+      url = "github:indexable-inc/git/aeb6a0b6680f5cc542df031b6dbe2983e1d4b981";
       flake = false;
     };
 
-    # Upstream openai/codex, patched in-repo (packages/agent/codex/patches).
-    # Pinned BY REV: importCargoLock removes the aggregate cargoHash, but git
-    # dependencies still carry fixed output hashes in the package. A
-    # branch-loose URL lets a blanket `nix flake update` float the source past
-    # those hashes, which broke every ix prod deploy for 13h on 2026-07-07.
-    # Bump this rev deliberately, run `nix run .#rebase-patches -- codex`, then
-    # build Codex and refresh any git dependency hashes named by Nix. The
-    # scheduled content and fork updaters intentionally leave this input alone.
+    # jj megamerge fork of openai/codex. Pinned BY REV: importCargoLock
+    # removes the aggregate cargoHash, but git dependencies still carry fixed
+    # output hashes in the package. A branch-loose URL lets a blanket
+    # `nix flake update` float the source past those hashes, which broke every
+    # ix prod deploy for 13h on 2026-07-07. Bump deliberately: jj-rebase
+    # indexable-inc/codex, repin here, then build Codex and refresh any git
+    # dependency hashes named by Nix. The scheduled content and fork updaters
+    # intentionally leave this input alone.
     codex-src = {
-      url = "github:openai/codex/1f0566d3f59298d1bb88820a0d35294f1eeb07ea";
+      url = "github:indexable-inc/codex/1ca1b52d1e4e579d0fd35b17e5fd8e719b84bd33";
       flake = false;
     };
 
-    # The maintained fork is the application source. Its own flake owns the
-    # Rust lock, toolchain, and platform build.
+    # The maintained jj megamerge fork is the application source. Its own
+    # flake owns the Rust lock, toolchain, and platform build; `ix-patched`
+    # is the megamerge bookmark (upstream v1.10.x base plus the patch DAG).
     zed-src.url = "github:indexable-inc/zed/ix-patched";
 
-    # Unmodified upstream base for validating and regenerating the patch series
-    # that produces zed-src's ix-patched branch.
-    zed-upstream = {
-      url = "github:zed-industries/zed/v1.10.x";
-      flake = false;
-    };
-
-    # Upstream NixOS/nix, patched in-repo (packages/nix/nix/patches). Pinned BY
-    # REV at tag 2.34.7, the version the hydra daemon runs (`nix store info` ->
-    # `Version: 2.34.7`): nix is our daemon toolchain, so the patched package
-    # must stay a protocol-compatible drop-in for the running daemon. The base
-    # moves DELIBERATELY, never under a routine `nix flake update`
-    # (fork-packages.nix marks it `autoUpdate = false`, so the scheduled
-    # fork-sync leaves it alone): bump this rev only when we intend to move the
-    # daemon version too, then `nix run .#rebase-patches -- nix` to regenerate
-    # the series on the new base.
+    # jj megamerge fork of NixOS/nix. The base stays at tag 2.34.7, the
+    # version the hydra daemon runs (`nix store info` -> `Version: 2.34.7`):
+    # nix is our daemon toolchain, so the patched package must stay a
+    # protocol-compatible drop-in for the running daemon. The base moves
+    # DELIBERATELY, never under a routine `nix flake update` (fork-packages
+    # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
+    # intend to move the daemon version too, then repin here.
     nix-src = {
-      url = "github:NixOS/nix/2c6d06e9387cf58167cb5a7ab91cee7333d8d17c";
+      url = "github:indexable-inc/nix/d789d8a3ab8a392a7dcfc7aa3ebd0533704f6c3f";
       flake = false;
     };
 
-    # Upstream aristocratos/btop, patched in-repo (packages/terminal/btop/patches).
-    # Tracks upstream main (autoUpdate = true in lib/fork-packages.nix): the base
-    # free-floats under the scheduled fork-sync, which runs `nix flake update
-    # btop-src` + `nix run .#rebase-patches -- btop` to advance the two patches
-    # (macOS disk IO sorting, cwd detail box) onto the new tail.
+    # jj megamerge fork of aristocratos/btop. Tracks upstream main
+    # (autoUpdate = true in lib/fork-packages.nix): the scheduled fork-sync
+    # jj-rebases the fork onto the new upstream tail, pushes `ix-patched` plus
+    # a pin ref, and floats this branch-loose input with `nix flake update`.
     btop-src = {
-      url = "github:aristocratos/btop";
+      url = "github:indexable-inc/btop/ix-patched";
       flake = false;
     };
 
-    # Upstream nushell/nushell, patched in-repo (packages/nushell/patches).
-    # Tracks upstream main (autoUpdate = true in lib/fork-packages.nix): the
-    # scheduled fork-sync bumps nushell-src and rebases the xattr patch.
+    # jj megamerge fork of nushell/nushell. Tracks upstream main (autoUpdate =
+    # true in lib/fork-packages.nix): the scheduled fork-sync jj-rebases the
+    # xattr patch onto the new tail and floats this branch-loose input.
     nushell-src = {
-      url = "github:nushell/nushell";
+      url = "github:indexable-inc/nushell/ix-patched";
       flake = false;
     };
 
-    # Upstream Mic92/nix-fast-build, patched in-repo
-    # (packages/nix/nix-fast-build/patches). Pinned to the rev of tag 1.6.0 --
-    # the exact version nixpkgs packages -- because the package overlays the
-    # patched source onto nixpkgs' nix-fast-build recipe, so the base must
-    # track the nixpkgs version, never free-float (autoUpdate = false in
-    # lib/fork-packages.nix). On a nixpkgs nix-fast-build bump, repin to the
-    # matching tag and run `nix run .#rebase-patches -- nix-fast-build`.
+    # jj megamerge fork of Mic92/nix-fast-build. The base stays at tag 1.6.0,
+    # the exact version nixpkgs packages, because the package overlays the
+    # patched source onto nixpkgs' nix-fast-build recipe, so it must track
+    # the nixpkgs version, never free-float (autoUpdate = false in
+    # lib/fork-packages.nix). On a nixpkgs nix-fast-build bump, jj-rebase
+    # indexable-inc/nix-fast-build onto the matching tag and repin.
     nix-fast-build-src = {
-      url = "github:Mic92/nix-fast-build/a28921953d962c6c2527108a6be4062eb6dc2f51";
+      url = "github:indexable-inc/nix-fast-build/6b976a8b2f8252942312599e6bfec20cec207f97";
       flake = false;
     };
 
-    # Upstream Gabriella439/Haskell-Nix-Derivation-Library, the `nix-derivation`
-    # Haskell library nix-output-monitor parses .drv files with, patched
-    # in-repo (packages/nix/nix-output-monitor/patches). The repo publishes no
+    # jj megamerge fork of Gabriella439/Haskell-Nix-Derivation-Library, the
+    # `nix-derivation` Haskell library nix-output-monitor parses .drv files
+    # with. The upstream repo publishes no
     # tags; this rev is upstream main while the cabal version still reads
     # 1.1.3 -- the hackage release nixpkgs builds -- PLUS the post-release
     # dependency-bound relaxations (QuickCheck 2.15, filepath 1.5) hackage
@@ -214,25 +201,24 @@
     # tree keeps the same dependency envelope. autoUpdate = false: repin when
     # nixpkgs moves to a newer nix-derivation.
     nix-derivation-src = {
-      url = "github:Gabriella439/Haskell-Nix-Derivation-Library/f1f5d5a2270b5ee23dfad40fee385cf4e94d6cea";
+      url = "github:indexable-inc/Haskell-Nix-Derivation-Library/ba78008319f3517013a9fd70245ecee5ab2054b4";
       flake = false;
     };
 
-    # Upstream nix-community/rnix-parser at the release tags whose crates the
-    # repo's nix tools vendor today: v0.12.0 (alejandra, deadnix) and v0.14.0
-    # (statix). lib/util/rnix-digit-separators patches the *vendored* rnix
-    # crate inside each tool's cargo vendor dir at build time; these pinned
-    # sources give the same patch series a registry-grade
-    # `patched-src-rnix-0-1{2,4}` apply gate in flake checks, so tokenizer
-    # drift surfaces in CI instead of a consumer build. autoUpdate = false:
-    # each pin moves only when a nixpkgs bump moves the vendored rnix version
-    # (then repin to the matching tag and rerun `rebase-patches`).
+    # jj megamerge forks of nix-community/rnix-parser at the release tags
+    # whose crates the repo's nix tools vendor today: v0.12.0 (alejandra,
+    # deadnix) and v0.14.0 (statix), one bookmark per series in
+    # indexable-inc/rnix-parser (ix-patched-0.12 / ix-patched-0.14).
+    # lib/util/rnix-digit-separators overlays the patched sources onto each
+    # tool's cargo vendor dir at build time. autoUpdate = false: each pin
+    # moves only when a nixpkgs bump moves the vendored rnix version (then
+    # jj-rebase the matching bookmark and repin).
     rnix-0-12-src = {
-      url = "github:nix-community/rnix-parser/d521c438acfa9383646f9c4af9d10bbb02df0f78";
+      url = "github:indexable-inc/rnix-parser/015fe463b6e9bad73326d725e0d3fa9a61e1fbdb";
       flake = false;
     };
     rnix-0-14-src = {
-      url = "github:nix-community/rnix-parser/0472081214c24b1ab4d34f7bf544284ed4e45ad3";
+      url = "github:indexable-inc/rnix-parser/3f74f857a0d2bb6715ba993f506368b8b413d0d5";
       flake = false;
     };
 
@@ -342,31 +328,25 @@
     # (index-workstation-profile-no-ci-eval,
     # zed-src-patch-lock-drift-darwin-only-guard document the same class of
     # silent-drift risk for zed), so nothing catches a routine bump breaking
-    # this build; move this rev only with `nix run .#rebase-patches --
-    # ghostty` followed by a manual `nix build .#ghostty` on darwin.
+    # this build; move this rev only via a jj rebase of indexable-inc/ghostty
+    # followed by a manual `nix build .#ghostty` on darwin. The rev is the
+    # `ix-patched` megamerge (upstream base 49a43bf5 plus the patch DAG).
     ghostty-src = {
-      url = "github:ghostty-org/ghostty/49a43bf560322eac0ba5d30c20a8b212106e3883";
+      url = "github:indexable-inc/ghostty/c1b4a88a20757642c8f945f8d96c4905198158cb";
       flake = false;
     };
 
-    # Upstream mesa (gitlab.freedesktop.org), patched in-repo for the panes GPU
-    # guest (packages/vm/panes/guest-image/mesa/patches): the venus driver-side
-    # external-semaphore delta (index#1742). De-forking replacement for the old
-    # `indexable-inc/mesa` snapshot fork tarball; pinned by the `mesa-26.1.2`
-    # tag, so the patched tree is the upstream tag tree plus the venus commits.
-    #
-    # `shallow=1` is load-bearing (same reason as snix-src): mesa's git history
-    # is huge, and only the source tree at the pinned tag is ever used (through
-    # `ix.mesaSrc` -> patchedSrc), never history or revCount. Without it the
-    # lock records `revCount`, forcing a full-history clone on every cold
-    # `nix flake archive` / direnv load. `flake.lock` still records the rev, so
-    # `rebase-patches` can read the base rev; the URL is a real git remote so
-    # its scratch-clone fetch works. Pinned by rev (autoUpdate = false in
-    # lib/fork-packages.nix): a mesa bump must be rebased AND boot-validated on
-    # a linux GPU host (the venus patch is validated by running the guest, not
-    # by CI), so it moves only under a deliberate manual bump, never the cron.
+    # jj megamerge fork of mesa (upstream lives on gitlab.freedesktop.org;
+    # indexable-inc/mesa mirrors the needed history) for the panes GPU guest:
+    # the venus driver-side external-semaphore delta (index#1742) on the
+    # `mesa-26.1.2` tag base. A github tarball fetch, so no history clone;
+    # the old gitlab URL needed `shallow=1` to avoid one. Pinned by rev
+    # (autoUpdate = false in lib/fork-packages.nix): a mesa bump must be
+    # rebased AND boot-validated on a linux GPU host (the venus patch is
+    # validated by running the guest, not by CI), so it moves only under a
+    # deliberate manual bump, never the cron.
     mesa-src = {
-      url = "git+https://gitlab.freedesktop.org/mesa/mesa?ref=refs/tags/mesa-26.1.2&shallow=1";
+      url = "github:indexable-inc/mesa/0859cf8912b7dde1cb7b06f2ed416a84a479feef";
       flake = false;
     };
   };
@@ -394,7 +374,6 @@
     clippy-src,
     codex-src,
     zed-src,
-    zed-upstream,
     nix-src,
     nix-fast-build-src,
     nix-derivation-src,
@@ -473,7 +452,6 @@
         clippy-src
         codex-src
         zed-src
-        zed-upstream
         nix-src
         nix-fast-build-src
         nix-derivation-src
@@ -537,13 +515,6 @@
     # updaters changed, instead of deriving an attr from path segments
     # (#2036). Non-schema, so surfaced through `collect` like `ciChecks`.
     updatablePackages = collected.collect "updatablePackages";
-    # Per-attempt-patch closure build gates (RFC 0010 A3, #2098), keyed
-    # `<system>.<fork>.<patch>`: the fork package rebuilt with the series
-    # restricted to that patch's dag.json closure. Deliberately NOT under
-    # `checks` (per-PR flake-check cost stays flat): built post-merge by the
-    # scheduled fork-closure-gates workflow and by the `upstream-sync --open`
-    # preflight. Non-schema, so surfaced through `collect` like `ciChecks`.
-    forkClosureGates = collected.collect "forkClosureGates";
     # CI-only view of `packages` with each NixOS image swapped for its
     # `toplevel` closure; cache-push.yml publishes this instead of the
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
