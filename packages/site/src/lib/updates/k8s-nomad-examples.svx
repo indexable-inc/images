@@ -1,0 +1,34 @@
+---
+id: k8s-nomad-examples
+postedAt: 2026-07-21T12:00:00-07:00
+title: "Kubernetes and Nomad clusters as example fleets, everything from the store"
+tags: [examples, kubernetes, nomad, fleet]
+links:
+  - label: k8s/k3s example
+    href: https://github.com/indexable-inc/index/tree/main/examples/k8s/k3s
+  - label: nomad/cluster example
+    href: https://github.com/indexable-inc/index/tree/main/examples/nomad/cluster
+---
+
+Two new example fleets show a workload orchestrator as just another set of
+NixOS modules.
+
+`nix run .#k8s-k3s-up` boots a three-node Kubernetes cluster (one k3s server,
+two agents). The Deployment and NodePort Service are Nix values rendered to
+YAML by nixpkgs' `services.k3s.manifests`; the pod image is a `dockerTools`
+build preloaded into containerd next to `k3s.airgap-images`, so no node ever
+contacts a registry. Agents derive their join address from the server node's
+east-west hostname at eval time, and an eval test pins the manifest's image
+reference to the exact derivation the nodes import.
+
+`nix run .#nomad-cluster-up` boots a Nomad server plus two clients and leans
+on the pairing that makes Nomad natural on NixOS: `raw_exec` executing a nix
+store binary the clients already carry in their closure. The job spec is Nix
+rendered to Nomad's API JSON by `pkgs.formats.json` and submitted by a
+boot-time oneshot; the allocation count follows the client replica count.
+Nomad is BUSL 1.1, so it is allowlisted by name in the image unfree
+predicate.
+
+Both examples converge with no `dependsOn`: nodes boot in parallel, joins
+retry, and cluster-level health checks (all nodes Ready, one allocation per
+client) gate `up`.

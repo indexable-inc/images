@@ -2092,6 +2092,30 @@
     cache.plan = fleet.planValue.nodes.cache;
   };
 
+  k8sK3sExample = let
+    fleet = import (paths.examples + "/k8s/k3s/ix.nix") {
+      index = {
+        lib = ix;
+      };
+    };
+  in {
+    inherit fleet;
+    server = fleet.nodes.k3s-server;
+    agent = fleet.nodes.k3s-agent-0;
+  };
+
+  nomadClusterExample = let
+    fleet = import (paths.examples + "/nomad/cluster/ix.nix") {
+      index = {
+        lib = ix;
+      };
+    };
+  in {
+    inherit fleet;
+    server = fleet.nodes.nomad-server;
+    client = fleet.nodes.nomad-client-0;
+  };
+
   observabilityStackExample = let
     fleet = import (paths.examples + "/observability/stack/ix.nix") {
       index = {
@@ -3957,6 +3981,68 @@
             "6379"
           ];
         message = "fleet-microservices cache should desugar tcp.port into a loopback nc probe";
+      }
+    ];
+
+    k8s-k3s = let
+      inherit (k8sK3sExample) server agent;
+      deployment = builtins.head server.services.k3s.manifests.whoami.content;
+      container = builtins.head deployment.spec.template.spec.containers;
+      podImage =
+        lib.findFirst (drv: drv ? imageName) null server.services.k3s.images;
+    in [
+      {
+        # Defends the cross-file contract between image.nix (what containerd
+        # imports) and workload.nix (what the pod spec asks for): a drifted
+        # name or tag would ErrImageNeverPull at runtime.
+        assertion =
+          podImage
+          != null
+          && container.image == "${podImage.imageName}:${podImage.imageTag}"
+          && container.imagePullPolicy == "Never";
+        message = "k8s-k3s deployment must reference the exact image preloaded into containerd, never a registry";
+      }
+      {
+        assertion =
+          agent.services.k3s.serverAddr
+          == "https://${server.ix.networking.eastWest.hostName}:6443";
+        message = "k8s-k3s agents should join the API server by its east-west hostname";
+      }
+      {
+        # kube-proxy answers the Service's NodePort on every node, so agents
+        # must open it too, not just the server that declares the manifest.
+        assertion =
+          agent.ix.networking.expose.whoami-nodeport.port
+          == (builtins.head (builtins.elemAt server.services.k3s.manifests.whoami.content 1).spec.ports).nodePort;
+        message = "k8s-k3s agents should open the whoami NodePort declared in the Service manifest";
+      }
+    ];
+
+    nomad-cluster = let
+      inherit (nomadClusterExample) server client;
+      whoami =
+        lib.findFirst (pkg: (pkg.meta.mainProgram or null) == "whoami-http") null
+        client.environment.systemPackages;
+    in [
+      {
+        assertion =
+          server.services.nomad.settings.server.enabled
+          && server.services.nomad.settings.server.bootstrap_expect == 1;
+        message = "nomad-cluster server should bootstrap a single-server raft";
+      }
+      {
+        # The job's artifact is a raw store path executed by raw_exec; both
+        # halves of that contract live on the client.
+        assertion =
+          client.services.nomad.settings.plugin.raw_exec.config.enabled
+          && whoami != null;
+        message = "nomad-cluster clients must enable raw_exec and pin the whoami binary into their closure";
+      }
+      {
+        assertion =
+          client.services.nomad.settings.client.servers
+          == [server.ix.networking.eastWest.hostName];
+        message = "nomad-cluster clients should register with the server by its east-west hostname";
       }
     ];
 
