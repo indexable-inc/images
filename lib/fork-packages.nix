@@ -819,6 +819,17 @@
           upstream = "hold";
           reason = "Real upstream bug worth a PR (stale progress line after resize, indexable-inc/index#3830). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # builtins.wasm, imported from the open upstream PR NixOS/nix#15380
+        # plus the fleet's determinism hardening on top
+        # (indexable-inc/index#3997).
+        "Add builtins.wasm" = {
+          upstream = "hold";
+          reason = "Import of the open upstream PR NixOS/nix#15380 (edolstra's builtins.wasm); nothing to send back, engage on that PR. Retire when the base ships it.";
+        };
+        "libexpr: force deterministic Wasm execution in builtins.wasm" = {
+          upstream = "hold";
+          reason = "Fleet determinism policy on top of the #15380 import (NaN canonicalization + deterministic relaxed SIMD keep eval bit-identical across darwin/linux); upstream measured ~3.6x on float-heavy Wasm and left it off, so propose it on the PR rather than fork-PR it.";
+        };
       };
     }
     {
