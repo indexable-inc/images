@@ -1,7 +1,8 @@
 //! The read-only drift companion report (RFC 0010, #2098).
 //!
-//! Per fork: how far the pinned base trails upstream's default branch
-//! (commits behind + base age), the declared patch stances, how many tracked
+//! Per fork: how far the pinned base trails its tracked upstream branch
+//! (the registry's `upstreamRef`, else the default branch; commits behind +
+//! base age), the declared patch stances, how many tracked
 //! patches are retired-awaiting-drop, and a one-word next action. The
 //! fork-sync cron surfaces it in its step summary and rolling PR body.
 //!
@@ -104,15 +105,20 @@ fn lock_rev(input: &str) -> Result<Option<String>> {
         .map(str::to_owned))
 }
 
-/// Commits behind = `ahead_by` of `pinned...default_branch`: how many
-/// commits upstream's default branch has that our pinned base does not.
-fn github_behind(ctx: &str, slug: &Slug, rev: &str) -> Result<Option<i64>> {
+/// Commits behind = `ahead_by` of `pinned...branch`: how many commits the
+/// tracked upstream branch (the registry's `upstreamRef`, else the default
+/// branch) has that our pinned base does not.
+fn github_behind(fork: &Fork, slug: &Slug, rev: &str) -> Result<Option<i64>> {
     let repo = format!("repos/{}/{}", slug.owner, slug.repo);
-    let Some(branch) = gh::read(ctx, &repo, ".default_branch")? else {
-        return Ok(None);
+    let branch = match &fork.upstream_ref {
+        Some(configured) => configured.clone(),
+        None => match gh::read(&fork.name, &repo, ".default_branch")? {
+            Some(branch) => branch,
+            None => return Ok(None),
+        },
     };
     let Some(n) = gh::read(
-        ctx,
+        &fork.name,
         &format!("{repo}/compare/{rev}...{branch}"),
         ".ahead_by",
     )?
@@ -234,7 +240,7 @@ fn row(fork: &Fork) -> Result<Row> {
     };
 
     let behind = match (forge, rev.as_deref()) {
-        ("github", Some(rev)) => github_behind(&fork.name, &slug, rev)?,
+        ("github", Some(rev)) => github_behind(fork, &slug, rev)?,
         _ => None,
     };
     let base_date = base_date(fork, forge, &slug, rev.as_deref())?;

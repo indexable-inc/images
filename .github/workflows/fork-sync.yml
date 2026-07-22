@@ -139,7 +139,7 @@ jobs:
           mapfile -t rows < <(
             nix eval --json '.#lib.forkPackages' \
               --apply 'fs: builtins.filter (f: f.autoUpdate) fs' \
-              | nix run nixpkgs#jq -- -c '.[] | {name, forkRepo, bookmark, upstreamUrl}'
+              | nix run nixpkgs#jq -- -c '.[] | {name, forkRepo, bookmark, upstreamUrl, upstreamRef}'
           )
           echo "auto-updatable forks: ${#rows[@]}"
           for row in "${rows[@]}"; do
@@ -157,12 +157,20 @@ jobs:
             # rebase (only tracked bookmarks follow their rewritten commits).
             jj bookmark track "${bookmark}@origin"
 
-            # The rebase targets the upstream's CURRENT default branch tip,
-            # discovered from its HEAD symref, not our pinned base.
+            # The rebase targets the CURRENT tip of the branch the fork
+            # tracks: the registry's `upstreamRef` when the base sits off
+            # the default branch (#4038), else the upstream's default
+            # branch, discovered from its HEAD symref -- never our pinned
+            # base.
             git remote add upstream "$upstream_url"
-            head_ref=$(git ls-remote --symref upstream HEAD \
-              | awk '$1 == "ref:" { sub("refs/heads/", "", $2); print $2; exit }')
-            echo "$name: upstream default branch is $head_ref"
+            head_ref=$(nix run nixpkgs#jq -- -r '.upstreamRef // empty' <<<"$row")
+            if [ -n "$head_ref" ]; then
+              echo "$name: upstream ref pinned by the registry: $head_ref"
+            else
+              head_ref=$(git ls-remote --symref upstream HEAD \
+                | awk '$1 == "ref:" { sub("refs/heads/", "", $2); print $2; exit }')
+              echo "$name: upstream default branch is $head_ref"
+            fi
             git fetch --no-tags upstream "refs/heads/$head_ref"
             upstream_tip=$(git rev-parse FETCH_HEAD)
 

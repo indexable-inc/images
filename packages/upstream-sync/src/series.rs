@@ -6,7 +6,9 @@
 //! every patch is a commit whose parents are its true dependencies, sealed by
 //! an "ix megamerge" commit whose tree is the full series applied linearly.
 //! This module opens a scratch commits-only clone, derives the series
-//! (bookmark ancestry minus the upstream base, minus the seal), and exposes
+//! (bookmark ancestry minus the upstream base -- anchored on the registry's
+//! `upstreamRef` when the base sits off the default branch -- minus the
+//! seal), and exposes
 //! the ancestry closure that decides what an upstream contribution drags
 //! along. Patch identity is the commit SUBJECT: it survives jj rebases, and
 //! the intent map in the registry is keyed by it.
@@ -35,12 +37,13 @@ pub struct Repo {
     _scratch: tempfile::TempDir,
     /// The bookmark tip (the megamerge seal commit).
     pub tip: String,
-    /// merge-base(bookmark tip, upstream default branch): the pinned base
+    /// merge-base(bookmark tip, tracked upstream branch): the pinned base
     /// the series sits on.
     pub base: String,
-    /// Upstream's default branch name (PRs target it).
+    /// The tracked upstream branch (the registry's `upstreamRef`, else the
+    /// upstream's default branch). PRs target it.
     pub upstream_branch: String,
-    /// Upstream's default branch tip at open time.
+    /// The tracked upstream branch's tip at open time.
     pub upstream_tip: String,
     /// The patch series in topological order, parents first.
     pub series: Vec<Commit>,
@@ -71,7 +74,14 @@ impl Repo {
         )?;
 
         let tip = fetch(&dir, &fork.name, "fork", &format!("refs/heads/{}", fork.bookmark))?;
-        let upstream_branch = default_branch(&dir, &fork.name, &fork.upstream_url)?;
+        // A fork based off a non-default branch declares `upstreamRef` in
+        // the registry (nix's 2.34.7 base sits on 2.34-maintenance):
+        // merge-basing against the default branch would undershoot the base
+        // and pull upstream commits into the series (#4038).
+        let upstream_branch = match &fork.upstream_ref {
+            Some(configured) => configured.clone(),
+            None => default_branch(&dir, &fork.name, &fork.upstream_url)?,
+        };
         let upstream_tip = fetch(
             &dir,
             &fork.name,

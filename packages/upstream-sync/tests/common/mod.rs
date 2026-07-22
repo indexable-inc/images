@@ -70,6 +70,18 @@ pub fn git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
+/// A local upstream repo with `main` as its default branch and one base
+/// commit.
+fn init_upstream(root: &Path) -> PathBuf {
+    let upstream = root.join("upstream");
+    fs::create_dir_all(&upstream).unwrap();
+    git(&upstream, &["init", "--quiet", "-b", "main"]);
+    fs::write(upstream.join("README"), "hello\n").unwrap();
+    git(&upstream, &["add", "."]);
+    git(&upstream, &["commit", "--quiet", "-m", "base"]);
+    upstream
+}
+
 /// The https URLs the binaries see; the gitconfig redirects them locally.
 pub const UPSTREAM_URL: &str = "https://github.com/fakeorg/fakerepo.git";
 pub const FORK_REPO: &str = "fakefork/fakerepo";
@@ -94,16 +106,41 @@ impl Fixture {
     /// Build the fixture under `root`. Each patch is `(subject, body)`; an
     /// empty body makes a reason-less commit (for the refusal tests).
     pub fn new(root: &Path, patches: &[(&str, &str)]) -> Self {
-        let upstream = root.join("upstream");
-        fs::create_dir_all(&upstream).unwrap();
-        git(&upstream, &["init", "--quiet", "-b", "main"]);
-        fs::write(upstream.join("README"), "hello\n").unwrap();
-        git(&upstream, &["add", "."]);
-        git(&upstream, &["commit", "--quiet", "-m", "base"]);
+        let upstream = init_upstream(root);
+        Self::seal(root, &upstream, "main", patches)
+    }
 
+    /// The #4038 shape: the fork is based on an upstream MAINTENANCE branch
+    /// whose tip is not an ancestor of the (diverged) default branch, and
+    /// the maintenance commits share a subject ("Bump version", exactly
+    /// NixOS/nix's 2.34-maintenance). A series read anchored on the default
+    /// branch merge-bases at the fork point and drags those commits into
+    /// the series; only an `upstreamRef`-anchored read sees the fork
+    /// patches alone.
+    pub fn on_maintenance_branch(root: &Path, patches: &[(&str, &str)]) -> Self {
+        let upstream = init_upstream(root);
+        git(&upstream, &["checkout", "--quiet", "-b", "maintenance"]);
+        for point in ["2.34.6", "2.34.7"] {
+            fs::write(upstream.join("version"), format!("{point}\n")).unwrap();
+            git(&upstream, &["add", "."]);
+            git(&upstream, &["commit", "--quiet", "-m", "Bump version"]);
+        }
+        git(&upstream, &["checkout", "--quiet", "main"]);
+        fs::write(upstream.join("feature"), "development moved on\n").unwrap();
+        git(&upstream, &["add", "."]);
+        git(
+            &upstream,
+            &["commit", "--quiet", "-m", "diverge the default branch"],
+        );
+        Self::seal(root, &upstream, "origin/maintenance", patches)
+    }
+
+    /// Clone the fork, commit the patch series on `base_ref`, and seal it
+    /// with the megamerge commit under the `ix-patched` bookmark.
+    fn seal(root: &Path, upstream: &Path, base_ref: &str, patches: &[(&str, &str)]) -> Self {
         let fork = root.join("fork");
         git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
-        git(&fork, &["checkout", "--quiet", "-b", "series", "main"]);
+        git(&fork, &["checkout", "--quiet", "-b", "series", base_ref]);
         for (i, (subject, body)) in patches.iter().enumerate() {
             fs::write(fork.join(format!("patch-{i}.txt")), format!("{subject}\n")).unwrap();
             git(&fork, &["add", "."]);
@@ -142,7 +179,7 @@ impl Fixture {
         )
         .unwrap();
         Self {
-            upstream,
+            upstream: upstream.to_path_buf(),
             fork,
             gitconfig,
         }
@@ -173,9 +210,17 @@ impl Fixture {
 
 /// A v2 mapping entry as JSON (subject-keyed intent).
 pub fn mapping_json(name: &str, patches_json: &str) -> String {
+    mapping_json_on(name, None, patches_json)
+}
+
+/// Like [`mapping_json`], optionally declaring the upstream branch the fork
+/// tracks (`upstreamRef`) instead of the upstream's default branch.
+pub fn mapping_json_on(name: &str, upstream_ref: Option<&str>, patches_json: &str) -> String {
+    let upstream_ref =
+        upstream_ref.map_or_else(String::new, |r| format!(r#""upstreamRef":"{r}","#));
     format!(
         r#"[{{"name":"{name}","input":"{name}-src","forkRepo":"{FORK_REPO}","bookmark":"ix-patched",
-  "upstreamUrl":"{UPSTREAM_URL}","autoUpdate":false,
+  "upstreamUrl":"{UPSTREAM_URL}",{upstream_ref}"autoUpdate":false,
   "upstreamPolicy":{{"prsWelcome":true,"aiPrsAllowed":"unknown","citation":"https://example.com","notes":"t"}},
   "patches":{patches_json}}}]"#
     )

@@ -31,6 +31,12 @@
 #   input       : flake input pinning the megamerge (flake.lock `locked.rev`;
 #                 branch-loose for autoUpdate forks).
 #   upstreamUrl : upstream git URL rebases target.
+#   upstreamRef : optional upstream branch the fork's base sits on.
+#                 upstream-sync anchors the series base on it (merge-base
+#                 against its tip) and drift compares against it; fork-sync
+#                 rebases target its tip. Default: the upstream's default
+#                 branch (its HEAD symref), which is right for every fork
+#                 except one based off a maintenance branch.
 #   forkRepo    : GitHub `owner/name` of the maintained fork repo.
 #   bookmark    : fork-repo branch holding the megamerge (`ix-patched`; one
 #                 bookmark per series where a repo carries several, e.g.
@@ -457,6 +463,8 @@
       name = "nix";
       input = "nix-src";
       upstreamUrl = "https://github.com/NixOS/nix.git";
+      # The 2.34.7 base lives on the maintenance branch, not master.
+      upstreamRef = "2.34-maintenance";
       forkRepo = "indexable-inc/nix";
       bookmark = "ix-patched";
       autoUpdate = false;

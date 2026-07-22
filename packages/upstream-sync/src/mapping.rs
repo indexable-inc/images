@@ -32,6 +32,11 @@ pub struct Fork {
     pub bookmark: String,
     /// The upstream git URL contributions target.
     pub upstream_url: String,
+    /// The upstream branch the fork's base sits on (e.g. nix on
+    /// `2.34-maintenance`). `None` means the upstream's default branch,
+    /// discovered from its HEAD symref.
+    #[serde(default)]
+    pub upstream_ref: Option<String>,
     /// Per-patch intent keyed by the patch commit's SUBJECT line (the
     /// identity that survives jj rebases).
     #[serde(default)]
@@ -245,6 +250,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fork.bookmark, "ix-patched");
+        assert_eq!(fork.upstream_ref, None);
         assert_eq!(fork.fork_owner(), "indexable-inc");
         assert_eq!(
             fork.fork_url(),
