@@ -21,7 +21,7 @@ pub const HERO_PATH: &str = "assets/hero.svg";
 
 /// The hero's committed dark twin, selected by the README's `<picture>`
 /// source: Safari never evaluates `prefers-color-scheme` inside an SVG
-/// loaded via `<img>` (WebKit bug 199134), so the embedded query alone
+/// loaded via `<img>` (`WebKit` bug 199134), so the embedded query alone
 /// renders the light palette for Safari readers on GitHub's dark theme.
 pub const HERO_DARK_PATH: &str = "assets/hero-dark.svg";
 
@@ -224,7 +224,7 @@ fn usage(pkg: &Package<'_>) -> String {
 /// per-package art to maintain). Adapts via its embedded
 /// `prefers-color-scheme` CSS when opened directly; README embedding also
 /// needs `hero_dark_svg`, because Safari never evaluates that query inside
-/// an SVG loaded via `<img>` (WebKit bug 199134).
+/// an SVG loaded via `<img>` (`WebKit` bug 199134).
 pub fn hero_svg(name: &str, tagline: Option<&str>) -> String {
     hero_svg_styled(name, tagline, Scheme::Light)
 }
@@ -236,6 +236,7 @@ pub fn hero_dark_svg(name: &str, tagline: Option<&str>) -> String {
     hero_svg_styled(name, tagline, Scheme::Dark)
 }
 
+#[derive(Clone, Copy)]
 enum Scheme {
     Light,
     Dark,

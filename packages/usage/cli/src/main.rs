@@ -109,15 +109,17 @@ struct Status {
 
 fn read_status() -> anyhow::Result<Status> {
     let consent = consent::resolve()?;
-    let mut last_upload_ms = None;
-    let mut install_id = None;
-    if let Some(db) = paths::db_path().filter(|db| db.exists()) {
-        let conn = store::open(&db)?;
-        last_upload_ms = store::meta_get(&conn, "last_upload_ms")?
-            .map(|value| value.parse::<i64>())
-            .transpose()?;
-        install_id = store::meta_get(&conn, "install_id")?;
-    }
+    let db = paths::db_path().filter(|db| db.exists());
+    let (last_upload_ms, install_id) = match db {
+        Some(db) => {
+            let conn = store::open(&db)?;
+            let last_upload_ms = store::meta_get(&conn, "last_upload_ms")?
+                .map(|value| value.parse::<i64>())
+                .transpose()?;
+            (last_upload_ms, store::meta_get(&conn, "install_id")?)
+        }
+        None => (None, None),
+    };
     Ok(Status {
         upload_enabled: consent.upload,
         source: consent.source.as_str(),
@@ -214,7 +216,7 @@ fn errors(json: bool, limit: u32) -> anyhow::Result<()> {
         "SELECT {ERROR_COLUMNS} FROM errors ORDER BY id DESC LIMIT ?1"
     ))?;
     let rows = stmt
-        .query_map([limit], |row| map_error_row(row))?
+        .query_map([limit], map_error_row)?
         .collect::<Result<Vec<_>, _>>()?;
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -242,7 +244,7 @@ fn error_by_id(id: i64, json: bool) -> anyhow::Result<()> {
         .query_row(
             &format!("SELECT {ERROR_COLUMNS} FROM errors WHERE id = ?1"),
             [id],
-            |row| map_error_row(row),
+            map_error_row,
         )
         .with_context(|| format!("no captured failure with id {id}"))?;
     if json {
