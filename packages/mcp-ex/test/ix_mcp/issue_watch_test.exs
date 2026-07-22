@@ -10,6 +10,11 @@ defmodule IxMcp.IssueWatchTest do
     assert :ignore = IssueWatch.start_link(owners: [], name: nil)
   end
 
+  test "unset env keeps the feed off by default" do
+    System.delete_env("IX_MCP_ISSUE_WATCH_OWNERS")
+    assert :ignore = IssueWatch.start_link(name: nil)
+  end
+
   test "announces a newly filed issue once", %{tmp_dir: dir} do
     created = DateTime.utc_now() |> DateTime.add(60) |> DateTime.to_iso8601()
 

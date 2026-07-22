@@ -213,10 +213,11 @@
     claimBeforeDispatch = {
       topics = ["workflow"];
       text = ''
-        A filed-issue notification reaches every session. Before dispatching
-        a fixer, check the issue for a claim (assignee or claim comment);
-        if none, post a claim comment naming your session, then dispatch.
-        An issue already claimed gets watched, not re-dispatched.
+        Before dispatching a fixer for an issue, check it for a claim
+        (assignee or claim comment); if none, post a claim comment naming
+        your session, then dispatch. An issue already claimed gets watched,
+        not re-dispatched. The kernel's issue-filed feed is off by default
+        (opt-in via IX_MCP_ISSUE_WATCH_OWNERS).
       '';
       reason = ''
         Every listening session dispatched its own fixer: ix#8156 got two
