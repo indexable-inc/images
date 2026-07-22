@@ -92,14 +92,33 @@ defmodule IxMcp.ActionLog do
   CREATE TABLE outbox (id INTEGER PRIMARY KEY, job_id TEXT, intent TEXT, status TEXT NOT NULL, elapsed_ms INTEGER, result TEXT, created_at TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0)
   """
 
-  # index#3880: the arbiter for issue pickup. Every kernel instance on a host
-  # shares this database, so the UNIQUE(repo, number) constraint IS the
-  # atomic claim: the winning INSERT gets the row, every later attempt reads
-  # the winner back. Known limit, by design: the database is per host, so
-  # cross-machine claims race; the GitHub assignee mirror in `IxMcp.Issues`
-  # is not compare-and-set, so it stays a mirror, not the arbiter.
-  @create_issue_claims """
+  # The v6 shape of the issue-claim arbiter (#3880), frozen for the 5 -> 6
+  # migration step: #3883 generalized it into `requests` (v7 -> 8 migrates
+  # the rows across and drops this table), so history stays history.
+  @create_issue_claims_v6 """
   CREATE TABLE issue_claims (id INTEGER PRIMARY KEY, repo TEXT NOT NULL, number INTEGER NOT NULL, session_id INTEGER REFERENCES sessions(id), claimed_at TEXT NOT NULL, UNIQUE(repo, number))
+  """
+
+  # index#3883: the request bus, generalizing issue pickup (#3880) to any
+  # unit of work an agent can offer ("review this diff", "run this eval").
+  # kind is 'issue' (ref = "owner/repo#n") or 'adhoc' (ref NULL); status
+  # walks open -> claimed -> done. Claiming is a single UPDATE guarded on
+  # status = 'open' -- the row count decides the race -- and the UNIQUE ref
+  # makes ensuring an issue-kind row idempotent (SQLite unique treats NULLs
+  # as distinct, so adhoc rows never collide). Known limit, by design: the
+  # database is per host, so cross-machine claims race; the GitHub assignee
+  # mirror in `IxMcp.Issues` is not compare-and-set, so it stays a mirror,
+  # not the arbiter.
+  @create_requests """
+  CREATE TABLE requests (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, ref TEXT UNIQUE, title TEXT NOT NULL, body TEXT, posted_by INTEGER REFERENCES sessions(id), status TEXT NOT NULL DEFAULT 'open', claimed_by INTEGER REFERENCES sessions(id), posted_at TEXT NOT NULL, claimed_at TEXT, done_at TEXT)
+  """
+
+  # Append-only companion to `requests` (#3883): one row per mutation
+  # (posted/claimed/done), written in the same transaction, so the feed each
+  # instance sweeps (`IxMcp.SessionWatch`) can never see a state the table
+  # does not hold. The requests row is current state; this is its history.
+  @create_request_events """
+  CREATE TABLE request_events (id INTEGER PRIMARY KEY, request_id INTEGER NOT NULL REFERENCES requests(id), event TEXT NOT NULL, session_id INTEGER REFERENCES sessions(id), at TEXT NOT NULL)
   """
 
   # index#3881: the per-host bus between kernel instances. A NULL to_session
@@ -123,8 +142,9 @@ defmodule IxMcp.ActionLog do
   # flat #3512 log, 2 = the #3532 normalization, 3 = the #3536 live rows,
   # 4 = the #3546 live cell line, 5 = the #3839 durable job ledger,
   # 6 = the #3880 issue-claim arbiter, 7 = the #3881 session heartbeat and
-  # message bus.
-  @user_version 7
+  # message bus, 8 = the #3883 request bus (issue_claims folded in and
+  # dropped).
+  @user_version 8
 
   # How long a statement waits for a sibling instance's write lock before
   # step!/fetch/execute! give up and crash with a diagnosis (#3890). A
@@ -239,7 +259,7 @@ defmodule IxMcp.ActionLog do
 
   # A v5 database predates the issue-claim arbiter (#3880): the table is
   # simply created empty.
-  @migrate_v5_to_v6 [@create_issue_claims]
+  @migrate_v5_to_v6 [@create_issue_claims_v6]
 
   # A v6 database predates the session heartbeat and message bus (#3881):
   # existing sessions gain a NULL last_seen_at (they never heartbeat), and
@@ -247,6 +267,23 @@ defmodule IxMcp.ActionLog do
   @migrate_v6_to_v7 [
     "ALTER TABLE sessions ADD COLUMN last_seen_at TEXT",
     @create_session_messages
+  ]
+
+  # A v7 database holds its issue claims in the #3880 table; the request bus
+  # (#3883) subsumes them, so each claim becomes a claimed request of kind
+  # 'issue' (ref doubles as the title -- the claim never carried one) and
+  # the old table drops. No request_events rows are synthesized: the feed
+  # announces news, and a migrated claim is history every instance already
+  # heard as event="picked_up".
+  @migrate_v7_to_v8 [
+    @create_requests,
+    @create_request_events,
+    """
+    INSERT INTO requests (kind, ref, title, posted_by, status, claimed_by, posted_at, claimed_at)
+    SELECT 'issue', repo || '#' || number, repo || '#' || number, NULL, 'claimed', session_id, claimed_at, claimed_at
+    FROM issue_claims ORDER BY id
+    """,
+    "DROP TABLE issue_claims"
   ]
 
   # Ordered migrations keyed by the user_version each upgrades FROM. Every
@@ -259,7 +296,8 @@ defmodule IxMcp.ActionLog do
     {3, @migrate_v3_to_v4},
     {4, @migrate_v4_to_v5},
     {5, @migrate_v5_to_v6},
-    {6, @migrate_v6_to_v7}
+    {6, @migrate_v6_to_v7},
+    {7, @migrate_v7_to_v8}
   ]
 
   @insert """
@@ -291,10 +329,18 @@ defmodule IxMcp.ActionLog do
   FROM jobs
   """
 
-  @select_issue_claim """
-  SELECT c.id, c.repo, c.number, c.session_id, s.name, c.claimed_at
-  FROM issue_claims c
-  LEFT JOIN sessions s ON s.id = c.session_id
+  @select_request """
+  SELECT r.id, r.kind, r.ref, r.title, r.body, r.posted_by, p.name, r.status, r.claimed_by, c.name, r.posted_at, r.claimed_at, r.done_at
+  FROM requests r
+  LEFT JOIN sessions p ON p.id = r.posted_by
+  LEFT JOIN sessions c ON c.id = r.claimed_by
+  """
+
+  @select_request_event """
+  SELECT e.id, e.request_id, e.event, e.session_id, s.name, e.at, r.kind, r.ref, r.title, r.body
+  FROM request_events e
+  JOIN requests r ON r.id = e.request_id
+  LEFT JOIN sessions s ON s.id = e.session_id
   """
 
   @select_session_message """
@@ -357,16 +403,42 @@ defmodule IxMcp.ActionLog do
         }
 
   @typedoc """
-  A recorded issue claim (#3880): `session` is the claiming sessions row's
-  name (nil when that session never named itself).
+  A request on the per-host work bus (#3883): `poster`/`claimer` are the
+  posting/claiming sessions rows' names (nil when unnamed or, for `poster`,
+  when the row was migrated from an issue claim, which nobody posted).
   """
-  @type issue_claim :: %{
+  @type request :: %{
           id: integer(),
-          repo: String.t(),
-          number: integer(),
+          kind: :issue | :adhoc,
+          ref: String.t() | nil,
+          title: String.t(),
+          body: String.t() | nil,
+          posted_by: integer() | nil,
+          poster: String.t() | nil,
+          status: :open | :claimed | :done,
+          claimed_by: integer() | nil,
+          claimer: String.t() | nil,
+          posted_at: String.t(),
+          claimed_at: String.t() | nil,
+          done_at: String.t() | nil
+        }
+
+  @typedoc """
+  A request mutation (#3883), joined with its request's identity so the feed
+  can announce without a second read: `session` is the acting sessions row's
+  name.
+  """
+  @type request_event :: %{
+          id: integer(),
+          request_id: integer(),
+          event: :posted | :claimed | :done,
           session_id: integer() | nil,
           session: String.t() | nil,
-          claimed_at: String.t()
+          at: String.t(),
+          kind: :issue | :adhoc,
+          ref: String.t() | nil,
+          title: String.t(),
+          body: String.t() | nil
         }
 
   @typedoc """
@@ -532,41 +604,107 @@ defmodule IxMcp.ActionLog do
     call(server, {:recent_jobs, session_id, n})
   end
 
-  # -- issue-claim arbiter (#3880) --------------------------------------------
+  # -- request bus (#3883) -----------------------------------------------------
 
   @doc """
-  Atomically claim `repo#number` for `session_id`. The shared database's
-  UNIQUE(repo, number) is the arbiter: the winning insert returns
-  `{:ok, claim}`, a conflict returns `{:error, winner}` with the standing
-  claim (including the winning session's name) so the loser can say who got
-  there first. Idempotent per session: re-claiming an issue this session
-  already holds is `{:ok, claim}`, which is what makes the call safe for
-  the client seam to retry across a server restart (#3903). `:disabled`
-  when the log is degraded (#3539) -- with no arbiter there is no claim to
-  win.
+  Record a request offering `title` to every agent on the host. `kind:
+  :adhoc` (ref nil) always inserts a fresh open row; `kind: :issue` requires
+  `ref` (`"owner/repo#n"`) and is an idempotent ensure -- the UNIQUE ref
+  makes a re-post read the standing row back, whatever its status. A
+  `posted` event lands in the same transaction only when the row is new: the
+  feed announces offers, and an existing row was already offered. Returns
+  `{:ok, request}`; `:disabled` when the log is degraded (#3539) -- with no
+  shared database there is no bus to post on.
+
+  Plain GenServer.call, not the retrying seam (#3874): an adhoc post is not
+  idempotent, so a retry across a server restart could offer the same work
+  twice (the same reason `send_session_message/4` does not retry).
+  """
+  @spec post_request(
+          :issue | :adhoc,
+          String.t() | nil,
+          String.t(),
+          String.t() | nil,
+          integer() | nil,
+          GenServer.server()
+        ) :: {:ok, request()} | :disabled
+  def post_request(kind, ref, title, body, session_id, server \\ __MODULE__)
+      when is_binary(title) and
+             ((kind == :adhoc and is_nil(ref)) or (kind == :issue and is_binary(ref))) do
+    GenServer.call(
+      server,
+      {:post_request, Atom.to_string(kind), ref, title, body, session_id, now()}
+    )
+  end
+
+  @doc """
+  Atomically claim request `id` for `session_id`: one UPDATE guarded on
+  `status = 'open'`, the row count deciding the race (#3883). The winner
+  gets `{:ok, request}` and a `claimed` event in the same transaction; a
+  loser reads the standing row back as `{:error, request}` (status and
+  claimer included) so it can say who got there first. Idempotent per
+  session: re-claiming a request this session already holds is
+  `{:ok, request}`, which is what makes the call safe for the client seam
+  to retry across a server restart (#3903). `{:error, :not_found}` when no
+  such request exists; `:disabled` when the log is degraded (#3539) -- with
+  no arbiter there is no claim to win.
+  """
+  @spec claim_request(integer(), integer() | nil, GenServer.server()) ::
+          {:ok, request()} | {:error, request()} | {:error, :not_found} | :disabled
+  def claim_request(id, session_id, server \\ __MODULE__) when is_integer(id) do
+    call(server, {:claim_request, id, session_id, now()})
+  end
+
+  @doc """
+  Mark claimed request `id` done: the same guarded-UPDATE shape as
+  `claim_request/3`, on `status = 'claimed'`, with a `done` event in the
+  same transaction. Finishing an already-done request is `{:ok, request}`
+  (idempotent, so the client seam can retry, #3903); a still-open one is
+  `{:error, request}` -- claim what you work, then finish it.
+  """
+  @spec finish_request(integer(), integer() | nil, GenServer.server()) ::
+          {:ok, request()} | {:error, request()} | {:error, :not_found} | :disabled
+  def finish_request(id, session_id, server \\ __MODULE__) when is_integer(id) do
+    call(server, {:finish_request, id, session_id, now()})
+  end
+
+  @doc """
+  Atomically claim the issue-kind request for `repo#number`, ensuring its
+  row first (`IxMcp.Issues.pickup/1`'s arbiter, #3880 generalized by
+  #3883): ensure + claim run in one transaction, and a row born here is
+  claimed at birth with only a `claimed` event -- it was never on offer, so
+  a `posted` announcement would offer work that is already taken. Same
+  returns and per-session idempotency as `claim_request/3`.
   """
   @spec claim_issue(String.t(), integer(), integer() | nil, GenServer.server()) ::
-          {:ok, issue_claim()} | {:error, issue_claim()} | :disabled
+          {:ok, request()} | {:error, request()} | :disabled
   def claim_issue(repo, number, session_id, server \\ __MODULE__)
       when is_binary(repo) and is_integer(number) do
     call(server, {:claim_issue, repo, number, session_id, now()})
   end
 
-  @doc """
-  Claims with id greater than `id`, oldest first. The cursor is the caller's
-  own watermark, per instance on purpose: several kernel instances share this
-  database and each must announce every claim to its own client, so a shared
-  announced flag (first sweeper wins) would silence all but one (#3880).
-  """
-  @spec issue_claims_after(integer(), GenServer.server()) :: [issue_claim()]
-  def issue_claims_after(id, server \\ __MODULE__) do
-    call(server, {:issue_claims_after, id})
+  @doc "Every request, open first (then claimed, then done), newest first within a status."
+  @spec list_requests(GenServer.server()) :: [request()]
+  def list_requests(server \\ __MODULE__) do
+    call(server, :list_requests)
   end
 
-  @doc "The highest issue-claim id (0 when none): a fresh watermark for `issue_claims_after/2`."
-  @spec last_issue_claim_id(GenServer.server()) :: integer()
-  def last_issue_claim_id(server \\ __MODULE__) do
-    call(server, :last_issue_claim_id)
+  @doc """
+  Request events with id greater than `id`, oldest first. The cursor is the
+  caller's own watermark, per instance on purpose: several kernel instances
+  share this database and each must announce every event to its own client,
+  so a shared announced flag (first sweeper wins) would silence all but one
+  (#3880).
+  """
+  @spec request_events_after(integer(), GenServer.server()) :: [request_event()]
+  def request_events_after(id, server \\ __MODULE__) do
+    call(server, {:request_events_after, id})
+  end
+
+  @doc "The highest request-event id (0 when none): a fresh watermark for `request_events_after/2`."
+  @spec last_request_event_id(GenServer.server()) :: integer()
+  def last_request_event_id(server \\ __MODULE__) do
+    call(server, :last_request_event_id)
   end
 
   # -- session directory + message bus (#3881) --------------------------------
@@ -605,7 +743,7 @@ defmodule IxMcp.ActionLog do
   @doc """
   Messages for `session_id` past the `id` watermark, oldest first: rows
   addressed to it plus broadcasts, never its own sends. The cursor is per
-  instance for the same reason as `issue_claims_after/2`: every instance
+  instance for the same reason as `request_events_after/2`: every instance
   must deliver to its own client (#3880).
   """
   @spec session_messages_after(integer(), integer(), GenServer.server()) :: [session_message()]
@@ -960,41 +1098,125 @@ defmodule IxMcp.ActionLog do
     {:reply, Enum.map(rows, &job_row_to_map/1), state}
   end
 
-  # The INSERT OR IGNORE plus the changes count is the whole race (#3880):
-  # a unique-constraint winner changes one row, every loser changes zero and
-  # reads the winner back. The single-writer GenServer serializes claims from
-  # this instance; claims from sibling instances serialize on SQLite itself.
-  def handle_call({:claim_issue, repo, number, session_id, at}, _from, %{db: db} = state) do
+  # The INSERT OR IGNORE plus the changes count is the ensure (#3883): the
+  # UNIQUE ref makes re-posting an issue-kind request read the standing row
+  # back, while an adhoc post (NULL ref, never unique-conflicting) always
+  # inserts. Only a fresh row gets a posted event, in the same transaction:
+  # the feed announces offers, and an existing row was already offered. The
+  # single-writer GenServer serializes posts from this instance; posts from
+  # sibling instances serialize on SQLite itself.
+  def handle_call(
+        {:post_request, kind, ref, title, body, session_id, at},
+        _from,
+        %{db: db} = state
+      ) do
+    :ok = execute!(db, "BEGIN IMMEDIATE")
+
     run(
       db,
-      "INSERT OR IGNORE INTO issue_claims (repo, number, session_id, claimed_at) VALUES (?, ?, ?, ?)",
-      [repo, number, session_id, at]
+      "INSERT OR IGNORE INTO requests (kind, ref, title, body, posted_by, status, posted_at) VALUES (?, ?, ?, ?, ?, 'open', ?)",
+      [kind, ref, title, body, session_id, at]
     )
 
     {:ok, changes} = Sqlite3.changes(db.conn)
 
-    [row] =
-      fetch(db, @select_issue_claim <> " WHERE c.repo = ? AND c.number = ?", [repo, number])
+    id =
+      if changes == 1 do
+        {:ok, id} = Sqlite3.last_insert_rowid(db.conn)
+        insert_request_event(db, id, "posted", session_id, at)
+        id
+      else
+        [[id]] = fetch(db, "SELECT id FROM requests WHERE ref = ?", [ref])
+        id
+      end
 
-    claim = issue_claim_row_to_map(row)
-
-    # A standing claim by the caller's own session is a win, not a loss:
-    # the client seam retries a claim whose server died after committing
-    # (#3903), and that retry must read back as the victory it already is,
-    # or the sole claimant would report losing the issue to itself. Only a
-    # real session id gets this: nil belongs to every anonymous caller at
-    # once, so it can never prove the standing claim is the caller's own.
-    won = changes == 1 or (session_id != nil and claim.session_id == session_id)
-    {:reply, if(won, do: {:ok, claim}, else: {:error, claim}), state}
+    :ok = execute!(db, "COMMIT")
+    {:reply, {:ok, fetch_request(db, id)}, state}
   end
 
-  def handle_call({:issue_claims_after, id}, _from, %{db: db} = state) do
-    rows = fetch(db, @select_issue_claim <> " WHERE c.id > ? ORDER BY c.id", [id])
-    {:reply, Enum.map(rows, &issue_claim_row_to_map/1), state}
+  # The guarded UPDATE plus the changes count is the whole race (#3883): the
+  # winner flips the one still-open row, every loser flips zero and reads
+  # the standing row back. The single-writer GenServer serializes claims
+  # from this instance; claims from sibling instances serialize on SQLite
+  # itself (BEGIN IMMEDIATE takes the write lock before the UPDATE looks).
+  def handle_call({:claim_request, id, session_id, at}, _from, %{db: db} = state) do
+    :ok = execute!(db, "BEGIN IMMEDIATE")
+    won = claim_request_row(db, id, session_id, at)
+    :ok = execute!(db, "COMMIT")
+    {:reply, claim_reply(db, id, session_id, won), state}
   end
 
-  def handle_call(:last_issue_claim_id, _from, %{db: db} = state) do
-    [[id]] = fetch(db, "SELECT COALESCE(MAX(id), 0) FROM issue_claims", [])
+  def handle_call({:finish_request, id, session_id, at}, _from, %{db: db} = state) do
+    :ok = execute!(db, "BEGIN IMMEDIATE")
+
+    run(
+      db,
+      "UPDATE requests SET status = 'done', done_at = ? WHERE id = ? AND status = 'claimed'",
+      [at, id]
+    )
+
+    {:ok, changes} = Sqlite3.changes(db.conn)
+    if changes == 1, do: insert_request_event(db, id, "done", session_id, at)
+    :ok = execute!(db, "COMMIT")
+
+    reply =
+      case fetch_request(db, id) do
+        nil ->
+          {:error, :not_found}
+
+        # Re-finishing a done request reads back as the finish it already
+        # is (the client seam retries across a restart, #3903); a still-open
+        # row was never claimed, and finishing unclaimed work stays an error.
+        %{status: :done} = request ->
+          {:ok, request}
+
+        request ->
+          {:error, request}
+      end
+
+    {:reply, reply, state}
+  end
+
+  # Issue pickup (#3880) as one transaction on the request bus: ensure the
+  # kind='issue' row, then claim it. A row born here is claimed at birth and
+  # writes only the claimed event -- it was never on offer, so a posted
+  # announcement would offer work that is already taken.
+  def handle_call({:claim_issue, repo, number, session_id, at}, _from, %{db: db} = state) do
+    ref = "#{repo}##{number}"
+    :ok = execute!(db, "BEGIN IMMEDIATE")
+
+    run(
+      db,
+      "INSERT OR IGNORE INTO requests (kind, ref, title, posted_by, status, posted_at) VALUES ('issue', ?, ?, ?, 'open', ?)",
+      [ref, ref, session_id, at]
+    )
+
+    [[id]] = fetch(db, "SELECT id FROM requests WHERE ref = ?", [ref])
+    won = claim_request_row(db, id, session_id, at)
+    :ok = execute!(db, "COMMIT")
+
+    {:reply, claim_reply(db, id, session_id, won), state}
+  end
+
+  def handle_call(:list_requests, _from, %{db: db} = state) do
+    rows =
+      fetch(
+        db,
+        @select_request <>
+          " ORDER BY CASE r.status WHEN 'open' THEN 0 WHEN 'claimed' THEN 1 ELSE 2 END, r.id DESC",
+        []
+      )
+
+    {:reply, Enum.map(rows, &request_row_to_map/1), state}
+  end
+
+  def handle_call({:request_events_after, id}, _from, %{db: db} = state) do
+    rows = fetch(db, @select_request_event <> " WHERE e.id > ? ORDER BY e.id", [id])
+    {:reply, Enum.map(rows, &request_event_row_to_map/1), state}
+  end
+
+  def handle_call(:last_request_event_id, _from, %{db: db} = state) do
+    [[id]] = fetch(db, "SELECT COALESCE(MAX(id), 0) FROM request_events", [])
     {:reply, id, state}
   end
 
@@ -1121,9 +1343,12 @@ defmodule IxMcp.ActionLog do
       "status" not in columns -> 2
       "line" not in columns -> 3
       not table_exists?(db, "jobs") -> 4
+      # v8 dropped issue_claims (#3883), so its presence must be judged
+      # after the requests table names the file current.
+      table_exists?(db, "requests") -> @user_version
       not table_exists?(db, "issue_claims") -> 5
       not table_exists?(db, "session_messages") -> 6
-      true -> @user_version
+      true -> 7
     end
   end
 
@@ -1142,7 +1367,8 @@ defmodule IxMcp.ActionLog do
         @create_jobs,
         @create_job_output,
         @create_outbox,
-        @create_issue_claims,
+        @create_requests,
+        @create_request_events,
         @create_session_messages,
         stamp(),
         "COMMIT"
@@ -1167,9 +1393,16 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:create_topic, _session_id, _name, _at}), do: 0
   defp disabled_reply({:start_action, _action}), do: 0
   defp disabled_reply({:finish_job, _id, _status, _result, _at}), do: :already_final
+
+  defp disabled_reply({:post_request, _kind, _ref, _title, _body, _session_id, _at}),
+    do: :disabled
+
+  defp disabled_reply({:claim_request, _id, _session_id, _at}), do: :disabled
+  defp disabled_reply({:finish_request, _id, _session_id, _at}), do: :disabled
   defp disabled_reply({:claim_issue, _repo, _number, _session_id, _at}), do: :disabled
-  defp disabled_reply({:issue_claims_after, _id}), do: []
-  defp disabled_reply(:last_issue_claim_id), do: 0
+  defp disabled_reply(:list_requests), do: []
+  defp disabled_reply({:request_events_after, _id}), do: []
+  defp disabled_reply(:last_request_event_id), do: 0
   defp disabled_reply({:heartbeat_session, _session_id, _at}), do: :ok
   defp disabled_reply(:session_directory), do: []
   defp disabled_reply({:send_session_message, _from, _to, _body, _at}), do: :disabled
@@ -1350,14 +1583,124 @@ defmodule IxMcp.ActionLog do
     }
   end
 
-  defp issue_claim_row_to_map([id, repo, number, session_id, session, claimed_at]) do
+  # The claim step shared by claim_request and claim_issue (#3883): the
+  # guarded UPDATE, its row count, and the claimed event, inside the
+  # caller's open transaction. True means this call flipped the row.
+  defp claim_request_row(db, id, session_id, at) do
+    run(
+      db,
+      "UPDATE requests SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ? AND status = 'open'",
+      [session_id, at, id]
+    )
+
+    {:ok, changes} = Sqlite3.changes(db.conn)
+    if changes == 1, do: insert_request_event(db, id, "claimed", session_id, at)
+    changes == 1
+  end
+
+  # A standing claim by the caller's own session is a win, not a loss: the
+  # client seam retries a claim whose server died after committing (#3903),
+  # and that retry must read back as the victory it already is, or the sole
+  # claimant would report losing the request to itself. Only a real session
+  # id gets this: nil belongs to every anonymous caller at once, so it can
+  # never prove the standing claim is the caller's own.
+  defp claim_reply(db, id, session_id, won) do
+    case fetch_request(db, id) do
+      nil ->
+        {:error, :not_found}
+
+      request ->
+        if won or
+             (session_id != nil and request.status == :claimed and
+                request.claimed_by == session_id) do
+          {:ok, request}
+        else
+          {:error, request}
+        end
+    end
+  end
+
+  defp insert_request_event(db, request_id, event, session_id, at) do
+    run(
+      db,
+      "INSERT INTO request_events (request_id, event, session_id, at) VALUES (?, ?, ?, ?)",
+      [request_id, event, session_id, at]
+    )
+  end
+
+  defp fetch_request(db, id) do
+    case fetch(db, @select_request <> " WHERE r.id = ?", [id]) do
+      [] -> nil
+      [row] -> request_row_to_map(row)
+    end
+  end
+
+  defp request_kind_atom("issue"), do: :issue
+  defp request_kind_atom("adhoc"), do: :adhoc
+
+  defp request_status_atom("open"), do: :open
+  defp request_status_atom("claimed"), do: :claimed
+  defp request_status_atom("done"), do: :done
+
+  defp request_event_atom("posted"), do: :posted
+  defp request_event_atom("claimed"), do: :claimed
+  defp request_event_atom("done"), do: :done
+
+  defp request_row_to_map([
+         id,
+         kind,
+         ref,
+         title,
+         body,
+         posted_by,
+         poster,
+         status,
+         claimed_by,
+         claimer,
+         posted_at,
+         claimed_at,
+         done_at
+       ]) do
     %{
       id: id,
-      repo: repo,
-      number: number,
+      kind: request_kind_atom(kind),
+      ref: ref,
+      title: title,
+      body: body,
+      posted_by: posted_by,
+      poster: poster,
+      status: request_status_atom(status),
+      claimed_by: claimed_by,
+      claimer: claimer,
+      posted_at: posted_at,
+      claimed_at: claimed_at,
+      done_at: done_at
+    }
+  end
+
+  defp request_event_row_to_map([
+         id,
+         request_id,
+         event,
+         session_id,
+         session,
+         at,
+         kind,
+         ref,
+         title,
+         body
+       ]) do
+    %{
+      id: id,
+      request_id: request_id,
+      event: request_event_atom(event),
       session_id: session_id,
       session: session,
-      claimed_at: claimed_at
+      at: at,
+      kind: request_kind_atom(kind),
+      ref: ref,
+      title: title,
+      body: body
     }
   end
 

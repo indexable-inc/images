@@ -70,6 +70,7 @@ list):
 | `Ix.restart()` | cancel jobs (sparing the calling cell), restart the workspace, restore bindings |
 | `PrWatch.start(pr, cwd, interval \\ 15, timeout \\ 3600)` | watch a PR via `gh`, notify on merge/close/timeout |
 | `Issues.pickup(3880)` | claim an issue atomically before working it (also `"owner/repo#n"`); a lost claim names the session that won |
+| `Requests.post("review PR #42", body)` | offer any unit of work to every agent on the host (#3883); `Requests.pickup(id)` claims it atomically, `Requests.done(id)` finishes it, `Requests.list()` shows the board, open first |
 | `Sessions.list()` | the session directory: every kernel instance on this host, with heartbeat liveness |
 | `Sessions.send(id_or_name, text)` | message another session (`Sessions.broadcast/1` for all); arrives as a `source="sessions"` channel event within seconds |
 | `Tui.act(uri, send_keys, peer \\ nil)` | drive a federated TUI resource via `ix-resource-cli` |
@@ -143,8 +144,8 @@ IxMcp.Supervisor (one_for_one)
 ├── IxMcp.Jobs.History     ordered record of every run
 ├── IxMcp.MCP.Notifier     server-initiated notification fan-out
 ├── IxMcp.PrWatch.Supervisor (Task.Supervisor) one task per PR watch
-├── IxMcp.IssueWatch       new-issue + pickup-claim channel feed (stdio-gated, `gh search issues`)
-├── IxMcp.SessionWatch     session heartbeat + cross-session message delivery (stdio-gated)
+├── IxMcp.IssueWatch       new-issue channel feed (stdio-gated, `gh search issues`)
+├── IxMcp.SessionWatch     session heartbeat + message and request-feed delivery (stdio-gated)
 └── IxMcp.MCP.Stdio        newline-delimited JSON-RPC on stdin/stdout
 ```
 

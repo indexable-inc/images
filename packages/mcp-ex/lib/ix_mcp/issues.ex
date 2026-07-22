@@ -2,14 +2,15 @@ defmodule IxMcp.Issues do
   @moduledoc """
   Atomic issue pickup (#3880): `Issues.pickup/1` from any cell claims a
   GitHub issue before a session starts working it, so two agents hearing the
-  same `source="issues"` announcement (#3877) cannot both take it. The
-  arbiter is the shared actions.db every kernel instance on a host already
-  opens (`IxMcp.ActionLog`): a UNIQUE(repo, number) insert either wins the
-  claim or reads back who beat this session to it. A won claim mirrors
-  itself to GitHub with `gh issue edit --add-assignee @me`, best effort --
-  visibility off-host, never arbitration -- and `IxMcp.IssueWatch` announces
-  it to every session on the host as an `event="picked_up"` channel
-  notification.
+  same `source="issues"` announcement (#3877) cannot both take it. A veneer
+  over the request bus (#3883): the claim is a `requests` row of kind
+  `:issue` in the shared actions.db every kernel instance on a host already
+  opens (`IxMcp.ActionLog`), ensured and claimed in one transaction -- the
+  guarded UPDATE's row count either wins the claim or reads back who beat
+  this session to it. A won claim mirrors itself to GitHub with `gh issue
+  edit --add-assignee @me`, best effort -- visibility off-host, never
+  arbitration -- and `IxMcp.SessionWatch` announces it to every session on
+  the host as a `source="requests"` `event="claimed"` channel notification.
 
   Known limit, by design: actions.db is per host, so claims race across
   machines, and GitHub assignment is not compare-and-set, so it stays a
@@ -60,8 +61,11 @@ defmodule IxMcp.Issues do
     session_id = Keyword.get_lazy(opts, :session_id, fn -> Session.ids().session_id end)
 
     case ActionLog.claim_issue(repo, number, session_id, log) do
-      {:ok, claim} ->
-        {:ok, "claimed #{repo}##{number} at #{claim.claimed_at}#{assign(repo, number, opts)}"}
+      {:ok, request} ->
+        {:ok, "claimed #{repo}##{number} at #{request.claimed_at}#{assign(repo, number, opts)}"}
+
+      {:error, %{status: :done} = winner} ->
+        {:error, "already done at #{winner.done_at} (claimed by session #{label(winner)})"}
 
       {:error, winner} ->
         {:error, "claimed by session #{label(winner)} at #{winner.claimed_at}"}
@@ -91,8 +95,8 @@ defmodule IxMcp.Issues do
     end
   end
 
-  defp label(%{session: nil, session_id: id}), do: "##{id || "?"}"
-  defp label(%{session: name}), do: name
+  defp label(%{claimer: nil, claimed_by: id}), do: "##{id || "?"}"
+  defp label(%{claimer: name}), do: name
 
   defp default_gh do
     System.get_env("IX_MCP_GH") || System.find_executable("gh")
