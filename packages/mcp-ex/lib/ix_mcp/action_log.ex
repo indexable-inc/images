@@ -103,6 +103,11 @@ defmodule IxMcp.ActionLog do
   # 6 = the #3880 issue-claim arbiter.
   @user_version 6
 
+  # How long a statement waits for a sibling instance's write lock before
+  # sqlite gives up with :busy and step!/fetch crash with a diagnosis
+  # (#3890). The NIF's own default is 2s, which live contention outlived.
+  @busy_timeout_ms 5_000
+
   # Frozen historical DDL for the 1 -> 2 step: the actions shape exactly as
   # #3532 shipped it, before the live-row columns. A migration must never
   # borrow the current @create_actions, or editing today's schema would
@@ -479,6 +484,14 @@ defmodule IxMcp.ActionLog do
 
     {:ok, conn} = Sqlite3.open(path)
 
+    # Several server instances share one database file, so a step can find a
+    # sibling holding the write lock. The NIF opens with a 2s busy handler; a
+    # lock outliving it surfaced as :busy and badmatch-crashed run/3, taking
+    # the calling job down with it (#3890). Wait longer here, and let
+    # step!/fetch turn a still-busy result into a descriptive crash. The
+    # option exists so the regression test can shrink the wait.
+    :ok = Sqlite3.set_busy_timeout(conn, Keyword.get(opts, :busy_timeout_ms, @busy_timeout_ms))
+
     # index#3539: on 2026-07-17 a server binary match-crashed right here
     # against an action log written under a newer schema, and the failed
     # child took the whole application down -- every tool call died over a
@@ -547,7 +560,7 @@ defmodule IxMcp.ActionLog do
         action.arguments
       ])
 
-    :done = Sqlite3.step(conn, insert)
+    :done = step!(conn, insert, "insert action")
     {:ok, id} = Sqlite3.last_insert_rowid(conn)
     {:reply, id, state}
   end
@@ -889,16 +902,41 @@ defmodule IxMcp.ActionLog do
   defp run(conn, sql, params) do
     {:ok, statement} = Sqlite3.prepare(conn, sql)
     :ok = Sqlite3.bind(statement, params)
-    :done = Sqlite3.step(conn, statement)
+    :done = step!(conn, statement, sql)
     :ok = Sqlite3.release(conn, statement)
+  end
+
+  # :busy after the connection's busy timeout (set at open) is a legitimate
+  # runtime state -- a sibling instance still holds the write lock -- not a
+  # programming error, so it fails with a diagnosis instead of a bare
+  # badmatch (#3890). No retry: the NIF already waited the full bound, and
+  # the supervisor reopens the log after the crash.
+  defp step!(conn, statement, sql) do
+    case Sqlite3.step(conn, statement) do
+      :busy ->
+        raise "action log write still blocked after the busy-timeout wait (#3890): #{sql}"
+
+      result ->
+        result
+    end
   end
 
   defp fetch(conn, sql, params) do
     {:ok, statement} = Sqlite3.prepare(conn, sql)
     :ok = Sqlite3.bind(statement, params)
-    {:ok, rows} = Sqlite3.fetch_all(conn, statement)
-    :ok = Sqlite3.release(conn, statement)
-    rows
+
+    case Sqlite3.fetch_all(conn, statement) do
+      {:ok, rows} ->
+        :ok = Sqlite3.release(conn, statement)
+        rows
+
+      # fetch_all reports a lock outliving the busy wait as this string.
+      {:error, "Database busy"} ->
+        raise "action log read still blocked after the busy-timeout wait (#3890): #{sql}"
+
+      {:error, reason} ->
+        raise "action log read failed: #{inspect(reason)}: #{sql}"
+    end
   end
 
   defp state_home do

@@ -599,4 +599,49 @@ defmodule IxMcp.ActionLogTest do
     :ok = Sqlite3.close(conn)
     assert tables == []
   end
+
+  # Several server instances share one database file, so a write can land
+  # while a sibling holds the write lock. SQLite reports that as :busy, which
+  # used to badmatch in run/3 and kill the log and the calling job (#3890).
+  test "a write blocked by a sibling's transaction waits the lock out instead of crashing" do
+    path = tmp_db()
+    log = start_supervised!({ActionLog, path: path, name: :action_log_busy_wait})
+    session_id = ActionLog.create_session("busy", log)
+
+    {:ok, blocker} = Sqlite3.open(path)
+    :ok = Sqlite3.execute(blocker, "BEGIN IMMEDIATE")
+
+    release =
+      Task.async(fn ->
+        Process.sleep(300)
+        :ok = Sqlite3.execute(blocker, "ROLLBACK")
+      end)
+
+    assert :ok = ActionLog.rename_session(session_id, "survived", log)
+    assert Task.await(release) == :ok
+    :ok = Sqlite3.close(blocker)
+  end
+
+  test "a lock outliving the bounded busy wait fails loudly, not with a badmatch (#3890)" do
+    path = tmp_db()
+
+    log =
+      start_supervised!(
+        {ActionLog, path: path, name: :action_log_busy_bound, busy_timeout_ms: 20}
+      )
+
+    {:ok, blocker} = Sqlite3.open(path)
+    :ok = Sqlite3.execute(blocker, "BEGIN IMMEDIATE")
+    ref = Process.monitor(log)
+
+    capture_log(fn ->
+      assert catch_exit(ActionLog.create_session("never", log))
+      assert_receive {:DOWN, ^ref, :process, _pid, {%RuntimeError{message: message}, _stack}}
+      assert message =~ "busy"
+      assert message =~ "3890"
+    end)
+
+    :ok = Sqlite3.execute(blocker, "ROLLBACK")
+    :ok = Sqlite3.close(blocker)
+  end
 end
