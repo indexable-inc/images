@@ -1284,6 +1284,17 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str, driver: Driver)
         push_arg(script, "-C");
         push_arg(script, "rpath=yes");
     }
+    // Proc-macro libtest executables inherit `prefer-dynamic`. Cargo normally
+    // supplies the rustc sysroot through the runner environment, but
+    // cargo-unit installs tests across a Nix derivation boundary. An ordinary
+    // `-C rpath=yes` records a loader-relative path for `build/<test>` that is
+    // wrong after installation under `$out/bin`, so embed the store path.
+    if driver == Driver::Rustc && unit.is_proc_macro() && unit.is_test() {
+        push_arg(script, "-C");
+        script.push_str(
+            "rustc_args+=( \"link-arg=-Wl,-rpath,${rustToolchain}/lib/rustlib/${hostRustTarget}/lib\" )\n",
+        );
+    }
     push_codegen(script, "metadata", hash);
     // rustc warns "ignoring -C extra-filename flag due to -o flag" when both
     // are given; the explicit `-o build/<name>` path fully determines a bin/test
@@ -3985,6 +3996,29 @@ mod tests {
         assert!(rendered.contains("testManifestDrv ="));
         assert!(rendered.contains("cargo-unit-test-manifest"));
         assert!(rendered.contains("failed to list tests for"));
+    }
+
+    #[test]
+    fn proc_macro_test_executable_embeds_rust_runtime_rpath() {
+        let mut graph = single_library_graph(
+            "path+file:///workspace#fixture-macro@0.1.0",
+            "fixture_macro",
+            "/workspace/src/lib.rs",
+            "2024",
+        );
+        let unit = &mut graph.units[0];
+        unit.target.kind = vec!["proc-macro".to_string()];
+        unit.target.crate_types = vec!["proc-macro".to_string()];
+        unit.mode = UnitMode::Test;
+
+        let mut script = String::new();
+        push_rustc_args(&mut script, unit, "hash", Driver::Rustc);
+
+        assert!(script.contains("'prefer-dynamic'"));
+        assert!(
+            script
+                .contains("link-arg=-Wl,-rpath,${rustToolchain}/lib/rustlib/${hostRustTarget}/lib")
+        );
     }
 
     #[test]
