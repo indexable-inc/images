@@ -12,18 +12,15 @@ defmodule IxMcp.IssueWatch do
   starts only alongside the stdio transport (`IxMcp.Application`), so
   `mix test` and IEx sessions never poll GitHub.
 
-  The same sweep also announces issue pickups (#3880): claims sessions win
-  through `IxMcp.Issues.pickup/1` land in the shared actions.db, and each
-  sweep pushes the ones this instance has not yet announced as
-  `event="picked_up"` notifications. The cursor is a per-instance claim-id
-  watermark (starting at the newest claim on boot), NOT a shared announced
-  flag: every instance on the host must tell its own client, and a shared
-  flag would let the first sweeper silence all the others.
+  Pickups no longer announce from here: an issue claim is a request on the
+  work bus (#3883), so `IxMcp.SessionWatch` delivers it with the rest of the
+  `source="requests"` feed -- that loop's cadence is seconds because it
+  talks only to the local SQLite, while this one's is set by GitHub polling
+  politeness.
   """
 
   use GenServer
 
-  alias IxMcp.ActionLog
   alias IxMcp.Cmd
   alias IxMcp.MCP.Notifier
 
@@ -54,18 +51,12 @@ defmodule IxMcp.IssueWatch do
         :ignore
 
       true ->
-        action_log = Keyword.get(opts, :action_log, ActionLog)
-
         state = %{
           gh: gh,
           owners: owners,
           interval_ms: Keyword.get(opts, :interval_ms, @interval_ms),
           since: DateTime.utc_now(:second),
-          seen: MapSet.new(),
-          action_log: action_log,
-          # Claims standing before this instance booted are old news; only
-          # pickups from here on announce (the filed-issue feed's since: now).
-          claims_since: ActionLog.last_issue_claim_id(action_log)
+          seen: MapSet.new()
         }
 
         {:ok, schedule(state)}
@@ -74,7 +65,7 @@ defmodule IxMcp.IssueWatch do
 
   @impl true
   def handle_info(:poll, state) do
-    {:noreply, state |> sweep() |> sweep_claims() |> schedule()}
+    {:noreply, state |> sweep() |> schedule()}
   end
 
   defp schedule(state) do
@@ -119,37 +110,6 @@ defmodule IxMcp.IssueWatch do
       {out, _nonzero} ->
         {:error, String.slice(out, 0, 400)}
     end
-  end
-
-  # Pickup fan-out (#3880): read past the watermark, announce, advance. The
-  # claim rows come from the shared database, so this hears every session on
-  # the host, including this instance's own pickups (harmless: the picker
-  # already knows, and one notification tells its transcript too).
-  defp sweep_claims(state) do
-    case ActionLog.issue_claims_after(state.claims_since, state.action_log) do
-      [] ->
-        state
-
-      claims ->
-        Enum.each(claims, &announce_claim/1)
-        %{state | claims_since: claims |> Enum.map(& &1.id) |> Enum.max()}
-    end
-  end
-
-  defp announce_claim(claim) do
-    ref = "#{claim.repo}##{claim.number}"
-    label = claim.session || "##{claim.session_id || "?"}"
-
-    Notifier.channel(
-      "issue picked up: #{ref} by session #{label} at #{claim.claimed_at}",
-      %{
-        "source" => "issues",
-        "event" => "picked_up",
-        "issue" => ref,
-        "session" => label,
-        "level" => "info"
-      }
-    )
   end
 
   defp announce(issue) do

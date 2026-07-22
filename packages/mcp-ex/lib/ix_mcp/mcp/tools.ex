@@ -63,9 +63,17 @@ defmodule IxMcp.MCP.Tools do
       Issues.pickup(3880)                   claim an issue atomically BEFORE working
                                             it (also "owner/repo#n"); won claims
                                             assign @me on GitHub and announce as
-                                            event="picked_up"; a lost claim returns
+                                            source="requests"; a lost claim returns
                                             {:error, "claimed by session ..."} --
                                             pick a different issue
+      Requests.post("review PR #42", body)  offer any unit of work to every agent
+                                            on this host; it announces as a
+                                            source="requests" channel event.
+                                            Requests.pickup(id) claims one
+                                            atomically BEFORE working it,
+                                            Requests.done(id) when finished,
+                                            Requests.list() shows the board
+                                            (open first)
       Sessions.list()                       the session directory: every kernel
                                             instance on this host with its name,
                                             topic, and heartbeat liveness -- check

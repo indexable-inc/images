@@ -1,7 +1,6 @@
 defmodule IxMcp.IssueWatchTest do
   use ExUnit.Case, async: false
 
-  alias IxMcp.ActionLog
   alias IxMcp.IssueWatch
   alias IxMcp.MCP.Notifier
 
@@ -71,58 +70,6 @@ defmodule IxMcp.IssueWatchTest do
     # the unchanged search result instead of re-announcing it.
     refute_receive {:mcp_send,
                     %{"params" => %{"meta" => %{"issue" => "indexable-inc/index#3877"}}}},
-                   200
-  end
-
-  test "announces a pickup claim once, skipping claims that predate boot", %{tmp_dir: dir} do
-    # Own ActionLog instance: the sweep must be driven by this test's claims
-    # alone, not whatever the globally running log accumulates.
-    log = :"issue_watch_claims_log_#{System.unique_integer([:positive])}"
-    start_supervised!({ActionLog, path: ":memory:", name: log})
-
-    # gh answers every issue search empty; only the claims sweep speaks.
-    gh = Path.join(dir, "gh")
-    File.write!(gh, "#!/bin/sh\necho '[]'\n")
-    File.chmod!(gh, 0o755)
-
-    stale = ActionLog.create_session("stale", log)
-    {:ok, _claim} = ActionLog.claim_issue("indexable-inc/index", 4200, stale, log)
-
-    Notifier.register(self())
-    _ = :sys.get_state(Notifier)
-
-    start_supervised!(
-      {IssueWatch,
-       gh: gh,
-       owners: ["indexable-inc"],
-       interval_ms: 25,
-       name: :issue_watch_claims_under_test,
-       action_log: log}
-    )
-
-    claimer = ActionLog.create_session("claimer", log)
-    {:ok, _claim} = ActionLog.claim_issue("indexable-inc/index", 4201, claimer, log)
-
-    assert_receive {:mcp_send,
-                    %{
-                      "method" => "notifications/claude/channel",
-                      "params" =>
-                        %{
-                          "meta" => %{
-                            "source" => "issues",
-                            "event" => "picked_up",
-                            "issue" => "indexable-inc/index#4201"
-                          }
-                        } = params
-                    }},
-                   5_000
-
-    assert params["meta"]["session"] == "claimer"
-    assert params["content"] =~ "issue picked up: indexable-inc/index#4201"
-
-    # The watermark must swallow both the already-announced claim and the
-    # one standing before this watcher booted.
-    refute_receive {:mcp_send, %{"params" => %{"meta" => %{"event" => "picked_up"}}}},
                    200
   end
 end

@@ -62,7 +62,8 @@ defmodule IxMcp.IssuesTest do
     assert detail =~ "claimed indexable-inc/index#4003"
     assert detail =~ "not mirrored"
 
-    assert [%{repo: "indexable-inc/index", number: 4003}] = ActionLog.issue_claims_after(0, log)
+    assert [%{kind: :issue, ref: "indexable-inc/index#4003", status: :claimed}] =
+             ActionLog.list_requests(log)
   end
 
   test "a failed GitHub mirror does not lose a won claim", %{tmp_dir: dir, log: log} do
@@ -92,6 +93,6 @@ defmodule IxMcp.IssuesTest do
   test "a malformed ref is rejected without touching the arbiter", %{log: log} do
     assert {:error, message} = Issues.pickup("not-a-ref", action_log: log, gh: nil)
     assert message =~ ~s(pass an integer or "owner/repo#n")
-    assert [] = ActionLog.issue_claims_after(0, log)
+    assert [] = ActionLog.list_requests(log)
   end
 end

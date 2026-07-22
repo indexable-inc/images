@@ -319,8 +319,8 @@ defmodule IxMcp.ActionLogTest do
     :ok = ActionLog.finish_action(action_id, "done", false, 3, log)
     assert [%{status: "done", stack: nil, line: nil} | _] = ActionLog.recent(10, log)
 
-    # The 2 -> ... -> 7 steps stamped the file on their way through (index#3539).
-    assert user_version(path) == 7
+    # The 2 -> ... -> 8 steps stamped the file on their way through (index#3539).
+    assert user_version(path) == 8
   end
 
   test "a v1 database migrates losslessly to the normalized schema, once" do
@@ -403,8 +403,8 @@ defmodule IxMcp.ActionLogTest do
 
     stop_supervised!(:migrate)
 
-    # The ladder ran 1 -> 2 -> ... -> 7 and left the stamp behind (index#3539).
-    assert user_version(path) == 7
+    # The ladder ran 1 -> 2 -> ... -> 8 and left the stamp behind (index#3539).
+    assert user_version(path) == 8
 
     # The migrated file is the v2 shape on disk: normalized columns, no v1
     # leftovers, and a reopen (no-op detection) does not duplicate rows.
@@ -442,10 +442,11 @@ defmodule IxMcp.ActionLogTest do
     assert tables ==
              [
                ["actions"],
-               ["issue_claims"],
                ["job_output"],
                ["jobs"],
                ["outbox"],
+               ["request_events"],
+               ["requests"],
                ["session_messages"],
                ["sessions"],
                ["topics"]
@@ -472,7 +473,7 @@ defmodule IxMcp.ActionLogTest do
   test "a fresh database is created stamped with the current schema version" do
     path = tmp_db()
     start_supervised!({ActionLog, path: path, name: :action_log_fresh_stamp})
-    assert user_version(path) == 7
+    assert user_version(path) == 8
   end
 
   test "an unstamped file already at the current schema is stamped, not rewritten" do
@@ -497,7 +498,7 @@ defmodule IxMcp.ActionLogTest do
 
     reopened = start_supervised!({ActionLog, path: path, name: :action_log_stamp_b})
     assert [%{intent: "keep"}] = ActionLog.recent(10, reopened)
-    assert user_version(path) == 7
+    assert user_version(path) == 8
   end
 
   test "an unstamped pre-line file (the #3536 shape) sniffs as v3 and gains the line column" do
@@ -522,19 +523,26 @@ defmodule IxMcp.ActionLogTest do
     log = start_supervised!({ActionLog, path: path, name: :action_log_pre_line})
 
     assert [%{intent: "pre-line row", status: "done", line: nil}] = ActionLog.recent(10, log)
-    assert user_version(path) == 7
+    assert user_version(path) == 8
   end
 
-  test "the unique constraint arbitrates issue claims (#3880)" do
+  test "the guarded update arbitrates issue claims on the request bus (#3880, #3883)" do
     log = start_supervised!({ActionLog, path: ":memory:", name: :action_log_claims})
 
     winner = ActionLog.create_session("winner", log)
     loser = ActionLog.create_session(nil, log)
 
-    assert ActionLog.last_issue_claim_id(log) == 0
+    assert ActionLog.last_request_event_id(log) == 0
 
     assert {:ok, claim} = ActionLog.claim_issue("indexable-inc/index", 3880, winner, log)
-    assert %{repo: "indexable-inc/index", number: 3880, session: "winner"} = claim
+
+    assert %{
+             kind: :issue,
+             ref: "indexable-inc/index#3880",
+             status: :claimed,
+             claimer: "winner"
+           } = claim
+
     assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(claim.claimed_at)
 
     # The holder re-claiming its own issue reads back as the win it already
@@ -546,23 +554,28 @@ defmodule IxMcp.ActionLogTest do
     # The loser reads the standing claim back, name included.
     assert {:error, standing} = ActionLog.claim_issue("indexable-inc/index", 3880, loser, log)
     assert standing.id == claim.id
-    assert standing.session == "winner"
+    assert standing.claimer == "winner"
 
     # Same number on another repo is a different claim.
     assert {:ok, other} = ActionLog.claim_issue("indexable-inc/ix", 3880, loser, log)
-    assert other.session == nil
+    assert other.claimer == nil
 
-    # The watermark cursor sees exactly the claims past it, oldest first.
-    assert [%{number: 3880}, %{repo: "indexable-inc/ix"}] = ActionLog.issue_claims_after(0, log)
-    assert [%{repo: "indexable-inc/ix"}] = ActionLog.issue_claims_after(claim.id, log)
-    assert ActionLog.last_issue_claim_id(log) == other.id
+    # A pickup-born row was never on offer, so each claim wrote exactly one
+    # claimed event (no posted), and the watermark cursor sees exactly the
+    # events past it, oldest first -- the idempotent re-claim added nothing.
+    assert [first, second] = ActionLog.request_events_after(0, log)
+    assert %{event: :claimed, request_id: claimed_id, ref: "indexable-inc/index#3880"} = first
+    assert claimed_id == claim.id
+    assert %{event: :claimed, ref: "indexable-inc/ix#3880"} = second
+    assert [^second] = ActionLog.request_events_after(first.id, log)
+    assert ActionLog.last_request_event_id(log) == second.id
   end
 
   test "a nil-session re-claim is a loss, never a win (#3903)" do
     log = start_supervised!({ActionLog, path: ":memory:", name: :action_log_nil_claims})
 
     assert {:ok, claim} = ActionLog.claim_issue("indexable-inc/index", 3903, nil, log)
-    assert claim.session_id == nil
+    assert claim.claimed_by == nil
 
     # nil is every anonymous caller at once, so it can never prove the
     # standing claim is the caller's own: the retry-across-restart carve-out
@@ -570,6 +583,174 @@ defmodule IxMcp.ActionLogTest do
     # anonymous sessions would both walk away believing they won.
     assert {:error, standing} = ActionLog.claim_issue("indexable-inc/index", 3903, nil, log)
     assert standing.id == claim.id
+  end
+
+  test "a request walks post -> claim -> done, events in the same transactions (#3883)" do
+    log = start_supervised!({ActionLog, path: ":memory:", name: :action_log_requests})
+
+    poster = ActionLog.create_session("poster", log)
+    worker = ActionLog.create_session("worker", log)
+    rival = ActionLog.create_session("rival", log)
+
+    assert {:ok, request} =
+             ActionLog.post_request(:adhoc, nil, "review the diff", "the body", poster, log)
+
+    assert %{
+             kind: :adhoc,
+             ref: nil,
+             title: "review the diff",
+             body: "the body",
+             status: :open,
+             poster: "poster",
+             claimed_by: nil
+           } = request
+
+    # Two adhoc posts with the same title are two offers: NULL refs never
+    # unique-conflict.
+    assert {:ok, twin} = ActionLog.post_request(:adhoc, nil, "review the diff", nil, poster, log)
+    assert twin.id != request.id
+
+    # The guarded UPDATE's row count decides the race: the winner flips the
+    # row, the loser reads the standing claim back, and the holder's own
+    # re-claim stays a win (#3903).
+    assert {:ok, claimed} = ActionLog.claim_request(request.id, worker, log)
+    assert %{status: :claimed, claimer: "worker"} = claimed
+    assert {:ok, ^claimed} = ActionLog.claim_request(request.id, worker, log)
+    assert {:error, standing} = ActionLog.claim_request(request.id, rival, log)
+    assert standing.claimer == "worker"
+    assert {:error, :not_found} = ActionLog.claim_request(999_999, rival, log)
+
+    # Done requires claimed: finishing open work is refused, finishing done
+    # work is idempotent.
+    assert {:error, %{status: :open}} = ActionLog.finish_request(twin.id, worker, log)
+    assert {:ok, done} = ActionLog.finish_request(request.id, worker, log)
+    assert %{status: :done} = done
+    assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(done.done_at)
+    assert {:ok, ^done} = ActionLog.finish_request(request.id, worker, log)
+    assert {:error, :not_found} = ActionLog.finish_request(999_999, worker, log)
+
+    # Exactly one event per mutation, oldest first: two posts, one claim,
+    # one done -- the losses and idempotent retries added nothing.
+    assert [
+             %{
+               event: :posted,
+               request_id: posted_id,
+               session: "poster",
+               title: "review the diff"
+             },
+             %{event: :posted, request_id: twin_id},
+             %{event: :claimed, session: "worker"},
+             %{event: :done, session: "worker"}
+           ] = ActionLog.request_events_after(0, log)
+
+    assert posted_id == request.id
+    assert twin_id == twin.id
+
+    # The board lists open first, then claimed, then done.
+    assert [%{id: open_id, status: :open}, %{status: :done}] = ActionLog.list_requests(log)
+    assert open_id == twin.id
+  end
+
+  test "an issue-kind post is an idempotent ensure on the unique ref (#3883)" do
+    log = start_supervised!({ActionLog, path: ":memory:", name: :action_log_request_ensure})
+
+    poster = ActionLog.create_session("poster", log)
+    worker = ActionLog.create_session("worker", log)
+
+    assert {:ok, request} =
+             ActionLog.post_request(
+               :issue,
+               "indexable-inc/index#3883",
+               "generalize pickup",
+               nil,
+               poster,
+               log
+             )
+
+    assert %{kind: :issue, ref: "indexable-inc/index#3883", status: :open} = request
+
+    # Re-posting the ref reads the standing row back, whatever its status,
+    # and announces nothing new.
+    assert {:ok, ^request} =
+             ActionLog.post_request(
+               :issue,
+               "indexable-inc/index#3883",
+               "another title",
+               nil,
+               worker,
+               log
+             )
+
+    # A pickup of the posted issue claims the SAME row: the veneer and the
+    # board are one table.
+    assert {:ok, claimed} = ActionLog.claim_issue("indexable-inc/index", 3883, worker, log)
+    assert claimed.id == request.id
+    assert claimed.title == "generalize pickup"
+
+    assert [%{event: :posted}, %{event: :claimed}] = ActionLog.request_events_after(0, log)
+  end
+
+  test "a v7 database folds its issue claims into requests and drops the table (#3883)" do
+    path = tmp_db()
+
+    # The exact v7 shape (#3881) with a standing claim, as a pre-#3883
+    # binary leaves it on disk.
+    {:ok, conn} = Sqlite3.open(path)
+
+    for statement <- [
+          "CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL, last_seen_at TEXT)",
+          "CREATE TABLE topics (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES sessions(id), name TEXT NOT NULL, started_at TEXT NOT NULL)",
+          "CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'done', stack TEXT, stack_at TEXT, line INTEGER)",
+          "CREATE TABLE jobs (id TEXT PRIMARY KEY, session_id INTEGER REFERENCES sessions(id), action_id INTEGER REFERENCES actions(id), intent TEXT, session_name TEXT, topic_name TEXT, code TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running', watch INTEGER NOT NULL DEFAULT 0, result TEXT, output_bytes INTEGER NOT NULL DEFAULT 0, output_dropped INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL, finished_at TEXT, elapsed_ms INTEGER)",
+          "CREATE TABLE job_output (job_id TEXT NOT NULL REFERENCES jobs(id), seq INTEGER NOT NULL, chunk TEXT NOT NULL, PRIMARY KEY (job_id, seq))",
+          "CREATE TABLE outbox (id INTEGER PRIMARY KEY, job_id TEXT, intent TEXT, status TEXT NOT NULL, elapsed_ms INTEGER, result TEXT, created_at TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0)",
+          "CREATE TABLE issue_claims (id INTEGER PRIMARY KEY, repo TEXT NOT NULL, number INTEGER NOT NULL, session_id INTEGER REFERENCES sessions(id), claimed_at TEXT NOT NULL, UNIQUE(repo, number))",
+          "CREATE TABLE session_messages (id INTEGER PRIMARY KEY, from_session INTEGER NOT NULL REFERENCES sessions(id), to_session INTEGER REFERENCES sessions(id), body TEXT NOT NULL, created_at TEXT NOT NULL)",
+          "INSERT INTO sessions (id, name, started_at, last_seen_at) VALUES (1, 'claimant', '2026-07-20T10:00:00Z', NULL)",
+          "INSERT INTO issue_claims (repo, number, session_id, claimed_at) VALUES ('indexable-inc/index', 3880, 1, '2026-07-20T10:00:01Z')",
+          "PRAGMA user_version = 7"
+        ] do
+      :ok = Sqlite3.execute(conn, statement)
+    end
+
+    :ok = Sqlite3.close(conn)
+
+    log = start_supervised!({ActionLog, path: path, name: :action_log_v7_to_v8})
+
+    # The claim crossed over as a claimed issue-kind request (the ref doubles
+    # as the title -- the claim never carried one, and nobody posted it)...
+    assert [request] = ActionLog.list_requests(log)
+
+    assert %{
+             kind: :issue,
+             ref: "indexable-inc/index#3880",
+             title: "indexable-inc/index#3880",
+             status: :claimed,
+             posted_by: nil,
+             claimed_by: 1,
+             claimer: "claimant",
+             claimed_at: "2026-07-20T10:00:01Z"
+           } = request
+
+    # ...still held against a rival claim, with no synthesized events (the
+    # feed announces news; a migrated claim was already heard).
+    assert {:error, %{claimer: "claimant"}} =
+             ActionLog.claim_issue("indexable-inc/index", 3880, nil, log)
+
+    assert ActionLog.request_events_after(0, log) == []
+
+    # The old table is gone and the stamp moved.
+    assert user_version(path) == 8
+
+    {:ok, conn} = Sqlite3.open(path)
+
+    {:ok, statement} =
+      Sqlite3.prepare(conn, "SELECT name FROM sqlite_master WHERE name = 'issue_claims'")
+
+    {:ok, leftovers} = Sqlite3.fetch_all(conn, statement)
+    :ok = Sqlite3.release(conn, statement)
+    :ok = Sqlite3.close(conn)
+    assert leftovers == []
   end
 
   test "the message cursor delivers addressed mail and broadcasts, never own sends (#3881)" do
@@ -633,7 +814,7 @@ defmodule IxMcp.ActionLogTest do
 
     # The refusal names both versions, so the operator knows which side moves.
     assert output =~ "user_version 9000"
-    assert output =~ "supported 7"
+    assert output =~ "supported 8"
     assert output =~ "index#3539"
 
     # The server stays useful: writes are absorbed, reads answer empty.
@@ -652,10 +833,14 @@ defmodule IxMcp.ActionLogTest do
     assert ActionLog.sessions(log) == []
     assert ActionLog.topics(log) == []
 
-    # With no arbiter there is no claim to win (#3880).
+    # With no arbiter there is no claim to win, and no bus to post on (#3883).
     assert ActionLog.claim_issue("indexable-inc/index", 1, session_id, log) == :disabled
-    assert ActionLog.issue_claims_after(0, log) == []
-    assert ActionLog.last_issue_claim_id(log) == 0
+    assert ActionLog.post_request(:adhoc, nil, "t", nil, session_id, log) == :disabled
+    assert ActionLog.claim_request(1, session_id, log) == :disabled
+    assert ActionLog.finish_request(1, session_id, log) == :disabled
+    assert ActionLog.list_requests(log) == []
+    assert ActionLog.request_events_after(0, log) == []
+    assert ActionLog.last_request_event_id(log) == 0
 
     # And no bus to carry a message (#3881).
     assert ActionLog.heartbeat_session(session_id, log) == :ok
