@@ -8,7 +8,4 @@
   # `packages.aarch64-darwin.btop`, so Macs substitute it from the cache
   # instead of the darwin cache-push lane building it natively.
   cross = true;
-  # Joins `nix run .#update`: bump btop-src and regenerate the patch series via
-  # passthru.updateScript (see default.nix / lib/fork-updater.nix).
-  updateScript = true;
 }
