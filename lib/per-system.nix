@@ -1381,8 +1381,11 @@
     # A crate with a `packageSet` is built through `repoPackages` and carries
     # its own `passthru.tests`. A lib-only workspace crate has no `packageSet`
     # and is not in `repoPackages`, so select its library straight from the
-    # shared unit graph (same path ix-vt's default.nix uses). The library unit
-    # key is the Cargo package name with dashes underscored.
+    # shared unit graph (same path ix-vt's default.nix uses). The unit graph is
+    # keyed by the Cargo package name (library unit key: dashes underscored),
+    # which the registry id need not match (packages/usage/core is id
+    # `usage-core`, crate `ix-usage-core`), so read the name from the crate's
+    # own manifest.
     packageTestsFor = entry:
       if entry.packageSet != null
       then
@@ -1392,10 +1395,12 @@
           repoPackages
         ).passthru.tests or {
         }
-      else
+      else let
+        cargoPackageName = (lib.importTOML (entry.path + "/Cargo.toml")).package.name;
+      in
         (cargoUnit.selectLibraryWithTests rustWorkspace.units {
-          library = lib.replaceStrings ["-"] ["_"] entry.id;
-          packageName = entry.id;
+          library = lib.replaceStrings ["-"] ["_"] cargoPackageName;
+          packageName = cargoPackageName;
         }).passthru.tests or {
         };
     # Two keyings of the same leaf test derivations:
