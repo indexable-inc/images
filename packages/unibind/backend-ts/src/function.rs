@@ -177,8 +177,8 @@ fn sync_body(shape: &CallShape<'_>, value: &TokenStream) -> BodyAndRet {
 }
 
 /// The async wrapper: convert arguments on the JavaScript thread, then
-/// `select!` the user future against the abort notification so an abort
-/// drops the future.
+/// hand the user future to the module's `__unibind_with_abort`, which
+/// races it against the abort notification so an abort drops the future.
 fn async_body(shape: &CallShape<'_>, value: &TokenStream) -> BodyAndRet {
     let CallShape {
         name,
@@ -210,25 +210,8 @@ fn async_body(shape: &CallShape<'_>, value: &TokenStream) -> BodyAndRet {
         },
         ret: quote!(::napi::Result<#ok_decl>),
         body: quote! {
-            let __unibind_future = #call;
-            match __unibind_signal {
-                ::std::option::Option::Some(__unibind_signal) => {
-                    if __unibind_signal.already_aborted {
-                        return ::std::result::Result::Err(__unibind_aborted());
-                    }
-                    ::tokio::select! {
-                        biased;
-                        () = __unibind_signal.notify.notified() => {
-                            ::std::result::Result::Err(__unibind_aborted())
-                        }
-                        value = __unibind_future => #settle,
-                    }
-                }
-                ::std::option::Option::None => {
-                    let value = __unibind_future.await;
-                    #settle
-                }
-            }
+            let value = __unibind_with_abort(__unibind_signal, #call).await?;
+            #settle
         },
     }
 }

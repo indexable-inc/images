@@ -43,6 +43,29 @@ mod __unibind_ts_sample_ts {
     fn __unibind_aborted() -> ::napi::Error {
         ::napi::Error::new(::napi::Status::Cancelled, "__unibind__:aborted")
     }
+    /// Race the user future against the abort notification; dropping
+    /// the future on abort is the cancellation. `None` (the argument
+    /// omitted or `undefined`) awaits the future undisturbed.
+    async fn __unibind_with_abort<F: ::std::future::Future>(
+        __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
+        __unibind_future: F,
+    ) -> ::napi::Result<F::Output> {
+        match __unibind_signal {
+            ::std::option::Option::Some(__unibind_signal) => {
+                if __unibind_signal.already_aborted {
+                    return ::std::result::Result::Err(__unibind_aborted());
+                }
+                ::tokio::select! {
+                    biased; () = __unibind_signal.notify.notified() => {
+                    ::std::result::Result::Err(__unibind_aborted()) } value =
+                    __unibind_future => ::std::result::Result::Ok(value),
+                }
+            }
+            ::std::option::Option::None => {
+                ::std::result::Result::Ok(__unibind_future.await)
+            }
+        }
+    }
     ///Map `SampleError` onto a decodable napi rejection reason, message from `Display`.
     impl ::std::convert::From<super::sample_ts::SampleError> for ::napi::Error {
         fn from(error: super::sample_ts::SampleError) -> Self {
@@ -114,23 +137,12 @@ mod __unibind_ts_sample_ts {
         b: i64,
         __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
     ) -> ::napi::Result<i64> {
-        let __unibind_future = super::sample_ts::slow_add(a, b);
-        match __unibind_signal {
-            ::std::option::Option::Some(__unibind_signal) => {
-                if __unibind_signal.already_aborted {
-                    return ::std::result::Result::Err(__unibind_aborted());
-                }
-                ::tokio::select! {
-                    biased; () = __unibind_signal.notify.notified() => {
-                    ::std::result::Result::Err(__unibind_aborted()) } value =
-                    __unibind_future => ::std::result::Result::Ok(value),
-                }
-            }
-            ::std::option::Option::None => {
-                let value = __unibind_future.await;
-                ::std::result::Result::Ok(value)
-            }
-        }
+        let value = __unibind_with_abort(
+                __unibind_signal,
+                super::sample_ts::slow_add(a, b),
+            )
+            .await?;
+        ::std::result::Result::Ok(value)
     }
     ///Fetch one row.
     #[::napi_derive::napi]
@@ -138,28 +150,15 @@ mod __unibind_ts_sample_ts {
         store: ::std::string::String,
         __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
     ) -> ::napi::Result<super::sample_ts::Row> {
-        let __unibind_future = super::sample_ts::fetch(store);
-        match __unibind_signal {
-            ::std::option::Option::Some(__unibind_signal) => {
-                if __unibind_signal.already_aborted {
-                    return ::std::result::Result::Err(__unibind_aborted());
-                }
-                ::tokio::select! {
-                    biased; () = __unibind_signal.notify.notified() => {
-                    ::std::result::Result::Err(__unibind_aborted()) } value =
-                    __unibind_future => match value { ::std::result::Result::Ok(value) =>
-                    ::std::result::Result::Ok(value), ::std::result::Result::Err(error)
-                    => { ::std::result::Result::Err(::napi::Error::from(error)) } },
-                }
-            }
-            ::std::option::Option::None => {
-                let value = __unibind_future.await;
-                match value {
-                    ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
-                    ::std::result::Result::Err(error) => {
-                        ::std::result::Result::Err(::napi::Error::from(error))
-                    }
-                }
+        let value = __unibind_with_abort(
+                __unibind_signal,
+                super::sample_ts::fetch(store),
+            )
+            .await?;
+        match value {
+            ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
+            ::std::result::Result::Err(error) => {
+                ::std::result::Result::Err(::napi::Error::from(error))
             }
         }
     }
@@ -229,33 +228,19 @@ mod __unibind_ts_sample_ts {
         store: ::std::string::String,
         __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
     ) -> ::napi::Result<__UnibindStreamTailLater> {
-        let __unibind_future = super::sample_ts::tail_later(store);
-        match __unibind_signal {
-            ::std::option::Option::Some(__unibind_signal) => {
-                if __unibind_signal.already_aborted {
-                    return ::std::result::Result::Err(__unibind_aborted());
-                }
-                ::tokio::select! {
-                    biased; () = __unibind_signal.notify.notified() => {
-                    ::std::result::Result::Err(__unibind_aborted()) } value =
-                    __unibind_future => match value { ::std::result::Result::Ok(value) =>
-                    ::std::result::Result::Ok(__UnibindStreamTailLater::__unibind_from(value)),
-                    ::std::result::Result::Err(error) => {
-                    ::std::result::Result::Err(::napi::Error::from(error)) } },
-                }
+        let value = __unibind_with_abort(
+                __unibind_signal,
+                super::sample_ts::tail_later(store),
+            )
+            .await?;
+        match value {
+            ::std::result::Result::Ok(value) => {
+                ::std::result::Result::Ok(
+                    __UnibindStreamTailLater::__unibind_from(value),
+                )
             }
-            ::std::option::Option::None => {
-                let value = __unibind_future.await;
-                match value {
-                    ::std::result::Result::Ok(value) => {
-                        ::std::result::Result::Ok(
-                            __UnibindStreamTailLater::__unibind_from(value),
-                        )
-                    }
-                    ::std::result::Result::Err(error) => {
-                        ::std::result::Result::Err(::napi::Error::from(error))
-                    }
-                }
+            ::std::result::Result::Err(error) => {
+                ::std::result::Result::Err(::napi::Error::from(error))
             }
         }
     }
@@ -360,35 +345,18 @@ mod __unibind_ts_sample_ts {
             amount: i64,
             __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
         ) -> ::napi::Result<i64> {
-            let __unibind_future = {
-                let __unibind_inner = ::std::sync::Arc::clone(&self.inner);
-                async move { __unibind_inner.add(amount).await }
-            };
-            match __unibind_signal {
-                ::std::option::Option::Some(__unibind_signal) => {
-                    if __unibind_signal.already_aborted {
-                        return ::std::result::Result::Err(__unibind_aborted());
-                    }
-                    ::tokio::select! {
-                        biased; () = __unibind_signal.notify.notified() => {
-                        ::std::result::Result::Err(__unibind_aborted()) } value =
-                        __unibind_future => match value {
-                        ::std::result::Result::Ok(value) =>
-                        ::std::result::Result::Ok(value),
-                        ::std::result::Result::Err(error) => {
-                        ::std::result::Result::Err(::napi::Error::from(error)) } },
-                    }
-                }
-                ::std::option::Option::None => {
-                    let value = __unibind_future.await;
-                    match value {
-                        ::std::result::Result::Ok(value) => {
-                            ::std::result::Result::Ok(value)
-                        }
-                        ::std::result::Result::Err(error) => {
-                            ::std::result::Result::Err(::napi::Error::from(error))
-                        }
-                    }
+            let value = __unibind_with_abort(
+                    __unibind_signal,
+                    {
+                        let __unibind_inner = ::std::sync::Arc::clone(&self.inner);
+                        async move { __unibind_inner.add(amount).await }
+                    },
+                )
+                .await?;
+            match value {
+                ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
+                ::std::result::Result::Err(error) => {
+                    ::std::result::Result::Err(::napi::Error::from(error))
                 }
             }
         }
@@ -413,3 +381,4 @@ mod __unibind_ts_sample_ts {
         }
     }
 }
+

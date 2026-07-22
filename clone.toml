@@ -55,7 +55,15 @@ ignore = [
 # type2 triple is gone (dead method deleted, pure field dumps now
 # dataclasses.asdict); measured 0.3593%. The 13-line _read_lines type1 twin
 # stays in the scan as a documented pair (see both data.py docstrings).
+#
+# 2026-07-22 (#3996): lowered 0.36 -> 0.305. The unibind ts/py emitters now
+# emit their async scaffold once per glue module (`__unibind_with_abort` next
+# to `__UnibindAbortSignal`; `SharedStream::anext` in unibind-py-runtime)
+# instead of inlining it per binding, and the regenerated snapshots shrank
+# accordingly; measured 0.3024% (1931 -> 1868 duplicated lines). The
+# remaining snapshot groups are per-class stream-handle glue left in the
+# scan as cleanup pressure.
 [budget]
-global_pct = 0.36
+global_pct = 0.305
 diff_pct = 0.0
 diff_base = "origin/main"

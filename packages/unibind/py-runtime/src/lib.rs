@@ -97,6 +97,25 @@ impl<T> SharedStream<T> {
         let inner = Arc::clone(&self.inner);
         async move { inner.lock().await.next().await }
     }
+
+    /// One `__anext__` call: pull the next item as an awaitable Python
+    /// object, mapping exhaustion to `StopAsyncIteration`. Generated
+    /// stream classes delegate their `__anext__` here.
+    ///
+    /// # Errors
+    ///
+    /// Fails when no asyncio event loop can be resolved for the calling
+    /// context.
+    pub fn anext<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>
+    where
+        T: for<'a> pyo3::IntoPyObject<'a> + Send + 'static,
+    {
+        let next = self.next();
+        future_into_py(py, async move {
+            next.await
+                .ok_or_else(|| pyo3::exceptions::PyStopAsyncIteration::new_err(()))
+        })
+    }
 }
 
 impl<T> fmt::Debug for SharedStream<T> {

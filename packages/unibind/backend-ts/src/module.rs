@@ -120,5 +120,31 @@ fn abort_signal() -> TokenStream {
         fn __unibind_aborted() -> ::napi::Error {
             ::napi::Error::new(::napi::Status::Cancelled, "__unibind__:aborted")
         }
+
+        /// Race the user future against the abort notification; dropping
+        /// the future on abort is the cancellation. `None` (the argument
+        /// omitted or `undefined`) awaits the future undisturbed.
+        async fn __unibind_with_abort<F: ::std::future::Future>(
+            __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
+            __unibind_future: F,
+        ) -> ::napi::Result<F::Output> {
+            match __unibind_signal {
+                ::std::option::Option::Some(__unibind_signal) => {
+                    if __unibind_signal.already_aborted {
+                        return ::std::result::Result::Err(__unibind_aborted());
+                    }
+                    ::tokio::select! {
+                        biased;
+                        () = __unibind_signal.notify.notified() => {
+                            ::std::result::Result::Err(__unibind_aborted())
+                        }
+                        value = __unibind_future => ::std::result::Result::Ok(value),
+                    }
+                }
+                ::std::option::Option::None => {
+                    ::std::result::Result::Ok(__unibind_future.await)
+                }
+            }
+        }
     }
 }

@@ -98,15 +98,7 @@ impl StreamExport<'_> {
                     &self,
                     py: ::pyo3::Python<'py>,
                 ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
-                    let next = self.stream.next();
-                    ::unibind_py_runtime::future_into_py(py, async move {
-                        match next.await {
-                            ::std::option::Option::Some(item) => ::pyo3::PyResult::Ok(item),
-                            ::std::option::Option::None => ::pyo3::PyResult::Err(
-                                ::pyo3::exceptions::PyStopAsyncIteration::new_err(()),
-                            ),
-                        }
-                    })
+                    self.stream.anext(py)
                 }
             }
         }
