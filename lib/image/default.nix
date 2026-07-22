@@ -142,11 +142,20 @@
           # context, so it roots into the image closure once (no duplicate
           # copy — the #1748 trap). `self.narHash` locks the pin. Only this
           # flake scope sees `self`, so it is plumbed down from `flake.nix`.
-          nix.registry.index.to = {
-            type = "path";
-            path = self.outPath;
-            inherit (self) narHash;
-          };
+          #
+          # `narHash` is conditional: when index is consumed as a relative
+          # `path:./index` input (ix vendors it as a git submodule, ix#8119),
+          # nix resolves the input as a subpath of the parent flake's source
+          # and its `self` carries no `narHash` — the parent's own rev locks
+          # the submodule content transitively. Emitting the pin unlocked
+          # there (first in-guest eval re-hashes the tree once) beats failing
+          # the whole eval on `attribute 'narHash' missing` (ix#8147).
+          nix.registry.index.to =
+            {
+              type = "path";
+              path = self.outPath;
+            }
+            // lib.optionalAttrs (self ? narHash) {inherit (self) narHash;};
         }
         ++ [
           ./platform.nix
