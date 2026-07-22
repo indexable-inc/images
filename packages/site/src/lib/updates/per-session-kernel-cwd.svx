@@ -1,0 +1,27 @@
+---
+id: per-session-kernel-cwd
+postedAt: 2026-07-22T00:00:00-07:00
+title: "Kernel commands no longer follow the movable OS cwd"
+tags: [mcp-ex, kernel, safety]
+links:
+  - label: issue 3902
+    href: https://github.com/indexable-inc/index/issues/3902
+  - label: Cmd
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/cmd.ex
+---
+
+Fixes #3902. When several agent sessions share one index kernel, the OS
+process cwd is BEAM-global: any cell that calls `File.cd!/1` moves it for
+everyone. One session wandered into its /tmp worktree that way, and a
+sibling's pathless `git reset --hard` resolved against the shared cwd and
+wiped the worktree's staged work.
+
+`Cmd.run/3` and `Cmd.sh/2` now never consult the OS cwd at spawn time. The
+launch directory is captured once at application boot, before any cell can
+run, and every pathless command defaults its `cd:` to that immutable capture;
+subagent spawns (`Agents.spawn` without `:cwd`) pin to the same directory.
+Working anywhere else takes an explicit `cd:` or `git -C` -- one agent's
+`File.cd!/1` can no longer aim another agent's commands at a foreign
+checkout.
+
+(authored by Claude Code, Fable 5)

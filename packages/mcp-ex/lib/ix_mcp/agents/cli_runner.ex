@@ -57,7 +57,10 @@ defmodule IxMcp.Agents.CliRunner do
   end
 
   defp open_port(spec, ctx) do
-    cwd = Keyword.get(ctx.opts, :cwd, File.cwd!())
+    # Never File.cwd!(): the OS cwd is BEAM-global and cell-movable, so a
+    # child spawned without :cwd would inherit wherever some other session
+    # last wandered (#3902). The boot-time capture is stable.
+    cwd = Keyword.get(ctx.opts, :cwd, IxMcp.Cmd.launch_cwd())
 
     {exe, args} =
       case spec.stdin do
