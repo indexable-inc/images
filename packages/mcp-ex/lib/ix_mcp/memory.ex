@@ -364,7 +364,13 @@ defmodule IxMcp.Memory do
 
   @spec run!([String.t()]) :: String.t()
   defp run!(args) do
-    case System.cmd(weave_bin!(), ["--store", store!()] ++ args, stderr_to_stdout: true) do
+    # Store before binary: WEAVE_MEMORY_STORE is the setup knob the module
+    # doc leads with, so when both are missing the error must name it. The
+    # sandboxed check stages no weave binary, so the reverse order failed
+    # there while passing on any dev machine with weave installed.
+    store = store!()
+
+    case System.cmd(weave_bin!(), ["--store", store] ++ args, stderr_to_stdout: true) do
       {out, 0} -> out
       {out, code} -> raise "weave #{Enum.join(args, " ")} exited #{code}: #{out}"
     end

@@ -88,7 +88,10 @@ defmodule IxMcp.Memory.Semantic do
 
   @spec recall(state(), String.t(), pos_integer()) :: {[map()], state()}
   defp recall(nil, query, limit) do
-    {bin, store, budget} = key = {Memory.weave_bin!(), Memory.store!(), max(limit, @entry_budget)}
+    # Store before binary, matching Memory.run!/1's error priority.
+    store = Memory.store!()
+    {bin, budget} = {Memory.weave_bin!(), max(limit, @entry_budget)}
+    key = {bin, store, budget}
 
     port =
       Port.open({:spawn_executable, bin}, [
@@ -120,7 +123,7 @@ defmodule IxMcp.Memory.Semantic do
   end
 
   defp recall(%{port: port, key: {bin, store, budget}, buffer: buffer} = state, query, limit) do
-    if {bin, store} == {Memory.weave_bin!(), Memory.store!()} and limit <= budget and
+    if {store, bin} == {Memory.store!(), Memory.weave_bin!()} and limit <= budget and
          Port.info(port) != nil do
       Port.command(port, query <> "\n")
       {line, rest} = read_answer(port, buffer, @answer_ms)
