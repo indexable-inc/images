@@ -40,13 +40,15 @@ defmodule IxMcp.Agents.CliRunner do
         |> Keyword.put(:prompt, instructions)
       )
 
-    port = open_port(spec, ctx)
+    cwd = validate_cwd!(ctx.opts)
+    port = open_port(spec, cwd)
     if spec.stdin == :stream, do: inject_user(port, instructions)
 
     loop(%{
       ctx: ctx,
       backend: backend,
       port: port,
+      cwd: cwd,
       stdin: spec.stdin,
       buf: "",
       final: nil,
@@ -56,12 +58,40 @@ defmodule IxMcp.Agents.CliRunner do
     })
   end
 
-  defp open_port(spec, ctx) do
-    # Never File.cwd!(): the OS cwd is BEAM-global and cell-movable, so a
-    # child spawned without :cwd would inherit wherever some other session
-    # last wandered (#3902). The boot-time capture is stable.
-    cwd = Keyword.get(ctx.opts, :cwd, IxMcp.Cmd.launch_cwd())
+  # Resolve the child's working directory and refuse to spawn into one
+  # that is not there: Erlang's child setup reports a failed `chdir` by
+  # exiting with the raw errno -- `{"", 2}` for ENOENT, `{"", 20}` for
+  # ENOTDIR -- indistinguishable from the CLI's own exit status, with no
+  # output to explain it (#3989; the Cmd shape fixed in #3985).
+  #
+  # The default is never File.cwd!(): the OS cwd is BEAM-global and
+  # cell-movable, so a child spawned without :cwd would inherit wherever
+  # some other session last wandered (#3902). The boot-time capture is
+  # stable.
+  @spec validate_cwd!(keyword()) :: binary()
+  defp validate_cwd!(opts) do
+    {cwd, hint} =
+      case Keyword.fetch(opts, :cwd) do
+        {:ok, cwd} -> {cwd, ""}
+        :error -> {IxMcp.Cmd.launch_cwd(), " (session launch dir deleted?)"}
+      end
 
+    case File.stat(cwd) do
+      {:ok, %File.Stat{type: :directory}} ->
+        cwd
+
+      {:ok, %File.Stat{type: other}} ->
+        raise ArgumentError, "cwd #{cwd} is not a directory (#{other})"
+
+      {:error, :enoent} ->
+        raise ArgumentError, "cwd #{cwd} does not exist#{hint}"
+
+      {:error, reason} ->
+        raise ArgumentError, "cwd #{cwd} is not usable: #{:file.format_error(reason)}"
+    end
+  end
+
+  defp open_port(spec, cwd) do
     {exe, args} =
       case spec.stdin do
         :stream ->
@@ -126,6 +156,20 @@ defmodule IxMcp.Agents.CliRunner do
   end
 
   defp continue_or_finish(state), do: loop(state)
+
+  # The validate/spawn gap (TOCTOU): a cwd deleted after validation still
+  # produces the bare-errno exit. A zero status means `chdir` succeeded,
+  # and a run that reached a final result speaks for itself, so only a
+  # nonzero exit with no final and the directory now gone is ambiguous --
+  # raise rather than report a status that may be errno, not the CLI's.
+  defp exit_result(%{final: nil, cwd: cwd}, code) when code != 0 do
+    if File.dir?(cwd) do
+      {:error, {:exit_status, code}}
+    else
+      raise "cwd #{cwd} no longer exists; exit #{code} may be the " <>
+              "raw chdir errno rather than the CLI's own status"
+    end
+  end
 
   defp exit_result(%{final: nil}, code), do: {:error, {:exit_status, code}}
   defp exit_result(%{final: final}, _code), do: final
