@@ -127,6 +127,10 @@ in {
   # imports `homeModules.mutable-json`: the module system deduplicates by key,
   # so the option is declared once.
   homeModule = {
+    # Real source path, not just the key: without `_file` a consumer's
+    # `definitionsWithLocations` attributes this module's definitions to the
+    # importing file (#3938).
+    _file = ./mutable-json.nix;
     key = "index/lib/services/mutable-json.nix";
     imports = [moduleBody];
   };

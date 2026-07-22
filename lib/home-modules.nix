@@ -11,12 +11,21 @@
   home-manager,
   nixpkgs,
 }: let
+  # Modules exported as applied values (`import <path> args`) give the module
+  # system no file to record, so a consumer's `definitionsWithLocations`
+  # attributes every definition to the importing file (#3938). Wrapping with
+  # `_file` restores the module's own source; the inner module keeps its own
+  # `key`, so instance dedup is unchanged.
+  importApply = file: args: {
+    _file = file;
+    imports = [(import file args)];
+  };
   # One instance shared by every wiring site (the workstation profile and
   # homeModules.provenance); the module's `key` also dedups the instances a
   # consumer combines, but there is no reason to make them re-apply the
   # walker.
-  provenanceHomeModule = import (paths.modules + "/home/provenance.nix") {inherit (ix) provenance;};
-  mutableFilesHomeModule = import (paths.modules + "/home/mutable-files.nix") {
+  provenanceHomeModule = importApply (paths.modules + "/home/provenance.nix") {inherit (ix) provenance;};
+  mutableFilesHomeModule = importApply (paths.modules + "/home/mutable-files.nix") {
     inherit indexPackages;
     portableServicesModule = ix.portableServices.homeModule;
   };
@@ -24,20 +33,20 @@
   # agents from structured attrs, pinned binaries, idempotent ssh apply).
   # One instance shared by homeModules.macos-guests and the personal darwin
   # profile. See modules/home/macos-guests.nix.
-  macosGuestsHomeModule = import (paths.modules + "/home/macos-guests.nix") {
+  macosGuestsHomeModule = importApply (paths.modules + "/home/macos-guests.nix") {
     inherit indexPackages ix;
   };
-  claudeCodeHomeModule = import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
+  claudeCodeHomeModule = importApply (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
     inherit indexPackages;
     promptModule = paths.packagesRoot + "/agent/prompt";
     mutableJsonModule = ix.mutableJson.homeModule;
   };
-  codexHomeModule = import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
+  codexHomeModule = importApply (paths.packagesRoot + "/agent/home-manager/codex.nix") {
     inherit indexPackages;
     promptModule = paths.packagesRoot + "/agent/prompt";
   };
   personal = import ./profiles.nix {
-    inherit lib ix paths indexPackages home-manager nixpkgs;
+    inherit lib ix paths indexPackages home-manager nixpkgs importApply;
     claudeCodeModule = claudeCodeHomeModule;
     codexModule = codexHomeModule;
     mutableFilesModule = mutableFilesHomeModule;
@@ -58,18 +67,18 @@ in {
     # closure so `whence </etc/...>` answers from /run/current-system with
     # zero eval. Set `provenance.rev = self.rev or self.dirtyRev or null`
     # in the consuming flake. See modules/darwin/provenance.nix.
-    provenance = import (paths.modules + "/darwin/provenance.nix") {inherit (ix) provenance;};
+    provenance = importApply (paths.modules + "/darwin/provenance.nix") {inherit (ix) provenance;};
     # System-level (root, /etc) adapter for declarative-but-writable files:
     # same model as homeModules.mutable-files, state under
     # /var/db/index-delta, boot-time reseed daemon. See
     # modules/darwin/mutable-files.nix.
-    mutable-files = import (paths.modules + "/darwin/mutable-files.nix") {
+    mutable-files = importApply (paths.modules + "/darwin/mutable-files.nix") {
       inherit indexPackages;
     };
     # Fabric Ray worker for macs (index#3192): join the fleet cluster as a
     # worker behind `services.ix-ray.enable`, same pinned ports and env as
     # the NixOS module. See modules/darwin/ray.nix.
-    ray = import (paths.modules + "/darwin/ray.nix") {indexLib = ix;};
+    ray = importApply (paths.modules + "/darwin/ray.nix") {indexLib = ix;};
     # Declarative NFS automounts via macOS autofs: each entry renders a
     # direct-map line, /etc/auto_master gains the include idempotently, and
     # activation reloads automountd. See modules/darwin/nfs.nix.
@@ -91,7 +100,7 @@ in {
     # auto-attach the remote's mux. Import it and set
     # `programs.mux.enable = true`; needs an nvim config shipping a `mux`
     # lua module. See modules/home/mux.nix.
-    mux = import (paths.modules + "/home/mux.nix") {inherit ix;};
+    mux = importApply (paths.modules + "/home/mux.nix") {inherit ix;};
     # XDG hygiene: point tool state/caches/config (cargo, go, npm/pnpm,
     # python, docker, aws, psql/sqlite histories, wget/less) at the XDG
     # base directories instead of $HOME. Import it and set
@@ -158,14 +167,14 @@ in {
     # cli-baseline, mux, xdg-tidy, and zsh-vi-cursor modules above; the
     # source repo's secrets/theme machinery is deliberately absent. See
     # users/harivansh-afk/home.nix.
-    harivansh-afk = import (paths.users + "/harivansh-afk/home.nix") {inherit ix;};
+    harivansh-afk = importApply (paths.users + "/harivansh-afk/home.nix") {inherit ix;};
     # Reusable workstation module: draw one Minecraft boss bar per in-flight
     # GitHub Actions run across a set of repos (green = running, filled by
     # elapsed / average duration; purple = queued/unpicked). Import it and set
     # `services.ciBars = { enable = true; repos = [ ... ]; }`. Closed over the
     # per-system packages so it resolves the `bossbar` CLI for the host. See
     # packages/minecraft/bossbar-overlay/ci-bars-home-module.nix.
-    ci-bars = import (paths.packagesRoot + "/minecraft/bossbar-overlay/ci-bars-home-module.nix") {
+    ci-bars = importApply (paths.packagesRoot + "/minecraft/bossbar-overlay/ci-bars-home-module.nix") {
       inherit indexPackages ix;
       portableServicesModule = ix.portableServices.homeModule;
     };
@@ -174,7 +183,7 @@ in {
     # Mixedbread, as a portable timer service. Closed over the per-system
     # packages so it resolves the `indexer` for the host. See
     # packages/search/indexer/home-module.nix.
-    indexer = import (paths.packagesRoot + "/search/indexer/home-module.nix") {
+    indexer = importApply (paths.packagesRoot + "/search/indexer/home-module.nix") {
       inherit indexPackages;
       portableServicesModule = ix.portableServices.homeModule;
     };

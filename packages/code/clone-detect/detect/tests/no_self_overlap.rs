@@ -34,9 +34,13 @@ fn process(values: &[i32]) -> i32 {
 }
 "#;
 
+/// One detection mode: fixture code, the config that enables the detector,
+/// and the selector for the pair kind it reports.
+type Case = (&'static str, DetectConfig, fn(&Kind) -> bool);
+
 #[test]
 fn detectors_never_compare_overlapping_regions_of_one_file() {
-    let cases: [(&str, DetectConfig, fn(&Kind) -> bool); 2] = [
+    let cases: [Case; 2] = [
         (
             TYPE3_FIXTURE,
             DetectConfig {

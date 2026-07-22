@@ -1,0 +1,29 @@
+---
+id: homemodules-file-attribution
+postedAt: 2026-07-21T12:00:00-07:00
+title: "Exported homeModules now carry their own file attribution"
+tags: [nix, modules]
+links:
+  - label: issue 3938
+    href: https://github.com/indexable-inc/index/issues/3938
+---
+
+Most of the flake's `homeModules` and `darwinModules` are built by
+applying a module file to its wiring args (`import ./mod.nix {...}`),
+which hands the consumer a plain attrset. The module system records no
+source file for a plain value, so it falls back to the file that
+imported it: in a consuming flake,
+`options.home.packages.definitionsWithLocations` blamed every
+definition from `homeModules.andrewgazelka-workstation` on the
+consumer's own `home/common.nix` instead of
+`users/andrewgazelka/profiles/workstation.nix`.
+
+The composition in `lib/home-modules.nix` and `lib/profiles.nix` now
+routes every applied-value export through one `importApply` helper that
+wraps the module as `{ _file = <path>; imports = [...]; }`, the same
+shape `lib.setDefaultModuleLocation` produces. `homeModules.mutable-json`
+gains a real `_file` next to its dedup `key` for the same reason.
+Definitions now resolve to the module's own source file, so
+location-driven tooling (`definitionsWithLocations`, provenance, error
+messages) points at the line that actually defined the value. Instance
+dedup is unchanged: the inner modules keep their explicit `key`s.
