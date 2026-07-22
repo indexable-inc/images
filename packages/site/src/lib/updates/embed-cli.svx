@@ -1,0 +1,19 @@
+---
+id: embed-cli
+postedAt: 2026-07-21T12:00:00-07:00
+title: "The embedding duplicate-code finder is now a CLI: nix run .#embed"
+tags: [mcp, embeddings, cli]
+links:
+  - label: issue #3905
+    href: https://github.com/indexable-inc/index/issues/3905
+  - label: embed module
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp/src/embed/embed/__init__.py
+---
+
+The `embed` battery (chunk, embed, parquet cache, similarity search) was only reachable as a Python module inside the ix-mcp kernel. It is now also a command, so Elixir and shell callers can mine semantic duplicates without a kernel:
+
+```sh
+nix run .#embed -- dupes . --k 40 --json
+```
+
+Subcommands mirror the module surface: `dupes` (top duplicate function pairs under a root), `pairs` (top pairs across the whole cache), `similar` (cached chunks nearest a query text or `--file`), and `ensure` (chunk a root and embed the cache misses). Output is a polars table by default; `--json` emits one row-oriented JSON document. The wrapper runs `python -m embed` on the exact interpreter bundled into the kernel, so the torch/MPS runtime and the per-model-revision parquet cache behave identically to in-kernel `import embed`. From Elixir: `Cmd.run("embed", ["dupes", root, "--k", "40", "--json"])`.

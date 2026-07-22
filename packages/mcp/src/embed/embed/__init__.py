@@ -21,6 +21,9 @@ process, no HTTP seam.
 * :func:`dupes` -- the one-call duplicate-code finder: :func:`ensure` a root,
   then mine the top pairs among that root's own chunks only.
 
+The same surface is a CLI on the same bundled interpreter for Elixir/shell
+callers: ``nix run .#embed -- dupes . --k 40 --json`` (index#3905).
+
 The cache is one parquet file per model revision at
 ``~/.cache/index-embed/<model_rev>.parquet`` (columns ``hash``, ``path``,
 ``embedding: array[f32, 1024]``); a model bump changes the revision and so
