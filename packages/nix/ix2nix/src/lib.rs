@@ -27,8 +27,9 @@
 //! | `+ - * / == != < <= > >= && \|\| !` | the same operators |
 //! | `true` / `false` / `null` | `true` / `false` / `null` |
 //!
-//! A module whose source uses `import()` renders wrapped as
-//! `{ __dir, __importIx }: <body>`; otherwise the body stands alone.
+//! Every module renders wrapped as `{ __dir, __importIx }: <body>` -- one
+//! calling convention for importers, whether or not the source used
+//! `import()`.
 //!
 //! Deliberate hard errors (no 1:1): `===`/`!==` (use `==`/`!=`), `undefined`
 //! (use `null`), bare `??` or bare `?.`, `let`/`var`, mutation, loops and

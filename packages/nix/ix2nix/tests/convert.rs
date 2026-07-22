@@ -4,7 +4,10 @@
 use ix2nix::convert;
 
 fn nix(source: &str) -> String {
-    convert(source).expect("source should convert")
+    let out = convert(source).expect("source should convert");
+    out.strip_prefix("{ __dir, __importIx }:\n")
+        .expect("every module renders under the wrapper")
+        .to_owned()
 }
 
 fn diagnostic(source: &str) -> ix2nix::Error {
@@ -32,9 +35,10 @@ fn top_level_consts_become_a_let() {
 }
 
 #[test]
-fn wrapper_appears_exactly_when_import_is_used() {
-    assert!(nix("export default import(\"./x.ix\");\n").starts_with("{ __dir, __importIx }:\n"));
-    assert!(!nix("export default 1;\n").starts_with("{ __dir"));
+fn wrapper_appears_even_without_imports() {
+    // `nix` strips the wrapper (asserting it), so an import-free module
+    // reduces to its bare body.
+    assert_eq!(nix("export default 1;\n"), "1\n");
 }
 
 #[test]

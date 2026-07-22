@@ -50,14 +50,12 @@ impl Ctx {
     }
 }
 
-/// Renders a whole module, adding the `{ __dir, __importIx }:` wrapper exactly
-/// when the source used `import()`.
+/// Renders a whole module under the `{ __dir, __importIx }:` wrapper, so every
+/// converted module presents one calling convention to its importer.
 #[must_use]
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
-    if module.wrapped {
-        out.push_str("{ __dir, __importIx }:\n");
-    }
+    out.push_str("{ __dir, __importIx }:\n");
     expr(
         &mut out,
         &module.body,
@@ -403,11 +401,13 @@ mod tests {
     use super::*;
     use crate::nix::{Binding, LetBinding, PatternField};
 
+    /// Renders `body` and strips the module wrapper, so each case asserts
+    /// only the expression under test.
     fn rendered(body: Expr) -> String {
-        module(&Module {
-            wrapped: false,
-            body,
-        })
+        let out = module(&Module { body });
+        out.strip_prefix("{ __dir, __importIx }:\n")
+            .expect("every module renders under the wrapper")
+            .to_owned()
     }
 
     fn ident(name: &str) -> Expr {

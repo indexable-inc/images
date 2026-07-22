@@ -5887,6 +5887,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ix2nix-wasm"
+version = "0.1.0"
+dependencies = [
+ "ix2nix",
+]
+
+[[package]]
 name = "javascriptcore-rs"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

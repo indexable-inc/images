@@ -4,12 +4,11 @@
 //! This is the only vocabulary the two passes share: nothing outside the
 //! renderer ever assembles Nix syntax from strings.
 
-/// A rendered `.ix` module: the mapped expression plus whether the source used
-/// `import()`, which decides the `{ __dir, __importIx }:` wrapper.
+/// A rendered `.ix` module. Every module renders under the
+/// `{ __dir, __importIx }:` wrapper so importers have exactly one calling
+/// convention, whether or not the source used `import()`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
-    /// True exactly when the source contains an `import()` expression.
-    pub wrapped: bool,
     pub body: Expr,
 }
 

@@ -19,10 +19,7 @@ use crate::nix::{
 /// Returns a positioned [`Error`] for any `JavaScript` form without a 1:1 Nix
 /// equivalent.
 pub fn module(program: &ast::Program<'_>, source: &str) -> Result<Module, Error> {
-    let mut mapper = Mapper {
-        source,
-        uses_import: false,
-    };
+    let mapper = Mapper { source };
 
     let mut bindings = Vec::new();
     let mut default = None;
@@ -66,7 +63,6 @@ pub fn module(program: &ast::Program<'_>, source: &str) -> Result<Module, Error>
         ));
     };
     Ok(Module {
-        wrapped: mapper.uses_import,
         body: make_let(bindings, body),
     })
 }
@@ -84,8 +80,6 @@ fn make_let(bindings: Vec<LetBinding>, body: Expr) -> Expr {
 
 struct Mapper<'s> {
     source: &'s str,
-    /// Set when any `import()` is mapped; decides the module wrapper.
-    uses_import: bool,
 }
 
 impl Mapper<'_> {
@@ -94,7 +88,7 @@ impl Mapper<'_> {
     }
 
     /// Maps one `JavaScript` expression to its Nix spelling.
-    fn expr(&mut self, expression: &ast::Expression<'_>) -> Result<Expr, Error> {
+    fn expr(&self, expression: &ast::Expression<'_>) -> Result<Expr, Error> {
         match expression {
             ast::Expression::BooleanLiteral(lit) => {
                 Ok(Expr::Ident(if lit.value { "true" } else { "false" }.into()))
@@ -189,7 +183,7 @@ impl Mapper<'_> {
         })
     }
 
-    fn template(&mut self, template: &ast::TemplateLiteral<'_>) -> Result<Expr, Error> {
+    fn template(&self, template: &ast::TemplateLiteral<'_>) -> Result<Expr, Error> {
         let mut parts = Vec::new();
         for (index, quasi) in template.quasis.iter().enumerate() {
             let Some(cooked) = &quasi.value.cooked else {
@@ -206,7 +200,7 @@ impl Mapper<'_> {
     }
 
     /// `[a, b]` maps to a list; spread segments left-fold with `++`.
-    fn array(&mut self, array: &ast::ArrayExpression<'_>) -> Result<Expr, Error> {
+    fn array(&self, array: &ast::ArrayExpression<'_>) -> Result<Expr, Error> {
         let mut operands = Vec::new();
         let mut items = Vec::new();
         for element in &array.elements {
@@ -237,7 +231,7 @@ impl Mapper<'_> {
     }
 
     /// `{ ... }` maps to an attrset; spread segments left-fold with `//`.
-    fn object(&mut self, object: &ast::ObjectExpression<'_>) -> Result<Expr, Error> {
+    fn object(&self, object: &ast::ObjectExpression<'_>) -> Result<Expr, Error> {
         let mut operands = Vec::new();
         let mut bindings: Vec<Binding> = Vec::new();
         for property in &object.properties {
@@ -270,7 +264,7 @@ impl Mapper<'_> {
         Ok(fold_binary(BinaryOp::Update, operands))
     }
 
-    fn property(&mut self, property: &ast::ObjectProperty<'_>) -> Result<Binding, Error> {
+    fn property(&self, property: &ast::ObjectProperty<'_>) -> Result<Binding, Error> {
         if property.kind != ast::PropertyKind::Init {
             return Err(self.err(
                 property.span,
@@ -307,7 +301,7 @@ impl Mapper<'_> {
         })
     }
 
-    fn arrow(&mut self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Expr, Error> {
+    fn arrow(&self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Expr, Error> {
         if arrow.r#async {
             return Err(self.err(arrow.span, "`async` has no Nix equivalent"));
         }
@@ -343,7 +337,7 @@ impl Mapper<'_> {
         Ok(body)
     }
 
-    fn arrow_body(&mut self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Expr, Error> {
+    fn arrow_body(&self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Expr, Error> {
         if arrow.expression {
             let Some(ast::Statement::ExpressionStatement(statement)) = arrow.body.statements.first()
             else {
@@ -389,7 +383,7 @@ impl Mapper<'_> {
         Ok(make_let(bindings, body))
     }
 
-    fn param(&mut self, pattern: &ast::BindingPattern<'_>) -> Result<Param, Error> {
+    fn param(&self, pattern: &ast::BindingPattern<'_>) -> Result<Param, Error> {
         match pattern {
             ast::BindingPattern::BindingIdentifier(ident) => Ok(Param::Ident(
                 self.checked_name(ident.span, ident.name.as_str())?,
@@ -408,7 +402,7 @@ impl Mapper<'_> {
         }
     }
 
-    fn object_param(&mut self, object: &ast::ObjectPattern<'_>) -> Result<Param, Error> {
+    fn object_param(&self, object: &ast::ObjectPattern<'_>) -> Result<Param, Error> {
         let mut fields: Vec<PatternField> = Vec::new();
         for property in &object.properties {
             let ast::PropertyKey::StaticIdentifier(key) = &property.key else {
@@ -470,7 +464,7 @@ impl Mapper<'_> {
     }
 
     /// `f(a, b)` maps to curried application `f a b`.
-    fn call(&mut self, call: &ast::CallExpression<'_>) -> Result<Expr, Error> {
+    fn call(&self, call: &ast::CallExpression<'_>) -> Result<Expr, Error> {
         if call.optional {
             return Err(self.err(call.span, "optional calls have no Nix equivalent"));
         }
@@ -498,8 +492,8 @@ impl Mapper<'_> {
     }
 
     /// `import("./x.ix")` / `import("./x.nix")` map to `__importIx` / `import`
-    /// applied to `__dir`-relative paths; the module wrapper follows.
-    fn import(&mut self, import: &ast::ImportExpression<'_>) -> Result<Expr, Error> {
+    /// applied to `__dir`-relative paths, both bound by the module wrapper.
+    fn import(&self, import: &ast::ImportExpression<'_>) -> Result<Expr, Error> {
         if import.options.is_some() {
             return Err(self.err(import.span, "import options have no Nix equivalent"));
         }
@@ -533,7 +527,6 @@ impl Mapper<'_> {
             ));
         };
 
-        self.uses_import = true;
         Ok(Expr::Apply {
             function: Box::new(Expr::Ident(function.into())),
             argument: Box::new(Expr::Binary {
@@ -544,13 +537,13 @@ impl Mapper<'_> {
         })
     }
 
-    fn static_member(&mut self, member: &ast::StaticMemberExpression<'_>) -> Result<Expr, Error> {
+    fn static_member(&self, member: &ast::StaticMemberExpression<'_>) -> Result<Expr, Error> {
         let base = self.expr(&member.object)?;
         Ok(push_select(base, Attr::Name(member.property.name.to_string())))
     }
 
     fn computed_member(
-        &mut self,
+        &self,
         member: &ast::ComputedMemberExpression<'_>,
     ) -> Result<Expr, Error> {
         let key = match &member.expression {
@@ -567,7 +560,7 @@ impl Mapper<'_> {
         Ok(push_select(base, key))
     }
 
-    fn logical(&mut self, logical: &ast::LogicalExpression<'_>) -> Result<Expr, Error> {
+    fn logical(&self, logical: &ast::LogicalExpression<'_>) -> Result<Expr, Error> {
         let op = match logical.operator {
             ast::LogicalOperator::And => BinaryOp::And,
             ast::LogicalOperator::Or => BinaryOp::Or,
@@ -583,7 +576,7 @@ impl Mapper<'_> {
     }
 
     /// `x.y?.z ?? d` maps to `x.y.z or d`. `??` anywhere else has no 1:1.
-    fn coalesce(&mut self, logical: &ast::LogicalExpression<'_>) -> Result<Expr, Error> {
+    fn coalesce(&self, logical: &ast::LogicalExpression<'_>) -> Result<Expr, Error> {
         let ast::Expression::ChainExpression(chain) = &logical.left else {
             return Err(self.err(
                 logical.span,
@@ -616,7 +609,7 @@ impl Mapper<'_> {
         })
     }
 
-    fn binary(&mut self, binary: &ast::BinaryExpression<'_>) -> Result<Expr, Error> {
+    fn binary(&self, binary: &ast::BinaryExpression<'_>) -> Result<Expr, Error> {
         use ast::BinaryOperator as JsOp;
         let op = match binary.operator {
             JsOp::Equality => BinaryOp::Eq,
@@ -649,7 +642,7 @@ impl Mapper<'_> {
         })
     }
 
-    fn unary(&mut self, unary: &ast::UnaryExpression<'_>) -> Result<Expr, Error> {
+    fn unary(&self, unary: &ast::UnaryExpression<'_>) -> Result<Expr, Error> {
         let op = match unary.operator {
             ast::UnaryOperator::LogicalNot => UnaryOp::Not,
             ast::UnaryOperator::UnaryNegation => UnaryOp::Neg,
@@ -669,7 +662,7 @@ impl Mapper<'_> {
     /// Collects a `const` declaration into `let` bindings, rejecting `let` /
     /// `var` and duplicate names.
     fn const_bindings(
-        &mut self,
+        &self,
         declaration: &ast::VariableDeclaration<'_>,
         bindings: &mut Vec<LetBinding>,
     ) -> Result<(), Error> {

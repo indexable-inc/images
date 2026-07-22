@@ -1,0 +1,3 @@
+const lib = import("./lib.ix");
+
+export default `doubled: ${builtins.toString(lib.double(21))}`;

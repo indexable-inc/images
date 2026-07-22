@@ -78,6 +78,7 @@ members = [
   "packages/mirror",
   "packages/mynoise",
   "packages/nix/ix2nix",
+  "packages/nix/ix2nix/wasm",
   "packages/nix/nix-web-monitor/parser",
   "packages/nix/nix-web-monitor/server",
   "packages/nix/oci-image-builder",
@@ -164,6 +165,15 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 publish = false
+
+# builtins.wasm plugins (packages/nix/ix2nix/wasm): wasm32-unknown-unknown
+# ships no unwinder, so the plugin unit graph builds under this profile's
+# panic=abort -- the release profile's implicit panic=unwind fails at the
+# final cdylib link ("the crate `panic_unwind` does not have the panic
+# strategy `unwind`").
+[profile.wasm-plugin]
+inherits = "release"
+panic = "abort"
 
 [workspace.lints.rust]
 warnings = "deny"
@@ -309,6 +319,7 @@ objc2-security = "0.3"
 objc2-web-kit = "0.3"
 object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
+ix2nix = { path = "packages/nix/ix2nix" }
 # JavaScript-syntax parser for ix2nix (packages/nix/ix2nix): .ix modules are
 # parsed as ES modules and mapped 1:1 onto a typed Nix expression tree.
 oxc_allocator = "0.141"
