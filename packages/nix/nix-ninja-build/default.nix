@@ -22,13 +22,12 @@ let
   inherit (ix) pkgs;
   inherit (repoPackages) nix-ninja nix-ix;
 
-  # The identical patched tree the fork package builds (same patch dir, same
-  # upstream pin), so this lane can never drift from packages/nix/nix.
-  patchedSrc = ix.patchedSrc {
-    name = "nix";
-    src = ix.nixSrc;
-    patchDir = ix.paths.root + "/packages/nix/nix/patches";
-  };
+  # The identical patched tree the fork package builds: since the jj
+  # megamerge migration the nix-src input IS the patched tree (the
+  # indexable-inc/nix megamerge commit, see lib/fork-packages.nix), so there
+  # is no patch application step left and this lane can never drift from
+  # packages/nix/nix.
+  patchedSrc = ix.nixSrc;
 
   # Run under the fork client, not stock pkgs.nix: the generated derivations
   # are dynamic derivations, which need a >= 2.30 master-based client, and the
