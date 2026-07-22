@@ -161,6 +161,7 @@ mod _unibind_conformance {
     }
 
     static CANCELLED: AtomicU64 = AtomicU64::new(0);
+    static STARTED: AtomicU64 = AtomicU64::new(0);
 
     /// Cancellation probe: dropped while still armed (the only way the
     /// future can end other than running to completion), it bumps
@@ -182,8 +183,14 @@ mod _unibind_conformance {
 
     /// Sleep `ms` on the runtime holding a `CancelGuard` across the await,
     /// then resolve to `ms`. Cancelled, the guard drops armed.
+    ///
+    /// Bumps `STARTED` on entry: an async body only runs at first poll, so
+    /// an abort that lands earlier drops the future with the guard never
+    /// armed. Callers that want to observe cancellation wait for
+    /// `started_count` to move before killing the caller.
     pub async fn slow(ms: u64) -> u64 {
         let mut guard = CancelGuard { armed: true };
+        STARTED.fetch_add(1, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(ms)).await;
         guard.armed = false;
         ms
@@ -192,6 +199,12 @@ mod _unibind_conformance {
     /// Calls of `slow` cancelled so far (armed guard drops).
     pub fn cancelled_count() -> u64 {
         CANCELLED.load(Ordering::SeqCst)
+    }
+
+    /// Calls of `slow` whose body has begun executing (first poll reached;
+    /// the cancel guard is armed from this point on).
+    pub fn started_count() -> u64 {
+        STARTED.load(Ordering::SeqCst)
     }
 
     static DROPPED_SESSIONS: AtomicU64 = AtomicU64::new(0);
