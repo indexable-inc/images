@@ -1,0 +1,29 @@
+---
+id: cmd-dead-launch-cwd
+postedAt: 2026-07-22T00:30:00-07:00
+title: Kernel commands name a missing working directory instead of failing as exit 2
+tags: [kernel, mcp, reliability]
+links:
+  - label: issue #3979
+    href: https://github.com/indexable-inc/index/issues/3979
+  - label: PR #3985
+    href: https://github.com/indexable-inc/index/pull/3985
+---
+
+Kernel commands default to the directory captured at boot, so pathless
+`Cmd.run` and `Cmd.sh` always resolve against the launch checkout. When that
+directory was deleted mid-session -- a cleaned-up worktree, a recreated
+checkout -- every command from then on returned `{"", 2}` in about zero
+seconds, `echo` included, while `:os.cmd/1` and the File helpers kept
+working. The port child reports a failed `chdir` by exiting with the raw
+errno and nothing on stdout, indistinguishable from the command itself
+failing, so nothing pointed at the real culprit.
+
+Both entry points now validate the effective `cd:` before spawning and raise
+an error naming the target: a missing directory (with a hint when it is the
+boot-time launch dir that vanished), a path that is not a directory, or an
+otherwise unusable one. A directory deleted between the check and the spawn
+is caught after the fact too -- a nonzero exit with the directory now gone
+raises instead of handing back a status that may be errno rather than the
+command's own. The silent failure mode is gone; a vanished directory is one
+loud error naming its path, not a session's worth of empty exit-2s.
