@@ -35,6 +35,9 @@ fn significant_kind_check() {
     assert!(is_significant("function_definition"));
     assert!(is_significant("class_declaration"));
     assert!(is_significant("struct_item"));
+    assert!(is_significant("do_block"));
+    assert!(is_significant("stab_clause"));
+    assert!(is_significant("anonymous_function"));
     assert!(!is_significant("identifier"));
     assert!(!is_significant("binary_expression"));
 }

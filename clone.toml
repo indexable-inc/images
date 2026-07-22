@@ -39,7 +39,14 @@ ignore = [
 # one-line expressions to multi-line rustfmt shape, so fragments that fell
 # under `min_lines = 8` before now cross it and count (0.4367% -> 0.4468%
 # measured on the same code).
+#
+# 2026-07-21 (#3886): lowered 0.45 -> 0.37. Duplication had been removed since
+# the last re-measure and the ceiling drifted loose; with Elixir newly gated
+# (do_block/stab_clause/anonymous_function significant) the whole-tree measure
+# is 0.3677%, including the two revealed pre-existing Elixir groups (parallel
+# NIF-binding test scaffolding, mix.exs project boilerplate) left in the scan
+# as cleanup pressure rather than ignored.
 [budget]
-global_pct = 0.45
+global_pct = 0.37
 diff_pct = 0.0
 diff_base = "origin/main"
