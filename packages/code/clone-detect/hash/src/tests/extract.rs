@@ -101,7 +101,7 @@ class Foo:
 // returned nothing and the ratchet silently skipped all Elixir.
 #[test]
 fn elixir_defs_case_clauses_and_fns_are_significant() {
-    let source = r#"
+    let source = r"
 defmodule M do
   def classify(input) do
     case input do
@@ -121,7 +121,7 @@ defmodule M do
     end)
   end
 end
-"#;
+";
     let tree = parse(Lang::Elixir, source);
     assert!(!significant_nodes(&tree, Lang::Elixir, 3, 5).is_empty());
 }
