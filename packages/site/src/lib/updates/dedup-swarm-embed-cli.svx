@@ -1,0 +1,38 @@
+---
+id: dedup-swarm-embed-cli
+postedAt: 2026-07-22
+title: Duplication swarm lands eight dedup PRs and an embedding dupe-finder CLI
+tags: [clone-detect, mcp, ci]
+links:
+  - label: "index#3905"
+    href: https://github.com/indexable-inc/index/issues/3905
+  - label: "index#3913"
+    href: https://github.com/indexable-inc/index/pull/3913
+  - label: "index#3945"
+    href: https://github.com/indexable-inc/index/pull/3945
+  - label: "index#3950"
+    href: https://github.com/indexable-inc/index/pull/3950
+---
+
+The repo had two duplicate-code detectors but only one you could call: the
+AST scanner (`nix run .#clone`) had a CLI, while the embedding-based
+semantic finder lived only inside the ix-mcp kernel's Python. PR #3913
+gives it a real binding: `nix run .#embed -- dupes . --k 40 --json` runs
+the Qwen3-embedding miner from any shell, so Elixir (and CI) can reach
+type-4 semantic clones the AST gate cannot see.
+
+An agent swarm then worked the AST scanner's top clusters as eight
+parallel PRs (#3915, #3916, #3918, #3919, #3920, #3921, #3922 plus the
+CLI), folding twin test bodies, sibling functions, and copied helpers
+across nu-py, google, evals, search, sqlmerge, clone-detect, and
+claude-hooks.
+
+Landing the swarm exposed a CI outage that had been running since
+2026-07-19: six broken lanes had merged red-on-red while the gate was
+already failing, each masking the next. The suspected ci-budget
+validation clock was measured and proven innocent; the real reds were a
+clippy fork-lint violation, an mcp tool-surface drift, a playwright
+driver/npm pin mismatch, five updates entries with bare link URLs, a
+`type_complexity` lint, and one flaky cancellation window. Fixed at
+source across #3935, #3936, #3945, and #3950; main's flake-check is
+green again as of run 29891202900.
