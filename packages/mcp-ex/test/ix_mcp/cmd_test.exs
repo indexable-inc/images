@@ -46,4 +46,45 @@ defmodule IxMcp.CmdTest do
     assert {out, 0} = await_5s(fn -> Cmd.sh("cat | wc -c") end)
     assert String.trim(out) == "0"
   end
+
+  # The #3979 incident: Erlang's child setup reports a failed chdir by
+  # exiting with the raw errno, so a missing cd: came back as {"", 2} --
+  # empty output, ENOENT dressed up as the command's own exit status.
+  describe "missing cd target (#3979)" do
+    test "run works while the cd exists and raises once it is deleted" do
+      dir = tmp_dir!()
+      assert {"a\n", 0} = Cmd.run("echo", ["a"], cd: dir)
+
+      File.rm_rf!(dir)
+      err = assert_raise(ArgumentError, fn -> Cmd.run("echo", ["a"], cd: dir) end)
+      assert err.message == "cd target #{dir} does not exist"
+    end
+
+    test "sh raises on a missing cd instead of returning {\"\", 2}" do
+      dir = tmp_dir!()
+      assert {"a\n", 0} = Cmd.sh("echo a", cd: dir)
+
+      File.rm_rf!(dir)
+      assert_raise(ArgumentError, ~r/does not exist/, fn -> Cmd.sh("echo a", cd: dir) end)
+    end
+
+    test "a cd that is a file, not a directory, raises (was {\"\", 20})" do
+      file = Path.join(tmp_dir!(), "plain-file")
+      File.write!(file, "")
+
+      assert_raise(ArgumentError, ~r/is not a directory/, fn ->
+        Cmd.run("echo", ["a"], cd: file)
+      end)
+    end
+
+    test "a cd deleted mid-command raises instead of returning an ambiguous status" do
+      dir = tmp_dir!()
+
+      # The command removes its own cwd and exits nonzero: the same
+      # after-the-spawn shape as a validate/spawn race, deterministically.
+      assert_raise(RuntimeError, ~r/no longer exists/, fn ->
+        Cmd.sh(~S(rmdir "$PWD" && exit 3), cd: dir)
+      end)
+    end
+  end
 end
