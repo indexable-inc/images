@@ -26,7 +26,11 @@
 # trees backport (NixOS/nix#15711 plus its post-merge fixes) behind an
 # off-by-default `lazy-trees` eval setting: flake inputs mount at their
 # content-addressed store paths and only materialize when forced
-# (indexable-inc/index#3645). The fork's
+# (indexable-inc/index#3645). Patches 0038-0039 import `builtins.wasm`
+# from the open upstream PR NixOS/nix#15380 (experimental feature
+# `wasm-builtin`, indexable-inc/index#3997) and force deterministic Wasm
+# execution (NaN canonicalization, deterministic relaxed SIMD) so eval
+# results stay bit-identical across the mixed darwin/linux fleet. The fork's
 # `codex/flake-check-eval-cache` branch (draft PR indexable-inc/nix#1) is
 # deliberately excluded: it is self-declared WIP, untested, and incomplete.
 let
@@ -178,9 +182,26 @@ let
       inherit (patchedSrc) patchSet;
     };
     provenanceJson = (pkgs.formats.json {}).generate "nix-ix-provenance.json" provenance;
-    patchedComponents =
-      ((base.overrideSource patchedSrc).appendPatches patchesCommon).overrideAllMesonComponents
-      (_: _: {inherit version;});
+    patchedComponents = (((base.overrideSource patchedSrc).appendPatches patchesCommon).overrideAllMesonComponents
+      (_: _: {inherit version;}))
+      .overrideScope (_: prev: {
+      # Patch 0038 (builtins.wasm, NixOS/nix#15380) adds a `wasm` meson
+      # feature to libexpr and declares its wasmtime dependency in the
+      # in-tree src/libexpr/package.nix; the nixpkgs modular scope builds
+      # from its own vendored component packaging, so that declaration
+      # never reaches this build. Worse, nixpkgs' meson hook passes
+      # --auto-features=enabled, which flips the feature on with nobody
+      # supplying the library (wasm.cc fails on #include <wasmtime.hh>).
+      # Wire the dependency here, at the same seam that swaps the source,
+      # and pin the feature explicitly so a missing wasmtime fails at
+      # configure time instead of mid-compile. nixpkgs' wasmtime ships the
+      # C API + C++ headers in its dev output and libwasmtime via the
+      # dev->out propagation of the multiple-outputs hook.
+      nix-expr = prev.nix-expr.overrideAttrs (old: {
+        buildInputs = (old.buildInputs or []) ++ [componentPkgs.wasmtime];
+        mesonFlags = (old.mesonFlags or []) ++ ["-Dwasm=enabled"];
+      });
+    });
 
     # The aggregate `nix` package (daemon + client + libs), the same attribute
     # `nixVersions.nix_2_34` exposes.
