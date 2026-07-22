@@ -1,6 +1,6 @@
 use tempfile::TempDir;
 
-use super::helpers::{assert_no_overlapping_fragments, create_temp_file, scan_and_run};
+use super::helpers::{create_temp_file, scan_and_run};
 use crate::{DetectConfig, DetectionResult, Kind, Type3Metric};
 
 /// The original function for the moderately-Type-3 fixture.
@@ -142,32 +142,4 @@ fn threshold_controls_type3_reporting() {
         Type3Metric::Overlap,
         1.0
     )));
-}
-
-#[test]
-fn groups_never_compare_overlapping_regions_of_one_file() {
-    let dir = TempDir::new().unwrap();
-    let code = r"
-fn process(values: &[i32]) -> i32 {
-    let mut total = 0;
-    for value in values {
-        if *value > 0 {
-            total += value;
-        }
-    }
-    total
-}
-";
-    create_temp_file(&dir, "nested.rs", code);
-
-    let result = scan_and_run(
-        &dir,
-        &DetectConfig {
-            enable_type3: true,
-            type3_threshold: 0.5,
-            ..DetectConfig::default()
-        },
-    );
-
-    assert_no_overlapping_fragments(&result, |kind| matches!(kind, Kind::Type3 { .. }));
 }

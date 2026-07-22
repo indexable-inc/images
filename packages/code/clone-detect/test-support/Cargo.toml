@@ -5,5 +5,16 @@ edition.workspace = true
 publish = false
 description = "Shared filesystem fixtures for clone detector tests"
 
+[dependencies]
+clone-detect = { workspace = true, optional = true }
+clone-scanner = { workspace = true, optional = true, features = ["test-support"] }
+tempfile = { workspace = true, optional = true }
+
+[features]
+# Helpers that drive the detector end to end. Kept optional so lower layers
+# (e.g. the scanner) can reuse the filesystem fixtures without pulling in
+# clone-detect, which sits above them.
+detect = ["dep:clone-detect", "dep:clone-scanner", "dep:tempfile"]
+
 [lints]
 workspace = true
