@@ -11,6 +11,10 @@ use std::fs;
 
 use common::{BODY, Fixture, SUBJECT, mapping_json, run_bin};
 
+#[expect(
+    clippy::anonymous_tuple_return_type,
+    reason = "process env pairs feed Command::envs at the only consumers; a named struct would be re-flattened immediately"
+)]
 fn base_envs(fixture: &Fixture) -> Vec<(&'static str, String)> {
     let mut envs = fixture.envs();
     envs.push(("PATH", std::env::var("PATH").unwrap()));

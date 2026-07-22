@@ -3,7 +3,8 @@ id: jj-megamerge-forks
 postedAt: 2026-07-22T14:30:00Z
 title: "Fork patches are now jj megamerge commit DAGs"
 links:
-  - https://github.com/indexable-inc/index/pull/4032
+  - label: index#4032
+    href: https://github.com/indexable-inc/index/pull/4032
 tags:
   - forks
   - infrastructure

@@ -15,11 +15,13 @@ use serde::Deserialize;
 /// Environment variable the Nix wrapper points at the baked-in fork list.
 pub const FORK_PACKAGES_ENV: &str = "UPSTREAM_SYNC_FORK_PACKAGES";
 
-/// One de-forked package from the mapping. The fork lives in a real GitHub
-/// fork repo (`fork_repo`) whose `bookmark` points at the megamerge commit;
-/// the patch series is that commit's ancestry down to the upstream base.
-/// Unknown fields (autoUpdate, derivedPatches, ...) belong to other tools
-/// and are ignored here.
+/// One de-forked package from the mapping.
+///
+/// The fork lives in a real GitHub fork repo (`fork_repo`) whose
+/// `bookmark` points at the megamerge commit; the patch series is that
+/// commit's ancestry down to the upstream base. Unknown fields
+/// (autoUpdate, derivedPatches, ...) belong to other tools and are
+/// ignored here.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Fork {
