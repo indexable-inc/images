@@ -1,5 +1,5 @@
 //! Per-language AST canonicalization applied ahead of the generic
-//! normalizer (issue #3878, modeled on elixir-vibe's ExDNA).
+//! normalizer (issue #3878, modeled on elixir-vibe's `ExDNA`).
 //!
 //! Language knowledge lives here, keyed off [`Lang`]; the recursion in
 //! `normalize` only sees the canonical [`View`]. Semantically equivalent
@@ -85,10 +85,13 @@ fn pipe<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
     })
 }
 
+/// An Elixir call split apart: the callee and its flattened arguments.
+type CalleeArgs<'tree> = (Node<'tree>, Vec<Node<'tree>>);
+
 /// Flatten an Elixir `call` into callee + arguments: children of the
 /// `arguments` node are spliced in directly, and any trailing `do_block`
 /// rides along as a final argument.
-fn call_parts(node: Node<'_>) -> Option<(Node<'_>, Vec<Node<'_>>)> {
+fn call_parts(node: Node<'_>) -> Option<CalleeArgs<'_>> {
     let target = node.child_by_field_name("target")?;
     let mut args = Vec::new();
     let mut cursor = node.walk();
