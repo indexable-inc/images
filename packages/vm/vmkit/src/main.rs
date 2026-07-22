@@ -346,7 +346,7 @@ fn main() -> ExitCode {
     // the entitlement re-exec (and the helper, running under sudo, must not
     // create root-owned signing caches in the user's HOME).
     if !matches!(cli.command, Command::Info | Command::OpenBlockDevice { .. })
-        && let Err(error) = ensure_signed_and_reexec()
+        && let Err(error) = ensure_signed_and_reexec(guest_name(&cli.command).as_deref())
     {
         eprintln!(
             "vmkit: could not self-sign with the virtualization/hypervisor entitlements: {error}"
@@ -362,11 +362,32 @@ fn main() -> ExitCode {
     }
 }
 
+/// The guest bundle's directory name, for commands that operate on one. Used to
+/// name the re-exec'd process so Activity Monitor reads "Virtual Machine
+/// Service for <guest>" instead of the hash-suffixed signed-cache binary.
+#[cfg(target_os = "macos")]
+fn guest_name(command: &Command) -> Option<std::ffi::OsString> {
+    let bundle = match command {
+        Command::InstallMacos { bundle, .. }
+        | Command::BootMacos { bundle, .. }
+        | Command::RunMacos { bundle, .. }
+        | Command::DriveMacos { bundle, .. }
+        | Command::Provision { bundle, .. } => bundle,
+        _ => return None,
+    };
+    bundle.file_name().map(std::ffi::OsStr::to_os_string)
+}
+
 /// Ad-hoc sign a cached copy of this binary with the virtualization entitlement
 /// and re-exec it. Returns `Ok(())` only when already running as the signed copy
 /// (sentinel env var set); otherwise it execs and does not return on success.
+///
+/// With a `guest` name, the exec goes through a symlink named after the guest:
+/// macOS names a process after the last path component passed to execve, so
+/// Activity Monitor's "Virtual Machine Service for <name>" row shows the guest.
+/// Entitlements are unaffected: the signature lives in the Mach-O itself.
 #[cfg(target_os = "macos")]
-fn ensure_signed_and_reexec() -> std::io::Result<()> {
+fn ensure_signed_and_reexec(guest: Option<&std::ffi::OsStr>) -> std::io::Result<()> {
     use std::hash::{Hash, Hasher};
     use std::io::{Error, ErrorKind};
     use std::os::unix::fs::PermissionsExt;
@@ -425,7 +446,25 @@ fn ensure_signed_and_reexec() -> std::io::Result<()> {
         prune_stale_signed(&dir, &signed);
     }
 
-    Err(std::process::Command::new(&signed)
+    let exec_path = match guest {
+        Some(name) => {
+            let link = dir.join(name);
+            // Recreate every run: a leftover link may point at a pruned older
+            // signed copy. A concurrent same-binary run racing us recreates an
+            // identical link, so losing the race is harmless.
+            match std::fs::remove_file(&link) {
+                Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
+            match std::os::unix::fs::symlink(&signed, &link) {
+                Err(error) if error.kind() != ErrorKind::AlreadyExists => return Err(error),
+                _ => {}
+            }
+            link
+        }
+        None => signed,
+    };
+    Err(std::process::Command::new(&exec_path)
         .env("IX_VMKIT_SIGNED", "1")
         // The pre-re-exec binary path (typically the immutable /nix/store
         // one): preferred over the user-writable signed cache copy when vmkit
