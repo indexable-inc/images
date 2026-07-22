@@ -40,4 +40,34 @@ defmodule IxMcp.CmdCwdTest do
     # nothing in this suite has moved the OS cwd, so the two still agree.
     assert Cmd.launch_cwd() == File.cwd!()
   end
+
+  # The #3979 incident shape: a session launched from a directory that is
+  # later deleted (a cleaned-up git worktree) saw every pathless command
+  # return {"", 2} forever. The default-cd path must instead raise and
+  # point at the launch dir.
+  test "a deleted launch dir raises with the launch-dir hint (#3979)" do
+    doomed = Path.join(System.tmp_dir!(), "ix-cwd-doomed-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(doomed)
+
+    before = File.cwd!()
+    File.cd!(doomed)
+    Cmd.capture_launch_cwd()
+    File.cd!(before)
+    # File.cwd!() resolves symlinks (/tmp -> /private/tmp on macOS), so the
+    # captured path is the canonical spelling, not `doomed` verbatim.
+    captured = Cmd.launch_cwd()
+
+    try do
+      assert {_out, 0} = Cmd.run("pwd")
+
+      File.rm_rf!(doomed)
+      err = assert_raise(ArgumentError, fn -> Cmd.run("pwd") end)
+      assert err.message == "cd target #{captured} does not exist (session launch dir deleted?)"
+      assert_raise(ArgumentError, ~r/launch dir deleted/, fn -> Cmd.sh("pwd") end)
+    after
+      # Recapture the real launch dir so no later test inherits the stub.
+      Cmd.capture_launch_cwd()
+      File.rm_rf!(doomed)
+    end
+  end
 end

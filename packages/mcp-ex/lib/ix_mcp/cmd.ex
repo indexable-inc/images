@@ -17,6 +17,12 @@ defmodule IxMcp.Cmd do
   `cd:` is the cwd captured once at application boot (`capture_launch_cwd/0`,
   called before any cell can run), immutable for the life of the instance.
   Working anywhere else takes an explicit `cd:` (or `git -C`).
+
+  A `cd:` directory that does not exist raises before the spawn. Erlang's
+  child setup reports a failed `chdir` by exiting with the raw errno --
+  `{"", 2}` for ENOENT, `{"", 20}` for ENOTDIR -- indistinguishable from
+  the command's own exit status, so a session whose launch dir was deleted
+  mid-session saw every command "fail" with empty exit-2 output (#3979).
   """
 
   @launch_cwd_key {__MODULE__, :launch_cwd}
@@ -48,12 +54,11 @@ defmodule IxMcp.Cmd do
   """
   @spec run(binary(), [binary()], keyword()) :: {Collectable.t(), non_neg_integer()}
   def run(cmd, args \\ [], opts \\ []) do
+    opts = validate_cd!(opts)
+
     # `$0` is `cmd` and `$@` the args, so no shell parsing touches them.
-    System.cmd(
-      "/bin/sh",
-      ["-c", ~S(exec "$0" "$@" </dev/null), cmd | args],
-      Keyword.put_new(opts, :cd, launch_cwd())
-    )
+    System.cmd("/bin/sh", ["-c", ~S(exec "$0" "$@" </dev/null), cmd | args], opts)
+    |> guard_cd_race(opts[:cd])
   end
 
   @doc """
@@ -64,10 +69,50 @@ defmodule IxMcp.Cmd do
   """
   @spec sh(binary(), keyword()) :: {Collectable.t(), non_neg_integer()}
   def sh(script, opts \\ []) do
-    System.cmd(
-      "/bin/sh",
-      ["-c", "exec </dev/null\n" <> script],
-      Keyword.put_new(opts, :cd, launch_cwd())
-    )
+    opts = validate_cd!(opts)
+
+    System.cmd("/bin/sh", ["-c", "exec </dev/null\n" <> script], opts)
+    |> guard_cd_race(opts[:cd])
+  end
+
+  # Default `cd:` to the launch dir and refuse to spawn into a directory
+  # that is not there: the port would otherwise report the child's failed
+  # `chdir` as `{"", errno}` with no diagnostic (#3979).
+  @spec validate_cd!(keyword()) :: keyword()
+  defp validate_cd!(opts) do
+    {cd, hint} =
+      case Keyword.fetch(opts, :cd) do
+        {:ok, cd} -> {cd, ""}
+        :error -> {launch_cwd(), " (session launch dir deleted?)"}
+      end
+
+    case File.stat(cd) do
+      {:ok, %File.Stat{type: :directory}} ->
+        Keyword.put(opts, :cd, cd)
+
+      {:ok, %File.Stat{type: other}} ->
+        raise ArgumentError, "cd target #{cd} is not a directory (#{other})"
+
+      {:error, :enoent} ->
+        raise ArgumentError, "cd target #{cd} does not exist#{hint}"
+
+      {:error, reason} ->
+        raise ArgumentError, "cd target #{cd} is not usable: #{:file.format_error(reason)}"
+    end
+  end
+
+  # The validate/spawn gap (TOCTOU): a `cd:` deleted after validation still
+  # produces the bare-errno exit. A zero status means `chdir` succeeded, so
+  # only a nonzero status with the directory now gone is ambiguous -- raise
+  # rather than hand back a status that may be errno, not the command's.
+  @spec guard_cd_race({Collectable.t(), non_neg_integer()}, binary()) ::
+          {Collectable.t(), non_neg_integer()}
+  defp guard_cd_race({_out, status} = result, cd) do
+    if status == 0 or File.dir?(cd) do
+      result
+    else
+      raise "cd target #{cd} no longer exists; exit #{status} may be the " <>
+              "raw chdir errno rather than the command's own status"
+    end
   end
 end
