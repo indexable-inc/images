@@ -95,15 +95,10 @@
       inherit (pkgs) applyPatches;
       patchesRoot = paths.root;
     };
-  # De-forked-package mapping (name -> input / upstream URL / patch dir), the
-  # single source of truth for the patched-src checks, the `.#update` fork
-  # nodes, and the `rebase-patches` tool. See lib/fork-packages.nix.
+  # Maintained-fork registry (name -> input / forkRepo / bookmark /
+  # upstreaming intent), the single source of truth for the fork-sync
+  # workflow and upstream-sync. See lib/fork-packages.nix.
   inherit (import ./fork-packages.nix) forkPackages;
-  # Per-attempt-patch closure build gates (RFC 0010 A3, #2098): the pure-eval
-  # dag.json closure computation (`closureOf`) plus the gate-attrset builder
-  # (`mkGates`) an opted-in fork package wires into its passthru. See
-  # lib/fork-closure-gates.nix.
-  forkClosureGates = import ./fork-closure-gates.nix {inherit lib;};
   # Mirror-enabled packages (opt-in `mirror` attr in a package's package.nix):
   # id, repo-relative path, and mirror-repo coordinates for each package that
   # publishes a standalone read-only mirror. `nix eval --json
@@ -123,10 +118,6 @@
         else null;
     })
     packageRegistry.mirrorEntries;
-  # Build a fork package's `passthru.updateScript` (flake update base ->
-  # rebase-patches), so it joins the registry-discovered `.#update` DAG. See
-  # lib/fork-updater.nix.
-  mkForkUpdater = import ./fork-updater.nix;
   # Build the de-forked-package flake checks (`patched-src-<name>` +
   # `patch-dag-<name>`) for a repo's fork list. The single owner of those check
   # derivations, reused by `lib/per-system.nix` for index's own forks and by a
@@ -135,9 +126,9 @@
   mkForkChecks = args: import ./mk-fork-checks.nix ({inherit lib;} // args);
   # The directory holding the shared DAG driver + verifier (`dag-check.nu` +
   # `dag-lib.nu`) that `mkForkChecks` stages into each `patch-dag-<name>` build.
-  # Exposed so a downstream consumer passes it straight through to `mkForkChecks`
-  # rather than reaching into index's package layout by path.
-  forkDagCheckSrc = paths.packagesRoot + "/rebase-patches";
+  # index's own forks migrated to jj megamerge fork repos (no in-repo series),
+  # but ix still keeps patch-dir forks and consumes this via `mkForkChecks`.
+  forkDagCheckSrc = paths.root + "/lib/util/fork-dag-check";
   # Public patch data for consumers whose system Nix is not `nix-ix`. Keep the
   # patch bytes owned by index so fleet configurations consume one source of
   # truth instead of copying the fix into each repository.
@@ -309,7 +300,10 @@
   # Patch the vendored rnix inside a rust tool so it lexes underscore digit
   # separators in nix numeric literals; the alejandra/statix/deadnix package
   # dirs under packages/nix/ consume this. See its doc comment.
-  rnixDigitSeparators = import ./util/rnix-digit-separators {inherit lib;};
+  rnixDigitSeparators = import ./util/rnix-digit-separators {
+    rnix012Src = rnix-0-12-src;
+    rnix014Src = rnix-0-14-src;
+  };
   goUnitFor = pkgs:
     import ./build/go-unit.nix {
       inherit lib pkgs;
@@ -567,7 +561,6 @@
       cargoUnitFor
       buildSvelteSite
       buildLibghosttyVt
-      patchedSrcFor
       writeBashApplication
       macosSdk
       appleSdkToolchain
@@ -717,7 +710,6 @@
       evalTimeSubstitutable
       evaluatorGate
       fabric
-      forkClosureGates
       forkPackages
       forkDagCheckSrc
       formatProvenance
@@ -733,7 +725,6 @@
       mirrorPackages
       mkBenchSuite
       mkForkChecks
-      mkForkUpdater
       mkMinecraftLoader
       mkMinecraftNbtFormat
       wrapPackage

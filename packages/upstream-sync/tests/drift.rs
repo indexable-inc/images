@@ -2,7 +2,8 @@
 //! flake.lock rev extraction, stance + retired counting, the next-action
 //! heuristic, and the degrade path (a failing forge yields unknown cells and
 //! a zero exit, never a crashed report). gh is stubbed with fixed `--jq`'d
-//! responses; nothing elaborate, the forge is not what is under test.
+//! responses; nothing elaborate, the forge is not what is under test. Drift
+//! is deliberately clone-free, so no git fixture is needed either.
 
 mod common;
 
@@ -19,21 +20,18 @@ const GH_STUB: &str = r#"case "$2" in
   *) echo "stub gh: unexpected: $*" >&2; exit 1 ;;
 esac"#;
 
-const MAPPING: &str = r#"[{"name":"fake","input":"fake-src","url":"https://github.com/fakeorg/fakerepo.git",
-  "patchDir":"repo/patches","autoUpdate":false,
-  "patches":{"0001-sent.patch":{"upstream":"attempt","reason":"t"},"0002-kept.patch":{"upstream":"never","reason":"t"}}},
- {"name":"bad","input":"bad-src","url":"https://github.com/badorg/badrepo.git",
-  "patchDir":"bad/patches","autoUpdate":false,"patches":{}}]"#;
+const MAPPING: &str = r#"[{"name":"fake","input":"fake-src","forkRepo":"fakefork/fakerepo",
+  "upstreamUrl":"https://github.com/fakeorg/fakerepo.git","autoUpdate":false,
+  "patches":{"fakefix: sent upstream":{"upstream":"attempt","reason":"t"},
+             "fakefix: kept forever":{"upstream":"never","reason":"t"},
+             "fakefix: wants polish":{"upstream":"hold","reason":"t"}}},
+ {"name":"bad","input":"bad-src","forkRepo":"fakefork/badrepo",
+  "upstreamUrl":"https://github.com/badorg/badrepo.git","autoUpdate":false,"patches":{}}]"#;
 
 const FLAKE_LOCK: &str = r#"{"nodes": {"fake-src": {"locked": {"rev": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
            "bad-src": {"locked": {"rev": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}"#;
 
-const FAKE_DAG: &str = r#"{"comment":"t","base":"deadbeef","nodes":[{"patch":"0001-sent.patch","deps":[]},{"patch":"0002-kept.patch","deps":[]},{"patch":"0003-unclassified.patch","deps":[]}]}"#;
-
-const FAKE_STATUS: &str = r#"{"comment":"t","lastChecked":"2026-01-01T00:00:00Z","patches":{"0001-sent.patch":{"upstream":"attempt","pr":{"url":"u","number":1,"state":"merged","checkedAt":"t"},"retired":true,"duplicates":[]}},"log":[]}"#;
-
-const BAD_DAG: &str =
-    r#"{"comment":"t","base":"deadbeef","nodes":[{"patch":"0001-x.patch","deps":[]}]}"#;
+const FAKE_STATUS: &str = r#"{"comment":"t","lastChecked":"2026-01-01T00:00:00Z","patches":{"fakefix: sent upstream":{"upstream":"attempt","pr":{"url":"u","number":1,"state":"merged","checkedAt":"t"},"retired":true,"duplicates":[]}},"log":[]}"#;
 
 #[test]
 fn drift_json_and_markdown_surfaces() {
@@ -43,12 +41,13 @@ fn drift_json_and_markdown_surfaces() {
     fs::create_dir(&stubs).unwrap();
     write_stub(&stubs, "gh", GH_STUB);
     let work = root.join("work");
-    fs::create_dir_all(work.join("repo/patches")).unwrap();
-    fs::create_dir_all(work.join("bad/patches")).unwrap();
+    fs::create_dir_all(work.join("packages/upstream-sync/status")).unwrap();
     fs::write(work.join("flake.lock"), FLAKE_LOCK).unwrap();
-    fs::write(work.join("repo/patches/dag.json"), FAKE_DAG).unwrap();
-    fs::write(work.join("repo/patches/upstream-status.json"), FAKE_STATUS).unwrap();
-    fs::write(work.join("bad/patches/dag.json"), BAD_DAG).unwrap();
+    fs::write(
+        work.join("packages/upstream-sync/status/fake.json"),
+        FAKE_STATUS,
+    )
+    .unwrap();
     let mapping = work.join("mapping.json");
     fs::write(&mapping, MAPPING).unwrap();
     let mapping_arg = mapping.display().to_string();

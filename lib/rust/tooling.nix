@@ -17,9 +17,11 @@
 
   # llm-clippy bootstraps before the full `ix` handle exists (below cargoUnit /
   # rustWorkspace), so build the patched-source util here to hand it the same
-  # `ix.patchedSrc` the packageSet path gets. It applies packages/llm-clippy/patches
-  # to the raw `clippy-src` upstream. Reached via `repoRoot` (not a `../` literal,
-  # which the astlog `no-parent-path` rule bans).
+  # `ix.patchedSrc` the packageSet path gets. Since the jj megamerge migration
+  # it only applies the fork's nix-derived patches (lib/fork-packages.nix
+  # `derivedPatches`) on top of the already-patched `clippy-src` tree. Reached
+  # via `repoRoot` (not a `../` literal, which the astlog `no-parent-path`
+  # rule bans).
   patchedSrcFor = pkgs:
     import (repoRoot + "/lib/util/patched-src.nix") {
       inherit lib evalTimeSubstitutable pkgs;
@@ -57,7 +59,7 @@
         ;
       # llm-clippy bootstraps before cargoUnit / rustWorkspace exist, so the
       # `ix` closure it receives carries only `buildRustPackage` plus the
-      # `patchedSrc` util it needs to apply its patch series to `clippy-src`.
+      # `patchedSrc` util that appends its derived patches to `clippy-src`.
       # `buildIxRustTool` adds the richer surface for packages that need it.
       clippyPackage = pkgs.callPackage (packagePath "llm-clippy") {
         ix = {

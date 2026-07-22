@@ -619,40 +619,6 @@
       macros = {};
     };
   };
-  jj-config = {
-    format = "toml";
-    value = {
-      user = {
-        name = "Andrew Gazelka";
-        email = "andrew.gazelka@gmail.com";
-      };
-      ui = {
-        default-command = "log";
-        diff-formatter = [
-          "difft"
-          "$left"
-          "$right"
-        ];
-        pager = "delta";
-      };
-      colors = {
-        "diff removed" = {
-          fg = "red";
-        };
-        "diff added" = {
-          fg = "green";
-        };
-      };
-      snapshot = {
-        max-new-file-size = "50MiB";
-      };
-      merge-tools = {
-        difftastic = {
-          program = "difft";
-        };
-      };
-    };
-  };
   tap-config = {
     format = "toml";
     value = {

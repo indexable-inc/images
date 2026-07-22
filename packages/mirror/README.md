@@ -1,22 +1,18 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
-    <img src="assets/hero.svg" width="720" alt="the monorepo feeds two generators: mirror gen plus publish syncs a read-only mirror repo, and mirror fork-branch regenerates a fork repo's ix-patched branch">
+    <img src="assets/hero.svg" width="720" alt="the monorepo feeds the generator: mirror gen plus publish syncs a self-contained tree into a read-only mirror repo">
   </picture>
 </p>
 
 # mirror
 
-How does one crate in a monorepo get its own GitHub repo that a stranger can clone and `cargo build`, without the repo drifting from the source? mirror generates opt-in standalone repos from this monorepo and keeps them equal to it in CI. Two products, one source-generation core:
+How does one crate in a monorepo get its own GitHub repo that a stranger can clone and `cargo build`, without the repo drifting from the source? mirror generates opt-in standalone repos from this monorepo and keeps them equal to it in CI: a package under `packages/` opts in via its `package.nix` and gets a self-contained, read-only GitHub repo that a visitor can clone and `cargo build` without ever seeing the monorepo. The monorepo stays the single source of truth; CI keeps the mirror equal to it.
 
-- **Package mirrors**: a package under `packages/` opts in via its
-  `package.nix` and gets a self-contained, read-only GitHub repo that a
-  visitor can clone and `cargo build` without ever seeing the monorepo. The
-  monorepo stays the single source of truth; CI keeps the mirror equal to it.
-- **Fork branches**: a de-forked package (lib/fork-packages.nix) can opt into
-  a real GitHub fork repo whose `ix-patched` branch is defined declaratively
-  (the upstream base pinned in `flake.lock` plus the in-repo `patches/` series
-  applied as commits), so opening an upstream PR is one push away.
+De-forked packages are a different product with a different owner: since the
+jj megamerge migration their patch series live natively as commits in each
+fork repo (lib/fork-packages.nix), rebased and pushed by
+`.github/workflows/fork-sync.yml`; this tool does not touch them.
 
 Rust packages are what the generator understands today, but the interface
 (the `mirror` manifest attr, `.#lib.mirrorPackages`, the sync workflow) is
@@ -92,15 +88,6 @@ pushes `main`. Snapshot sync: one mirror commit per effective change, no
 history filtering, cheap enough to run on every push to main. `--create`
 creates the GitHub repo via `gh repo create` when it does not exist yet.
 
-`mirror fork-branch --name <fork> [--push]` reads the fork mapping
-(`.#lib.forkPackages`, or `--mapping <json>`), fetches the upstream repo at
-the rev `flake.lock` pins for the fork's input, applies the `patches/` series
-with `git am --3way` onto branch `ix-patched`, and, with `--push`, force
-pushes that branch to the entry's `forkRepo`. Without `--push` it is a pure
-verification that the series still applies. The branch is regenerated, never
-merged into, so it is always a clean, properly rebased serialization of the
-patch DAG.
-
 ## Adding a mirror
 
 1. Add the attr to the package's `package.nix`:
@@ -124,9 +111,6 @@ patch DAG.
    publishes on the next push to `main` touching `packages/**` (plus a daily
    cron and `workflow_dispatch`), creating the repo on first run.
 
-To maintain a fork repo for a de-forked package instead, add
-`forkRepo = "indexable-inc/<name>";` to its entry in lib/fork-packages.nix.
-
 ## Permissions
 
 The default `GITHUB_TOKEN` can neither create repositories nor push to any
@@ -134,8 +118,8 @@ repo other than this one, so mirror-sync mints `MIRROR_TOKEN` per run from
 the org-owned **ix-mirror-sync GitHub App**, installed on the `indexable-inc`
 org with
 
-- Administration: **write** (create the mirror/fork repos on first publish),
-- Contents: **write** (push `main` / `ix-patched`),
+- Administration: **write** (create the mirror repos on first publish),
+- Contents: **write** (push `main`),
 - Metadata: **read** (implicit baseline).
 
 The app's client id lives in the `MIRROR_APP_CLIENT_ID` repository variable

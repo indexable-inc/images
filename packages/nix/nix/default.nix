@@ -126,14 +126,9 @@ let
     (componentPkgs.stdenv.hostPlatform.isDarwin && builtins.pathExists flakySkipPatch)
     flakySkipPatch;
 
-  # The whole patched pipeline as a function of the applied series, so the
-  # per-attempt-patch closure gates below rebuild the SAME logic with a
-  # restricted series instead of copying it. `patchNames = null` is the full
-  # series (the shipped package).
-  #
-  # The full-series patched tree doubles as the
-  # `checks.<system>.patched-src-nix` conflict gate (per-system wiring), so a
-  # patch that stops applying fails there in seconds.
+  # The source is the indexable-inc/nix jj megamerge (nix-src input): the
+  # upstream 2.34.7 base plus the patch DAG, fetched already patched, so the
+  # only remaining build-time patches are nixpkgs' own (`patchesCommon`).
   #
   # Identify a patched daemon by version: `nix --version` (and
   # `builtins.nixVersion`) report the version each *component* was compiled
@@ -142,19 +137,17 @@ let
   # patch in our series would be clobbered and a version override on the
   # `nix-everything` aggregate would only rename the store path. Set it through
   # `overrideAllMesonComponents`, the last layer in the component builder
-  # stack, which also wins over the sourceLayer's `+<patch-count>` suffix.
-  # The marker is semver build metadata (`+ix.p<count>.h<hash>`), not
+  # stack. The marker is semver build metadata (`+ix.g<rev12>.h<hash>`), not
   # `-ix`: meson feeds the version to darwin ld's -current_version, which
   # rejects a `-` suffix as a "malformed 32-bit x.y.z version number" but
   # tolerates `+`.
-  mkPatchedNix = patchNames: let
-    patchedSrc = ix.patchedSrc {
-      name = "nix";
-      src = ix.nixSrc;
-      patchDir = ./patches;
-      inherit patchNames;
-    };
-    upstream =
+  patchedNix = let
+    # nixpkgs' modular components.nix derives each component's sourceRoot
+    # from `patchedSrc.name`; a raw flake input (fetchTree result) carries no
+    # `name`. stdenv unpacks a store-path src into `stripHash $src`, which is
+    # "source" for a github tarball input, so declare exactly that.
+    patchedSrc = ix.nixSrc // {name = "source";};
+    source =
       {
         version = upstreamVersion;
         narHash = ix.nixSrc.narHash;
@@ -169,17 +162,19 @@ let
       })
       patchesCommon;
     sourceDigest = builtins.hashString "sha256" (builtins.toJSON {
-      upstreamNarHash = upstream.narHash;
-      patchSetDigest = patchedSrc.patchSet.digest;
+      sourceNarHash = source.narHash;
       inherit commonPatches;
     });
     shortHash = builtins.substring 0 20 sourceDigest;
-    version = "${upstreamVersion}+ix.p${toString patchedSrc.patchSet.count}.h${shortHash}";
+    revStamp =
+      if ix.nixSrc ? rev
+      then "g${builtins.substring 0 12 ix.nixSrc.rev}."
+      else "";
+    version = "${upstreamVersion}+ix.${revStamp}h${builtins.substring 0 8 sourceDigest}";
     provenance = {
-      schema = 1;
+      schema = 2;
       algorithm = "sha256";
-      inherit commonPatches sourceDigest upstream version;
-      inherit (patchedSrc) patchSet;
+      inherit commonPatches sourceDigest source version;
     };
     provenanceJson = (pkgs.formats.json {}).generate "nix-ix-provenance.json" provenance;
     patchedComponents = (((base.overrideSource patchedSrc).appendPatches patchesCommon).overrideAllMesonComponents
@@ -223,8 +218,8 @@ let
       # The aggregate's `doCheck = true` gates the build on `checkInputs`: the
       # five component unit-test runners plus the entire upstream functional
       # suite. Those dominate a cold build of this closure and re-validate
-      # nothing per consumer rebuild: patch applicability is already gated by
-      # `checks.<system>.patched-src-nix`, the series carries its own
+      # nothing per consumer rebuild: the source arrives pre-patched from the
+      # fork repo, the series carries its own
       # upstream-style functional test inside the patched tree, and the `smoke`
       # passthru below executes the linked binary. With them on, the cache-push
       # darwin lane (3-core hosted mac) blew its 4 h job budget cold-building
@@ -255,28 +250,12 @@ let
       meta =
         (old.meta or {})
         // {
-          description = "NixOS/nix ${upstreamVersion} with the index in-repo patch series (${toString provenance.patchSet.count} patches, h${shortHash})";
+          description = "NixOS/nix ${upstreamVersion} with the index patch DAG (indexable-inc/nix megamerge, h${shortHash})";
           mainProgram = "nix";
         };
     });
 
-  package = mkPatchedNix null;
-
-  # Per-attempt-patch closure build gates (RFC 0010 A3, #2098): one derivation
-  # per attempt-marked patch, this same package rebuilt with the series
-  # restricted to that patch's dag.json closure -- exactly the standalone
-  # series `upstream-pr` ships upstream. Lazy passthru data, never a flake
-  # check (heavy builds; the scheduled fork-closure-gates workflow and the
-  # `upstream-sync --open` preflight build them). Keyed here off the fork's
-  # own lib/fork-packages.nix entry so intent has one home.
-  closureGates = ix.forkClosureGates.mkGates {
-    fork =
-      lib.findFirst (fork: fork.name == "nix")
-      (throw "packages/nix/nix: lib/fork-packages.nix has no `nix` entry")
-      ix.forkPackages;
-    patchDir = ./patches;
-    mkSeries = mkPatchedNix;
-  };
+  package = patchedNix;
 
   # The override's real risk is that the whole modular C++ tree still links and
   # the installed binary and provenance file agree with the eval-time identity.
@@ -302,9 +281,8 @@ let
       jq -e \
         --arg version ${lib.escapeShellArg package.version} \
         --arg sourceDigest ${lib.escapeShellArg package.provenance.sourceDigest} \
-        --arg upstreamNarHash ${lib.escapeShellArg package.provenance.upstream.narHash} \
-        --arg patchSetDigest ${lib.escapeShellArg package.provenance.patchSet.digest} \
-        '.schema == 1 and .algorithm == "sha256" and .version == $version and .sourceDigest == $sourceDigest and .upstream.narHash == $upstreamNarHash and .patchSet.algorithm == "sha256" and .patchSet.digest == $patchSetDigest and .patchSet.count == (.patchSet.patches | length)' \
+        --arg upstreamNarHash ${lib.escapeShellArg package.provenance.source.narHash} \
+        '.schema == 2 and .algorithm == "sha256" and .version == $version and .sourceDigest == $sourceDigest and .source.narHash == $upstreamNarHash' \
         ${package}/share/nix/ix-provenance.json >/dev/null
 
       mkdir -p "$out"
@@ -337,7 +315,7 @@ in
     passthru =
       (old.passthru or {})
       // {
-        inherit bootstrapLock closureGates;
+        inherit bootstrapLock;
         # Execution tests are native-only: the cross package's binary cannot
         # run on the linux build host (its format is asserted in-build
         # instead), and the check catalog collects tests from the native

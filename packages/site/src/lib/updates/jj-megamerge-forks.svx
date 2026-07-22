@@ -1,0 +1,37 @@
+---
+id: jj-megamerge-forks
+postedAt: 2026-07-22T14:30:00Z
+title: "Fork patches are now jj megamerge commit DAGs"
+links:
+  - https://github.com/indexable-inc/index/pull/4032
+tags:
+  - forks
+  - infrastructure
+---
+
+All 14 maintained forks moved from in-repo patch series (`patches/*.patch`
+plus a generated `dag.json`) to real fork repos where every patch is a git
+commit whose parents are its true dependencies. An "ix megamerge" commit
+seals each series: its tree equals the full series applied linearly, its
+parents are the DAG heads, and the flake input pins that one commit, so
+builds fetch a plain git tree and never apply patches.
+
+What this deletes: `rebase-patches` and its scratch-repo rebase engine, the
+byte-commutation check, the per-attempt closure gates, `mirror fork-branch`,
+and every `dag.json`. Rebases are now `jj rebase` in the fork repo
+(colocated; the remote stays plain git); a conflict marks the guilty patch
+commit instead of aborting the run, and `jj evolog` keeps every prior
+version of every patch across bumps.
+
+Two rules keep the setup honest. Every bookmark push carries a permanent
+`refs/pins/<date>-<sha12>` ref in the same operation that bumps flake.lock,
+because jj rebases rewrite history and GitHub GCs unreachable commits: the
+pin refs are what keep every previously locked megamerge fetchable. And a
+conflicted jj commit is never pushed: plain-git readers cannot parse jj's
+conflict encoding.
+
+Migration fidelity: 11 of 13 megamerge trees hash byte-identical to the old
+`patchedSrc` outputs. The two diffs favor the new world: the old nix tree
+shipped GNU patch `.orig` backup droppings, and mesa's CSVs picked up the
+CRLF its own `.gitattributes` asks for (GitHub tarballs honor it; the old
+git fetch did not).

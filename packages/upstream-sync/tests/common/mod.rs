@@ -3,9 +3,12 @@
     reason = "each integration-test binary compiles this module separately and uses a subset"
 )]
 
-//! Shared harness for the binary integration tests: stub tools on PATH and a
-//! scratch repo layout mirroring the nix `runCommand` tests this crate's
-//! predecessor shipped with.
+//! Shared harness for the binary integration tests: stub tools on PATH plus
+//! REAL local git repos standing in for the upstream and the fork repo. The
+//! binaries only ever speak https URLs (the mapping's upstreamUrl and the
+//! forkRepo-derived push URL), so the harness redirects those to the local
+//! fixtures with `url.<dir>.insteadOf` in a scratch global gitconfig; no
+//! network is touched.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -45,32 +48,146 @@ pub fn run_bin(exe: &str, args: &[&str], cwd: &Path, envs: &[(&str, String)]) ->
     }
 }
 
-/// The fake-fork patch file used across tests.
-pub const PATCH: &str = "0001-fake-fix.patch";
-
-pub const PATCH_TEXT: &str = "\
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Test <t@t>
-Date: Mon, 1 Jan 2026 00:00:00 +0000
-Subject: [PATCH] fakefix: repair the frobnicator widget alignment
-
----
-";
-
-pub const DAG_JSON: &str =
-    r#"{"comment":"t","base":"deadbeef","nodes":[{"patch":"0001-fake-fix.patch","deps":[]}]}"#;
-
-/// Lay out `<root>/<patch_dir>` with the fake patch + dag.json.
-pub fn write_series(root: &Path, patch_dir: &str) -> PathBuf {
-    let dir = root.join(patch_dir);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join(PATCH), PATCH_TEXT).unwrap();
-    fs::write(dir.join("dag.json"), DAG_JSON).unwrap();
-    dir
+/// Run git with a fixed test identity, asserting success.
+pub fn git(cwd: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed in {}: {}",
+        cwd.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
-/// Read a fork's status file as JSON.
-pub fn status_json(root: &Path, patch_dir: &str) -> serde_json::Value {
-    let raw = fs::read_to_string(root.join(patch_dir).join("upstream-status.json")).unwrap();
+/// The https URLs the binaries see; the gitconfig redirects them locally.
+pub const UPSTREAM_URL: &str = "https://github.com/fakeorg/fakerepo.git";
+pub const FORK_REPO: &str = "fakefork/fakerepo";
+pub const FORK_URL: &str = "https://github.com/fakefork/fakerepo.git";
+
+/// The default single test patch.
+pub const SUBJECT: &str = "fakefix: repair the frobnicator widget alignment";
+pub const BODY: &str = "This explains why the widget needed repairing.";
+
+/// Local upstream + fork repos in the jj megamerge layout: the fork's
+/// `ix-patched` branch holds a linear chain of patch commits on the upstream
+/// base, sealed by an "ix megamerge" commit (tree = head tree, parent =
+/// head), exactly the shape the migration pushes.
+pub struct Fixture {
+    pub upstream: PathBuf,
+    pub fork: PathBuf,
+    /// Scratch global gitconfig with the insteadOf redirects.
+    pub gitconfig: PathBuf,
+}
+
+impl Fixture {
+    /// Build the fixture under `root`. Each patch is `(subject, body)`; an
+    /// empty body makes a reason-less commit (for the refusal tests).
+    pub fn new(root: &Path, patches: &[(&str, &str)]) -> Self {
+        let upstream = root.join("upstream");
+        fs::create_dir_all(&upstream).unwrap();
+        git(&upstream, &["init", "--quiet", "-b", "main"]);
+        fs::write(upstream.join("README"), "hello\n").unwrap();
+        git(&upstream, &["add", "."]);
+        git(&upstream, &["commit", "--quiet", "-m", "base"]);
+
+        let fork = root.join("fork");
+        git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
+        git(&fork, &["checkout", "--quiet", "-b", "series", "main"]);
+        for (i, (subject, body)) in patches.iter().enumerate() {
+            fs::write(fork.join(format!("patch-{i}.txt")), format!("{subject}\n")).unwrap();
+            git(&fork, &["add", "."]);
+            let message = if body.is_empty() {
+                (*subject).to_owned()
+            } else {
+                format!("{subject}\n\n{body}")
+            };
+            git(&fork, &["commit", "--quiet", "-m", &message]);
+        }
+        // The megamerge seal: same tree as the series head, parent(s) = the
+        // DAG head(s). Series readers must skip it.
+        let head = git(&fork, &["rev-parse", "HEAD"]);
+        let tree = git(&fork, &["rev-parse", "HEAD^{tree}"]);
+        let seal = git(
+            &fork,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &head,
+                "-m",
+                &format!("ix megamerge: {} patches on {}", patches.len(), &head[..12]),
+            ],
+        );
+        git(&fork, &["branch", "ix-patched", &seal]);
+
+        let gitconfig = root.join("gitconfig");
+        fs::write(
+            &gitconfig,
+            format!(
+                "[url \"{}\"]\n\tinsteadOf = {UPSTREAM_URL}\n[url \"{}\"]\n\tinsteadOf = {FORK_URL}\n",
+                upstream.display(),
+                fork.display()
+            ),
+        )
+        .unwrap();
+        Self {
+            upstream,
+            fork,
+            gitconfig,
+        }
+    }
+
+    /// The env pairs that make the binaries hit the local fixtures.
+    pub fn envs(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("GIT_CONFIG_GLOBAL", self.gitconfig.display().to_string()),
+            ("GIT_CONFIG_NOSYSTEM", "1".to_owned()),
+        ]
+    }
+
+    /// The sha of the series commit with this subject, from the fork repo.
+    pub fn sha_of(&self, subject: &str) -> String {
+        git(
+            &self.fork,
+            &[
+                "log",
+                "ix-patched",
+                &format!("--grep=^{subject}$"),
+                "--format=%H",
+                "-1",
+            ],
+        )
+    }
+}
+
+/// A v2 mapping entry as JSON (subject-keyed intent).
+pub fn mapping_json(name: &str, patches_json: &str) -> String {
+    format!(
+        r#"[{{"name":"{name}","input":"{name}-src","forkRepo":"{FORK_REPO}","bookmark":"ix-patched",
+  "upstreamUrl":"{UPSTREAM_URL}","autoUpdate":false,
+  "upstreamPolicy":{{"prsWelcome":true,"aiPrsAllowed":"unknown","citation":"https://example.com","notes":"t"}},
+  "patches":{patches_json}}}]"#
+    )
+}
+
+/// Read a fork's status file (packages/upstream-sync/status/<name>.json
+/// under `root`, the test's working directory) as JSON.
+pub fn status_json(root: &Path, name: &str) -> serde_json::Value {
+    let raw = fs::read_to_string(
+        root.join("packages/upstream-sync/status")
+            .join(format!("{name}.json")),
+    )
+    .unwrap();
     serde_json::from_str(&raw).unwrap()
 }

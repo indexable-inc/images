@@ -21,7 +21,7 @@ use serde::Serialize;
 use crate::mapping::{self, Fork, Slug};
 use crate::status;
 use crate::style::{CYAN, YELLOW, paint};
-use crate::{dag, gh};
+use crate::gh;
 
 /// One fork's drift facts (the `--json` row shape).
 #[derive(Debug, Serialize)]
@@ -47,7 +47,7 @@ pub struct Row {
 ///
 /// # Errors
 /// Fails on flag conflicts, an unknown fork name, or unreadable local data
-/// (mapping, dag.json, status file); forge errors degrade to unknown cells.
+/// (mapping, flake.lock, status file); forge errors degrade to unknown cells.
 pub fn run(
     mapping_override: Option<&Path>,
     name: Option<&str>,
@@ -176,7 +176,7 @@ fn base_date(fork: &Fork, forge: &str, slug: &Slug, rev: Option<&str>) -> Result
             &format!("repos/{}/{}/commits/{rev}", slug.owner, slug.repo),
             ".commit.committer.date",
         ),
-        "gitlab" => Ok(gitlab_base_date(&fork.url, rev)),
+        "gitlab" => Ok(gitlab_base_date(&fork.upstream_url, rev)),
         _ => Ok(None),
     }
 }
@@ -190,32 +190,28 @@ fn age_days(date: &str) -> Result<i64> {
         .div_euclid(86_400))
 }
 
-/// Patch stances walk dag.json node order (the canonical series, same as the
-/// sync loop); an unclassified patch defaults to hold (fail-safe).
+/// Patch stances count the declared intent map (subject-keyed). The report
+/// is deliberately clone-free, so an unclassified series commit (present in
+/// the fork repo, absent here) is not counted; the sync loop, which does
+/// open the fork repo, is where unclassified patches surface as hold.
 struct StanceCounts {
     attempt: usize,
     hold: usize,
     never: usize,
 }
 
-fn stance_counts(fork: &Fork) -> Result<StanceCounts> {
-    let dag_file = fork.patch_dir_abs().join("dag.json");
-    let series: Vec<String> = if dag_file.exists() {
-        dag::Doc::load(&dag_file)?.patch_names()
-    } else {
-        fork.patches.keys().cloned().collect()
-    };
-    let stances: Vec<String> = series.iter().map(|p| fork.stance(p)).collect();
+fn stance_counts(fork: &Fork) -> StanceCounts {
+    let stances: Vec<String> = fork.patches.keys().map(|s| fork.stance(s)).collect();
     let count = |wanted: &str| stances.iter().filter(|s| *s == wanted).count();
-    Ok(StanceCounts {
+    StanceCounts {
         attempt: count("attempt"),
         hold: count("hold"),
         never: count("never"),
-    })
+    }
 }
 
 fn row(fork: &Fork) -> Result<Row> {
-    let slug = Slug::parse(&fork.url)?;
+    let slug = Slug::parse(&fork.upstream_url)?;
     let rev = lock_rev(&fork.input)?;
     if rev.is_none() {
         eprintln!(
@@ -229,9 +225,9 @@ fn row(fork: &Fork) -> Result<Row> {
             )
         );
     }
-    let forge = if mapping::is_github(&fork.url) {
+    let forge = if mapping::is_github(&fork.upstream_url) {
         "github"
-    } else if mapping::is_gitlab(&fork.url) {
+    } else if mapping::is_gitlab(&fork.upstream_url) {
         "gitlab"
     } else {
         "other"
@@ -244,7 +240,7 @@ fn row(fork: &Fork) -> Result<Row> {
     let base_date = base_date(fork, forge, &slug, rev.as_deref())?;
     let age_days = base_date.as_deref().map(age_days).transpose()?;
 
-    let stances = stance_counts(fork)?;
+    let stances = stance_counts(fork);
     let retired = status::Doc::load(&status::path(fork))?
         .patches
         .values()

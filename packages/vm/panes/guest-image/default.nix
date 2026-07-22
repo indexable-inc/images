@@ -61,7 +61,7 @@
             # De-forked (index#1894): the delta is an in-repo patch series
             # (./mesa/patches) applied to the upstream `mesa-src` input through
             # `ix.patchedSrc`, replacing the old `indexable-inc/mesa` snapshot
-            # fork tarball. `packages/rebase-patches` regenerates the series on a
+            # fork tarball. A jj rebase of indexable-inc/mesa moves the delta on a
             # base bump; `checks.<system>.patched-src-mesa` gates that it still
             # applies. `hardware.graphics.enable` in ./nixos.nix consumes
             # `pkgs.mesa`, so this override is what /run/opengl-driver (and the
@@ -73,12 +73,8 @@
               # patch set applying against the pinned tree; the assert catches
               # the version skew, the build failure catches the patch skew.
               src = assert lib.assertMsg (old.version == "26.1.2")
-              "panes-guest-image: mesa patch series is pinned at 26.1.2 (mesa-src input) but nixpkgs mesa is ${old.version}; bump the mesa-src tag in flake.nix, run `nix run .#rebase-patches -- mesa`, and boot-validate the panes guest on a linux GPU host";
-                ix.patchedSrc {
-                  name = "mesa";
-                  src = ix.mesaSrc;
-                  patchDir = ./mesa/patches;
-                };
+              "panes-guest-image: the mesa fork is pinned at 26.1.2 (mesa-src input) but nixpkgs mesa is ${old.version}; jj-rebase indexable-inc/mesa onto the matching tag, repin mesa-src, and boot-validate the panes guest on a linux GPU host";
+                ix.mesaSrc;
             });
           })
         ];

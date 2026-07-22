@@ -1,82 +1,72 @@
-# Single source of truth for the de-forked packages: each one pins an upstream
-# `flake = false` input and keeps its delta as an ordered `patches/` series
-# next to the package (see lib/util/patched-src.nix). One list drives four
-# consumers so they cannot drift:
+# Single source of truth for the maintained forks. Each fork lives in a real
+# GitHub fork repo (`forkRepo`) whose `bookmark` points at the "megamerge"
+# commit: every patch is a commit whose parents are its true dependencies,
+# and the megamerge's tree equals the full series applied linearly (its
+# parents are the DAG heads). The flake input (`input`) pins that megamerge
+# commit, so builds fetch one plain git commit and never apply patches or
+# need jj installed. Fork repos are maintained with jj (colocated); every
+# bookmark push carries a permanent `refs/pins/<date>-<sha12>` ref in the
+# same operation that bumps flake.lock, so every rev the lock has ever
+# pinned stays fetchable after a rebase rewrites history. Never push a
+# conflicted jj commit: git-based readers (GitHub, the fetchers) cannot
+# parse jj's conflict encoding.
 #
-#   - `packages/<...>/default.nix` applies the series via `ix.patchedSrc`.
-#   - `lib/per-system.nix` exposes each patched source as
-#     `checks.<system>.patched-src-<name>` (the seconds-fast conflict gate).
-#   - `packages/rebase-patches` reads the rendered JSON (input name, upstream
-#     git URL, repo-relative patch dir) to regenerate the series through a real
-#     `git rebase` when the pinned base moves.
-#   - `packages/upstream-sync` reads the per-patch upstreaming intent and per-repo
-#     `upstreamPolicy` to drive the upstreaming loop (refresh tracked PR state,
-#     find duplicates, and open PRs for `attempt`-marked patches). See that tool.
+# One list drives the consumers so they cannot drift:
 #
-# Adding a de-forked package is one entry here plus its `patches/` folder.
+#   - `packages/<...>/default.nix` consumes the pinned input directly as src
+#     (plus `ix.patchedSrc` for `derivedPatches`, where declared).
+#   - `.github/workflows/fork-sync.yml` jj-rebases each autoUpdate fork onto
+#     the upstream tip, pushes bookmark + pin ref, and floats the input.
+#   - `packages/upstream-sync` reads the per-patch upstreaming intent and
+#     per-repo `upstreamPolicy` to drive the upstreaming loop; a patch ships
+#     upstream by pushing its commit (whose git ancestry IS its dependency
+#     closure) from the fork repo.
+#
+# Adding a fork is one entry here plus the fork repo itself: fork the
+# upstream on GitHub, commit the patch DAG, push the bookmark and a pin ref,
+# pin the megamerge as the flake input.
 #
 # Fields:
-#   name       : package id / patched-src check suffix.
-#   input      : flake.lock input name whose `locked.rev` pins the base.
-#   url        : upstream git URL the base and rebase fetch from.
-#   patchDir   : repo-relative path to the ordered `*.patch` series.
+#   name        : package id.
+#   input       : flake input pinning the megamerge (flake.lock `locked.rev`;
+#                 branch-loose for autoUpdate forks).
+#   upstreamUrl : upstream git URL rebases target.
+#   forkRepo    : GitHub `owner/name` of the maintained fork repo.
+#   bookmark    : fork-repo branch holding the megamerge (`ix-patched`; one
+#                 bookmark per series where a repo carries several, e.g.
+#                 rnix-parser's ix-patched-0.12 / ix-patched-0.14).
 #   derivedPatches : optional list of patches DERIVED BY NIX at build time
-#                instead of stored as line diffs -- for mechanical or generated
-#                content (a stanza stamped into every manifest, a tracked
-#                lockfile) that re-conflicts on every rebase when kept as a
-#                diff. Each entry:
+#                instead of committed to the fork repo -- for mechanical or
+#                generated content (a stanza stamped into every manifest, a
+#                tracked lockfile) that re-conflicts on every rebase when
+#                kept as a commit. Each entry:
 #                  name      : short id (names the generated patch derivation).
 #                  generator : repo-relative path to a .nix file evaluating to
 #                              `{pkgs, src, ...}: drv` whose output is a single
 #                              unified-diff file produced at BUILD time from
-#                              the actual pinned tree (copy src, apply the
-#                              mechanical edit, diff old new). A generator must
+#                              the fetched megamerge tree. A generator must
 #                              fail loudly behind a structural guard (e.g.
 #                              "every `[package]` manifest got the stanza,
 #                              count > 0"), never silently no-op, and never
 #                              bake in magic totals that go stale.
 #                  reason    : one line, the patch's reason of record. Derived
-#                              patches are not commits, so the dag commit-body
-#                              reason check cannot cover them; this field does.
+#                              patches are not fork-repo commits, so the
+#                              commit-body reason rule cannot cover them; this
+#                              field does.
 #                  upstream  : always "never". A derived patch is repo-local
-#                              mechanical output and is invisible to
-#                              rebase-patches, dag.json, and upstream-sync by
-#                              construction (it is not a `*.patch` file), so it
-#                              can never be rebased, dag-tracked, or sent
-#                              upstream.
-#                `patchedSrc` appends the generator outputs after the static
-#                series; see lib/util/patched-src.nix.
+#                              mechanical output, invisible to the fork repo
+#                              and upstream-sync by construction, so it can
+#                              never be rebased or sent upstream.
+#                `ix.patchedSrc` applies the generator outputs on top of the
+#                fetched megamerge tree; see lib/util/patched-src.nix.
 #   autoUpdate : whether the scheduled fork-sync (.github/workflows/fork-sync.yml)
-#                may free-float the base under a routine bump. `false` pins the
-#                input by rev and keeps it out of the cron; it moves only under a
-#                deliberate manual `rebase-patches` run.
-#   closureGates : optional, default false. Opt the fork into the
-#                per-attempt-patch closure build gates (RFC 0010 A3, #2098):
-#                one derivation per attempt-marked patch that rebuilds the
-#                fork package with the series restricted to that patch's
-#                dag.json closure -- exactly what `upstream-pr` ships
-#                upstream, so a red gate means the upstream PR would be
-#                broken. Heavy full-package builds, so gates are NEVER flake
-#                checks: they surface as `passthru.closureGates` on the fork
-#                package and `forkClosureGates.<system>.<name>` on the flake,
-#                built by the scheduled fork-closure-gates workflow
-#                (post-merge; its static path filters must name this fork's
-#                patch dir) and the `upstream-sync --open` preflight. Opting
-#                in also requires the package to wire `passthru.closureGates`
-#                (see packages/nix/nix/default.nix) and a `gatePackages`
-#                entry in lib/per-system.nix (missing one fails eval loudly).
-#   forkRepo   : optional GitHub `owner/name` of a real fork repo to maintain.
-#                When set, the mirror-sync workflow (packages/mirror,
-#                `mirror fork-branch --name <name> --push`) keeps that repo's
-#                `ix-patched` branch equal to the pinned base plus this patch
-#                series applied as commits, so an upstream PR is one push away.
-#                Absent = no fork repo is maintained (the in-repo series stays
-#                the only serialization).
+#                may jj-rebase the fork onto the upstream tip and float the
+#                input under the cron. `false` pins the input by rev; it moves
+#                only under a deliberate manual rebase.
 #
 # Upstreaming intent (hand-written declarative intent; the human gate on the
 # outward act). `packages/upstream-sync` reads these; the LIVE state it tracks
-# (PR urls, states, retirement) is generated into `upstream-status.json` next to
-# each series and is never hand-written.
+# (PR urls, states, retirement) is generated, never hand-written.
 #
 #   upstreamPolicy : per-repo contribution stance, researched from each upstream's
 #                    CONTRIBUTING / governance. Fields:
@@ -87,9 +77,10 @@
 #                                      tool refuses to open any PR against it.
 #                      citation      : URL backing `aiPrsAllowed` (the policy doc).
 #                      notes         : one line of contribution nuance (CLA, disclosure).
-#   patches        : per-patch intent, keyed by the EXACT patch file name (the
-#                    stable identity the series and dag.json share; keying by a
-#                    derived slug would risk a slug/file mismatch). Each value:
+#   patches        : per-patch intent, keyed by the patch commit's SUBJECT
+#                    line (the identity that survives rebases; jj evolves the
+#                    commit but the subject is the patch's name of record).
+#                    Each value:
 #                      upstream : "attempt" | "hold" | "never".
 #                        attempt = we want it upstream and authorize the tool to open
 #                                  the PR (the human gate for the outward act).
@@ -103,21 +94,18 @@
 #                                 a commit message; appended after the PR body.
 #                    A patch with no entry defaults to `hold` with an "unclassified"
 #                    reason (fail-safe: an unclassified patch is never sent upstream
-#                    automatically) -- but for a fork that declares any intent, the
-#                    `patch-dag-<name>` check fails a patch with no entry, so the
-#                    fallback only backstops forks with no `patches` attrset at all.
-#                    `upstream-sync` treats a repo whose
-#                    `upstreamPolicy.aiPrsAllowed == false` as `never` regardless of
-#                    the per-patch mark, so a banned repo cannot leak a PR.
+#                    automatically). `upstream-sync` fails loudly when an intent key
+#                    matches no commit subject on the fork bookmark, and treats a repo
+#                    whose `upstreamPolicy.aiPrsAllowed == false` as `never` regardless
+#                    of the per-patch mark, so a banned repo cannot leak a PR.
 #
 # There is deliberately NO per-patch description field: the upstream PR's title
-# and body come from the patch's own commit message (subject = title, body = PR
+# and body come from the patch commit's own message (subject = title, body = PR
 # body, plus AI attribution and a link to the patch of record; see
 # packages/upstream-pr). A nix copy would duplicate the commit message and
 # drift. One fact, one home: the commit message IS the patch's description and
-# its reason of record, and the `patch-dag-<name>` check fails any patch whose
-# commit message states no reason (attribution trailers and bare issue refs do
-# not count).
+# its reason of record; upstream-sync refuses to ship a commit whose body
+# states no reason (attribution trailers and bare issue refs do not count).
 {
   forkPackages = [
     {
@@ -130,8 +118,9 @@
       # hashes named by Nix.
       name = "codex";
       input = "codex-src";
-      url = "https://github.com/openai/codex.git";
-      patchDir = "packages/agent/codex/patches";
+      upstreamUrl = "https://github.com/openai/codex.git";
+      forkRepo = "indexable-inc/codex";
+      bookmark = "ix-patched";
       autoUpdate = false;
       upstreamPolicy = {
         # Codex is invitation-only: unsolicited PRs are closed without review, so
@@ -144,11 +133,11 @@
         notes = "Invitation-only: 'does not accept unsolicited code contributions... will be closed without review.' CLA required. External help goes to issues, not PRs.";
       };
       patches = {
-        "0001-mcp-route-channel-notifications-into-chat.patch" = {
+        "mcp: route channel notifications into chat" = {
           upstream = "never";
           reason = "Hard to land upstream (fast-moving OpenAI-owned repo); ix-specific MCP channel-notification routing.";
         };
-        "0002-tui-refresh-adaptive-syntax-theme-on-focus-regain.patch" = {
+        "tui: refresh adaptive syntax theme on focus regain" = {
           upstream = "never";
           reason = "General fix for openai/codex#18942, but codex closes unsolicited PRs (prsWelcome = false); the upstream issue is the feedback channel.";
         };
@@ -157,8 +146,9 @@
     {
       name = "btop";
       input = "btop-src";
-      url = "https://github.com/aristocratos/btop.git";
-      patchDir = "packages/terminal/btop/patches";
+      upstreamUrl = "https://github.com/aristocratos/btop.git";
+      forkRepo = "indexable-inc/btop";
+      bookmark = "ix-patched";
       autoUpdate = true;
       upstreamPolicy = {
         prsWelcome = true;
@@ -171,11 +161,11 @@
         notes = "AI code allowed but must be disclosed ([AI generated] tag); undisclosed AI = closed PR / block. Feature PRs: open a feature request first.";
       };
       patches = {
-        "0001-Add-macOS-process-disk-IO-sorting.patch" = {
+        "Add macOS process disk IO sorting" = {
           upstream = "hold";
           reason = "General macOS feature (per-process disk IO sorting) plausibly welcome upstream, but wants a quality pass and a discussion issue first per btop CONTRIBUTING.";
         };
-        "0002-proc-show-kernel-working-directory-cwd-in-the-detail.patch" = {
+        "proc: show kernel working directory (cwd) in the detail box" = {
           upstream = "hold";
           reason = "General feature (show process cwd in detail view); wants a quality pass and a discussion issue first.";
         };
@@ -190,13 +180,13 @@
       # flake input at that branch. Pinned by rev (autoUpdate = false): there
       # is no `.#home-manager.updateScript` package for the fork-sync cron to
       # drive; bump by hand with `nix flake update home-manager-src` + `nix
-      # run .#rebase-patches -- home-manager`, then re-push the fork branch.
+      # jj-rebase indexable-inc/home-manager, push bookmark + pin ref, repin.
       name = "home-manager";
       input = "home-manager-src";
-      url = "https://github.com/nix-community/home-manager.git";
-      patchDir = "packages/home-manager/patches";
-      autoUpdate = false;
+      upstreamUrl = "https://github.com/nix-community/home-manager.git";
       forkRepo = "indexable-inc/home-manager";
+      bookmark = "ix-patched";
+      autoUpdate = false;
       upstreamPolicy = {
         prsWelcome = true;
         # The contributing manual (guidelines, getting-started) has no
@@ -207,7 +197,7 @@
         notes = "PRs welcome. Commit subject `{module}: summary` <= 50 chars, body explains motivation; changes should carry tests. No CLA.";
       };
       patches = {
-        "0001-files-batch-symlink-creation-and-target-checks-in-ac.patch" = {
+        "files: batch symlink creation and target checks in activation" = {
           upstream = "attempt";
           reason = "General activation performance fix (per-file fork+exec dominates linkGeneration/checkLinkTargets on darwin, 3.4s -> 0.2s for 365 links); behavior-preserving and upstream-quality.";
         };
@@ -216,8 +206,9 @@
     {
       name = "git";
       input = "git-src";
-      url = "https://github.com/git/git.git";
-      patchDir = "packages/git/patches";
+      upstreamUrl = "https://github.com/git/git.git";
+      forkRepo = "indexable-inc/git";
+      bookmark = "ix-patched";
       # The package overlays nixpkgs' git recipe onto this source, so the base
       # must equal nixpkgs' git version tag (v2.54.0), never free-float under
       # the fork-sync cron. Repin manually when nixpkgs bumps git.
@@ -232,7 +223,7 @@
         notes = "Mailing-list workflow (git@vger.kernel.org / GitGitGadget); DCO sign-off required; no AI-specific policy found as of 2026-07-18.";
       };
       patches = {
-        "0001-submodule-helper-borrow-common-dir-module-store-in-l.patch" = {
+        "submodule--helper: borrow common-dir module store in linked worktrees" = {
           upstream = "hold";
           reason = "General fix git upstream anticipated in df56607dff2 but never implemented; wants a mailing-list submission with review, which upstream-sync cannot automate for a non-PR project.";
         };
@@ -241,8 +232,9 @@
     {
       name = "nushell";
       input = "nushell-src";
-      url = "https://github.com/nushell/nushell.git";
-      patchDir = "packages/nushell/patches";
+      upstreamUrl = "https://github.com/nushell/nushell.git";
+      forkRepo = "indexable-inc/nushell";
+      bookmark = "ix-patched";
       autoUpdate = true;
       upstreamPolicy = {
         prsWelcome = true;
@@ -251,12 +243,12 @@
         notes = "PRs welcome for focused changes; CONTRIBUTING has no AI-specific policy as of 2026-07-07. Include tests and user-facing release-note context.";
       };
       patches = {
-        "0001-Add-xattrs-column-to-ls-l.patch" = {
+        "Add xattrs column to ls -l" = {
           upstream = "attempt";
           reason = "General filesystem feature requested in nushell/nushell#7106; prior PR #7158 was abandoned and explicitly left open for takeover.";
           prExtra = "Related issue: nushell/nushell#7106. Prior closed attempt: nushell/nushell#7158.";
         };
-        "0002-Derive-feature-list-for-cargo-unit-builds.patch" = {
+        "Derive feature list for cargo-unit builds" = {
           upstream = "never";
           reason = "Repo-specific: cargo-unit does not export Cargo's aggregate CARGO_CFG_FEATURE env var, so the package derives it from CARGO_FEATURE_* for ix builds.";
         };
@@ -270,8 +262,9 @@
       # so the patched source is load-bearing, not just validated.
       name = "ghostty";
       input = "ghostty-src";
-      url = "https://github.com/ghostty-org/ghostty.git";
-      patchDir = "packages/ghostty/patches";
+      upstreamUrl = "https://github.com/ghostty-org/ghostty.git";
+      forkRepo = "indexable-inc/ghostty";
+      bookmark = "ix-patched";
       # Pinned by rev (see flake.nix's ghostty-src comment): a routine bump
       # can silently break the darwin-only build with no CI to catch it.
       autoUpdate = false;
@@ -287,22 +280,22 @@
         notes = "AI-assisted PRs welcome with disclosure (AI_POLICY.md) but gated by CONTRIBUTING.md's vouch system: unvouched contributors are auto-closed, so a human must request and receive a maintainer's `!vouch` before upstream-sync can open a PR.";
       };
       patches = {
-        "0001-macos-fire-undo-close-expiry-via-main-queue-GCD-time.patch" = {
+        "macos: fire undo-close expiry via main-queue GCD timer" = {
           upstream = "attempt";
           reason = "Undo-close retention (ghostty-org/ghostty#7535) leaks live sessions when the run-loop expiry Timer never fires; a main-queue GCD timer fires regardless of arming thread and run-loop mode.";
           prExtra = "Context: undo-close design in ghostty-org/ghostty#7535; observed dozens of hidden surfaces tens of hours old against a 5s undo-timeout.";
         };
-        "0002-termio-hang-up-child-process-groups-when-spawn-time-.patch" = {
+        "termio: hang up child process groups when spawn-time killpg EPERMs" = {
           upstream = "attempt";
           reason = "Darwin killpg EPERM at surface close can mean the hangup reached nobody (root-owned login(1) alone in the spawn-time group; the shell moved to its own job-control group), leaving shells alive against a revoked tty.";
           prExtra = "Related earlier lifecycle issues: ghostty-org/ghostty#2273, ghostty-org/ghostty#4554.";
         };
-        "0003-terminal-expose-per-cell-OSC-8-hyperlink-URIs-throug.patch" = {
+        "terminal: expose per-cell OSC 8 hyperlink URIs through the render state" = {
           upstream = "attempt";
           reason = "The render-state C API exposes only a per-cell has-hyperlink bool (the row flag may false-positive), so a libghostty-vt embedder cannot learn a cell's OSC 8 link target; the URI must be duplicated out of page memory during update() like graphemes and styles already are.";
           prExtra = "Motivating embedder: ix-term (indexable-inc/ix#8008), which renders the terminal grid in a browser and needs real anchors for OSC 8 hyperlinks.";
         };
-        "0004-build-keep-Demit-lib-vt-buildable-without-Apple-abso.patch" = {
+        "build: keep -Demit-lib-vt buildable without Apple absolute-path tools" = {
           upstream = "attempt";
           reason = "A -Demit-lib-vt build cannot exec hardcoded /bin/cp and /usr/bin/ranlib in a hermetic (Nix darwin sandbox) build, and hanging the vt xcframework off install forces xcodebuild on every darwin build; resolving the tools from PATH and gating the xcframework on emit-xcframework (already default-false under emit-lib-vt) matches how the app xcframework is gated and changes nothing for developer Macs.";
           prExtra = "Motivating embedder: ix-vt (indexable-inc/ix#8117), which builds the VT-only subtree fully sandboxed; lib/build/libghostty-vt.nix documents the boundary.";
@@ -311,14 +304,15 @@
     }
     {
       # clippy is nightly-toolchain-coupled: its input is pinned by rev and must
-      # move only with the pinned nightly, so `rebase-patches` is run explicitly
+      # move only with the pinned nightly, so the fork is jj-rebased explicitly
       # alongside a toolchain bump, never under a blanket `nix flake update` or
       # the scheduled fork-sync. `name` is `clippy` (not the `llm-clippy` package
       # id) so the check reads `patched-src-clippy` and the rebase arg is `clippy`.
       name = "clippy";
       input = "clippy-src";
-      url = "https://github.com/rust-lang/rust-clippy.git";
-      patchDir = "packages/llm-clippy/patches";
+      upstreamUrl = "https://github.com/rust-lang/rust-clippy.git";
+      forkRepo = "indexable-inc/rust-clippy";
+      bookmark = "ix-patched";
       autoUpdate = false;
       upstreamPolicy = {
         prsWelcome = true;
@@ -337,54 +331,54 @@
       patches = {
         # The nightly-sync commit is our rebase mechanism onto the pinned
         # toolchain; it is meaningless upstream.
-        "0001-Update-Clippy-for-nightly-2026-05-27-repo-toolchain-.patch" = {
+        "Update Clippy for nightly 2026-05-27 (repo toolchain pin)" = {
           upstream = "never";
           reason = "Repo-specific: pins clippy to our nightly toolchain; not an upstream change.";
         };
         # The ten new lints: the user's default is `attempt` but HOLD for a
         # quality pass (a lint upstream needs a proposal issue, docs, ui tests,
         # and a stabilization discussion). The clippy quality pass is a follow-up.
-        "0002-Add-module_file_count-lint.patch" = {
+        "Add module_file_count lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate but wants a quality pass (lint proposal issue, docs, ui tests) before a PR.";
         };
-        "0003-Add-excessive_file_length-lint.patch" = {
+        "Add excessive_file_length lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        "0004-Add-path_segment_repetition-lint.patch" = {
+        "Add path_segment_repetition lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        "0005-Add-underscore_in_module_filename-lint.patch" = {
+        "Add underscore_in_module_filename lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        "0006-Add-renamed_imports-lint.patch" = {
+        "Add renamed_imports lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        "0007-Add-fallible_int_fallback-lint.patch" = {
+        "Add fallible_int_fallback lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        "0008-Add-magic_number-lint.patch" = {
+        "Add magic_number lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        "0009-Add-drop_must_use-lint.patch" = {
+        "Add drop_must_use lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        "0010-Add-non_trait_imports-lint.patch" = {
+        "Add non_trait_imports lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        "0011-Add-string_ip_field-lint.patch" = {
+        "Add string_ip_field lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
-        "0012-Add-anonymous-tuple-return-type-lint.patch" = {
+        "Add anonymous tuple return type lint" = {
           upstream = "hold";
           reason = "New lint; attempt candidate pending the quality pass.";
         };
@@ -415,12 +409,13 @@
       # sync-fd patch (index#1742) is validated by BOOTING the panes guest on a
       # linux GPU host and exercising the WSI acquire path, not by CI, so a base
       # bump is a rebase-plus-boot event, not a routine cron. `url` is the
-      # gitlab git remote so `rebase-patches`' scratch-clone fetch works; the
+      # gitlab remote stays the rebase target for indexable-inc/mesa; the
       # build consumes `ix.mesaSrc` (the shallow git input) through patchedSrc.
       name = "mesa";
       input = "mesa-src";
-      url = "https://gitlab.freedesktop.org/mesa/mesa.git";
-      patchDir = "packages/vm/panes/guest-image/mesa/patches";
+      upstreamUrl = "https://gitlab.freedesktop.org/mesa/mesa.git";
+      forkRepo = "indexable-inc/mesa";
+      bookmark = "ix-patched";
       autoUpdate = false;
       upstreamPolicy = {
         prsWelcome = true;
@@ -437,15 +432,15 @@
         notes = "GitLab MR workflow, not GitHub; upstream-sync's gh path cannot open a mesa MR. Also bans autonomous-agent submissions (human must drive the MR). Contribute by hand via gitlab.freedesktop.org with Assisted-by/Generated-by trailers.";
       };
       patches = {
-        "0001-venus-handle-temporary-sync-fd-semaphore-imports-dri.patch" = {
+        "venus: handle temporary sync fd semaphore imports driver-side" = {
           upstream = "never";
           reason = "Real venus driver fix and a strong upstream candidate, but mesa is GitLab: upstream-sync's gh path cannot open the MR. Contribute by hand.";
         };
-        "0002-README.ix-document-snapshot-fork-layout.patch" = {
+        "README.ix: document snapshot fork layout" = {
           upstream = "never";
           reason = "Repo-specific: documents our snapshot fork layout; meaningless upstream.";
         };
-        "0003-venus-fail-sparse-batches-waiting-on-driver-side-syn.patch" = {
+        "venus: fail sparse batches waiting on driver-side sync fd imports" = {
           upstream = "never";
           reason = "Real venus driver fix but mesa is GitLab; upstream-sync's gh path cannot open the MR. Contribute by hand.";
         };
@@ -458,17 +453,16 @@
       # change that moves the daemon version, never under a routine
       # `nix flake update` or the scheduled fork-sync -- hence `autoUpdate =
       # false`, which pins `nix-src` by rev and keeps it out of the cron. Bump the
-      # `nix-src` rev, then `nix run .#rebase-patches -- nix`.
+      # `nix-src` rev after jj-rebasing indexable-inc/nix.
       name = "nix";
       input = "nix-src";
-      url = "https://github.com/NixOS/nix.git";
-      patchDir = "packages/nix/nix/patches";
+      upstreamUrl = "https://github.com/NixOS/nix.git";
+      forkRepo = "indexable-inc/nix";
+      bookmark = "ix-patched";
       autoUpdate = false;
-      # nix is the one fork whose attempt patches ship upstream as standalone
-      # dag.json closures, so it pays for the per-attempt closure build gates
-      # (RFC 0010 A3): 9 attempt patches = 9 scheduled full-package builds,
-      # cache hits between changes. See the `closureGates` field doc above.
-      closureGates = true;
+      # nix is the fork with the most attempt patches; each ships upstream as
+      # its commit's ancestry from indexable-inc/nix. Preflight before an
+      # upstream PR: build the fork at that patch commit's rev.
       upstreamPolicy = {
         prsWelcome = true;
         # NixOS/nix now has an explicit AI/automation policy (NixOS/nix#15984,
@@ -498,7 +492,36 @@
         # handler rather than a blanket `catch (...)`), the narrowing Andrew
         # proposed in the #15963 discussion after xokdvium objected to swallowing
         # all exceptions. Ready in shape but a human (Andrew) reopens/submits it.
-        "0001-fix-libstore-don-t-crash-the-daemon-when-a-GC-roots-.patch" = {
+        # jj input scheme (nix#15651): vendored from the already-open upstream
+        # PR #16066 (ee0691ab) with three 2.34.7 back-port adaptations noted in
+        # the commit body. No PR of ours: upstream's own is in flight; adopt
+        # theirs (and drop the adaptations) when the base moves past it.
+        "libfetchers: add a Jujutsu (jj) input scheme" = {
+          upstream = "hold";
+          reason = "Upstream PR NixOS/nix#16066 (same commit, ee0691ab) is already open; never file a rival. Re-sync when the base catches up.";
+        };
+        # Real product fix, upstream-shaped and standalone: on Darwin/FreeBSD
+        # LOCAL_PEERCRED carries no pid, so the daemon never recorded
+        # clientPid (build attribution + disconnect liveness silently degraded).
+        "libcmd: report peer pid on Darwin/FreeBSD via LOCAL_PEERPID" = {
+          upstream = "hold";
+          reason = "Genuine upstream bug fix (daemon clientPid always missing on Darwin); wants a human review pass before an attempt mark authorizes the PR.";
+        };
+        # Fork-local test adaptations: they exist because fork patches changed
+        # failure propagation / added features, so they are meaningless upstream.
+        "tests/functional: update failure expectations for preserved leaf errors" = {
+          upstream = "never";
+          reason = "Adapts upstream tests to the fork's failure-propagation patches; upstream has nothing to apply it to.";
+        };
+        "tests/functional: assert no-progress deadline only where it exists" = {
+          upstream = "never";
+          reason = "Tests a fork-only feature (no-progress deadlines).";
+        };
+        "tests/functional: skip zombie staleness check where states are hidden" = {
+          upstream = "never";
+          reason = "Fixes a fork-added test (build-status liveness) for the macOS seatbelt.";
+        };
+        "fix(libstore): don't crash the daemon when a GC roots client thread is interrupted" = {
           upstream = "hold";
           reason = "Reworked to catch (BaseError&) per the #15963 review (xokdvium: `catch (...)` swallows too much); a human (Andrew) resubmits, referencing #15963/#15962/#13438. Fixes NixOS/nix#15962.";
         };
@@ -508,7 +531,7 @@
         # std::filesystem migration reintroduced the throwing exists() overload
         # that #5884 first flagged and #8485 still tracks. A human submits it
         # framed as restoring that lost behavior.
-        "0002-fix-libexpr-treat-inaccessible-default-lookup-path-e.patch" = {
+        "fix(libexpr): treat inaccessible default lookup-path entries as absent" = {
           upstream = "hold";
           reason = "Cleanest candidate: restores the EPERM-tolerant default-path probing of #8240 lost in the std::filesystem migration (see #5884, still-open #8485). Human submits, framed as a regression fix.";
         };
@@ -519,31 +542,31 @@
         # NIX_STATE_DIR, works when the daemon is wedged / the store lock is
         # contended -- exactly where `nix ps` hangs) rather than opening a rival
         # PR. Held pending that conversation.
-        "0003-libutil-add-build-status-dir-experimental-feature.patch" = {
+        "libutil: add build-status-dir experimental feature" = {
           upstream = "hold";
           reason = "Build-status series overlaps edolstra's active #15979 (nix ps); engage there with the daemon-less file-based angle instead of filing a competing series.";
         };
-        "0004-libstore-add-build-status-directory-writer.patch" = {
+        "libstore: add build status directory writer" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        "0005-libstore-write-status-files-from-build-and-substitut.patch" = {
+        "libstore: write status files from build and substitution goals" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        "0006-libstore-daemon-record-client-identity-for-build.patch" = {
+        "libstore: daemon record client identity for build status" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        "0007-nix-add-nix-store-builds-command.patch" = {
+        "nix: add 'nix store builds' command" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        "0008-tests-functional-test-build-status-directory.patch" = {
+        "tests/functional: test build status directory" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        "0009-doc-release-note-for-build-status-directory-and-nix-.patch" = {
+        "doc: release note for build status directory and 'nix store builds'" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
@@ -553,13 +576,13 @@
         # leaveDotGit-for-flakes), but held: repo-wide upstreaming pause
         # (NixOS/nix#15984, see #2021), and a feature of this size should
         # start as an upstream discussion, not a cold PR.
-        "0010-libfetchers-add-opt-in-structured-commit-history-exp.patch" = {
+        "libfetchers: add opt-in structured commit history export for git inputs" = {
           upstream = "hold";
           reason = "Feature-sized change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/RFC first.";
         };
         # 0011: temp roots for in-flight CA build outputs, closing the min-free
         # auto-GC race that broke wide cargo-unit graphs (index#2334).
-        "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch" = {
+        "fix(libstore): add temp roots for CA derivation outputs (GC race)" = {
           upstream = "hold";
           reason = "Fix for min-free auto-GC deleting in-flight CA build outputs (indexable-inc/index#2334). Hold: humans submit nix patches upstream per NixOS/nix#15984; overlaps the still-open upstream discussion NixOS/nix#15613 / NixOS/nix#15719.";
         };
@@ -567,7 +590,7 @@
         # (makeFallbackPath), the residual GC window 0011 left open: a
         # non-chroot builder writes the unregistered scratch path directly,
         # and a concurrent GC deletes it mid-build (index#2354).
-        "0012-fix-libstore-add-temp-root-for-floating-CA-scratch-o.patch" = {
+        "fix(libstore): add temp root for floating-CA scratch output paths (GC race)" = {
           upstream = "hold";
           reason = "Companion to 0011: roots the floating-CA scratch output path during non-chroot builds (indexable-inc/index#2354). Upstream master has the same gap, but humans submit nix patches upstream per NixOS/nix#15984.";
         };
@@ -578,7 +601,7 @@
         # (archive-compatible-tree check with automatic tarball fallback), so
         # upstreamable in principle, but held like 0010: feature-sized fetcher
         # changes should start as an upstream discussion, not a cold PR.
-        "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch" = {
+        "libfetchers: opt-in incremental fetching of forge inputs via the Git protocol" = {
           upstream = "hold";
           reason = "Feature-sized fetcher change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/discussion first (touches lock-file-adjacent fetch semantics).";
         };
@@ -592,11 +615,11 @@
         # enforced by the `checks.<system>.stock-nix-parse-*` shards (index#3635).
         # astlog's digit-grouping lints track the remaining toolchain
         # backlog (astlog-rules/nix.astlog).
-        "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch" = {
+        "libexpr: accept underscore digit separators in numeric literals" = {
           upstream = "hold";
           reason = "Language syntax change; must start as an upstream issue/RFC, and humans submit nix patches upstream per NixOS/nix#15984.";
         };
-        "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch" = {
+        "fix(libcmd): preserve repeated installable cardinality" = {
           upstream = "hold";
           reason = "Fixes repeated installables multiplying `nix build --json` results (indexable-inc/index#2633). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -605,35 +628,35 @@
         # file disabled both scheduled and reactive GC until the store filled
         # (index#3031). Upstream master already treats the name as opaque in
         # NixOS/nix#15992; this is the reader-side backport for mixed versions.
-        "0016-fix-libstore-accept-opaque-temporary-root-filenames.patch" = {
+        "fix(libstore): accept opaque temporary root filenames" = {
           upstream = "hold";
           reason = "Backports the mixed-version temporary-root reader from NixOS/nix#15992 (indexable-inc/index#3031). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
         # 0017: each daemon process decides whether to auto-GC before waiting
         # for the store-global gc.lock. Recheck under that lock so queued
         # callers do not repeat a collection after the first restores space.
-        "0017-fix-libstore-recheck-free-space-after-GC-lock.patch" = {
+        "fix(libstore): recheck free space after GC lock" = {
           upstream = "hold";
           reason = "Prevents stale queued auto-GC decisions from serializing CI jobs behind repeated collections (indexable-inc/index#3085, indexable-inc/ix#7145). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
         # 0018: a daemon worker loses its signal thread at fork while retaining
         # the blocked mask, then synchronous auto-GC can wait forever on a
         # detached collector queued at gc.lock after the client disappears.
-        "0018-fix-libstore-interrupt-blocked-automatic-GC.patch" = {
+        "fix(libstore): interrupt blocked automatic GC" = {
           upstream = "hold";
           reason = "Restarts forked daemon signal handling and makes blocked auto-GC observe cancellation (indexable-inc/index#3300, indexable-inc/ix#7145). Signal handling ports Lix dccde9436; humans submit Nix patches upstream per NixOS/nix#15984.";
         };
-        "0019-Get-rid-of-duplicated-Build-failed-due-to-failed-dep.patch" = {
+        "Get rid of duplicated 'Build failed due to failed dependency' error messages" = {
           upstream = "hold";
           reason = "Backports NixOS/nix#16040 from 2.34.8; drop when the daemon base reaches 2.34.8 or newer.";
         };
-        "0020-libstore-preserve-content-addressed-leaf-failures.patch" = {
+        "libstore: preserve content-addressed leaf failures" = {
           upstream = "hold";
           reason = "Preserves actionable floating-CA leaf failures through resolution (indexable-inc/index#3279, indexable-inc/ix#7357). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
         # 0021: CPU, I/O, and build-log activity distinguish a silent active
         # compiler from an idle builder before the daemon cancels its goal.
-        "0021-libstore-enforce-derivation-no-progress-deadlines.patch" = {
+        "libstore: enforce derivation no-progress deadlines" = {
           upstream = "hold";
           reason = "Fleet CI policy for indexable-inc/index#3317. Validate the process-aware deadline before proposing a general Nix interface; humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -643,7 +666,7 @@
         # CLOSE-WAIT wedged CI slots for hours. The worker loop now polls
         # paused transfers and fails them as transient curl errors, so
         # download-attempts still applies.
-        "0022-libstore-fail-paused-downloads-on-peer-half-close-or.patch" = {
+        "libstore: fail paused downloads on peer half-close or stall" = {
           upstream = "hold";
           reason = "Fails paused downloads on peer half-close or stall past stalled-download-timeout instead of parking forever (indexable-inc/index#3559). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -653,7 +676,7 @@
         # plain `git` node stock Nix understands. Fixes the hard failure of
         # NixOS/nix#13571 and the silent empty-submodule trees of
         # NixOS/nix#14982; the mapping mirrors GitHubInputScheme::clone().
-        "0023-libfetchers-fetch-forge-inputs-via-git-when-submodul.patch" = {
+        "libfetchers: fetch forge inputs via git when submodules are requested" = {
           upstream = "hold";
           reason = "Implements roberth's implicit git+https switch from NixOS/nix#14982 (also fixes NixOS/nix#13571; indexable-inc/index#3626). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -667,7 +690,7 @@
         # PR NixOS/nix#15982 (bug NixOS/nix#14762), which the deferral needs
         # for nested relative inputs. Extends the merged update-time child
         # lock respect of NixOS/nix#13437 to every lock computation.
-        "0024-libflake-defer-to-the-child-lock-for-relative-path-f.patch" = {
+        "libflake: defer to the child lock for relative path flake inputs" = {
           upstream = "hold";
           reason = "Eval/lock-time sparse lock semantics for relative path inputs, the scoped start of the sparseNodes plan (NixOS/nix#7730; indexable-inc/index#3627). Hold: humans submit Nix patches upstream per NixOS/nix#15984, and the sparseNodes migration should land via the upstream plan, not a cold fork PR.";
         };
@@ -682,19 +705,19 @@
         # subset. Determinate's own v2.35.1 tree has dropped the
         # random-path implementation and rides the same mechanism. All four
         # are already on upstream master; drop when the base reaches 2.35+.
-        "0025-libexpr-Add-a-way-to-collect-string-context-from-Val.patch" = {
+        "libexpr: Add a way to collect string context from ValuePrinter" = {
           upstream = "hold";
           reason = "Backports upstream 569ee752c (prerequisite of NixOS/nix#15711, merged to master 2026-04-27); drop when the base reaches a release containing it (2.35+).";
         };
-        "0026-Don-t-copy-flakes-to-the-store-unnecessarily.patch" = {
+        "Don't copy flakes to the store unnecessarily" = {
           upstream = "hold";
           reason = "Backports upstream 891ef140b (NixOS/nix#15711, merged to master 2026-04-27); drop when the base reaches a release containing it (2.35+).";
         };
-        "0027-libexpr-Make-hash-mismatches-while-copying-lazy-path.patch" = {
+        "libexpr: Make hash mismatches while copying lazy paths to the store a proper error" = {
           upstream = "hold";
           reason = "Backports upstream 8ffda0826 (NixOS/nix#15950, post-merge fix to #15711); drop when the base reaches a release containing it (2.35+).";
         };
-        "0028-libexpr-Handle-lazy-paths-in-builtins.storePath-bett.patch" = {
+        "libexpr: Handle lazy paths in builtins.storePath better" = {
           upstream = "hold";
           reason = "Backports upstream 933f3140b (NixOS/nix#16078, post-merge fix to #15711); drop when the base reaches a release containing it (2.35+).";
         };
@@ -703,7 +726,7 @@
         # keeps the fork byte-identical to eager evaluation unless opted in;
         # flipping the fleet on is a separate decision with its own drv-hash
         # and eval-result equivalence sweeps (indexable-inc/index#3645).
-        "0029-libexpr-gate-lazy-input-mounting-behind-an-off-by-de.patch" = {
+        "libexpr: gate lazy input mounting behind an off-by-default lazy-trees setting" = {
           upstream = "hold";
           reason = "Fork policy gate for the 0025-0028 backports (indexable-inc/index#3645): upstream ships the behavior unconditionally, we default it off pending fleet-wide equivalence sweeps. Retire together with the backports when the base reaches 2.35+.";
         };
@@ -715,7 +738,7 @@
         # flake.lock and inputs.<name>.{lastModified,rev,shortRev} carry
         # them. Plain subdirectories stay unstamped: their time equals the
         # parent's and would churn the lock on every parent commit.
-        "0030-libflake-stamp-submodule-metadata-on-relative-path-f.patch" = {
+        "libflake: stamp submodule metadata on relative path flake inputs" = {
           upstream = "hold";
           reason = "Submodule metadata for relative path inputs (indexable-inc/index#3737); companion to 0024 in the sparseNodes direction (NixOS/nix#7730). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -729,7 +752,7 @@
         # (tarball-cache-v2: 3700 packs / 932MB). Extends the guard patch
         # 0013 already applied to packfilesOnly fetches to every cache-repo
         # fetch.
-        "0031-fix-libfetchers-keep-user-git-auto-maintenance-out-o.patch" = {
+        "fix: libfetchers: keep user git auto-maintenance out of cache fetches" = {
           upstream = "hold";
           reason = "Keeps user git auto-maintenance out of nix-internal cache repos; fetch-spawned detached `git maintenance run --auto` SIGSEGVs on macOS (indexable-inc/index#3755). Upstream-nix candidate, held: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -739,7 +762,7 @@
         # Snapshot such trees at mount time via clonefile(2) (~70ms) and
         # evaluate from the snapshot; fall back to an eager copy where
         # cloning is unavailable.
-        "0032-libexpr-snapshot-mutable-source-trees-at-mount-time-.patch" = {
+        "libexpr: snapshot mutable source trees at mount time (lazy-trees)" = {
           upstream = "hold";
           reason = "Fixes the lazy-trees mid-eval mutation race for mutable local trees (indexable-inc/index#3749). Upstream-nix candidate once lazy trees settle there, held: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -750,7 +773,7 @@
         # holding goals, builders, and locks (indexable-inc/index#3752).
         # Upstream master has the same gap: its Waker self-pipe only serves
         # cross-thread goal wakeups and is not wired to triggerInterrupt.
-        "0033-libstore-wake-the-goal-loop-when-the-process-is-inte.patch" = {
+        "libstore: wake the goal loop when the process is interrupted" = {
           upstream = "hold";
           reason = "Level-triggered interrupt wakeup for the goal loop (indexable-inc/index#3752); upstream master's Waker pipe is not interrupt-wired, so the bug exists there too. Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -760,7 +783,7 @@
         # (indexable-inc/index#3752). Writers now hold a lifetime flock on
         # their entry; readers treat an acquirable lock (or, for legacy
         # entries, a dead-or-zombie pid) as proof the writer is gone.
-        "0034-libstore-prove-build-status-writers-alive-with-a-lif.patch" = {
+        "libstore: prove build-status writers alive with a lifetime lock" = {
           upstream = "hold";
           reason = "Build-status series follow-up (zombie-proof staleness, indexable-inc/index#3752): engage on #15979 rather than open a competing PR.";
         };
@@ -768,7 +791,7 @@
         # POLLNVAL arrive regardless of the events mask, so an error-state
         # client socket spun the monitor thread at 100% CPU without ever
         # signalling client death (linux poll path only; darwin uses kqueue).
-        "0035-libutil-treat-POLLERR-POLLNVAL-as-fd-death-in-Monito.patch" = {
+        "libutil: treat POLLERR/POLLNVAL as fd death in MonitorFdHup" = {
           upstream = "hold";
           reason = "Port of the MonitorFdHup half of NixOS/nix#15691 (open since 2026-04, indexable-inc/index#3769); retire if that PR merges. Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -776,7 +799,7 @@
         # terminals that understand it (Ghostty, WezTerm, Windows Terminal,
         # ConEmu) show a native build-progress indicator; percent mirrors the
         # build + copy counters of the textual status line.
-        "0036-libmain-emit-terminal-progress-OSC-9-4-from-the-prog.patch" = {
+        "libmain: emit terminal progress (OSC 9;4) from the progress bar" = {
           upstream = "hold";
           reason = "UX feature (indexable-inc/index#3830) upstream may want behind a setting or with broader terminal detection. Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -784,7 +807,7 @@
         # and nothing invalidates on resize), so resizing the terminal leaves
         # a stale truncated or wrapped line; adds a window-size callback in
         # libutil and registers the progress bar to repaint through it.
-        "0037-libmain-repaint-the-progress-bar-on-terminal-resize.patch" = {
+        "libmain: repaint the progress bar on terminal resize" = {
           upstream = "hold";
           reason = "Real upstream bug worth a PR (stale progress line after resize, indexable-inc/index#3830). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
@@ -796,11 +819,12 @@
       # (packages/nix/nix-fast-build), so the base must equal the nixpkgs
       # package version (tag 1.6.0), never free-float under the fork-sync
       # cron. On a nixpkgs nix-fast-build bump, repin the input to the
-      # matching tag and run `nix run .#rebase-patches -- nix-fast-build`.
+      # matching tag after jj-rebasing indexable-inc/nix-fast-build.
       name = "nix-fast-build";
       input = "nix-fast-build-src";
-      url = "https://github.com/Mic92/nix-fast-build.git";
-      patchDir = "packages/nix/nix-fast-build/patches";
+      upstreamUrl = "https://github.com/Mic92/nix-fast-build.git";
+      forkRepo = "indexable-inc/nix-fast-build";
+      bookmark = "ix-patched";
       autoUpdate = false;
       upstreamPolicy = {
         prsWelcome = true;
@@ -809,11 +833,11 @@
         notes = "No CONTRIBUTING or AI policy published as of 2026-07-19; small focused PRs with tests are the observed norm.";
       };
       patches = {
-        "0001-workers-make-skip-cached-skip-locally-realized-outpu.patch" = {
+        "workers: make --skip-cached skip locally-realized outputs" = {
           upstream = "hold";
           reason = "Changes what --skip-cached means for `local` outputs for every user; upstream would plausibly want it opt-in, so it needs reshaping as a flag before a PR.";
         };
-        "0002-build-add-a-typed-per-derivation-no-progress-deadlin.patch" = {
+        "build: add a typed per-derivation no-progress deadline" = {
           upstream = "never";
           reason = "Depends on index's nix fork (build-status directory, patches 0003-0009/0021) that upstream Nix does not have; unmergeable until that daemon interface exists upstream.";
         };
@@ -826,11 +850,12 @@
       # cabal version still reads 1.1.3 (the hackage release nixpkgs builds,
       # plus the bound-relaxation cabal revisions hackage layers on top), so
       # it must not free-float: repin when nixpkgs moves past 1.1.3, then
-      # `nix run .#rebase-patches -- nix-derivation`.
+      # jj-rebasing indexable-inc/Haskell-Nix-Derivation-Library.
       name = "nix-derivation";
       input = "nix-derivation-src";
-      url = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library.git";
-      patchDir = "packages/nix/nix-output-monitor/patches";
+      upstreamUrl = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library.git";
+      forkRepo = "indexable-inc/Haskell-Nix-Derivation-Library";
+      bookmark = "ix-patched";
       autoUpdate = false;
       upstreamPolicy = {
         prsWelcome = true;
@@ -839,7 +864,7 @@
         notes = "No CONTRIBUTING or AI policy; the CA gap is tracked upstream as issue #28 with PR #26 proposing a sum-type DerivationOutput.";
       };
       patches = {
-        "0001-Parser-accept-empty-output-paths-in-floating-CA-deri.patch" = {
+        "Parser: accept empty output paths in floating-CA derivations" = {
           upstream = "hold";
           reason = "Upstream PR #26 already proposes the larger sum-type fix for issue #28; ours is the deliberately smaller parser widening, so engage on #26/#28 rather than file a competing PR.";
         };
@@ -851,16 +876,16 @@
       # rewrites the crate inside each consuming tool's cargo vendor dir at
       # build time, selecting the series matching the vendored version
       # (0.11/0.12 share one tokenizer shape, 0.13/0.14 the other). These two
-      # entries pin the upstream tags the in-use crates were cut from --
-      # v0.12.0 (alejandra, deadnix) here, v0.14.0 (statix) below -- so each
-      # series gets the standard canonical form, patched-src apply gate, and
-      # dag/reason checks; the build-time patcher reads the same patch files
-      # from these patchDirs. Repin alongside the vendored-version change on a
+      # entries pin the megamerges built on the upstream tags the in-use
+      # crates were cut from -- v0.12.0 (alejandra, deadnix) here, v0.14.0
+      # (statix) below; the build-time patcher overlays the patched sources
+      # from these inputs. Repin alongside the vendored-version change on a
       # nixpkgs bump (the build fails loudly on an unknown rnix version).
       name = "rnix-0-12";
       input = "rnix-0-12-src";
-      url = "https://github.com/nix-community/rnix-parser.git";
-      patchDir = "lib/util/rnix-digit-separators/patches-0.12";
+      upstreamUrl = "https://github.com/nix-community/rnix-parser.git";
+      forkRepo = "indexable-inc/rnix-parser";
+      bookmark = "ix-patched-0.12";
       autoUpdate = false;
       upstreamPolicy = {
         prsWelcome = true;
@@ -869,7 +894,7 @@
         notes = "nix-community project, PRs welcome, no stated AI policy; the patched dialect is gated on the Nix language itself changing, and 0.12 is a historical tag that upstream would not amend anyway.";
       };
       patches = {
-        "0001-tokenizer-accept-underscore-digit-separators-in-nume.patch" = {
+        "tokenizer: accept underscore digit separators in numeric literals" = {
           upstream = "hold";
           reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
         };
@@ -880,8 +905,9 @@
       # tokenizer generation (statix's vendored rnix).
       name = "rnix-0-14";
       input = "rnix-0-14-src";
-      url = "https://github.com/nix-community/rnix-parser.git";
-      patchDir = "lib/util/rnix-digit-separators/patches-0.14";
+      upstreamUrl = "https://github.com/nix-community/rnix-parser.git";
+      forkRepo = "indexable-inc/rnix-parser";
+      bookmark = "ix-patched-0.14";
       autoUpdate = false;
       upstreamPolicy = {
         prsWelcome = true;
@@ -890,7 +916,7 @@
         notes = "nix-community project, PRs welcome, no stated AI policy; the patched dialect is gated on the Nix language itself changing.";
       };
       patches = {
-        "0001-tokenizer-accept-underscore-digit-separators-in-nume.patch" = {
+        "tokenizer: accept underscore digit separators in numeric literals" = {
           upstream = "hold";
           reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
         };

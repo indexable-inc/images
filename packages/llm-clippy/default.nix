@@ -13,20 +13,19 @@ let
   # `ix.buildRustPackage` is curried on the full package set; read `pkgs` from
   # `ix` rather than taking a `pkgs` callPackage formal (unreachable by `override`).
   inherit (ix) pkgs;
-  # De-forking: `clippy-src` is now upstream rust-lang/rust-clippy pinned by rev,
-  # and the LLM-tuned lint series lives in ./patches (applied via the shared
-  # patched-src util, which also appends the fork's nix-derived patches
-  # declared in lib/fork-packages.nix `derivedPatches`). The patched tree
-  # carries the toolchain file and Cargo.lock the build reads below, exactly
-  # as the old fork tree did.
+  # `clippy-src` is the indexable-inc/rust-clippy jj megamerge (upstream base
+  # plus the LLM-tuned lint patch DAG); the shared patched-src util only
+  # appends the fork's nix-derived patches declared in lib/fork-packages.nix
+  # `derivedPatches` (matched by the registry name, "clippy"). The patched
+  # tree carries the toolchain file and Cargo.lock the build reads below,
+  # exactly as the old fork tree did.
   source =
     if clippy-src == null
     then throw "llm-clippy: clippy-src is required"
     else
       ix.patchedSrc {
-        name = "llm-clippy";
+        name = "clippy";
         src = clippy-src;
-        patchDir = ./patches;
       };
   # Drive the toolchain from the patched tree's `rust-toolchain.toml` so the
   # base bump + regenerated series advance the rustc/rustc_private ABI in

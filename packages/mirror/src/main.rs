@@ -1,21 +1,17 @@
 //! `mirror`: opt-in standalone GitHub repos generated from this monorepo.
 //!
-//! One tool, two products, one source-generation core:
+//! A package with a `mirror` attr in its `package.nix` gets a self-contained
+//! source tree (inlined workspace inheritance, pruned `Cargo.lock`, banner
+//! README) snapshot-synced into a read-only GitHub mirror repo (`gen` /
+//! `publish`). The monorepo stays the source of truth. De-forked packages
+//! are NOT this tool's product: since the jj megamerge migration their
+//! branches live natively in each fork repo (lib/fork-packages.nix), pushed
+//! by .github/workflows/fork-sync.yml.
 //!
-//!   - `gen` / `publish`: a package with a `mirror` attr in its `package.nix`
-//!     gets a self-contained source tree (inlined workspace inheritance,
-//!     pruned `Cargo.lock`, banner README) snapshot-synced into a read-only
-//!     GitHub mirror repo. The monorepo stays the source of truth.
-//!   - `fork-branch`: a de-forked package (lib/fork-packages.nix) gets a real
-//!     GitHub fork branch built declaratively: the pinned upstream base from
-//!     `flake.lock` plus the in-repo patch series applied as commits, so an
-//!     upstream PR is one `git push` away.
-//!
-//! CI drives both from `.github/workflows/mirror-sync.yml`.
+//! CI drives this from `.github/workflows/mirror-sync.yml`.
 
 mod changelog;
 mod exec;
-mod fork;
 mod generate;
 mod lockfile;
 mod manifest;
@@ -87,20 +83,6 @@ enum Command {
         #[arg(long)]
         mirror_json: Option<PathBuf>,
     },
-    /// Build a de-forked package's `ix-patched` branch: pinned upstream base
-    /// plus the in-repo patch series, verified to apply cleanly.
-    ForkBranch {
-        /// Fork name from lib/fork-packages.nix, e.g. `codex`.
-        #[arg(long)]
-        name: String,
-        /// Force-push the built branch to the fork's `forkRepo`.
-        #[arg(long)]
-        push: bool,
-        /// Fork mapping as a JSON file (the rendered `.#lib.forkPackages`
-        /// list); defaults to evaluating it with `nix eval --json`.
-        #[arg(long)]
-        mapping: Option<PathBuf>,
-    },
 }
 
 fn main() -> Result<()> {
@@ -153,18 +135,6 @@ fn main() -> Result<()> {
                 repo,
                 create,
                 mirror_json,
-            },
-        ),
-        Command::ForkBranch {
-            name,
-            push,
-            mapping,
-        } => fork::run(
-            &workspace,
-            &fork::Request {
-                name,
-                push,
-                mapping,
             },
         ),
     }

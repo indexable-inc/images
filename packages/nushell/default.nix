@@ -1,19 +1,11 @@
 {
   ix,
   lib,
-  nix,
-  # Sibling package set (flake path only), for the `rebase-patches` binary the
-  # fork updater invokes. `{ }` on the overlay path.
-  repoPackages ? {},
-  # Nushell writer for `passthru.updateScript`, pre-bound on the flake path
-  # (lib/packages.nix); `null` on the overlay path -> omit the fork updater.
-  updateScriptWriter ? null,
 }: let
-  source = ix.patchedSrc {
-    name = "nushell";
-    src = ix.nushellSrc;
-    patchDir = ./patches;
-  };
+  # The indexable-inc/nushell jj megamerge (nushell-src input): upstream main
+  # plus the xattr-aware ls patch. The scheduled fork-sync rebases the fork
+  # repo and floats the input.
+  source = ix.nushellSrc;
 
   workspace = ix.cargoUnit.buildWorkspace {
     pname = "nushell";
@@ -49,19 +41,7 @@ in
       (old.passthru or {})
       // {
         inherit workspace;
-      }
-      // lib.optionalAttrs (updateScriptWriter != null && repoPackages ? rebase-patches) {
-        updateScript =
-          ix.mkForkUpdater {
-            writeNushellApplication = updateScriptWriter;
-            inherit nix;
-            rebasePatches = repoPackages.rebase-patches;
-          } {
-            name = "nushell";
-            input = "nushell-src";
-          };
       };
-
     meta =
       (old.meta or {})
       // {

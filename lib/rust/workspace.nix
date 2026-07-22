@@ -6,7 +6,6 @@
   buildSvelteSite,
   buildLibghosttyVt,
   ghosttySrc,
-  patchedSrcFor,
   writeBashApplication,
   # Cross-compilation leaves, threaded in so `unitsFor { target }` can build a
   # second unit graph for a non-host triple without `workspace.nix` having
@@ -21,22 +20,17 @@
 }: workspacePkgs: let
   inherit (paths) root;
 
-  # libghostty-vt built for the workspace's package set, from the PATCHED
-  # fork source (packages/ghostty/patches; the fork's C-API additions such as
-  # the per-cell hyperlink URI are part of the surface ix-vt binds, so the
-  # unpatched base would fail the link). ix-vt-sys links this dylib, so the
+  # libghostty-vt built for the workspace's package set, from the ghostty-src
+  # jj megamerge fork tree (the fork's C-API additions such as the per-cell
+  # hyperlink URI are part of the surface ix-vt binds, so the unpatched
+  # upstream base would fail the link). ix-vt-sys links this dylib, so the
   # unit graph needs both the build-script env (so the build script emits the
   # link directives) and a workspace-wide `-L` search path (a build script's
   # own link-search does not propagate to the final per-unit link in this
   # graph; see the alsa note below for the same shape). The dylib dir is also
   # a runtime input for the ix-vt tests, which dlopen it.
   libghosttyVt = buildLibghosttyVt workspacePkgs {
-    ghosttySource = (patchedSrcFor workspacePkgs) {
-      name = "ghostty";
-      src = ghosttySrc;
-      patchDir = root + "/packages/ghostty/patches";
-    };
-    baseSource = ghosttySrc;
+    ghosttySource = ghosttySrc;
   };
   ghosttyLibDir = "${libghosttyVt}/lib";
 

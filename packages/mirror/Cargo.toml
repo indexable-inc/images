@@ -11,8 +11,8 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
-# Fork mappings (lib/fork-packages.nix rendered by `nix eval --json`) and
-# flake.lock are consumed as plain JSON, so no nix evaluation happens here.
+# The mirror manifest (`.#lib.mirrorPackages` rendered by `nix eval --json`)
+# is consumed as plain JSON, so no nix evaluation happens here.
 serde_json.workspace = true
 tempfile.workspace = true
 toml_edit.workspace = true

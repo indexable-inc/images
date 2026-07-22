@@ -1,94 +1,35 @@
-//! End-to-end `upstream-pr --dry-run` against a real local git upstream: the
-//! closure/fetch/am/branch mechanism runs for real (real `git` on PATH via
-//! the workspace's packageTestInputs); only push + PR are out of scope by
-//! design of --dry-run. The nu predecessor never had this coverage.
+//! End-to-end `upstream-pr` against REAL local git repos in the megamerge
+//! layout: series read, subject resolution, closure reporting, the
+//! reason-of-record refusal, and the prepare-only branch push all run for
+//! real (real `git` on PATH via the workspace's packageTestInputs); only
+//! `gh pr create` is out of scope (behind --open, which the non-GitHub test
+//! exercises via its early bail).
 
 mod common;
 
 use std::fs;
-use std::path::Path;
-use std::process::Command;
 
-use common::run_bin;
+use common::{BODY, Fixture, SUBJECT, mapping_json, run_bin};
 
-fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+fn base_envs(fixture: &Fixture) -> Vec<(&'static str, String)> {
+    let mut envs = fixture.envs();
+    envs.push(("PATH", std::env::var("PATH").unwrap()));
+    envs
 }
 
 #[test]
-fn dry_run_applies_closure_onto_upstream_tip() {
+fn dry_run_resolves_closure_and_pushes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-
-    // A local "upstream" whose default branch is main, plus one commit on
-    // top exported as our fork patch (then dropped from upstream, so the
-    // patch is genuinely ours).
-    let upstream = root.join("upstream");
-    fs::create_dir(&upstream).unwrap();
-    git(&upstream, &["init", "--quiet", "-b", "main"]);
-    fs::write(upstream.join("README"), "hello\n").unwrap();
-    git(&upstream, &["add", "."]);
-    git(&upstream, &["commit", "--quiet", "-m", "base"]);
-    fs::write(upstream.join("README"), "hello widget\n").unwrap();
-    git(&upstream, &["add", "."]);
-    git(
-        &upstream,
-        &[
-            "commit",
-            "--quiet",
-            "-m",
-            "fakefix: repair widget\n\nThis explains why.",
-        ],
+    // Two chained patches: the second's contribution closure drags the
+    // first (its git parent), which the tool must warn about.
+    let fixture = Fixture::new(
+        root,
+        &[(SUBJECT, BODY), ("fakefix: also polish the widget", "Why.")],
     );
-    let patches = root.join("patches");
-    fs::create_dir(&patches).unwrap();
-    git(
-        &upstream,
-        &["format-patch", "-1", "-o", &patches.display().to_string()],
-    );
-    git(&upstream, &["reset", "--quiet", "--hard", "HEAD~1"]);
-    let patch_name = fs::read_dir(&patches)
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .file_name()
-        .into_string()
-        .unwrap();
-
-    fs::write(
-        patches.join("dag.json"),
-        format!(r#"{{"comment":"t","base":"x","nodes":[{{"patch":"{patch_name}","deps":[]}}]}}"#),
-    )
-    .unwrap();
     let mapping = root.join("mapping.json");
-    fs::write(
-        &mapping,
-        format!(
-            r#"[{{"name":"fake","input":"fake-src","url":"file://{}","patchDir":"patches","autoUpdate":false,"patches":{{}}}}]"#,
-            upstream.display()
-        ),
-    )
-    .unwrap();
+    fs::write(&mapping, mapping_json("fake", "{}")).unwrap();
 
-    let envs = [
-        ("PATH", std::env::var("PATH").unwrap()),
-        ("GIT_COMMITTER_NAME", "Test".to_owned()),
-        ("GIT_COMMITTER_EMAIL", "t@t".to_owned()),
-    ];
     let run = run_bin(
         env!("CARGO_BIN_EXE_upstream-pr"),
         &[
@@ -96,10 +37,10 @@ fn dry_run_applies_closure_onto_upstream_tip() {
             "--mapping",
             &mapping.display().to_string(),
             "fake",
-            &patch_name,
+            "polish",
         ],
         root,
-        &envs,
+        &base_envs(&fixture),
     );
     assert_eq!(
         run.status, 0,
@@ -107,32 +48,126 @@ fn dry_run_applies_closure_onto_upstream_tip() {
         run.stdout, run.stderr
     );
     assert!(
-        run.stdout.contains("upstream default branch is main"),
+        run.stdout
+            .contains("target patch 'fakefix: also polish the widget'"),
         "{}",
         run.stdout
     );
     assert!(
-        run.stdout.contains("applied 1 commit(s) cleanly"),
+        run.stdout.contains("drags 1 ancestor patch(es)"),
         "{}",
         run.stdout
     );
     assert!(
-        run.stdout
-            .contains("--dry-run: would push branch upstream-pr/fake/fakefix-repair-widget"),
+        run.stdout.contains("would push 2 commit(s)"),
         "{}",
         run.stdout
     );
+    // --dry-run must leave the fork repo untouched.
+    let branches = common::git(&fixture.fork, &["branch", "--list", "upstream/*"]);
+    assert!(branches.is_empty(), "dry run pushed a branch: {branches}");
+}
 
-    // The scratch repo named in the output survives for inspection.
-    let scratch = run
-        .stdout
-        .lines()
-        .find_map(|l| l.strip_prefix("upstream-pr: scratch repo left for inspection: "))
-        .unwrap()
-        .to_owned();
-    assert!(
-        Path::new(&scratch).join(".git").exists(),
-        "scratch repo missing: {scratch}"
+#[test]
+fn prepare_pushes_the_patch_commit_to_the_fork_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let fixture = Fixture::new(root, &[(SUBJECT, BODY)]);
+    let mapping = root.join("mapping.json");
+    fs::write(&mapping, mapping_json("fake", "{}")).unwrap();
+
+    let run = run_bin(
+        env!("CARGO_BIN_EXE_upstream-pr"),
+        &[
+            "--mapping",
+            &mapping.display().to_string(),
+            "fake",
+            "frobnicator",
+        ],
+        root,
+        &base_envs(&fixture),
     );
-    fs::remove_dir_all(&scratch).unwrap();
+    assert_eq!(
+        run.status, 0,
+        "prepare failed:\n{}\n{}",
+        run.stdout, run.stderr
+    );
+    // The branch on the fork repo points at the patch commit itself: its
+    // ancestry is the contribution.
+    let branch = "upstream/fakefix-repair-the-frobnicator-widget-alignment";
+    let pushed = common::git(&fixture.fork, &["rev-parse", &format!("refs/heads/{branch}")]);
+    assert_eq!(pushed, fixture.sha_of(SUBJECT), "{}", run.stdout);
+    assert!(
+        run.stdout.contains(&format!(
+            "compare/main...fakefork:fakerepo:{branch}?expand=1"
+        )),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains("prepare-only"), "{}", run.stdout);
+}
+
+/// The reason-of-record refusal runs before ANY push, in every mode: a
+/// body-less commit has nothing to say upstream.
+#[test]
+fn bodyless_commit_is_refused_before_any_push() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let fixture = Fixture::new(root, &[("fakefix: no reason given", "")]);
+    let mapping = root.join("mapping.json");
+    fs::write(&mapping, mapping_json("fake", "{}")).unwrap();
+
+    for mode in [&["--dry-run"][..], &[][..]] {
+        let mut args = mode.to_vec();
+        let mapping_arg = mapping.display().to_string();
+        args.extend(["--mapping", &mapping_arg, "fake", "no reason"]);
+        let run = run_bin(
+            env!("CARGO_BIN_EXE_upstream-pr"),
+            &args,
+            root,
+            &base_envs(&fixture),
+        );
+        assert_ne!(run.status, 0, "mode {mode:?} accepted a body-less commit");
+        let combined = format!("{}{}", run.stdout, run.stderr);
+        assert!(
+            combined.contains("no commit-message body"),
+            "mode {mode:?}: {combined}"
+        );
+        let branches = common::git(&fixture.fork, &["branch", "--list", "upstream/*"]);
+        assert!(
+            branches.is_empty(),
+            "mode {mode:?} pushed despite the refusal: {branches}"
+        );
+    }
+}
+
+/// `--open` is the gh path; a non-GitHub upstream (mesa on gitlab) has none,
+/// so the outward act bails up front instead of preparing a branch nothing
+/// can use.
+#[test]
+fn open_against_non_github_upstream_bails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let mapping = root.join("mapping.json");
+    fs::write(
+        &mapping,
+        r#"[{"name":"fake","input":"fake-src","forkRepo":"fakefork/fakerepo",
+  "upstreamUrl":"https://gitlab.example.org/fakeorg/fakerepo.git","patches":{}}]"#,
+    )
+    .unwrap();
+    let run = run_bin(
+        env!("CARGO_BIN_EXE_upstream-pr"),
+        &[
+            "--open",
+            "--mapping",
+            &mapping.display().to_string(),
+            "fake",
+            "anything",
+        ],
+        root,
+        &[("PATH", std::env::var("PATH").unwrap())],
+    );
+    assert_ne!(run.status, 0);
+    let combined = format!("{}{}", run.stdout, run.stderr);
+    assert!(combined.contains("not GitHub"), "{combined}");
 }

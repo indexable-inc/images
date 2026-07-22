@@ -1098,8 +1098,12 @@ in {
   home.file.".config/k9s/skins/main.yaml".source =
     yamlFormat.generate "andrewgazelka-k9s-main-skin.yaml" yamlStructured.k9s-skins-main;
 
-  # jj (Jujutsu)
-  home.file.".config/jj/config.toml".source = renderStructured "jj-config";
+  # jj (Jujutsu): out-of-store symlink into the personal config repo so jj
+  # settings (megamerge revset aliases and friends) are editable live, no
+  # rebuild between tweaks. Requested 2026-07-22 with the jj megamerge fork
+  # migration; the old structured jj-config entry moved into that file.
+  home.file.".config/jj/config.toml".source =
+    config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/.config/nix/jj/config.toml";
 
   # Tap
   home.file.".config/tap/config.toml".source = renderStructured "tap-config";
