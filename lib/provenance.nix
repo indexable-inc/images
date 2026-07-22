@@ -11,6 +11,11 @@
 #
 #   { file, line, rev, drv, source, definitions, settings }
 #
+# and for each environment-populating package option (`home.packages`,
+# `environment.systemPackages`) one entry per element pname (#3942):
+#
+#   { file, line, rev, version, definitions }
+#
 # `file:line` is the most specific definition site: per-key
 # `builtins.unsafeGetAttrPos` when the attrset was written literally,
 # degrading to the defining module file (line null) for computed attrs
@@ -106,6 +111,63 @@
               // sourcePayload (source name value))
           ]
       ) (builtins.attrNames cfg);
+
+  # Walk one listOf-package option into raw package entries: one
+  # {name, version, site} per (definition, element). The position candidate
+  # is the element's `meta.position` (nixpkgs mkDerivation records
+  # `unsafeGetAttrPos` of a literal attr there), which `site` trusts only
+  # when it lands in the defining module file, i.e. the derivation was
+  # written literally in that module. Packages pulled from nixpkgs or an
+  # overlay carry positions pointing into whatever code constructed them,
+  # so they degrade to the defining module file with no line, exactly like
+  # computed attrs in the file walker.
+  walkPackages = options: optionPath: let
+    option = lib.attrByPath optionPath null options;
+    metaPos = element: let
+      position = element.meta.position or null;
+      parts =
+        if builtins.isString position
+        then builtins.match "(.*):([0-9]+)" position
+        else null;
+    in
+      if parts == null
+      then null
+      else {
+        file = builtins.head parts;
+        line = lib.toInt (builtins.elemAt parts 1);
+      };
+  in
+    if !(builtins.isAttrs option) || !(option ? definitionsWithLocations)
+    then []
+    else
+      lib.concatMap (
+        def:
+          if !(builtins.isList def.value)
+          then []
+          else
+            lib.concatMap (
+              element:
+                lib.optional (lib.isDerivation element && (element ? pname || element ? name)) {
+                  name = discard (lib.getName element);
+                  version = let
+                    version = element.version or null;
+                  in
+                    if version == null
+                    then null
+                    else discard version;
+                  site = site def.file (metaPos element);
+                }
+            )
+            def.value
+      )
+      option.definitionsWithLocations;
+
+  # The primary definition site of a merged entry: the most specific
+  # line-bearing site wins, scanning later (more specific) definitions
+  # first; a chain with no line-bearing site keeps its first file.
+  primarySite = sites:
+    lib.findFirst (site: site.line != null) (lib.head sites)
+    (lib.reverseList sites);
 
   # Manifest keys are $HOME-relative for user files and absolute for system
   # files, matching what `whence` reconstructs from its argument.
@@ -237,14 +299,21 @@ in {
       enabled = _value: true;
     };
 
+  # Package collectors (#3942): one raw entry per (definition site, list
+  # element) of the environment-populating package option.
+  homePackageCollectors = {options}: walkPackages options ["home" "packages"];
+  darwinPackageCollectors = {options}: walkPackages options ["environment" "systemPackages"];
+
   # Fold collector entries into the manifest attrset:
   #   { version; files.<deployed path> = { file; line; rev; drv; source;
-  #     definitions; settings; }; }
+  #     definitions; settings; };
+  #     packages.<pname> = { file; line; rev; version; definitions; }; }
   # `rev` is the configuration flake's revision, copied onto every entry so
   # `whence` prints which checkout defined a file.
   manifestFor = {
     options,
     entries,
+    packages ? [],
     rev ? null,
   }: let
     settingsList = settingsIndex options;
@@ -255,9 +324,7 @@ in {
       ) {}
       entries;
     finish = entry: let
-      primary =
-        lib.findFirst (site: site.line != null) (lib.head entry.sites)
-        (lib.reverseList entry.sites);
+      primary = primarySite entry.sites;
       linked =
         lib.filter (
           chain: lib.any (site: lib.elem site.file chain.declarations) entry.sites
@@ -270,8 +337,43 @@ in {
       definitions = entry.sites;
       settings = map (chain: {inherit (chain) option definitions;}) linked;
     };
+    # A pname defined by several modules (or twice in one) collapses into
+    # one entry carrying every site; the latest non-null version wins, same
+    # tiebreak as mergeEntry's source/drv.
+    byName =
+      lib.foldl' (
+        acc: entry: let
+          prev = acc.${entry.name} or null;
+        in
+          acc
+          // {
+            ${entry.name} =
+              if prev == null
+              then {
+                inherit (entry) version;
+                sites = [entry.site];
+              }
+              else {
+                version =
+                  if entry.version != null
+                  then entry.version
+                  else prev.version;
+                sites = lib.unique (prev.sites ++ [entry.site]);
+              };
+          }
+      ) {}
+      packages;
+    finishPackage = entry: let
+      primary = primarySite entry.sites;
+    in {
+      inherit (primary) file line;
+      inherit rev;
+      inherit (entry) version;
+      definitions = entry.sites;
+    };
   in {
     version = 1;
     files = lib.mapAttrs (_path: finish) byPath;
+    packages = lib.mapAttrs (_name: finishPackage) byName;
   };
 }

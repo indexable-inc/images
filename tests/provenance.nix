@@ -3,9 +3,10 @@
 # modules/home/provenance.nix and asserts the manifest links deployed paths
 # back to their defining nix sites: a literal `home.file` entry carries the
 # fixture's file:line, an `xdg.configFile` entry records both the user site
-# and the home-manager wiring hop, and a `programs.htop.settings`-driven
-# file records the settings chain. Eval-only: nothing from the evaluated
-# configuration is built.
+# and the home-manager wiring hop, a `programs.htop.settings`-driven
+# file records the settings chain, and `home.packages` elements land under
+# the manifest's `packages` key with the file walker's granularity (#3942).
+# Eval-only: nothing from the evaluated configuration is built.
 {
   lib,
   pkgs,
@@ -35,7 +36,7 @@
       ];
     }).config;
 
-  inherit (hmConfig.provenance.entries) files;
+  inherit (hmConfig.provenance.entries) files packages;
 
   fixtureSuffix = "fixtures/provenance-home.nix";
   siteInFixture = site: lib.hasSuffix fixtureSuffix site.file && site.line != null;
@@ -51,6 +52,10 @@
     if keys == []
     then null
     else files.${builtins.head keys};
+
+  helloPkg = packages.hello or null;
+  inlinePkg = packages.provenance-inline or null;
+  htopPkg = packages.htop or null;
 
   assertions = [
     {
@@ -98,6 +103,26 @@
     {
       assertion = lib.hasInfix "provenance.json" hmConfig.home.extraBuilderCommands;
       message = "enabling provenance should link provenance.json into the generation builder";
+    }
+    {
+      assertion =
+        helloPkg
+        != null
+        && lib.hasSuffix fixtureSuffix helloPkg.file
+        && helloPkg.line == null;
+      message = "a nixpkgs package should degrade to the defining module file with no line";
+    }
+    {
+      assertion = helloPkg != null && helloPkg.version == pkgs.hello.version && helloPkg.rev == testRev;
+      message = "package entries should carry the element version and the configured flake rev";
+    }
+    {
+      assertion = inlinePkg != null && siteInFixture inlinePkg && inlinePkg.version == "1";
+      message = "an inline literal derivation should resolve to its fixture site (file:line)";
+    }
+    {
+      assertion = htopPkg != null && !(lib.hasSuffix fixtureSuffix htopPkg.file);
+      message = "a module-installed package (programs.htop) should attribute to the wiring module, not the fixture";
     }
   ];
 

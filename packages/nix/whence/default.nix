@@ -1,15 +1,20 @@
-# `whence <path>`: deployed config file -> defining nix source line (#2416).
+# `whence <path|pname>`: deployed config file or installed package ->
+# defining nix source line (#2416, #3942).
 #
 # Reads the provenance manifest that modules/home/provenance.nix and
 # modules/darwin/provenance.nix bake into each generation (deployed path ->
-# { file, line, rev, drv, source, definitions, settings }), so the answer
-# comes from the live profile with zero eval. A path no manifest knows about
-# falls back to `nix-store -q --deriver` on the resolved store path.
+# { file, line, rev, drv, source, definitions, settings } under `files`,
+# pname -> { file, line, rev, version, definitions } under `packages`), so
+# the answer comes from the live profile with zero eval. The argument is
+# sniffed, not flagged: an existing path is looked up as a file; anything
+# else tries the package namespace first, then the file keys. A query no
+# manifest knows about falls back to `nix-store -q --deriver` on the
+# resolved store path.
 {writeNushellApplication}:
 writeNushellApplication {
   name = "whence";
   meta = {
-    description = "Deployed config file -> defining nix source line, from the generation's provenance manifest";
+    description = "Deployed config file or installed package -> defining nix source line, from the generation's provenance manifest";
     mainProgram = "whence";
   };
   # No pinned nix in runtimeInputs: the fallback `nix-store -q --deriver`
@@ -73,6 +78,15 @@ writeNushellApplication {
       }
     }
 
+    # A package entry prints like a file entry, titled by pname (plus
+    # version when the manifest recorded one); print-entry's optional
+    # accessors skip the file-only fields a package entry lacks.
+    def print-package [name: string, entry: record] {
+      let version = ($entry.version? | default null)
+      let title = if $version == null { $name } else { $"($name) ($version)" }
+      print-entry $title $entry
+    }
+
     # Unmanifested store path: the store's own deriver link is the only
     # provenance left.
     def fallback [resolved: string] {
@@ -87,13 +101,28 @@ writeNushellApplication {
       }
     }
 
-    def main [path: string] {
+    def main [target: string] {
       # A trailing slash on HOME would make the ($home)/ prefix tests below
       # miss every home file.
       let home = ($env.HOME | str trim --right --char '/')
       # Logical absolute path (no symlink resolution): manifest keys are
       # deployment targets, which are themselves symlinks into the store.
-      let logical = ($path | path expand --no-symlink)
+      let logical = ($target | path expand --no-symlink)
+
+      # An argument that is not an existing path is sniffed as a package
+      # name first (#3942); an existing path always means the file, so a
+      # package named like a file in the cwd loses to the file.
+      if not ($logical | path exists) {
+        for manifest_path in (manifests) {
+          let packages = (open $manifest_path | get packages? | default {} | transpose key entry)
+          let hit = ($packages | where {|row| $row.key == $target })
+          if ($hit | is-not-empty) {
+            let row = ($hit | first)
+            print-package $row.key $row.entry
+            return
+          }
+        }
+      }
       # Fully resolved payload, for matching by store path and the fallback.
       let resolved = (if ($logical | path exists) { $logical | path expand } else { $logical })
 

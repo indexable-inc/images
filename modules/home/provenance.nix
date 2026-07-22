@@ -6,7 +6,8 @@
 # symlinks home-manager deploys). This module bakes the backlink into the
 # generation itself: `lib/provenance.nix` walks the evaluated configuration
 # (`home.file`, `xdg.configFile`, `launchd.agents`, plus linked
-# `programs.*.settings` sites) and the rendered manifest is linked into the
+# `programs.*.settings` sites, and `home.packages` under a `packages` key,
+# #3942) and the rendered manifest is linked into the
 # activation package, so the live profile always carries
 # `~/.local/state/nix/profiles/home-manager/provenance.json` for its own
 # generation and old generations keep theirs. Query time is a JSON read
@@ -56,6 +57,7 @@
             inherit options;
             inherit (cfg) rev;
             entries = provenance.homeCollectors {inherit options config;};
+            packages = provenance.homePackageCollectors {inherit options;};
           };
           description = "Rendered manifest attrset (deployed path -> provenance).";
         };

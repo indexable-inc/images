@@ -1,6 +1,7 @@
 # Per-generation eval-provenance manifest for nix-darwin (#2415): the
 # darwin counterpart of modules/home/provenance.nix, covering the system
-# surfaces (`environment.etc`, `launchd.agents`/`daemons`). The rendered
+# surfaces (`environment.etc`, `launchd.agents`/`daemons`, and
+# `environment.systemPackages` under a `packages` key, #3942). The rendered
 # manifest is linked into the system derivation, so
 # `/run/current-system/provenance.json` always describes the running
 # generation and old generations keep theirs; `whence </etc/...>` reads it
@@ -50,6 +51,7 @@
             inherit options;
             inherit (cfg) rev;
             entries = provenance.darwinCollectors {inherit options config;};
+            packages = provenance.darwinPackageCollectors {inherit options;};
           };
           description = "Rendered manifest attrset (deployed path -> provenance).";
         };
