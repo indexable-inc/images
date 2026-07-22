@@ -5,7 +5,8 @@ to set when driving `ix`, its SDKs, and the search and MCP tools - not an
 exhaustive dump. Many more internal, computed, and wrapper-only variables exist
 in the codebase. To see the full set, grep the repos (for example
 `rg "env::var|os\.environ|process\.env|env = \"IX_"`). Everything below was
-verified by opening the source that reads it; each row cites the repo-relative path.
+verified by opening the source that reads it; each row cites the path (or the
+repo, for the SDKs whose source lives in the private ix monorepo) that reads it.
 
 ## CLI and auth
 
@@ -16,10 +17,10 @@ URL the same way. See [cli.md](cli.md).
 
 | var | meaning | default | source path |
 | --- | --- | --- | --- |
-| `IX_TOKEN` | API bearer token. Required to talk to the ix platform. | none | ix CLI (ix monorepo), `packages/sdk/typescript/src/index.ts` |
-| `IX_API_KEY` | Token fallback in the TS SDK if `IX_TOKEN` is unset. | none | `packages/sdk/typescript/src/index.ts` |
-| `IX_API_BASE_URL` | API base URL (TS SDK). | `https://api.ix.dev` | `packages/sdk/typescript/src/index.ts` |
-| `IX_REGION` | Pin VMs to a region instead of letting the API pick. | `us-west-1` (Python); first region the API returns (TS) | `packages/sdk/python/ix_sdk/__init__.py`, `packages/sdk/typescript/src/index.ts` |
+| `IX_TOKEN` | API bearer token. Required to talk to the ix platform. | none | ix CLI and TS SDK (ix monorepo) |
+| `IX_API_KEY` | Token fallback in the TS SDK if `IX_TOKEN` is unset. | none | TS SDK, npm `@indexable/sdk` (ix monorepo) |
+| `IX_API_BASE_URL` | API base URL (TS SDK). | `https://api.ix.dev` | TS SDK, npm `@indexable/sdk` (ix monorepo) |
+| `IX_REGION` | Pin VMs to a region instead of letting the API pick. | `us-west-1` (Python); first region the API returns (TS) | Python and TS SDKs (ix monorepo) |
 | `IX_PROFILE` | Config profile to use (`--profile`). | none | ix CLI (ix monorepo) |
 | `IX_DEBUG` | Enable CLI debug tracing (`--debug`). Truthy value. | off | ix CLI (ix monorepo) |
 | `IX_ADMIN` | Use admin privileges, bypassing ownership checks (`--admin`). Truthy value. | off | ix CLI (ix monorepo) |

@@ -64,7 +64,10 @@ ignore = [
 # builders and host-file walk through unibind-test-support; measured
 # 0.2941%. The residual per-export class shells (napi/pyo3 need concrete
 # classes) stay in the scan.
+# 2026-07-22 (#4011): lowered 0.30 -> 0.25. The hand-copied TypeScript/Python
+# SDK source mirror (packages/sdk/{typescript,python}) is deleted — distribution
+# is artifact-only and the mirror held the SDK clone cluster; measured 0.2497%.
 [budget]
-global_pct = 0.30
+global_pct = 0.25
 diff_pct = 0.0
 diff_base = "origin/main"
