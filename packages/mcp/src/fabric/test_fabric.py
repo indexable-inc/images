@@ -836,7 +836,7 @@ def test_reconcile_weave_unreachable_raises_fabric_error(monkeypatch: pytest.Mon
 
 
 def test_run_spawn_survives_unreachable_weave(
-    monkeypatch: pytest.MonkeyPatch, _spool_home: Path
+    monkeypatch: pytest.MonkeyPatch, spool_home: Path
 ) -> None:
     """The other half of the boundary (index#3419): spawn-path recording rides
     the durable local spool, so an unreachable server never fails or blocks
@@ -851,7 +851,7 @@ def test_run_spawn_survives_unreachable_weave(
         return await handle.wait()
 
     assert run(main()) == 5
-    segments = list(_spool_home.glob("w-*.jsonl"))
+    segments = list(spool_home.glob("w-*.jsonl"))
     assert segments, "intent must be durable on disk while undelivered"
 
 
@@ -859,7 +859,7 @@ def test_run_spawn_survives_unreachable_weave(
 
 
 def test_session_spawns_and_records_while_weave_down(
-    monkeypatch: pytest.MonkeyPatch, _spool_home: Path
+    monkeypatch: pytest.MonkeyPatch, spool_home: Path
 ) -> None:
     """index#3418 invariant: with weave unreachable, the submitted intent is
     fsync'd to the local spool BEFORE the SDK subprocess spawns, the session
@@ -896,7 +896,7 @@ def test_session_spawns_and_records_while_weave_down(
     # append order, prompt payload included.
     assert fake.queries == ["do it"]
     assert journal.facts == []
-    segments = list(_spool_home.glob("w-*.jsonl"))
+    segments = list(spool_home.glob("w-*.jsonl"))
     assert len(segments) == 1
     lines = [json.loads(line) for line in segments[0].read_text().splitlines() if line]
     attrs = [item["fact"]["attr"] for item in lines if "fact" in item]
