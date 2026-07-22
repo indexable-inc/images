@@ -73,6 +73,13 @@ pub const SIGNIFICANT: &[&str] = &[
     "switch_case",
     "try_expression",
     "try_statement",
+    // Elixir (tree-sitter-elixir has no function_* kinds: a def is a `call`
+    // node, far too broad to gate on). The bodies carry the duplication:
+    // `do_block` for def/defmodule/case bodies, `stab_clause` for fn and
+    // case clauses (the Elixir match_arm), `anonymous_function` for fn.
+    "do_block",
+    "stab_clause",
+    "anonymous_function",
 ];
 
 #[must_use]

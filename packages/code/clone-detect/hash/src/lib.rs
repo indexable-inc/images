@@ -1,3 +1,4 @@
+mod canon;
 mod extract;
 pub mod kinds;
 mod normalize;

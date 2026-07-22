@@ -1,0 +1,17 @@
+---
+id: clone-detect-elixir-gate
+postedAt: 2026-07-21T15:30:00-07:00
+title: "The clone ratchet now actually gates Elixir"
+tags: [clone-detect, elixir, lint, quality]
+links:
+  - label: kinds.rs
+    href: https://github.com/indexable-inc/index/tree/main/packages/code/clone-detect/hash/src/kinds.rs
+  - label: issue 3886
+    href: https://github.com/indexable-inc/index/issues/3886
+---
+
+While porting ExDNA-style canonicalization into clone-detect (#3878), a gap surfaced: the scanner parses `.ex/.exs` files, but no tree-sitter-elixir node kind was in the `SIGNIFICANT` set, so `significant_nodes` returned nothing and the duplication ratchet silently skipped every Elixir file (#3886).
+
+tree-sitter-elixir has no `function_item`-style kinds; a `def` is just a `call` node, far too broad to gate on. The gate now hangs off the bodies instead: `do_block` (def/defmodule/case bodies), `stab_clause` (fn and case clauses, the Elixir `match_arm`), and `anonymous_function`.
+
+Gating Elixir revealed two pre-existing clone groups, kept in the scan as cleanup pressure rather than ignored: identical test scaffolding copied across the three NIF-binding suites (plumb, tui-ex, unibind conformance; 26 lines, exact) and near-identical `mix.exs` boilerplate between the gmail and tui Elixir packages (19 lines, type-3). The whole-tree measure lands at 0.3677%, so the `clone.toml` ceiling ratchets down from the drifted 0.45 to 0.37, just above measured, per the file's own convention.

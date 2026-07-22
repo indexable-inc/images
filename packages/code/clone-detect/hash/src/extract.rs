@@ -2,6 +2,7 @@ use std::hash::{Hash, Hasher};
 
 use ast_merge_ast::Tree;
 pub use ast_merge_ast::compute;
+use ast_merge_langs::Lang;
 use rustc_hash::FxHasher;
 
 use crate::{
@@ -51,15 +52,20 @@ pub struct Dual {
 }
 
 #[must_use]
-pub fn dual(tree: &Tree, node: tree_sitter::Node<'_>) -> Dual {
+pub fn dual(tree: &Tree, lang: Lang, node: tree_sitter::Node<'_>) -> Dual {
     Dual {
         content: compute(tree, node),
-        normalized: normalize::hash(tree, node),
+        normalized: normalize::hash(tree, lang, node),
     }
 }
 
 #[must_use]
-pub fn significant_nodes(tree: &Tree, min_lines: usize, min_nodes: usize) -> Vec<NodeInfo> {
+pub fn significant_nodes(
+    tree: &Tree,
+    lang: Lang,
+    min_lines: usize,
+    min_nodes: usize,
+) -> Vec<NodeInfo> {
     let mut results = Vec::new();
 
     for node in tree.preorder() {
@@ -84,9 +90,9 @@ pub fn significant_nodes(tree: &Tree, min_lines: usize, min_nodes: usize) -> Vec
         let Dual {
             content: content_hash,
             normalized: normalized_hash,
-        } = dual(tree, node);
+        } = dual(tree, lang, node);
 
-        let children = collect_children(tree, node);
+        let children = collect_children(tree, lang, node);
         let subtree_features = collect_subtree_features(tree, node);
 
         results.push(NodeInfo {
@@ -107,13 +113,13 @@ pub fn significant_nodes(tree: &Tree, min_lines: usize, min_nodes: usize) -> Vec
 
 /// Collect detailed info for each direct named child of a node.
 /// Preserves ordering for statement-sequence detection.
-fn collect_children(tree: &Tree, node: tree_sitter::Node<'_>) -> Vec<ChildInfo> {
+fn collect_children(tree: &Tree, lang: Lang, node: tree_sitter::Node<'_>) -> Vec<ChildInfo> {
     let mut children = Vec::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         children.push(ChildInfo {
             kind: child.kind(),
-            normalized_hash: normalize::hash(tree, child),
+            normalized_hash: normalize::hash(tree, lang, child),
             byte_range: child.byte_range(),
             start_line: child.start_position().row,
             end_line: child.end_position().row,
@@ -128,6 +134,11 @@ fn collect_children(tree: &Tree, node: tree_sitter::Node<'_>) -> Vec<ChildInfo> 
 /// (kind + normalized leaf content). Then adds bigrams of consecutive tokens
 /// for structural context. The combined unigram+bigram set captures both
 /// local node types and parent-child/sibling relationships.
+///
+/// Stays verbatim (no per-language canonical views): the features feed the
+/// fuzzy Type-3 similarity metric, where a dropped pipe operator or reordered
+/// keyword pair shifts a handful of unigrams/bigrams instead of gating an
+/// exact hash match.
 ///
 /// Complexity: O(n) where n = number of nodes in subtree.
 fn collect_subtree_features(tree: &Tree, node: tree_sitter::Node<'_>) -> Vec<u64> {

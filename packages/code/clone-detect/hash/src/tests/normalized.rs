@@ -1,7 +1,16 @@
-use super::helpers::{pair_hashes, parse_js, parse_python, parse_rust};
+use ast_merge_langs::Lang;
+
+use super::helpers::{parse, parse_rust};
 use crate::{Dual, dual, hash as normalized};
 
-type Parser = fn(&str) -> ast_merge_ast::Tree;
+fn assert_hash_relations(cases: &[(&str, Lang, &str, &str, bool)]) {
+    for &(name, lang, left, right, equal) in cases {
+        let (left, right) = (parse(lang, left), parse(lang, right));
+        let left = normalized(&left, lang, left.root_node());
+        let right = normalized(&right, lang, right.root_node());
+        assert_eq!(left == right, equal, "{name}");
+    }
+}
 
 #[test]
 #[allow(
@@ -9,80 +18,80 @@ type Parser = fn(&str) -> ast_merge_ast::Tree;
     reason = "the cases form one readable normalization behavior table"
 )]
 fn normalized_hash_relations() {
-    let cases: &[(&str, Parser, &str, &str, bool)] = &[
+    assert_hash_relations(&[
         (
             "renamed functions",
-            parse_rust,
+            Lang::Rust,
             "fn foo() { let x = 1; }",
             "fn bar() { let y = 1; }",
             true,
         ),
         (
             "different structure",
-            parse_rust,
+            Lang::Rust,
             "fn foo() { let x = 1; }",
             "fn foo() { let x = 1; let y = 2; }",
             false,
         ),
         (
             "swapped identifiers",
-            parse_rust,
+            Lang::Rust,
             "fn f() { a + b }",
             "fn f() { b + a }",
             true,
         ),
         (
             "different operators",
-            parse_rust,
+            Lang::Rust,
             "fn f() { a + b }",
             "fn f() { a - b }",
             false,
         ),
         (
             "inconsistent identifier mapping",
-            parse_rust,
+            Lang::Rust,
             "fn f() { x + x }",
             "fn f() { x + y }",
             false,
         ),
         (
             "different argument counts",
-            parse_rust,
+            Lang::Rust,
             "fn f(a: i32) { a }",
             "fn f(a: i32, b: i32) { a }",
             false,
         ),
         (
             "different types",
-            parse_rust,
+            Lang::Rust,
             "fn f(a: i32) { a }",
             "fn f(a: i64) { a }",
             false,
         ),
         (
             "JavaScript rename",
-            parse_js,
+            Lang::JavaScript,
             "function add(a, b) { return a + b; }",
             "function sum(x, y) { return x + y; }",
             true,
         ),
         (
             "Python rename",
-            parse_python,
+            Lang::Python,
             "def add(a, b):\n    return a + b",
             "def sum(x, y):\n    return x + y",
             true,
         ),
         (
             "closure rename",
-            parse_rust,
+            Lang::Rust,
             "fn f() { let add = |a, b| a + b; }",
             "fn g() { let sum = |x, y| x + y; }",
             true,
         ),
         (
             "complex function rename",
-            parse_rust,
+            Lang::Rust,
             r"fn calculate(a: i32, b: i32) -> i32 {
                 let sum = a + b;
                 let product = a * b;
@@ -97,25 +106,120 @@ fn normalized_hash_relations() {
         ),
         (
             "nested function rename",
-            parse_rust,
+            Lang::Rust,
             "fn outer() { fn inner() { let x = 1; } }",
             "fn wrapper() { fn nested() { let y = 1; } }",
             true,
         ),
         (
             "recursive function rename",
-            parse_rust,
+            Lang::Rust,
             "fn factorial(n: i32) -> i32 { if n <= 1 { 1 } else { n * factorial(n - 1) } }",
             "fn fact(x: i32) -> i32 { if x <= 1 { 1 } else { x * fact(x - 1) } }",
             true,
         ),
-    ];
+    ]);
+}
 
-    for &(name, parse, left, right, equal) in cases {
-        let pair = pair_hashes(parse, normalized, left, right);
-        let (left, right) = (pair.left, pair.right);
-        assert_eq!(left == right, equal, "{name}");
-    }
+/// Per-language canonical views (`canon`): Elixir pipes hash like plain
+/// calls, and keyword/struct-literal field order is hashed order-insensitively
+/// (issue #3878).
+#[test]
+fn canonicalized_hash_relations() {
+    assert_hash_relations(&[
+        (
+            "elixir pipe hashes like plain call",
+            Lang::Elixir,
+            "x |> f(a)",
+            "f(x, a)",
+            true,
+        ),
+        (
+            "elixir bare pipe stage",
+            Lang::Elixir,
+            "x |> f",
+            "f(x)",
+            true,
+        ),
+        (
+            "elixir pipe chain",
+            Lang::Elixir,
+            "x |> f(a) |> g(b)",
+            "g(f(x, a), b)",
+            true,
+        ),
+        (
+            "elixir qualified pipe",
+            Lang::Elixir,
+            "x |> Mod.f(a)",
+            "Mod.f(x, a)",
+            true,
+        ),
+        (
+            "elixir map key order",
+            Lang::Elixir,
+            "%{name: x, age: y}",
+            "%{age: y, name: x}",
+            true,
+        ),
+        (
+            "elixir struct field order",
+            Lang::Elixir,
+            "%User{name: x, age: y}",
+            "%User{age: y, name: x}",
+            true,
+        ),
+        (
+            // Ordered data: only map/struct keyword pairs sort (#3885 review).
+            "elixir trailing keyword arguments stay ordered",
+            Lang::Elixir,
+            "f(x, a: 1, b: 2)",
+            "f(x, b: 2, a: 1)",
+            false,
+        ),
+        (
+            "elixir bare keyword lists stay ordered",
+            Lang::Elixir,
+            "[a: x, b: y]",
+            "[b: y, a: x]",
+            false,
+        ),
+        (
+            "rust struct literal field order",
+            Lang::Rust,
+            "fn f() { let u = User { name: 1, age: 2 }; }",
+            "fn f() { let u = User { age: 2, name: 1 }; }",
+            true,
+        ),
+        (
+            "elixir pipe arity still distinguishes",
+            Lang::Elixir,
+            "x |> f(a)",
+            "f(x)",
+            false,
+        ),
+        (
+            "elixir different keys still distinguish",
+            Lang::Elixir,
+            "%{name: x, age: y}",
+            "%{name: x, size: y}",
+            false,
+        ),
+        (
+            "elixir keyword vs positional argument",
+            Lang::Elixir,
+            "f(x, a: 1)",
+            "f(x, 1)",
+            false,
+        ),
+        (
+            "rust different field values still distinguish",
+            Lang::Rust,
+            "fn f() { let u = User { name: a, age: b }; }",
+            "fn f() { let u = User { name: a.c, age: b }; }",
+            false,
+        ),
+    ]);
 }
 
 #[test]
@@ -124,7 +228,7 @@ fn dual_returns_both() {
     let Dual {
         content,
         normalized,
-    } = dual(&tree, tree.root_node());
+    } = dual(&tree, Lang::Rust, tree.root_node());
     assert_ne!(content, 0);
     assert_ne!(normalized, 0);
 }
@@ -133,8 +237,8 @@ fn dual_returns_both() {
 fn dual_separates_content_from_normalized_identity() {
     let left = parse_rust("fn foo() { let x = 1; }");
     let right = parse_rust("fn bar() { let y = 1; }");
-    let left = dual(&left, left.root_node());
-    let right = dual(&right, right.root_node());
+    let left = dual(&left, Lang::Rust, left.root_node());
+    let right = dual(&right, Lang::Rust, right.root_node());
     assert_ne!(left.content, right.content);
     assert_eq!(left.normalized, right.normalized);
 }
@@ -142,14 +246,14 @@ fn dual_separates_content_from_normalized_identity() {
 #[test]
 fn empty_function_has_a_hash() {
     let tree = parse_rust("fn empty() {}");
-    assert_ne!(normalized(&tree, tree.root_node()), 0);
+    assert_ne!(normalized(&tree, Lang::Rust, tree.root_node()), 0);
 }
 
 #[test]
 fn normalized_hash_is_deterministic() {
     let tree = parse_rust("fn foo() { let x = 1; let y = 2; x + y }");
-    let expected = normalized(&tree, tree.root_node());
+    let expected = normalized(&tree, Lang::Rust, tree.root_node());
     for _ in 0..2 {
-        assert_eq!(normalized(&tree, tree.root_node()), expected);
+        assert_eq!(normalized(&tree, Lang::Rust, tree.root_node()), expected);
     }
 }
