@@ -131,7 +131,10 @@ def texts(items: list[str]) -> npt.NDArray[np.float32]:
         show_progress_bar=False,
         normalize_embeddings=True,
     )
-    return np.asarray(vectors, dtype=np.float32)
+    # Bind through the annotation: sentence-transformers' encode returns Any,
+    # which zuban --strict rejects as a bare return value.
+    array: npt.NDArray[np.float32] = np.asarray(vectors, dtype=np.float32)
+    return array
 
 
 # ---------------------------------------------------------------------------

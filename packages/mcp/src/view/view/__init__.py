@@ -174,7 +174,8 @@ def _code_css() -> str:
     sel = f".{_CODE_CLASS}"
 
     def token_rules(style_name: str) -> dict[str, str]:
-        defs = HtmlFormatter(style=style_name, cssclass=_CODE_CLASS).get_style_defs(sel)
+        # Pygments ships partial stubs; get_style_defs is untyped upstream.
+        defs = HtmlFormatter(style=style_name, cssclass=_CODE_CLASS).get_style_defs(sel)  # type: ignore[no-untyped-call]
         rules: dict[str, str] = {}
         for line in defs.splitlines():
             stripped = line.strip()
@@ -514,12 +515,13 @@ def _highlight(text: str, lang: str | None, start_line: int) -> str:
     lexer = None
     if lang:
         try:
-            lexer = get_lexer_by_name(lang)
+            # Pygments ships partial stubs; the lexer helpers are untyped upstream.
+            lexer = get_lexer_by_name(lang)  # type: ignore[no-untyped-call]
         except Exception:
             lexer = None
     if lexer is None:
         try:
-            lexer = guess_lexer(text)
+            lexer = guess_lexer(text)  # type: ignore[no-untyped-call]
         except Exception:
             lexer = TextLexer()
     # Class-based (not inline) tokens so the palette can flip with the OS theme;
@@ -532,7 +534,7 @@ def _highlight(text: str, lang: str | None, start_line: int) -> str:
         linenostart=start_line,
         nowrap=False,
     )
-    return str(highlight(text, lexer, formatter))
+    return str(highlight(text, lexer, formatter))  # type: ignore[no-untyped-call]
 
 
 # The structured-view mime the dashboard's pane bridge republishes as a native
