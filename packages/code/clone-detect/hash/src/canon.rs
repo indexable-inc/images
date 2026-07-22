@@ -9,9 +9,10 @@
 //!   Elixir call is itself viewed as callee + flattened arguments so the two
 //!   spellings meet in the middle (which also unifies `f(x, a)` with the
 //!   paren-less `f x, a`).
-//! - Elixir keyword pairs hash order-insensitively: the `keywords` node
-//!   behind map/struct literals, keyword lists, and trailing keyword
-//!   arguments sorts its pairs by key text.
+//! - Elixir keyword pairs inside map/struct literals hash
+//!   order-insensitively. Bare keyword lists and trailing keyword arguments
+//!   stay verbatim: they are ordered data (pattern matches and
+//!   `Keyword.pop_first/2` consume them positionally).
 //! - Rust struct literals likewise: `field_initializer_list` sorts its
 //!   initializers by field name.
 
@@ -45,10 +46,21 @@ pub fn view<'t>(lang: Lang, tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
 fn elixir<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
     match node.kind() {
         "binary_operator" => pipe(tree, node),
-        "call" => call(node),
-        "keywords" => Some(sorted_by_key(tree, node, "key")),
+        "call" => {
+            let (target, args) = call_parts(node)?;
+            Some(View::Call { target, args })
+        }
+        "keywords" => keywords(tree, node),
         _ => None,
     }
+}
+
+/// Keyword pairs sort only inside map/struct literals (`map_content`
+/// parent), where order is semantically irrelevant. A `list` or `arguments`
+/// parent means an ordered keyword list, hashed verbatim so reordered
+/// pipelines and option lists stay distinct (#3885 review).
+fn keywords<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
+    (node.parent()?.kind() == "map_content").then(|| sorted_by_key(tree, node, "key"))
 }
 
 /// `x |> f(a)` views as `f(x, a)`; a bare stage `x |> f` views as `f(x)`.
@@ -63,9 +75,7 @@ fn pipe<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
     let rhs = node.child_by_field_name("right")?;
 
     if rhs.kind() == "call" {
-        let View::Call { target, mut args } = call(rhs)? else {
-            return None;
-        };
+        let (target, mut args) = call_parts(rhs)?;
         args.insert(0, lhs);
         return Some(View::Call { target, args });
     }
@@ -78,7 +88,7 @@ fn pipe<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
 /// Flatten an Elixir `call` into callee + arguments: children of the
 /// `arguments` node are spliced in directly, and any trailing `do_block`
 /// rides along as a final argument.
-fn call(node: Node<'_>) -> Option<View<'_>> {
+fn call_parts(node: Node<'_>) -> Option<(Node<'_>, Vec<Node<'_>>)> {
     let target = node.child_by_field_name("target")?;
     let mut args = Vec::new();
     let mut cursor = node.walk();
@@ -93,7 +103,7 @@ fn call(node: Node<'_>) -> Option<View<'_>> {
             args.push(child);
         }
     }
-    Some(View::Call { target, args })
+    Some((target, args))
 }
 
 fn rust<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
@@ -104,6 +114,14 @@ fn rust<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
 /// back to the child's own text (Rust shorthand and base initializers have
 /// no `field` child). The sort is stable, so duplicate keys keep their
 /// source order.
+///
+/// The sort key is raw source text, evaluated before identifier
+/// renumbering, which trades away one Type-II case on purpose: a clone that
+/// consistently renames the keys themselves (two different Rust struct
+/// types) can reorder under sorting and hash apart. That is a missed clone,
+/// never a false match; sorting on normalized keys would need a renumbering
+/// pre-pass whose numbering itself depends on traversal order (#3885
+/// review).
 fn sorted_by_key<'t>(tree: &Tree, node: Node<'t>, key_field: &str) -> View<'t> {
     let mut cursor = node.walk();
     let mut children: Vec<Node<'t>> = node.named_children(&mut cursor).collect();

@@ -12,8 +12,9 @@ use crate::{
 const LITERAL_PLACEHOLDER: u64 = 0xDEAD_BEEF;
 
 /// Virtual node kind hashed in place of a grammar kind for canonical calls.
-/// Tree-sitter kind names never contain `:`, so a canonical call cannot
-/// collide with a verbatim node.
+/// Anonymous token kinds do contain colons (`":"`, `"::"`), but no
+/// tree-sitter kind equals the full string `canon:call`, so a canonical
+/// call cannot collide with a verbatim node.
 const CANON_CALL_KIND: &str = "canon:call";
 
 #[must_use]

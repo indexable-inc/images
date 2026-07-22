@@ -27,12 +27,13 @@ language; the generic recursion only sees canonical views:
   bare stages (`x |> f`) as `f(x)`, and chains fold up recursively. Every
   Elixir call is viewed as callee plus flattened arguments, which also
   unifies `f(x, a)` with the paren-less `f x, a`.
-- **Keyword and struct-literal field order is ignored.** Elixir `keywords`
-  nodes (map and struct literals, keyword lists, trailing keyword
-  arguments) and Rust `field_initializer_list` nodes hash their pairs
-  sorted by key text, so `%User{name: x, age: y}` matches
+- **Map and struct field order is ignored.** Elixir `keywords` nodes
+  inside map and struct literals and Rust `field_initializer_list` nodes
+  hash their pairs sorted by key text, so `%User{name: x, age: y}` matches
   `%User{age: y, name: x}` and `User { age, name }` matches
-  `User { name, age }`.
+  `User { name, age }`. Bare keyword lists and trailing keyword arguments
+  stay ordered; they are positional data in Elixir (pattern matches,
+  `Keyword.pop_first/2`), so reordering them is a semantic change.
 
 Each rewrite carries a fixture pair proving the clone is now caught and a
 negative case proving genuinely different code still hashes apart; the

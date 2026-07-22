@@ -170,11 +170,19 @@ fn canonicalized_hash_relations() {
             true,
         ),
         (
-            "elixir trailing keyword argument order",
+            // Ordered data: only map/struct keyword pairs sort (#3885 review).
+            "elixir trailing keyword arguments stay ordered",
             Lang::Elixir,
             "f(x, a: 1, b: 2)",
             "f(x, b: 2, a: 1)",
-            true,
+            false,
+        ),
+        (
+            "elixir bare keyword lists stay ordered",
+            Lang::Elixir,
+            "[a: x, b: y]",
+            "[b: y, a: x]",
+            false,
         ),
         (
             "rust struct literal field order",
