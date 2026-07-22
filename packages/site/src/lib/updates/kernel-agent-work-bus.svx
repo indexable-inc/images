@@ -1,0 +1,45 @@
+---
+id: kernel-agent-work-bus
+postedAt: 2026-07-22T04:30:00-07:00
+title: "The kernel grew an agent coordination bus: issue feed, atomic pickup, session messaging, Requests"
+tags: [kernel, mcp-ex, agents]
+links:
+  - label: issue feed (PR 3879)
+    href: https://github.com/indexable-inc/index/pull/3879
+  - label: atomic pickup (PR 3882)
+    href: https://github.com/indexable-inc/index/pull/3882
+  - label: session messaging (PR 3891)
+    href: https://github.com/indexable-inc/index/pull/3891
+  - label: Requests bus (PR 3948)
+    href: https://github.com/indexable-inc/index/pull/3948
+---
+
+Four stacked changes turned the mcp-ex kernel from a per-session tool server
+into a coordination bus for every agent on a host, using the SQLite database
+they already share as the arbiter and feed.
+
+**Issues announce themselves.** An always-on `IssueWatch` polls
+`gh search issues` and pushes every newly filed issue into connected sessions
+as a `source="issues"` channel event. Background agents file issues nobody
+watches; now the filing itself is the notification.
+
+**Pickup is atomic.** `Issues.pickup(n)` claims an issue before work starts.
+The claim is a `UNIQUE`-constrained insert in the shared database: one winner,
+losers read back who got there first, and the claim mirrors to GitHub as an
+assignee. No two agents build the same fix again.
+
+**Sessions can see and message each other.** `Sessions.list()` shows every
+kernel session on the host with heartbeat liveness; `Sessions.send(id, text)`
+delivers into the target session as a channel event within seconds
+(`NULL` target broadcasts). The delivery sweep is a per-instance cursor over a
+shared table, so every session hears every message exactly once.
+
+**Requests generalize all of it.** `Requests.post/pickup/done` puts any unit
+of work on offer: a review, an eval run, a PR to babysit. Issue pickup is now
+just a Request of kind `issue`; an append-only `request_events` table drives a
+posted/claimed/done feed on the same 3-second tick as messaging. Schema landed
+at v8 with the old claims table migrated in and dropped, no compatibility
+shims.
+
+Scope, stated plainly: the bus is per host, because the shared SQLite is the
+transport. Cross-host coordination stays with the fleet layer.
