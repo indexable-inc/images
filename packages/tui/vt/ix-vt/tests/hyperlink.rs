@@ -1,7 +1,7 @@
 //! OSC 8 hyperlink URI exposure through the render state (index#3835).
 //!
 //! The anchor text deliberately differs from the URI ("click me" vs
-//! https://example.com), the exact case plain-URL detection cannot cover
+//! <https://example.com>), the exact case plain-URL detection cannot cover
 //! (indexable-inc/ix#8008). Exercises the fork's C API end-to-end against
 //! the real patched library: per-cell URIs on anchor cells, `None`
 //! elsewhere, distinct adjacent links kept apart, and the copied URI

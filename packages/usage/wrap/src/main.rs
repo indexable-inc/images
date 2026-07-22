@@ -4,7 +4,7 @@
 //! wrapper spawns the real target with inherited stdio and argv0, stays out
 //! of the way (ctrl-C reaches the child, SIGTERM is forwarded), and after
 //! the child exits appends one line to the local spool: a single `O_APPEND`
-//! write, no locks, no SQLite on the hot path. It then exits with the
+//! write, no locks, no `SQLite` on the hot path. It then exits with the
 //! child's status (`128 + signal` for signal deaths).
 //!
 //! Failure policy: anything telemetry-internal is dropped silently
@@ -62,7 +62,7 @@ const COMPACT_THRESHOLD_BYTES: u64 = 256 * 1024;
 /// Minimum spacing between detached upload kicks. The uploader enforces the
 /// real 24h cadence; this only avoids spawning a kick process per
 /// invocation.
-const KICK_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+const KICK_INTERVAL: Duration = Duration::from_hours(6);
 
 fn main() {
     let spec = load_spec().unwrap_or_else(|err| {
@@ -88,10 +88,10 @@ fn load_spec() -> Result<Spec, String> {
 
 /// The target command with our argv, argv0, environment, and stdio.
 fn build_command(spec: &Spec) -> Command {
-    let mut args = std::env::args_os();
-    let arg0 = args.next();
+    let mut forwarded = std::env::args_os();
+    let arg0 = forwarded.next();
     let mut command = Command::new(&spec.target);
-    command.args(args);
+    command.args(forwarded);
     // The spec must not leak: a target that spawns other wrapped tools would
     // otherwise record them under this spec's package.
     command.env_remove("IX_USAGE_SPEC");
@@ -269,13 +269,11 @@ fn marker_stale(marker: &Path) -> bool {
     let fresh = std::fs::metadata(marker)
         .and_then(|meta| meta.modified())
         .map(|modified| matches!(modified.elapsed(), Ok(age) if age < KICK_INTERVAL));
-    match fresh {
-        Ok(true) => false,
-        // Missing marker, unreadable mtime, or an mtime in the future: treat
-        // as stale and reset it.
-        Ok(false) | Err(_) => {
-            let _ = std::fs::write(marker, b"");
-            true
-        }
+    if matches!(fresh, Ok(true)) {
+        return false;
     }
+    // Missing marker, unreadable mtime, or an mtime in the future: treat as
+    // stale and reset it.
+    let _ = std::fs::write(marker, b"");
+    true
 }

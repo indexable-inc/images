@@ -275,9 +275,11 @@ pub enum ScrollViewport {
 }
 
 /// The mouse-reporting flavor an application has requested via DEC private
-/// modes 9/1000/1002/1003 (see [`Terminal::mouse_reporting`]). The variants
-/// are ordered by how much the application asked to see; when several modes
-/// are set at once the strongest wins, matching how terminals dispatch.
+/// modes 9/1000/1002/1003 (see [`Terminal::mouse_reporting`]).
+///
+/// The variants are ordered by how much the application asked to see; when
+/// several modes are set at once the strongest wins, matching how terminals
+/// dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MouseReporting {
     /// No mouse mode set: the terminal owns the mouse (scrollback, selection).
