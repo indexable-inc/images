@@ -23,11 +23,11 @@ defmodule IxMcp.IssueWatch do
 
   use GenServer
 
-  require Logger
-
   alias IxMcp.ActionLog
   alias IxMcp.Cmd
   alias IxMcp.MCP.Notifier
+
+  require Logger
 
   @default_owners ["indexable-inc"]
   @interval_ms 60_000
