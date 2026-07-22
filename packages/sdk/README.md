@@ -7,18 +7,20 @@
 
 # ix SDK
 
-Building on ix and wondering which SDK to grab? This directory is the public
-source for all three. Each links or bundles the same precompiled, proprietary
-`ix-sdk` core distributed by Indexable, so behavior is identical across
-languages and each binding only adds ecosystem-native surface.
+Building on ix and wondering which SDK to grab? Every binding links or bundles
+the same precompiled, proprietary `ix-sdk` core, so behavior is identical
+across languages. The bindings are built from ix's private crates and shipped
+as artifacts; the published packages, not this tree, are the SDK.
 
-| SDK | Source | Get it |
-| --- | --- | --- |
-| Rust | [`rust/`](./rust) | the core crates; built via Nix, the other SDKs bind it |
-| Python | [`python/`](./python) | `nix build .#ix-sdk-python` |
-| TypeScript | [`typescript/`](./typescript) | `npm install @indexable/sdk` |
+| SDK | Get it |
+| --- | --- |
+| Rust | [`rust/`](./rust): wraps the prebuilt core via Nix; the other SDKs bind it |
+| Python | the published `ix_sdk` wheel: PyPI, or pinned from R2 via `nix build .#ix-sdk-python` |
+| TypeScript | `npm install @indexable/sdk` |
 
-The Nix build assumes a clone: `git clone https://github.com/indexable-inc/index`.
+This repo carries no Python or TypeScript SDK source. In-repo,
+[`packages/ix-sdk-python`](../ix-sdk-python) pins the published wheel by hash,
+and [`rust/`](./rust) validates the prebuilt `ix-sdk-wire` artifact pins.
 
 ## License
 

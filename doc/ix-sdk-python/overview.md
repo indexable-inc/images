@@ -9,8 +9,8 @@ Python module, the index side of the index <-> ix artifact boundary (ENG-2151,
 scanned store-clean by ix's `nix/packages/workspace-sdks.nix`, then uploaded to
 R2 with `wrangler`; this consumer only downloads and installs it.
 
-See python for the `ix_sdk` API the wheel exposes, and
-common for the cross-SDK prebuilt-artifact model.
+See common for the cross-SDK prebuilt-artifact model; the `ix_sdk` API
+surface is whatever the shipped wheel exposes (its `_ix_sdk.pyi` stub).
 
 ## Flake metadata (`package.nix`)
 
@@ -73,12 +73,10 @@ downstream:
 - module-level `Client`, `Group`, `GroupMember`;
 - `Client` methods `create_group`, `add_group_member`, `create`, `branches`.
 
-Note: `Group`, `GroupMember`, `create_group`, and `add_group_member` are NOT
-present in the source-available `packages/sdk/python/ix_sdk/__init__.py` in this tree
-(verified absent). They exist in the prebuilt wheel, which is compiled from a
-newer/fuller private `crates/ix/sdk-py`. The packaging test therefore validates
-the wheel's surface, which is a superset of the public source mirror. See the
-domain NOTES.
+The wheel is compiled from ix's private `crates/ix/sdk-py`; this repo carries
+no `ix_sdk` source and consumes the SDK as a published artifact only (#4011).
+The shipped wheel is the authoritative surface, so the test asserts against it
+directly.
 
 ## Consumers
 
