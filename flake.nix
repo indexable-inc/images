@@ -159,7 +159,7 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      url = "github:indexable-inc/nix/d789d8a3ab8a392a7dcfc7aa3ebd0533704f6c3f";
+      url = "github:indexable-inc/nix/1e3afc6f82ba15bda700c4dbf252099c3e90ca97";
       flake = false;
     };
 

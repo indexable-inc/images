@@ -520,6 +520,35 @@
         # handler rather than a blanket `catch (...)`), the narrowing Andrew
         # proposed in the #15963 discussion after xokdvium objected to swallowing
         # all exceptions. Ready in shape but a human (Andrew) reopens/submits it.
+        # jj input scheme (nix#15651): vendored from the already-open upstream
+        # PR #16066 (ee0691ab) with three 2.34.7 back-port adaptations noted in
+        # the commit body. No PR of ours: upstream's own is in flight; adopt
+        # theirs (and drop the adaptations) when the base moves past it.
+        "libfetchers: add a Jujutsu (jj) input scheme" = {
+          upstream = "hold";
+          reason = "Upstream PR NixOS/nix#16066 (same commit, ee0691ab) is already open; never file a rival. Re-sync when the base catches up.";
+        };
+        # Real product fix, upstream-shaped and standalone: on Darwin/FreeBSD
+        # LOCAL_PEERCRED carries no pid, so the daemon never recorded
+        # clientPid (build attribution + disconnect liveness silently degraded).
+        "libcmd: report peer pid on Darwin/FreeBSD via LOCAL_PEERPID" = {
+          upstream = "hold";
+          reason = "Genuine upstream bug fix (daemon clientPid always missing on Darwin); wants a human review pass before an attempt mark authorizes the PR.";
+        };
+        # Fork-local test adaptations: they exist because fork patches changed
+        # failure propagation / added features, so they are meaningless upstream.
+        "tests/functional: update failure expectations for preserved leaf errors" = {
+          upstream = "never";
+          reason = "Adapts upstream tests to the fork's failure-propagation patches; upstream has nothing to apply it to.";
+        };
+        "tests/functional: assert no-progress deadline only where it exists" = {
+          upstream = "never";
+          reason = "Tests a fork-only feature (no-progress deadlines).";
+        };
+        "tests/functional: skip zombie staleness check where states are hidden" = {
+          upstream = "never";
+          reason = "Fixes a fork-added test (build-status liveness) for the macOS seatbelt.";
+        };
         "fix(libstore): don't crash the daemon when a GC roots client thread is interrupted" = {
           upstream = "hold";
           reason = "Reworked to catch (BaseError&) per the #15963 review (xokdvium: `catch (...)` swallows too much); a human (Andrew) resubmits, referencing #15963/#15962/#13438. Fixes NixOS/nix#15962.";
