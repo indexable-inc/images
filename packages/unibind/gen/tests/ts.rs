@@ -8,26 +8,14 @@
 use unibind_core::ir;
 use unibind_gen::host::HostEmitter as _;
 use unibind_gen::ts::TsEmitter;
-use unibind_test_support::assert_snapshot;
+use unibind_test_support::assert_host_snapshots;
+use unibind_test_support::fixtures::{self, arg, docs};
 
 fn names(py: Option<&str>, ts: Option<&str>) -> ir::Names {
     ir::Names {
         py: py.map(str::to_owned),
         ts: ts.map(str::to_owned),
         ..ir::Names::default()
-    }
-}
-
-fn docs(lines: &[&str]) -> Vec<String> {
-    lines.iter().map(|line| (*line).to_owned()).collect()
-}
-
-fn arg(name: &str, ty: ir::Type, default: Option<ir::Literal>) -> ir::Arg {
-    ir::Arg {
-        name: name.to_owned(),
-        names: names(None, None),
-        ty,
-        default,
     }
 }
 
@@ -41,16 +29,7 @@ fn field(name: &str, ts: Option<&str>, doc_lines: &[&str], ty: ir::Type) -> ir::
 }
 
 fn function(name: &str, ts: Option<&str>, doc_lines: &[&str], args: Vec<ir::Arg>) -> ir::Function {
-    ir::Function {
-        name: name.to_owned(),
-        names: names(None, ts),
-        docs: docs(doc_lines),
-        asyncness: ir::Asyncness::Sync,
-        blocking: false,
-        args,
-        ret: None,
-        throws: None,
-    }
+    fixtures::function(name, names(None, ts), doc_lines, args)
 }
 
 const fn owned_string() -> ir::Type {
@@ -280,17 +259,18 @@ fn ts_host_files_snapshot() {
         addon: "sample_ts".to_owned(),
     };
     let files = emitter.emit(&interface()).expect("emits");
-    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
-    assert_eq!(paths, ["index.d.ts", "index.js"]);
-    assert_snapshot(
-        &files[0].contents,
-        include_str!("snapshots/sample.d.ts"),
-        "sample.d.ts",
-    );
-    assert_snapshot(
-        &files[1].contents,
-        include_str!("snapshots/sample.js"),
-        "sample.js",
+    assert_host_snapshots(
+        files
+            .iter()
+            .map(|file| (file.path.as_str(), file.contents.as_str())),
+        &[
+            (
+                "index.d.ts",
+                "sample.d.ts",
+                include_str!("snapshots/sample.d.ts"),
+            ),
+            ("index.js", "sample.js", include_str!("snapshots/sample.js")),
+        ],
     );
 }
 

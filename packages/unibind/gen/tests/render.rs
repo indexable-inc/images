@@ -11,24 +11,12 @@ use unibind_gen::artifact::parse_ir_bytes;
 use unibind_gen::host::HostEmitter as _;
 use unibind_gen::py::PyEmitter;
 use unibind_test_support::assert_snapshot;
+use unibind_test_support::fixtures::{self, arg, docs};
 
 fn names(py: Option<&str>) -> ir::Names {
     ir::Names {
         py: py.map(str::to_owned),
         ..ir::Names::default()
-    }
-}
-
-fn docs(lines: &[&str]) -> Vec<String> {
-    lines.iter().map(|line| (*line).to_owned()).collect()
-}
-
-fn arg(name: &str, ty: ir::Type, default: Option<ir::Literal>) -> ir::Arg {
-    ir::Arg {
-        name: name.to_owned(),
-        names: names(None),
-        ty,
-        default,
     }
 }
 
@@ -46,16 +34,7 @@ const fn owned_string() -> ir::Type {
 }
 
 fn function(name: &str, py: Option<&str>, doc_lines: &[&str], args: Vec<ir::Arg>) -> ir::Function {
-    ir::Function {
-        name: name.to_owned(),
-        names: names(py),
-        docs: docs(doc_lines),
-        asyncness: ir::Asyncness::Sync,
-        blocking: false,
-        args,
-        ret: None,
-        throws: None,
-    }
+    fixtures::function(name, names(py), doc_lines, args)
 }
 
 fn sample_functions() -> Vec<ir::Function> {
