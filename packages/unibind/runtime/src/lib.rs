@@ -55,10 +55,11 @@ impl<T> fmt::Debug for UniStream<T> {
     }
 }
 
-/// One consumer's pull handle over a [`UniStream`]: checked-out pull
-/// state, a gate serializing concurrent pulls, and a level-triggered
-/// closed flag. The shared body of every generated handle class, so the
-/// per-export types stay thin shells.
+/// One consumer's pull handle over a [`UniStream`].
+///
+/// Holds the checked-out pull state, a gate serializing concurrent
+/// pulls, and a level-triggered closed flag. The shared body of every
+/// generated handle class, so the per-export types stay thin shells.
 ///
 /// `close` is synchronous and race-free: the watch channel flips to
 /// closed, which both wakes a pull blocked inside `next` (dropping the

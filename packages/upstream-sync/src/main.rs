@@ -182,6 +182,28 @@ fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool) -> RepoGate {
     RepoGate { blocked, reason }
 }
 
+/// Every intent key must name a real series commit: a key orphaned by a
+/// rebase that retitled or dropped its commit is dead intent, and dead
+/// `attempt` intent silently loses the authorization it encodes.
+fn ensure_no_orphaned_intent(fork: &Fork, all_subjects: &[String]) -> Result<()> {
+    let orphaned: Vec<&String> = fork
+        .patches
+        .keys()
+        .filter(|key| !all_subjects.iter().any(|s| s == *key))
+        .collect();
+    if orphaned.is_empty() {
+        return Ok(());
+    }
+    Err(eyre!(
+        "upstream-sync: {}: intent keys in lib/fork-packages.nix match no commit subject on {}@{}: {:?}. Series subjects: {:?}",
+        fork.name,
+        fork.fork_repo,
+        fork.bookmark,
+        orphaned,
+        all_subjects
+    ))
+}
+
 fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Result<()> {
     let slug = Slug::parse(&fork.upstream_url)?;
     let policy = fork.policy();
@@ -240,25 +262,7 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     );
     let repo = series::Repo::open(fork)?;
     let all_subjects = repo.subjects();
-
-    // Every intent key must name a real series commit: a key orphaned by a
-    // rebase that retitled or dropped its commit is dead intent, and dead
-    // `attempt` intent silently loses the authorization it encodes.
-    let orphaned: Vec<&String> = fork
-        .patches
-        .keys()
-        .filter(|key| !all_subjects.iter().any(|s| s == *key))
-        .collect();
-    if !orphaned.is_empty() {
-        return Err(eyre!(
-            "upstream-sync: {}: intent keys in lib/fork-packages.nix match no commit subject on {}@{}: {:?}. Series subjects: {:?}",
-            fork.name,
-            fork.fork_repo,
-            fork.bookmark,
-            orphaned,
-            all_subjects
-        ));
-    }
+    ensure_no_orphaned_intent(fork, &all_subjects)?;
 
     let selected: Vec<String> = match args.patch.as_deref() {
         None => all_subjects,

@@ -154,6 +154,10 @@ impl Fixture {
         // The megamerge seal: same tree as the series head, parent(s) = the
         // DAG head(s). Series readers must skip it.
         let head = git(&fork, &["rev-parse", "HEAD"]);
+        #[expect(
+            clippy::literal_string_with_formatting_args,
+            reason = "^{tree} is git revision syntax, not a format placeholder"
+        )]
         let tree = git(&fork, &["rev-parse", "HEAD^{tree}"]);
         let seal = git(
             &fork,
@@ -186,6 +190,10 @@ impl Fixture {
     }
 
     /// The env pairs that make the binaries hit the local fixtures.
+    #[expect(
+        clippy::anonymous_tuple_return_type,
+        reason = "process env pairs feed Command::envs at the only consumers; a named struct would be re-flattened immediately"
+    )]
     pub fn envs(&self) -> Vec<(&'static str, String)> {
         vec![
             ("GIT_CONFIG_GLOBAL", self.gitconfig.display().to_string()),

@@ -113,10 +113,8 @@ impl<T> SharedStream<T> {
     {
         let next = self.next();
         future_into_py(py, async move {
-            match next.await {
-                Some(item) => Ok(item),
-                None => Err(pyo3::exceptions::PyStopAsyncIteration::new_err(())),
-            }
+            next.await
+                .ok_or_else(|| pyo3::exceptions::PyStopAsyncIteration::new_err(()))
         })
     }
 }
