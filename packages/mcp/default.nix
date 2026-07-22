@@ -1369,10 +1369,12 @@
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
     # This set drifts silently: session_set_name (#1615) and kernel_restart
-    # (#2349) each joined the surface without updating it, and the stale drv
-    # kept passing from cache on main until this package's inputs changed and
-    # forced a rebuild. When adding a tool, add it here in the same change.
-    + "expected = {'python_exec','pr_watch','read','kernel_trace','kernel_restart','tui_act','session_set_name','topic_set','reply'}; "
+    # (#2349) each joined the surface without updating it, dropping the read
+    # tool (#3503) left it listed here, and each time the stale drv kept
+    # passing from cache on main until this package's inputs changed and
+    # forced a rebuild. When adding or removing a tool, update it in the same
+    # change.
+    + "expected = {'python_exec','pr_watch','kernel_trace','kernel_restart','tui_act','session_set_name','topic_set','reply'}; "
     + "assert set(names) == expected, ('tool surface drifted: %r' % (names,)); "
     + "from ix_notebook_mcp import registry; instr = mcp._mcp_server.instructions; "
     + "assert 'root=' not in instr, 'a parameter/signature leaked into the instructions'; "
