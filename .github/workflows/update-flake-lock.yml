@@ -83,10 +83,10 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          # Submodule mode edits pins in the caller's tree; flake mode needs no
-          # submodules (and index itself has none).
-          submodules: ${{ inputs.submodule-paths != '' }}
+        # Never checkout's `submodules:` option: on ix runners the
+        # dispatcher's per-job GIT_CONFIG_GLOBAL defeats checkout's
+        # temp-HOME token plumbing (ix#8123). The bump step below runs its
+        # own anonymous `git submodule update --init`.
 
       # Fully qualified, not `./.github/actions/install-nix`: this workflow is
       # reusable (`workflow_call`), and for a cross-repo caller (ix) the
