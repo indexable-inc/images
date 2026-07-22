@@ -120,6 +120,10 @@ org with
 
 - Administration: **write** (create the mirror repos on first publish),
 - Contents: **write** (push `main`),
+- Workflows: **write** (fork-sync pushes megamerge rebases whose range
+  carries upstream changes to `.github/workflows/*`; GitHub rejects any
+  app push that alters workflow files without this permission -- btop's
+  2026-07-22 rebase was bounced exactly this way),
 - Metadata: **read** (implicit baseline).
 
 The app's client id lives in the `MIRROR_APP_CLIENT_ID` repository variable
