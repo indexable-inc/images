@@ -1,5 +1,5 @@
 //! Per-language AST canonicalization applied ahead of the generic
-//! normalizer (issue #3878, modeled on elixir-vibe's ExDNA).
+//! normalizer (issue #3878, modeled on elixir-vibe's `ExDNA`).
 //!
 //! Language knowledge lives here, keyed off [`Lang`]; the recursion in
 //! `normalize` only sees the canonical [`View`]. Semantically equivalent
@@ -47,7 +47,7 @@ fn elixir<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
     match node.kind() {
         "binary_operator" => pipe(tree, node),
         "call" => {
-            let (target, args) = call_parts(node)?;
+            let CallParts { target, args } = call_parts(node)?;
             Some(View::Call { target, args })
         }
         "keywords" => keywords(tree, node),
@@ -75,7 +75,7 @@ fn pipe<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
     let rhs = node.child_by_field_name("right")?;
 
     if rhs.kind() == "call" {
-        let (target, mut args) = call_parts(rhs)?;
+        let CallParts { target, mut args } = call_parts(rhs)?;
         args.insert(0, lhs);
         return Some(View::Call { target, args });
     }
@@ -85,10 +85,17 @@ fn pipe<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
     })
 }
 
+/// An Elixir `call` split into callee and flattened arguments, the pieces a
+/// [`View::Call`] is built from.
+struct CallParts<'t> {
+    target: Node<'t>,
+    args: Vec<Node<'t>>,
+}
+
 /// Flatten an Elixir `call` into callee + arguments: children of the
 /// `arguments` node are spliced in directly, and any trailing `do_block`
 /// rides along as a final argument.
-fn call_parts(node: Node<'_>) -> Option<(Node<'_>, Vec<Node<'_>>)> {
+fn call_parts(node: Node<'_>) -> Option<CallParts<'_>> {
     let target = node.child_by_field_name("target")?;
     let mut args = Vec::new();
     let mut cursor = node.walk();
@@ -103,7 +110,7 @@ fn call_parts(node: Node<'_>) -> Option<(Node<'_>, Vec<Node<'_>>)> {
             args.push(child);
         }
     }
-    Some((target, args))
+    Some(CallParts { target, args })
 }
 
 fn rust<'t>(tree: &Tree, node: Node<'t>) -> Option<View<'t>> {
