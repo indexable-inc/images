@@ -22,6 +22,14 @@ defmodule IxMcp.Jobs.Job do
   control process itself (which trapping cannot catch) is caught by the
   single reaper (`IxMcp.Jobs.Reaper`), which writes the `killed` transition
   from outside.
+
+  The durable ledger must never take a job down with it (#3874): every
+  `ActionLog` call from this process goes through `safe_log/1`, which
+  absorbs the exit a caller inherits when the log dies mid-request (the
+  log's own client API already retries across the restart blip). A failed
+  output flush leaves the hot buffer unflushed for the next tick; a failed
+  terminal transition re-arms itself (`:record_terminal`) until the ledger
+  takes it, so the notification is delayed, never lost.
   """
 
   use GenServer, restart: :temporary
@@ -35,6 +43,8 @@ defmodule IxMcp.Jobs.Job do
   alias IxMcp.Session
   alias IxMcp.Workspace
 
+  require Logger
+
   # How often a running exec's eval process is stack-sampled into the action
   # log (Process.info(pid, :current_stacktrace) -- external, works on a
   # wedged process). Tests shrink it via app env to keep the suite fast.
@@ -44,6 +54,11 @@ defmodule IxMcp.Jobs.Job do
   # durable `job_output` table. A hard kill loses at most this window of the
   # very latest output (already-flushed output survives, which is the point).
   @flush_interval_ms Application.compile_env(:ix_mcp, :output_flush_interval_ms, 250)
+
+  # How long a job waits before retrying a terminal transition the ledger
+  # could not take (#3874). The log restarts in milliseconds; a second is
+  # generous without spamming a genuinely stuck database.
+  @terminal_retry_ms 1_000
 
   # Per-job output cap. Beyond it, output is dropped (head kept) and the drop
   # is recorded, so one runaway cell cannot fill the ledger. 8 MiB is far
@@ -70,6 +85,7 @@ defmodule IxMcp.Jobs.Job do
     :finished_mono,
     :result,
     status: :running,
+    terminal_recorded: false,
     diagnostics: [],
     subscribers: [],
     flushed_seq: nil,
@@ -98,6 +114,7 @@ defmodule IxMcp.Jobs.Job do
           finished_mono: integer() | nil,
           result: {:value, term()} | {:failure, String.t()} | nil,
           status: status(),
+          terminal_recorded: boolean(),
           diagnostics: [String.t()],
           subscribers: [pid()],
           flushed_seq: integer() | nil,
@@ -211,18 +228,23 @@ defmodule IxMcp.Jobs.Job do
   @impl true
   def handle_continue(:spawn_eval, state) do
     # Record the durable jobs row and arm the reaper before anything can die,
-    # so a death in the first instants is still finalized (#3839).
-    ActionLog.job_started(%{
-      id: state.id,
-      session_id: state.session_id,
-      action_id: state.action_id,
-      intent: state.intent,
-      session_name: state.session,
-      topic_name: state.topic,
-      code: state.code,
-      watch: state.watch,
-      started_at: DateTime.to_iso8601(state.started_at)
-    })
+    # so a death in the first instants is still finalized (#3839). A ledger
+    # outage must not abort the job itself (#3874): without the row, later
+    # reads degrade to the hot buffer, which beats dying before the eval
+    # even starts.
+    safe_log(fn ->
+      ActionLog.job_started(%{
+        id: state.id,
+        session_id: state.session_id,
+        action_id: state.action_id,
+        intent: state.intent,
+        session_name: state.session,
+        topic_name: state.topic,
+        code: state.code,
+        watch: state.watch,
+        started_at: DateTime.to_iso8601(state.started_at)
+      })
+    end)
 
     Reaper.watch(state.id, self())
 
@@ -361,6 +383,15 @@ defmodule IxMcp.Jobs.Job do
   # death).
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
+  def handle_info(:record_terminal, %{terminal_recorded: false, status: status} = state)
+      when status != :running do
+    # Catch up the output the failed pre-terminal flush left behind, then
+    # retry the transition itself (#3874).
+    {:noreply, state |> flush() |> record_terminal()}
+  end
+
+  def handle_info(:record_terminal, state), do: {:noreply, state}
+
   def handle_info(:flush, %{status: :running} = state) do
     state = %{flush(state) | flush_scheduled: true}
     schedule_flush()
@@ -381,7 +412,7 @@ defmodule IxMcp.Jobs.Job do
           end
 
         stack = JSON.encode!(Enum.map(shown, &Exception.format_stacktrace_entry/1))
-        ActionLog.update_stack(state.action_id, stack, cell_line(frames))
+        safe_log(fn -> ActionLog.update_stack(state.action_id, stack, cell_line(frames)) end)
 
       nil ->
         :ok
@@ -416,20 +447,36 @@ defmodule IxMcp.Jobs.Job do
     # Persist all captured output before the transition, so a reader that
     # sees the job finish finds its output already complete on disk.
     state = flush(state)
-
-    # The one atomic terminal transition: jobs row + actions row + outbox,
-    # committed together (#3839). Whoever writes it first wins; the reaper's
-    # racing `killed` attempt then no-ops.
-    case ActionLog.finish_job(state.id, status, render_result(state)) do
-      {:notify, outbox} -> Notifier.publish(outbox)
-      :already_final -> :ok
-    end
-
-    Reaper.reported(state.id)
+    state = record_terminal(state)
 
     summary = build_summary(state)
     Enum.each(state.subscribers, fn pid -> send(pid, {:ix_job_finished, state.id, summary}) end)
     %{state | subscribers: []}
+  end
+
+  # The one atomic terminal transition: jobs row + actions row + outbox,
+  # committed together (#3839). Whoever writes it first wins; the reaper's
+  # racing `killed` attempt then no-ops. When the ledger is unavailable the
+  # transition re-arms itself (#3874) -- the reaper stays armed until it
+  # lands, so even this process dying in the window is still finalized.
+  defp record_terminal(state) do
+    recorded =
+      safe_log(fn -> ActionLog.finish_job(state.id, state.status, render_result(state)) end)
+
+    case recorded do
+      {:ok, {:notify, outbox}} ->
+        Notifier.publish(outbox)
+        Reaper.reported(state.id)
+        %{state | terminal_recorded: true}
+
+      {:ok, :already_final} ->
+        Reaper.reported(state.id)
+        %{state | terminal_recorded: true}
+
+      :unavailable ->
+        Process.send_after(self(), :record_terminal, @terminal_retry_ms)
+        state
+    end
   end
 
   # Capture one output chunk into the hot buffer, honoring the per-job cap.
@@ -462,9 +509,20 @@ defmodule IxMcp.Jobs.Job do
       rows ->
         rows = Enum.sort(rows)
         dropped_now = :counters.get(state.counter, 2)
-        ActionLog.append_job_output(state.id, rows, dropped_now - state.flushed_dropped)
-        {last_seq, _} = List.last(rows)
-        %{state | flushed_seq: last_seq, flushed_dropped: dropped_now}
+
+        append =
+          safe_log(fn -> ActionLog.append_job_output(state.id, rows, dropped_now) end)
+
+        case append do
+          {:ok, :ok} ->
+            {last_seq, _} = List.last(rows)
+            %{state | flushed_seq: last_seq, flushed_dropped: dropped_now}
+
+          # Nothing advanced: the same rows are still in the hot buffer and
+          # the next tick retries the whole batch (idempotent per seq).
+          :unavailable ->
+            state
+        end
     end
   end
 
@@ -473,12 +531,28 @@ defmodule IxMcp.Jobs.Job do
   defp maybe_flush_dropped(state) do
     dropped_now = :counters.get(state.counter, 2)
 
-    if dropped_now > state.flushed_dropped do
-      ActionLog.append_job_output(state.id, [], dropped_now - state.flushed_dropped)
+    with true <- dropped_now > state.flushed_dropped,
+         {:ok, :ok} <-
+           safe_log(fn -> ActionLog.append_job_output(state.id, [], dropped_now) end) do
       %{state | flushed_dropped: dropped_now}
     else
-      state
+      _unchanged -> state
     end
+  end
+
+  # Run one ActionLog write, absorbing the exit inherited when the log dies
+  # mid-request (#3874): the ledger degrades, the job survives. The log's
+  # client API has already retried across the supervisor restart by the
+  # time this fires, so a hit here means the log is truly down.
+  defp safe_log(fun) do
+    {:ok, fun.()}
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "job #{inspect(self())}: action log unavailable: #{inspect(reason, limit: 5)}"
+      )
+
+      :unavailable
   end
 
   defp schedule_flush, do: Process.send_after(self(), :flush, @flush_interval_ms)

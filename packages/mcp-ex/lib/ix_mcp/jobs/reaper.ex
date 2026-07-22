@@ -21,6 +21,15 @@ defmodule IxMcp.Jobs.Reaper do
   alias IxMcp.ActionLog
   alias IxMcp.MCP.Notifier
 
+  require Logger
+
+  # Retry cadence for a `killed` transition the ledger could not take
+  # (#3874). The reaper's monitor map is the only record of which jobs are
+  # still guarded, so this process must never die over a ledger call: it
+  # re-arms the write instead.
+  @finalize_retries 10
+  @finalize_retry_ms 1_000
+
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)
@@ -66,16 +75,33 @@ defmodule IxMcp.Jobs.Reaper do
     ids = if id, do: Map.delete(state.ids, id), else: state.ids
 
     if id do
-      case ActionLog.finish_job(
-             id,
-             :killed,
-             "killed: " <> inspect(reason, limit: 25, printable_limit: 2_000)
-           ) do
-        {:notify, outbox} -> Notifier.publish(outbox)
-        :already_final -> :ok
-      end
+      result = "killed: " <> inspect(reason, limit: 25, printable_limit: 2_000)
+      finalize(id, result, @finalize_retries)
     end
 
     {:noreply, %{state | refs: refs, ids: ids}}
+  end
+
+  def handle_info({:finalize, id, result, attempts}, state) do
+    finalize(id, result, attempts)
+    {:noreply, state}
+  end
+
+  # Drive the ledger terminal for a job that died unreported. An exit from
+  # the ledger call (it died mid-request, #3874) must not crash the reaper
+  # -- that would drop every monitor it holds -- so the attempt re-arms
+  # itself instead.
+  defp finalize(id, result, attempts) do
+    case ActionLog.finish_job(id, :killed, result) do
+      {:notify, outbox} -> Notifier.publish(outbox)
+      :already_final -> :ok
+    end
+  catch
+    :exit, reason ->
+      if attempts > 0 do
+        Process.send_after(self(), {:finalize, id, result, attempts - 1}, @finalize_retry_ms)
+      else
+        Logger.error("reaper: job #{id} terminal write lost: #{inspect(reason, limit: 5)}")
+      end
   end
 end

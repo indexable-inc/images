@@ -35,7 +35,17 @@ defmodule IxMcp.ActionLog do
   session (observed live), while a call makes the row durable before the
   tool response ships; one SQLite insert is negligible against MCP wire
   overhead. A failed open or write crashes this process loudly and the
-  supervisor reopens the log.
+  supervisor reopens the log -- except transient `SQLITE_BUSY` (#3874):
+  several server instances share this database, so a sibling holding the
+  write lock is normal operation, not a fault. sqlite itself waits it out
+  (`PRAGMA busy_timeout`) and a bounded retry covers the rest; before that,
+  one busy write match-crashed the GenServer, the exit propagated into
+  whichever process sat in `GenServer.call` (a job's output flush, an
+  exec's `start_action`), and under sustained contention the crash loop
+  could exhaust the root supervisor's restart intensity and take the whole
+  kernel -- and every running job -- down with it. The client API absorbs
+  the restart blip too: `call/3` retries a call that died with the server,
+  so callers survive an ActionLog restart instead of inheriting its exit.
   """
 
   use GenServer
@@ -103,10 +113,27 @@ defmodule IxMcp.ActionLog do
   # 6 = the #3880 issue-claim arbiter.
   @user_version 6
 
-  # How long a statement waits for a sibling instance's write lock before
-  # sqlite gives up with :busy and step!/fetch crash with a diagnosis
-  # (#3890). The NIF's own default is 2s, which live contention outlived.
-  @busy_timeout_ms 5_000
+  # SQLITE_BUSY tolerance (#3874). The pragma makes sqlite wait out a
+  # sibling instance's write lock inside the NIF; the bounded retry on top
+  # covers the starvation window where the timeout still expires. Only
+  # after both does a write crash loudly (a stuck-forever database is a
+  # real fault, not contention).
+  @busy_timeout_ms Application.compile_env(:ix_mcp, :busy_timeout_ms, 5_000)
+  @busy_retries 3
+  @busy_retry_sleep_ms 100
+
+  # How long the client API keeps retrying a call whose server died
+  # mid-request or is restarting (#3874). The supervisor brings the log
+  # back within milliseconds; this only needs to outlive the blip.
+  @call_retries 20
+  @call_retry_sleep_ms 100
+
+  # Callers must outwait the server's own worst case, not the default 5s:
+  # one statement can legitimately occupy the single-writer GenServer for
+  # busy_timeout x retries (a slow sibling holding the lock), and a caller
+  # that times out at exactly @busy_timeout_ms would die with the same
+  # symptom #3874 fixed, just as a timeout-exit instead of a crash-exit.
+  @call_timeout_ms 30_000
 
   # Frozen historical DDL for the 1 -> 2 step: the actions shape exactly as
   # #3532 shipped it, before the live-row columns. A migration must never
@@ -292,25 +319,25 @@ defmodule IxMcp.ActionLog do
   @doc "Insert a sessions row (name may be nil); returns its id."
   @spec create_session(String.t() | nil, GenServer.server()) :: integer()
   def create_session(name, server \\ __MODULE__) do
-    GenServer.call(server, {:create_session, name, now()})
+    call(server, {:create_session, name, now()})
   end
 
   @doc "Set an existing session row's name."
   @spec rename_session(integer(), String.t(), GenServer.server()) :: :ok
   def rename_session(id, name, server \\ __MODULE__) do
-    GenServer.call(server, {:rename_session, id, name})
+    call(server, {:rename_session, id, name})
   end
 
   @doc "Insert a topics row under `session_id`; returns its id."
   @spec create_topic(integer(), String.t(), GenServer.server()) :: integer()
   def create_topic(session_id, name, server \\ __MODULE__) do
-    GenServer.call(server, {:create_topic, session_id, name, now()})
+    call(server, {:create_topic, session_id, name, now()})
   end
 
   @doc "Insert an action row as `running` before the call executes; returns its id."
   @spec start_action(map(), GenServer.server()) :: integer()
   def start_action(action, server \\ __MODULE__) do
-    GenServer.call(server, {:start_action, Map.put(action, :at, now())})
+    call(server, {:start_action, Map.put(action, :at, now())})
   end
 
   @doc "Finalize a running action row; a no-op when it already finished."
@@ -318,7 +345,7 @@ defmodule IxMcp.ActionLog do
           :ok
   def finish_action(id, status, is_error, elapsed_ms, server \\ __MODULE__)
       when status in ["done", "failed", "cancelled"] do
-    GenServer.call(server, {:finish_action, id, status, is_error, elapsed_ms})
+    call(server, {:finish_action, id, status, is_error, elapsed_ms})
   end
 
   @doc """
@@ -328,13 +355,13 @@ defmodule IxMcp.ActionLog do
   """
   @spec update_stack(integer(), String.t(), pos_integer() | nil, GenServer.server()) :: :ok
   def update_stack(id, stack_json, line, server \\ __MODULE__) do
-    GenServer.call(server, {:update_stack, id, stack_json, line, now()})
+    call(server, {:update_stack, id, stack_json, line, now()})
   end
 
   @doc "Latest `n` recorded actions, newest first, with session/topic names joined in."
   @spec recent(pos_integer(), GenServer.server()) :: [entry()]
   def recent(n \\ 20, server \\ __MODULE__) do
-    GenServer.call(server, {:recent, n})
+    call(server, {:recent, n})
   end
 
   @doc "All sessions rows, oldest first."
@@ -342,14 +369,14 @@ defmodule IxMcp.ActionLog do
           %{id: integer(), name: String.t() | nil, started_at: String.t()}
         ]
   def sessions(server \\ __MODULE__) do
-    GenServer.call(server, :sessions)
+    call(server, :sessions)
   end
 
   @doc "All topics rows, oldest first."
   @spec topics(GenServer.server()) ::
           [%{id: integer(), session_id: integer(), name: String.t(), started_at: String.t()}]
   def topics(server \\ __MODULE__) do
-    GenServer.call(server, :topics)
+    call(server, :topics)
   end
 
   # -- durable job ledger (#3839) --------------------------------------------
@@ -357,13 +384,15 @@ defmodule IxMcp.ActionLog do
   @doc "Insert a `jobs` row as `running` when a job starts; idempotent per id."
   @spec job_started(job_start(), GenServer.server()) :: :ok
   def job_started(job, server \\ __MODULE__) do
-    GenServer.call(server, {:job_started, job})
+    call(server, {:job_started, job})
   end
 
   @doc """
-  Append output `chunks` (`[{seq, chunk}]`) to a job, recording `dropped`
-  bytes discarded by the per-job cap. Batched by the job process so the hot
-  path is not one call per `put_chars`.
+  Append output `chunks` (`[{seq, chunk}]`) to a job, recording
+  `dropped_total` -- the job's running total of bytes discarded by the
+  per-job cap, an absolute value so a retried batch cannot double-count
+  (#3874). Batched by the job process so the hot path is not one call per
+  `put_chars`.
   """
   @spec append_job_output(
           String.t(),
@@ -372,8 +401,8 @@ defmodule IxMcp.ActionLog do
           GenServer.server()
         ) ::
           :ok
-  def append_job_output(id, chunks, dropped \\ 0, server \\ __MODULE__) do
-    GenServer.call(server, {:append_job_output, id, chunks, dropped})
+  def append_job_output(id, chunks, dropped_total \\ 0, server \\ __MODULE__) do
+    call(server, {:append_job_output, id, chunks, dropped_total})
   end
 
   @doc """
@@ -387,25 +416,25 @@ defmodule IxMcp.ActionLog do
           {:notify, outbox()} | :already_final
   def finish_job(id, status, result, server \\ __MODULE__)
       when status in [:done, :failed, :cancelled, :killed] do
-    GenServer.call(server, {:finish_job, id, Atom.to_string(status), result, now()})
+    call(server, {:finish_job, id, Atom.to_string(status), result, now()})
   end
 
   @doc "The recorded job row, or nil."
   @spec job(String.t(), GenServer.server()) :: job() | nil
   def job(id, server \\ __MODULE__) do
-    GenServer.call(server, {:job, id})
+    call(server, {:job, id})
   end
 
   @doc "The full recorded output of a job, from the durable table."
   @spec job_output(String.t(), GenServer.server()) :: binary()
   def job_output(id, server \\ __MODULE__) do
-    GenServer.call(server, {:job_output, id})
+    call(server, {:job_output, id})
   end
 
   @doc "Recent jobs for a session (nil = all), newest first."
   @spec recent_jobs(integer() | nil, pos_integer(), GenServer.server()) :: [job()]
   def recent_jobs(session_id, n \\ 20, server \\ __MODULE__) do
-    GenServer.call(server, {:recent_jobs, session_id, n})
+    call(server, {:recent_jobs, session_id, n})
   end
 
   # -- issue-claim arbiter (#3880) --------------------------------------------
@@ -450,7 +479,7 @@ defmodule IxMcp.ActionLog do
   """
   @spec unacked_outbox(integer() | nil, GenServer.server()) :: [outbox()]
   def unacked_outbox(session_id \\ nil, server \\ __MODULE__) do
-    GenServer.call(server, {:unacked_outbox, session_id})
+    call(server, {:unacked_outbox, session_id})
   end
 
   @doc """
@@ -460,7 +489,36 @@ defmodule IxMcp.ActionLog do
   """
   @spec ack_outbox([integer()], GenServer.server()) :: non_neg_integer()
   def ack_outbox(ids, server \\ __MODULE__) do
-    GenServer.call(server, {:ack_outbox, ids})
+    call(server, {:ack_outbox, ids})
+  end
+
+  # Every public function funnels through here (#3874). When the server dies
+  # mid-request -- historically a SQLITE_BUSY badmatch under a sibling's
+  # write lock -- the exit propagated into whichever process was calling:
+  # job control processes died mid-flush and vanished from the registry,
+  # and the reaper died and forgot every monitor it held. The supervisor
+  # restarts the log within milliseconds, so a bounded retry absorbs the
+  # blip. A timeout is not retried (the request may still be executing);
+  # exhaustion re-raises the exit, keeping a truly-down log loud. A rare
+  # side effect is acceptable double-logging: a retried insert whose first
+  # attempt committed before the server died writes a second row (job-ledger
+  # writes are idempotent by key; a duplicate session/action row is only a
+  # cosmetic log artifact).
+  defp call(server, request), do: call(server, request, @call_retries)
+
+  defp call(server, request, attempts) do
+    GenServer.call(server, request, @call_timeout_ms)
+  catch
+    :exit, {:timeout, _call} = reason ->
+      exit(reason)
+
+    :exit, reason ->
+      if attempts > 0 do
+        Process.sleep(@call_retry_sleep_ms)
+        call(server, request, attempts - 1)
+      else
+        exit(reason)
+      end
   end
 
   @doc """
@@ -483,14 +541,7 @@ defmodule IxMcp.ActionLog do
     if path != ":memory:", do: File.mkdir_p!(Path.dirname(path))
 
     {:ok, conn} = Sqlite3.open(path)
-
-    # Several server instances share one database file, so a step can find a
-    # sibling holding the write lock. The NIF opens with a 2s busy handler; a
-    # lock outliving it surfaced as :busy and badmatch-crashed run/3, taking
-    # the calling job down with it (#3890). Wait longer here, and let
-    # step!/fetch turn a still-busy result into a descriptive crash. The
-    # option exists so the regression test can shrink the wait.
-    :ok = Sqlite3.set_busy_timeout(conn, Keyword.get(opts, :busy_timeout_ms, @busy_timeout_ms))
+    :ok = Sqlite3.execute(conn, "PRAGMA busy_timeout = #{@busy_timeout_ms}")
 
     # index#3539: on 2026-07-17 a server binary match-crashed right here
     # against an action log written under a newer schema, and the failed
@@ -560,7 +611,7 @@ defmodule IxMcp.ActionLog do
         action.arguments
       ])
 
-    :done = step!(conn, insert, "insert action")
+    :ok = step!(conn, insert)
     {:ok, id} = Sqlite3.last_insert_rowid(conn)
     {:reply, id, state}
   end
@@ -624,9 +675,14 @@ defmodule IxMcp.ActionLog do
     {:reply, :ok, state}
   end
 
-  def handle_call({:append_job_output, id, chunks, dropped}, _from, %{conn: conn} = state) do
-    :ok = Sqlite3.execute(conn, "BEGIN IMMEDIATE")
+  def handle_call({:append_job_output, id, chunks, dropped_total}, _from, %{conn: conn} = state) do
+    :ok = execute!(conn, "BEGIN IMMEDIATE")
 
+    # A batch can arrive twice (#3874): the job retries a flush whose reply
+    # was lost, and the client seam retries a call whose server died after
+    # committing. The rows are idempotent by (job_id, seq); the counters
+    # must be too, so bytes count only rows this insert actually added and
+    # the drop total is an absolute high-water mark, not a delta.
     added =
       Enum.reduce(chunks, 0, fn {seq, chunk}, acc ->
         run(conn, "INSERT OR IGNORE INTO job_output (job_id, seq, chunk) VALUES (?, ?, ?)", [
@@ -635,16 +691,17 @@ defmodule IxMcp.ActionLog do
           chunk
         ])
 
-        acc + byte_size(chunk)
+        {:ok, inserted} = Sqlite3.changes(conn)
+        acc + inserted * byte_size(chunk)
       end)
 
     run(
       conn,
-      "UPDATE jobs SET output_bytes = output_bytes + ?, output_dropped = output_dropped + ? WHERE id = ?",
-      [added, dropped, id]
+      "UPDATE jobs SET output_bytes = output_bytes + ?, output_dropped = MAX(output_dropped, ?) WHERE id = ?",
+      [added, dropped_total, id]
     )
 
-    :ok = Sqlite3.execute(conn, "COMMIT")
+    :ok = execute!(conn, "COMMIT")
     {:reply, :ok, state}
   end
 
@@ -667,7 +724,7 @@ defmodule IxMcp.ActionLog do
         [[action_id, intent, started_at]] ->
           elapsed = elapsed_ms(started_at, at)
           is_error = if status in ["failed", "killed"], do: 1, else: 0
-          :ok = Sqlite3.execute(conn, "BEGIN IMMEDIATE")
+          :ok = execute!(conn, "BEGIN IMMEDIATE")
 
           run(
             conn,
@@ -686,7 +743,7 @@ defmodule IxMcp.ActionLog do
           )
 
           {:ok, outbox_id} = Sqlite3.last_insert_rowid(conn)
-          :ok = Sqlite3.execute(conn, "COMMIT")
+          :ok = execute!(conn, "COMMIT")
 
           {:notify,
            %{
@@ -896,48 +953,94 @@ defmodule IxMcp.ActionLog do
   end
 
   defp execute_all(conn, statements) do
-    Enum.each(statements, fn statement -> :ok = Sqlite3.execute(conn, statement) end)
+    Enum.each(statements, fn statement -> :ok = execute!(conn, statement) end)
   end
 
   defp run(conn, sql, params) do
     {:ok, statement} = Sqlite3.prepare(conn, sql)
     :ok = Sqlite3.bind(statement, params)
-    :done = step!(conn, statement, sql)
+    :ok = step!(conn, statement)
     :ok = Sqlite3.release(conn, statement)
-  end
-
-  # :busy after the connection's busy timeout (set at open) is a legitimate
-  # runtime state -- a sibling instance still holds the write lock -- not a
-  # programming error, so it fails with a diagnosis instead of a bare
-  # badmatch (#3890). No retry: the NIF already waited the full bound, and
-  # the supervisor reopens the log after the crash.
-  defp step!(conn, statement, sql) do
-    case Sqlite3.step(conn, statement) do
-      :busy ->
-        raise "action log write still blocked after the busy-timeout wait (#3890): #{sql}"
-
-      result ->
-        result
-    end
   end
 
   defp fetch(conn, sql, params) do
     {:ok, statement} = Sqlite3.prepare(conn, sql)
     :ok = Sqlite3.bind(statement, params)
+    rows = fetch_all!(conn, statement)
+    :ok = Sqlite3.release(conn, statement)
+    rows
+  end
 
-    case Sqlite3.fetch_all(conn, statement) do
-      {:ok, rows} ->
-        :ok = Sqlite3.release(conn, statement)
-        rows
+  # -- SQLITE_BUSY tolerance (#3874) ------------------------------------------
+  # sqlite already waits `@busy_timeout_ms` inside the NIF before reporting
+  # busy; these bounded retries only cover the starvation window where that
+  # timeout still expires under a slow sibling. Anything else stays a loud
+  # crash, unchanged.
 
-      # fetch_all reports a lock outliving the busy wait as this string.
-      {:error, "Database busy"} ->
-        raise "action log read still blocked after the busy-timeout wait (#3890): #{sql}"
+  defp step!(conn, statement), do: step!(conn, statement, @busy_retries)
 
-      {:error, reason} ->
-        raise "action log read failed: #{inspect(reason)}: #{sql}"
+  defp step!(conn, statement, attempts) do
+    case Sqlite3.step(conn, statement) do
+      :done ->
+        :ok
+
+      :busy when attempts > 0 ->
+        Process.sleep(@busy_retry_sleep_ms)
+        step!(conn, statement, attempts - 1)
+
+      :busy ->
+        raise "action log write still blocked after the busy-timeout wait and retries (#3890)"
+
+      other ->
+        raise "action log write failed: #{inspect(other)}"
     end
   end
+
+  defp execute!(conn, sql), do: execute!(conn, sql, @busy_retries)
+
+  defp execute!(conn, sql, attempts) do
+    case Sqlite3.execute(conn, sql) do
+      :ok ->
+        :ok
+
+      {:error, reason} when attempts > 0 ->
+        if busy?(reason) do
+          Process.sleep(@busy_retry_sleep_ms)
+          execute!(conn, sql, attempts - 1)
+        else
+          raise "action log execute failed: #{inspect(reason)}"
+        end
+
+      {:error, reason} ->
+        raise "action log execute failed: #{inspect(reason)}"
+    end
+  end
+
+  defp fetch_all!(conn, statement), do: fetch_all!(conn, statement, @busy_retries)
+
+  defp fetch_all!(conn, statement, attempts) do
+    case Sqlite3.fetch_all(conn, statement) do
+      {:ok, rows} ->
+        rows
+
+      {:error, reason} when attempts > 0 ->
+        if busy?(reason) do
+          Process.sleep(@busy_retry_sleep_ms)
+          fetch_all!(conn, statement, attempts - 1)
+        else
+          raise "action log read failed: #{inspect(reason)}"
+        end
+
+      {:error, reason} ->
+        raise "action log read failed: #{inspect(reason)}"
+    end
+  end
+
+  defp busy?(reason) when is_binary(reason) do
+    reason =~ "database is locked" or reason =~ "database table is locked"
+  end
+
+  defp busy?(_reason), do: false
 
   defp state_home do
     System.get_env("XDG_STATE_HOME") || Path.join(System.user_home!(), ".local/state")

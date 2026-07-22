@@ -54,7 +54,19 @@ defmodule IxMcp.Application do
         {IxMcp.Agents.Events, harness: IxMcp.Agents.Harness}
       ] ++ issue_watch() ++ transport()
 
-    Supervisor.start_link(children, strategy: :one_for_one, name: IxMcp.Supervisor)
+    # max_restarts above the default 3-in-5s (#3874): ActionLog's callers
+    # now retry across its restarts, so a persistent fault there (disk
+    # full, I/O error -- transient SQLITE_BUSY no longer crashes at all)
+    # gets re-triggered quickly by the retries. The extra headroom keeps a
+    # single faulting child from taking the whole kernel -- and every
+    # running job -- down before the retries give up; a child that still
+    # cannot hold up its part after ten restarts is a real fault and the
+    # loud whole-app death stays.
+    Supervisor.start_link(children,
+      strategy: :one_for_one,
+      max_restarts: 10,
+      name: IxMcp.Supervisor
+    )
   end
 
   # index#3539: without ERL_CRASH_DUMP the BEAM writes erl_crash.dump into
