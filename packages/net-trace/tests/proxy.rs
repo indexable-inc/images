@@ -25,10 +25,11 @@ fn one_shot_upstream(reply: &'static [u8]) -> u16 {
 }
 
 fn recorded(recorder: &Recorder) -> Vec<Connection> {
-    // Handlers push on close; poll briefly instead of a fixed generous sleep.
+    // Connections register at accept and finish at close; poll for the
+    // closed state instead of a fixed generous sleep.
     for _ in 0..50 {
         let snapshot = recorder.snapshot();
-        if !snapshot.is_empty() {
+        if !snapshot.is_empty() && snapshot.iter().all(|connection| connection.finished) {
             return snapshot;
         }
         thread::sleep(Duration::from_millis(20));

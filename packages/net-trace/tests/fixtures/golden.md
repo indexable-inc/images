@@ -15,4 +15,4 @@
 github.com:443 +72ms ######################## 484ms [eval]
 ```
 
-<sub>Client-side connections only (proxy env): eval fetches, gh, git. Daemon-side substitutions and fixed-output builders are not visible here.</sub>
+<sub>Client-side connections only (proxy env): eval fetches, gh, git. Daemon-side substitutions and fixed-output builders are not visible here. Run: local</sub>

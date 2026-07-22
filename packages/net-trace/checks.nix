@@ -45,7 +45,7 @@ in {
 
       cp "$fixtures/good.json" net-trace-summary.json
       bash validate.sh
-      for bad in bad-host bad-label bad-scheme missing; do
+      for bad in bad-host bad-label bad-newline bad-scheme missing; do
         cp "$fixtures/$bad.json" net-trace-summary.json
         if bash validate.sh 2>/dev/null; then
           echo "validate $bad: accepted a hostile summary" >&2

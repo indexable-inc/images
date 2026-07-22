@@ -33,7 +33,11 @@ run_traced() {
 # upload step; the Markdown goes to the step summary for humans.
 net_trace_report() {
   [[ -n "${net_trace}" && -d "${net_trace_dir}" ]] || return 0
-  "${net_trace}" render --dir "${net_trace_dir}" --json >net-trace-summary.json || true
+  # A failed render must not leave a truncated summary for the upload step:
+  # the trusted job would then redden on schema validation instead of
+  # skipping cleanly.
+  "${net_trace}" render --dir "${net_trace_dir}" --json >net-trace-summary.json \
+    || rm -f net-trace-summary.json
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     "${net_trace}" render --dir "${net_trace_dir}" >>"${GITHUB_STEP_SUMMARY}" || true
   fi

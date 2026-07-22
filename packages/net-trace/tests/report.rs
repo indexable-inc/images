@@ -14,6 +14,7 @@ fn connection(start_ms: u64, dur_ms: u64, host: &str) -> Connection {
         bytes_up: 100,
         bytes_down: 1000,
         failed: false,
+        finished: true,
     }
 }
 

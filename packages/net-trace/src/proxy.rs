@@ -29,6 +29,11 @@ pub struct Connection {
     /// The upstream connection failed (unresolvable, refused, timed out).
     /// Failed attempts are still recorded: a blocked fetch is a fetch.
     pub failed: bool,
+    /// Closed and fully accounted. Never serialized: snapshots taken while a
+    /// tunnel is still open report its duration so far with zero bytes (the
+    /// counters live in the copy threads until close).
+    #[serde(skip)]
+    pub finished: bool,
 }
 
 /// How the client asked for the upstream.
@@ -57,19 +62,41 @@ impl Recorder {
         }
     }
 
-    /// Copy of everything recorded so far. Handlers push on connection close,
-    /// so callers snapshot after the child exits (its sockets EOF first).
+    /// Copy of everything recorded so far. Connections registered at accept
+    /// time and still open (a keep-alive socket whose upstream has not closed
+    /// yet) report their duration up to this snapshot, so a long fetch in
+    /// flight at child exit is visible rather than silently dropped.
     ///
     /// # Panics
     /// Panics if a handler thread panicked while holding the lock; handlers
     /// do not panic between lock and unlock.
     #[must_use]
     pub fn snapshot(&self) -> Vec<Connection> {
-        self.connections.lock().expect("recorder lock poisoned").clone()
+        let now = self.elapsed_ms();
+        let mut connections = self.connections.lock().expect("recorder lock poisoned").clone();
+        for connection in &mut connections {
+            if !connection.finished {
+                connection.dur_ms = now.saturating_sub(connection.start_ms);
+            }
+        }
+        connections
     }
 
-    fn push(&self, connection: Connection) {
-        self.connections.lock().expect("recorder lock poisoned").push(connection);
+    /// Register a connection at accept time; the handle updates it at close.
+    fn begin(&self, connection: Connection) -> usize {
+        let mut connections = self.connections.lock().expect("recorder lock poisoned");
+        connections.push(connection);
+        connections.len() - 1
+    }
+
+    fn finish(&self, index: usize, dur_ms: u64, transfer: &Transfer, failed: bool) {
+        let mut connections = self.connections.lock().expect("recorder lock poisoned");
+        let connection = &mut connections[index];
+        connection.dur_ms = dur_ms;
+        connection.bytes_up = transfer.up;
+        connection.bytes_down = transfer.down;
+        connection.failed = failed;
+        connection.finished = true;
     }
 
     fn elapsed_ms(&self) -> u64 {
@@ -136,17 +163,24 @@ fn handle(mut client: TcpStream, recorder: &Recorder) -> Result<()> {
     let head = read_head(&mut client)?;
     let target = parse_target(&head.bytes[..head.len])?;
 
+    let index = recorder.begin(Connection {
+        start_ms,
+        dur_ms: 0,
+        host: target.host.clone(),
+        port: target.port,
+        scheme: target.scheme,
+        bytes_up: 0,
+        bytes_down: 0,
+        failed: false,
+        finished: false,
+    });
     let record = |transfer: &Transfer, failed: bool| {
-        recorder.push(Connection {
-            start_ms,
-            dur_ms: u64::try_from(started.elapsed().as_millis()).expect("elapsed millis fit u64"),
-            host: target.host.clone(),
-            port: target.port,
-            scheme: target.scheme,
-            bytes_up: transfer.up,
-            bytes_down: transfer.down,
+        recorder.finish(
+            index,
+            u64::try_from(started.elapsed().as_millis()).expect("elapsed millis fit u64"),
+            transfer,
             failed,
-        });
+        );
     };
 
     let upstream = match connect_upstream(&target) {
@@ -260,14 +294,21 @@ impl Authority {
     }
 }
 
+/// Try every resolved address, not just the first: a v6-less host whose
+/// resolver returns AAAA records first must not turn every fetch into a 502
+/// that the untraced gate would have survived.
 fn connect_upstream(target: &Target) -> Result<TcpStream> {
-    let address = (target.host.as_str(), target.port)
+    let addresses = (target.host.as_str(), target.port)
         .to_socket_addrs()
-        .wrap_err_with(|| format!("resolve {}:{}", target.host, target.port))?
-        .next()
-        .ok_or_else(|| eyre!("no address for {}:{}", target.host, target.port))?;
-    TcpStream::connect_timeout(&address, IO_TIMEOUT)
-        .wrap_err_with(|| format!("connect {}:{}", target.host, target.port))
+        .wrap_err_with(|| format!("resolve {}:{}", target.host, target.port))?;
+    let mut last_error = eyre!("no address for {}:{}", target.host, target.port);
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, IO_TIMEOUT) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = eyre!("connect {address}: {error}"),
+        }
+    }
+    Err(last_error)
 }
 
 fn pump(client: TcpStream, mut upstream: TcpStream, initial_up: &[u8]) -> Result<Transfer> {
