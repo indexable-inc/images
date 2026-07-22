@@ -393,7 +393,11 @@
       topics = ["agency"];
       text = ''
         Done means landed on `origin/main`: own the PR through merge, and
-        claim landed only when the merge commit contains your push. Then
+        claim landed only when the merge commit contains your push. Merge
+        by force, not by vigil: once local checks pass (package tests,
+        format, lint), admin-merge (`gh pr merge --merge --admin`) instead
+        of babysitting CI; main's post-merge CI is the validator, and a red
+        it finds is fixed forward immediately by whoever merged. Then
         delete worktree and branch and announce in one line:
         `🚀 Pushed to main: [<summary>](<commit url>)` or
         `🌸 PR merged: [<title or number>](<url>) in <duration>`.
