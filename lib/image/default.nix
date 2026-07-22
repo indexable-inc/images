@@ -142,10 +142,22 @@
           # context, so it roots into the image closure once (no duplicate
           # copy — the #1748 trap). `self.narHash` locks the pin. Only this
           # flake scope sees `self`, so it is plumbed down from `flake.nix`.
+          # `self.narHash` is absent when index is consumed as a path-locked
+          # flake input (ix's ./index submodule seam, ix#8142): path-type lock
+          # nodes carry no narHash, so nix hands the input through without
+          # one. Recompute it from the already-ingested source in that case;
+          # fetchTree on a store path is pure and yields the same NAR hash
+          # a git consumption would have carried (index#3981).
           nix.registry.index.to = {
             type = "path";
             path = self.outPath;
-            inherit (self) narHash;
+            narHash =
+              self.narHash
+                or (builtins.fetchTree {
+                type = "path";
+                path = self.outPath;
+              })
+                .narHash;
           };
         }
         ++ [
