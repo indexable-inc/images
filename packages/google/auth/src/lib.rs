@@ -494,9 +494,11 @@ pub fn logout_message(removed: &[PathBuf], json: bool) -> String {
 }
 
 /// Delete this machine's stored Google grant and print the shared logout
-/// confirmation ([`logout_message`]). Idempotent: signing out when already
-/// signed out is a no-op, not an error. The `gmail` and `gcal` CLIs both
-/// call this so their `logout` subcommands cannot drift.
+/// confirmation ([`logout_message`]).
+///
+/// Idempotent: signing out when already signed out is a no-op, not an
+/// error. The `gmail` and `gcal` CLIs both call this so their `logout`
+/// subcommands cannot drift.
 ///
 /// # Errors
 /// Returns an error if the platform exposes no config directory, or if a

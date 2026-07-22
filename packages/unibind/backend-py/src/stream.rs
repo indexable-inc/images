@@ -27,6 +27,7 @@ pub struct StreamExport<'a> {
 
 /// Every stream-returning export in the interface, in render order (free
 /// functions first, then each object's methods).
+#[must_use]
 pub fn collect(interface: &ir::Interface) -> Vec<StreamExport<'_>> {
     let free = interface
         .functions
@@ -56,10 +57,12 @@ fn stream_export<'a>(
 }
 
 impl StreamExport<'_> {
+    #[must_use]
     pub fn class_ident(&self) -> Ident {
         class_ident(self.owner, &self.function.name)
     }
 
+    #[must_use]
     pub fn render(&self, ctx: &Ctx<'_>) -> TokenStream {
         let ident = self.class_ident();
         let py_name = class_name(self.owner, &self.function.name);
@@ -110,11 +113,13 @@ impl StreamExport<'_> {
     }
 }
 
-/// The Rust identifier of a stream class. Export names are unique per
-/// scope (Rust enforces it), so classes cannot collide within a scope; a
-/// free function named exactly like an object+method concatenation would
-/// collide across scopes, and fails loudly as a duplicate item in the glue
-/// module rather than silently misbinding.
+/// The Rust identifier of a stream class.
+///
+/// Export names are unique per scope (Rust enforces it), so classes cannot
+/// collide within a scope; a free function named exactly like an
+/// object+method concatenation would collide across scopes, and fails loudly
+/// as a duplicate item in the glue module rather than silently misbinding.
+#[must_use]
 pub fn class_ident(owner: Option<&str>, export: &str) -> Ident {
     let export = pascal_case(export);
     owner.map_or_else(
