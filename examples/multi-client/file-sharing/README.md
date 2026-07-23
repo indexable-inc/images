@@ -8,27 +8,27 @@
 # Multi-client file sharing
 
 Ever had two VMs clobber the same file because their locks never saw each
-other? This fleet shares one directory across ix VMs over SMB 3.1.1 with
-locking that actually coordinates: a `file-server` node exports
-`/var/lib/file-share`, two client replicas mount it at `/mnt/share`, and
+other? This example shares one directory across ix VMs over SMB 3.1.1 with
+locking that actually coordinates: a `file-server` VM exports
+`/var/lib/file-share`, two client VMs mount it at `/mnt/share`, and
 `smbd` mediates every `flock()` and `fcntl` byte-range lock centrally, so a
 lock taken on `client-0` blocks `client-1`.
 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#multi-client-file-sharing-up
+ix apply .#file-server .#client-0 .#client-1
 ```
 
-`nix run .#multi-client-file-sharing-health` re-runs the health checks (smbd
-active, CIFS mounted on both clients). Get the repo with
-`git clone https://github.com/indexable-inc/index`.
+The server first, so the clients can mount the share; each client's health
+checks (smbd reachable, CIFS mounted) gate its apply. Get the source with
+`git clone https://github.com/indexable-inc/index` and run it from
+`examples/multi-client/file-sharing`.
 
 ## Shape
 
-- [`ix.nix`](ix.nix) defines the fleet: one server node and two client
-  replicas with `dependsOn` so the server is up first.
+- [`default.ix`](default.ix) defines the VMs: one server and two clients
+  built from the same module.
 - [`server.nix`](server.nix) configures Samba with the locking knobs
   (`strict locking`, `posix locking`, `kernel oplocks = no`,
   `strict sync = yes`) that keep two clients honest about each other's writes.
@@ -56,7 +56,7 @@ path via `fcntl` byte-range locks.
 
 ## Tradeoffs
 
-- The share is **guest-writable** so the generated up wrapper works without
+- The share is **guest-writable** so `ix apply` works without
   secrets plumbing. Real deployments should drop `guest ok = yes` from
   [`server.nix`](server.nix), add a Samba user with `smbpasswd`, and pass
   `credentials=` to the CIFS mount through a systemd `LoadCredential` (the

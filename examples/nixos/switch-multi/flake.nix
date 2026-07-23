@@ -4,7 +4,7 @@
   inputs = {
     # https://github.com/indexable-inc/index/issues/1537: every standalone
     # example points at the public Index flake; this one still demonstrates raw
-    # NixOS attrs, not mkFleet.
+    # NixOS attrs, no index lib involved.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     index = {
       url = "github:indexable-inc/index";
@@ -13,7 +13,7 @@
   };
 
   outputs = {nixpkgs, ...}: let
-    example = import ./ix.nix {inherit nixpkgs;};
+    example = import ./default.ix {inherit nixpkgs;};
   in {
     inherit (example) nixosConfigurations;
     ix.nixosConfigurations.default = example.nixosConfigurations;

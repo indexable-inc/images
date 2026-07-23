@@ -1,0 +1,28 @@
+{index}: let
+  inherit (index.lib) mkVm;
+
+  # One GitHub token, declared once and consumed by every agent VM. The
+  # ix account secret store owns the lower snake_case key; each VM
+  # declares how it receives it at runtime as `/run/secrets/github/token`.
+  #
+  # Store it first with `ix secret set github_token`. A fine-grained
+  # GitHub PAT or GitHub App installation token scoped to the repos the
+  # agents touch is the right credential here, not a personal classic PAT.
+  agent = name:
+    mkVm {
+      inherit name;
+      deployment.secrets.github_token = {
+        file = "github/token";
+        owner = "root";
+        mode = "0400";
+      };
+      modules = [./agent.nix];
+    };
+in {
+  # Three interchangeable agent VMs. None of them runs `gh auth login`;
+  # they all consume the same declared token, so a fourth is one more
+  # name here: `ix apply .#agent-0 .#agent-1 .#agent-2`.
+  nixosConfigurations =
+    builtins.foldl' (acc: vm: acc // vm.nixosConfigurations) {}
+    (map agent ["agent-0" "agent-1" "agent-2"]);
+}

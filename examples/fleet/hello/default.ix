@@ -1,0 +1,28 @@
+{index}: let
+  inherit (index.lib) mkVm;
+  eastWestGroup = "fleet-hello";
+  group = {ix.networking.groups = [eastWestGroup];};
+
+  web = mkVm {
+    name = "web";
+    modules = [./web.nix group];
+  };
+
+  # Three interchangeable workers. `worker.nix` resolves the web listener
+  # by name over the east-west group, so one more worker is one more name
+  # in this list.
+  worker = name:
+    mkVm {
+      inherit name;
+      modules = [./worker.nix group];
+      nodes = web.nixosConfigurations;
+    };
+  workers = map worker ["worker-0" "worker-1" "worker-2"];
+in {
+  # `ix apply .#web .#worker-0 .#worker-1 .#worker-2`, web first so the
+  # workers' health checks can reach it.
+  nixosConfigurations =
+    builtins.foldl' (acc: vm: acc // vm.nixosConfigurations)
+    web.nixosConfigurations
+    workers;
+}

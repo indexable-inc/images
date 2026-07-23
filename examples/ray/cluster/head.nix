@@ -18,9 +18,9 @@
       ;
   };
 
-  # Every fleet node here runs Ray, so the node count is the cluster size the
-  # health check should wait for. Bumping `ray-worker.replicas` in ix.nix
-  # raises this automatically.
+  # Every VM wired in here runs Ray, so the node count is the cluster size
+  # the health check should wait for. Adding a worker in default.ix raises
+  # this automatically.
   expectedNodes = builtins.length (builtins.attrNames nodes);
 in {
   imports = [

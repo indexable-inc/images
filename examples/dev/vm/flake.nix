@@ -1,5 +1,5 @@
 {
-  description = "ix example: dev-fleet";
+  description = "ix example: dev-vm";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -14,12 +14,12 @@
     index,
     ...
   }: let
-    fleet = import ./ix.nix {
+    vm = import ./default.ix {
       inherit index;
       src = self;
     };
   in {
-    ix.fleets.default = fleet;
-    inherit (fleet) nixosConfigurations;
+    ix.default = vm;
+    inherit (vm) nixosConfigurations;
   };
 }

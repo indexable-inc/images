@@ -40,7 +40,7 @@ closures through your laptop.
 
 ## The loop
 
-1. Edit a configuration in [`ix.nix`](ix.nix): change a VM's package list.
+1. Edit a configuration in [`default.ix`](default.ix): change a VM's package list.
 2. Run the multi-VM `ix apply` again. Only the changed closures rebuild on the
    builder; unchanged VMs are a no-op.
 3. `ix shell web -- rg --version` (or `worker -- jq`, `edge -- hello`)
@@ -59,16 +59,16 @@ closures through your laptop.
 
 ## Shape
 
-- [`flake.nix`](flake.nix) is the entrypoint; unlike the `mkFleet` examples
-  it exposes raw `nixosConfigurations` (`builder`, `web`, `worker`, `edge`).
-- [`ix.nix`](ix.nix) builds those systems; each target differs only by its
-  sentinel package.
+- [`flake.nix`](flake.nix) is the entrypoint; unlike the `mkVm` examples it
+  exposes raw `nixosConfigurations` (`builder`, `web`, `worker`, `edge`).
+- [`default.ix`](default.ix) builds those systems; each target differs only
+  by its sentinel package.
 - [`configuration.nix`](configuration.nix) is the shared NixOS module every
   VM switches onto. It imports `virtualisation/docker-image.nix` so the
   system evaluates against the `ix/base` image without a bootloader.
 
 ## Fork it
 
-Copy this directory, add or rename configurations in [`ix.nix`](ix.nix), and
+Copy this directory, add or rename configurations in [`default.ix`](default.ix), and
 point `--build-vm` at your own builder VM. The `index` flake input pulls
 `github:indexable-inc/index` for you; no admin rights are needed.

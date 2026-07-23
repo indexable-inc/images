@@ -8,7 +8,7 @@
 # Crazy Terrain
 
 What does Minecraft terrain look like when a diffusion model generates it at
-the absolute Java height limit? This is one ix fleet node running a Fabric
+the absolute Java height limit? This is one ix VM running a Fabric
 `1.21.11` server with
 [`terrain-diffusion`](https://github.com/xandergos/terrain-diffusion-mc), a
 world generator that replaces vanilla noise with neural terrain. Every
@@ -19,11 +19,11 @@ puts the diffusion pipeline's `10 km` peak at roughly `y ~2060`.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#minecraft-crazy-terrain-up
+ix apply .#crazy-terrain
 ```
 
-Need the repo first? `git clone https://github.com/indexable-inc/index`.
+Need the source first? `git clone https://github.com/indexable-inc/index`,
+then run it from `examples/minecraft/crazy-terrain`.
 
 ## Shape
 
@@ -65,7 +65,7 @@ in the minecraft module's `formatFor` table.
   generator.
 - You want Paper or Bukkit plugins. `terrain-diffusion` is Fabric-only; see
   [`../survival/`](../survival/) for the Paper-plus-Velocity shape.
-- You are switching an already-running crazy-terrain node onto these
+- You are switching an already-running crazy-terrain VM onto these
   settings. Dimension type bounds and the initial world scale are committed
   at world creation, so a `world/` that was generated under the old defaults
   keeps its old `min_y`, `height`, and scale. The deploy is fine on a fresh

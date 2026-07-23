@@ -1,0 +1,31 @@
+{index}: let
+  inherit (index.lib) mkVm;
+  eastWestGroup = "east-west-firewall";
+  group = {ix.networking.groups = [eastWestGroup];};
+
+  service = mkVm {
+    name = "service";
+    modules = [./service.nix group];
+  };
+
+  allowed-client = mkVm {
+    name = "allowed-client";
+    modules = [./allowed-client.nix group];
+    nodes = service.nixosConfigurations;
+  };
+
+  # No group membership: absence from the ix group is the boundary this
+  # example checks.
+  outside-client = mkVm {
+    name = "outside-client";
+    modules = [./outside-client.nix];
+    nodes = service.nixosConfigurations;
+  };
+in {
+  # `ix apply .#service .#allowed-client .#outside-client`, service
+  # first: both clients probe it over east-west DNS.
+  nixosConfigurations =
+    service.nixosConfigurations
+    // allowed-client.nixosConfigurations
+    // outside-client.nixosConfigurations;
+}

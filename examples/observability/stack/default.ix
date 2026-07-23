@@ -1,0 +1,36 @@
+{index}: let
+  inherit (index.lib) mkVm;
+  eastWestGroup = "observability-stack";
+  group = {ix.networking.groups = [eastWestGroup];};
+
+  observability = mkVm {
+    name = "observability";
+    deployment.l7ProxyPorts = [3000];
+    modules = [
+      {
+        services.ix-observability = {
+          enable = true;
+          environment = "example";
+          clickhouse.openFirewall = true;
+          collector.openFirewall = true;
+          grafana = {
+            openFirewall = true;
+            anonymousViewer = true;
+          };
+        };
+      }
+      group
+    ];
+  };
+
+  app = mkVm {
+    name = "app";
+    modules = [./app.nix group];
+    nodes = observability.nixosConfigurations;
+  };
+in {
+  # `ix apply .#observability .#app`, the stack first so the app's
+  # telemetry has somewhere to land.
+  nixosConfigurations =
+    observability.nixosConfigurations // app.nixosConfigurations;
+}

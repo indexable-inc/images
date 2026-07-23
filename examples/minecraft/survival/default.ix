@@ -1,0 +1,8 @@
+{index}:
+index.lib.mkVm {
+  name = "survival";
+  # ipv4 so the minecraft module's server-list health check can reach the
+  # public address.
+  deployment.ipv4 = true;
+  modules = [./minecraft.nix];
+}

@@ -1,0 +1,55 @@
+{index}:
+# Three VMs that carry a Minecraft block placement from the game server
+# to a 3D spatial query, the long-term data architecture in one example.
+#
+#   producer (Paper + plugin)  ->  log (Kafka topic)  ->  view (ClickHouse)
+#                              \->  collector (OTel)   ->  view (ClickHouse)
+#
+# Domain facts (block placements) take the log -> view path. Server
+# telemetry (the producer's own signals) takes the separate collector
+# path. Both land in ONE ClickHouse: the `view` VM runs the shared
+# `services.ix-observability` stack (ClickHouse + collector + Grafana)
+# and adds the `minecraft` database on that same server, so there is
+# never a second ClickHouse. See README.md.
+let
+  inherit (index.lib) mkVm;
+  # All three VMs share one east-west group so the view and producer can
+  # resolve and reach the log's Kafka broker and the view's OTel
+  # collector. A VM outside the group has no east-west route or DNS name
+  # to its siblings.
+  eastWestGroup = "minecraft-blocks";
+  group = {ix.networking.groups = [eastWestGroup];};
+
+  # The single durable, replayable source of truth.
+  log = mkVm {
+    name = "log";
+    modules = [./log.nix group];
+  };
+
+  # The view VM: the shared observability stack plus the minecraft
+  # spatial view and Kafka ingest on the SAME ClickHouse. Telemetry lands
+  # in `otel_*`; block facts land in `minecraft.*`.
+  view = mkVm {
+    name = "view";
+    deployment.l7ProxyPorts = [3000];
+    modules = [./view.nix group];
+    nodes = log.nixosConfigurations;
+  };
+
+  # The game server: emits domain facts to the log and telemetry to the
+  # collector on the view VM. ipv4 so the Minecraft server-list health
+  # check can reach the public address.
+  producer = mkVm {
+    name = "producer";
+    deployment.ipv4 = true;
+    modules = [./producer.nix group];
+    nodes = log.nixosConfigurations // view.nixosConfigurations;
+  };
+in {
+  # `ix apply .#log .#view .#producer`, in that order: each layer's
+  # health checks probe the one below it.
+  nixosConfigurations =
+    log.nixosConfigurations
+    // view.nixosConfigurations
+    // producer.nixosConfigurations;
+}

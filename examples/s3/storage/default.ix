@@ -1,0 +1,7 @@
+{index}:
+# No `recreateOnUp`: this VM holds object data, so it persists across
+# converges instead of being rebuilt each time like the nginx demo.
+index.lib.mkVm {
+  name = "s3";
+  modules = [./service.nix];
+}

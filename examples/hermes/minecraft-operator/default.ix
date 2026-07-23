@@ -1,0 +1,44 @@
+{index}:
+# A Hermes agent operating a Paper Minecraft server. Two VMs:
+#
+#   minecraft (Paper + RCON)  <-east-west-  hermes (agent + RCON MCP server)
+#
+# The agent gets one typed `run_command` MCP tool that speaks RCON to
+# the game server, so "whitelist my friend", "shrink the world border",
+# or a daily player-count report are chat requests instead of console
+# sessions. See README.md for the workflows.
+let
+  inherit (index.lib) mkVm;
+  # RCON is only routable inside this group; the public internet sees
+  # the game port (the minecraft VM has ipv4 for player traffic), not
+  # the console.
+  eastWestGroup = "hermes-minecraft";
+  group = {ix.networking.groups = [eastWestGroup];};
+
+  minecraft = mkVm {
+    name = "minecraft";
+    deployment.ipv4 = true;
+    modules = [./minecraft.nix group];
+  };
+
+  hermes = mkVm {
+    name = "hermes";
+    deployment.secrets.hermes_env = {
+      file = "hermes.env";
+      owner = "hermes";
+      mode = "0400";
+    };
+    modules = [
+      index.lib.hermesAgent.nixosModules.default
+      index.lib.hermes.profile
+      ./operator.nix
+      group
+    ];
+    nodes = minecraft.nixosConfigurations;
+  };
+in {
+  # `ix apply .#minecraft .#hermes`, the game server first so the
+  # agent's RCON tool has a console to speak to.
+  nixosConfigurations =
+    minecraft.nixosConfigurations // hermes.nixosConfigurations;
+}

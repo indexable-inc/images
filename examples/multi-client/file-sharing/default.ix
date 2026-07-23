@@ -1,0 +1,22 @@
+{index}: let
+  inherit (index.lib) mkVm;
+
+  file-server = mkVm {
+    name = "file-server";
+    modules = [./server.nix];
+  };
+
+  client = name:
+    mkVm {
+      inherit name;
+      modules = [./client.nix];
+      nodes = file-server.nixosConfigurations;
+    };
+in {
+  # `ix apply .#file-server .#client-0 .#client-1`, the server first so
+  # the clients can mount the share.
+  nixosConfigurations =
+    file-server.nixosConfigurations
+    // (client "client-0").nixosConfigurations
+    // (client "client-1").nixosConfigurations;
+}

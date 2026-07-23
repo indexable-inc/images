@@ -1,0 +1,29 @@
+{index}: let
+  inherit (index.lib) mkVm;
+  eastWestGroup = "k8s-k3s";
+  group = {ix.networking.groups = [eastWestGroup];};
+
+  # The server's cluster-ready check names every VM wired in via `nodes`
+  # (see server.nix), so a missing agent is a failure rather than a
+  # smaller cluster that happens to look Ready.
+  server = mkVm {
+    name = "k3s-server";
+    modules = [./server.nix group];
+    nodes = agentConfigurations;
+  };
+
+  # Agents boot in parallel with the server and retry the join until its
+  # API answers, so apply order does not matter.
+  agent = name:
+    mkVm {
+      inherit name;
+      modules = [./agent.nix group];
+      nodes = server.nixosConfigurations;
+    };
+  agentConfigurations =
+    builtins.foldl' (acc: vm: acc // vm.nixosConfigurations) {}
+    (map agent ["k3s-agent-0" "k3s-agent-1"]);
+in {
+  # `ix apply .#k3s-server .#k3s-agent-0 .#k3s-agent-1`
+  nixosConfigurations = server.nixosConfigurations // agentConfigurations;
+}

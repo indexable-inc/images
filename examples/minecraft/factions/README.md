@@ -8,7 +8,7 @@
 # Factions Server
 
 What does a production-shaped factions server look like as one Nix file? This
-standalone consumer example defines a single Paper `26.1.2` node with a curated
+standalone consumer example defines a single Paper `26.1.2` VM with a curated
 plugin set (factions, economy, audit, map, voice, scripting), a `12000` block
 world border, a 4064-block max-height datapack, BlueMap on TCP `8100`, Simple
 Voice Chat on UDP `24454`, and local-only RCON for managed reloads. Customize
@@ -17,11 +17,11 @@ real player UUIDs and spawn/claim policy before using it with real players.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#minecraft-factions-up
+ix apply .#factions
 ```
 
-Need the repo first? `git clone https://github.com/indexable-inc/index`.
+Need the source first? `git clone https://github.com/indexable-inc/index`,
+then run it from `examples/minecraft/factions`.
 
 ## Shape
 

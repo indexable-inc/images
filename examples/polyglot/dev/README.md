@@ -8,8 +8,8 @@
 # Polyglot dev VM
 
 Want one VM where `cargo`, `kotlinc`, `gleam`, `dune`, and `tsc` are already
-on PATH, with their language servers next to them? This fleet builds a single
-`workbench` node from the [`ix.languages.*`](../../../lib/languages/)
+on PATH, with their language servers next to them? This example builds a
+single `workbench` VM from the [`ix.languages.*`](../../../lib/languages/)
 helpers. The point is how the helpers compose: one JDK is resolved once and
 threaded through every JVM tool, the language servers travel with their
 compilers, and the `ix.profiles.jvm` runtime keeps `JAVA_HOME` aligned with
@@ -18,12 +18,12 @@ whatever `java` and `javac` end up on PATH.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#polyglot-dev-up
+ix apply .#workbench
 ix shell workbench
 ```
 
-Get the repo with `git clone https://github.com/indexable-inc/index`.
+Get the source with `git clone https://github.com/indexable-inc/index` and
+run it from `examples/polyglot/dev`.
 
 ## Shape
 
@@ -31,7 +31,7 @@ Get the repo with `git clone https://github.com/indexable-inc/index`.
   `environment.systemPackages`. Languages are grouped by family (`jvm`,
   `native`, `scripting`, `functional`, `beam`), so adding or removing one is
   a single attribute edit.
-- [`ix.nix`](ix.nix) wraps it as a one-node fleet (`workbench`).
+- [`default.ix`](default.ix) wraps it as a single VM (`workbench`).
 
 ## What's on PATH
 

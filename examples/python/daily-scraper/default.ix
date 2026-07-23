@@ -1,0 +1,5 @@
+{index}:
+index.lib.mkVm {
+  name = "scraper";
+  modules = [./service.nix];
+}

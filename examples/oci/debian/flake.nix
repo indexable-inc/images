@@ -10,7 +10,7 @@
   };
 
   outputs = {index, ...}: let
-    image = import ./ix.nix {inherit index;};
+    image = import ./default.ix {inherit index;};
   in {
     ix.images.default = image;
     packages.x86_64-linux.default = image;

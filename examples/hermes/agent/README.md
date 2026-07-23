@@ -7,28 +7,23 @@
 
 # Hermes Operator VM
 
-What does it take to run a long-lived AI agent as a boring system service? This is one ix node running [Nous Research's Hermes agent](https://hermes-agent.nousresearch.com/) as a daemon: the upstream NixOS module (`services.hermes-agent.*`) is wired in through [`index.lib.hermesAgent`](../../../lib/default.nix), and this preset only chooses the model provider, the persona, and which integrations are turned on. Defaults: OpenRouter for the model, local SQLite memory, Edge TTS, a filesystem MCP server pointed at the workspace, no messaging platforms. Everything else is opt-in through `_module.args.hermes.*`.
+What does it take to run a long-lived AI agent as a boring system service? This is one ix VM running [Nous Research's Hermes agent](https://hermes-agent.nousresearch.com/) as a daemon: the upstream NixOS module (`services.hermes-agent.*`) is wired in through [`index.lib.hermesAgent`](../../../lib/default.nix), and this preset only chooses the model provider, the persona, and which integrations are turned on. Defaults: OpenRouter for the model, local SQLite memory, Edge TTS, a filesystem MCP server pointed at the workspace, no messaging platforms. Everything else is opt-in through `_module.args.hermes.*`.
 
 ## Run
-
-```sh
-# From the index repo root.
-nix run .#hermes-agent-up
-```
 
 Store the env file first, then bring the VM up and open a chat:
 
 ```sh
 printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env
-nix run .#hermes-agent-up
+ix apply .#hermes
 ix shell hermes -- hermes chat
 ```
 
-The fleet maps `hermes_env` to `/run/secrets/hermes.env`, owned by the `hermes` user. The file lives outside `/nix/store`. To rotate, run `ix secret set hermes_env` again and restart the unit if the process needs to re-read it. Need the repo first? `git clone https://github.com/indexable-inc/index`.
+The VM maps `hermes_env` to `/run/secrets/hermes.env`, owned by the `hermes` user. The file lives outside `/nix/store`. To rotate, run `ix secret set hermes_env` again and restart the unit if the process needs to re-read it. Need the source first? `git clone https://github.com/indexable-inc/index`, then run it from `examples/hermes/agent`.
 
 ## Shape
 
-- [`ix.nix`](ix.nix) wraps the node as a one-node fleet.
+- [`default.ix`](default.ix) wraps the module set as a single VM.
 - [`hermes.nix`](hermes.nix) is the service composition. It includes the upstream `services.hermes-agent` module and reads a `_module.args.hermes` arg-bag for the integration toggles.
 - [`documents/SOUL.md`](documents/SOUL.md) is the agent's persona prompt. It tells the agent it is inside an ix VM, what tooling is on PATH, and which authorities live on the host side.
 - [`documents/USER.md`](documents/USER.md) is the long-running user context Hermes injects every session.
@@ -36,20 +31,23 @@ The fleet maps `hermes_env` to `/run/secrets/hermes.env`, owned by the `hermes` 
 
 ## Enable more providers
 
-Every Tier 1 integration is one flag in the fleet preset plus matching lines in the env file. The flag goes in your override of [`ix.nix`](ix.nix) (or in a separate fleet that imports [`hermes.nix`](hermes.nix)):
+Every Tier 1 integration is one flag in the preset plus matching lines in the env file. The flag goes in your override of [`default.ix`](default.ix) (or in a separate VM that imports [`hermes.nix`](hermes.nix)):
 
 ```nix
-nodes.hermes = {
+index.lib.mkVm {
+  name = "hermes";
   modules = [
     index.lib.hermesAgent.nixosModules.default
     ./hermes.nix
+    {
+      _module.args.hermes = {
+        telegram = true;
+        webSearch = "tavily";
+        memory = "mem0";
+      };
+    }
   ];
-  _module.args.hermes = {
-    telegram = true;
-    webSearch = "tavily";
-    memory = "mem0";
-  };
-};
+}
 ```
 
 Update the stored `hermes_env` value with all matching credentials, then restart the unit:
@@ -78,7 +76,7 @@ ix shell hermes -- sudo systemctl restart hermes-agent
 | `memory` | `"holographic"` (default, local SQLite) / `"mem0"` / `"supermemory"` / `"honcho"` / `"hindsight"` / `"retaindb"` / `"openviking"` / `"byterover"` | Persistent memory backend. |
 | `modelDefault` | model string (default `"anthropic/claude-sonnet-4"`) | Model the agent asks for. |
 | `modelBaseUrl` | URL (default OpenRouter) | Point at `https://api.anthropic.com/v1` or `https://api.openai.com/v1` for direct routing. |
-| `apiServer` | bool (default `false`) | OpenAI-compatible `hermes api-server`. The one INBOUND toggle: claims a TCP port (`apiServerPort`, default `9119`) and opens the in-guest firewall; reachability is scoped by the node's east-west groups. Set `API_SERVER_KEY` in the env file. |
+| `apiServer` | bool (default `false`) | OpenAI-compatible `hermes api-server`. The one INBOUND toggle: claims a TCP port (`apiServerPort`, default `9119`) and opens the in-guest firewall; reachability is scoped by the VM's east-west groups. Set `API_SERVER_KEY` in the env file. |
 | `apiServerPort` | port (default `9119`) | Listen port for `apiServer`. |
 
 Per-integration env file overrides (`telegramEnvFile`, `webSearchEnvFile`, etc.) accept a different absolute path when your secret store splits keys across files. They all default to `envFile`, which defaults to `/run/secrets/hermes.env`.
@@ -94,9 +92,9 @@ Three ready-made shapes build on this composition instead of forking it:
 ## Bad fit if
 
 - You want the agent to install Ubuntu `.deb` packages at runtime. Flip `services.hermes-agent.container.enable = true` upstream-side and accept Docker-in-VM nesting. On ix the agent already has `nix shell nixpkgs#<tool>` against a real NixOS, so the container mode tradeoff usually does not pay off.
-- You want one Hermes daemon serving several personas. The state DB (`state.db`, `memories/`, `skills/`) is single-tenant. Spin up a second node with a different `SOUL.md` instead.
+- You want one Hermes daemon serving several personas. The state DB (`state.db`, `memories/`, `skills/`) is single-tenant. Spin up a second VM with a different `SOUL.md` instead.
 - You want inbound webhooks from WhatsApp, Microsoft Teams, Slack, SMS, or email. Those need a public hostname and a port claim. Build a gateway-VM preset rather than adding the surface here.
-- You want the OpenAI-compatible `hermes api-server` so LobeChat or Open WebUI can point at this node. That is the [`examples/hermes/api-server`](../api-server/) preset (a port claim on `9119` plus an east-west group), not extra surface on this outbound-only shape.
+- You want the OpenAI-compatible `hermes api-server` so LobeChat or Open WebUI can point at this VM. That is the [`examples/hermes/api-server`](../api-server/) preset (a port claim on `9119` plus an east-west group), not extra surface on this outbound-only shape.
 
 ## What's load-bearing
 

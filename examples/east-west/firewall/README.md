@@ -16,14 +16,13 @@ same URL fails.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#east-west-firewall-up
-nix run .#east-west-firewall-health
+ix apply .#service .#allowed-client .#outside-client
 ```
 
-The fleet wrapper creates the `east-west-firewall` group, adds `service` and
-`allowed-client`, then runs the health checks. Need the repo first?
-`git clone https://github.com/indexable-inc/index`.
+The service first: both clients' health checks probe it. Applying creates
+the `east-west-firewall` group and adds `service` and `allowed-client`.
+Need the source first? `git clone https://github.com/indexable-inc/index`,
+then run it from `examples/east-west/firewall`.
 
 ## Verify manually
 
@@ -39,8 +38,8 @@ for that VM.
 
 ## Shape
 
-- [`ix.nix`](ix.nix) declares the fleet and places only `service` and
-  `allowed-client` in the east-west group.
+- [`default.ix`](default.ix) declares the three VMs and places only
+  `service` and `allowed-client` in the east-west group.
 - [`service.nix`](service.nix) runs nginx on port 8080 and opens that port in
   the guest firewall.
 - [`allowed-client.nix`](allowed-client.nix) checks that `http://service:8080/`

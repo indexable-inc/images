@@ -18,18 +18,19 @@ port `8333` and read/write buckets.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#s3-storage-up
+ix apply .#s3
 ```
 
-The node holds object data, so it persists across `up` runs instead of being
+The VM holds object data, so it persists across converges instead of being
 recreated. The module also publishes a `/healthz` readiness check on the S3
-port, so ix reports the node healthy only once the gateway is actually
-serving. Get the repo with `git clone https://github.com/indexable-inc/index`.
+port, so ix reports the VM healthy only once the gateway is actually
+serving. Get the source with
+`git clone https://github.com/indexable-inc/index` and run it from
+`examples/s3/storage`.
 
 ## Smoke test
 
-Shell into the node and run a round-trip with the bundled
+Shell into the VM (`ix shell s3`) and run a round-trip with the bundled
 [`s5cmd`](https://github.com/peak/s5cmd). The demo endpoint and credentials
 are exported as environment variables (`S3_ENDPOINT_URL`,
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), so the commands need no flags:
@@ -74,5 +75,5 @@ unauthenticated S3 endpoint is otherwise refused at evaluation.
 - **You need the full AWS S3 feature set.** Core object, bucket, and
   multipart operations work; lifecycle, versioning, and object-lock support
   is partial.
-- **The data must survive node loss.** Object data lives in the node's state
+- **The data must survive VM loss.** Object data lives in the VM's state
   directory; back it up or snapshot the VM.

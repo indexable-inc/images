@@ -811,6 +811,8 @@
     mkNonNixImage
     mkFleetFor
     mkFleet
+    mkVmFor
+    mkVm
     mkDevFor
     mkDev
     ;
@@ -821,6 +823,7 @@
         lib
         paths
         mkFleetFor
+        mkVmFor
         mkDevFor
         ixReturn
         ;
@@ -859,6 +862,8 @@
         mkNonNixImage
         mkPackageRegistry
         mkPackageSet
+        mkVm
+        mkVmFor
         nixosModules
         overlay
         overlays

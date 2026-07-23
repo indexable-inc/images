@@ -1,36 +1,35 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
-    <img src="assets/hero.svg" width="720" alt="three worker replicas resolving one web node by name inside the fleet-hello east-west group">
+    <img src="assets/hero.svg" width="720" alt="three workers resolving one web VM by name inside the fleet-hello east-west group">
   </picture>
 </p>
 
 # Fleet hello
 
 What does a Kubernetes Service plus a three-replica Deployment look like as
-one Nix file? This is the smallest multi-node fleet: one `web` node serving a
-static page and three `worker` replicas that resolve it by name with
-`ix.endpointOf nodes.web "http"` and probe it as their health check — an
+one Nix file? This is the smallest multi-VM example: one `web` VM serving a
+static page and three interchangeable `worker` VMs that resolve it by name
+with `ix.endpointOf nodes.web "http"` and probe it as their health check — an
 `httpGet`-style probe declared as `http = { host; port; }`, no hand-written
-curl. Workers roll with `updateStrategy.maxUnavailable = 1`, so `up`
-recreates one replica at a time and each must pass its checks before the
-next is touched. The generated up wrapper reports healthy only once every
-worker can reach the web node.
+curl.
 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#fleet-hello-up
+ix apply .#web .#worker-0 .#worker-1 .#worker-2
 ```
 
-Need the repo first? `git clone https://github.com/indexable-inc/index`.
+Apply `web` first so the workers' health checks have something to reach.
+Need the source first? `git clone https://github.com/indexable-inc/index`
+and run it from `examples/fleet/hello`.
 
 ## Shape
 
-- [`ix.nix`](ix.nix) defines the fleet: one `web` node and a `worker` node
-  with `replicas = 3` and `updateStrategy.maxUnavailable = 1`, all in one
-  east-west group, with `dependsOn` so the web node boots first.
+- [`default.ix`](default.ix) defines the VMs: one `web` and three `worker`s
+  built from the same module, all in one east-west group. The workers take
+  `nodes = web.nixosConfigurations`, which is how the peer reference below
+  resolves.
 - [`web.nix`](web.nix) runs nginx and declares `ix.networking.expose.http`,
   which opens the firewall, registers the port claim, and names the endpoint
   workers resolve. Its readiness is a one-line `http.port` probe.
@@ -41,22 +40,14 @@ Need the repo first? `git clone https://github.com/indexable-inc/index`.
 ## Verify
 
 ```sh
-# kubectl-get for the fleet: one row per node with STATUS, READY (checks
-# passed/total), and ADDRESS; add -o wide for region and running vs desired
-# image, --watch to poll, -o json for machines.
-nix run .#fleet-hello-status
-
 ix shell worker-0 -- curl --fail http://web:8080/
 ```
 
-Replicas are numbered `worker-0` through `worker-2`; each reaches `web` by
-its node name over the east-west network. `nix run .#fleet-hello-logs --
---unit nginx --on web` pulls the nginx journal from the web node; without
-`--on` the logs verb streams from every node, prefixing each line with
-`[node]`.
+Workers are named `worker-0` through `worker-2`; each reaches `web` by its
+VM name over the east-west network.
 
 ## Scale
 
-Worker count is one line: raise `worker.replicas` in [`ix.nix`](ix.nix).
-Nothing else changes; new replicas join the group and pick up the same
-health check.
+One more worker is one more name in [`default.ix`](default.ix)'s worker
+list (and one more `ix apply` target). It joins the group and picks up the
+same health check; nothing else changes.

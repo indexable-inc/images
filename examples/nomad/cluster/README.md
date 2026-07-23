@@ -22,27 +22,26 @@ places a process, and Nix has already delivered its entire dependency tree.
 | static IPs in configs           | go-sockaddr `GetPrivateIP` + east-west hostnames              |
 
 One count, one contract: [`job.nix`](job.nix) derives the allocation count
-from the fleet's client replicas, and the static port keeps allocations from
-co-locating, so the scheduler spreads exactly one `whoami` per client.
+from the client VMs wired in via `nodes`, and the static port keeps
+allocations from co-locating, so the scheduler spreads exactly one `whoami`
+per client.
 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#nomad-cluster-up
+ix apply .#nomad-server .#nomad-client-0 .#nomad-client-1
 ```
 
-Need the repo first? `git clone https://github.com/indexable-inc/index`.
-
-`up` boots all three nodes in parallel; clients retry registration until the
-server answers, the server submits the job once its API is up, and each
-client's `whoami-http` probe gates success on the allocation placed there
-actually answering.
+Need the source first? `git clone https://github.com/indexable-inc/index`
+and run it from `examples/nomad/cluster`. Apply order does not matter:
+clients retry registration until the server answers, the server submits the
+job once its API is up, and each client's `whoami-http` probe gates success
+on the allocation placed there actually answering.
 
 ## Shape
 
-- [`ix.nix`](ix.nix) - the fleet: `nomad-server` and `nomad-client` with
-  `replicas = 2`, one east-west group.
+- [`default.ix`](default.ix) - the VMs: `nomad-server` and two
+  `nomad-client-*` VMs built from one module, one east-west group.
 - [`node.nix`](node.nix) - what every agent shares: the nomad service,
   datacenter, bind/advertise addressing, a liveness check.
 - [`server.nix`](server.nix) - single-server raft plus the cluster ports
@@ -58,8 +57,6 @@ actually answering.
 ## Verify
 
 ```sh
-nix run .#nomad-cluster-status
-
 # Real nomad CLI against a real cluster:
 ix shell nomad-server -- nomad server members
 ix shell nomad-server -- nomad job status whoami
@@ -67,14 +64,14 @@ ix shell nomad-server -- nomad job status whoami
 # Each client's allocation answers on 8080 and names itself:
 ix shell nomad-client-0 -- curl --silent http://127.0.0.1:8080/  # {"alloc":"web.whoami[0]","node":"nomad-client-0"}
 
-nix run .#nomad-cluster-logs -- --on nomad-server --unit nomad --lines 50
+ix shell nomad-server -- journalctl -u nomad -n 50
 ```
 
 ## Scale
 
-Raise `nomad-client.replicas` in [`ix.nix`](ix.nix). The job's `Count` and
-the per-client probes both follow from the same node list - one line, and
-the scheduler fills the new client.
+Add `nomad-client-2` to the client list in [`default.ix`](default.ix). The
+job's `Count` and the per-client probes both follow from the same VM list -
+one line, and the scheduler fills the new client.
 
 ## License note
 

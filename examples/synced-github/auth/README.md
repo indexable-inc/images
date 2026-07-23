@@ -7,34 +7,34 @@
 
 # Synced GitHub auth
 
-How do you give a whole fleet of agent VMs one GitHub identity without
-running `gh auth login` on each box? The fleet declares a single token; every
-node wires `git` to use it through a credential helper that reads the secret
-file on demand. Adding a replica needs no extra auth step.
+How do you give several agent VMs one GitHub identity without running
+`gh auth login` on each box? Every VM declares the same token; each wires
+`git` to use it through a credential helper that reads the secret file on
+demand. Adding an agent needs no extra auth step.
 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#synced-github-auth-up
+ix apply .#agent-0 .#agent-1 .#agent-2
 ```
 
-Get the repo with `git clone https://github.com/indexable-inc/index`.
+Get the source with `git clone https://github.com/indexable-inc/index` and
+run it from `examples/synced-github/auth`.
 
 ## Shape
 
-- [`ix.nix`](ix.nix) defines the fleet: three `agent` replicas and a
-  `deployment.secrets.github_token` attachment that delivers the stored value
-  as `/run/secrets/github/token`.
+- [`default.ix`](default.ix) defines three interchangeable `agent-*` VMs,
+  each with a `deployment.secrets.github_token` attachment that delivers
+  the stored value as `/run/secrets/github/token`.
 - [`agent.nix`](agent.nix) installs a `git` credential helper that reads the
   token from that runtime path on demand.
 
 ## How the token reaches git
 
-Store the value once with `ix secret set github_token`. The fleet declaration
-maps that account key to `/run/secrets/github/token` for every node. Only the
-key and target path enter the fleet plan; the token bytes stay in the ix
-secret store and are materialized when the VM is created.
+Store the value once with `ix secret set github_token`. Each VM maps that
+account key to `/run/secrets/github/token`. Only the key and target path
+enter the declaration; the token bytes stay in the ix secret store and are
+materialized when the VM is created.
 
 [`agent.nix`](agent.nix) registers a credential helper in `/etc/gitconfig`
 scoped to `https://github.com`. When `git` needs a credential it runs the
@@ -72,7 +72,7 @@ A tempting shortcut is to mount the operator's whole `~/.config` (or
 `~/.config/gh`) into every VM over a shared folder, so `gh` and `git` pick up
 the host's existing login. For a single local dev VM driven by
 [`packages/vm/vmkit`](../../../packages/vm/vmkit) over virtio-fs it can be
-reasonable. As a fleet primitive it has sharp edges:
+reasonable. As a multi-VM primitive it has sharp edges:
 
 - It shares far more than a token. `~/.config` holds unrelated app state,
   other services' credentials, and host-specific paths that mean nothing in a
@@ -81,7 +81,7 @@ reasonable. As a fleet primitive it has sharp edges:
 - The host token is usually a broad personal credential. Per-VM scoped tokens
   (a fine-grained PAT or a GitHub App installation token) cannot be expressed
   by copying one shared file.
-- Remote fleet VMs have no host filesystem to share in the first place.
+- Remote VMs have no host filesystem to share in the first place.
 
 Declaring one scoped secret and consuming it per node keeps the surface to a
 single credential with a single owner. Whether ix should also offer a

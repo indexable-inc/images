@@ -10,9 +10,9 @@
   };
 
   outputs = {index, ...}: let
-    fleet = import ./ix.nix {inherit index;};
+    vm = import ./default.ix {inherit index;};
   in {
-    ix.fleets.default = fleet;
-    inherit (fleet) nixosConfigurations;
+    ix.default = vm;
+    inherit (vm) nixosConfigurations;
   };
 }

@@ -211,6 +211,35 @@
 
   mkFleet = mkFleetFor system;
 
+  /**
+  Evaluate a single VM (ix#8306: one VM is the product surface, there is
+  no fleet API). Takes the VM's NixOS `modules`, an optional `name` (the
+  `nixosConfigurations` attr, and the default hostname and image name),
+  and an optional `deployment` attrset with the same keys a fleet node
+  accepted. Returns the same result shape `mkFleet` produced for one
+  node, so `inherit (vm) nixosConfigurations;` keeps working in example
+  flakes and `ix apply .#<name>` resolves the config.
+
+  `nodes` wires in peer VMs evaluated by their own `mkVm` calls: pass the
+  peers' `nixosConfigurations` and this VM's modules see them (plus the
+  VM itself) as the `nodes` module argument, so cross-VM references like
+  `ix.endpointOf nodes.<peer> "<listener>"` keep working without any
+  fleet grouping.
+  */
+  mkVmFor = hostSystem: {
+    modules,
+    name ? "default",
+    deployment ? {},
+    nodes ? {},
+  }:
+    (mkFleetFor hostSystem) {
+      peers = nodes;
+      nodes.${name} = {inherit modules deployment;};
+    };
+
+  mkVm = mkVmFor system;
+
+
   # Dev-fleet layer over `mkFleet` (RFC 0007): consumes the forkable `ix.nix`
   # spec. Curried like `mkFleetFor` so example/flake eval can target a host
   # system.
@@ -251,6 +280,8 @@ in {
     bootstrapImage
     mkFleetFor
     mkFleet
+    mkVmFor
+    mkVm
     mkDevFor
     mkDev
     ;

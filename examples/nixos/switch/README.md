@@ -21,9 +21,7 @@ ix apply .#devbox
 ```
 
 The first run creates `devbox` from `ix/base:latest` and activates this
-configuration on it. From a clone of the index repo root,
-`nix run .#nixos-switch-up` brings up the same fleet through the generated
-wrapper.
+configuration on it.
 
 ## The loop
 
@@ -41,8 +39,8 @@ nothing is recreated.
 - [`flake.nix`](flake.nix) is the native `ix apply` entrypoint. It exposes
   `nixosConfigurations.devbox`, which `ix apply .#devbox` resolves to the NixOS
   system closure.
-- [`ix.nix`](ix.nix) keeps the one-node fleet definition reused by the repo
-  example wrappers.
+- [`default.ix`](default.ix) builds that configuration with
+  `index.lib.mkVm`.
 - [`configuration.nix`](configuration.nix) is the NixOS module you edit.
 
 ## Fork it

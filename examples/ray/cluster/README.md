@@ -8,12 +8,12 @@
 # Ray cluster
 
 What does it take to run a real multi-node [Ray](https://docs.ray.io) cluster
-on VMs you can actually firewall? This fleet runs one `ray-head` (the Ray
-GCS) and two `ray-worker` replicas that join it over the east-west network. A
+on VMs you can actually firewall? This example runs one `ray-head` VM (the
+Ray GCS) and two `ray-worker` VMs that join it over the east-west network. A
 driver packaged with
 [`ix.buildUvApplication`](../../../lib/build/uv-application.nix) attaches to
 the head, fans `@ray.remote` tasks across the cluster, and reports which node
-ran each one. The driver doubles as the head's health check, so the fleet
+ran each one. The driver doubles as the head's health check, so the head
 does not report healthy until every worker has joined.
 
 The Python stays ordinary Ray. The ix-specific parts are
@@ -23,20 +23,20 @@ The Python stays ordinary Ray. The ix-specific parts are
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#ray-cluster-up
+ix apply .#ray-head .#ray-worker-0 .#ray-worker-1
 ```
 
-Get the repo with `git clone https://github.com/indexable-inc/index`.
+Get the source with `git clone https://github.com/indexable-inc/index` and
+run it from `examples/ray/cluster`.
 
 ## Shape
 
 - [`pyproject.toml`](pyproject.toml), [`uv.lock`](uv.lock), and [`src/`](src/)
   are the Ray driver (`ray-demo`).
-- [`ix.nix`](ix.nix) defines the fleet: one head and two worker replicas, all
+- [`default.ix`](default.ix) defines the VMs: one head and two workers, all
   in one east-west group. Workers retry their Ray startup until the head is
-  reachable, so the fleet can boot the whole cluster together while the
-  head's health check waits for every node to join.
+  reachable, so the whole cluster can apply together while the head's
+  health check waits for every node to join.
 - [`cluster-node.nix`](cluster-node.nix) owns one Ray node: the package, the
   pinned ports, the `nix-ld` loader environment, and the hardened
   long-running service. Head and worker differ only by their `ray start`
@@ -66,9 +66,10 @@ node.
 
 ## Scale
 
-Worker count is one line. Raise `ray-worker.replicas` in [`ix.nix`](ix.nix);
-the head's health check waits for the new total because it counts fleet nodes
-rather than hard-coding three.
+Worker count is one line. Add `ray-worker-2` to the worker list in
+[`default.ix`](default.ix); the head's health check waits for the new total
+because it counts the VMs wired in via `nodes` rather than hard-coding
+three.
 
 ## Ports
 

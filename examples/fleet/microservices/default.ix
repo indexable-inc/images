@@ -1,0 +1,37 @@
+{index}: let
+  inherit (index.lib) mkVm;
+  eastWestGroup = "fleet-micro";
+  group = {ix.networking.groups = [eastWestGroup];};
+
+  cache = mkVm {
+    name = "cache";
+    modules = [./cache.nix group];
+  };
+
+  # Three interchangeable api VMs behind the gateway. Each one's health
+  # checks include "can I reach the cache?".
+  api = name:
+    mkVm {
+      inherit name;
+      modules = [./api.nix group];
+      nodes = cache.nixosConfigurations;
+    };
+  apiConfigurations =
+    builtins.foldl' (acc: vm: acc // vm.nixosConfigurations) {}
+    (map api ["api-0" "api-1" "api-2"]);
+
+  # The gateway discovers every `api-*` VM wired in via `nodes` at eval
+  # time and load-balances across them (see gateway.nix).
+  gateway = mkVm {
+    name = "gateway";
+    modules = [./gateway.nix group];
+    nodes = apiConfigurations;
+  };
+in {
+  # `ix apply .#cache .#api-0 .#api-1 .#api-2 .#gateway`, in that order:
+  # each layer's health checks probe the one below it.
+  nixosConfigurations =
+    cache.nixosConfigurations
+    // apiConfigurations
+    // gateway.nixosConfigurations;
+}

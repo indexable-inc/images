@@ -1,0 +1,26 @@
+{index}: let
+  inherit (index.lib) mkVm;
+  eastWestGroup = "ray-cluster";
+  group = {ix.networking.groups = [eastWestGroup];};
+
+  # head.nix sizes its cluster-ready check from every VM wired in via
+  # `nodes`, so a missing worker is a failure.
+  head = mkVm {
+    name = "ray-head";
+    modules = [./head.nix group];
+    nodes = workerConfigurations;
+  };
+
+  worker = name:
+    mkVm {
+      inherit name;
+      modules = [./worker.nix group];
+      nodes = head.nixosConfigurations;
+    };
+  workerConfigurations =
+    builtins.foldl' (acc: vm: acc // vm.nixosConfigurations) {}
+    (map worker ["ray-worker-0" "ray-worker-1"]);
+in {
+  # `ix apply .#ray-head .#ray-worker-0 .#ray-worker-1`
+  nixosConfigurations = head.nixosConfigurations // workerConfigurations;
+}

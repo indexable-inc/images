@@ -1,0 +1,28 @@
+{index}: let
+  inherit (index.lib) mkVm;
+  eastWestGroup = "nomad-cluster";
+  group = {ix.networking.groups = [eastWestGroup];};
+
+  # The server's job spec sizes itself from the client VMs wired in via
+  # `nodes` (job.nix counts the `nomad-client-*` names).
+  server = mkVm {
+    name = "nomad-server";
+    modules = [./server.nix group];
+    nodes = clientConfigurations;
+  };
+
+  # Clients boot in parallel with the server and retry registration until
+  # it answers, so apply order does not matter.
+  client = name:
+    mkVm {
+      inherit name;
+      modules = [./client.nix group];
+      nodes = server.nixosConfigurations;
+    };
+  clientConfigurations =
+    builtins.foldl' (acc: vm: acc // vm.nixosConfigurations) {}
+    (map client ["nomad-client-0" "nomad-client-1"]);
+in {
+  # `ix apply .#nomad-server .#nomad-client-0 .#nomad-client-1`
+  nixosConfigurations = server.nixosConfigurations // clientConfigurations;
+}

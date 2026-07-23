@@ -5,8 +5,8 @@
   ...
 }: let
   gatewayPort = 8080;
-  # Discover every api replica at eval time: raise `api.replicas` in ix.nix
-  # and the upstream pool (and the per-replica probes below) grow with it.
+  # Discover every api VM at eval time: add one in default.ix and the
+  # upstream pool (and the per-VM probes below) grow with it.
   apiEndpoints =
     lib.mapAttrsToList (_name: node: ix.endpointOf node "http")
     (lib.filterAttrs (name: _node: lib.hasPrefix "api-" name) nodes);

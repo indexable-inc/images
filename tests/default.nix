@@ -5698,9 +5698,9 @@
       }
       {
         assertion =
-          builtins.pathExists (paths.examples + "/dev/fleet/ix.nix")
-          && builtins.pathExists (paths.examples + "/dev/fleet/dev.nix");
-        message = "dev-fleet should expose ix.nix as the mkDev entrypoint and dev.nix as the editable module";
+          builtins.pathExists (paths.examples + "/dev/vm/default.ix")
+          && builtins.pathExists (paths.examples + "/dev/vm/dev.nix");
+        message = "dev-vm should expose default.ix as the mkDev entrypoint and dev.nix as the editable module";
       }
       {
         assertion =

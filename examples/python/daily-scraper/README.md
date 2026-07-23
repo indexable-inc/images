@@ -18,17 +18,17 @@ S3. The Python stays ordinary Python; the ix-specific parts are
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#python-daily-scraper-up
+ix apply .#scraper
 ```
 
-Get the repo with `git clone https://github.com/indexable-inc/index`.
+Get the source with `git clone https://github.com/indexable-inc/index` and
+run it from `examples/python/daily-scraper`.
 
 ## Shape
 
 - [`pyproject.toml`](pyproject.toml), [`uv.lock`](uv.lock), and [`src/`](src/)
   are the Python project.
-- [`ix.nix`](ix.nix) defines one ix fleet node.
+- [`default.ix`](default.ix) defines the VM.
 - [`service.nix`](service.nix) owns the concrete service config, hardening,
   timer, and optional S3 sync.
 - [`package.nix`](package.nix) packages the uv project as a store executable.
@@ -36,31 +36,30 @@ Get the repo with `git clone https://github.com/indexable-inc/index`.
 ## S3 output
 
 The example leaves S3 sync disabled. [`service.nix`](service.nix) reads a
-`dailyScraper` module argument, so a fleet can enable S3 without forking the
-service module. Store the env file with `ix secret set daily_scraper_aws_env`,
-then have the fleet attach it as a runtime file:
+`dailyScraper` module argument, so a deployment can enable S3 without
+forking the service module. Store the env file with
+`ix secret set daily_scraper_aws_env`, then attach it as a runtime file in
+[`default.ix`](default.ix):
 
 ```nix
-{
+index.lib.mkVm {
+  name = "scraper";
   deployment.secrets.daily_scraper_aws_env = {
     file = "daily-scraper/aws.env";
     owner = "root";
     mode = "0400";
   };
-
-  nodes.scraper.modules = [
-    (
-      { ... }:
-      {
-        _module.args.dailyScraper.s3 = {
-          uri = "s3://andrew-scraper-output/github";
-          deleteRemoved = true;
-          awsEnvironmentFile = "/run/secrets/daily-scraper/aws.env";
-        };
-      }
-    )
+  modules = [
+    ./service.nix
+    {
+      _module.args.dailyScraper.s3 = {
+        uri = "s3://andrew-scraper-output/github";
+        deleteRemoved = true;
+        awsEnvironmentFile = "/run/secrets/daily-scraper/aws.env";
+      };
+    }
   ];
-};
+}
 ```
 
 The AWS file is read at service start through `LoadCredential`, so the keys

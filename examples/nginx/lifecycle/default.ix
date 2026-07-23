@@ -1,0 +1,6 @@
+{index}:
+index.lib.mkVm {
+  name = "nginx";
+  deployment.recreateOnUp = true;
+  modules = [./service.nix];
+}

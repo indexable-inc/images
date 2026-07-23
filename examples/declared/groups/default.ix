@@ -1,0 +1,26 @@
+{index}: let
+  inherit (index.lib) mkVm;
+
+  # No group module here: the api image itself declares
+  # `ix.networking.groups`, so its network identity travels with the
+  # image definition instead of the deployment wiring.
+  api = mkVm {
+    name = "api";
+    modules = [./api.nix];
+  };
+
+  # The client's image is group-agnostic; membership is added here at the
+  # composition layer and unions with anything the image declares.
+  client = mkVm {
+    name = "client";
+    modules = [
+      ./client.nix
+      {ix.networking.groups = ["declared-groups"];}
+    ];
+    nodes = api.nixosConfigurations;
+  };
+in {
+  # `ix apply .#api .#client`, api first: the client's health checks
+  # probe it over the east-west network.
+  nixosConfigurations = api.nixosConfigurations // client.nixosConfigurations;
+}
