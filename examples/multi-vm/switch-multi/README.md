@@ -16,7 +16,7 @@ substitute most of what the first build produced instead of rebuilding it.
 ## Run
 
 ```sh
-# From this directory (examples/nixos/switch-multi in the index repo).
+# From this directory (examples/multi-vm/switch-multi in the index repo).
 ix apply .#web .#worker .#edge
 ```
 

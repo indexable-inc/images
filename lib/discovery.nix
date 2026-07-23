@@ -135,9 +135,11 @@
   requested system rather than always pinning to the default.
 
   Only single-VM results (the evaluator shape: `nodes` + `planValue`)
-  are kept: a multi-VM example returns a plain
-  `{ nixosConfigurations = ...; }` merge and is deployed VM-by-VM with
-  `ix apply .#a .#b`, so it has no lifecycle plan to aggregate here.
+  are kept: a multi-VM example is deployed VM-by-VM with
+  `ix apply .#a .#b` and an oci entry returns images, so neither has a
+  lifecycle plan to aggregate. The filter forces each conversion (an
+  IFD), so the returned key set is IFD-dependent; see the note at the
+  filter for what may consume it (index#4087).
 
   Adding an example is `mkdir examples/<category>/<name>` + edit
   `default.ix`; this aggregator picks it up on the next eval, no
@@ -164,6 +166,12 @@
         };
     };
   in
+    # Classifying single- vs multi-VM needs the converted module (the
+    # `nodes` + `planValue` shape), and conversion is an IFD, so this
+    # attrset's KEY SET is IFD-dependent. It must never feed a `packages`
+    # name: IFD-forbidding evals (ix's no-build lint gate) enumerate those
+    # names. Example-derived package fan-outs live in `legacyPackages`
+    # instead (index#4087).
     lib.filterAttrs (_: fleet: fleet != null) (
       lib.mapAttrs (
         _: entry: let

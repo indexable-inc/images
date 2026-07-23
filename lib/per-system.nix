@@ -1500,11 +1500,13 @@
     )
     exampleFleets;
 
-  # Surface every example's `ix fleet <sub>` wrapper as a flake package.
-  # Each example contributes `packages.<system>.<example>-{up,health,...}`,
-  # which lets `nix run .#nginx-lifecycle-up` invoke the existing fleet
-  # plumbing through the wrapper's `meta.mainProgram`, and
-  # `nix build .#nginx-lifecycle-up` produce the wrapper script on disk.
+  # Surface every example's `ix fleet <sub>` wrapper as a buildable attr.
+  # Each example contributes `<example>-{up,health,...}` under
+  # `legacyPackages.<system>` (e.g. `nix build
+  # .#legacyPackages.x86_64-linux.nginx-lifecycle-up`). Deliberately NOT in
+  # `packages`: the example key set needs the `.ix` converter IFD, and
+  # `packages` names must stay enumerable by IFD-forbidding evals
+  # (index#4087).
   examplePackages = let
     fleetSubs = [
       "up"
@@ -1720,11 +1722,9 @@
     }
     // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
     // repoFlakePackages
-    // examplePackages
     // nonNixExampleImages
     // nonNixExampleDescriptions
-    // crossPackages
-    // healthChecks.lifecyclePackages;
+    // crossPackages;
   securityRootRegistry = let
     mkRoot = ix.securityRoots.mkRoot;
     owner = "indexable-inc/index";
@@ -1816,11 +1816,12 @@ in {
   #      `ix apply` substitutes (consumers reconstruct the archive on demand via
   #      streamLayeredImage). Non-image packages, and non-NixOS OCI images (which
   #      expose no `toplevel`), pass through unchanged. See lib/image/oci-layer.nix.
-  #   2. The `health-check-*` packages (and the `health-checks{,-zellij}` runners)
-  #      pin every fleet node's `toplevel` closure as a build dep
-  #      (lib/image/health-checks.nix). Drop the wrapper scripts and add the
-  #      fleet node `toplevel` closures directly, so the closures those checks
-  #      drag in stay cached without pushing the per-fleet script derivations.
+  #   2. The `health-checks{,-zellij}` runners pin every fleet node's
+  #      `toplevel` closure as a build dep (lib/image/health-checks.nix); the
+  #      per-example `health-check-*` wrappers live in `legacyPackages`, not
+  #      here (index#4087). Drop the runner scripts and add the fleet node
+  #      `toplevel` closures directly, so the closures the checks drag in
+  #      stay cached without pushing the script derivations.
   #   3. The cross lane's eval-time IFD outputs (`crossIfdRoots`): the rendered
   #      `cargo-units.nix`, its `cargo-unit-graph.json`, and the vendor dir a Mac
   #      forces at eval when it substitutes a Darwin cross output. These are
@@ -1927,7 +1928,16 @@ in {
   # `packages` and every gate closure that enumerates it (flake-check,
   # blast-radius, cache-push). x86_64-linux only: the plan replays gcc/binutils
   # saved commands, so there is no Darwin or cross lane to offer.
-  legacyPackages = lib.optionalAttrs (system == "x86_64-linux") {
+  legacyPackages =
+    # Example-derived fan-outs: the `<example>-{up,health,...}` fleet
+    # wrappers and the `health-check-<example>` lifecycle packages. Their
+    # KEY SET requires the `.ix` converter IFD (see exampleFleetsFor), so
+    # they live here rather than in `packages`, whose names IFD-forbidding
+    # evals enumerate (index#4087). The `health-checks{,-zellij}` runners
+    # keep their static names in `packages`.
+    examplePackages
+    // healthChecks.lifecyclePackages
+    // lib.optionalAttrs (system == "x86_64-linux") {
     kernel-unit = (ix.kernelUnitFor pkgs).buildKernel {
       inherit (pkgs.linux_6_12) src;
     };

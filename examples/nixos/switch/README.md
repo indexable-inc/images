@@ -54,5 +54,5 @@ onto your own VM.
 ## Scope
 
 This builds on the target VM itself, the `ix apply` default. Switching
-several VMs in one command is what [`switch-multi`](../switch-multi)
+several VMs in one command is what [`switch-multi`](../../multi-vm/switch-multi)
 demonstrates.
