@@ -7,11 +7,12 @@
   ports = import ./ports.nix;
   k3s = lib.getExe' config.services.k3s.package "k3s";
 
-  # Every fleet node runs k3s under its own hostname, so the fleet's node
-  # list is exactly the set of Kubernetes nodes the cluster must reach.
-  # Naming them (instead of `--all`) makes a missing agent a failure rather
-  # than a smaller cluster that happens to look Ready. Bumping
-  # `k3s-agent.replicas` in ix.nix extends this automatically.
+  # Every VM here runs k3s under its own hostname, so the `nodes` module
+  # argument (this VM plus the peers wired in default.ix) is exactly the set
+  # of Kubernetes nodes the cluster must reach. Naming them (instead of
+  # `--all`) makes a missing agent a failure rather than a smaller cluster
+  # that happens to look Ready. Wiring another agent VM into default.ix
+  # extends this automatically.
   clusterNodes =
     map (node: "node/${node.config.networking.hostName}")
     (lib.attrValues nodes);
@@ -38,7 +39,7 @@ in {
 
   ix.healthChecks = {
     nodes-ready = {
-      description = "every fleet node joined the cluster and reports Ready";
+      description = "every VM joined the cluster and reports Ready";
       command =
         [
           k3s

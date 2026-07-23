@@ -1552,14 +1552,14 @@
   };
 
   # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
-  # `examples/oci` with the same hierarchical shape as fleet examples, but
-  # return images instead of fleet plans and are exposed as opt-in packages only.
+  # `examples/oci` with the same hierarchical shape as the VM examples, but
+  # return images instead of VM plans and are exposed as opt-in packages only.
   nonNixExampleImages =
     lib.mapAttrs'
     (
       name: entry:
         lib.nameValuePair "non-nix-${name}" (
-          import (entry.path + "/ix.nix") {
+          ix.importIxFor system (entry.path + "/default.ix") {
             index = {
               lib = ix;
             };
@@ -1569,7 +1569,7 @@
     (
       ix.discoverTree {
         root = paths.examples + "/oci";
-        requiredFiles = ["ix.nix"];
+        requiredFiles = ["default.ix"];
       }
     );
 

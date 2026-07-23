@@ -1,0 +1,44 @@
+// A three-VM Nomad cluster: `ix apply .#nomad-server .#nomad-client-0
+// .#nomad-client-1`. No ordering between them: clients boot in parallel with
+// the server and retry registration until it answers, and the server's job
+// check waits for an allocation on every client, so bring-up converges
+// regardless of order.
+export default ({ index }) => {
+  // One private east-west network for the cluster.
+  const group = { ix: { networking: { groups: ["nomad-cluster"] } } };
+  const server = index.lib.mkVm({
+    name: "nomad-server",
+    modules: [import("./server.nix"), group],
+    // Peer wiring: the whoami job's Count matches the client VMs the server
+    // sees in its `nodes` module argument.
+    nodes: {
+      ...clientZero.nixosConfigurations,
+      ...clientOne.nixosConfigurations,
+    },
+  });
+  // Two interchangeable clients; the static port keeps the scheduler from
+  // co-locating their allocations.
+  const client = (name) =>
+    index.lib.mkVm({
+      name: name,
+      modules: [import("./client.nix"), group],
+      // Clients register by the server's east-west hostname.
+      nodes: server.nixosConfigurations,
+    });
+  const clientZero = client("nomad-client-0");
+  const clientOne = client("nomad-client-1");
+  return {
+    nixosConfigurations: {
+      ...server.nixosConfigurations,
+      ...clientZero.nixosConfigurations,
+      ...clientOne.nixosConfigurations,
+    },
+    // Per-VM results (plans, lifecycle wrappers), for tooling and the
+    // repo's eval tests.
+    vms: {
+      "nomad-server": server,
+      "nomad-client-0": clientZero,
+      "nomad-client-1": clientOne,
+    },
+  };
+};

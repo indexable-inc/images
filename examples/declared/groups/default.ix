@@ -1,0 +1,27 @@
+// Two VMs: `ix apply .#api .#client`. The api image itself declares
+// `ix.networking.groups` (see api.nix), so its network identity travels
+// with the image definition. The client's image is group-agnostic; its
+// membership is added here, at the wiring layer, as a one-line module.
+export default ({ index }) => {
+  const api = index.lib.mkVm({
+    name: "api",
+    modules: [import("./api.nix")],
+  });
+  const client = index.lib.mkVm({
+    name: "client",
+    modules: [
+      import("./client.nix"),
+      { ix: { networking: { groups: ["declared-groups"] } } },
+    ],
+    nodes: api.nixosConfigurations,
+  });
+  return {
+    nixosConfigurations: {
+      ...api.nixosConfigurations,
+      ...client.nixosConfigurations,
+    },
+    // Per-VM results (plans, lifecycle wrappers), for tooling and the
+    // repo's eval tests.
+    vms: { api: api, client: client },
+  };
+};

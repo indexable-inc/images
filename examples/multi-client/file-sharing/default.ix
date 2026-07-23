@@ -1,0 +1,33 @@
+// One SMB server and two clients: `ix apply .#file-server .#client-0
+// .#client-1`. The clients mount the share by the server's east-west
+// hostname; cross-client locking is the point of the example, so there are
+// two of them.
+export default ({ index }) => {
+  const server = index.lib.mkVm({
+    name: "file-server",
+    modules: [import("./server.nix")],
+  });
+  const client = (name) =>
+    index.lib.mkVm({
+      name: name,
+      modules: [import("./client.nix")],
+      // The mount resolves the server by its east-west hostname.
+      nodes: server.nixosConfigurations,
+    });
+  const clientZero = client("client-0");
+  const clientOne = client("client-1");
+  return {
+    nixosConfigurations: {
+      ...server.nixosConfigurations,
+      ...clientZero.nixosConfigurations,
+      ...clientOne.nixosConfigurations,
+    },
+    // Per-VM results (plans, lifecycle wrappers), for tooling and the
+    // repo's eval tests.
+    vms: {
+      "file-server": server,
+      "client-0": clientZero,
+      "client-1": clientOne,
+    },
+  };
+};

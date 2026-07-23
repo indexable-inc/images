@@ -65,7 +65,7 @@ in {
       description = "kubelet API (kubectl logs/exec reach the node here)";
     };
     # kube-proxy programs the whoami Service's NodePort (workload.nix) on
-    # every node, server and agents alike; open it fleet-wide so a curl
+    # every node, server and agents alike; open it on every VM so a curl
     # lands regardless of which node it hits.
     whoami-nodeport = {
       port = ports.nodePort;

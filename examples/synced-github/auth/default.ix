@@ -1,0 +1,20 @@
+// One GitHub token, declared once. The ix account secret store owns the
+// lower snake_case key; this VM declares how it is received at runtime
+// as `/run/secrets/github/token`.
+//
+// Store it first with `ix secret set github_token`. A fine-grained
+// GitHub PAT or GitHub App installation token scoped to the repos the
+// agents touch is the right credential here, not a personal classic PAT.
+//
+// The agent VM never runs `gh auth login`; it consumes the declared
+// token, so bringing up another VM from this same config costs nothing.
+export default ({ index }) =>
+  index.lib.mkVm({
+    name: "agent",
+    deployment: {
+      secrets: {
+        github_token: { file: "github/token", owner: "root", mode: "0400" },
+      },
+    },
+    modules: [import("./agent.nix")],
+  });

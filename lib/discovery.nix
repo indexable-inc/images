@@ -1,7 +1,9 @@
 {
   lib,
   paths,
+  importIxFor,
   mkFleetFor,
+  mkVmFor,
   mkDevFor,
   ixReturn,
 }: let
@@ -120,18 +122,25 @@
     strictList (map entryAsTree entries);
 
   /**
-  Discovered example fleets, built for a given host system. Discovery
-  walks the hierarchical `examples/<category>/<name>/ix.nix` layout.
-  Keys in the returned attrset join the category and name with `-`, so
-  `examples/hermes/api-server` contributes `hermes-api-server`. Each
-  fleet is imported with `{ index = { lib = ix; }; }` to match
-  the contract examples already use, with `mkFleet` swapped for the
-  host-system variant so the wrapper derivations under
-  `.up`/`.health`/`.replace` build for the requested system rather
-  than always pinning to the default.
+  Discovered example VMs, built for a given host system. Discovery walks
+  the hierarchical `examples/<category>/<name>/default.ix` layout
+  (JavaScript-syntax Nix, converted through `importIxFor` — an IFD on the
+  compiled `ix2nix`, since repo evals run on stock nix without
+  `builtins.wasm`). Keys in the returned attrset join the category and
+  name with `-`, so `examples/hermes/api-server` contributes
+  `hermes-api-server`. Each config is imported with
+  `{ index = { lib = ix; }; }` to match the contract examples already
+  use, with `mkVm`/`mkFleet` swapped for the host-system variants so the
+  wrapper derivations under `.up`/`.health`/`.replace` build for the
+  requested system rather than always pinning to the default.
 
-  Adding an example is `mkdir examples/<category>/<name> + edit
-  ix.nix`; this aggregator picks it up on the next eval, no
+  Only single-VM results (the evaluator shape: `nodes` + `planValue`)
+  are kept: a multi-VM example returns a plain
+  `{ nixosConfigurations = ...; }` merge and is deployed VM-by-VM with
+  `ix apply .#a .#b`, so it has no lifecycle plan to aggregate here.
+
+  Adding an example is `mkdir examples/<category>/<name>` + edit
+  `default.ix`; this aggregator picks it up on the next eval, no
   registry edits.
   */
   exampleFleetsFor = {hostSystem}: let
@@ -140,16 +149,17 @@
         ixReturn
         // {
           mkFleet = mkFleetFor hostSystem;
+          mkVm = mkVmFor hostSystem;
           mkDev = mkDevFor hostSystem;
         };
     };
 
     discovered = discoverTree {
       root = paths.examples;
-      requiredFiles = ["ix.nix"];
+      requiredFiles = ["default.ix"];
       validate = {metadata, ...}:
         assert lib.assertMsg (builtins.length metadata.segments == 2)
-        "exampleFleetsFor: expected examples/<category>/<name>/ix.nix, got examples/${metadata.relativePath}"; {
+        "exampleFleetsFor: expected examples/<category>/<name>/default.ix, got examples/${metadata.relativePath}"; {
           name = lib.concatStringsSep "-" metadata.segments;
         };
     };
@@ -157,7 +167,7 @@
     lib.filterAttrs (_: fleet: fleet != null) (
       lib.mapAttrs (
         _: entry: let
-          load = import (entry.path + "/ix.nix");
+          load = importIxFor hostSystem (entry.path + "/default.ix");
           args = builtins.functionArgs load;
           value =
             if args ? index

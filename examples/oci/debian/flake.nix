@@ -10,7 +10,14 @@
   };
 
   outputs = {index, ...}: let
-    image = import ./ix.nix {inherit index;};
+    # `default.ix` is JavaScript-syntax Nix. `builtins.wasm` converts it during
+    # evaluation, so evaluating this flake takes index's patched nix with
+    # `wasm-builtin` in `extra-experimental-features` (`ix apply` and `ix eval`
+    # pass the flag).
+    importIx = import (index + "/packages/nix/ix2nix/import-ix.nix") {
+      converter = "${index.packages.${index.lib.system}.ix2nix-wasm}/lib/ix2nix.wasm";
+    };
+    image = importIx ./default.ix {inherit index;};
   in {
     ix.images.default = image;
     packages.x86_64-linux.default = image;

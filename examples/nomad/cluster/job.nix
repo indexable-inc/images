@@ -6,7 +6,7 @@ The spec is plain Nix rendered to nomad's API JSON by one renderer
 (pkgs.formats.json); `nomad job run -json` reads that format directly, so
 there is no HCL to hand-assemble. The task's artifact is the store path of
 whoami.nix, which every client pins into its closure. Count matches the
-client replicas and the static port keeps allocations from co-locating, so
+client VMs and the static port keeps allocations from co-locating, so
 the scheduler spreads one allocation per client.
 */
 {
@@ -86,7 +86,7 @@ in {
 
   # `job inspect` exits non-zero until the job is registered; each client's
   # own `whoami-http` probe (client.nix) then covers "my allocation runs and
-  # answers", so together the fleet's checks gate on one alloc per client.
+  # answers", so together the example's checks gate on one alloc per client.
   ix.healthChecks.whoami-registered = {
     description = "whoami job registered with the scheduler";
     command = [

@@ -10,6 +10,11 @@ let
   # default buried in the shared composition, owns the number.
   port = 9119;
 in {
+  # Any VM that should be able to call the API joins this group; a VM
+  # outside it has no east-west route or DNS name to the listener.
+  # Declared in the image so the network identity travels with it.
+  ix.networking.groups = ["hermes-api"];
+
   _module.args.hermes = {
     apiServer = true;
     apiServerPort = port;

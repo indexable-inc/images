@@ -144,7 +144,7 @@ in {
   };
 
   # The worker port range is opened at the firewall directly: `expose` covers a
-  # single named listener, not a range. Unlike the fleet module
+  # single named listener, not a range. Unlike the reusable module
   # (modules/services/ray), this open is NOT scoped to a tailscale interface:
   # these are ix guest VMs with no tailscale and no public interface at all
   # (east-west only, no internet egress), so the guest-global firewall is

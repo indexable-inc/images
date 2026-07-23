@@ -8,11 +8,11 @@
 # Observability stack
 
 Where do spans and logs go when your app runs in a VM you created five
-minutes ago? This fleet self-hosts the whole pipeline: an `observability`
-node runs an OpenTelemetry collector, ClickHouse, and Grafana, and an `app`
-node exercises both instrumentation paths by sending a span through its local
+minutes ago? These two VMs self-host the whole pipeline: an `observability`
+VM runs an OpenTelemetry collector, ClickHouse, and Grafana, and an `app`
+VM exercises both instrumentation paths by sending a span through its local
 collector agent and writing a log line the agent tails. A health check holds
-the fleet unhealthy until both records actually land in ClickHouse.
+the app VM unhealthy until both records actually land in ClickHouse.
 
 For how the telemetry pipeline works end to end, with diagrams, see the
 [module README](../../../modules/services/observability/README.md).
@@ -20,8 +20,8 @@ For how the telemetry pipeline works end to end, with diagrams, see the
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#observability-stack-up
+# From this directory (examples/observability/stack in the index repo).
+ix apply .#observability .#app
 ```
 
 Grafana is on port `3000` through the example's L7 proxy. The
@@ -36,8 +36,10 @@ Get the repo with `git clone https://github.com/indexable-inc/index`.
 
 ## Shape
 
-- `observability` runs
-  [`services.ix-observability`](../../../modules/services/observability/).
+- [`default.ix`](default.ix) wires the two VMs into one east-west group;
+  `observability` runs
+  [`services.ix-observability`](../../../modules/services/observability/)
+  from a small inline module.
 - `app` enables only the local collector agent and forwards OTLP to
   `observability:4317`.
 - [`app.nix`](app.nix) proves both instrumentation paths: direct OTLP spans

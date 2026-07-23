@@ -11,7 +11,7 @@ What happens to a block placement after the click? Here it becomes a durable
 fact: the placement lands in a Kafka log, the log materializes into a
 ClickHouse table ordered by a space-filling curve, and a bounding-box query
 over that table scans only the storage it needs. Three VMs carry the tour
-(`producer`, `log`, `view`), and the fleet also shows the contrast the
+(`producer`, `log`, `view`), and the example also shows the contrast the
 architecture turns on: a block placement is a domain fact and travels the log
 path, while the server's own telemetry travels a separate collector path into
 the same database.
@@ -19,13 +19,14 @@ the same database.
 ## Run
 
 ```sh
-nix run .#minecraft-blocks-up
+# From this directory (examples/minecraft/blocks in the index repo).
+ix apply .#log .#view .#producer
 ```
 
 That brings up three VMs: `log` (the Kafka broker), `view` (ClickHouse, the
 OTel collector, and Grafana), and `producer` (the Paper server with the
-block-events plugin). Grafana is on port `3000` through the example's L7 proxy. The wrapper
-lives on the index root flake: `git clone https://github.com/indexable-inc/index`.
+block-events plugin). Grafana is on port `3000` through the example's L7
+proxy. Get the repo with `git clone https://github.com/indexable-inc/index`.
 
 Query the spatial view from inside the view VM:
 
@@ -99,11 +100,11 @@ replayable, and they land in a view shaped for the questions you ask of them.
 
 The server's own signals (tick rate, JVM heap, lag, logs) are telemetry. Those
 go through the OpenTelemetry collector into the `otel_*` tables, the same path
-every other service in the fleet uses. The diagram shows both legs side by side
+every other service uses. The diagram shows both legs side by side
 because the architecture only works when you put each kind of data on the right
 one. A block-place is not telemetry, so it never goes through the collector.
 
-Both legs land in one ClickHouse. The `view` node runs the shared
+Both legs land in one ClickHouse. The `view` VM runs the shared
 `services.ix-observability` stack (ClickHouse, collector, Grafana) and adds the
 `minecraft` database on that same server, so telemetry and block facts share a
 database without a second ClickHouse.
@@ -248,6 +249,8 @@ from); this example keeps the single fixed group for simplicity.
 
 ## Shape
 
+- `default.ix` wires the three VMs into one east-west group; `view` and
+  `producer` resolve their peers through `mkVm`'s `nodes` argument.
 - `schema.nix` is the one source of truth for the event: the topic name, the
   Morton offset, the granule size, the skip indexes, and the ClickHouse DDL all
   derive from the field list, so the log, the table, and the queries cannot
@@ -301,6 +304,6 @@ things:
 nix build .#checks.x86_64-linux.eval
 ```
 
-The eval aggregate also evaluates the fleet's config assertions (the KRaft
+The eval aggregate also evaluates the example's config assertions (the KRaft
 broker, the shared ClickHouse, the spatial view, both producer legs) and builds
 the plugin jar against the real Paper API.
