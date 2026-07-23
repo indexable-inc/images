@@ -246,6 +246,24 @@
     };
   }
   {
+    backendLanguage = {
+      topics = ["architecture"];
+      text = ''
+        Backend and service code defaults to Rust, not Python or JavaScript.
+        An agent writes it, so ease of authoring counts for little; runtime
+        cost, type safety, and a single deployable binary count for more.
+        Reach for Python or JS only where the ecosystem forces it (a library
+        with no Rust equivalent, an existing app in that language) and say
+        why.
+      '';
+      reason = ''
+        New backend code kept landing in Python and JS for authoring
+        convenience that does not apply when an agent writes it; performance
+        and single-binary deploys matter more (Andrew, 2026-07-23).
+      '';
+    };
+  }
+  {
     oneSourceOfTruth = {
       topics = ["architecture"];
       text = ''
