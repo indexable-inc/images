@@ -3538,8 +3538,8 @@
         message = "base profile should enable the ix shell workspace by default";
       }
       {
-        assertion = base.config.users.users.root.shell.meta.mainProgram == "nu";
-        message = "base profile should make root land in nushell (via platform users.defaultUserShell)";
+        assertion = base.config.users.users.root.shell.meta.mainProgram == "zsh";
+        message = "base profile should make root land in zsh (via platform users.defaultUserShell)";
       }
       {
         assertion = base.config.home-manager.users.root.programs.fzf.historyWidget.command == "";
