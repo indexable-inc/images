@@ -1404,6 +1404,15 @@
       resource-monitor-stats-writer = cargoUnit.selectBinaryWithTests rustWorkspace.units {
         binary = "resource-monitor-stats-writer";
       };
+      sandboxed-agent-egress-check = cargoUnit.selectBinaryWithTests rustWorkspace.units {
+        binary = "sandboxed-agent-egress-check";
+      };
+      sandboxed-agent-launch = cargoUnit.selectBinaryWithTests rustWorkspace.units {
+        binary = "sandboxed-agent-launch";
+      };
+      sandboxed-agent-proxy = cargoUnit.selectBinaryWithTests rustWorkspace.units {
+        binary = "sandboxed-agent-proxy";
+      };
     };
     # cargoAudit scans the single workspace Cargo.lock against the advisory DB,
     # so it is one lockfile-scoped check (it rebuilds only on a Cargo.lock

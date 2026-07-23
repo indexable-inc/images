@@ -1,0 +1,13 @@
+[package]
+name = "sandboxed-agent-proxy"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+httparse.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true

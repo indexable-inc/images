@@ -72,6 +72,9 @@
             (root + "/Cargo.toml")
             (root + "/Cargo.lock")
             (rustPackageFiles (paths.modules + "/services/resource-monitor/stats-writer"))
+            (rustPackageFiles (paths.modules + "/services/sandboxed-agent/egress-check"))
+            (rustPackageFiles (paths.modules + "/services/sandboxed-agent/launch"))
+            (rustPackageFiles (paths.modules + "/services/sandboxed-agent/proxy"))
           ]
           ++ map (entry: rustPackageFiles entry.path) packageRegistry.rustWorkspaceEntries
         )
