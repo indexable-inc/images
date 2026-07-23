@@ -1,0 +1,83 @@
+// The demo workload, declared the same way as the machines that run it.
+//
+// `services.k3s.manifests` is nixpkgs' typed path into the k3s auto-deploy
+// directory: the Deployment and Service below are plain Nix values and the
+// module renders the YAML. The pod image (image.ix) is preloaded into
+// containerd on every node (node.ix), so the manifest never touches a
+// registry.
+//
+// A manifest change lands via a rebuild of the server VM: the right coupling
+// for a demo and for cluster add-ons. At scale, app churn goes through the
+// Kubernetes API instead, so a deploy is not a machine rebuild.
+
+export default ({ ix, lib, pkgs, ...rest }) => {
+  const ports = import("./ports.ix");
+  const replicas = 2;
+  const appLabels = { "app.kubernetes.io/name": "whoami" };
+  const whoamiImage = import("./image.ix")({ ix: ix, lib: lib, pkgs: pkgs });
+  return {
+    services: {
+      k3s: {
+        manifests: {
+          whoami: {
+            content: [
+              {
+                apiVersion: "apps/v1",
+                kind: "Deployment",
+                metadata: { name: "whoami" },
+                spec: {
+                  replicas: replicas,
+                  selector: { matchLabels: appLabels },
+                  template: {
+                    metadata: { labels: appLabels },
+                    spec: {
+                      containers: [
+                        {
+                          name: "whoami",
+                          // Never pulled: every node already imported the image
+                          // into containerd from the store (node.ix).
+                          image: `${whoamiImage.imageName}:${whoamiImage.imageTag}`,
+                          imagePullPolicy: "Never",
+                          env: [
+                            {
+                              name: "POD_NAME",
+                              valueFrom: { fieldRef: { fieldPath: "metadata.name" } },
+                            },
+                            {
+                              name: "NODE_NAME",
+                              valueFrom: { fieldRef: { fieldPath: "spec.nodeName" } },
+                            },
+                          ],
+                          ports: [{ containerPort: ports.app }],
+                          readinessProbe: {
+                            httpGet: { path: "/", port: ports.app },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+              {
+                apiVersion: "v1",
+                kind: "Service",
+                metadata: { name: "whoami" },
+                spec: {
+                  type: "NodePort",
+                  selector: appLabels,
+                  ports: [
+                    {
+                      port: ports.app,
+                      targetPort: ports.app,
+                      nodePort: ports.nodePort,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+};
