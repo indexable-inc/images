@@ -21,6 +21,30 @@
 # `final.<attrName>`), so later overlays compose.
 # astlog-ignore: keep-overrides-composable
 let
+  # curl 8.21.0 started consuming the public curl_multi_wakeup() eventfd from
+  # curl_multi_perform(). That loses a wakeup for callers which perform before
+  # polling (notably Nix's file-transfer worker, which can then sleep for its
+  # full 10-second idle timeout). Upstream fixed the regression by giving the
+  # threaded resolver a separate internal wakeup pair:
+  # https://github.com/curl/curl/issues/22272
+  #
+  # Keep the patch here until nixpkgs ships a curl release containing
+  # 009fd378e8f01c97ebe67a14a41a06d56430f3df. The version assertion makes a
+  # nixpkgs curl bump fail visibly instead of silently carrying a stale patch.
+  curl = assert lib.assertMsg (prev.curl.version == "8.21.0")
+  "remove the curl wakeup patch: expected nixpkgs curl 8.21.0, got ${prev.curl.version}";
+    prev.curl.overrideAttrs (old: {
+      patches =
+        (old.patches or [])
+        ++ [
+          (prev.fetchurl {
+            name = "curl-8.21.0-fix-multi-wakeup.patch";
+            url = "https://github.com/curl/curl/commit/009fd378e8f01c97ebe67a14a41a06d56430f3df.patch";
+            hash = "sha256-RMFcifj9jDaWY5jNBGqQc2NUoXb3+mHR/1ubrYjpHvc=";
+          })
+        ];
+    });
+
   # Read the target system from `prev`, not `final`: this overlay's attribute
   # *names* are computed by filtering the registry's `overlay` entries by
   # system (see `overlayEntriesFor`), so forcing the system through `final`
@@ -73,6 +97,8 @@ in
     entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)
   )
   // {
+    inherit curl;
+
     # Default Temurin JRE for repo-owned package sets. The major lives in
     # `lib/languages/jvm-defaults.nix`, shared with `ix.languages.{java,scala}`
     # and exported NixOS modules.
