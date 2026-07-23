@@ -120,6 +120,22 @@
         "type": "github"
       }
     },
+    "flake-registry-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1782548455,
+        "narHash": "sha256-Jjp/ZivVqZCLptwlSuwU8n0a8b8PXJqabxpSG7KRNuI=",
+        "owner": "NixOS",
+        "repo": "flake-registry",
+        "rev": "10bd3d9e8eefb4725e346eddd3a505aa0aacf01b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "flake-registry",
+        "type": "github"
+      }
+    },
     "ghostty-src": {
       "flake": false,
       "locked": {
@@ -554,6 +570,7 @@
         "drgn-src": "drgn-src",
         "examples": "examples",
         "fff-src": "fff-src",
+        "flake-registry-src": "flake-registry-src",
         "ghostty-src": "ghostty-src",
         "git-src": "git-src",
         "hermes-agent": "hermes-agent",
