@@ -656,7 +656,7 @@
         Designing or fixing a system, first judge whether its current shape
         is fundamentally right. On finding a fundamentally better design,
         even a major one, surface it unprompted and put the choice to the
-        user with the kernel Ask dialog (Ask.user in an exec cell), costs
+        user with the AskUserQuestion tool, costs
         named; this early, the rework is usually wanted.
       '';
       reason = ''

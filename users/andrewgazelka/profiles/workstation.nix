@@ -258,15 +258,6 @@
     # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
     # rule permits.
     protectedMergeGuard = false;
-    systemTools = {
-      Agent = true;
-      TaskCreate = true;
-      TaskGet = true;
-      TaskList = true;
-      TaskOutput = true;
-      TaskStop = true;
-      TaskUpdate = true;
-    };
     # appendSystemPrompt (house rules appended to the stock prompt) comes from
     # the package default. Set `appendSystemPrompt = null;` here to ship the
     # stock prompt alone on this machine.
