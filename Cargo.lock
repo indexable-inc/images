@@ -11101,6 +11101,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandboxed-agent-egress-check"
+version = "0.1.0"
+
+[[package]]
+name = "sandboxed-agent-launch"
+version = "0.1.0"
+
+[[package]]
+name = "sandboxed-agent-proxy"
+version = "0.1.0"
+dependencies = [
+ "httparse",
+ "rustls",
+ "webpki-roots",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"

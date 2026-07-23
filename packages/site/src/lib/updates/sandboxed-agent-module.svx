@@ -1,0 +1,15 @@
+---
+id: sandboxed-agent-module
+postedAt: 2026-07-23T12:00:00-07:00
+title: "Key-blind agent sandboxing is a reusable module"
+tags: [modules, security, agent, rust]
+links:
+  - label: module
+    href: https://github.com/indexable-inc/index/tree/main/modules/services/sandboxed-agent
+  - label: example it came from
+    href: https://github.com/indexable-inc/index/pull/4102
+---
+
+The kernel-build example's sandbox machinery moved into `services.sandboxed-agent`, a general module: a fixed-uid confined user, a uid-keyed nftables egress policy that admits exactly one loopback port, a credential-injecting proxy that owns the secret, a `systemd-run` wrapper on PATH, and nix-daemon scoping. Consumers set the agent's user, uid, command, and the proxy's upstream host, header, and key file.
+
+The proxy itself is now a small Rust binary built with cargo-unit, replacing the example's stdlib Python. It relays upstream responses byte for byte, so SSE streams and compressed bodies pass through untouched. The kernel-build example shrank to intent: git-clone the tree, install the toolchain, point the module at Claude.

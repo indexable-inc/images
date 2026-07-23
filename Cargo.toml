@@ -1,6 +1,9 @@
 [workspace]
 members = [
   "modules/services/resource-monitor/stats-writer",
+  "modules/services/sandboxed-agent/egress-check",
+  "modules/services/sandboxed-agent/launch",
+  "modules/services/sandboxed-agent/proxy",
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
   "packages/agent/subagent-cache",
@@ -276,6 +279,7 @@ git2 = { version = "0.21", default-features = false }
 glob = "0.3"
 heck = "0.5"
 hex = "0.4"
+httparse = "1"
 hegeltest = { version = "0.14", default-features = false }
 # The Iceberg corpus lake (issue #752). iceberg 0.9 pins arrow/parquet ^57.1
 # while the workspace parquet pair is on 59; the 57 tree stays isolated inside

@@ -61,17 +61,18 @@ does, minus the key and the network.
   `CPATH`/`LIBRARY_PATH` wiring that makes kbuild's host tools (objtool,
   menuconfig, extract-cert) compile outside a nix-shell. It also sets zsh as
   the VM shell.
-- [`claude.nix`](claude.nix) is the sandbox: the `claude` and
-  `anthropic-proxy` users, the proxy service, the nftables egress policy,
-  and the `claude` wrapper ([`claude-wrapper.py`](claude-wrapper.py)).
-- [`anthropic-proxy.py`](anthropic-proxy.py) is the proxy, small enough to
-  audit in one sitting: accept plain HTTP on `127.0.0.1:8402`, drop the
+- [`claude.nix`](claude.nix) is the sandbox, as intent: it enables the
+  repo's [`services.sandboxed-agent`](../../../modules/services/sandboxed-agent/default.nix)
+  module and fills in the Anthropic-shaped values -- the `claude` user and
+  uid, `pkgs.claude-code` as the confined command, the proxy's port,
+  upstream host, credential header, and key file. The mechanism (users,
+  proxy service, nftables policy, wrapper, health checks) lives in the
+  module.
+- The proxy itself is a small Rust binary
+  ([`modules/services/sandboxed-agent/proxy`](../../../modules/services/sandboxed-agent/proxy/src/main.rs)),
+  auditable in one sitting: accept plain HTTP on `127.0.0.1:8402`, drop the
   client's credential headers, inject the real key from the 0400 file, and
-  stream the TLS response from `api.anthropic.com` back.
-- [`check-claude-egress.py`](check-claude-egress.py) backs the
-  `claude-egress` health check: connect to the proxy as the claude uid,
-  then assert a direct `https://api.anthropic.com` attempt from that uid
-  fails.
+  relay the TLS response from `api.anthropic.com` back byte for byte.
 
 ## The trust model, in plain words
 
@@ -128,8 +129,9 @@ covers forks, daemons, and anything the agent leaves behind. `reject`
 rather than `drop` keeps failure fast and honest (telemetry and update
 probes error immediately instead of hanging).
 
-The `claude-egress` health check proves the behavior, not the config: see
-[`check-claude-egress.py`](check-claude-egress.py).
+The `sandboxed-agent-egress` health check proves the behavior, not the
+config: as the claude uid, connect to the proxy, then assert a direct
+`https://api.anthropic.com` attempt fails fast.
 
 ## Known gaps
 
