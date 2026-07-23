@@ -4526,9 +4526,12 @@
           && !(overlay.codex.forcedSettings.features ? shell_tool)
           && overlay.codex.forcedSettings.features.standalone_web_search == false
           # With the index kernel + exa baked, every superseded native tool is
-          # folded in, in each agent's own vocabulary.
+          # folded in, in each agent's own vocabulary — except Bash, which
+          # Claude keeps as the kernel-outage fallback (index#4080): a dead MCP
+          # connection never auto-reattaches, so a kernel BEAM crash must
+          # degrade to a stock shell rather than leave the session toolless.
+          && !(builtins.elem "Bash" baked.claude.deniedToolPatterns)
           && builtins.all (tool: builtins.elem tool baked.claude.deniedToolPatterns) [
-            "Bash"
             "Read"
             "Write"
             "Edit"
