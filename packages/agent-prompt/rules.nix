@@ -60,6 +60,25 @@
     };
   }
   {
+    noZingers = {
+      topics = ["writing"];
+      text = ''
+        Never write a zinger: a sentence built to land as a punchline gets
+        flattened into a plain claim. Never write a rhetorical triad; three
+        parallel items ("fast, simple, and correct") lose one or gain a
+        fourth. A superlative ("best", "blazing", "massive") is replaced by
+        the measurement that would earn it, or cut. This covers everything
+        you write: replies, commit messages, PR bodies, docs, site updates.
+      '';
+      reason = ''
+        Requested 2026-07-23: prose sets the register and calibratedClaims
+        handles absolutes, yet punch-up devices kept appearing in agent
+        prose. Lands as its own rule since style governs code as well as
+        prose; the shape follows noEmDashes, one register ban stated once.
+      '';
+    };
+  }
+  {
     promptSource = {
       text = ''
         These rules live at `packages/agent-prompt/rules.nix` in the index
