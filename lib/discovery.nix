@@ -123,7 +123,8 @@
 
   /**
   Discovered example VMs, built for a given host system. Discovery walks
-  the hierarchical `examples/<category>/<name>/default.ix` layout
+  the `examples/[<category>/]<name>/default.ix` layout (the category
+  level is optional for an example that is its own category)
   (JavaScript-syntax Nix, converted through `importIxFor` — an IFD on the
   compiled `ix2nix`, since repo evals run on stock nix without
   `builtins.wasm`). Keys in the returned attrset join the category and
@@ -141,7 +142,7 @@
   IFD), so the returned key set is IFD-dependent; see the note at the
   filter for what may consume it (index#4087).
 
-  Adding an example is `mkdir examples/<category>/<name>` + edit
+  Adding an example is `mkdir examples/[<category>/]<name>` + edit
   `default.ix`; this aggregator picks it up on the next eval, no
   registry edits.
   */
@@ -160,8 +161,8 @@
       root = paths.examples;
       requiredFiles = ["default.ix"];
       validate = {metadata, ...}:
-        assert lib.assertMsg (builtins.length metadata.segments == 2)
-        "exampleFleetsFor: expected examples/<category>/<name>/default.ix, got examples/${metadata.relativePath}"; {
+        assert lib.assertMsg (builtins.length metadata.segments <= 2)
+        "exampleFleetsFor: expected examples/[<category>/]<name>/default.ix, got examples/${metadata.relativePath}"; {
           name = lib.concatStringsSep "-" metadata.segments;
         };
     };

@@ -4,7 +4,10 @@
   "file_types": {
     "Nu": ["nu"],
     "JSONC": ["common.json", "*-mods.json"],
-    "Scheme": ["astlog"]
+    "Scheme": ["astlog"],
+    // .ix is TypeScript-syntax (ix2nix checks the annotations); as JS, Zed
+    // rejects `type` aliases.
+    "TypeScript": ["ix"]
   },
   "languages": {
     "Rust": {

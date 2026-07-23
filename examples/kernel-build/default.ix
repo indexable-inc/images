@@ -1,26 +1,21 @@
 // A Linux kernel hack-station: one VM that fetches a kernel tree on first
 // boot, carries the whole kbuild toolchain, and ships a `claude` command
 // whose agent can build kernels but can neither read the Anthropic API key
-// nor reach the internet (see claude.nix for the sandbox, README for the
+// nor reach the internet (see claude.ix for the sandbox, README for the
 // trust model).
 //
 // The key is attached through the ix secret store (`ix secret set
 // anthropic_api_key`) and materializes as a file only the proxy user can
-// read; claude.nix resolves the same path from this declaration.
-// The checked shape of the `mkVm` result: asserted at eval (WHNF plus attr
-// names only), so wiring mistakes fail as positioned .ix type errors.
-type Vm = { nixosConfigurations: object };
+// read; claude.ix resolves the same path from this declaration.
 
 export default ({ index }) => {
   // The tree to hack on. Edit these three to target another repo, tag, or
   // checkout path; everything else (ownership handoff, the agent's cwd docs)
-  // follows the dest through `config.services.git-clone`. The annotations
-  // are checked when the VM evaluates: `srcDir` must be an absolute path,
-  // and a typo'd non-string ref fails here rather than deep in kbuild.
-  const repoUrl: nonEmptyStr = "https://github.com/torvalds/linux";
-  const repoRef: nonEmptyStr = "v6.16";
-  const srcDir: path = "/src/linux";
-  const vm: Vm = index.lib.mkVm({
+  // follows the dest through `config.services.git-clone`.
+  const repoUrl = "https://github.com/torvalds/linux";
+  const repoRef = "v6.16";
+  const srcDir = "/src/linux";
+  return index.lib.mkVm({
     name: "kernel-build",
     deployment: {
       secrets: {
@@ -47,9 +42,8 @@ export default ({ index }) => {
           },
         },
       },
-      import("./toolchain.nix"),
-      import("./claude.nix"),
+      import("./toolchain.ix"),
+      import("./claude.ix"),
     ],
   });
-  return vm;
 };

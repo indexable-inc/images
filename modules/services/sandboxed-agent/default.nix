@@ -24,7 +24,7 @@ Three properties, each with one owner:
 
 The consumer surface is intent-sized: name the confined user and uid, point
 `command.program` at the real binary, and describe the proxy's one upstream
-(host, credential header, key file). See examples/kernel-build/claude for
+(host, credential header, key file). See examples/kernel-build for
 the pattern in use.
 */
 {

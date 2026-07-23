@@ -1,0 +1,67 @@
+// The sandbox, as intent: run Claude Code as a confined agent whose only
+// network reach is a key-injecting loopback proxy to api.anthropic.com.
+//
+// The mechanism -- the fixed-uid user, the uid-keyed nftables egress policy,
+// the Rust proxy that owns the key, the systemd-run wrapper, the nix-daemon
+// scoping -- lives in the repo's `services.sandboxed-agent` module
+// (modules/services/sandboxed-agent); this file only fills in the
+// Anthropic-shaped values and hands the kernel tree to the agent. The README
+// walks the trust model.
+
+export default ({ config, lib, pkgs, ...rest }) => ({
+  services: {
+    "sandboxed-agent": {
+      enable: true,
+
+      user: "claude",
+      uid: 1100,
+
+      // Interactive entry point, installed as `claude`; the real claude-code
+      // binary stays off PATH, so every session enters through the sandbox.
+      command: {
+        name: "claude",
+        program: lib.getExe(pkgs["claude-code"]),
+      },
+
+      proxy: {
+        // Claimed in ix.networking.portClaims by the module, so an eval-time
+        // error (not a runtime bind race) catches another module wanting it.
+        port: 8402,
+        upstream: "api.anthropic.com",
+        header: "x-api-key",
+        // Where default.ix's secret declaration materializes the key: owner
+        // anthropic-proxy, mode 0400. The `claude` uid cannot pass the DAC
+        // check.
+        user: "anthropic-proxy",
+        secretFile: "/run/secrets/anthropic/api-key",
+      },
+
+      environment: {
+        // The kbuild host-tool search paths from toolchain.ix, so the agent's
+        // build commands see the same environment a human shell does.
+        CPATH: config.environment.variables.CPATH,
+        LIBRARY_PATH: config.environment.variables.LIBRARY_PATH,
+        PKG_CONFIG_PATH: config.environment.variables.PKG_CONFIG_PATH,
+        ANTHROPIC_BASE_URL: config.services["sandboxed-agent"].proxy.url,
+        // Never the real key; the proxy strips this and injects its own.
+        ANTHROPIC_API_KEY: "dummy-key-the-proxy-injects-the-real-one",
+        // Skip telemetry/update probes that would only burn timeouts against
+        // the egress policy.
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      },
+    },
+  },
+
+  // The clone runs as root (it needs the network the agent is denied); hand
+  // the tree to the agent afterwards. Re-runs alongside the idempotent
+  // clone on every boot; a re-chown of an existing tree is a few seconds.
+  systemd: {
+    services: {
+      "git-clone": lib.mkIf(config.services["git-clone"].enable, {
+        serviceConfig: {
+          ExecStartPost: `${pkgs.coreutils}/bin/chown -R claude:claude ${config.services["git-clone"].dest}`,
+        },
+      }),
+    },
+  },
+});
