@@ -47,7 +47,8 @@ pub(crate) fn arg_check(loc: String, ty: Expr, value: Expr, body: Expr) -> Expr 
 /// Type names with a fixed meaning; `type` aliases may not shadow them
 /// ([`crate::map`] rejects the declaration), so a reference is never
 /// ambiguous between a built-in and a module alias.
-pub(crate) const BUILTIN_TYPES: [&str; 13] = [
+pub(crate) const BUILTIN_TYPES: [&str; 14] = [
+    "bool",
     "int",
     "float",
     "u8",
@@ -240,6 +241,10 @@ impl Mapper<'_> {
         // `path` / `nonEmptyStr` come from nixpkgs `lib.types`. TypeScript's
         // bare `number` stays banned.
         match name {
+            // TypeScript's keyword is `boolean`; Nix's name is `bool`. The
+            // keyword arrives as TSBooleanKeyword, this arm catches the Nix
+            // spelling, and both lower to the same checker.
+            "bool" => Ok(runtime("bool")),
             "int" => Ok(runtime("int")),
             "float" => Ok(runtime("float")),
             "u8" => Ok(runtime("u8")),
@@ -261,6 +266,34 @@ impl Mapper<'_> {
                      Record<string, T>, plus this module's `type` aliases"
                 ),
             )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every `__ixTy.<field>` the converter can emit must be defined by the
+    /// runtime, or a typed module fails at eval with `attribute missing`
+    /// instead of a type error. Scans this crate's two emitting sources for
+    /// string literals passed to the `runtime` spelling helper, plus the two
+    /// entry points, and checks each name is bound in `ix-ty.nix`.
+    #[test]
+    fn every_emitted_runtime_field_exists_in_ix_ty_nix() {
+        let sources = [include_str!("ty.rs"), include_str!("map.rs")];
+        let runtime_nix = include_str!("../ix-ty.nix");
+        let mut fields = vec!["arg".to_owned(), "ret".to_owned()];
+        for source in sources {
+            for (index, _) in source.match_indices("runtime(\"") {
+                let rest = &source[index + 9..];
+                let end = rest.find('\"').expect("string literal closes");
+                fields.push(rest[..end].to_owned());
+            }
+        }
+        for field in fields {
+            assert!(
+                runtime_nix.contains(&format!("{field} =")),
+                "__ixTy.{field} is emitted but not defined in ix-ty.nix"
+            );
         }
     }
 }

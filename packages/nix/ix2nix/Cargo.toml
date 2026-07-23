@@ -15,6 +15,10 @@ oxc_diagnostics.workspace = true
 oxc_parser.workspace = true
 oxc_span.workspace = true
 
+[dev-dependencies]
+hegeltest = { workspace = true, default-features = false }
+rnix.workspace = true
+
 [[bin]]
 name = "ix2nix"
 path = "src/main.rs"
