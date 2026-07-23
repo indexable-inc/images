@@ -90,7 +90,7 @@ each node key matches its `name`; and that every `dependsOn` names a real node.
   the simple attr lets the native multi-VM `ix apply .#a .#b --build-vm <builder>`
   derive each VM name. The `<node>-system` package stays as a build alias. Merge
   the fleet's `nixosConfigurations` into your flake's top-level
-  `nixosConfigurations` (see `examples/nixos/switch-multi/flake.nix` for a
+  `nixosConfigurations` (see `examples/multi-vm/switch-multi/flake.nix` for a
   direct `ix apply` flake and `examples/dev/fleet/default.nix` for the mkDev
   wrapper).
 - **`ReplacementImage`** (`:34`): `imageName`, `destination`,
