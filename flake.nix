@@ -101,6 +101,19 @@
       flake = false;
     };
 
+    # The global flake registry, baked into guest images so an in-guest
+    # `nix run <id>#...` on any registry alias resolves without nix first
+    # downloading https://channels.nixos.org/flake-registry.json on the cold
+    # path (that download was the first HTTP transfer of every cold in-guest
+    # nix process, and paired with the libcurl 8.21 lost-wakeup it cost each
+    # cold `nix run` +10s; index#4122). This repo is the source that channel
+    # URL is published from. Branch-floating: the scheduled flake update
+    # advances it; aliases churn rarely, so staleness is harmless.
+    flake-registry-src = {
+      url = "github:NixOS/flake-registry";
+      flake = false;
+    };
+
     # jj megamerge fork of rust-lang/rust-clippy with the restriction lints
     # tuned for LLM-assisted codebases (lib/fork-packages.nix). Pinned BY
     # REV, not a floating branch: clippy-driver links rustc_private and must match
@@ -353,6 +366,7 @@
     sdk-prebuilt-rust-overlay,
     home-manager,
     home-manager-src,
+    flake-registry-src,
     hermes-agent,
     btop-src,
     nushell-src,
@@ -431,6 +445,7 @@
         sdk-prebuilt-rust-overlay
         home-manager
         home-manager-src
+        flake-registry-src
         hermes-agent
         btop-src
         nushell-src

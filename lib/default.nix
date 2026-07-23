@@ -8,6 +8,11 @@
   sdk-prebuilt-rust-overlay,
   home-manager,
   home-manager-src,
+  # The global flake registry source (github:NixOS/flake-registry), baked
+  # into guest images so in-guest nix never downloads it on the cold path
+  # (index#4122). Defaulted `null` so a bare `import ./lib` (no flake) still
+  # evaluates; `lib/image` omits the nix.conf pin when it is absent.
+  flake-registry-src ? null,
   hermes-agent,
   btop-src,
   nushell-src,
@@ -804,6 +809,7 @@
         moduleList
         writeNushellApplication
         packageSetFor
+        flake-registry-src
         ;
     })
     evalImageConfig

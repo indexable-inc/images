@@ -14,6 +14,12 @@
   # `nix.registry.index` module below). `null` when `lib` is imported without a
   # flake; the pin is then omitted.
   self ? null,
+  # The global flake registry source (github:NixOS/flake-registry), baked so
+  # in-guest nix resolves registry aliases without downloading
+  # https://channels.nixos.org/flake-registry.json on the cold path (see the
+  # `nix.settings.flake-registry` module below). `null` when `lib` is imported
+  # without a flake; the nix.conf pin is then omitted.
+  flake-registry-src ? null,
 }: let
   # The `nix.registry.index.to` construction, shared with the
   # `image-registry-pin` check (tests/default.nix). See its doc comment.
@@ -149,6 +155,25 @@
           # path-locked submodule seam (index#3981) — see ./registry-pin.nix;
           # the `image-registry-pin` check holds both shapes.
           nix.registry.index.to = registryPin self;
+        }
+        ++ lib.optional (flake-registry-src != null) {
+          # Bake the GLOBAL flake registry too, and point nix.conf's
+          # `flake-registry` at the store copy. Resolving any indirect
+          # flakeref (`nix run nixpkgs#hello` included, even though nixpkgs
+          # is pinned in the system registry above) makes nix construct the
+          # global registry, which by default downloads
+          # https://channels.nixos.org/flake-registry.json -- the FIRST HTTP
+          # transfer of every cold in-guest nix process. That download sat
+          # on the cold path of every `nix run` in a fresh VM, and combined
+          # with the libcurl 8.21 first-transfer lost-wakeup it cost each
+          # cold run +10s (nix_run_hello KPI p50 5.9s -> 16.5s, index#4122).
+          # channels.nixos.org publishes exactly this repo's
+          # flake-registry.json, so behavior is identical for every alias;
+          # the interpolation carries the store-path context, rooting the
+          # file into the image closure. Registry aliases churn rarely, and
+          # the branch-floating input advances under the scheduled flake
+          # update, so staleness is bounded and harmless.
+          nix.settings.flake-registry = "${flake-registry-src}/flake-registry.json";
         }
         ++ [
           ./platform.nix
