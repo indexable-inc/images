@@ -379,8 +379,8 @@
       <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
     </marker>
   </defs>
-  <path class="frame" d="M 136 14 H 711 Q 719 14 719 22 V 218 Q 719 226 711 226 H 9 Q 1 226 1 218 V 22 Q 1 14 9 14 H 22"/>
-  <text x="28" y="18.5">[-] flywheel</text>
+  <path class="frame" d="M 105 14 H 711 Q 719 14 719 22 V 218 Q 719 226 711 226 H 9 Q 1 226 1 218 V 22 Q 1 14 9 14 H 22"/>
+  <text x="28" y="18.5">flywheel</text>
   <text x="80" y="92">a change lands once</text>
   <text id="s0" class="m tool r0" x="80" y="112">nix'</text>
   <text class="m tool r1" x="80" y="112">clippy'</text>
