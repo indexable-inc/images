@@ -1,0 +1,25 @@
+---
+id: ifd-free-package-names
+postedAt: 2026-07-23T14:05:00Z
+title: "Package names are IFD-free again: example fan-outs move to legacyPackages"
+tags: [nix, ci, examples]
+links:
+  - label: index#4087
+    href: https://github.com/indexable-inc/index/issues/4087
+  - label: index#4088
+    href: https://github.com/indexable-inc/index/pull/4088
+  - label: ix#8367
+    href: https://github.com/indexable-inc/ix/pull/8367
+---
+
+The `default.ix` example conversion (#4079) quietly made the flake's `packages.<system>` key set depend on an IFD: classifying single- versus multi-VM examples forced every example through the `ix2nix` converter derivation, and `lifecyclePackages` spread those keys into `packages`. Any consumer that merely probes `index.packages.<system>` then needs IFD, and ix's CI lint gate is exactly such a consumer: a no-build proof that evaluates with `allow-import-from-derivation` disabled and `max-jobs 0`. Both mains went red for a few hours on 2026-07-23.
+
+The fix (#4088) moves the example-derived fan-outs out of `packages`: the per-example `health-check-*` lifecycle packages and the `<example>-{up,health,...}` fleet wrappers now live under `legacyPackages.<system>`, the same surface that already keeps kernel-unit's eval-time IFD out of every gate closure. The `health-checks` and `health-checks-zellij` runners keep their static names in `packages`.
+
+Operator-visible changes:
+
+- `nix build .#health-check-<example>` becomes `nix build .#legacyPackages.<system>.health-check-<example>`; same for the `<example>-up` style wrappers
+- `examples/nixos/switch-multi` moved to `examples/multi-vm/switch-multi`
+- the invariant to keep: `packages.<system>` names must stay enumerable with IFD disabled; example-derived or unit-graph-derived names belong in `legacyPackages`
+
+The same restoration landed two unrelated latent breakages that had merged while the ix gate was down: a missed `Error::internal_error` call-site migration in orch-rpc (ix#8366) and treefmt drift in the run-viewer slices.
