@@ -298,10 +298,8 @@
     })
   agentMcpServers;
 
-  # Native Codex settings, seeded into ~/.codex/config.toml as a writable
-  # mutable file (see `mutable.files` below): Codex appends per-project trust
-  # decisions and runtime toggles to config.toml, which a read-only store
-  # symlink would reject.
+  # Native Codex soft defaults. The wrapper supplies them only when the
+  # app-owned config.toml does not set the same key.
   codexSettings = {
     check_for_update_on_startup = false;
     bypass_hook_trust = true;
@@ -314,11 +312,9 @@
     commit_attribution = "";
     # The features block below opts into under-development features
     # (multi_agent_v2 et al.); without this Codex warns about them on every
-    # startup. Set here (not just the wrapper soft default) so the seeded
-    # config.toml stays quiet even under a stock codex binary.
+    # startup.
     suppress_unstable_features_warning = true;
     agents.max_depth = 3;
-    mcp_servers = codexMcpServers;
     features = {
       steer = true;
       multi_agent = true;
@@ -351,14 +347,13 @@
   # attrset-of-skills vs directory mode, and a flake input is an attrset.
   skillsSrc = indexSkillsSrc;
 
-  # The wrapper remains only for behavior that has no config-file equivalent:
-  # the shared hooks and system prompt plus package selection. Native Codex
-  # settings are declared on programs.codex below and rendered to config.toml.
+  # The wrapper carries the shared hooks, system prompt, soft settings, and
+  # forced MCP transport. config.toml stays entirely app-owned.
   codexBase = indexPkgs.codex;
   codex =
     (codexBase.override {
-      mcpServers = {};
-      settings = {};
+      mcpServers = codexMcpServers;
+      settings = codexSettings;
       forcedSettings = {};
       # On the override, not programs.codex.systemPrompt.omitRules, for the
       # same reason as claudeCode above: the module folds that option only
@@ -1205,13 +1200,10 @@ in {
     # bakes one `--mcp-config=` flag from `agentMcpServers` above.
   };
 
-  # Codex, via Home Manager. Static policy and defaults live in config.toml,
-  # where Codex and its desktop app can inspect the same source of truth. The
-  # wrapper carries only behavior without a native config-file representation.
-  # `settings` is deliberately NOT set here: the module would render
-  # config.toml as a read-only store symlink, and Codex writes to it at
-  # runtime (project trust, model switches). The same values are seeded
-  # writable from `codexSettings` via `mutable.files` below.
+  # Codex, via Home Manager. The wrapper supplies Nix defaults without
+  # claiming config.toml, which Codex owns and edits at runtime. MCP executable
+  # paths are forced by the wrapper so a stale runtime entry cannot pin an old
+  # server generation.
   programs.codex = {
     enable = true;
     package = codex;
@@ -1225,22 +1217,6 @@ in {
     # `finalPackage.hooksJson`, and the two sources conflict as soon as any
     # hook-affecting option diverges from the wrapper defaults.
     installHooks = false;
-  };
-
-  # Codex edits its own config at runtime, so the file cannot be a read-only
-  # store render. Durable: in-app changes survive activation and login; when
-  # the declared base moves under local edits, the file queues in
-  # `index-delta status --json` (both diffs as addressed ops) for an explicit
-  # discard / adopt / absorb-into-Nix via `index-delta apply-ops`.
-  # ~/.claude/settings.json moved off this mechanism (#3180): its declared
-  # base carries store paths that move on every index bump (hooks, statusline),
-  # so durable drift queued a conflict per bump; the claude-code module's
-  # mutable-json 3-way merge updates those keys mechanically while preserving
-  # Claude's runtime writes.
-  mutable.files.".codex/config.toml" = {
-    source = tomlFormat.generate "andrewgazelka-codex-config.toml" codexSettings;
-    persistence = "durable";
-    declaredAt = "users/andrewgazelka/profiles/workstation.nix";
   };
 
   # ~/.claude.json is entirely runtime-owned and intentionally unmanaged.

@@ -78,8 +78,8 @@
     # warning; a user who sets this key keeps their value.
     suppress_unstable_features_warning = true;
   },
-  # MCP servers rendered as soft Codex defaults. A user's own
-  # `[mcp_servers.<name>]` config wins per-key through config-launch.
+  # MCP servers. Local executable paths are forced because the generation
+  # owns them. Remote servers stay soft so user config can override them.
   mcpServers ?
     (import (ix.paths.packagesRoot + "/agent/common.nix") {
       inherit lib ix;
@@ -150,12 +150,16 @@
       features =
         (forcedSettings.features or {}) // (sharedPermissions.codex.forcedSettings.features or {});
     };
+  localMcpServers = lib.filterAttrs (_: server: server ? command) mcpServers;
+  remoteMcpServers = lib.filterAttrs (_: server: !(server ? command)) mcpServers;
   specValue = {
     target = lib.getExe codexWithNotifications;
     config_dir_env = "CODEX_HOME";
     config_dir_default = "~/.codex";
     config_file = "config.toml";
-    forced = entriesOf (ix.attrs.flattenToDotted effectiveForcedSettings);
+    forced =
+      entriesOf (ix.attrs.flattenToDotted effectiveForcedSettings)
+      ++ ix.mcp.toCodexEntries localMcpServers;
     soft =
       entriesOf (
         ix.attrs.flattenToDotted (
@@ -165,7 +169,7 @@
           // settings
         )
       )
-      ++ ix.mcp.toCodexEntries mcpServers;
+      ++ ix.mcp.toCodexEntries remoteMcpServers;
   };
   spec = (formats.json {}).generate "codex-launch-spec.json" specValue;
 

@@ -176,8 +176,9 @@ in {
       type = lib.types.nullOr jsonFormat.type;
       default = null;
       description = ''
-        MCP server declarations rendered as soft Codex config defaults. Null
-        keeps the package default; `{ }` intentionally bakes no MCP defaults.
+        MCP server declarations rendered into the Codex wrapper. Local
+        command servers are forced. Remote URL servers are soft defaults. Null
+        keeps the package default; `{ }` intentionally bakes no MCP servers.
       '';
     };
 
