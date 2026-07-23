@@ -875,6 +875,8 @@ defmodule IxMcp.ActionLog do
     :ok = Sqlite3.set_busy_timeout(conn, min(@busy_nif_wait_ms, busy_budget(opts)))
     db = %{conn: conn, busy_timeout_ms: busy_budget(opts)}
 
+    ensure_wal(db)
+
     # index#3539: on 2026-07-17 a server binary match-crashed right here
     # against an action log written under a newer schema, and the failed
     # child took the whole application down -- every tool call died over a
@@ -916,6 +918,28 @@ defmodule IxMcp.ActionLog do
   end
 
   def terminate(_reason, _state), do: :ok
+
+  # The shared file must run in WAL mode (#4092): under the default rollback
+  # journal one instance's long read -- a history scan over a grown log --
+  # holds the lock every sibling's writes need, and on 2026-07-23 those
+  # blocked writes outlived the busy budget, crash-looped every instance's
+  # log, and killed two whole kernels through restart intensity. WAL keeps
+  # readers and the single writer independent, leaving busy_wait to genuine
+  # writer-writer contention. The pragma is persistent and converts an
+  # existing rollback-journal file in place; conversion needs a moment of
+  # exclusivity, so it rides the same busy budget as any write. Anything but
+  # wal (or memory, for the ":memory:" test databases) means the conversion
+  # failed and this instance would reintroduce the blocking mode for every
+  # sibling, so it refuses to run rather than degrade silently.
+  defp ensure_wal(db) do
+    case fetch(db, "PRAGMA journal_mode=WAL", []) do
+      [[mode]] when mode in ["wal", "memory"] ->
+        :ok
+
+      [[mode]] ->
+        raise "action log could not enter WAL mode (#4092), still #{inspect(mode)}"
+    end
+  end
 
   # index#3539 degraded mode: the file belongs to a newer server, so writes
   # are dropped and reads answer empty rather than crashing every caller.
