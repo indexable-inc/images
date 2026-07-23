@@ -11,7 +11,12 @@ defmodule IxMcp.CmdCwdTest do
   # worktree. The fix removes the OS cwd from command spawning entirely:
   # pathless commands run in the boot-time launch directory, immutably.
   test "File.cd! cannot redirect pathless commands off the launch cwd (#3902)" do
-    assert {launch, 0} = Cmd.run("pwd")
+    # Every pwd here runs with -P: pwd defaults to -L and echoes the caller's
+    # $PWD spelling (/tmp/... in a checkout under macOS's /tmp ->
+    # /private/tmp symlink), while the launch cwd is captured
+    # symlink-resolved via File.cwd!(), so only physical paths compare
+    # byte-equal on both sides.
+    assert {launch, 0} = Cmd.run("pwd", ["-P"])
 
     elsewhere = Path.join(System.tmp_dir!(), "ix-cwd-test-15235")
     File.mkdir_p!(elsewhere)
@@ -23,11 +28,11 @@ defmodule IxMcp.CmdCwdTest do
     try do
       # Session A moved the OS cwd; session B's pathless commands must not
       # follow it -- run/3 and sh/2 both still answer with the launch dir.
-      assert {^launch, 0} = Cmd.run("pwd")
-      assert {^launch, 0} = Cmd.sh("pwd")
+      assert {^launch, 0} = Cmd.run("pwd", ["-P"])
+      assert {^launch, 0} = Cmd.sh("pwd -P")
 
       # An explicit cd: still selects exactly the directory the caller names.
-      assert {moved, 0} = Cmd.run("pwd", [], cd: elsewhere)
+      assert {moved, 0} = Cmd.run("pwd", ["-P"], cd: elsewhere)
       assert moved != launch
       assert Path.basename(String.trim(moved)) == Path.basename(elsewhere)
     after
