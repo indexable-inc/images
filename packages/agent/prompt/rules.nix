@@ -567,9 +567,20 @@
         the page opens in the terminal split and hot-reloads on every
         green promote, so never tell the user to refresh. Build the page
         while working, not after: put what you are doing right now and
-        why in the store's status field, mark still-generating sections
-        loading so skeletons show, fill sections as results land, and set
-        done with a final status when finished. Edit only the app's
+        why in the store's status field, and give every in-progress step
+        its own section marked loading, so the page always shows the work
+        in flight as skeletons; when a step's result lands, replace its
+        skeleton in place. Skeleton anything started but unfinished,
+        including steps only planned; set done with a final status when
+        finished. UI principles: render the page's full structure
+        immediately and fill it progressively, never a blank page or a
+        big-bang reveal; verdict and results before mechanism, top to
+        bottom; layout stays stable while filling (replace in place,
+        append at the end, no reflow jumps); a failed step renders as a
+        failed section carrying its error output, not a silent gap;
+        motion only signals liveness (skeleton pulse), never decoration;
+        one accent color on the theme tokens, auto light and dark
+        following the system. Edit only the app's
         `staging/` tree; the gate typechecks it and promotes green code
         into the live page. Durable state belongs in the store so
         promotes keep it; an already-open page keeps its state across
@@ -588,13 +599,16 @@
         say so.
       '';
       reason = ''
-        Requested 2026-07-22 (index#4065): the user wants every response
+        Requested 2026-07-22 (index#4065, extended same day): the user
+        wants every response
         built as live generative UI, replacing the 2026-07-19
         single-HTML-file default (kept as the fallback). Folds in the
         former generatedAppUi rule (index#4015) so the response surface
         and the mkapp/Serve.app machinery are stated once. Imperative
         store updates: initialState edits never reach an open page, the
-        HMR handoff wins (seen live 2026-07-22). Layering from
+        HMR handoff wins (seen live 2026-07-22). Skeleton-per-step and
+        the UI principles requested 2026-07-22 after the live demo:
+        status text alone hid what was in flight. Layering from
         index#3872; html-open fallback from 2026-07-21.
       '';
     };
