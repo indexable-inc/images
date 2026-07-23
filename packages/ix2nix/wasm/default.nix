@@ -132,5 +132,16 @@ in
       (old.passthru or {})
       // {
         tests = {inherit e2e;};
+        # This wasm32 graph is its own `buildWorkspace`, invisible to
+        # per-system.nix's shared-workspace `crossIfdRoots`. Every scaffolded
+        # `ix init` eval forces these at eval time through
+        # `lib.importIxWasm` (the `import unitsNix` behind the converter
+        # drv), so cache-push publishes them as explicit roots via the
+        # `workspacePackageIfdRoots` harvest -- otherwise each fresh project
+        # re-vendors and re-renders the graph before its first substitution
+        # (#4127; same #1890 class as codex's second workspace).
+        workspaceIfdRoots = {
+          inherit (workspace) unitsNix unitGraphJson vendorDir;
+        };
       };
   })
