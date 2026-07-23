@@ -4485,6 +4485,17 @@
         message = "Codex wrapper should render built-in tool disables into forced launch config";
       }
       {
+        assertion = let
+          forcedKeys = map (entry: entry.key) repoPackages.codex.passthru.specValue.forced;
+          softKeys = map (entry: entry.key) repoPackages.codex.passthru.specValue.soft;
+        in
+          builtins.elem "mcp_servers.index.command" forcedKeys
+          && !builtins.elem "mcp_servers.index.command" softKeys
+          && !builtins.elem "mcp_servers.exa.url" forcedKeys
+          && builtins.elem "mcp_servers.exa.url" softKeys;
+        message = "Codex wrapper should force local MCP commands and keep remote MCP URLs soft";
+      }
+      {
         # Bypass-permissions is enforced through Claude's managed-settings layer
         # (/etc/claude-code/managed-settings.json): read-only, highest precedence,
         # leaving ~/.claude/settings.json app-owned. Pin both keys so a refactor

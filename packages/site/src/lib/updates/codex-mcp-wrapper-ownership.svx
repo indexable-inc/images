@@ -1,0 +1,23 @@
+---
+id: codex-mcp-wrapper-ownership
+postedAt: 2026-07-22T00:00:00-07:00
+title: "Codex now follows the current MCP generation"
+tags: [codex, mcp-ex, home-manager]
+links:
+  - label: issue 4069
+    href: https://github.com/indexable-inc/index/issues/4069
+  - label: Codex wrapper
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent/codex/default.nix
+---
+
+Fixes #4069. Codex could keep launching the old Python `ix-mcp` after the
+workstation moved to the Elixir `mcp-ex` server. The command was copied into
+`~/.codex/config.toml`; runtime edits made that file conflict with its next
+declared base, so Home Manager left every incoming change unapplied.
+
+MCP server paths now ride Codex's forced wrapper layer. `config.toml` is fully
+app-owned, so project trust and UI settings need no Nix merge. Each wrapper
+generation supplies its matching MCP executable even when the app file still
+contains an older entry.
+
+(sent by an AI agent via Codex)
