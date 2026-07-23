@@ -1,0 +1,27 @@
+---
+id: memory-entity-graph
+postedAt: 2026-07-22T17:45:00-07:00
+title: "Agent memory grows an entity graph: about edges, minted ids, graph-walking recall"
+tags: [memory, weave, mcp-ex]
+links:
+  - label: IxMcp.Memory
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/memory.ex
+  - label: "#4072"
+    href: https://github.com/indexable-inc/index/issues/4072
+---
+
+Memories were flat facts: a slug, a one-line hook, a prose body. Related
+knowledge was findable only by regex or embedding similarity. Now each
+memory links into an entity graph: `Memory.remember(..., about:
+["gh:indexable-inc/ix#8088", "host:hydra"])` writes typed edges to minted
+ids for issues and PRs (`gh:<org>/<repo>#<n>`), repos, hosts, tools, and
+people, and `Memory.graph/1` walks them.
+
+The store's recall projection (journal data, not engine code) traverses
+these edges two hops out, degree-gated so hubs like a whole repo don't
+drown the walk: recalling one memory about an issue now surfaces the
+sibling memories that cite the same issue, host, or tool. The 1,000
+existing memories were backfilled with 2,175 `about` edges; the id
+convention lives in the store itself as `mem:memory-ontology`, and the
+SessionStart digest teaches agents to write the granular form at the
+moment of learning.
