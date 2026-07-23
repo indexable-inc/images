@@ -3546,6 +3546,15 @@
         message = "base profile should pre-create the workspace directory via systemd-tmpfiles";
       }
       {
+        # Regression fence for ix#8389: a rootfs captured while nix held the
+        # unix-dotfile lock boots with /nix/var/nix/db/db.sqlite.lock still
+        # present, and every guest nix invocation then spins forever in
+        # SQLITE_BUSY retries. The lock cleanup must run unconditionally at
+        # boot (not gated behind shellWorkspace or any other toggle).
+        assertion = builtins.elem "R! /nix/var/nix/db/db.sqlite.lock" base.config.systemd.tmpfiles.rules;
+        message = "base profile should remove a stale SQLite dotfile lock on the nix DB at boot (ix#8389)";
+      }
+      {
         assertion = let
           firewall = base.config.networking.firewall;
         in
