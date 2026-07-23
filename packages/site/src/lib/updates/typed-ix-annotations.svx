@@ -31,11 +31,11 @@ The pieces:
 - Checks are force-safe: a check may force the annotated value to weak
   head normal form and read attrset keys, never field values or list
   elements, so typed code never evaluates deeper than untyped code.
-- Type spellings: `string`, `bool`, `Int`, `Float`, `Drv`, `object`,
+- Type spellings: `string`, `bool`, `int`, `float`, `drv`, `object`,
   `T[]`, `Record<string, T>`, inline object types with optional fields,
-  function types, literal unions, `T | null`, and refinements borrowed
-  from nixpkgs `lib.types` basics: `Uint`, `Port`, `Path`,
-  `NonEmptyString`. `number` is a hard
+  function types, literal unions, `T | null`, Rust-width integer
+  refinements `u8`/`u16`/`u32`/`i8`/`i16`/`i32`, and the nixpkgs
+  `lib.types` basics `port`, `path`, `nonEmptyStr`. `number` is a hard
   error (Nix splits int and float), as are interfaces, generics, and
   `satisfies`, in keeping with the converter's no-fallbacks rule.
 - `as T` checks at the cast site, the opposite of TypeScript erasure, on

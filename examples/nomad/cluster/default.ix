@@ -18,7 +18,7 @@ export default ({ index }) => {
   });
   // Two interchangeable clients; the static port keeps the scheduler from
   // co-locating their allocations.
-  const client = (name) =>
+  const client = (name: string) =>
     index.lib.mkVm({
       name: name,
       modules: [import("./client.nix"), group],

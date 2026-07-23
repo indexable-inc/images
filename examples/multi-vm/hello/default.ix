@@ -1,5 +1,10 @@
 // The smallest multi-VM app: one web VM and three interchangeable workers
 // that probe it. `ix apply .#web .#worker-0 .#worker-1 .#worker-2`.
+// The checked shape of one `mkVm` result: presence of the attr is asserted
+// at eval (WHNF + attr names only), so passing a bare module set where a VM
+// belongs fails with a positioned .ix type error instead of a deep Nix trace.
+type Vm = { nixosConfigurations: object };
+
 export default ({ index }) => {
   // One private east-west network, so workers reach the web VM by name.
   const group = { ix: { networking: { groups: ["multi-vm-hello"] } } };
@@ -9,7 +14,7 @@ export default ({ index }) => {
   });
   // Each worker resolves the web VM's listener through its `nodes` module
   // argument (`ix.endpointOf nodes.web "http"`). Scaling is one more line.
-  const worker = (name) =>
+  const worker = (name: string): Vm =>
     index.lib.mkVm({
       name: name,
       modules: [import("./worker.nix"), group],

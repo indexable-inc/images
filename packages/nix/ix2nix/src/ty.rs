@@ -47,8 +47,20 @@ pub(crate) fn arg_check(loc: String, ty: Expr, value: Expr, body: Expr) -> Expr 
 /// Type names with a fixed meaning; `type` aliases may not shadow them
 /// ([`crate::map`] rejects the declaration), so a reference is never
 /// ambiguous between a built-in and a module alias.
-pub(crate) const BUILTIN_TYPES: [&str; 8] = [
-    "Int", "Uint", "Port", "Float", "Path", "NonEmptyString", "Drv", "Record",
+pub(crate) const BUILTIN_TYPES: [&str; 13] = [
+    "int",
+    "float",
+    "u8",
+    "u16",
+    "u32",
+    "i8",
+    "i16",
+    "i32",
+    "port",
+    "path",
+    "nonEmptyStr",
+    "drv",
+    "Record",
 ];
 
 /// Wraps a checker as `__ixTy.nullable <ty>`; optional pattern fields check
@@ -91,7 +103,7 @@ impl Mapper<'_> {
             ast::TSType::TSObjectKeyword(_) => Ok(apply(runtime("attrsOf"), runtime("any"))),
             ast::TSType::TSNumberKeyword(number) => Err(self.err(
                 number.span,
-                "Nix distinguishes integers from floats; use `Int` or `Float`",
+                "Nix distinguishes integers from floats; use `int` or `float`",
             )),
             ast::TSType::TSNullKeyword(null) => Err(self.err(
                 null.span,
@@ -223,24 +235,30 @@ impl Mapper<'_> {
         if let Some(arguments) = &reference.type_arguments {
             return Err(self.err(arguments.span, "generic types are not lowered yet"));
         }
-        // The refinement names mirror nixpkgs `lib.types` basics (`port`,
-        // `path`, unsigned ints), so `.ix` types speak the vocabulary NixOS
-        // modules already do; TypeScript's bare `number` stays banned.
+        // Lowercase on purpose: `int` and `float` are what Nix itself calls
+        // the types, the width refinements are Rust vocabulary, and `port` /
+        // `path` / `nonEmptyStr` come from nixpkgs `lib.types`. TypeScript's
+        // bare `number` stays banned.
         match name {
-            "Int" => Ok(runtime("int")),
-            "Uint" => Ok(runtime("uint")),
-            "Port" => Ok(runtime("port")),
-            "Float" => Ok(runtime("float")),
-            "Path" => Ok(runtime("path")),
-            "NonEmptyString" => Ok(runtime("nonEmptyString")),
-            "Drv" => Ok(runtime("drv")),
+            "int" => Ok(runtime("int")),
+            "float" => Ok(runtime("float")),
+            "u8" => Ok(runtime("u8")),
+            "u16" => Ok(runtime("u16")),
+            "u32" => Ok(runtime("u32")),
+            "i8" => Ok(runtime("i8")),
+            "i16" => Ok(runtime("i16")),
+            "i32" => Ok(runtime("i32")),
+            "port" => Ok(runtime("port")),
+            "path" => Ok(runtime("path")),
+            "nonEmptyStr" => Ok(runtime("nonEmptyStr")),
+            "drv" => Ok(runtime("drv")),
             _ if self.type_aliases.contains(name) => Ok(Expr::Ident(alias_binding(name))),
             _ => Err(self.err(
                 ident.span,
                 format!(
-                    "unknown type `{name}`; built-ins are Int, Uint, Port, Float, Path, \
-                     NonEmptyString, Drv, and Record<string, T>, plus this \
-                     module's `type` aliases"
+                    "unknown type `{name}`; built-ins are int, float, \
+                     u8/u16/u32/i8/i16/i32, port, path, nonEmptyStr, drv, and \
+                     Record<string, T>, plus this module's `type` aliases"
                 ),
             )),
         }

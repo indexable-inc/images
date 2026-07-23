@@ -24,13 +24,13 @@ fn parameter_annotation_lowers_to_arg_check() {
 
 #[test]
 fn return_annotation_wraps_the_innermost_body() {
-    let out = nix("export default (a, b): Int => a;\n");
+    let out = nix("export default (a, b): int => a;\n");
     assert_eq!(out, "a: b: __ixTy.ret \"1:22 return\" __ixTy.int a\n");
 }
 
 #[test]
 fn as_cast_checks_but_as_unknown_erases() {
-    let out = nix("export default x as Int;\n");
+    let out = nix("export default x as int;\n");
     assert_eq!(out, "__ixTy.ret \"1:21 as\" __ixTy.int x\n");
     assert_eq!(nix("export default x as unknown;\n"), "x\n");
     assert_eq!(nix("export default x as any;\n"), "x\n");
@@ -45,13 +45,13 @@ fn type_alias_becomes_a_checker_binding() {
 
 #[test]
 fn nullable_union_lowers_to_nullable() {
-    let out = nix("export default (x: Int | null) => x;\n");
+    let out = nix("export default (x: int | null) => x;\n");
     assert!(out.contains("__ixTy.nullable __ixTy.int"), "{out}");
 }
 
 #[test]
 fn destructured_parameter_checks_bound_fields() {
-    let out = nix("export default ({ a }: { a: Int }) => a;\n");
+    let out = nix("export default ({ a }: { a: int }) => a;\n");
     assert_eq!(
         out,
         "{ a }: __ixTy.arg \"1:26 argument field `a`\" __ixTy.int a a\n"
@@ -60,22 +60,22 @@ fn destructured_parameter_checks_bound_fields() {
 
 #[test]
 fn destructured_annotation_must_be_inline_and_bound() {
-    let error = diagnostic("type T = { a: Int };\nexport default ({ a }: T) => a;\n");
+    let error = diagnostic("type T = { a: int };\nexport default ({ a }: T) => a;\n");
     assert!(error.message().contains("inline object type"), "{error}");
-    let error = diagnostic("export default ({ a }: { b: Int }) => a;\n");
+    let error = diagnostic("export default ({ a }: { b: int }) => a;\n");
     assert!(error.message().contains("not bound by the pattern"), "{error}");
 }
 
 #[test]
 fn number_is_rejected_naming_int_and_float() {
     let error = diagnostic("export default (x: number) => x;\n");
-    assert!(error.message().contains("`Int` or `Float`"), "{error}");
+    assert!(error.message().contains("`int` or `float`"), "{error}");
 }
 
 #[test]
 fn lib_types_refinements_lower_to_runtime_checkers() {
-    let out = nix("export default (p: Port, d: Path, s: NonEmptyString, u: Uint) => p;\n");
-    for checker in ["__ixTy.port", "__ixTy.path", "__ixTy.nonEmptyString", "__ixTy.uint"] {
+    let out = nix("export default (p: port, d: path, s: nonEmptyStr, u: u32) => p;\n");
+    for checker in ["__ixTy.port", "__ixTy.path", "__ixTy.nonEmptyStr", "__ixTy.u32"] {
         assert!(out.contains(checker), "{checker} missing in {out}");
     }
 }
@@ -84,14 +84,14 @@ fn lib_types_refinements_lower_to_runtime_checkers() {
 fn optional_pattern_fields_check_as_nullable() {
     // The Nix default binds when the caller omits the field, so the bound
     // name's type is `T | null`, not `T`.
-    let out = nix("export default ({ a = null }: { a?: Int }) => a;\n");
+    let out = nix("export default ({ a = null }: { a?: int }) => a;\n");
     assert!(out.contains("(__ixTy.nullable __ixTy.int)"), "{out}");
 }
 
 #[test]
 fn each_parameter_checks_inside_its_own_lambda() {
     // Checks fire on partial application and read exactly their own binder.
-    let out = nix("export default (a: Int, b: string) => a;\n");
+    let out = nix("export default (a: int, b: string) => a;\n");
     assert_eq!(
         out,
         "a: __ixTy.arg \"1:17 argument `a`\" __ixTy.int a (b: \
@@ -101,13 +101,13 @@ fn each_parameter_checks_inside_its_own_lambda() {
 
 #[test]
 fn const_annotations_lower_to_ret_checks() {
-    let out = nix("const x: Int = 1;\nexport default x;\n");
+    let out = nix("const x: int = 1;\nexport default x;\n");
     assert!(out.contains("x = __ixTy.ret \"1:8 const `x`\" __ixTy.int 1"), "{out}");
 }
 
 #[test]
 fn builtin_shadowing_aliases_are_rejected() {
-    let error = diagnostic("type Port = string;\nexport default 1;\n");
+    let error = diagnostic("type port = string;\nexport default 1;\n");
     assert!(error.message().contains("shadows the built-in"), "{error}");
 }
 
@@ -119,13 +119,13 @@ fn optional_parameters_are_rejected_even_unannotated() {
 
 #[test]
 fn call_site_type_arguments_are_rejected() {
-    let error = diagnostic("export default f<Int>(2);\n");
+    let error = diagnostic("export default f<int>(2);\n");
     assert!(error.message().contains("call-site type arguments"), "{error}");
 }
 
 #[test]
 fn definite_assignment_is_rejected() {
-    let error = diagnostic("const x!: Int = 1;\nexport default x;\n");
+    let error = diagnostic("const x!: int = 1;\nexport default x;\n");
     assert!(error.message().contains("definite assignment"), "{error}");
 }
 
@@ -137,7 +137,7 @@ fn unknown_type_names_are_rejected() {
 
 #[test]
 fn mixed_unions_are_rejected() {
-    let error = diagnostic("export default (x: Int | string) => x;\n");
+    let error = diagnostic("export default (x: int | string) => x;\n");
     assert!(error.message().contains("`T | null`"), "{error}");
 }
 
@@ -147,9 +147,9 @@ fn generics_interfaces_satisfies_and_nonnull_are_rejected() {
     assert!(error.message().contains("generic arrows"), "{error}");
     let error = diagnostic("type Box<A> = { v: A };\nexport default 1;\n");
     assert!(error.message().contains("generic type aliases"), "{error}");
-    let error = diagnostic("interface I { a: Int }\nexport default 1;\n");
+    let error = diagnostic("interface I { a: int }\nexport default 1;\n");
     assert!(error.message().contains("use `type`"), "{error}");
-    let error = diagnostic("export default x satisfies Int;\n");
+    let error = diagnostic("export default x satisfies int;\n");
     assert!(error.message().contains("static-only"), "{error}");
     let error = diagnostic("export default x!;\n");
     assert!(error.message().contains("no runtime lowering"), "{error}");
@@ -157,7 +157,7 @@ fn generics_interfaces_satisfies_and_nonnull_are_rejected() {
 
 #[test]
 fn duplicate_type_aliases_are_rejected() {
-    let error = diagnostic("type A = Int;\ntype A = Float;\nexport default 1;\n");
+    let error = diagnostic("type A = int;\ntype A = float;\nexport default 1;\n");
     assert!(error.message().contains("duplicate `type A`"), "{error}");
 }
 

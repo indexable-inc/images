@@ -17,7 +17,7 @@ export default ({ index }) => {
     },
   });
   // Two interchangeable agents; adding a third is one more line here.
-  const agent = (name) =>
+  const agent = (name: string) =>
     index.lib.mkVm({
       name: name,
       modules: [import("./agent.nix"), group],
