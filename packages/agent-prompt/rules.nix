@@ -709,6 +709,24 @@
     };
   }
   {
+    readTopDown = {
+      topics = ["architecture"];
+      text = ''
+        Compose code so it reads without comments: a reader starts at the
+        top-level abstraction and descends, each level a sentence of
+        well-named parts. Structure carries what the code does. Needing a
+        comment to say what a block does means extract the block and name
+        it.
+      '';
+      reason = ''
+        Requested 2026-07-23: `style` covers naming and why-only comments,
+        commentDensityRewrite the rewrite when explanation runs long; the
+        reading path itself, top down through composition, was unstated as
+        the standard for legibility.
+      '';
+    };
+  }
+  {
     commentDensityRewrite = {
       topics = ["architecture" "agency"];
       text = ''
