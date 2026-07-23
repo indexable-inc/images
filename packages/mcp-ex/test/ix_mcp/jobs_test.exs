@@ -3,6 +3,7 @@ defmodule IxMcp.JobsTest do
 
   alias IxMcp.ActionLog
   alias IxMcp.Jobs
+  alias IxMcp.Jobs.Reaper
   alias IxMcp.MCP.Notifier
   alias IxMcp.Session
 
@@ -319,6 +320,83 @@ defmodule IxMcp.JobsTest do
              end)
 
     assert Jobs.tail(summary.id, 2) =~ "tick 40"
+  end
+
+  # -- #4082: reads and finishes survive a parked or lossy ledger --------------
+
+  test "a ledger parked in a slow write cannot kill the exec path (#4082)" do
+    # Force the lazy session row before parking the log: Session.ids/0 must
+    # not itself queue behind the suspended server.
+    _ = Session.ids()
+
+    log = Process.whereis(ActionLog)
+    :ok = :sys.suspend(log)
+
+    {summary, output} =
+      try do
+        # The job's control process parks in `job_started` against the
+        # suspended log. Pre-fix, Jobs.run died here: the {:subscribe, pid}
+        # call hit its default 5s timeout and the exit killed the caller
+        # (the exec handler, in production).
+        Jobs.run(~s|IO.puts("parked"); :ok|, budget: 0.2, intent: "under parked ledger")
+      after
+        :ok = :sys.resume(log)
+      end
+
+    # The budget elapsed while the ledger was parked: the run degrades to
+    # the budget-then-background contract instead of an exit, and reads
+    # answer from the snapshot.
+    assert summary.running
+    assert is_binary(output)
+    assert Jobs.get(summary.id).id == summary.id
+
+    final = Jobs.await(summary.id, 10_000)
+    assert final.status == :done
+
+    # And the run is on the durable record once the ledger drains.
+    assert %{status: :done} =
+             eventually(fn ->
+               case ActionLog.job(summary.id) do
+                 %{status: :done} = row -> row
+                 _not_yet -> nil
+               end
+             end)
+
+    assert Enum.find(Jobs.history(20), &(&1.id == summary.id))
+  end
+
+  test "a killed job whose start write was lost is still finalized via reaper meta (#4082)" do
+    %{session_id: session_id} = Session.ids()
+    id = "gh" <> Base.encode16(:crypto.strong_rand_bytes(3), case: :lower)
+
+    start = %{
+      id: id,
+      session_id: session_id,
+      action_id: nil,
+      intent: "ghost start",
+      session_name: nil,
+      topic_name: nil,
+      code: ":ok",
+      watch: false,
+      started_at: DateTime.to_iso8601(DateTime.utc_now())
+    }
+
+    # No job_started write ever happens: the load shape where safe_log
+    # absorbed it. The reaper holds the start metadata and reconstructs the
+    # row when it finalizes the kill.
+    victim = spawn(fn -> Process.sleep(:infinity) end)
+    :ok = Reaper.watch(id, victim, start)
+    Process.exit(victim, :kill)
+
+    assert %{status: :killed, intent: "ghost start"} =
+             eventually(fn ->
+               case ActionLog.job(id) do
+                 %{status: :killed} = row -> row
+                 _not_yet -> nil
+               end
+             end)
+
+    assert Enum.find(Jobs.history(20), &(&1.id == id))
   end
 
   # Graceful stop/start through the supervisor: unlike a kill, this does

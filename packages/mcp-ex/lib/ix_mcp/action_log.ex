@@ -590,13 +590,22 @@ defmodule IxMcp.ActionLog do
   read of another job's terminal state, not news, so its outbox row is born
   acked -- on the record, never announced. Only `done` goes quiet; a
   wrapper's own failure or death still announces (the invariant).
+
+  `start:` is the job's start metadata (the `job_started/2` map, #4082).
+  With it, a missing jobs row is reconstructed inside this transition
+  instead of no-opping as `:already_final`: under load a job's `job_started`
+  write can be absorbed by the job's ledger seam (#3874), and before #4082
+  that single lost write erased the whole run from the record -- finish and
+  output had no row to land on, `Jobs.history` never listed the job, and
+  the durability contract ("history survives even a crash or kill") broke.
   """
   @spec finish_job(String.t(), Job.status(), String.t() | nil, keyword(), GenServer.server()) ::
           {:notify, outbox()} | :already_final
   def finish_job(id, status, result, opts \\ [], server \\ __MODULE__)
       when status in [:done, :failed, :cancelled, :killed] do
     quiet = Keyword.get(opts, :quiet, false)
-    call(server, {:finish_job, id, Atom.to_string(status), result, quiet, now()})
+    start = Keyword.get(opts, :start)
+    call(server, {:finish_job, id, Atom.to_string(status), result, quiet, now(), start})
   end
 
   @doc """
@@ -995,22 +1004,7 @@ defmodule IxMcp.ActionLog do
   end
 
   def handle_call({:job_started, job}, _from, %{db: db} = state) do
-    run(
-      db,
-      "INSERT OR IGNORE INTO jobs (id, session_id, action_id, intent, session_name, topic_name, code, status, watch, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)",
-      [
-        job.id,
-        job.session_id,
-        job.action_id,
-        job.intent,
-        job.session_name,
-        job.topic_name,
-        job.code,
-        bool_to_int(job.watch),
-        job.started_at
-      ]
-    )
-
+    insert_job_row(db, job)
     {:reply, :ok, state}
   end
 
@@ -1050,7 +1044,12 @@ defmodule IxMcp.ActionLog do
   # never catch the two logs disagreeing and no terminal transition escapes
   # the outbox. The single-writer GenServer serializes this against every
   # other write, so the guard needs no locking of its own.
-  def handle_call({:finish_job, id, status, result, quiet, at}, _from, %{db: db} = state) do
+  def handle_call({:finish_job, id, status, result, quiet, at, start}, _from, %{db: db} = state) do
+    # Reconstruct a lost start row before the guarded transition (#4082):
+    # idempotent by primary key, so a row that already exists -- running or
+    # terminal -- is untouched and the guard below still decides the race.
+    if is_map(start), do: insert_job_row(db, start)
+
     reply =
       case fetch(
              db,
@@ -1435,7 +1434,9 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:create_session, _name, _at}), do: 0
   defp disabled_reply({:create_topic, _session_id, _name, _at}), do: 0
   defp disabled_reply({:start_action, _action}), do: 0
-  defp disabled_reply({:finish_job, _id, _status, _result, _quiet, _at}), do: :already_final
+
+  defp disabled_reply({:finish_job, _id, _status, _result, _quiet, _at, _start}),
+    do: :already_final
 
   defp disabled_reply({:post_request, _kind, _ref, _title, _body, _session_id, _at}),
     do: :disabled
@@ -1559,6 +1560,27 @@ defmodule IxMcp.ActionLog do
   end
 
   defp now, do: DateTime.utc_now() |> DateTime.to_iso8601()
+
+  # One idempotent write shared by `job_started` and the reconstructing
+  # `finish_job` (#4082): INSERT OR IGNORE on the primary key, so replays
+  # and reconstructions never clobber a row that already landed.
+  defp insert_job_row(db, job) do
+    run(
+      db,
+      "INSERT OR IGNORE INTO jobs (id, session_id, action_id, intent, session_name, topic_name, code, status, watch, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)",
+      [
+        job.id,
+        job.session_id,
+        job.action_id,
+        job.intent,
+        job.session_name,
+        job.topic_name,
+        job.code,
+        bool_to_int(job.watch),
+        job.started_at
+      ]
+    )
+  end
 
   defp bool_to_int(true), do: 1
   defp bool_to_int(false), do: 0

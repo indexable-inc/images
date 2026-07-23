@@ -35,10 +35,17 @@ defmodule IxMcp.Jobs.Reaper do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)
   end
 
-  @doc "Monitor a job control process so its unreported death is finalized."
-  @spec watch(String.t(), pid()) :: :ok
-  def watch(id, pid) do
-    GenServer.cast(__MODULE__, {:watch, id, pid})
+  @doc """
+  Monitor a job control process so its unreported death is finalized.
+  `start` is the job's start metadata (`ActionLog.job_start()`): the
+  finalizing transition hands it to `ActionLog.finish_job/5`, which
+  reconstructs the jobs row when the `job_started` write itself was lost
+  under load (#4082) -- without it, a kill after a lost start write
+  no-opped as `:already_final` and the job vanished from the record.
+  """
+  @spec watch(String.t(), pid(), map() | nil) :: :ok
+  def watch(id, pid, start \\ nil) do
+    GenServer.cast(__MODULE__, {:watch, id, pid, start})
   end
 
   @doc "A job reported a terminal transition itself; stop guarding it."
@@ -49,13 +56,20 @@ defmodule IxMcp.Jobs.Reaper do
 
   @impl true
   def init(_) do
-    {:ok, %{refs: %{}, ids: %{}}}
+    {:ok, %{refs: %{}, ids: %{}, starts: %{}}}
   end
 
   @impl true
-  def handle_cast({:watch, id, pid}, state) do
+  def handle_cast({:watch, id, pid, start}, state) do
     ref = Process.monitor(pid)
-    {:noreply, %{state | refs: Map.put(state.refs, ref, id), ids: Map.put(state.ids, id, ref)}}
+
+    {:noreply,
+     %{
+       state
+       | refs: Map.put(state.refs, ref, id),
+         ids: Map.put(state.ids, id, ref),
+         starts: put_start(state.starts, id, start)
+     }}
   end
 
   def handle_cast({:reported, id}, state) do
@@ -65,7 +79,14 @@ defmodule IxMcp.Jobs.Reaper do
 
       {ref, ids} ->
         Process.demonitor(ref, [:flush])
-        {:noreply, %{state | refs: Map.delete(state.refs, ref), ids: ids}}
+
+        {:noreply,
+         %{
+           state
+           | refs: Map.delete(state.refs, ref),
+             ids: ids,
+             starts: Map.delete(state.starts, id)
+         }}
     end
   end
 
@@ -73,17 +94,18 @@ defmodule IxMcp.Jobs.Reaper do
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     {id, refs} = Map.pop(state.refs, ref)
     ids = if id, do: Map.delete(state.ids, id), else: state.ids
+    {start, starts} = if id, do: Map.pop(state.starts, id), else: {nil, state.starts}
 
     if id do
       result = "killed: " <> inspect(reason, limit: 25, printable_limit: 2_000)
-      finalize(id, result, @finalize_retries)
+      finalize(id, result, start, @finalize_retries)
     end
 
-    {:noreply, %{state | refs: refs, ids: ids}}
+    {:noreply, %{state | refs: refs, ids: ids, starts: starts}}
   end
 
-  def handle_info({:finalize, id, result, attempts}, state) do
-    finalize(id, result, attempts)
+  def handle_info({:finalize, id, result, start, attempts}, state) do
+    finalize(id, result, start, attempts)
     {:noreply, state}
   end
 
@@ -91,17 +113,24 @@ defmodule IxMcp.Jobs.Reaper do
   # the ledger call (it died mid-request, #3874) must not crash the reaper
   # -- that would drop every monitor it holds -- so the attempt re-arms
   # itself instead.
-  defp finalize(id, result, attempts) do
-    case ActionLog.finish_job(id, :killed, result) do
+  defp finalize(id, result, start, attempts) do
+    case ActionLog.finish_job(id, :killed, result, start: start) do
       {:notify, outbox} -> Notifier.publish(outbox)
       :already_final -> :ok
     end
   catch
     :exit, reason ->
       if attempts > 0 do
-        Process.send_after(self(), {:finalize, id, result, attempts - 1}, @finalize_retry_ms)
+        Process.send_after(
+          self(),
+          {:finalize, id, result, start, attempts - 1},
+          @finalize_retry_ms
+        )
       else
         Logger.error("reaper: job #{id} terminal write lost: #{inspect(reason, limit: 5)}")
       end
   end
+
+  defp put_start(starts, _id, nil), do: starts
+  defp put_start(starts, id, start), do: Map.put(starts, id, start)
 end

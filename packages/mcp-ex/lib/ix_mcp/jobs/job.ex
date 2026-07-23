@@ -30,6 +30,17 @@ defmodule IxMcp.Jobs.Job do
   output flush leaves the hot buffer unflushed for the next tick; a failed
   terminal transition re-arms itself (`:record_terminal`) until the ledger
   takes it, so the notification is delayed, never lost.
+
+  Reads never queue behind those ledger calls (#4082): the job publishes a
+  snapshot (status, rendered result, buffer/counter handles) as its Registry
+  value at init and again at finish, so `Jobs.get`/`Jobs.output` are plain
+  ETS reads while this process is parked in a 30s `ActionLog` call -- under
+  concurrent load the old call path timed out at the default 5s and killed
+  the exec handler. The same load can lose the `job_started` write itself
+  (`safe_log` absorbs it), so the start metadata rides with the reaper and
+  with the terminal transition, either of which reconstructs the jobs row;
+  before that, a lost start row made `finish_job` no-op as `:already_final`
+  and the whole run vanished from the record.
   """
 
   use GenServer, restart: :temporary
@@ -174,7 +185,9 @@ defmodule IxMcp.Jobs.Job do
   """
   @spec await(GenServer.server(), timeout()) :: {:ok, summary()} | :timeout
   def await(server, timeout_ms) do
-    case GenServer.call(server, {:subscribe, self()}) do
+    started_mono = System.monotonic_time(:millisecond)
+
+    case subscribe(server, timeout_ms) do
       {:finished, summary} ->
         {:ok, summary}
 
@@ -182,16 +195,46 @@ defmodule IxMcp.Jobs.Job do
         receive do
           {:ix_job_finished, _id, summary} -> {:ok, summary}
         after
-          timeout_ms ->
-            GenServer.cast(server, {:unsubscribe, self()})
-
-            # The finish notification may have raced the timeout; prefer it.
-            receive do
-              {:ix_job_finished, _id, summary} -> {:ok, summary}
-            after
-              0 -> :timeout
-            end
+          remaining_ms(timeout_ms, started_mono) ->
+            give_up(server)
         end
+
+      :busy ->
+        give_up(server)
+    end
+  end
+
+  # Subscribing must never outlive the caller's own budget (#4082): a control
+  # process parked in a ledger write under load cannot take the subscription
+  # for up to the ledger's 30s call bound, and the old default-5s call here
+  # died with `{:timeout, {GenServer, :call, [pid, {:subscribe, ...}]}}` --
+  # killing the exec handler. A subscribe that cannot land within the budget
+  # means the same thing as a budget that ran out: the job stays backgrounded.
+  defp subscribe(server, timeout_ms) do
+    GenServer.call(server, {:subscribe, self()}, subscribe_timeout(timeout_ms))
+  catch
+    :exit, {:timeout, {GenServer, :call, _args}} -> :busy
+  end
+
+  defp subscribe_timeout(:infinity), do: :infinity
+  # The floor keeps a tiny budget from turning the subscription itself into
+  # a guaranteed timeout race on a healthy process.
+  defp subscribe_timeout(timeout_ms), do: max(timeout_ms, 1_000)
+
+  defp remaining_ms(:infinity, _started_mono), do: :infinity
+
+  defp remaining_ms(timeout_ms, started_mono) do
+    max(timeout_ms - (System.monotonic_time(:millisecond) - started_mono), 0)
+  end
+
+  defp give_up(server) do
+    GenServer.cast(server, {:unsubscribe, self()})
+
+    # The finish notification may have raced the timeout; prefer it.
+    receive do
+      {:ix_job_finished, _id, summary} -> {:ok, summary}
+    after
+      0 -> :timeout
     end
   end
 
@@ -200,9 +243,67 @@ defmodule IxMcp.Jobs.Job do
   def output(server) do
     server
     |> GenServer.call(:buffer)
+    |> read_buffer()
+    |> Kernel.||("")
+  end
+
+  @doc """
+  The job's summary read from its Registry-value snapshot -- an ETS read
+  that never touches the control process (#4082): a process parked in a
+  ledger write under load answers no GenServer.call within the default 5s,
+  and reads must not inherit that stall. `nil` when the job is not resident
+  (finished-and-gone, or the sliver before `init` publishes the snapshot);
+  callers fall back to the call path or the durable ledger.
+  """
+  @spec read_summary(String.t()) :: summary() | nil
+  def read_summary(id) do
+    with {pid, %{} = snap} <- lookup_snapshot(id),
+         true <- Process.alive?(pid) do
+      finished = snap.finished_mono || System.monotonic_time(:millisecond)
+
+      %{
+        id: id,
+        status: snap.status,
+        running: snap.status == :running,
+        intent: snap.intent,
+        elapsed_s: (finished - snap.started_mono) / 1000,
+        output_bytes: :counters.get(snap.counter, 1),
+        diagnostics: snap.diagnostics,
+        result: snap.result
+      }
+    else
+      _not_resident -> nil
+    end
+  end
+
+  @doc "The job's output read straight from its hot buffer via the snapshot (#4082), or nil."
+  @spec read_output(String.t()) :: String.t() | nil
+  def read_output(id) do
+    with {pid, %{buffer: buffer}} <- lookup_snapshot(id),
+         true <- Process.alive?(pid) do
+      read_buffer(buffer)
+    else
+      _not_resident -> nil
+    end
+  end
+
+  defp lookup_snapshot(id) do
+    case Registry.lookup(IxMcp.Jobs.Registry, id) do
+      [{pid, value}] -> {pid, value}
+      [] -> nil
+    end
+  end
+
+  # The buffer is a public ETS table owned by the control process; it can be
+  # deleted between the aliveness check and the read when the process dies
+  # right then, which means the same as "not resident".
+  defp read_buffer(buffer) do
+    buffer
     |> :ets.tab2list()
     |> Enum.sort()
     |> Enum.map_join("", fn {_seq, chunk} -> chunk end)
+  rescue
+    ArgumentError -> nil
   end
 
   # -- server ----------------------------------------------------------------
@@ -232,31 +333,29 @@ defmodule IxMcp.Jobs.Job do
       started_at: DateTime.utc_now()
     }
 
+    # Publish the read snapshot before anything can block: from here on,
+    # summary and output reads are ETS lookups against the Registry value,
+    # never calls into this process (#4082).
+    publish_snapshot(state)
+
     {:ok, state, {:continue, :spawn_eval}}
   end
 
   @impl true
   def handle_continue(:spawn_eval, state) do
-    # Record the durable jobs row and arm the reaper before anything can die,
-    # so a death in the first instants is still finalized (#3839). A ledger
-    # outage must not abort the job itself (#3874): without the row, later
-    # reads degrade to the hot buffer, which beats dying before the eval
-    # even starts.
-    safe_log(fn ->
-      ActionLog.job_started(%{
-        id: state.id,
-        session_id: state.session_id,
-        action_id: state.action_id,
-        intent: state.intent,
-        session_name: state.session,
-        topic_name: state.topic,
-        code: state.code,
-        watch: state.watch,
-        started_at: DateTime.to_iso8601(state.started_at)
-      })
-    end)
+    # Arm the reaper before the ledger write, not after (#4082): the write
+    # below can park this process for the ledger's full call bound under
+    # load, and a kill inside that window used to escape the reaper
+    # entirely. The reaper carries the start metadata so it can finalize
+    # this job even when the `job_started` row itself never landed.
+    Reaper.watch(state.id, self(), start_meta(state))
 
-    Reaper.watch(state.id, self())
+    # Record the durable jobs row before the eval can die, so a death in the
+    # first instants is still finalized (#3839). A ledger outage must not
+    # abort the job itself (#3874): without the row, later reads degrade to
+    # the hot buffer, and the terminal transition reconstructs the row from
+    # the same metadata (#4082), which beats dying before the eval starts.
+    safe_log(fn -> ActionLog.job_started(start_meta(state)) end)
 
     buffer = state.buffer
     counter = state.counter
@@ -461,6 +560,11 @@ defmodule IxMcp.Jobs.Job do
         finished_mono: System.monotonic_time(:millisecond)
     }
 
+    # Snapshot first (#4082): the flush and terminal write below can park
+    # this process on the ledger, and readers must already see the terminal
+    # state through the Registry value while that happens.
+    publish_snapshot(state)
+
     # Persist all captured output before the transition, so a reader that
     # sees the job finish finds its output already complete on disk.
     state = flush(state)
@@ -479,7 +583,10 @@ defmodule IxMcp.Jobs.Job do
   defp record_terminal(state) do
     recorded =
       safe_log(fn ->
-        ActionLog.finish_job(state.id, state.status, render_result(state), quiet: state.quiet)
+        ActionLog.finish_job(state.id, state.status, render_result(state),
+          quiet: state.quiet,
+          start: start_meta(state)
+        )
       end)
 
     case recorded do
@@ -577,6 +684,46 @@ defmodule IxMcp.Jobs.Job do
   end
 
   defp schedule_flush, do: Process.send_after(self(), :flush, @flush_interval_ms)
+
+  # The job's start metadata, exactly as `ActionLog.job_started/2` takes it.
+  # Built once per use from state and handed to the ledger, the reaper, and
+  # the terminal transition (#4082): any of them can then (re)create the
+  # jobs row, so losing the start write under load no longer loses the job.
+  defp start_meta(state) do
+    %{
+      id: state.id,
+      session_id: state.session_id,
+      action_id: state.action_id,
+      intent: state.intent,
+      session_name: state.session,
+      topic_name: state.topic,
+      code: state.code,
+      watch: state.watch,
+      started_at: DateTime.to_iso8601(state.started_at)
+    }
+  end
+
+  # The Registry value doubles as the job's hot read model (#4082): summary
+  # fields plus the buffer/counter handles, so `Jobs.get`/`Jobs.output` are
+  # plain ETS reads that keep answering while this process sits in a ledger
+  # call. Only the owning process may update its own Registry value, which
+  # is exactly who calls this.
+  defp publish_snapshot(state) do
+    Registry.update_value(IxMcp.Jobs.Registry, state.id, fn _old ->
+      %{
+        intent: state.intent,
+        status: state.status,
+        result: render_result(state),
+        diagnostics: state.diagnostics,
+        started_mono: state.started_mono,
+        finished_mono: state.finished_mono,
+        counter: state.counter,
+        buffer: state.buffer
+      }
+    end)
+
+    state
+  end
 
   defp build_summary(state) do
     finished = state.finished_mono || System.monotonic_time(:millisecond)
