@@ -51,6 +51,10 @@ mod result_code {
 }
 
 mod activity_code {
+    /// Aggregate progress for derivations being built. Nix also emits the same
+    /// `resProgress` result for transfers and copied paths, whose counters are
+    /// bytes or paths rather than derivations.
+    pub const BUILDS: u64 = 104;
     pub const BUILD: u64 = 105;
     /// Nix emits this right before building a content-addressed derivation: it
     /// "resolves" the derivation (rewrites each input reference to the input's
@@ -885,13 +889,19 @@ impl MonitorState {
                 }
             }
             ActivityResult::Progress { progress } => {
-                self.progress = Some(*progress);
+                let is_build_progress = self
+                    .activities
+                    .get(&action.id)
+                    .is_some_and(|activity| activity.activity_type.code == activity_code::BUILDS);
                 if let Some(activity) = self.activities.get_mut(&action.id) {
                     activity.progress = Some(*progress);
                 }
-                self.emit(Delta::ProgressSet {
-                    progress: *progress,
-                });
+                if is_build_progress {
+                    self.progress = Some(*progress);
+                    self.emit(Delta::ProgressSet {
+                        progress: *progress,
+                    });
+                }
                 self.emit_activity(action.id);
             }
             ActivityResult::SetExpected {
@@ -1685,6 +1695,56 @@ mod tests {
         assert_eq!(snapshot.builds[0].phase.as_deref(), Some("buildPhase"));
         assert_eq!(snapshot.builds[0].log_count, 1);
         assert_eq!(snapshot.logs[0].text, "compiling");
+    }
+
+    #[test]
+    fn transfer_progress_does_not_replace_aggregate_build_progress() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":["https://cache.example/nar"],"id":7,"level":3,"text":"downloading","type":101}"#);
+        state.apply_line(
+            r#"@nix {"action":"result","fields":[51987686,51987686,0,0],"id":7,"type":105}"#,
+        );
+
+        let snapshot = state.snapshot();
+        assert_eq!(
+            snapshot.progress, None,
+            "download bytes are not derivations"
+        );
+        assert_eq!(
+            snapshot.activities[0].progress,
+            Some(ActivityProgress {
+                done: 51_987_686,
+                expected: 51_987_686,
+                running: 0,
+                failed: 0,
+            }),
+            "the owning transfer still keeps its own progress"
+        );
+        assert!(
+            state
+                .drain_deltas()
+                .iter()
+                .all(|delta| !matches!(delta, Delta::ProgressSet { .. })),
+            "transfer progress must not become the graph's drv counter"
+        );
+    }
+
+    #[test]
+    fn builds_activity_sets_aggregate_build_progress() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":[],"id":9,"level":3,"text":"building derivations","type":104}"#);
+        state.apply_line(r#"@nix {"action":"result","fields":[2,3,1,0],"id":9,"type":105}"#);
+
+        let expected = ActivityProgress {
+            done: 2,
+            expected: 3,
+            running: 1,
+            failed: 0,
+        };
+        assert_eq!(state.snapshot().progress, Some(expected));
+        assert!(state.drain_deltas().iter().any(
+            |delta| matches!(delta, Delta::ProgressSet { progress } if *progress == expected)
+        ));
     }
 
     #[test]
