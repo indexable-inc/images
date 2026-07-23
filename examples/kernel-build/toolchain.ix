@@ -1,0 +1,61 @@
+// The interactive kernel build environment: everything `make defconfig &&
+// make -j$(nproc)` needs, wired for a plain VM shell rather than a nix-shell.
+//
+// Tool selection mirrors `lib/kernel/kbuild-unit.nix`'s `kbuildInputs` (the
+// repo's CI-grade kernel builder), plus the compiler and binutils that stdenv
+// provides implicitly there.
+
+export default ({ lib, pkgs, ...rest }) => {
+  // Libraries kbuild's host tools link against: objtool wants libelf + zlib,
+  // extract-cert wants openssl, menuconfig wants ncurses. In a derivation
+  // stdenv's cc-wrapper injects their search paths; in an interactive shell
+  // nothing does, so the `environment.variables` below carry the dev outputs
+  // through gcc's standard CPATH/LIBRARY_PATH lookup instead.
+  const hostToolLibs = [pkgs.elfutils, pkgs.ncurses, pkgs.openssl, pkgs.zlib];
+  return {
+    environment: {
+      systemPackages: [
+        pkgs.gcc,
+        // setlocalversion shells out to git when the tree has .git, and the
+        // agent's whole edit loop lives in a git checkout.
+        pkgs.git,
+        // kbuild execs ld/objcopy/nm/ar directly (LD=, OBJCOPY=, ...), not
+        // through the gcc driver, so the wrapped compiler's baked-in bintools
+        // path does not cover it.
+        pkgs.binutils,
+        pkgs.gnumake,
+        pkgs.flex,
+        pkgs.bison,
+        pkgs.bc,
+        pkgs.perl,
+        pkgs.python3,
+        // scripts/kconfig probes ncurses through HOSTPKG_CONFIG.
+        pkgs["pkg-config"],
+        // BTF generation when a config sets CONFIG_DEBUG_INFO_BTF=y.
+        pkgs.pahole,
+        pkgs.kmod,
+        pkgs.cpio,
+        ...hostToolLibs,
+      ],
+
+      // gcc and ld honor these as ordinary search-path env vars, which makes
+      // the system shell a working kbuild host without an FHS emulation layer
+      // or a nix-shell wrapper. Scoped globally on purpose: this VM exists to
+      // build kernels, and the `claude` wrapper (claude.ix) re-exports the
+      // same values into the agent's session.
+      variables: {
+        CPATH: lib.makeSearchPathOutput("dev", "include", hostToolLibs),
+        LIBRARY_PATH: lib.makeLibraryPath(hostToolLibs),
+        PKG_CONFIG_PATH: lib.makeSearchPathOutput("dev", "lib/pkgconfig", hostToolLibs),
+      },
+    },
+
+    // zsh as the VM shell for every user. The platform sets nushell at normal
+    // priority (lib/image/platform.nix), so taking this example's brief --
+    // a zsh VM -- requires force. Known gap: `ix shell` currently drops into
+    // bash regardless of the account shell; the fix is in flight in ix, and
+    // `zsh` (or `su - claude`) gets you there meanwhile.
+    programs: { zsh: { enable: true } },
+    users: { defaultUserShell: lib.mkForce(pkgs.zsh) },
+  };
+};

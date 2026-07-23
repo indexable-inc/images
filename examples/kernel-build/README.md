@@ -17,7 +17,7 @@ never sees it.
 ## Run
 
 ```sh
-# From this directory (examples/kernel-build/claude in the index repo).
+# From this directory (examples/kernel-build in the index repo).
 ix secret set anthropic_api_key   # paste an Anthropic API key at the hidden prompt
 ix apply .#kernel-build
 ```
@@ -51,25 +51,25 @@ does, minus the key and the network.
 
 - [`default.ix`](default.ix) declares the VM. The repo URL, ref, and
   checkout path are the three consts at the top; the tree is fetched by the
-  repo's boot-time [`services.git-clone`](../../../modules/services/git-clone/default.nix)
+  repo's boot-time [`services.git-clone`](../../modules/services/git-clone/default.nix)
   module (shallow, idempotent across reboots). The
   `deployment.secrets.anthropic_api_key` attachment materializes the stored
   key as `/run/secrets/anthropic/api-key`, owner `anthropic-proxy`, mode
   `0400`.
-- [`toolchain.nix`](toolchain.nix) is the kbuild host: gcc, binutils, make,
+- [`toolchain.ix`](toolchain.ix) is the kbuild host: gcc, binutils, make,
   flex, bison, bc, perl, openssl, libelf, ncurses, pahole, and the
   `CPATH`/`LIBRARY_PATH` wiring that makes kbuild's host tools (objtool,
   menuconfig, extract-cert) compile outside a nix-shell. It also sets zsh as
   the VM shell.
-- [`claude.nix`](claude.nix) is the sandbox, as intent: it enables the
-  repo's [`services.sandboxed-agent`](../../../modules/services/sandboxed-agent/default.nix)
+- [`claude.ix`](claude.ix) is the sandbox, as intent: it enables the
+  repo's [`services.sandboxed-agent`](../../modules/services/sandboxed-agent/default.nix)
   module and fills in the Anthropic-shaped values -- the `claude` user and
   uid, `pkgs.claude-code` as the confined command, the proxy's port,
   upstream host, credential header, and key file. The mechanism (users,
   proxy service, nftables policy, wrapper, health checks) lives in the
   module.
 - The proxy itself is a small Rust binary
-  ([`modules/services/sandboxed-agent/proxy`](../../../modules/services/sandboxed-agent/proxy/src/main.rs)),
+  ([`modules/services/sandboxed-agent/proxy`](../../modules/services/sandboxed-agent/proxy/src/main.rs)),
   auditable in one sitting: accept plain HTTP on `127.0.0.1:8402`, drop the
   client's credential headers, inject the real key from the 0400 file, and
   relay the TLS response from `api.anthropic.com` back byte for byte.
@@ -148,7 +148,7 @@ config: as the claude uid, connect to the proxy, then assert a direct
 ## Bad fit if
 
 - You want CI-grade, cached, per-translation-unit kernel builds. That is
-  [`lib/kernel/kbuild-unit.nix`](../../../lib/kernel/kbuild-unit.nix)
+  [`lib/kernel/kbuild-unit.nix`](../../lib/kernel/kbuild-unit.nix)
   (index#3442), which builds kernels as content-addressed derivations. This
   example is the interactive complement: a mutable tree, a warm shell, an
   agent.
