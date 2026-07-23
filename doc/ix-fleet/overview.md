@@ -7,6 +7,11 @@ converges the live fleet to it. It is the operational front end over the ix
 control plane: where [vmkit](../vmkit/overview.md) owns one local guest, `ix-fleet`
 manages many remote ix VMs (the SDK calls them branches) by name.
 
+> **Deprecated.** Fleets are removed from the ix product surface
+> (indexable-inc/ix#8306); the hosted platform's model is one VM per project,
+> converged with `ix apply`. This page remains the from-source reference for
+> the standalone tool.
+
 Unlike the rest of this domain, `ix-fleet` does not touch a local hypervisor. It
 talks to the ix API through the Python SDK (`ix_sdk.Client`) and fans per-node
 work out through [dag-runner](../dag-runner/overview.md). All logic

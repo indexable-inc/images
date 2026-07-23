@@ -60,7 +60,7 @@ Start here, then follow the page that matches the question:
 | --- | --- |
 | [cli.md](cli.md) | The `ix` verb map and mental model. For flags, run `ix <verb> --help`. |
 | [lifecycle.md](lifecycle.md) | "I want to X" -> command: create, run, converge, stop, snapshot, destroy. |
-| [fleet.md](fleet.md) | Declarative multi-VM fleets via the separate `ix-fleet` tool. |
+| [fleet.md](fleet.md) | Deprecated (indexable-inc/ix#8306): multi-VM fleets via the separate `ix-fleet` tool. |
 | [images.md](images.md) | Build an image, tag/push to `registry.ix.dev`, boot a VM from it. |
 | [networking.md](networking.md) | Expose ports, private VM-to-VM groups, `<host>.ix.internal`, public ingress. |
 | [secrets.md](secrets.md) | Declare a secret, attach it to a VM, materialize it in the guest. |
@@ -77,5 +77,5 @@ per-package docs under [`doc/`](../index.md), for example the
 
 - [cli.md](cli.md): the `ix` verb map and mental model.
 - [lifecycle.md](lifecycle.md): which command for create, run, converge, snapshot, destroy.
-- [fleet.md](fleet.md): declarative multi-VM fleets via `ix-fleet`.
+- [fleet.md](fleet.md): the deprecated multi-VM `ix-fleet` tool.
 - [glossary.md](glossary.md): disambiguating overloaded names.

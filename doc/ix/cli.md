@@ -53,10 +53,11 @@ Nix-managed binary lives in the read-only store and is refused: update the
 - **`ix run` is the imperative one-off.** It boots a fresh VM, runs one command,
   streams its output, and leaves the VM up. Reach for `apply`
   for a config you own and re-converge; reach for `run` for a quick command.
-- **Fleets are a separate tool.** Multi-VM declarative fleets live in `ix-fleet`
-  (`nix run .#ix-fleet -- --plan plan.json <verb>`), not in `ix`. See
-  [fleet.md](fleet.md). There is no `ix down`, `ix health`, `ix diff`, or
-  `ix fleet`. Single-VM teardown is `ix rm` (or `ix stop` to keep it).
+- **There is no fleet concept.** A project defines one VM and `ix apply`
+  converges it. The standalone multi-VM `ix-fleet` tool is deprecated
+  (indexable-inc/ix#8306, see [fleet.md](fleet.md)). There is no `ix down`,
+  `ix health`, `ix diff`, or `ix fleet`. Single-VM teardown is `ix rm` (or
+  `ix stop` to keep it).
 
 ## Verbs
 
@@ -109,7 +110,7 @@ current flag list on any verb. Four global flags apply everywhere:
 
 ## See also
 
-- [fleet.md](fleet.md): multi-VM declarative fleets via the separate `ix-fleet`.
+- [fleet.md](fleet.md): the deprecated multi-VM `ix-fleet` tool (indexable-inc/ix#8306).
 - [lifecycle.md](lifecycle.md): provision -> run -> stop -> snapshot -> rm.
 - [networking.md](networking.md): groups, the overlay, and shares.
 - [secrets.md](secrets.md): the write-only secret store and default attachment.

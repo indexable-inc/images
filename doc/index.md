@@ -10,7 +10,7 @@ From-source documentation for the packages in the `index` repo (a shared, open-s
 - Every page opens with its title and a one-line summary, so this index (and an
   agent's `llms.txt` map) can be generated from the pages themselves.
 - `doc/ix/` is the platform guide for users of the hosted `ix` platform (the
-  CLI, fleets, networking, secrets, ...). Those pages defer CLI flags to
+  CLI, networking, secrets, ...). Those pages defer CLI flags to
   `ix <verb> --help` and cite only public source. Start at
   [ix/overview.md](ix/overview.md).
 - The `doc/assets/demo-*` files are README assets, not documentation pages.
@@ -25,7 +25,7 @@ User-facing guides for the hosted `ix` platform. Start at
 | [ix/overview.md](ix/overview.md) | The platform map: open-source vs hosted boundary, a first VM, and where each "how do I" lives. |
 | [ix/cli.md](ix/cli.md) | The `ix` verb map and mental model; flags live in `ix <verb> --help`. |
 | [ix/lifecycle.md](ix/lifecycle.md) | "I want to X" -> command: create, run, converge, stop, snapshot, destroy (single VM and fleet). |
-| [ix/fleet.md](ix/fleet.md) | Declarative multi-VM fleets via the separate `ix-fleet` tool. |
+| [ix/fleet.md](ix/fleet.md) | Deprecated (indexable-inc/ix#8306): multi-VM fleets via the separate `ix-fleet` tool. |
 | [ix/images.md](ix/images.md) | Build an image, tag and push to `registry.ix.dev`, boot a VM from it. |
 | [ix/networking.md](ix/networking.md) | Expose ports, private VM-to-VM groups, `<host>.ix.internal`, and public ingress. |
 | [ix/secrets.md](ix/secrets.md) | Declare a secret, attach it to a VM, materialize it in the guest. |

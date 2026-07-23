@@ -7,6 +7,11 @@ command per lifecycle verb; `ix-fleet` (`packages/ix-fleet`, Python) reads that
 plan and converges the live fleet to it. This page is the short how-to; the
 exhaustive from-source reference is [../ix-fleet/overview.md](../ix-fleet/overview.md).
 
+> **Deprecated.** Fleets are removed from the ix product surface
+> (indexable-inc/ix#8306): the model is one VM per project, defined by your
+> config and converged with `ix apply`. The standalone `ix-fleet` tool still
+> lives in this repo, and this page remains its how-to.
+
 > `ix-fleet` is a separate tool from the [`ix` CLI](cli.md). It drives the same
 > ix control plane (a node is an ix branch) through the Python SDK and `IX_TOKEN`
 > from the environment, but you do not call `ix` directly to run a fleet.
