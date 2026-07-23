@@ -60,7 +60,8 @@ Three unrelated things:
 
 - **`.#ix-fleet`** - the CLI/tool that renders and executes fleet plans
   (`packages/ix-fleet/Cargo.toml:2,4`).
-- A **fleet** - the set of remote ix VMs a plan describes.
+- A **fleet** - the set of remote ix VMs a plan describes. Off the product
+  surface since indexable-inc/ix#8306: an ix project defines one VM.
 - A node in that fleet is called a **branch** by the ix SDK (`ix_sdk.BranchStatus`)
   (`packages/ix-fleet/src/ix_fleet/__init__.py:221`).
 
