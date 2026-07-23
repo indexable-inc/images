@@ -3116,6 +3116,13 @@
       }
       {
         assertion =
+          agentCommon.defaultServers.index.command
+          == lib.getExe repoPackages.mcp-ex
+          && agentCommon.defaultServers.index.args == [];
+        message = "agent wrappers should use the argument-free Elixir MCP server by default";
+      }
+      {
+        assertion =
           ix.mcp.houseServers {
             indexCommand = "/bin/ix-mcp";
           }
@@ -4525,11 +4532,9 @@
           ]
           && !(overlay.codex.forcedSettings.features ? shell_tool)
           && overlay.codex.forcedSettings.features.standalone_web_search == false
-          # With the index kernel + exa baked, every superseded native tool is
-          # folded in, in each agent's own vocabulary — except Bash, which
-          # Claude keeps as the kernel-outage fallback (index#4080): a dead MCP
-          # connection never auto-reattaches, so a kernel BEAM crash must
-          # degrade to a stock shell rather than leave the session toolless.
+          # With the index kernel + exa baked, file and web tools are folded in.
+          # Both agents keep their native shell as the direct command path and
+          # as the kernel-outage path (index#4080).
           && !(builtins.elem "Bash" baked.claude.deniedToolPatterns)
           && builtins.all (tool: builtins.elem tool baked.claude.deniedToolPatterns) [
             "Read"
@@ -4545,8 +4550,8 @@
             "WebSearch"
             "WebFetch"
           ]
-          && baked.codex.forcedSettings.features.shell_tool == false
-          && baked.codex.forcedSettings.features.unified_exec == false
+          && !(baked.codex.forcedSettings.features ? shell_tool)
+          && !(baked.codex.forcedSettings.features ? unified_exec)
           && baked.codex.forcedSettings.features.standalone_web_search == false;
         message = "agent policy should gate kernel/exa-superseded native tools on the baked MCP servers";
       }
@@ -4569,10 +4574,10 @@
             "computer_use"
             "image_generation"
             "in_app_browser"
-            "shell_tool"
             "standalone_web_search"
-            "unified_exec"
-          ];
+          ]
+          && !(builtins.elem "features.shell_tool" (map (entry: entry.key) forced))
+          && !(builtins.elem "features.unified_exec" (map (entry: entry.key) forced));
         message = "Codex wrapper should render built-in tool disables into forced launch config";
       }
       {

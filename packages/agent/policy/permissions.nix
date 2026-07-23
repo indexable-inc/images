@@ -21,14 +21,9 @@
 # connection shared instead (#2382), which is no isolation at all.
 {
   lib,
-  # True when the wrapper bakes the `index` MCP server (the ix kernel,
-  # packages/mcp). The kernel owns shell, file IO, and code search
-  # (python_exec/nu, read, grep/find), so the stock native tools this table
-  # maps are disabled wherever it is present. A wrapper without the kernel
-  # (the overlay package set) keeps the kernel-superseded tools: denying them
-  # there would leave the agent with no hands. (The exa-gated web pair below
-  # is a separate gate and is still denied in the overlay build, since exa is
-  # baked unconditionally by the default server set.)
+  # True when the wrapper bakes the `index` MCP server. The kernel owns stateful
+  # data and fleet work. Native file tools are disabled wherever it is present,
+  # while the native shell remains available as the direct command path.
   indexKernelBaked ? false,
   # True when the wrapper bakes the `exa` MCP server, which supersedes the
   # stock web search/fetch surface.
@@ -49,21 +44,9 @@
   # Code tool names for `permissions.deny`; `codexFeatures` are codex
   # `features.*` leaves for the forced `-c` layer. The file IO and search rows
   # carry no codex handle: codex reads, writes, and searches through its shell
-  # (covered by the `shell` row), and its `apply_patch` tool is enabled
-  # per-model upstream with no config toggle to reach it.
+  # and its `apply_patch` tool is enabled per-model upstream with no config
+  # toggle to reach it.
   kernelSuperseded = {
-    shell = {
-      # Claude keeps Bash even with the kernel baked: the kernel is the
-      # preferred shell (prompt rules steer there), but a kernel BEAM crash
-      # (index#4080, 2026-07-23) left sessions with NO shell or file IO at
-      # all, since a dead MCP connection never auto-reattaches. Bash is the
-      # degraded-mode fallback, not a second first-class path.
-      claudeTools = [];
-      codexFeatures = {
-        shell_tool = false;
-        unified_exec = false;
-      };
-    };
     fileRead = {
       claudeTools = ["Read"];
       codexFeatures = {};
