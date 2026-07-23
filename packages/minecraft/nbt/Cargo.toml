@@ -17,7 +17,7 @@ serde_json.workspace = true
 # Property-based testing via Hegel. Pinned to the `native` feature so cargo
 # test runs without the Python hegel-core server (the default backend). The
 # native backend is functionally complete; only performance differs.
-hegeltest = { workspace = true, default-features = false, features = ["native"] }
+hegeltest = { workspace = true, default-features = false }
 
 # cargo-machete can't see hegeltest because it's only reached through the
 # `#[hegel::test]` proc-macro under `tests/`. Listing it here keeps the
