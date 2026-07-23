@@ -89,7 +89,7 @@ fn withdraw(world: &mut AccountWorld, amount: Cents) {
 }
 
 #[when(regex = r"^I try to (deposit|withdraw) \$(-?\d+\.\d{2})$")]
-fn try_operation(world: &mut AccountWorld, operation: Operation, amount: Cents) {
+const fn try_operation(world: &mut AccountWorld, operation: Operation, amount: Cents) {
     world.last_result = Some(match operation {
         Operation::Deposit => world.account.deposit(amount.0),
         Operation::Withdraw => world.account.withdraw(amount.0),
@@ -97,11 +97,19 @@ fn try_operation(world: &mut AccountWorld, operation: Operation, amount: Cents) 
 }
 
 #[then(regex = r"^the balance is \$(-?\d+\.\d{2})$")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber's macro requires steps to take `&mut World`"
+)]
 fn balance_is(world: &mut AccountWorld, expected: Cents) {
     assert_eq!(world.account.balance_cents(), expected.0);
 }
 
 #[then(regex = r"^the operation fails, short \$(\d+\.\d{2})$")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber's macro requires steps to take `&mut World`"
+)]
 fn fails_insufficient(world: &mut AccountWorld, missing: Cents) {
     assert_eq!(
         world.last_result,
@@ -112,6 +120,14 @@ fn fails_insufficient(world: &mut AccountWorld, missing: Cents) {
 }
 
 #[then(regex = r#"^the error reads "([^"]+)"$"#)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "cucumber step parameters are parsed via FromStr into owned values"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber's macro requires steps to take `&mut World`"
+)]
 fn error_reads(world: &mut AccountWorld, expected: String) {
     let error = world
         .last_result
@@ -121,6 +137,10 @@ fn error_reads(world: &mut AccountWorld, expected: String) {
 }
 
 #[then("the operation fails as a non-positive amount")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber's macro requires steps to take `&mut World`"
+)]
 fn fails_non_positive(world: &mut AccountWorld) {
     assert_eq!(world.last_result, Some(Err(AccountError::NonPositiveAmount)));
 }
