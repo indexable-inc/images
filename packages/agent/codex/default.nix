@@ -84,15 +84,13 @@
     (import (ix.paths.packagesRoot + "/agent/common.nix") {
       inherit lib ix;
       # Cross (Linux->Darwin) lane: repoPackages are host-native builds, so
-      # baking `index` would point mcp_servers.index.command at a Linux ix-mcp
-      # the Mac cannot exec (and no Darwin ix-mcp exists in this eval -- it is
-      # a host Python env, not a cross Rust unit). Bake no kernel there: the
-      # same exa-only fallback as the overlay set, and the permissions gate
-      # below then keeps codex's native shell tools enabled instead of
-      # assuming a baked kernel.
+      # baking `index` would point mcp_servers.index.command at a Linux
+      # ix-mcp-ex the Mac cannot exec. No Darwin ix-mcp-ex exists in this
+      # eval. Bake no kernel there: use the exa-only overlay fallback and keep
+      # Codex's native shell tools enabled.
       repoPackages =
         if ix.cross.isCross or false
-        then builtins.removeAttrs repoPackages ["mcp"]
+        then builtins.removeAttrs repoPackages ["mcp-ex"]
         else repoPackages;
       promptOmitRules = omitRules;
       promptOmitTopics = omitTopics;
@@ -135,9 +133,8 @@
     })
     flat;
 
-  # Gates fold in the native tools each baked MCP server supersedes: with the
-  # `index` kernel present the codex shell is force-disabled, and the overlay
-  # build (no kernel baked) keeps its shell rather than losing every tool.
+  # Gates fold in the native tools each baked MCP server supersedes. The native
+  # shell remains available with or without the kernel.
   sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
     inherit lib;
     indexKernelBaked = mcpServers ? index;

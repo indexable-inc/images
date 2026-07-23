@@ -5,12 +5,13 @@
   repoPackages ? {},
 }: {
   # Rendered from the shared `ix.mcp` registry with the kernel pointed at the
-  # `mcp` sibling when it is in scope. Each wrapper adapts this to its own
-  # config shape (`ix.mcp.toClaudeJson` / `ix.mcp.toCodexEntries` / `ix.mcp.toCursorJson`).
+  # Elixir `mcp-ex` sibling when it is in scope. Each wrapper adapts this to
+  # its own config shape.
   defaultServers = ix.mcp.defaultServers {
     indexCommand =
-      if repoPackages ? mcp
-      then lib.getExe repoPackages.mcp
+      if repoPackages ? mcp-ex
+      then lib.getExe repoPackages.mcp-ex
       else null;
+    indexArgs = [];
   };
 }

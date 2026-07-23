@@ -365,13 +365,15 @@
     indexKernel = {
       topics = ["tooling"];
       text = ''
-        Do shell, search, and data work through the index kernel MCP; its
-        connection-delivered instructions own the how-to.
+        Use the native shell for commands and search. Use the index kernel for
+        stateful Elixir, fleet, and data work; its connection instructions own
+        the kernel how-to.
       '';
       reason = ''
-        Restated MCP mechanics went stale (index#1986, index#1999, the
-        Python-to-Elixir cutover). Absorbs mcpGuidanceOwnership
-        (index#3594).
+        The Elixir kernel owns persistent state and fleet work. Native shell
+        stays available for direct commands and when the MCP connection dies
+        (index#4080). Connection-delivered instructions own kernel mechanics
+        so the prompt does not drift (index#1986, index#1999, index#3594).
       '';
     };
   }

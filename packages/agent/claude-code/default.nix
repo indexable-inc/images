@@ -148,7 +148,7 @@
   # namespace (where ids like `btop` or `kitty` would shadow the nixpkgs attrs
   # other packages resolve, and a self-named override like packages/btop would
   # recurse into itself). The overlay eval context does not provide it (the
-  # `mcp` package needs `ix.rustWorkspace` rebound to the caller's pkgs, which
+  # `mcp-ex` package needs the flake package set, which
   # only the flake package set does), so the overlay build of
   # `pkgs.claude-code` falls back to `{ }` and drops the defaults below that
   # need a sibling.
@@ -163,8 +163,8 @@
   # the old pattern of consumers symlinkJoin-wrapping this wrapper a second time
   # just to add it. Defaults to the default pair, additions only (no stock tool is
   # disabled or overridden):
-  #  - `index`: the ix notebook kernel (`ix-mcp serve`, packages/mcp) over
-  #    stdio. Present only when the `mcp` sibling is in scope, i.e. in the
+  #  - `index`: the Elixir ix kernel (`ix-mcp-ex`, packages/mcp-ex) over
+  #    stdio. Present only when the `mcp-ex` sibling is in scope, i.e. in the
   #    flake package set but not the overlay (see `repoPackages`).
   #  - `exa`: Exa's hosted web-search server over streamable HTTP at
   #    https://mcp.exa.ai/mcp. Keyless works with rate limits; for higher
@@ -179,7 +179,7 @@
   # Claude Code "channels" (research preview, needs claude-code >= 2.1.80): MCP
   # servers whose events push into the running session, so the agent reacts to
   # things that happen while you are away. Our `index` server (baked above via
-  # `mcpServers`, packages/mcp) is a channel: kernel `notify(...)` and
+  # `mcpServers`, packages/mcp-ex) is a channel: kernel `notify(...)` and
   # interactive-resource actions emit `notifications/claude/channel` events. It
   # is our OWN stdio server, baked into this package from the same trusted
   # registry as `mcpServers`. Each entry is a channel spec:
