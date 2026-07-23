@@ -18,7 +18,7 @@ firewall; only the proxy listeners are public.
 ## Run
 
 ```sh
-ix apply .#survival
+ix apply .#survival --ipv4
 ```
 
 Need the source first? `git clone https://github.com/indexable-inc/index`,

@@ -14,8 +14,8 @@ What does it take to run a long-lived AI agent as a boring system service? This 
 Store the env file first, then bring the VM up and open a chat:
 
 ```sh
-printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env
-ix apply .#hermes
+printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env --file hermes.env --owner hermes --mode 0400
+ix apply .#hermes --secret hermes_env
 ix shell hermes -- hermes chat
 ```
 

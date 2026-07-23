@@ -139,7 +139,7 @@ Our wrapped `claude-code` (the `IS_SANDBOX=1` wrapper plus the read-only `/etc/c
 4. `lib/dev/shared-mount.nix` — generalized SMB server + client modules (from the example).
 5. `lib/dev/identity.nix` — bind `~/.claude` / `~/.n` onto the share and materialize `/ix`.
 6. `templates/dev/` — the forkable `flake.nix` + `dev.nix` template, registered as `templates.dev`.
-7. `examples/dev/fleet/` — a runnable demo of all three modes.
+7. `examples/dev/vm/` — the runnable demo (single VM since ix#8306 removed fleets).
 8. Add the `ix` CLI to the dev base image (for recursion).
 
 **In `ix` (sibling repo):**

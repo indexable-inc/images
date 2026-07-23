@@ -830,6 +830,7 @@
     })
     discoverTree
     discoverModules
+    examplesFor
     exampleFleetsFor
     ;
 
@@ -851,6 +852,7 @@
         errors
         evalImageConfig
         exampleFleetsFor
+        examplesFor
         goUnitFor
         kernelUnitFor
         macosSdk

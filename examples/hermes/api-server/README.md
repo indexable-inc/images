@@ -22,11 +22,11 @@ Unlike every other hermes preset this one is inbound: the VM claims TCP `9119` v
 Store the env-file secret before launch. `API_SERVER_KEY` is the bearer token your frontends will present; generate a long random one:
 
 ```sh
-ix secret set hermes_env <<EOF
+ix secret set hermes_env --file hermes.env --owner hermes --mode 0400 <<EOF
 OPENROUTER_API_KEY=sk-or-...
 API_SERVER_KEY=$(openssl rand -hex 32)
 EOF
-ix apply .#hermes
+ix apply .#hermes --secret hermes_env
 ```
 
 Need the source first? `git clone https://github.com/indexable-inc/index`, then run it from `examples/hermes/api-server`.

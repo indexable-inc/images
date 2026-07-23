@@ -15,7 +15,8 @@ demand. Adding an agent needs no extra auth step.
 ## Run
 
 ```sh
-ix apply .#agent-0 .#agent-1 .#agent-2
+ix secret set github_token --file github/token --mode 0400
+ix apply .#agent-0 .#agent-1 .#agent-2 --secret github_token
 ```
 
 Get the source with `git clone https://github.com/indexable-inc/index` and
@@ -23,18 +24,18 @@ run it from `examples/synced-github/auth`.
 
 ## Shape
 
-- [`default.ix`](default.ix) defines three interchangeable `agent-*` VMs,
-  each with a `deployment.secrets.github_token` attachment that delivers
-  the stored value as `/run/secrets/github/token`.
+- [`default.ix`](default.ix) defines three interchangeable `agent-*` VMs;
+  the `github_token` secret attached at `ix apply` time is delivered as
+  `/run/secrets/github/token`.
 - [`agent.nix`](agent.nix) installs a `git` credential helper that reads the
   token from that runtime path on demand.
 
 ## How the token reaches git
 
-Store the value once with `ix secret set github_token`. Each VM maps that
-account key to `/run/secrets/github/token`. Only the key and target path
-enter the declaration; the token bytes stay in the ix secret store and are
-materialized when the VM is created.
+Store the value once with `ix secret set github_token --file github/token
+--mode 0400`, then attach it per VM with `ix apply --secret github_token`.
+Only the key and target path enter the declaration; the token bytes stay
+in the ix secret store and are materialized when the VM is created.
 
 [`agent.nix`](agent.nix) registers a credential helper in `/etc/gitconfig`
 scoped to `https://github.com`. When `git` needs a credential it runs the

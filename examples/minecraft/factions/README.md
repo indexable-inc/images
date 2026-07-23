@@ -17,7 +17,7 @@ real player UUIDs and spawn/claim policy before using it with real players.
 ## Run
 
 ```sh
-ix apply .#factions
+ix apply .#factions --ipv4
 ```
 
 Need the source first? `git clone https://github.com/indexable-inc/index`,

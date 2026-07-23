@@ -1486,7 +1486,13 @@
       ;
   });
 
-  exampleFleets = ix.exampleFleetsFor {hostSystem = system;};
+  examples = ix.examplesFor {hostSystem = system;};
+  exampleFleets = examples.fleets;
+  # Every example's VMs (fleet-shaped or plain multi-VM), the coverage
+  # surface for cache-push and security roots: multi-VM examples carry no
+  # lifecycle plan (ix#8306) but their closures must stay eval- and
+  # build-covered.
+  exampleVms = examples.vms;
 
   # Same fleets with "health-check-" prepended to every external name, so the
   # lifecycle scripts that force-delete VMs by name can never clobber an
@@ -1771,15 +1777,15 @@
       packageSet;
     exampleEntries =
       lib.concatMapAttrs (
-        fleetName: fleet:
+        exampleName: example:
           lib.mapAttrs' (
             node: path: let
-              name = "example-${fleetName}-${node}";
+              name = "example-${exampleName}-${node}";
             in
               lib.nameValuePair name {
                 inherit path;
                 root = mkRoot {
-                  attr = "exampleFleets.${system}.${fleetName}.systemPackages.${node}";
+                  attr = "examplesFor.${system}.vms.${exampleName}.systemPackages.${node}";
                   inherit name owner;
                   class = "deployed-service";
                   environment = "development";
@@ -1789,9 +1795,9 @@
                 };
               }
           )
-          fleet.systemPackages
+          example.systemPackages
       )
-      exampleFleets;
+      exampleVms;
     entries =
       if pkgs.stdenv.hostPlatform.isDarwin
       then packageEntries
@@ -1843,17 +1849,17 @@ in {
     imagesAsClosures = lib.mapAttrs (_: p: p.passthru.toplevel or p) (
       lib.filterAttrs (name: _: !isHealthCheck name) packageSet
     );
-    # `fleet.systemPackages` keys each node's toplevel as `<node>-system`; the
-    # fleet-name prefix keeps nodes sharing a name across fleets distinct.
+    # `systemPackages` keys each VM's toplevel as `<vm>-system`; the
+    # example-name prefix keeps VMs sharing a name across examples distinct.
     exampleNodeToplevels =
       lib.concatMapAttrs (
-        fleetName: fleet:
+        exampleName: example:
           lib.mapAttrs' (
-            node: toplevel: lib.nameValuePair "${fleetName}-${node}" toplevel
+            node: toplevel: lib.nameValuePair "${exampleName}-${node}" toplevel
           )
-          fleet.systemPackages
+          example.systemPackages
       )
-      exampleFleets;
+      exampleVms;
     # Native analog of `crossIfdRoots` (adjustment 4). `crossWorkspace` with no
     # target override IS the host workspace, so these are exactly the drvs a
     # Darwin consumer's eval of the native wrappers imports.

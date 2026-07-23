@@ -121,27 +121,36 @@
     strictList (map entryAsTree entries);
 
   /**
-  Discovered example VMs, built for a given host system. Discovery
-  walks the hierarchical `examples/<category>/<name>/default.ix` layout.
-  Keys in the returned attrset join the category and name with `-`, so
+  Discovered example VMs, built for a given host system in one load
+  pass. Discovery walks the hierarchical
+  `examples/<category>/<name>/default.ix` layout. Keys in the returned
+  attrsets join the category and name with `-`, so
   `examples/hermes/api-server` contributes `hermes-api-server`. Each
-  config is imported with `{ index = { lib = ix; }; }` to match
-  the contract examples already use, with `mkVm`/`mkFleet`/`mkDev`
-  swapped for the host-system variants so the wrapper derivations under
-  `.up`/`.health`/`.replace` build for the requested system rather
-  than always pinning to the default.
+  config is imported with `{ index = { lib = ix; }; }` to match the
+  contract examples already use, with `mkVm`/`mkFleet`/`mkDev` swapped
+  for the host-system variants so the wrapper derivations under
+  `.up`/`.health`/`.replace` build for the requested system rather than
+  always pinning to the default.
 
-  Only single-VM results (the evaluator shape: `nodes` + `planValue`)
-  are kept. A multi-VM example returns a plain
-  `{ nixosConfigurations = ...; }` merge and is applied VM-by-VM with
-  `ix apply .#a .#b` (ix#8306: no fleet grouping), so it carries no
-  lifecycle plan to aggregate here.
+  Two views over the one pass (share it: call `examplesFor` once):
+
+  - `fleets`: only single-VM results (the evaluator shape: `nodes` +
+    `planValue`), the surface the lifecycle/health harness can drive. A
+    multi-VM example returns a plain `{ nixosConfigurations = ...; }`
+    merge and is applied VM-by-VM with `ix apply .#a .#b` (ix#8306: no
+    fleet grouping), so it carries no lifecycle plan to aggregate.
+  - `vms`: every example with `nixosConfigurations`, fleet-shaped or
+    plain, normalized to `{ nixosConfigurations; systemPackages; }`
+    (`systemPackages` keys each VM's NixOS toplevel as `<vm>-system`,
+    the shape `mkFleet` exposed). This is the coverage surface:
+    cache-push and security roots build every example VM's closure from
+    it, so multi-VM examples stay eval- and build-covered.
 
   Adding an example is `mkdir examples/<category>/<name>` + edit
   `default.ix`; this aggregator picks it up on the next eval, no
   registry edits.
   */
-  exampleFleetsFor = {hostSystem}: let
+  examplesFor = {hostSystem}: let
     indexShim = {
       lib =
         ixReturn
@@ -157,31 +166,48 @@
       requiredFiles = ["default.ix"];
       validate = {metadata, ...}:
         assert lib.assertMsg (builtins.length metadata.segments == 2)
-        "exampleFleetsFor: expected examples/<category>/<name>/default.ix, got examples/${metadata.relativePath}"; {
+        "examplesFor: expected examples/<category>/<name>/default.ix, got examples/${metadata.relativePath}"; {
           name = lib.concatStringsSep "-" metadata.segments;
         };
     };
-  in
-    lib.filterAttrs (_: fleet: fleet != null) (
+
+    values = lib.filterAttrs (_: value: value != null) (
       lib.mapAttrs (
         _: entry: let
           load = import (entry.path + "/default.ix");
           args = builtins.functionArgs load;
-          value =
-            if args ? index
-            then load {index = indexShim;}
-            else null;
         in
-          if value != null && value ? nodes && value ? planValue
-          then value
+          # Non-VM configs (the oci images take `index` but return a
+          # derivation; nixos/switch-multi takes `nixpkgs`) fall out via
+          # the shape filters below or this arg check.
+          if args ? index
+          then load {index = indexShim;}
           else null
       )
       discovered
     );
+
+    toplevelPackages = nixosConfigurations:
+      lib.mapAttrs' (
+        name: cfg: lib.nameValuePair "${name}-system" cfg.config.system.build.toplevel
+      )
+      nixosConfigurations;
+  in {
+    fleets = lib.filterAttrs (_: value: value ? nodes && value ? planValue) values;
+    vms =
+      lib.mapAttrs (_: value: {
+        inherit (value) nixosConfigurations;
+        systemPackages = value.systemPackages or (toplevelPackages value.nixosConfigurations);
+      })
+      (lib.filterAttrs (_: value: value ? nixosConfigurations) values);
+  };
+
+  exampleFleetsFor = args: (examplesFor args).fleets;
 in {
   inherit
     discoverTree
     discoverModules
+    examplesFor
     exampleFleetsFor
     ;
 }

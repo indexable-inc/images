@@ -27,12 +27,12 @@ Want an agent in your pocket without opening a single inbound port? This is the 
 Store the env-file secret, then bring the VM up. To rotate later, run `ix secret set hermes_env` again and restart the unit.
 
 ```sh
-ix secret set hermes_env <<'EOF'
+ix secret set hermes_env --file hermes.env --owner hermes --mode 0400 <<'EOF'
 OPENROUTER_API_KEY=sk-or-...
 TELEGRAM_BOT_TOKEN=123456789:ABC...
 TELEGRAM_ALLOWED_USERS=123456789
 EOF
-ix apply .#hermes
+ix apply .#hermes --secret hermes_env
 ```
 
 Need the source first? `git clone https://github.com/indexable-inc/index`, then run it from `examples/hermes/telegram`.

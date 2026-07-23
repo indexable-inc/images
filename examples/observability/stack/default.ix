@@ -3,9 +3,10 @@
   eastWestGroup = "observability-stack";
   group = {ix.networking.groups = [eastWestGroup];};
 
+  # Grafana is published at create time:
+  # `ix apply .#observability --l7-proxy-port 3000`.
   observability = mkVm {
     name = "observability";
-    deployment.l7ProxyPorts = [3000];
     modules = [
       {
         services.ix-observability = {

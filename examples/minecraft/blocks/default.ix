@@ -28,26 +28,29 @@ let
 
   # The view VM: the shared observability stack plus the minecraft
   # spatial view and Kafka ingest on the SAME ClickHouse. Telemetry lands
-  # in `otel_*`; block facts land in `minecraft.*`.
+  # in `otel_*`; block facts land in `minecraft.*`. Grafana is published
+  # at create time: `ix apply .#view --l7-proxy-port 3000`.
   view = mkVm {
     name = "view";
-    deployment.l7ProxyPorts = [3000];
     modules = [./view.nix group];
     nodes = log.nixosConfigurations;
   };
 
   # The game server: emits domain facts to the log and telemetry to the
-  # collector on the view VM. ipv4 so the Minecraft server-list health
-  # check can reach the public address.
+  # collector on the view VM. Create it with `ix apply .#producer --ipv4`
+  # so players (and the server-list health check) can reach the public
+  # address.
   producer = mkVm {
     name = "producer";
-    deployment.ipv4 = true;
     modules = [./producer.nix group];
     nodes = log.nixosConfigurations // view.nixosConfigurations;
   };
 in {
-  # `ix apply .#log .#view .#producer`, in that order: each layer's
-  # health checks probe the one below it.
+  # Apply in dependency order, each layer's health checks probing the
+  # one below it (see README.md for the create-time flags):
+  #   ix apply .#log
+  #   ix apply .#view --l7-proxy-port 3000
+  #   ix apply .#producer --ipv4
   nixosConfigurations =
     log.nixosConfigurations
     // view.nixosConfigurations

@@ -25,8 +25,9 @@ Store the model key env file, bring both VMs up (the game server first, so
 the agent's RCON tool has a console to speak to), and open a chat:
 
 ```sh
-printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env
-ix apply .#minecraft .#hermes
+printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env --file hermes.env --owner hermes --mode 0400
+ix apply .#minecraft --ipv4
+ix apply .#hermes --secret hermes_env
 ix shell hermes -- hermes chat
 ```
 

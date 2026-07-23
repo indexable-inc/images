@@ -15,19 +15,16 @@ let
   eastWestGroup = "hermes-minecraft";
   group = {ix.networking.groups = [eastWestGroup];};
 
+  # Players need the public address: `ix apply .#minecraft --ipv4`.
   minecraft = mkVm {
     name = "minecraft";
-    deployment.ipv4 = true;
     modules = [./minecraft.nix group];
   };
 
+  # The model key rides the account secret store; attach it at create
+  # time with `ix apply .#hermes --secret hermes_env` (see README.md).
   hermes = mkVm {
     name = "hermes";
-    deployment.secrets.hermes_env = {
-      file = "hermes.env";
-      owner = "hermes";
-      mode = "0400";
-    };
     modules = [
       index.lib.hermesAgent.nixosModules.default
       index.lib.hermes.profile
@@ -37,8 +34,10 @@ let
     nodes = minecraft.nixosConfigurations;
   };
 in {
-  # `ix apply .#minecraft .#hermes`, the game server first so the
-  # agent's RCON tool has a console to speak to.
+  # Apply the game server first so the agent's RCON tool has a console
+  # to speak to:
+  #   ix apply .#minecraft --ipv4
+  #   ix apply .#hermes --secret hermes_env
   nixosConfigurations =
     minecraft.nixosConfigurations // hermes.nixosConfigurations;
 }

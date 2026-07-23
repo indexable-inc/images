@@ -25,7 +25,7 @@ a probe eval to plan the fleet, then builds each node with the same module:
 Curried `mkDevFor hostSystem { module, src }` so flake/example evaluation can
 build the wrapper derivations for the requested system, mirroring `mkFleetFor`.
 `src` is the flake `self`, threaded in by the template's `flake.nix`; it is
-what gets materialized at `/ix`. The user's `ix.nix` never mentions it.
+what gets materialized at `/ix`. The user's `dev.nix` never mentions it.
 */
 {
   lib,

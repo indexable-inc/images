@@ -19,14 +19,16 @@ the same database.
 ## Run
 
 ```sh
-ix apply .#log .#view .#producer
+ix apply .#log
+ix apply .#view --l7-proxy-port 3000
+ix apply .#producer --ipv4
 ```
 
 In that order: each layer's health checks probe the one below it. That
 brings up three VMs: `log` (the Kafka broker), `view` (ClickHouse, the
-OTel collector, and Grafana), and `producer` (the Paper server with the
-block-events plugin). Grafana is on port `3000` through the example's L7
-proxy. Get the source with
+OTel collector, and Grafana, published on port `3000` through the L7
+proxy), and `producer` (the Paper server with the block-events plugin,
+on a public IPv4 address for players). Get the source with
 `git clone https://github.com/indexable-inc/index` and run it from
 `examples/minecraft/blocks`.
 

@@ -20,12 +20,14 @@ For how the telemetry pipeline works end to end, with diagrams, see the
 ## Run
 
 ```sh
-ix apply .#observability .#app
+ix apply .#observability --l7-proxy-port 3000
+ix apply .#app
 ```
 
-The stack first, so the app's telemetry has somewhere to land.
+The stack first, so the app's telemetry has somewhere to land;
+`--l7-proxy-port` publishes Grafana through the HTTP proxy.
 
-Grafana is on port `3000` through the example's L7 proxy. The
+Grafana is on port `3000` through the L7 proxy. The
 ClickHouse-backed query helper is available inside the observability VM:
 
 ```sh

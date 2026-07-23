@@ -19,7 +19,7 @@ puts the diffusion pipeline's `10 km` peak at roughly `y ~2060`.
 ## Run
 
 ```sh
-ix apply .#crazy-terrain
+ix apply .#crazy-terrain --ipv4
 ```
 
 Need the source first? `git clone https://github.com/indexable-inc/index`,

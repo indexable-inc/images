@@ -5681,8 +5681,12 @@
           lib.all (
             rel: let
               text = builtins.readFile (paths.examples + "/${rel}/README.md");
+              # The retired per-example fleet wrappers were named
+              # `<category>-<name>-{up,health,...}`; match that prefix rather
+              # than every `nix run .#`, which unrelated dev commands may use.
+              wrapperPrefix = "nix run .#${lib.replaceStrings ["/"] ["-"] rel}-";
             in
-              lib.hasInfix "ix apply .#" text && !(lib.hasInfix "nix run .#" text)
+              lib.hasInfix "ix apply .#" text && !(lib.hasInfix wrapperPrefix text)
           )
           exampleApplyReadmes;
         message = "example READMEs should point at explicit ix apply .#<vm> targets, not the retired fleet wrappers (ix#8306)";
