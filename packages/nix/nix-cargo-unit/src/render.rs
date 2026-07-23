@@ -725,9 +725,11 @@ fn compute_hash(
     let unit = &graph.units[index];
     let mut dependency_hashes = Vec::new();
     for dependency in &unit.dependencies {
-        if graph.units[dependency.index].is_run_custom_build() {
-            continue;
-        }
+        // Include run-custom-build deps: `merge_identity_hash` dedupes units
+        // over every dependency, so a name hash that skipped runs collided
+        // two merged units differing only in a build-script-run variant
+        // (indexable-inc/index#4093). The unit graph is a DAG, so recursing
+        // through runs terminates.
         dependency_hashes.push(format!(
             "{}:{}:{}:{}",
             dependency.extern_crate_name,

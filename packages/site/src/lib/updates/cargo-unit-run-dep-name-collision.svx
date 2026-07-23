@@ -1,0 +1,17 @@
+---
+id: cargo-unit-run-dep-name-collision
+postedAt: 2026-07-23T12:00:00-07:00
+title: "nix-cargo-unit: unit names now hash build-script-run deps (collision fix)"
+tags: [nix, rust, cargo-unit, bug]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/4093
+  - label: render.rs
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix-cargo-unit/src/render.rs
+---
+
+`nix-cargo-unit` dedupes units by a full-identity hash that walks every dependency, but named the resulting derivations with a second hash that skipped build-script-run dependencies. Two merged units that differed only in which build-script-run variant they depended on rendered under the same attr key, and the generated `cargo-units.nix` failed to import with `attribute already defined`.
+
+The trigger was mundane: adding a dev-dependency (`cucumber`, for the Gherkin POC) perturbed feature unification between the `[--workspace]` and `[--workspace --tests]` target sets, producing two `tree-sitter` build-script-run variants whose downstream `tree-sitter-dockerfile-updated` run units collided.
+
+The name hash now includes run-custom-build dependency edges, mirroring the merge hash, so names are injective over merged units. Cost: a one-time rename of every unit whose closure contains a build script, i.e. most of the workspace rebuilds once. Toolchain bumps already rename every unit the same way, so this is an established event class, not a new one.
