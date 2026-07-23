@@ -3513,6 +3513,10 @@
         message = "base profile should route Nix through cache.ix.dev before fallback substituters";
       }
       {
+        assertion = base.config.nix.package == repoPackages.nix-ix;
+        message = "base images must use IX's wasm-enabled Nix so ix apply can evaluate the default ix2nix-wasm scaffold";
+      }
+      {
         assertion = let
           pin = base.config.nix.registry.nixpkgs.to;
         in
