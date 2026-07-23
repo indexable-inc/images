@@ -580,6 +580,31 @@ in {
     boot = {
       isContainer = true;
 
+      # `isContainer` makes nixpkgs' container-config.nix turn the modprobe
+      # machinery off ("containers don't have a kernel"), but ix guests DO
+      # have one: the host direct-kernel-boots linux-ix and injects that
+      # kernel's full module tree at /lib/modules/<kver> in every rootfs.
+      # Without this re-enable the guest has no module loader at all:
+      # /proc/sys/kernel/modprobe keeps the kernel's compiled-in default
+      # /sbin/modprobe (which does not exist here), so request_module()
+      # fails and every =m kernel feature is dead -- nftables.service dies
+      # with "Unable to initialize Netlink socket: Protocol not supported"
+      # on every boot and every switch exits 4 (ix#8408). Re-enabling the
+      # upstream module (nixos/modules/system/boot/modprobe.nix) puts
+      # pkgs.kmod on PATH and points the sysctl at its modprobe from an
+      # activation snippet, which runs at boot AND during a switch, so the
+      # fix reaches an already-booted VM through a plain `ix apply`.
+      #
+      # Version skew is safe: nixpkgs kmod probes
+      # /run/{booted,current}-system/kernel-modules first but only takes a
+      # prefix whose <uname -r> subdir exists. ix toplevels never ship the
+      # kernel-modules link (boot.kernel.enable = false under isContainer),
+      # and a user toplevel carrying modules for some other kernel fails
+      # the <uname -r> probe, so resolution always lands on the injected
+      # /lib/modules tree of the RUNNING kernel.
+      # astlog-ignore: no-mkforce container-config.nix sets this unconditionally for isContainer; ix#8408
+      modprobeConfig.enable = lib.mkForce true;
+
       # /tmp on tmpfs (RAM-backed). The default on-disk /tmp grows
       # without bound on long-running VMs, and ix VMs have plenty of RAM
       # to spare for ephemeral working space (see AGENTS.md "VM

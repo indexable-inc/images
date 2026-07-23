@@ -1,0 +1,35 @@
+---
+id: guest-modprobe-wiring
+postedAt: "2026-07-23"
+title: kernel module autoloading works in guests, nftables firewall starts green
+links:
+  - label: "ix#8408"
+    href: https://github.com/indexable-inc/ix/issues/8408
+tags:
+  - platform
+  - images
+---
+
+Every ix guest boots the host-provided linux-ix kernel and gets that
+kernel's full module tree injected at `/lib/modules/<kver>`, but until now
+no image shipped a module loader: images set `boot.isContainer = true`, and
+nixpkgs' container-config.nix responds by disabling the whole modprobe
+machinery on the theory that containers have no kernel. The result was that
+`/proc/sys/kernel/modprobe` still pointed at the kernel's compiled-in
+default `/sbin/modprobe` (which does not exist in the guest), so
+`request_module()` always failed and every `=m` kernel feature was dead.
+Concretely, `nftables.service` failed on every boot with "Unable to
+initialize Netlink socket: Protocol not supported" -- the in-guest firewall
+the platform declares was never actually enforcing -- and every
+`switch-to-configuration` exited 4 on it.
+
+The platform profile now re-enables the upstream modprobe module
+(`boot.modprobeConfig.enable`), which puts `kmod` (`modprobe`, `lsmod`,
+`modinfo`, ...) on the system PATH and points
+`/proc/sys/kernel/modprobe` at kmod's modprobe from an activation
+snippet. Activation runs at boot and during a switch, so already-running
+VMs pick the fix up through a plain `ix apply` with the new index pin --
+no base-image rebuild needed for switched VMs. Module resolution follows
+the running kernel: nixpkgs kmod only takes a candidate directory whose
+`uname -r` subtree exists, so even a user toplevel carrying modules for a
+different kernel resolves against the injected `/lib/modules` tree.
