@@ -656,10 +656,26 @@ in {
         ix.packages.mcp
       ];
 
-    # Pre-create the workspace at boot so login.nu can cd into it
-    # without racing tmpfiles or relying on mkdir from the shell.
-    systemd.tmpfiles.rules = lib.mkIf cfg.shellWorkspace.enable [
-      "d ${cfg.shellWorkspace.directory} 0755 root root -"
-    ];
+    systemd.tmpfiles.rules =
+      [
+        # With `use-sqlite-wal = false` (above) nix opens db.sqlite on
+        # SQLite's unix-dotfile VFS, whose lock is a real directory entry
+        # (`db.sqlite.lock`) rather than a POSIX lock that dies with its
+        # holder. A rootfs captured while nix held that lock (golden
+        # template capture of a mid-write guest) therefore boots with the
+        # lock still present, and every later nix invocation spins forever
+        # in SQLITE_BUSY retries -- `ix apply` then fails its 5s
+        # wasm-capability probe with "stream into guest failed" (ix#8389).
+        # After a fresh boot no process can hold the lock, so removing it
+        # here ("!" = boot only, before nix-daemon or any login shell can
+        # run nix) is always safe. The sibling db.sqlite-journal must
+        # stay: a hot journal is how SQLite rolls back the interrupted
+        # write on next open.
+        "R! /nix/var/nix/db/db.sqlite.lock"
+      ]
+      # Pre-create the workspace at boot so login.nu can cd into it
+      # without racing tmpfiles or relying on mkdir from the shell.
+      ++ lib.optional cfg.shellWorkspace.enable
+      "d ${cfg.shellWorkspace.directory} 0755 root root -";
   };
 }
