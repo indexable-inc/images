@@ -10,7 +10,7 @@ export default ({ index }) => {
   // Three interchangeable api VMs; each resolves the cache through its
   // `nodes` module argument. Scaling is one more line here: the gateway's
   // upstream pool grows to match.
-  const api = (name) =>
+  const api = (name: string) =>
     index.lib.mkVm({
       name: name,
       modules: [import("./api.nix"), group],

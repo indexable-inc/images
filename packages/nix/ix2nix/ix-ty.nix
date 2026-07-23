@@ -46,22 +46,29 @@
       check = loc: v: pred v || fail loc desc v;
     };
     prim = name: mk name (v: builtins.typeOf v == name);
+    intIn = name: lo: hi:
+      mk "${name} (${toString lo} to ${toString hi})" (v: builtins.isInt v && v >= lo && v <= hi);
   in {
     string = prim "string";
     int = prim "int";
     float = prim "float";
     bool = prim "bool";
-    # Refinements borrowed from nixpkgs `lib.types` basics; each stays a
-    # single WHNF-safe predicate.
-    uint = mk "unsigned int" (v: builtins.isInt v && v >= 0);
-    port = mk "port (0-65535)" (v: builtins.isInt v && v >= 0 && v <= 65535);
+    # Refinements: Rust-width integers plus nixpkgs `lib.types` basics; each
+    # stays a single WHNF-safe predicate.
+    u8 = intIn "u8" 0 255;
+    u16 = intIn "u16" 0 65535;
+    u32 = intIn "u32" 0 4294967295;
+    i8 = intIn "i8" (-128) 127;
+    i16 = intIn "i16" (-32768) 32767;
+    i32 = intIn "i32" (-2147483648) 2147483647;
+    port = intIn "port" 0 65535;
     path = mk "path" (
       v:
         builtins.typeOf v
         == "path"
         || (builtins.isString v && builtins.substring 0 1 v == "/")
     );
-    nonEmptyString = mk "non-empty string" (v: builtins.isString v && v != "");
+    nonEmptyStr = mk "non-empty string" (v: builtins.isString v && v != "");
     func = mk "function" builtins.isFunction;
     any = {
       desc = "any";

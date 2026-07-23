@@ -2,11 +2,11 @@
 type Proto = "tcp" | "udp";
 type Endpoint = {
   host: string;
-  port: Int;
+  port: int;
   proto?: Proto;
 };
 
-const mkEndpoint = (host: string, port: Int): Endpoint => {
+const mkEndpoint = (host: string, port: int): Endpoint => {
   return { host: host, port: port };
 };
 
@@ -17,6 +17,6 @@ export default ({ config }: { config: Record<string, Endpoint> }) => {
     web: mkEndpoint("web", 80),
     raw: raw,
     anything: anything,
-    ports: [80, 443] as Int[],
+    ports: [80, 443] as int[],
   };
 };

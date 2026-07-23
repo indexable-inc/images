@@ -41,11 +41,11 @@
 //! | `type X = T` | `let ty'X = <T>` (referenced by annotations) |
 //! | `({ a }: { a: T }) => e` | per-field `__ixTy.arg` checks on the bound names |
 //!
-//! Type spellings: `string`, `bool`, `Int`, `Float`, `Drv`, `any`/`unknown`,
+//! Type spellings: `string`, `bool`, `int`, `float`, `drv`, `any`/`unknown`,
 //! `object`, `T[]`, `Record<string, T>`, `{ a: T; b?: U }`, function types
-//! (callability only), literal unions, and `T \| null`, plus refinements
-//! borrowed from nixpkgs `lib.types` basics: `Uint`, `Port`, `Path`,
-//! `NonEmptyString`. `number` is a hard error (Nix splits int and float),
+//! (callability only), literal unions, and `T \| null`, plus refinements:
+//! Rust-width integers `u8`/`u16`/`u32`/`i8`/`i16`/`i32` and the nixpkgs
+//! `lib.types` basics `port`, `path`, `nonEmptyStr`. `number` is a hard error (Nix splits int and float),
 //! as are interfaces, generics, `satisfies`, non-null `!`, and unions
 //! beyond `T \| null` / literals.
 //!

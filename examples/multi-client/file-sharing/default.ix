@@ -7,7 +7,7 @@ export default ({ index }) => {
     name: "file-server",
     modules: [import("./server.nix")],
   });
-  const client = (name) =>
+  const client = (name: string) =>
     index.lib.mkVm({
       name: name,
       modules: [import("./client.nix")],
