@@ -309,13 +309,12 @@
   # strips the tool's schema from the model context entirely; Claude Code has
   # no lazy/deferred-description mode for built-in tools (scoped patterns
   # like `Bash(...)` leave the schema loaded), so denying is the only way to
-  # reclaim their tokens. The orchestration surface (Agent, SendMessage,
-  # Task*, ScheduleWakeup) is off because delegation routes through the index
-  # kernel instead: coding agents spawned from `python_exec` as background
-  # jobs, completion notifying the session over the kernel channel (#2404).
-  # The MCP resource browsers are kernel-superseded the same way.
+  # reclaim their tokens. The MCP resource browsers are kernel-superseded.
   defaultSystemTools = {
-    Agent = false;
+    # On: subagent delegation from inside the session. The same system-card
+    # eval that keeps SendMessage off (see below) found async subagents fine:
+    # the loss shows up in the peer mesh, not in spawn-and-collect.
+    Agent = true;
     # Off: no real benefit in this harness (previews ship as files or URLs),
     # and enabling it surfaces Claude-bundled design skills that inject
     # Anthropic style guidelines we do not want steering output. Denying the
@@ -323,15 +322,17 @@
     # skills listing (verified 2026-07, index#3607); the sibling `dataviz`
     # skill is removed via `skillOverrides` in houseSettingsDefaults below.
     Artifact = false;
-    # Off: superseded by the kernel's Ask (index#3856). Ask.user in an exec
-    # cell raises the same native dialog through MCP elicitation, so the
-    # redesign-at-the-root rule (prompt/rules.nix, index#3841) keeps its
-    # user-facing fork without this tool's schema riding in every context.
-    AskUserQuestion = false;
+    # On: kernel Ask.user (index#3856) rides MCP elicitation, and Claude
+    # Code renders elicitation as an awkward raw dialog; the native tool is
+    # the better question UI, so it owns the user-facing fork and
+    # prompt/rules.nix points at it (#4095).
+    AskUserQuestion = true;
     DesignSync = false;
-    EnterPlanMode = false;
+    # Plan mode on both ends: cheap, and the plan/act split earns its two
+    # schemas (#4095).
+    EnterPlanMode = true;
     EnterWorktree = false;
-    ExitPlanMode = false;
+    ExitPlanMode = true;
     ExitWorktree = false;
     ListMcpResourcesTool = false;
     PushNotification = false;
@@ -340,16 +341,26 @@
     RemoteTrigger = true;
     ReportFindings = false;
     ScheduleWakeup = false;
+    # Off: agent-teams peer messaging (needs env
+    # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS too). The Claude Fable 5 system
+    # card's Multi-Agent ProgramBench (sec. 8.15.2) found the SendMessage
+    # peer mesh reaches similar solutions faster in wall clock but with no
+    # better final quality and much worse token efficiency than one agent
+    # working sequentially, so subagents (Agent, Task*) are on and the mesh
+    # stays off (#4095).
     SendMessage = false;
     SendUserFile = true;
     ShareOnboardingGuide = true;
     Skill = true;
-    TaskCreate = false;
-    TaskGet = false;
-    TaskList = false;
-    TaskOutput = false;
-    TaskStop = false;
-    TaskUpdate = false;
+    # Task* on: the shared task list tracks multi-step work and collects
+    # background subagent output (TaskOutput/TaskStop); useful without the
+    # agent-teams mesh (#4095).
+    TaskCreate = true;
+    TaskGet = true;
+    TaskList = true;
+    TaskOutput = true;
+    TaskStop = true;
+    TaskUpdate = true;
     ToolSearch = true;
     WaitForMcpServers = true;
     Workflow = true;
