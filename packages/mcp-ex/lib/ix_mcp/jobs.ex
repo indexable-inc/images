@@ -15,6 +15,10 @@ defmodule IxMcp.Jobs do
   when the job process is gone, so a crashed or killed run is still readable
   and still on record. `history/1` is a view over the `jobs` table scoped to
   this server instance's session.
+
+  Live reads go through the job's Registry-value snapshot (#4082) -- an ETS
+  read -- rather than GenServer calls into the control process, which under
+  load can sit parked in a ledger write far past the default call timeout.
   """
 
   alias IxMcp.ActionLog
@@ -50,9 +54,14 @@ defmodule IxMcp.Jobs do
         {Job, {id, code, Keyword.take(opts, [:intent, :action_id, :watch])}}
       )
 
+    # Read back by id, not by 5s GenServer calls into the control process
+    # (#4082): a process parked in a ledger write under load answers no
+    # call inside the default timeout, and that exit killed the exec
+    # handler. The id path reads the Registry-value snapshot (falling back
+    # to the ledger), which answers regardless.
     case Job.await(pid, round(budget_s * 1000)) do
-      {:ok, summary} -> {summary, Job.output(pid)}
-      :timeout -> {Job.summary(pid), Job.output(pid)}
+      {:ok, summary} -> {summary, output(id)}
+      :timeout -> {get(id), output(id)}
     end
   end
 
@@ -65,10 +74,16 @@ defmodule IxMcp.Jobs do
     end
   end
 
-  @doc "Summary of a job -- live from its process, or reconstructed from the ledger."
+  @doc "Summary of a job -- from its snapshot or process, or reconstructed from the ledger."
   @spec get(String.t()) :: Job.summary()
   def get(id) do
-    live_or_ledger(id, &Job.summary/1, &summary_from_ledger/1)
+    # Snapshot first (#4082): an ETS read that stays answerable while the
+    # control process sits in a ledger call. The call path only covers the
+    # sliver before the job publishes its snapshot in init.
+    case Job.read_summary(id) do
+      nil -> live_or_ledger(id, &Job.summary/1, &summary_from_ledger/1)
+      summary -> summary
+    end
   end
 
   @doc """
@@ -176,7 +191,13 @@ defmodule IxMcp.Jobs do
   @doc "Full captured output -- from the live buffer, or the durable table if the job is gone."
   @spec output(String.t()) :: String.t()
   def output(id) do
-    live_or_ledger(id, &Job.output/1, &output_from_ledger/1)
+    # Snapshot first (#4082), same reasoning as `get/1`: the hot buffer is
+    # public ETS, so reading it must not queue behind a parked control
+    # process.
+    case Job.read_output(id) do
+      nil -> live_or_ledger(id, &Job.output/1, &output_from_ledger/1)
+      output -> output
+    end
   end
 
   defp output_from_ledger(id) do
@@ -223,11 +244,15 @@ defmodule IxMcp.Jobs do
   @doc "Ids and summaries of jobs that are still running."
   @spec running() :: [Job.summary()]
   def running do
-    IxMcp.Jobs.Supervisor
-    |> DynamicSupervisor.which_children()
-    |> Enum.flat_map(fn
-      {_, pid, :worker, _} when is_pid(pid) -> [Job.summary(pid)]
-      _ -> []
+    # Snapshot reads (#4082): scanning with per-child GenServer calls would
+    # stall on the first control process parked in a ledger write.
+    IxMcp.Jobs.Registry
+    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.flat_map(fn id ->
+      case Job.read_summary(id) do
+        nil -> []
+        summary -> [summary]
+      end
     end)
     |> Enum.filter(& &1.running)
   end

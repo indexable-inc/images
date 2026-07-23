@@ -915,4 +915,39 @@ defmodule IxMcp.ActionLogTest do
     :ok = Sqlite3.execute(blocker, "ROLLBACK")
     :ok = Sqlite3.close(blocker)
   end
+
+  # Under load a job's `job_started` write can be absorbed by the job's
+  # ledger seam (#3874) and never land. The terminal transition used to
+  # answer `:already_final` for the missing row, erasing the run from the
+  # record entirely (#4082); with the start metadata it reconstructs the
+  # row inside the same transition.
+  test "finish_job reconstructs a jobs row whose start write never landed (#4082)" do
+    path = tmp_db()
+    log = start_supervised!({ActionLog, path: path, name: :action_log_4082_ghost})
+    session_id = ActionLog.create_session("ghost", log)
+
+    start = %{
+      id: "gh4082",
+      session_id: session_id,
+      action_id: nil,
+      intent: "ghost",
+      session_name: "ghost",
+      topic_name: nil,
+      code: ":ok",
+      watch: false,
+      started_at: DateTime.to_iso8601(DateTime.utc_now())
+    }
+
+    # No job_started call: the start write was lost.
+    assert {:notify, outbox} =
+             ActionLog.finish_job("gh4082", :done, ":ok", [start: start], log)
+
+    refute outbox.acked
+    assert %{status: :done, code: ":ok", intent: "ghost"} = ActionLog.job("gh4082", log)
+    assert [%{id: "gh4082"}] = ActionLog.recent_jobs(session_id, 10, log)
+
+    # The guard still decides the race: a second finalize no-ops.
+    assert ActionLog.finish_job("gh4082", :killed, "late", [start: start], log) ==
+             :already_final
+  end
 end
