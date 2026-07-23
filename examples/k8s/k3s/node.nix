@@ -25,7 +25,9 @@ in {
     # Everything containerd needs, preloaded from the store on every node
     # (the scheduler may place pods anywhere): k3s's bundled images (pause,
     # coredns, ...) plus the workload's. Nothing is pulled from a registry;
-    # the guests have no internet egress anyway.
+    # the guests have no internet egress anyway. Preloading puts each image
+    # in every node's closure, the right trade for one demo image; past a
+    # handful of apps, push nix-built images to a registry instead.
     images = [
       config.services.k3s.package.airgap-images
       (import ./image.nix {inherit ix lib pkgs;})

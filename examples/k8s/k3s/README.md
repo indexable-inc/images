@@ -78,3 +78,27 @@ Another agent is one line in [`default.ix`](default.ix): add
 token, preload the same images, and appear by name in the server's
 `nodes-ready` check automatically. Raise `replicas` in
 [`workload.nix`](workload.nix) to spread more pods across them.
+
+## Why k3s and not upstream Kubernetes
+
+k3s is CNCF-conformant Kubernetes, not a subset: same API, same kubectl,
+same manifests. What it changes is shape. Upstream Kubernetes is six
+coordinating daemons plus a PKI between them, wired imperatively by
+kubeadm; k3s is one binary reading one config file, which maps 1:1 onto a
+NixOS module. nixpkgs agrees: `services.k3s` is actively maintained and
+carries the typed options every row of the table above leans on
+(`manifests`, `images`, `charts`), while the legacy `services.kubernetes`
+module has been slated for extraction since 2021 ([nixpkgs#115179]). HA
+needs no external etcd either: `clusterInit = true` on the first server
+switches the embedded datastore from sqlite to etcd, and further servers
+join it.
+
+Shipping the workload entirely from the store is a demo virtue, not the
+operating model at scale. Past a handful of apps, preloading every image
+on every node bloats each node's closure, and deploying through
+`services.k3s.manifests` couples an app deploy to a rebuild of the server
+VM. The split that scales: nix owns the machines and the cluster substrate
+(k3s itself, join wiring, ports, system add-ons, image builds), the
+Kubernetes API owns workload churn.
+
+[nixpkgs#115179]: https://github.com/NixOS/nixpkgs/issues/115179

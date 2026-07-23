@@ -6,6 +6,10 @@ directory: the Deployment and Service below are plain Nix values and the
 module renders the YAML. The pod image (image.nix) is preloaded into
 containerd on every node (node.nix), so the manifest never touches a
 registry.
+
+A manifest change lands via a rebuild of the server VM: the right coupling
+for a demo and for cluster add-ons. At scale, app churn goes through the
+Kubernetes API instead, so a deploy is not a machine rebuild.
 */
 {
   ix,

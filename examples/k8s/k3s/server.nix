@@ -23,6 +23,8 @@ in {
   ];
 
   # Single server on the embedded sqlite datastore (the module default).
+  # HA when it matters is `clusterInit = true` here (sqlite becomes embedded
+  # etcd) plus further servers pointed at this one via `serverAddr`.
   # Everything not exercised by the example is disabled so the cluster is
   # exactly the scheduler, DNS, and the workload.
   services.k3s.extraFlags = [
