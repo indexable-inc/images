@@ -37,6 +37,12 @@ defmodule IxMcp.MixProject do
   defp deps do
     [
       {:exqlite, "~> 0.39"},
+      # Agent compatibility affordance: cells written from habit call
+      # Jason.decode!/encode! even though OTP >= 27 ships a built-in JSON
+      # module, and an UndefinedFunctionError mid-cell wastes a whole
+      # exec round trip. Carrying jason in the release makes those calls
+      # just work.
+      {:jason, "~> 1.4"},
       # The Fable 5 async-subagents harness (packages/agent-harness-ex,
       # #3700): agents as supervised processes with mailbox-backed Send/Wait
       # semantics. A path dep so the harness rides into the release; the MCP

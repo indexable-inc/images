@@ -182,7 +182,7 @@
     }
     ''
       set +e
-      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
         '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_set_name","arguments":{"name":"smoke"}}}' \
@@ -193,6 +193,7 @@
         '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"local pty drive probe","budget":60,"code":"{:ok, t} = TuiLocal.spawn(\"cat\", []); :ok = TuiLocal.send(t, \"pty-smoke\\r\"); {:ok, s} = TuiLocal.wait_for(t, \"pty-smoke\"); :ok = TuiLocal.close(t); s"}}}' \
         '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"otp batteries present","budget":60,"code":"{:ok, _} = Application.ensure_all_started([:inets, :ssl, :xmerl, :runtime_tools, :tools]); \"otp-batteries-ok\""}}}' \
         '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"gmail nif runtime load probe","budget":60,"code":"false = Gmail.status().signed_in; \"gmail-nif-ok\""}}}' \
+        '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"jason agent-compat probe","budget":60,"code":"%{\"k\" => 1} = Jason.decode!(~s({\"k\":1})); \"jason-compat-ok\""}}}' \
         | IX_MCP_ACTIONS_DB="$PWD/actions.db" ix-mcp-ex > response.jsonl 2> server-stderr.log
       rc=$?
       set -e
@@ -297,6 +298,17 @@
         *'gmail-nif-ok'*) ;;
         *)
           echo "exec did not load the gmail NIF app through IxMcp.Gmail" >&2
+          printf '%s\n' "$out_lines" >&2
+          exit 1
+          ;;
+      esac
+      # Agent-compat: jason rides the release purely so cells written from
+      # Jason habit work; this proves the app is shipped and loadable in
+      # the embedded release, not just present in mix.lock.
+      case "$out_lines" in
+        *'jason-compat-ok'*) ;;
+        *)
+          echo "exec could not call Jason.decode! in the release" >&2
           printf '%s\n' "$out_lines" >&2
           exit 1
           ;;

@@ -1,0 +1,13 @@
+---
+id: kernel-jason-compat
+postedAt: 2026-07-22T12:00:00-07:00
+title: "Jason works in kernel exec cells"
+tags: [mcp, elixir, kernel]
+links:
+  - label: mix.exs
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/mix.exs
+---
+
+Agents writing cells for the Elixir kernel (ix-mcp-ex) reach for `Jason.decode!` out of habit -- it has been the de facto JSON library for a decade -- and until now every such cell died with `UndefinedFunctionError: module Jason is not available`, wasting a full exec round trip before the agent rediscovered OTP's built-in `JSON` module. The kernel release now carries `jason ~> 1.4` as a plain runtime dep, so both spellings work in cells.
+
+Nothing in the kernel itself switches over: the MCP wire format and internal encoding still ride the built-in `JSON` module. Jason is purely a compatibility affordance for agent muscle memory. It was already in the dependency closure (credo pulls it in for the test environment), so the vendored-deps hash and lockfile are unchanged; the dep only had to be promoted so `mix release` ships it.
