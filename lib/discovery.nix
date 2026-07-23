@@ -134,13 +134,12 @@
   wrapper derivations under `.up`/`.health`/`.replace` build for the
   requested system rather than always pinning to the default.
 
-  Only single-VM examples (the evaluator shape: `nodes` + `planValue`)
-  participate: a multi-VM example is deployed VM-by-VM with
+  Only single-VM results (the evaluator shape: `nodes` + `planValue`)
+  are kept: a multi-VM example is deployed VM-by-VM with
   `ix apply .#a .#b` and an oci entry returns images, so neither has a
-  lifecycle plan to aggregate. The classification is the tree itself
-  (`examples/multi-vm/`, `examples/oci/`), never the converted module:
-  conversion is an IFD, and the key set must stay computable by
-  IFD-forbidding evals (index#4087).
+  lifecycle plan to aggregate. The filter forces each conversion (an
+  IFD), so the returned key set is IFD-dependent; see the note at the
+  filter for what may consume it (index#4087).
 
   Adding an example is `mkdir examples/<category>/<name>` + edit
   `default.ix`; this aggregator picks it up on the next eval, no
@@ -166,34 +165,29 @@
           name = lib.concatStringsSep "-" metadata.segments;
         };
     };
-    # Static, tree-derived classification: `multi-vm` examples deploy VM-by-VM
-    # (`ix apply .#a .#b`) and `oci` entries return images, so neither has a
-    # single-VM lifecycle plan to aggregate. Deciding this from the converted
-    # module would force the ix2nix converter derivation (an IFD) just to
-    # compute the key set, and consumers reach these keys from evals that
-    # forbid IFD (index#4087: ix's no-build lint gate probes
-    # `index.packages.<system>`, whose names spread `lifecyclePackages`).
-    singleVmExamples =
-      lib.filterAttrs
-      (_: entry: !(builtins.elem (builtins.head entry.metadata.segments) ["multi-vm" "oci"]))
-      discovered;
   in
-    lib.mapAttrs (
-      _: entry: let
-        load = importIxFor hostSystem (entry.path + "/default.ix");
-        args = builtins.functionArgs load;
-        value =
-          if args ? index
-          then load {index = indexShim;}
-          else null;
-      in
-        assert lib.assertMsg (value != null && value ? nodes && value ? planValue)
-        ("exampleFleetsFor: examples/${entry.metadata.relativePath} is not a single-VM example "
-          + "(expected the evaluator shape `nodes` + `planValue`); multi-VM examples live under "
-          + "examples/multi-vm/ and images under examples/oci/");
-          value
-    )
-    singleVmExamples;
+    # Classifying single- vs multi-VM needs the converted module (the
+    # `nodes` + `planValue` shape), and conversion is an IFD, so this
+    # attrset's KEY SET is IFD-dependent. It must never feed a `packages`
+    # name: IFD-forbidding evals (ix's no-build lint gate) enumerate those
+    # names. Example-derived package fan-outs live in `legacyPackages`
+    # instead (index#4087).
+    lib.filterAttrs (_: fleet: fleet != null) (
+      lib.mapAttrs (
+        _: entry: let
+          load = importIxFor hostSystem (entry.path + "/default.ix");
+          args = builtins.functionArgs load;
+          value =
+            if args ? index
+            then load {index = indexShim;}
+            else null;
+        in
+          if value != null && value ? nodes && value ? planValue
+          then value
+          else null
+      )
+      discovered
+    );
 in {
   inherit
     discoverTree
