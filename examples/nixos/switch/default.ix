@@ -1,0 +1,9 @@
+// A one-VM NixOS config consumed by flake.nix for the native `ix apply`
+// loop: `ix apply .#devbox` builds this configuration on ix and activates
+// it on the running VM in place. Edit `configuration.nix`, run it again,
+// and the VM converges.
+export default ({ index }) =>
+  index.lib.mkVm({
+    name: "devbox",
+    modules: [import("./configuration.nix")],
+  });

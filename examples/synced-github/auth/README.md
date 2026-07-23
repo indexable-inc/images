@@ -1,29 +1,30 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
-    <img src="assets/hero.svg" width="720" alt="one token in the ix secret store materializes on three agent VMs whose git credential helpers authenticate to github.com">
+    <img src="assets/hero.svg" width="720" alt="one token in the ix secret store materializes on agent VMs whose git credential helpers authenticate to github.com">
   </picture>
 </p>
 
 # Synced GitHub auth
 
-How do you give a whole fleet of agent VMs one GitHub identity without
-running `gh auth login` on each box? The fleet declares a single token; every
-node wires `git` to use it through a credential helper that reads the secret
-file on demand. Adding a replica needs no extra auth step.
+How do you give any number of agent VMs one GitHub identity without running
+`gh auth login` on each box? The config declares a single token; the VM
+wires `git` to use it through a credential helper that reads the secret file
+on demand. Bringing up another VM from the same config needs no extra auth
+step.
 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#synced-github-auth-up
+# From this directory (examples/synced-github/auth in the index repo).
+ix apply .#agent
 ```
 
 Get the repo with `git clone https://github.com/indexable-inc/index`.
 
 ## Shape
 
-- [`ix.nix`](ix.nix) defines the fleet: three `agent` replicas and a
+- [`default.ix`](default.ix) declares the agent VM and a
   `deployment.secrets.github_token` attachment that delivers the stored value
   as `/run/secrets/github/token`.
 - [`agent.nix`](agent.nix) installs a `git` credential helper that reads the
@@ -31,10 +32,10 @@ Get the repo with `git clone https://github.com/indexable-inc/index`.
 
 ## How the token reaches git
 
-Store the value once with `ix secret set github_token`. The fleet declaration
-maps that account key to `/run/secrets/github/token` for every node. Only the
-key and target path enter the fleet plan; the token bytes stay in the ix
-secret store and are materialized when the VM is created.
+Store the value once with `ix secret set github_token`. The declaration maps
+that account key to `/run/secrets/github/token`. Only the key and target
+path enter the deployment; the token bytes stay in the ix secret store and
+are materialized when the VM is created.
 
 [`agent.nix`](agent.nix) registers a credential helper in `/etc/gitconfig`
 scoped to `https://github.com`. When `git` needs a credential it runs the
@@ -72,7 +73,7 @@ A tempting shortcut is to mount the operator's whole `~/.config` (or
 `~/.config/gh`) into every VM over a shared folder, so `gh` and `git` pick up
 the host's existing login. For a single local dev VM driven by
 [`packages/vm/vmkit`](../../../packages/vm/vmkit) over virtio-fs it can be
-reasonable. As a fleet primitive it has sharp edges:
+reasonable. As a shared primitive it has sharp edges:
 
 - It shares far more than a token. `~/.config` holds unrelated app state,
   other services' credentials, and host-specific paths that mean nothing in a
@@ -81,18 +82,18 @@ reasonable. As a fleet primitive it has sharp edges:
 - The host token is usually a broad personal credential. Per-VM scoped tokens
   (a fine-grained PAT or a GitHub App installation token) cannot be expressed
   by copying one shared file.
-- Remote fleet VMs have no host filesystem to share in the first place.
+- Remote VMs have no host filesystem to share in the first place.
 
-Declaring one scoped secret and consuming it per node keeps the surface to a
+Declaring one scoped secret and consuming it per VM keeps the surface to a
 single credential with a single owner. Whether ix should also offer a
 config-sync primitive for the local dev-VM case is an open design question:
 [#465](https://github.com/indexable-inc/index/issues/465).
 
 ## Bad fit if
 
-- You need per-repo or per-agent GitHub identities on the same node. One
+- You need per-repo or per-agent GitHub identities on the same VM. One
   system credential helper answers for all of `github.com`; split identities
-  want per-user config or separate nodes.
+  want per-user config or separate VMs.
 - You want `gh` authenticated for non-interactive services. Wire `GH_TOKEN`
   into that unit through `LoadCredential` from the same file rather than the
   global environment.

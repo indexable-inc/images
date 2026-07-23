@@ -211,6 +211,39 @@
 
   mkFleet = mkFleetFor system;
 
+  /**
+  Build one VM from a list of NixOS modules (ix#8306: the product surface
+  is a single VM, so this is the seam `default.ix` configs call). A thin
+  one-node wrapper over the same evaluator `mkFleet` uses -- the result
+  keeps the exact shape tooling already consumes (`nixosConfigurations.<name>`,
+  `planValue`, the lifecycle wrappers), so a flake exposes it as
+  `ix.default` and inherits `nixosConfigurations` from it.
+
+  Arguments:
+  - `modules`: list of NixOS modules defining the VM.
+  - `name`: the `nixosConfigurations` key and the VM's default
+    hostname/image name.
+  - `deployment`: per-VM deployment options, the same keys the fleet
+    evaluator checks (`region`, `ipv4`, `secrets`, `recreateOnUp`, ...).
+  - `nodes`: peer VMs evaluated by their own `mkVm` calls. Pass the
+    peers' `nixosConfigurations` and this VM's modules see them (plus
+    the VM itself) as the `nodes` module argument, so cross-VM
+    references like `ix.endpointOf nodes.<peer> "<listener>"` keep
+    working without any fleet grouping.
+  */
+  mkVmFor = hostSystem: {
+    modules,
+    name ? "default",
+    deployment ? {},
+    nodes ? {},
+  }:
+    mkFleetFor hostSystem {
+      peers = nodes;
+      nodes.${name} = {inherit modules deployment;};
+    };
+
+  mkVm = mkVmFor system;
+
   # Dev-fleet layer over `mkFleet` (RFC 0007): consumes the forkable `ix.nix`
   # spec. Curried like `mkFleetFor` so example/flake eval can target a host
   # system.
@@ -251,6 +284,8 @@ in {
     bootstrapImage
     mkFleetFor
     mkFleet
+    mkVmFor
+    mkVm
     mkDevFor
     mkDev
     ;

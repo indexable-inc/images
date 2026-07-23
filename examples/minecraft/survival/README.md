@@ -8,7 +8,7 @@
 # Survival Server
 
 Can Java and Bedrock players share one world from a single VM? This is one ix
-fleet node running a [Paper](https://papermc.io/software/paper) survival
+VM running a [Paper](https://papermc.io/software/paper) survival
 backend behind [Velocity](https://papermc.io/software/velocity), with
 [Geyser](https://geysermc.org/) and
 [Floodgate](https://geysermc.org/wiki/floodgate/) on the proxy so both client
@@ -18,8 +18,8 @@ firewall; only the proxy listeners are public.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#minecraft-survival-up
+# From this directory (examples/minecraft/survival in the index repo).
+ix apply .#survival
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.
@@ -41,6 +41,6 @@ another VM or a manual firewall edit.
 
 ## Bad Fit If
 
-Use separate fleet nodes when you want several public survival servers all on
+Use separate VMs when you want several public survival servers all on
 the natural Java port. One image can host a proxy plus one backend cleanly; a
 network wants topology once the backends become independently scaled worlds.

@@ -21,9 +21,8 @@ ix apply .#devbox
 ```
 
 The first run creates `devbox` from `ix/base:latest` and activates this
-configuration on it. From a clone of the index repo root,
-`nix run .#nixos-switch-up` brings up the same fleet through the generated
-wrapper.
+configuration on it. Get the repo with
+`git clone https://github.com/indexable-inc/index`.
 
 ## The loop
 
@@ -41,8 +40,8 @@ nothing is recreated.
 - [`flake.nix`](flake.nix) is the native `ix apply` entrypoint. It exposes
   `nixosConfigurations.devbox`, which `ix apply .#devbox` resolves to the NixOS
   system closure.
-- [`ix.nix`](ix.nix) keeps the one-node fleet definition reused by the repo
-  example wrappers.
+- [`default.ix`](default.ix) declares the VM with `index.lib.mkVm`; the
+  flake exposes it as `ix.default`.
 - [`configuration.nix`](configuration.nix) is the NixOS module you edit.
 
 ## Fork it
@@ -54,6 +53,6 @@ onto your own VM.
 
 ## Scope
 
-This builds on the target VM itself, the `ix apply` default. Building several
-VMs on one shared builder VM is what [`switch-multi`](../switch-multi)
-demonstrates with `--build-vm`.
+This builds on the target VM itself, the `ix apply` default. Switching
+several VMs in one command is what [`switch-multi`](../switch-multi)
+demonstrates.

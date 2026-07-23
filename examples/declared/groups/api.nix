@@ -5,9 +5,9 @@
 }: let
   httpPort = 8080;
 in {
-  # The image carries its own east-west membership: every fleet that
-  # deploys this image lands in the deployer's `declared-groups` network
-  # without a fleet-level `groups` entry.
+  # The image carries its own east-west membership: every VM deployed from
+  # this image lands in the deployer's `declared-groups` network without any
+  # wiring-level `groups` module.
   ix = {
     networking = {
       groups = ["declared-groups"];

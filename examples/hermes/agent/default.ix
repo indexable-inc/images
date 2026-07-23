@@ -1,0 +1,12 @@
+// `ix apply` reads this VM through flake.nix. The syntax is JavaScript,
+// the semantics are Nix (index's ix2nix converts it during evaluation).
+export default ({ index }) =>
+  index.lib.mkVm({
+    name: "hermes",
+    deployment: {
+      secrets: {
+        hermes_env: { file: "hermes.env", owner: "hermes", mode: "0400" },
+      },
+    },
+    modules: [index.lib.hermesAgent.nixosModules.default, index.lib.hermes.profile],
+  });

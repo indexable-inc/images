@@ -12,7 +12,7 @@ layered on top? These examples build OCI images on a non-Nix base with
 `index.lib.mkNonNixImage`: the base distro's own userland stays as the rootfs
 (so `/bin/bash`, `apt`, and the FHS are all present) and Nix store paths ride
 along as extra layers. This is the path a plain-distro image takes, outside
-the NixOS module/fleet path.
+the NixOS module path.
 
 ## Build
 
@@ -26,13 +26,13 @@ Each result is a standard OCI archive, so
 `ix image push <name> registry.ix.dev/...` works on it directly. Get the repo
 with `git clone https://github.com/indexable-inc/index`.
 
-## Not fleets
+## Not VM configs
 
-The other entries under `examples/` are NixOS fleets driven by `mkFleet`,
-each exposing generated `<name>-up` / `<name>-health` wrapper packages. The
-[`ubuntu`](ubuntu/) and [`debian`](debian/) directories here return images
-instead of fleet plans, so example fleet discovery skips them; they surface
-as the opt-in `non-nix-*` packages above instead.
+The other entries under `examples/` are NixOS VM configs built with `mkVm`,
+each applied through its own flake with `ix apply`. The [`ubuntu`](ubuntu/)
+and [`debian`](debian/) directories here return images instead of VM plans,
+so example discovery skips them; they surface as the opt-in `non-nix-*`
+packages above instead.
 
 ## How it differs from `mkImage`
 

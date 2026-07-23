@@ -18,8 +18,8 @@ port `8333` and read/write buckets.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#s3-storage-up
+# From this directory (examples/s3/storage in the index repo).
+ix apply .#s3
 ```
 
 The node holds object data, so it persists across `up` runs instead of being
@@ -68,7 +68,7 @@ unauthenticated S3 endpoint is otherwise refused at evaluation.
 
 ## Bad fit if
 
-- **You need replication or HA.** This is one node with one copy of the data.
+- **You need replication or HA.** This is one VM with one copy of the data.
   SeaweedFS scales out, but that is a multi-node deployment this example does
   not cover.
 - **You need the full AWS S3 feature set.** Core object, bucket, and

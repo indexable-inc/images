@@ -8,7 +8,7 @@
 # Crazy Terrain
 
 What does Minecraft terrain look like when a diffusion model generates it at
-the absolute Java height limit? This is one ix fleet node running a Fabric
+the absolute Java height limit? This is one ix VM running a Fabric
 `1.21.11` server with
 [`terrain-diffusion`](https://github.com/xandergos/terrain-diffusion-mc), a
 world generator that replaces vanilla noise with neural terrain. Every
@@ -19,8 +19,8 @@ puts the diffusion pipeline's `10 km` peak at roughly `y ~2060`.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#minecraft-crazy-terrain-up
+# From this directory (examples/minecraft/crazy-terrain in the index repo).
+ix apply .#crazy-terrain
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.

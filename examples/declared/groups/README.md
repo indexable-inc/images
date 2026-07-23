@@ -7,24 +7,24 @@
 
 # Declared groups
 
-Should a VM's group membership live in the image or in the fleet? Both work,
-and this two-VM fleet shows each source. The `api` image sets
-`ix.networking.groups = [ "declared-groups" ]` in its own module, so any fleet
-deploying that image joins the deployer's `declared-groups` network; the
-`client` joins through a fleet-level `nodes.client.groups` entry on a
-group-agnostic image. Both sources union into the same plan field.
+Should a VM's group membership live in the image or in the deployment
+wiring? Both work, and this two-VM example shows each source. The `api`
+image sets `ix.networking.groups = [ "declared-groups" ]` in its own module,
+so any deployment of that image joins the deployer's `declared-groups`
+network; the `client`'s image is group-agnostic, and its membership is a
+one-line module added in [`default.ix`](default.ix). Both sources land in
+the same network.
 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#declared-groups-up
-nix run .#declared-groups-health
+# From this directory (examples/declared/groups in the index repo).
+ix apply .#api .#client
 ```
 
-The fleet wrapper get-or-creates the `declared-groups` group under your
-account, adds both VMs, then runs the health checks: the client curls the api
-over the private group network. Need the repo first?
+Applying the two VMs get-or-creates the `declared-groups` group under your
+account and adds both; the client's health check curls the api over the
+private group network. Need the repo first?
 `git clone https://github.com/indexable-inc/index`.
 
 ## Verify manually
@@ -36,17 +36,18 @@ ix shell client -- curl -fsS http://api:8080/
 
 ## Shape
 
-- [`ix.nix`](ix.nix) declares the fleet; note `api` has no
-  fleet-level `groups` entry.
+- [`default.ix`](default.ix) wires the two VMs; note `api` gains no group
+  at the wiring layer, while `client` gets its membership from a one-line
+  module there.
 - [`api.nix`](api.nix) carries the group in the image
   (`ix.networking.groups`) and exposes port 8080 to group members.
-- [`client.nix`](client.nix) joins via the fleet-level `groups` and checks
-  that `http://api:8080/` answers over the private network.
+- [`client.nix`](client.nix) checks that `http://api:8080/` answers over
+  the private network.
 
 ## Where the slugs live
 
 Group slugs are scoped to the deploying user (`UNIQUE (owner_id, slug)` on
 the server), so a common name like `declared-groups` in a published image
 never collides with another user's group of the same name. Slugs are
-`[a-z0-9_-]`, max 63 chars (the DNS label limit); the fleet eval rejects
-anything else before any RPC runs.
+`[a-z0-9_-]`, max 63 chars (the DNS label limit); the eval rejects anything
+else before any RPC runs.

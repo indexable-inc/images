@@ -1,0 +1,56 @@
+// Three VMs carrying a Minecraft block placement from the game server to a
+// 3D spatial query, the long-term data architecture in one example:
+//
+//   producer (Paper + plugin)  ->  log (Kafka topic)  ->  view (ClickHouse)
+//                              \->  collector (OTel)   ->  view (ClickHouse)
+//
+// Domain facts (block placements) take the log -> view path. Server telemetry
+// (the producer's own signals) takes the separate collector path. Both land in
+// ONE ClickHouse: the `view` VM runs the shared `services.ix-observability`
+// stack (ClickHouse + collector + Grafana) and adds the `minecraft` database
+// on that same server, so there is never a second ClickHouse. See README.md.
+//
+// Apply the log first, then the rest: `ix apply .#log .#view .#producer`.
+export default ({ index }) => {
+  // All three VMs share one east-west group so the view and producer can
+  // resolve and reach the log's Kafka broker and the view's OTel collector.
+  // A VM outside the group has no east-west route or DNS name to them.
+  const group = { ix: { networking: { groups: ["minecraft-blocks"] } } };
+
+  // The single durable, replayable source of truth.
+  const log = index.lib.mkVm({
+    name: "log",
+    modules: [import("./log.nix"), group],
+  });
+
+  // The view VM: the shared observability stack (ClickHouse + OTel collector
+  // + Grafana) plus the minecraft spatial view and Kafka ingest on the SAME
+  // ClickHouse. Telemetry lands in `otel_*`; block facts land in `minecraft.*`.
+  const view = index.lib.mkVm({
+    name: "view",
+    deployment: { l7ProxyPorts: [3000] },
+    modules: [import("./view.nix"), group],
+    nodes: log.nixosConfigurations,
+  });
+
+  // The game server: emits domain facts to the log and telemetry to the
+  // collector on the view VM. ipv4 so the Minecraft server-list health
+  // check can reach the public address.
+  const producer = index.lib.mkVm({
+    name: "producer",
+    deployment: { ipv4: true },
+    modules: [import("./producer.nix"), group],
+    nodes: { ...log.nixosConfigurations, ...view.nixosConfigurations },
+  });
+
+  return {
+    nixosConfigurations: {
+      ...log.nixosConfigurations,
+      ...view.nixosConfigurations,
+      ...producer.nixosConfigurations,
+    },
+    // Per-VM results (plans, lifecycle wrappers), for tooling and the
+    // repo's eval tests.
+    vms: { log: log, view: view, producer: producer },
+  };
+};

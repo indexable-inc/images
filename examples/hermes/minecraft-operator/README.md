@@ -7,32 +7,32 @@
 
 # Hermes Minecraft Operator
 
-What if your Minecraft server's admin was an agent you could just message? Here a [Hermes agent](../agent/) operates a Paper server: two nodes in one east-west group, where players reach the game over public ipv4 and the agent reaches only the console. Its single game-facing capability is a typed `run_command(command) -> response` MCP tool that speaks RCON ([`mcp/rcon_mcp.py`](mcp/rcon_mcp.py)), so "whitelist my friend", "shrink the world border to 2000", or a daily player-count report become chat requests instead of console sessions.
+What if your Minecraft server's admin was an agent you could just message? Here a [Hermes agent](../agent/) operates a Paper server: two VMs in one east-west group, where players reach the game over public ipv4 and the agent reaches only the console. Its single game-facing capability is a typed `run_command(command) -> response` MCP tool that speaks RCON ([`mcp/rcon_mcp.py`](mcp/rcon_mcp.py)), so "whitelist my friend", "shrink the world border to 2000", or a daily player-count report become chat requests instead of console sessions.
 
 The tool's schema is the whole attack surface: one console-command string, parsed by the Minecraft server's own grammar and permission model. No argv, no shell, no file access on the game node.
 
 ## Shape
 
-- [`ix.nix`](ix.nix): the two-node fleet. Players reach the game over public ipv4; RCON is only routable inside the `hermes-minecraft` group.
+- [`default.ix`](default.ix): the two VMs. Players reach the game over public ipv4; RCON is only routable inside the `hermes-minecraft` group.
 - [`minecraft.nix`](minecraft.nix): Paper with `rcon.enable = true` and whitelist enforcement from first boot.
-- [`operator.nix`](operator.nix): layers the MCP server and an operator persona on the shared `ix.hermes.profile` composition. The RCON host/port are read off the minecraft node's evaluated config, so they cannot drift.
+- [`operator.nix`](operator.nix): layers the MCP server and an operator persona on the shared `ix.hermes.profile` composition. The RCON host/port are read off the minecraft VM's evaluated config (a `mkVm` peer), so they cannot drift.
 - [`rcon.nix`](rcon.nix): the shared RCON credential. Committed plaintext like the survival example's forwarding secret: east-west-scoped, obviously a change-me.
 - [`documents/SOUL.md`](documents/SOUL.md): the persona; read-before-write, quote real server responses, destructive commands only on explicit request.
 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#hermes-minecraft-operator-up
+# From this directory (examples/hermes/minecraft-operator in the index repo).
+ix apply .#minecraft .#hermes
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.
 
-Store the model key env file, bring the fleet up, and open a chat:
+Store the model key env file, bring the VMs up, and open a chat:
 
 ```sh
 printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env
-nix run .#hermes-minecraft-operator-up
+ix apply .#minecraft .#hermes
 ix shell hermes -- hermes chat
 ```
 
@@ -62,9 +62,9 @@ The cron job lives in Hermes' own scheduler (`$HERMES_HOME/cron/jobs.json`), cre
 
 ## The credential, honestly
 
-RCON is password-authenticated and the password is committed in [`rcon.nix`](rcon.nix). That is acceptable here because the RCON port is only reachable inside the fleet's east-west group (the public internet sees the game port, not the console), and it keeps the generated up wrapper working with zero manual steps. To rotate: edit `rcon.nix`, `ix fleet switch`, then delete `/var/lib/minecraft/.ix-rcon-password` on the minecraft node and restart it (the seed only writes when the file is absent).
+RCON is password-authenticated and the password is committed in [`rcon.nix`](rcon.nix). That is acceptable here because the RCON port is only reachable inside the example's east-west group (the public internet sees the game port, not the console), and it keeps `ix apply` working with zero manual steps. To rotate: edit `rcon.nix`, re-run `ix apply .#minecraft`, then delete `/var/lib/minecraft/.ix-rcon-password` on the minecraft VM and restart it (the seed only writes when the file is absent).
 
 ## Bad fit if
 
-- You want the agent to edit server files, install plugins, or restart the unit. Those are declarative fleet concerns; this preset deliberately gives the agent a console, not a shell, on the game node.
-- You want multiple agents or per-player personas. The agent state is single-tenant; run another hermes node.
+- You want the agent to edit server files, install plugins, or restart the unit. Those are declarative configuration concerns; this preset deliberately gives the agent a console, not a shell, on the game VM.
+- You want multiple agents or per-player personas. The agent state is single-tenant; run another hermes VM.

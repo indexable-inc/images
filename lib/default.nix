@@ -811,16 +811,37 @@
     mkNonNixImage
     mkFleetFor
     mkFleet
+    mkVmFor
+    mkVm
     mkDevFor
     mkDev
     ;
+
+  /**
+  Import a `.ix` (JavaScript-syntax Nix) module for a given host system.
+  Delegates to `packages/nix/ix2nix/import-ix-native.nix`: the conversion
+  runs the compiled `ix2nix` binary in a small derivation (IFD), so it works
+  on stock nix — CI and repo-local evals do not carry `builtins.wasm`.
+  Example flakes use the in-eval `import-ix.nix` wasm shim instead.
+  */
+  importIxFor = hostSystem: let
+    hostPkgs = nixpkgs.legacyPackages.${hostSystem};
+  in
+    import ./import-ix-native.nix {
+      pkgs = hostPkgs;
+      inherit (packageSetFor hostPkgs) ix2nix;
+    };
+
+  importIx = importIxFor system;
 
   inherit
     (import ./discovery.nix {
       inherit
         lib
         paths
+        importIxFor
         mkFleetFor
+        mkVmFor
         mkDevFor
         ixReturn
         ;
@@ -849,6 +870,8 @@
         evalImageConfig
         exampleFleetsFor
         goUnitFor
+        importIx
+        importIxFor
         kernelUnitFor
         macosSdk
         mkDev
@@ -859,6 +882,8 @@
         mkNonNixImage
         mkPackageRegistry
         mkPackageSet
+        mkVm
+        mkVmFor
         nixosModules
         overlay
         overlays

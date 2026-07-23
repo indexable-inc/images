@@ -1,0 +1,39 @@
+// The observability stack and one instrumented app VM: `ix apply
+// .#observability .#app`. The app resolves the collector and ClickHouse
+// through its `nodes` module argument.
+export default ({ index }) => {
+  const group = { ix: { networking: { groups: ["observability-stack"] } } };
+  const observability = index.lib.mkVm({
+    name: "observability",
+    // Grafana rides the ix L7 proxy on 3000.
+    deployment: { l7ProxyPorts: [3000] },
+    modules: [
+      group,
+      {
+        services: {
+          "ix-observability": {
+            enable: true,
+            environment: "example",
+            clickhouse: { openFirewall: true },
+            collector: { openFirewall: true },
+            grafana: { openFirewall: true, anonymousViewer: true },
+          },
+        },
+      },
+    ],
+  });
+  const app = index.lib.mkVm({
+    name: "app",
+    modules: [import("./app.nix"), group],
+    nodes: observability.nixosConfigurations,
+  });
+  return {
+    nixosConfigurations: {
+      ...observability.nixosConfigurations,
+      ...app.nixosConfigurations,
+    },
+    // Per-VM results (plans, lifecycle wrappers), for tooling and the
+    // repo's eval tests.
+    vms: { observability: observability, app: app },
+  };
+};

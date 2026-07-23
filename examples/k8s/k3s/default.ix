@@ -1,0 +1,43 @@
+// A three-VM k3s cluster: `ix apply .#k3s-server .#k3s-agent-0 .#k3s-agent-1`.
+// No ordering between them: agents boot in parallel with the server and retry
+// the join until the API answers, and the server's cluster-ready check waits
+// for every VM, so bring-up converges regardless of order.
+export default ({ index }) => {
+  // One private east-west network for the cluster; a VM outside it has no
+  // route to the API or the kubelets.
+  const group = { ix: { networking: { groups: ["k8s-k3s"] } } };
+  const server = index.lib.mkVm({
+    name: "k3s-server",
+    modules: [import("./server.nix"), group],
+    // Peer wiring: the server's readiness check waits for every VM listed
+    // in its `nodes` module argument, the agents included.
+    nodes: {
+      ...agentZero.nixosConfigurations,
+      ...agentOne.nixosConfigurations,
+    },
+  });
+  // Two interchangeable agents; adding a third is one more line here.
+  const agent = (name) =>
+    index.lib.mkVm({
+      name: name,
+      modules: [import("./agent.nix"), group],
+      // Agents join by the server's east-west hostname.
+      nodes: server.nixosConfigurations,
+    });
+  const agentZero = agent("k3s-agent-0");
+  const agentOne = agent("k3s-agent-1");
+  return {
+    nixosConfigurations: {
+      ...server.nixosConfigurations,
+      ...agentZero.nixosConfigurations,
+      ...agentOne.nixosConfigurations,
+    },
+    // Per-VM results (plans, lifecycle wrappers), for tooling and the
+    // repo's eval tests.
+    vms: {
+      "k3s-server": server,
+      "k3s-agent-0": agentZero,
+      "k3s-agent-1": agentOne,
+    },
+  };
+};

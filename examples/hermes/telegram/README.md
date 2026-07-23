@@ -11,7 +11,7 @@ Want an agent in your pocket without opening a single inbound port? This is the 
 
 ## Shape
 
-- [`ix.nix`](ix.nix) wraps the node as a one-node fleet.
+- [`default.ix`](default.ix) declares the VM with `index.lib.mkVm` and attaches the `hermes_env` secret.
 - [`telegram.nix`](telegram.nix) layers two deltas on the shared `ix.hermes.profile` composition: `_module.args.hermes.telegram = true` and a chat-tuned `SOUL.md`.
 - [`documents/SOUL.md`](documents/SOUL.md) is the persona: short messages, light markdown, conversation register. Everything else (model provider, memory, tools) is inherited from the hermes-agent preset and overridable through the same `_module.args.hermes` toggles.
 
@@ -25,8 +25,8 @@ Want an agent in your pocket without opening a single inbound port? This is the 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#hermes-telegram-up
+# From this directory (examples/hermes/telegram in the index repo).
+ix apply .#hermes
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.
@@ -39,7 +39,7 @@ OPENROUTER_API_KEY=sk-or-...
 TELEGRAM_BOT_TOKEN=123456789:ABC...
 TELEGRAM_ALLOWED_USERS=123456789
 EOF
-nix run .#hermes-telegram-up
+ix apply .#hermes
 ```
 
 `TELEGRAM_ALLOWED_USERS` is a comma-separated allowlist of numeric Telegram user IDs. It is the only authentication layer: anyone not on the list is ignored, and anyone on it talks to an agent with root in this VM. Keep it to IDs you control. To add a second user later, append the ID and restart the unit.

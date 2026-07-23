@@ -1,0 +1,36 @@
+// Three VMs proving the east-west boundary: `ix apply .#service
+// .#allowed-client .#outside-client`. The service and the allowed client
+// share a group; the outside client does not, and its health check asserts
+// the service is unreachable from there.
+export default ({ index }) => {
+  const group = { ix: { networking: { groups: ["east-west-firewall"] } } };
+  const service = index.lib.mkVm({
+    name: "service",
+    modules: [import("./service.nix"), group],
+  });
+  const allowedClient = index.lib.mkVm({
+    name: "allowed-client",
+    modules: [import("./allowed-client.nix"), group],
+    nodes: service.nixosConfigurations,
+  });
+  // No group: absence from the ix group is the boundary this example checks.
+  const outsideClient = index.lib.mkVm({
+    name: "outside-client",
+    modules: [import("./outside-client.nix")],
+    nodes: service.nixosConfigurations,
+  });
+  return {
+    nixosConfigurations: {
+      ...service.nixosConfigurations,
+      ...allowedClient.nixosConfigurations,
+      ...outsideClient.nixosConfigurations,
+    },
+    // Per-VM results (plans, lifecycle wrappers), for tooling and the
+    // repo's eval tests.
+    vms: {
+      service: service,
+      "allowed-client": allowedClient,
+      "outside-client": outsideClient,
+    },
+  };
+};

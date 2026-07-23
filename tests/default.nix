@@ -80,19 +80,33 @@
     builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {class = "package";})).class;
   invalidSecurityRootSla =
     builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {slaHours = 0;})).slaHours;
-  fleetWrapperReadmes = [
+  # Example READMEs must document the one product entrypoint (ix#8306):
+  # an explicit `ix apply` line, single- and multi-VM alike, with no stale
+  # references to the pre-`default.ix` config name.
+  applyReadmes = [
+    "declared/groups"
+    "dev/vm"
+    "east-west/firewall"
     "hermes/agent"
     "hermes/api-server"
     "hermes/minecraft-operator"
     "hermes/telegram"
+    "k8s/k3s"
     "minecraft/blocks"
     "minecraft/crazy-terrain"
     "minecraft/factions"
     "minecraft/survival"
     "multi-client/file-sharing"
+    "multi-vm/hello"
+    "multi-vm/microservices"
+    "nixos/switch"
+    "nixos/switch-multi"
+    "nomad/cluster"
+    "observability/stack"
     "polyglot/dev"
     "python/daily-scraper"
     "ray/cluster"
+    "s3/storage"
     "synced-github/auth"
   ];
 
@@ -1978,7 +1992,7 @@
   );
 
   factionsExample = let
-    fleet = import (paths.examples + "/minecraft/factions/ix.nix") {
+    fleet = ix.importIx (paths.examples + "/minecraft/factions/default.ix") {
       index = {
         lib = ix;
       };
@@ -1997,7 +2011,7 @@
   };
 
   survivalExample = let
-    fleet = import (paths.examples + "/minecraft/survival/ix.nix") {
+    fleet = ix.importIx (paths.examples + "/minecraft/survival/default.ix") {
       index = {
         lib = ix;
       };
@@ -2021,7 +2035,7 @@
   };
 
   dailyScraperExample = let
-    fleet = import (paths.examples + "/python/daily-scraper/ix.nix") {
+    fleet = ix.importIx (paths.examples + "/python/daily-scraper/default.ix") {
       index = {
         lib = ix;
       };
@@ -2035,7 +2049,7 @@
   };
 
   nginxLifecycleExample = let
-    fleet = import (paths.examples + "/nginx/lifecycle/ix.nix") {
+    fleet = ix.importIx (paths.examples + "/nginx/lifecycle/default.ix") {
       index = {
         lib = ix;
       };
@@ -2048,7 +2062,7 @@
   };
 
   s3StorageExample = let
-    fleet = import (paths.examples + "/s3/storage/ix.nix") {
+    fleet = ix.importIx (paths.examples + "/s3/storage/default.ix") {
       index = {
         lib = ix;
       };
@@ -2060,10 +2074,21 @@
     plan = fleet.planValue.nodes.s3;
   };
 
-  fleetHelloExample = let
-    fleet = import (paths.examples + "/fleet/hello/ix.nix") {
-      index = {
-        lib = ix;
+  # Replicas, dependsOn, and updateStrategy are fleet-evaluator features no
+  # example exercises anymore (ix#8306 removed fleets from the product
+  # surface), so this inline spec keeps them covered until the fleet layer
+  # itself goes. It reuses the multi-vm/hello modules: the worker resolves
+  # the web listener through the `nodes` module argument either way.
+  replicasFleet = let
+    fleet = ix.mkFleet {
+      nodes = {
+        web.modules = [(paths.examples + "/multi-vm/hello/web.nix")];
+        worker = {
+          replicas = 3;
+          dependsOn = ["web"];
+          updateStrategy.maxUnavailable = 1;
+          modules = [(paths.examples + "/multi-vm/hello/worker.nix")];
+        };
       };
     };
   in {
@@ -2072,10 +2097,35 @@
     worker.plan = fleet.planValue.nodes.worker-0;
   };
 
-  fleetMicroservicesExample = let
-    fleet = import (paths.examples + "/fleet/microservices/ix.nix") {
+  # The converted example itself: one VM per role, wired through `mkVm`'s
+  # `nodes` (peer) argument instead of a fleet spec.
+  multiVmHelloExample = let
+    example = ix.importIx (paths.examples + "/multi-vm/hello/default.ix") {
       index = {
         lib = ix;
+      };
+    };
+  in {
+    worker.plan = example.vms.worker-0.planValue.nodes.worker-0;
+  };
+
+  # Same evaluator-coverage story as `replicasFleet`, for replica fan-out:
+  # a dependsOn on a replicated node, and the gateway's upstream pool and
+  # per-replica probes, expand across every replica.
+  replicaFanoutFleet = let
+    fleet = ix.mkFleet {
+      nodes = {
+        cache.modules = [(paths.examples + "/multi-vm/microservices/cache.nix")];
+        api = {
+          replicas = 3;
+          dependsOn = ["cache"];
+          updateStrategy.maxUnavailable = 1;
+          modules = [(paths.examples + "/multi-vm/microservices/api.nix")];
+        };
+        gateway = {
+          dependsOn = ["api"];
+          modules = [(paths.examples + "/multi-vm/microservices/gateway.nix")];
+        };
       };
     };
   in {
@@ -2088,32 +2138,42 @@
     cache.plan = fleet.planValue.nodes.cache;
   };
 
-  k8sK3sExample = let
-    fleet = import (paths.examples + "/k8s/k3s/ix.nix") {
+  # The converted example itself, wired through `mkVm`'s `nodes` (peer)
+  # argument instead of a fleet spec.
+  multiVmMicroservicesExample = let
+    example = ix.importIx (paths.examples + "/multi-vm/microservices/default.ix") {
       index = {
         lib = ix;
       };
     };
   in {
-    inherit fleet;
-    server = fleet.nodes.k3s-server;
-    agent = fleet.nodes.k3s-agent-0;
+    gateway.config = example.vms.gateway.nodes.gateway;
+  };
+
+  k8sK3sExample = let
+    example = ix.importIx (paths.examples + "/k8s/k3s/default.ix") {
+      index = {
+        lib = ix;
+      };
+    };
+  in {
+    server = example.vms.k3s-server.nodes.k3s-server;
+    agent = example.vms.k3s-agent-0.nodes.k3s-agent-0;
   };
 
   nomadClusterExample = let
-    fleet = import (paths.examples + "/nomad/cluster/ix.nix") {
+    example = ix.importIx (paths.examples + "/nomad/cluster/default.ix") {
       index = {
         lib = ix;
       };
     };
   in {
-    inherit fleet;
-    server = fleet.nodes.nomad-server;
-    client = fleet.nodes.nomad-client-0;
+    server = example.vms.nomad-server.nodes.nomad-server;
+    client = example.vms.nomad-client-0.nodes.nomad-client-0;
   };
 
   observabilityStackExample = let
-    fleet = import (paths.examples + "/observability/stack/ix.nix") {
+    example = ix.importIx (paths.examples + "/observability/stack/default.ix") {
       index = {
         lib = ix;
       };
@@ -2125,26 +2185,25 @@
       null
       config.environment.systemPackages;
   in {
-    inherit fleet;
     observability = let
-      config = fleet.nodes.observability;
+      config = example.vms.observability.nodes.observability;
     in {
       inherit config;
       cfg = config.services.ix-observability;
       collector = config.services.opentelemetry-collector.settings;
       grafana = config.services.grafana;
-      plan = fleet.planValue.nodes.observability;
+      plan = example.vms.observability.planValue.nodes.observability;
       queryTool = queryTool config;
       dashboardPath =
         (builtins.elemAt config.services.grafana.provision.dashboards.settings.providers 0).options.path;
     };
     app = let
-      config = fleet.nodes.app;
+      config = example.vms.app.nodes.app;
     in {
       inherit config;
       cfg = config.services.ix-observability;
       collector = config.services.opentelemetry-collector.settings;
-      plan = fleet.planValue.nodes.app;
+      plan = example.vms.app.planValue.nodes.app;
     };
   };
 
@@ -2610,7 +2669,7 @@
   };
 
   minecraftBlocksExample = let
-    fleet = import (paths.examples + "/minecraft/blocks/ix.nix") {
+    example = ix.importIx (paths.examples + "/minecraft/blocks/default.ix") {
       index = {
         lib = ix;
       };
@@ -2621,24 +2680,30 @@
     packages = import (paths.examples + "/minecraft/blocks/packages.nix") {inherit ix pkgs;};
     schema = import (paths.examples + "/minecraft/blocks/schema.nix") {inherit lib;};
   in {
-    inherit fleet packages schema;
-    log = {
-      config = fleet.nodes.log;
-      plan = fleet.planValue.nodes.log;
-      kafka = fleet.nodes.log.services.apache-kafka;
+    inherit packages schema;
+    log = let
+      config = example.vms.log.nodes.log;
+    in {
+      inherit config;
+      plan = example.vms.log.planValue.nodes.log;
+      kafka = config.services.apache-kafka;
     };
-    view = {
-      config = fleet.nodes.view;
-      plan = fleet.planValue.nodes.view;
-      obs = fleet.nodes.view.services.ix-observability;
-      initUnit = fleet.nodes.view.systemd.services.mc-blocks-view-init;
+    view = let
+      config = example.vms.view.nodes.view;
+    in {
+      inherit config;
+      plan = example.vms.view.planValue.nodes.view;
+      obs = config.services.ix-observability;
+      initUnit = config.systemd.services.mc-blocks-view-init;
     };
-    producer = {
-      config = fleet.nodes.producer;
-      plan = fleet.planValue.nodes.producer;
-      minecraft = fleet.nodes.producer.services.minecraft;
-      agent = fleet.nodes.producer.services.ix-observability;
-      shipUnit = fleet.nodes.producer.systemd.services.mc-blocks-ship;
+    producer = let
+      config = example.vms.producer.nodes.producer;
+    in {
+      inherit config;
+      plan = example.vms.producer.planValue.nodes.producer;
+      minecraft = config.services.minecraft;
+      agent = config.services.ix-observability;
+      shipUnit = config.systemd.services.mc-blocks-ship;
     };
   };
   invalidSecretNameEval = builtins.tryEval (
@@ -3835,49 +3900,72 @@
       }
     ];
 
-    fleet-hello = [
+    fleet-replicas = [
       {
         assertion =
-          fleetHelloExample.fleet.planValue.order
+          replicasFleet.fleet.planValue.order
           == [
             "web"
             "worker-0"
             "worker-1"
             "worker-2"
           ]
-          && fleetHelloExample.worker.plan.dependsOn == ["web"];
-        message = "fleet-hello should expand three worker replicas that depend on the web node";
+          && replicasFleet.worker.plan.dependsOn == ["web"];
+        message = "the fleet evaluator should expand three worker replicas that depend on the web node";
       }
       {
         assertion = let
-          check = fleetHelloExample.web.plan.healthChecks.http-loopback;
+          check = replicasFleet.web.plan.healthChecks.http-loopback;
         in
           check.from
           == "guest"
           && lib.hasSuffix "/bin/curl" (builtins.head check.command)
           && lib.last check.command == "http://127.0.0.1:8080/";
-        message = "fleet-hello web should desugar its http probe into a loopback curl";
+        message = "the web node should desugar its http probe into a loopback curl";
       }
       {
         assertion = let
-          check = fleetHelloExample.worker.plan.healthChecks.web-reachable;
+          check = replicasFleet.worker.plan.healthChecks.web-reachable;
         in
           check.from == "guest" && lib.last check.command == "http://web:8080/";
-        message = "fleet-hello workers should probe the web endpoint resolved by node name";
+        message = "workers should probe the web endpoint resolved by node name";
       }
       {
         assertion =
-          fleetHelloExample.worker.plan.updateStrategy.maxUnavailable
+          replicasFleet.worker.plan.updateStrategy.maxUnavailable
           == 1
-          && fleetHelloExample.web.plan.updateStrategy == null;
-        message = "fleet-hello workers should roll one at a time while the singleton web node carries no strategy";
+          && replicasFleet.web.plan.updateStrategy == null;
+        message = "workers should roll one at a time while the singleton web node carries no strategy";
       }
     ];
 
-    fleet-microservices = [
+    multi-vm-hello = [
+      {
+        assertion = let
+          check = multiVmHelloExample.worker.plan.healthChecks.web-reachable;
+        in
+          check.from == "guest" && lib.last check.command == "http://web:8080/";
+        message = "multi-vm-hello worker should resolve the web VM through the mkVm peer seam";
+      }
+    ];
+
+    multi-vm-microservices = [
       {
         assertion =
-          fleetMicroservicesExample.fleet.planValue.order
+          builtins.attrNames multiVmMicroservicesExample.gateway.config.services.nginx.upstreams.api.servers
+          == [
+            "api-0:8080"
+            "api-1:8080"
+            "api-2:8080"
+          ];
+        message = "multi-vm-microservices gateway should resolve every api VM through the mkVm peer seam";
+      }
+    ];
+
+    fleet-replica-fanout = [
+      {
+        assertion =
+          replicaFanoutFleet.fleet.planValue.order
           == [
             "api-0"
             "api-1"
@@ -3885,24 +3973,24 @@
             "cache"
             "gateway"
           ]
-          && fleetMicroservicesExample.api.plan.dependsOn == ["cache"]
-          && fleetMicroservicesExample.gateway.plan.dependsOn
+          && replicaFanoutFleet.api.plan.dependsOn == ["cache"]
+          && replicaFanoutFleet.gateway.plan.dependsOn
           == [
             "api-0"
             "api-1"
             "api-2"
           ];
-        message = "fleet-microservices should expand the gateway's api dependency across every replica";
+        message = "the fleet evaluator should expand the gateway's api dependency across every replica";
       }
       {
-        assertion = fleetMicroservicesExample.api.plan.updateStrategy.maxUnavailable == 1;
-        message = "fleet-microservices api replicas should carry the rolling-update window into the plan";
+        assertion = replicaFanoutFleet.api.plan.updateStrategy.maxUnavailable == 1;
+        message = "api replicas should carry the rolling-update window into the plan";
       }
       {
         # The gateway enumerates api replicas at eval time, so raising
         # `replicas` grows the upstream pool without touching gateway.nix.
         assertion =
-          builtins.attrNames fleetMicroservicesExample.gateway.config.services.nginx.upstreams.api.servers
+          builtins.attrNames replicaFanoutFleet.gateway.config.services.nginx.upstreams.api.servers
           == [
             "api-0:8080"
             "api-1:8080"
@@ -3912,7 +4000,7 @@
       }
       {
         assertion = let
-          checks = fleetMicroservicesExample.gateway.plan.healthChecks;
+          checks = replicaFanoutFleet.gateway.plan.healthChecks;
         in
           lib.last checks.upstream-api-0.command
           == "http://api-0:8080/healthz"
@@ -3923,7 +4011,7 @@
       }
       {
         assertion = let
-          check = fleetMicroservicesExample.api.plan.healthChecks.cache-reachable;
+          check = replicaFanoutFleet.api.plan.healthChecks.cache-reachable;
         in
           lib.hasSuffix "/bin/nc" (builtins.head check.command)
           && builtins.tail check.command
@@ -3936,7 +4024,7 @@
       }
       {
         assertion = let
-          check = fleetMicroservicesExample.cache.plan.healthChecks.accepting-connections;
+          check = replicaFanoutFleet.cache.plan.healthChecks.accepting-connections;
         in
           lib.hasSuffix "/bin/nc" (builtins.head check.command)
           && builtins.tail check.command
@@ -5698,9 +5786,9 @@
       }
       {
         assertion =
-          builtins.pathExists (paths.examples + "/dev/fleet/ix.nix")
-          && builtins.pathExists (paths.examples + "/dev/fleet/dev.nix");
-        message = "dev-fleet should expose ix.nix as the mkDev entrypoint and dev.nix as the editable module";
+          builtins.pathExists (paths.examples + "/dev/vm/default.ix")
+          && builtins.pathExists (paths.examples + "/dev/vm/dev.nix");
+        message = "dev-vm should expose default.ix as the mkDev entrypoint and dev.nix as the editable module";
       }
       {
         assertion =
@@ -5708,10 +5796,10 @@
             rel: let
               text = builtins.readFile (paths.examples + "/${rel}/README.md");
             in
-              lib.hasInfix "nix run .#" text && !(lib.hasInfix "\nix apply\n" text)
+              lib.hasInfix "ix apply" text && !(lib.hasInfix "ix.nix" text)
           )
-          fleetWrapperReadmes;
-        message = "fleet-wrapper examples should point at generated nix run .#<example>-up commands, not bare ix apply";
+          applyReadmes;
+        message = "example READMEs should document the ix apply entrypoint against default.ix, with no stale ix.nix references";
       }
       {
         assertion = fleet.nodes.db.networking.hostName == "db";

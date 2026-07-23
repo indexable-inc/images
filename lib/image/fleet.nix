@@ -18,6 +18,13 @@ rendered fleet plan, image attrset, and wrapped CLI app.
   defaults ? [],
   deployment ? {},
   nodes,
+  # Peer VMs evaluated elsewhere, merged into the `nodes` module argument
+  # so cross-VM references (`ix.endpointOf nodes.<peer> ...`) work when
+  # VMs are wired together one `mkVm` at a time instead of in one fleet
+  # spec (ix#8306). Values are `{ config }` wrappers, i.e. exactly the
+  # entries of another result's `nixosConfigurations`. Own nodes win on
+  # name collisions.
+  peers ? {},
 }: let
   inherit
     (builtins)
@@ -274,7 +281,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     )
     checkedNodeSpecs;
 
-  nodeRefs = lib.mapAttrs (_name: config: {inherit config;}) nodeConfigs;
+  nodeRefs = peers // lib.mapAttrs (_name: config: {inherit config;}) nodeConfigs;
   planHealthChecks = config:
     lib.mapAttrs (_name: check: {
       inherit
