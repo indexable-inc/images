@@ -7,7 +7,7 @@ the system can start and control a VM without holding the macOS entitlements
 themselves. The motivating use case: boot and drive a guest fully off-screen and
 screenshot its display, so an agent can verify on-screen rendering inside an
 isolated VM without the app appearing on the operator's desktop or grabbing the
-operator's cursor (`packages/vm/vmkit/src/main.rs:1-24`).
+operator's cursor (`packages/vmkit/src/main.rs:1-24`).
 
 This page covers the CLI surface, the module layout, and the macOS signing
 model. The libkrun Linux-guest backend (EFI firmware, GPU/Venus, networking,
@@ -16,13 +16,13 @@ capture limits) is in [linux-guests](linux-guests.md).
 ## Build and flake output
 
 - Rust workspace member (root `Cargo.toml`); binary built by
-  `packages/vm/vmkit/default.nix` via `ix.cargoUnit.selectBinaryWithTests`. Flake
+  `packages/vmkit/default.nix` via `ix.cargoUnit.selectBinaryWithTests`. Flake
   output `vmkit`: `nix run .#vmkit -- info`, `nix build .#vmkit`.
-- Platforms (`packages/vm/vmkit/default.nix:9-13`, `package.nix:11-15`):
+- Platforms (`packages/vmkit/default.nix:9-13`, `package.nix:11-15`):
   `aarch64-darwin`, `aarch64-linux`, `x86_64-linux`. `x86_64-darwin` is omitted
   (libkrun-efi is aarch64-only). The crate compiles everywhere (off-host code is
   `cfg`'d out) but the output is advertised only on supported hosts.
-- Dependencies (`packages/vm/vmkit/Cargo.toml`): `clap` + `snafu` are
+- Dependencies (`packages/vmkit/Cargo.toml`): `clap` + `snafu` are
   unconditional (every host parses args and reports errors). The Apple-framework
   crates (`objc2*`, `block2`, `dispatch2`, `image`, plus `dashboard-core`,
   `tokio`, `base64` for live publishing) are gated to `cfg(target_os = "macos")`,
@@ -31,7 +31,7 @@ capture limits) is in [linux-guests](linux-guests.md).
 
 ## CLI surface
 
-`vmkit` is a `clap` derive CLI (`packages/vm/vmkit/src/main.rs:30-239`). The
+`vmkit` is a `clap` derive CLI (`packages/vmkit/src/main.rs:30-239`). The
 `Command` enum is `cfg`-split: only `Info` and `BootLinux` exist on Linux; the
 macOS-guest and GUI-capture variants are macOS-only. Dispatch is
 `imp::dispatch` on macOS (`src/main.rs:519`) and `dispatch_linux` on Linux
@@ -84,7 +84,7 @@ using `dashboard-core`'s `Publisher` over a producer socket in the discovery
 directory. Set `IX_VMKIT_NO_DASHBOARD` to any value to disable it. See
 [dashboard-core](../dashboard-core/overview.md).
 
-## Modules (`packages/vm/vmkit/src`)
+## Modules (`packages/vmkit/src`)
 
 | module | host | role |
 | --- | --- | --- |
@@ -173,5 +173,5 @@ returning PIL images that render inline. That module is owned by the
 ## Not yet built
 
 A vsock control channel and a long-lived `serve` mode for IPC are designed but
-not implemented (`packages/vm/vmkit/README.md` roadmap). Today each guest is an
+not implemented (`packages/vmkit/README.md` roadmap). Today each guest is an
 independent `vmkit` process spawned per operation.

@@ -4,7 +4,7 @@
 tokenizer that splits identifiers the way a code reviewer reads them: on
 `camelCase`, `snake_case`, `kebab-case`, and any non-alphanumeric run. It is a
 single Rust workspace library crate (`id = code-tokenizer`, no flake output)
-consumed by the search index (`packages/search/file-search/Cargo.toml`).
+consumed by the search index (`packages/file-search/Cargo.toml`).
 
 ## Public surface (`src/lib.rs`)
 

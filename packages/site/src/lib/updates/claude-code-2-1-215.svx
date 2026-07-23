@@ -14,7 +14,7 @@ The vendored Claude Code moves from 2.1.206 to 2.1.215 via the signed
 updater: `nix run .#claude-code.updateScript` fetched Anthropic's
 per-version `manifest.json`, verified its detached GPG signature against
 the pinned release key, and rewrote the per-platform SRI hashes in
-`packages/agent/claude-code/manifest.json`.
+`packages/claude-code/manifest.json`.
 
 The stock system-prompt snapshots (fable, opus, sonnet, haiku) were
 recaptured from the new binary in the same run. The wrapper replaces the

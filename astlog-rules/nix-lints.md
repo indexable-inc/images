@@ -46,7 +46,7 @@ truth. **101 lints total: 97 `error`, 4 `warning`.**
 | 22 | [`no-stringly-flags`](#no-stringly-flags) | err | build flag attrs are list-of-string, not one string with spaces; whitespace inside flag values breaks paths-with-spaces and shell quoting |
 | 23 | [`no-substitute-all`](#no-substitute-all) | err | `substituteAll` / `substituteAllFiles` was removed from nixpkgs; use `replaceVars` or `replaceVarsWith` instead |
 | 24 | [`runcommand-missing-structured-attrs`](#runcommand-missing-structured-attrs) | warn | runCommand with empty attrs {}; add { __structuredAttrs = true; } for consistent derivation behavior |
-| 25 | [`no-handrolled-shell-script`](#no-handrolled-shell-script) | warn | `writeText "*.sh"` hand-rolls an unchecked shell script; prefer a compiled Rust launcher (ix.rustWorkspace, see packages/config-launch / packages/agent/codex) or ix.writeNushellApplication / ix.writePythonApplication, or keep it with an `astlog-ignore: no-handrolled-shell-script` comment + reason |
+| 25 | [`no-handrolled-shell-script`](#no-handrolled-shell-script) | warn | `writeText "*.sh"` hand-rolls an unchecked shell script; prefer a compiled Rust launcher (ix.rustWorkspace, see packages/config-launch / packages/codex) or ix.writeNushellApplication / ix.writePythonApplication, or keep it with an `astlog-ignore: no-handrolled-shell-script` comment + reason |
 | 26 | [`no-nix-in-generated-shell`](#no-nix-in-generated-shell) | err | Nix-generated shell applications must not call nix again; pass realized store paths into the script instead |
 | 27 | [`no-write-shell-application`](#no-write-shell-application) | err | writeShellApplication is banned (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks) |
 | 28 | [`no-write-shell-script`](#no-write-shell-script) | err | writeShellScript is unchecked (no shellcheck, no declared deps); prefer a compiled Rust launcher/tool (ix.rustWorkspace, see packages/config-launch / packages/claude-hooks), else ix.writeNushellApplication / ix.writePythonApplication for logic, else ix.writeBashApplication (checked) for must-be-bash |
@@ -738,7 +738,7 @@ Unchecked / dependency-hiding shell generators; prefer compiled or checked launc
 
 **🟡 warning**
 
-`writeText "*.sh" ...` hand-rolls a shell script with no shellcheck and no declared runtime deps (the same gap that bans writeShellApplication / writeShellScriptBin). Prefer a compiled wrapper: a small Rust launcher built via ix.rustWorkspace (see packages/config-launch, used by packages/agent/codex) for argv0-preserving exec, or ix.writeNushellApplication / ix.writePythonApplication for logic scripts. A launch wrapper that needs install-time `@placeholder@` substitution the writers cannot express may keep writeText with an `astlog-ignore: no-handrolled-shell-script` comment plus a reason.
+`writeText "*.sh" ...` hand-rolls a shell script with no shellcheck and no declared runtime deps (the same gap that bans writeShellApplication / writeShellScriptBin). Prefer a compiled wrapper: a small Rust launcher built via ix.rustWorkspace (see packages/config-launch, used by packages/codex) for argv0-preserving exec, or ix.writeNushellApplication / ix.writePythonApplication for logic scripts. A launch wrapper that needs install-time `@placeholder@` substitution the writers cannot express may keep writeText with an `astlog-ignore: no-handrolled-shell-script` comment plus a reason.
 
 *Matches:* `apply_expression` · *predicates:* `text-match` · *1 pattern variant*
 
@@ -2554,7 +2554,7 @@ with import nixpkgs { }; with lib; [ (getLib hello) ]
 ## Number literals
 
 Digit grouping in numeric literals, following the Rust convention. The repo's
-patched nix (`packages/nix/nix/patches/0014-libexpr-accept-underscore-digit-separators-in-numeri.patch`)
+patched nix (`packages/nix/patches/0014-libexpr-accept-underscore-digit-separators-in-numeri.patch`)
 accepts underscore digit separators between digits (`10_000`, `1_000.000_1`,
 `2.5e1_0`) and strips them before the value is parsed; this lint enforces that
 separators, where present, group digits in threes, via the `misgrouped-digits`
@@ -2567,7 +2567,7 @@ then `_565`), so consumer flakes importing this tree must stay stock-parseable
 
 **🔴 error**
 
-A literal that already carries underscore separators must use exactly the canonical grouping: threes, counted from the right for the integer part and the exponent and from the left of the decimal point for the fraction (`1_0000` is `10_000`, `1_000.00_001` is `1_000.000_01`). The workspace's tree-sitter-nix fork (`packages/code/tree-sitter-nix`) lexes underscore literals as single integer/float nodes -- the same dialect the patched nix lexer accepts -- so one literal is one finding and one rewrite edit.
+A literal that already carries underscore separators must use exactly the canonical grouping: threes, counted from the right for the integer part and the exponent and from the left of the decimal point for the fraction (`1_0000` is `10_000`, `1_000.00_001` is `1_000.000_01`). The workspace's tree-sitter-nix fork (`packages/tree-sitter-nix`) lexes underscore literals as single integer/float nodes -- the same dialect the patched nix lexer accepts -- so one literal is one finding and one rewrite edit.
 
 *Matches:* `integer_expression` / `float_expression` · *predicates:* `text-match`, `misgrouped-digits` · *1 pattern variant* · *rewrite:* regroups the digits canonically
 

@@ -23,7 +23,7 @@ description: 'Agents compress verified facts, stale recall, and inference into o
 
 ## Summary
 
-Make agent reports decomposable into auditable claims. Three contract changes: a claim-audit pass before any report (every factual claim maps to a tool result from the current session or is marked unverified), per-claim provenance (checked now, recalled, or inferred, with timestamps on volatile state), and a decomposition rule (sub-claims with different truth values are never merged into one verdict). Delivery is a rules change in `packages/agent/prompt/rules.nix`, and the gate for adopting it is an eval with known-answer questions whose correct answers require splitting a claim.
+Make agent reports decomposable into auditable claims. Three contract changes: a claim-audit pass before any report (every factual claim maps to a tool result from the current session or is marked unverified), per-claim provenance (checked now, recalled, or inferred, with timestamps on volatile state), and a decomposition rule (sub-claims with different truth values are never merged into one verdict). Delivery is a rules change in `packages/agent-prompt/rules.nix`, and the gate for adopting it is an eval with known-answer questions whose correct answers require splitting a claim.
 
 ## Motivation: a real miss, 2026-07-19
 
@@ -72,7 +72,7 @@ Seed tasks with known-answer upstream-status questions where the correct answer 
 
 ### e. Delivery: rules change validated by prompt-eval
 
-The mechanisms land as edits to `packages/agent/prompt/rules.nix` (the `faithfulReporting` and `validate` rules are the anchors), validated with the prompt-eval approach: baseline vs changed prompt, N fresh sessions on the eval suite from (d), adopt only on a measured win. No harness code changes are required for (a) through (c); they are prompt-level contracts. If prompt-level enforcement proves too weak, a structured report format (claims as data, prose rendered from them) is the escalation, noted under future possibilities.
+The mechanisms land as edits to `packages/agent-prompt/rules.nix` (the `faithfulReporting` and `validate` rules are the anchors), validated with the prompt-eval approach: baseline vs changed prompt, N fresh sessions on the eval suite from (d), adopt only on a measured win. No harness code changes are required for (a) through (c); they are prompt-level contracts. If prompt-level enforcement proves too weak, a structured report format (claims as data, prose rendered from them) is the escalation, noted under future possibilities.
 
 ## Why the existing rules were not enough
 
@@ -99,7 +99,7 @@ The house rules already say "Never guess what you can check: verify load-bearing
 
 ## Prior art
 
-- `faithfulReporting` in `packages/agent/prompt/rules.nix`: the claim-audit sentence and its measured effect on fabricated reports, per the Claude Fable 5 system card guidance.
+- `faithfulReporting` in `packages/agent-prompt/rules.nix`: the claim-audit sentence and its measured effect on fabricated reports, per the Claude Fable 5 system card guidance.
 - FActScore (arXiv:2305.14251): factuality scoring by decomposing long-form output into atomic claims and verifying each one independently; the same move mechanism (c) asks the agent to perform on itself.
 - SAFE, "Long-form factuality in large language models" (arXiv:2403.18802): claim decomposition plus per-claim search-backed verification, evidence that per-claim grading is tractable at scale.
 - Plan 0023 (evals as the gate for behavioral change): the adopt-only-on-measured-win discipline that (d) and (e) follow.

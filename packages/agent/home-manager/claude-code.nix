@@ -1,6 +1,6 @@
 {
   indexPackages,
-  # Path to the house prompt module (packages/agent/prompt), injected by the
+  # Path to the house prompt module (packages/agent-prompt), injected by the
   # importing flake so this module never climbs the tree with `../`.
   promptModule,
   # The mutable-json home module (lib/services/mutable-json.nix), injected by
@@ -39,7 +39,7 @@
   optionalOverride = condition: name: value:
     lib.optionalAttrs condition {${name} = value;};
   # BEGIN claude-code wrapper knob reference (drift-checked by checks.claude-code-knob-reference)
-  # Every argument packages/agent/claude-code/default.nix accepts (and every
+  # Every argument packages/claude-code/default.nix accepts (and every
   # features/systemTools sub-key), each with its stock default, so any
   # override is one uncommented line: in packageOverrides below for
   # wrapper-only knobs, or through the programs.claude-code option named in
@@ -94,7 +94,7 @@
   #   developmentChannels = <"server:index" when the index server is baked>;  channel specs for --dangerously-load-development-channels
   #   omitRules = [ ];  option systemPrompt.omitRules; rule names dropped from the house prompt
   #   omitTopics = [ ];  topic names dropped from the house prompt
-  #   systemPrompt = <house prompt from packages/agent/prompt>;  option systemPrompt; null bakes no flag and ships the stock prompt
+  #   systemPrompt = <house prompt from packages/agent-prompt>;  option systemPrompt; null bakes no flag and ships the stock prompt
   #   updateScriptWriter = null;  plumbing: writer for passthru.updateScript (flake package set only)
   # END claude-code wrapper knob reference
 
@@ -106,7 +106,7 @@
   # where the CLI or this wrapper bakes one; "" means unset. Vars owned by a
   # typed wrapper knob point at the knob instead of duplicating it. Sources:
   # the env-var registry inside the shipped cli.js, extracted mechanically
-  # to packages/agent/claude-code/env-registry.tsv (all 812 names with
+  # to packages/claude-code/env-registry.tsv (all 812 names with
   # accessor types; regenerate with `nix build .#claude-code.envRegistry`),
   # cross-checked against https://code.claude.com/docs/en/env-vars. The
   # undocumented remainder in the TSV is internal experiment gates and
@@ -604,7 +604,7 @@ in {
         default = false;
         description = ''
           Write the house context render (the tagged prompt rules minus the
-          `system`-only basics, see packages/agent/prompt) to
+          `system`-only basics, see packages/agent-prompt) to
           {file}`~/.claude/CLAUDE.md` through the native
           {option}`programs.claude-code.context` option, so sessions whose
           runtime keeps its stock system prompt (claude.ai desktop, unwrapped

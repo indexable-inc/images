@@ -84,7 +84,7 @@
   # macOS dev.
   searchPythonSource = builtins.path {
     name = "search-py-python-source";
-    path = ix.paths.packagesRoot + "/search/search-py/python";
+    path = ix.paths.packagesRoot + "/search-py/python";
   };
   searchModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-search-python-module"
@@ -166,7 +166,7 @@
   # shared workspace graph, so it works on Linux and macOS dev alike.
   astlogPythonSource = builtins.path {
     name = "astlog-py-python-source";
-    path = ix.paths.packagesRoot + "/code/astlog/py/python";
+    path = ix.paths.packagesRoot + "/astlog/py/python";
   };
   astlogModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-astlog-python-module"
@@ -205,7 +205,7 @@
   # index. Unlike `astlogModule` above, the site tree comes from
   # `ix.unibind.build`: unibind-generated stub + `py.typed` merged with the
   # hand-written wrapper, cdylib from the shared workspace graph. Same
-  # arguments as packages/code/scipql/py/default.nix (the wheel); keep the two
+  # arguments as packages/scipql/py/default.nix (the wheel); keep the two
   # call sites in sync. (The CLI bakes in rust-analyzer/souffle; the kernel
   # module exposes facts/query/fix/rename over an already-built index.scip.)
   scipqlModule =
@@ -215,7 +215,7 @@
         package = "scipql";
         pythonSource = builtins.path {
           name = "scipql-py-python-source";
-          path = ix.paths.packagesRoot + "/code/scipql/py/python";
+          path = ix.paths.packagesRoot + "/scipql/py/python";
         };
         pythonPackages = ps: [ps.polars];
       };
@@ -326,7 +326,7 @@
     ''
   );
 
-  # The distiller's transcript reader (packages/agent/distiller), the single
+  # The distiller's transcript reader (packages/distiller), the single
   # Python-side owner of the Claude transcript schema, bundled from that
   # package's own passthru so the module recipe is not duplicated here.
   # `claude_history` imports `distiller.transcripts` (stdlib-only); the

@@ -33,7 +33,7 @@ unibind = { workspace = true, features = ["py"] }
 pyo3 = { workspace = true, features = ["extension-module"] }
 ```
 
-(`packages/code/scipql/py` is the reference consumer.) The workspace lives in
+(`packages/scipql/py` is the reference consumer.) The workspace lives in
 the monorepo: `git clone https://github.com/indexable-inc/index`. Cargo
 unifies the macro crate's features across a workspace build, so once any
 workspace member enables another backend, every export names its own
@@ -122,7 +122,7 @@ workspace graph, the registry's `pyExtension = true` marker injects the
 darwin `-undefined dynamic_lookup` link args (replacing per-crate build.rs),
 and the outputs are the merged python site tree, a zuban/ruff strict gate,
 the mcp-style importable module, and the Linux wheel;
-`packages/code/scipql/py` is the proving consumer. For `ts`: the output is
+`packages/scipql/py` is the proving consumer. For `ts`: the output is
 the tui-node-shaped npm package (sanitized `native/<crate>.node` + generated
 `index.js`/`index.d.ts` + a `cpu`/`libc`-stamped package.json, Linux-only);
 `packages/unibind/conformance-ts` is the proving consumer, gated by a Node
@@ -280,7 +280,7 @@ GC-run resource destructors. It runs in CI as
 
 | Phase | Issue | Scope |
 | ----- | ----- | ----- |
-| 0     | #1990 | core IR, macro skeleton, pyo3 backend for sync functions, records, errors; proven by porting `packages/code/scipql/py` |
+| 0     | #1990 | core IR, macro skeleton, pyo3 backend for sync functions, records, errors; proven by porting `packages/scipql/py` |
 | 1     | #1991 | `unibind-gen`: host files (`.pyi`) from the embedded IR, `unibind.lib.build` nix glue |
 | 2     | #1992 | async, cancellation, streams, resources/objects (Python backend); proven by `packages/unibind/conformance` |
 | 3     | #1993 | TypeScript backend (napi-rs): render crate + `ts(name = ...)` renames, `unibind-gen ts` host files (`index.js`/`index.d.ts`), npm packaging in `unibind.lib.build`, Node conformance gate |
@@ -290,7 +290,7 @@ GC-run resource destructors. It runs in CI as
 
 ## Phase 0 in the tree
 
-`packages/code/scipql/py` is the proving port: the same five functions, the
+`packages/scipql/py` is the proving port: the same five functions, the
 same `_scipql` module name and cdylib layout the mcp interpreter bundles, but
 the 169 lines of hand-written pyo3 conversion replaced by the annotated
 module above plus record and error declarations. The exception surface

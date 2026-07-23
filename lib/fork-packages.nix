@@ -116,7 +116,7 @@
   forkPackages = [
     {
       # Codex uses importCargoLock, but git dependencies still carry fixed
-      # output hashes in packages/agent/codex/default.nix. A free-floating base
+      # output hashes in packages/codex/default.nix. A free-floating base
       # can move Cargo.lock past those hashes, including for downstream flakes
       # that lock codex-src transitively; that broke every ix prod deploy for
       # 13h on 2026-07-07. The input is pinned by rev in flake.nix. Bump it by
@@ -841,7 +841,7 @@
     {
       # nix-fast-build is the CI build engine (the `check` app): the package
       # overlays this patched source onto nixpkgs' nix-fast-build recipe
-      # (packages/nix/nix-fast-build), so the base must equal the nixpkgs
+      # (packages/nix-fast-build), so the base must equal the nixpkgs
       # package version (tag 1.6.0), never free-float under the fork-sync
       # cron. On a nixpkgs nix-fast-build bump, repin the input to the
       # matching tag after jj-rebasing indexable-inc/nix-fast-build.
@@ -870,7 +870,7 @@
     }
     {
       # nix-derivation is the Haskell .drv parser nix-output-monitor links;
-      # packages/nix/nix-output-monitor feeds this patched source into a
+      # packages/nix-output-monitor feeds this patched source into a
       # haskellPackages.extend override. The base is upstream main while its
       # cabal version still reads 1.1.3 (the hackage release nixpkgs builds,
       # plus the bound-relaxation cabal revisions hackage layers on top), so
@@ -921,7 +921,7 @@
       patches = {
         "tokenizer: accept underscore digit separators in numeric literals" = {
           upstream = "hold";
-          reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
+          reason = "Lexes a dialect only index's patched nix accepts (packages/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
         };
       };
     }
@@ -943,7 +943,7 @@
       patches = {
         "tokenizer: accept underscore digit separators in numeric literals" = {
           upstream = "hold";
-          reason = "Lexes a dialect only index's patched nix accepts (packages/nix/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
+          reason = "Lexes a dialect only index's patched nix accepts (packages/nix/patches/0014); upstream rnix should not take it before the Nix language change lands upstream.";
         };
       };
     }

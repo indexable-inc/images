@@ -14,7 +14,7 @@ nix run .#chrome-vm [out.png]        # default out: ./chrome-vm-shot.png
 ## What it is
 
 - Nix-only package: a macOS nushell app built by
-  `writeNushellApplication` (`packages/vm/chrome-vm/default.nix:25-90`). Not a Rust
+  `writeNushellApplication` (`packages/chrome-vm/default.nix:25-90`). Not a Rust
   workspace member.
 - Flake output `chrome-vm`, `aarch64-darwin` only (`package.nix:5-6`): the host
   must be Apple Silicon because vmkit's Linux-guest path there is libkrun-efi.

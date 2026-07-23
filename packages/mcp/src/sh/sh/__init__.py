@@ -215,7 +215,7 @@ def _structured_hint(cmd: str | list[str]) -> str | None:
 # (model view + streamed job stdout), the ShellError message, and the dashboard
 # prompt. A command built from secret values (`curl -H "Authorization: Bearer
 # ..."`) must not leak them into model-visible or stored logs when it fails.
-# Mirrors the ingestion-side table in packages/search/source/meta/src/sanitize.rs:
+# Mirrors the ingestion-side table in packages/source/meta/src/sanitize.rs:
 # conservative, prefixed, high-precision patterns, each match replaced by
 # `[redacted:<kind>]` (ordered so a recognizable token wins the precise label
 # before the generic header/kwarg catch-alls). The raw command stays available

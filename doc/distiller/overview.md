@@ -29,7 +29,7 @@ The CLI (`src/distiller/cli.py`) drives five stages:
    `:21-26`), tool errors (`is_error` tool_results), success markers
    (`_SUCCESS_RE` including "Pushed to main", `:30-34`), the final assistant
    message, models used, and a noisy heuristic `outcome` label. Unparseable
-   lines are skipped, mirroring the Rust adapter `packages/search/source/claude`.
+   lines are skipped, mirroring the Rust adapter `packages/source/claude`.
 2. **Group and filter** (`cli.run`, `cli.py:65-87`). Group sessions by project
    (`cwd`), drop the distiller's own headless sessions via the `PROMPT_SENTINEL`
    guard (`distill.py:25`), apply `--project` substring filters, and skip
@@ -61,7 +61,7 @@ re-distilled only when its `fingerprint` (message count + last timestamp) change
 
 ## The corpus contract (`corpus.py`)
 
-Both slices use the exact 9-column schema mirroring `packages/search/sink/parquet`
+Both slices use the exact 9-column schema mirroring `packages/sink/parquet`
 (`corpus.py:38-50`): `external_id, source, content_hash, title, url, host,
 timestamp(int64), body, meta_json`, all Utf8 but `timestamp`, with
 `external_id/source/content_hash/body/meta_json` non-null. Load-bearing details:

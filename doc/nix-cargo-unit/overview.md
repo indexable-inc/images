@@ -97,7 +97,7 @@ in [internals](internals.md).
 - **Standalone workspace** (`Cargo.toml:32`): its own `[workspace]` and
   `Cargo.lock`, excluded from the root workspace (root `Cargo.toml` `exclude`),
   so a root-lock bump elsewhere never recompiles it and its Nix build keys only
-  on `packages/nix/nix-cargo-unit/`.
+  on `packages/nix-cargo-unit/`.
 - **Flake output** (`package.nix`): `flake = true`, `packageSet = true`,
   `passthruTests = true`. Run as `nix run .#nix-cargo-unit`. NOT
   `inRustWorkspace` (it is its own workspace).

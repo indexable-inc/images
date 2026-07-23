@@ -1,6 +1,6 @@
 # nix-web-monitor
 
-`packages/nix/nix-web-monitor` runs a Nix command with quiet terminal output and a
+`packages/nix-web-monitor` runs a Nix command with quiet terminal output and a
 live browser monitor: a build tree, log tail, activity DAG, store-optimisation
 totals, and a `nix-daemon` syscall panel, all on one HTTP port. It is two Rust
 workspace crates:
@@ -49,7 +49,7 @@ nix-web-monitor serve [--host H] [--port N]
 
 - `--emit ndjson` (`server/src/emit.rs`): run headless. Instead of serving the
   web UI, spawn the nix command, feed the parser, and stream a compact
-  [`BuildView`](../../packages/nix/nix-web-monitor/parser/src/build_view.rs) as
+  [`BuildView`](../../packages/nix-web-monitor/parser/src/build_view.rs) as
   one JSON object per line on stdout (throttled to ~2 Hz, plus a final
   authoritative snapshot after nix exits). This is the machine-readable
   counterpart to the browser feed, consumed by the kernel `nix` module's live

@@ -38,7 +38,7 @@ hashes. Set `updateScript = true` in the package's `package.nix` so it joins the
 repo-wide updater: `nix run .#update` runs every flagged package's updater (plus
 the Minecraft catalogs) in parallel via dag-runner, and the `update.yml` workflow
 runs it hourly and opens one PR. Do not add a per-package update workflow. See
-[`packages/agent/claude-code`](packages/agent/claude-code) and [`packages/yc`](packages/yc)
+[`packages/claude-code`](packages/claude-code) and [`packages/yc`](packages/yc)
 for the worked shape: `nix run .#claude-code.updateScript -- <version>`.
 
 Ecosystem lockfiles get their own hourly updater rather than joining

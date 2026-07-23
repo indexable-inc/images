@@ -18,7 +18,7 @@ let
   };
 
   # The same toolchain pairing the repo's other Elixir gates build against
-  # (packages/andrewgazelka/hive).
+  # (packages/hive).
   elixir = ix.languages.elixir.toolchain pkgs {version = "1.19";};
   erlang = ix.languages.erlang.toolchain pkgs {version = "28";};
 

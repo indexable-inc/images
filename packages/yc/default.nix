@@ -12,7 +12,7 @@
 }: let
   # Slug map and pinned hashes live in manifest.json as the single owner; this
   # file only reads them back. Refresh with `nix run .#yc.updateScript` (see the
-  # updateScript below). Mirrors the packages/agent/claude-code layout.
+  # updateScript below). Mirrors the packages/claude-code layout.
   manifest = lib.importJSON ./manifest.json;
   inherit (manifest) version;
 
@@ -101,7 +101,7 @@ in
       homepage = "https://bookface.ycombinator.com";
       # License omitted rather than `licenses.unfree` so the per-system flake
       # package set (which evaluates nixpkgs without `allowUnfree`) can still
-      # `nix run .#yc`. Same posture as packages/agent/claude-code. Distribution terms
+      # `nix run .#yc`. Same posture as packages/claude-code. Distribution terms
       # are Y Combinator's; this flake only repackages the published binaries.
       mainProgram = "yc";
       platforms = builtins.attrNames manifest.platforms;

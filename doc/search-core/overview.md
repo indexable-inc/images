@@ -3,7 +3,7 @@
 `packages/search-core` is the content-addressed semantic code search core:
 content hashing, the local manifest, dedup-aware sync, the backend `Store`
 trait, and the query/projection/filter logic. It is a library (crate
-`search_core`, `packages/search/search-core/Cargo.toml:12`); the [`search`](../search/overview.md)
+`search_core`, `packages/search-core/Cargo.toml:12`); the [`search`](../search/overview.md)
 CLI, the [`search-py`](../search-py/overview.md) binding, and the
 [`indexer`](../indexer/overview.md) all depend on it. No flake output; it is a
 workspace unit.

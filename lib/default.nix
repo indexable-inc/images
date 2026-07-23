@@ -235,7 +235,7 @@
   # for syntax color across the repo: the code-highlight crate embeds this JSON
   # for the search `-c` output, and the base profile generates its
   # Neovim colorscheme from the same data through this value.
-  islandsTheme = lib.importJSON (paths.packagesRoot + "/code/code-highlight/src/islands-theme.json");
+  islandsTheme = lib.importJSON (paths.packagesRoot + "/code-highlight/src/islands-theme.json");
   # Repo-default JVM major: imported once here (single source of truth) and
   # threaded into `languages.java`, which re-exports it as
   # `ix.languages.java.defaultJvmVersion` for modules/examples that pin the JDK.
@@ -819,7 +819,7 @@
 
   /**
   Import a `.ix` (JavaScript-syntax Nix) module for a given host system.
-  Delegates to `packages/nix/ix2nix/import-ix-native.nix`: the conversion
+  Delegates to `packages/ix2nix/import-ix-native.nix`: the conversion
   runs the compiled `ix2nix` binary in a small derivation (IFD), so it works
   on stock nix — CI and repo-local evals do not carry `builtins.wasm`.
   Example flakes use the in-eval `import-ix.nix` wasm shim instead.
@@ -830,7 +830,7 @@
     import ./import-ix-native.nix {
       pkgs = hostPkgs;
       inherit (packageSetFor hostPkgs) ix2nix;
-      ixTy = import (paths.root + "/packages/nix/ix2nix/ix-ty.nix") {mode = "assert";};
+      ixTy = import (paths.root + "/packages/ix2nix/ix-ty.nix") {mode = "assert";};
     };
 
   importIx = importIxFor system;

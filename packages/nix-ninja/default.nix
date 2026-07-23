@@ -14,7 +14,7 @@
 # (the ninja replacement meson invokes via $NINJA) and `nix-ninja-task`
 # (the in-sandbox builder every generated derivation execs, so it must
 # resolve to a /nix/store path -- being in this output's bin/ satisfies
-# that). Consumed by packages/nix/nix-ninja-build, the incremental build
+# that). Consumed by packages/nix-ninja-build, the incremental build
 # lane for the patched nix fork (#3655).
 let
   src = ix.nixNinjaSrc;

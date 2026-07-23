@@ -13,7 +13,7 @@
 //!
 //! This is a deliberately small sampler rather than a second copy of tango.
 //! Tango stays the right tool for paired A/B comparison of two builds of the
-//! same function in one process (see `packages/search/file-search/benches`); this
+//! same function in one process (see `packages/file-search/benches`); this
 //! harness exists to fold a Rust closure's time and allocation behavior into the
 //! same [`Run`](crate::schema::Run) schema as the macro harness and custom
 //! metrics, so all three flow through one history store and one comparator.

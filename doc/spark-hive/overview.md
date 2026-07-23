@@ -15,12 +15,12 @@ planning with no config gate, so on the lean build Gluten fails to initialize
 for any query. This distribution bundles hadoop and the full Hive jar set
 (`hive-exec`, `hive-common`, `hive-metastore`, `hive-serde`, `spark-hive`, ...),
 so Gluten and other Hive-dependent features work with no external classpath
-(`packages/spark/spark-hive/default.nix:1-12`).
+(`packages/spark-hive/default.nix:1-12`).
 
 ## What this repo changes
 
 `default.nix` installs the distribution and wraps every launcher
-(`packages/spark/spark-hive/default.nix`):
+(`packages/spark-hive/default.nix`):
 
 - Source: `fetchurl` of `spark-${version}-bin-hadoop3.tgz` from
   `archive.apache.org`, pinned by `version = "3.5.5"` and an inline SRI `hash`
@@ -59,7 +59,7 @@ so Gluten and other Hive-dependent features work with no external classpath
   fetching the ~400 MiB distribution on platforms nothing builds it for), while
   `overlay = true` stays unconditional and lazy, mirroring
   [spark-gluten](../spark-gluten/overview.md) and `drgn`
-  (`packages/spark/spark-hive/package.nix:3-10`).
+  (`packages/spark-hive/package.nix:3-10`).
 - Platform constraint: x86_64-linux only (the spark service module that consumes
   it is x86_64-linux only because the Gluten Velox bundle has no other native
   build).

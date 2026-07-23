@@ -5,7 +5,7 @@ title: "House prompt gains a calibrated-wording rule: no absolutes without a mea
 tags: [agent, prompt]
 links:
   - label: rules.nix
-    href: https://github.com/indexable-inc/index/blob/main/packages/agent/prompt/rules.nix
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent-prompt/rules.nix
   - label: "#3684"
     href: https://github.com/indexable-inc/index/issues/3684
 ---

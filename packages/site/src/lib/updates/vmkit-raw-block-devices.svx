@@ -5,7 +5,7 @@ title: "vmkit attaches raw host block devices as VM disks, bypassing APFS"
 tags: [interesting, vm, vmkit, macos]
 links:
   - label: vmkit README
-    href: https://github.com/indexable-inc/index/blob/main/packages/vm/vmkit/README.md
+    href: https://github.com/indexable-inc/index/blob/main/packages/vmkit/README.md
   - label: issue #3554
     href: https://github.com/indexable-inc/index/issues/3554
 ---

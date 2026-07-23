@@ -7,7 +7,7 @@ links:
   - label: issue
     href: https://github.com/indexable-inc/index/issues/4093
   - label: render.rs
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix-cargo-unit/src/render.rs
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix-cargo-unit/src/render.rs
 ---
 
 `nix-cargo-unit` dedupes units by a full-identity hash that walks every dependency, but named the resulting derivations with a second hash that skipped build-script-run dependencies. Two merged units that differed only in which build-script-run variant they depended on rendered under the same attr key, and the generated `cargo-units.nix` failed to import with `attribute already defined`.

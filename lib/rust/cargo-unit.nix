@@ -977,7 +977,7 @@
   from source.
 
   The result is byte-contract-identical to a library unit the renderer would
-  emit (`packages/nix/nix-cargo-unit/src/render.rs:1375-1402`): `$out` carries
+  emit (`packages/nix-cargo-unit/src/render.rs:1375-1402`): `$out` carries
   `$out/lib/lib<name>-<hash>.rlib`, the matching `.rmeta`, and
   `$out/nix-support/extern-path` holding the absolute path to the `.rlib`.
   A downstream unit therefore consumes it exactly like a from-source unit:

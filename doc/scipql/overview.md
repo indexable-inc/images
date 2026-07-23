@@ -6,7 +6,7 @@ scipql queries a *resolved* index: every occurrence carries its SCIP moniker, so
 `net::Socket` and `mock::Socket` are distinct symbols and a rename touches only
 the real definition and its references, never a same-named symbol elsewhere or a
 field of the same name. The full design and grammar are in
-[`packages/code/scipql/README.md`](../../packages/code/scipql/README.md).
+[`packages/scipql/README.md`](../../packages/scipql/README.md).
 
 ## Member crates
 
@@ -18,7 +18,7 @@ field of the same name. The full design and grammar are in
 
 All three are Rust workspace members; only `cli` is a flake/packageSet output.
 `core` reuses [`edit-applier`](../edit-applier/overview.md) for the rewrite step
-(`packages/code/scipql/core/Cargo.toml`) and depends on the `scip` and `protobuf`
+(`packages/scipql/core/Cargo.toml`) and depends on the `scip` and `protobuf`
 crates to read a SCIP index.
 
 ## Pipeline (`core/src/lib.rs:1-14`)

@@ -2,13 +2,13 @@
 
 Linux guests boot on [libkrun](https://github.com/containers/libkrun), not
 Virtualization.framework, with a different libkrun per host
-(`packages/vm/vmkit/src/linuxkrun.rs:1-21`). The macOS split is deliberate: VZ
+(`packages/vmkit/src/linuxkrun.rs:1-21`). The macOS split is deliberate: VZ
 gives a Linux guest no GPU, while libkrun-efi ships a virtio-gpu Venus device
 backed by MoltenVK, so a Linux guest gets real Vulkan on Apple Silicon. The two
 boot models share the ctx/config/gpu/console/watchdog/`krun_start_enter`
 skeleton in `linuxkrun.rs`; only the payload step is `cfg`-split. See the
 [overview](overview.md) for the CLI flags and the source of truth at
-`packages/vm/vmkit/docs/linux-libkrun.md`.
+`packages/vmkit/docs/linux-libkrun.md`.
 
 ## The two boot models
 

@@ -27,8 +27,8 @@
     "packages/loop/Cargo.toml",
     "packages/minecraft/nbt/Cargo.toml",
     "packages/minecraft/sync-managed/Cargo.toml",
-    "packages/nix/nix-cargo-unit/Cargo.toml",
-    "packages/nix/oci-image-builder/Cargo.toml",
+    "packages/nix-cargo-unit/Cargo.toml",
+    "packages/oci-image-builder/Cargo.toml",
     "tests/fixtures/cargo-unit-hello/Cargo.toml"
   ],
   "rust-analyzer.check.command": "clippy",

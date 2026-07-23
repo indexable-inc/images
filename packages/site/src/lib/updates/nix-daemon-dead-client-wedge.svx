@@ -7,9 +7,9 @@ links:
   - label: issue 3752
     href: https://github.com/indexable-inc/index/issues/3752
   - label: patch 0033
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix/patches/0033-libstore-wake-the-goal-loop-when-the-process-is-inte.patch
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0033-libstore-wake-the-goal-loop-when-the-process-is-inte.patch
   - label: patch 0034
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix/patches/0034-libstore-prove-build-status-writers-alive-with-a-lif.patch
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0034-libstore-prove-build-status-writers-alive-with-a-lif.patch
 ---
 
 On hydra this morning, `nix store builds` reported 33 builds "in

@@ -1,6 +1,6 @@
 {
   indexPackages,
-  # Path to the house prompt module (packages/agent/prompt), injected by the
+  # Path to the house prompt module (packages/agent-prompt), injected by the
   # importing flake so this module never climbs the tree with `../`.
   promptModule,
 }: {
@@ -108,7 +108,7 @@ in {
         agents.max_depth = 3;
         # Enabling multi_agent_v2 above trips Codex's unstable-features
         # startup warning; suppress it alongside the opt-in (mirrors the
-        # wrapper default in packages/agent/codex/default.nix).
+        # wrapper default in packages/codex/default.nix).
         suppress_unstable_features_warning = true;
       };
       description = ''
@@ -202,7 +202,7 @@ in {
         default = true;
         description = ''
           Write the house context render (the tagged prompt rules minus the
-          `system`-only basics, see packages/agent/prompt) to
+          `system`-only basics, see packages/agent-prompt) to
           {file}`$CODEX_HOME/AGENTS.md` through the native
           {option}`programs.codex.context` option. An explicit `context`
           value overrides this default entirely.

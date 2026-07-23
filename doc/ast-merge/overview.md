@@ -6,7 +6,7 @@ revisions with a GumTree-style tree differ, runs a 3DM structural merge, and
 falls back to a clean line-based merge whenever parsing fails or a structural
 conflict is found. It is one Cargo workspace package split into six member
 crates (root `Cargo.toml:9-14`); the `cli` crate is the flake output
-`ast-merge` (`packages/code/ast-merge/cli/default.nix`, `nix run .#ast-merge`). The
+`ast-merge` (`packages/ast-merge/cli/default.nix`, `nix run .#ast-merge`). The
 `ast` and `langs` crates are also the shared tree-sitter substrate for
 [astlog](../astlog/overview.md) and [clone-detect](../clone-detect/overview.md).
 

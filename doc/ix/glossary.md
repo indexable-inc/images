@@ -12,27 +12,27 @@ doubt, match the meaning to the entry point you are about to invoke (`nix run
 
 | Meaning | What it is | Source |
 | --- | --- | --- |
-| `.#search` | Read-only semantic + regex CLI over the shared corpus store. Never indexes locally. Needs `MXBAI_API_KEY` (or a stored token) or it fails at auth. | `packages/search/search/Cargo.toml:2`, `packages/search/search/src/main.rs:3` |
-| `search-core` | Rust library the CLI is a thin wrapper over. | `packages/search/search-core/Cargo.toml:2` |
-| `search-py` | PyO3 bindings. Imported in Python as `import search`; the wheel is named `ix-search`. | `packages/search/search-py/python/search/__init__.py`, `packages/search/search-py/pyproject.toml:9` |
-| `file-search` | Independent BM25 / Tantivy file-and-path indexer. Unrelated to the semantic store. `.#file-search`. | `packages/search/file-search/Cargo.toml:2,6` |
-| `polars-mixedbread` | Polars IO plugin; `import polars_mixedbread`. | `packages/search/polars-mixedbread/pyproject.toml:6` |
-| `mixedbread` | Rust client lib for the Mixedbread vector store. | `packages/search/mixedbread/Cargo.toml:2` |
-| `search-eval` | Search-quality evaluation harness. `.#search-eval`. | `packages/search/search-eval/pyproject.toml:2` |
-| `indexer` | The thing that actually ingests content into the store; `search` only queries what `indexer` populates. | `packages/search/indexer/Cargo.toml:2,6` |
+| `.#search` | Read-only semantic + regex CLI over the shared corpus store. Never indexes locally. Needs `MXBAI_API_KEY` (or a stored token) or it fails at auth. | `packages/search/Cargo.toml:2`, `packages/search/src/main.rs:3` |
+| `search-core` | Rust library the CLI is a thin wrapper over. | `packages/search-core/Cargo.toml:2` |
+| `search-py` | PyO3 bindings. Imported in Python as `import search`; the wheel is named `ix-search`. | `packages/search-py/python/search/__init__.py`, `packages/search-py/pyproject.toml:9` |
+| `file-search` | Independent BM25 / Tantivy file-and-path indexer. Unrelated to the semantic store. `.#file-search`. | `packages/file-search/Cargo.toml:2,6` |
+| `polars-mixedbread` | Polars IO plugin; `import polars_mixedbread`. | `packages/polars-mixedbread/pyproject.toml:6` |
+| `mixedbread` | Rust client lib for the Mixedbread vector store. | `packages/mixedbread/Cargo.toml:2` |
+| `search-eval` | Search-quality evaluation harness. `.#search-eval`. | `packages/search-eval/pyproject.toml:2` |
+| `indexer` | The thing that actually ingests content into the store; `search` only queries what `indexer` populates. | `packages/indexer/Cargo.toml:2,6` |
 
 The default Mixedbread store is itself named `index`
-(`packages/search/search/src/main.rs:1569`).
+(`packages/search/src/main.rs:1569`).
 
 ## index
 
 - The **repo**: `indexable-inc/index`.
 - The **default store name** that `search` queries and `indexer` fills
-  (`packages/search/search/src/main.rs:1569`).
+  (`packages/search/src/main.rs:1569`).
 - The **verb** "to index" (ingest content) - owned by `indexer`, not by
-  `search` (`packages/search/search/src/main.rs:3`).
+  `search` (`packages/search/src/main.rs:3`).
 - The **package** `indexer` that performs that verb
-  (`packages/search/indexer/Cargo.toml:2`).
+  (`packages/indexer/Cargo.toml:2`).
 
 ## run
 

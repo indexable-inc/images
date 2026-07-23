@@ -1,6 +1,6 @@
 name: Bootstrap patched Nix client
 description: >-
-  Put the fleet's patched Nix client (nix-ix, packages/nix/nix) first on
+  Put the fleet's patched Nix client (nix-ix, packages/nix) first on
   PATH for every later step. Repo .nix files use underscore digit separators
   in numeric literals, which a stock client cannot parse, so every nix
   invocation that evaluates this tree must go through the patched client

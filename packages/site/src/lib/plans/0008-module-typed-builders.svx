@@ -147,7 +147,7 @@ The contract is defended by eval-time regression tests, not by assertion in pros
 
 ### Composition with the cross lane
 
-The cross-compilation lane in `lib/per-system.nix` wraps the builder to force `isCross = true`: `wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // { isCross = true; });`. This keeps working unchanged: the override calls the functor with an extra declared argument, which the module merges like any other. A package definition such as `packages/nix/nix-web-monitor/server/default.nix` stays target-agnostic and never mentions `isCross`.
+The cross-compilation lane in `lib/per-system.nix` wraps the builder to force `isCross = true`: `wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // { isCross = true; });`. This keeps working unchanged: the override calls the functor with an extra declared argument, which the module merges like any other. A package definition such as `packages/nix-web-monitor/server/default.nix` stays target-agnostic and never mentions `isCross`.
 
 ### Migration
 

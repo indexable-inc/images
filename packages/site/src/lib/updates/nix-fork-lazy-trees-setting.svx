@@ -5,7 +5,7 @@ title: "nix fork: lazy trees vendored as an off-by-default `lazy-trees` setting"
 tags: [nix, fork, performance, flakes]
 links:
   - label: patches 0025-0029
-    href: https://github.com/indexable-inc/index/tree/main/packages/nix/nix/patches
+    href: https://github.com/indexable-inc/index/tree/main/packages/nix/patches
   - label: NixOS/nix#15711
     href: https://github.com/NixOS/nix/pull/15711
   - label: NixOS/nix#13225

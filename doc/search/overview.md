@@ -3,7 +3,7 @@
 `packages/search` is the read-only semantic and regex search CLI over the shared
 corpus store: one Mixedbread store holding code plus agent/shell history across
 the fleet. It is a thin wrapper over [`search-core`](../search-core/overview.md)
-(`packages/search/search/Cargo.toml:6`), binary `search`
+(`packages/search/Cargo.toml:6`), binary `search`
 (`nix run .#search`, `default.nix`).
 
 `search` never indexes (`src/main.rs:1-8`). The separate

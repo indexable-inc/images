@@ -3,7 +3,7 @@
 # binary, then `import` the output (import-from-derivation). The repo's own
 # example discovery and tests load through this shim because CI evaluates the
 # flake with stock Determinate Nix; scaffolded user projects keep loading
-# through the in-eval wasm shim, `packages/nix/ix2nix/import-ix.nix`, instead
+# through the in-eval wasm shim, `packages/ix2nix/import-ix.nix`, instead
 # (`ix apply`/`ix eval` run index's patched nix, no IFD).
 #
 # Lives under lib/, not next to that wasm twin, because the crate's source
@@ -20,7 +20,7 @@
   pkgs,
   # The compiled converter CLI (`packages.<system>.ix2nix`).
   ix2nix,
-  # The imported type runtime (`packages/nix/ix2nix/ix-ty.nix`, applied to a
+  # The imported type runtime (`packages/ix2nix/ix-ty.nix`, applied to a
   # mode); threaded in because up-paths out of lib/ are banned.
   ixTy,
 }: let

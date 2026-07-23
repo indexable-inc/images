@@ -1,6 +1,6 @@
 # pi-beam (bounded beam search)
 
-`packages/agent/pi-harnesses/beam` (flake output `pi-beam`) is an executor that turns a
+`packages/pi-harnesses/beam` (flake output `pi-beam`) is an executor that turns a
 hard decision into a bounded beam search instead of a linear commitment. At a
 decision point the executor explores 2-4 candidate approaches in parallel on
 isolated git worktrees under turn + time budgets, ranks them on ground truth, and

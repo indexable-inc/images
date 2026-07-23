@@ -54,7 +54,7 @@ The module system knows all of this at eval time. It records a file per definiti
 
 - `lib/provenance.nix`: a pure-eval walker over file-materializing options (`home.file`, `xdg.configFile`, `launchd.agents`/`daemons`, `environment.etc`). Per deployed path it emits `file`, `line`, `rev`, `drv`, `source`, the full definition chain, and linked `programs.<x>.settings` sites. Positions from `unsafeGetAttrPos` are trusted only when they land in the module file that made the definition; computed attrs degrade to the defining module file with no line.
 - `modules/home/provenance.nix` and `modules/darwin/provenance.nix` (#2415): render the walker output into the activation package, so the live profile carries `provenance.json` for its own generation and old generations keep theirs.
-- `packages/nix/whence` (#2416): reads the live generation's manifest and answers `whence <path>` with zero eval.
+- `packages/whence` (#2416): reads the live generation's manifest and answers `whence <path>` with zero eval.
 
 Verified live on hydra today: generation 595 of the home-manager profile carries `provenance.json`; each entry maps a deployed file to its defining module and rev.
 

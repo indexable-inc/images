@@ -157,7 +157,7 @@
     .${
       pkgs.stdenv.hostPlatform.system
     }
-      or (throw "unibind: python wheels are Linux-only, got ${pkgs.stdenv.hostPlatform.system}; macOS needs install-name fixups and macosx tags nobody consumes yet (same policy as packages/search/search-py)");
+      or (throw "unibind: python wheels are Linux-only, got ${pkgs.stdenv.hostPlatform.system}; macOS needs install-name fixups and macosx tags nobody consumes yet (same policy as packages/search-py)");
 
   # Lazy: only forced when a caller demands the wheel, so the module/site
   # outputs stay usable on darwin.

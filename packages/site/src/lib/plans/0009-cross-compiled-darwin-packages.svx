@@ -109,7 +109,7 @@ buildCrossPackage = target: entry:
     entry.path { };
 ```
 
-This is the whole trick. `packages/nix/nix-web-monitor/server/default.nix` calls `ix.rustWorkspace.units` and `ix.wrapPackage` identically for native and cross builds; the lane has quietly replaced `units` with the target unit graph and forced `wrapPackage` into cross mode (so `nativePathSuffix` host tools drop out of the wrapper). One definition, N targets.
+This is the whole trick. `packages/nix-web-monitor/server/default.nix` calls `ix.rustWorkspace.units` and `ix.wrapPackage` identically for native and cross builds; the lane has quietly replaced `units` with the target unit graph and forced `wrapPackage` into cross mode (so `nativePathSuffix` host tools drop out of the wrapper). One definition, N targets.
 
 ### The builder DAG
 
@@ -182,7 +182,7 @@ cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" { nativeBuildInputs = 
 
 ### What does not need this lane: Haskell
 
-GHC Linux→Darwin cross would be a category problem, but it turns out nothing here needs it. `nix-output-monitor`, the one Haskell tool in the tree, is a nixpkgs expression (`pkgs/by-name/ni/nix-output-monitor`) with a single leaf patch on `haskellPackages.nix-derivation` (`packages/nix/nix-output-monitor/default.nix`). Unlike the Rust workspace, that path has no Linux-only IFD: on a Mac it evaluates natively, GHC and the unpatched dependency closure substitute from `cache.nixos.org`, and only the patched leaf and `nom` itself compile locally. Haskell tools ride nixpkgs' native Darwin path and never enter the cross lane; the lane's scope is repo-owned Rust (plus its C/C++ and Svelte inputs), which is exactly what the unit DAG covers.
+GHC Linux→Darwin cross would be a category problem, but it turns out nothing here needs it. `nix-output-monitor`, the one Haskell tool in the tree, is a nixpkgs expression (`pkgs/by-name/ni/nix-output-monitor`) with a single leaf patch on `haskellPackages.nix-derivation` (`packages/nix-output-monitor/default.nix`). Unlike the Rust workspace, that path has no Linux-only IFD: on a Mac it evaluates natively, GHC and the unpatched dependency closure substitute from `cache.nixos.org`, and only the patched leaf and `nom` itself compile locally. Haskell tools ride nixpkgs' native Darwin path and never enter the cross lane; the lane's scope is repo-owned Rust (plus its C/C++ and Svelte inputs), which is exactly what the unit DAG covers.
 
 ### Migration
 

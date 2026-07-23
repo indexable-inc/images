@@ -45,13 +45,13 @@ User-facing guides for the hosted `ix` platform. Start at
 | [btop](btop/overview.md) | `packages/btop` repackages btop, the resource monitor (CPU, memory, disk, network, process TUI), rebuilt from a repo-owned fork instead of the upstream source. |
 | [chrome-vm](chrome-vm/overview.md) | `packages/chrome-vm` runs headless Chromium inside a real Linux VM on a macOS host and gives the screenshot back, in one command. |
 | [chrome-vm-image](chrome-vm-image/overview.md) | `packages/chrome-vm-image` is the raw EFI-bootable aarch64 NixOS disk image that the chrome-vm demo boots under vmkit/libkrun. |
-| [claude-code](claude-code/overview.md) | `packages/agent/claude-code` repackages Claude Code, Anthropic's agentic coding CLI, as a prebuilt-binary install with a thick layer of baked-in fleet defaults. |
-| [claude-hooks](claude-hooks/overview.md) | `packages/claude-hooks` is one compiled binary with three Claude Code hook subcommands, replacing the old hand-rolled `writeShellScript` hooks in `packages/agent/claude-code`. |
+| [claude-code](claude-code/overview.md) | `packages/claude-code` repackages Claude Code, Anthropic's agentic coding CLI, as a prebuilt-binary install with a thick layer of baked-in fleet defaults. |
+| [claude-hooks](claude-hooks/overview.md) | `packages/claude-hooks` is one compiled binary with three Claude Code hook subcommands, replacing the old hand-rolled `writeShellScript` hooks in `packages/claude-code`. |
 | [claude-stories](claude-stories/overview.md) | `packages/claude-stories` puts an Instagram-style row of "stories" in the Claude Code status line: each teammate's avatar (initials in a gradient ring) and what they are working on right... |
 | [clone-detect](clone-detect/overview.md) | `packages/clone-detect` finds duplicated code across a tree. |
 | [code-highlight](code-highlight/overview.md) | `packages/code-highlight` is a tree-sitter syntax highlighter that renders a source string (or a line range) as ANSI-colored terminal text. |
 | [code-tokenizer](code-tokenizer/overview.md) | `packages/code-tokenizer` is a tantivy tokenizer that splits identifiers the way a code reviewer reads them: on `camelCase`, `snake_case`, `kebab-case`, and any non-alphanumeric run. |
-| [codex](codex/overview.md) | `packages/agent/codex` repackages the OpenAI Codex CLI (the nixpkgs `codex` package) with baked-in `-c` config defaults. |
+| [codex](codex/overview.md) | `packages/codex` repackages the OpenAI Codex CLI (the nixpkgs `codex` package) with baked-in `-c` config defaults. |
 | [config-launch](config-launch/overview.md) | `packages/config-launch` is a spec-driven exec launcher: it reads a JSON spec, sets environment variables and `PATH`, injects CLI flags (static, argv-conditional, and config-file-gated `-... |
 | [cuda-hello](cuda-hello/overview.md) | `packages/cuda-hello` is a minimal CUDA kernel written in pure, idiomatic Rust and compiled to PTX with cuda-oxide, NVIDIA's experimental Rust-to-CUDA codegen backend. |
 | [dag-runner](dag-runner/overview.md) | `packages/dag-runner` is a tiny task runner: it takes a JSON DAG of shell commands, runs each node as soon as its dependencies finish (so graph shape, not fixed "levels", determines paral... |
@@ -87,7 +87,7 @@ User-facing guides for the hosted `ix` platform. Start at
 | [mynoise](mynoise/overview.md) | `packages/mynoise` plays myNoise.net generators from the CLI by streaming and mixing their band loops locally. |
 | [nix-cargo-unit](nix-cargo-unit/overview.md) | `packages/nix-cargo-unit` renders a Cargo unit graph into composable Nix derivations: one `stdenv.mkDerivation` per rustc invocation, wired into a graph that mirrors Cargo's own. |
 | [nix-output-monitor](nix-output-monitor/overview.md) | `packages/nix-output-monitor` is the upstream `nix-output-monitor` (`nom`), re-packaged with one patch so it parses content-addressed derivations. |
-| [nix-web-monitor](nix-web-monitor/overview.md) | `packages/nix/nix-web-monitor` runs a Nix command with quiet terminal output and a live browser monitor: a build tree, log tail, activity DAG, store-optimisation totals, and a `nix-daemon` sy... |
+| [nix-web-monitor](nix-web-monitor/overview.md) | `packages/nix-web-monitor` runs a Nix command with quiet terminal output and a live browser monitor: a build tree, log tail, activity DAG, store-optimisation totals, and a `nix-daemon` sy... |
 | [oci-image-builder](oci-image-builder/overview.md) | `packages/oci-image-builder` turns a `dockerTools.streamLayeredImage` layer plan into an OCI image. |
 | [pi-harnesses](pi-harnesses/overview.md) | `packages/pi-harnesses` is a collection of Pi-based agent harnesses. |
 | [polars-mixedbread](polars-mixedbread/overview.md) | `packages/polars-mixedbread` is a Polars IO source backed by Mixedbread store search. |

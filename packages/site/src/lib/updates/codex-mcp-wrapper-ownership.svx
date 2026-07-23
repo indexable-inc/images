@@ -7,7 +7,7 @@ links:
   - label: issue 4069
     href: https://github.com/indexable-inc/index/issues/4069
   - label: Codex wrapper
-    href: https://github.com/indexable-inc/index/blob/main/packages/agent/codex/default.nix
+    href: https://github.com/indexable-inc/index/blob/main/packages/codex/default.nix
 ---
 
 Fixes #4069. Codex could keep launching the old Python `ix-mcp` after the

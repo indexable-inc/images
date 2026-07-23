@@ -47,7 +47,7 @@
     # lives outside the filtered site source; hand the build that one file so
     # vite's `$islands-theme` alias resolves (see the site's vite.config.js).
     preBuild = "export IX_ISLANDS_THEME=${
-      root + "/packages/code/code-highlight/src/islands-theme.json"
+      root + "/packages/code-highlight/src/islands-theme.json"
     }";
   };
   dashboardSiteHtml = "${dashboardSite}/share/dashboard-site/index.html";

@@ -29,7 +29,7 @@
     evalTimeSubstitutable = import (repoRoot + "/lib/util/eval-time-substitutable.nix");
   };
 
-  sourceRoot = repoRoot + "/packages/nix/nix-cargo-unit";
+  sourceRoot = repoRoot + "/packages/nix-cargo-unit";
   manifest = lib.importTOML (sourceRoot + "/Cargo.toml");
   checkedCargoUnit = rust.buildPackage {
     pname = manifest.package.name;

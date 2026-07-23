@@ -1,6 +1,6 @@
 # codex
 
-`packages/agent/codex` repackages the OpenAI Codex CLI (the nixpkgs `codex` package)
+`packages/codex` repackages the OpenAI Codex CLI (the nixpkgs `codex` package)
 with baked-in `-c` config defaults. The binary is unchanged; the wrapper injects
 config on every invocation through the shared `config-launch` launcher
 (`packages/config-launch`), the same mechanism
@@ -11,7 +11,7 @@ nixpkgs/flake-lock bump.
 ## Why an additive flake output, not an overlay
 
 `package.nix` sets `flake = true` but deliberately NOT `overlay`
-(`packages/agent/codex/package.nix:7-13`): `pkgs.codex` must stay the plain nixpkgs
+(`packages/codex/package.nix:7-13`): `pkgs.codex` must stay the plain nixpkgs
 CLI because the room-server wrapper pins `pkgs.codex` as the binary it
 spawns over JSON-RPC. This wrapper is an additive output
 (`nix run .#codex`, `index.packages.<sys>.codex`) that bakes defaults on top of
@@ -19,7 +19,7 @@ the same base without changing what the overlay hands other code.
 
 ## Baked defaults
 
-The wrapper builds a launch spec (`packages/agent/codex/default.nix:74-81`) the
+The wrapper builds a launch spec (`packages/codex/default.nix:74-81`) the
 launcher reads: it targets `lib.getExe codex`, sets `config_dir_env = CODEX_HOME`
 / `config_dir_default = ~/.codex` / `config_file = config.toml`, and carries two
 kinds of `-c key=value` overrides.
@@ -78,7 +78,7 @@ same `-c` flags. Caveats noted inline: the wrapper must win the login shell PATH
   completions) stays pristine (`default.nix:93-105`). `binName` defaults to
   `codex`.
 - Flake output: `nix run .#codex` / `nix build .#codex`. `package.nix` sets
-  `packageSet = true`, `flake = true` (`packages/agent/codex/package.nix`). The
+  `packageSet = true`, `flake = true` (`packages/codex/package.nix`). The
   `packageSet` here is the index package set, not a nixpkgs overlay injection.
 - The overlay eval context provides no `repoPackages`, so a `{ }` build bakes no
   MCP server (the same fallback claude-code uses); the flake package set is
