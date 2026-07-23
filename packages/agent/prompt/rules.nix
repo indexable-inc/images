@@ -91,22 +91,25 @@
       topics = ["workflow"];
       text = ''
         Never edit in a primary checkout: work on a dedicated `git worktree`
-        branch and verify root and branch before committing. Right after
-        `git worktree add`, run `git submodule update --init --recursive`:
-        a new worktree leaves submodules uninitialized even when the build
-        needs them. An isolation worktree belongs to the session's repo,
-        not necessarily your task's: verify its origin, and when the task
-        targets another repo, add your own worktree of the target
-        checkout. Unmerged branches are unfinished for reasons you may
-        not see; check for open PRs touching a file before nontrivial
-        edits.
+        branch at `/tmp/worktree/<org>/<repo>/<name>` (org and repo from
+        the checkout's origin URL) and verify root and branch before
+        committing. Right after `git worktree add`, run
+        `git submodule update --init --recursive`: a new worktree leaves
+        submodules uninitialized even when the build needs them. An
+        isolation worktree belongs to the session's repo, not necessarily
+        your task's: verify its origin, and when the task targets another
+        repo, add your own worktree of the target checkout. Unmerged
+        branches are unfinished for reasons you may not see; check for
+        open PRs touching a file before nontrivial edits.
       '';
       reason = ''
         Primary-checkout edits collided with concurrent work; parallel
         sessions raced duplicate PRs (#1911, #1914, #1943). Absorbs
         coordinateBranches (index#3594). Fixers briefed on ix tasks
         received index worktrees and hand-rolled replacements, one
-        clobbering a sibling's (index#4008).
+        clobbering a sibling's (index#4008). Ad-hoc worktree locations
+        made parallel sessions and cleanup unpredictable; standardized
+        path requested in index#4062.
       '';
     };
   }
