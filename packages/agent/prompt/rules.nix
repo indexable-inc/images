@@ -558,34 +558,44 @@
     };
   }
   {
-    htmlOutput = {
-      topics = ["writing" "comms"];
+    generativeUiOutput = {
+      topics = ["writing" "comms" "tooling"];
       text = ''
-        Respond as HTML, not chat text: write each response to one HTML
-        file per session and keep rewriting that same file so it always
-        shows the current state of the response. On the first write open
-        it with `html-open` (the home config's live-reload viewer: it
-        serves the file and refreshes the tab on every rewrite); fall
-        back to plain `open` only when html-open is missing, and say so.
-        The user reads only the page; chat text is
-        one pointer line at most. Layer the page: the surface is a short
-        causal story in plain words (we thought X, but Y, so Z) with named
-        actors, ordered what broke / damage / fix / lesson for incidents;
-        a reader who knows none of the jargon can follow it. Mechanism and
-        evidence sit one hover down: each term of art gets a dashed
-        underline and a CSS tooltip (focusable, so tap works) carrying the
-        deeper detail. Expand dense notes, never paste them.
+        Respond as generative UI, not chat text: for everything, by
+        default, one mkapp app per session is the response surface.
+        Scaffold with `mkapp`, serve with `Serve.app` in a kernel cell;
+        the page opens in the terminal split and hot-reloads on every
+        green promote, so never tell the user to refresh. Build the page
+        while working, not after: put what you are doing right now and
+        why in the store's status field, mark still-generating sections
+        loading so skeletons show, fill sections as results land, and set
+        done with a final status when finished. Edit only the app's
+        `staging/` tree; the gate typechecks it and promotes green code
+        into the live page. Durable state belongs in the store so
+        promotes keep it; an already-open page keeps its state across
+        promotes, so live updates go as imperative statements after the
+        store's rehydrate, never as initialState edits. The user reads
+        only the page; chat text is one pointer line at most. Layer the
+        page: the surface is a short causal story in plain words (we
+        thought X, but Y, so Z) with named actors, ordered what broke /
+        damage / fix / lesson for incidents; a reader who knows none of
+        the jargon can follow it. Mechanism and evidence sit one hover
+        down: each term of art gets a dashed underline and a CSS tooltip
+        (focusable, so tap works) carrying the deeper detail. Expand
+        dense notes, never paste them. When mkapp or the kernel is
+        unavailable, fall back to one live-rewritten HTML file opened
+        with `html-open` (plain `open` only if that too is missing), and
+        say so.
       '';
       reason = ''
-        Requested 2026-07-19: the user reads responses as a live HTML page
-        that updates while the agent works. Layering added 2026-07-21
-        (index#3872): the terse register made incident notes like the hc2
-        store-copy note unreadable; the hover-explainer rewrite was the
-        format the user wanted as default, and duplicate chat answers were
-        noise. html-open added 2026-07-21: plain `open` shows a dead
-        file:// snapshot, so rewrites were invisible without manual
-        reloads; html-open (config packages/html-open.nix, nixpkgs
-        live-server underneath) keeps the tab current.
+        Requested 2026-07-22 (index#4065): the user wants every response
+        built as live generative UI, replacing the 2026-07-19
+        single-HTML-file default (kept as the fallback). Folds in the
+        former generatedAppUi rule (index#4015) so the response surface
+        and the mkapp/Serve.app machinery are stated once. Imperative
+        store updates: initialState edits never reach an open page, the
+        HMR handoff wins (seen live 2026-07-22). Layering from
+        index#3872; html-open fallback from 2026-07-21.
       '';
     };
   }
@@ -698,25 +708,6 @@
       reason = ''
         Investigations evaporated with sessions; `playbook/src/routes/` does
         not render live (index#3458), so the path is exact.
-      '';
-    };
-  }
-  {
-    generatedAppUi = {
-      topics = ["tooling"];
-      text = ''
-        Building a web UI for the user: scaffold with `mkapp`, serve with
-        `Serve.app` in a kernel cell. Edit only the app's `staging/` tree;
-        the gate typechecks it and promotes green code into the live page,
-        and durable state belongs in the store so promotes keep it. Narrate
-        through the store's status field, mark still-generating sections
-        loading so skeletons show, and keep updating the live page until the
-        work is done.
-      '';
-      reason = ''
-        index#4015: the scaffold and serve machinery exists, but nothing
-        told agents to narrate progress on the page or route edits through
-        the checked staging tree instead of the live src/.
       '';
     };
   }
