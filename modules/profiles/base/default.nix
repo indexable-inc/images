@@ -21,8 +21,9 @@ in {
         default = true;
         description = ''
           Pre-create a writable workspace directory and auto-cd login
-          shells (Nushell `login.nu`) into it. Disable for sealed
-          appliances where there is no interactive workflow to land in.
+          shells (Nushell `login.nu`, zsh `.zlogin`) into it. Disable for
+          sealed appliances where there is no interactive workflow to
+          land in.
         '';
       };
 
@@ -143,7 +144,18 @@ in {
         # `programs.zsh`/`programs.fish` modules further down handle
         # system-wide registration; these are the per-user HM counterparts.
         bash.enable = true;
-        zsh.enable = true;
+        zsh = {
+          enable = true;
+          # zsh is root's login shell (users.users.root.shell below), so
+          # mirror login.nu's workspace cd for zsh login shells. Same
+          # exists-guard: harmless when shellWorkspace is disabled and the
+          # directory was never created.
+          loginExtra = lib.mkIf cfg.shellWorkspace.enable ''
+            if [[ -d "${cfg.shellWorkspace.directory}" ]]; then
+              cd "${cfg.shellWorkspace.directory}"
+            fi
+          '';
+        };
         fish.enable = true;
         # fish 4.8.0 (current nixpkgs nixos-unstable) removed
         # share/fish/tools/create_manpage_completions.py, which Home Manager's
@@ -471,13 +483,19 @@ in {
       };
     };
 
+    # Root logs into zsh: familiar POSIX-ish interactive shell with the
+    # full Home Manager wiring above (starship prompt, atuin, zoxide,
+    # direnv, fzf). Nushell stays the platform default user shell for
+    # service accounts (lib/image/platform.nix `users.defaultUserShell`),
+    # and bash remains installed as the always-present fallback.
+    users.users.root.shell = pkgs.zsh;
+
     # Ship every common operator shell so an SSH session can chsh into
     # whatever the operator already knows. bash is implicit in NixOS;
     # zsh and fish get their NixOS modules so /etc/shells registration
     # and system-wide completion paths are wired without per-image
-    # setup. Nushell is the platform default user shell (see
-    # lib/image/platform.nix) and lands as the login shell directly,
-    # since Home Manager owns its config files via the root attrset.
+    # setup. Home Manager owns root's per-shell config files via the
+    # root attrset above.
     programs = {
       zsh.enable = true;
       fish.enable = true;

@@ -633,13 +633,21 @@ in {
     # wants to drop the stub from its closure.
     programs.nix-ld.enable = lib.mkDefault true;
 
-    # Nushell is the operator shell across this repo: the base profile ships
-    # system-wide nu config and the workspace login.nu. Setting it as the
-    # default user shell means service users (minecraft, ...) and any future
-    # user inherit Nushell rather than bash, so an su or a manual
-    # session into a service account lands in the same shell as root.
+    # Nushell is the default user shell across this repo: the base profile
+    # ships system-wide nu config and the workspace login.nu, so service
+    # users (minecraft, ...) and any future user inherit Nushell rather
+    # than bash. Root's interactive shell is zsh, set in the base profile
+    # next to the rest of its shell wiring.
     users.defaultUserShell = pkgs.nushell;
 
+    # Guest identity (`networking.hostName`) is NOT defaulted here. The
+    # option's own default (`config.system.nixos.distroId`, i.e. "nixos")
+    # is injected by the module system at mkOptionDefault priority, so a
+    # platform-level `mkOptionDefault` collides with it ("conflicting
+    # definition values"), and a platform-level `mkDefault` would collide
+    # with the fleet module's per-node `mkDefault name`. The standalone
+    # base image brands itself in `images/system/base` instead; fleet
+    # nodes keep their per-node name.
     networking = {
       # ix provisions the guest address, route, and DNS before systemd reaches
       # normal service startup. Leaving NixOS DHCP enabled makes dhcpcd wait
