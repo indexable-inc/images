@@ -52,6 +52,7 @@ members = [
   "packages/flecs-query/core",
   "packages/flecs-query/mcp",
   "packages/flecs-query/py",
+  "packages/gherkin-poc",
   "packages/git-log-pretty",
   "packages/github-avatar",
   "packages/google/auth",
@@ -255,6 +256,7 @@ kitty = { path = "packages/terminal/kitty" }
 lake-iceberg = { path = "packages/search/lake/iceberg" }
 color-eyre = "0.6"
 crossterm = "0.29"
+cucumber = "0.23"
 dashboard-core = { path = "packages/dashboard/dashboard-core" }
 deadpool-postgres = "0.14"
 devicons = "0.6"

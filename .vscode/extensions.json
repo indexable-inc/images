@@ -1,6 +1,7 @@
 {
   "recommendations": [
     "jnoortheen.nix-ide",
+    "CucumberOpen.cucumber-official",
     "coopermaruyama.nix-embedded-languages",
     "rust-lang.rust-analyzer",
     "mkhl.direnv",
