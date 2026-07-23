@@ -435,6 +435,28 @@
     };
   }
   {
+    subagentTopology = {
+      topics = ["tooling"];
+      text = ''
+        Prefer delegating to subagents over doing everything inline. The
+        topology is a star: the spawner is the hub, subagents are leaves.
+        A leaf that hits a problem outside its charter (a different bug,
+        a design flaw, a blocking dependency) does not fix it and does
+        not spawn its own coordinator; it sends the problem to its parent
+        (SendMessage when available, otherwise its final report), and the
+        parent decides: fix, file, or dispatch another subagent. Subagents
+        never coordinate with each other directly; cross-agent traffic
+        goes through the parent.
+      '';
+      reason = ''
+        Requested 2026-07-23: the spawner is the one context holding the
+        whole picture, so cross-cutting problems route through it. States
+        topology and escalation only; delegation mechanics stay in
+        backgroundSubagents and subagentToolSubset.
+      '';
+    };
+  }
+  {
     wallTime = {
       topics = ["workflow" "agency"];
       text = ''
