@@ -154,13 +154,12 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      # Megamerge 6191434e (45 patches on 2c6d06e9387c) plus the
-      # first-transfer lost-wakeup fix (indexable-inc/nix#2): libcurl 8.21.0
-      # drains the wakeup eventfd on entering curl_multi_poll, so the first
-      # transfer of every nix process slept the worker's whole 10s idle poll
-      # before starting -- every cold in-guest `nix run` paid +10s on the
-      # flake-registry fetch (index#4122).
-      url = "github:indexable-inc/nix/0bcdf91ce72e21241359c72a2aa17d55178801b3";
+      # Megamerge 403b19c5 (47 patches on 2c6d06e9387c): the 45-patch series
+      # plus the first-transfer lost-wakeup fix (indexable-inc/nix#2, folded
+      # into the patch DAG; index#4122) and the killed-build orphan recovery
+      # (invalid CA scratch-output leftovers are cleared under the build
+      # locks instead of wedging every rebuild of the drv; index#4112).
+      url = "github:indexable-inc/nix/403b19c5a120dcb57f293790fb1ec470d0d1392c";
       flake = false;
     };
 
