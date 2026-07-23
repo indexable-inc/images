@@ -756,7 +756,7 @@ dependencies = [
 name = "ast-merge-ast"
 version = "0.1.0"
 dependencies = [
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "snafu",
  "tree-sitter",
  "tree-sitter-rust",
@@ -769,7 +769,7 @@ dependencies = [
  "ast-merge-ast",
  "ast-merge-langs",
  "ast-merge-matcher",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "similar",
  "tree-sitter",
 ]
@@ -823,7 +823,7 @@ version = "0.1.0"
 dependencies = [
  "ast-merge-ast",
  "rayon",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "tracing",
  "tree-sitter",
  "tree-sitter-rust",
@@ -1227,7 +1227,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "shlex 1.3.0",
  "syn 2.0.118",
 ]
@@ -1614,6 +1614,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cbindgen"
+version = "0.29.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ecb53484c9c167ba674026b656d8a27d7657a58e6066aa902bfb1a4aa00ae20"
+dependencies = [
+ "clap",
+ "heck 0.5.0",
+ "indexmap 2.14.0",
+ "log",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.118",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1750,33 +1769,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ciborium"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
-dependencies = [
- "ciborium-io",
- "ciborium-ll",
- "serde",
-]
-
-[[package]]
-name = "ciborium-io"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
-
-[[package]]
-name = "ciborium-ll"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
-dependencies = [
- "ciborium-io",
- "half",
-]
-
-[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1903,7 +1895,7 @@ dependencies = [
  "clone-scanner",
  "clone-test-support",
  "rayon",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "tempfile",
@@ -1915,7 +1907,7 @@ version = "0.1.0"
 dependencies = [
  "ast-merge-ast",
  "ast-merge-langs",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "tree-sitter",
 ]
 
@@ -1939,7 +1931,7 @@ dependencies = [
  "clone-test-support",
  "ignore",
  "parking_lot",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "snafu",
  "tempfile",
  "tracing",
@@ -2316,6 +2308,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "countme"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7704b5fdd17b18ae31c4c1da5a2e0305a2bf17b5249300a9ee9ed7b72114c636"
+
+[[package]]
 name = "cow-utils"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2469,7 +2467,7 @@ dependencies = [
  "postcard",
  "pulley-interpreter",
  "regalloc2",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_derive",
  "sha2 0.10.9",
@@ -3812,7 +3810,7 @@ dependencies = [
  "log",
  "notify 9.0.0-rc.4",
  "notify-types",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "walkdir",
 ]
 
@@ -4022,7 +4020,7 @@ dependencies = [
  "fluent-syntax",
  "intl-memoizer",
  "intl_pluralrules",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "self_cell",
  "smallvec",
  "unic-langid",
@@ -4359,7 +4357,7 @@ dependencies = [
  "itertools 0.11.0",
  "loro-thunderdome",
  "proc-macro2",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -5044,27 +5042,43 @@ dependencies = [
 
 [[package]]
 name = "hegeltest"
-version = "0.14.27"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f8e84ddc1f22b055b011f6698759f9161123e4dc4d6a27c8276360e307e5228"
+checksum = "a5701dedf265f0843636826fdbbb1fc93ae013ccd37dc52357a4c0a1bf14d003"
 dependencies = [
- "ciborium",
  "crc32fast",
  "dashu-int",
+ "hegeltest-c",
  "hegeltest-macros",
+ "miniz_oxide",
  "parking_lot",
  "paste",
  "rand 0.10.2",
- "rustc-hash",
- "serde",
+ "rustc-hash 2.1.3",
+ "tempfile",
+]
+
+[[package]]
+name = "hegeltest-c"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10f2ed09c0cf2259e0660c87d5959fd41ad60fe676e074c64e0a7d0eb37ad209"
+dependencies = [
+ "cbindgen",
+ "crc32fast",
+ "dashu-int",
+ "miniz_oxide",
+ "parking_lot",
+ "rand 0.10.2",
+ "rustc-hash 2.1.3",
  "tempfile",
 ]
 
 [[package]]
 name = "hegeltest-macros"
-version = "0.14.27"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67743643fd380fcab53c7f2e106fe31752cde495416177336a8de6c8b85b81e"
+checksum = "34220b7df7a680766537f5ee6882c0dbef3a45fbe794c212520db2bbb19b79ef"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5978,11 +5992,13 @@ dependencies = [
 name = "ix2nix"
 version = "0.1.0"
 dependencies = [
+ "hegeltest",
  "oxc_allocator",
  "oxc_ast",
  "oxc_diagnostics",
  "oxc_parser",
  "oxc_span",
+ "rnix",
 ]
 
 [[package]]
@@ -6568,7 +6584,7 @@ dependencies = [
  "loro-delta",
  "loro-internal",
  "loro-kv-store",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "tracing",
 ]
 
@@ -6583,7 +6599,7 @@ dependencies = [
  "leb128",
  "loro-rle",
  "nonmax",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_columnar",
  "serde_json",
@@ -6637,7 +6653,7 @@ dependencies = [
  "postcard",
  "pretty_assertions",
  "rand 0.8.6",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_columnar",
  "serde_json",
@@ -6661,7 +6677,7 @@ dependencies = [
  "lz4_flex 0.11.6",
  "once_cell",
  "quick_cache",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "tracing",
  "xxhash-rust",
 ]
@@ -7126,7 +7142,7 @@ dependencies = [
  "itertools 0.15.0",
  "markdown",
  "miette",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "smol_str",
 ]
 
@@ -7180,7 +7196,7 @@ dependencies = [
  "napi-build",
  "napi-sys",
  "nohash-hasher",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "tokio",
 ]
 
@@ -8108,7 +8124,7 @@ dependencies = [
  "num-traits",
  "pyo3",
  "pyo3-build-config",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -8772,7 +8788,7 @@ dependencies = [
  "allocator-api2",
  "hashbrown 0.17.1",
  "oxc_data_structures",
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -8871,7 +8887,7 @@ dependencies = [
  "oxc_span",
  "oxc_str",
  "oxc_syntax",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "seq-macro",
 ]
 
@@ -8888,7 +8904,7 @@ dependencies = [
  "oxc_span",
  "oxc_str",
  "phf 0.14.0",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "unicode-id-start",
 ]
 
@@ -10164,7 +10180,7 @@ dependencies = [
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "rustls",
  "socket2",
  "thiserror 2.0.18",
@@ -10186,7 +10202,7 @@ dependencies = [
  "rand 0.10.2",
  "rand_pcg",
  "ring",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "rustls",
  "rustls-pki-types",
  "slab",
@@ -10568,7 +10584,7 @@ dependencies = [
  "bumpalo",
  "hashbrown 0.17.1",
  "log",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "smallvec",
 ]
@@ -10799,6 +10815,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rnix"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c163bd17372eecdf10d351c34584b7de7c1a33be4e92a32f3fb3f5a7fe3f579b"
+dependencies = [
+ "rowan",
+]
+
+[[package]]
 name = "roaring"
 version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10819,6 +10844,18 @@ dependencies = [
  "num-rational",
  "symphonia",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rowan"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "417a3a9f582e349834051b8a10c8d71ca88da4211e4093528e36b9845f6b5f21"
+dependencies = [
+ "countme",
+ "hashbrown 0.14.5",
+ "rustc-hash 1.1.0",
+ "text-size",
 ]
 
 [[package]]
@@ -10890,6 +10927,12 @@ name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
+
+[[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
@@ -11363,7 +11406,7 @@ dependencies = [
  "phf 0.13.1",
  "phf_codegen 0.13.1",
  "precomputed-hash",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "servo_arc",
  "smallvec",
 ]
@@ -12564,7 +12607,7 @@ dependencies = [
  "rayon",
  "regex",
  "rust-stemmers",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "sketches-ddsketch",
@@ -12898,6 +12941,12 @@ dependencies = [
  "ansitok",
  "unicode-width 0.2.2",
 ]
+
+[[package]]
+name = "text-size"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f18aa187839b2bdb1ad2fa35ead8c4c2976b64e4363c386d45ac0f7ee85c9233"
 
 [[package]]
 name = "textwrap"
@@ -13867,7 +13916,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb30dbbd9036155e74adad6812e9898d03ec374946234fbcebd5dfc7b9187b90"
 dependencies = [
- "rustc-hash",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]
@@ -14434,7 +14483,7 @@ dependencies = [
  "indicatif",
  "libc",
  "nix 0.31.3",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "rustix 1.1.4",
  "thiserror 2.0.18",
  "uucore",
@@ -14501,7 +14550,7 @@ dependencies = [
  "num-traits",
  "os_display",
  "procfs",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "rustix 1.1.4",
  "thiserror 2.0.18",
  "unic-langid",

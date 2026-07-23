@@ -280,7 +280,9 @@ glob = "0.3"
 heck = "0.5"
 hex = "0.4"
 httparse = "1"
-hegeltest = { version = "0.14", default-features = false }
+hegeltest = { version = "0.28.2", default-features = false }
+# Reparse oracle for ix2nix property tests: emitted Nix must parse cleanly.
+rnix = "0.14"
 # The Iceberg corpus lake (issue #752). iceberg 0.9 pins arrow/parquet ^57.1
 # while the workspace parquet pair is on 59; the 57 tree stays isolated inside
 # lake-iceberg (see its Cargo.toml).

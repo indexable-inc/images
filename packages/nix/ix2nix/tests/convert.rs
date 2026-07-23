@@ -73,6 +73,16 @@ fn number_is_rejected_naming_int_and_float() {
 }
 
 #[test]
+fn bool_and_boolean_both_lower() {
+    // Found by the hegel reparse property: `bool` is a plain type reference
+    // in TS (the keyword is `boolean`), so it needs its own builtin arm.
+    for spelling in ["bool", "boolean"] {
+        let out = nix(&format!("export default (x: {spelling}) => x;\n"));
+        assert!(out.contains("__ixTy.bool"), "{spelling}: {out}");
+    }
+}
+
+#[test]
 fn lib_types_refinements_lower_to_runtime_checkers() {
     let out = nix("export default (p: port, d: path, s: nonEmptyStr, u: u32) => p;\n");
     for checker in ["__ixTy.port", "__ixTy.path", "__ixTy.nonEmptyStr", "__ixTy.u32"] {
