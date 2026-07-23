@@ -92,6 +92,7 @@
     "hermes/minecraft-operator"
     "hermes/telegram"
     "k8s/k3s"
+    "kernel-build/claude"
     "minecraft/blocks"
     "minecraft/crazy-terrain"
     "minecraft/factions"
