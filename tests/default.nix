@@ -4527,8 +4527,10 @@
           && overlay.codex.forcedSettings.features.standalone_web_search == false
           # With the index kernel + exa baked, every superseded native tool is
           # folded in, in each agent's own vocabulary.
+          # Bash is deliberately absent: it survives the kernel deny as the
+          # degraded-mode fallback for kernel outages (index#4080, PR #4081).
+          && !(builtins.elem "Bash" baked.claude.deniedToolPatterns)
           && builtins.all (tool: builtins.elem tool baked.claude.deniedToolPatterns) [
-            "Bash"
             "Read"
             "Write"
             "Edit"
