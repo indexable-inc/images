@@ -119,25 +119,25 @@
   memoryDigest = ix.writeBashApplication pkgs {
     name = "claude-memory-digest";
     text = ''
-      store=${lib.escapeShellArg memoryStore}
-      if [ ! -d "$store" ]; then
-        echo "Memory store missing at $store; create it with: weave --store \"$store\" init"
-        exit 0
-      fi
-      echo "## Memory"
-      echo "Durable memory is a weave store at $store: append-only facts, Datalog-derived views."
-    echo "Save at the moment of learning: Memory.remember(\"slug\", \"one-line hook\", type: \"project\", topic: \"nix\", handle: \"cmd/path\", body: long_md, about: [\"gh:indexable-inc/ix#8088\", \"host:hydra\"]) in the index kernel."
-    echo "Link every memory into the entity graph: 1-4 about: ids for the concrete things it describes -- gh:<org>/<repo>#<n> (issue or PR), repo:<org>/<name>, host:<name>, tool:<name>, person:<login>. Mint ids exactly (short cites expand: ix -> indexable-inc/ix; full table in mem:memory-ontology); a misspelled id fragments the graph silently. Recall walks these edges, so co-cited memories surface together; Memory.graph(\"slug\") shows a memory's neighborhood."
-      echo "Recall: Memory.recall(\"regex\") (rich rows: id, time, type, topic, handle, body) or Memory.query(datalog). Recalled facts go stale; verify before use and record the re-check with Memory.verify(\"slug\") -- verified memories rank first below. Never edit history: newer facts win, Memory.retract(id) kills a wrong one."
-      echo
-      echo "### Hooks (freshest verification first, then recency)"
-      # Rank by the newest mem/verified-at seq per entity (0 when never
-      # verified), then by the desc fact's own seq: a re-checked memory
-      # outranks a merely recent one (index#3865).
-      ${lib.getExe cfg.packages.weave} --store "$store" query 'vseq(E, max(S)) :- fact_id(I, E, "mem/verified-at", V), fact_seq(I, S). rank(V, S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S), vseq(E, V). rank(0, S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S), not vseq(E, _). ?- rank(V, S, E, D) order V desc, S desc limit 150.'
-      echo
-      echo "### Counts by type"
-      ${lib.getExe cfg.packages.weave} --store "$store" query 'per_type(T, count(E)) :- latest(E, "mem/type", T). ?- per_type(T, N) order N desc.'
+        store=${lib.escapeShellArg memoryStore}
+        if [ ! -d "$store" ]; then
+          echo "Memory store missing at $store; create it with: weave --store \"$store\" init"
+          exit 0
+        fi
+        echo "## Memory"
+        echo "Durable memory is a weave store at $store: append-only facts, Datalog-derived views."
+      echo "Save at the moment of learning: Memory.remember(\"slug\", \"one-line hook\", type: \"project\", topic: \"nix\", handle: \"cmd/path\", body: long_md, about: [\"gh:indexable-inc/ix#8088\", \"host:hydra\"]) in the index kernel."
+      echo "Link every memory into the entity graph: 1-4 about: ids for the concrete things it describes -- gh:<org>/<repo>#<n> (issue or PR), repo:<org>/<name>, host:<name>, tool:<name>, person:<login>. Mint ids exactly (short cites expand: ix -> indexable-inc/ix; full table in mem:memory-ontology); a misspelled id fragments the graph silently. Recall walks these edges, so co-cited memories surface together; Memory.graph(\"slug\") shows a memory's neighborhood."
+        echo "Recall: Memory.recall(\"regex\") (rich rows: id, time, type, topic, handle, body) or Memory.query(datalog). Recalled facts go stale; verify before use and record the re-check with Memory.verify(\"slug\") -- verified memories rank first below. Never edit history: newer facts win, Memory.retract(id) kills a wrong one."
+        echo
+        echo "### Hooks (freshest verification first, then recency)"
+        # Rank by the newest mem/verified-at seq per entity (0 when never
+        # verified), then by the desc fact's own seq: a re-checked memory
+        # outranks a merely recent one (index#3865).
+        ${lib.getExe cfg.packages.weave} --store "$store" query 'vseq(E, max(S)) :- fact_id(I, E, "mem/verified-at", V), fact_seq(I, S). rank(V, S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S), vseq(E, V). rank(0, S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S), not vseq(E, _). ?- rank(V, S, E, D) order V desc, S desc limit 150.'
+        echo
+        echo "### Counts by type"
+        ${lib.getExe cfg.packages.weave} --store "$store" query 'per_type(T, count(E)) :- latest(E, "mem/type", T). ?- per_type(T, N) order N desc.'
     '';
   };
 
@@ -283,22 +283,6 @@
     indexCommand = lib.getExe indexPkgs.mcp-ex;
     indexArgs = [];
   };
-  codexMcpServers = lib.mapAttrs (_: def:
-    if (def.transport or "stdio") == "stdio"
-    then
-      {
-        inherit (def) command;
-        default_tools_approval_mode = "approve";
-      }
-      // lib.optionalAttrs (def ? args) {inherit (def) args;}
-      // lib.optionalAttrs (def ? env) {inherit (def) env;}
-      // lib.optionalAttrs (def ? envVars) {env_vars = def.envVars;}
-    else {
-      inherit (def) url;
-      default_tools_approval_mode = "approve";
-    })
-  agentMcpServers;
-
   # Native Codex soft defaults. The wrapper supplies them only when the
   # app-owned config.toml does not set the same key.
   codexSettings = {
@@ -353,7 +337,7 @@
   codexBase = indexPkgs.codex;
   codex =
     (codexBase.override {
-      mcpServers = codexMcpServers;
+      mcpServers = agentMcpServers;
       settings = codexSettings;
       forcedSettings = {};
       # On the override, not programs.codex.systemPrompt.omitRules, for the
