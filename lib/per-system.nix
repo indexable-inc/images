@@ -1901,25 +1901,43 @@ in {
   # so they key identically in both views.
   ciChecks = catalogFor rustPackageTestSets.sharded // forkChecks;
 
-  # `nix fmt` runs alejandra directly on the paths it is given. A single `-q`
+  # `nix fmt` runs alejandra on the paths it is given. A single `-q`
   # (`--quiet`) drops alejandra's informational chatter -- the
   # "Congratulations! Your code complies with the Alejandra style." success
   # line and the rotating "Special thanks ... for being a sponsor of
   # Alejandra" promo -- while still surfacing genuine formatting/parse errors
   # (a second `-q` would suppress those too, which we do not want). The
   # lint-fix `nix` lane above already runs `alejandra --quiet`; this wraps the
-  # interactive `nix fmt` entrypoint the same way. A makeWrapper wrapper (not a
-  # hand-rolled shell script, per no-write-shell-application) over the cached
-  # `pkgs.alejandra` store path, so there is nothing extra to rebuild.
-  formatter = pkgs.symlinkJoin {
+  # interactive `nix fmt` entrypoint the same way.
+  #
+  # Since Nix 2.24, `nix fmt` invokes the formatter from the flake root with
+  # NO path arguments (older Nix appended `.`); bare alejandra then reads
+  # stdin, sees EOF, and fails with "<anonymous file on stdin>: unexpected
+  # end of file" (#4105). Defaulting to `.` needs an arity check, which
+  # makeWrapper cannot express and the shell fence (#3823) bars a new shell
+  # wrapper from doing, so this is a compiled exec shim
+  # (ix.writeRustApplication) over the realized alejandra store path.
+  formatter = ix.writeRustApplication pkgs {
     name = "alejandra-quiet";
-    paths = [pkgs.alejandra];
-    nativeBuildInputs = [pkgs.makeWrapper];
-    postBuild = ''
-      # shell
-      wrapProgram $out/bin/alejandra --add-flags --quiet
+    text = ''
+      fn main() {
+          // for .exec(); kept inside main so the astlog Nushell-text
+          // heuristic (which keys on a leading `use `) does not fire
+          use std::os::unix::process::CommandExt;
+
+          let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+          if args.is_empty() {
+              args.push(".".into());
+          }
+          let err = std::process::Command::new("${lib.getExe pkgs.alejandra}")
+              .arg("--quiet")
+              .args(args)
+              .exec();
+          eprintln!("alejandra-quiet: exec alejandra failed: {err}");
+          std::process::exit(1);
+      }
     '';
-    meta.mainProgram = "alejandra";
+    meta.description = "alejandra for `nix fmt`: quiet, and formats the whole tree when given no paths";
   };
 
   # Per-TU content-addressed kernel build (kbuild-unit, #3411), exposed under
