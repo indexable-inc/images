@@ -126,7 +126,8 @@
       fi
       echo "## Memory"
       echo "Durable memory is a weave store at $store: append-only facts, Datalog-derived views."
-      echo "Save at the moment of learning: Memory.remember(\"slug\", \"one-line hook\", type: \"project\", topic: \"nix\", handle: \"cmd/path\", body: long_md) in the index kernel."
+    echo "Save at the moment of learning: Memory.remember(\"slug\", \"one-line hook\", type: \"project\", topic: \"nix\", handle: \"cmd/path\", body: long_md, about: [\"gh:indexable-inc/ix#8088\", \"host:hydra\"]) in the index kernel."
+    echo "Link every memory into the entity graph: 1-4 about: ids for the concrete things it describes -- gh:<org>/<repo>#<n> (issue or PR), repo:<org>/<name>, host:<name>, tool:<name>, person:<login>. Mint ids exactly (short cites expand: ix -> indexable-inc/ix; full table in mem:memory-ontology); a misspelled id fragments the graph silently. Recall walks these edges, so co-cited memories surface together; Memory.graph(\"slug\") shows a memory's neighborhood."
       echo "Recall: Memory.recall(\"regex\") (rich rows: id, time, type, topic, handle, body) or Memory.query(datalog). Recalled facts go stale; verify before use and record the re-check with Memory.verify(\"slug\") -- verified memories rank first below. Never edit history: newer facts win, Memory.retract(id) kills a wrong one."
       echo
       echo "### Hooks (freshest verification first, then recency)"

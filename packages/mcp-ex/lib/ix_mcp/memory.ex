@@ -20,6 +20,15 @@ defmodule IxMcp.Memory do
   facts as typed edges, so corrections and clusters are walkable via
   `graph/1` instead of discoverable only by regex. History is never
   edited: newer facts win, `retract/1` kills a wrong one.
+
+  Memories also link into the store's entity graph: `about` (a plain
+  attribute, not `mem/`-prefixed, so the prelude's `edge/3` and the
+  recall projection walk it) points a memory at the concrete things it
+  describes. Ids are minted, never guessed: `gh:<org>/<repo>#<n>` (issue
+  or PR, unified), `repo:<org>/<name>`, `host:<name>`, `tool:<name>`,
+  `person:<login>`. The full convention, including the short-cite
+  expansion table (ix -> indexable-inc/ix, ...), lives in the store
+  itself as `mem:memory-ontology`.
   """
 
   alias IxMcp.Memory.Semantic
@@ -36,6 +45,12 @@ defmodule IxMcp.Memory do
   as entity-valued facts, which weave treats as typed edges (`graph/1`
   walks them). `supersedes:` makes a correction explicit instead of
   relying on newer-wins; `relates:` links peers.
+
+  `about:` takes minted thing ids (`about: ["gh:indexable-inc/ix#8088",
+  "host:hydra"]`) and links the memory into the entity graph, where the
+  recall projection pulls co-cited memories through shared specific
+  things. One to four specific ids beat a pile of generic ones; the id
+  scheme is in the moduledoc and `mem:memory-ontology`.
   """
   @spec remember(String.t(), String.t(), keyword()) :: :ok
   def remember(slug, desc, opts \\ []) do
@@ -50,6 +65,12 @@ defmodule IxMcp.Memory do
     for key <- [:supersedes, :relates],
         value <- List.wrap(Keyword.get(opts, key)) do
       fact(entity, "mem/#{key}", mem_entity(to_string(value)))
+    end
+
+    # Plain attribute on purpose: the store prelude's edge/3 and the
+    # recall projection walk `about`, not `mem/about`.
+    for value <- List.wrap(Keyword.get(opts, :about)) do
+      fact(entity, "about", to_string(value))
     end
 
     case Keyword.get(opts, :body) do
@@ -154,8 +175,9 @@ defmodule IxMcp.Memory do
 
   @doc """
   The typed-edge neighborhood of `mem:<slug>`: every live entity-valued
-  fact (mem/supersedes, mem/relates, any future edge attribute) pointing
-  into or out of the entity, as `%{from, edge, to}` rows.
+  fact (mem/supersedes, mem/relates, about, any future edge attribute)
+  pointing into or out of the entity, as `%{from, edge, to}` rows, thing
+  ids (`gh:`, `repo:`, `host:`, `tool:`, `person:`, `project:`) included.
   """
   @spec graph(String.t()) :: [map()]
   def graph(slug) do
@@ -163,7 +185,7 @@ defmodule IxMcp.Memory do
 
     rows =
       query("""
-      edge(S, A, O) :- fact(S, A, O), regex(O, "^mem:").
+      edge(S, A, O) :- fact(S, A, O), regex(O, "^(?:mem|gh|repo|host|tool|person|project):").
       hit(S, A, O) :- edge(S, A, O), regex(S, "#{anchor}").
       hit(S, A, O) :- edge(S, A, O), regex(O, "#{anchor}").
       ?- hit(S, A, O).

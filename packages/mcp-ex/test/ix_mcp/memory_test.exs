@@ -87,6 +87,24 @@ defmodule IxMcp.MemoryTest do
                ]
       end
 
+      test "about links a memory to thing ids that graph walks" do
+        Memory.remember("outage", "ix new down in us-west-1",
+          about: ["gh:indexable-inc/ix#8088", "host:hydra"]
+        )
+
+        assert Enum.sort(Memory.graph("outage")) == [
+                 %{from: "mem:outage", edge: "about", to: "gh:indexable-inc/ix#8088"},
+                 %{from: "mem:outage", edge: "about", to: "host:hydra"}
+               ]
+
+        # Plain `about`, never `mem/about`: the store prelude's edge/3 and
+        # the recall projection walk the unprefixed attribute.
+        assert [%{"V" => _} | _] =
+                 Memory.query(~s{?- fact("mem:outage", "about", V).})
+
+        assert [] = Memory.query(~s{?- fact("mem:outage", "mem/about", V).})
+      end
+
       test "verify appends a receipt that recall surfaces" do
         Memory.remember("claim", "checkable claim")
         id = Memory.verify("claim", session: "sess-42")
