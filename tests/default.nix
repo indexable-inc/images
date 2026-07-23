@@ -80,7 +80,7 @@
     builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {class = "package";})).class;
   invalidSecurityRootSla =
     builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {slaHours = 0;})).slaHours;
-  fleetWrapperReadmes = [
+  exampleApplyReadmes = [
     "hermes/agent"
     "hermes/api-server"
     "hermes/minecraft-operator"
@@ -1978,7 +1978,7 @@
   );
 
   factionsExample = let
-    fleet = import (paths.examples + "/minecraft/factions/ix.nix") {
+    fleet = import (paths.examples + "/minecraft/factions/default.ix") {
       index = {
         lib = ix;
       };
@@ -1997,7 +1997,7 @@
   };
 
   survivalExample = let
-    fleet = import (paths.examples + "/minecraft/survival/ix.nix") {
+    fleet = import (paths.examples + "/minecraft/survival/default.ix") {
       index = {
         lib = ix;
       };
@@ -2021,7 +2021,7 @@
   };
 
   dailyScraperExample = let
-    fleet = import (paths.examples + "/python/daily-scraper/ix.nix") {
+    fleet = import (paths.examples + "/python/daily-scraper/default.ix") {
       index = {
         lib = ix;
       };
@@ -2035,7 +2035,7 @@
   };
 
   nginxLifecycleExample = let
-    fleet = import (paths.examples + "/nginx/lifecycle/ix.nix") {
+    fleet = import (paths.examples + "/nginx/lifecycle/default.ix") {
       index = {
         lib = ix;
       };
@@ -2048,7 +2048,7 @@
   };
 
   s3StorageExample = let
-    fleet = import (paths.examples + "/s3/storage/ix.nix") {
+    fleet = import (paths.examples + "/s3/storage/default.ix") {
       index = {
         lib = ix;
       };
@@ -2061,59 +2061,57 @@
   };
 
   fleetHelloExample = let
-    fleet = import (paths.examples + "/fleet/hello/ix.nix") {
+    vms = import (paths.examples + "/fleet/hello/default.ix") {
       index = {
         lib = ix;
       };
     };
   in {
-    inherit fleet;
-    web.plan = fleet.planValue.nodes.web;
-    worker.plan = fleet.planValue.nodes.worker-0;
+    names = builtins.attrNames vms.nixosConfigurations;
+    web.checks = vms.nixosConfigurations.web.config.ix.healthChecks;
+    worker.checks = vms.nixosConfigurations.worker-0.config.ix.healthChecks;
   };
 
   fleetMicroservicesExample = let
-    fleet = import (paths.examples + "/fleet/microservices/ix.nix") {
+    vms = import (paths.examples + "/fleet/microservices/default.ix") {
       index = {
         lib = ix;
       };
     };
   in {
-    inherit fleet;
+    names = builtins.attrNames vms.nixosConfigurations;
     gateway = {
-      config = fleet.nodes.gateway;
-      plan = fleet.planValue.nodes.gateway;
+      config = vms.nixosConfigurations.gateway.config;
+      checks = vms.nixosConfigurations.gateway.config.ix.healthChecks;
     };
-    api.plan = fleet.planValue.nodes.api-0;
-    cache.plan = fleet.planValue.nodes.cache;
+    api.checks = vms.nixosConfigurations.api-0.config.ix.healthChecks;
+    cache.checks = vms.nixosConfigurations.cache.config.ix.healthChecks;
   };
 
   k8sK3sExample = let
-    fleet = import (paths.examples + "/k8s/k3s/ix.nix") {
+    vms = import (paths.examples + "/k8s/k3s/default.ix") {
       index = {
         lib = ix;
       };
     };
   in {
-    inherit fleet;
-    server = fleet.nodes.k3s-server;
-    agent = fleet.nodes.k3s-agent-0;
+    server = vms.nixosConfigurations.k3s-server.config;
+    agent = vms.nixosConfigurations.k3s-agent-0.config;
   };
 
   nomadClusterExample = let
-    fleet = import (paths.examples + "/nomad/cluster/ix.nix") {
+    vms = import (paths.examples + "/nomad/cluster/default.ix") {
       index = {
         lib = ix;
       };
     };
   in {
-    inherit fleet;
-    server = fleet.nodes.nomad-server;
-    client = fleet.nodes.nomad-client-0;
+    server = vms.nixosConfigurations.nomad-server.config;
+    client = vms.nixosConfigurations.nomad-client-0.config;
   };
 
   observabilityStackExample = let
-    fleet = import (paths.examples + "/observability/stack/ix.nix") {
+    vms = import (paths.examples + "/observability/stack/default.ix") {
       index = {
         lib = ix;
       };
@@ -2125,26 +2123,24 @@
       null
       config.environment.systemPackages;
   in {
-    inherit fleet;
     observability = let
-      config = fleet.nodes.observability;
+      config = vms.nixosConfigurations.observability.config;
     in {
       inherit config;
       cfg = config.services.ix-observability;
       collector = config.services.opentelemetry-collector.settings;
       grafana = config.services.grafana;
-      plan = fleet.planValue.nodes.observability;
       queryTool = queryTool config;
       dashboardPath =
         (builtins.elemAt config.services.grafana.provision.dashboards.settings.providers 0).options.path;
     };
     app = let
-      config = fleet.nodes.app;
+      config = vms.nixosConfigurations.app.config;
     in {
       inherit config;
       cfg = config.services.ix-observability;
       collector = config.services.opentelemetry-collector.settings;
-      plan = fleet.planValue.nodes.app;
+      checks = config.ix.healthChecks;
     };
   };
 
@@ -2610,35 +2606,34 @@
   };
 
   minecraftBlocksExample = let
-    fleet = import (paths.examples + "/minecraft/blocks/ix.nix") {
+    vms = import (paths.examples + "/minecraft/blocks/default.ix") {
       index = {
         lib = ix;
       };
     };
+    node = name: vms.nixosConfigurations.${name}.config;
     # The buildable artifacts (plugin jar, integration check) built directly
     # so the integration check can be pulled into the `eval` aggregate via
     # `helperScript`.
     packages = import (paths.examples + "/minecraft/blocks/packages.nix") {inherit ix pkgs;};
     schema = import (paths.examples + "/minecraft/blocks/schema.nix") {inherit lib;};
   in {
-    inherit fleet packages schema;
+    inherit packages schema;
     log = {
-      config = fleet.nodes.log;
-      plan = fleet.planValue.nodes.log;
-      kafka = fleet.nodes.log.services.apache-kafka;
+      config = node "log";
+      kafka = (node "log").services.apache-kafka;
     };
     view = {
-      config = fleet.nodes.view;
-      plan = fleet.planValue.nodes.view;
-      obs = fleet.nodes.view.services.ix-observability;
-      initUnit = fleet.nodes.view.systemd.services.mc-blocks-view-init;
+      config = node "view";
+      checks = (node "view").ix.healthChecks;
+      obs = (node "view").services.ix-observability;
+      initUnit = (node "view").systemd.services.mc-blocks-view-init;
     };
     producer = {
-      config = fleet.nodes.producer;
-      plan = fleet.planValue.nodes.producer;
-      minecraft = fleet.nodes.producer.services.minecraft;
-      agent = fleet.nodes.producer.services.ix-observability;
-      shipUnit = fleet.nodes.producer.systemd.services.mc-blocks-ship;
+      config = node "producer";
+      minecraft = (node "producer").services.minecraft;
+      agent = (node "producer").services.ix-observability;
+      shipUnit = (node "producer").systemd.services.mc-blocks-ship;
     };
   };
   invalidSecretNameEval = builtins.tryEval (
@@ -3838,19 +3833,18 @@
     fleet-hello = [
       {
         assertion =
-          fleetHelloExample.fleet.planValue.order
+          fleetHelloExample.names
           == [
             "web"
             "worker-0"
             "worker-1"
             "worker-2"
-          ]
-          && fleetHelloExample.worker.plan.dependsOn == ["web"];
-        message = "fleet-hello should expand three worker replicas that depend on the web node";
+          ];
+        message = "fleet-hello should expose the web VM and three interchangeable workers";
       }
       {
         assertion = let
-          check = fleetHelloExample.web.plan.healthChecks.http-loopback;
+          check = fleetHelloExample.web.checks.http-loopback;
         in
           check.from
           == "guest"
@@ -3860,43 +3854,25 @@
       }
       {
         assertion = let
-          check = fleetHelloExample.worker.plan.healthChecks.web-reachable;
+          check = fleetHelloExample.worker.checks.web-reachable;
         in
           check.from == "guest" && lib.last check.command == "http://web:8080/";
-        message = "fleet-hello workers should probe the web endpoint resolved by node name";
-      }
-      {
-        assertion =
-          fleetHelloExample.worker.plan.updateStrategy.maxUnavailable
-          == 1
-          && fleetHelloExample.web.plan.updateStrategy == null;
-        message = "fleet-hello workers should roll one at a time while the singleton web node carries no strategy";
+        message = "fleet-hello workers should probe the web endpoint resolved by VM name";
       }
     ];
 
     fleet-microservices = [
       {
         assertion =
-          fleetMicroservicesExample.fleet.planValue.order
+          fleetMicroservicesExample.names
           == [
             "api-0"
             "api-1"
             "api-2"
             "cache"
             "gateway"
-          ]
-          && fleetMicroservicesExample.api.plan.dependsOn == ["cache"]
-          && fleetMicroservicesExample.gateway.plan.dependsOn
-          == [
-            "api-0"
-            "api-1"
-            "api-2"
           ];
-        message = "fleet-microservices should expand the gateway's api dependency across every replica";
-      }
-      {
-        assertion = fleetMicroservicesExample.api.plan.updateStrategy.maxUnavailable == 1;
-        message = "fleet-microservices api replicas should carry the rolling-update window into the plan";
+        message = "fleet-microservices should expose the cache, three api VMs, and the gateway";
       }
       {
         # The gateway enumerates api replicas at eval time, so raising
@@ -3912,18 +3888,18 @@
       }
       {
         assertion = let
-          checks = fleetMicroservicesExample.gateway.plan.healthChecks;
+          checks = fleetMicroservicesExample.gateway.checks;
         in
           lib.last checks.upstream-api-0.command
           == "http://api-0:8080/healthz"
           && lib.last checks.upstream-api-1.command == "http://api-1:8080/healthz"
           && lib.last checks.upstream-api-2.command == "http://api-2:8080/healthz"
           && lib.last checks.proxies-to-api.command == "http://127.0.0.1:8080/";
-        message = "fleet-microservices gateway should generate one http probe per discovered api replica plus an end-to-end proxy probe";
+        message = "fleet-microservices gateway should generate one http probe per discovered api VM plus an end-to-end proxy probe";
       }
       {
         assertion = let
-          check = fleetMicroservicesExample.api.plan.healthChecks.cache-reachable;
+          check = fleetMicroservicesExample.api.checks.cache-reachable;
         in
           lib.hasSuffix "/bin/nc" (builtins.head check.command)
           && builtins.tail check.command
@@ -3932,11 +3908,11 @@
             "cache"
             "6379"
           ];
-        message = "fleet-microservices api replicas should tcp-probe the cache endpoint across nodes";
+        message = "fleet-microservices api replicas should tcp-probe the cache endpoint across VMs";
       }
       {
         assertion = let
-          check = fleetMicroservicesExample.cache.plan.healthChecks.accepting-connections;
+          check = fleetMicroservicesExample.cache.checks.accepting-connections;
         in
           lib.hasSuffix "/bin/nc" (builtins.head check.command)
           && builtins.tail check.command
@@ -4104,12 +4080,10 @@
       }
       {
         assertion =
-          observabilityStackExample.observability.plan.l7ProxyPorts
-          == [3000]
-          && builtins.elem 3000 observabilityStackExample.observability.config.networking.firewall.allowedTCPPorts
+          builtins.elem 3000 observabilityStackExample.observability.config.networking.firewall.allowedTCPPorts
           && builtins.elem 4317 observabilityStackExample.observability.config.networking.firewall.allowedTCPPorts
           && builtins.elem 9000 observabilityStackExample.observability.config.networking.firewall.allowedTCPPorts;
-        message = "observability-stack should expose Grafana, OTLP, and ClickHouse for the example fleet";
+        message = "observability-stack should expose Grafana, OTLP, and ClickHouse for the example VMs";
       }
       {
         assertion =
@@ -4125,13 +4099,13 @@
       }
       {
         assertion = let
-          checks = observabilityStackExample.app.plan.healthChecks;
+          checks = observabilityStackExample.app.checks;
         in
           checks.observability-demo.from
           == "guest"
           && checks.observability-ingested.attempts == 60
           && checks.observability-ingested.timeoutSec == 10;
-        message = "observability-stack app node should prove local emission and ClickHouse ingestion";
+        message = "observability-stack app VM should prove local emission and ClickHouse ingestion";
       }
       {
         assertion = observabilityStackExample.observability.queryTool != null;
@@ -4186,7 +4160,7 @@
         # The view health check confirms all three minecraft objects exist
         # (table, Kafka queue, materialized view).
         assertion = let
-          check = minecraftBlocksExample.view.plan.healthChecks.mc-blocks-view;
+          check = minecraftBlocksExample.view.checks.mc-blocks-view;
         in
           check.from == "guest" && check.attempts == 60;
         message = "minecraft-blocks view node should health-check the spatial view, queue, and MV";
@@ -5708,10 +5682,10 @@
             rel: let
               text = builtins.readFile (paths.examples + "/${rel}/README.md");
             in
-              lib.hasInfix "nix run .#" text && !(lib.hasInfix "\nix apply\n" text)
+              lib.hasInfix "ix apply .#" text && !(lib.hasInfix "nix run .#" text)
           )
-          fleetWrapperReadmes;
-        message = "fleet-wrapper examples should point at generated nix run .#<example>-up commands, not bare ix apply";
+          exampleApplyReadmes;
+        message = "example READMEs should point at explicit ix apply .#<vm> targets, not the retired fleet wrappers (ix#8306)";
       }
       {
         assertion = fleet.nodes.db.networking.hostName == "db";
