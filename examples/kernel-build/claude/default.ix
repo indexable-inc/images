@@ -1,0 +1,48 @@
+// A Linux kernel hack-station: one VM that fetches a kernel tree on first
+// boot, carries the whole kbuild toolchain, and ships a `claude` command
+// whose agent can build kernels but can neither read the Anthropic API key
+// nor reach the internet (see claude.nix for the sandbox, README for the
+// trust model).
+//
+// The key is attached through the ix secret store (`ix secret set
+// anthropic_api_key`) and materializes as a file only the proxy user can
+// read; claude.nix resolves the same path from this declaration.
+export default ({ index }) => {
+  // The tree to hack on. Edit these three to target another repo, tag, or
+  // checkout path; everything else (ownership handoff, the agent's cwd docs)
+  // follows the dest through `config.services.git-clone`.
+  const repoUrl = "https://github.com/torvalds/linux";
+  const repoRef = "v6.16";
+  const srcDir = "/src/linux";
+  return index.lib.mkVm({
+    name: "kernel-build",
+    deployment: {
+      secrets: {
+        anthropic_api_key: {
+          file: "anthropic/api-key",
+          owner: "anthropic-proxy",
+          mode: "0400",
+        },
+      },
+    },
+    modules: [
+      {
+        services: {
+          // The repo's boot-time clone service (modules/services/git-clone).
+          // `timer` activation fetches after boot readiness instead of
+          // holding multi-user.target hostage to a ~1.5 GB checkout.
+          "git-clone": {
+            enable: true,
+            url: repoUrl,
+            ref: repoRef,
+            dest: srcDir,
+            shallow: true,
+            activation: "timer",
+          },
+        },
+      },
+      import("./toolchain.nix"),
+      import("./claude.nix"),
+    ],
+  });
+};
