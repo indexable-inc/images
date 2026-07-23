@@ -15,3 +15,20 @@ is overwritten by the next promote.
   clear the flag when its content lands.
 - Keep updating until done: fill sections as results arrive, then set
   `app.done = true` with a final status when the work is complete.
+
+## UI
+
+The full shadcn-svelte component registry is vendored under
+`staging/lib/components/ui/` (button, card, dialog, table, tabs, sidebar,
+sonner, ...; only chart and form are omitted). Import through the `$lib`
+alias, which resolves inside the tree being checked:
+
+```svelte
+import { Button } from '$lib/components/ui/button';
+import * as Card from '$lib/components/ui/card';
+```
+
+Style with Tailwind (v4) utility classes. The theme maps the operator's
+terminal palettes onto the shadcn variables (`bg-background`, `text-primary`,
+`text-muted-foreground`, ...) and switches light/dark with the OS
+automatically; use those semantic colors instead of hardcoded ones.
