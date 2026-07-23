@@ -15,7 +15,7 @@ package is consumed by the spark service module alongside
 The bundled `.so`s (`libvelox.so`, `libgluten.so`, `libarrow_*_jni.so`) are
 built on CentOS 7, so their ELF interpreter is `/lib64/ld-linux-x86-64.so.2` and
 their rpath points at FHS paths that do not exist on NixOS: the stock jar fails
-to load (`packages/spark/spark-gluten/default.nix:1-15`). The fix is to explode the
+to load (`packages/spark-gluten/default.nix:1-15`). The fix is to explode the
 jar, autopatchelf the native libs against the Nix store, and repack; the patched
 interpreter and rpath are absolute store paths, so they survive Gluten's runtime
 re-extraction.
@@ -67,6 +67,6 @@ consumers put on the Spark driver/executor classpath, `default.nix:103-107`).
   linux_amd64 native build is published upstream and the package autopatchelfs
   ELF objects), while `overlay = true` stays unconditional and lazy:
   `pkgs.spark-gluten` is only forced inside an x86_64-linux closure (the spark
-  service module), mirroring `drgn` (`packages/spark/spark-gluten/package.nix:3-13`).
+  service module), mirroring `drgn` (`packages/spark-gluten/package.nix:3-13`).
 - Platform constraint: `meta.platforms = [ "x86_64-linux" ]`
   (`default.nix:109-115`).

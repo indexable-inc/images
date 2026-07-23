@@ -57,7 +57,7 @@ The failure mode is dropping a hard-won specific to save a line. Guards:
 
 ## Apply and validate
 
-- **Edit the source, not a symlink.** Andrew's agent system prompt is generated from `packages/agent/prompt`; `users/andrewgazelka/profiles/workstation.nix` selects any rule omissions. A profile switch applies prompt changes. A project `CLAUDE.md` is live immediately.
+- **Edit the source, not a symlink.** Andrew's agent system prompt is generated from `packages/agent-prompt`; `users/andrewgazelka/profiles/workstation.nix` selects any rule omissions. A profile switch applies prompt changes. A project `CLAUDE.md` is live immediately.
 - **Prove behavior survived.** Compression's whole risk is silently changing behavior. After applying, use the `prompt-eval` skill: spawn fresh `claude -p` sessions on neutral tasks that should trigger the rules you rewrote, and confirm the behavior still emerges. If a rule no longer fires, you over-compressed it. This is the only real proof; reading the diff is not enough.
 
 ## Output

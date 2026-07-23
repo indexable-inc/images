@@ -4,9 +4,9 @@ members = [
   "modules/services/sandboxed-agent/egress-check",
   "modules/services/sandboxed-agent/launch",
   "modules/services/sandboxed-agent/proxy",
-  "packages/agent/claude-hooks",
-  "packages/agent/claude-stories",
-  "packages/agent/subagent-cache",
+  "packages/claude-hooks",
+  "packages/claude-stories",
+  "packages/subagent-cache",
   "packages/audio/app",
   "packages/audio/blob",
   "packages/audio/clock",
@@ -19,29 +19,29 @@ members = [
   "packages/audio/score",
   "packages/blast-radius",
   "packages/chromium-cookies",
-  "packages/code/ast-merge/ast",
-  "packages/code/ast-merge/cli",
-  "packages/code/ast-merge/diff",
-  "packages/code/ast-merge/git",
-  "packages/code/ast-merge/langs",
-  "packages/code/ast-merge/matcher",
-  "packages/code/astlog/cli",
-  "packages/code/astlog/core",
-  "packages/code/astlog/py",
-  "packages/code/clone-detect/cli",
-  "packages/code/clone-detect/detect",
-  "packages/code/clone-detect/hash",
-  "packages/code/clone-detect/pragma",
-  "packages/code/clone-detect/scanner",
-  "packages/code/clone-detect/test-support",
-  "packages/code/code-highlight",
-  "packages/code/edit-applier",
-  "packages/code/error-chain",
-  "packages/code/file-language",
-  "packages/code/scipql/cli",
-  "packages/code/scipql/core",
-  "packages/code/scipql/py",
-  "packages/code/tree-sitter-nix",
+  "packages/ast-merge/ast",
+  "packages/ast-merge/cli",
+  "packages/ast-merge/diff",
+  "packages/ast-merge/git",
+  "packages/ast-merge/langs",
+  "packages/ast-merge/matcher",
+  "packages/astlog/cli",
+  "packages/astlog/core",
+  "packages/astlog/py",
+  "packages/clone-detect/cli",
+  "packages/clone-detect/detect",
+  "packages/clone-detect/hash",
+  "packages/clone-detect/pragma",
+  "packages/clone-detect/scanner",
+  "packages/clone-detect/test-support",
+  "packages/code-highlight",
+  "packages/edit-applier",
+  "packages/error-chain",
+  "packages/file-language",
+  "packages/scipql/cli",
+  "packages/scipql/core",
+  "packages/scipql/py",
+  "packages/tree-sitter-nix",
   "packages/config-launch",
   "packages/cve-scan",
   "packages/dag-runner",
@@ -82,11 +82,11 @@ members = [
   "packages/mirror",
   "packages/mynoise",
   "packages/net-trace",
-  "packages/nix/ix2nix",
-  "packages/nix/ix2nix/wasm",
-  "packages/nix/nix-web-monitor/parser",
-  "packages/nix/nix-web-monitor/server",
-  "packages/nix/oci-image-builder",
+  "packages/ix2nix",
+  "packages/ix2nix/wasm",
+  "packages/nix-web-monitor/parser",
+  "packages/nix-web-monitor/server",
+  "packages/oci-image-builder",
   "packages/nu-py",
   "packages/plumb/cli",
   "packages/plumb/ex",
@@ -96,32 +96,32 @@ members = [
   "packages/repo-walker",
   "packages/screencast/screencast",
   "packages/screencast/screencast-ingest",
-  "packages/search/code-tokenizer",
-  "packages/search/file-search",
-  "packages/search/indexer",
-  "packages/search/lake/iceberg",
-  "packages/search/mixedbread",
-  "packages/search/polars-mixedbread",
-  "packages/search/search",
-  "packages/search/search-core",
-  "packages/search/search-py",
-  "packages/search/sink/mixedbread",
-  "packages/search/sink/parquet",
-  "packages/search/source/atuin",
-  "packages/search/source/claude",
-  "packages/search/source/codex",
-  "packages/search/source/debug",
-  "packages/search/source/git",
-  "packages/search/source/github",
-  "packages/search/source/journald",
-  "packages/search/source/linear",
-  "packages/search/source/meta",
-  "packages/search/source/parquet",
-  "packages/search/source/slack",
+  "packages/code-tokenizer",
+  "packages/file-search",
+  "packages/indexer",
+  "packages/lake/iceberg",
+  "packages/mixedbread",
+  "packages/polars-mixedbread",
+  "packages/search",
+  "packages/search-core",
+  "packages/search-py",
+  "packages/sink/mixedbread",
+  "packages/sink/parquet",
+  "packages/source/atuin",
+  "packages/source/claude",
+  "packages/source/codex",
+  "packages/source/debug",
+  "packages/source/git",
+  "packages/source/github",
+  "packages/source/journald",
+  "packages/source/linear",
+  "packages/source/meta",
+  "packages/source/parquet",
+  "packages/source/slack",
   "packages/skill-lint",
   "packages/sqlmerge",
-  "packages/terminal/kitty",
-  "packages/terminal/terminal-theme",
+  "packages/kitty",
+  "packages/terminal-theme",
   "packages/tui/ex",
   "packages/tui/reel",
   "packages/tui/tui",
@@ -149,20 +149,20 @@ members = [
   "packages/usage/cli",
   "packages/usage/core",
   "packages/usage/wrap",
-  "packages/vm/panes/audio",
-  "packages/vm/panes/compositor",
-  "packages/vm/panes/guest-transport",
-  "packages/vm/panes/host",
-  "packages/vm/panes/protocol",
-  "packages/vm/vmkit",
+  "packages/panes/audio",
+  "packages/panes/compositor",
+  "packages/panes/guest-transport",
+  "packages/panes/host",
+  "packages/panes/protocol",
+  "packages/vmkit",
 ]
 # nix-cargo-unit is the bootstrap tool that renders this workspace's unit graph,
 # so it owns its own Cargo.toml + Cargo.lock (it carries its own `[workspace]`).
 # Excluding it here keeps the root lockfile from pulling it in, so a root-lock
 # bump never recompiles it; its Nix build keys only on its own folder.
 exclude = [
-  "packages/nix/nix-cargo-unit",
-  "packages/nix/nix-kbuild-unit",
+  "packages/nix-cargo-unit",
+  "packages/nix-kbuild-unit",
 ]
 resolver = "3"
 
@@ -171,7 +171,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# builtins.wasm plugins (packages/nix/ix2nix/wasm): wasm32-unknown-unknown
+# builtins.wasm plugins (packages/ix2nix/wasm): wasm32-unknown-unknown
 # ships no unwinder, so the plugin unit graph builds under this profile's
 # panic=abort -- the release profile's implicit panic=unwind fails at the
 # final cdylib link ("the crate `panic_unwind` does not have the panic
@@ -209,7 +209,7 @@ anstream = "1"
 anstyle = "1"
 anyhow = "1"
 arrow = "59"
-ast-merge-ast = { path = "packages/code/ast-merge/ast" }
+ast-merge-ast = { path = "packages/ast-merge/ast" }
 audio-blob = { path = "packages/audio/blob" }
 audio-clock = { path = "packages/audio/clock" }
 audio-dsp = { path = "packages/audio/dsp" }
@@ -217,11 +217,11 @@ audio-engine = { path = "packages/audio/engine" }
 audio-instrument = { path = "packages/audio/instrument" }
 audio-net = { path = "packages/audio/net" }
 audio-score = { path = "packages/audio/score" }
-ast-merge-diff = { path = "packages/code/ast-merge/diff" }
-ast-merge-git = { path = "packages/code/ast-merge/git" }
-ast-merge-langs = { path = "packages/code/ast-merge/langs" }
-ast-merge-matcher = { path = "packages/code/ast-merge/matcher" }
-astlog-core = { path = "packages/code/astlog/core" }
+ast-merge-diff = { path = "packages/ast-merge/diff" }
+ast-merge-git = { path = "packages/ast-merge/git" }
+ast-merge-langs = { path = "packages/ast-merge/langs" }
+ast-merge-matcher = { path = "packages/ast-merge/matcher" }
+astlog-core = { path = "packages/astlog/core" }
 axum = "0.8"
 base64 = "0.22"
 bytes = "1"
@@ -232,21 +232,21 @@ bzip2 = "0.6"
 cc = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
-source-atuin = { path = "packages/search/source/atuin" }
-source-claude = { path = "packages/search/source/claude" }
-source-codex = { path = "packages/search/source/codex" }
-source-debug = { path = "packages/search/source/debug" }
-source-git = { path = "packages/search/source/git" }
-source-journald = { path = "packages/search/source/journald" }
-clone-detect = { path = "packages/code/clone-detect/detect" }
-clone-hash = { path = "packages/code/clone-detect/hash" }
-clone-pragma = { path = "packages/code/clone-detect/pragma" }
-clone-scanner = { path = "packages/code/clone-detect/scanner" }
-clone-test-support = { path = "packages/code/clone-detect/test-support" }
-error-chain = { path = "packages/code/error-chain" }
-code-highlight = { path = "packages/code/code-highlight" }
-code-tokenizer = { path = "packages/search/code-tokenizer" }
-file-search = { path = "packages/search/file-search" }
+source-atuin = { path = "packages/source/atuin" }
+source-claude = { path = "packages/source/claude" }
+source-codex = { path = "packages/source/codex" }
+source-debug = { path = "packages/source/debug" }
+source-git = { path = "packages/source/git" }
+source-journald = { path = "packages/source/journald" }
+clone-detect = { path = "packages/clone-detect/detect" }
+clone-hash = { path = "packages/clone-detect/hash" }
+clone-pragma = { path = "packages/clone-detect/pragma" }
+clone-scanner = { path = "packages/clone-detect/scanner" }
+clone-test-support = { path = "packages/clone-detect/test-support" }
+error-chain = { path = "packages/error-chain" }
+code-highlight = { path = "packages/code-highlight" }
+code-tokenizer = { path = "packages/code-tokenizer" }
+file-search = { path = "packages/file-search" }
 github-avatar = { path = "packages/github-avatar" }
 google-auth = { path = "packages/google/auth" }
 google-calendar = { path = "packages/google/calendar" }
@@ -255,8 +255,8 @@ indexbench = { path = "packages/indexbench" }
 ix-vt = { path = "packages/tui/vt/ix-vt" }
 ix-vt-sys = { path = "packages/tui/vt/ix-vt-sys", version = "0.1.0" }
 ix-usage-core = { path = "packages/usage/core" }
-kitty = { path = "packages/terminal/kitty" }
-lake-iceberg = { path = "packages/search/lake/iceberg" }
+kitty = { path = "packages/kitty" }
+lake-iceberg = { path = "packages/lake/iceberg" }
 color-eyre = "0.6"
 crossterm = "0.29"
 cucumber = "0.23"
@@ -264,11 +264,11 @@ dashboard-core = { path = "packages/dashboard/dashboard-core" }
 deadpool-postgres = "0.14"
 devicons = "0.6"
 dirs = "6"
-edit-applier = { path = "packages/code/edit-applier" }
+edit-applier = { path = "packages/edit-applier" }
 efx-engine = { path = "packages/efx/engine" }
 efx-ir = { path = "packages/efx/ir" }
 efx-lang = { path = "packages/efx/lang" }
-file-language = { path = "packages/code/file-language" }
+file-language = { path = "packages/file-language" }
 plumb-core = { path = "packages/plumb/core" }
 plumb-syntax = { path = "packages/plumb/syntax" }
 flate2 = "1"
@@ -296,16 +296,16 @@ insta = { version = "1.42", features = ["json"] }
 lazy-regex = "3.4"
 libc = "0.2"
 libloading = "0.8"
-source-linear = { path = "packages/search/source/linear" }
-source-github = { path = "packages/search/source/github" }
-mixedbread = { path = "packages/search/mixedbread" }
+source-linear = { path = "packages/source/linear" }
+source-github = { path = "packages/source/github" }
+mixedbread = { path = "packages/mixedbread" }
 loro = "1.12"
 napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
 napi-build = "2"
 napi-derive = "3"
 ndarray = "0.17"
 nix = "0.31"
-nix-web-monitor-parser = { path = "packages/nix/nix-web-monitor/parser" }
+nix-web-monitor-parser = { path = "packages/nix-web-monitor/parser" }
 # The embedded nushell engine nu-py wraps. One version for the whole family,
 # aligned with pkgs.nushell so embedded semantics match the CLI on PATH.
 # nu-command drops its default `sqlite` feature (`stor`, `into sqlite`): its
@@ -328,8 +328,8 @@ objc2-security = "0.3"
 objc2-web-kit = "0.3"
 object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
-ix2nix = { path = "packages/nix/ix2nix" }
-# JavaScript-syntax parser for ix2nix (packages/nix/ix2nix): .ix modules are
+ix2nix = { path = "packages/ix2nix" }
+# JavaScript-syntax parser for ix2nix (packages/ix2nix): .ix modules are
 # parsed as ES modules and mapped 1:1 onto a typed Nix expression tree.
 oxc_allocator = "0.141"
 oxc_ast = "0.141"
@@ -339,8 +339,8 @@ oxc_span = "0.141"
 mc-protocol = { path = "packages/minecraft/protocol" }
 mcp-server-info = { path = "packages/mcp/server-info" }
 md-5 = "0.10"
-panes-protocol = { path = "packages/vm/panes/protocol" }
-panes-guest-transport = { path = "packages/vm/panes/guest-transport" }
+panes-protocol = { path = "packages/panes/protocol" }
+panes-guest-transport = { path = "packages/panes/guest-transport" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 pbkdf2 = { version = "0.12", default-features = false }
@@ -379,9 +379,9 @@ rustler = "0.38"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 scip = "0.9"
-scipql-core = { path = "packages/code/scipql/core" }
-search-core = { path = "packages/search/search-core" }
-source-meta = { path = "packages/search/source/meta" }
+scipql-core = { path = "packages/scipql/core" }
+search-core = { path = "packages/search-core" }
+source-meta = { path = "packages/source/meta" }
 serde = "1"
 serde_json = "1"
 serde_norway = "0.9"
@@ -389,10 +389,10 @@ sha1 = "0.10"
 sha2 = "0.11"
 shlex = "1"
 similar = "3"
-source-slack = { path = "packages/search/source/slack" }
-source-parquet = { path = "packages/search/source/parquet" }
-sink-mixedbread = { path = "packages/search/sink/mixedbread" }
-sink-parquet = { path = "packages/search/sink/parquet" }
+source-slack = { path = "packages/source/slack" }
+source-parquet = { path = "packages/source/parquet" }
+sink-mixedbread = { path = "packages/sink/mixedbread" }
+sink-parquet = { path = "packages/sink/parquet" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"
 syn = { version = "2", features = ["full"] }
@@ -402,7 +402,7 @@ tao = "0.35"
 tar = "0.4"
 tempfile = "3"
 terminal-light = "1"
-terminal-theme = { path = "packages/terminal/terminal-theme" }
+terminal-theme = { path = "packages/terminal-theme" }
 tokio = "1"
 tokio-postgres = "0.7"
 tokio-stream = "0.1"
@@ -436,7 +436,7 @@ tree-sitter-lua = "0.5"
 tree-sitter-md = "0.5"
 # Patched with underscore digit separators in numeric literals: the
 # [patch.crates-io] entry below substitutes the in-repo fork
-# (packages/code/tree-sitter-nix) for this crates-io release everywhere the
+# (packages/tree-sitter-nix) for this crates-io release everywhere the
 # workspace resolves it.
 tree-sitter-nix = "0.3"
 tree-sitter-ocaml = "0.25"
@@ -492,8 +492,8 @@ zip = { version = "7", default-features = false }
 
 # Workspace-wide crate substitutions. `tree-sitter-nix` is the in-repo fork
 # carrying underscore digit separators in numeric literals (the dialect the
-# patched nix-ix lexer accepts; see packages/code/tree-sitter-nix/README.md),
+# patched nix-ix lexer accepts; see packages/tree-sitter-nix/README.md),
 # so astlog, clone-detect, and every other ast-merge-langs consumer parse the
 # same numbers nix does.
 [patch.crates-io]
-tree-sitter-nix = { path = "packages/code/tree-sitter-nix" }
+tree-sitter-nix = { path = "packages/tree-sitter-nix" }

@@ -4,7 +4,7 @@
 # investigation from a prior finding while every file that finding read is still
 # byte-for-byte unchanged. Recall is Postgres full-text search; the only
 # outbound call is a one-shot Haiku judge that gates precision. The Claude Code
-# lookup/populate hooks (packages/agent/claude-hooks) own freshness re-hashing
+# lookup/populate hooks (packages/claude-hooks) own freshness re-hashing
 # and capture, and POST to this daemon over the trusted tailnet.
 #
 # This module is deliberately generic: it owns the systemd service and the

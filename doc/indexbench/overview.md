@@ -159,7 +159,7 @@ actual added allocation reddens the gate (`src/bin/alloc-demo.rs:1-53`).
 `nix develop .#bench` provides `indexbench` plus `hyperfine`, `valgrind`,
 `samply`, and `jemalloc` (`lib/per-system.nix:1127-1135`). `tango-bench` is a
 separate workspace dependency for paired A/B micro comparisons (see
-`packages/search/file-search/benches`).
+`packages/file-search/benches`).
 
 ## Tests
 

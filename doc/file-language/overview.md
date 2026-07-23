@@ -7,7 +7,7 @@ search ranker) can depend on it without pulling in a tree-sitter grammar
 closure. It is a single Rust workspace library crate (`id = file-language`, no
 flake output) with zero dependencies (`Cargo.toml`); [code-highlight](../code-highlight/overview.md)
 layers the grammar-to-query mapping on top of this enum
-(`packages/code/code-highlight/Cargo.toml:14`).
+(`packages/code-highlight/Cargo.toml:14`).
 
 ## Public surface (`src/lib.rs`)
 

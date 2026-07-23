@@ -25,7 +25,7 @@
     else
       throw ''
         the `${surface}` surface of this flake requires the indexable Nix
-        fork: it uses language patches (packages/nix/nix/patches, e.g.
+        fork: it uses language patches (packages/nix/patches, e.g.
         underscore digit separators) that this evaluator
         (Nix ${builtins.nixVersion or "unknown"}) cannot parse.
 

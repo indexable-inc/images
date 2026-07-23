@@ -37,4 +37,4 @@ on the team runs it.
 The same seam manages the rest of the harness: permission denies are policy
 in one Nix file, hooks are rendered from shared definitions, and the system
 prompt is versioned like any other source file. Start at
-[`packages/agent/claude-code`](https://github.com/indexable-inc/index/tree/main/packages/agent/claude-code).
+[`packages/claude-code`](https://github.com/indexable-inc/index/tree/main/packages/claude-code).

@@ -130,7 +130,7 @@ MODULES: tuple[Module, ...] = (
         "`recent(source=['shell'], since='6h')` newest-first. Each is async and "
         "returns a polars frame (one row per hit, compose `.filter`/`.group_by`/"
         "`.head`) with timestamp/user/host/session_id provenance columns",
-        # Mirrors the resolution order owned by packages/search/mixedbread/src/auth.rs
+        # Mirrors the resolution order owned by packages/mixedbread/src/auth.rs
         # (env key, else the `mgrep login` token), which the bundled module
         # reaches through search-py.
         credential=Credential(

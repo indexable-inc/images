@@ -1,7 +1,7 @@
 # source adapters
 
 The concrete [`SourceAdapter`](overview.md) implementations under
-`packages/search/source/*`, plus the `source-parquet` log reader. Each turns one corpus
+`packages/source/*`, plus the `source-parquet` log reader. Each turns one corpus
 into [`Document`](overview.md)s carrying the common envelope (`source`,
 `external_id`, `content_hash`, `title`, `timestamp`) merged with the
 source-specific filter tags below. All are library crates; the

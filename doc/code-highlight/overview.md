@@ -6,7 +6,7 @@ source plus a language hint (path or extension) into colored output, with a
 plain-text fallback for unsupported languages or any failure, so a caller always
 renders something. It is a single Rust workspace library crate (`id =
 code-highlight`, no flake output); the search tooling
-is its consumer (`packages/search/search/Cargo.toml`).
+is its consumer (`packages/search/Cargo.toml`).
 
 ## Public surface (`src/lib.rs`)
 

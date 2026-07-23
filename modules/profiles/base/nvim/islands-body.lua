@@ -3,7 +3,7 @@
 -- This is the highlight-group layout both ix-islands variants share. The base
 -- profile generates colors/ix-islands-{dark,light}.lua by prepending the
 -- per-variant header and a `local c = { ... }` palette built from the single
--- source of truth (packages/code/code-highlight/src/islands-theme.json, read through
+-- source of truth (packages/code-highlight/src/islands-theme.json, read through
 -- ix.islandsTheme) to this file. Every color comes from `c`, so editing a color
 -- means editing the JSON, not this file. The search `-c` highlighter
 -- reads the same JSON, so terminal and editor stay in step.

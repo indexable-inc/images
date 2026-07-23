@@ -1,6 +1,6 @@
 # claude-code
 
-`packages/agent/claude-code` repackages
+`packages/claude-code` repackages
 [Claude Code](https://www.anthropic.com/claude-code), Anthropic's agentic coding
 CLI, as a prebuilt-binary install with a thick layer of baked-in fleet defaults.
 The upstream artifact is a Bun single-file executable pinned per platform; this
@@ -13,33 +13,33 @@ The injection is done through the shared `config-launch` launcher
 (`packages/config-launch`), the same mechanism [codex](../codex/overview.md)
 uses: the wrapper bakes a launch-spec JSON and points `config-launch` at it via
 a `makeBinaryWrapper` `--set IX_LAUNCH_SPEC`
-(`packages/agent/claude-code/default.nix:451-459`).
+(`packages/claude-code/default.nix:451-459`).
 
 ## Version pin and provenance
 
 `manifest.json` holds `version` and per-platform `{ slug, hash }`, read with
-`lib.importJSON` and never hand-edited (`packages/agent/claude-code/default.nix:128-129`;
+`lib.importJSON` and never hand-edited (`packages/claude-code/default.nix:128-129`;
 `manifest.json` currently pins `2.1.170` for four platforms). The binary is
 `fetchurl`ed from the Anthropic-branded CDN with the GCS bucket as a hash-pinned
-mirror (`packages/agent/claude-code/default.nix:402-408`).
+mirror (`packages/claude-code/default.nix:402-408`).
 
 - Bump: `nix run .#claude-code.updateScript -- [version]`. The updater
   (`update.nix`) refetches Anthropic's per-version manifest, converts its hex
   checksums to SRI, and rewrites `manifest.json`
-  (`packages/agent/claude-code/update.nix:33-67`).
+  (`packages/claude-code/update.nix:33-67`).
 - Fails closed on provenance: the updater verifies the manifest's detached GPG
   signature against the pinned release key (`release-signing-key.asc`,
   fingerprint `31DD DE24 ... 1A7E CACE`) in an isolated `GNUPGHOME` and aborts
   if `gpg --verify` is non-zero, so a spoofed manifest cannot inject hashes for
-  attacker-controlled binaries (`packages/agent/claude-code/update.nix:1-8`, `43-52`).
+  attacker-controlled binaries (`packages/claude-code/update.nix:1-8`, `43-52`).
 - Pin is by raw version, not the npm `latest` tag, because Anthropic ships to
   the `next` prerelease tag days before promoting to `latest`
-  (`packages/agent/claude-code/default.nix:121-127`).
+  (`packages/claude-code/default.nix:121-127`).
 
 ## Baked defaults
 
 All flag/env/PATH injection is declared as data in `launchSpec`
-(`packages/agent/claude-code/default.nix:375-391`) and applied by
+(`packages/claude-code/default.nix:375-391`) and applied by
 `config-launch`; the settings render travels separately (see below).
 
 ### Forced env (always set)
@@ -149,18 +149,18 @@ Defaults to the default pair, additions only:
 - `exa`: Exa's hosted web-search server over streamable HTTP at
   `https://mcp.exa.ai/mcp` (keyless, rate-limited).
 
-### System prompt (`packages/agent/prompt/`)
+### System prompt (`packages/agent-prompt/`)
 
 `systemPrompt` is baked as the session's system prompt, REPLACING the stock one
 rather than appending to it (`default.nix:95-113`). The text is the house
 rules: craft and style defaults, pre-v1 no-backward-compatibility,
 one-concept-one-implementation, git worktrees, delegation through the index
 kernel, no force merges, no em dashes, and more
-(`packages/agent/prompt/rules.nix`). Set to `null` to ship the stock prompt alone.
+(`packages/agent-prompt/rules.nix`). Set to `null` to ship the stock prompt alone.
 
 ### Hooks (`packages/agent/policy/hook-runner.nix`, `default.nix:209-285`)
 
-Lifecycle hooks, all subcommands of one compiled binary (`packages/agent/claude-hooks`)
+Lifecycle hooks, all subcommands of one compiled binary (`packages/claude-hooks`)
 wrapped with their tool paths and the baked primary-checkout default; each fails
 open and silent
 (`packages/agent/policy/hook-runner.nix:1-20`):
@@ -206,7 +206,7 @@ and on Linux the sandbox helpers `bubblewrap` and `socat`.
   for all three hooks (`default.nix:464-480`).
 - Flake output: `nix run .#claude-code` / `nix build .#claude-code`, plus
   `pkgs.claude-code` (overlay). `package.nix` sets `packageSet`, `flake`,
-  `overlay`, `updateScript` all `true` (`packages/agent/claude-code/package.nix`).
+  `overlay`, `updateScript` all `true` (`packages/claude-code/package.nix`).
   Note: the overlay build gets `repoPackages = { }`, so it drops sibling-
   dependent defaults (the `index` MCP server, the search-gated prompt-priors
   hook) and omits `passthru.updateScript`; the full-featured build is the flake

@@ -12,7 +12,7 @@
   # `ix.deepMerge` exactly as flake-output packages do (lib/packages.nix binds
   # `ix` for the `packageSetFor` path). Without this, an overlay package that
   # takes an `ix` argument fails callPackage with a missing-arg error (e.g.
-  # packages/agent/claude-code uses `ix.deepMerge.rhs`).
+  # packages/claude-code uses `ix.deepMerge.rhs`).
   ix,
 }: final: prev:
 # This `let` holds only the registry-iteration helpers (`overlayContext`,

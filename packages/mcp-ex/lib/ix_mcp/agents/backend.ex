@@ -10,7 +10,7 @@ defmodule IxMcp.Agents.Backend do
       the child) plus `--disallowedTools Agent,Task` and
       CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS=1 (no built-in subagent
       types). The tool deny mirrors `defaultSystemTools` in
-      packages/agent/claude-code/default.nix; keep the two in sync.
+      packages/claude-code/default.nix; keep the two in sync.
     * codex: `-c agents.max_depth=1` (the CLI minimum; 1 is the thread
       itself, no children) and `-c mcp_servers={}`.
     * all: IX_AGENT_CHILD=1, which `IxMcp.Agents.spawn/2` raises under, so
@@ -34,7 +34,7 @@ defmodule IxMcp.Agents.Backend do
           stdin: :stream | :closed
         }
 
-  # Mirrors packages/agent/claude-code/default.nix defaultSystemTools
+  # Mirrors packages/claude-code/default.nix defaultSystemTools
   # (Agent = false, Task* = false); "Task" also denies the TaskCreate
   # family's umbrella tool name used by older harness builds.
   @claude_deny "Agent,Task"

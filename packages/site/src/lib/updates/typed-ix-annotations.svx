@@ -5,7 +5,7 @@ title: "`.ix` modules accept TypeScript type annotations, lowered to runtime che
 tags: [ix2nix, types, nix]
 links:
   - label: ix2nix
-    href: https://github.com/indexable-inc/index/tree/main/packages/nix/ix2nix
+    href: https://github.com/indexable-inc/index/tree/main/packages/ix2nix
   - label: "issue #4103"
     href: https://github.com/indexable-inc/index/issues/4103
 ---

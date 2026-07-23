@@ -1,7 +1,7 @@
 # Patch the `rnix` crate inside a rust tool's vendored cargo dependencies so
 # the tool lexes underscore digit separators in nix numeric literals
 # (`1_000`, `1_000.000_1`, `2.5e1_0`) -- the dialect the patched nix lexer
-# accepts (packages/nix/nix/patches/0014-libexpr-accept-underscore-digit-
+# accepts (packages/nix/patches/0014-libexpr-accept-underscore-digit-
 # separators-in-numeri.patch). alejandra, statix, and deadnix all parse nix
 # through rnix, and none of them can format or lint a tree using separators
 # until their tokenizer takes them; their package dirs under packages/nix/

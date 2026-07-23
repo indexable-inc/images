@@ -1,7 +1,7 @@
 <script lang="ts">
   // The `nix-build` data renderer: a live Nix build tree. The pane's `body` is a
   // JSON `BuildView` (owned by the Rust nix-web-monitor parser crate and streamed
-  // by its `--emit ndjson` mode; see packages/nix/nix-web-monitor). This draws it
+  // by its `--emit ndjson` mode; see packages/nix-web-monitor). This draws it
   // compactly and still — a summary bar of status counts, the derivation rows with
   // phase and a status dot, an in-flight-activity strip with progress bars, and any
   // errors highlighted. Colors are theme variables, so it follows the dashboard's

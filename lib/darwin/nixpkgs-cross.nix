@@ -1,6 +1,6 @@
 # Linux -> Darwin nixpkgs cross scope for C/C++ closures that build through
 # upstream nixpkgs packaging instead of the cargo-unit lane (RFC 0009). The
-# consumer today is `nix-ix`: packages/nix/nix swaps its component scope to
+# consumer today is `nix-ix`: packages/nix swaps its component scope to
 # this one when the registry cross lane instantiates it, so the full modular
 # nix closure builds on the linux fleet and a Mac only substitutes (#3585).
 #

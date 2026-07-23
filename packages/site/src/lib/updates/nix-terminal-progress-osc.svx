@@ -5,9 +5,9 @@ title: "nix builds now drive the terminal's native progress indicator"
 tags: [nix, fork, terminal, ux]
 links:
   - label: patch 0036 (OSC 9;4)
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix/patches/0036-libmain-emit-terminal-progress-OSC-9-4-from-the-prog.patch
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0036-libmain-emit-terminal-progress-OSC-9-4-from-the-prog.patch
   - label: patch 0037 (resize repaint)
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix/patches/0037-libmain-repaint-the-progress-bar-on-terminal-resize.patch
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0037-libmain-repaint-the-progress-bar-on-terminal-resize.patch
   - label: issue 3830
     href: https://github.com/indexable-inc/index/issues/3830
 ---

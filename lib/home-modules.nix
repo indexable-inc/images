@@ -38,12 +38,12 @@
   };
   claudeCodeHomeModule = importApply (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
     inherit indexPackages;
-    promptModule = paths.packagesRoot + "/agent/prompt";
+    promptModule = paths.packagesRoot + "/agent-prompt";
     mutableJsonModule = ix.mutableJson.homeModule;
   };
   codexHomeModule = importApply (paths.packagesRoot + "/agent/home-manager/codex.nix") {
     inherit indexPackages;
-    promptModule = paths.packagesRoot + "/agent/prompt";
+    promptModule = paths.packagesRoot + "/agent-prompt";
   };
   personal = import ./profiles.nix {
     inherit lib ix paths indexPackages home-manager nixpkgs importApply;
@@ -182,8 +182,8 @@ in {
     # Slack/Linear exports, git repos) to an S3/R2 parquet archive and/or
     # Mixedbread, as a portable timer service. Closed over the per-system
     # packages so it resolves the `indexer` for the host. See
-    # packages/search/indexer/home-module.nix.
-    indexer = importApply (paths.packagesRoot + "/search/indexer/home-module.nix") {
+    # packages/indexer/home-module.nix.
+    indexer = importApply (paths.packagesRoot + "/indexer/home-module.nix") {
       inherit indexPackages;
       portableServicesModule = ix.portableServices.homeModule;
     };

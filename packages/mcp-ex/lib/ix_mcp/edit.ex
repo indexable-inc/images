@@ -81,7 +81,7 @@ defmodule IxMcp.Edit do
   # -- primary-checkout worktree guard (#3871) --------------------------------
 
   # The claude-code home-manager module ships a PreToolUse hook
-  # (packages/agent/claude-hooks `worktree-guard`) that denies native
+  # (packages/claude-hooks `worktree-guard`) that denies native
   # Edit/Write under the configured primary-checkout globs. Kernel writes
   # bypass hooks entirely, so the same policy is enforced here at the
   # blessed write seam, with the same knobs and the same message: an

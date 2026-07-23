@@ -5,7 +5,7 @@
 #   lib/build/uv-application.nix   (all uv apps)
 #   lib/util/writers.nix          (writePythonApplication scripts)
 #   packages/mcp/default.nix      (bundled-module strict gate)
-#   packages/agent/distiller/default.nix
+#   packages/distiller/default.nix
 #   lib/per-system.nix            (the repo-wide `ruff` lint stage, over ALL .py)
 #
 # Why flags AND a discovered toml: per-package builds run ruff inside sandboxes

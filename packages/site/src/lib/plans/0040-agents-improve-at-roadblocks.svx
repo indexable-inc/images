@@ -170,7 +170,7 @@ Four metrics, all computable from timestamps the org already records
   alarms.
 
 The harness composes two things the repo already ships.
-`packages/agent/system-prompt-eval` spawns fresh `claude -p` rollouts
+`packages/system-prompt-eval` spawns fresh `claude -p` rollouts
 and has an LLM judge score transcripts into diffable JSON under
 `eval-results/`. `packages/indexbench` has the Metric schema, durable
 run history, and a comparator that exits non-zero on regression

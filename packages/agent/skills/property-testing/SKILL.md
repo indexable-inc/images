@@ -10,7 +10,7 @@ Repo-owned Rust crates use `hegeltest` (workspace dev-dependency; lib name
 pure-Rust engine, `#[hegel::test]` under plain `cargo test`, automatic
 shrinking to a minimal counterexample, and a failure database (`.hegel/`,
 gitignored) that replays the last counterexample first on the next run.
-Reference suites: `packages/nix/ix2nix/tests/properties.rs`,
+Reference suites: `packages/ix2nix/tests/properties.rs`,
 `packages/minecraft/nbt/tests/property.rs`.
 
 ## Which properties earn their keep

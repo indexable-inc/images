@@ -85,7 +85,7 @@ def test_long_command_is_truncated_in_failure_line() -> None:
 
 # NOTE: no test below embeds anything resembling a real credential; every
 # fixture token is constructed at test time from repeated filler (the same
-# convention as packages/search/source/meta/src/sanitize.rs tests).
+# convention as packages/source/meta/src/sanitize.rs tests).
 
 
 def test_failure_line_redacts_bearer_token() -> None:

@@ -13,7 +13,7 @@
 # Closed over the per-system flake package set (to resolve the `bossbar` CLI for
 # the host) and the portable-services home module (so one spec renders a native
 # launchd agent on macOS and a native systemd user unit + timer on Linux). Same
-# shape as packages/search/indexer/home-module.nix.
+# shape as packages/indexer/home-module.nix.
 #
 # Needs `gh` authenticated for the host user, and the boss bar overlay running to
 # be visible (on a headless host it just writes harmless overlay rows). The watch

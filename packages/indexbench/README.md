@@ -165,7 +165,7 @@ nix develop .#bench   # indexbench + hyperfine + valgrind + samply + jemalloc
 ```
 
 `tango-bench` is already a workspace dependency for paired A/B micro comparisons
-(see `packages/search/file-search/benches`).
+(see `packages/file-search/benches`).
 
 ## Fast-follow
 

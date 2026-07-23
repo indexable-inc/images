@@ -35,7 +35,7 @@ agency, separately from task success.
 The repo ships real TUI drivers: packages/tui (Rust PTY driver) with the
 tui-py harness, and the Elixir kernel bridge Tui.act via ix-resource-cli.
 But most agent sessions run without them, on hosts where tmux is installed
-(modules/home/tmux.nix, packages/terminal/tmux). The interesting failure is
+(modules/home/tmux.nix, packages/tmux). The interesting failure is
 not that the model cannot type into vim; it is that models with a perfectly
 good escape hatch (tmux new-session -d, send-keys, capture-pane) never
 think to use it. Task-success evals hide this: a task can fail for many

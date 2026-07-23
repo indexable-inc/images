@@ -4,7 +4,7 @@
 # its sysroot; `clang -fuse-ld=lld` is the Rust linker. The returned `env` is
 # merged into `cargoUnit.buildWorkspace`'s build environment, where the
 # nix-cargo-unit renderer picks up `CARGO_TARGET_<T>_LINKER` per unit and
-# threads `--target` into rustc itself (see packages/nix/nix-cargo-unit/src/render.rs).
+# threads `--target` into rustc itself (see packages/nix-cargo-unit/src/render.rs).
 #
 # Ported from the sibling `ix` repo (nix/lib/apple-sdk-toolchain.nix). The
 # wrapper scripts go through the shared `writeBashApplication`

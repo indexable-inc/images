@@ -10,7 +10,7 @@ Datalog rules join those relations (structurally, by value, or recursively),
 through a Nushell lint stage defined in `lib/per-system.nix`.
 
 The full language reference, prior-art comparison, and design rationale are in
-[`packages/code/astlog/README.md`](../../packages/code/astlog/README.md); this page is
+[`packages/astlog/README.md`](../../packages/astlog/README.md); this page is
 the structural map.
 
 ## Member crates
@@ -22,10 +22,10 @@ the structural map.
 | `astlog/py` | `astlog-py` | PyO3 bindings (`import astlog` in the ix kernel) | none |
 
 All three are Rust workspace members; only `cli` is a flake/packageSet output
-(`packages/code/astlog/cli/default.nix`, `nix run .#astlog`). `core` depends on
+(`packages/astlog/cli/default.nix`, `nix run .#astlog`). `core` depends on
 [`ast-merge-langs`](../ast-merge/overview.md) for grammars and language
 detection and on [`edit-applier`](../edit-applier/overview.md) for the rewrite
-step (`packages/code/astlog/core/Cargo.toml`). It parses with tree-sitter directly
+step (`packages/astlog/core/Cargo.toml`). It parses with tree-sitter directly
 and matches with tree-sitter's `Query` engine; it does not use `ast-merge-ast`.
 
 ## The language (four S-expression forms)

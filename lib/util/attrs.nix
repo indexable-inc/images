@@ -1,6 +1,6 @@
 # General attrset helpers beyond `nixpkgs.lib`. Keep these pure and free of any
 # consumer's formatting opinions (no flag spellings, no value encoders): a
-# caller composes them with its own glue. See packages/agent/codex for the canonical
+# caller composes them with its own glue. See packages/codex for the canonical
 # use (a nested config tree -> `--config dotted.key=value` flags).
 {lib}: let
   inherit (builtins) isAttrs;

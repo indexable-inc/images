@@ -14,10 +14,10 @@ meta records (``isMeta``, ``<...>``/``Caveat:`` prefixes), tool-result-only
 entries, and pasted-TUI noise are all skipped (issue #2245).
 
 The transcript schema is deliberately NOT re-implemented here: parsing reuses
-:func:`distiller.transcripts.parse_session` (packages/agent/distiller), the
+:func:`distiller.transcripts.parse_session` (packages/distiller), the
 same reader the transcript distiller runs, so the schema knowledge stays owned
 in one place on the Python side (the Rust owner is
-``packages/search/source/claude``).
+``packages/source/claude``).
 """
 
 from __future__ import annotations

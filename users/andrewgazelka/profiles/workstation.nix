@@ -151,7 +151,7 @@
   # baseRef, effort/fast/theme runtime-toggle defaults, auto-updates channel,
   # the version-aware statusline, the 1M/cron/autocompact clamps (typed
   # `features` argument), and the built-in tool deny rules all come from
-  # packages/agent/claude-code in indexable-inc/index (#2449), so only what is
+  # packages/claude-code in indexable-inc/index (#2449), so only what is
   # genuinely personal (paths, plugins, marketplaces) belongs here. Lifecycle
   # hooks are index-owned too (packages/agent/hooks.nix):
   # baked into the claude-code package (Claude) and exposed as
@@ -1157,7 +1157,7 @@ in {
   # the writable file, because Claude edits it at runtime. .claude.json
   # remains app-owned runtime state because Claude stores account and session
   # metadata beside user choices there. CLAUDE.md is generation-owned and
-  # module-rendered: the house context render (packages/agent/prompt) plus the
+  # module-rendered: the house context render (packages/agent-prompt) plus the
   # personal appendix, so the shared rules never fork into a hand-rolled copy.
   programs.claude-code = {
     enable = true;

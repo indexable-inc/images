@@ -17,7 +17,7 @@ Every check re-stated the same success-marker epilogue, and most took the
 whole tracked tree as their source, so any file edit anywhere rebuilt them.
 
 Each check now lives in a `checks.nix` next to what it checks
-(astlog-rules/, packages/blast-radius/, packages/code/scipql/,
+(astlog-rules/, packages/blast-radius/, packages/scipql/,
 users/andrewgazelka/, lib/dev/, lib/util/, lib/services/,
 lib/darwin/) and builds through the one shared `mkScriptCheck` shape in
 lib/checks.nix. Sources are scoped filesets: the astlog self-test rebuilds

@@ -62,7 +62,7 @@ Sharing is a promotion of an existing private memory, so the private layer keeps
 
 ### Read path
 
-Recall greps two roots: private first, shared second. A slug present in both resolves to the private copy, so a user's own correction always beats the fleet's version. The harness config grows a `sharedMemoryDirectory` sibling next to `autoMemoryDirectory`; the grep recipe in the memory rule (`packages/agent/prompt/rules.nix`) is unchanged apart from the second root.
+Recall greps two roots: private first, shared second. A slug present in both resolves to the private copy, so a user's own correction always beats the fleet's version. The harness config grows a `sharedMemoryDirectory` sibling next to `autoMemoryDirectory`; the grep recipe in the memory rule (`packages/agent-prompt/rules.nix`) is unchanged apart from the second root.
 
 ### Freshness for concurrent agents
 

@@ -232,12 +232,12 @@
     modules = [
       (import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
         indexPackages = homeAgentIndexPackages;
-        promptModule = paths.packagesRoot + "/agent/prompt";
+        promptModule = paths.packagesRoot + "/agent-prompt";
         mutableJsonModule = ix.mutableJson.homeModule;
       })
       (import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
         indexPackages = homeAgentIndexPackages;
-        promptModule = paths.packagesRoot + "/agent/prompt";
+        promptModule = paths.packagesRoot + "/agent-prompt";
       })
       {
         home = {

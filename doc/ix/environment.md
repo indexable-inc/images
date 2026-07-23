@@ -35,9 +35,9 @@ Mixedbread. **`MXBAI_API_KEY` is required**: without it (and without a prior
 
 | var | meaning | default | source path |
 | --- | --- | --- | --- |
-| `MXBAI_API_KEY` | Mixedbread API key. Required unless you ran `mgrep login`. | none | `packages/search/mixedbread/src/lib.rs` |
-| `MXBAI_STORE` | Store name to query/index (`--store`). | `index` | `packages/search/search/src/main.rs` |
-| `MXBAI_BASE_URL` | Mixedbread API base URL (`--base-url`). | `https://api.mixedbread.com` | `packages/search/search/src/main.rs` |
+| `MXBAI_API_KEY` | Mixedbread API key. Required unless you ran `mgrep login`. | none | `packages/mixedbread/src/lib.rs` |
+| `MXBAI_STORE` | Store name to query/index (`--store`). | `index` | `packages/search/src/main.rs` |
+| `MXBAI_BASE_URL` | Mixedbread API base URL (`--base-url`). | `https://api.mixedbread.com` | `packages/search/src/main.rs` |
 
 ## Run recorder
 

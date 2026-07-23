@@ -9,7 +9,7 @@
   # the flake-package path (lib/packages.nix), which is where
   # `nix run .#humanlayer.updateScript` resolves; the overlay path leaves it
   # null, so `pkgs.humanlayer` carries no updateScript. Same pattern as
-  # packages/yc and packages/agent/claude-code.
+  # packages/yc and packages/claude-code.
   updateScriptWriter ? null,
 }: let
   # Version and per-platform hashes live in manifest.json as the single owner;

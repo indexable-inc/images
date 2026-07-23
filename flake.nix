@@ -252,7 +252,7 @@
     # pdtpartners/nix-ninja: ninja-compatible build runner that turns each
     # compilation unit of a meson/ninja graph into its own content-addressed
     # Nix derivation (the incremental build lane for the patched nix fork,
-    # packages/nix/nix-ninja-build, issue #3655). Pre-alpha upstream, so
+    # packages/nix-ninja-build, issue #3655). Pre-alpha upstream, so
     # pinned BY REV rather than by branch: the hourly flake-lock updater must
     # not move it; bump deliberately after revalidating the lane. Consumed as
     # a source tree (flake = false) and built with rustPlatform in
@@ -270,7 +270,7 @@
     # snix-src` to bump.
     #
     # `shallow=1` is load-bearing, not cosmetic: only the source tree at the
-    # pinned rev is ever used (`ix.snixSrc` -> `packages/nix/snix`), never git
+    # pinned rev is ever used (`ix.snixSrc` -> `packages/snix`), never git
     # history or `revCount`. Without it the lock records `revCount`, which forces
     # Nix to clone snix's entire ~22k-commit history (~500 MB) to materialize the
     # input. nix-direnv's `use flake` then runs `nix flake archive` on every cold

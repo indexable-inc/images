@@ -1,5 +1,5 @@
 # Shared hook runner wrapper for Claude Code and Codex. The hooks are
-# subcommands of one compiled binary (packages/agent/claude-hooks) rather than
+# subcommands of one compiled binary (packages/claude-hooks) rather than
 # hand-rolled shell scripts. Each fails OPEN and SILENT (any
 # missing input, parse error, or kill-switch exits with no stdout: a noisy or
 # broken hook is strictly worse than no hook). See that crate for the full
@@ -15,7 +15,7 @@
 #    CLAUDE_CODE_DISABLE_PROMPT_PRIORS=1.
 #  - subagent-cache-lookup (PreToolUse on Agent) / subagent-cache-populate
 #    (SubagentStop): serve a fresh prior read-only subagent investigation from
-#    the subagent-cache daemon (packages/agent/subagent-cache) instead of
+#    the subagent-cache daemon (packages/subagent-cache) instead of
 #    re-running it, and capture each finished one (ENG-4665). POST to
 #    SUBAGENT_CACHE_URL; inert when unset. Kill switch:
 #    CLAUDE_CODE_DISABLE_SUBAGENT_CACHE=1.

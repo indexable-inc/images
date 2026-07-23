@@ -1,5 +1,5 @@
 // The dashboard's shiki themes, generated from the JetBrains Islands palette
-// owned by packages/code/code-highlight/src/islands-theme.json (resolved
+// owned by packages/code-highlight/src/islands-theme.json (resolved
 // through the `$islands-theme` vite alias). Only the slot → TextMate-scope
 // mapping lives here; edit colors in the palette file, never here.
 import palette from '$islands-theme';

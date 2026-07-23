@@ -5,7 +5,7 @@ title: "House prompt: subagent tools are never a superset of yours"
 tags: [agent, prompt]
 links:
   - label: rules
-    href: https://github.com/indexable-inc/index/blob/main/packages/agent/prompt/rules.nix
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent-prompt/rules.nix
 ---
 
 The house prompt gains a `subagentToolSubset` rule: treat a subagent's toolset as never a superset of your own. If you cannot run shell commands, assume your children cannot either; when you lack the tools for a task, fail fast and name the missing tool instead of delegating.
