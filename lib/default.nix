@@ -835,6 +835,23 @@
 
   importIx = importIxFor system;
 
+  /**
+  Stable entry point for external flakes evaluated by ix's patched nix
+  (`ix apply` / `ix eval` pass `wasm-builtin`): the in-eval `builtins.wasm`
+  variant of `importIx`, already wired to the compiled ix2nix converter.
+  Scaffolded `ix init` flakes consume this as `index.lib.importIxWasm`
+  instead of importing a deep repo path, so moving files inside this repo
+  can never break them again (#4125).
+  */
+  importIxWasmFor = hostSystem: let
+    hostPkgs = nixpkgs.legacyPackages."${hostSystem}";
+  in
+    import (paths.root + "/packages/ix2nix/import-ix.nix") {
+      converter = "${(packageSetFor hostPkgs).ix2nix-wasm}/lib/ix2nix.wasm";
+    };
+
+  importIxWasm = importIxWasmFor system;
+
   inherit
     (import ./discovery.nix {
       inherit
@@ -873,6 +890,8 @@
         goUnitFor
         importIx
         importIxFor
+        importIxWasm
+        importIxWasmFor
         kernelUnitFor
         macosSdk
         mkDev
