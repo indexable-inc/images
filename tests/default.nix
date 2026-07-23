@@ -6266,6 +6266,8 @@
     test -d ${
       cargoUnitWorkspace.targetSets.test.tests.cargo_unit_hello.cases."tests::package_test_env_and_path_are_available"
     }
+    test -f ${cargoUnitWorkspace.nextestByTarget.cargo_unit_hello}/result
+    test ! -e ${cargoUnitWorkspace.nextestByTarget.cargo_unit_hello}/junit.xml
     test -d ${(builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).all}
     test -d ${(builtins.head (builtins.attrValues (builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).cases))}
     test -s ${cargoUnitWorkspace.testPlan}/packages/cargo-unit-hello/test-binaries
