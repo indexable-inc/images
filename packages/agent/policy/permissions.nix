@@ -53,7 +53,12 @@
   # per-model upstream with no config toggle to reach it.
   kernelSuperseded = {
     shell = {
-      claudeTools = ["Bash"];
+      # Claude keeps Bash even with the kernel baked: the kernel is the
+      # preferred shell (prompt rules steer there), but a kernel BEAM crash
+      # (index#4080, 2026-07-23) left sessions with NO shell or file IO at
+      # all, since a dead MCP connection never auto-reattaches. Bash is the
+      # degraded-mode fallback, not a second first-class path.
+      claudeTools = [];
       codexFeatures = {
         shell_tool = false;
         unified_exec = false;
