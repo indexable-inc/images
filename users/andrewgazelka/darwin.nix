@@ -82,6 +82,9 @@ in {
       # refuses no-auth servers, so a third-party client is required to reach
       # `vnc://<host>.<tailnet>.ts.net:5900`. See ix nix/modules/desktop/remote-desktop.nix.
       "vnc-viewer"
+      # Zed via brew: the nix package (crane-built fork) was dropped for eval-time
+      # fetch storms (index#4028); the cask sidesteps the build entirely.
+      "zed"
       "zoom"
     ];
 

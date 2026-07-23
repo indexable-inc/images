@@ -92,6 +92,8 @@
   expand_excerpt_lines = 5;
   find_all_references_include_current = false;
   file_types = {
+    # .ix is JavaScript syntax with Nix semantics (ix2nix); highlight as JS.
+    JavaScript = ["ix"];
     Nu = ["nu"];
     Scheme = ["astlog"];
   };
