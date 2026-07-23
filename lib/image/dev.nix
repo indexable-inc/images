@@ -1,11 +1,12 @@
 /**
-`mkDev`: an opinionated dev-fleet layer over `mkFleet` (RFC 0007).
+`mkDev`: an opinionated dev layer over `mkFleet` (RFC 0007).
 
-Consumes one user-owned NixOS module (the forkable `ix.nix`) and returns the
-same result shape `mkFleet` does (`.up`, `.health`, `.diff`, `withNodePrefix`,
-…), so it drops straight into the flake/example plumbing.
+Consumes one user-owned NixOS module (the forkable `dev.nix`) and returns the
+same result shape `mkFleet` and `mkVm` do (`nixosConfigurations`, `.up`,
+`.health`, `withNodePrefix`, …), so it drops straight into the flake/example
+plumbing.
 
-The user's `ix.nix` is an ordinary NixOS module: `environment.systemPackages`
+The user's `dev.nix` is an ordinary NixOS module: `environment.systemPackages`
 and friends at the top level, plus `ix.dev.*` (see `lib/dev/options.nix`) to
 describe the agents, fleet, and shared volume. `mkDev` reads `ix.dev` once via
 a probe eval to plan the fleet, then builds each node with the same module:
