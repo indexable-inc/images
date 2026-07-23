@@ -1,0 +1,24 @@
+---
+id: lint-main-unquoted-splice
+postedAt: 2026-07-23T09:15:00-07:00
+title: main lint gate green again after quoting a legacyPackages splice
+links:
+  - label: "index#4096"
+    href: https://github.com/indexable-inc/index/issues/4096
+tags:
+  - nix
+  - lint
+---
+
+`nix run .#lint` was red on main: astlog's `no-unquoted-splice` rule
+flagged `nixpkgs.legacyPackages.${hostSystem}` in `lib/default.nix`
+(the `importIxFor` helper), where the antiquote interpolates outside a
+string.
+
+The fix quotes the splice — `legacyPackages."${hostSystem}"` — matching
+the existing call site in `lib/image/default.nix`. While clearing that,
+the lint run also caught `lib/per-system.nix` out of alejandra formatting
+(the `kernel-unit` attrs under the x86_64-linux `optionalAttrs` block were
+under-indented), so that file was reformatted too — whitespace only, no
+syntactic change. The lint gate on main now reports zero blocking
+findings.

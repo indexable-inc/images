@@ -825,7 +825,7 @@
   Example flakes use the in-eval `import-ix.nix` wasm shim instead.
   */
   importIxFor = hostSystem: let
-    hostPkgs = nixpkgs.legacyPackages.${hostSystem};
+    hostPkgs = nixpkgs.legacyPackages."${hostSystem}";
   in
     import ./import-ix-native.nix {
       pkgs = hostPkgs;
