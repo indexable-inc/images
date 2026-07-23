@@ -65,17 +65,27 @@
         then "WAL"
         else "DELETE";
 
-      # FHS layout pointing into the NixOS toplevel. Keep activation-owned
-      # paths writable: NixOS first boot populates /etc and creates /bin/sh
-      # and /usr/bin/env, so those cannot be symlinks into the immutable store.
+      # FHS layout pointing into the NixOS toplevel. /etc stays a writable
+      # directory: NixOS first boot populates it. /bin/sh and /usr/bin/env
+      # are baked at build time with the exact targets the binsh/usrbinenv
+      # activation snippets would have linked: platform.nix blanks those
+      # snippets because the CAS-booted guest reaches /bin and /usr through
+      # symlinks into the read-only store, where their recreate-and-rename
+      # can never succeed (ix#8307).
       systemRoot = pkgs.runCommand "system-root" {} ''
         mkdir -p $out
         ln -s ${toplevel}/init $out/init
         mkdir -p $out/etc
         mkdir -p $out/bin
+        ${lib.optionalString (config.environment.binsh != null) ''
+          ln -s ${config.environment.binsh} $out/bin/sh
+        ''}
         ln -s ${toplevel}/sw/sbin $out/sbin
         ln -s ${toplevel}/sw/lib $out/lib
         mkdir -p $out/usr/bin
+        ${lib.optionalString (config.environment.usrbinenv != null) ''
+          ln -s ${config.environment.usrbinenv} $out/usr/bin/env
+        ''}
         ln -s ${toplevel}/sw/lib $out/usr/lib
         ln -s ${toplevel}/sw/sbin $out/usr/sbin
         mkdir -p $out/tmp $out/var $out/run $out/proc $out/sys $out/dev $out/root

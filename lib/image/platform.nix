@@ -765,6 +765,21 @@ in {
       daemonIOSchedClass = "idle";
     };
 
+    # /bin/sh and /usr/bin/env are baked into every image root at build time
+    # (oci-layer.nix systemRoot here; the CAS systemRoot on the ix side), and
+    # the CAS-booted guest reaches /bin and /usr through symlinks into the
+    # read-only store, so the stock recreate-and-rename these snippets run
+    # can never succeed there: both fail on every boot and would fail the
+    # Activating phase of a switch (ix#8307). Blank them; the attrs stay
+    # defined so snippet dependency resolution is unaffected. mkForce because
+    # nixpkgs assigns both snippets unconditionally, not as defaults.
+    system.activationScripts = {
+      # astlog-ignore: no-mkforce nixpkgs sets this unconditionally; the image bakes /bin/sh (ix#8307)
+      binsh = lib.mkForce "";
+      # astlog-ignore: no-mkforce nixpkgs sets this unconditionally; the image bakes /usr/bin/env (ix#8307)
+      usrbinenv = lib.mkForce "";
+    };
+
     system.stateVersion = "25.05";
   };
 }
