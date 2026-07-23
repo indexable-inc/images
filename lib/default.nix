@@ -704,6 +704,7 @@
       gitDefaults
       goUnit
       hermes
+      kernelUnitFor
       languages
       kdl
       lists
