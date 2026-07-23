@@ -20,7 +20,7 @@ on:
         type: string
         default: ""
       app-client-id:
-        description: "Client id of a GitHub App (contents + pull-requests write) that authors the bump PR; empty falls back to GITHUB_TOKEN, whose PRs never get pull_request CI on private repos."
+        description: "Client id of a GitHub App (contents + pull-requests write) that authors the bump PR; empty falls back to the PLAYBOOK_APP_CLIENT_ID variable, then to GITHUB_TOKEN, whose PRs never get pull_request CI on private repos."
         type: string
         default: ""
       runner-label:
@@ -46,6 +46,13 @@ on:
     secrets:
       app-private-key:
         description: "Private key for app-client-id."
+        required: false
+      # UPPER_SNAKE, unlike its siblings: the name must match the repository
+      # secret that index's own scheduled/dispatched runs resolve (those
+      # events read secrets.* from the repository, not from workflow_call).
+      # A caller passes app-private-key instead and never needs this.
+      PLAYBOOK_APP_PRIVATE_KEY:
+        description: "Repository-secret twin of app-private-key for index's own scheduled runs."
         required: false
       slack-bot-token:
         description: "Slack bot token (chat:write) for escalation posts; empty escalates through the tracking issue only."
@@ -121,13 +128,65 @@ jobs:
       # fork-approval API cannot clear them (ix#6566). When the caller supplies
       # a GitHub App with contents + pull-requests write, mint a token scoped
       # to this repository and author the PR with it so CI triggers normally.
+      # index's own scheduled and dispatched runs have no workflow_call
+      # inputs, so they fall back to the repo's PLAYBOOK_APP_CLIENT_ID
+      # variable + PLAYBOOK_APP_PRIVATE_KEY secret (the same ix-playbook-agent
+      # identity ix passes in), closing the loop of #3692: the rolling bump
+      # PR #3021 sat 159 hours with no flake-check because it was authored by
+      # GITHUB_TOKEN. With neither configured the step is skipped and the PR
+      # falls back to GITHUB_TOKEN below, where CI stays silent.
       - name: Mint PR token
         id: app-token
-        if: ${{ inputs.app-client-id != '' }}
+        if: ${{ (inputs.app-client-id || vars.PLAYBOOK_APP_CLIENT_ID) != '' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ inputs.app-client-id }}
-          private-key: ${{ secrets.app-private-key }}
+          client-id: ${{ inputs.app-client-id || vars.PLAYBOOK_APP_CLIENT_ID }}
+          private-key: ${{ secrets.app-private-key || secrets.PLAYBOOK_APP_PRIVATE_KEY }}
+
+      # The merge half of the loop (#3692): each tick first lands the bump a
+      # previous tick pushed, once CI proved it green. This runs before this
+      # tick's own push below, which would reset the PR's checks back to
+      # pending. The merge is an explicit API rebase (the only merge method
+      # main allows), not native auto-merge, and never a bypass: a PR that
+      # cannot merge on its own merits stays open. Merging with the app token
+      # also means the resulting push to main triggers the post-merge
+      # workflows, which a GITHUB_TOKEN merge would not. Scoped to index
+      # itself: a cross-repo caller (ix) keeps its own merge policy. A PR
+      # stuck unmergeable past the threshold is the escalate job's to report
+      # (#3438), not this step's.
+      - name: Merge the previous green bump
+        if: ${{ steps.app-token.outputs.token != '' && github.repository == 'indexable-inc/index' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          BUMP_BRANCH: update-flake-lock
+        run: |
+          set -euo pipefail
+          number="$(gh pr list --repo "$REPOSITORY" --head "$BUMP_BRANCH" --base main \
+            --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$number" ]; then
+            echo "no open rolling PR on ${BUMP_BRANCH}; nothing to merge"
+            exit 0
+          fi
+          state="$(gh pr view "$number" --repo "$REPOSITORY" \
+            --json mergeStateStatus --jq .mergeStateStatus)"
+          case "$state" in
+            # UNSTABLE is "required checks green, a non-required context red
+            # or pending"; bot-authored PRs always carry the skipped
+            # non-required `approve` context, so requiring CLEAN would never
+            # merge anything.
+            CLEAN | UNSTABLE)
+              gh pr merge --rebase --repo "$REPOSITORY" "$number"
+              echo "merged rolling PR #${number} (mergeStateStatus ${state})"
+              ;;
+            # BLOCKED: a required check (flake-check, closure-gate) is pending
+            # or red. DIRTY: merge conflict. UNKNOWN: GitHub is still
+            # computing. Each heals on a later tick after the push below
+            # refreshes the branch and its checks.
+            *)
+              echo "rolling PR #${number} not mergeable (mergeStateStatus ${state}); leaving it for a later tick"
+              ;;
+          esac
 
       # Notify the human behind a manual dispatch (of this workflow or of a
       # cross-repo caller such as ix: a reusable workflow shares the caller's

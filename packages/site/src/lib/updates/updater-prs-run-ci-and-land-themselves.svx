@@ -1,0 +1,37 @@
+---
+id: updater-prs-run-ci-and-land-themselves
+postedAt: "2026-07-19T06:18:00-07:00"
+title: "updater PRs run CI and land themselves"
+links:
+  - label: "closed loop #3692"
+    href: "https://github.com/indexable-inc/index/issues/3692"
+  - label: "escalation deadman #3438"
+    href: "https://github.com/indexable-inc/index/issues/3438"
+  - label: "the 159-hour PR #3021"
+    href: "https://github.com/indexable-inc/index/pull/3021"
+tags:
+  - ci
+---
+
+The four updater workflows (flake.lock, cargo, rust-nightly, content) now
+author their rolling PRs as the ix-playbook-agent GitHub App, and each
+scheduled tick merges the previous tick's bump via `gh pr merge --rebase`
+once `flake-check` has proved it green. A correct bump lands on main with
+no human in the loop.
+
+Before this, the rolling PRs were pushed with the workflow's own
+`GITHUB_TOKEN`, and GitHub deliberately never triggers `pull_request`
+workflows on events that token creates. So `flake-check` never ran, nothing
+could merge, and bumps only landed when a human re-authored them: the
+flake.lock PR carried a correct nixpkgs bump for 159 hours while prod broke
+downstream of the stale pin (ix#7844).
+
+The merge is an explicit API call on the next tick, not native auto-merge:
+the PR merges only when GitHub already reports it mergeable on its own
+merits, rebase-only, no admin bypass. The escalation job from #3438 stays
+untouched as the deadman that reports any bump stuck past its threshold.
+
+The loop stays dormant until the `PLAYBOOK_APP_CLIENT_ID` variable and
+`PLAYBOOK_APP_PRIVATE_KEY` secret exist on the repo; until then the
+workflows keep today's behavior. The identity is the same app ix's
+updaters already push with.

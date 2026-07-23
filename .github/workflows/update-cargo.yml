@@ -83,15 +83,73 @@ jobs:
           # also normalizes the lockfile after the breaking edits above.
           cargo update
 
+      # PRs authored by the default GITHUB_TOKEN never trigger `pull_request`
+      # workflows on private repos, so the rolling bump PR gets no
+      # `flake-check` and can only land when a human re-authors it (#3692;
+      # the flake.lock bump #3021 sat 159 hours that way). Author the push
+      # and the merge as the ix-playbook-agent GitHub App instead (contents +
+      # pull-requests write, the same identity ix's updaters use) so CI runs
+      # on every bump. Until the PLAYBOOK_APP_CLIENT_ID variable and
+      # PLAYBOOK_APP_PRIVATE_KEY secret are configured, this is skipped and
+      # the workflow keeps today's GITHUB_TOKEN behavior: the PR opens but
+      # its CI stays silent.
+      - name: Mint PR token
+        id: app-token
+        if: ${{ vars.PLAYBOOK_APP_CLIENT_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.PLAYBOOK_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PLAYBOOK_APP_PRIVATE_KEY }}
+
+      # The merge half of the loop (#3692): each tick first lands the bump a
+      # previous tick pushed, once CI proved it green. This runs before this
+      # tick's own push below, which would reset the PR's checks back to
+      # pending. The merge is an explicit API rebase (the only merge method
+      # main allows), not native auto-merge, and never a bypass: a PR that
+      # cannot merge on its own merits stays open. Merging with the app token
+      # also means the resulting push to main triggers the post-merge
+      # workflows, which a GITHUB_TOKEN merge would not.
+      - name: Merge the previous green bump
+        if: ${{ steps.app-token.outputs.token != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          BUMP_BRANCH: update-cargo
+        run: |
+          set -euo pipefail
+          number="$(gh pr list --repo "$REPOSITORY" --head "$BUMP_BRANCH" --base main \
+            --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$number" ]; then
+            echo "no open rolling PR on ${BUMP_BRANCH}; nothing to merge"
+            exit 0
+          fi
+          state="$(gh pr view "$number" --repo "$REPOSITORY" \
+            --json mergeStateStatus --jq .mergeStateStatus)"
+          case "$state" in
+            # UNSTABLE is "required checks green, a non-required context red
+            # or pending"; bot-authored PRs always carry the skipped
+            # non-required `approve` context, so requiring CLEAN would never
+            # merge anything.
+            CLEAN | UNSTABLE)
+              gh pr merge --rebase --repo "$REPOSITORY" "$number"
+              echo "merged rolling PR #${number} (mergeStateStatus ${state})"
+              ;;
+            # BLOCKED: a required check (flake-check, closure-gate) is pending
+            # or red. DIRTY: merge conflict. UNKNOWN: GitHub is still
+            # computing. Each heals on a later tick after the push below
+            # refreshes the branch and its checks.
+            *)
+              echo "rolling PR #${number} not mergeable (mergeStateStatus ${state}); leaving it for a later tick"
+              ;;
+          esac
+
       # Opens (or updates) a single PR, and only when something changed:
       # create-pull-request no-ops on an empty diff. It reuses the
       # `update-cargo` branch so each run advances the same PR.
       #
-      # `token`: a PR opened with the default GITHUB_TOKEN does not trigger the
-      # `pull_request` workflows (`flake-check`), so branch protection would
-      # block the merge. Set an `AUTOBUMP_TOKEN` repo secret (a PAT or GitHub
-      # App token) to make the PR run CI; without it this falls back to
-      # GITHUB_TOKEN and a maintainer must re-trigger `flake-check`.
+      # `token`: the app token minted above, so the PR triggers `pull_request`
+      # CI (`flake-check`) and the next scheduled tick can merge it; the
+      # GITHUB_TOKEN fallback opens a PR whose CI never runs (#3692).
       # Notify the human behind a manual dispatch: review request + assignee +
       # body mention, all empty (a no-op) on the scheduled runs, which have no
       # triggering human.
@@ -102,7 +160,7 @@ jobs:
       - name: Open pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
           assignees: ${{ steps.trigger.outputs.user }}
           reviewers: ${{ steps.trigger.outputs.user }}
           base: main
