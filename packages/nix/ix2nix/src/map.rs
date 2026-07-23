@@ -3,10 +3,13 @@
 //! Every `JavaScript` form either has exactly one Nix spelling or is a
 //! positioned [`Error`]; there are no fallbacks.
 
+use std::collections::HashSet;
+
 use oxc_ast::ast;
 use oxc_span::{GetSpan as _, Span};
 
 use crate::error::Error;
+use crate::ty::{BUILTIN_TYPES, alias_binding, arg_check, nullable};
 use crate::nix::{
     Attr, BinaryOp, Binding, Expr, LetBinding, Module, Param, PatternField, StrPart, UnaryOp,
     is_bare_ident,
@@ -19,7 +22,25 @@ use crate::nix::{
 /// Returns a positioned [`Error`] for any `JavaScript` form without a 1:1 Nix
 /// equivalent.
 pub fn module(program: &ast::Program<'_>, source: &str) -> Result<Module, Error> {
-    let mapper = Mapper { source };
+    // Alias names are collected up front so annotations anywhere in the
+    // module can reference an alias declared after them (Nix `let` is
+    // recursive, so the emitted bindings tolerate any order).
+    let mut type_aliases = HashSet::new();
+    for statement in &program.body {
+        if let ast::Statement::TSTypeAliasDeclaration(alias) = statement
+            && !type_aliases.insert(alias.id.name.to_string())
+        {
+            return Err(Error::at_offset32(
+                alias.id.span.start,
+                source,
+                format!("duplicate `type {}`", alias.id.name),
+            ));
+        }
+    }
+    let mapper = Mapper {
+        source,
+        type_aliases,
+    };
 
     let mut bindings = Vec::new();
     let mut default = None;
@@ -27,6 +48,15 @@ pub fn module(program: &ast::Program<'_>, source: &str) -> Result<Module, Error>
         match statement {
             ast::Statement::VariableDeclaration(declaration) => {
                 mapper.const_bindings(declaration, &mut bindings)?;
+            }
+            ast::Statement::TSTypeAliasDeclaration(alias) => {
+                mapper.alias_bindings(alias, &mut bindings)?;
+            }
+            ast::Statement::TSInterfaceDeclaration(interface) => {
+                return Err(mapper.err(
+                    interface.span,
+                    "`interface` has no runtime lowering; use `type`",
+                ));
             }
             ast::Statement::ExportDefaultDeclaration(export) => {
                 let Some(expression) = export.declaration.as_expression() else {
@@ -78,12 +108,15 @@ fn make_let(bindings: Vec<LetBinding>, body: Expr) -> Expr {
     }
 }
 
-struct Mapper<'s> {
-    source: &'s str,
+pub(crate) struct Mapper<'s> {
+    pub(crate) source: &'s str,
+    /// Names of this module's top-level `type` aliases; the only type names
+    /// [`crate::ty`] resolves beyond the built-ins.
+    pub(crate) type_aliases: HashSet<String>,
 }
 
 impl Mapper<'_> {
-    fn err(&self, span: Span, message: impl Into<String>) -> Error {
+    pub(crate) fn err(&self, span: Span, message: impl Into<String>) -> Error {
         Error::at_offset32(span.start, self.source, message)
     }
 
@@ -116,6 +149,16 @@ impl Mapper<'_> {
             ast::Expression::BinaryExpression(binary) => self.binary(binary),
             ast::Expression::UnaryExpression(unary) => self.unary(unary),
             ast::Expression::ParenthesizedExpression(paren) => self.expr(&paren.expression),
+            ast::Expression::TSAsExpression(cast) => self.cast(cast),
+            ast::Expression::TSSatisfiesExpression(satisfies) => Err(self.err(
+                satisfies.span,
+                "`satisfies` is a static-only assertion and nothing static runs \
+                 here; use `as` for a runtime check",
+            )),
+            ast::Expression::TSNonNullExpression(non_null) => Err(self.err(
+                non_null.span,
+                "`!` has no runtime lowering; use `x.y ?? default` or `T | null`",
+            )),
             ast::Expression::ChainExpression(chain) => Err(self.err(
                 chain.span,
                 "optional chaining maps only as `expr?.path ?? default` \
@@ -158,7 +201,7 @@ impl Mapper<'_> {
         }
     }
 
-    fn number(&self, lit: &ast::NumericLiteral<'_>) -> Result<Expr, Error> {
+    pub(crate) fn number(&self, lit: &ast::NumericLiteral<'_>) -> Result<Expr, Error> {
         let Some(raw) = lit.raw.as_ref() else {
             return Err(self.err(lit.span, "numeric literal without source text"));
         };
@@ -301,6 +344,48 @@ impl Mapper<'_> {
         })
     }
 
+    /// `expr as T` checks at the cast site, the opposite of TypeScript's
+    /// erasure, on purpose: casts are exactly where unchecked values (JSON,
+    /// imported plain Nix) enter typed code. `as any` / `as unknown` is the
+    /// uncheckable escape hatch and lowers to nothing.
+    fn cast(&self, cast: &ast::TSAsExpression<'_>) -> Result<Expr, Error> {
+        let value = self.expr(&cast.expression)?;
+        if matches!(
+            cast.type_annotation,
+            ast::TSType::TSAnyKeyword(_) | ast::TSType::TSUnknownKeyword(_)
+        ) {
+            return Ok(value);
+        }
+        let ty = self.ty(&cast.type_annotation)?;
+        Ok(self.ret_check(cast.type_annotation.span(), "as", ty, value))
+    }
+
+    /// `type X = T` becomes a `ty'X` checker binding in the emitted `let`.
+    fn alias_bindings(
+        &self,
+        alias: &ast::TSTypeAliasDeclaration<'_>,
+        bindings: &mut Vec<LetBinding>,
+    ) -> Result<(), Error> {
+        if let Some(type_parameters) = &alias.type_parameters {
+            return Err(self.err(
+                type_parameters.span,
+                "generic type aliases are not lowered yet",
+            ));
+        }
+        let name = self.checked_name(alias.id.span, alias.id.name.as_str())?;
+        if BUILTIN_TYPES.contains(&name.as_str()) {
+            return Err(self.err(
+                alias.id.span,
+                format!("`type {name}` shadows the built-in type `{name}`"),
+            ));
+        }
+        bindings.push(LetBinding {
+            name: alias_binding(&name),
+            value: self.ty(&alias.type_annotation)?,
+        });
+        Ok(())
+    }
+
     fn arrow(&self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Expr, Error> {
         if arrow.r#async {
             return Err(self.err(arrow.span, "`async` has no Nix equivalent"));
@@ -319,9 +404,31 @@ impl Mapper<'_> {
             ));
         }
 
+        if let Some(type_parameters) = &arrow.type_parameters {
+            return Err(self.err(
+                type_parameters.span,
+                "generic arrows are not lowered yet; annotate concrete types",
+            ));
+        }
+
         let mut body = self.arrow_body(arrow)?;
+        // For a curried `(a, b): R => e`, the declared return is the value of
+        // the innermost body, so its check wraps `e` before the lambdas fold.
+        if let Some(return_type) = &arrow.return_type {
+            let ty = self.ty(&return_type.type_annotation)?;
+            body = self.ret_check(return_type.span, "return", ty, body);
+        }
         // `(a, b) => e` curries to `a: b: e`, matching curried call mapping.
+        // Each parameter's checks wrap the body directly inside that
+        // parameter's own lambda, so a check reads exactly its own binder
+        // (immune to shadowing) and fires on partial application.
         for item in arrow.params.items.iter().rev() {
+            if item.optional {
+                return Err(self.err(
+                    item.span,
+                    "optional parameters have no Nix equivalent; use `T | null`",
+                ));
+            }
             if let Some(initializer) = &item.initializer {
                 return Err(self.err(
                     initializer.span(),
@@ -329,12 +436,108 @@ impl Mapper<'_> {
                      parameter (Nix `{ a ? default }`)",
                 ));
             }
+            if let Some(annotation) = &item.type_annotation {
+                let mut checks = Vec::new();
+                self.param_checks(&item.pattern, annotation, &mut checks)?;
+                for (loc, ty, value) in checks.into_iter().rev() {
+                    body = arg_check(loc, ty, value, body);
+                }
+            }
             body = Expr::Lambda {
                 param: self.param(&item.pattern)?,
                 body: Box::new(body),
             };
         }
         Ok(body)
+    }
+
+    /// Collects the checks one annotated parameter contributes.
+    ///
+    /// A plain parameter checks its own binding. A destructured parameter has
+    /// no binding for the whole attrset, so its annotation must be an inline
+    /// object type and lowers to per-field checks on the bound names; the
+    /// pattern itself already makes Nix demand the fields exist.
+    fn param_checks(
+        &self,
+        pattern: &ast::BindingPattern<'_>,
+        annotation: &ast::TSTypeAnnotation<'_>,
+        checks: &mut Vec<(String, Expr, Expr)>,
+    ) -> Result<(), Error> {
+        match pattern {
+            ast::BindingPattern::BindingIdentifier(ident) => {
+                let loc =
+                    self.check_loc(ident.span, &format!("argument `{}`", ident.name));
+                checks.push((
+                    loc,
+                    self.ty(&annotation.type_annotation)?,
+                    Expr::Ident(ident.name.to_string()),
+                ));
+            }
+            ast::BindingPattern::ObjectPattern(object) => {
+                let ast::TSType::TSTypeLiteral(literal) = &annotation.type_annotation else {
+                    return Err(self.err(
+                        annotation.span,
+                        "a destructured parameter needs an inline object type \
+                         (`({ a }: { a: T })`); there is no binding for the whole set",
+                    ));
+                };
+                for member in &literal.members {
+                    let ast::TSSignature::TSPropertySignature(property) = member else {
+                        return Err(self.err(
+                            member.span(),
+                            "only property signatures lower; index, call, and method \
+                             signatures have no runtime check",
+                        ));
+                    };
+                    let ast::PropertyKey::StaticIdentifier(key) = &property.key else {
+                        return Err(self.err(
+                            property.key.span(),
+                            "pattern field types use plain identifier keys",
+                        ));
+                    };
+                    let bound = object.properties.iter().any(|bound| {
+                        matches!(
+                            &bound.key,
+                            ast::PropertyKey::StaticIdentifier(name) if name.name == key.name
+                        )
+                    });
+                    if !bound {
+                        return Err(self.err(
+                            key.span,
+                            format!(
+                                "field `{}` is declared but not bound by the pattern; \
+                                 only bound fields can be checked",
+                                key.name
+                            ),
+                        ));
+                    }
+                    let Some(field_annotation) = &property.type_annotation else {
+                        return Err(
+                            self.err(property.span, "property signature needs a type")
+                        );
+                    };
+                    let loc =
+                        self.check_loc(key.span, &format!("argument field `{}`", key.name));
+                    let field_ty = self.ty(&field_annotation.type_annotation)?;
+                    // An optional field's Nix default (conventionally `null`)
+                    // binds when the caller omits it; `T | null` is the type
+                    // the bound name actually has.
+                    let field_ty = if property.optional {
+                        nullable(field_ty)
+                    } else {
+                        field_ty
+                    };
+                    checks.push((loc, field_ty, Expr::Ident(key.name.to_string())));
+                }
+            }
+            other => {
+                return Err(self.err(
+                    other.span(),
+                    "this parameter shape cannot carry a type annotation",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn arrow_body(&self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Expr, Error> {
@@ -355,6 +558,12 @@ impl Mapper<'_> {
             match statement {
                 ast::Statement::VariableDeclaration(declaration) => {
                     self.const_bindings(declaration, &mut bindings)?;
+                }
+                ast::Statement::TSTypeAliasDeclaration(alias) => {
+                    return Err(self.err(
+                        alias.span,
+                        "`type` aliases live at module top level only",
+                    ));
                 }
                 ast::Statement::ReturnStatement(ret) => {
                     let Some(argument) = &ret.argument else {
@@ -467,6 +676,12 @@ impl Mapper<'_> {
     fn call(&self, call: &ast::CallExpression<'_>) -> Result<Expr, Error> {
         if call.optional {
             return Err(self.err(call.span, "optional calls have no Nix equivalent"));
+        }
+        if let Some(type_arguments) = &call.type_arguments {
+            return Err(self.err(
+                type_arguments.span,
+                "call-site type arguments are not lowered yet",
+            ));
         }
         if call.arguments.is_empty() {
             return Err(self.err(
@@ -686,10 +901,18 @@ impl Mapper<'_> {
             let Some(init) = &declarator.init else {
                 return Err(self.err(declarator.span, "`const` must have an initializer"));
             };
-            bindings.push(LetBinding {
-                name,
-                value: self.expr(init)?,
-            });
+            if declarator.definite {
+                return Err(self.err(
+                    declarator.span,
+                    "definite assignment (`!`) has no runtime lowering",
+                ));
+            }
+            let mut value = self.expr(init)?;
+            if let Some(annotation) = &declarator.type_annotation {
+                let ty = self.ty(&annotation.type_annotation)?;
+                value = self.ret_check(annotation.span(), &format!("const `{name}`"), ty, value);
+            }
+            bindings.push(LetBinding { name, value });
         }
         Ok(())
     }

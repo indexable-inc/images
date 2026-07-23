@@ -5,13 +5,166 @@ use ix2nix::convert;
 
 fn nix(source: &str) -> String {
     let out = convert(source).expect("source should convert");
-    out.strip_prefix("{ __dir, __importIx }:\n")
+    out.strip_prefix("{ __dir, __importIx, __ixTy }:\n")
         .expect("every module renders under the wrapper")
         .to_owned()
 }
 
 fn diagnostic(source: &str) -> ix2nix::Error {
     convert(source).expect_err("source should be rejected")
+}
+
+// --- types ---
+
+#[test]
+fn parameter_annotation_lowers_to_arg_check() {
+    let out = nix("export default (a: string) => a;\n");
+    assert_eq!(out, "a: __ixTy.arg \"1:17 argument `a`\" __ixTy.string a a\n");
+}
+
+#[test]
+fn return_annotation_wraps_the_innermost_body() {
+    let out = nix("export default (a, b): Int => a;\n");
+    assert_eq!(out, "a: b: __ixTy.ret \"1:22 return\" __ixTy.int a\n");
+}
+
+#[test]
+fn as_cast_checks_but_as_unknown_erases() {
+    let out = nix("export default x as Int;\n");
+    assert_eq!(out, "__ixTy.ret \"1:21 as\" __ixTy.int x\n");
+    assert_eq!(nix("export default x as unknown;\n"), "x\n");
+    assert_eq!(nix("export default x as any;\n"), "x\n");
+}
+
+#[test]
+fn type_alias_becomes_a_checker_binding() {
+    let out = nix("type P = \"a\" | \"b\";\nexport default (x: P) => x;\n");
+    assert!(out.contains("ty'P = __ixTy.enum [ \"a\" \"b\" ]"), "{out}");
+    assert!(out.contains("__ixTy.arg \"2:17 argument `x`\" ty'P x"), "{out}");
+}
+
+#[test]
+fn nullable_union_lowers_to_nullable() {
+    let out = nix("export default (x: Int | null) => x;\n");
+    assert!(out.contains("__ixTy.nullable __ixTy.int"), "{out}");
+}
+
+#[test]
+fn destructured_parameter_checks_bound_fields() {
+    let out = nix("export default ({ a }: { a: Int }) => a;\n");
+    assert_eq!(
+        out,
+        "{ a }: __ixTy.arg \"1:26 argument field `a`\" __ixTy.int a a\n"
+    );
+}
+
+#[test]
+fn destructured_annotation_must_be_inline_and_bound() {
+    let error = diagnostic("type T = { a: Int };\nexport default ({ a }: T) => a;\n");
+    assert!(error.message().contains("inline object type"), "{error}");
+    let error = diagnostic("export default ({ a }: { b: Int }) => a;\n");
+    assert!(error.message().contains("not bound by the pattern"), "{error}");
+}
+
+#[test]
+fn number_is_rejected_naming_int_and_float() {
+    let error = diagnostic("export default (x: number) => x;\n");
+    assert!(error.message().contains("`Int` or `Float`"), "{error}");
+}
+
+#[test]
+fn lib_types_refinements_lower_to_runtime_checkers() {
+    let out = nix("export default (p: Port, d: Path, s: NonEmptyString, u: Uint) => p;\n");
+    for checker in ["__ixTy.port", "__ixTy.path", "__ixTy.nonEmptyString", "__ixTy.uint"] {
+        assert!(out.contains(checker), "{checker} missing in {out}");
+    }
+}
+
+#[test]
+fn optional_pattern_fields_check_as_nullable() {
+    // The Nix default binds when the caller omits the field, so the bound
+    // name's type is `T | null`, not `T`.
+    let out = nix("export default ({ a = null }: { a?: Int }) => a;\n");
+    assert!(out.contains("(__ixTy.nullable __ixTy.int)"), "{out}");
+}
+
+#[test]
+fn each_parameter_checks_inside_its_own_lambda() {
+    // Checks fire on partial application and read exactly their own binder.
+    let out = nix("export default (a: Int, b: string) => a;\n");
+    assert_eq!(
+        out,
+        "a: __ixTy.arg \"1:17 argument `a`\" __ixTy.int a (b: \
+         __ixTy.arg \"1:25 argument `b`\" __ixTy.string b a)\n"
+    );
+}
+
+#[test]
+fn const_annotations_lower_to_ret_checks() {
+    let out = nix("const x: Int = 1;\nexport default x;\n");
+    assert!(out.contains("x = __ixTy.ret \"1:8 const `x`\" __ixTy.int 1"), "{out}");
+}
+
+#[test]
+fn builtin_shadowing_aliases_are_rejected() {
+    let error = diagnostic("type Port = string;\nexport default 1;\n");
+    assert!(error.message().contains("shadows the built-in"), "{error}");
+}
+
+#[test]
+fn optional_parameters_are_rejected_even_unannotated() {
+    let error = diagnostic("export default (a?) => a;\n");
+    assert!(error.message().contains("optional parameters"), "{error}");
+}
+
+#[test]
+fn call_site_type_arguments_are_rejected() {
+    let error = diagnostic("export default f<Int>(2);\n");
+    assert!(error.message().contains("call-site type arguments"), "{error}");
+}
+
+#[test]
+fn definite_assignment_is_rejected() {
+    let error = diagnostic("const x!: Int = 1;\nexport default x;\n");
+    assert!(error.message().contains("definite assignment"), "{error}");
+}
+
+#[test]
+fn unknown_type_names_are_rejected() {
+    let error = diagnostic("export default (x: Widget) => x;\n");
+    assert!(error.message().contains("unknown type `Widget`"), "{error}");
+}
+
+#[test]
+fn mixed_unions_are_rejected() {
+    let error = diagnostic("export default (x: Int | string) => x;\n");
+    assert!(error.message().contains("`T | null`"), "{error}");
+}
+
+#[test]
+fn generics_interfaces_satisfies_and_nonnull_are_rejected() {
+    let error = diagnostic("export default <A>(x: A) => x;\n");
+    assert!(error.message().contains("generic arrows"), "{error}");
+    let error = diagnostic("type Box<A> = { v: A };\nexport default 1;\n");
+    assert!(error.message().contains("generic type aliases"), "{error}");
+    let error = diagnostic("interface I { a: Int }\nexport default 1;\n");
+    assert!(error.message().contains("use `type`"), "{error}");
+    let error = diagnostic("export default x satisfies Int;\n");
+    assert!(error.message().contains("static-only"), "{error}");
+    let error = diagnostic("export default x!;\n");
+    assert!(error.message().contains("no runtime lowering"), "{error}");
+}
+
+#[test]
+fn duplicate_type_aliases_are_rejected() {
+    let error = diagnostic("type A = Int;\ntype A = Float;\nexport default 1;\n");
+    assert!(error.message().contains("duplicate `type A`"), "{error}");
+}
+
+#[test]
+fn unannotated_modules_lower_without_any_ixty_reference() {
+    let out = nix("const f = (a) => a;\nexport default f(1);\n");
+    assert!(!out.contains("__ixTy"), "{out}");
 }
 
 // --- module shape ---

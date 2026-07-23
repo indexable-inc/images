@@ -1,4 +1,4 @@
-{ __dir, __importIx }:
+{ __dir, __importIx, __ixTy }:
 let
   lib = __importIx (__dir + "/lib.ix");
   overlay = import (__dir + "/../overlays/default.nix");

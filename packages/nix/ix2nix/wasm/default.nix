@@ -61,11 +61,13 @@
 
   # End-to-end over every boundary this package exists for: the patched
   # nix-ix evaluator loads the plugin (`wasm-builtin`), the shim's calling
-  # convention matches the renderer's `{ __dir, __importIx }:` wrapper, a
-  # relative `.ix` import recurses through the shim, and a conversion error
-  # surfaces its positioned diagnostic as a Nix eval error. Client-side eval
-  # against a scratch store; no daemon. The crate's sibling files are reached
-  # through the repo root (`../` literals are banned: no-parent-path).
+  # convention matches the renderer's `{ __dir, __importIx, __ixTy }:`
+  # wrapper, a relative `.ix` import recurses through the shim, a conversion
+  # error surfaces its positioned diagnostic as a Nix eval error, and type
+  # annotations check in `assert` mode and cost nothing in `erase` mode.
+  # Client-side eval against a scratch store; no daemon. The crate's sibling
+  # files are reached through the repo root (`../` literals are banned:
+  # no-parent-path).
   crateDir = ix.paths.root + "/packages/nix/ix2nix";
 
   e2e =
@@ -83,13 +85,33 @@
         nix eval \
           --extra-experimental-features 'nix-command wasm-builtin' \
           --impure \
-          --expr "let importIx = import ${crateDir + "/import-ix.nix"} { converter = ${package}/lib/ix2nix.wasm; }; in importIx $1"
+          --expr "let importIx = import ${crateDir}/import-ix.nix { converter = ${package}/lib/ix2nix.wasm; typeMode = \"$2\"; }; in importIx $1"
       }
 
-      value=$(evalIx ${crateDir + "/examples"}/main.ix)
+      value=$(evalIx ${crateDir + "/examples"}/main.ix assert)
       expected='"doubled: 42"'
       if [ "$value" != "$expected" ]; then
         printf 'expected: %s\nactual:   %s\n' "$expected" "$value" >&2
+        exit 1
+      fi
+
+      # Type annotations: assert mode passes a well-typed module ...
+      value=$(evalIx ${crateDir + "/examples"}/typed.ix assert)
+      if [ "$value" != "42" ]; then
+        printf 'typed.ix: expected 42, got %s\n' "$value" >&2
+        exit 1
+      fi
+      # ... fails an ill-typed one with a positioned error naming the module ...
+      if evalIx ${crateDir + "/examples"}/typed-error.ix assert 2> typed.log; then
+        echo "typed-error.ix unexpectedly passed its checks" >&2
+        exit 1
+      fi
+      grep -F 'expected int, got string' typed.log
+      grep -F '3:24 argument `b`' typed.log
+      # ... and erase mode evaluates the same module with the checks free.
+      value=$(evalIx ${crateDir + "/examples"}/typed-error.ix erase)
+      if [ "$value" != "1" ]; then
+        printf 'typed-error.ix under erase: expected 1, got %s\n' "$value" >&2
         exit 1
       fi
 

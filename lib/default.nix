@@ -830,6 +830,7 @@
     import ./import-ix-native.nix {
       pkgs = hostPkgs;
       inherit (packageSetFor hostPkgs) ix2nix;
+      ixTy = import (paths.root + "/packages/nix/ix2nix/ix-ty.nix") {mode = "assert";};
     };
 
   importIx = importIxFor system;
