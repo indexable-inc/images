@@ -15,15 +15,24 @@ pub struct Error {
     line_text: String,
 }
 
+/// A 1-based source position. Named (rather than a bare tuple) to satisfy the
+/// workspace's `clippy::anonymous_tuple_return_type`.
+pub(crate) struct LineCol {
+    /// 1-based line number.
+    pub(crate) line: usize,
+    /// 1-based column (in characters) within that line.
+    pub(crate) column: usize,
+}
+
 /// 1-based line and column (in characters) of byte `offset` in `source`.
 /// Shared by diagnostics and the `__ixTy` check locations the mapper emits,
 /// so both spell positions identically.
-pub(crate) fn line_col(offset: usize, source: &str) -> (usize, usize) {
+pub(crate) fn line_col(offset: usize, source: &str) -> LineCol {
     let offset = offset.min(source.len());
     let line_start = source[..offset].rfind('\n').map_or(0, |i| i + 1);
     let line = source[..line_start].matches('\n').count() + 1;
     let column = source[line_start..offset].chars().count() + 1;
-    (line, column)
+    LineCol { line, column }
 }
 
 impl Error {
@@ -34,7 +43,7 @@ impl Error {
         let line_end = source[offset..]
             .find('\n')
             .map_or(source.len(), |i| offset + i);
-        let (line, column) = line_col(offset, source);
+        let LineCol { line, column } = line_col(offset, source);
         let line_start = source[..offset].rfind('\n').map_or(0, |i| i + 1);
 
         Self {

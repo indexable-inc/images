@@ -10,7 +10,7 @@
 use oxc_ast::ast;
 use oxc_span::{GetSpan as _, Span};
 
-use crate::error::{Error, line_col};
+use crate::error::{Error, LineCol, line_col};
 use crate::map::Mapper;
 use crate::nix::{Attr, Expr, StrPart};
 
@@ -82,7 +82,7 @@ impl Mapper<'_> {
     /// `"<line>:<col> <what>"`: the source location a failed check reports.
     /// The runtime prefixes the module path, which only the importer knows.
     pub(crate) fn check_loc(&self, span: Span, what: &str) -> String {
-        let (line, column) = line_col(span.start as usize, self.source);
+        let LineCol { line, column } = line_col(span.start as usize, self.source);
         format!("{line}:{column} {what}")
     }
 
