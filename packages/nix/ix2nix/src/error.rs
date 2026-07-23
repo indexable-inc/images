@@ -15,17 +15,27 @@ pub struct Error {
     line_text: String,
 }
 
+/// 1-based line and column (in characters) of byte `offset` in `source`.
+/// Shared by diagnostics and the `__ixTy` check locations the mapper emits,
+/// so both spell positions identically.
+pub(crate) fn line_col(offset: usize, source: &str) -> (usize, usize) {
+    let offset = offset.min(source.len());
+    let line_start = source[..offset].rfind('\n').map_or(0, |i| i + 1);
+    let line = source[..line_start].matches('\n').count() + 1;
+    let column = source[line_start..offset].chars().count() + 1;
+    (line, column)
+}
+
 impl Error {
     /// Builds an error pointing at byte `offset` of `source`.
     pub(crate) fn at(offset: usize, source: &str, message: impl Into<String>) -> Self {
         let offset = offset.min(source.len());
 
-        let line_start = source[..offset].rfind('\n').map_or(0, |i| i + 1);
         let line_end = source[offset..]
             .find('\n')
             .map_or(source.len(), |i| offset + i);
-        let line = source[..line_start].matches('\n').count() + 1;
-        let column = source[line_start..offset].chars().count() + 1;
+        let (line, column) = line_col(offset, source);
+        let line_start = source[..offset].rfind('\n').map_or(0, |i| i + 1);
 
         Self {
             message: message.into(),

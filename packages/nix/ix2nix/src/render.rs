@@ -50,12 +50,12 @@ impl Ctx {
     }
 }
 
-/// Renders a whole module under the `{ __dir, __importIx }:` wrapper, so every
+/// Renders a whole module under the `{ __dir, __importIx, __ixTy }:` wrapper, so every
 /// converted module presents one calling convention to its importer.
 #[must_use]
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
-    out.push_str("{ __dir, __importIx }:\n");
+    out.push_str("{ __dir, __importIx, __ixTy }:\n");
     expr(
         &mut out,
         &module.body,
@@ -405,7 +405,7 @@ mod tests {
     /// only the expression under test.
     fn rendered(body: Expr) -> String {
         let out = module(&Module { body });
-        out.strip_prefix("{ __dir, __importIx }:\n")
+        out.strip_prefix("{ __dir, __importIx, __ixTy }:\n")
             .expect("every module renders under the wrapper")
             .to_owned()
     }

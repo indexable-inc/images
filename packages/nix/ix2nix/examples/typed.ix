@@ -1,0 +1,3 @@
+const inc = (n: Int): Int => n + 1;
+
+export default inc(41);

@@ -1,0 +1,19 @@
+{ __dir, __importIx, __ixTy }:
+let
+  ty'Proto = __ixTy.enum [ "tcp" "udp" ];
+  ty'Endpoint = __ixTy.attrs [ (__ixTy.req "host" __ixTy.string) (__ixTy.req "port" __ixTy.int) (__ixTy.opt "proto" ty'Proto) ];
+  mkEndpoint = host: __ixTy.arg "9:21 argument `host`" __ixTy.string host (port: __ixTy.arg "9:35 argument `port`" __ixTy.int port (__ixTy.ret "9:45 return" ty'Endpoint {
+    host = host;
+    port = port;
+  }));
+in
+{ config }: __ixTy.arg "13:31 argument field `config`" (__ixTy.attrsOf ty'Endpoint) config (let
+  raw = __ixTy.ret "14:29 as" ty'Endpoint config.web;
+  anything = config.web;
+in
+{
+  web = mkEndpoint "web" 80;
+  raw = raw;
+  anything = anything;
+  ports = __ixTy.ret "20:25 as" (__ixTy.listOf __ixTy.int) [ 80 443 ];
+})

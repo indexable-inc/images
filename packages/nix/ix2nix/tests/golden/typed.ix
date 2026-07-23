@@ -1,0 +1,22 @@
+// Every kind of type-annotation lowering in one module.
+type Proto = "tcp" | "udp";
+type Endpoint = {
+  host: string;
+  port: Int;
+  proto?: Proto;
+};
+
+const mkEndpoint = (host: string, port: Int): Endpoint => {
+  return { host: host, port: port };
+};
+
+export default ({ config }: { config: Record<string, Endpoint> }) => {
+  const raw = config.web as Endpoint;
+  const anything = config.web as unknown;
+  return {
+    web: mkEndpoint("web", 80),
+    raw: raw,
+    anything: anything,
+    ports: [80, 443] as Int[],
+  };
+};

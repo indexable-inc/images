@@ -1,6 +1,6 @@
 //! `ix2nix`: a pure source-to-source converter from `.ix` modules to Nix.
 //!
-//! A `.ix` file is `JavaScript` *syntax* used as a 1:1 skin over Nix
+//! A `.ix` file is TypeScript *syntax* used as a 1:1 skin over Nix
 //! *semantics*: no `JavaScript` runtime behavior, no evaluation. [`convert`]
 //! takes `.ix` source in and returns Nix source out. Anything without exactly
 //! one Nix spelling is a positioned [`Error`] — there are no fallbacks.
@@ -27,9 +27,31 @@
 //! | `+ - * / == != < <= > >= && \|\| !` | the same operators |
 //! | `true` / `false` / `null` | `true` / `false` / `null` |
 //!
-//! Every module renders wrapped as `{ __dir, __importIx }: <body>` -- one
-//! calling convention for importers, whether or not the source used
-//! `import()`.
+//! # Types
+//!
+//! TypeScript annotations lower to *runtime checks* against the `__ixTy`
+//! runtime the importer passes (`ix-ty.nix`; `assert` mode checks, `erase`
+//! mode no-ops). Static checking is tsc's job, never this converter's.
+//!
+//! | `.ix` (TypeScript syntax) | emitted Nix |
+//! |---|---|
+//! | `(a: T) => e` | `a: __ixTy.arg "<line>:<col> ..." <T> a e` |
+//! | `(a): R => e` | `a: __ixTy.ret "<line>:<col> return" <R> e` |
+//! | `e as T` | `__ixTy.ret "<line>:<col> as" <T> e` (`as any`/`as unknown`: nothing) |
+//! | `type X = T` | `let ty'X = <T>` (referenced by annotations) |
+//! | `({ a }: { a: T }) => e` | per-field `__ixTy.arg` checks on the bound names |
+//!
+//! Type spellings: `string`, `bool`, `Int`, `Float`, `Drv`, `any`/`unknown`,
+//! `object`, `T[]`, `Record<string, T>`, `{ a: T; b?: U }`, function types
+//! (callability only), literal unions, and `T \| null`, plus refinements
+//! borrowed from nixpkgs `lib.types` basics: `Uint`, `Port`, `Path`,
+//! `NonEmptyString`. `number` is a hard error (Nix splits int and float),
+//! as are interfaces, generics, `satisfies`, non-null `!`, and unions
+//! beyond `T \| null` / literals.
+//!
+//! Every module renders wrapped as `{ __dir, __importIx, __ixTy }: <body>`
+//! -- one calling convention for importers, whether or not the source used
+//! `import()` or type annotations.
 //!
 //! Deliberate hard errors (no 1:1): `===`/`!==` (use `==`/`!=`), `undefined`
 //! (use `null`), bare `??` or bare `?.`, `let`/`var`, mutation, loops and
@@ -40,6 +62,7 @@ pub mod error;
 pub mod map;
 pub mod nix;
 pub mod render;
+pub mod ty;
 
 pub use error::Error;
 
@@ -55,7 +78,7 @@ use oxc_span::SourceType;
 /// uses any `JavaScript` form without a 1:1 Nix equivalent.
 pub fn convert(source: &str) -> Result<String, Error> {
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, SourceType::mjs()).parse();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
 
     if let Some(diagnostic) = parsed.diagnostics.as_slice().first() {
         let offset = diagnostic
