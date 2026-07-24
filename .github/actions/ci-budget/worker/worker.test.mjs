@@ -451,6 +451,16 @@ test("budget verdicts fill only the outputs the script never published", async (
       await readFile(output, "utf8"),
       "lint_result<<GHDELIM\npartial\nGHDELIM\nnix_result=budget-exceeded\n",
     );
+    // A killed script's last write may lack its newline; the backfill must
+    // start a fresh line instead of corrupting that entry.
+    await writeFile(output, "lint_result=succ");
+    assert.deepEqual(recordBudgetVerdicts({ githubOutputPath: output }), [
+      "nix_result",
+    ]);
+    assert.equal(
+      await readFile(output, "utf8"),
+      "lint_result=succ\nnix_result=budget-exceeded\n",
+    );
     // No GITHUB_OUTPUT (running outside Actions) publishes nothing.
     assert.deepEqual(recordBudgetVerdicts({ githubOutputPath: "" }), []);
   } finally {

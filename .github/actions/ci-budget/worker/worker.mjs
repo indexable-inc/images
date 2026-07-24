@@ -350,9 +350,14 @@ export function recordBudgetVerdicts({
     if (entry) published.add(entry[1]);
   }
   const missing = outputs.filter((name) => !published.has(name));
+  if (missing.length === 0) return missing;
+  // Guard against a killed script whose last write lacked a newline; a bare
+  // append would corrupt that entry instead of starting a fresh one.
+  const content = readFileSync(githubOutputPath, "utf8");
+  const separator = content === "" || content.endsWith("\n") ? "" : "\n";
   appendFileSync(
     githubOutputPath,
-    missing.map((name) => `${name}=budget-exceeded\n`).join(""),
+    separator + missing.map((name) => `${name}=budget-exceeded\n`).join(""),
   );
   return missing;
 }
@@ -388,6 +393,11 @@ function groupExists(pid) {
     return true;
   } catch (error) {
     if (error?.code === "ESRCH") return false;
+    // Darwin can report EPERM instead of ESRCH while the group's members are
+    // zombies being reaped; we always probe a group this process spawned, so
+    // permission genuinely denied is impossible and EPERM means "gone".
+    // Observed as a rare local test flake in the teardown loop.
+    if (error?.code === "EPERM") return false;
     throw error;
   }
 }
