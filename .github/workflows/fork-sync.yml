@@ -57,7 +57,7 @@ jobs:
       - name: Provision missing CLI tools
         uses: ./.github/actions/ensure-tools
         with:
-          tools: awk=gawk curl
+          tools: awk=gawk curl gh
 
       # MIRROR_TOKEN is minted per run from the org-owned ix-mirror-sync
       # GitHub App (Contents write on the org's repos): short-lived, no
@@ -267,6 +267,36 @@ jobs:
             fi
           } > "$RUNNER_TEMP/pr-body.md"
 
+      # GitHub refuses ANY App push that creates or updates a file under
+      # .github/workflows/ unless the app holds Workflows:write, and neither
+      # GITHUB_TOKEN nor the apps here do (#4045). create-pull-request pushes
+      # the rolling branch over git, so when that branch does not exist the
+      # push creates every file in the tree -- workflow files included -- and
+      # the whole run dies with "refusing to allow a GitHub App to create or
+      # update workflow ...", having already rebased and pushed the fork
+      # repos. That is what killed run 30132019124.
+      #
+      # Move the branch with the git refs API instead, which only repoints an
+      # existing commit and so introduces no new blob for the restriction to
+      # object to. create-pull-request then only ever pushes the flake.lock
+      # commit on top of a branch that already matches this run's tree, and a
+      # flake.lock-only diff contains no workflow file at all. `delete-branch`
+      # is off to match: a branch that survives is one this step keeps aligned.
+      - name: Sync the rolling branch to this commit
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${REPOSITORY}/git/ref/heads/fork-sync" --jq .object.sha; then
+            gh api -X PATCH "repos/${REPOSITORY}/git/refs/heads/fork-sync" \
+              -F sha="${SHA}" -F force=true --jq .object.sha
+          else
+            gh api -X POST "repos/${REPOSITORY}/git/refs" \
+              -f ref=refs/heads/fork-sync -f sha="${SHA}" --jq .object.sha
+          fi
+
       - name: Open pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
@@ -275,7 +305,8 @@ jobs:
           reviewers: ${{ steps.trigger.outputs.user }}
           base: main
           branch: fork-sync
-          delete-branch: true
+          # Kept alive deliberately; see the ref-sync step above.
+          delete-branch: false
           commit-message: "fork-sync: rebase fork repos onto upstream and float inputs"
           title: "fork-sync: rebase fork repos onto upstream and float inputs"
           # The body (preamble + live fork-drift table) is assembled by the

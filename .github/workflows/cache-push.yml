@@ -139,6 +139,42 @@ jobs:
             | sort -u > "$roots" || true
           phase eval "$eval_t"
 
+          # Darwin eval guard (#3587). Deleting the hosted-mac lane removed
+          # the only thing in CI that instantiated
+          # cachePushRoots.aarch64-darwin, so a package that stops EVALUATING
+          # on darwin would next be discovered by a human on a mac. Eval is
+          # pure: it needs no darwin builder, only this runner. Nothing is
+          # realised, and error rows fail the run naming the attr.
+          #
+          # The count of genuinely native (non-cross-aliased) rows is the
+          # #3586 ratchet: it should only ever shrink as packages gain
+          # `cross = true`.
+          #
+          # Report-only, deliberately. The deleted lane's own filter was
+          # `select(.error == null and ...)`, i.e. it tolerated error rows and
+          # never recorded how many there were, so there is no trustworthy
+          # baseline to fail against and a fail-closed gate here would just
+          # red main on pre-existing breakage. Two or three green runs
+          # establish the real numbers; commit them as budgets and turn both
+          # counts into hard gates then (#3586).
+          darwin_t=$SECONDS
+          darwin_rows="$workdir/darwin-rows.jsonl"
+          "$eval_jobs" \
+            --flake .#cachePushRoots.aarch64-darwin \
+            --workers 16 \
+            --max-memory-size 6144 \
+            2>"$workdir/darwin-eval.err" \
+            > "$darwin_rows" || true
+          phase darwin-eval "$darwin_t"
+          darwin_errors="$("$jq" -rs '[.[] | select(.error != null)] | length' "$darwin_rows")"
+          darwin_native="$("$jq" -rs '[.[] | select(.system == "aarch64-darwin")] | length' "$darwin_rows")"
+          echo "::notice::cache-push: cachePushRoots.aarch64-darwin evaluates; ${darwin_native} root(s) still native-only (#3586 ratchet)"
+          if [ "$darwin_errors" -gt 0 ]; then
+            "$jq" -rs '.[] | select(.error != null) | "::warning::darwin eval failed: \(.attr): \(.error | split("\n")[0])"' \
+              "$darwin_rows"
+            echo "::warning::cache-push: ${darwin_errors} root(s) in cachePushRoots.aarch64-darwin do not evaluate"
+          fi
+
           # Skip roots already pushed: makes the run O(changed), not O(full
           # closure). Probe the atticd endpoint the push writes to, not
           # cache.ix.dev (ncps in front 404s ix-public paths, which made every
