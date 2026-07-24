@@ -26,6 +26,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # ubuntu-latest ships no nix, so every step below died 127 on `nix:
+      # command not found` -- this workflow had never had a green run. Same
+      # install pair as update.yml: install-nix also sets
+      # `accept-flake-config = true`, which is what lets the eval step below
+      # pick up the flake's `wasm-builtin` experimental feature.
+      - name: Install Determinate Nix
+        uses: ./.github/actions/install-nix
+
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
       # The rolling Rust manifest can publish before rust-overlay has generated
       # that day's expressions. Advance the overlay first so a toolchain bump
       # and the resolver data required to evaluate it land atomically.
