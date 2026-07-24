@@ -59,6 +59,12 @@ __pycache__/
 .claude/settings.local.json
 CLAUDE.local.md
 
+# Agent isolation worktrees: `git worktree add` checkouts of OTHER commits.
+# fd/rg prune nested git repos on their own, but statix builds its ignore
+# set from this file plus statix.toml only, so without this line lint walks
+# a sibling agent's stale tree and reds this checkout (#4147).
+/.claude/worktrees/
+
 # Skills are built into the `skills` flake package (one dir per skills/<name>).
 # The Claude wrapper exports that prebuilt store path to the SessionStart hook,
 # which copies it here for Claude Code and Codex. Preview with
