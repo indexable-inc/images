@@ -12,10 +12,13 @@ import {
   DeadlineExceeded,
   assertQueueAdmission,
   assertSetupAllowance,
+  budgetExceededMessage,
   currentWorkerJob,
   loadPolicy,
   parseArguments,
   queuedRunCount,
+  recordBudgetVerdicts,
+  reportBudgetExceeded,
   runBudgetedScript,
   validationSeconds,
 } from "./worker.mjs";
@@ -101,6 +104,7 @@ function response(jobs) {
 
 test("policy exposes independent queue, setup, validation, and cleanup clocks", () => {
   const policy = loadPolicy();
+  assert.equal(policy.big_change_label, "ci/big-change");
   assert.equal(policy.queue_start_seconds, 300);
   assert.equal(policy.setup_allowance_seconds, 120);
   assert.equal(policy.routine_validation_seconds, 300);
@@ -405,6 +409,49 @@ test("validation starts with the complete tier allowance after setup", () => {
   assert.equal(validationSeconds({ bigChange: true, policy }), 10_800);
 });
 
+test("budget kill message names the clock, the elapsed time, and the remedy", () => {
+  const policy = loadPolicy();
+  const routine = budgetExceededMessage({
+    allowedSeconds: 300,
+    bigChange: false,
+    elapsedSeconds: 301,
+    policy,
+  });
+  assert.match(routine, /routine_validation_seconds=300s exceeded after 301s/);
+  assert.match(routine, /add the ci\/big-change label/);
+  assert.match(routine, /extended_validation_seconds=10800s budget/);
+
+  const extended = budgetExceededMessage({
+    allowedSeconds: 10_800,
+    bigChange: true,
+    elapsedSeconds: 10_930,
+    policy,
+  });
+  assert.match(extended, /extended_validation_seconds=10800s exceeded after 10930s/);
+  assert.match(extended, /already held the extended budget/);
+});
+
+test("budget verdicts fill only the outputs the script never published", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ci-budget-worker-verdicts-"));
+  try {
+    const output = join(directory, "github-output");
+    // Heredoc form: the delimiter line must count as a published output.
+    await writeFile(output, "lint_result<<GHDELIM\npartial\nGHDELIM\n");
+
+    assert.deepEqual(recordBudgetVerdicts({ githubOutputPath: output }), [
+      "nix_result",
+    ]);
+    assert.equal(
+      await readFile(output, "utf8"),
+      "lint_result<<GHDELIM\npartial\nGHDELIM\nnix_result=budget-exceeded\n",
+    );
+    // No GITHUB_OUTPUT (running outside Actions) publishes nothing.
+    assert.deepEqual(recordBudgetVerdicts({ githubOutputPath: "" }), []);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
 test("script arguments cross the JSON boundary as distinct values", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ci-budget-worker-arguments-"));
   try {
@@ -443,6 +490,64 @@ test("timeout kills a TERM-resistant descendant after its leader exits", async (
     });
     assert.equal(status, 124);
     await assertProcessGone(Number(await waitForFile(fixture.descendant)));
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("timeout announces the budget kill and backfills mirror verdicts", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ci-budget-worker-report-"));
+  try {
+    const script = join(directory, "gate.sh");
+    const output = join(directory, "github-output");
+    // Publish one honest phase result, then outlive the clock, like
+    // run-ci-phases.sh does when the Nix phase overruns after lint finished.
+    await writeFile(
+      script,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf 'lint_result=success\\n' >>github-output",
+        "sleep 60",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(output, "");
+
+    const logged = [];
+    t.mock.method(console, "log", (line) => logged.push(line));
+    const annotated = [];
+    t.mock.method(console, "error", (line) => annotated.push(line));
+
+    const policy = loadPolicy();
+    const status = await runBudgetedScript({
+      graceSeconds: 0.05,
+      // Wired exactly as main() wires it, with the budget shrunk to test size.
+      onBudgetExceeded: (expiry) =>
+        reportBudgetExceeded({
+          ...expiry,
+          bigChange: false,
+          githubOutputPath: output,
+          policy,
+        }),
+      scriptPath: "gate.sh",
+      validationSeconds: 0.5,
+      workspace: directory,
+    });
+
+    assert.equal(status, 124);
+    const logText = logged.join("\n");
+    assert.match(logText, /routine_validation_seconds=0\.5s exceeded after \d+s/);
+    assert.match(logText, /published nix_result=budget-exceeded/);
+    assert.match(
+      annotated.join("\n"),
+      /^::error title=CI worker budget exceeded::validation budget routine_validation_seconds=0\.5s .* add the ci\/big-change label for the extended_validation_seconds=10800s budget\.$/m,
+    );
+    // The honest lint verdict survives; only the killed phase reads as policy.
+    assert.equal(
+      await readFile(output, "utf8"),
+      "lint_result=success\nnix_result=budget-exceeded\n",
+    );
   } finally {
     await rm(directory, { force: true, recursive: true });
   }

@@ -1,0 +1,25 @@
+---
+id: ci-budget-loud-kills
+postedAt: 2026-07-23T00:00:00-07:00
+title: "CI budget kills now announce themselves in the log, the annotations, and the mirror results"
+tags: [ci]
+links:
+  - label: "#4139: silent kill at routine_validation_seconds"
+    href: https://github.com/indexable-inc/index/issues/4139
+---
+
+When the ci-budget worker's validation clock expired, it killed the gate's
+process group and said nothing: no annotation, no log line, and the hosted
+mirror jobs read blank results. Diagnosing one such kill took two full CI
+runs plus a host-journal dig (#4139), and the same signature hit several
+other PRs the same day.
+
+The worker now reports before it signals. The job log and a `::error`
+annotation both carry one line naming the clock that fired, the elapsed
+time, and the remedy (`add the ci/big-change label for the
+extended_validation_seconds=10800s budget`), and any mirrored output the
+script never published is backfilled as `budget-exceeded`, so the `lint`
+and `build` mirror jobs report the actual cause instead of `missing`.
+Phase results the script published before the kill are kept as-is. Budget
+semantics are unchanged: same clocks, same TERM/KILL contract, same exit
+code 124.
