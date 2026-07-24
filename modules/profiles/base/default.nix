@@ -76,12 +76,13 @@ in {
     # `'xterm-ghostty': unknown terminal type.` because the guest only ships
     # ncurses' built-in set. Pulls only the small `terminfo` outputs (ghostty,
     # kitty, alacritty, wezterm, foot, ...), not the terminal binaries.
-    environment.enableAllTerminfo = true;
-
-    # Native CLI installers use the XDG-standard per-user binary directory.
-    # Make those binaries available on the next login without asking every
-    # image user to edit a shell-specific startup file.
-    environment.localBinInPath = true;
+    environment = {
+      enableAllTerminfo = true;
+      # Native CLI installers use the XDG-standard per-user binary directory.
+      # Make those binaries available on the next login without asking every
+      # image user to edit a shell-specific startup file.
+      localBinInPath = true;
+    };
 
     # Cubic halves cwnd on any loss, so a residential last-mile at
     # 30 ms and a couple percent loss caps a single TCP flow far
