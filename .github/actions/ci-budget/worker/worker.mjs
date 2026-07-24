@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,9 +80,14 @@ export function loadPolicy(
   ) {
     throw new Error(`CI budget policy keys must be ${expected.join(", ")}`);
   }
-  return Object.fromEntries(
-    numeric.map((name) => [name, parsePositiveInteger(parsed[name], name)]),
-  );
+  return {
+    // The label is part of the budget-exceeded remedy text: a killed run must
+    // name the exact label that buys the extended tier (index#4139).
+    big_change_label: parsed.big_change_label,
+    ...Object.fromEntries(
+      numeric.map((name) => [name, parsePositiveInteger(parsed[name], name)]),
+    ),
+  };
 }
 
 function repositoryPath(repository) {
@@ -299,12 +304,100 @@ export function validationSeconds({ bigChange, policy }) {
   return policy.routine_validation_seconds;
 }
 
+export function budgetExceededMessage({
+  allowedSeconds,
+  bigChange,
+  elapsedSeconds,
+  policy,
+}) {
+  // allowedSeconds comes from the clock that actually fired, not re-derived
+  // from the policy, so the reported number can never drift from the kill.
+  const budgetName = bigChange
+    ? "extended_validation_seconds"
+    : "routine_validation_seconds";
+  const remedy = bigChange
+    ? "the run already held the extended budget; split the change or revisit " +
+      "the ci-budget policy catalog"
+    : `add the ${policy.big_change_label} label for the ` +
+      `extended_validation_seconds=${policy.extended_validation_seconds}s budget`;
+  return (
+    `validation budget ${budgetName}=${allowedSeconds}s exceeded after ` +
+    `${elapsedSeconds}s; terminating the gate's process group. ` +
+    `To get more time, ${remedy}.`
+  );
+}
+
+// The outputs declared in the worker's action.yml. The budgeted script
+// publishes them to GITHUB_OUTPUT itself, normally as its last act, so a
+// budget kill leaves every hosted mirror job reading a blank result with no
+// cause attached (index#4139).
+export const mirroredOutputs = ["lint_result", "nix_result"];
+
+/// Append a `budget-exceeded` verdict for every mirrored output the killed
+/// script never published, and return the names written. Results the script
+/// already published stay untouched: a phase that finished inside the budget
+/// reported honestly and only the still-blank phases died by policy.
+export function recordBudgetVerdicts({
+  githubOutputPath,
+  outputs = mirroredOutputs,
+}) {
+  if (!githubOutputPath) return [];
+  const published = new Set();
+  for (const line of readFileSync(githubOutputPath, "utf8").split("\n")) {
+    // GITHUB_OUTPUT entries start `name=value` or `name<<DELIMITER`:
+    // https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-an-output-parameter
+    const entry = /^([^=<\s]+)(=|<<)/.exec(line);
+    if (entry) published.add(entry[1]);
+  }
+  const missing = outputs.filter((name) => !published.has(name));
+  if (missing.length === 0) return missing;
+  // Guard against a killed script whose last write lacked a newline; a bare
+  // append would corrupt that entry instead of starting a fresh one.
+  const content = readFileSync(githubOutputPath, "utf8");
+  const separator = content === "" || content.endsWith("\n") ? "" : "\n";
+  appendFileSync(
+    githubOutputPath,
+    separator + missing.map((name) => `${name}=budget-exceeded\n`).join(""),
+  );
+  return missing;
+}
+
+/// Make a policy kill loud in every place a human looks first: the job log,
+/// the run's annotations, and the mirror jobs' results. Diagnosing one silent
+/// 300s kill took two full CI runs plus a host-journal dig (index#4139).
+export function reportBudgetExceeded({
+  allowedSeconds,
+  bigChange,
+  elapsedSeconds,
+  githubOutputPath = process.env.GITHUB_OUTPUT,
+  policy,
+}) {
+  const message = budgetExceededMessage({
+    allowedSeconds,
+    bigChange,
+    elapsedSeconds,
+    policy,
+  });
+  // Plain line as well as the annotation: whoever tails the raw job log sees
+  // output stop mid-build, and this names the killer inline at that spot.
+  console.log(`ci-budget: ${message}`);
+  console.error(`::error title=CI worker budget exceeded::${message}`);
+  for (const name of recordBudgetVerdicts({ githubOutputPath })) {
+    console.log(`ci-budget: published ${name}=budget-exceeded for the mirror jobs`);
+  }
+}
+
 function groupExists(pid) {
   try {
     process.kill(-pid, 0);
     return true;
   } catch (error) {
     if (error?.code === "ESRCH") return false;
+    // Darwin can report EPERM instead of ESRCH while the group's members are
+    // zombies being reaped; we always probe a group this process spawned, so
+    // permission genuinely denied is impossible and EPERM means "gone".
+    // Observed as a rare local test flake in the teardown loop.
+    if (error?.code === "EPERM") return false;
     throw error;
   }
 }
@@ -348,6 +441,7 @@ function signalExitCode(signal) {
 
 export async function runBudgetedScript({
   graceSeconds,
+  onBudgetExceeded,
   scriptArguments = [],
   scriptPath,
   validationSeconds: allowedSeconds,
@@ -361,6 +455,7 @@ export async function runBudgetedScript({
     throw new Error("script must stay inside GITHUB_WORKSPACE");
   }
 
+  const scriptStartedAt = Date.now();
   const child = spawn("bash", [absoluteScript, ...scriptArguments], {
     cwd: workspace,
     detached: true,
@@ -399,6 +494,19 @@ export async function runBudgetedScript({
   try {
     result = await Promise.race([childDone, timedOut, externalSignal]);
     clearTimeout(timeout);
+    if (result.kind === "timeout" && onBudgetExceeded !== undefined) {
+      // Report before any kill signal: the group's own streams die with it,
+      // so nothing after this point can explain the kill from the inside.
+      // Best-effort by design; a reporting bug must not leave the group alive.
+      try {
+        onBudgetExceeded({
+          allowedSeconds,
+          elapsedSeconds: Math.round((Date.now() - scriptStartedAt) / 1000),
+        });
+      } catch (error) {
+        console.error(`::error title=ci-budget-worker::budget report failed: ${error.message}`);
+      }
+    }
     await terminateGroup(child.pid, graceSeconds * 1000);
     if (result.kind !== "child") {
       await Promise.race([childDone.catch(() => undefined), delay(1000)]);
@@ -473,6 +581,8 @@ export async function main() {
   const allowedSeconds = validationSeconds({ bigChange, policy });
   return runBudgetedScript({
     graceSeconds: policy.termination_grace_seconds,
+    onBudgetExceeded: (expiry) =>
+      reportBudgetExceeded({ ...expiry, bigChange, policy }),
     scriptArguments: parseArguments(input("arguments") || "[]"),
     scriptPath,
     validationSeconds: allowedSeconds,
