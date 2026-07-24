@@ -26,6 +26,15 @@ concurrency:
   group: mirror-sync
   cancel-in-progress: false
 
+env:
+  # Client-side eval knobs only; the self-hosted runner's Nix daemon owns
+  # substituters and trusted keys. Same posture as check.yml / fork-sync.yml.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    accept-flake-config = false
+    max-jobs = auto
+    cores = 1
+
 jobs:
   # Snapshot-sync each opt-in package (a `mirror` attr in its package.nix,
   # surfaced as `.#lib.mirrorPackages`) into its standalone read-only repo.
@@ -34,7 +43,10 @@ jobs:
   # create repos or push outside this repository, so without the app secrets
   # the job skips loudly instead of half-running.
   mirrors:
-    runs-on: ubuntu-latest
+    # Self-hosted via the org-wide ix-ci-dispatcher, same scheme as check.yml:
+    # the runner already carries a nix daemon and a warm /nix/store, so this
+    # lane needs no hosted nix installer.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-mirror-sync', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -44,9 +56,6 @@ jobs:
           # over the package path, and the generator refuses a shallow clone
           # rather than publish a silently truncated changelog.
           fetch-depth: 0
-
-      - name: Install Determinate Nix
-        uses: ./.github/actions/install-nix
 
       # Underscore digit separators: every nix invocation that evaluates this
       # tree must go through the patched client (see the action's description).

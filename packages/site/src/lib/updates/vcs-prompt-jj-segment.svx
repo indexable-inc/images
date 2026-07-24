@@ -2,6 +2,7 @@
 id: vcs-prompt-jj-segment
 postedAt: "2026-07-24"
 title: the prompt reads jj state in a jj workspace instead of the exported git view
+links: []
 tags:
   - nix
   - cli

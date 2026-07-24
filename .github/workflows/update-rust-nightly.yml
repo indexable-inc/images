@@ -15,10 +15,25 @@ concurrency:
   group: update-rust-nightly
   cancel-in-progress: false
 
+env:
+  # Client-side eval knobs only; the self-hosted runner's Nix daemon owns
+  # substituters and trusted keys. Same posture as check.yml / fork-sync.yml.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    accept-flake-config = false
+    max-jobs = auto
+    cores = 1
+
 jobs:
   update-rust-nightly:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Dispatched to the org-wide ix-ci-dispatcher, the same self-hosted runner
+    # scheme as check.yml: the `ix-ci-run-*` label is claimed by the
+    # dispatcher, which mints an ephemeral runner per job on a host with a
+    # warm, persistent /nix/store. A hosted runner ships no nix at all, which
+    # is why every scheduled run of this workflow since #1706 died 127 on
+    # `nix: command not found` before reaching a single real step.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-rust-nightly', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 20
     permissions:
       contents: write
       pull-requests: write
@@ -26,11 +41,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
       # The rolling Rust manifest can publish before rust-overlay has generated
       # that day's expressions. Advance the overlay first so a toolchain bump
       # and the resolver data required to evaluate it land atomically.
       - name: Update Rust overlay
         run: nix flake update rust-overlay
+
+      - name: Provision missing CLI tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: python3
 
       # python3's stdlib tomllib parses both the pin and the upstream manifest
       # properly instead of grepping dates out of TOML by hand.

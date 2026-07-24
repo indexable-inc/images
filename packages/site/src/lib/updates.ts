@@ -26,12 +26,16 @@ export type SiteUpdate = SiteUpdateMeta & {
 
 type SvxModule = {
   default: Component;
-  // The raw frontmatter shape. `tags` is optional here because mdsvex does
-  // not validate; the loader below normalizes to a required `string[]`.
+  // The raw frontmatter shape. `tags` and `links` are optional here because
+  // mdsvex does not validate; the loader below normalizes both to required
+  // arrays so one entry without them cannot crash the prerender.
   // `metadata` itself is absent when the frontmatter fails to parse
   // (e.g. an unquoted title containing a colon); the loader rejects that
   // loudly, naming the file.
-  metadata?: Omit<SiteUpdateMeta, 'tags'> & { tags?: string[] };
+  metadata?: Omit<SiteUpdateMeta, 'tags' | 'links'> & {
+    tags?: string[];
+    links?: SiteUpdateLink[];
+  };
 };
 
 const modules = import.meta.glob<SvxModule>('./updates/*.svx', { eager: true });
@@ -52,6 +56,7 @@ export const siteUpdates: SiteUpdate[] = Object.entries(modules)
     return {
       ...mod.metadata,
       tags: (mod.metadata.tags ?? []).map((tag) => tag.toLowerCase()),
+      links: mod.metadata.links ?? [],
       component: mod.default,
       rawBody: stripFrontmatter(rawModules[path] ?? '')
     };

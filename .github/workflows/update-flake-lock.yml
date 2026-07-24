@@ -24,17 +24,25 @@ on:
         type: string
         default: ""
       runner-label:
-        description: Runner label for the update and escalation jobs
+        description: >-
+          Runner label for the update and escalation jobs. Empty (the default)
+          dispatches to the org-wide ix-ci-dispatcher, whose ephemeral runners
+          already carry a nix daemon and a warm store; no caller should need a
+          hosted runner, which has no nix at all.
         type: string
-        default: ubuntu-latest
+        default: ""
       submodule-paths:
         description: "Space-separated git submodule paths to bump to their remote HEAD instead of updating flake inputs. Mutually exclusive with flake-inputs: the DS update-flake-lock action can only write flake.lock, and composing both PR mechanisms on one rolling branch would fight over it."
         type: string
         default: ""
       nix-preinstalled:
-        description: Whether the selected runner already provides Nix
+        description: >-
+          Accepted and ignored. Every runner this job lands on provides Nix
+          now that the hosted fallback and its installer are gone. Retained
+          only so indexable-inc/ix's existing caller keeps validating; drop it
+          there, then delete this input.
         type: boolean
-        default: false
+        default: true
       escalate-after-hours:
         description: "Hours the rolling bump PR may stay failing before the escalate job alerts; see the escalate job below."
         type: number
@@ -68,7 +76,7 @@ jobs:
     # Schedule/dispatch have no workflow_call inputs, so retain the hosted
     # default for index itself and for callers that have not opted into a
     # Nix-owned runner profile.
-    runs-on: ${{ inputs.runner-label || 'ubuntu-latest' }}
+    runs-on: ["${{ inputs.runner-label || format('ix-ci-run-{0}-{1}-update-flake-lock', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 15
     permissions:
       contents: write
@@ -93,25 +101,14 @@ jobs:
         # temp-HOME token plumbing (ix#8123). The bump step below runs its
         # own anonymous `git submodule update --init`.
 
-      # Fully qualified, not `./.github/actions/install-nix`: this workflow is
-      # reusable (`workflow_call`), and for a cross-repo caller (ix) the
-      # `actions/checkout` above checks out the CALLER's repository, which does
-      # not contain index's local composite action. A local-path `uses:` then
-      # fails with "Can't find 'action.yml'" (broke ix's hourly flake bump when
-      # #2064 introduced the local action). Referencing the action by repo
-      # resolves it from index@main regardless of which repo called the job.
-      - name: Install Determinate Nix
-        # Submodule mode needs nix too: the bump step relocks flake inputs
-        # pinned by a bumped gitlink (ix#8180), and the tool-provision step's
-        # `ensure` builds missing CLIs from nixpkgs.
-        if: ${{ !inputs.nix-preinstalled }}
-        uses: indexable-inc/index/.github/actions/install-nix@main
-
       # Underscore digit separators require the patched client in index and in
       # downstream callers such as ix. The action reads its source lock from
       # index and fetches that source independently when the checkout belongs
-      # to a caller. Fully qualified like install-nix above because a reusable
-      # workflow checks out the caller's repository.
+      # to a caller. Fully qualified (not `./.github/actions/...`) because a
+      # reusable workflow's checkout is the CALLER's repository, which does not
+      # contain index's local composite actions; a local-path `uses:` then
+      # fails with "Can't find 'action.yml'" (that broke ix's hourly bump when
+      # #2064 introduced the local action).
       - name: Bootstrap patched Nix client
         if: ${{ inputs.submodule-paths == '' }}
         uses: indexable-inc/index/.github/actions/bootstrap-patched-nix@main
@@ -133,9 +130,9 @@ jobs:
       # cross-repo caller such as ix: a reusable workflow shares the caller's
       # event and actor): review request + assignee, both empty (a no-op) on
       # the scheduled runs, which have no triggering human. The PR body stays
-      # the update-flake-lock action's own template, so the review request is
-      # the notification channel here. Fully qualified like install-nix above
-      # because a reusable workflow checks out the caller's repository.
+      # a one-line template, so the review request is the notification
+      # channel here. Fully qualified for the same reason as the bootstrap
+      # action above.
       - name: Resolve triggering human
         id: trigger
         uses: indexable-inc/index/.github/actions/triggering-actor@main
@@ -147,20 +144,11 @@ jobs:
       # ix's self-hosted runner jobs expose a minimal PATH (git + nix, no gh,
       # jq, curl, awk; see indexable-inc/ix run 29892367191). Extend PATH from
       # nixpkgs via the preinstalled nix only for what is missing, so hosted
-      # runners (ubuntu-latest, everything native) skip the builds.
       - name: Provision missing CLI tools
-        run: |
-          set -euo pipefail
-          ensure() {
-            command -v "$1" >/dev/null 2>&1 && return
-            # --print-out-paths prints one line per output (jq: bin + man);
-            # add /bin per path, not to the joined string.
-            while IFS= read -r p; do
-              echo "${p}/bin" >> "$GITHUB_PATH"
-            done < <(nix build "nixpkgs#$1" --no-link --print-out-paths)
-          }
-          ensure gh
-          ensure jq
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: gh jq
+
       - name: Bump submodules
         if: ${{ inputs.submodule-paths != '' }}
         env:
@@ -303,20 +291,44 @@ jobs:
               ${TRIGGER_USER:+--assignee "$TRIGGER_USER" --reviewer "$TRIGGER_USER"}
           fi
 
+      # Hand-rolled rather than DeterminateSystems/update-flake-lock: the
+      # `relock -> commit -> force-push the rolling branch -> ensure one open
+      # PR` shape is exactly what the submodule branch above already does by
+      # hand, and inlining it keeps the lane on our own nix client instead of
+      # a third-party action that assumes the Determinate toolchain.
       - name: Update flake.lock
         if: ${{ inputs.submodule-paths == '' }}
-        uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
-        with:
-          base: main
-          branch: update-flake-lock
-          commit-msg: "flake.lock: update"
-          pr-title: "Update Nix flake inputs"
-          pr-assignees: ${{ steps.trigger.outputs.user }}
-          pr-reviewers: ${{ steps.trigger.outputs.user }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           # Empty for schedule/dispatch on index (all inputs public); a caller
           # scopes this to avoid fetching private inputs it can't auth for.
-          inputs: ${{ inputs.flake-inputs }}
-          token: ${{ steps.app-token.outputs.token || github.token }}
+          FLAKE_INPUTS: ${{ inputs.flake-inputs }}
+          TRIGGER_USER: ${{ steps.trigger.outputs.user }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Push authenticates with the minted token: the checkout token is
+          # job-scoped and may lack contents:write when the caller supplies an
+          # app. Same reasoning as the submodule branch above.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git checkout -B update-flake-lock origin/main
+          read -ra scoped <<< "$FLAKE_INPUTS"
+          # No inputs named means relock everything; naming them keeps a
+          # caller off inputs it cannot authenticate for.
+          nix flake update "${scoped[@]}"
+          if git diff --quiet -- flake.lock; then
+            echo "flake.lock is already current; nothing to bump"
+            exit 0
+          fi
+          git commit -m "flake.lock: update" -- flake.lock
+          git push -f origin update-flake-lock
+          if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
+            gh pr create --base main --head update-flake-lock \
+              --title "Update Nix flake inputs" \
+              --body "Automated bump of the pinned flake inputs." \
+              ${TRIGGER_USER:+--assignee "$TRIGGER_USER" --reviewer "$TRIGGER_USER"}
+          fi
 
   # A watcher that only fires on the success path (merge) is silent on
   # sustained failure: ix's `index` pin sat 4 days stale behind red bump PRs
@@ -346,7 +358,7 @@ jobs:
     # Reuse the caller-selected runner for both halves of the transaction. A
     # hosted escalation tail would make a supposedly self-hosted reusable
     # workflow silently depend on GitHub capacity after the update job exits.
-    runs-on: ${{ inputs.runner-label || 'ubuntu-latest' }}
+    runs-on: ["${{ inputs.runner-label || format('ix-ci-run-{0}-{1}-update-flake-lock', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 10
     permissions:
       contents: read
