@@ -25,9 +25,9 @@ runs:
       run: |
         set -euo pipefail
         for spec in $TOOLS; do
-          command="${spec%%=*}"
+          cmd="${spec%%=*}"
           attr="${spec#*=}"
-          if command -v "$command" >/dev/null 2>&1; then
+          if command -v "$cmd" >/dev/null 2>&1; then
             continue
           fi
           # --print-out-paths emits one line per output (jq: bin + man), so add

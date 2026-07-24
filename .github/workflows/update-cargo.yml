@@ -21,9 +21,24 @@ concurrency:
   group: update-cargo
   cancel-in-progress: false
 
+env:
+  # Client-side eval knobs only; the self-hosted runner's Nix daemon owns
+  # substituters and trusted keys. Same posture as check.yml / fork-sync.yml.
+  # This lane evaluates no repo Nix, but the ensure-tools step below shells out
+  # to a bare `nix build nixpkgs#...`, which needs the features enabled.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    accept-flake-config = false
+    max-jobs = auto
+    cores = 1
+
 jobs:
   update-cargo:
-    runs-on: ubuntu-latest
+    # Dispatched to the org-wide ix-ci-dispatcher, the same self-hosted runner
+    # scheme as check.yml: the `ix-ci-run-*` label is claimed by the
+    # dispatcher, which mints an ephemeral runner per job on a host with a
+    # warm, persistent /nix/store.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-update-cargo', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 20
     permissions:
       contents: write
@@ -32,10 +47,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # The GitHub-hosted Ubuntu runner ships rustup, and the repo's
-      # rust-toolchain.toml pins the nightly cargo it downloads on first use
-      # (same toolchain story as fuzz-nbt.yml). nightly is what makes
-      # `cargo update --breaking` available: it is an unstable option.
+      # `rustup`: the ix runner ships no Rust at all, and rustup is what reads
+      # the repo's rust-toolchain.toml and downloads the nightly cargo it pins
+      # on first use (same toolchain story as fuzz-nbt.yml). nightly is what
+      # makes `cargo update --breaking` available: it is an unstable option.
+      # nixpkgs' rustup patchelfs every binary it downloads onto the Nix
+      # dynamic linker, so upstream's FHS tarballs run on this host.
+      # `awk`: the dry-run plan below is parsed with it, and the runner's PATH
+      # carries only git, nix and coreutils.
+      - name: Provision missing CLI tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: rustup awk=gawk
+
       - name: Update Cargo dependencies
         env:
           # Deterministic, un-colored status lines so the parse below is stable

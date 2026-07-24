@@ -130,7 +130,7 @@ jobs:
   # PR cannot influence.
   comment:
     needs: evaluate
-    runs-on: ubuntu-latest
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-blast-radius-comment', github.run_id, github.run_attempt) }}"]
     # p95 <1m over last 30 green runs (2026-07-17); 10m floor.
     timeout-minutes: 10
     permissions:
@@ -141,6 +141,16 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # The self-hosted runner exposes a minimal PATH (git + nix +
+      # coreutils); this job shells out to more than that. Referenced by
+      # repo, not `./.github/actions/...`: this job never checks the
+      # repository out (it is pure `gh api`), so there is no local action
+      # tree to resolve a relative path against.
+      - name: Provision missing CLI tools
+        uses: indexable-inc/index/.github/actions/ensure-tools@main
+        with:
+          tools: gh jq
+
       - name: Download report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

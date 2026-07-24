@@ -15,6 +15,14 @@ on:
 permissions:
   contents: read
 
+env:
+  # ensure-tools resolves `nixpkgs#` attrs through the runner's nix client,
+  # which needs the flake CLI enabled. Only those two features: neither job
+  # evaluates this repo's flake, so the `ca-derivations` / `wasm-builtin`
+  # knobs the build lanes carry would buy nothing here.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes
+
 concurrency:
   group: approve-user-change-${{ github.event.pull_request.number }}-${{ github.event_name }}
   cancel-in-progress: true
@@ -22,11 +30,24 @@ concurrency:
 jobs:
   check:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    # Dispatched to the org-wide ix-ci-dispatcher, the same self-hosted
+    # runner scheme as check.yml: the `ix-ci-run-*` label is claimed by the
+    # dispatcher, which mints an ephemeral runner per job.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-approve-user-change-test', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 5
     steps:
       - name: Checkout pull request
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # shellcheck is the gate itself; the suite below reads
+      # .github/user-owners.json through jq and enumerates users/ with GNU
+      # find's `-printf`. None of the three are in the runner's
+      # git + nix + coreutils PATH. No gh: sourcing the policy script only
+      # defines its functions, so no API call runs here.
+      - name: Provision missing CLI tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: find=findutils jq shellcheck
 
       - name: Test approval policy
         run: |
@@ -45,7 +66,11 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: ubuntu-latest
+    # Dispatched to the org-wide ix-ci-dispatcher, the same self-hosted
+    # runner scheme as check.yml: the `ix-ci-run-*` label is claimed by the
+    # dispatcher, which mints an ephemeral runner per job. The runner is
+    # ephemeral, so the write token below outlives no other job on it.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-approve-user-change', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 5
     steps:
       # pull_request_target supplies a write token, so only trusted base-branch
@@ -55,6 +80,16 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
+
+      # approve-user-change.sh drives the reviews API with gh and filters
+      # every response through jq; the runner's PATH carries neither. Kept
+      # below the checkout on purpose: `./.github/actions/...` resolves out
+      # of the workspace, so this composite is the base-branch copy the
+      # trust note above requires, not the pull request's.
+      - name: Provision missing CLI tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: gh jq
 
       - name: Approve current commit when the author owns every path
         env:

@@ -13,6 +13,13 @@ permissions: read-all
 
 jobs:
   analysis:
+    # The one lane that stays GitHub-hosted. ossf/scorecard-action is a
+    # container action (`runs.using: docker`, image
+    # ghcr.io/ossf/scorecard-action:v2.4.3), so the runner has to hand the
+    # job a working Docker daemon. The ix ephemeral runners are Nix-based
+    # and ship none, so dispatching this to `ix-ci-run-*` would not degrade
+    # the scan, it would fail the step outright. Do not migrate it until
+    # scorecard ships a non-container entrypoint.
     runs-on: ubuntu-latest
     # p95 1m over last 30 green runs (2026-07-17); 10m floor.
     timeout-minutes: 10

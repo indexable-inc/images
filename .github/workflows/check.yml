@@ -206,7 +206,7 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-net-trace-comment', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -217,6 +217,16 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # The self-hosted runner exposes a minimal PATH (git + nix +
+      # coreutils); this job shells out to more than that. Referenced by
+      # repo, not `./.github/actions/...`: this job never checks the
+      # repository out (it is pure `gh api`), so there is no local action
+      # tree to resolve a relative path against.
+      - name: Provision missing CLI tools
+        uses: indexable-inc/index/.github/actions/ensure-tools@main
+        with:
+          tools: gh jq
+
       # continue-on-error: the artifact is missing whenever the gate ran
       # untraced (tracer bootstrap fails open) or died before its EXIT trap;
       # a missing profile must not mark the run red.
@@ -314,7 +324,7 @@ jobs:
   closure-gate:
     needs: flake-check
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-closure-gate', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 1
     steps:
       - name: Mirror the required-root gate

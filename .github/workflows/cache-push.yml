@@ -284,12 +284,22 @@ jobs:
   # the run red.
   advance-cache-ready:
     needs: [push]
-    runs-on: ubuntu-latest
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-advance-cache-ready', github.run_id, github.run_attempt) }}"]
     # p95 <1m over last 30 green runs (2026-07-17); 10m floor.
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      # The self-hosted runner exposes a minimal PATH (git + nix +
+      # coreutils); this job shells out to more than that. Referenced by
+      # repo, not `./.github/actions/...`: this job never checks the
+      # repository out (it is pure `gh api`), so there is no local action
+      # tree to resolve a relative path against.
+      - name: Provision missing CLI tools
+        uses: indexable-inc/index/.github/actions/ensure-tools@main
+        with:
+          tools: gh jq
+
       - name: Fast-forward cache-ready to the pushed commit
         env:
           GH_TOKEN: ${{ github.token }}

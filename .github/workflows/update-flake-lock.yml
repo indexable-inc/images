@@ -144,8 +144,11 @@ jobs:
       # ix's self-hosted runner jobs expose a minimal PATH (git + nix, no gh,
       # jq, curl, awk; see indexable-inc/ix run 29892367191). Extend PATH from
       # nixpkgs via the preinstalled nix only for what is missing, so hosted
+      # Fully qualified for the same reason as the bootstrap action below: a
+      # reusable workflow's checkout is the CALLER's repository, which has no
+      # copy of index's local composite actions.
       - name: Provision missing CLI tools
-        uses: ./.github/actions/ensure-tools
+        uses: indexable-inc/index/.github/actions/ensure-tools@main
         with:
           tools: gh jq
 
