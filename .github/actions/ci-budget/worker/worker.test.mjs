@@ -105,7 +105,7 @@ function response(jobs) {
 test("policy exposes independent queue, setup, validation, and cleanup clocks", () => {
   const policy = loadPolicy();
   assert.equal(policy.big_change_label, "ci/big-change");
-  assert.equal(policy.queue_start_seconds, 300);
+  assert.equal(policy.queue_start_seconds, 7200);
   assert.equal(policy.setup_allowance_seconds, 120);
   assert.equal(policy.routine_validation_seconds, 300);
   assert.equal(policy.extended_validation_seconds, 10_800);
@@ -274,13 +274,18 @@ test("worker identity fails closed on missing and duplicate runner matches", asy
 
 test("queue admission accepts the boundary and rejects one millisecond late", () => {
   const policy = loadPolicy();
+  // Created 10:00:00 plus the 7200s admission budget puts the boundary at
+  // exactly 12:00:00 (#3549 widened it from 300s).
   assert.doesNotThrow(() =>
-    assertQueueAdmission({ job: workerJob(), policy }),
+    assertQueueAdmission({
+      job: workerJob({ startedAt: "2026-07-15T12:00:00Z" }),
+      policy,
+    }),
   );
   assert.throws(
     () =>
       assertQueueAdmission({
-        job: workerJob({ startedAt: "2026-07-15T10:05:00.001Z" }),
+        job: workerJob({ startedAt: "2026-07-15T12:00:00.001Z" }),
         policy,
       }),
     DeadlineExceeded,
@@ -289,23 +294,24 @@ test("queue admission accepts the boundary and rejects one millisecond late", ()
 
 test("queue admission failure reports the wait, the budget, and saturation", () => {
   const policy = loadPolicy();
-  // ix#7625: a PR worker created at 13:17:16Z started 33 minutes later while
-  // stacked deploy runs held every dispatcher slot. The failure must read as
-  // pool saturation with the actual wait, not as a bare timestamp comparison.
+  // ix#7625: a PR worker started long after creation while stacked deploy
+  // runs held every dispatcher slot. The failure must read as pool
+  // saturation with the actual wait, not as a bare timestamp comparison.
+  // (The wait here overruns even the 7200s budget #3549 widened to.)
   assert.throws(
     () =>
       assertQueueAdmission({
         job: workerJob({
           createdAt: "2026-07-17T13:17:16Z",
-          startedAt: "2026-07-17T13:50:23Z",
+          startedAt: "2026-07-17T15:37:16Z",
         }),
         policy,
       }),
     (error) => {
       assert.ok(error instanceof DeadlineExceeded);
-      assert.match(error.message, /waited 1987s for a runner slot/);
-      assert.match(error.message, /300s queue admission budget/);
-      assert.match(error.message, /deadline 2026-07-17T13:22:16\.000Z/);
+      assert.match(error.message, /waited 8400s for a runner slot/);
+      assert.match(error.message, /7200s queue admission budget/);
+      assert.match(error.message, /deadline 2026-07-17T15:17:16\.000Z/);
       assert.match(error.message, /dispatcher\s+slot stayed busy/);
       assert.match(error.message, /ix#7625/);
       return true;
@@ -371,7 +377,7 @@ test("late sibling fails even when another worker started on time", async () => 
           runnerName: "runner-timely",
           startedAt: "2026-07-15T10:00:30Z",
         }),
-        workerJob({ startedAt: "2026-07-15T10:05:01Z" }),
+        workerJob({ startedAt: "2026-07-15T12:00:01Z" }),
       ]),
     repository: "indexable-inc/ix",
     runAttempt: 2,
