@@ -3542,6 +3542,10 @@
         message = "base profile should make root land in zsh (via platform users.defaultUserShell)";
       }
       {
+        assertion = base.config.environment.localBinInPath;
+        message = "base profile should put each user's ~/.local/bin on the login PATH";
+      }
+      {
         assertion = base.config.home-manager.users.root.programs.fzf.historyWidget.command == "";
         message = "base profile should leave Ctrl-R history search to Atuin";
       }
