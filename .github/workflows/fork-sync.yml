@@ -54,21 +54,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # ix's self-hosted runner jobs expose a minimal PATH (git + nix +
-      # coreutils; no awk, curl -- the first two live runs died 127 on each
-      # in turn). Same ensure idiom as update-flake-lock.yml: extend PATH
-      # from nixpkgs via the preinstalled nix only for what is missing.
       - name: Provision missing CLI tools
-        run: |
-          set -euo pipefail
-          ensure() {
-            command -v "$1" >/dev/null 2>&1 && return
-            while IFS= read -r p; do
-              echo "${p}/bin" >> "$GITHUB_PATH"
-            done < <(nix build "nixpkgs#$2" --no-link --print-out-paths)
-          }
-          ensure awk gawk
-          ensure curl curl
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: awk=gawk curl
 
       # MIRROR_TOKEN is minted per run from the org-owned ix-mirror-sync
       # GitHub App (Contents write on the org's repos): short-lived, no

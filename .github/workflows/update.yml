@@ -21,9 +21,22 @@ concurrency:
   group: update-content
   cancel-in-progress: false
 
+env:
+  # Client-side eval knobs only; the self-hosted runner's Nix daemon owns
+  # substituters and trusted keys. Same posture as check.yml / fork-sync.yml.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    accept-flake-config = false
+    max-jobs = auto
+    cores = 1
+
 jobs:
   update:
-    runs-on: ubuntu-latest
+    # Self-hosted via the org-wide ix-ci-dispatcher, same scheme as check.yml.
+    # The warm, persistent /nix/store is what keeps this lane cheap: every
+    # updater's closure, and every changed package rebuilt below, substitutes
+    # instead of cold-building the way a hosted runner has to.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-update-content', github.run_id, github.run_attempt) }}"]
     # p95 44m, worst 48m over last 30 green runs (2026-07-17); 2x headroom.
     timeout-minutes: 90
     permissions:
@@ -33,16 +46,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # Read-only: the updater only needs warm substitutes to verify a freshly
-      # pinned hash builds. Publishing happens when the resulting PR merges and
-      # flake-check rebuilds on the self-hosted runners (which push to ix-ci).
-      - name: Install Determinate Nix
-        uses: ./.github/actions/install-nix
-
       # Underscore digit separators: every nix invocation that evaluates this
       # tree must go through the patched client (see the action's description).
       - name: Bootstrap patched Nix client
         uses: ./.github/actions/bootstrap-patched-nix
+
+      - name: Provision missing CLI tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: jq
 
       # Runs every content updater in parallel via dag-runner (see
       # lib/per-system.nix). Each regenerates its own source files relative to

@@ -10,8 +10,9 @@ description: >-
   pinned separator-free revision and substituted from the warm store /
   cache.ix.dev only when the runner does not already provide a compatible
   client. Downstream repositories fetch that revision from the repository that
-  owns this action. Requires git and a nix client on PATH (the immutable
-  runner client on self-hosted runners, the install-nix action's elsewhere).
+  owns this action. Requires git and a nix client on PATH, which every runner
+  this repo dispatches to provides: CI is self-hosted throughout, and the
+  ephemeral ix-ci-run-* runners carry a nix daemon and a warm store.
 
 runs:
   using: composite
