@@ -1,25 +1,24 @@
 name: Cache push watchdog
 
-# The cache publish pipeline is two workflows since the 2026-07-19 darwin
-# split (#3672): cache-push.yml realises the x86_64-linux roots (including
-# the Linux->Darwin cross closure) and advances `cache-ready`, the pin every
-# fleet consumer tracks (RFC 0009, #1862); cache-push-darwin.yml realises the
-# native aarch64-darwin roots on a hosted mac, under its own concurrency
-# group, and advances `cache-ready-darwin` for dev macs. This watchdog sweeps
-# BOTH lanes from one cron via the job matrix below, parameterized over
-# (workflow file, pin ref, max run age) with each lane's ceiling derived from
-# that workflow's own job timeouts (#3693). If #3587 deletes the darwin lane
-# once every root cross-builds, its matrix row goes with it.
+# The cache publish pipeline is one workflow again: cache-push.yml realises
+# the x86_64-linux roots (including the Linux->Darwin cross closure) and
+# advances `cache-ready`, the pin every consumer tracks (RFC 0009, #1862).
+# The hosted-mac lane it was split from in #3672 is deleted (#3587): it
+# closed 299 runs without a single success and never created
+# `cache-ready-darwin`, so a dev mac substitutes cross closures from
+# `cache-ready` and builds the rest locally, exactly as it always has. The
+# job matrix below is kept for its one remaining row rather than inlined,
+# since a second lane is what #3586 is working toward.
 #
 # Origin: on 2026-07-06 (#1968) the pin froze for 13+ hours with no alert.
 # The corrected root cause (see #1968), from when both lanes still shared one
 # workflow and one `cache-push` concurrency group:
 #
-#   - The darwin lane ran multi-hour (pre-#1966 ENOSPC thrash; one run's
-#     darwin-build hit its then-240-min job timeout exactly), so each
-#     acquired run held the shared group for hours. The split (#3672) removed
-#     that cross-lane starvation by construction, but each lane can still
-#     wedge itself the same way inside its own group.
+#   - The darwin lane ran multi-hour (pre-#1966 ENOSPC thrash; one run hit
+#     its then-240-min job timeout exactly), so each acquired run held the
+#     shared group for hours. The split (#3672) and then the deletion
+#     (#3587) removed that starvation by construction, but the surviving
+#     lane can still wedge itself the same way inside its own group.
 #   - GitHub keeps at most ONE pending run per concurrency group: every new
 #     push supersedes and auto-cancels the previously pending run (documented
 #     behavior; `cancel-in-progress: false` only protects the RUNNING run).
@@ -48,9 +47,8 @@ name: Cache push watchdog
 #      lane's workflow is active at all (the pipeline gave up rather than
 #      being busy). Alert + one self-heal dispatch, deduped against recent
 #      heals so a slow lane cannot trigger a dispatch storm. A pin ref that
-#      does not exist is reported and skipped: `cache-ready-darwin` has never
-#      been created (as of #3693), so until the first darwin publish lands
-#      there is nothing to compare.
+#      does not exist is reported and skipped rather than treated as drift,
+#      which is what a lane looks like before its first publish lands.
 #
 # Every wedge files/updates one tracking issue PER LANE (the linux lane stays
 # on the pre-split issue thread) AND fails that lane's matrix job (red in the
@@ -106,10 +104,8 @@ jobs:
       matrix:
         # One row per publish lane: (workflow file, pin ref, signal-1
         # ceiling, tracking-issue marker). The ceiling is the sum of that
-        # workflow's serial job timeouts plus 30 min slack -- the same
-        # construction as the pre-split 520 (push 180 + darwin-build 240 +
-        # darwin-push 60 + advance-cache-ready 10, + 30), now per lane, so
-        # linux zombie detection no longer waits out a darwin-sized budget.
+        # workflow's serial job timeouts plus 30 min slack, per lane, so one
+        # lane's zombie detection never waits out another lane's budget.
         include:
           - workflow: cache-push.yml
             pin_ref: cache-ready
@@ -118,11 +114,6 @@ jobs:
             # The pre-split marker, verbatim: keeps this lane on the
             # tracking-issue thread the watchdog has always used (#2551).
             marker: cache-push-watchdog-tracking
-          - workflow: cache-push-darwin.yml
-            pin_ref: cache-ready-darwin
-            # darwin-build 330 + darwin-push 60, + 30 slack.
-            max_run_age_min: "420"
-            marker: cache-push-watchdog-tracking-darwin
     env:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
@@ -259,8 +250,8 @@ jobs:
             # gh api prints the HTTP error body to STDOUT, so the failed
             # substitution still assigns the 404 JSON to ready_sha; clear it
             # or the [ -n ] guard below feeds that JSON into the compare URL
-            # (every darwin-lane sweep failed this way until the first
-            # cache-ready-darwin publish, exactly the case the note covers).
+            # (every sweep of a lane whose pin does not exist yet failed
+            # this way, exactly the case the note above covers).
             ready_sha=""
             note "${PIN_REF} ref does not exist yet; nothing to compare"
           fi

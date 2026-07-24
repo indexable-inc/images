@@ -13,8 +13,9 @@ name: Closure gate
 # the unpublished window shrinks to roughly upload time. True
 # publish-before-merge (retiring cache-ready) stays open on #1873.
 #
-# The native aarch64-darwin cache lane (GitHub-hosted mac, cold codex is
-# 40-80 min) is not gated here; it stays a post-merge cache-push concern.
+# Native aarch64-darwin closures are not gated here and are no longer
+# published at all: #3587 deleted the hosted-mac lane. A mac substitutes the
+# Linux->Darwin cross closure from `cache-ready` and builds the rest itself.
 
 on:
   workflow_dispatch:

@@ -26,7 +26,7 @@ concurrency:
 
 env:
   # The self-hosted runner's Nix daemon owns substituters and trusted keys,
-  # so only client-side eval knobs are set here; no install-nix step. Same
+  # so only client-side eval knobs are set here, and nothing installs a nix. Same
   # posture and reasoning as check.yml (the ephemeral runner UID is
   # untrusted, so flake config would only produce ignored-setting warnings;
   # ca-derivations is needed to evaluate the rust workspace units).

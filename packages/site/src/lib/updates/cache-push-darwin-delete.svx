@@ -1,0 +1,35 @@
+---
+id: cache-push-darwin-delete
+postedAt: 2026-07-24T16:30:00-07:00
+title: "The hosted-mac cache lane is gone; darwin consumers pin cache-ready again"
+tags: [ci]
+links:
+  - label: "#3587: delete the darwin lane"
+    href: https://github.com/indexable-inc/index/issues/3587
+  - label: "#3586: cross-build audit"
+    href: https://github.com/indexable-inc/index/issues/3586
+  - label: "PR #3672: the original split"
+    href: https://github.com/indexable-inc/index/pull/3672
+---
+
+`cache-push-darwin.yml` is deleted. It ran on a GitHub-hosted `macos-14`
+runner because the fleet has no darwin machine, and in 299 runs it never
+concluded success once — 271 cancelled, 26 failed. It never created
+`cache-ready-darwin`, so nothing has ever pinned that ref.
+
+Nothing regresses, because nothing was being delivered. What a mac can
+substitute is the Linux→Darwin cross closure, and the linux lane already
+realises and publishes every one of those roots from
+`cachePushRoots.x86_64-linux`. Darwin consumers pin `cache-ready`, the same
+ref the rest of the fleet tracks.
+
+What a mac now builds locally is the set of genuinely native
+`aarch64-darwin` roots with no cross story yet — Apple-framework packages
+(`ghostty`, `vmkit`, `screencast`), the repo's own Rust CLIs, and the site
+and Python trees. That was already true in practice; it is now true by
+declaration. `#3586` tracks moving each of them onto the cross lane, at
+which point they publish through the linux lane like `btop`, `codex` and
+`nix-ix` already do.
+
+The removal also takes the last GitHub-hosted Nix installer with it, so no
+lane in this repo installs Determinate Nix any more.

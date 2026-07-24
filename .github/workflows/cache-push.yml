@@ -6,7 +6,7 @@ name: Cache push
 # `advance-cache-ready` moves the consumer pin once every root realised: a
 # run with failed roots still publishes what did realise, but it concludes
 # failure and the pin holds (#3195). The native aarch64-darwin lane lives in
-# cache-push-darwin.yml: GitHub keeps one pending run per concurrency group,
+# the deleted hosted-mac lane: GitHub keeps one pending run per group,
 # so the 2h+ hosted-mac runs sharing this group superseded-cancelled every
 # queued run behind them (24 in a row on 2026-07-19) and starved this pin
 # (#3586). Non-gating for merges.
@@ -275,8 +275,9 @@ jobs:
   # merge. The darwin lanes moved OFF this gate (2026-07-19): they exist to
   # prewarm dev macs, every fleet consumer of this pin is linux, and gating
   # on the GitHub-hosted mac held the fleet pin hostage for 2h13m-2h45m per
-  # run (8-run sample). Darwin consumers pin `cache-ready-darwin` instead,
-  # advanced at the end of darwin-push once the native artifacts are relayed
+  # run (8-run sample). Darwin consumers pin this same ref since #3587
+  # deleted the hosted-mac lane: what a mac can substitute is the
+  # Linux->Darwin cross closure, which this lane publishes
   # (same #1890 guarantee, its own ref). Downstream of the lane, so a failure
   # here never gates the cache publish itself. Also the linux lane's truth
   # gate (#3195): `push` stays green over individual failed roots so partial
