@@ -30,7 +30,7 @@ env:
   # nix-eval-jobs aborts ("experimental Nix feature 'ca-derivations' is
   # disabled"). Mirrors check.yml.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes ca-derivations
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
 
 jobs:
