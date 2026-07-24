@@ -142,6 +142,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
           normalizeSourceDestination value.destination
           != protected
           && !(lib.hasPrefix "${protected}/" (normalizeSourceDestination value.destination))
+          && !(lib.hasPrefix "${normalizeSourceDestination value.destination}/" protected)
       ) ["/dev" "/proc" "/sys" "/nix/store"]
     ) "source '${name}'.destination must be an absolute normalized guest path outside protected system trees";
     assert lib.assertMsg (
@@ -214,8 +215,8 @@ rendered fleet plan, image attrset, and wrapped CLI app.
       if builtins.isString value
       then value != ""
       else if builtins.isList value
-      then value != []
-      else value != null;
+      then lib.any (command: builtins.isString command && command != "") value
+      else false;
     serviceIsStartable = service: let
       unit = config.systemd.services.${service};
     in
@@ -273,7 +274,10 @@ rendered fleet plan, image attrset, and wrapped CLI app.
 
         case "$operation" in
           prepare)
-            install -d -m 0755 "$(dirname -- "$next")"
+            # `install -d -m` also chmods an existing directory. `mkdir -p -m`
+            # applies the mode only to newly-created parents, preserving guest
+            # ownership and permissions on an existing destination parent.
+            mkdir -p -m 0755 -- "$(dirname -- "$next")"
             mkdir -- "$next"
             ;;
           abort)

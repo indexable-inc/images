@@ -5,7 +5,8 @@ result
 result-*
 
 # ix CLI local state
-.ix/
+.ix/*
+!.ix/sources.lock.json
 
 # Build outputs
 .gradle/

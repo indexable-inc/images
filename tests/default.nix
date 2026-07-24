@@ -2021,6 +2021,13 @@
     };
   };
 
+  fleetProtectedSourceAncestorEval = tryFleetSourceManifest {
+    artifact = {
+      path = ".ix/artifacts/nix";
+      destination = "/nix";
+    };
+  };
+
   fleetMissingSourceServiceEval = builtins.tryEval (
     builtins.deepSeq
     (ix.mkFleet {
@@ -2031,6 +2038,25 @@
           activateServices = ["missing-worker"];
         };
         modules = [{}];
+      };
+    }).nodes.web.system.build.toplevel.drvPath
+    true
+  );
+
+  fleetEmptySourceServiceEval = builtins.tryEval (
+    builtins.deepSeq
+    (ix.mkFleet {
+      nodes.web = {
+        deployment.sources.artifact = {
+          path = ".ix/artifacts/bundle";
+          destination = "/var/lib/web/bundle";
+          activateServices = ["empty-worker"];
+        };
+        modules = [
+          {
+            systemd.services.empty-worker.serviceConfig.ExecStart = [""];
+          }
+        ];
       };
     }).nodes.web.system.build.toplevel.drvPath
     true
@@ -6060,8 +6086,16 @@
         message = "fleet plans should reject nested Source destination paths";
       }
       {
+        assertion = !fleetProtectedSourceAncestorEval.success;
+        message = "fleet plans should reject ancestors of protected Source destination paths";
+      }
+      {
         assertion = !fleetMissingSourceServiceEval.success;
         message = "fleet plans should reject Source gates for missing systemd services";
+      }
+      {
+        assertion = !fleetEmptySourceServiceEval.success;
+        message = "fleet plans should reject Source gates whose ExecStart list contains no command";
       }
       {
         assertion =
