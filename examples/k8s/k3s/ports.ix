@@ -1,0 +1,9 @@
+// One statement of every port in the cluster; node.ix opens the ones every
+// node listens on, server.ix and workload.ix the role-specific ones.
+export default {
+  api: 6443,
+  flannelVxlan: 8472,
+  kubelet: 10250,
+  app: 8080,
+  nodePort: 30080,
+};

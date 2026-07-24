@@ -1,0 +1,18 @@
+// The demo pod image, built by dockerTools instead of pulled from a registry.
+//
+// Every node preloads this image (node.ix) because the scheduler may place
+// pods on any of them; the manifest references it by `imageName:imageTag`.
+
+export default ({ ix, lib, pkgs }) => {
+  const ports = import("./ports.ix");
+  const serve = ix.writePythonApplication(pkgs, {
+    name: "whoami-serve",
+    src: __dir + "/whoami_serve.py",
+    args: [builtins.toString(ports.app)],
+  });
+  return pkgs.dockerTools.buildLayeredImage({
+    name: "whoami",
+    tag: "nix",
+    config: { Entrypoint: [lib.getExe(serve)] },
+  });
+};
