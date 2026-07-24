@@ -142,7 +142,7 @@
           | where {|line| $line != "" and not ($line | str starts-with "#") }
         )
         let scripts = (
-          fd --hidden --type file --exclude .git --exclude .claude/worktrees
+          fd --hidden --type file --exclude .git
             --extension sh --extension bash --extension nu
           | lines
         )
@@ -240,7 +240,7 @@
           --extension toml --extension json --extension yaml --extension yml
           --extension kdl --extension ini --extension conf --extension cfg --extension xml
           --extension properties --extension editorconfig --extension sobelow-conf
-          --exclude .git --exclude .claude/worktrees
+          --exclude .git
           | lines
         )
         let denied = ($candidates | where {|path| not ($allowed | any {|pattern| $path =~ $pattern})})
