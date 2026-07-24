@@ -78,6 +78,11 @@ in {
     # kitty, alacritty, wezterm, foot, ...), not the terminal binaries.
     environment.enableAllTerminfo = true;
 
+    # Native CLI installers use the XDG-standard per-user binary directory.
+    # Make those binaries available on the next login without asking every
+    # image user to edit a shell-specific startup file.
+    environment.localBinInPath = true;
+
     # Cubic halves cwnd on any loss, so a residential last-mile at
     # 30 ms and a couple percent loss caps a single TCP flow far
     # below the path's real capacity. BBR models bottleneck bandwidth
