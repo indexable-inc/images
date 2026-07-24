@@ -1452,8 +1452,10 @@ fn append_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str)
 
 // A killed content-addressed build on a store without a build sandbox (the
 // darwin default) can leave its resolved output path behind in /nix/store as an
-// invalid directory owned by the `_nixbld` user that ran it. Nix does not remove
-// that orphan before a later rebuild of the same drv, so a fresh builder (a
+// invalid directory owned by the `_nixbld` user that ran it. Before fork rev
+// 403b19c5 nix did not remove that orphan before a later rebuild of the same
+// drv (the daemon now clears it itself under the build locks, #4112), so a
+// fresh builder (a
 // different `_nixbld` uid) hits the pre-existing dir at `$out` and the artifact
 // `cp` below fails with a bare `cp: ... Permission denied` one phase after rustc
 // succeeded, which reads like a linker/OOM failure (#2247). Detect the orphan
@@ -1461,9 +1463,11 @@ fn append_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str)
 // sealed store path is always root-owned and never pre-exists for a fresh build,
 // so an existing non-writable `$out` here is unambiguously a killed-build
 // leftover; we only detect and report it, never delete a store path from a
-// builder. A nix builder puts GNU coreutils `stat` first on PATH even on
-// darwin, so query the owner with GNU `-c '%U'` first; BSD `stat -f '%Su'` is
-// only the fallback (GNU stat would misparse `-f` as `--file-system`).
+// builder. This precheck firing on a store whose daemon carries the #4112 fix
+// means something new is wrong. A nix builder puts GNU coreutils `stat` first
+// on PATH even on darwin, so query the owner with GNU `-c '%U'` first; BSD
+// `stat -f '%Su'` is only the fallback (GNU stat would misparse `-f` as
+// `--file-system`).
 const ORPHAN_OUTPUT_PRECHECK: &str = "\
 if [ -e \"$out\" ] && [ ! -w \"$out\" ]; then
   echo >&2 \"error: refusing to install over a pre-existing, non-writable output path:\"

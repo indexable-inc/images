@@ -674,8 +674,6 @@
       [profile.default]
       retries = 0
       slow-timeout = { period = "${rawArgs.nextestPerTestTimeout or "120s"}", terminate-after = 1 }
-      [profile.default.junit]
-      path = "junit.xml"
     '';
     nextestNonInteractiveEnv = {
       # #1597: Nix builders can attach cargo-nextest to a pseudo-terminal
@@ -756,9 +754,6 @@
           ${nextestFilterForTestPolicy packagePolicy}
 
         mkdir -p "$out"
-        if [ -f "$workspace_root/target/nextest/default/junit.xml" ]; then
-          cp "$workspace_root/target/nextest/default/junit.xml" "$out/junit.xml"
-        fi
         echo "ran ${targetName} test target" > "$out/result"
       '';
     nextestByTarget = lib.mapAttrs mkNextestForTarget (units.tests or {});

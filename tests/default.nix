@@ -3538,8 +3538,12 @@
         message = "base profile should enable the ix shell workspace by default";
       }
       {
-        assertion = base.config.users.users.root.shell.meta.mainProgram == "nu";
-        message = "base profile should make root land in nushell (via platform users.defaultUserShell)";
+        assertion = base.config.users.users.root.shell.meta.mainProgram == "zsh";
+        message = "base profile should make root land in zsh (via platform users.defaultUserShell)";
+      }
+      {
+        assertion = base.config.environment.localBinInPath;
+        message = "base profile should put each user's ~/.local/bin on the login PATH";
       }
       {
         assertion = base.config.home-manager.users.root.programs.fzf.historyWidget.command == "";
@@ -6266,6 +6270,8 @@
     test -d ${
       cargoUnitWorkspace.targetSets.test.tests.cargo_unit_hello.cases."tests::package_test_env_and_path_are_available"
     }
+    test -f ${cargoUnitWorkspace.nextestByTarget.cargo_unit_hello}/result
+    test ! -e ${cargoUnitWorkspace.nextestByTarget.cargo_unit_hello}/junit.xml
     test -d ${(builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).all}
     test -d ${(builtins.head (builtins.attrValues (builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).cases))}
     test -s ${cargoUnitWorkspace.testPlan}/packages/cargo-unit-hello/test-binaries

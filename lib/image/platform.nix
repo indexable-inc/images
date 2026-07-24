@@ -633,12 +633,12 @@ in {
     # wants to drop the stub from its closure.
     programs.nix-ld.enable = lib.mkDefault true;
 
-    # Nushell is the operator shell across this repo: the base profile ships
-    # system-wide nu config and the workspace login.nu. Setting it as the
-    # default user shell means service users (minecraft, ...) and any future
-    # user inherit Nushell rather than bash, so an su or a manual
-    # session into a service account lands in the same shell as root.
-    users.defaultUserShell = pkgs.nushell;
+    # Zsh is the default interactive shell for image users. The base profile
+    # registers it system-wide and wires the shared prompt, history, directory
+    # jumping, and workspace login behavior. Service users (minecraft, ...)
+    # and future users inherit the same shell as root unless their image
+    # explicitly overrides it.
+    users.defaultUserShell = pkgs.zsh;
 
     networking = {
       # ix provisions the guest address, route, and DNS before systemd reaches

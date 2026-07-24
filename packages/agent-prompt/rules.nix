@@ -60,6 +60,25 @@
     };
   }
   {
+    noZingers = {
+      topics = ["writing"];
+      text = ''
+        Never write a zinger: a sentence built to land as a punchline gets
+        flattened into a plain claim. Never write a rhetorical triad; three
+        parallel items ("fast, simple, and correct") lose one or gain a
+        fourth. A superlative ("best", "blazing", "massive") is replaced by
+        the measurement that would earn it, or cut. This covers everything
+        you write: replies, commit messages, PR bodies, docs, site updates.
+      '';
+      reason = ''
+        Requested 2026-07-23: prose sets the register and calibratedClaims
+        handles absolutes, yet punch-up devices kept appearing in agent
+        prose. Lands as its own rule since style governs code as well as
+        prose; the shape follows noEmDashes, one register ban stated once.
+      '';
+    };
+  }
+  {
     promptSource = {
       text = ''
         These rules live at `packages/agent-prompt/rules.nix` in the index
@@ -705,6 +724,24 @@
         A jobs-registry death (index#3839) drew a three-patch fix on a shape
         the author thought wrong; the ledger redesign surfaced only when the
         user asked "would you design it differently".
+      '';
+    };
+  }
+  {
+    readTopDown = {
+      topics = ["architecture"];
+      text = ''
+        Compose code so it reads without comments: a reader starts at the
+        top-level abstraction and descends, each level a sentence of
+        well-named parts. Structure carries what the code does. Needing a
+        comment to say what a block does means extract the block and name
+        it.
+      '';
+      reason = ''
+        Requested 2026-07-23: `style` covers naming and why-only comments,
+        commentDensityRewrite the rewrite when explanation runs long; the
+        reading path itself, top down through composition, was unstated as
+        the standard for legibility.
       '';
     };
   }
