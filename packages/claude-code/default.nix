@@ -13,7 +13,6 @@
   git,
   bubblewrap,
   socat,
-  nix,
   gnupg,
   python3,
   formats,
@@ -684,7 +683,8 @@
     else
       import ./update.nix {
         writeNushellApplication = updateScriptWriter;
-        inherit nix gnupg;
+        inherit gnupg;
+        nix = repoPackages.nix-ix;
       };
 in
   # `allowVendoredUnfree` strips the honest `meta.license` tag below so the

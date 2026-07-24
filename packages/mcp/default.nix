@@ -1,7 +1,10 @@
 {
   ix,
   lib,
-  nix,
+  # The fork client rather than stock `pkgs.nix`; see packages/yc/default.nix
+  # for why an updater must not pull nixpkgs' nix into its closure. Empty on
+  # the overlay path, which omits the updateScript anyway.
+  repoPackages ? {},
   updateScriptWriter ? null,
 }: let
   # The headless Nix build-tree emitter. The `nix` module's live-pane path spawns
@@ -30,7 +33,7 @@
     then null
     else
       import ./update.nix {
-        inherit nix;
+        nix = repoPackages.nix-ix;
         writeNushellApplication = updateScriptWriter;
       };
   # The PTY-driving `tui` package, baked into the pinned interpreter so every

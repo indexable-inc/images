@@ -21,7 +21,6 @@
 {
   ix,
   lib,
-  nix,
   stdenv,
   fetchurl,
   makeWrapper,
@@ -32,6 +31,10 @@
   tzdata,
   # Writer for `passthru.updateScript` (flake-package path only); null on the
   # overlay path.
+  # The fork client rather than stock `pkgs.nix`; see packages/yc/default.nix
+  # for why an updater must not pull nixpkgs' nix into its closure. Empty on
+  # the overlay path, which omits the updateScript anyway.
+  repoPackages ? {},
   updateScriptWriter ? null,
   # Pinned, not a parameter: a `jdk ? jdk17_headless` arg collides with the
   # `pkgs.jdk` callPackage auto-fills (currently openjdk 21, which Spark 3.5 does
@@ -46,7 +49,7 @@
   pin = ix.pins.loadPin ./pins.json "spark";
   updateScript = ix.pins.mkOptionalUpdater {
     writeNushellApplication = updateScriptWriter;
-    inherit nix;
+    nix = repoPackages.nix-ix;
     pname = "spark-hive";
     relPath = "packages/spark-hive/pins.json";
   };

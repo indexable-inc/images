@@ -12,7 +12,6 @@
   path,
   repoPackages,
   ix,
-  nix,
   # Writer for `passthru.updateScript`, bound only on the flake-package path
   # (lib/packages.nix); the overlay path leaves it null so `pkgs.*` carries no
   # updater. Same nullable-writer pattern as vector-bin.
@@ -92,7 +91,7 @@
   # (`nix run .#update`); bumping the LWJGL version is the human edit.
   updateScript = ix.pins.mkOptionalUpdater {
     writeNushellApplication = updateScriptWriter;
-    inherit nix;
+    nix = repoPackages.nix-ix;
     pname = "panes-guest-image";
     relPath = "packages/panes/guest-image/pins.json";
   };
