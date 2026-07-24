@@ -834,5 +834,5 @@ only to make the plan's inputs body-independent.
         else tree;
     };
 in {
-  inherit buildKernel;
+  inherit buildKernel kbuildInputs;
 }
