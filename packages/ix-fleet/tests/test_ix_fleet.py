@@ -47,6 +47,16 @@ def fleet_plan(order: list[str], nodes: list[dict[str, typing.Any]]) -> dict[str
     }
 
 
+def source_attachment(name: str = "artifact") -> dict[str, typing.Any]:
+    return {
+        "name": name,
+        "path": ".ix/artifacts/tooling",
+        "sourceId": None,
+        "destination": "/var/lib/tooling",
+        "activateServices": ["worker"],
+    }
+
+
 class FleetPlanValidationTests(unittest.TestCase):
     def test_rejects_nodes_missing_from_order(self) -> None:
         data = fleet_plan(["web"], [fleet_node("web"), fleet_node("db")])
@@ -97,6 +107,42 @@ class FleetPlanValidationTests(unittest.TestCase):
         assert [secret.name for secret in parsed.secrets] == ["github_token", "hermes_env"]
         assert parsed.secrets[0].target.name == "GH_TOKEN"
         assert parsed.secrets[1].target.owner == "hermes"
+
+    def test_source_attachments_default_empty_and_round_trip(self) -> None:
+        bare = ix_fleet.FleetNode.model_validate(fleet_node("web"))
+        assert bare.sources == []
+
+        node = fleet_node("web")
+        node["sources"] = [source_attachment()]
+        parsed = ix_fleet.FleetNode.model_validate(node)
+        assert parsed.sources[0]["path"] == ".ix/artifacts/tooling"
+
+
+class SourceWorkflowGuardTests(unittest.TestCase):
+    def test_image_deploys_reject_source_nodes(self) -> None:
+        node_data = fleet_node("web")
+        node_data["sources"] = [source_attachment()]
+        node = ix_fleet.FleetNode.model_validate(node_data)
+
+        for operation in ("up", "replace"):
+            with (
+                self.subTest(operation=operation),
+                pytest.raises(RuntimeError, match=rf"ix-fleet {operation}.*web"),
+            ):
+                ix_fleet.reject_source_image_deploy([node], operation)
+
+    def test_non_remote_switch_rejects_source_nodes(self) -> None:
+        node_data = fleet_node("web")
+        node_data["sources"] = [source_attachment()]
+        node_data["switch"]["buildOn"] = "local"
+        node = ix_fleet.FleetNode.model_validate(node_data)
+
+        with pytest.raises(RuntimeError, match=r"non-remote switch nodes: web"):
+            ix_fleet.reject_local_source_switch([node])
+
+        node_data["switch"]["buildOn"] = "remote"
+        remote = ix_fleet.FleetNode.model_validate(node_data)
+        ix_fleet.reject_local_source_switch([remote])
 
 
 class VerifySecretsAvailableTests(unittest.TestCase):

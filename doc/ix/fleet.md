@@ -97,9 +97,9 @@ replicated node's replicas Kubernetes-RollingUpdate style: `up`/`replace`
 recreate at most `k` replicas concurrently, each gated on its health checks
 before the next starts (`lib/image/fleet.nix:139-165`). `deployment` accepts
 `bootstrapImage`, `destination`, `env`, `ipv4`, `l7ProxyPorts`,
-`noDefaultSecrets`, `recreateOnUp`, `region`, `secrets`, `switch` - and only
-those; unknown keys error (`lib/image/fleet.nix:77-102`). Health checks are not a
-deployment key: declare them in a node module as `ix.healthChecks.<name>`
+`noDefaultSecrets`, `recreateOnUp`, `region`, `secrets`, `sources`, `switch` -
+and only those; unknown keys error (`lib/image/fleet.nix:77-102`). Health checks
+are not a deployment key: declare them in a node module as `ix.healthChecks.<name>`
 (`lib/image/fleet.nix:72-76`).
 
 Rendered plan (pydantic, `__init__.py:34-146`): a `FleetPlan` is `order`, `nodes`
@@ -107,8 +107,8 @@ Rendered plan (pydantic, `__init__.py:34-146`): a `FleetPlan` is `order`, `nodes
 `switch` (`SwitchSpec`: `target`, `buildOn` auto|local|remote, `buildVm`,
 `sourceInstallable`, `overrideInputs`), `bootstrapImage`, `replacementImage`,
 `region`, `ipv4`, `snapshot`, `recreateOnUp`, `tags`, `groups`, `env`,
-`l7ProxyPorts`, `dependsOn`, `healthChecks`, `secrets`, `noDefaultSecrets`,
-`updateStrategy`.
+`l7ProxyPorts`, `dependsOn`, `healthChecks`, `secrets`, `sources`,
+`noDefaultSecrets`, `updateStrategy`.
 
 ## See also
 

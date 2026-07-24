@@ -88,6 +88,249 @@ rendered fleet plan, image attrset, and wrapped CLI app.
 
   normalizeSecrets = secrets: lib.mapAttrsToList normalizeSecretAttachment secrets;
 
+  knownSourceKeys = ["path" "sourceId" "destination" "activateServices"];
+  normalizeSourceDestination = destination:
+    "/"
+    + lib.concatStringsSep "/" (
+      lib.filter (
+        component: component != "" && component != "."
+      ) (lib.splitString "/" destination)
+    );
+
+  normalizeSourceAttachment = name: value:
+    assert lib.assertMsg (isSecretName name)
+    "source key '${name}' must be lower snake_case: [a-z][a-z0-9_]*";
+    assert lib.assertMsg (isAttrs value) "source '${name}' must be an attrset";
+    assert lib.assertMsg (
+      lib.subtractLists knownSourceKeys (attrNames value) == []
+    ) "source '${name}' has unknown option(s): ${lib.concatStringsSep ", " (lib.subtractLists knownSourceKeys (attrNames value))}; valid options: ${lib.concatStringsSep ", " knownSourceKeys}";
+    assert lib.assertMsg (
+      (value ? path) != (value ? sourceId)
+    ) "source '${name}' must set exactly one of path or sourceId";
+    assert lib.assertMsg (
+      !(value ? path)
+      || (
+        builtins.isString value.path
+        && value.path != ""
+        && builtins.match "/.*" value.path == null
+        && !(builtins.elem ".." (lib.splitString "/" value.path))
+        && (
+          let
+            components = lib.filter (component: component != "" && component != ".") (lib.splitString "/" value.path);
+          in
+            components
+            != []
+            && components != [".ix"]
+        )
+      )
+    ) "source '${name}'.path must name a dedicated artifact subtree below the apply source root (not . or .ix), not a Nix path";
+    assert lib.assertMsg (
+      !(value ? sourceId)
+      || (
+        builtins.isString value.sourceId
+        && builtins.match "[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}" value.sourceId != null
+      )
+    ) "source '${name}'.sourceId must be a UUID string";
+    assert lib.assertMsg (
+      value ? destination
+      && builtins.isString value.destination
+      && builtins.match "/.+" value.destination != null
+      && !(builtins.elem ".." (lib.splitString "/" value.destination))
+      && normalizeSourceDestination value.destination != "/"
+      && lib.all (
+        protected:
+          normalizeSourceDestination value.destination
+          != protected
+          && !(lib.hasPrefix "${protected}/" (normalizeSourceDestination value.destination))
+      ) ["/dev" "/proc" "/sys" "/nix/store"]
+    ) "source '${name}'.destination must be an absolute normalized guest path outside protected system trees";
+    assert lib.assertMsg (
+      builtins.isList (value.activateServices or [])
+      && lib.all (
+        service:
+          builtins.isString service
+          && builtins.match "[A-Za-z0-9@_.:-]+" service != null
+          && !(lib.hasSuffix ".service" service)
+      ) (value.activateServices or [])
+    ) "source '${name}'.activateServices must contain systemd service names without the .service suffix"; {
+      inherit name;
+      path = value.path or null;
+      sourceId = value.sourceId or null;
+      destination = normalizeSourceDestination value.destination;
+      activateServices = lib.unique (value.activateServices or []);
+    };
+
+  normalizeSources = sources: let
+    normalized = lib.mapAttrsToList normalizeSourceAttachment sources;
+    destinations = map (source: source.destination) normalized;
+    hasNestedDestinations =
+      lib.any (
+        outer:
+          lib.any (
+            inner:
+              outer
+              != inner
+              && (
+                lib.hasPrefix "${outer}/" inner
+                || lib.hasPrefix "${inner}/" outer
+              )
+          )
+          destinations
+      )
+      destinations;
+  in
+    assert lib.assertMsg (
+      lib.length destinations == lib.length (lib.unique destinations)
+    ) "deployment.sources entries must use distinct destination paths";
+    assert lib.assertMsg (!hasNestedDestinations)
+    "deployment.sources entries must not use nested destination paths"; normalized;
+
+  /**
+  Embed the post-switch Source contract in the guest system.
+
+  `ix apply` cannot evaluate deployment metadata on the caller: local applies
+  deliberately upload the source and evaluate on the VM so the caller needs no
+  Nix installation. The activated closure therefore exposes one small JSON
+  manifest under `/etc/ix/`; after the ordinary system switch, `ix apply` reads
+  it through guest exec, uploads/reuses the declared artifacts, materializes
+  them, and invokes the fixed activator below.
+
+  Services named by `activateServices` are fail-closed behind a runtime marker.
+  A boot or switch removes the marker and stops an old instance; only the
+  post-materialization activator recreates it and starts the services. This
+  closes the `ConditionPathExists` trap where a unit skipped during boot stays
+  skipped after its artifact appears.
+  */
+  sourceRuntimeModule = sources: {
+    config,
+    lib,
+    pkgs,
+    ...
+  }: let
+    activateServices = lib.unique (lib.concatMap (source: source.activateServices) sources);
+    serviceUnits = map (service: "${service}.service") activateServices;
+    sourceDestinations = map (source: source.destination) sources;
+    serviceIsStartable = service: let
+      unit = config.systemd.services.${service};
+    in
+      (unit.script or null)
+      != null
+      || (unit.serviceConfig.ExecStart or null) != null;
+    systemctl = lib.getExe' config.systemd.package "systemctl";
+    readyPath = "/run/ix/sources-ready";
+    activator = pkgs.writeShellApplication {
+      name = "ix-source-activate";
+      runtimeInputs = [
+        pkgs.coreutils
+        config.systemd.package
+      ];
+      text = ''
+        install -d -m 0755 /run/ix
+        touch ${readyPath}
+        ${lib.optionalString (serviceUnits != []) ''
+          systemctl reset-failed ${lib.escapeShellArgs serviceUnits} || true
+          if ! systemctl start ${lib.escapeShellArgs serviceUnits}; then
+            systemctl stop ${lib.escapeShellArgs serviceUnits} || true
+            rm -f ${readyPath}
+            exit 1
+          fi
+        ''}
+      '';
+    };
+    stager = pkgs.writeShellApplication {
+      name = "ix-source-stage";
+      runtimeInputs = [
+        pkgs.coreutils
+        pkgs.util-linux
+      ];
+      text = ''
+        if [[ "$#" -ne 3 ]]; then
+          echo "usage: ix-source-stage <prepare|commit|abort> <destination> <token>" >&2
+          exit 2
+        fi
+        operation="$1"
+        destination="$2"
+        token="$3"
+        case "$destination" in
+          ${lib.concatMapStringsSep "\n          " (destination: "${lib.escapeShellArg destination}) ;;") sourceDestinations}
+          *)
+            echo "ix-source-stage: undeclared destination: $destination" >&2
+            exit 2
+            ;;
+        esac
+        if [[ ! "$token" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; then
+          echo "ix-source-stage: invalid apply token" >&2
+          exit 2
+        fi
+
+        next="$destination.ix-source-$token.next"
+        install -d -m 0755 /run/ix
+
+        case "$operation" in
+          prepare)
+            install -d -m 0755 "$(dirname -- "$next")"
+            mkdir -- "$next"
+            ;;
+          abort)
+            rm -rf -- "$next"
+            ;;
+          commit)
+            exec 9>/run/ix/source-stage.lock
+            flock 9
+            if [[ ! -d "$next" || -L "$next" ]]; then
+              echo "ix-source-stage: staged tree is missing or not a directory" >&2
+              exit 1
+            fi
+            if [[ -e "$destination" || -L "$destination" ]]; then
+              # `--exchange --no-copy` maps to renameat2(RENAME_EXCHANGE):
+              # the old and new trees swap atomically on the same filesystem,
+              # with no missing-destination window or copy fallback.
+              mv -T --exchange --no-copy -- "$next" "$destination"
+              rm -rf -- "$next"
+            else
+              mv -T --no-copy -- "$next" "$destination"
+            fi
+            ;;
+          *)
+            echo "ix-source-stage: unknown operation: $operation" >&2
+            exit 2
+            ;;
+        esac
+      '';
+    };
+  in
+    lib.mkIf (sources != []) {
+      assertions =
+        map (service: {
+          assertion = serviceIsStartable service;
+          message = "deployment.sources activateServices references missing or non-startable systemd service '${service}'";
+        })
+        activateServices;
+
+      environment.etc."ix/deployment-sources.json".text = builtins.toJSON {
+        version = 1;
+        inherit sources;
+      };
+      environment.systemPackages = [
+        activator
+        stager
+      ];
+
+      system.activationScripts.ixSourceGate = {
+        deps = ["etc"];
+        text = ''
+          ${lib.optionalString (serviceUnits != []) ''
+            ${systemctl} stop ${lib.escapeShellArgs serviceUnits} || true
+          ''}
+          ${lib.getExe' pkgs.coreutils "rm"} -f ${readyPath}
+        '';
+      };
+
+      systemd.services = lib.genAttrs activateServices (_service: {
+        unitConfig.ConditionPathExists = readyPath;
+      });
+    };
+
   mergeDeployments = parts:
     lib.mergeAttrsList parts
     // {
@@ -96,7 +339,35 @@ rendered fleet plan, image attrset, and wrapped CLI app.
       # User-store secret keys merge by source name; node layers can override a
       # fleet-wide delivery target while unrelated refs compose.
       secrets = lib.foldl' lib.recursiveUpdate {} (map (part: part.secrets or {}) parts);
+      # Source keys merge like secrets, except the mutually-exclusive identity
+      # selector is replaced as a pair: a node-level sourceId must remove an
+      # inherited path (and vice versa).
+      sources = lib.foldl' mergeSourceLayer {} (map (part: part.sources or {}) parts);
     };
+
+  mergeSourceAttachment = previous: next:
+    if !(isAttrs previous && isAttrs next)
+    then next
+    else let
+      merged = lib.recursiveUpdate previous next;
+    in
+      if next ? path
+      then builtins.removeAttrs merged ["sourceId"]
+      else if next ? sourceId
+      then builtins.removeAttrs merged ["path"]
+      else merged;
+
+  mergeSourceLayer = accumulated: layer:
+    assert lib.assertMsg (isAttrs layer) "deployment.sources must be an attrset";
+      lib.foldl' (
+        result: name:
+          result
+          // {
+            ${name} = mergeSourceAttachment (result.${name} or {}) layer.${name};
+          }
+      )
+      accumulated
+      (attrNames layer);
 
   # Every deployment key the plan consumes. `deployment` is a plain attrset
   # (not a NixOS module), so a typo or an imagined option would otherwise be
@@ -116,6 +387,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     "region"
     "secrets"
     "snapshot"
+    "sources"
     "switch"
   ];
   checkedDeployment = name: deploy: let
@@ -259,6 +531,12 @@ rendered fleet plan, image attrset, and wrapped CLI app.
       ${lib.concatStringsSep " -> " (dependencyOrder.cycle or [])}
   ''; checkedKnownNodeSpecs;
 
+  nodeSources =
+    lib.mapAttrs (
+      _name: spec: normalizeSources (spec.deployment.sources or {})
+    )
+    checkedNodeSpecs;
+
   nodeConfigs =
     lib.mapAttrs (
       name: spec:
@@ -275,6 +553,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
                 ix.image.name = lib.mkDefault name;
                 networking.hostName = lib.mkDefault name;
               }
+              (sourceRuntimeModule nodeSources.${name})
             ]
             ++ spec.modules;
         }
@@ -367,6 +646,10 @@ rendered fleet plan, image attrset, and wrapped CLI app.
           # Per-VM user-store secret references plus delivery targets. ix-fleet
           # verifies the source keys exist before deploying.
           secrets = normalizeSecrets (deploy.secrets or {});
+          # Public attachment metadata only. The deprecated image `up` /
+          # `replace` path uses this to reject Source-bearing nodes before any
+          # mutation; source-aware switching is owned by `ix apply`.
+          sources = nodeSources.${name};
           dependsOn = expandedDependencies.${name};
           healthChecks = planHealthChecks config;
           # Rolling-update window for this node's replica group; ix-fleet

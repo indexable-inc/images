@@ -82,7 +82,7 @@ actions show as `verb <action>`.
 | | `port-forward <vm> <l:r>` | Private dev tunnel from your laptop to a VM port; not public ingress. |
 | | `logs <vm>` | Read captured streams: `workload` (default), `kernel`, `diagnostic`, `platform`. |
 | Images / source | `image <ls\|push\|rm>` | Manage registry images; bare push refs land under `registry.ix.dev/<you>/`. |
-| | `source <ls\|rm>` | List or remove CAS-backed uploaded source trees. |
+| | `source <upload\|show\|materialize\|ls\|rm>` | Upload literal artifact trees, inspect them, materialize them into VMs, or remove them. |
 | Networking | `group <create\|rm\|ls\|add\|rm-member\|members>` | East-west groups: decide which VMs reach each other privately. |
 | | `net up <group>` | Bring up the Linux overlay for a group (TUN device, `<name>.ix.internal` DNS). Needs sudo / `CAP_NET_ADMIN`. |
 | | `share <vm> <port>` | Publish a guest port on a public or email-gated (`--to`) share hostname. |
@@ -95,6 +95,51 @@ actions show as `verb <action>`.
 Hidden verbs exist for debugging (`doctor`, `reload`, `sysrq`, `trace`, `config`,
 `system`); they take `--admin`/`IX_ADMIN` or are otherwise internal and are not
 part of the day-to-day surface.
+
+## Declarative artifact Sources
+
+Use `deployment.sources` for large immutable artifacts that should not live in
+Git or the plaintext secret store. A path is relative to the local
+`ix apply` source root and is uploaded literally, so `.gitignore` does not
+silently omit an explicitly selected encrypted bundle. Use a dedicated
+artifact subdirectory; `.` and `.ix` are rejected because the generated lock
+lives under `.ix`:
+
+```nix
+deployment.sources.grim_tooling = {
+  path = ".ix/artifacts/grim-tooling";
+  destination = "/var/lib/grim/releases/tooling";
+  activateServices = [ "grim-build-worker" ];
+};
+```
+
+`ix apply .#worker-1 .#worker-2` uploads each unique artifact once per region,
+materializes the same immutable Source into every target, and only then starts
+the services named by `activateServices`. Those services remain fail-closed on
+boot or a later switch until all declared Sources have materialized. Every
+`activateServices` entry must name an already-declared, startable systemd
+service; evaluation fails for missing or empty units.
+Each destination is replaced from a fresh sibling staging tree, so files
+removed from a newer Source cannot survive from an older deployment. Source
+destinations must therefore be distinct and non-nested.
+The legacy `ix-fleet up` and `ix-fleet replace` image paths reject
+Source-bearing nodes because they cannot run this post-boot materializer; use
+`ix apply` for those deployments.
+
+The first successful apply writes `.ix/sources.lock.json`. Commit that lock,
+not the artifact bytes: another checkout can redeploy the locked Source while
+the local artifact is absent. If both the regional Source and local artifact
+are gone, apply fails rather than silently deploying different or incomplete
+content. Keep decryption keys in `ix secret`; Source/CAS only needs the
+encrypted artifact.
+
+The lower-level commands are useful for inspection and recovery:
+
+```sh
+ix source upload .ix/artifacts/grim-tooling --region us-west-1
+ix source show <source-id>
+ix source materialize <source-id> --vm worker-1 --dest /var/lib/grim/releases/tooling
+```
 
 ## Flags
 
