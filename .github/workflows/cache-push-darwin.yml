@@ -39,7 +39,7 @@ env:
   # as cache-push.yml, including `fallback` for the poisoned-substitute
   # incident (ix#6139): remove it together with that lane's copy.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes ca-derivations
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
     max-jobs = auto
     cores = 1
@@ -99,7 +99,7 @@ jobs:
       # config the daemon also trusts. `fallback` for the same reason as the
       # linux lane (ix#6139).
       NIX_CONFIG: |-
-        experimental-features = nix-command flakes ca-derivations
+        experimental-features = nix-command flakes ca-derivations wasm-builtin
         accept-flake-config = false
         max-jobs = auto
         fallback = true

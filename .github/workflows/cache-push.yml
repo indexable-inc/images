@@ -43,7 +43,7 @@ env:
   # indexable-inc/ix#6149); the fallback-detection warning in the realise
   # phase below goes with it.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes ca-derivations
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
     max-jobs = auto
     cores = 1

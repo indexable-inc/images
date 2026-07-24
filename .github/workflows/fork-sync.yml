@@ -31,7 +31,7 @@ env:
   # untrusted, so flake config would only produce ignored-setting warnings;
   # ca-derivations is needed to evaluate the rust workspace units).
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes ca-derivations
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
     max-jobs = auto
     cores = 1

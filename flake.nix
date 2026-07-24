@@ -20,7 +20,17 @@
     # disabled". Declared here so any eval against this flake (CI's
     # `accept-flake-config` runs, a local `nix flake check`, `nix build
     # .#checks.<sys>.<name>`) picks it up from one source of truth.
-    extra-experimental-features = ["ca-derivations"];
+    #
+    # `wasm-builtin`: `.ix` modules convert in-eval through `builtins.wasm`
+    # over the committed `lib/ix2nix.wasm` (no IFD, #4136);
+    # the nix-ix client gates that builtin behind this feature. A client
+    # without the feature warns "unknown experimental feature" and then
+    # throws an actionable error only if the eval actually imports a `.ix`
+    # file (packages/ix2nix/import-ix.nix).
+    extra-experimental-features = [
+      "ca-derivations"
+      "wasm-builtin"
+    ];
   };
 
   inputs = {
@@ -418,6 +428,7 @@
       # Repo maintenance scripts and package-owned source updaters.
       tools = {
         cveScan = ./packages/cve-scan/cve-scan.py;
+        ix2nixWasmRegen = ./packages/maintainers/scripts/ix2nix-wasm-regen.py;
         ixShellSyncIgnored = ./packages/maintainers/scripts/ix-shell-sync-ignored.py;
         mcSource = ./packages/minecraft/tools/mc-source.nu;
         updateSounds = ./packages/minecraft/tools/update-sounds.nu;
