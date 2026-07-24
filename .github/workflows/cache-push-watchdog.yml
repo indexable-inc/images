@@ -113,8 +113,8 @@ jobs:
         include:
           - workflow: cache-push.yml
             pin_ref: cache-ready
-            # push 150 + advance-cache-ready 10, + 30 slack.
-            max_run_age_min: "190"
+            # push 300 + advance-cache-ready 10, + 30 slack.
+            max_run_age_min: "340"
             # The pre-split marker, verbatim: keeps this lane on the
             # tracking-issue thread the watchdog has always used (#2551).
             marker: cache-push-watchdog-tracking
@@ -164,10 +164,14 @@ jobs:
           healed=""    # set once a redispatch happened this tick
 
           dispatch_heal() {
-            # full_pass heals holes left by cancelled/partial pushes; both
-            # lane workflows expose the same workflow_dispatch input.
-            if gh workflow run "${WORKFLOW_FILE}" --repo "${REPOSITORY}" --ref main -f full_pass=true; then
-              add_finding "- **Self-heal**: dispatched a fresh \`${WORKFLOW_FILE}\` (full_pass) on main."
+            # full_pass=false: the probe's skip list is the whole point of a
+            # heal during a backlog. full_pass SKIPS the probe and realises
+            # every root unconditionally, so healing a 200-root backlog with
+            # it dispatched the maximum possible work and guaranteed the
+            # successor died on the same timeout (#2551). full_pass stays an
+            # operator-only tool for healing actual publish holes.
+            if gh workflow run "${WORKFLOW_FILE}" --repo "${REPOSITORY}" --ref main -f full_pass=false; then
+              add_finding "- **Self-heal**: dispatched a fresh \`${WORKFLOW_FILE}\` on main."
               healed=1
             else
               echo "::error::watchdog failed to redispatch ${WORKFLOW_FILE}"
@@ -189,16 +193,34 @@ jobs:
           : > "$annotated"
           holder_exists=""
           while IFS=$'\t' read -r id created event; do
-            njobs="$(gh api "repos/${REPOSITORY}/actions/runs/${id}/jobs" --jq '.total_count')" \
+            job_row="$(gh api "repos/${REPOSITORY}/actions/runs/${id}/jobs" \
+              --jq '[.total_count, (([.jobs[].started_at // empty] | sort | first) // "")] | @tsv')" \
               || fail_loud "listing jobs for run ${id} failed"
-            created_epoch="$(date -u -d "$created" +%s)"
-            age_min=$(( (now_epoch - created_epoch) / 60 ))
+            IFS=$'\t' read -r njobs job_started <<< "$job_row"
+            # Age from when the run started WORKING, not when it was created.
+            # Signal 1's ceiling is the sum of the lane's job timeouts, but
+            # created_at also counts concurrency-queue wait -- and this group
+            # is serialized by multi-hour holders, so queued runs routinely
+            # waited 40-120 min and got cancelled mid-build while perfectly
+            # healthy (run 30051032046 was killed after 90 min of work).
+            # A run that never materialized a job has no start time; it falls
+            # back to created_at and is signal 2's business, not signal 1's.
+            if [ -n "$job_started" ]; then
+              start_epoch="$(date -u -d "$job_started" +%s)"
+            else
+              start_epoch="$(date -u -d "$created" +%s)"
+            fi
+            age_min=$(( (now_epoch - start_epoch) / 60 ))
             if [ "$njobs" -gt 0 ]; then holder_exists=1; fi
             printf '%s\t%s\t%s\t%s\n' "$id" "$age_min" "$njobs" "$event" >> "$annotated"
           done < "$runs_file"
 
           # --- Signal 1: zombie holder ----------------------------------------
           while IFS=$'\t' read -r id age_min njobs event; do
+            # Signal 2 owns runs that never materialized a job; this signal is
+            # about a run that HAS a runner and is holding the group past the
+            # job timeouts its ceiling is derived from.
+            [ "$njobs" -gt 0 ] || continue
             if [ "$age_min" -ge "${MAX_RUN_AGE_MIN}" ]; then
               echo "::error::run ${id} active for ${age_min} min (>= ${MAX_RUN_AGE_MIN}): exceeds the sum of ${WORKFLOW_FILE} job timeouts; a queued-but-never-assigned job holds the group with no timeout (#1968)"
               add_finding "- **Zombie run**: [${id}](https://github.com/${REPOSITORY}/actions/runs/${id}) active ${age_min} min with ${njobs} job(s)."

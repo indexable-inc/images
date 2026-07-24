@@ -55,9 +55,15 @@ jobs:
     # `-cache-push` and attaches the push-only ix-public token as a per-job
     # systemd credential (spawn.rs ix_public_push_eligible).
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-cache-push', github.run_id, github.run_attempt) }}"]
-    # p95 51m, worst 138m over last 30 green runs (2026-07-17); 150 covers the
-    # worst observed cold push with headroom instead of the old 3h cap.
-    timeout-minutes: 150
+    # p95 51m, worst 138m over last 30 green runs (2026-07-17). Raised 150 ->
+    # 300 after the 2026-07-23 `flatten package namespaces` rebuild put 207 of
+    # 207 roots in the realise set: five consecutive runs died at exactly
+    # 2h30m and, because the push used to happen only after every root
+    # realised, each published nothing and left the next run the same
+    # backlog (#2551). The incremental push below is what actually makes the
+    # lane converge; this just drains it in fewer runs. Keep the watchdog's
+    # max_run_age_min in lockstep -- it is derived from this number.
+    timeout-minutes: 300
     outputs:
       # Realise-failure count for advance-cache-ready's publish-hole gate (#3195).
       failed-roots: ${{ steps.publish.outputs.failed-roots }}
@@ -168,10 +174,29 @@ jobs:
           # error annotation below names them so a chronic failure is loud.
           failed_roots="$workdir/failed-roots.txt"
           : > "$failed_roots"
+          failed_pushes="$workdir/failed-pushes.txt"
+          : > "$failed_pushes"
           realise_t=$SECONDS
-          # shellcheck disable=SC2016  # $1/$2 expand in the child bash, not here
+          # Each child pushes its own root the moment that root is realised,
+          # instead of leaving every path for the bulk push after the whole
+          # xargs finishes. That ordering is what wedged the lane: a run
+          # killed by timeout-minutes published NOTHING, so the next run's
+          # probe found the same 200-odd roots missing and restarted from the
+          # same place -- forty runs over two days with zero convergence
+          # (#2551). Publishing per root makes a killed run still leave
+          # progress behind for the next probe to skip.
+          #
+          # --jobs 2, not 16: sixteen children share one uplink. A push
+          # failure is not a realise failure, so it lands in its own file and
+          # leaves the root out of failed-roots (which feeds the
+          # publish-hole gate); the sweep below and the next run retry it.
+          # shellcheck disable=SC2016  # positionals expand in the child, not here
           "$xargs" -a "$drvs" -r -P16 -n1 bash -c \
-              'nix-store --realise --keep-going "$2" || { printf "%s\n" "$2" >> "$1"; exit 1; }' _ "$failed_roots" \
+              'paths=$(nix-store --realise --keep-going "$4") || { printf "%s\n" "$4" >> "$1"; exit 1; }
+               printf "%s\n" "$paths"
+               # shellcheck disable=SC2086  # store paths never contain spaces
+               "$2" push --jobs 2 ix-public $paths >&2 || printf "%s\n" "$4" >> "$3"' \
+              _ "$failed_roots" "$attic" "$failed_pushes" \
             > "$outs" 2>"$workdir/realise.err" \
             || {
               # Match any error line (nix phrases failures several ways); pure
@@ -193,6 +218,10 @@ jobs:
               names="$names ${name%.drv}"
             done < "$failed_roots"
             echo "::error::cache-push: $(wc -l < "$failed_roots") root(s) failed to realise (rebuilt and re-failed on every merge until fixed):$names"
+          fi
+
+          if [ -s "$failed_pushes" ]; then
+            echo "::warning::cache-push: $(wc -l < "$failed_pushes") root(s) realised but failed their incremental push; the sweep below and the next run retry them"
           fi
 
           # Recorded for advance-cache-ready rather than failing here: an exit
@@ -219,6 +248,9 @@ jobs:
           fi
 
           if [ -s "$outs" ]; then
+            # Idempotent sweep: every path here was already pushed by its own
+            # child above, so attic finds them present and this is a cheap
+            # re-check that catches anything whose incremental push failed.
             push_t=$SECONDS
             "$xargs" -a "$outs" -r "$attic" push --jobs 16 ix-public \
               || echo "::warning::some paths failed to push to ix-public"
