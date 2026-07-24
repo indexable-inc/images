@@ -125,9 +125,10 @@
   Discovered example VMs, built for a given host system. Discovery walks
   the `examples/[<category>/]<name>/default.ix` layout (the category
   level is optional for an example that is its own category)
-  (JavaScript-syntax Nix, converted through `importIxFor` — an IFD on the
-  compiled `ix2nix`, since repo evals run on stock nix without
-  `builtins.wasm`). Keys in the returned attrset join the category and
+  (JavaScript-syntax Nix, converted in-eval through `importIxFor`, i.e.
+  `builtins.wasm` over the committed converter; repo evals run on the
+  nix-ix client with `wasm-builtin`). Keys in the returned attrset join
+  the category and
   name with `-`, so `examples/hermes/api-server` contributes
   `hermes-api-server`. Each config is imported with
   `{ index = { lib = ix; }; }` to match the contract examples already
@@ -138,9 +139,9 @@
   Only single-VM results (the evaluator shape: `nodes` + `planValue`)
   are kept: a multi-VM example is deployed VM-by-VM with
   `ix apply .#a .#b` and an oci entry returns images, so neither has a
-  lifecycle plan to aggregate. The filter forces each conversion (an
-  IFD), so the returned key set is IFD-dependent; see the note at the
-  filter for what may consume it (index#4087).
+  lifecycle plan to aggregate. The filter forces each conversion; see
+  the note at the filter for what may consume the resulting key set
+  (index#4087).
 
   Adding an example is `mkdir examples/[<category>/]<name>` + edit
   `default.ix`; this aggregator picks it up on the next eval, no
@@ -168,10 +169,10 @@
     };
   in
     # Classifying single- vs multi-VM needs the converted module (the
-    # `nodes` + `planValue` shape), and conversion is an IFD, so this
-    # attrset's KEY SET is IFD-dependent. It must never feed a `packages`
-    # name: IFD-forbidding evals (ix's no-build lint gate) enumerate those
-    # names. Example-derived package fan-outs live in `legacyPackages`
+    # `nodes` + `planValue` shape). Conversion is in-eval now (committed
+    # wasm converter, no IFD), but this attrset's KEY SET still depends on
+    # every example's converted contents, so it stays out of `packages`
+    # names: example-derived package fan-outs live in `legacyPackages`
     # instead (index#4087).
     lib.filterAttrs (_: fleet: fleet != null) (
       lib.mapAttrs (

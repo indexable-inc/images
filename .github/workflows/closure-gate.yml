@@ -30,7 +30,7 @@ env:
   # Client-side eval knobs only, same set and rationale as check.yml: the
   # self-hosted daemon owns substituters, trusted keys, and system features.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes ca-derivations
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
     max-jobs = auto
     cores = 1

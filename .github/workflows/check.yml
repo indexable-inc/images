@@ -58,10 +58,14 @@ env:
   # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating the
   # check / package sets resolves floating content-addressed derivations.
   # Without the feature the evaluator aborts with "experimental Nix feature
-  # 'ca-derivations' is disabled". Keep the client feature here because CI
-  # intentionally does not consume repository flake configuration.
+  # 'ca-derivations' is disabled". `wasm-builtin`: `.ix` example discovery
+  # converts modules in-eval via `builtins.wasm` over the committed
+  # `lib/ix2nix.wasm` (no IFD; #4136), and the bootstrapped
+  # nix-ix client only exposes that builtin with the feature on. Keep the
+  # client features here because CI intentionally does not consume
+  # repository flake configuration.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes ca-derivations
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
     max-jobs = auto
     cores = 1
