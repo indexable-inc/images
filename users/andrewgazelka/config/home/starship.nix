@@ -46,7 +46,10 @@
     description = "Age of the ${name} flake pin baked into this config";
   };
 in {
-  format = "\${custom.submodule_chain}$all$line_break$character";
+  # `$all` covers every module not named here, so the leading modules are
+  # spelled out to keep `${custom.vcs}` where `git_branch` used to render:
+  # right after the directory, ahead of the language and tooling segments.
+  format = "\${custom.submodule_chain}$username$hostname$localip$directory\${custom.vcs}$all$line_break$character";
   aws = {
     disabled = true;
     symbol = "  ";
@@ -110,8 +113,15 @@ in {
     disabled = true;
     symbol = " ";
   };
+  # Replaced by `custom.vcs` (the vcs-prompt binary), which renders jj state
+  # in a jj workspace and git state everywhere else. Neither module can be
+  # disabled per directory, and in a colocated jj repo both report the
+  # exported git view: a detached HEAD at whatever `jj git export` last wrote.
   git_branch = {
-    symbol = " ";
+    disabled = true;
+  };
+  git_status = {
+    disabled = true;
   };
   git_commit = {
     disabled = true;
@@ -285,13 +295,6 @@ in {
   status = {
     symbol = " ";
   };
-  git_status = {
-    format = "([$all_status$ahead_behind]($style) )";
-    stashed = "";
-    ahead = "⇡\${count}";
-    behind = "⇣\${count}";
-    diverged = "⇕⇡\${ahead_count}⇣\${behind_count}";
-  };
   shell = {
     disabled = false;
     fish_indicator = "";
@@ -306,6 +309,30 @@ in {
       style = "bold blue";
       when = "nu -n -c 'if (\"CLAUDE_CODE\" in $env) or (\"CLAUDE_SESSION\" in $env) { exit 0 } else { exit 1 }'";
     };
+    # The VCS segment, in place of the disabled `git_branch` and `git_status`:
+    # `on 󱗆 lsurukvy ix-patched+2 *` in a jj workspace (working-copy change id,
+    # nearest bookmark and the distance to it, then conflict / divergent /
+    # non-empty flags), `on  main !3?1⇡2` in a git repo, with the symbols
+    # those modules were configured with. The binary colors its own output
+    # rather than taking a `style`, since one segment carries several colors.
+    # `git_state` stays enabled and still reports an in-progress rebase.
+    vcs = {
+      command = "vcs-prompt";
+      when = "vcs-prompt detect";
+      shell = [
+        "sh"
+        "-c"
+      ];
+      use_stdin = false;
+      # No `ignore_timeout`, unlike the other custom modules here: this one
+      # waits on `git status` (~50ms warm in this config repo, three levels of
+      # submodules) and `jj log` (~20ms), and if either ever blocks on a repo
+      # lock, dropping the segment at starship's 500ms mark beats hanging the
+      # prompt behind it.
+      format = "$output ";
+      description = "jj working-copy state in a jj workspace, git branch and status elsewhere";
+    };
+
     # Human-readable time since the latest commit (e.g. "2 hours ago"), shown
     # to the left of newer custom modules. Runs under sh because when starship
     # spawns `nu -c`, external commands in the pipeline don't inherit the
@@ -367,7 +394,6 @@ in {
     # because sh passes the working directory to all child processes.
     #   command = "rg -ic todo -g '!vendored/**' . | awk -F: '{s+=$NF} END {if(s>0) print s}'"
     #
-    # jj: command = "jj-starship"; detect_folders = [".jj"]
     # ix: command = "ix-starship" (branch and sync status: ↻ syncing, ⏸ stopped, ✗ crashed)
     flake_pin_index = pinModule "index" "$(git -C '${indexPinRepo}' log -1 --format=%ct 2>/dev/null)";
     flake_pin_ix = pinModule "ix" (toString ixPinTimestamp);

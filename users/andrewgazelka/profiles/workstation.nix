@@ -523,6 +523,7 @@ in {
       indexPkgs.ast-merge # `ast-merge`: the index repo's .gitattributes merge driver for *.rs; without it on PATH a rebase outside the dev shell records markerless "ours" conflicts (silent data loss); same pinned `index` input
       indexPkgs.mynoise # `mynoise`: play myNoise.net generators (`mynoise RAIN`, `--list`); same pinned `index` input
       indexPkgs.htmlpage # `htmlpage`: render one-file TSX reports to self-contained HTML and open them; same pinned `index` input
+      indexPkgs.vcs-prompt # `vcs-prompt`: the prompt's VCS segment (jj state in a jj workspace, git branch/status elsewhere), called by custom.vcs in home/starship.nix; same pinned `index` input
       indexPkgs.whence # `whence <path>`: deployed file -> defining nix file:line, read from the generation's provenance.json manifest; same pinned `index` input
       cfg.packages.ix # `ix`: fleet/VM CLI (ix apply/shell/ls/snapshot); pinned via the `ix` flake input, bump with `nix flake update ix`
       (callPackage (configRoot + "/home/ssh-hosts") {}) # `ssh-hosts`: list SSH aliases + recent ssh targets; backs the ssh-hosts Claude skill
@@ -571,7 +572,7 @@ in {
       gh # GitHub CLI (PRs, issues, gists, auth, runs)
       tea # Forgejo/Gitea CLI (pull requests, issues, releases)
       jujutsu # `jj` — Git-compatible VCS with first-class branches/operations
-      # jj-starship  # slow to build from source (starship segment for jj repos)
+      # jj-starship  # slow to build from source (jj-lib); indexPkgs.vcs-prompt renders the same segment
       lazygit # TUI for git (stage, commit, branch, rebase visually)
       delta # syntax-highlighted git diff/blame pager
       difftastic # tree-sitter-aware structural diff (`difft`)
