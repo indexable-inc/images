@@ -1841,6 +1841,7 @@
                 ExecStart = "${pkgs.coreutils}/bin/true";
                 RemainAfterExit = true;
               };
+              systemd.services.grim-build-worker.unitConfig.ConditionPathExists = "/var/lib/grim/config";
             }
           )
         ];
@@ -6127,8 +6128,14 @@
               activateServices = ["grim-build-worker"];
             }
           ]
-          && fleet.nodes.web.systemd.services.grim-build-worker.unitConfig.ConditionPathExists
-          == "/run/ix/sources-ready"
+          && lib.length fleet.nodes.web.systemd.services.grim-build-worker.unitConfig.ConditionPathExists
+          == 2
+          && lib.elem
+          "/var/lib/grim/config"
+          fleet.nodes.web.systemd.services.grim-build-worker.unitConfig.ConditionPathExists
+          && lib.elem
+          "/run/ix/sources-ready"
+          fleet.nodes.web.systemd.services.grim-build-worker.unitConfig.ConditionPathExists
           && lib.hasInfix "grim-build-worker.service" fleet.nodes.web.system.activationScripts.ixSourceGate.text
           && fleetPlan.web.sources == manifest.sources;
         message = "Source attachments should merge into the guest closure and gate declared services until ix apply materializes them";

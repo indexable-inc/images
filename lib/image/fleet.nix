@@ -210,12 +210,17 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     activateServices = lib.unique (lib.concatMap (source: source.activateServices) sources);
     serviceUnits = map (service: "${service}.service") activateServices;
     sourceDestinations = map (source: source.destination) sources;
+    hasStartCommand = value:
+      if builtins.isString value
+      then value != ""
+      else if builtins.isList value
+      then value != []
+      else value != null;
     serviceIsStartable = service: let
       unit = config.systemd.services.${service};
     in
-      (unit.script or null)
-      != null
-      || (unit.serviceConfig.ExecStart or null) != null;
+      hasStartCommand (unit.script or null)
+      || hasStartCommand (unit.serviceConfig.ExecStart or null);
     systemctl = lib.getExe' config.systemd.package "systemctl";
     readyPath = "/run/ix/sources-ready";
     activator = pkgs.writeShellApplication {
@@ -327,7 +332,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
       };
 
       systemd.services = lib.genAttrs activateServices (_service: {
-        unitConfig.ConditionPathExists = readyPath;
+        unitConfig.ConditionPathExists = [readyPath];
       });
     };
 
