@@ -36,6 +36,8 @@ struct CargoLockPackageEntry {
     name: String,
     version: String,
     source: Option<String>,
+    #[serde(default)]
+    dependencies: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +69,11 @@ struct CargoLockPackage {
     name: String,
     version: String,
     source: String,
+    /// Dependency strings exactly as Cargo.lock spells them: `name`,
+    /// `name version`, or `name version (source)` when disambiguation is
+    /// needed. Used to compute the vendored universe a build script's
+    /// `cargo metadata` needs (see `metadata_universe_for_unit`).
+    dependencies: Vec<String>,
 }
 
 impl CargoLockSources {
@@ -87,11 +94,13 @@ impl CargoLockSources {
                     name,
                     version,
                     source,
+                    dependencies,
                 } = package;
                 source.map(|source| CargoLockPackage {
                     name,
                     version,
                     source,
+                    dependencies,
                 })
             })
             .collect();
@@ -100,6 +109,11 @@ impl CargoLockSources {
     }
 
     fn source_for_unit(&self, unit: &Unit) -> Result<String> {
+        self.package_for_unit(unit)
+            .map(|package| package.source.clone())
+    }
+
+    fn package_for_unit(&self, unit: &Unit) -> Result<&CargoLockPackage> {
         let unit_name = unit.package_name();
         let unit_version = unit.package_version();
         let unit_source = external_source_from_pkg_id(&unit.pkg_id).ok_or_else(|| {
@@ -122,7 +136,7 @@ impl CargoLockSources {
             .collect();
 
         match matches.as_slice() {
-            [package] => Ok(package.source.clone()),
+            [package] => Ok(package),
             [] => Err(eyre!(
                 "external unit {} {} has no matching Cargo.lock source for package id {}",
                 unit_name,
@@ -140,6 +154,88 @@ impl CargoLockSources {
                     .join(", ")
             )),
         }
+    }
+
+    /// The vendored universe a build script's own `cargo metadata` needs: the
+    /// lockfile dependency closure of the unit's package, excluding the package
+    /// itself (the run derivation's writable manifest copy plays that role).
+    ///
+    /// Cargo.lock omits dev-dependencies of non-workspace packages, so this
+    /// universe matches the manifest only after the run phase strips its
+    /// dev-dependency tables -- exactly the dependency set cargo resolves when
+    /// it builds the crate as a dependency rather than a workspace root.
+    fn metadata_universe_for_unit(&self, unit: &Unit) -> Result<Vec<&CargoLockPackage>> {
+        let root = self.package_for_unit(unit)?;
+        let mut seen = BTreeSet::new();
+        let mut universe = Vec::new();
+        let mut queue: VecDeque<&CargoLockPackage> = VecDeque::from([root]);
+        seen.insert((root.source.as_str(), root.name.as_str(), root.version.as_str()));
+
+        while let Some(package) = queue.pop_front() {
+            for dependency in &package.dependencies {
+                for resolved in self.resolve_lock_dependency(package, dependency)? {
+                    if seen.insert((
+                        resolved.source.as_str(),
+                        resolved.name.as_str(),
+                        resolved.version.as_str(),
+                    )) {
+                        universe.push(resolved);
+                        queue.push_back(resolved);
+                    }
+                }
+            }
+        }
+
+        universe.sort_by(|a, b| {
+            (&a.name, &a.version, &a.source).cmp(&(&b.name, &b.version, &b.source))
+        });
+        Ok(universe)
+    }
+
+    /// Resolve one Cargo.lock dependency string (`name`, `name version`, or
+    /// `name version (source)`) to its package entries. Ambiguity is fine --
+    /// cargo only adds version/source qualifiers when a bare name is ambiguous,
+    /// and including every match merely widens the vendored universe.
+    fn resolve_lock_dependency(
+        &self,
+        dependent: &CargoLockPackage,
+        dependency: &str,
+    ) -> Result<Vec<&CargoLockPackage>> {
+        let mut parts = dependency.split_whitespace();
+        let name = parts.next().ok_or_else(|| {
+            eyre!(
+                "Cargo.lock package {} {} has an empty dependency string",
+                dependent.name,
+                dependent.version
+            )
+        })?;
+        let version = parts.next();
+        let source = parts
+            .next()
+            .map(|source| source.trim_start_matches('(').trim_end_matches(')'));
+
+        let matches: Vec<_> = self
+            .packages
+            .iter()
+            .filter(|package| {
+                package.name == name
+                    && version.is_none_or(|version| package.version == version)
+                    && source.is_none_or(|source| package.source == source)
+            })
+            .collect();
+
+        if matches.is_empty() {
+            // A dependency of an external package always has an external
+            // source of its own (registry crates cannot depend on path
+            // packages), so every dependency string must resolve here.
+            return Err(eyre!(
+                "Cargo.lock dependency `{}` of {} {} matches no vendorable package entry",
+                dependency,
+                dependent.name,
+                dependent.version
+            ));
+        }
+        Ok(matches)
     }
 }
 
@@ -375,7 +471,7 @@ fn render_unit_entries(
             entries,
             "    {} = mkUnit {};\n\n",
             prepared.unit_attr(*run_index),
-            render_build_script_run(graph, prepared, *run_index, build_script_run)?
+            render_build_script_run(graph, options, prepared, *run_index, build_script_run)?
         )?;
     }
 
@@ -1557,8 +1653,132 @@ done
     )
 }
 
+// Build-dependency package names whose presence marks a build script as one
+// that shells out to `cargo metadata` at run time (cbindgen does, from
+// `Builder::generate`). Only these runs get the offline cargo config below:
+// wiring the vendored registry into *every* build-script run would make each
+// one depend on its package's whole vendored dependency closure, re-running
+// expensive build scripts (ring, aws-lc-sys) on every unrelated lockfile bump.
+const CARGO_INVOKING_BUILD_DEPS: &[&str] = &["cbindgen"];
+
+fn build_script_invokes_cargo(graph: &UnitGraph, compile_index: usize) -> bool {
+    let mut seen = BTreeSet::from([compile_index]);
+    let mut queue = VecDeque::from([compile_index]);
+    while let Some(index) = queue.pop_front() {
+        let unit = &graph.units[index];
+        if CARGO_INVOKING_BUILD_DEPS.contains(&unit.package_name().as_ref()) {
+            return true;
+        }
+        for dependency in &unit.dependencies {
+            if seen.insert(dependency.index) {
+                queue.push_back(dependency.index);
+            }
+        }
+    }
+    false
+}
+
+// The `?rev=`/`?tag=`/`?branch=` selector and trailing commit of a Cargo.lock
+// git source string, split out so the offline config can emit the matching
+// `[source."<git>"]` replacement block (same shape lib/rust/vendor.nix emits
+// for the aggregate vendor dir).
+fn parse_git_lock_source(source: &str) -> Result<(String, Option<(String, String)>)> {
+    let rest = source
+        .strip_prefix("git+")
+        .ok_or_else(|| eyre!("git source string `{source}` does not start with git+"))?;
+    let rest = rest.split_once('#').map_or(rest, |(head, _)| head);
+    match rest.split_once('?') {
+        None => Ok((rest.to_string(), None)),
+        Some((url, selector)) => {
+            let (kind, reference) = selector.split_once('=').ok_or_else(|| {
+                eyre!("git source string `{source}` has a selector without a value")
+            })?;
+            if !matches!(kind, "rev" | "tag" | "branch") {
+                return Err(eyre!("git source string `{source}` has selector `{kind}`"));
+            }
+            Ok((url.to_string(), Some((kind.to_string(), reference.to_string()))))
+        }
+    }
+}
+
+// The Nix expression for the cargo config an offline `cargo metadata` run
+// reads: crates-io (and any git source in the universe) replaced with a
+// `linkFarm` holding exactly the package's lockfile dependency closure. The
+// linkFarm is scoped to that closure -- not the whole-workspace vendor dir --
+// so the run derivation only rebuilds when its own dependencies change.
+fn render_metadata_cargo_config(
+    run_unit: &Unit,
+    universe: &[&CargoLockPackage],
+) -> Result<String> {
+    let mut farm_entries = String::new();
+    for package in universe {
+        write!(
+            farm_entries,
+            "
+        {{ name = {}; path = vendorSources.{}; }}",
+            nix_attr(&format!("{}-{}", package.name, package.version)),
+            nix_attr(&format!(
+                "{}#{}@{}",
+                package.source, package.name, package.version
+            ))
+        )?;
+    }
+
+    let mut git_blocks = String::new();
+    let mut git_sources = BTreeSet::new();
+    for package in universe {
+        if package.source.starts_with("git+") && git_sources.insert(package.source.as_str()) {
+            let (url, selector) = parse_git_lock_source(&package.source)?;
+            write!(
+                git_blocks,
+                "
+    [source.{}]
+    git = {}
+",
+                nix_attr(&package.source),
+                nix_attr(&url)
+            )?;
+            if let Some((kind, reference)) = selector {
+                writeln!(git_blocks, "    {kind} = {}", nix_attr(&reference))?;
+            }
+            git_blocks.push_str("    replace-with = \"vendored-sources\"\n");
+        } else if !package.source.starts_with("registry+")
+            && !package.source.starts_with("sparse+")
+        {
+            return Err(eyre!(
+                "cannot vendor {} {} from `{}` for the {} build script's cargo metadata run",
+                package.name,
+                package.version,
+                package.source,
+                run_unit.package_name()
+            ));
+        }
+    }
+
+    Ok(format!(
+        r#"pkgs.writeText {config_name} ''
+             [source.crates-io]
+             replace-with = "vendored-sources"
+{git_blocks}
+             [source.vendored-sources]
+             directory = "${{pkgs.linkFarm {farm_name} [{farm_entries} ]}}"
+           ''"#,
+        config_name = nix_attr(&format!(
+            "{}-{}-metadata-cargo-config.toml",
+            run_unit.package_name(),
+            run_unit.package_version()
+        )),
+        farm_name = nix_attr(&format!(
+            "{}-{}-metadata-vendor",
+            run_unit.package_name(),
+            run_unit.package_version()
+        )),
+    ))
+}
+
 fn render_build_script_run(
     graph: &UnitGraph,
+    options: &RenderOptions,
     prepared: &PreparedGraph,
     run_index: usize,
     build_script_run: &BuildScriptRun,
@@ -1566,6 +1786,23 @@ fn render_build_script_run(
     let run_unit = &graph.units[run_index];
     let compile_unit = &graph.units[build_script_run.compile_index];
     let mut attrs = Attrs::new();
+
+    // A vendored crate's build script can itself shell out to `cargo metadata`
+    // (cbindgen does). That invocation treats the crate as a standalone
+    // workspace root, so without help it reaches for crates.io from inside the
+    // sandbox and dies on DNS. Give exactly those runs what a normal offline
+    // cargo build gets: a vendored-registry cargo config scoped to the
+    // package's lockfile dependency closure (the run phase also strips the
+    // manifest's dev-dependencies, which a workspace lockfile never vendors).
+    let offline_cargo_metadata =
+        run_unit.is_external() && build_script_invokes_cargo(graph, build_script_run.compile_index);
+    if offline_cargo_metadata {
+        let universe = options.cargo_lock_sources.metadata_universe_for_unit(run_unit)?;
+        attrs.expr(
+            "cargoOfflineConfig",
+            &render_metadata_cargo_config(run_unit, &universe)?,
+        );
+    }
 
     attrs.string(
         "pname",
@@ -1634,6 +1871,7 @@ fn render_build_script_run(
             compile_unit,
             build_script_run.compile_index,
             build_script_run,
+            offline_cargo_metadata,
         )?,
     );
     // Best-effort: strip debug info from the build script's compiled `.o`/`.a` to
@@ -1659,6 +1897,7 @@ fn render_build_script_run_phase(
     compile_unit: &Unit,
     compile_index: usize,
     build_script_run: &BuildScriptRun,
+    offline_cargo_metadata: bool,
 ) -> Result<String> {
     let mut script = String::new();
     let source = prepared.source_entry(run_index)?;
@@ -1694,6 +1933,38 @@ fn render_build_script_run_phase(
     script.push_str("export OUT_DIR=$build_script_out_dir\n");
     ensure_source_contains_unit(source, run_unit)?;
     script.push_str("export CARGO_MANIFEST_DIR=$build_script_manifest_dir\n");
+    if offline_cargo_metadata {
+        // A build script that shells out to `cargo metadata` (cbindgen) runs it
+        // against this crate's manifest as if it were a standalone workspace.
+        // Point crates-io at a vendored linkFarm (built above and handed in as
+        // `$cargoOfflineConfig`) and force `--offline`, so the resolve never
+        // touches the network.
+        //
+        // Two edits to the writable manifest copy make the resolve match the
+        // vendored universe, which is the crate's dependency closure *as the
+        // workspace resolved it*:
+        //   * strip the dev-dependency tables — the workspace Cargo.lock never
+        //     records a non-member's dev-deps, so they are absent from the
+        //     universe, and cbindgen only reads the crate's public-API
+        //     dependencies (never its dev-deps) to generate the C header; and
+        //   * delete any Cargo.lock the crate shipped to crates.io. That lock
+        //     pins versions the crate published against (e.g. dashu-int 0.4.1),
+        //     which need not be the versions the workspace resolved and vendored
+        //     (0.4.3). Removing it lets cargo re-resolve against the vendored
+        //     dir, where the workspace-chosen versions are the only candidates
+        //     and satisfy the manifest's own requirements.
+        script.push_str(
+            "cargo_offline_home=$(mktemp -d)/cargo-home\n\
+             mkdir -p \"$cargo_offline_home\"\n\
+             cp \"$cargoOfflineConfig\" \"$cargo_offline_home/config.toml\"\n\
+             export CARGO_HOME=\"$cargo_offline_home\"\n\
+             export CARGO_NET_OFFLINE=true\n\
+             rm -f \"$build_script_manifest_dir/Cargo.lock\"\n\
+             awk '/^\\[/ { drop = ($0 ~ /dev[_-]dependencies/) } !drop { print }' \\\n  \
+             \"$build_script_manifest_dir/Cargo.toml\" > \"$build_script_manifest_dir/Cargo.toml.offline\"\n\
+             mv \"$build_script_manifest_dir/Cargo.toml.offline\" \"$build_script_manifest_dir/Cargo.toml\"\n",
+        );
+    }
     script.push_str("export RUSTC=\"$(type -p rustc)\"\n");
     script.push_str("export RUSTDOC=\"$(type -p rustdoc)\"\n");
     script.push_str("HOST_TRIPLE=\"$($RUSTC -vV | sed -n 's/^host: //p')\"\n");
@@ -3367,6 +3638,7 @@ mod tests {
                     name: (*name).to_string(),
                     version: (*version).to_string(),
                     source: (*source).to_string(),
+                    dependencies: Vec::new(),
                 })
                 .collect(),
         }
@@ -5824,5 +6096,144 @@ version = "0.1.0"
         assert!(rendered.contains("rustc_args+=( 'cfg(feature, values(\"alpha\", \"beta\"))' )"));
         assert!(rendered.contains("rustc_args+=( 'cfg(ix_test)' )"));
         fs::remove_dir_all(workspace).unwrap();
+    }
+
+    fn cargo_lock_sources_with_deps(
+        packages: &[(&str, &str, &str, &[&str])],
+    ) -> CargoLockSources {
+        CargoLockSources {
+            packages: packages
+                .iter()
+                .map(|(name, version, source, dependencies)| CargoLockPackage {
+                    name: (*name).to_string(),
+                    version: (*version).to_string(),
+                    source: (*source).to_string(),
+                    dependencies: dependencies.iter().map(|d| (*d).to_string()).collect(),
+                })
+                .collect(),
+        }
+    }
+
+    // A vendored crate whose build script shells out to `cargo metadata`
+    // (detected by a cbindgen build-dependency) must run offline against a
+    // vendored registry, or it dies reaching crates.io from the sandbox
+    // (issue #4142, hegeltest-c 0.30.1). A build script with no such dependency
+    // is left untouched so it does not gain a needless dependency-closure input.
+    fn write_vendored_crate(vendor: &Path, name: &str, version: &str) {
+        let dir = vendor.join(format!("{name}-{version}"));
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\nversion = \"{version}\"\n"),
+        )
+        .unwrap();
+        fs::write(dir.join("src/lib.rs"), "").unwrap();
+        fs::write(dir.join("build.rs"), "fn main() {}\n").unwrap();
+    }
+
+    fn cargo_metadata_build_script_graph(vendor: &Path, with_cbindgen: bool) -> UnitGraph {
+        let registry = "registry+https://github.com/rust-lang/crates.io-index";
+        let build_deps = if with_cbindgen {
+            serde_json::json!([{ "index": 0, "extern_crate_name": "cbindgen" }])
+        } else {
+            serde_json::json!([])
+        };
+        let cbindgen_lib = vendor.join("cbindgen-0.29.4/src/lib.rs");
+        let mycrate_build = vendor.join("mycrate-1.0.0/build.rs");
+        let mycrate_lib = vendor.join("mycrate-1.0.0/src/lib.rs");
+        serde_json::from_value(serde_json::json!({
+          "version": 1,
+          "units": [
+            {
+              "pkg_id": format!("{registry}#cbindgen@0.29.4"),
+              "target": {
+                "kind": ["lib"], "crate_types": ["lib"], "name": "cbindgen",
+                "src_path": cbindgen_lib, "edition": "2021"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "mode": "build", "dependencies": []
+            },
+            {
+              "pkg_id": format!("{registry}#mycrate@1.0.0"),
+              "target": {
+                "kind": ["custom-build"], "crate_types": ["bin"],
+                "name": "build-script-build",
+                "src_path": mycrate_build, "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "mode": "build", "dependencies": build_deps
+            },
+            {
+              "pkg_id": format!("{registry}#mycrate@1.0.0"),
+              "target": {
+                "kind": ["custom-build"], "crate_types": ["bin"],
+                "name": "build-script-build",
+                "src_path": mycrate_build, "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "mode": "run-custom-build",
+              "dependencies": [{ "index": 1, "extern_crate_name": "build_script_build" }]
+            },
+            {
+              "pkg_id": format!("{registry}#mycrate@1.0.0"),
+              "target": {
+                "kind": ["lib"], "crate_types": ["lib"], "name": "mycrate",
+                "src_path": mycrate_lib, "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "mode": "build",
+              "dependencies": [{ "index": 2, "extern_crate_name": "build_script_build" }]
+            }
+          ],
+          "roots": [3]
+        }))
+        .unwrap()
+    }
+
+    fn render_cargo_metadata_build_script(with_cbindgen: bool) -> String {
+        let registry = "registry+https://github.com/rust-lang/crates.io-index";
+        let vendor = tempfile::tempdir().unwrap();
+        write_vendored_crate(vendor.path(), "cbindgen", "0.29.4");
+        write_vendored_crate(vendor.path(), "mycrate", "1.0.0");
+        render_units_nix(
+            &cargo_metadata_build_script_graph(vendor.path(), with_cbindgen),
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: Some(vendor.path().to_path_buf()),
+                cargo_lock_sources: cargo_lock_sources_with_deps(&[
+                    ("mycrate", "1.0.0", registry, &["cbindgen"]),
+                    ("cbindgen", "0.29.4", registry, &[]),
+                ]),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cargo_metadata_build_script_runs_offline_against_vendored_registry() {
+        let rendered = render_cargo_metadata_build_script(true);
+        assert!(rendered.contains("cargoOfflineConfig ="));
+        assert!(rendered.contains("[source.crates-io]"));
+        assert!(rendered.contains("replace-with = \"vendored-sources\""));
+        // The offline vendor dir is scoped to the crate's own dependency
+        // closure, not the whole workspace: only cbindgen appears.
+        assert!(rendered.contains(
+            "vendorSources.\"registry+https://github.com/rust-lang/crates.io-index#cbindgen@0.29.4\""
+        ));
+        assert!(rendered.contains("export CARGO_NET_OFFLINE=true"));
+        // Dev-dependencies are stripped: the workspace lock never records a
+        // non-member's dev-deps, so they cannot be in the vendored universe.
+        assert!(rendered.contains("dev[_-]dependencies"));
+    }
+
+    #[test]
+    fn build_script_without_cargo_metadata_stays_online_free() {
+        let rendered = render_cargo_metadata_build_script(false);
+        assert!(!rendered.contains("cargoOfflineConfig ="));
+        assert!(!rendered.contains("export CARGO_NET_OFFLINE=true"));
     }
 }

@@ -155,6 +155,7 @@ members = [
   "packages/panes/host",
   "packages/panes/protocol",
   "packages/vmkit",
+  "packages/vcs-prompt",
 ]
 # nix-cargo-unit is the bootstrap tool that renders this workspace's unit graph,
 # so it owns its own Cargo.toml + Cargo.lock (it carries its own `[workspace]`).

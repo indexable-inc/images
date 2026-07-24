@@ -1,0 +1,25 @@
+---
+id: committed-ix2nix-wasm
+postedAt: "2026-07-23"
+title: the .ix converter is committed, so imports realize nothing mid-eval
+links:
+  - label: "index#4136"
+    href: https://github.com/indexable-inc/index/issues/4136
+tags:
+  - nix
+  - ix2nix
+---
+
+`index.lib.importIxWasm` (and `importIx`; they are one implementation now)
+loads the ix2nix converter from a file committed in the index tree,
+`lib/ix2nix.wasm`, instead of realizing the `ix2nix-wasm`
+derivation output during evaluation. Importing a `.ix` module is now pure
+in-eval work: no import-from-derivation anywhere on the path, no
+substitution from a cache, so a fresh `ix init` project evaluates offline
+and repo evals stop stalling on a mid-eval store realization.
+
+A CI gate byte-compares the committed file against the built
+`.#ix2nix-wasm` on every push, and `nix run .#ix2nix-wasm-regen`
+regenerates it when the converter source changes. The wasm detour is still
+transitional: once nix has proper parallel IFD we hope to drop the wasm
+converter and run the native ix2nix binary instead.

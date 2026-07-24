@@ -142,7 +142,7 @@
           | where {|line| $line != "" and not ($line | str starts-with "#") }
         )
         let scripts = (
-          fd --hidden --type file --exclude .git --exclude .claude/worktrees
+          fd --hidden --type file --exclude .git
             --extension sh --extension bash --extension nu
           | lines
         )
@@ -240,7 +240,7 @@
           --extension toml --extension json --extension yaml --extension yml
           --extension kdl --extension ini --extension conf --extension cfg --extension xml
           --extension properties --extension editorconfig --extension sobelow-conf
-          --exclude .git --exclude .claude/worktrees
+          --exclude .git
           | lines
         )
         let denied = ($candidates | where {|path| not ($allowed | any {|pattern| $path =~ $pattern})})
@@ -1305,9 +1305,10 @@
   # the shared workspace, so harvest these too -- otherwise a consumer
   # substituting the package output re-vendors/re-renders that graph at eval
   # and hits the #1890 trap on drvs it cannot build (Darwin for codex;
-  # every scaffolded `ix init` eval for the wasm converter, #4127). Generic
-  # over the whole `packageSet` (crossPackages included), so any package
-  # exposing the passthru joins with no hand-kept list.
+  # pre-#4125 scaffolded `ix init` evals for the wasm converter, #4127; new
+  # scaffolds read the committed `ix2nix.wasm` and never force that graph).
+  # Generic over the whole `packageSet` (crossPackages included), so any
+  # package exposing the passthru joins with no hand-kept list.
   workspacePackageIfdRoots = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     lib.concatMapAttrs (
       name: pkg:
@@ -1700,6 +1701,16 @@
       # interpreter, so `nix run .#embed -- dupes . --k 40 --json` sees the
       # same torch/MPS runtime and parquet cache as in-kernel `import embed`.
       embed = repoPackages.mcp.passthru.embedCli;
+      # Regenerates the COMMITTED `.ix` converter (lib/ix2nix.wasm) that
+      # `lib.importIxWasm` loads with zero mid-eval store realization; the
+      # `ix2nix-wasm-fresh` check byte-compares the file against the built
+      # package and names this command when it is stale.
+      ix2nix-wasm-regen = ix.writePythonApplication pkgs {
+        name = "ix2nix-wasm-regen";
+        src = paths.tools.ix2nixWasmRegen;
+        runtimeInputs = [pkgs.git];
+        meta.description = "Rebuild .#ix2nix-wasm (x86_64-linux) and copy the artifact to lib/ix2nix.wasm";
+      };
       update-mods = updateMods;
       update-loaders = updateLoaders;
       inherit update;
@@ -1840,9 +1851,10 @@ in {
   #      packages' runtime closures; adding them as roots is the fix for #1687.
   #      `workspacePackageIfdRoots` extends this to any package that rides a
   #      second `buildWorkspace` (codex's codex-rs; ix2nix-wasm's wasm32
-  #      graph, which every scaffolded `ix init` eval forces through
-  #      `lib.importIxWasm`, #4127), whose own unit graph `crossIfdRoots`
-  #      -- keyed off the shared `crossWorkspace` -- does not see.
+  #      graph, which pre-#4125 scaffolded `ix init` evals still force by
+  #      interpolating the package output into `converter`, #4127), whose
+  #      own unit graph `crossIfdRoots` -- keyed off the shared
+  #      `crossWorkspace` -- does not see.
   #   4. On Darwin hosts, the native lane's eval-time IFD outputs
   #      (`nativeIfdRoots`): the same three unit-graph artifacts as (3) but for
   #      the host's own target, which a Darwin consumer forces at eval when it

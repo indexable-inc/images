@@ -43,7 +43,7 @@ def policy_error(path: Path) -> RuntimeError:
 
 class PolicyTests(unittest.TestCase):
     def test_shared_phase_clocks_and_worker_envelopes(self) -> None:
-        assert queue_start_minutes() == 5
+        assert queue_start_minutes() == 120
         assert validation_seconds(big_change=False) == 300
         assert validation_seconds(big_change=True) == 10_800
         assert worker_timeout_minutes(big_change=False) == 8
@@ -142,7 +142,7 @@ class PolicyTests(unittest.TestCase):
 
         assert not decision.managed_workflow
         assert decision.classification.big_change
-        assert decision.queue_start_seconds == 300
+        assert decision.queue_start_seconds == 7200
         assert decision.setup_allowance_seconds == 120
         assert decision.validation_seconds == 10_800
         assert decision.termination_grace_seconds == 10

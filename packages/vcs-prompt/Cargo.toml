@@ -1,0 +1,17 @@
+[package]
+name = "vcs-prompt"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Starship VCS segment: jj working-copy state inside a jj workspace, git branch and status everywhere else"
+
+[lints]
+workspace = true
+
+[dependencies]
+anstyle.workspace = true
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

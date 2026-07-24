@@ -29,9 +29,15 @@ inputs:
 
 outputs:
   lint_result:
-    description: Optional lint phase result emitted by the budgeted script
+    description: >-
+      Optional lint phase result emitted by the budgeted script, or
+      budget-exceeded when the validation clock killed the script before it
+      published one
   nix_result:
-    description: Optional Nix phase result emitted by the budgeted script
+    description: >-
+      Optional Nix phase result emitted by the budgeted script, or
+      budget-exceeded when the validation clock killed the script before it
+      published one
 
 runs:
   using: node24

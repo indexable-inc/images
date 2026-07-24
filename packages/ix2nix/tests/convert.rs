@@ -341,6 +341,21 @@ fn spread_only_object_is_the_operand_itself() {
 fn duplicate_object_keys_are_rejected() {
     let error = diagnostic("export default { a: 1, a: 2 };");
     assert!(error.message().contains("duplicate key `a`"), "{error}");
+    // Shorthand names the key too, so it collides with a written-out one.
+    let error = diagnostic("export default { a, a: 2 };");
+    assert!(error.message().contains("duplicate key `a`"), "{error}");
+}
+
+#[test]
+fn shorthand_property_repeats_the_name_on_both_sides() {
+    // `{ src }` is the JS spelling of `src = src;`. Pattern position already
+    // requires the shorthand (renaming is rejected there), so pin the literal
+    // position too: entrypoints thread flake values through it.
+    assert_eq!(nix("export default { src };"), "{\n  src = src;\n}\n");
+    assert_eq!(
+        nix("export default { src, mode: 1 };"),
+        "{\n  src = src;\n  mode = 1;\n}\n"
+    );
 }
 
 #[test]

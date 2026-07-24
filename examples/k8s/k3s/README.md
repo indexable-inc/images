@@ -15,14 +15,14 @@ registry; the entire cluster, workload included, ships from the nix store.
 
 | Usually                            | Here                                                       |
 | ---------------------------------- | ---------------------------------------------------------- |
-| kubeadm / cloud control plane      | `services.k3s.enable = true` in [`node.nix`](node.nix)     |
-| `kubectl apply -f app.yaml`        | `services.k3s.manifests` in [`workload.nix`](workload.nix) |
-| `docker push` + registry pull      | `services.k3s.images` preloads [`image.nix`](image.nix)    |
+| kubeadm / cloud control plane      | `services.k3s.enable = true` in [`node.ix`](node.ix)     |
+| `kubectl apply -f app.yaml`        | `services.k3s.manifests` in [`workload.ix`](workload.ix) |
+| `docker push` + registry pull      | `services.k3s.images` preloads [`image.ix`](image.ix)    |
 | airgap image bundles               | `k3s.airgap-images` from the store                         |
 | joining nodes with a token by hand | `serverAddr` from the server peer's node attrs             |
 
 The wiring is the cluster definition: [`default.ix`](default.ix) lists the
-VMs, [`agent.nix`](agent.nix) derives the join address from the server VM's
+VMs, [`agent.ix`](agent.ix) derives the join address from the server VM's
 east-west hostname at eval time, and the Deployment references
 the pod image by the exact `imageName:imageTag` of the derivation every node
 imports - a drifted tag fails the repo's eval tests before anything boots.
@@ -44,19 +44,19 @@ joined, the `whoami` Deployment rolled out, and its NodePort answers.
 
 - [`default.ix`](default.ix) - the wiring: `k3s-server` and two agents, one
   east-west group, each wired as the other's peers through `mkVm`'s `nodes`.
-- [`node.nix`](node.nix) - what every cluster node shares: the k3s service,
+- [`node.ix`](node.ix) - what every cluster node shares: the k3s service,
   the join token, the runtime node-ip handoff, image preload, inter-node
   ports (flannel VXLAN, kubelet), a liveness check.
-- [`server.nix`](server.nix) - the control plane: API port, extras disabled,
+- [`server.ix`](server.ix) - the control plane: API port, extras disabled,
   the cluster-wide readiness probes (`kubectl wait` over the wired VM
   list, rollout status, NodePort http).
-- [`agent.nix`](agent.nix) - join the server by its east-west hostname.
-- [`workload.nix`](workload.nix) - the Deployment and NodePort Service as
+- [`agent.ix`](agent.ix) - join the server by its east-west hostname.
+- [`workload.ix`](workload.ix) - the Deployment and NodePort Service as
   Nix values; the k3s module renders the YAML.
-- [`image.nix`](image.nix) / [`whoami_serve.py`](whoami_serve.py) - the pod
+- [`image.ix`](image.ix) / [`whoami_serve.py`](whoami_serve.py) - the pod
   image, built by `dockerTools`: a tiny http server reporting its pod and
   node via the downward API.
-- [`ports.nix`](ports.nix) - every port, stated once.
+- [`ports.ix`](ports.ix) - every port, stated once.
 
 ## Verify
 
@@ -77,7 +77,7 @@ Another agent is one line in [`default.ix`](default.ix): add
 `agent("k3s-agent-2")` to the server's peers. New agents join with the same
 token, preload the same images, and appear by name in the server's
 `nodes-ready` check automatically. Raise `replicas` in
-[`workload.nix`](workload.nix) to spread more pods across them.
+[`workload.ix`](workload.ix) to spread more pods across them.
 
 ## Why k3s and not upstream Kubernetes
 

@@ -1,0 +1,61 @@
+export default ({ config, lib, nodes, ...rest }) => {
+  const ports = import("./ports.ix");
+  const k3s = lib["getExe'"](config.services.k3s.package, "k3s");
+
+  // Every VM here runs k3s under its own hostname, so the `nodes` module
+  // argument (every node of the fleet in default.ix) is exactly the set
+  // of Kubernetes nodes the cluster must reach. Naming them (instead of
+  // `--all`) makes a missing agent a failure rather than a smaller cluster
+  // that happens to look Ready. Wiring another agent into default.ix
+  // extends this automatically.
+  const clusterNodes = builtins.map(
+    (node) => `node/${node.config.networking.hostName}`,
+    lib.attrValues(nodes),
+  );
+
+  return {
+    imports: [import("./node.ix"), import("./workload.ix")],
+
+    // Single server on the embedded sqlite datastore (the module default).
+    // HA when it matters is `clusterInit = true` here (sqlite becomes embedded
+    // etcd) plus further servers pointed at this one via `serverAddr`.
+    // Everything not exercised by the example is disabled so the cluster is
+    // exactly the scheduler, DNS, and the workload.
+    services: {
+      k3s: {
+        extraFlags: [
+          "--disable=traefik",
+          "--disable=metrics-server",
+          "--disable=servicelb",
+          "--disable=local-storage",
+        ],
+      },
+    },
+
+    ix: {
+      networking: {
+        expose: {
+          "k3s-api": {
+            port: ports.api,
+            description: "Kubernetes API server (agents join here)",
+          },
+        },
+      },
+
+      healthChecks: {
+        "nodes-ready": {
+          description: "every VM joined the cluster and reports Ready",
+          command: [k3s, "kubectl", "wait", "--for=condition=Ready", "--timeout=5s", ...clusterNodes],
+        },
+        "whoami-rollout": {
+          description: "whoami Deployment fully rolled out",
+          command: [k3s, "kubectl", "rollout", "status", "deployment/whoami", "--timeout=5s"],
+        },
+        "whoami-nodeport": {
+          description: "whoami Service answers on its NodePort",
+          http: { port: ports.nodePort, path: "/" },
+        },
+      },
+    },
+  };
+};

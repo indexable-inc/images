@@ -65,6 +65,11 @@
   # wrapper, a relative `.ix` import recurses through the shim, a conversion
   # error surfaces its positioned diagnostic as a Nix eval error, and type
   # annotations check in `assert` mode and cost nothing in `erase` mode.
+  # Deliberately runs the freshly BUILT `${package}`, not the committed
+  # `lib/ix2nix.wasm` the repo wires into `importIxWasm`: a converter
+  # regression then fails here on the same PR that introduces it, before
+  # anyone regenerates the committed copy, and `fresh` below separately
+  # pins committed == built.
   # Client-side eval against a scratch store; no daemon. The crate's sibling
   # files are reached through the repo root (`../` literals are banned:
   # no-parent-path).
@@ -126,18 +131,49 @@
 
       mkdir -p "$out"
     '';
+
+  # Freshness gate for the COMMITTED converter (issue #4136): the committed
+  # `lib/ix2nix.wasm` must byte-match this package's build, or `.ix` evals
+  # run a converter that no longer corresponds to the crate source.
+  # x86_64-linux only, because the artifact is not bit-identical across
+  # build hosts (the toolchain store path feeds `-C metadata`, so symbol
+  # hashes differ per host); the committed bytes are pinned to the
+  # x86_64-linux build, which is also the system CI's flake-check lane
+  # builds. Expected churn: the built bytes embed the ix2nix unit-source
+  # store path in two panic-location strings, and that unit source is the
+  # whole packages/ix2nix directory, so ANY edit under packages/ix2nix (and
+  # any toolchain or nixpkgs bump) re-keys the artifact and trips this gate.
+  # One `nix run .#ix2nix-wasm-regen` converges it, because the committed
+  # copy lives under lib/, outside its own build's inputs.
+  fresh = let
+    committed = ix.paths.root + "/lib/ix2nix.wasm";
+  in
+    pkgs.runCommand "ix2nix-wasm-fresh" {strictDeps = true;} ''
+      if ! cmp ${committed} ${package}/lib/ix2nix.wasm; then
+        echo "committed lib/ix2nix.wasm is stale against the built .#ix2nix-wasm" >&2
+        echo "regenerate it with: nix run .#ix2nix-wasm-regen" >&2
+        exit 1
+      fi
+      touch "$out"
+    '';
 in
   package.overrideAttrs (old: {
     passthru =
       (old.passthru or {})
       // {
-        tests = {inherit e2e;};
+        tests =
+          {inherit e2e;}
+          // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+            inherit fresh;
+          };
         # This wasm32 graph is its own `buildWorkspace`, invisible to
-        # per-system.nix's shared-workspace `crossIfdRoots`. Every scaffolded
-        # `ix init` eval forces these at eval time through
-        # `lib.importIxWasm` (the `import unitsNix` behind the converter
-        # drv), so cache-push publishes them as explicit roots via the
-        # `workspacePackageIfdRoots` harvest -- otherwise each fresh project
+        # per-system.nix's shared-workspace `crossIfdRoots`. Current consumers
+        # read the committed `ix2nix.wasm` and never realize this graph at
+        # eval, but flakes scaffolded before #4125 interpolate the
+        # `ix2nix-wasm` package output into `converter` and float on index
+        # main, so their evals still force these drvs. cache-push therefore
+        # keeps publishing them as explicit roots via the
+        # `workspacePackageIfdRoots` harvest -- otherwise each such project
         # re-vendors and re-renders the graph before its first substitution
         # (#4127; same #1890 class as codex's second workspace).
         workspaceIfdRoots = {

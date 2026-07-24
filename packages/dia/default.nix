@@ -3,7 +3,10 @@
   stdenv,
   fetchurl,
   undmg,
-  nix,
+  # The fork client rather than stock `pkgs.nix`; see packages/yc/default.nix
+  # for why an updater must not pull nixpkgs' nix into its closure. Empty on
+  # the overlay path, which omits the updateScript anyway.
+  repoPackages ? {},
   # Writer used to build `passthru.updateScript`. Only the flake package set
   # supplies it (lib/packages.nix); the overlay eval context leaves it null. The
   # updater is a maintainer-facing flake output, so the overlay build of
@@ -30,7 +33,7 @@
   # .dmg once and emits the SRI hash the fetcher pins.
   updateScriptArgs = {
     name = "dia-update";
-    runtimeInputs = [nix];
+    runtimeInputs = [repoPackages.nix-ix];
     meta.description = "Refresh packages/dia/manifest.json to a Dia release";
     text = ''
       # nu

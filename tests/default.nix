@@ -2261,8 +2261,8 @@
       };
     };
   in {
-    server = example.vms.k3s-server.nodes.k3s-server;
-    agent = example.vms.k3s-agent-0.nodes.k3s-agent-0;
+    server = example.nodes.k3s-server;
+    agent = example.nodes.k3s-agent-0;
   };
 
   nomadClusterExample = let

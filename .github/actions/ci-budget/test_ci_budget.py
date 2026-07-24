@@ -668,7 +668,7 @@ class RenderingTests(unittest.TestCase):
         )
         comment = ci_budget.render_comment(result)
         assert comment.startswith(ci_budget.COMMENT_MARKER)
-        assert "start within 5 minutes" in comment
+        assert "start within 120 minutes" in comment
         assert "120 seconds for setup" in comment
         assert "300 seconds for validation" in comment
         assert "10 seconds for cleanup" in comment

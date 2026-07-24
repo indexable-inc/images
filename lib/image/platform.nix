@@ -761,6 +761,12 @@ in {
           "ca-derivations"
           "dynamic-derivations"
           "git-hashing"
+          # `.ix` imports convert in-eval via `builtins.wasm` over the
+          # committed converter (lib/ix2nix.wasm via importIxWasm, #4136); the
+          # in-VM client is the wasm-enabled nix-ix, which gates the builtin
+          # behind this feature, so plain `nix build` / `nix eval` in a VM
+          # can load `.ix` modules without per-command flags.
+          "wasm-builtin"
         ];
         allow-import-from-derivation = lib.mkDefault true;
         warn-dirty = false;

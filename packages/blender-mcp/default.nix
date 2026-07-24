@@ -9,6 +9,10 @@
   ix,
   lib,
   pkgs,
+  # The fork client rather than stock `pkgs.nix`; see packages/yc/default.nix
+  # for why an updater must not pull nixpkgs' nix into its closure. Empty on
+  # the overlay path, which omits the updateScript anyway.
+  repoPackages ? {},
   # Writer for `passthru.updateScript` (flake-package path only; the package
   # is not registered in the overlay). Same nullable-writer pattern as
   # vector-bin / wasm-bindgen-cli.
@@ -20,7 +24,7 @@
   pin = ix.pins.loadPin ./pins.json "blender-mcp";
   updateScript = ix.pins.mkOptionalUpdater {
     writeNushellApplication = updateScriptWriter;
-    inherit (pkgs) nix;
+    nix = repoPackages.nix-ix;
     pname = "blender-mcp";
     relPath = "packages/blender-mcp/pins.json";
   };

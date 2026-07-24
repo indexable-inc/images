@@ -1611,6 +1611,36 @@ def "nu-complete git-branches" [] {
     $local | append $remote | uniq
 }
 
+# git worktree list as a table. Porcelain is the only stable form to parse: the
+# human-readable output appends bare `(detached HEAD)` and `prunable` fields
+# that shift column positions, while porcelain is one `key value` per line with
+# blank-line-separated entries.
+def "git worktrees" [] {
+    ^git worktree list --porcelain
+    | split row "\n\n"
+    | where ($it | str trim | is-not-empty)
+    | each {|block|
+        let entry = (
+            $block
+            | lines
+            | where ($it | is-not-empty)
+            | reduce --fold {} {|line, acc|
+                let pair = ($line | split row --number 2 " ")
+                # Valueless keys (`bare`, `detached`) carry no value; make them flags.
+                $acc | insert $pair.0 (if ($pair | length) > 1 { $pair.1 } else { true })
+            }
+        )
+        {
+            name: ($entry.worktree | path basename)
+            path: ($entry.worktree | str replace $env.HOME "~")
+            head: ($entry.HEAD | str substring 0..<8)
+            branch: ($entry.branch? | default "" | str replace "refs/heads/" "")
+            detached: ($entry.detached? | default false)
+            prunable: ($entry.prunable? != null)
+        }
+    }
+}
+
 # Switch to a branch, jumping to its worktree if one exists
 def --env gw [
     branch: string@"nu-complete git-branches"

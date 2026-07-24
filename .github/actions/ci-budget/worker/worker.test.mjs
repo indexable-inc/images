@@ -12,10 +12,13 @@ import {
   DeadlineExceeded,
   assertQueueAdmission,
   assertSetupAllowance,
+  budgetExceededMessage,
   currentWorkerJob,
   loadPolicy,
   parseArguments,
   queuedRunCount,
+  recordBudgetVerdicts,
+  reportBudgetExceeded,
   runBudgetedScript,
   validationSeconds,
 } from "./worker.mjs";
@@ -101,7 +104,8 @@ function response(jobs) {
 
 test("policy exposes independent queue, setup, validation, and cleanup clocks", () => {
   const policy = loadPolicy();
-  assert.equal(policy.queue_start_seconds, 300);
+  assert.equal(policy.big_change_label, "ci/big-change");
+  assert.equal(policy.queue_start_seconds, 7200);
   assert.equal(policy.setup_allowance_seconds, 120);
   assert.equal(policy.routine_validation_seconds, 300);
   assert.equal(policy.extended_validation_seconds, 10_800);
@@ -270,13 +274,18 @@ test("worker identity fails closed on missing and duplicate runner matches", asy
 
 test("queue admission accepts the boundary and rejects one millisecond late", () => {
   const policy = loadPolicy();
+  // Created 10:00:00 plus the 7200s admission budget puts the boundary at
+  // exactly 12:00:00 (#3549 widened it from 300s).
   assert.doesNotThrow(() =>
-    assertQueueAdmission({ job: workerJob(), policy }),
+    assertQueueAdmission({
+      job: workerJob({ startedAt: "2026-07-15T12:00:00Z" }),
+      policy,
+    }),
   );
   assert.throws(
     () =>
       assertQueueAdmission({
-        job: workerJob({ startedAt: "2026-07-15T10:05:00.001Z" }),
+        job: workerJob({ startedAt: "2026-07-15T12:00:00.001Z" }),
         policy,
       }),
     DeadlineExceeded,
@@ -285,23 +294,24 @@ test("queue admission accepts the boundary and rejects one millisecond late", ()
 
 test("queue admission failure reports the wait, the budget, and saturation", () => {
   const policy = loadPolicy();
-  // ix#7625: a PR worker created at 13:17:16Z started 33 minutes later while
-  // stacked deploy runs held every dispatcher slot. The failure must read as
-  // pool saturation with the actual wait, not as a bare timestamp comparison.
+  // ix#7625: a PR worker started long after creation while stacked deploy
+  // runs held every dispatcher slot. The failure must read as pool
+  // saturation with the actual wait, not as a bare timestamp comparison.
+  // (The wait here overruns even the 7200s budget #3549 widened to.)
   assert.throws(
     () =>
       assertQueueAdmission({
         job: workerJob({
           createdAt: "2026-07-17T13:17:16Z",
-          startedAt: "2026-07-17T13:50:23Z",
+          startedAt: "2026-07-17T15:37:16Z",
         }),
         policy,
       }),
     (error) => {
       assert.ok(error instanceof DeadlineExceeded);
-      assert.match(error.message, /waited 1987s for a runner slot/);
-      assert.match(error.message, /300s queue admission budget/);
-      assert.match(error.message, /deadline 2026-07-17T13:22:16\.000Z/);
+      assert.match(error.message, /waited 8400s for a runner slot/);
+      assert.match(error.message, /7200s queue admission budget/);
+      assert.match(error.message, /deadline 2026-07-17T15:17:16\.000Z/);
       assert.match(error.message, /dispatcher\s+slot stayed busy/);
       assert.match(error.message, /ix#7625/);
       return true;
@@ -367,7 +377,7 @@ test("late sibling fails even when another worker started on time", async () => 
           runnerName: "runner-timely",
           startedAt: "2026-07-15T10:00:30Z",
         }),
-        workerJob({ startedAt: "2026-07-15T10:05:01Z" }),
+        workerJob({ startedAt: "2026-07-15T12:00:01Z" }),
       ]),
     repository: "indexable-inc/ix",
     runAttempt: 2,
@@ -403,6 +413,59 @@ test("validation starts with the complete tier allowance after setup", () => {
   const policy = loadPolicy();
   assert.equal(validationSeconds({ bigChange: false, policy }), 300);
   assert.equal(validationSeconds({ bigChange: true, policy }), 10_800);
+});
+
+test("budget kill message names the clock, the elapsed time, and the remedy", () => {
+  const policy = loadPolicy();
+  const routine = budgetExceededMessage({
+    allowedSeconds: 300,
+    bigChange: false,
+    elapsedSeconds: 301,
+    policy,
+  });
+  assert.match(routine, /routine_validation_seconds=300s exceeded after 301s/);
+  assert.match(routine, /add the ci\/big-change label/);
+  assert.match(routine, /extended_validation_seconds=10800s budget/);
+
+  const extended = budgetExceededMessage({
+    allowedSeconds: 10_800,
+    bigChange: true,
+    elapsedSeconds: 10_930,
+    policy,
+  });
+  assert.match(extended, /extended_validation_seconds=10800s exceeded after 10930s/);
+  assert.match(extended, /already held the extended budget/);
+});
+
+test("budget verdicts fill only the outputs the script never published", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ci-budget-worker-verdicts-"));
+  try {
+    const output = join(directory, "github-output");
+    // Heredoc form: the delimiter line must count as a published output.
+    await writeFile(output, "lint_result<<GHDELIM\npartial\nGHDELIM\n");
+
+    assert.deepEqual(recordBudgetVerdicts({ githubOutputPath: output }), [
+      "nix_result",
+    ]);
+    assert.equal(
+      await readFile(output, "utf8"),
+      "lint_result<<GHDELIM\npartial\nGHDELIM\nnix_result=budget-exceeded\n",
+    );
+    // A killed script's last write may lack its newline; the backfill must
+    // start a fresh line instead of corrupting that entry.
+    await writeFile(output, "lint_result=succ");
+    assert.deepEqual(recordBudgetVerdicts({ githubOutputPath: output }), [
+      "nix_result",
+    ]);
+    assert.equal(
+      await readFile(output, "utf8"),
+      "lint_result=succ\nnix_result=budget-exceeded\n",
+    );
+    // No GITHUB_OUTPUT (running outside Actions) publishes nothing.
+    assert.deepEqual(recordBudgetVerdicts({ githubOutputPath: "" }), []);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });
 
 test("script arguments cross the JSON boundary as distinct values", async () => {
@@ -443,6 +506,64 @@ test("timeout kills a TERM-resistant descendant after its leader exits", async (
     });
     assert.equal(status, 124);
     await assertProcessGone(Number(await waitForFile(fixture.descendant)));
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("timeout announces the budget kill and backfills mirror verdicts", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ci-budget-worker-report-"));
+  try {
+    const script = join(directory, "gate.sh");
+    const output = join(directory, "github-output");
+    // Publish one honest phase result, then outlive the clock, like
+    // run-ci-phases.sh does when the Nix phase overruns after lint finished.
+    await writeFile(
+      script,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf 'lint_result=success\\n' >>github-output",
+        "sleep 60",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(output, "");
+
+    const logged = [];
+    t.mock.method(console, "log", (line) => logged.push(line));
+    const annotated = [];
+    t.mock.method(console, "error", (line) => annotated.push(line));
+
+    const policy = loadPolicy();
+    const status = await runBudgetedScript({
+      graceSeconds: 0.05,
+      // Wired exactly as main() wires it, with the budget shrunk to test size.
+      onBudgetExceeded: (expiry) =>
+        reportBudgetExceeded({
+          ...expiry,
+          bigChange: false,
+          githubOutputPath: output,
+          policy,
+        }),
+      scriptPath: "gate.sh",
+      validationSeconds: 0.5,
+      workspace: directory,
+    });
+
+    assert.equal(status, 124);
+    const logText = logged.join("\n");
+    assert.match(logText, /routine_validation_seconds=0\.5s exceeded after \d+s/);
+    assert.match(logText, /published nix_result=budget-exceeded/);
+    assert.match(
+      annotated.join("\n"),
+      /^::error title=CI worker budget exceeded::validation budget routine_validation_seconds=0\.5s .* add the ci\/big-change label for the extended_validation_seconds=10800s budget\.$/m,
+    );
+    // The honest lint verdict survives; only the killed phase reads as policy.
+    assert.equal(
+      await readFile(output, "utf8"),
+      "lint_result=success\nnix_result=budget-exceeded\n",
+    );
   } finally {
     await rm(directory, { force: true, recursive: true });
   }

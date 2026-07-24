@@ -704,6 +704,7 @@
       gitDefaults
       goUnit
       hermes
+      kernelUnitFor
       languages
       kdl
       lists
@@ -818,39 +819,36 @@
     ;
 
   /**
-  Import a `.ix` (JavaScript-syntax Nix) module for a given host system.
-  Delegates to `packages/ix2nix/import-ix-native.nix`: the conversion
-  runs the compiled `ix2nix` binary in a small derivation (IFD), so it works
-  on stock nix — CI and repo-local evals do not carry `builtins.wasm`.
-  Example flakes use the in-eval `import-ix.nix` wasm shim instead.
+  Import a `.ix` (JavaScript-syntax Nix) module: the in-eval `builtins.wasm`
+  conversion through the COMMITTED `lib/ix2nix.wasm`, a plain in-tree file,
+  so no store path is realized mid-eval (no IFD and no substitution; a
+  fresh `ix init` project evaluates offline). Requires an
+  evaluator with `wasm-builtin` (`ix eval` / `ix apply`, or nix-ix with the
+  feature in `extra-experimental-features`); on anything else importing a
+  `.ix` file throws with those instructions. CI bootstraps the nix-ix client
+  (.github/actions/bootstrap-patched-nix), so repo evals qualify. Once nix
+  has proper parallel IFD we hope to drop the wasm converter and run the
+  native ix2nix binary instead.
+
+  `importIx`/`importIxWasm` and the `*For` variants are one implementation:
+  the conversion no longer depends on a host package set, but the four names
+  stay because scaffolded flakes and repo callers consume all of them
+  (#4125).
   */
-  importIxFor = hostSystem: let
-    hostPkgs = nixpkgs.legacyPackages."${hostSystem}";
-  in
-    import ./import-ix-native.nix {
-      pkgs = hostPkgs;
-      inherit (packageSetFor hostPkgs) ix2nix;
-      ixTy = import (paths.root + "/packages/ix2nix/ix-ty.nix") {mode = "assert";};
-    };
+  importIxWasmFor = _hostSystem: importIxWasm;
 
-  importIx = importIxFor system;
+  importIxWasm = import (paths.root + "/packages/ix2nix/import-ix.nix") {
+    # The committed converter lives under lib/, not in the ix2nix crate
+    # directory, because unit-scoped crate sources take the whole crate dir:
+    # in there, the artifact would feed its own build's input hash and the
+    # freshness gate could never converge (same placement reasoning as the
+    # retired lib/import-ix-native.nix).
+    converter = paths.root + "/lib/ix2nix.wasm";
+  };
 
-  /**
-  Stable entry point for external flakes evaluated by ix's patched nix
-  (`ix apply` / `ix eval` pass `wasm-builtin`): the in-eval `builtins.wasm`
-  variant of `importIx`, already wired to the compiled ix2nix converter.
-  Scaffolded `ix init` flakes consume this as `index.lib.importIxWasm`
-  instead of importing a deep repo path, so moving files inside this repo
-  can never break them again (#4125).
-  */
-  importIxWasmFor = hostSystem: let
-    hostPkgs = nixpkgs.legacyPackages."${hostSystem}";
-  in
-    import (paths.root + "/packages/ix2nix/import-ix.nix") {
-      converter = "${(packageSetFor hostPkgs).ix2nix-wasm}/lib/ix2nix.wasm";
-    };
+  importIxFor = importIxWasmFor;
 
-  importIxWasm = importIxWasmFor system;
+  importIx = importIxWasm;
 
   inherit
     (import ./discovery.nix {
