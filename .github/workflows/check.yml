@@ -97,14 +97,24 @@ env:
   # no line in the log naming it. A timeout instead fails that one root, names
   # it in the realise annotation, and lets `--keep-going` finish the rest.
   #
-  # To let a specific derivation run longer, do NOT add a per-derivation
-  # attribute for it. Anything of the `__buildTimeout` shape is part of the
-  # derivation, so it changes the output hash, so the package it is attached
-  # to stops matching the binary cache and rebuilds from source on every host
-  # forever -- and the packages that genuinely need more than ten minutes
-  # (rustc, ghc, chromium) are exactly the ones you most need to substitute.
-  # Raise this number for the lane, or use the name-pattern override the
-  # daemon consults, which is not part of any derivation.
+  # The escape hatch today is per-LANE: raise this number in the workflow that
+  # needs it. There is deliberately no per-derivation one, and it is worth
+  # writing down why, because the obvious implementation is a trap.
+  #
+  # A per-derivation attribute -- anything of the `__buildTimeout = 3600`
+  # shape -- is part of the derivation, so it changes the output hash, so the
+  # package it is attached to stops matching the binary cache and rebuilds
+  # from source on every host forever. The packages that genuinely need more
+  # than ten minutes are rustc, ghc, chromium: exactly the ones you most need
+  # to substitute. It is the same trap this repo's overlay was cleaned of on
+  # 2026-07-25, where an override added to survive a test failure was itself
+  # the reason the build ran locally at all.
+  #
+  # A real per-derivation exception has to live somewhere that is not part of
+  # any derivation: a daemon-side setting matching on derivation NAME, so an
+  # unmodified nixpkgs `rustc-1.x` still substitutes. That needs a fork patch
+  # (nix has no such setting) and does not exist yet. Raise the lane number
+  # until it does.
   #
   # `ca-derivations`: the rust workspace units default to
   # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating the
