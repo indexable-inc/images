@@ -8,9 +8,14 @@
   # mtimes, index#3733), so the segment asks git for the commit epoch at
   # prompt time; it also tracks bumps without a switch.
   indexPinRepo,
-  # ix pin: a git flake input, so its commit epoch is real at eval time and
-  # baked at switch time.
-  ixPinTimestamp,
+  # ix pin repo, and for the same reason. ix used to be a git flake input
+  # whose `lastModified` was real at eval time, and this took an epoch
+  # instead. It is now a `path:./ix` submodule (nix#147), so `lastModified`
+  # is absent whenever that checkout is dirty -- the normal state while
+  # working in it -- and `inputs.ix.lastModified` then aborted the entire
+  # switch with `error: attribute 'lastModified' missing`. Asking git at
+  # prompt time has no eval-time input left to be missing.
+  ixPinRepo,
 }: let
   # Ages of the index/ix flake pins shown in the prompt. Each pin's epoch
   # reaches sh as a shell expression and sh computes the age at prompt time,
@@ -400,6 +405,6 @@ in {
     #
     # ix: command = "ix-starship" (branch and sync status: ↻ syncing, ⏸ stopped, ✗ crashed)
     flake_pin_index = pinModule "index" "$(git -C '${indexPinRepo}' log -1 --format=%ct 2>/dev/null)";
-    flake_pin_ix = pinModule "ix" (toString ixPinTimestamp);
+    flake_pin_ix = pinModule "ix" "$(git -C '${ixPinRepo}' log -1 --format=%ct 2>/dev/null)";
   };
 }

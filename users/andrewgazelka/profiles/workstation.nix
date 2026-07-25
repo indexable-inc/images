@@ -1374,8 +1374,13 @@ in {
     # Settings are pure nix (home/starship.nix): one source of truth that can
     # bake eval-time facts, e.g. the ix pin age segment.
     settings = import (configRoot + "/home/starship.nix") {
-      inherit (cfg) ixPinTimestamp;
-      indexPinRepo = "${cfg.paths.privateConfigDirectory}/index";
+      inherit (cfg) ixPinRepo;
+      # `paths.indexCheckout`, not `<privateConfigDirectory>/index`: index
+      # moved under ix/ (ix#8119) and this path did not follow, so it named a
+      # directory that does not exist. `pinModule` short-circuits a failing
+      # epoch substitution, so the segment rendered empty instead of erroring
+      # and the breakage went unnoticed.
+      indexPinRepo = cfg.paths.indexCheckout;
     };
   };
 
