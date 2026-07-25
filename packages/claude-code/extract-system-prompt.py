@@ -190,6 +190,19 @@ async def capture(
             "DISABLE_ERROR_REPORTING": "1",
             "DISABLE_AUTOUPDATER": "1",
             "DISABLE_INSTALLATION_CHECKS": "1",
+            # Pinned, not inherited. The CLI reports $SHELL verbatim in the
+            # environment block it sends, so an inherited value writes the
+            # capturing maintainer's shell into a committed snapshot: the
+            # 2.1.220 refresh flipped `Shell: bash` to `Shell: zsh` on every
+            # model purely because a different person ran it. That defeats the
+            # stated purpose of this env ("reflect the binary, not the
+            # maintainer's shell") and buries real prompt changes in noise.
+            #
+            # `OS Version` in the same block is still capture-host specific and
+            # cannot be fixed here -- it is read from the kernel, not the
+            # environment -- so a refresh from a different macOS still shows up
+            # in the diff.
+            "SHELL": "/bin/bash",
         }
     )
     proc = await asyncio.create_subprocess_exec(
