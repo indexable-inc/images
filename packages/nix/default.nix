@@ -129,6 +129,42 @@ let
     (componentPkgs.stdenv.hostPlatform.isDarwin && builtins.pathExists flakySkipPatch)
     flakySkipPatch;
 
+  # curl 8.21.0 started consuming the public curl_multi_wakeup() eventfd from
+  # inside curl_multi_perform(). That loses a wakeup for callers which perform
+  # before polling, and libstore's file-transfer worker is exactly such a
+  # caller: it can then sleep for its full 10-second idle timeout. Upstream
+  # fixed it by giving the threaded resolver a separate internal wakeup pair
+  # (https://github.com/curl/curl/issues/22272).
+  #
+  # This patch belongs here rather than on `pkgs.curl`, even though the overlay
+  # is the usual home for a nixpkgs fix. curl reaches GHC, rustc, cargo and the
+  # whole python package set as a build input via git-minimal
+  # (ghc -> sphinx -> pytest-xdist -> execnet -> hatch-vcs -> git-minimal ->
+  # curl), so overriding it globally rehashes most of nixpkgs and detaches the
+  # tree from cache.nixos.org. Measured on 2026-07-25 against nixpkgs
+  # e2587cae: arrow-cpp substitutes as a 28.5 MiB download and souffle as
+  # 2.8 MiB, and both were being compiled from source here for this one patch.
+  # `modular/src/libstore/package.nix` is the only nix component that takes
+  # curl as an input, so scoping it to that component keeps the fix where the
+  # stall happens and leaves everything else matching the binary cache.
+  #
+  # Drop this once nixpkgs ships a curl containing
+  # 009fd378e8f01c97ebe67a14a41a06d56430f3df. The version assertion makes a
+  # nixpkgs curl bump fail visibly instead of silently carrying a stale patch.
+  curlWithMultiWakeupFix = assert lib.assertMsg (componentPkgs.curl.version == "8.21.0")
+  "remove the curl wakeup patch: expected nixpkgs curl 8.21.0, got ${componentPkgs.curl.version}";
+    componentPkgs.curl.overrideAttrs (old: {
+      patches =
+        (old.patches or [])
+        ++ [
+          (componentPkgs.fetchurl {
+            name = "curl-8.21.0-fix-multi-wakeup.patch";
+            url = "https://github.com/curl/curl/commit/009fd378e8f01c97ebe67a14a41a06d56430f3df.patch";
+            hash = "sha256-RMFcifj9jDaWY5jNBGqQc2NUoXb3+mHR/1ubrYjpHvc=";
+          })
+        ];
+    });
+
   # The source is the indexable-inc/nix jj megamerge (nix-src input): the
   # upstream 2.34.7 base plus the patch DAG, fetched already patched, so the
   # only remaining build-time patches are nixpkgs' own (`patchesCommon`).
@@ -199,6 +235,10 @@ let
         buildInputs = (old.buildInputs or []) ++ [componentPkgs.wasmtime];
         mesonFlags = (old.mesonFlags or []) ++ ["-Dwasm=enabled"];
       });
+      # See `curlWithMultiWakeupFix` above: libstore owns the file-transfer
+      # worker the curl regression stalls, and it is the only component that
+      # takes curl, so the patch is scoped to it instead of `pkgs.curl`.
+      nix-store = prev.nix-store.override {curl = curlWithMultiWakeupFix;};
     });
 
     # The aggregate `nix` package (daemon + client + libs), the same attribute

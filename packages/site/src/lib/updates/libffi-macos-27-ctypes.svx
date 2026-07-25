@@ -223,5 +223,45 @@ switch, and five of the six failed on a hardcoded time budget: 60 seconds for a
 git commit, 3 seconds for a CTest case, 70 milliseconds for an event-loop timer.
 None of them was broken.
 
-The lever that would make the patch cheap is index CI publishing these paths to
-cache.ix.dev, so the runner pays the bootstrap once instead of every workstation.
+The patch is kept and the cost is not. It applies to one component now:
+
+```nix
+nix-store = prev.nix-store.override {curl = curlWithMultiWakeupFix;};
+```
+
+`modular/src/libstore/package.nix` is the only nix component that takes curl as
+an input, and libstore owns the file-transfer worker the regression stalls, so
+scoping it there keeps the fix exactly where the stall happens. Everything else
+goes back to matching cache.nixos.org. `packages/nix/default.nix` already had
+the seam: the same `overrideScope` that wires wasmtime into libexpr for
+`builtins.wasm`.
+
+Measuring first is what changed the shape of this. Against nixpkgs `e2587cae`
+on aarch64-darwin, `nix-store --query --requisites` puts
+`curl-8.21.0-fix-multi-wakeup.patch.drv` inside arrow-cpp (2376 input drvs),
+souffle (1574) and erlang, and plain nixpkgs fetches all three as binaries:
+arrow-cpp at 28.5 MiB, souffle at 2.8 MiB. torch is 75.7 MiB, pyspark 433.6
+MiB, ray 70.8 MiB. `packages/mcp/default.nix` says as much in a comment already
+written against `ps.torch`, "torch substitutes from the official cache", which
+was true when it was written and had quietly stopped being true.
+
+Ten of the overrides on this page are gone with the cause: graphite2, harfbuzz,
+gunicorn, requests-futures, watchfiles, dunamai, ipython, inquirer3, uvloop and
+the python valkey client. All ten substitute at this rev, so none of their
+suites runs here any more. `lib/overlay.nix` drops from 330 lines to 119.
+
+That leaves the trap worth naming, because it hides itself. An override changes
+the derivation hash, which forces the local build, which runs the suite, which
+is what the override was working around. Adding one always looks like it fixed
+something, and it did, but it also created the work it fixed. Two of these,
+graphite2 and harfbuzz, were not Darwin-gated the way the python ones were, so
+they were detaching the Linux tree for CI and the fleet as well, with pango and
+gtk sitting under harfbuzz.
+
+The valkey server override stays. That failure was reproduced five consecutive
+times from source across two Linux machine classes, loaded and idle, sandboxed
+and unsandboxed, so it is not an artifact of this host.
+
+Publishing to cache.ix.dev from index CI is still worth doing, and it is now a
+smaller claim: it would cover the paths that genuinely have no upstream binary,
+rather than paying for a bootstrap we were creating ourselves.
