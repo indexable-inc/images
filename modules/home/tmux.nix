@@ -7,6 +7,10 @@
   cfg = config.programs.tmux.structured;
   inherit (lib) types;
   renderValue = value: lib.escapeShellArg value;
+  # Key names are punctuation as often as letters (`"`, `%`, `$`, `;`). Bare, tmux's
+  # parser swallows the rest of the line into the key name; single quotes can't express
+  # a literal `'`. Double quotes handle every key name once \, " and $ are escaped.
+  renderKey = key: "\"${lib.escape ["\\" "\"" "$"] key}\"";
   renderSettings = command: settings:
     lib.concatMap (name:
       map (value: "${command} ${name} ${renderValue value}")
@@ -23,8 +27,8 @@
     ++ (renderSettings "setw -g" cfg.window)
     ++ (map (plugin: "set -g @plugin ${renderValue plugin}") cfg.plugins)
     ++ (renderSettings "set -g" (lib.mapAttrs' (name: value: lib.nameValuePair "@${name}" value) cfg.pluginSettings))
-    ++ (map (binding: "bind${lib.optionalString binding.noPrefix " -n"}${lib.optionalString (binding.table != null) " -T ${binding.table}"} ${binding.key} ${binding.command}") cfg.bindings)
-    ++ (map (key: "unbind -n ${key}") cfg.unbindNoPrefix)
+    ++ (map (binding: "bind${lib.optionalString binding.noPrefix " -n"}${lib.optionalString (binding.table != null) " -T ${binding.table}"} ${renderKey binding.key} ${binding.command}") cfg.bindings)
+    ++ (map (key: "unbind -n ${renderKey key}") cfg.unbindNoPrefix)
     ++ (map (command: "run ${renderValue command}") cfg.run)
     ++ cfg.extra
   );
