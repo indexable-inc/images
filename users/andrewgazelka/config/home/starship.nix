@@ -324,11 +324,15 @@ in {
         "-c"
       ];
       use_stdin = false;
-      # No `ignore_timeout`, unlike the other custom modules here: this one
-      # waits on `git status` (~50ms warm in this config repo, three levels of
-      # submodules) and `jj log` (~20ms), and if either ever blocks on a repo
-      # lock, dropping the segment at starship's 500ms mark beats hanging the
-      # prompt behind it.
+      # Wait the commands out rather than let starship drop the segment at its
+      # 500ms mark: warm they cost ~20ms (`jj log`) and ~50ms (`git status`
+      # here, three levels of submodules), but a loaded box blows past 500ms
+      # and a branch that vanishes exactly when a build is running is worse
+      # than a prompt that arrives late. Waiting is safe because neither
+      # command takes a repo lock: `--ignore-working-copy` skips jj's
+      # working-copy snapshot, `--no-optional-locks` skips git's index
+      # refresh.
+      ignore_timeout = true;
       format = "$output ";
       description = "jj working-copy state in a jj workspace, git branch and status elsewhere";
     };
