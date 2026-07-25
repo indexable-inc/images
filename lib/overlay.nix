@@ -69,6 +69,30 @@ let
         pyprev.gunicorn.overridePythonAttrs (_: {
           __darwinAllowLocalNetworking = true;
         });
+
+      # dunamai's test__version__from_git__with_annotated_tags commits to a
+      # scratch repo, then asserts the commit timestamp is within one minute of
+      # `now`. That one minute is a wall-clock budget for the test's own setup,
+      # and a busy machine loses it: the suite takes over three minutes under
+      # load here, and the commit was 72 seconds old by the time the assertion
+      # ran (11:20:59 against a now of 11:22:11). 55 other cases passed.
+      #
+      # Widen the window rather than disable the case. dunamai read the
+      # timestamp correctly, so only the freshness bound was wrong, and deleting
+      # the test would drop real coverage of the timestamp plumbing.
+      # `--replace-fail` makes an upstream rewrite of the assertion break loudly
+      # here instead of silently no longer applying.
+      dunamai = assert lib.assertMsg (pyprev.dunamai.version == "1.25.0") ''
+        recheck the dunamai test timing patch: expected nixpkgs dunamai 1.25.0,
+        got ${pyprev.dunamai.version}.'';
+        pyprev.dunamai.overridePythonAttrs (old: {
+          postPatch =
+            (old.postPatch or "")
+            + ''
+              substituteInPlace tests/integration/test_dunamai.py \
+                --replace-fail "delta = dt.timedelta(minutes=1)" "delta = dt.timedelta(minutes=30)"
+            '';
+        });
     });
 
   # Read the target system from `prev`, not `final`: this overlay's attribute

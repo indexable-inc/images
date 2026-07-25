@@ -120,3 +120,22 @@ exercised rather than deselected.
 Nothing wants gunicorn directly. It arrives as a test input of aiohttp, which
 the python env depends on, so a package nobody asked for failing its own test
 suite is enough to stop a `home-manager switch`.
+
+dunamai stopped the next attempt for a different reason. One of its tests
+commits to a scratch repo and asserts the commit timestamp is within a minute of
+`now`:
+
+```
+AssertionError: assert (datetime(2026, 7, 25, 11, 22, 11) - timedelta(seconds=60))
+                       <= datetime(2026, 7, 25, 11, 20, 59)
+```
+
+That minute is a wall-clock budget for the test's own setup, and a busy machine
+loses it. This host had ten other agents building, the suite took 194 seconds,
+and the commit was 72 seconds old by the time the assertion ran. 55 other cases
+passed. The overlay widens the window to 30 minutes rather than deleting the
+test, since dunamai read the timestamp correctly and only the freshness bound was
+wrong. The suite is then 56 passed and 6 skipped.
+
+Machine load is not usually thought of as an input to a build, but a test with a
+wall-clock budget makes it one.
