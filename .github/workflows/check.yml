@@ -129,6 +129,14 @@ jobs:
       - name: Bootstrap patched Nix client
         uses: ./.github/actions/bootstrap-patched-nix
 
+      - name: Provision submodule-sync test tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: jq yq=yq-go
+
+      - name: Test direct submodule sync
+        run: .github/scripts/test-update-flake-lock-direct.sh
+
       # Build the gate's network tracer (#4031) from main's flake ref, outside
       # the validation clock below so tracing never eats PR budget. From main,
       # not this PR's tree: a PR-tree build would eval the PR's flake untraced
