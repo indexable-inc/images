@@ -24,11 +24,13 @@ concurrency:
 env:
   # Client-side eval knobs only; the self-hosted runner's Nix daemon owns
   # substituters and trusted keys. Same posture as check.yml / fork-sync.yml.
+  # `max-jobs` and `cores` are deliberately absent: unlike every other knob
+  # they are not daemon-owned, and a client value silently overrides the
+  # fleet tuning. check.yml owns the explanation.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
-    max-jobs = auto
-    cores = 1
+    timeout = 600
 
 jobs:
   update:

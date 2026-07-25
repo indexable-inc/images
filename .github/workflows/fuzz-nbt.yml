@@ -21,11 +21,13 @@ env:
   # substituters and trusted keys. Same posture as check.yml / fork-sync.yml.
   # This lane evaluates no repo Nix, but the ensure-tools step below shells out
   # to a bare `nix build nixpkgs#...`, which needs the features enabled.
+  # `max-jobs` and `cores` are deliberately absent: unlike every other knob
+  # they are not daemon-owned, and a client value silently overrides the
+  # fleet tuning. check.yml owns the explanation.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
-    max-jobs = auto
-    cores = 1
+    timeout = 600
 
 jobs:
   fuzz:

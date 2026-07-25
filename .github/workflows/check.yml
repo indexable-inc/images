@@ -50,10 +50,62 @@ env:
   # consults. As a restricted setting from the untrusted CI runner user it was
   # ignored regardless, emitting only a "not a trusted user" warning.
   #
-  # `max-jobs = auto` builds one derivation per core; `cores = 1` keeps each
-  # build single-threaded. The closure is wide, so parallelism comes from
-  # building many derivations at once, not threads inside one build.
+  # We also do NOT set `max-jobs` or `cores`, and this is the one place the
+  # "the daemon owns it" posture above needs stating explicitly, because those
+  # two are exactly the settings the daemon CANNOT refuse. Every other tuning
+  # knob travels in the trust-filtered overrides map and an untrusted runner
+  # UID gets an ignored-setting warning. `max-jobs` and `cores` instead travel
+  # as dedicated fields of the `SetOptions` wire message
+  # (libstore/remote-store.cc: they are written positionally, then explicitly
+  # `overrides.erase`d) and the daemon assigns them before it consults the
+  # trust flag at all (libstore/daemon.cc `ClientSettings::apply`). A client
+  # value always wins.
+  #
+  # So the `cores = 1` this file used to carry silently overrode the fleet's
+  # `cores = 16` (ix nix/modules/services/host/ci-dispatcher/module.nix) on
+  # every dispatcher host, and every build in this repo's CI compiled with
+  # NIX_BUILD_CORES=1. That is the regression ix#7249 already diagnosed and
+  # fixed daemon-side -- "when the graph narrows to its critical path a gate
+  # crawls, e.g. `ninja -j1` compiling nix-ix for ~50 min while max-jobs=32
+  # sat idle" -- and the fix was inert here for as long as this line existed.
+  #
+  # The old rationale ("the closure is wide, so parallelism comes from
+  # building many derivations at once, not threads inside one build") holds
+  # only while the graph is wide. Every realise ends narrow: the last roots
+  # build one at a time, and single-threaded is then the whole runtime. The
+  # measured cost was cache-push.yml, which went 18 hours without a single
+  # successful run, each attempt killed at the dispatcher's 190-min unit cap
+  # mid-realise -- while indexable-inc/ix's cache-warm lane, on the same
+  # runner pool and setting neither knob, finished in 20-60 min every run.
+  #
+  # `max-jobs` comes off for the same reason: `auto` reports the host's thread
+  # count (128), overriding the daemon's deliberate 32, and the surplus builds
+  # just block on the auto-allocate-uids pool lock.
   # https://nix.dev/manual/nix/2.28/advanced-topics/cores-vs-jobs
+  #
+  # `timeout = 600` caps ANY single derivation at ten minutes. Unlike the two
+  # settings above this one is deliberate, and unlike them the daemon does
+  # accept it from an untrusted UID -- `timeout`, `max-silent-time`,
+  # `poll-interval` and `connect-timeout` are the explicit exceptions to the
+  # trust filter (libstore/daemon.cc, the `trusted || name == ...` arm),
+  # because a client asking for LESS time cannot escalate anything.
+  #
+  # Ten minutes is a budget, not a guess about any particular package: with
+  # cores restored, an index package that needs longer than that is either
+  # stuck or wants investigating. The alternative is what this repo had until
+  # today -- one derivation quietly absorbing the entire runner lifetime with
+  # no line in the log naming it. A timeout instead fails that one root, names
+  # it in the realise annotation, and lets `--keep-going` finish the rest.
+  #
+  # To let a specific derivation run longer, do NOT add a per-derivation
+  # attribute for it. Anything of the `__buildTimeout` shape is part of the
+  # derivation, so it changes the output hash, so the package it is attached
+  # to stops matching the binary cache and rebuilds from source on every host
+  # forever -- and the packages that genuinely need more than ten minutes
+  # (rustc, ghc, chromium) are exactly the ones you most need to substitute.
+  # Raise this number for the lane, or use the name-pattern override the
+  # daemon consults, which is not part of any derivation.
+  #
   # `ca-derivations`: the rust workspace units default to
   # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating the
   # check / package sets resolves floating content-addressed derivations.
@@ -67,8 +119,7 @@ env:
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
-    max-jobs = auto
-    cores = 1
+    timeout = 600
 
 jobs:
   ci-budget:
