@@ -1,0 +1,40 @@
+---
+id: libffi-macos-27-ctypes
+postedAt: 2026-07-24T22:30:00-07:00
+title: "`import ctypes` works again on macOS 27"
+tags: [nix, darwin]
+links:
+  - label: "nixpkgs#541367: the assert"
+    href: https://github.com/NixOS/nixpkgs/issues/541367
+  - label: "nixpkgs#541990: the fix"
+    href: https://github.com/NixOS/nixpkgs/pull/541990
+---
+
+On macOS 27, every nixpkgs Python aborted the moment it imported `ctypes`:
+
+```
+Assertion failed: (trampoline_handle), function ffi_trampoline_table_alloc_block_invoke, file closures.c, line 258.
+```
+
+nixpkgs on Darwin builds Apple's libffi (`libffi-40`, from opensource.apple.com)
+instead of the upstream project. Apple's arm64 closure code cannot map
+executable memory on demand, so it `dlopen`s a companion
+`libffi-trampolines.dylib` holding pre-built trampoline pages, and nixpkgs links
+its own copy from `src/aarch64/trampoline.S`. That copy carried an
+`LC_DYLD_CHAINED_FIXUPS` header whose `seg_count` was larger than the number of
+segments in the binary. dyld on macOS 26 ignored the mismatch. dyld on macOS 27
+rejects the load with `chained fixups, seg_count exceeds number of segments`,
+`dlopen` returns NULL, and the `assert` fires.
+
+The symptom looked nothing like the cause. A `home-manager switch` died building
+h5py 3.15.1, which runs `build_ext` under a Python that imports `ctypes`, making
+it the first derivation in the closure to hit the abort. Nix prints the last 25
+log lines on failure, and all 25 were `copying h5py/tests/...` from the phase
+before, so the assert never appeared in the error at all. `nix log` on the drv
+has it.
+
+nixpkgs #541990 adds `-Wl,-no_fixup_chains` to the trampoline link, which drops
+the malformed header. The `nixpkgs` input here moves from `61b7c44c`
+(2026-07-17) to `e2587cae` (2026-07-23) to pick that up. Everything downstream
+follows `index/nixpkgs`, so the workstation config and the fleet inherit the fix
+from this one bump.
