@@ -181,3 +181,47 @@ The `programs.nh` override mattered as much as the package entry. nh puts its ow
 `nom` on PATH ahead of `home.packages`, so it had been rewired to the patched
 fork; leaving that override in place would have kept pulling GHC in even with the
 `home.packages` entry commented out.
+
+Dropping the fork did not remove GHC, though. `nix why-depends` puts it behind
+something else entirely:
+
+```
+home-manager-generation
+└── ix-mcp-fish-completions
+    └── ix-mcp
+        └── svelte-bundle
+            └── shellcheck-0.11.0
+                └── pandoc-cli-3.7.0.2
+                    └── ghc-9.10.3
+```
+
+shellcheck is Haskell and nixpkgs builds its man page with pandoc. Plain nixpkgs
+shellcheck substitutes as 14.4 KiB of fetches, so the question was never why we
+want Haskell. It was why ours does not match the cache.
+
+Comparing the two shellcheck derivations input by input answers it. They have the
+same five inputs and an identical `stdenv-darwin`; the divergence is one patch,
+ten levels down:
+
+```
+ShellCheck → Diff → QuickCheck → ghc → sphinx
+  → pytest-xdist → execnet → hatch-vcs → git-minimal → curl-8.21.0
+      +curl-8.21.0-fix-multi-wakeup.patch
+```
+
+GHC's build needs Sphinx, Sphinx pulls `git-minimal`, and `git-minimal` links
+curl. So the curl wakeup patch sits inside GHC's own build closure, and every
+Haskell package follows. The same patch reaches `rustc-bootstrap`,
+`cargo-bootstrap` and the cargo vendor tooling.
+
+That patch is worth keeping: curl 8.21.0 eats the `curl_multi_wakeup()` eventfd
+from `curl_multi_perform()` and can stall Nix's file-transfer worker for its full
+ten-second idle timeout. But its real cost is not the rebuild time. It is that we
+compile packages nixpkgs ships prebuilt, so their test suites run here, on macOS
+27, under whatever load the machine has. Six packages failed that way in one
+switch, and five of the six failed on a hardcoded time budget: 60 seconds for a
+git commit, 3 seconds for a CTest case, 70 milliseconds for an event-loop timer.
+None of them was broken.
+
+The lever that would make the patch cheap is index CI publishing these paths to
+cache.ix.dev, so the runner pays the bootstrap once instead of every workstation.

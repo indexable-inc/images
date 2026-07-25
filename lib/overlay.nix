@@ -112,6 +112,64 @@ let
         pyprev.ipython.overridePythonAttrs (old: {
           disabledTests = (old.disabledTests or []) ++ ["test_system_interrupt"];
         });
+
+      # inquirer3's tests/acceptance drives a real terminal through pexpect. All
+      # ten cases fail with `pexpect.exceptions.TIMEOUT` here while the other 147
+      # pass, so the library works and only the terminal-driving harness does
+      # not survive this sandbox.
+      #
+      # nixpkgs disables nothing in this recipe, meaning its own build passes and
+      # we would never have run these tests at all if we were substituting. We
+      # build it because the curl patch above detaches this tree from
+      # cache.nixos.org, which is the wider cost of that patch: packages nixpkgs
+      # ships prebuilt get compiled here, and their suites then run on macOS 27
+      # under whatever load the machine has.
+      inquirer3 = assert lib.assertMsg (pyprev.inquirer3.version == "0.6.1") ''
+        recheck the inquirer3 disabled tests: expected nixpkgs inquirer3 0.6.1,
+        got ${pyprev.inquirer3.version}.'';
+        pyprev.inquirer3.overridePythonAttrs (old: {
+          disabledTestPaths = (old.disabledTestPaths or []) ++ ["tests/acceptance"];
+        });
+
+      # uvloop's suite does not survive a loaded machine, and naming the cases
+      # does not converge. First run: test_call_at in both TestBaseUV and
+      # TestBaseAIO, which assert a timer fires within 70ms
+      # (`assertLess(finished - started, 0.07)`), measured at 0.162 and 0.079.
+      # Skipping those two produced a different failure on the next run,
+      # test_process_delayed_stdio__not_paused__no_stdin, which races a subprocess
+      # against its stdio. Both are latency budgets in an event loop, so each run
+      # under load picks a different victim out of 442.
+      #
+      # So drop the suite for this package rather than grow a list forever. The
+      # coverage is not ours in the first place: nixpkgs CI runs it and
+      # cache.nixos.org ships the result, and we only compile uvloop here because
+      # the curl patch above detached this tree from that cache. A suite that
+      # reports a different failure each run produces no signal we would act on.
+      uvloop = assert lib.assertMsg (pyprev.uvloop.version == "0.22.1") ''
+        recheck skipping the uvloop suite: expected nixpkgs uvloop 0.22.1, got
+        ${pyprev.uvloop.version}.'';
+        pyprev.uvloop.overridePythonAttrs (_: {
+          doCheck = false;
+        });
+    });
+
+  # graphite2 pins several CTest cases to `TIMEOUT 3` in its tests/*/CMakeLists
+  # (comparerenderer and examples). Three seconds does not survive a busy
+  # machine: five of 91 were killed at 12 to 27 seconds while the other 86
+  # passed. CTest's `--timeout` cannot help, because an explicit per-test TIMEOUT
+  # property wins over the command-line default, so raise the property itself.
+  #
+  # Like the python fixes above, we only run these tests because the curl patch
+  # detaches this tree from cache.nixos.org; nixpkgs ships graphite2 prebuilt.
+  graphite2 = assert lib.assertMsg (prev.graphite2.version == "1.3.15") ''
+    recheck the graphite2 test timeouts: expected nixpkgs graphite2 1.3.15, got
+    ${prev.graphite2.version}.'';
+    prev.graphite2.overrideAttrs (old: {
+      postPatch =
+        (old.postPatch or "")
+        + ''
+          find tests -name CMakeLists.txt -exec sed -i 's/TIMEOUT 3)/TIMEOUT 300)/g' {} +
+        '';
     });
 
   # Read the target system from `prev`, not `final`: this overlay's attribute
@@ -166,7 +224,7 @@ in
     entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)
   )
   // {
-    inherit curl pythonPackagesExtensions;
+    inherit curl graphite2 pythonPackagesExtensions;
 
     # Default Temurin JRE for repo-owned package sets. The major lives in
     # `lib/languages/jvm-defaults.nix`, shared with `ix.languages.{java,scala}`
