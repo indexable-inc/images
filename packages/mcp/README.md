@@ -209,6 +209,32 @@ set `IX_MCP_AUTO_DASHBOARD=1` to restore the old per-server auto-spawn.
   needs, reading files included, is reachable from `python_exec` and the bundled
   modules.
 
+## Notification sources
+
+`serve` (stdio only -- channels are stdio-only) also runs a small set of
+default-on notification sources
+([`ix_notebook_mcp/notifications/`](./ix_notebook_mcp/notifications)): each one
+polls a cheap host interface on its own low cadence and pushes noteworthy
+events into the connected agent session over the same channel `pr_watch` and
+the kernel's `notify()` use, so the agent's context improves without it asking.
+Shipped sources:
+
+- **`imessage`** (macOS, default on, every 5s): every incoming iMessage/SMS,
+  read from `~/Library/Messages/chat.db` (read-only, WAL-aware). The baseline
+  is the newest message at startup, so history never replays. Reading `chat.db`
+  needs **Full Disk Access** for the process running `ix-mcp`; without it the
+  source logs one line naming the remedy and disables itself.
+- **`system`** (macOS + Linux, default on, every 60s): adverse host events --
+  low disk space, memory pressure (`sysctl kern.memorystatus_vm_pressure_level`
+  on macOS, PSI `/proc/pressure/memory` on Linux), thermal throttling
+  (`pmset -g therm`), OOM kills (`/proc/vmstat` `oom_kill`), and runaway load.
+  Edge-triggered: one event when a condition begins, not one per tick.
+
+`IX_MCP_NOTIFY=0` turns the framework off; `IX_MCP_NOTIFY_IMESSAGE=0` /
+`IX_MCP_NOTIFY_SYSTEM=0` turn one source off. Sources are failure-isolated: a
+broken one logs once and stops, and can never take down the server or its
+siblings.
+
 ## Pinned interpreter and bundled modules
 
 The kernel runs on the same pinned interpreter as the server, so code can

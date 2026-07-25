@@ -578,7 +578,7 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
 
 
 async def _run(cfg: Config) -> None:
-    from . import dashboard, mesh, tools, transport
+    from . import dashboard, mesh, notifications, tools, transport
     from .kernel import Kernel, restore_with_lock, set_kernel
 
     kernel = Kernel(cfg)
@@ -602,6 +602,11 @@ async def _run(cfg: Config) -> None:
     (runtime_dir() / "dashboard-url").write_text(url)
     tools.set_dashboard_url(url)
     mesh_runner = await mesh.start(cfg, tools.session_names, url)
+    # Default-on host notification sources (incoming iMessages on macOS,
+    # adverse system events): broadcast onto the mailbox outbox, delivered by
+    # the stdio channel pump. Never load-bearing -- start() skips with one
+    # stderr line instead of raising (see ix_notebook_mcp.notifications).
+    notifications_task = notifications.start(cfg)
     print(f"[ix-mcp] data API: {cfg.dashboard_url()}  (Weave UI: {url})", file=sys.stderr, flush=True)
     if cfg.session_path is not None:
         print(f"[ix-mcp] session file: {cfg.session_path}", file=sys.stderr, flush=True)
@@ -614,6 +619,8 @@ async def _run(cfg: Config) -> None:
         else:
             await transport.serve()
     finally:
+        if notifications_task is not None:
+            notifications_task.cancel()
         if restore_task is not None and not restore_task.done():
             restore_task.cancel()
         if cfg.session_path is not None:
