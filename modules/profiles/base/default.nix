@@ -1,8 +1,12 @@
 # Base runtime profile.
 #
-# Auto-enabled by `lib/image/oci-layer.nix`. Ships cross-cutting CLI that should
-# be available on every VM for debugging and introspection. Image-specific
-# runtime dependencies still belong in the image or service that needs them.
+# Auto-enabled by `lib/image/oci-layer.nix`. The bar: the first ten minutes of
+# a person or agent in a fresh VM must just work. That means the consensus
+# baseline every competitor's default sandbox ships (VCS, downloaders,
+# archivers, a Python and Node runtime, a C toolchain) plus the cross-cutting
+# debugging and introspection CLI. Image-specific runtime dependencies still
+# belong in the image or service that needs them; sealed appliances disable
+# the profile to drop the interactive stack.
 {
   config,
   ix,
@@ -492,9 +496,65 @@ in {
     # setup. Zsh is the platform default user shell (see
     # lib/image/platform.nix); Home Manager owns its root-user config
     # and the login-time workspace behavior above.
-    programs = {
-      zsh.enable = true;
-      fish.enable = true;
+    # Every command-not-found points at the escape hatch: with cache.ix.dev
+    # warm, `nix run nixpkgs#<tool>` materializes most tools in about a
+    # second, but nothing surfaces that to someone staring at a bare
+    # "command not found". One hint line per shell; no auto-run (executing
+    # an unreviewed store path on a typo is not a default anyone wants).
+    programs = let
+      hint = tool: "hint: 'nix run nixpkgs#${tool}' runs it without installing (warm cache, about a second); 'nix shell nixpkgs#${tool}' puts it on PATH.";
+    in {
+      zsh = {
+        enable = true;
+        interactiveShellInit = ''
+          command_not_found_handler() {
+            print -u2 "zsh: command not found: $1"
+            print -u2 "${hint "$1"}"
+            return 127
+          }
+        '';
+      };
+      fish = {
+        enable = true;
+        interactiveShellInit = ''
+          function fish_command_not_found
+            echo "fish: Unknown command: $argv[1]" >&2
+            echo "${hint "$argv[1]"}" >&2
+          end
+        '';
+      };
+      bash.interactiveShellInit = ''
+        command_not_found_handle() {
+          echo "bash: $1: command not found" >&2
+          echo "${hint "$1"}" >&2
+          return 127
+        }
+      '';
+
+      # nixpkgs' channel-DB command-not-found defines these same three
+      # handler functions when enabled; its default is only false here
+      # because a flake-pinned nixpkgs tarball lacks programs.sqlite.
+      # Pin it off so the handlers above stay the single owner instead
+      # of colliding by module-include order.
+      command-not-found.enable = false;
+
+      # git for every user, not just root: the curated per-user config
+      # (delta, mergiraf, aliases) stays in Home Manager above, but the
+      # binary itself must not depend on whose profile is on PATH --
+      # DynamicUser services and any future non-root user get git too.
+      # The system gitconfig also carries a fallback identity so the
+      # first `git commit` in a fresh VM never dies with "unable to
+      # auto-detect email address"; system scope is git's lowest
+      # precedence, so any real identity (global or repo-local) wins.
+      git = {
+        enable = true;
+        config = {
+          user = {
+            name = "ix";
+            email = "root@ix.local";
+          };
+        };
+      };
 
       # Neovim is wired through the NixOS module because the wrapper
       # bakes the curated config into the binary itself, so XDG never
@@ -598,6 +658,10 @@ in {
           bat
           bpftrace
           btop
+          # dig/nslookup for DNS debugging; `host` alone (shipped via
+          # NixOS defaults) answers "does it resolve" but not "from which
+          # server, with which record details".
+          dnsutils
           # Stack unwinder and ELF/DWARF inspector. `eu-stack` resolves
           # stripped binaries against separate debuginfo, `eu-readelf`
           # gives a saner view of section/note contents than `readelf`,
@@ -607,7 +671,14 @@ in {
           eza
           fd
           file
+          # C toolchain: `pip install` of any package with a native
+          # extension, node-gyp, and every "./configure && make" README
+          # assume cc + make exist. 5 of 7 competitor default images ship
+          # one; a VM that can't build a C extension fails the first
+          # real Python or Node session.
+          gcc
           gdb
+          gnumake
           # gnutar, gzip, and zstd ride along so any VM switched once stays
           # switchable: the `ix apply` source upload streams a tarball through
           # `tar -x -I zstd` inside the guest, and these binaries are not
@@ -634,11 +705,24 @@ in {
           nh
           nix-output-monitor
           nix-tree
+          # Default language runtimes. python3 and node are the two
+          # interpreters "run this script" instructions assume exist
+          # (both ship in 5 of 7 competitor default sandboxes); uv is
+          # the package/venv path for Python that doesn't fight the
+          # read-only store the way bare pip does.
+          nodejs
+          python3
+          uv
+          # TLS/cert debugging (s_client, x509) plus the digest/keygen
+          # one-liners every deploy doc reaches for.
+          openssl
           # Walks DWARF/BTF type info to pretty-print kernel and userspace
           # structs out of core dumps, /proc/kcore, or VM RAM memfds. The
           # canonical tool for "I have raw memory and I need to know what
           # struct lives at this offset", which gdb/lldb both fumble.
           pahole
+          # killall/pstree muscle memory from every other Unix box.
+          psmisc
           # drgn complements pahole: pahole answers "what is the layout of
           # struct foo?", drgn lets you start from a typed root and walk
           # the live value graph in Python (dereference pointers, follow
@@ -648,16 +732,35 @@ in {
           drgn
           pv
           ripgrep
+          # The `sqlite3` CLI: half of local app state (browsers, package
+          # managers, our own atuin history) is a SQLite file, and
+          # inspecting one without the CLI means writing a script.
+          sqlite
           strace
           tcpdump
+          # zellij (below) is the curated multiplexer, but tmux is the
+          # one operators and agent recipes actually type; both are tiny.
+          tmux
+          tree
           # Complements ripgrep with what it lacks: boolean queries
           # (-%), fuzzy match (-Z), and searching inside archives and
           # compressed files (-z).
           ugrep
+          # Half the internet distributes .zip; gnutar/zstd cover the
+          # rest of the archive formats but reject zip, which turns a
+          # plain `curl -LO <github archive>` into a dead end.
+          unzip
+          # wget rides along for the copy-paste commands that assume it;
+          # curl comes from NixOS' core packages.
+          wget
+          # Hex dump/reverse for quick binary pokes without pulling
+          # a full vim install (nvim's wrapper does not expose xxd).
+          xxd
           # Pane and tab multiplexer for one session. Connection survival
           # across SSH drops is handled by ix itself (AGENTS.md "VM
           # assumptions"), so zellij is shipped for splits, not reattach.
           zellij
+          zip
           zstd
           ;
       })

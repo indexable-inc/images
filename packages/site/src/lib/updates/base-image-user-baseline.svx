@@ -1,0 +1,28 @@
+---
+id: base-image-user-baseline
+postedAt: 2026-07-24T18:55:00-07:00
+title: "Every VM now ships the tools people actually reach for first"
+tags: [interesting, images, base-profile]
+links:
+  - label: PR 4156
+    href: https://github.com/indexable-inc/index/pull/4156
+---
+
+A fresh `ix/base` VM could walk a kernel struct out of a core dump but
+could not run `python3 -c 'print(1)'` or extract a `.zip`. The base
+profile was written for debugging appliances; `ix run`'s default image
+is where people and agents actually land.
+
+Every VM now carries the consensus baseline of the sandbox market
+(surveyed across E2B, Daytona, Modal, Codespaces, Vercel, and
+Cloudflare defaults): `git` on the system PATH for every user, not
+just root's profile, plus `python3`, `node`, `uv`, `gcc`, `make`,
+`unzip`, `zip`, `wget`, `dig`, `sqlite3`, `openssl`, `tree`, `tmux`,
+and friends.
+
+Two paper cuts went with it. The first `git commit` no longer dies on
+identity auto-detection: `/etc/gitconfig` carries a lowest-precedence
+fallback identity that any real `git config` wins over. And a missing
+command in bash, zsh, or fish now prints the escape hatch instead of a
+bare error: `nix run nixpkgs#<tool>` resolves from the warm
+`cache.ix.dev` in about a second, which was true before but invisible.

@@ -1,6 +1,7 @@
-# Default ix environment base: agent CLIs plus a normal build toolchain.
+# Default ix environment base: agent CLIs plus the dev-only build extras.
 # The auto-enabled base profile supplies version control, editors, the nushell
-# workspace wrapper, debuggers, tracing tools, and archive utilities.
+# workspace wrapper, debuggers, tracing tools, archive utilities, the default
+# language runtimes (python3, node, uv), and the C toolchain (gcc, make).
 {
   ix,
   pkgs,
@@ -15,17 +16,13 @@
       # surface; `chromium` is the actual browser it drives.
       agent-browser
       chromium
-      # Build toolchain. Most ecosystems lean on cmake / make / ninja and
-      # pkg-config; rustup keeps the toolchain pinnable per-project.
+      # Build-system layer above the base profile's cc + make: cmake /
+      # ninja / pkg-config for the ecosystems that generate their builds;
+      # rustup keeps the Rust toolchain pinnable per-project.
       cmake
-      gcc
-      gnumake
       ninja
       pkg-config
       rustup
-      # Default language runtimes that show up across most dev sessions.
-      nodejs
-      python3
       ;
   };
 }
