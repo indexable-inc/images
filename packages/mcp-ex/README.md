@@ -52,7 +52,7 @@ are the discovery surface, generated live from module docs.
 
 ## Tools
 
-The MCP surface is exactly three tools; everything else the Python server
+The MCP surface is exactly one tool; everything else the Python server
 exposed as tools is an in-language callable, pre-aliased in every cell like
 `Jobs` (the server instructions delivered at MCP initialize teach the same
 list):
@@ -60,7 +60,6 @@ list):
 | tool | what it does |
 |---|---|
 | `exec` | run a cell; budget-then-background |
-| `session_set_name` / `topic_set` | label this session's runs in the action log |
 
 | in-cell callable | what it does |
 |---|---|
@@ -81,8 +80,8 @@ path that used to justify out-of-band tools needs none.
 
 Every `tools/call` lands in a local SQLite action log
 (`~/.local/state/ix-mcp-ex/actions.db`): a `sessions` row per server
-instance (created lazily on first use), a `topics` row per `topic_set` call
-(a timeline -- repeated names make new rows), and an `actions` row per call
+instance (created lazily on first use), a `topics` row per topic (a
+timeline -- repeated names make new rows), and an `actions` row per call
 referencing both.
 
 ## Why we left Python

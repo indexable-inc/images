@@ -224,7 +224,7 @@ defmodule IxMcp.ActionLogTest do
     end
   end
 
-  test "one server instance is one session; topic_set is a timeline, not a dictionary" do
+  test "one server instance is one session; a topic is a timeline, not a dictionary" do
     # Prime the lazy session row so the count below is stable regardless of
     # which test in this suite touched the global log first.
     %{session_id: session_id} = IxMcp.Session.ids()
