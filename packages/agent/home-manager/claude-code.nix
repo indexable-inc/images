@@ -88,6 +88,7 @@
   #   pluginDirs = [ ];  option pluginDirs; --plugin-dir=<dir> flags: namespaced plugin bundles (the house plugin rides this layer)
   #   primaryCheckouts = <"/home/*/index", "/home/*/ix">;  option primaryCheckouts; globs the PreToolUse worktree guard denies edits under
   #   personalStartupContext = false;  option personalStartupContext; Andrew-only startup context hooks
+  #   alwaysOnReview = false;  arms the PostToolUse edit logger and Stop review gate
   #   extraSessionStart = [ ];  option extraSessionStart; SessionStart commands ({ package, exeName, args, timeout }) whose stdout becomes session context (index#3849)
   #   repoPackages = { };  plumbing: sibling repo packages threaded by lib/packages.nix, not a config knob
   #   mcpServers = <ix.mcp default pair: index + exa>;  option defaultMcpServers; baked --mcp-config layer (CLI layers merge, additions only)
