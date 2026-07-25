@@ -1305,8 +1305,8 @@
   # the shared workspace, so harvest these too -- otherwise a consumer
   # substituting the package output re-vendors/re-renders that graph at eval
   # and hits the #1890 trap on drvs it cannot build (Darwin for codex;
-  # pre-#4125 scaffolded `ix init` evals for the wasm converter, #4127; new
-  # scaffolds read the committed `ix2nix.wasm` and never force that graph).
+  # scaffolded `ix init` evals for the wasm converter, #4127 -- and, since
+  # the converter went back to IFD on 2026-07-25, EVERY `.ix` eval).
   # Generic over the whole `packageSet` (crossPackages included), so any
   # package exposing the passthru joins with no hand-kept list.
   workspacePackageIfdRoots = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
@@ -1696,16 +1696,6 @@
       lint-fixed = lintFix.fixed;
       lint-fix-patch = lintFix.patch;
       site-dev = site.passthru.devServer;
-      # Regenerates the COMMITTED `.ix` converter (lib/ix2nix.wasm) that
-      # `lib.importIxWasm` loads with zero mid-eval store realization; the
-      # `ix2nix-wasm-fresh` check byte-compares the file against the built
-      # package and names this command when it is stale.
-      ix2nix-wasm-regen = ix.writePythonApplication pkgs {
-        name = "ix2nix-wasm-regen";
-        src = paths.tools.ix2nixWasmRegen;
-        runtimeInputs = [pkgs.git];
-        meta.description = "Rebuild .#ix2nix-wasm (x86_64-linux) and copy the artifact to lib/ix2nix.wasm";
-      };
       update-mods = updateMods;
       update-loaders = updateLoaders;
       inherit update;

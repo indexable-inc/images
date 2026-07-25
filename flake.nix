@@ -22,7 +22,8 @@
     # .#checks.<sys>.<name>`) picks it up from one source of truth.
     #
     # `wasm-builtin`: `.ix` modules convert in-eval through `builtins.wasm`
-    # over the committed `lib/ix2nix.wasm` (no IFD, #4136);
+    # over the `ix2nix-wasm` package output (IFD as of 2026-07-25, replacing
+    # the committed `lib/ix2nix.wasm` of #4136);
     # the nix-ix client gates that builtin behind this feature. A client
     # without the feature warns "unknown experimental feature" and then
     # throws an actionable error only if the eval actually imports a `.ix`
@@ -430,7 +431,6 @@
       # Repo maintenance scripts and package-owned source updaters.
       tools = {
         cveScan = ./packages/cve-scan/cve-scan.py;
-        ix2nixWasmRegen = ./packages/maintainers/scripts/ix2nix-wasm-regen.py;
         ixShellSyncIgnored = ./packages/maintainers/scripts/ix-shell-sync-ignored.py;
         mcSource = ./packages/minecraft/tools/mc-source.nu;
         updateSounds = ./packages/minecraft/tools/update-sounds.nu;
@@ -440,6 +440,13 @@
     };
 
     ix = import ./lib {
+      # The `.ix` converter, resolved through IFD instead of a committed
+      # artifact. A function, not a value, so this stays lazy: `perSystem`
+      # below takes `ix`, so a strict reference here would be a cycle. Nothing
+      # on the ix2nix-wasm build path imports a `.ix` module, so forcing the
+      # converter forces only `ix.cargoUnit` / `ix.rustWorkspace` /
+      # `ix.languages`, never `importIxWasm` again.
+      ix2nixWasmFor = system: perSystem.${system}.packages.ix2nix-wasm;
       inherit
         self
         nixpkgs
