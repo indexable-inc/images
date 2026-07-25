@@ -98,28 +98,67 @@ env:
     fallback = true
 
 jobs:
-  # Split out of `push` so the shards do not each pay for it, and so a darwin
-  # eval regression is one red job rather than the same warning repeated N
-  # times. Eval is pure: it needs no darwin builder. The label deliberately
-  # does NOT end in `-cache-push`, so this job is refused the ix-public push
-  # credential -- it realises nothing and has no business holding a
-  # fleet-trust token.
-  darwin-eval:
-    runs-on: ["${{ format('ix-ci-run-{0}-{1}-darwin-eval', github.run_id, github.run_attempt) }}"]
-    # Pure eval of one attrset; 27s observed. 20m is a wide floor.
-    timeout-minutes: 20
+  push:
+    name: push (shard ${{ matrix.shard }})
+    strategy:
+      # One slow or broken shard must not cancel the others: every shard that
+      # completes publishes its own roots, and the next run's probe skips them.
+      # Partial progress is the property that makes this lane converge.
+      fail-fast: false
+      matrix:
+        # THREE shards, and the ceiling is not the root count -- it is how many
+        # of these the fleet can hold at once. The dispatcher classifies EVERY
+        # indexable-inc/index job as `large` unconditionally (ix
+        # crates/ci/dispatcher/src/handler/workflow_job.rs `classify`), and the
+        # large class reserves 128 GiB of a host's 176 GiB runner slice. So one
+        # index job per host, five dispatcher hosts, five index jobs fleet-wide
+        # -- shared with Check (the gating lane), CVE scan, and Update content.
+        #
+        # A first attempt used six shards plus a separate darwin-eval job. That
+        # is seven large-class jobs for a pool of five, so they could not
+        # co-schedule and they crowded out Check. Three leaves room for the
+        # gate and still triples the old single-runner parallelism.
+        #
+        # The reservation is also ~5x too big for this lane specifically: the
+        # large class is sized from index's flake-check evaluator peaking at
+        # 94.1 GiB, but a cache-push shard evaluates with
+        # `--max-memory-size 6144` and then realises, and realisation happens
+        # in the nix-daemon cgroup rather than the runner unit. Teaching
+        # `classify` to route `-cache-push` to `small` would let this go much
+        # wider; until then the fleet, not the work, sets this number.
+        #
+        # The count is read from `strategy.job-total` below rather than
+        # duplicated, so this list is the only edit needed to rebalance.
+        shard: [0, 1, 2]
+    # Warm-store pool shared with check.yml. The dispatcher recognises the
+    # `-cache-push` suffix and attaches the push-only ix-public token as a
+    # per-job systemd credential (spawn.rs ix_public_push_eligible). The shard
+    # index sits before that suffix; see the header note.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-shard{2}-cache-push', github.run_id, github.run_attempt, matrix.shard) }}"]
+    # Under the dispatcher's 190-min runnerMaxRuntimeSecs (see the header), so
+    # an overrun fails as a job timeout naming the shard instead of a bare
+    # exit 143. 170 leaves 20 min of cleanup slack against the unit cap.
+    timeout-minutes: 170
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
       - name: Bootstrap patched Nix client
         uses: ./.github/actions/bootstrap-patched-nix
 
       # Darwin eval guard (#3587). Deleting the hosted-mac lane removed the
       # only thing in CI that instantiated cachePushRoots.aarch64-darwin, so a
       # package that stops EVALUATING on darwin would next be discovered by a
-      # human on a mac. Nothing is realised, and error rows are reported
-      # naming the attr.
+      # human on a mac. Eval is pure: it needs no darwin builder, nothing is
+      # realised, and error rows are reported naming the attr.
+      #
+      # On shard 0 only, and inside the shard rather than as its own job. It
+      # is 27 seconds of evaluation, and a separate job would reserve a whole
+      # 128 GiB large-class slot -- a fifth of the fleet's index capacity --
+      # to spend them (see the matrix note above). Running it on one shard
+      # gets the guard without paying for it N times or taking a host.
       #
       # The count of genuinely native (non-cross-aliased) rows is the #3586
       # ratchet: it should only ever shrink as packages gain `cross = true`.
@@ -132,6 +171,7 @@ jobs:
       # real numbers; commit them as budgets and turn both counts into hard
       # gates then (#3586).
       - name: Evaluate cachePushRoots.aarch64-darwin
+        if: matrix.shard == 0
         shell: bash
         run: |
           set -euo pipefail
@@ -157,36 +197,6 @@ jobs:
             "$jq" -rs '.[] | select(.error != null) | "::warning::darwin eval failed: \(.attr): \(.error | split("\n")[0])"' "$rows"
             echo "::warning::cache-push: ${errors} root(s) in cachePushRoots.aarch64-darwin do not evaluate"
           fi
-
-  push:
-    name: push (shard ${{ matrix.shard }})
-    strategy:
-      # One slow or broken shard must not cancel the others: every shard that
-      # completes publishes its own roots, and the next run's probe skips them.
-      # Partial progress is the property that makes this lane converge.
-      fail-fast: false
-      matrix:
-        # Six shards over five dispatcher hosts. The count is read from
-        # `strategy.job-total` below rather than duplicated, so changing this
-        # list is the only edit needed to rebalance.
-        shard: [0, 1, 2, 3, 4, 5]
-    # Warm-store pool shared with check.yml. The dispatcher recognises the
-    # `-cache-push` suffix and attaches the push-only ix-public token as a
-    # per-job systemd credential (spawn.rs ix_public_push_eligible). The shard
-    # index sits before that suffix; see the header note.
-    runs-on: ["${{ format('ix-ci-run-{0}-{1}-shard{2}-cache-push', github.run_id, github.run_attempt, matrix.shard) }}"]
-    # Under the dispatcher's 190-min runnerMaxRuntimeSecs (see the header), so
-    # an overrun fails as a job timeout naming the shard instead of a bare
-    # exit 143. 170 leaves 20 min of cleanup slack against the unit cap.
-    timeout-minutes: 170
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      # Underscore digit separators: every nix invocation that evaluates this
-      # tree must go through the patched client (see the action's description).
-      - name: Bootstrap patched Nix client
-        uses: ./.github/actions/bootstrap-patched-nix
 
       - name: Publish this shard's packages to cache.ix.dev
         id: publish
@@ -426,8 +436,8 @@ jobs:
   # so a hole in any slice skips this job and holds the pin. Run 29295767529
   # concluded success while its own log recorded the whole codex closure
   # failing to realise, and the pin advanced over the hole onto every darwin
-  # consumer (#3195, #3188). `darwin-eval` is deliberately NOT in `needs`: it
-  # is report-only and realises nothing, so it must never hold the pin.
+  # consumer (#3195, #3188). The darwin eval guard rides inside shard 0 and is
+  # report-only, so it can warn without ever holding the pin.
   advance-cache-ready:
     needs: [push]
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-advance-cache-ready', github.run_id, github.run_attempt) }}"]
