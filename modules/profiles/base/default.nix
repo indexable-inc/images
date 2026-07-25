@@ -409,7 +409,26 @@ in {
             };
             fetch = {
               prune = true;
-              writeCommitGraph = true;
+              # NOT writeCommitGraph. It writes a *split* commit-graph, adding
+              # one small increment per fetch on top of the existing chain, and
+              # nothing here ever compacts that chain: `maintenance.auto` is
+              # false below (deliberately, see its comment), and
+              # `maintenance.repo` covers only registered repos. So the chain
+              # grows one file per fetch without bound, and a chain that grows
+              # without bound eventually breaks.
+              #
+              # Observed 2026-07-25 on ~/.config/nix at five chained graphs:
+              # every `git pull --rebase` died with `fatal: invalid commit
+              # position. commit-graph is likely corrupt`, while `git fsck
+              # --connectivity-only` passed, so the object store was fine and
+              # only the cache was bad. Deleting the chain did not stick,
+              # because the next fetch immediately wrote a fresh increment.
+              # `git commit-graph write --reachable --split=replace` collapses
+              # it back to one verified file and is the manual repair.
+              #
+              # `gc.writeCommitGraph` below still keeps a graph current, and gc
+              # rewrites it whole rather than appending, so the read speedup
+              # survives without the unbounded chain.
               negotiationAlgorithm = "skipping";
               parallel = 0;
             };
