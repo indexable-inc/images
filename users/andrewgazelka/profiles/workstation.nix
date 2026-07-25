@@ -781,7 +781,16 @@ in {
       # '')
       nix-index # find which package provides a given file/binary (`nix-locate`)
       nvd # diff Nix store paths and profile generations after rebuilds
-      indexPkgs.nix-output-monitor # `nom` patched so nix-derivation parses content-addressed derivations (index repo builds them); upstream nixpkgs nom spams DerivationParseError. Bump with `nix flake update index`
+      # indexPkgs.nix-output-monitor  # the CA-aware `nom` fork costs a full GHC
+      # bootstrap. It patches haskellPackages (forked nix-derivation), which
+      # invalidates the entire cached Haskell set, so a nixpkgs bump rebuilds ghc
+      # plus ~950 Haskell derivations from source with no cache hit anywhere:
+      # cache.nixos.org has the unpatched set and cache.ix.dev only carries revs
+      # index CI has already built. The base profile already ships the plain
+      # nixpkgs nix-output-monitor, which substitutes as one 8.9 MiB download, so
+      # `nom` and `nh` still work. The cost is DerivationParseError noise on the
+      # content-addressed derivations this repo builds. Re-enable when the fork
+      # is worth a ghc build.
       # indexable-inc/index#1711: eval needs the x86_64-linux IFD output
       # (cargo-units.nix); when cache.ix.dev lacks it, copy it from the fleet:
       # `nix copy --no-check-sigs --from ssh-ng://vin-compute-1 <path from the eval error>`
@@ -1399,12 +1408,13 @@ in {
   programs.nh =
     {
       enable = true;
-      # nh wraps its own nom onto PATH ahead of home.packages, so it bypasses the
-      # CA-patched nom from index (see the home.packages entry) and spams
-      # `DerivationParseError "string"`; rewire the wrapper to the patched one.
-      package = pkgs.nh.override {
-        inherit (indexPkgs) nix-output-monitor;
-      };
+      # nh wraps its own nom onto PATH ahead of home.packages. It used to be
+      # rewired to the CA-patched nom from index so it would stop spamming
+      # `DerivationParseError "string"`, but that override is what dragged a full
+      # GHC bootstrap into this closure (see the commented home.packages entry),
+      # and overriding the package here would keep pulling it in even with that
+      # entry gone. Take nh's stock nom, which substitutes from the binary cache,
+      # and accept the parse noise on content-addressed derivations.
     }
     # The default flake lives at the workstation checkout path; other hosts have no
     # checkout here, so leave nh without a default flake there.

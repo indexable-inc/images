@@ -160,3 +160,24 @@ Four failures came out from behind the libffi fix, and none of them were caused
 by it. A stale dependency ceiling, a sandbox without loopback, and two tests with
 wall-clock budgets were all sitting in the closure already. Each became visible
 only when the one in front of it stopped aborting the build first.
+
+Behind all four sat the actual cost. With the failures cleared, 947 of the 1205
+remaining derivations turned out to be Haskell: GHC 9.10.3 itself, then
+QuickCheck, tasty, HUnit, prettyprinter, optparse-applicative, ghc-exactprint.
+Nothing was substitutable, because `packages/nix-output-monitor` patches
+`haskellPackages` with a forked `nix-derivation`, and patching the set
+invalidates all of it. cache.nixos.org has the unpatched set and cache.ix.dev
+only carries revs index CI has already built, so a nixpkgs bump means compiling a
+Haskell toolchain from source on the workstation.
+
+That fork exists for a small reason: upstream `nom` cannot parse
+content-addressed derivations and spams `DerivationParseError` on this repo's
+builds. A GHC bootstrap per nixpkgs bump is a steep price for quieter build
+output, so the workstation now takes the plain nixpkgs `nix-output-monitor` that
+the base profile already ships, which substitutes as a single 8.9 MiB download.
+`nom` and `nh` keep working and the parse noise comes back.
+
+The `programs.nh` override mattered as much as the package entry. nh puts its own
+`nom` on PATH ahead of `home.packages`, so it had been rewired to the patched
+fork; leaving that override in place would have kept pulling GHC in even with the
+`home.packages` entry commented out.
