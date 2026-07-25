@@ -626,12 +626,21 @@
   #
   # Each platform build minifies the expression differently, so the anchor is
   # keyed by system. Every entry was counted exactly once against the pinned
-  # 2.1.215 binaries (index#3788):
+  # 2.1.220 binaries, whose SRI hashes were checked against manifest.json first
+  # so the counts came from the same bytes the fetcher pins.
+  #
+  # 2.1.215 -> 2.1.220 reminified three of the four, which is exactly what the
+  # `expect` gate exists to catch (it failed with "COUNT DRIFT ... expected 1,
+  # found 0" rather than silently not patching): En -> xn, Sn -> xn, vn -> Hn
+  # on x86_64-linux and vn -> An on aarch64-linux. Note the two Linux anchors
+  # were identical under 2.1.215 and are NOT under 2.1.220, so they cannot be
+  # collapsed into one entry. Only the callee names move; the argument order
+  # (`_(y(...))` on darwin, `y(_(...))` on linux) is unchanged.
   devChannelsGateAnchor = {
-    aarch64-darwin = ''if(!g()||En()!=="firstParty"||_(y("policySettings")))'';
-    x86_64-darwin = ''if(!g()||Sn()!=="firstParty"||_(y("policySettings")))'';
-    x86_64-linux = ''if(!g()||vn()!=="firstParty"||y(_("policySettings")))'';
-    aarch64-linux = ''if(!g()||vn()!=="firstParty"||y(_("policySettings")))'';
+    aarch64-darwin = ''if(!g()||xn()!=="firstParty"||_(y("policySettings")))'';
+    x86_64-darwin = ''if(!g()||xn()!=="firstParty"||y(_("policySettings")))'';
+    x86_64-linux = ''if(!g()||Hn()!=="firstParty"||y(_("policySettings")))'';
+    aarch64-linux = ''if(!g()||An()!=="firstParty"||y(_("policySettings")))'';
   };
 
   devChannelsGatePatch = [
