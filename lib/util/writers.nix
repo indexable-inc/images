@@ -64,7 +64,19 @@
       ]
       ++ extraSearchPathArgs
       ++ ["${src}"];
-    ruffAnnPhase = "${lib.getExe' pkgs.ruff "ruff"} check ${ruffAnnArgs} ${lib.escapeShellArg "${src}"}";
+    # `--no-cache`: ruff writes `.ruff_cache` beside the files it checks, and
+    # `src` here is a store path, so without it every Python writer dies on
+    # "Failed to initialize cache at /nix/store/<hash>-source/.ruff_cache:
+    # Permission denied (os error 13)". The store is read-only; there is
+    # nowhere for the cache to go and nothing to gain from it in a sandbox
+    # that runs once. The repo-wide `ruff` lint stage already passes this for
+    # the same reason (lib/per-system.nix).
+    #
+    # It stayed hidden because cache-push is the only thing in CI that builds
+    # these derivations, and it could not finish a realise at all until
+    # 2026-07-25 (ENG-9819) while reporting failed roots at warning level. The
+    # first run that got through named `whoami-serve` in 13 seconds.
+    ruffAnnPhase = "${lib.getExe' pkgs.ruff "ruff"} check --no-cache ${ruffAnnArgs} ${lib.escapeShellArg "${src}"}";
     # zuban/mypy resolve the interpreter's own packages from
     # `--python-executable`, so MYPYPATH must carry only genuinely-extra import
     # roots. Forwarding the interpreter's site-packages (the default of

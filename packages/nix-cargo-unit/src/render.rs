@@ -1869,7 +1869,6 @@ fn render_build_script_run(
             run_index,
             run_unit,
             compile_unit,
-            build_script_run.compile_index,
             build_script_run,
             offline_cargo_metadata,
         )?,
@@ -1895,13 +1894,19 @@ fn render_build_script_run_phase(
     run_index: usize,
     run_unit: &Unit,
     compile_unit: &Unit,
-    compile_index: usize,
     build_script_run: &BuildScriptRun,
     offline_cargo_metadata: bool,
 ) -> Result<String> {
     let mut script = String::new();
     let source = prepared.source_entry(run_index)?;
-    let compile_ref = format!("${{units.{}}}", nix_attr(&prepared.names[compile_index]));
+    // Taken from `build_script_run` rather than passed alongside it: the caller
+    // was handing over both the struct and one of its own fields, which is the
+    // 8th argument that tripped `clippy::too_many_arguments` (limit 7). One
+    // source of truth, and no way for the two to disagree.
+    let compile_ref = format!(
+        "${{units.{}}}",
+        nix_attr(&prepared.names[build_script_run.compile_index])
+    );
     let manifest_dir = source_path_expr(source, &crate_root_for_unit(run_unit))?;
 
     script.push_str("mkdir -p $out\n");
