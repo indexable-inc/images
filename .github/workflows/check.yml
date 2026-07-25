@@ -191,13 +191,11 @@ jobs:
       - name: Bootstrap patched Nix client
         uses: ./.github/actions/bootstrap-patched-nix
 
-      - name: Provision submodule-sync test tools
-        uses: ./.github/actions/ensure-tools
-        with:
-          tools: jq yq=yq-go
-
+      # Was a committed bash script until it tripped the shell fence (#3823);
+      # the jq/yq provisioning step went with it, since the Rust port parses
+      # the workflow YAML and the lock JSON in-process.
       - name: Test direct submodule sync
-        run: .github/scripts/test-update-flake-lock-direct.sh
+        run: nix run .#submodule-sync-test -- "$GITHUB_WORKSPACE"
 
       # Build the gate's network tracer (#4031) from main's flake ref, outside
       # the validation clock below so tracing never eats PR budget. From main,

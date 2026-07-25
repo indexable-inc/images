@@ -12298,6 +12298,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "submodule-sync-test"
+version = "0.1.0"
+dependencies = [
+ "color-eyre",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

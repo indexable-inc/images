@@ -7,6 +7,7 @@ members = [
   "packages/claude-hooks",
   "packages/claude-stories",
   "packages/subagent-cache",
+  "packages/submodule-sync-test",
   "packages/audio/app",
   "packages/audio/blob",
   "packages/audio/clock",
