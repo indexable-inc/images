@@ -7,8 +7,8 @@
   formats,
   binName ? "cursor-agent",
   # Sibling repo packages from the flake package set (threaded by
-  # lib/packages.nix), used to locate the `ix-mcp` entrypoint for the rendered
-  # `index` MCP server. `{ }` when the `mcp` sibling is out of scope, in which
+  # lib/packages.nix), used to locate the `ix-mcp-ex` entrypoint for the rendered
+  # `index` MCP server. `{ }` when the `mcp-ex` sibling is out of scope, in which
   # case only the keyless `exa` server is rendered.
   repoPackages ? {},
   # Rule names dropped from the default house prompt. Only affects the computed

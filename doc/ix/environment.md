@@ -51,16 +51,6 @@ summary. These tune that behavior.
 | `IX_RUN_HEAD_LINES` | First lines to print in the summary. | `2` | `packages/tui/run/run.py` |
 | `IX_RUN_TAIL_LINES` | Last lines to print in the summary. | `2` | `packages/tui/run/run.py` |
 
-## ix-mcp
-
-User-tunable variables for the notebook MCP server. (Internal and
-fleet-injected ones such as `IX_MCP_EXEC_TOKEN` and `IX_MCP_SHARED` are omitted.)
-
-| var | meaning | default | source path |
-| --- | --- | --- | --- |
-| `IX_MCP_MAX_RESULT_CHARS` | Max characters of a tool result before paging kicks in. Floor 500. | `50000` | `packages/mcp/ix_notebook_mcp/outputs.py` |
-| `IX_MCP_SESSION` | Checkpoint the session to a file; set by `serve --session FILE`. | unset (off) | `packages/mcp/ix_notebook_mcp/runtime.py` |
-
 ## Health-check context (read-only)
 
 These are **injected by the platform into host health checks, not set by you.**

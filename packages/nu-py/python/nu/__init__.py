@@ -139,14 +139,12 @@ __all__ = ["Engine", "NuCwdError", "NuError", "NuResult", "nu", "reset", "value"
 __version__ = "0.1.0"
 
 # Job renaming mirrors sh: inside the kernel, `name=` labels the running job in
-# the dashboard. Outside (plain `import nu` in a test), it is silently ignored.
-try:
-    from ix_notebook_mcp.runtime import _ix_current, _rename_current_job
-    from ix_notebook_mcp.runtime import register_resource as _register_resource
-except Exception:  # pragma: no cover - exercised only outside the kernel
-    _ix_current = None
-    _register_resource = None
-    _rename_current_job = None
+# the dashboard. The Python kernel that supplied these hooks (ix_notebook_mcp)
+# has been retired, so they are always absent now; the None fallbacks keep the
+# module importable standalone.
+_ix_current = None
+_register_resource = None
+_rename_current_job = None
 
 _engine: Engine | None = None
 _RESOURCE_TAIL_CHARS = 120_000

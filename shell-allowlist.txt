@@ -47,7 +47,6 @@ lib/util/pins.nix:writeNushellApplication:4
 lib/util/with-lock.sh
 lib/util/writers.nix:writeBashApplication:2
 lib/util/writers.nix:writeNushellApplication:3
-modules/darwin/ray.nix:writeNushellApplication:1
 modules/home/macos-guests.nix:writeNushellApplication:1
 modules/home/mux.nix:writeBashApplication:1
 modules/home/mux/mux.sh
@@ -56,7 +55,6 @@ modules/profiles/base/login.nu
 modules/services/inference/default.nix:writeBashApplication:1
 modules/services/minecraft/default.nix:writeNushellApplication:2
 modules/services/observability/default.nix:writeNushellApplication:1
-modules/services/ray/default.nix:writeNushellApplication:2
 modules/services/remote-desktop/default.nix:writeNushellApplication:2
 modules/services/spark/default.nix:writeNushellApplication:1
 packages/claude-code-debug/default.nix:writeNushellApplication:2
@@ -64,7 +62,6 @@ packages/claude-code/default.nix:writeNushellApplication:1
 packages/claude-code/statusline.nu
 packages/claude-code/update.nix:writeNushellApplication:2
 packages/codex/rust.nix:writeBashApplication:1
-packages/pi-harnesses/engine/smoke/run.sh
 packages/pi-harnesses/omp/smoke/claude-hooks-smoke.sh
 packages/agent/skills/antithesis-setup/assets/antithesis/setup-complete.sh
 packages/agent/skills/antithesis-triage/assets/download-logs.sh
@@ -89,9 +86,6 @@ packages/ghpr/default.nix:writeBashApplication:1
 packages/ix-fleet/default.nix:writeBashApplication:1
 packages/jupyter/default.nix:writeBashApplication:1
 packages/lakekeeper/default.nix:writeNushellApplication:1
-packages/mcp/default.nix:writeNushellApplication:1
-packages/mcp/svelte-bundle/default.nix:writeBashApplication:1
-packages/mcp/update.nix:writeNushellApplication:2
 packages/minecraft/bossbar-overlay/app/scripts/fetch-assets.sh
 packages/minecraft/bossbar-overlay/app/scripts/import-theme.sh
 packages/minecraft/bossbar-overlay/ci-bars-home-module.nix:writeBashApplication:2

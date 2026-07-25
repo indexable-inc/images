@@ -27,8 +27,8 @@
   # claude-code wrapper (index#3849).
   extraSessionStart ? [],
   # Sibling repo packages from the flake package set (threaded by
-  # lib/packages.nix), used to locate the `ix-mcp` entrypoint for the baked
-  # `index` MCP server. `{ }` in the overlay package set, where the `mcp`
+  # lib/packages.nix), used to locate the `ix-mcp-ex` entrypoint for the baked
+  # `index` MCP server. `{ }` in the overlay package set, where the `mcp-ex`
   # sibling is out of scope, so the wrapper bakes no MCP server there (the same
   # fallback the claude-code wrapper uses).
   repoPackages ? {},

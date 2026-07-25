@@ -53,7 +53,7 @@
         "$skills_dir" >&2
       exit 1
     fi
-    ${lib.optionalString (repoPackages ? mcp) ''
+    ${lib.optionalString (repoPackages ? mcp-ex) ''
     agents_dir="$(spec_env IX_CLAUDE_AGENTS_DIR)"
     if [ ! -d "$agents_dir" ] || [ -z "$(find "$agents_dir" -maxdepth 1 -name '*.md' -print -quit)" ]; then
       printf 'claude launcher env check failed: IX_CLAUDE_AGENTS_DIR has no agent markdown files: %s\n' \

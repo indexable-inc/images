@@ -250,11 +250,11 @@
   # Code can load store-backed skills through `--plugin-dir` / `--add-dir`, but
   # bare subagents still have to exist under `.claude/agents`; exporting store
   # paths lets that hook do a plain copy instead of running `nix build` during
-  # interactive startup. The overlay package has no sibling `mcp` package in
+  # interactive startup. The overlay package has no sibling `mcp-ex` package in
   # scope, so it skips rendered agents whose MCP frontmatter depends on it.
   agentSkillsDir = ix.skills.mkSkillsDir {inherit pkgs;};
   agentAgentsDir =
-    if repoPackages ? mcp
+    if repoPackages ? mcp-ex
     then let
       definitions = import (ix.paths.packagesRoot + "/agent/subagents.nix") {
         inherit

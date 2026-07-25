@@ -424,11 +424,6 @@ in {
     "Library/Application Support/Claude/claude_desktop_config.json" = {
       source = jsonFormat.generate "andrewgazelka-claude-desktop.json" {
         globalShortcut = "";
-        mcpServers.ix = {
-          type = "http";
-          url = "https://mcp.ix.dev/mcp";
-          headers = {};
-        };
         preferences = {
           quickEntryShortcut = "off";
           quickEntryDictationShortcut = "off";

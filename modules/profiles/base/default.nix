@@ -669,128 +669,119 @@ in {
       };
     };
 
-    environment.systemPackages =
-      (builtins.attrValues {
-        inherit
-          (pkgs)
-          ast-grep
-          bat
-          bpftrace
-          btop
-          # dig/nslookup for DNS debugging; `host` alone (shipped via
-          # NixOS defaults) answers "does it resolve" but not "from which
-          # server, with which record details".
-          dnsutils
-          # Stack unwinder and ELF/DWARF inspector. `eu-stack` resolves
-          # stripped binaries against separate debuginfo, `eu-readelf`
-          # gives a saner view of section/note contents than `readelf`,
-          # and `eu-unstrip` recombines a stripped binary with its
-          # debug companion before feeding it to gdb/drgn/pahole.
-          elfutils
-          eza
-          fd
-          file
-          # C toolchain: `pip install` of any package with a native
-          # extension, node-gyp, and every "./configure && make" README
-          # assume cc + make exist. 5 of 7 competitor default images ship
-          # one; a VM that can't build a C extension fails the first
-          # real Python or Node session.
-          gcc
-          gdb
-          gnumake
-          # gnutar, gzip, and zstd ride along so any VM switched once stays
-          # switchable: the `ix apply` source upload streams a tarball through
-          # `tar -x -I zstd` inside the guest, and these binaries are not
-          # on NixOS' default system PATH.
-          gnutar
-          gzip
-          # Alternative editors next to the default neovim. Helix is the
-          # modern single-binary editor; micro is the nano-style fallback
-          # for operators who want predictable bindings without modes.
-          helix
-          htop
-          micro
-          jq
-          lldb
-          lsof
-          mgrep
-          ncdu
-          # nh wraps nixos-rebuild/home-manager/darwin-rebuild with a
-          # build tree (via nom), pre-activation diffs (via dix), and
-          # confirmation prompts. nix-output-monitor is shipped
-          # separately so plain `nom nix build .#foo` works outside nh.
-          # nix-tree is the interactive TUI for exploring a derivation's
-          # dependency graph.
-          nh
-          nix-output-monitor
-          nix-tree
-          # Default language runtimes. python3 and node are the two
-          # interpreters "run this script" instructions assume exist
-          # (both ship in 5 of 7 competitor default sandboxes); uv is
-          # the package/venv path for Python that doesn't fight the
-          # read-only store the way bare pip does.
-          nodejs
-          python3
-          uv
-          # TLS/cert debugging (s_client, x509) plus the digest/keygen
-          # one-liners every deploy doc reaches for.
-          openssl
-          # Walks DWARF/BTF type info to pretty-print kernel and userspace
-          # structs out of core dumps, /proc/kcore, or VM RAM memfds. The
-          # canonical tool for "I have raw memory and I need to know what
-          # struct lives at this offset", which gdb/lldb both fumble.
-          pahole
-          # killall/pstree muscle memory from every other Unix box.
-          psmisc
-          # drgn complements pahole: pahole answers "what is the layout of
-          # struct foo?", drgn lets you start from a typed root and walk
-          # the live value graph in Python (dereference pointers, follow
-          # intrusive lists, dump fields). Packaged in `packages/drgn/`
-          # against the v0.2.0 upstream release until the open nixpkgs PR
-          # (#446138) lands and the pin moves.
-          drgn
-          pv
-          ripgrep
-          # The `sqlite3` CLI: half of local app state (browsers, package
-          # managers, our own atuin history) is a SQLite file, and
-          # inspecting one without the CLI means writing a script.
-          sqlite
-          strace
-          tcpdump
-          # zellij (below) is the curated multiplexer, but tmux is the
-          # one operators and agent recipes actually type; both are tiny.
-          tmux
-          tree
-          # Complements ripgrep with what it lacks: boolean queries
-          # (-%), fuzzy match (-Z), and searching inside archives and
-          # compressed files (-z).
-          ugrep
-          # Half the internet distributes .zip; gnutar/zstd cover the
-          # rest of the archive formats but reject zip, which turns a
-          # plain `curl -LO <github archive>` into a dead end.
-          unzip
-          # wget rides along for the copy-paste commands that assume it;
-          # curl comes from NixOS' core packages.
-          wget
-          # Hex dump/reverse for quick binary pokes without pulling
-          # a full vim install (nvim's wrapper does not expose xxd).
-          xxd
-          # Pane and tab multiplexer for one session. Connection survival
-          # across SSH drops is handled by ix itself (AGENTS.md "VM
-          # assumptions"), so zellij is shipped for splits, not reattach.
-          zellij
-          zip
-          zstd
-          ;
-      })
-      ++ [
-        # Persistent Python sessions exposed over MCP. Lets an agent inside
-        # the VM (or one shelling in via `ix shell`) hand structured Python
-        # off to a client without round-tripping shell quoting, and keeps
-        # the interpreter warm across calls so iterative debugging on a
-        # live process or memfd doesn't re-import every step.
-        ix.packages.mcp
-      ];
+    environment.systemPackages = builtins.attrValues {
+      inherit
+        (pkgs)
+        ast-grep
+        bat
+        bpftrace
+        btop
+        # dig/nslookup for DNS debugging; `host` alone (shipped via
+        # NixOS defaults) answers "does it resolve" but not "from which
+        # server, with which record details".
+        dnsutils
+        # Stack unwinder and ELF/DWARF inspector. `eu-stack` resolves
+        # stripped binaries against separate debuginfo, `eu-readelf`
+        # gives a saner view of section/note contents than `readelf`,
+        # and `eu-unstrip` recombines a stripped binary with its
+        # debug companion before feeding it to gdb/drgn/pahole.
+        elfutils
+        eza
+        fd
+        file
+        # C toolchain: `pip install` of any package with a native
+        # extension, node-gyp, and every "./configure && make" README
+        # assume cc + make exist. 5 of 7 competitor default images ship
+        # one; a VM that can't build a C extension fails the first
+        # real Python or Node session.
+        gcc
+        gdb
+        gnumake
+        # gnutar, gzip, and zstd ride along so any VM switched once stays
+        # switchable: the `ix apply` source upload streams a tarball through
+        # `tar -x -I zstd` inside the guest, and these binaries are not
+        # on NixOS' default system PATH.
+        gnutar
+        gzip
+        # Alternative editors next to the default neovim. Helix is the
+        # modern single-binary editor; micro is the nano-style fallback
+        # for operators who want predictable bindings without modes.
+        helix
+        htop
+        micro
+        jq
+        lldb
+        lsof
+        mgrep
+        ncdu
+        # nh wraps nixos-rebuild/home-manager/darwin-rebuild with a
+        # build tree (via nom), pre-activation diffs (via dix), and
+        # confirmation prompts. nix-output-monitor is shipped
+        # separately so plain `nom nix build .#foo` works outside nh.
+        # nix-tree is the interactive TUI for exploring a derivation's
+        # dependency graph.
+        nh
+        nix-output-monitor
+        nix-tree
+        # Default language runtimes. python3 and node are the two
+        # interpreters "run this script" instructions assume exist
+        # (both ship in 5 of 7 competitor default sandboxes); uv is
+        # the package/venv path for Python that doesn't fight the
+        # read-only store the way bare pip does.
+        nodejs
+        python3
+        uv
+        # TLS/cert debugging (s_client, x509) plus the digest/keygen
+        # one-liners every deploy doc reaches for.
+        openssl
+        # Walks DWARF/BTF type info to pretty-print kernel and userspace
+        # structs out of core dumps, /proc/kcore, or VM RAM memfds. The
+        # canonical tool for "I have raw memory and I need to know what
+        # struct lives at this offset", which gdb/lldb both fumble.
+        pahole
+        # killall/pstree muscle memory from every other Unix box.
+        psmisc
+        # drgn complements pahole: pahole answers "what is the layout of
+        # struct foo?", drgn lets you start from a typed root and walk
+        # the live value graph in Python (dereference pointers, follow
+        # intrusive lists, dump fields). Packaged in `packages/drgn/`
+        # against the v0.2.0 upstream release until the open nixpkgs PR
+        # (#446138) lands and the pin moves.
+        drgn
+        pv
+        ripgrep
+        # The `sqlite3` CLI: half of local app state (browsers, package
+        # managers, our own atuin history) is a SQLite file, and
+        # inspecting one without the CLI means writing a script.
+        sqlite
+        strace
+        tcpdump
+        # zellij (below) is the curated multiplexer, but tmux is the
+        # one operators and agent recipes actually type; both are tiny.
+        tmux
+        tree
+        # Complements ripgrep with what it lacks: boolean queries
+        # (-%), fuzzy match (-Z), and searching inside archives and
+        # compressed files (-z).
+        ugrep
+        # Half the internet distributes .zip; gnutar/zstd cover the
+        # rest of the archive formats but reject zip, which turns a
+        # plain `curl -LO <github archive>` into a dead end.
+        unzip
+        # wget rides along for the copy-paste commands that assume it;
+        # curl comes from NixOS' core packages.
+        wget
+        # Hex dump/reverse for quick binary pokes without pulling
+        # a full vim install (nvim's wrapper does not expose xxd).
+        xxd
+        # Pane and tab multiplexer for one session. Connection survival
+        # across SSH drops is handled by ix itself (AGENTS.md "VM
+        # assumptions"), so zellij is shipped for splits, not reattach.
+        zellij
+        zip
+        zstd
+        ;
+    };
 
     systemd.tmpfiles.rules =
       [
