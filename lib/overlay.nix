@@ -91,6 +91,26 @@ let
           __darwinAllowLocalNetworking = true;
         });
 
+      # watchfiles asks the sandbox for FSEvents so its tests can watch files:
+      #   sandboxProfile = "(allow mach-lookup (global-name \"com.apple.FSEvents\"))"
+      # nix refuses a derivation carrying any sandbox profile unless `sandbox` is
+      # `relaxed`, and this host needs `sandbox = true` (nix.conf: with
+      # sandbox=false, parallel content-addressed builds collide). So the build
+      # fails before it starts, with "specifies a sandbox profile, but this is
+      # only allowed when 'sandbox' is 'relaxed'".
+      #
+      # Clearing the profile alone is not enough, because the tests then fail for
+      # want of the FSEvents access it was granting, so the checks go with it.
+      # Weakening the sandbox to `relaxed` for one package's test suite is the
+      # wrong trade: it is load-bearing for CA build correctness here.
+      watchfiles = assert lib.assertMsg (pyprev.watchfiles.version == "1.2.0") ''
+        recheck the watchfiles sandbox workaround: expected nixpkgs watchfiles
+        1.2.0, got ${pyprev.watchfiles.version}.'';
+        pyprev.watchfiles.overridePythonAttrs (_: {
+          sandboxProfile = "";
+          doCheck = false;
+        });
+
       # dunamai's test__version__from_git__with_annotated_tags commits to a
       # scratch repo, then asserts the commit timestamp is within one minute of
       # `now`. That one minute is a wall-clock budget for the test's own setup,
