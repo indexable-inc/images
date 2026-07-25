@@ -19,18 +19,35 @@
 # `buildOverlayPackage`); it hides no custom package. Every package is exposed as
 # a real top-level overlay attr by the `genAttrs'` below (i.e. as
 # `final.<attrName>`), so later overlays compose.
+#
+# On what is deliberately NOT here. The curl 8.21.0 curl_multi_wakeup() patch
+# used to be a global `curl` override in this file; it now lives in packages/nix
+# on the `nix-store` component, the only thing that needs it. curl is a build
+# input of git-minimal, which GHC reaches via sphinx -> pytest-xdist -> execnet
+# -> hatch-vcs, and which rustc-bootstrap, cargo-bootstrap and the cargo vendor
+# tooling reach too, so overriding `pkgs.curl` rehashed GHC, rustc, cargo and
+# the whole python set and detached this tree from cache.nixos.org. Measured
+# 2026-07-25 against nixpkgs e2587cae: arrow-cpp substitutes as a 28.5 MiB
+# download and souffle as 2.8 MiB, and both were being compiled here for that
+# one patch.
+#
+# Ten test-suite overrides went with it (graphite2, harfbuzz, gunicorn,
+# requests-futures, watchfiles, dunamai, ipython, inquirer3, uvloop and the
+# python valkey client). Each existed because the curl override forced a local
+# build, which ran a suite nixpkgs had already run on its own builders, and
+# those suites then failed on wall-clock budgets under load or on sandbox and
+# macOS 27 differences. All ten substitute at this nixpkgs rev.
+#
+# The trap is worth naming, because it hides itself: an override changes the
+# derivation hash, which forces the local build, which runs the suite, which is
+# what the override works around. Adding one always looks like it fixed
+# something. Before adding an override here, check whether the package
+# substitutes without it (`nix build --dry-run nixpkgs#<pkg>` at this rev); if
+# it does, the override is what will be creating the work. graphite2 and
+# harfbuzz were also not Darwin-gated, so they detached the Linux tree for CI
+# and the fleet, with pango and gtk under harfbuzz.
 # astlog-ignore: keep-overrides-composable
 let
-  # curl 8.21.0 started consuming the public curl_multi_wakeup() eventfd from
-  # curl_multi_perform(). That loses a wakeup for callers which perform before
-  # polling (notably Nix's file-transfer worker, which can then sleep for its
-  # full 10-second idle timeout). Upstream fixed the regression by giving the
-  # threaded resolver a separate internal wakeup pair:
-  # https://github.com/curl/curl/issues/22272
-  #
-  # Keep the patch here until nixpkgs ships a curl release containing
-  # 009fd378e8f01c97ebe67a14a41a06d56430f3df. The version assertion makes a
-  # nixpkgs curl bump fail visibly instead of silently carrying a stale patch.
   # valkey 9.1.0's integration/dual-channel-replication test ("Steady state
   # after dual channel sync ... Can't set new keys") fails deterministically on
   # ix dev/build machines: 5 consecutive from-source builds across two machine
@@ -40,220 +57,6 @@ let
   # 4930-test suite is not an ix correctness gate. Checks off, like mdbook in
   # the ix repo, until nixpkgs carries a version whose suite passes here.
   valkey = prev.valkey.overrideAttrs (_: {doCheck = false;});
-
-  curl = assert lib.assertMsg (prev.curl.version == "8.21.0")
-  "remove the curl wakeup patch: expected nixpkgs curl 8.21.0, got ${prev.curl.version}";
-    prev.curl.overrideAttrs (old: {
-      patches =
-        (old.patches or [])
-        ++ [
-          (prev.fetchurl {
-            name = "curl-8.21.0-fix-multi-wakeup.patch";
-            url = "https://github.com/curl/curl/commit/009fd378e8f01c97ebe67a14a41a06d56430f3df.patch";
-            hash = "sha256-RMFcifj9jDaWY5jNBGqQc2NUoXb3+mHR/1ubrYjpHvc=";
-          })
-        ];
-    });
-
-  # gunicorn 26.0.0's TestASGIIntegration fixture binds a port
-  # (`s.bind(('127.0.0.1', 0))`). The Darwin build sandbox has no loopback
-  # unless the derivation opts in, so the fixture errors at setup and the build
-  # fails. Linux sandboxes do provide loopback, which is why nixpkgs does not
-  # see this: its recipe already disables two sibling integration tests for the
-  # same class of failure ("failure while starting a gunicorn instance") but
-  # never set the sandbox flag. With the flag the suite runs in full, 1874
-  # passed and 350 skipped, so the tests are exercised rather than skipped.
-  #
-  # gunicorn is not wanted directly; it reaches the closure as a test input of
-  # aiohttp, which the python env pulls in.
-  #
-  # Darwin-only so the Linux gunicorn keeps matching cache.nixos.org. Drop this
-  # once nixpkgs sets __darwinAllowLocalNetworking on gunicorn itself.
-  pythonPackagesExtensions =
-    prev.pythonPackagesExtensions
-    ++ lib.optional prev.stdenv.hostPlatform.isDarwin (_pyfinal: pyprev: {
-      gunicorn = assert lib.assertMsg (pyprev.gunicorn.version == "26.0.0") ''
-        remove the gunicorn loopback flag: expected nixpkgs gunicorn 26.0.0, got
-        ${pyprev.gunicorn.version}. Recheck whether TestASGIIntegration still
-        needs __darwinAllowLocalNetworking.'';
-        pyprev.gunicorn.overridePythonAttrs (_: {
-          __darwinAllowLocalNetworking = true;
-        });
-
-      # requests-futures is the same sandbox-loopback problem as gunicorn, and
-      # deterministic rather than load-dependent: its tests stand up a local HTTP
-      # server, so all 12 error at socketserver.py:478 (`socket.bind`) with
-      # `PermissionError: [Errno 1] Operation not permitted`.
-      requests-futures = assert lib.assertMsg (pyprev.requests-futures.version == "1.0.2") ''
-        recheck the requests-futures loopback flag: expected nixpkgs
-        requests-futures 1.0.2, got ${pyprev.requests-futures.version}.'';
-        pyprev.requests-futures.overridePythonAttrs (_: {
-          __darwinAllowLocalNetworking = true;
-        });
-
-      # watchfiles asks the sandbox for FSEvents so its tests can watch files:
-      #   sandboxProfile = "(allow mach-lookup (global-name \"com.apple.FSEvents\"))"
-      # nix refuses a derivation carrying any sandbox profile unless `sandbox` is
-      # `relaxed`, and this host needs `sandbox = true` (nix.conf: with
-      # sandbox=false, parallel content-addressed builds collide). So the build
-      # fails before it starts, with "specifies a sandbox profile, but this is
-      # only allowed when 'sandbox' is 'relaxed'".
-      #
-      # Clearing the profile alone is not enough, because the tests then fail for
-      # want of the FSEvents access it was granting, so the checks go with it.
-      # Weakening the sandbox to `relaxed` for one package's test suite is the
-      # wrong trade: it is load-bearing for CA build correctness here.
-      watchfiles = assert lib.assertMsg (pyprev.watchfiles.version == "1.2.0") ''
-        recheck the watchfiles sandbox workaround: expected nixpkgs watchfiles
-        1.2.0, got ${pyprev.watchfiles.version}.'';
-        pyprev.watchfiles.overridePythonAttrs (_: {
-          sandboxProfile = "";
-          doCheck = false;
-        });
-
-      # python valkey (the client, not the server that gets doCheck = false
-      # above) loses one async pubsub case of 1904 under load:
-      # test_channel_subscribe_unsubscribe waits for the subscribe confirmation
-      # and `wait_for_message` returns None instead, so the assert compares None
-      # against the expected message. A race on message delivery, not a bug.
-      #
-      # Narrow skip rather than doCheck = false: unlike uvloop, this suite is
-      # otherwise stable here, 1904 passed. If a second case starts failing,
-      # escalate to dropping the suite rather than growing this list.
-      valkey = assert lib.assertMsg (pyprev.valkey.version == "6.1.1") ''
-        recheck the valkey client disabled test: expected nixpkgs
-        python3Packages.valkey 6.1.1, got ${pyprev.valkey.version}.'';
-        pyprev.valkey.overridePythonAttrs (old: {
-          disabledTests = (old.disabledTests or []) ++ ["test_channel_subscribe_unsubscribe"];
-        });
-
-      # dunamai's test__version__from_git__with_annotated_tags commits to a
-      # scratch repo, then asserts the commit timestamp is within one minute of
-      # `now`. That one minute is a wall-clock budget for the test's own setup,
-      # and a busy machine loses it: the suite takes over three minutes under
-      # load here, and the commit was 72 seconds old by the time the assertion
-      # ran (11:20:59 against a now of 11:22:11). 55 other cases passed.
-      #
-      # Widen the window rather than disable the case. dunamai read the
-      # timestamp correctly, so only the freshness bound was wrong, and deleting
-      # the test would drop real coverage of the timestamp plumbing.
-      # `--replace-fail` makes an upstream rewrite of the assertion break loudly
-      # here instead of silently no longer applying.
-      dunamai = assert lib.assertMsg (pyprev.dunamai.version == "1.25.0") ''
-        recheck the dunamai test timing patch: expected nixpkgs dunamai 1.25.0,
-        got ${pyprev.dunamai.version}.'';
-        pyprev.dunamai.overridePythonAttrs (old: {
-          postPatch =
-            (old.postPatch or "")
-            + ''
-              substituteInPlace tests/integration/test_dunamai.py \
-                --replace-fail "delta = dt.timedelta(minutes=1)" "delta = dt.timedelta(minutes=30)"
-            '';
-        });
-
-      # ipython's test_system_interrupt starts a subprocess that sleeps five
-      # seconds and asserts a SIGINT interrupts it. On a loaded machine the
-      # pexpect spawn behind it fails, and ipython's own handler then reads
-      # `child` before assignment, so the case dies as
-      # `UnboundLocalError: cannot access local variable 'child'` in
-      # IPython/utils/_process_posix.py rather than as a timeout. 1592 other
-      # cases passed and the suite took 12 minutes.
-      #
-      # No bound to widen here, unlike dunamai: the failure is an unbound-local
-      # in a error path, so the case goes in the list nixpkgs already keeps for
-      # exactly this ("timing sensitive": test_debug_magic_passes_through_
-      # generators, test_nest_embed). It just has not reached this one.
-      ipython = assert lib.assertMsg (pyprev.ipython.version == "9.14.0") ''
-        recheck the ipython disabled test: expected nixpkgs ipython 9.14.0, got
-        ${pyprev.ipython.version}.'';
-        pyprev.ipython.overridePythonAttrs (old: {
-          disabledTests = (old.disabledTests or []) ++ ["test_system_interrupt"];
-        });
-
-      # inquirer3's tests/acceptance drives a real terminal through pexpect. All
-      # ten cases fail with `pexpect.exceptions.TIMEOUT` here while the other 147
-      # pass, so the library works and only the terminal-driving harness does
-      # not survive this sandbox.
-      #
-      # nixpkgs disables nothing in this recipe, meaning its own build passes and
-      # we would never have run these tests at all if we were substituting. We
-      # build it because the curl patch above detaches this tree from
-      # cache.nixos.org, which is the wider cost of that patch: packages nixpkgs
-      # ships prebuilt get compiled here, and their suites then run on macOS 27
-      # under whatever load the machine has.
-      inquirer3 = assert lib.assertMsg (pyprev.inquirer3.version == "0.6.1") ''
-        recheck the inquirer3 disabled tests: expected nixpkgs inquirer3 0.6.1,
-        got ${pyprev.inquirer3.version}.'';
-        pyprev.inquirer3.overridePythonAttrs (old: {
-          disabledTestPaths = (old.disabledTestPaths or []) ++ ["tests/acceptance"];
-        });
-
-      # uvloop's suite does not survive a loaded machine, and naming the cases
-      # does not converge. First run: test_call_at in both TestBaseUV and
-      # TestBaseAIO, which assert a timer fires within 70ms
-      # (`assertLess(finished - started, 0.07)`), measured at 0.162 and 0.079.
-      # Skipping those two produced a different failure on the next run,
-      # test_process_delayed_stdio__not_paused__no_stdin, which races a subprocess
-      # against its stdio. Both are latency budgets in an event loop, so each run
-      # under load picks a different victim out of 442.
-      #
-      # So drop the suite for this package rather than grow a list forever. The
-      # coverage is not ours in the first place: nixpkgs CI runs it and
-      # cache.nixos.org ships the result, and we only compile uvloop here because
-      # the curl patch above detached this tree from that cache. A suite that
-      # reports a different failure each run produces no signal we would act on.
-      uvloop = assert lib.assertMsg (pyprev.uvloop.version == "0.22.1") ''
-        recheck skipping the uvloop suite: expected nixpkgs uvloop 0.22.1, got
-        ${pyprev.uvloop.version}.'';
-        pyprev.uvloop.overridePythonAttrs (_: {
-          doCheck = false;
-        });
-    });
-
-  # graphite2 pins several CTest cases to `TIMEOUT 3` in its tests/*/CMakeLists
-  # (comparerenderer and examples). Three seconds does not survive a busy
-  # machine: five of 91 were killed at 12 to 27 seconds while the other 86
-  # passed. CTest's `--timeout` cannot help, because an explicit per-test TIMEOUT
-  # property wins over the command-line default, so raise the property itself.
-  #
-  # Like the python fixes above, we only run these tests because the curl patch
-  # detaches this tree from cache.nixos.org; nixpkgs ships graphite2 prebuilt.
-  graphite2 = assert lib.assertMsg (prev.graphite2.version == "1.3.15") ''
-    recheck the graphite2 test timeouts: expected nixpkgs graphite2 1.3.15, got
-    ${prev.graphite2.version}.'';
-    prev.graphite2.overrideAttrs (old: {
-      postPatch =
-        (old.postPatch or "")
-        + ''
-          find tests -name CMakeLists.txt -exec sed -i 's/TIMEOUT 3)/TIMEOUT 300)/g' {} +
-        '';
-    });
-
-  # harfbuzz fails one subtest out of 7238: HarfBust.ttf shaped through CoreText,
-  # where the recorded advances no longer match what macOS 27 returns.
-  #
-  #   expected: "[H=0+1022|a=1+990|r=2+710|f=3+574|B=4+980|u=5+1022|s=6+972|t=7+625]"
-  #
-  # This is a real OS behaviour change rather than load, in the same family as the
-  # libffi trampoline break: nixpkgs allows /System/Library/Fonts through
-  # `__impureHostDeps` precisely so the CoreText tests exercise the system engine,
-  # so the expectation is pinned to whatever CoreText shipped when it was written.
-  # nixpkgs will meet this too once its darwin builders move to 27.
-  #
-  # The test data names its shapers per case, so run that one under `ot` alone.
-  # That keeps the OpenType coverage and drops only the CoreText variant, rather
-  # than losing the 7237 subtests that pass.
-  harfbuzz = assert lib.assertMsg (prev.harfbuzz.version == "13.2.1") ''
-    recheck the harfbuzz coretext test: expected nixpkgs harfbuzz 13.2.1, got
-    ${prev.harfbuzz.version}. macOS may have changed CoreText's advances again.'';
-    prev.harfbuzz.overrideAttrs (old: {
-      postPatch =
-        (old.postPatch or "")
-        + ''
-          substituteInPlace test/shape/data/in-house/tests/harfbust.tests \
-            --replace-fail '@shapers=ot,coretext' '@shapers=ot'
-        '';
-    });
 
   # Read the target system from `prev`, not `final`: this overlay's attribute
   # *names* are computed by filtering the registry's `overlay` entries by
@@ -307,7 +110,7 @@ in
     entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)
   )
   // {
-    inherit curl graphite2 harfbuzz valkey pythonPackagesExtensions;
+    inherit valkey;
 
     # Default Temurin JRE for repo-owned package sets. The major lives in
     # `lib/languages/jvm-defaults.nix`, shared with `ix.languages.{java,scala}`
