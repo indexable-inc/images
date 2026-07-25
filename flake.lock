@@ -3,11 +3,11 @@
     "btop-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1784724655,
-        "narHash": "sha256-JsLaZ/Lxy2QqE4nUSn5ol//6UMUaNDidYRzefavgZ0g=",
+        "lastModified": 1784933009,
+        "narHash": "sha256-v2KFxutzLFDOvoHSi7vyMO7dphu+yDeiEhuKkWioxbQ=",
         "owner": "indexable-inc",
         "repo": "btop",
-        "rev": "9f43b7904e2d2e08cfe33c2fa54c472de1cee2ef",
+        "rev": "df4c4235d35127fc3cf3d96bd1a726971810315b",
         "type": "github"
       },
       "original": {
@@ -376,11 +376,11 @@
     "nushell-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1784724689,
-        "narHash": "sha256-qmhR0ItOC5fne8s3NuS+JZw+DSwvIdNQGRQK6+ykwrY=",
+        "lastModified": 1784933077,
+        "narHash": "sha256-YyJ0h7rTCwqwbCRgsCRcBcHNtv7biSqTa9njbDxmk7Y=",
         "owner": "indexable-inc",
         "repo": "nushell",
-        "rev": "2d3f1b3d35b2dd4abc1cc4e6092d3908ad021416",
+        "rev": "ce285a0e9976fb23d6a021f77b19c634dc6528c9",
         "type": "github"
       },
       "original": {
