@@ -35,6 +35,10 @@ on:
         description: "Space-separated git submodule paths to bump to their remote HEAD instead of updating flake inputs. Mutually exclusive with flake-inputs: the DS update-flake-lock action can only write flake.lock, and composing both PR mechanisms on one rolling branch would fight over it."
         type: string
         default: ""
+      direct-push:
+        description: "Push a submodule bump directly to main instead of opening the rolling PR. Requires submodule-paths, an App token with contents:write, and a ruleset bypass for that App."
+        type: boolean
+        default: false
       nix-preinstalled:
         description: >-
           Accepted and ignored. Every runner this job lands on provides Nix
@@ -84,9 +88,9 @@ jobs:
       pull-requests: write
     steps:
       - name: Validate inputs
-        if: ${{ inputs.submodule-paths != '' && inputs.flake-inputs != '' }}
+        if: ${{ (inputs.submodule-paths != '' && inputs.flake-inputs != '') || (inputs.direct-push && (inputs.submodule-paths == '' || inputs.app-client-id == '')) }}
         run: |
-          echo "::error::submodule-paths and flake-inputs are mutually exclusive; pass one."
+          echo "::error::submodule-paths and flake-inputs are mutually exclusive, and direct-push requires both submodule-paths and app-client-id."
           exit 1
 
       - name: Checkout repository
@@ -96,6 +100,12 @@ jobs:
         # runs unauthenticated and dies (#3959). v5's local extraheader works
         # everywhere the fleet runs.
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # The bump below sets an App-authenticated origin. Keeping checkout's
+          # GITHUB_TOKEN extraheader would override that URL credential, make
+          # the push appear as github-actions[bot], and suppress the push/PR
+          # workflows the App-authenticated update is meant to trigger.
+          persist-credentials: false
         # Never checkout's `submodules:` option: on ix runners the
         # dispatcher's per-job GIT_CONFIG_GLOBAL defeats checkout's
         # temp-HOME token plumbing (ix#8123). The bump step below runs its
@@ -113,18 +123,31 @@ jobs:
         if: ${{ inputs.submodule-paths == '' }}
         uses: indexable-inc/index/.github/actions/bootstrap-patched-nix@main
 
-      # PRs authored by the default GITHUB_TOKEN never get pull_request CI on
-      # private repos: GitHub parks every run in action_required and the
-      # fork-approval API cannot clear them (ix#6566). When the caller supplies
-      # a GitHub App with contents + pull-requests write, mint a token scoped
-      # to this repository and author the PR with it so CI triggers normally.
-      - name: Mint PR token
-        id: app-token
-        if: ${{ inputs.app-client-id != '' }}
+      # Direct pushes need only contents:write. Keep that token narrower than
+      # the PR token: ix grants the App a ruleset bypass for this path, so
+      # carrying unrelated App permissions would enlarge a sensitive grant.
+      - name: Mint direct-push token
+        id: direct-app-token
+        if: ${{ inputs.app-client-id != '' && inputs.direct-push }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ inputs.app-client-id }}
           private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+
+      # PRs authored by the default GITHUB_TOKEN never get pull_request CI on
+      # private repos: GitHub parks every run in action_required and the
+      # fork-approval API cannot clear them (ix#6566). When the caller supplies
+      # a GitHub App, mint a token scoped to only what the rolling PR path uses.
+      - name: Mint PR token
+        id: pr-app-token
+        if: ${{ inputs.app-client-id != '' && !inputs.direct-push }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+          permission-pull-requests: write
 
       # Notify the human behind a manual dispatch (of this workflow or of a
       # cross-repo caller such as ix: a reusable workflow shares the caller's
@@ -135,6 +158,7 @@ jobs:
       # action above.
       - name: Resolve triggering human
         id: trigger
+        if: ${{ !inputs.direct-push }}
         uses: indexable-inc/index/.github/actions/triggering-actor@main
 
       # Submodule mode: move each listed pin to its remote HEAD on the same
@@ -155,7 +179,8 @@ jobs:
       - name: Bump submodules
         if: ${{ inputs.submodule-paths != '' }}
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          DIRECT_PUSH: ${{ inputs.direct-push }}
+          GH_TOKEN: ${{ steps.direct-app-token.outputs.token || steps.pr-app-token.outputs.token || github.token }}
           SUBMODULE_PATHS: ${{ inputs.submodule-paths }}
           TRIGGER_USER: ${{ steps.trigger.outputs.user }}
         run: |
@@ -166,133 +191,159 @@ jobs:
           # Push and submodule fetches authenticate with the minted token
           # (private repos; the checkout token is job-scoped and may lack
           # contents:write when the caller supplies an app).
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-          git checkout -B update-flake-lock origin/main
-          git submodule update --init -- "${paths[@]}"
-          git submodule update --remote -- "${paths[@]}"
-          # Plain git/bash: the self-hosted runner PATH has git and gh but
-          # not awk (run 29892186766 died on it).
-          summary=""
-          for p in "${paths[@]}"; do
-            summary="${summary:+${summary}, }${p}@$(git -C "$p" rev-parse --short=8 HEAD)"
-          done
-          bumped=""
-          if ! git diff --quiet; then
-            git commit -am "submodules: bump ${summary}"
-            bumped=1
+          if [ -n "${UPDATE_REMOTE_URL:-}" ]; then
+            # Test seam: production never sets this. It lets the workflow test
+            # exercise real fetch/commit/push behavior against a local bare
+            # remote without putting a fake credential in process output.
+            git remote set-url origin "$UPDATE_REMOTE_URL"
+          else
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-          # Relock every flake input pinned by a listed gitlink (path:./<sub>
-          # locked with a rev, as ix pins `index`; ix#8180): flake.lock
-          # records the gitlink rev plus the input's own nested locks, so a
-          # gitlink-only commit ships a stale lock that fails ix's
-          # check-submodule-lock-sync guard (ix#8149) -- since that guard
-          # landed, an unrelocked bump PR can never go green. Relock AFTER
-          # committing: nix resolves the path input's rev from the committed
-          # HEAD tree, not the submodule worktree or the git index, so a
-          # pre-commit `nix flake update` silently no-ops (ix#8143: a
-          # gitlink-only commit on main makes the first nix command rewrite
-          # flake.lock and dirty the checkout that prod deploys require
-          # clean). Staleness decides, not this run's gitlink move: a pin
-          # left stale by an earlier gitlink-only push to main is relocked
-          # and pushed even when the submodule did not move this run.
-          relock=()
-          if [ -f flake.lock ]; then
+
+          build_candidate() {
+            # Rebuild from the current main tip on every attempt. A concurrent
+            # human main push is preserved; the bot never rebases or overwrites
+            # it and never force-pushes main.
+            git fetch origin main
+            git checkout -B "$target_branch" origin/main
+            git submodule update --init -- "${paths[@]}"
+            git submodule update --remote -- "${paths[@]}"
+
+            # Plain git/bash: the self-hosted runner PATH has git and gh but
+            # not awk (run 29892186766 died on it).
+            summary=""
             for p in "${paths[@]}"; do
-              gitlink="$(git rev-parse "HEAD:${p}")"
-              while IFS= read -r name; do
-                relock+=("$name")
-              done < <(jq -r --arg path "./$p" --arg rev "$gitlink" '.nodes as $n
-                | $n[.root].inputs // {} | to_entries[]
-                | select(.value | type == "string")
-                | select(($n[.value].locked.type? == "path")
-                         and ($n[.value].locked.path? == $path)
-                         and (($n[.value].locked.rev? // "") != $rev))
-                | .key' flake.lock)
+              summary="${summary:+${summary}, }${p}@$(git -C "$p" rev-parse --short=8 HEAD)"
             done
-          fi
-          if [ -z "$bumped" ] && [ "${#relock[@]}" -eq 0 ]; then
-            echo "submodules already at their remote HEADs and every pin locked; nothing to bump"
-            exit 0
-          fi
-          if [ "${#relock[@]}" -gt 0 ]; then
-            nix flake update "${relock[@]}"
-            # Re-stamp the gitlink pin on the relocked node(s). The runner's
-            # nix is the immutable fleet client built from whatever index rev
-            # the host last deployed; a client older than index patch 0030
-            # (libflake: stamp submodule metadata on relative path inputs)
-            # locks a relative path input as bare {path,type}, silently
-            # DROPPING the pin (run 29912321315 shipped exactly that to ix;
-            # #3982) -- and bootstrap-patched-nix cannot save it: its pin
-            # predates p30 and its probe only checks underscore parsing. Both
-            # pin fields are pure git facts (the gitlink sha and its
-            # committer time), so stamping them here makes the lock
-            # client-independent; on a >= p30 client the stamp is a
-            # byte-identical no-op (verified against `nix flake lock`
-            # output). Keys re-sorted because nix serializes JSON objects
-            # with sorted keys.
-            for p in "${paths[@]}"; do
-              rev="$(git -C "$p" rev-parse HEAD)"
-              ts="$(git -C "$p" show -s --format=%ct HEAD)"
-              jq --arg path "./${p}" --arg rev "$rev" --argjson ts "$ts" '
-                (.nodes[.root].inputs // {} | [to_entries[]
-                  | select(.value | type == "string") | .value]) as $rootNodes
-                | .nodes |= with_entries(
-                    if (.key as $k | ($rootNodes | index($k)))
-                       and .value.locked.type? == "path" and .value.locked.path? == $path
-                    then .value.locked = ((.value.locked + {rev: $rev, lastModified: $ts})
-                                          | to_entries | sort_by(.key) | from_entries)
-                    else . end)
-              ' flake.lock > flake.lock.tmp
-              mv flake.lock.tmp flake.lock
-            done
-            git add flake.lock
-            if [ -n "$bumped" ]; then
-              git commit --amend --no-edit
-            else
-              git commit -m "flake.lock: relock ${relock[*]} to the ${summary} gitlink"
+            bumped=""
+            if ! git diff --quiet; then
+              git commit -am "submodules: bump ${summary}"
+              bumped=1
             fi
-          fi
-          # Refuse to push a lock that disagrees with a gitlink pin: a miss
-          # above (renamed input, unexpected lock shape, a client dropping
-          # the pin) is exactly the stale-lock bug the relock exists to
-          # prevent, and the caller's CI (ix's check-submodule-lock-sync)
-          # would reject the commit anyway.
-          if [ -f flake.lock ]; then
-            for p in "${paths[@]}"; do
-              rev="$(git rev-parse "HEAD:${p}")"
-              bad="$(jq -r --arg path "./${p}" --arg rev "$rev" '
-                (.nodes[.root].inputs // {} | [to_entries[]
-                  | select(.value | type == "string") | .value]) as $rootNodes
-                | [.nodes | to_entries[]
-                   | select((.key as $k | ($rootNodes | index($k)))
-                            and .value.locked.type? == "path" and .value.locked.path? == $path)
-                   | select((.value.locked.rev? // "missing") != $rev)
-                   | .key] | join(", ")' flake.lock)"
-              if [ -n "$bad" ]; then
-                echo "::error::flake.lock node(s) ${bad} do not pin ./${p} at gitlink ${rev}; refusing to push a stale lock (#3982)"
-                exit 1
+
+            # Relock every flake input pinned by a listed gitlink (path:./<sub>
+            # locked with a rev, as ix pins `index`; ix#8180). Relock AFTER
+            # committing: nix resolves the path input's rev from committed
+            # HEAD, not the worktree or index (ix#8143).
+            relock=()
+            if [ -f flake.lock ]; then
+              for p in "${paths[@]}"; do
+                gitlink="$(git rev-parse "HEAD:${p}")"
+                while IFS= read -r name; do
+                  relock+=("$name")
+                done < <(jq -r --arg path "./$p" --arg rev "$gitlink" '.nodes as $n
+                  | $n[.root].inputs // {} | to_entries[]
+                  | select(.value | type == "string")
+                  | select(($n[.value].locked.type? == "path")
+                           and ($n[.value].locked.path? == $path)
+                           and (($n[.value].locked.rev? // "") != $rev))
+                  | .key' flake.lock)
+              done
+            fi
+            if [ -z "$bumped" ] && [ "${#relock[@]}" -eq 0 ]; then
+              echo "submodules already at their remote HEADs and every pin locked; nothing to bump"
+              exit 0
+            fi
+            if [ "${#relock[@]}" -gt 0 ]; then
+              nix flake update "${relock[@]}"
+              # Re-stamp the gitlink pin when an older runner client drops it
+              # (#3982). Both values are facts from the selected commit.
+              for p in "${paths[@]}"; do
+                rev="$(git -C "$p" rev-parse HEAD)"
+                ts="$(git -C "$p" show -s --format=%ct HEAD)"
+                jq --arg path "./${p}" --arg rev "$rev" --argjson ts "$ts" '
+                  (.nodes[.root].inputs // {} | [to_entries[]
+                    | select(.value | type == "string") | .value]) as $rootNodes
+                  | .nodes |= with_entries(
+                      if (.key as $k | ($rootNodes | index($k)))
+                         and .value.locked.type? == "path" and .value.locked.path? == $path
+                      then .value.locked = ((.value.locked + {rev: $rev, lastModified: $ts})
+                                            | to_entries | sort_by(.key) | from_entries)
+                      else . end)
+                ' flake.lock > flake.lock.tmp
+                mv flake.lock.tmp flake.lock
+              done
+              git add flake.lock
+              if [ -n "$bumped" ]; then
+                git commit --amend --no-edit
+              else
+                git commit -m "flake.lock: relock ${relock[*]} to the ${summary} gitlink"
               fi
-            done
-            jq -r '.nodes | to_entries[]
-                | select(.value.locked.type? == "path" and (.value.locked | has("rev")))
-                | "\(.key) \(.value.locked.path) \(.value.locked.rev)"' flake.lock \
-            | while read -r name lock_path lock_rev; do
-                entry="$(git ls-tree HEAD -- "${lock_path#./}")"
-                read -r mode _type oid _rest <<< "$entry" || true
-                if [ "${mode:-}" != 160000 ] || [ "$oid" != "$lock_rev" ]; then
-                  echo "::error::flake.lock node '${name}' pins ${lock_path} at ${lock_rev} but the tree has '${entry:-nothing}'; refusing to push a stale lock (#3982)"
+            fi
+
+            # Refuse to push a lock that disagrees with any gitlink pin.
+            if [ -f flake.lock ]; then
+              for p in "${paths[@]}"; do
+                rev="$(git rev-parse "HEAD:${p}")"
+                bad="$(jq -r --arg path "./${p}" --arg rev "$rev" '
+                  (.nodes[.root].inputs // {} | [to_entries[]
+                    | select(.value | type == "string") | .value]) as $rootNodes
+                  | [.nodes | to_entries[]
+                     | select((.key as $k | ($rootNodes | index($k)))
+                              and .value.locked.type? == "path" and .value.locked.path? == $path)
+                     | select((.value.locked.rev? // "missing") != $rev)
+                     | .key] | join(", ")' flake.lock)"
+                if [ -n "$bad" ]; then
+                  echo "::error::flake.lock node(s) ${bad} do not pin ./${p} at gitlink ${rev}; refusing to push a stale lock (#3982)"
                   exit 1
                 fi
               done
+              jq -r '.nodes | to_entries[]
+                  | select(.value.locked.type? == "path" and (.value.locked | has("rev")))
+                  | "\(.key) \(.value.locked.path) \(.value.locked.rev)"' flake.lock \
+              | while read -r name lock_path lock_rev; do
+                  entry="$(git ls-tree HEAD -- "${lock_path#./}")"
+                  read -r mode _type oid _rest <<< "$entry" || true
+                  if [ "${mode:-}" != 160000 ] || [ "$oid" != "$lock_rev" ]; then
+                    echo "::error::flake.lock node '${name}' pins ${lock_path} at ${lock_rev} but the tree has '${entry:-nothing}'; refusing to push a stale lock (#3982)"
+                    exit 1
+                  fi
+                done
+            fi
+
+            # ix carries the stricter committed-tree guard. Run it when a
+            # caller provides it, before a direct ruleset-bypassing push.
+            if [ "$DIRECT_PUSH" = true ] && [ -x scripts/ci/check-submodule-lock-sync.sh ]; then
+              scripts/ci/check-submodule-lock-sync.sh HEAD
+            fi
+          }
+
+          if [ "$DIRECT_PUSH" != true ]; then
+            target_branch=update-flake-lock
+            build_candidate
+            git push -f origin update-flake-lock
+            if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
+              gh pr create --base main --head update-flake-lock \
+                --title "Update Nix flake inputs" \
+                --body "Automated bump: ${summary}." \
+                ${TRIGGER_USER:+--assignee "$TRIGGER_USER" --reviewer "$TRIGGER_USER"}
+            fi
+            exit 0
           fi
-          git push -f origin update-flake-lock
-          if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
-            gh pr create --base main --head update-flake-lock \
-              --title "Update Nix flake inputs" \
-              --body "Automated bump: ${summary}." \
-              ${TRIGGER_USER:+--assignee "$TRIGGER_USER" --reviewer "$TRIGGER_USER"}
-          fi
+
+          target_branch=direct-submodule-sync
+          for attempt in 1 2 3; do
+            build_candidate
+            if git push origin HEAD:refs/heads/main; then
+              echo "pushed ${summary} directly to main"
+              exit 0
+            fi
+
+            # Retry only a real concurrent-main race. Permission/ruleset/network
+            # failures leave origin/main as an ancestor of our candidate and
+            # must fail immediately rather than burning three identical tries.
+            git fetch origin main
+            if git merge-base --is-ancestor origin/main HEAD; then
+              echo "::error::direct push failed without a concurrent main update; not retrying"
+              exit 1
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::main advanced during all three direct-push attempts"
+              exit 1
+            fi
+            echo "::warning::main advanced during direct-push attempt ${attempt}; rebuilding from the new tip"
+          done
 
       # Hand-rolled rather than DeterminateSystems/update-flake-lock: the
       # `relock -> commit -> force-push the rolling branch -> ensure one open
@@ -302,7 +353,7 @@ jobs:
       - name: Update flake.lock
         if: ${{ inputs.submodule-paths == '' }}
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.pr-app-token.outputs.token || github.token }}
           # Empty for schedule/dispatch on index (all inputs public); a caller
           # scopes this to avoid fetching private inputs it can't auth for.
           FLAKE_INPUTS: ${{ inputs.flake-inputs }}
@@ -357,7 +408,7 @@ jobs:
   # issue. Callers must grant `issues: write` on the calling job.
   escalate:
     needs: update-flake-lock
-    if: ${{ always() }}
+    if: ${{ always() && inputs.direct-push != true }}
     # Reuse the caller-selected runner for both halves of the transaction. A
     # hosted escalation tail would make a supposedly self-hosted reusable
     # workflow silently depend on GitHub capacity after the update job exits.
