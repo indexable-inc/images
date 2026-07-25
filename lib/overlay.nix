@@ -265,7 +265,7 @@ in
     entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)
   )
   // {
-    inherit curl graphite2 pythonPackagesExtensions;
+    inherit curl graphite2 valkey pythonPackagesExtensions;
 
     # Default Temurin JRE for repo-owned package sets. The major lives in
     # `lib/languages/jvm-defaults.nix`, shared with `ix.languages.{java,scala}`
