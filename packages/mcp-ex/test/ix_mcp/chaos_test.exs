@@ -92,4 +92,21 @@ defmodule IxMcp.ChaosTest do
     assert summary.status == :done
     assert summary.result == ":rises"
   end
+
+  test "await returns the killed terminal instead of parking when a control process is hard-killed" do
+    {job, _} = Jobs.run("Process.sleep(:infinity)", budget: 0.05, intent: "await-on-kill")
+    assert job.running
+    {:ok, pid} = Jobs.lookup(job.id)
+
+    # Await from a separate process so the old :infinity park fails as a Task
+    # timeout here instead of wedging the whole suite.
+    task = Task.async(fn -> Jobs.await(job.id, :infinity) end)
+    # Let the await subscribe and park before the kill, so this exercises the
+    # subscribed-then-killed window rather than the already-gone lookup path.
+    Process.sleep(100)
+    Process.exit(pid, :kill)
+
+    summary = Task.await(task, 10_000)
+    assert summary.status == :killed
+  end
 end
