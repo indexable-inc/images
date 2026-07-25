@@ -93,6 +93,25 @@ let
                 --replace-fail "delta = dt.timedelta(minutes=1)" "delta = dt.timedelta(minutes=30)"
             '';
         });
+
+      # ipython's test_system_interrupt starts a subprocess that sleeps five
+      # seconds and asserts a SIGINT interrupts it. On a loaded machine the
+      # pexpect spawn behind it fails, and ipython's own handler then reads
+      # `child` before assignment, so the case dies as
+      # `UnboundLocalError: cannot access local variable 'child'` in
+      # IPython/utils/_process_posix.py rather than as a timeout. 1592 other
+      # cases passed and the suite took 12 minutes.
+      #
+      # No bound to widen here, unlike dunamai: the failure is an unbound-local
+      # in a error path, so the case goes in the list nixpkgs already keeps for
+      # exactly this ("timing sensitive": test_debug_magic_passes_through_
+      # generators, test_nest_embed). It just has not reached this one.
+      ipython = assert lib.assertMsg (pyprev.ipython.version == "9.14.0") ''
+        recheck the ipython disabled test: expected nixpkgs ipython 9.14.0, got
+        ${pyprev.ipython.version}.'';
+        pyprev.ipython.overridePythonAttrs (old: {
+          disabledTests = (old.disabledTests or []) ++ ["test_system_interrupt"];
+        });
     });
 
   # Read the target system from `prev`, not `final`: this overlay's attribute
