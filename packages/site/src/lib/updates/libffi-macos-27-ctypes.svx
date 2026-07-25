@@ -48,3 +48,48 @@ onto the `v2.55.0` tag. The rebase lands on a new branch,
 `ix-patched-v2.55.0`, instead of rewriting `ix-patched`. `git-src` is pinned by
 rev, and force-pushing the old branch would eventually let GitHub collect the
 old commit and break every index rev still pointing at it.
+
+The bump has one more piece of fallout. msgpack moved to 1.2.1, and mitmproxy
+12.2.3 declares `msgpack>=1.0.0,<=1.1.2`, so `pythonRuntimeDepsCheckHook`
+refused the wheel:
+
+```
+- msgpack<=1.1.2,>=1.0.0 not satisfied by version 1.2.1
+```
+
+There is no newer mitmproxy to move to. 12.2.3 is the latest release, and
+nixpkgs master still hits this, since its recipe relaxes eight other mitmproxy
+pins through `pythonRelaxDeps` and has not reached msgpack.
+
+The ceiling itself is stale. Upstream deleted the msgpack dependency outright
+after 12.2.3, and relaxing the cap locally builds clean with mitmproxy's own
+suite at 1776 passed and 1 skipped against msgpack 1.2.1. So a one-line
+`pythonRelaxDeps` override would have worked. The reason it is not the fix here
+is the pattern behind it. mitmproxy generates an upper bound for every
+dependency from its `uv.lock`, most of them pinned to a single version:
+
+```
+"aioquic>=1.2.0,<=1.2.0",
+"h11>=0.16.0,<=0.16.0",
+"pyparsing>=3.3.2,<=3.3.2",
+"certifi>=2019.9.11",           # no upper bound here to get latest CA bundle
+"cryptography>=42.0,<=49.0.0",  # relaxed upper bound here to get security fixes
+```
+
+That is a lockfile-first policy which assumes one private environment per tool,
+and it cannot hold against a distribution that ships one version of each
+library. nixpkgs already carries `aioquic_1_2` as a version-pinned attribute for
+this exact recipe. Every nixpkgs bump that moves a library past one of those
+ceilings breaks the build again, so the override would be permanent maintenance
+rather than a fix.
+
+mitmproxy is therefore no longer a nix package. `uvx mitmproxy` gives it the
+private environment its dependency policy expects, resolves `msgpack` to 1.1.2
+inside that environment, and leaves the shared python set at 1.2.1 for everyone
+else. It also brings its own CPython, so it sits outside the libffi problem this
+page opens with. Verified on this host: mitmproxy 12.2.3 on Python 3.12.13,
+macOS-27.0-arm64, seven seconds cold.
+
+The `~/.mitmproxy` out-of-store symlink stays. `uvx mitmproxy` reads the same
+directory, so the private CA is not regenerated and does not have to be
+re-trusted.

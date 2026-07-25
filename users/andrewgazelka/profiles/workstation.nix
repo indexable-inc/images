@@ -694,7 +694,7 @@ in {
       mtr # traceroute + ping in one continuous report
       doggo # modern `dig` (DNS lookups, multiple resolvers)
       grpcurl # `curl` for gRPC services (reflection-aware)
-      mitmproxy # interactive HTTPS proxy for inspecting/modifying traffic
+      # mitmproxy  # interactive HTTPS proxy — use `uvx mitmproxy`: upstream caps every dep with `<=` generated from its uv.lock, so it collides with nixpkgs' single shared python set on most bumps (msgpack 1.2.1 vs its <=1.1.2)
       scraper # scrape/export git commits, Discord, Matrix, GitHub (indexable-inc/scraper flake)
       # rustup                             # Rust toolchain installer (managed elsewhere — usually project-local)
       speedtest-cli # Ookla speedtest (Python client)
@@ -1140,6 +1140,10 @@ in {
 
   # Mitmproxy — holds the private CA key material, so workstation-only
   # (out-of-store); never bake it into the world-readable nix store.
+  #
+  # This stays even though mitmproxy is no longer a nix package: `uvx mitmproxy`
+  # reads the same `~/.mitmproxy`, so the CA survives the move and does not have
+  # to be regenerated and re-trusted.
   home.file.".mitmproxy" = lib.mkIf pkgs.stdenv.isDarwin {
     source = config.lib.file.mkOutOfStoreSymlink "${configDir}/mitmproxy";
   };
