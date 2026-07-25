@@ -111,6 +111,22 @@ let
           doCheck = false;
         });
 
+      # python valkey (the client, not the server that gets doCheck = false
+      # above) loses one async pubsub case of 1904 under load:
+      # test_channel_subscribe_unsubscribe waits for the subscribe confirmation
+      # and `wait_for_message` returns None instead, so the assert compares None
+      # against the expected message. A race on message delivery, not a bug.
+      #
+      # Narrow skip rather than doCheck = false: unlike uvloop, this suite is
+      # otherwise stable here, 1904 passed. If a second case starts failing,
+      # escalate to dropping the suite rather than growing this list.
+      valkey = assert lib.assertMsg (pyprev.valkey.version == "6.1.1") ''
+        recheck the valkey client disabled test: expected nixpkgs
+        python3Packages.valkey 6.1.1, got ${pyprev.valkey.version}.'';
+        pyprev.valkey.overridePythonAttrs (old: {
+          disabledTests = (old.disabledTests or []) ++ ["test_channel_subscribe_unsubscribe"];
+        });
+
       # dunamai's test__version__from_git__with_annotated_tags commits to a
       # scratch repo, then asserts the commit timestamp is within one minute of
       # `now`. That one minute is a wall-clock budget for the test's own setup,
