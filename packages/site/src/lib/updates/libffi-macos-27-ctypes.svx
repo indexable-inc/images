@@ -93,3 +93,30 @@ macOS-27.0-arm64, seven seconds cold.
 The `~/.mitmproxy` out-of-store symlink stays. `uvx mitmproxy` reads the same
 directory, so the private CA is not regenerated and does not have to be
 re-trusted.
+
+Behind mitmproxy sat a second failure, which only became visible once mitmproxy
+stopped aborting the build first. gunicorn 26.0.0 has a fixture that asks the
+kernel for a free port:
+
+```python
+@pytest.fixture
+def free_port(self):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+```
+
+The Darwin build sandbox has no loopback interface unless a derivation opts in
+with `__darwinAllowLocalNetworking`, so the fixture errors at setup and the
+build fails. Linux sandboxes do provide loopback, which is why nixpkgs ships it
+this way: the recipe already disables two sibling integration tests for the same
+class of failure, "failure while starting a gunicorn instance", and simply never
+needed the sandbox flag on the platform its CI runs.
+
+`lib/overlay.nix` sets the flag on Darwin only, so the Linux build keeps
+matching cache.nixos.org. Setting it beats skipping the test: the suite then
+runs in full at 1874 passed and 350 skipped, with `test_asgi_worker.py`
+exercised rather than deselected.
+
+Nothing wants gunicorn directly. It arrives as a test input of aiohttp, which
+the python env depends on, so a package nobody asked for failing its own test
+suite is enough to stop a `home-manager switch`.

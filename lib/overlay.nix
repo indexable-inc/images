@@ -45,6 +45,32 @@ let
         ];
     });
 
+  # gunicorn 26.0.0's TestASGIIntegration fixture binds a port
+  # (`s.bind(('127.0.0.1', 0))`). The Darwin build sandbox has no loopback
+  # unless the derivation opts in, so the fixture errors at setup and the build
+  # fails. Linux sandboxes do provide loopback, which is why nixpkgs does not
+  # see this: its recipe already disables two sibling integration tests for the
+  # same class of failure ("failure while starting a gunicorn instance") but
+  # never set the sandbox flag. With the flag the suite runs in full, 1874
+  # passed and 350 skipped, so the tests are exercised rather than skipped.
+  #
+  # gunicorn is not wanted directly; it reaches the closure as a test input of
+  # aiohttp, which the python env pulls in.
+  #
+  # Darwin-only so the Linux gunicorn keeps matching cache.nixos.org. Drop this
+  # once nixpkgs sets __darwinAllowLocalNetworking on gunicorn itself.
+  pythonPackagesExtensions =
+    prev.pythonPackagesExtensions
+    ++ lib.optional prev.stdenv.hostPlatform.isDarwin (_pyfinal: pyprev: {
+      gunicorn = assert lib.assertMsg (pyprev.gunicorn.version == "26.0.0") ''
+        remove the gunicorn loopback flag: expected nixpkgs gunicorn 26.0.0, got
+        ${pyprev.gunicorn.version}. Recheck whether TestASGIIntegration still
+        needs __darwinAllowLocalNetworking.'';
+        pyprev.gunicorn.overridePythonAttrs (_: {
+          __darwinAllowLocalNetworking = true;
+        });
+    });
+
   # Read the target system from `prev`, not `final`: this overlay's attribute
   # *names* are computed by filtering the registry's `overlay` entries by
   # system (see `overlayEntriesFor`), so forcing the system through `final`
@@ -97,7 +123,7 @@ in
     entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)
   )
   // {
-    inherit curl;
+    inherit curl pythonPackagesExtensions;
 
     # Default Temurin JRE for repo-owned package sets. The major lives in
     # `lib/languages/jvm-defaults.nix`, shared with `ix.languages.{java,scala}`
