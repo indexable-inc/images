@@ -134,12 +134,14 @@
 
     # jj megamerge fork of git/git: linked worktrees borrow the common-dir
     # submodule object store instead of re-cloning every submodule from the
-    # network (#3610). The base tracks nixpkgs' git version (v2.54.0 tag)
+    # network (#3610). The base tracks nixpkgs' git version (v2.55.0 tag)
     # because the package overlays nixpkgs' git recipe, so it never
     # free-floats: on a nixpkgs git bump, jj-rebase indexable-inc/git onto
-    # the matching tag and repin.
+    # the matching tag and repin. Each rebase lands on a new branch
+    # (ix-patched-v<version>) rather than rewriting the previous one, so revs
+    # pinned by older index commits stay reachable and keep building.
     git-src = {
-      url = "github:indexable-inc/git/aeb6a0b6680f5cc542df031b6dbe2983e1d4b981";
+      url = "github:indexable-inc/git/69fbc5cfd883f5a45c88f202325ba08d20fdbdcb";
       flake = false;
     };
 

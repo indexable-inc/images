@@ -38,3 +38,13 @@ the malformed header. The `nixpkgs` input here moves from `61b7c44c`
 (2026-07-17) to `e2587cae` (2026-07-23) to pick that up. Everything downstream
 follows `index/nixpkgs`, so the workstation config and the fleet inherit the fix
 from this one bump.
+
+That bump also carries git 2.54.0 to 2.55.0, and there is no rev in between:
+nixpkgs bumped git on 2026-07-11, four days before the libffi fix merged, so
+any tree with the fix already has the new git. `packages/git` asserts that
+nixpkgs' git version matches the `git-src` pin, so the single ix patch (linked
+worktrees borrowing the common-dir submodule object store, #3610) is rebased
+onto the `v2.55.0` tag. The rebase lands on a new branch,
+`ix-patched-v2.55.0`, instead of rewriting `ix-patched`. `git-src` is pinned by
+rev, and force-pushing the old branch would eventually let GitHub collect the
+old commit and break every index rev still pointing at it.

@@ -140,17 +140,17 @@
     "git-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1784724682,
-        "narHash": "sha256-RV8Xlvi1P7/qPYNlGWU90/kM6uAo4T+hWhrA3oT81Go=",
+        "lastModified": 1784960835,
+        "narHash": "sha256-9N1VyEYI7gpdR75evmQiO5fg546e4tc3W4zuwRFKbU0=",
         "owner": "indexable-inc",
         "repo": "git",
-        "rev": "aeb6a0b6680f5cc542df031b6dbe2983e1d4b981",
+        "rev": "69fbc5cfd883f5a45c88f202325ba08d20fdbdcb",
         "type": "github"
       },
       "original": {
         "owner": "indexable-inc",
         "repo": "git",
-        "rev": "aeb6a0b6680f5cc542df031b6dbe2983e1d4b981",
+        "rev": "69fbc5cfd883f5a45c88f202325ba08d20fdbdcb",
         "type": "github"
       }
     },
