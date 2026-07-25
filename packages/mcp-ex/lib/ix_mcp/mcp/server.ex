@@ -108,8 +108,7 @@ defmodule IxMcp.MCP.Server do
     """
     An MCP server whose REPL is Elixir: `exec` runs cells on one shared,
     persistent workspace (bindings survive across calls), each cell in its
-    own supervised BEAM process. Name the session before acting; set a topic
-    per work phase.
+    own supervised BEAM process.
 
     #{Tools.surface_guide()}
     """

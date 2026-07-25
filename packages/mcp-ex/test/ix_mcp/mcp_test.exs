@@ -21,12 +21,11 @@ defmodule IxMcp.MCPTest do
     assert response["result"]["instructions"] =~ "Read.file"
   end
 
-  test "the tool surface is exactly exec, session_set_name, and topic_set" do
+  test "the tool surface is exactly exec" do
     response = Server.handle(request("tools/list", %{}))
     tools = response["result"]["tools"]
 
-    assert tools |> Enum.map(& &1["name"]) |> Enum.sort() ==
-             ["exec", "session_set_name", "topic_set"]
+    assert tools |> Enum.map(& &1["name"]) == ["exec"]
 
     exec = Enum.find(tools, &(&1["name"] == "exec"))
     assert exec["inputSchema"]["required"] == ["code", "intent"]
@@ -48,18 +47,6 @@ defmodule IxMcp.MCPTest do
     assert text =~ ~s("status":"done")
     assert text =~ "hi"
     assert text =~ "=> 4"
-  end
-
-  test "session_set_name and topic_set round-trip" do
-    Server.handle(
-      request("tools/call", %{"name" => "session_set_name", "arguments" => %{"name" => "abc"}})
-    )
-
-    Server.handle(
-      request("tools/call", %{"name" => "topic_set", "arguments" => %{"topic" => "xyz"}})
-    )
-
-    assert IxMcp.Session.get() == %{name: "abc", topic: "xyz"}
   end
 
   test "unknown method returns a JSON-RPC error, notifications return nil" do

@@ -2,8 +2,8 @@ defmodule IxMcp.ActionLog do
   @moduledoc """
   Append-only SQLite record of every MCP action (#3512), normalized (#3532):
   a `sessions` row per server instance (created lazily on first use, so a
-  connection that never acts leaves no row), a `topics` row per `topic_set`
-  call (a timeline -- repeating a name makes a new row), and an `actions` row
+  connection that never acts leaves no row), a `topics` row per topic (a
+  timeline -- repeating a name makes a new row), and an `actions` row
   per `tools/call` referencing both. This module owns all SQLite access; the
   current session/topic ids live in `IxMcp.Session`. Pure logging for future
   reference; nothing on the hot path reads it.

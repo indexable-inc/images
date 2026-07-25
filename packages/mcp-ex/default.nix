@@ -182,10 +182,9 @@
     }
     ''
       set +e
-      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
-        '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_set_name","arguments":{"name":"smoke"}}}' \
         '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"utf8 wire roundtrip","budget":60,"code":"\"snow ☃\""}}}' \
         '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"binary output rides as escapes","budget":60,"code":"IO.puts(<<255, 97>> <> \"bin-marker\")"}}}' \
         '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"connection survives binary output","budget":60,"code":"\"alive-after-binary\""}}}' \
@@ -220,14 +219,6 @@
         *'"name":"exec"'*) ;;
         *)
           echo "tools/list did not advertise exec" >&2
-          printf '%s\n' "$out_lines" >&2
-          exit 1
-          ;;
-      esac
-      case "$out_lines" in
-        *'session named: smoke'*) ;;
-        *)
-          echo "tools/call session_set_name did not answer" >&2
           printf '%s\n' "$out_lines" >&2
           exit 1
           ;;
