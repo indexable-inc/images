@@ -23,6 +23,14 @@
           + "context. Give it an outcome plus the exact fields to return; it drives "
           + "the whole loop in its own index kernel and returns only the distilled "
           + "result, keeping screenshots and DOM dumps out of the main thread.";
+        # STILL THE PYTHON SERVER, and the last thing using it. This agent
+        # exists for browser automation and image/PDF sweeps, and `browser` is
+        # a Python-server tool with no counterpart in mcp-ex (whose surface is
+        # `exec` plus in-language callables). Its two siblings below moved to
+        # mcp-ex cleanly because they only shell out, which is `System.cmd/3`
+        # in Elixir. Swapping this one without a browser would delete the
+        # capability it is spawned for, so it waits on mcp-ex growing one --
+        # at which point packages/mcp can be deleted outright (#3823 follow-up).
         mcpServers = ix.mcp.toAgentMcpServers {
           own-kernel = {
             transport = "stdio";
@@ -103,8 +111,8 @@
         mcpServers = ix.mcp.toAgentMcpServers {
           own-kernel = {
             transport = "stdio";
-            command = lib.getExe repoPackages.mcp;
-            args = ["serve"];
+            command = lib.getExe repoPackages.mcp-ex;
+            args = [];
           };
         };
       };
@@ -118,17 +126,22 @@
 
         Cursor ships a semantic index of the repo; drive it headless (no TUI) from
         your own kernel, the `own-kernel` MCP server (use its tools, not any
-        inherited `mcp__index__*` ones). In its `python_exec`:
+        inherited `mcp__index__*` ones). In its `exec`:
 
-        ```python
-        res = await nu(
-            "^cursor-agent -p $env.Q --output-format text",
-            env={"Q": question},
-            cwd=repo_root,          # the repo the question is about
-            timeout=180,
-        )
-        print(res.item(0, 0))      # bare external stdout lands in one cell
+        ```elixir
+        {out, status} =
+          System.cmd("cursor-agent", ["-p", question, "--output-format", "text"],
+            cd: repo_root,          # the repo the question is about
+            stderr_to_stdout: true
+          )
+        IO.puts(out)
+        status
         ```
+
+        There is no shell wrapper to reach for here and none is needed: a cell is
+        its own BEAM process, so a subprocess blocks nobody. If the search runs
+        long, `exec` backgrounds it and hands you a job handle rather than timing
+        out.
 
         - `-p` is print/non-interactive mode: it has read + search tools, prints the
           answer, and exits. No trust gate, no PTY.
@@ -299,8 +312,8 @@
         mcpServers = ix.mcp.toAgentMcpServers {
           own-kernel = {
             transport = "stdio";
-            command = lib.getExe repoPackages.mcp;
-            args = ["serve"];
+            command = lib.getExe repoPackages.mcp-ex;
+            args = [];
           };
         };
       };
@@ -315,12 +328,21 @@
         the `own-kernel` MCP server: a fresh serve process spawned for this run,
         so a wedged spawning session cannot reach you. Name the session
         (`own-kernel`'s `session_set_name`), then run each command via its
-        `python_exec`:
+        `exec`:
 
-        ```python
-        r = await nu("^git -C /abs/path status --porcelain", check=False)
-        print(r.exit_code); print(r.result)
+        ```elixir
+        {out, code} =
+          System.cmd("git", ["-C", "/abs/path", "status", "--porcelain"],
+            stderr_to_stdout: true
+          )
+        IO.puts(out)
+        code
         ```
+
+        `System.cmd/3` does not raise on a non-zero exit, so the code comes back
+        as data, which is exactly the fidelity this agent exists for. Use
+        `System.cmd/3` directly rather than a shell string: arguments are a list,
+        so nothing re-splits or re-globs them on the way to the process.
 
         ## Rules
 

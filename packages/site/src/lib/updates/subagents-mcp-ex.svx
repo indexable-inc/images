@@ -1,0 +1,56 @@
+---
+id: subagents-mcp-ex
+postedAt: 2026-07-25T23:50:00-07:00
+title: "two of three subagents move to the Elixir kernel"
+tags: [agents, elixir]
+---
+
+The default MCP servers already point at `mcp-ex`, the Elixir kernel. Three
+subagents still spawned the Python server for their own private kernel. Two of
+them moved; one did not, and the one that did not is the interesting part.
+
+`cursor-search` and `executor` only ever shell out. In the Python kernel that
+meant the blessed `nu()` wrapper inside `python_exec`:
+
+```python
+r = await nu("^git -C /abs/path status --porcelain", check=False)
+print(r.exit_code); print(r.result)
+```
+
+`mcp-ex` deliberately has no `nu()`, and its README is worth quoting on why:
+the Python kernel needed a managed, non-blocking, cancellable shell path
+because one synchronous call on a shared asyncio loop freezes every session's
+jobs. On a preemptive runtime that wrapper is redundant surface area. A cell
+that needs a subprocess writes one:
+
+```elixir
+{out, code} =
+  System.cmd("git", ["-C", "/abs/path", "status", "--porcelain"],
+    stderr_to_stdout: true
+  )
+IO.puts(out)
+code
+```
+
+For `executor` this is better than a port, it is an upgrade. That agent exists
+for fidelity: the parent wants verbatim output and the real exit code.
+`System.cmd/3` returns the code as data rather than raising, and takes
+arguments as a list, so nothing re-splits or re-globs them between the brief
+and the process.
+
+## The one that stayed
+
+`index-action-runner` is spawned for browser automation and image or PDF
+sweeps. `browser` is a Python-server tool. `mcp-ex` exposes `exec` plus
+in-language callables — `Read.file`, `Memory.*`, `Ix.trace`, `Sessions.*` — and
+nothing that drives a browser.
+
+Swapping it anyway would have looked like a finished migration while deleting
+the capability the agent is spawned for. So it still runs the Python server,
+with a note saying it is the last consumer, why, and what has to exist before
+`packages/mcp` can be deleted.
+
+That also settles the wider question. The Python MCP cannot come out of the
+fleet base profile or the `embed` CLI yet, because this agent still needs it.
+The order is: a browser in `mcp-ex`, then the swap, then delete the package
+everywhere. Not: delete the package and discover what depended on it.
