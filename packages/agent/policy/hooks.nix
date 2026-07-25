@@ -4,6 +4,10 @@
   hookRunner,
   primaryCheckouts ? [],
   personalStartupContext ? false,
+  # Off by default: Opus 5 reaches for the review agent more than the work
+  # warrants, so an always-armed Stop gate turns a one-line fix into a
+  # four-agent fan-out. Opt in per consumer if you want the gate back.
+  alwaysOnReview ? false,
   # Consumer-supplied SessionStart context commands: each entry
   # ({ package, exeName ? null, args ? [], timeout ? 10 }) runs at session
   # start and its stdout is injected as session context. The generic seam
@@ -120,6 +124,7 @@
         matcher = "Write|Edit|MultiEdit|NotebookEdit";
         command = hookCommands.reviewEditLogger;
         agents = ["claude"];
+        enable = alwaysOnReview;
       }
       # Records each armed ScheduleWakeup fire time so the Stop gate below can
       # tell a dropped wakeup from a fired one (index#2259).
@@ -134,6 +139,7 @@
       {
         command = hookCommands.stopReviewGate;
         agents = ["claude"];
+        enable = alwaysOnReview;
       }
       # Retrospect a substantive session once per session (own marker), like
       # the review gate above — but out-of-band: the hook detaches a worker

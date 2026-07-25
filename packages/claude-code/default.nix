@@ -135,6 +135,9 @@
   # Disabled for the shared wrapper because those hooks print workstation-local
   # context that is not meaningful for other users.
   personalStartupContext ? false,
+  # Arms the PostToolUse edit logger and the Stop review gate. Off by default:
+  # Opus 5 over-triggers the review agent relative to the size of the change.
+  alwaysOnReview ? false,
   # Consumer-supplied SessionStart context commands
   # ({ package, exeName ? null, args ? [], timeout ? 10 }): each runs at
   # session start and its stdout is injected as session context. The generic
@@ -443,6 +446,7 @@
       hookRunner
       primaryCheckouts
       personalStartupContext
+      alwaysOnReview
       extraSessionStart
       ;
   };
