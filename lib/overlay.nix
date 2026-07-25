@@ -80,6 +80,17 @@ let
           __darwinAllowLocalNetworking = true;
         });
 
+      # requests-futures is the same sandbox-loopback problem as gunicorn, and
+      # deterministic rather than load-dependent: its tests stand up a local HTTP
+      # server, so all 12 error at socketserver.py:478 (`socket.bind`) with
+      # `PermissionError: [Errno 1] Operation not permitted`.
+      requests-futures = assert lib.assertMsg (pyprev.requests-futures.version == "1.0.2") ''
+        recheck the requests-futures loopback flag: expected nixpkgs
+        requests-futures 1.0.2, got ${pyprev.requests-futures.version}.'';
+        pyprev.requests-futures.overridePythonAttrs (_: {
+          __darwinAllowLocalNetworking = true;
+        });
+
       # dunamai's test__version__from_git__with_annotated_tags commits to a
       # scratch repo, then asserts the commit timestamp is within one minute of
       # `now`. That one minute is a wall-clock budget for the test's own setup,
