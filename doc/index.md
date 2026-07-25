@@ -79,7 +79,6 @@ User-facing guides for the hosted `ix` platform. Start at
 | [lake](lake/overview.md) | `packages/lake` (member `lake/iceberg`, crate `lake-iceberg`) is the Iceberg corpus lake: the durable, replayable log under the multi-source search corpus (issue #752), succeeding the ful... |
 | [launchk](launchk/overview.md) | `packages/launchk` builds launchk, a cursive (Rust TUI) tool for observing launchd agents and daemons, from source. |
 | [llm-clippy](llm-clippy/overview.md) | `packages/llm-clippy` builds a fork of `rust-lang/rust-clippy` carrying extra restriction lints tuned for LLM-assisted codebases. |
-| [mcp](mcp/overview.md) | `packages/mcp` is `ix-mcp` (the `ix_notebook_mcp` Python package): a Python execution MCP server. |
 | [minecraft](minecraft/overview.md) | `packages/minecraft` is a directory of small, single-purpose Minecraft tools in three languages. |
 | [minecraft-assets](minecraft-assets/overview.md) | `packages/minecraft-assets` is a Nix-only package (no Rust, no source code of its own) that produces authentic Minecraft GUI textures and the vanilla bitmap font by extracting them straig... |
 | [minestom](minestom/overview.md) | `packages/minestom` packages from-scratch Minecraft servers built on Minestom, the Java server library. |

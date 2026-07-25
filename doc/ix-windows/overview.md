@@ -10,11 +10,10 @@ reload, so scroll and focus survive), and closes when the resource closes or its
 producer disconnects.
 
 It reuses [dashboard-core](../dashboard-core/overview.md) for the entire
-transport, so the MCP needs no change: the MCP already publishes every
-`register_resource()` view as an [`HtmlView`] pane keyed `resource/<id>` (see
-`packages/mcp/ix_notebook_mcp/pane_bridge.py`), and this process just windows
-those panes. A producer's exec runs, namespace, and cells stay on the web
-canvas.
+transport, so any producer needs no change: a dashboard-core producer publishes
+every `register_resource()` view as an [`HtmlView`] pane keyed `resource/<id>`,
+and this process just windows those panes. A producer's exec runs, namespace,
+and cells stay on the web canvas.
 
 It is split into a reusable engine library (`src/lib.rs`, `[lib] name =
 "ix_windows"`) and a thin binary (`src/main.rs`, `[[bin]] name = "ix-windows"`).

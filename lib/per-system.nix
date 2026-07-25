@@ -1696,11 +1696,6 @@
       lint-fixed = lintFix.fixed;
       lint-fix-patch = lintFix.patch;
       site-dev = site.passthru.devServer;
-      # Embedding duplicate-code finder CLI (index#3905): the ix-mcp kernel's
-      # bundled `embed` module run as `python -m embed` on the same pinned
-      # interpreter, so `nix run .#embed -- dupes . --k 40 --json` sees the
-      # same torch/MPS runtime and parquet cache as in-kernel `import embed`.
-      embed = repoPackages.mcp.passthru.embedCli;
       # Regenerates the COMMITTED `.ix` converter (lib/ix2nix.wasm) that
       # `lib.importIxWasm` loads with zero mid-eval store realization; the
       # `ix2nix-wasm-fresh` check byte-compares the file against the built

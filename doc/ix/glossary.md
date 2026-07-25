@@ -39,7 +39,7 @@ The default Mixedbread store is itself named `index`
 Three unrelated things:
 
 - **`nix run`** - the Nix command that launches any flake app (`.#search`,
-  `.#mcp`, ...).
+  `.#mcp-ex`, ...).
 - **`.#run`** - terminal session recorder: records a command's terminal
   session, timing, and queryable output events. `nix run .#run -- <cmd>`
   (`packages/tui/run/default.nix:14,17`).
@@ -49,12 +49,10 @@ Three unrelated things:
 ## mcp
 
 - The **protocol** (Model Context Protocol).
-- The **server** package: flake app `.#mcp`, but the binary is `ix-mcp` and the
-  Python module is `ix_notebook_mcp`. Start it with `nix run .#mcp -- serve`
-  (`packages/mcp/default.nix:289`, `packages/mcp/ix_notebook_mcp/`,
-  `packages/mcp/README.md:13`).
-- A **dashboard embedded in `ix-mcp`** (distinct from the standalone
-  `.#dashboard`; see below) (`packages/mcp/README.md:17`).
+- The **server** package: flake app `.#mcp-ex`, the Elixir kernel, binary
+  `ix-mcp-ex` (`packages/mcp-ex/`, `packages/mcp-ex/README.md`). This is the
+  only MCP kernel; the retired Python server (`packages/mcp`, `ix_notebook_mcp`)
+  is gone.
 
 ## fleet
 
@@ -71,8 +69,6 @@ Three unrelated things:
   producer socket into one live board (`packages/dashboard/dashboard/Cargo.toml:2,6`).
 - **`dashboard-core`** - the shared library: wire types, pane publisher, canvas
   server (`packages/dashboard/dashboard-core/Cargo.toml:2,6`).
-- The **dashboard embedded in `ix-mcp`** - one view of the MCP server's feed,
-  served over HTTP (`packages/mcp/README.md:17`).
 
 ## Wheel / import / binary names
 
@@ -82,7 +78,6 @@ These do not match each other - check this table before importing or invoking.
 | --- | --- | --- | --- | --- |
 | `search` | `.#search` | `search` | - | - |
 | `search-py` | - | - | `search` | `ix-search` |
-| `mcp` | `.#mcp` | `ix-mcp` | `ix_notebook_mcp` | - |
 | `polars-mixedbread` | - | - | `polars_mixedbread` | `polars-mixedbread` |
 | `file-search` | `.#file-search` | `file-search` | - | - |
 

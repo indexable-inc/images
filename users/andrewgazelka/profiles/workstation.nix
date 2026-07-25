@@ -518,7 +518,6 @@ in {
       # finalPackage); listing it here too would just double-add the same drv.
       # codex is likewise installed by programs.codex below (home.packages =
       # [ cfg.package ]); not listed here to avoid double-adding the same drv.
-      indexPkgs.mcp # `ix-mcp`: index MCP server (search_semantic/search_grep, python_*); pinned via the `index` flake input, bump with `nix flake update index`
       indexPkgs.git-log-pretty # `git-log-pretty`: pretty ahead-of-main git log; same pinned `index` input
       indexPkgs.ast-merge # `ast-merge`: the index repo's .gitattributes merge driver for *.rs; without it on PATH a rebase outside the dev shell records markerless "ours" conflicts (silent data loss); same pinned `index` input
       indexPkgs.mynoise # `mynoise`: play myNoise.net generators (`mynoise RAIN`, `--list`); same pinned `index` input

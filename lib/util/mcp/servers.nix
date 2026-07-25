@@ -106,9 +106,9 @@ in {
   `toClaudeJson` / `toCodexEntries` / `toCursorJson`.
 
   Arguments:
-  - `indexCommand`: path to the `ix-mcp` entrypoint, or `null` when the `mcp`
-    sibling is out of scope (e.g. the overlay package set), in which case only
-    the keyless `exa` server is returned.
+  - `indexCommand`: path to the `ix-mcp-ex` entrypoint, or `null` when the
+    `mcp-ex` sibling is out of scope (e.g. the overlay package set), in which
+    case only the keyless `exa` server is returned.
   */
   inherit defaultServers;
 

@@ -15,7 +15,7 @@
 # Grep) got Glob and Grep but neither Bash nor Read (#2077, #2153; probed
 # 2026-07-07 on 2.1.197). Subagents that need shell must bring their own
 # index kernel via `mcpServers` (see subagents.nix `executor` and
-# `index-action-runner`); do not rely on a declared Bash surviving the deny.
+# `cursor-search`); do not rely on a declared Bash surviving the deny.
 # The inline server must carry a name the parent session does not already
 # bind: a same-named inline `index` is silently discarded and the parent's
 # connection shared instead (#2382), which is no isolation at all.
