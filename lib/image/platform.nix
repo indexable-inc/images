@@ -762,7 +762,8 @@ in {
           "dynamic-derivations"
           "git-hashing"
           # `.ix` imports convert in-eval via `builtins.wasm` over the
-          # committed converter (lib/ix2nix.wasm via importIxWasm, #4136); the
+          # `ix2nix-wasm` package output (importIxWasm; IFD as of 2026-07-25,
+          # replacing the committed artifact of #4136). The
           # in-VM client is the wasm-enabled nix-ix, which gates the builtin
           # behind this feature, so plain `nix build` / `nix eval` in a VM
           # can load `.ix` modules without per-command flags.

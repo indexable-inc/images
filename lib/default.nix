@@ -3,6 +3,8 @@
 {
   nixpkgs,
   paths,
+  # `system: <ix2nix-wasm package>`; see the note at `importIxWasmFor`.
+  ix2nixWasmFor,
   rust-overlay,
   sdk-prebuilt-nixpkgs,
   sdk-prebuilt-rust-overlay,
@@ -820,9 +822,10 @@
 
   /**
   Import a `.ix` (JavaScript-syntax Nix) module: the in-eval `builtins.wasm`
-  conversion through the COMMITTED `lib/ix2nix.wasm`, a plain in-tree file,
-  so no store path is realized mid-eval (no IFD and no substitution; a
-  fresh `ix init` project evaluates offline). Requires an
+  conversion through the `ix2nix-wasm` package output. That output is a
+  derivation, so importing a `.ix` file IS import-from-derivation and needs
+  either a warm `cache.ix.dev` or a builder that can produce the wasm32
+  artifact. Requires an
   evaluator with `wasm-builtin` (`ix eval` / `ix apply`, or nix-ix with the
   feature in `extra-experimental-features`); on anything else importing a
   `.ix` file throws with those instructions. CI bootstraps the nix-ix client
@@ -835,15 +838,43 @@
   stay because scaffolded flakes and repo callers consume all of them
   (#4125).
   */
+  /**
+  The `.ix` converter, built rather than committed (2026-07-25).
+
+  `lib/ix2nix.wasm` used to be a checked-in artifact so that importing a `.ix`
+  module realized nothing mid-eval. That bought offline, builder-free evals at
+  the cost of a binary in the tree that silently goes stale: the freshness gate
+  caught it, nothing fixed it, and `flake-check` sat red on main until someone
+  ran `ix2nix-wasm-regen` by hand.
+
+  Now the converter is the `ix2nix-wasm` package output, so importing a `.ix`
+  module is IFD. It cannot drift from the crate source, because it IS the crate
+  source. The trade is deliberate and is a real cost, not a free win: an eval
+  that touches a `.ix` file now needs that wasm32 output, and the artifact is
+  built on x86_64-linux, so a Mac evaluating `.ix` modules needs a remote
+  builder or a warm `cache.ix.dev`. That reverses #4125/#4127, which introduced
+  the committed artifact to keep `ix init` scaffold evals off the wasm32 graph.
+
+  Always built on x86_64-linux, whatever the host system asks for, which is
+  why `importIxWasmFor` still ignores its argument exactly as it did when the
+  artifact was committed. The pin is load-bearing, not a cache optimization:
+  the wasm32 output is NOT bit-identical across build hosts, because the
+  native toolchain's store path feeds `-C metadata` and so the symbol hashes
+  differ per host. Without the pin a Mac would build its own converter, and
+  every `.ix` module would convert through different bytes there than in CI.
+  The committed artifact was pinned to the x86_64-linux build for that same
+  reason; see the note on the retired `fresh` gate in packages/ix2nix/wasm.
+
+  Callers that already hand in their own converter -- scaffolded flakes, the
+  e2e -- are unaffected: `converter` was always a parameter of import-ix.nix.
+  */
   importIxWasmFor = _hostSystem: importIxWasm;
 
   importIxWasm = import (paths.root + "/packages/ix2nix/import-ix.nix") {
-    # The committed converter lives under lib/, not in the ix2nix crate
-    # directory, because unit-scoped crate sources take the whole crate dir:
-    # in there, the artifact would feed its own build's input hash and the
-    # freshness gate could never converge (same placement reasoning as the
-    # retired lib/import-ix-native.nix).
-    converter = paths.root + "/lib/ix2nix.wasm";
+    # `<out>/lib/ix2nix.wasm`, not the output root: `builtins.wasm` wants the
+    # object itself and reading the directory fails with "read of 96 bytes: Is
+    # a directory". Same path the package's own e2e passes.
+    converter = "${ix2nixWasmFor "x86_64-linux"}/lib/ix2nix.wasm";
   };
 
   importIxFor = importIxWasmFor;

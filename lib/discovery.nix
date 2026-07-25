@@ -126,8 +126,8 @@
   the `examples/[<category>/]<name>/default.ix` layout (the category
   level is optional for an example that is its own category)
   (JavaScript-syntax Nix, converted in-eval through `importIxFor`, i.e.
-  `builtins.wasm` over the committed converter; repo evals run on the
-  nix-ix client with `wasm-builtin`). Keys in the returned attrset join
+  `builtins.wasm` over the built `ix2nix-wasm` converter; repo evals run
+  on the nix-ix client with `wasm-builtin`). Keys in the returned attrset join
   the category and
   name with `-`, so `examples/hermes/api-server` contributes
   `hermes-api-server`. Each config is imported with
