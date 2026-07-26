@@ -13,7 +13,7 @@ tags:
 `lib/ix2nix.wasm` is deleted. `index.lib.importIxWasm` now reads
 `<out>/lib/ix2nix.wasm` from the `ix2nix-wasm` package, so importing a `.ix`
 module is import-from-derivation again. This reverses
-[the committed-artifact change](/updates/committed-ix2nix-wasm) from two days
+[the committed-artifact change](/committed-ix2nix-wasm/) from two days
 earlier.
 
 ## what the committed copy actually cost
