@@ -22,53 +22,114 @@ defmodule IxMcp.Evaluator do
   @type refs :: %{vars: [atom()], modules: [module()]}
 
   @doc """
-  Parse a cell and read off what it mentions: the variables it names and the
-  modules it declares. The caller runs the resulting AST with
+  Parse a cell and read off what it mentions: the workspace variables it
+  reads and the modules it declares. The caller runs the resulting AST with
   `eval_quoted/3`; splitting parse from eval is what lets the workspace warn
   a cell about a variable another cell changed under it *before* the cell
   uses it, since a cell that raises never reaches the merge (#3967).
   """
   @spec scan(String.t()) :: {:ok, Macro.t(), refs()} | {:parse_error, String.t()}
   def scan(code) when is_binary(code) do
+    # `file:` matches what `IxMcp.Workspace` puts in the eval env, which is
+    # what error positions are reported against.
     case Code.string_to_quoted(code, file: "cell", columns: true, emit_warnings: false) do
-      {:ok, quoted} -> {:ok, quoted, %{vars: variables(quoted), modules: modules(quoted)}}
+      {:ok, quoted} -> {:ok, quoted, read_refs(quoted)}
       {:error, {meta, message, token}} -> {:parse_error, format_parse_error(meta, message, token)}
     end
   end
 
-  # A variable node is `{name, meta, context}` with an atom context; a call
-  # carries its arguments there instead, and an alias carries a list. `_`
-  # prefixed names are deliberately throwaway and never worth reporting.
-  defp variables(quoted) do
-    {_quoted, names} =
-      Macro.prewalk(quoted, MapSet.new(), fn
+  # One walk, three questions: which names does the cell mention, which of
+  # those does it introduce itself, and which modules does it declare. A name
+  # the cell introduces in a clause head is that clause's own variable and
+  # says nothing about the workspace's, so `fn body -> body end` must not
+  # count as reading the workspace's `body`. An `=` is deliberately not a
+  # binder here: `body = String.trim(body)` genuinely reads the old value.
+  defp read_refs(quoted) do
+    {_quoted, acc} =
+      Macro.prewalk(quoted, %{vars: MapSet.new(), bound: MapSet.new(), modules: []}, &visit/2)
+
+    %{
+      vars: acc.vars |> MapSet.difference(acc.bound) |> Enum.sort(),
+      modules: Enum.reverse(acc.modules)
+    }
+  end
+
+  # A `defmodule`/`def` body is its own scope and cannot see cell variables at
+  # all, and a `quote` block is code that may never run; neither tells us
+  # anything about what this cell reads, so both are walked for nothing but
+  # the module names `defmodule` claims.
+  defp visit({:quote, _meta, _args} = node, acc), do: {skip(node), acc}
+
+  defp visit({:defmodule, _meta, [alias_node | rest]} = node, acc) do
+    acc =
+      case declared_module(alias_node) do
+        nil -> acc
+        module -> %{acc | modules: [module | acc.modules]}
+      end
+
+    # Walk the body for nested defmodules only; nothing in it reads the cell.
+    {_walked, inner} =
+      Macro.prewalk(rest, %{acc | vars: MapSet.new(), bound: MapSet.new()}, &visit/2)
+
+    {skip(node), %{acc | modules: inner.modules}}
+  end
+
+  defp visit({def_kind, _meta, _args} = node, acc) when def_kind in [:def, :defp, :defmacro],
+    do: {skip(node), acc}
+
+  # `fn`, `case`, `with`, `for`, `try` and friends all reach the compiler as
+  # `->` clauses; a `<-` generator binds the same way.
+  defp visit({:->, _meta, [head, _body]} = node, acc),
+    do: {node, %{acc | bound: MapSet.union(acc.bound, pattern_vars(head))}}
+
+  defp visit({:<-, _meta, [pattern, _source]} = node, acc),
+    do: {node, %{acc | bound: MapSet.union(acc.bound, pattern_vars(pattern))}}
+
+  # A pin reads the outer value even inside a pattern, so it is a mention
+  # that no clause head can take away.
+  defp visit({:^, _meta, [{name, _var_meta, context}]} = node, acc)
+       when is_atom(name) and is_atom(context) do
+    {node, %{acc | bound: MapSet.delete(acc.bound, name), vars: MapSet.put(acc.vars, name)}}
+  end
+
+  defp visit({name, _meta, context} = node, acc) when is_atom(name) and is_atom(context) do
+    {node, if(mentionable?(name), do: %{acc | vars: MapSet.put(acc.vars, name)}, else: acc)}
+  end
+
+  defp visit(node, acc), do: {node, acc}
+
+  # Replacing a node with an atom is how a prewalk declines to descend.
+  defp skip(_node), do: :__skipped__
+
+  # `defmodule __MODULE__.Inner` and `defmodule unquote(name)` name a module
+  # the AST cannot resolve; there is nothing to claim and `Module.concat/1`
+  # would raise on the attempt.
+  defp declared_module({:__aliases__, _meta, parts}) do
+    if Enum.all?(parts, &is_atom/1), do: Module.concat(parts)
+  end
+
+  defp declared_module(_other), do: nil
+
+  defp pattern_vars(pattern) do
+    {_pattern, names} =
+      Macro.prewalk(pattern, MapSet.new(), fn
+        {:^, _meta, _args} = node, names ->
+          {skip(node), names}
+
         {name, _meta, context} = node, names when is_atom(name) and is_atom(context) ->
-          {node, if(reportable_var?(name), do: MapSet.put(names, name), else: names)}
+          {node, if(mentionable?(name), do: MapSet.put(names, name), else: names)}
 
         node, names ->
           {node, names}
       end)
 
-    Enum.sort(names)
+    names
   end
 
   @pseudo_vars [:__MODULE__, :__DIR__, :__ENV__, :__CALLER__, :__STACKTRACE__, :__block__]
 
-  defp reportable_var?(name) do
+  defp mentionable?(name) do
     name not in @pseudo_vars and not String.starts_with?(Atom.to_string(name), "_")
-  end
-
-  defp modules(quoted) do
-    {_quoted, declared} =
-      Macro.prewalk(quoted, [], fn
-        {:defmodule, _meta, [{:__aliases__, _alias_meta, parts} | _rest]} = node, declared ->
-          {node, [Module.concat(parts) | declared]}
-
-        node, declared ->
-          {node, declared}
-      end)
-
-    Enum.reverse(declared)
   end
 
   @doc "Evaluate an already-parsed cell against a workspace snapshot."

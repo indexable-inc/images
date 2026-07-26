@@ -404,9 +404,8 @@ defmodule IxMcp.Jobs.Job do
         # a quiet wrapper through this, #3934). Process dictionary, not a
         # closure: the id must be readable from inside the running cell.
         Process.put(:ix_job_id, id)
-        {binding, env} = Workspace.snapshot()
 
-        outcome = evaluate(code, binding, env, writer)
+        outcome = evaluate(code, writer)
 
         send(job, {:eval_finished, self(), outcome})
       end)
@@ -436,14 +435,17 @@ defmodule IxMcp.Jobs.Job do
   # once after, about the variables this cell took from somebody else. The
   # first has to come before evaluation, because the cell holding a clobbered
   # value is usually the cell that raises, and a raising cell never merges.
-  defp evaluate(code, binding, env, writer) do
+  defp evaluate(code, writer) do
     case Evaluator.scan(code) do
       {:ok, quoted, refs} ->
-        before = Workspace.check_cell(refs, writer)
+        # One visit to the workspace, so the warnings describe exactly the
+        # values this cell was handed rather than whatever a concurrent cell
+        # merged between the snapshot and the question.
+        {binding, env, before} = Workspace.begin_cell(refs, writer)
 
         case Evaluator.eval_quoted(quoted, binding, env) do
           {:ok, value, binding, env, diags} ->
-            {:done, value, before ++ diags ++ Workspace.merge(binding, env, writer)}
+            {:done, value, before ++ diags ++ Workspace.merge(binding, env, refs, writer)}
 
           {:runtime_error, formatted, diags} ->
             {:failed, formatted, before ++ diags}

@@ -58,7 +58,7 @@ defmodule IxMcp.WorkspaceProvenanceTest do
     {_c, warned} = diagnostics(~s(body = ["settled"]), "A takes it back")
     assert warned =~ "changed type under this workspace"
 
-    {_d, quiet} = diagnostics(~s[length(body)], "A uses it")
+    {_d, quiet} = diagnostics("length(body)", "A uses it")
     refute quiet =~ "changed type under this workspace"
   end
 
@@ -71,7 +71,7 @@ defmodule IxMcp.WorkspaceProvenanceTest do
 
     # Same type means no crash waiting downstream, so the reader is not
     # interrupted; the write side is where the collision is visible.
-    {_c, quiet} = diagnostics(~s[String.length(out)], "A uses out")
+    {_c, quiet} = diagnostics("String.length(out)", "A uses out")
     refute quiet =~ "shared binding"
   end
 
@@ -82,7 +82,7 @@ defmodule IxMcp.WorkspaceProvenanceTest do
 
   test "merely reading a variable does not take it over" do
     {a, _} = diagnostics(~s(shared = "value"), "A binds shared")
-    {_b, quiet} = diagnostics(~s[String.length(shared)], "B reads shared")
+    {_b, quiet} = diagnostics("String.length(shared)", "B reads shared")
     refute quiet =~ "shared binding"
 
     owner = Enum.find(Workspace.owners(), &(&1.name == :shared))
@@ -130,6 +130,92 @@ defmodule IxMcp.WorkspaceProvenanceTest do
       )
 
     refute quiet =~ "shared module"
+  end
+
+  test "a shadowed local is not a read of the shared variable" do
+    {_a, _} = diagnostics(~s(body = "html"), "A binds body")
+    {_b, _} = diagnostics(~s(body = ["lines"]), "B clobbers body")
+
+    # `body` here is the anonymous function's own parameter and cannot reach
+    # the workspace's, so warning about it would be crying wolf.
+    {_c, quiet} = diagnostics("Enum.map([1, 2], fn body -> body + 1 end)", "C shadows body")
+    refute quiet =~ "shared binding"
+
+    {_d, quiet} = diagnostics("case {:ok, 1} do {:ok, body} -> body end", "C matches body")
+    refute quiet =~ "shared binding"
+
+    # Reading it and rebinding it in one expression is a real read.
+    {_e, warned} = diagnostics("body = length(body)", "C reads then rebinds body")
+    assert warned =~ "changed type under this workspace"
+  end
+
+  test "a cell that puts the type back is not reported as the one that broke it" do
+    {_a, _} = diagnostics(~s(body = "html"), "A binds body")
+    {_b, _} = diagnostics(~s(body = ["lines"]), "B clobbers body")
+    {_c, _} = diagnostics(~s(body = "repaired"), "C repairs body")
+
+    {_d, quiet} = diagnostics("String.length(body)", "A uses body again")
+    refute quiet =~ "shared binding"
+  end
+
+  test "a defmodule the AST cannot resolve does not kill the cell" do
+    {summary, _} =
+      diagnostics(
+        "defmodule OuterScan do\n  defmodule __MODULE__.Inner do\n    def hi, do: :ok\n  end\nend",
+        "A defines a nested module"
+      )
+
+    assert summary.status == :done
+    # The module is defined by the cell, so this file cannot call into it.
+    assert function_exported?(OuterScan.Inner, :hi, 0)
+  end
+
+  test "a defmodule inside quote claims nothing" do
+    {_a, _} =
+      diagnostics("q = quote do\n  defmodule QuotedPage do\n  end\nend", "A quotes a module")
+
+    {_b, quiet} =
+      diagnostics("defmodule QuotedPage do\n  def render, do: :ok\nend", "B defines it for real")
+
+    refute quiet =~ "shared module"
+  end
+
+  test "a failed cell claims neither its variables nor its modules" do
+    {failed, _} =
+      diagnostics(
+        ~s(defmodule ClaimedOnFailure do\n  def hi, do: :ok\nend\n\nraise "boom"),
+        "A defines then raises"
+      )
+
+    assert failed.status == :failed
+
+    {_b, quiet} =
+      diagnostics("defmodule ClaimedOnFailure do\n  def hi, do: :no\nend", "B defines it")
+
+    refute quiet =~ "shared module"
+  end
+
+  test "an improper list does not take the workspace down" do
+    workspace = Process.whereis(Workspace)
+    {summary, _} = diagnostics(~s(iodata = ["a" | "b"]), "A binds iodata")
+
+    assert summary.status == :done
+    assert Process.whereis(Workspace) == workspace
+    assert Enum.find(Workspace.owners(), &(&1.name == :iodata)).shape == "a term"
+  end
+
+  test "Ix.bindings reports names that predate the provenance map" do
+    {_a, _} = diagnostics(~s(restored = "value"), "A binds restored")
+    {binding, env} = Workspace.snapshot()
+    IxMcp.Checkpoint.store(binding, env)
+    IxMcp.Checkpoint.store_provenance(%{owners: %{}, contested: %{}, modules: %{}})
+
+    :ok = Supervisor.terminate_child(IxMcp.Supervisor, Workspace)
+    {:ok, _pid} = Supervisor.restart_child(IxMcp.Supervisor, Workspace)
+
+    orphan = Enum.find(IxMcp.Kernel.bindings(), &(&1.name == :restored))
+    assert orphan.job == nil
+    assert orphan.shape == "a 5-byte binary"
   end
 
   test "provenance survives a workspace restart" do

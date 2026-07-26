@@ -65,6 +65,7 @@ defmodule IxMcp.Checkpoint do
   @spec clear() :: :ok
   def clear do
     :ets.delete(@table, :workspace)
+    :ets.delete(@table, :provenance)
     :ok
   end
 

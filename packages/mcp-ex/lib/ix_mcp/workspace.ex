@@ -24,6 +24,8 @@ defmodule IxMcp.Workspace do
 
   use GenServer
 
+  alias IxMcp.Evaluator
+
   # `Kernel` would shadow Elixir's; cells reach trace/restart as `Ix`.
   @prelude "alias IxMcp.Jobs; alias IxMcp.Api; alias IxMcp.Fleet; " <>
              "alias IxMcp.Read; alias IxMcp.Edit; alias IxMcp.PrWatch; alias IxMcp.Tui; " <>
@@ -52,9 +54,6 @@ defmodule IxMcp.Workspace do
           shape: String.t()
         }
 
-  @typedoc "What a cell mentions, read off its AST before it runs."
-  @type refs :: %{vars: [atom()], modules: [module()]}
-
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)
@@ -67,27 +66,30 @@ defmodule IxMcp.Workspace do
   end
 
   @doc """
-  What the cell about to run should be told, and the module claims it makes.
+  Open a cell: the {binding, env} it evaluates against, plus what it should
+  be told before it runs.
 
-  Called with the names the cell's source mentions, before it evaluates, so
-  the warning lands above the failure rather than after it: a cell that
-  crashes never merges, and the read side of a clobber is exactly the cell
-  that crashes. Returns diagnostic lines, and records this cell as the
-  definer of the modules it declares.
+  One call, not a snapshot followed by a question, so the warnings describe
+  exactly the values the cell is handed. The warnings come before evaluation
+  because a cell that raises never merges, and the cell holding a clobbered
+  value is usually the cell that raises. Nothing is recorded here; a cell
+  that fails claims nothing.
   """
-  @spec check_cell(refs(), writer()) :: [String.t()]
-  def check_cell(refs, writer) do
-    GenServer.call(__MODULE__, {:check_cell, refs, writer})
+  @spec begin_cell(Evaluator.refs(), writer()) ::
+          {Code.binding(), Macro.Env.t(), [String.t()]}
+  def begin_cell(refs, writer) do
+    GenServer.call(__MODULE__, {:begin_cell, refs, writer})
   end
 
   @doc """
-  Merge a finished cell's resulting context back into the shared state.
-  Returns a diagnostic line for every variable this cell took over from
-  another cell.
+  Merge a finished cell's resulting context back into the shared state, and
+  record it as the owner of the variables it wrote and the modules it
+  declared. Returns a diagnostic line for every variable this cell took over
+  from another cell.
   """
-  @spec merge(Code.binding(), Macro.Env.t(), writer()) :: [String.t()]
-  def merge(binding, env, writer) do
-    GenServer.call(__MODULE__, {:merge, binding, env, writer})
+  @spec merge(Code.binding(), Macro.Env.t(), Evaluator.refs(), writer()) :: [String.t()]
+  def merge(binding, env, refs, writer) do
+    GenServer.call(__MODULE__, {:merge, binding, env, refs, writer})
   end
 
   @doc "Names bound right now (for introspection / api surface)."
@@ -129,44 +131,39 @@ defmodule IxMcp.Workspace do
     {:reply, {state.binding, state.env}, state}
   end
 
+  # Driven off the binding, not off the provenance map: a name restored from
+  # a checkpoint written before this existed has a value and no owner, and
+  # leaving it out would report an empty workspace that is not empty.
   def handle_call(:owners, _from, state) do
     rows =
-      state.owners
-      |> Enum.sort_by(fn {name, _owner} -> name end)
-      |> Enum.map(fn {name, owner} ->
-        %{
-          name: name,
-          shape: owner.shape,
-          job: owner.job,
-          intent: owner.intent,
-          session_id: owner.session_id,
-          session: owner.session,
-          at: owner.at
-        }
-      end)
+      state.binding
+      |> Enum.sort_by(fn {name, _value} -> name end)
+      |> Enum.map(fn {name, value} -> row(name, value, Map.get(state.owners, name)) end)
 
     {:reply, rows, state}
   end
 
-  def handle_call({:check_cell, refs, writer}, _from, state) do
+  def handle_call({:begin_cell, refs, writer}, _from, state) do
     now = DateTime.utc_now()
 
-    var_warnings =
-      Enum.flat_map(Map.get(refs, :vars, []), &contested_warning(state, &1, writer, now))
+    warnings =
+      Enum.flat_map(Map.get(refs, :vars, []), &contested_warning(state, &1, writer, now)) ++
+        Enum.flat_map(Map.get(refs, :modules, []), &module_warning(state, &1, writer, now))
 
-    {module_warnings, modules} = claim_modules(state, Map.get(refs, :modules, []), writer, now)
-
-    state = %{state | modules: modules}
-    checkpoint_provenance(state)
-    {:reply, var_warnings ++ module_warnings, state}
+    {:reply, {state.binding, state.env, warnings}, state}
   end
 
-  def handle_call({:merge, binding, env, writer}, _from, state) do
+  def handle_call({:merge, binding, env, refs, writer}, _from, state) do
     now = DateTime.utc_now()
 
     {warnings, owners, contested} =
       Enum.reduce(binding, {[], state.owners, state.contested}, fn {name, value}, acc ->
         record_write(state, name, value, writer, now, acc)
+      end)
+
+    modules =
+      Enum.reduce(Map.get(refs, :modules, []), state.modules, fn module, modules ->
+        Map.put(modules, module, definition(writer, now))
       end)
 
     # Variables the cell bound or rebound win; variables it never touched
@@ -178,7 +175,8 @@ defmodule IxMcp.Workspace do
       | binding: merged,
         env: env,
         owners: owners,
-        contested: contested
+        contested: contested,
+        modules: modules
     }
 
     IxMcp.Checkpoint.store(state.binding, state.env)
@@ -196,6 +194,8 @@ defmodule IxMcp.Workspace do
   # A name the cell merely read comes back from `prune_binding` holding the
   # very term it was given, so an identical value is not a write and must not
   # take ownership away from the cell that produced it.
+  defp record_write(_state, name, _value, _writer, _now, acc) when not is_atom(name), do: acc
+
   defp record_write(state, name, value, writer, now, {warnings, owners, contested}) do
     case Keyword.fetch(state.binding, name) do
       {:ok, previous} when previous === value ->
@@ -211,7 +211,7 @@ defmodule IxMcp.Workspace do
               rebind(name, was, theirs, value, mine, warnings, contested)
 
             _first_binding_or_own_variable ->
-              {warnings, Map.delete(contested, name)}
+              {warnings, settle(contested, name, mine)}
           end
 
         {warnings, Map.put(owners, name, mine), contested}
@@ -225,13 +225,28 @@ defmodule IxMcp.Workspace do
         "#{shape(value, mine)}. #{tail(theirs, mine)}"
 
     contested =
-      if theirs.tag == mine.tag do
-        Map.delete(contested, name)
-      else
-        Map.put(contested, name, %{was: theirs, now: mine})
+      cond do
+        theirs.tag == mine.tag -> Map.delete(contested, name)
+        restores?(contested, name, mine) -> Map.delete(contested, name)
+        true -> Map.put(contested, name, %{was: theirs, now: mine})
       end
 
     {[warning | warnings], contested}
+  end
+
+  defp restores?(contested, name, mine) do
+    match?({:ok, %{was: %{tag: tag}}} when tag == mine.tag, Map.fetch(contested, name))
+  end
+
+  # A write that puts the name back to the type it was contested away from is
+  # the repair, not a second incident: clearing here is what stops the cell
+  # that fixed `body` from being reported as the cell that broke it.
+  defp settle(contested, name, mine) do
+    case Map.fetch(contested, name) do
+      {:ok, %{was: %{tag: tag}}} when tag == mine.tag -> Map.delete(contested, name)
+      {:ok, _still_contested} -> contested
+      :error -> contested
+    end
   end
 
   # The read side of a clobber: reported to any later cell whose source
@@ -256,32 +271,56 @@ defmodule IxMcp.Workspace do
 
   # Modules are global to the BEAM no matter whose cell defines them, so
   # redefinition stays legal and stays warned about -- the compiler's own
-  # "redefining module Page" says nothing about who had it first.
-  defp claim_modules(state, declared, writer, now) do
-    Enum.reduce(declared, {[], state.modules}, fn module, {warnings, modules} ->
-      mine = %{
-        job: writer.job,
-        intent: writer.intent,
-        session_id: writer.session_id,
-        session: writer.session,
-        at: now,
-        tag: :module,
-        shape: "a module"
-      }
+  # "redefining module Page" says nothing about who had it first. Reported
+  # before the cell runs, recorded only when it succeeds.
+  defp module_warning(state, module, writer, now) do
+    case takeover(Map.get(state.modules, module), writer) do
+      %{} = theirs ->
+        [
+          "warning: shared module: #{inspect(module)} was defined #{ago(theirs.at, now)} by " <>
+            "#{origin(theirs, writer)}; this cell redefines it for every agent on this " <>
+            "kernel, because modules are global to the BEAM."
+        ]
 
-      case takeover(Map.get(modules, module), writer) do
-        %{} = theirs ->
-          warning =
-            "warning: shared module: #{inspect(module)} was defined #{ago(theirs.at, now)} by " <>
-              "#{origin(theirs, mine)}; this cell redefines it for every agent on this kernel, " <>
-              "because modules are global to the BEAM."
+      nil ->
+        []
+    end
+  end
 
-          {warnings ++ [warning], Map.put(modules, module, mine)}
+  defp definition(writer, now) do
+    %{
+      job: writer.job,
+      intent: writer.intent,
+      session_id: writer.session_id,
+      session: writer.session,
+      at: now,
+      tag: :module,
+      shape: "a module"
+    }
+  end
 
-        nil ->
-          {warnings, Map.put(modules, module, mine)}
-      end
-    end)
+  defp row(name, value, nil) do
+    %{
+      name: name,
+      shape: shape_of(value),
+      job: nil,
+      intent: nil,
+      session_id: nil,
+      session: nil,
+      at: nil
+    }
+  end
+
+  defp row(name, _value, owner) do
+    %{
+      name: name,
+      shape: owner.shape,
+      job: owner.job,
+      intent: owner.intent,
+      session_id: owner.session_id,
+      session: owner.session,
+      at: owner.at
+    }
   end
 
   # A cell rewriting its own variable is not a collision: the same job means
@@ -349,16 +388,25 @@ defmodule IxMcp.Workspace do
   defp tag(value) when is_pid(value), do: :pid
   defp tag(_value), do: :term
 
-  defp shape_of(value) when is_binary(value), do: counted(byte_size(value), "byte binary")
-  defp shape_of(value) when is_list(value), do: counted(length(value), "element list")
-  defp shape_of(%module{}), do: "a #{inspect(module)} struct"
-  defp shape_of(value) when is_map(value), do: counted(map_size(value), "key map")
-  defp shape_of(value) when is_tuple(value), do: counted(tuple_size(value), "element tuple")
-  defp shape_of(value) when is_integer(value), do: "the integer #{value}"
-  defp shape_of(value) when is_float(value), do: "a float"
-  defp shape_of(value) when is_atom(value), do: "the atom #{inspect(value)}"
-  defp shape_of(value) when is_function(value), do: "a function"
-  defp shape_of(_value), do: "a term"
+  # Nothing about describing a value may take the workspace down: this runs
+  # inside the GenServer every cell blocks on, and an improper list bound as
+  # iodata (`["a" | "b"]`) is enough to make `length/1` raise (#3967).
+  defp shape_of(value) do
+    describe_shape(value)
+  rescue
+    _any -> "a term"
+  end
+
+  defp describe_shape(value) when is_binary(value), do: counted(byte_size(value), "byte binary")
+  defp describe_shape(value) when is_list(value), do: counted(length(value), "element list")
+  defp describe_shape(%module{}), do: "a #{inspect(module)} struct"
+  defp describe_shape(value) when is_map(value), do: counted(map_size(value), "key map")
+  defp describe_shape(value) when is_tuple(value), do: counted(tuple_size(value), "element tuple")
+  defp describe_shape(value) when is_integer(value), do: "the integer #{value}"
+  defp describe_shape(value) when is_float(value), do: "a float"
+  defp describe_shape(value) when is_atom(value), do: "the atom #{inspect(value)}"
+  defp describe_shape(value) when is_function(value), do: "a function"
+  defp describe_shape(_value), do: "a term"
 
   # "an 18-element list", not "a 18-element list": eight and eighteen are the
   # only counts whose spoken form opens on a vowel.
