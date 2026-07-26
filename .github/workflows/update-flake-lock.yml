@@ -222,9 +222,17 @@ jobs:
             # remote without putting a fake credential in process output.
             git remote set-url origin "$UPDATE_REMOTE_URL"
           else
-            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
             clone_token="${SUBMODULE_READ_TOKEN:-${GH_TOKEN}}"
             git config --global url."https://x-access-token:${clone_token}@github.com/".insteadOf "https://github.com/"
+            # Keep the fetch URL credential-free so relative submodule URLs
+            # such as ../nox.git resolve to https://github.com/... and receive
+            # clone_token through the rewrite above. Embedding GH_TOKEN in the
+            # fetch URL makes Git carry that ix-only token into the resolved
+            # Nox URL before insteadOf matching, so the private clone fails.
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+            # Pushes still use the narrowly scoped write App token. A URL with
+            # userinfo does not match the credential-free insteadOf prefix.
+            git remote set-url --push origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           fi
 
           build_candidate() {
