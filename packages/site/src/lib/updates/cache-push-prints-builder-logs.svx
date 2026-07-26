@@ -81,6 +81,15 @@ change fixes, so a link checker would guard nothing today while carrying a
 route inventory that drifts. The real repair is building the site in the Check
 gate.
 
+**Correction, same day.** The first sentence of that paragraph is wrong. The
+Check gate does build the site: `requiredGateRoots.x86_64-linux.closure-site`
+and `packages.x86_64-linux.site` are the same derivation, and `flake-check` on
+`4fb45b3a` failed on this exact 404 half an hour before cache-push did. What
+was missing is that the commit was pushed straight to main, so the verdict
+arrived after the fact, and `flake-check` was already red for an unrelated
+root. The link check landed in lint after all, deriving its route inventory
+rather than listing one; see [the follow-up](/site-link-lint/).
+
 The other roots seen failing in the same lane — `search-eval`,
 `nixos-system-kernel-build-*`, `nixos-system-dev` — were not investigated.
 They will now print their own builder logs on the next merge, which is the

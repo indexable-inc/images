@@ -316,24 +316,203 @@
           exit 1
         }
       }
-      # Plan/update/story identity (packages/site/src/lib/plans, updates,
-      # stories) is enforced at SvelteKit build time -- plans.ts throws on a
-      # duplicate plan number or a frontmatter/filename mismatch -- but the
-      # Check gate never builds the site, so two individually-green PRs merged
-      # into a duplicate plan number 0031 and main's site build stayed red for
-      # 8.5h before the Pages workflow surfaced it (#3669). This stage
-      # front-loads the pure file-scan invariants into the gate every PR and
-      # main commit runs: within each content directory a four-digit filename
+      # Site content invariants, front-loaded into the pre-push lint.
+      #
+      # The SvelteKit build is the full validator and the Check gate DOES run
+      # it: `site` is in `packageSet`, so `cachePushRoots` carries it and
+      # `requiredGateRoots` exposes it as `closure-site`, which `check
+      # required` builds on every PR and every push. What it cannot be is
+      # early. This repo pushes straight to main, so on a direct push that
+      # verdict arrives minutes after the commit is already public -- which is
+      # exactly how #3669 (duplicate plan number 0031) and ENG-9863 (a
+      # dangling in-page link) each reached main and stayed there. The stages
+      # here are the ones cheap enough to run before the push instead.
+      #
+      # Identity (#3669): within each content directory a four-digit filename
       # prefix is claimed at most once, frontmatter `id` equals the filename
       # stem (stems are unique per directory, so ids stay unique), and a
       # frontmatter `number` agrees with the prefix (the #3668 rename fixed
       # the collision but left the old `number` behind, which kept the site
-      # build red). The site build remains the full validator.
+      # build red).
+      #
+      # Referential integrity (ENG-9863): every absolute in-page link
+      # resolves to a route the site prerenders. Updates are routed at
+      # `/<id>`; one `.svx` linking `/updates/<id>` failed `ix-site` on three
+      # consecutive main merges. The crawler does catch it, but names the
+      # linking ROUTE -- "404 /updates/committed-ix2nix-wasm (linked from
+      # /ifd-ix2nix-wasm/)" -- and never the file to edit, so this stage
+      # reports path, line, and a suggested route instead.
+      #
+      # The route inventory is derived, never listed. Static routes are the
+      # directories under src/routes owning a `+page`/`+server` file; a
+      # dynamic `[id]` directory is expanded with the ids of whichever
+      # `$lib/<collection>` its own loader imports. Add a route, rename a
+      # collection, or delete a page and the inventory follows. A committed
+      # route list would drift, and a link checker that passes a 404 because
+      # its inventory is stale is worse than no checker.
       def frontmatter-field [front: list<string>, key: string] {
         let matches = ($front | parse --regex ('^' + $key + ': *(?<value>.+)$'))
         if ($matches | is-empty) { null } else {
           $matches | get 0.value | str trim | str trim --char "'"
         }
+      }
+      # Every path the site prerenders, as a route key (see `route-key`).
+      def site-routes [] {
+        let routes_root = "packages/site/src/routes"
+        let lib_root = "packages/site/src/lib"
+        let owners = (
+          fd --type file '^\+(page\.svelte|page\.ts|server\.ts)$' $routes_root
+          | lines
+          | each {|file| $file | path dirname }
+          | uniq
+          | each {|dir|
+              {
+                dir: $dir
+                rel: ($dir | str replace $routes_root "" | str trim --left --char '/')
+              }
+            }
+        )
+        let static_routes = (
+          $owners
+          | where {|owner| not ($owner.rel | split row '/' | any {|seg| $seg =~ '^\[.+\]$' }) }
+          | get rel
+        )
+        # A `[param]` directory serves one page per entry of the collection
+        # its loader imports, so read the import rather than assume the name:
+        # `/rfcs/[id]` and `/plans/[id]` both draw from `$lib/plans`.
+        let generated = (
+          $owners
+          | where {|owner| ($owner.rel | path basename) =~ '^\[.+\]$' }
+          | each {|owner|
+              let prefix = ($owner.rel | path dirname | str replace --regex '^\.$' "")
+              let loader = ($owner.dir | path join "+page.ts")
+              let collections = (
+                if ($loader | path exists) {
+                  open --raw $loader
+                  | parse --regex '\$lib/(?<name>[A-Za-z0-9_-]+)'
+                  | get name
+                  | uniq
+                  | where {|name|
+                      let dir = ($lib_root | path join $name)
+                      ($dir | path exists) and (($dir | path type) == "dir")
+                    }
+                } else { [] }
+              )
+              $collections
+              | each {|name|
+                  fd --extension svx . ($lib_root | path join $name)
+                  | lines
+                  | each {|svx|
+                      let stem = ($svx | path parse | get stem)
+                      if ($prefix | is-empty) { $stem } else { $"($prefix)/($stem)" }
+                    }
+                }
+              | flatten
+            }
+          | flatten
+        )
+        let assets = (
+          fd --type file . "packages/site/static"
+          | lines
+          | each {|file| $file | str replace "packages/site/static/" "" }
+        )
+        $static_routes | append $generated | append $assets | uniq
+      }
+      # One route key per URL: query and fragment dropped, slashes trimmed at
+      # both ends, so `/x`, `/x/` and `/x/#top` compare equal and the root is
+      # the empty string. Matching ignores the trailing slash deliberately:
+      # `trailingSlash = 'always'` makes the slashless spelling a redirect,
+      # not a 404, so demanding one here would fail links that work.
+      def route-key [link: string] {
+        $link
+        | split row '#'
+        | first
+        | split row '?'
+        | first
+        | str trim --char '/'
+      }
+      # Lines that could carry an absolute link, minus the ones inside a
+      # fenced block, with inline code blanked. An incident write-up quotes
+      # the broken link it fixed inside backticks
+      # (cache-push-prints-builder-logs.svx does exactly this); the crawler
+      # never follows those, so neither does this stage. Candidate lines are
+      # selected before anything else runs: a fold over every line of every
+      # plan rebuilt an immutable list per line and cost 4s of the lint's
+      # 4.5s wall, against 0.1s for the whole stage before that.
+      def svx-live-lines [path: string] {
+        let all = (open --raw $path | lines)
+        # Fence markers pair off, opener to closer; an unclosed final fence
+        # runs to end of file, which is how a truncated block still hides.
+        let fenced = (
+          $all
+          | enumerate
+          | where {|row| ($row.item | str trim) | str starts-with '```' }
+          | get index
+          | chunks 2
+          | each {|pair|
+              {
+                start: ($pair | first)
+                end: (if ($pair | length) > 1 { $pair | last } else { $all | length })
+              }
+            }
+        )
+        $all
+        | enumerate
+        | where {|row| ($row.item | str contains '](/') or ($row.item | str contains 'href="/') }
+        | where {|row| not ($fenced | any {|block| $row.index >= $block.start and $row.index <= $block.end }) }
+        | each {|row|
+            {
+              line: ($row.index + 1)
+              text: ($row.item | str replace --all --regex '`[^`]*`' "")
+            }
+          }
+      }
+      # Absolute in-page targets on one line: markdown `](/path)` and HTML
+      # `href="/path"`. `//host/path` is protocol-relative -- another origin,
+      # which the crawler does not follow -- so it is not a route reference.
+      def line-links [text: string] {
+        [
+          ($text | parse --regex '\]\((?<link>/[^)\s]*)')
+          ($text | parse --regex 'href="(?<link>/[^"]*)"')
+        ]
+        | flatten
+        | get link
+        | where {|link| not ($link | str starts-with '//') }
+      }
+      # In-page links in the prerendered corpus that resolve to no route.
+      # Only `.svx` content is scanned: it is the surface that grows by one
+      # file per change, while the components around it route through
+      # `resolve()` and are type-checked. Relative links are not checked,
+      # because the corpus has none.
+      def site-link-errors [] {
+        let routes = (site-routes | each {|route| route-key $route })
+        [plans updates stories]
+        | each {|kind|
+            fd --extension svx . $"packages/site/src/lib/($kind)"
+            | lines
+            | sort
+            | each {|path|
+                svx-live-lines $path
+                | each {|row|
+                    line-links $row.text
+                    | each {|link|
+                        { path: $path, line: $row.line, link: $link, key: (route-key $link) }
+                      }
+                  }
+                | flatten
+              }
+            | flatten
+          }
+        | flatten
+        | where {|ref| $ref.key not-in $routes }
+        | each {|ref|
+            let tail = ($ref.key | split row '/' | last)
+            let near = ($routes | where {|route| ($route | split row '/' | last) == $tail })
+            let hint = (
+              if ($near | is-empty) { "" } else { $"; did you mean /($near | first)/" }
+            )
+            $"  ($ref.path):($ref.line): ($ref.link) is not a prerendered route($hint)"
+          }
       }
       def "main site-ids" [] {
         let errors = (
@@ -389,11 +568,16 @@
             }
           | flatten
         )
+        let link_errors = (site-link-errors)
         if ($errors | is-not-empty) {
-          print --stderr "site content identity is enforced by the SvelteKit build, which the Check gate never runs (#3669); keep filenames and frontmatter agreeing so collisions fail fast:"
-          $errors | each {|line| print --stderr $line }
-          exit 1
+          print --stderr "site content identity is enforced by the SvelteKit build, which on a direct push to main reports after the commit is public (#3669); keep filenames and frontmatter agreeing so collisions fail fast:"
+          $errors | each {|line| print --stderr $line } | ignore
         }
+        if ($link_errors | is-not-empty) {
+          print --stderr "the SvelteKit prerender crawler treats a dangling in-page link as fatal and names the linking route, not the file (ENG-9863); every absolute link must resolve to a prerendered route:"
+          $link_errors | each {|line| print --stderr $line } | ignore
+        }
+        if (($errors | is-not-empty) or ($link_errors | is-not-empty)) { exit 1 }
       }
       # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
       # pathlib + pytest + explicit annotations + no `typing.cast`; see
