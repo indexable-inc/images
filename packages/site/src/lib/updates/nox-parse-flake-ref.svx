@@ -1,0 +1,23 @@
+---
+id: nox-parse-flake-ref
+postedAt: 2026-07-26T23:20:00Z
+title: "nox implements `builtins.parseFlakeRef` with one typed flake reference model"
+tags: [nox, nix, evaluator, flakes]
+links:
+  - label: implementation
+    href: https://github.com/indexable-inc/nox/pull/384
+  - label: issue
+    href: https://github.com/indexable-inc/nox/issues/368
+---
+
+`builtins.parseFlakeRef` now accepts a context-free flake reference string and returns its
+exploded fetcher attributes. The evaluator rejects output fragments, relative bare paths,
+non-string values, and strings carrying Nix store context.
+
+One typed `reference::Attrs` model now owns flake references across parsing, registries, lock
+computation, source resolution, the driver, and evaluation. The change removes the parallel
+`reference::Input` enum and JSON lock attribute map. Source subdirectory selection is shared, and
+`narHash` verification covers the full source root before `dir` selects a subtree.
+
+A live differential matched Nix 2.34.7 on 19 of 19 accepted and rejected references. The affected
+Rust suite passed 1,482 tests with 55 skipped.
