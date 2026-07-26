@@ -15,10 +15,21 @@ defmodule IxMcp.Kernel do
     Blast radius: this server's jobs, nothing else. When called from a cell,
     that cell's own job is spared so the restart runs to completion and the
     report comes back.
+  * `bindings/0` -- every bound name with the cell that bound it. One
+    kernel's workspace is shared by every agent riding its connection, so
+    "who bound this?" is a real question (#3967).
   """
 
   alias IxMcp.Jobs
   alias IxMcp.Jobs.Job
+
+  @doc """
+  Every bound name with its owner: the job that wrote it, that job's intent,
+  the value's shape, and when. The answer to a variable holding somebody
+  else's work.
+  """
+  @spec bindings() :: [map()]
+  def bindings, do: IxMcp.Workspace.owners()
 
   @doc "Human-readable stack report for all running jobs and core server processes."
   @spec trace() :: String.t()

@@ -1,31 +1,79 @@
 defmodule IxMcp.Evaluator do
   @moduledoc """
   Evaluates one cell in the calling process, the way Livebook's
-  `Livebook.Runtime.Evaluator` does it: parse to AST, then
-  `Code.eval_quoted_with_env/4` with `:prune_binding` against a snapshot of
-  the workspace context. Output goes to whatever group leader the caller
-  installed (each job installs its own `IxMcp.Evaluator.IOProxy`).
+  `Livebook.Runtime.Evaluator` does it: `scan/1` parses to AST, then
+  `eval_quoted/3` runs it through `Code.eval_quoted_with_env/4` with
+  `:prune_binding` against a snapshot of the workspace context. Output goes
+  to whatever group leader the caller installed (each job installs its own
+  `IxMcp.Evaluator.IOProxy`).
 
-  The parse step is the per-cell gate: code that does not parse is rejected
-  with a compiler diagnostic and never evaluated. Compile-time warnings are
-  collected via `Code.with_diagnostics/2` and returned alongside the result.
+  `scan/1` is the per-cell gate: code that does not parse is rejected with a
+  compiler diagnostic and never evaluated. It is also where the names a cell
+  mentions are read off the AST, which is what lets the shared workspace warn
+  a cell about somebody else's write before the cell runs on it (#3967).
+  Compile-time warnings are collected via `Code.with_diagnostics/2` and
+  returned alongside the result.
   """
 
   @type ok :: {:ok, term(), Code.binding(), Macro.Env.t(), [String.t()]}
-  @type failure :: {:parse_error, String.t()} | {:runtime_error, String.t(), [String.t()]}
+  @type failure :: {:runtime_error, String.t(), [String.t()]}
 
-  @spec eval(String.t(), Code.binding(), Macro.Env.t()) :: ok() | failure()
-  def eval(code, binding, env) when is_binary(code) do
-    case Code.string_to_quoted(code, file: env.file, columns: true, emit_warnings: false) do
-      {:ok, quoted} ->
-        eval_quoted(quoted, binding, env)
+  @typedoc "The names a cell mentions, read off its AST before it runs."
+  @type refs :: %{vars: [atom()], modules: [module()]}
 
-      {:error, {meta, message, token}} ->
-        {:parse_error, format_parse_error(meta, message, token)}
+  @doc """
+  Parse a cell and read off what it mentions: the variables it names and the
+  modules it declares. The caller runs the resulting AST with
+  `eval_quoted/3`; splitting parse from eval is what lets the workspace warn
+  a cell about a variable another cell changed under it *before* the cell
+  uses it, since a cell that raises never reaches the merge (#3967).
+  """
+  @spec scan(String.t()) :: {:ok, Macro.t(), refs()} | {:parse_error, String.t()}
+  def scan(code) when is_binary(code) do
+    case Code.string_to_quoted(code, file: "cell", columns: true, emit_warnings: false) do
+      {:ok, quoted} -> {:ok, quoted, %{vars: variables(quoted), modules: modules(quoted)}}
+      {:error, {meta, message, token}} -> {:parse_error, format_parse_error(meta, message, token)}
     end
   end
 
-  defp eval_quoted(quoted, binding, env) do
+  # A variable node is `{name, meta, context}` with an atom context; a call
+  # carries its arguments there instead, and an alias carries a list. `_`
+  # prefixed names are deliberately throwaway and never worth reporting.
+  defp variables(quoted) do
+    {_quoted, names} =
+      Macro.prewalk(quoted, MapSet.new(), fn
+        {name, _meta, context} = node, names when is_atom(name) and is_atom(context) ->
+          {node, if(reportable_var?(name), do: MapSet.put(names, name), else: names)}
+
+        node, names ->
+          {node, names}
+      end)
+
+    Enum.sort(names)
+  end
+
+  @pseudo_vars [:__MODULE__, :__DIR__, :__ENV__, :__CALLER__, :__STACKTRACE__, :__block__]
+
+  defp reportable_var?(name) do
+    name not in @pseudo_vars and not String.starts_with?(Atom.to_string(name), "_")
+  end
+
+  defp modules(quoted) do
+    {_quoted, declared} =
+      Macro.prewalk(quoted, [], fn
+        {:defmodule, _meta, [{:__aliases__, _alias_meta, parts} | _rest]} = node, declared ->
+          {node, [Module.concat(parts) | declared]}
+
+        node, declared ->
+          {node, declared}
+      end)
+
+    Enum.reverse(declared)
+  end
+
+  @doc "Evaluate an already-parsed cell against a workspace snapshot."
+  @spec eval_quoted(Macro.t(), Code.binding(), Macro.Env.t()) :: ok() | failure()
+  def eval_quoted(quoted, binding, env) do
     {result, diagnostics} =
       Code.with_diagnostics(fn ->
         try do

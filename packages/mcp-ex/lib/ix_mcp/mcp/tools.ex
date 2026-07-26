@@ -48,6 +48,12 @@ defmodule IxMcp.MCP.Tools do
                                             default cd: to the kernel's launch dir
                                             (never the movable OS cwd, #3902), so
                                             pass cd: or -C to work elsewhere
+      Ix.bindings()                         every bound name with the cell that bound it:
+                                            job, intent, value shape, time. This kernel's
+                                            bindings are shared by every agent riding its
+                                            connection -- a session and its subagents
+                                            alike -- so a cell taking over another cell's
+                                            variable is reported to both sides (#3967)
       Ix.trace()                            stack dump of every running job's processes,
                                             taken from outside with Process.info/2
       Ix.restart()                          cancel running jobs (sparing the calling
