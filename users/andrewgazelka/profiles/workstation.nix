@@ -753,7 +753,7 @@ in {
       #   nixos-rebuild switch --flake ~/.config/nix#vm --target-host andrewgazelka@<ip>
       # or just rebuild from inside the guest. Key-only login; the key is in
       # ssh-keys/andrewgazelka.pub.
-      nixos-rebuild
+      nixos-rebuild-ng
       nil # Nix language server (static analysis)
       nixd # Nix language server (evaluation-based, better flake/nixpkgs completion)
       # Experimental: TypeScript-grade type checker LSP for Nix (tsgo fork).

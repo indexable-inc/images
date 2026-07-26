@@ -15,22 +15,22 @@
   default, and switching vendors changes both the front end and the
   ABI of `<vector>`. Pick the vendor explicitly so cross-vendor link
   failures surface at config time, not at link time.
+
+  Only versions the pinned nixpkgs still builds are listed. gcc 9-12
+  and clang 16/17 were dropped upstream as unmaintained and now
+  resolve to `throw` aliases, so naming one failed at eval rather
+  than degrading; nothing here selected them.
   */
   compilersFor = pkgs: {
     gcc = {
       latest = pkgs.gcc;
-      "9" = pkgs.gcc9;
-      "10" = pkgs.gcc10;
-      "11" = pkgs.gcc11;
-      "12" = pkgs.gcc12;
       "13" = pkgs.gcc13;
       "14" = pkgs.gcc14;
       "15" = pkgs.gcc15;
+      "16" = pkgs.gcc16;
     };
     clang = {
       latest = pkgs.clang;
-      "16" = pkgs.clang_16;
-      "17" = pkgs.clang_17;
       "18" = pkgs.clang_18;
       "19" = pkgs.clang_19;
       "20" = pkgs.clang_20;
@@ -55,7 +55,7 @@ in {
     `"clang"` when an upstream needs libc++ or AddressSanitizer features
     clang ships ahead of.
   - `version`: required, `"latest"` or a vendor-specific major. gcc
-    covers 9-15, clang covers 16-22.
+    covers 13-16, clang covers 18-22.
 
   Example:
   ```nix

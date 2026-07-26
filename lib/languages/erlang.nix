@@ -16,6 +16,7 @@
     latest = pkgs.beamPackages.erlang;
     "27" = pkgs.beam27Packages.erlang;
     "28" = pkgs.beam28Packages.erlang;
+    "29" = pkgs.beam29Packages.erlang;
   };
 in {
   /**
@@ -28,7 +29,7 @@ in {
 
   Arguments:
   - `pkgs`: nixpkgs instance the toolchain comes from.
-  - `version`: required, one of `"latest" | "27" | "28"`. Pass
+  - `version`: required, one of `"latest" | "27" | "28" | "29"`. Pass
     `"latest"` to follow `pkgs.beamPackages.erlang`.
 
   Example:

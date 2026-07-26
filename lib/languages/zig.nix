@@ -4,10 +4,12 @@
   the explicit table makes "what version do I need" the actual
   question the helper answers, rather than letting `pkgs.zig` float
   a build out from under a project that pinned to 0.14 syntax.
+
+  0.12 was removed upstream and is a `throw` alias now, so it is gone
+  from the table rather than left to fail at selection time.
   */
   toolchainsFor = pkgs: {
     latest = pkgs.zig;
-    "0.12" = pkgs.zig_0_12;
     "0.13" = pkgs.zig_0_13;
     "0.14" = pkgs.zig_0_14;
     "0.15" = pkgs.zig_0_15;
@@ -25,8 +27,8 @@ in {
 
   Arguments:
   - `pkgs`: nixpkgs instance the toolchain comes from.
-  - `version`: required, one of `"latest" | "0.12" | "0.13" | "0.14"
-    | "0.15" | "0.16"`. Pin a specific minor because Zig is pre-1.0
+  - `version`: required, one of `"latest" | "0.13" | "0.14" | "0.15"
+    | "0.16"`. Pin a specific minor because Zig is pre-1.0
     and breaks source-level compatibility regularly.
 
   Example:

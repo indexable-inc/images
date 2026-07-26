@@ -25,6 +25,7 @@
     latest = pkgs.beamPackages.elixir;
     "1.18" = pkgs.beamPackages.elixir_1_18;
     "1.19" = pkgs.beamPackages.elixir_1_19;
+    "1.20" = pkgs.beamPackages.elixir_1_20;
   };
 in {
   /**
@@ -42,7 +43,7 @@ in {
 
   Arguments:
   - `pkgs`: nixpkgs instance the toolchain comes from.
-  - `version`: required, one of `"latest" | "1.18" | "1.19"`.
+  - `version`: required, one of `"latest" | "1.18" | "1.19" | "1.20"`.
     Pass `"latest"` to follow `pkgs.beamPackages.elixir`.
 
   Example:

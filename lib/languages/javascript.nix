@@ -1,16 +1,16 @@
 {errors}: let
   /**
   Node.js major → nixpkgs attribute mapping. The explicit list is
-  smaller than what nixpkgs ships because end-of-life lines (16, 18)
-  are gone from the channel; bump the top entry when a new even-major
-  LTS lands.
+  smaller than what nixpkgs ships because end-of-life lines are gone
+  from the channel: 20 (EOL 2026-04-30) and 25 (EOL 2026-06-01) are
+  `throw` aliases now, so naming one failed at eval. Bump the top
+  entry when a new major lands.
   */
   nodesFor = pkgs: {
     latest = pkgs.nodejs;
-    "20" = pkgs.nodejs_20;
     "22" = pkgs.nodejs_22;
     "24" = pkgs.nodejs_24;
-    "25" = pkgs.nodejs_25;
+    "26" = pkgs.nodejs_26;
   };
 in {
   /**
@@ -25,7 +25,7 @@ in {
 
   Arguments:
   - `pkgs`: nixpkgs instance the Node package comes from.
-  - `version`: required, one of `"latest" | "20" | "22" | "24" | "25"`.
+  - `version`: required, one of `"latest" | "22" | "24" | "26"`.
     Pin a specific even-major when the build needs stable ABI
     compatibility for native modules.
 

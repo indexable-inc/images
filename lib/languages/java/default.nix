@@ -20,6 +20,12 @@
   eval. The covered versions match the LTS lines nixpkgs ships
   headless variants for; bump the tables when a new LTS or platform
   target needs it.
+
+  23 and 24 are gone from all three distributions that carried them:
+  both reached end of life and nixpkgs turned them into `throw`
+  aliases, so naming one failed at eval instead of falling back.
+  Nothing in the repo selected them; 25 is the current non-LTS line
+  and 21 the current LTS.
   */
   jdksFor = pkgs: {
     openjdk = {
@@ -27,8 +33,6 @@
       "11" = pkgs.jdk11_headless;
       "17" = pkgs.jdk17_headless;
       "21" = pkgs.jdk21_headless;
-      "23" = pkgs.jdk23_headless;
-      "24" = pkgs.jdk24_headless;
       "25" = pkgs.jdk25_headless;
     };
     temurin = {
@@ -36,8 +40,6 @@
       "11" = pkgs.temurin-bin-11;
       "17" = pkgs.temurin-bin-17;
       "21" = pkgs.temurin-bin-21;
-      "23" = pkgs.temurin-bin-23;
-      "24" = pkgs.temurin-bin-24;
       "25" = pkgs.temurin-bin-25;
     };
     corretto = {
@@ -51,8 +53,6 @@
       "11" = pkgs.zulu11;
       "17" = pkgs.zulu17;
       "21" = pkgs.zulu21;
-      "23" = pkgs.zulu23;
-      "24" = pkgs.zulu24;
       "25" = pkgs.zulu25;
     };
   };
@@ -76,9 +76,13 @@
   Per-major-version Gradle attribute mapping. nixpkgs also exposes a
   floating `pkgs.gradle` alias, but the explicit attributes make the
   resolver diff reviewable when a Gradle major moves.
+
+  Gradle 7 is not offered: it stopped receiving security updates when
+  Gradle 9 shipped, and nixpkgs marks `gradle_7` insecure, so forcing
+  its `drvPath` aborts unless the caller opts into
+  `permittedInsecurePackages`. Nothing here asked for it.
   */
   gradlesFor = pkgs: {
-    "7" = pkgs.gradle_7;
     "8" = pkgs.gradle_8;
     "9" = pkgs.gradle_9;
   };
@@ -88,7 +92,7 @@ in {
 
   Unknown distributions and unknown versions for a distribution throw
   with the supported set listed, so a typo (`"openjdkk"`, `"22"` when
-  only `21` and `23` ship) is fixable from the message alone.
+  only `21` and `25` ship) is fixable from the message alone.
 
   OpenJDK uses the `_headless` variant by default so a server image
   that only needs the JDK does not pull X11 and CUPS into the closure.
@@ -98,8 +102,8 @@ in {
   Arguments:
   - `pkgs`: nixpkgs instance the JDK comes from.
   - `version`: required, major version as a string (`"8" | "11" |
-    "17" | "21" | "23" | "24" | "25"`). `"21"` is the current
-    long-term-support line.
+    "17" | "21" | "25"`). `"21"` is the current long-term-support
+    line.
   - `distribution`: required, one of `"openjdk" | "temurin" |
     "corretto" | "zulu"`.
 
@@ -196,8 +200,8 @@ in {
   - `jdk`: optional resolved JDK package. Defaults to the OpenJDK
     headless major pinned in [`../jvm-defaults.nix`](../jvm-defaults.nix), the same JDK every other helper in this namespace
     assumes.
-  - `version`: required, Gradle major as a string (`"7" | "8" |
-    "9"`). `"9"` matches `lib/build/gradle-fat-jar.nix`.
+  - `version`: required, Gradle major as a string (`"8" | "9"`).
+    `"9"` matches `lib/build/gradle-fat-jar.nix`.
   */
   gradle = pkgs: args @ {jdk ? defaultJdkFor pkgs, ...}: let
     version = errors.requireArg {

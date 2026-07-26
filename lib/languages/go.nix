@@ -8,10 +8,13 @@
   `"latest"` follows whatever `pkgs.go` resolves to in the pinned
   nixpkgs, so a caller that does not care about pinning gets the
   channel default without naming a version.
+
+  1.23 is gone: it reached end of life and nixpkgs replaced
+  `go_1_23` with a `throw`, so selecting it failed at eval. 1.27 is
+  not offered yet: the pinned channel still ships it as `1.27rc2`.
   */
   toolchainsFor = pkgs: {
     latest = pkgs.go;
-    "1.23" = pkgs.go_1_23;
     "1.25" = pkgs.go_1_25;
     "1.26" = pkgs.go_1_26;
   };
@@ -27,7 +30,7 @@ in {
 
   Arguments:
   - `pkgs`: nixpkgs instance the toolchain comes from.
-  - `version`: required, one of `"latest" | "1.23" | "1.25" | "1.26"`.
+  - `version`: required, one of `"latest" | "1.25" | "1.26"`.
     Pass `"latest"` to follow `pkgs.go`, or a specific minor when the
     build needs a known compiler version (race-detector internals,
     generic-inference changes, std-lib API additions between releases).

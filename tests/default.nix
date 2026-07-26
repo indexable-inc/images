@@ -2571,16 +2571,48 @@
   languages = {
     elixirLatest = ix.languages.elixir.toolchain pkgs {version = "latest";};
     erlangLatest = ix.languages.erlang.toolchain pkgs {version = "latest";};
-    # Forcing `drvPath` is the whole point: nixpkgs deprecates a BEAM
-    # attribute by wrapping every attribute of the derivation (except
-    # meta/name/type/outputName) in `lib.warn`, so a table entry still
-    # spelled `pkgs.elixir_1_*` / `pkgs.erlang_*` resolves fine until
-    # something forces it -- and then `abort-on-warn` kills the eval of
-    # whatever host or image reached it. Removed majors (elixir 1.15/1.16,
-    # erlang 26) throw here for the same reason.
-    beamPinnedDrvPaths = builtins.concatStringsSep " " (
-      builtins.map (version: (ix.languages.elixir.toolchain pkgs {inherit version;}).drvPath) ["1.18" "1.19"]
-      ++ builtins.map (version: (ix.languages.erlang.toolchain pkgs {inherit version;}).drvPath) ["27" "28"]
+    # Forcing `drvPath` is the whole point, and it covers every version
+    # table in `lib/languages`, not just the BEAM ones. Nixpkgs retires an
+    # attribute in three shapes and only one of them is visible at lookup:
+    # a `throw` alias fails immediately, a dropped attribute raises
+    # `attribute missing`, but a `warnAlias` wraps every attribute of the
+    # derivation except meta/name/type/outputName in `lib.warn`, so the
+    # entry resolves fine until something forces it -- and then
+    # `abort-on-warn` kills the eval of whatever host or image reached it.
+    # An insecure package (gradle 7) hides the same way, behind an assert
+    # on `drvPath`. Advertising a version this repo cannot instantiate is
+    # the bug; forcing every advertised version is the check.
+    languageTableDrvPaths = builtins.concatStringsSep " " (
+      builtins.map (version: (ix.languages.elixir.toolchain pkgs {inherit version;}).drvPath) ["latest" "1.18" "1.19" "1.20"]
+      ++ builtins.map (version: (ix.languages.erlang.toolchain pkgs {inherit version;}).drvPath) ["latest" "27" "28" "29"]
+      ++ builtins.map (version: (ix.languages.go.toolchain pkgs {inherit version;}).drvPath) ["latest" "1.25" "1.26"]
+      ++ builtins.map (version: (ix.languages.zig.toolchain pkgs {inherit version;}).drvPath) ["latest" "0.13" "0.14" "0.15" "0.16"]
+      ++ builtins.map (version: (ix.languages.javascript.node pkgs {inherit version;}).drvPath) ["latest" "22" "24" "26"]
+      ++ builtins.map (version: (ix.languages.python.interpreter pkgs {inherit version;}).drvPath) ["3.11" "3.12" "3.13" "3.14"]
+      ++ builtins.map (version:
+        (ix.languages.cpp.compiler pkgs {
+          vendor = "gcc";
+          inherit version;
+        })
+        .drvPath) ["latest" "13" "14" "15" "16"]
+      ++ builtins.map (version:
+        (ix.languages.cpp.compiler pkgs {
+          vendor = "clang";
+          inherit version;
+        })
+        .drvPath) ["latest" "18" "19" "20" "21" "22"]
+      ++ builtins.concatMap (distribution:
+        builtins.map (version:
+          (ix.languages.java.jdk pkgs {
+            inherit distribution version;
+          })
+          .drvPath)
+        (
+          if distribution == "corretto"
+          then ["11" "17" "21" "25"]
+          else ["8" "11" "17" "21" "25"]
+        )) ["openjdk" "temurin" "corretto" "zulu"]
+      ++ builtins.map (version: (ix.languages.java.gradle pkgs {inherit version;}).drvPath) ["8" "9"]
     );
     erlangRebarDefault = ix.languages.erlang.rebar3 pkgs {};
     erlangRebarExplicit = ix.languages.erlang.rebar3 pkgs {erlang = pkgs.beamPackages.erlang;};
@@ -5552,8 +5584,8 @@
         message = "ix.languages.erlang latest should follow beamPackages.erlang";
       }
       {
-        assertion = builtins.isString languages.beamPinnedDrvPaths;
-        message = "every advertised Elixir and Erlang minor should instantiate without a deprecation warning";
+        assertion = builtins.isString languages.languageTableDrvPaths;
+        message = "every version advertised by an ix.languages table should instantiate: no deprecation warning, no removed alias, no insecure package";
       }
       {
         assertion = languages.erlangRebarDefault.drvPath == languages.erlangRebarExplicit.drvPath;

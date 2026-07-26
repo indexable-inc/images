@@ -4,9 +4,12 @@
   nixpkgs interpreter attribute. Listed explicitly so the error from
   an unknown version names the supported set; bump the top entry when
   the platform follows nixpkgs onto a newer Python.
+
+  3.10 is gone: the pinned nixpkgs dropped the attribute outright, so
+  selecting it raised `attribute missing`. 3.15 is not here yet
+  because the channel still ships it as a beta.
   */
   interpretersFor = pkgs: {
-    "3.10" = pkgs.python310;
     "3.11" = pkgs.python311;
     "3.12" = pkgs.python312;
     "3.13" = pkgs.python313;

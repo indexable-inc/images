@@ -14,7 +14,10 @@
   libxkbcommon,
   vulkan-loader,
   libGL,
-  xorg,
+  libx11,
+  libxcursor,
+  libxrandr,
+  libxi,
 }:
 # Builds the whole desktop-overlay workspace: `bossbar-overlay` and `book-overlay`
 # share the `overlay-core` float + wgpu engine and are produced from one
@@ -30,10 +33,10 @@ let
     libxkbcommon
     vulkan-loader
     libGL
-    xorg.libX11
-    xorg.libXcursor
-    xorg.libXrandr
-    xorg.libXi
+    libx11
+    libxcursor
+    libxrandr
+    libxi
   ];
   bins = [
     "bossbar-overlay"
