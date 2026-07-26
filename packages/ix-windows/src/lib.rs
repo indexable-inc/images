@@ -22,9 +22,9 @@
 //!
 //! ## What counts as a resource
 //!
-//! The MCP publishes every `register_resource()` view (a terminal, a TUI screen,
-//! a custom widget — all already rendered to HTML) as an [`HtmlView`] pane keyed
-//! `resource/<id>` (see `packages/mcp/ix_notebook_mcp/pane_bridge.py`). This
+//! A dashboard-core producer publishes every `register_resource()` view (a
+//! terminal, a TUI screen, a custom widget — all already rendered to HTML) as an
+//! [`HtmlView`] pane keyed `resource/<id>`. This
 //! engine windows exactly those panes; a producer's exec runs, namespace, and
 //! cells stay on the web canvas.
 

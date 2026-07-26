@@ -75,10 +75,6 @@ in {
     mutable-files = importApply (paths.modules + "/darwin/mutable-files.nix") {
       inherit indexPackages;
     };
-    # Fabric Ray worker for macs (index#3192): join the fleet cluster as a
-    # worker behind `services.ix-ray.enable`, same pinned ports and env as
-    # the NixOS module. See modules/darwin/ray.nix.
-    ray = importApply (paths.modules + "/darwin/ray.nix") {indexLib = ix;};
     # Declarative NFS automounts via macOS autofs: each entry renders a
     # direct-map line, /etc/auto_master gains the include idempotently, and
     # activation reloads automountd. See modules/darwin/nfs.nix.

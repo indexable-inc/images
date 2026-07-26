@@ -1,0 +1,62 @@
+---
+id: git-commit-graph-chain
+postedAt: 2026-07-25T12:40:00-07:00
+title: "git stops writing a commit-graph on every fetch"
+tags: [git, nix]
+---
+
+`git pull --rebase` in `~/.config/nix` started failing outright:
+
+```
+fatal: invalid commit position. commit-graph is likely corrupt
+```
+
+The object store was fine. `git fsck --connectivity-only` passed, `git log`
+worked, and every ref resolved. Only the cache was bad, which is the annoying
+case: nothing is lost, but the commands you need most stop working, and the
+error names a file rather than a cause.
+
+Three settings in the base profile combined to produce it, and each one is
+reasonable alone.
+
+`fetch.writeCommitGraph` writes a *split* commit-graph. That is what the option
+does: rather than rewriting the whole graph after each fetch, it drops one small
+increment on top of the existing chain. Cheap per fetch, and it keeps the graph
+current for the next `git log`.
+
+`maintenance.auto = false` stops git from ever compacting that chain. That
+setting is not an accident either. It is there because auto maintenance detaches
+an uncapped `git repack --cruft`, and at agent-fleet commit volume those stack
+without bound: 1,033 of them piled up in about twelve minutes and swapped a
+128 GB workstation (ix#8161, #4001).
+
+`maintenance.repo` then covers only repos explicitly registered with
+`git maintenance register`, and `~/.config/nix` is not one of them.
+
+So the chain grows by one file per fetch and nothing ever merges it. This
+checkout reached five chained graph files, and at five it broke. The failure
+looks like corruption because it is, but the cause is that the chain was never
+allowed to end.
+
+Deleting the chain does not fix it for long. The next fetch writes a fresh
+increment immediately, which is why the first repair attempt appeared to work
+and then failed again on the very next pull.
+
+The manual repair is one command, and it is worth knowing because it collapses
+the chain to a single verified file:
+
+```sh
+git commit-graph write --reachable --split=replace
+git commit-graph verify   # exits 0
+```
+
+The fix here is to stop appending. `fetch.writeCommitGraph` comes off, and
+`gc.writeCommitGraph` stays on: gc rewrites the graph whole rather than
+appending to a chain, so the read speedup that made the setting attractive
+survives without the part that grows without bound.
+
+Pairing matters more than the individual settings. A cache that is only ever
+appended to needs something that compacts it, and turning off auto maintenance
+removed that something for every repo on every host. The two settings were
+added for different reasons at different times, and neither is wrong on its
+own.

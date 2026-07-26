@@ -4,12 +4,10 @@
 is a thin, declarative wrapper around [`pi`](https://pi.dev) with a fixed posture
 and one or more bundled extensions, shipped as its own Nix package (`README.md`).
 There is no Rust here: the wrappers are `stdenv`/`buildNpmPackage` derivations
-around TypeScript/JavaScript extensions and (for the engine) a hardened C
-launcher.
+around TypeScript/JavaScript extensions.
 
 | sub-dir | id / flake output | what |
 | --- | --- | --- |
-| `engine/` | `pi-harness` | the locked-down Room engine: built-in tools ABSENT, only the `ix-mcp` surface, JSON event stream. |
 | `base/` | `pi-base` | base UX pack: live tok/s, git status widget, `/diff`, `/lg`. No agent behavior change. |
 | `prosecutor/` | `pi-prosecutor` | executor under a skeptical, context-isolated supervisor with earned-trust check-ins. |
 | `beam/` | `pi-beam` | executor that turns a hard decision into a bounded [beam search](beam.md) over isolated worktree branches. |
@@ -22,8 +20,7 @@ beam-search executor on its own page ([beam.md](beam.md)).
 
 `mk-pi-harness.nix` (`shared/mk-pi-harness.nix:1-147`) wraps `pi` with a
 build-time posture and produces a single `bin/<name>` launcher. It is used by
-`base`, `prosecutor`, and `beam`; the engine keeps its own hardened C launcher
-for the secret-bearing posture. Key arguments:
+`base`, `prosecutor`, and `beam`. Key arguments:
 
 - `pi` (default nixpkgs `pi-coding-agent`): the bare binary the wrapper execs.
   Pinned so the wrapper never resolves `pi` from the caller's PATH, where a
@@ -51,8 +48,7 @@ One canonical table (`shared/models.nix`): `claude` = anthropic
 `pi --provider --model [--thinking]`. API keys are NOT stored here: each harness
 receives them from the caller's environment (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`)
 and Pi reads the named var itself. The harness owns model selection only, not
-secret lookup. The engine keeps its own copy (`engine/models.nix`) rendered into
-C until the two converge.
+secret lookup.
 
 Select a model per run with `PI_HARNESS_MODEL`:
 
@@ -61,45 +57,6 @@ nix run .#pi-prosecutor -- "your task"               # claude (opus-4-8)
 PI_HARNESS_MODEL=codex nix run .#pi-beam -- "..."    # gpt-5.6-sol medium
 nix run .#pi-fusion -- "your task"                   # fable primary + gpt-5.6-sol low sidekick
 ```
-
-## engine (`pi-harness`)
-
-The Index-side Pi engine harness (ENG-2261/2262): Pi as a Room-facing engine with
-the built-in tools absent, exposing only the `ix-mcp` tool surface, selecting the
-model declaratively, and emitting a machine-readable JSON event stream
-(`engine/README.md`). It is the Pi equivalent of the claude-code "tools removed"
-posture.
-
-Lockdown mechanism (`engine/default.nix`): a hardened C launcher (`launcher.c`,
-built in `buildPhase`) execs `pi --no-builtin-tools --no-extensions --no-skills
---no-session --mode <json> --print --provider/--model --system-prompt
---extension <ix-mcp-bridge>` (`engine/default.nix:269-289`). Built-ins are absent,
-not merely denied. The only tool surface is `extension/ix-mcp-bridge.ts`, which
-runs `ix-mcp serve` over stdio and re-exposes its tools (`python_exec`,
-`search_*`, `calendar_*`); it is packaged with `buildNpmPackage` so the shipped
-extension carries its `node_modules` (`engine/default.nix:49-69`). The MCP child
-receives a scrubbed env allowlist so `python_exec` cannot read provider keys; add
-non-provider vars with `PI_HARNESS_MCP_ENV_ALLOWLIST=NAME`.
-
-Process hardening (Linux): the launcher marks itself non-dumpable
-(`PR_SET_DUMPABLE 0`, `PR_SET_NO_NEW_PRIVS 1`) before env/model setup and
-`LD_PRELOAD`s a tiny constructor library into Pi so the post-exec Pi process
-reapplies the same boundary, denying same-UID `/proc/<pid>/environ` reads before
-MCP starts (`engine/default.nix:95-121,144-159,201-207`). Both fail closed
-(`_exit(126)`).
-
-Event stream: in JSON mode the launcher allocates a per-run `IX_MCP_STORE` if
-unset and execs `room_event_mapper.py`, which starts Pi and maps Pi's `--mode
-json` events to stable Room-facing names (`turn_started`, `text_delta`,
-`reasoning_delta`, `tool_call_started`, `tool_call_output`, `usage`,
-`turn_completed`, `error`), keeping the original under `raw`. It suppresses
-auto-retried `turn_end`s and emits exactly one terminal `turn_completed` per
-turn, carrying `status: "error"` when the final attempt failed. It also folds
-ix-mcp SQLite rows into `cell_update`/`resource_update` payloads shaped like the
-MCP dashboard's (`engine/README.md:48-101`). Config: `PI_HARNESS_MODE=text` for
-interactive dev, `PI_HARNESS_SYSTEM_PROMPT`, `PI_HARNESS_PI_BIN`. Validation:
-`engine/smoke/run.sh` (needs network + key) and the stdlib
-`room_event_mapper_test.py` (run at build time, `engine/default.nix:342-346`).
 
 ## base (`pi-base`)
 
@@ -163,7 +120,6 @@ packageSet = true; flake = true; }`); the registry auto-discovers new harnesses
 with no central list to edit.
 
 ```
-nix run .#pi-harness    -- "prompt"     # locked-down Room engine, JSON stream
 nix run .#pi-base       -- "task"
 nix run .#pi-prosecutor -- "task"
 nix run .#pi-beam       -- "task"

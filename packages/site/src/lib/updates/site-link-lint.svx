@@ -1,0 +1,123 @@
+---
+id: site-link-lint
+postedAt: "2026-07-25"
+title: a dangling site link now fails lint by filename, and the Check gate always did build the site
+links:
+  - label: "ENG-9863"
+    href: https://linear.app/indexable/issue/ENG-9863
+tags:
+  - ci
+  - lint
+  - site
+---
+
+`nix run .#lint` now fails an absolute in-page link that resolves to no
+prerendered route, and says which file and line wrote it:
+
+```
+the SvelteKit prerender crawler treats a dangling in-page link as fatal and names the linking route, not the file (ENG-9863); every absolute link must resolve to a prerendered route:
+  packages/site/src/lib/updates/ifd-ix2nix-wasm.svx:16: /updates/committed-ix2nix-wasm is not a prerendered route; did you mean /committed-ix2nix-wasm/
+```
+
+That is 0.14s of extra file scanning, inside the `site-ids` stage that
+already front-loads the site's other pure invariants. No new stage, no new
+script, and nothing new is built.
+
+## the premise this started from was false
+
+The brief was "the Check gate never builds the site, so add it." It already
+does, and the note in [the cache-push write-up](/cache-push-prints-builder-logs/)
+saying otherwise was wrong. `site` is in `packageSet`, so `cachePushRoots`
+carries it, so `requiredGateRoots` exposes it as `closure-site`, which is
+exactly what `check required` builds. The two attributes resolve to one
+derivation:
+
+```
+$ nix eval --raw .#packages.x86_64-linux.site.drvPath
+/nix/store/qihy9aja9lzwvp38g308k5czwjm51wgw-ix-site-0.1.0.drv
+$ nix eval --raw .#requiredGateRoots.x86_64-linux.closure-site.drvPath
+/nix/store/qihy9aja9lzwvp38g308k5czwjm51wgw-ix-site-0.1.0.drv
+```
+
+It did not just build the site. It caught this bug, on the commit that
+introduced it, twenty-two minutes before the first cache-push failure. From
+the `flake-check` job of Check run 30178648484 on `4fb45b3a`:
+
+```
+ix-site> Error: 404 /updates/committed-ix2nix-wasm (linked from /ifd-ix2nix-wasm/)
+error: Cannot build '/nix/store/x8rs2j2qsd68a2bm2priqsa7z8k9ysfb-ix-site-0.1.0.drv'.
+```
+
+Two things kept that from stopping anything. `4fb45b3a` was pushed straight
+to main, so the gate's verdict arrived after the commit was public; there was
+no pull request for it to block. And `flake-check` was already red for an
+unrelated reason — the commit before it, `0b88b11a`, failed on
+`ix2nix-wasm-fresh` — so a new red carried no signal. Every Check run on main
+in that twelve-hour window is a failure.
+
+## timings, since the cost was the reason it was deferred
+
+Measured against the `x86_64-linux` remote builder with a warm store:
+
+| what | wall |
+| --- | --- |
+| `nix build .#packages.x86_64-linux.site`, one `.svx` changed | 25s |
+| the same build, failing on a dangling link | 49s |
+| the `vite build` inside it | 3.83s |
+| `lint-stage site-ids` before this change | 0.11s |
+| `lint-stage site-ids` after | 0.25s |
+| `nix run .#lint`, 13 stages in parallel | 3.5s |
+
+The lint's wall clock does not move: `astlog` is still the critical path at
+3.5s and `site-ids` finishes in 0.5s beside it. So the deferral traded a gate
+for 25 seconds that were already being spent.
+The 436MB `ix-site-node-modules` closure is the only expensive input, and it
+is unchanged by a content edit.
+
+## why a lint stage is still the right place
+
+The build is the better validator and it stays the validator. What it cannot
+be is early, for a repo whose normal path to main is `git push`. Lint runs
+before the commit; the build runs after it. That is the same reasoning that
+put plan-number collisions in this stage after #3669, and the same failure
+shape: a content invariant that only the bundler knew about, learned too late
+to matter.
+
+It is also the better message. SvelteKit names the linking *route* —
+`linked from /ifd-ix2nix-wasm/` — and never the file, so fixing it means
+mapping a URL back to a `.svx` by hand. The lint names
+`packages/site/src/lib/updates/ifd-ix2nix-wasm.svx:16`.
+
+## the route inventory is derived, because a listed one would drift
+
+Nothing is hardcoded. Static routes are the directories under `src/routes`
+owning a `+page.svelte`, `+page.ts` or `+server.ts`. A dynamic `[id]`
+directory is expanded with the ids of whichever `$lib/<collection>` its own
+loader imports, read out of the loader source — which is how `/rfcs/[id]`
+and `/plans/[id]` both correctly draw from `$lib/plans`. Add a route, rename
+a collection, or delete a page and the inventory follows. A committed route
+list that silently passes a 404 is worse than no check at all.
+
+Prose that quotes a broken link is not a broken link: fenced blocks are
+dropped and inline code is blanked before scanning, which is what keeps the
+cache-push write-up — it quotes the exact bad link in backticks — green.
+
+The first version of that scan cost 4.0s, not 0.25s, and would have made
+`site-ids` the lint's critical path on its own, ahead of `astlog`. It folded over every line of
+every plan accumulating a list, and nushell copies the list on each append, so
+a linear scan was quadratic. Selecting candidate lines first — a line with no
+`](/` or `href="/` in it cannot carry a link — and only then asking whether
+they sit inside a fence is what got it back under baseline noise.
+
+## what this does not do
+
+Only `.svx` under `plans`, `updates` and `stories` is scanned. Components are
+not: they route through `resolve()` and are type-checked, and they do not grow
+by one file per change the way the corpus does. Relative links are not checked
+either, because the corpus has none, so the rule would be untested. Neither is
+the trailing slash enforced, even though `trailingSlash = 'always'`: the
+slashless spelling redirects rather than 404s, and a rule I could not watch
+fail is not a rule I will ship.
+
+The chronically red `flake-check` is untouched and is the larger problem here.
+A gate nobody can read is a gate nobody has.

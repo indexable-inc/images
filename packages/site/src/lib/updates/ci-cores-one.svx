@@ -1,0 +1,148 @@
+---
+id: ci-cores-one
+postedAt: 2026-07-25T21:10:00-07:00
+title: "every build in CI was compiling single-threaded"
+tags: [nix, ci]
+---
+
+The cache-push lane went eighteen hours without a single successful run. Three
+consecutive attempts died the same way:
+
+```
+30152532864  10:12:57 -> 13:22:59   exit 143
+30157757744  13:23:05 -> 16:33:07   exit 143
+30163241281  16:33:13 -> 19:43:15   exit 143
+```
+
+Three hours, ten minutes, two seconds each. A number that exact is not a build
+failure. It is `services.ix.ciDispatcher.runnerMaxRuntimeSecs`, which caps a
+runner unit at 190 minutes and sends it SIGTERM. The workflow declared
+`timeout-minutes: 300`, so it believed it had five hours and could never reach
+the ceiling it was written against. Every overrun surfaced as a bare 143 with
+nothing in the log naming a cause.
+
+That explains why the runs ended. It does not explain why they needed three
+hours in the first place, and that turned out to be the real defect.
+
+## cores = 1
+
+The workflow's `NIX_CONFIG` carried two lines:
+
+```
+max-jobs = auto
+cores = 1
+```
+
+The comment above them explained the reasoning: the closure is wide, so
+parallelism should come from building many derivations at once rather than
+from threads inside any one build. Sound enough as far as it goes. The same
+`env:` block also stated the general posture, that the self-hosted runner's
+Nix daemon owns the tuning and the workflow only sets client-side eval knobs.
+
+Both things cannot be true at once, because `cores` is the one setting the
+daemon cannot own.
+
+Almost every Nix setting a client sends travels in a map that the daemon
+filters by trust. The CI runner UID is deliberately untrusted, so those
+settings are dropped with an ignored-setting warning, which is exactly what
+the posture above describes. But `cores` and `max-jobs` do not travel that
+way. They are dedicated fields of the `SetOptions` wire message, written
+positionally and then explicitly removed from the override map:
+
+```cpp
+// libstore/remote-store.cc
+    << settings.getWorkerSettings().maxBuildJobs
+    ...
+    << settings.getLocalSettings().buildCores << ...;
+
+overrides.erase(settings.getWorkerSettings().maxBuildJobs.name);
+overrides.erase(settings.getLocalSettings().buildCores.name);
+```
+
+and the daemon assigns them before it consults the trust flag at all:
+
+```cpp
+// libstore/daemon.cc, ClientSettings::apply
+settings.getWorkerSettings().maxBuildJobs.assign(maxBuildJobs);
+settings.getLocalSettings().buildCores = buildCores;
+
+for (auto & i : overrides) {          // <- trust filtering starts here
+    if (!trusted && !whitelist.count(name)) { warn(...); continue; }
+```
+
+So the client always wins. `cores = 1` overrode the fleet's `cores = 16` on
+every dispatcher host, and every build in this repository's CI ran with
+`NIX_BUILD_CORES=1`.
+
+## the fix that was already there
+
+The unpleasant part is that this exact failure had already been diagnosed and
+fixed, one layer down. From the dispatcher module, next to `cores = 16`:
+
+> replacing both base's `cores=0` (-j128 per build: a full 32-build batch is
+> 4096-way thread oversubscription with unbounded aggregate compile RAM) and
+> the old forced `cores=1` (one thread per build: when the graph narrows to
+> its critical path a gate crawls, e.g. `ninja -j1` compiling nix-ix for
+> ~50 min while max-jobs=32 sat idle, ix#7249).
+
+That fix was correct and had been inert for as long as the workflow line
+existed. A setting applied at the layer that owns the hardware, silently
+overridden by a line in a YAML file in a different repository.
+
+The controlled comparison was sitting in the fleet the whole time. The private
+monorepo has its own publish lane, `cache-warm`, running on the same runner
+pool, dispatched by the same service, against the same daemons. Its
+`NIX_CONFIG` sets neither knob, so the daemon's 16 applies. It finishes in
+twenty to sixty minutes, every run.
+
+## why "the closure is wide" stops being true
+
+The original rationale holds while the graph is wide, and a realise starts
+wide. It does not end that way. The last roots have nothing left to run
+beside them, so they build one at a time, and at that point single-threaded is
+not a small tax on a parallel workload, it is the entire remaining runtime.
+Every realise ends in that tail. The wider the rebuild, the longer the tail.
+
+Three changes landed together, because fixing only the first would leave the
+lane one wide rebuild away from the same wall:
+
+`cores` and `max-jobs` come out of all eleven workflows, so the daemon's
+per-host values apply. `timeout-minutes` drops from 300 to 170, under the
+runner cap, so an overrun fails as a legible job timeout naming the shard
+instead of an opaque kill. And the realise is sharded across a job matrix, so
+the roots spread over the five dispatcher hosts rather than queueing on one.
+
+## a ten-minute budget per derivation
+
+The lane also now sets `timeout = 600`: no single derivation may run longer
+than ten minutes. Unlike the two settings that came out, this one the daemon
+does accept from an untrusted UID. `timeout`, `max-silent-time`,
+`poll-interval` and `connect-timeout` are the explicit exceptions to the trust
+filter, on the reasoning that a client asking for *less* time cannot escalate
+anything.
+
+Ten minutes is a budget rather than an estimate for any particular package.
+The behaviour it replaces is one derivation quietly absorbing an entire runner
+lifetime with no line in the log naming it. A timeout fails that one root,
+names it, and lets `--keep-going` finish the others.
+
+The tempting way to grant an exception is a per-derivation attribute, some
+`__buildTimeout = 3600` on the packages that need it. That is a trap worth
+naming, because it is the same one this repository's overlay was cleaned of
+earlier the same day. An attribute is part of the derivation, so it changes
+the output hash, so the package stops matching the binary cache and rebuilds
+from source on every host forever. The packages that genuinely need more than
+ten minutes are rustc, ghc, chromium: precisely the ones you most need to
+substitute. The exception has to live somewhere that is not part of any
+derivation.
+
+## what to take from it
+
+An override is only as good as the layer that can enforce it. The dispatcher
+module reasoned carefully about threads per build, asserted its value in a
+deploy gate, and documented the incident that motivated it. None of that
+mattered, because the setting it chose is one of the two a client can always
+override, and a workflow in another repository did.
+
+Worth asking of any setting you tune centrally: is there a layer above this
+that can quietly win, and would anything tell me if it had?

@@ -1,0 +1,115 @@
+---
+id: nixpkgs-index-derivation
+postedAt: 2026-07-25T23:30:00-07:00
+title: "a CI cache entry that wanted to be a derivation"
+tags: [nix, ci]
+---
+
+The CVE scanner needs to answer one question about every path in a closure:
+what package is this, and what version? So it keeps a catalog of all of
+nixpkgs:
+
+```json
+"/nix/store/abc...-openssl-3.5.4": { "pname": "openssl", "version": "3.5.4" }
+```
+
+That catalog is a pure function of one input, the locked nixpkgs revision.
+Same revision, same catalog. It was being recomputed in the workflow and
+stashed in `actions/cache` under a hand-written key:
+
+```yaml
+key: cve-nixpkgs-index-v2-x86_64-linux-${{ steps.nixpkgs.outputs.revision }}
+```
+
+Three things are wrong with that, and the third is the one that bites.
+
+It runs on a self-hosted machine that already has a local Nix store and a fleet
+binary cache on the same network, and then fetches from GitHub over the
+internet instead. It evaluates all of nixpkgs inside the CI job's memory
+envelope rather than the daemon's, which is where an evaluation that size
+belongs. And the key is a string a human maintains, so it can drift from the
+thing it claims to describe.
+
+That last one is not hypothetical. The same file paired a `cache/restore` at
+v4.3.0 with a `cache/save` at v6.1.0, in the same cache operation, and nobody
+noticed for months.
+
+## Why it could not just be a derivation
+
+The obvious fix is to make the catalog a derivation and let the store handle
+it. The obstacle is that `pname` and `version` are *evaluation-time* metadata.
+They are attributes of the recipe, not files inside the result. You cannot read
+them off a built package because they were never written there.
+
+So producing the catalog means evaluating nixpkgs, and a build sandbox is
+designed to make that impossible: no network, no daemon socket. A build runs
+programs on its inputs. It cannot ask Nix questions.
+
+There is a second wall behind the first. The catalog is keyed by output path,
+and computing an output path means instantiating a derivation, which writes a
+`.drv` to the store. Sandboxes cannot write to the store either.
+
+## recursive-nix, and why not IFD
+
+`recursive-nix` hands the sandbox a socket back to the daemon, so the build can
+evaluate and instantiate. It is the designed escape hatch for a build whose job
+is to ask Nix something, and it is already enabled and advertised across this
+fleet.
+
+Import-from-derivation is the usual reflex here and it does not help. IFD
+changes *when* a build happens relative to evaluation; it grants the builder no
+new capability. The derivation IFD builds is still an ordinary sandboxed
+derivation that cannot evaluate nixpkgs. IFD is a consumer-side tool and this
+is a producer-side problem.
+
+Avoiding IFD is also worth something on its own. This repo already pays for it
+elsewhere: an entire category of cache-push roots exists so that a Mac can
+*substitute* eval-time IFD outputs instead of trying to build x86_64-linux
+derivations during evaluation. Nothing here is IFD. The scanner reads the
+catalog at runtime from a path, so evaluation stays pure.
+
+## The part that needed checking
+
+The catalog records a revision, and it is not the git rev. It is a SHA-256 over
+the serialized lock entry.
+
+That matters for the cache key. Feeding the derivation the whole `flake.lock`
+would rebuild a full nixpkgs evaluation whenever any unrelated input moved, so
+it gets a synthesized lock holding only the nixpkgs entry. That is only sound
+if serialization is canonical, and it is: this project does not enable
+serde_json's `preserve_order`, so its maps are `BTreeMap` and the bytes depend
+on content alone, not on key order in the source file.
+
+Worth verifying rather than assuming, because the failure would have been
+quiet: the derivation would produce a valid catalog carrying a revision that
+disagreed with the one CI computes. Checked independently, against the real
+lock, without going through the tool:
+
+```
+$ jq -cS '.nodes[.nodes[.root].inputs.nixpkgs].locked' flake.lock | shasum -a 256
+39763143e659d29fe7ec655c1acc1d8ce3133e84046a3ad9f191f03e852246c8
+
+derivation reported:
+sha256:39763143e659d29fe7ec655c1acc1d8ce3133e84046a3ad9f191f03e852246c8
+```
+
+The first build produced 38,191 output paths.
+
+## What changed
+
+Six workflow steps become two lines:
+
+```bash
+index="$(nix build .#cve-scan.nixpkgsIndex --no-link --print-out-paths)"
+cp "$index" artifacts/cve-scan/inputs/nixpkgs-index.json
+```
+
+The cache key is now the derivation hash, so it cannot drift from its inputs.
+`cache.ix.dev` serves the result to every host and every repo. And the
+evaluation runs in the nix-daemon cgroup instead of the job's.
+
+The advisory cache stays exactly where it is. That data comes from OSV, NVD,
+KEV and EPSS over the network; it is genuinely impure and a derivation would be
+the wrong shape for it. The point is not that caches are bad. It is that a
+cache holding a pure function of a pinned input is a derivation someone wrote
+by hand, and the hand-written version is the one that drifts.

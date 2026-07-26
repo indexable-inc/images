@@ -191,11 +191,24 @@ defmodule IxMcp.Jobs.Job do
       {:finished, summary} ->
         {:ok, summary}
 
-      :subscribed ->
+      {:subscribed, id} ->
+        ref = Process.monitor(server)
+
         receive do
-          {:ix_job_finished, _id, summary} -> {:ok, summary}
+          {:ix_job_finished, _id, summary} ->
+            Process.demonitor(ref, [:flush])
+            {:ok, summary}
+
+          {:DOWN, ^ref, :process, _pid, _reason} ->
+            # The control process died without reporting a terminal
+            # transition -- a hard kill finish/1 cannot run through. The
+            # reaper drives the ledger terminal from outside (#3839); read
+            # that durable record instead of parking here forever, which is
+            # what an :infinity await did when its job was killed.
+            {:ok, killed_summary(id)}
         after
           remaining_ms(timeout_ms, started_mono) ->
+            Process.demonitor(ref, [:flush])
             give_up(server)
         end
 
@@ -235,6 +248,23 @@ defmodule IxMcp.Jobs.Job do
       {:ix_job_finished, _id, summary} -> {:ok, summary}
     after
       0 -> :timeout
+    end
+  end
+
+  # After a control process dies unreported its terminal state lives only in
+  # the ledger, written by the reaper off the same :DOWN this await saw. The
+  # two monitors race, so the read can arrive before the write; poll the
+  # durable summary briefly until it goes terminal (bounded, never a hang).
+  @killed_read_tries 100
+  @killed_read_ms 50
+  defp killed_summary(id, tries \\ @killed_read_tries) do
+    summary = IxMcp.Jobs.get(id)
+
+    if summary.status != :running or tries <= 0 do
+      summary
+    else
+      Process.sleep(@killed_read_ms)
+      killed_summary(id, tries - 1)
     end
   end
 
@@ -426,7 +456,7 @@ defmodule IxMcp.Jobs.Job do
   def handle_call(:cancel, _from, state), do: {:reply, {:error, :finished}, state}
 
   def handle_call({:subscribe, pid}, _from, %{status: :running} = state) do
-    {:reply, :subscribed, %{state | subscribers: [pid | state.subscribers]}}
+    {:reply, {:subscribed, state.id}, %{state | subscribers: [pid | state.subscribers]}}
   end
 
   def handle_call({:subscribe, _pid}, _from, state) do

@@ -1,0 +1,43 @@
+---
+id: claude-code-2-1-220
+postedAt: "2026-07-25T16:45:00-07:00"
+title: "Claude Code bumps to 2.1.220"
+tags:
+  - agent
+  - claude-code
+---
+
+The vendored Claude Code moves from 2.1.215 to 2.1.220 via the signed updater:
+`nix run .#claude-code.updateScript` fetched Anthropic's per-version
+`manifest.json`, verified its detached GPG signature against the pinned release
+key, and rewrote the per-platform SRI hashes in
+`packages/claude-code/manifest.json`.
+
+```
+updated packages/claude-code/manifest.json to 2.1.220; signature verified
+```
+
+All four platforms moved together (`darwin-arm64`, `darwin-x64`, `linux-x64`,
+`linux-arm64`). The updater fails closed, so an unverifiable signature would
+have left the manifest untouched rather than pinning hashes for a binary nobody
+checked.
+
+## the updater is slower than it looks
+
+Worth knowing before you run it: `claude-code-update` declares `nix` in its
+`runtimeInputs`, and in this repo `nix` is the patched nix-ix. On a machine
+without those paths cached that means building nix from source before the
+updater does any work at all:
+
+```
+building '/nix/store/...-nix-util-2.34.7+ix...drv'
+building '/nix/store/...-nix-store-2.34.7+ix...drv'
+building '/nix/store/...-nix-cmd-2.34.7+ix...drv'
+building '/nix/store/...-nix-2.34.7+ix...drv'
+```
+
+On aarch64-darwin there is no remote builder to offload to, so it compiles
+locally. The updater itself only needs `nix hash convert`, so the whole nix-ix
+closure is heavier than the job requires. Not fixed here, just recorded.
+
+The stock system-prompt snapshots are unchanged by this bump.

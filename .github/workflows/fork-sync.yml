@@ -30,11 +30,13 @@ env:
   # posture and reasoning as check.yml (the ephemeral runner UID is
   # untrusted, so flake config would only produce ignored-setting warnings;
   # ca-derivations is needed to evaluate the rust workspace units).
+  # `max-jobs` and `cores` are deliberately absent: unlike every other knob
+  # they are not daemon-owned, and a client value silently overrides the
+  # fleet tuning. check.yml owns the explanation.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations wasm-builtin
     accept-flake-config = false
-    max-jobs = auto
-    cores = 1
+    timeout = 600
 
 jobs:
   fork-sync:

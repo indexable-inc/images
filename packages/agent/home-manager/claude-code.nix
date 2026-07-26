@@ -99,7 +99,7 @@
   #   updateScriptWriter = null;  plumbing: writer for passthru.updateScript (flake package set only)
   # END claude-code wrapper knob reference
 
-  # BEGIN claude-code env reference (extracted from Claude Code cli.js 2.1.215)
+  # BEGIN claude-code env reference (extracted from Claude Code cli.js 2.1.220)
   # Every documented environment variable the pinned CLI reads, one line
   # each: uncomment into a consuming machine's programs.claude-code.defaults
   # under `env` (settings env is read at CC startup even when the launch env
@@ -107,7 +107,7 @@
   # where the CLI or this wrapper bakes one; "" means unset. Vars owned by a
   # typed wrapper knob point at the knob instead of duplicating it. Sources:
   # the env-var registry inside the shipped cli.js, extracted mechanically
-  # to packages/claude-code/env-registry.tsv (all 812 names with
+  # to packages/claude-code/env-registry.tsv (all 830 names with
   # accessor types; regenerate with `nix build .#claude-code.envRegistry`),
   # cross-checked against https://code.claude.com/docs/en/env-vars. The
   # undocumented remainder in the TSV is internal experiment gates and
@@ -254,10 +254,12 @@
   #   CLAUDE_CODE_IDE_HOST_OVERRIDE = "";  Override the host address used to connect to the IDE extension.
   #   CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL = "";  Set to `1` to skip auto-installation of IDE extensions.
   #   CLAUDE_CODE_IDE_SKIP_VALID_CHECK = "";  Set to `1` to skip validation of IDE lockfile entries during connection.
+  #   CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS = "";  How many subagents can be running in one session before the Agent tool refuses to spawn another (default: 20). Accepts a positive whole number in plain digits; anything else is ignored, so the variable can ad...
   #   CLAUDE_CODE_MAX_CONTEXT_TOKENS = "";  Override the context window size Claude Code assumes for the active model.
   #   CLAUDE_CODE_MAX_OUTPUT_TOKENS = "";  Set the maximum number of output tokens for most requests.
   #   CLAUDE_CODE_MAX_RETRIES = "";  Override the number of times to retry failed API requests (default: 10).
   #   CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION = "";  Cap on the number of subagents one session can spawn with the Agent tool (default: 200).
+  #   CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH = "";  Number of subagent layers allowed below the main conversation (default: 1). At the default, subagents can't spawn their own subagents; set `2` or higher to allow it. Accepts a positive whole number in plain d...
   #   CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY = "";  Maximum number of read-only tools and subagents that can execute in parallel (default: 10).
   #   CLAUDE_CODE_MAX_TURNS = "";  Cap the number of agentic turns when no explicit limit is passed.
   #   CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION = "";  Cap on the total number of WebSearch calls one session can make (default: 200).

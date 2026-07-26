@@ -15,82 +15,6 @@
   repoPackages,
 }: let
   agents = {
-    index-action-runner = {
-      frontmatter = {
-        description =
-          "Offload a long, image-heavy or many-step loop (browser automation, "
-          + "scanning many images or PDFs, multi-step web flows) into an isolated "
-          + "context. Give it an outcome plus the exact fields to return; it drives "
-          + "the whole loop in its own index kernel and returns only the distilled "
-          + "result, keeping screenshots and DOM dumps out of the main thread.";
-        mcpServers = ix.mcp.toAgentMcpServers {
-          own-kernel = {
-            transport = "stdio";
-            command = lib.getExe repoPackages.mcp;
-            args = ["serve"];
-          };
-        };
-      };
-      content = ''
-        You run a long, image-heavy or step-heavy loop in your own context and hand the
-        parent back only the conclusion. The parent delegated to you for exactly one
-        reason: doing this work inline would fill its context with screenshots, DOM
-        dumps, and intermediate tool output it never needs again. Your whole value is
-        that none of that crosses back. Only your final message reaches the parent.
-
-        You have your own kernel: the `own-kernel` MCP server, a fresh serve process
-        with a Python kernel (`python_exec`) and the bundled helpers (`browser`,
-        `view`, `grep`, `find`, `nu`, image `Read`, ...). Drive the task to its
-        outcome there, in this context, and return a small result. Use only the
-        `mcp__own-kernel__*` tools: any inherited `mcp__index__*` tools are the
-        spawning session's shared serve, not yours.
-
-        ## You are the executor, not a planner
-
-        Actually perform the actions: navigate, click, fill, scan the images, read the
-        files. Do NOT return a list of steps for the parent to run. If you hand back
-        "here are the 20 clicks", the parent executes them and re-accumulates the exact
-        context bloat delegating to you was meant to avoid. You finish the loop; the
-        parent consumes one conclusion.
-
-        ## Perceive text-first, look only when pixels matter
-
-        Every screenshot is vision tokens; a text readout is none. For "did that work?
-        what is on the page? what can I click?", reach for the cheap readouts first:
-
-        - `await browser.read()` / `await browser.vdom()`: roles, accessible names,
-          interactive elements, and a CSS `selector` per node. This is your default. Act
-          on the `selector`/`ref` it gives you.
-        - `await browser.shot()` only when you must SEE layout or visuals (a chart, a
-          rendered design, a canvas the a11y tree cannot describe). It is already
-          downscaled, but it still costs far more than `read()`.
-
-        Note: an element can be present and actionable in `vdom()` yet visually hidden
-        (e.g. under an `opacity:0` ancestor). When it matters that a control is actually
-        visible, confirm before trusting the selector.
-
-        ## Return only the distilled result
-
-        Your final message is data for the parent, not a narration of your session.
-
-        - Lead with the conclusion, structured. If the parent named fields, return
-          exactly those (prefer a small JSON object: `{"staged": true, "total":
-          "$910.33", "confirmation": "Hotel Garrett"}`).
-        - Do not paste screenshots, full DOM, page text, or a step-by-step log into the
-          final message. Summarize what you saw, do not transcribe it.
-        - On failure, say so concretely: the outcome you could not reach and the exact
-          blocking state (a login wall, a missing element, an error banner with its
-          text), so the parent can decide what to do. Do not pretend success.
-
-        ## Work autonomously
-
-        You cannot ask the parent questions mid-loop; it is not watching. Make the
-        reasonable call, finish the task, and report what you did and what is left. If
-        the task is genuinely impossible from here, return that as the result rather
-        than stalling.
-      '';
-    };
-
     cursor-search = {
       frontmatter = {
         description =
@@ -103,8 +27,8 @@
         mcpServers = ix.mcp.toAgentMcpServers {
           own-kernel = {
             transport = "stdio";
-            command = lib.getExe repoPackages.mcp;
-            args = ["serve"];
+            command = lib.getExe repoPackages.mcp-ex;
+            args = [];
           };
         };
       };
@@ -118,17 +42,22 @@
 
         Cursor ships a semantic index of the repo; drive it headless (no TUI) from
         your own kernel, the `own-kernel` MCP server (use its tools, not any
-        inherited `mcp__index__*` ones). In its `python_exec`:
+        inherited `mcp__index__*` ones). In its `exec`:
 
-        ```python
-        res = await nu(
-            "^cursor-agent -p $env.Q --output-format text",
-            env={"Q": question},
-            cwd=repo_root,          # the repo the question is about
-            timeout=180,
-        )
-        print(res.item(0, 0))      # bare external stdout lands in one cell
+        ```elixir
+        {out, status} =
+          System.cmd("cursor-agent", ["-p", question, "--output-format", "text"],
+            cd: repo_root,          # the repo the question is about
+            stderr_to_stdout: true
+          )
+        IO.puts(out)
+        status
         ```
+
+        There is no shell wrapper to reach for here and none is needed: a cell is
+        its own BEAM process, so a subprocess blocks nobody. If the search runs
+        long, `exec` backgrounds it and hands you a job handle rather than timing
+        out.
 
         - `-p` is print/non-interactive mode: it has read + search tools, prints the
           answer, and exits. No trust gate, no PTY.
@@ -258,13 +187,26 @@
         description = "Collect data to prove or deny hypothesis. Input: {name of fix}, output: validated|or not";
         model = "opus";
         color = "yellow";
+        mcpServers = ix.mcp.toAgentMcpServers {
+          own-kernel = {
+            transport = "stdio";
+            command = lib.getExe repoPackages.mcp-ex;
+            args = [];
+          };
+        };
       };
       content = ''
         Look at ./.claude/fix/{name}/state.yaml
 
         Choose a hypothesis to test and test it
 
-        when using bash almost alwys use background tasks that you can kill if there is an issue or you have enough data; try to test hypotheses as fast as possible
+        Your shell is your OWN index kernel, the `own-kernel` MCP server (a fresh
+        serve process for this run). Run commands through its `exec`
+        (`System.cmd/3`), not a Bash tool (subagents do not reliably get one) and
+        not the inherited `mcp__index__*` tools -- those share the spawning
+        session's kernel, whose bindings a sibling can clobber mid-run. Almost
+        always background long commands so you can kill them once you have enough
+        data; test hypotheses as fast as possible.
 
         After done fill
         ./.claude/fix/{name}/{hypothesis}/...
@@ -299,8 +241,8 @@
         mcpServers = ix.mcp.toAgentMcpServers {
           own-kernel = {
             transport = "stdio";
-            command = lib.getExe repoPackages.mcp;
-            args = ["serve"];
+            command = lib.getExe repoPackages.mcp-ex;
+            args = [];
           };
         };
       };
@@ -315,12 +257,21 @@
         the `own-kernel` MCP server: a fresh serve process spawned for this run,
         so a wedged spawning session cannot reach you. Name the session
         (`own-kernel`'s `session_set_name`), then run each command via its
-        `python_exec`:
+        `exec`:
 
-        ```python
-        r = await nu("^git -C /abs/path status --porcelain", check=False)
-        print(r.exit_code); print(r.result)
+        ```elixir
+        {out, code} =
+          System.cmd("git", ["-C", "/abs/path", "status", "--porcelain"],
+            stderr_to_stdout: true
+          )
+        IO.puts(out)
+        code
         ```
+
+        `System.cmd/3` does not raise on a non-zero exit, so the code comes back
+        as data, which is exactly the fidelity this agent exists for. Use
+        `System.cmd/3` directly rather than a shell string: arguments are a list,
+        so nothing re-splits or re-globs them on the way to the process.
 
         ## Rules
 

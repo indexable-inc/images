@@ -1,3 +1,32 @@
+# Inherited from the PARENT ix checkout, not wanted here.
+#
+# index is a git submodule of ix, and cargo merges every `.cargo/config.toml`
+# from the cwd up to the filesystem root. So a cargo invocation inside index
+# picks up `../.cargo/config.toml`, which sets `[profile.release] rustflags`.
+# That key is gated behind the unstable `profile-rustflags` feature, which ix
+# opts into at the top of ITS Cargo.toml -- a declaration that does not reach
+# this workspace. The result was that every bare cargo command in index failed,
+# debug builds included:
+#
+#     error: failed to parse manifest
+#     Caused by: feature `profile-rustflags` is required
+#
+# Declaring it here makes cargo parse the inherited config instead of aborting.
+# The flags themselves are `--remap-path-prefix` entries for /app and /opt/cargo
+# and are inert on a developer checkout, where those paths do not exist.
+#
+# One leak is NOT fixed by this line: the same parent config sets
+# `[build] target = "x86_64-unknown-linux-musl"`, and a child config cannot
+# unset a parent key. Bare cargo in index therefore cross-compiles to musl by
+# default and fails on ring / aws-lc-sys / libmimalloc-sys. Pass the host triple
+# explicitly for a local check:
+#
+#     cargo check -p <pkg> --target aarch64-apple-darwin
+#
+# None of this affects the packaged builds, which run in a Nix sandbox from a
+# store path with no parent directory to inherit from.
+cargo-features = ["profile-rustflags"]
+
 [workspace]
 members = [
   "modules/services/resource-monitor/stats-writer",
@@ -7,6 +36,7 @@ members = [
   "packages/claude-hooks",
   "packages/claude-stories",
   "packages/subagent-cache",
+  "packages/submodule-sync-test",
   "packages/audio/app",
   "packages/audio/blob",
   "packages/audio/clock",

@@ -1,0 +1,19 @@
+[package]
+name = "submodule-sync-test"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Integration test for update-flake-lock.yml: multiple gitlinks and locks advance together, current pins no-op, and lost push races retry"
+
+[lints]
+workspace = true
+
+[dependencies]
+color-eyre.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+tempfile.workspace = true
+
+[[bin]]
+name = "submodule-sync-test"
+path = "src/main.rs"

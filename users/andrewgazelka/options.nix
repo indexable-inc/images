@@ -94,9 +94,14 @@
       };
     };
 
-    ixPinTimestamp = lib.mkOption {
-      type = lib.types.ints.positive;
-      description = "ix flake pin commit epoch baked into the Starship prompt.";
+    ixPinRepo = lib.mkOption {
+      type = lib.types.str;
+      description = ''
+        ix checkout the Starship prompt asks for the pin's commit epoch at
+        prompt time. A path, not an epoch: `path:./ix` carries no
+        `lastModified` while that checkout is dirty, so baking one at eval
+        time broke `home-manager switch` outright.
+      '';
     };
 
     sshSigningPublicKey = lib.mkOption {

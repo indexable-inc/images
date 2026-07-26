@@ -1,0 +1,101 @@
+---
+id: cache-push-first-green
+postedAt: 2026-07-25T21:30:00-07:00
+title: "what a broken cache lane was hiding"
+tags: [nix, ci]
+---
+
+The cache-push lane spent eighteen hours unable to finish a single run. The
+cause was `cores = 1`: every build in CI compiled single-threaded because the
+workflow overrode a daemon setting the daemon cannot refuse.
+
+With that fixed and the realise sharded, the first run through looked like
+this:
+
+```
+phase 'tools'   took 2s
+phase 'eval'    took 23s
+phase 'probe'   took 1s
+phase 'realise' took 13s
+phase 'push'    took 0s
+```
+
+Thirteen seconds to realise forty roots, in a phase that had previously run
+for three hours and ten minutes and then been killed. The three shard jobs
+took 44, 45 and 51 seconds end to end.
+
+Every shard also failed, and that is the more interesting half.
+
+## Two roots that had been failing on every merge
+
+A run that never reaches the end of its realise never reports what broke in
+it. Failed roots were recorded at warning level and the job was killed before
+the summary, so the lane had been rebuilding and re-failing the same
+derivations on every single merge without ever saying which ones. Nix does not
+cache failures, so this repeated indefinitely.
+
+The first run that got to the end named them immediately.
+
+`whoami-serve`, and through it the whole `nixos-system-k3s-agent-1` closure:
+
+```
+Failed to initialize cache at /nix/store/bdxhfz...-source/.ruff_cache:
+Permission denied (os error 13)
+```
+
+`lib/util/writers.nix` ran `ruff check` against a store path without
+`--no-cache`. Ruff puts `.ruff_cache` beside the files it checks, the store is
+read-only, so the check could never succeed. The repo's own repo-wide lint
+stage already passes `--no-cache`, with a comment giving this exact reason.
+The Python writer simply never got it, and nothing that ran regularly built
+these derivations.
+
+Then `nix-cargo-unit`:
+
+```
+this function has too many arguments (8/7)
+```
+
+`render_build_script_run_phase` crossed clippy's limit. It crossed it in
+commit `551dfae7`, "run cbindgen build scripts offline against a vendored
+registry", which added an eighth parameter.
+
+That commit is on main. It merged, and the gate that would have caught it was
+the very lane that could not complete.
+
+## The fix is a deletion
+
+The tempting fix is `#[allow(clippy::too_many_arguments)]`. The signature did
+not need it:
+
+```rust
+render_build_script_run_phase(
+    graph, prepared, run_index, run_unit,
+    compile_unit,
+    build_script_run.compile_index,   // <- a field of the next argument
+    build_script_run,
+    offline_cargo_metadata,
+)
+```
+
+The caller was passing a struct and, separately, one of that struct's own
+fields. Three other lines in the same caller already read
+`build_script_run.compile_index` directly. Dropping the parameter and reading
+the field inside the function gives seven arguments, one source of truth, and
+no way for the two to disagree.
+
+Clippy's argument limit is a blunt instrument and it is often worth
+suppressing. It is worth reading first, though, because a signature that has
+drifted past seven has usually drifted for a reason.
+
+## What this says about broken gates
+
+A slow gate and a broken gate fail differently. A slow one costs time and
+everybody knows it is slow. A broken one stops being a gate, and nothing
+announces that: main keeps going green, the merge queue keeps moving, and
+regressions land through a check that has quietly stopped checking.
+
+The eighteen hours of red runs were the visible cost. `551dfae7` merging with
+a clippy error was the invisible one, and it is the one worth remembering.
+Before concluding a red lane is merely slow, it is worth asking what it was
+supposed to be catching, and whether it has caught anything lately.

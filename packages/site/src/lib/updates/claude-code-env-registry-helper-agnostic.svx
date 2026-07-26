@@ -1,0 +1,116 @@
+---
+id: claude-code-env-registry-helper-agnostic
+postedAt: "2026-07-25T21:30:00-07:00"
+title: the Claude Code env extractor no longer pins the minifier's helper name
+tags:
+  - agent
+  - claude-code
+  - ci
+---
+
+`flake-check` on main is green again. The 2.1.215 -> 2.1.220 bump left
+`packages/claude-code/env-registry.tsv` stamped with the old version, and the
+documented way to fix that refused to run:
+
+```
+$ nix build .#claude-code.envRegistry
+no env registry modules found; the bundle layout changed
+```
+
+The bundle layout did not change. The minified name of one helper did.
+
+## esbuild's `__export` helper is a fresh two-letter name every release
+
+Claude Code ships as a Bun single-file executable with cli.js embedded as
+plain text. Every env var it reads is declared in a family of lazy ESM
+modules, each compiled to an export object of the shape
+`<helper>(<module>,{NAME:()=>ref,...})`. `extract-env-registry.py` found those
+objects with a regex that spelled the helper out:
+
+```python
+EXPORT_OPEN = re.compile(rb"nt\([A-Za-z0-9_$]+,\{")
+```
+
+In 2.1.220 the same call reads `tt(hki,{no_proxy:()=>kdh,...`. Nothing else
+about the shape moved — same `NAME:()=>ref` entries, same `Pe.str()` /
+`Pe.bool()` / `Pe.int({min:1})` accessors, same eight modules in the same
+order. The one identifier the script pinned is the one identifier the
+minifier is free to renumber on any release, so this was going to fire again.
+
+The call target is now matched as any identifier and the discrimination is
+left entirely to the shape of the object literal, which is what was doing the
+real work already: strict reconstruction (the block must be `NAME:()=>ref`
+entries and commas, nothing else), at least 30 entries, at least 90% of keys
+env-var-shaped, and at least one `CLAUDE_`/`ANTHROPIC_`/`OTEL_` key. On the
+2.1.220 binary that generic scan finds exactly eight modules, all under the
+helper `tt`, and zero false positives.
+
+## before and after
+
+| | 2.1.215 | 2.1.220 |
+| --- | --- | --- |
+| registry modules | 8 | 8 |
+| rows | 812 | 830 |
+| unresolved accessor types (`?`) | 0 | 0 |
+
+Net +18, and the module ordinals are stable, so the diff reads as a normal
+release: `MCP_DISCOVERY_CACHE{,_TTL_S,_MAX_STALE_S}`,
+`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`,
+`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, a pile of internal experiment gates
+with codenames (`CLAUDE_CODE_HERON_TALLOW`, `CLAUDE_CODE_JUNIPER_SUNDIAL`),
+and three names dropped (`API_TOKEN`, `CLAUDE_CODE_OWNERSHIP_FRAME`,
+`CLAUDE_CODE_SKILL_DESC_REFRAME`). The two new subagent caps are documented
+upstream, so they join the curated env reference block in
+`packages/agent/home-manager/claude-code.nix`; the codenamed gates stay
+TSV-only.
+
+## a near-empty parse used to pass the gate
+
+`checks.claude-code-knob-reference` pins the TSV by version marker and nothing
+else. A parse that degraded from 830 rows to three would still carry the right
+marker and go green while gutting the reference it exists to guard. The
+extractor now refuses to emit in that case:
+
+- fewer than 500 rows total, or
+- any of eight long-lived documented knobs missing (`ANTHROPIC_API_KEY`,
+  `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `CLAUDE_CODE_ENTRYPOINT`,
+  `CLAUDE_CONFIG_DIR`, `DISABLE_TELEMETRY`, `HTTP_PROXY`,
+  `MAX_THINKING_TOKENS`).
+
+That second list is a smoke test, not a registry. The registry stays derived
+from the binary; these are names whose absence means the parse broke rather
+than that upstream deleted the variable.
+
+## the failure message now hands over a lead
+
+"the bundle layout changed" told the next person nothing. Every candidate that
+gets past the entry-count threshold and is then rejected is now tallied by
+which filter rejected it, and the five largest near misses are printed with a
+key sample. Simulating a shape change (sentinel prefixes that match nothing)
+against the real 2.1.220 binary:
+
+```
+rejected candidates: 40x keys not env-shaped, 9x no sentinel key, 11x not all `NAME:()=>ref` entries
+largest near misses:
+    376 entries  only 2/376 keys env-shaped: waitForScrollIdle, updateLastInteractionTime, ...
+    239 entries  only 114/239 keys env-shaped: version, util, treeifyError, toJSONSchema, toDotPath
+    231 entries  no sentinel key: VOICE_STREAM_BASE_URL, VCR_RECORD, ULTRAPLAN_PROMPT_FILE, ...
+```
+
+The third line is the tell: 231 env-shaped keys sitting one filter away from
+acceptance says the objects are still there and the sentinel rule is what
+moved. That is the shape of information the old one-liner threw away.
+
+## what this does not fix
+
+Nothing here re-cross-checks the curated env reference block against upstream
+docs beyond the two new documented names. The block still omits the `OTEL_*`
+family and ambient probes like `SHELL` and `TMPDIR` that appear in the docs
+page; that was a pre-existing editorial call and this change did not revisit
+it.
+
+The extractor is also still a regex over a 257MB blob rather than a parse. It
+survives an identifier rename now, but a genuine change to how esbuild emits
+lazy module exports would still need a human. It will at least say which
+filter to look at. The [version bump itself](/claude-code-2-1-220/) is
+unchanged.

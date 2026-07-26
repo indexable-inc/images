@@ -167,7 +167,7 @@
   # Thin wrapper to keep call sites as plain lists; delegates to ix.evalImageConfig
   # so tests exercise the same evaluation path as production image builds.
   evalConfig = modules: ix.evalImageConfig {inherit modules;};
-  # The portable fleet modules (services.ix-ray / services.ix-spark) take the
+  # The portable fleet modules (services.ix-spark) take the
   # index lib as `indexLib` (not `ix`, which a host binds to its own specialArg).
   # In index's own eval the `ix` specialArg already IS the index lib, so re-expose
   # it under that name for those modules.
@@ -1779,8 +1779,6 @@
     )
     uvApplication.uvWheelhouse.distributions;
 
-  mcpPackage = (ix.packageSetFor pkgs).mcp;
-
   fleet = ix.mkFleet {
     # Stand-in for the ix-side CAS manifest builder (the cas-layer.nix
     # contract): a directory with manifest.cas + locator.bin, carrying
@@ -2840,40 +2838,6 @@
     }
   ];
 
-  # The ix-ray service (Ray cluster node + ix-mcp engine for the `fleet`
-  # distributed API). Evaluated through the real image path so a broken option,
-  # unit, or port claim fails here rather than in a CI image build.
-  # notebookPackage is handed in by the consumer (the real ix-mcp package on a
-  # deploy); a placeholder here keeps the eval cheap -- it is never run, and
-  # openFirewall is on so the port wiring is introspectable.
-  ixRayHead = evalConfig [
-    withIndexLib
-    (
-      {pkgs, ...}: {
-        services.ix-ray = {
-          enable = true;
-          role = "head";
-          openFirewall = true;
-          notebookPackage = pkgs.hello;
-        };
-      }
-    )
-  ];
-  ixRayWorker = evalConfig [
-    withIndexLib
-    (
-      {pkgs, ...}: {
-        services.ix-ray = {
-          enable = true;
-          role = "worker";
-          headAddress = "100.64.0.1";
-          openFirewall = true;
-          notebookPackage = pkgs.hello;
-        };
-      }
-    )
-  ];
-
   # The multi-node ix-spark service (Spark master/worker over Tailscale + a Spark
   # Connect server on the master). role defaults to "master".
   ixSparkMaster = evalConfig [
@@ -3202,157 +3166,6 @@
           lib.hasInfix "question behind the question" sampleClaudeContextPrompt
           && lib.hasInfix "question behind the question" sampleCodexContextPrompt;
         message = "Untagged rules should render into context files";
-      }
-    ];
-
-    ix-ray = [
-      {
-        # The head runs both daemons (Ray GCS + the ix-mcp engine that drives it).
-        assertion = (ixRayHead.systemd.services ? ix-ray) && (ixRayHead.systemd.services ? ix-ray-notebook);
-        message = "ix-ray head should run both the Ray daemon and the ix-mcp engine";
-      }
-      {
-        # The head opens the GCS (workers join), the Ray Client server
-        # (off-cluster `ray://` drivers), exec, and pinned inter-node ports --
-        # on the tailscale interface only.
-        assertion = let
-          ports = ixRayHead.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
-        in
-          builtins.elem 6379 ports
-          && builtins.elem 10_001 ports
-          && builtins.elem 8799 ports
-          && builtins.elem 6380 ports
-          && builtins.elem 6381 ports;
-        message = "ix-ray head should open the GCS, client-server, exec, and inter-node manager ports on tailscale0";
-      }
-      {
-        # Ray's GCS and Client server are unauthenticated (reaching them is
-        # arbitrary code execution), so NOTHING may open them on the global
-        # firewall: a fleet host can also face the internet, and a global
-        # `allowedTCPPorts` would have published `ray://<public-ip>:10001`
-        # (index#1800 review).
-        assertion = let
-          globalPorts = ixRayHead.networking.firewall.allowedTCPPorts;
-          globalRanges = ixRayHead.networking.firewall.allowedTCPPortRanges;
-          rayPorts = [
-            6379
-            6380
-            6381
-            8798
-            8799
-            10_001
-          ];
-        in
-          builtins.all (p: !(builtins.elem p globalPorts)) rayPorts
-          && builtins.all (r: !(r.from == 10_002 && r.to == 10_031)) globalRanges;
-        message = "ix-ray must never open its ports on the global firewall, only on tailscale0";
-      }
-      {
-        # A worker opens its inter-node + exec ports, but neither the GCS nor the
-        # client-server port (only the head serves those).
-        assertion = let
-          ports = ixRayWorker.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
-        in
-          builtins.elem 8799 ports
-          && builtins.elem 6380 ports
-          && !(builtins.elem 6379 ports)
-          && !(builtins.elem 10_001 ports);
-        message = "ix-ray worker should open exec + manager ports but not the GCS/client ports";
-      }
-      {
-        # The engine trusts the tailnet for /api/exec by default, so a peer's
-        # fleet.in_kernel works without a shared token.
-        assertion =
-          (ixRayHead.systemd.services.ix-ray-notebook.environment.IX_MCP_EXEC_TRUST_NETWORK or null) == "1";
-        message = "ix-ray notebook should enable tailnet-trust exec by default";
-      }
-      {
-        # notebook.enable (the default) requires a notebookPackage to run the engine.
-        assertion = let
-          failures = failedAssertionsFor [
-            withIndexLib
-            {
-              services.ix-ray = {
-                enable = true;
-                role = "head";
-              };
-            }
-          ];
-        in
-          builtins.any (a: lib.hasInfix "notebookPackage" a.message) failures;
-        message = "ix-ray should fail evaluation when notebook.enable has no notebookPackage";
-      }
-      {
-        # The Ray daemon must use the short /run temp-dir so its plasma AF_UNIX
-        # socket path stays under the 108-byte sun_path limit, and must keep the
-        # object store mappable from an attaching kernel (PrivateDevices off).
-        assertion = let
-          unit = ixRayHead.systemd.services.ix-ray.serviceConfig;
-        in
-          unit.RuntimeDirectory == "ray" && unit.PrivateDevices == false && unit.PrivateUsers == false;
-        message = "ix-ray daemon should use /run/ray and leave the shared-memory object store mappable";
-      }
-      {
-        # Both roles must exec `ray start <flags>`: the launcher builds its arg
-        # list from `["start"] ++ modeArgs`, so the rendered script must carry
-        # the `start` subcommand ahead of the mode flag. Regressed once when the
-        # list began with `--head`/`--address` and Ray crash-looped on
-        # `No such option: --head` (index#1800 crash-loop).
-        assertion = let
-          headScript = builtins.readFile ixRayHead.systemd.services.ix-ray.serviceConfig.ExecStart;
-          workerScript = builtins.readFile ixRayWorker.systemd.services.ix-ray.serviceConfig.ExecStart;
-        in
-          lib.hasInfix "\"start\" \"--head\"" headScript
-          && lib.hasInfix "\"start\" \"--address\"" workerScript;
-        message = "ix-ray launcher must exec `ray start` (the `start` subcommand ahead of --head/--address), never `ray --head`";
-      }
-      {
-        # The fabric labels declared as data in lib/fabric.nix must reach the
-        # daemon's argv: the rendered launcher carries `--resources` JSON with
-        # the host label, the os label, and the env-handshake resource
-        # (index#3192). Guards the option -> nodeResources -> argv wiring, not
-        # the literal values.
-        assertion = let
-          workerScript = builtins.readFile ixRayWorker.systemd.services.ix-ray.serviceConfig.ExecStart;
-        in
-          lib.hasInfix "--resources" workerScript
-          && lib.hasInfix "host_" workerScript
-          && lib.hasInfix "fabric_env:" workerScript
-          && lib.hasInfix "linux" workerScript;
-        message = "ix-ray must advertise the fabric labels (host_<name>, os, fabric_env:<tag>) via --resources";
-      }
-      {
-        # A worker with no headAddress cannot know where to join: fail eval.
-        assertion = let
-          failures = failedAssertionsFor [
-            withIndexLib
-            {
-              services.ix-ray = {
-                enable = true;
-                role = "worker";
-              };
-            }
-          ];
-        in
-          builtins.any (a: lib.hasInfix "headAddress" a.message) failures;
-        message = "ix-ray worker should fail evaluation without a headAddress";
-      }
-      {
-        # The head must not set headAddress (it IS the address).
-        assertion = let
-          failures = failedAssertionsFor [
-            withIndexLib
-            {
-              services.ix-ray = {
-                enable = true;
-                role = "head";
-                headAddress = "100.64.0.1";
-              };
-            }
-          ];
-        in
-          builtins.any (a: lib.hasInfix "headAddress" a.message) failures;
-        message = "ix-ray head should fail evaluation when headAddress is set";
       }
     ];
 
@@ -4524,7 +4337,7 @@
             import (paths.packagesRoot + "/agent/policy/permissions.nix") ({inherit lib;} // gates);
           # The overlay build's real gate combination: exa is baked
           # unconditionally by the default server set, the kernel is not
-          # (repoPackages.mcp is out of scope there).
+          # (repoPackages.mcp-ex is out of scope there).
           overlay = policy {exaSearchBaked = true;};
           baked = policy {
             indexKernelBaked = true;
@@ -6324,10 +6137,6 @@
     ${uvApplication}/bin/uv-app-fixture > uv-app-fixture.out
     grep -q 'hello from uv app fixture' uv-app-fixture.out
     test -e ${uvApplication.uvWheelhouse}/click-8.1.7-py3-none-any.whl
-
-    ${lib.getExe mcpPackage} eval '1 + 2' > mcp-eval.out
-    grep -q 'result:' mcp-eval.out
-    grep -q '^3$' mcp-eval.out
   '';
 
   cargoUnitRealWorkspaceAssertions = [

@@ -1,7 +1,7 @@
 defmodule IxMcp.MCP.Tools do
   @moduledoc """
-  The MCP tool surface: exactly `exec`, `session_set_name`, and `topic_set`.
-  Everything that used to be a separate tool (read, trace, restart, PR
+  The MCP tool surface: exactly `exec`. Everything that used to be a
+  separate tool (read, trace, restart, PR
   watching, TUI driving) is an in-language callable aliased into every cell
   (#3532); `surface_guide/0` is the one text that teaches it, shared between
   the `exec` description and the server instructions. Every tool returns
@@ -224,26 +224,6 @@ defmodule IxMcp.MCP.Tools do
           },
           "required" => ["code", "intent"]
         }
-      },
-      %{
-        "name" => "session_set_name",
-        "description" =>
-          "Name this connection's session. Call before acting tools; the name labels every run this server records.",
-        "inputSchema" => %{
-          "type" => "object",
-          "properties" => %{"name" => %{"type" => "string", "minLength" => 3, "maxLength" => 80}},
-          "required" => ["name"]
-        }
-      },
-      %{
-        "name" => "topic_set",
-        "description" =>
-          "Start a new topic. Runs fold under the topic inside the session; change it when work moves to a new phase (each call starts a fresh topic, even under a repeated name).",
-        "inputSchema" => %{
-          "type" => "object",
-          "properties" => %{"topic" => %{"type" => "string", "minLength" => 3, "maxLength" => 80}},
-          "required" => ["topic"]
-        }
       }
     ]
   end
@@ -280,21 +260,6 @@ defmodule IxMcp.MCP.Tools do
     if action_id, do: IxMcp.ActionLog.finish_action(action_id, "failed", true, 0)
     {:error, "exec requires string `code`"}
   end
-
-  def call("session_set_name", %{"name" => name}, _action_id) when is_binary(name) do
-    :ok = IxMcp.Session.set_name(name)
-    {:ok, "session named: #{name}"}
-  end
-
-  def call("session_set_name", _args, _action_id),
-    do: {:error, "session_set_name requires string `name`"}
-
-  def call("topic_set", %{"topic" => topic}, _action_id) when is_binary(topic) do
-    :ok = IxMcp.Session.set_topic(topic)
-    {:ok, "topic set: #{topic}"}
-  end
-
-  def call("topic_set", _args, _action_id), do: {:error, "topic_set requires string `topic`"}
 
   def call(other, _args, _action_id), do: {:error, "unknown tool: #{other}"}
 
