@@ -40,9 +40,32 @@ defmodule IxMcp.Checkpoint do
     end
   end
 
+  @doc """
+  Provenance rides its own row (#3967): who bound each variable and each
+  module, so `Ix.restart()` comes back still able to say whose value a
+  binding is. Kept apart from the binding row so the shape the disk
+  checkpoint reads and writes stays exactly what it always was.
+  """
+  @spec store_provenance(map()) :: :ok
+  def store_provenance(provenance) do
+    :ets.insert(@table, {:provenance, provenance})
+    :ok
+  end
+
+  @spec fetch_provenance() :: %{owners: map(), contested: map(), modules: map()}
+  def fetch_provenance do
+    empty = %{owners: %{}, contested: %{}, modules: %{}}
+
+    case :ets.lookup(@table, :provenance) do
+      [{:provenance, provenance}] -> Map.merge(empty, provenance)
+      [] -> empty
+    end
+  end
+
   @spec clear() :: :ok
   def clear do
     :ets.delete(@table, :workspace)
+    :ets.delete(@table, :provenance)
     :ok
   end
 

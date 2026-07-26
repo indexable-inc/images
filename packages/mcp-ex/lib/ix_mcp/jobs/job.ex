@@ -395,6 +395,7 @@ defmodule IxMcp.Jobs.Job do
     job = self()
     code = state.code
     id = state.id
+    writer = writer(state)
 
     {eval_pid, eval_ref} =
       spawn_monitor(fn ->
@@ -403,20 +404,8 @@ defmodule IxMcp.Jobs.Job do
         # a quiet wrapper through this, #3934). Process dictionary, not a
         # closure: the id must be readable from inside the running cell.
         Process.put(:ix_job_id, id)
-        {binding, env} = Workspace.snapshot()
 
-        outcome =
-          case Evaluator.eval(code, binding, env) do
-            {:ok, value, binding, env, diags} ->
-              Workspace.merge(binding, env)
-              {:done, value, diags}
-
-            {:parse_error, message} ->
-              {:failed, "parse error: " <> message, []}
-
-            {:runtime_error, formatted, diags} ->
-              {:failed, formatted, diags}
-          end
+        outcome = evaluate(code, writer)
 
         send(job, {:eval_finished, self(), outcome})
       end)
@@ -426,6 +415,45 @@ defmodule IxMcp.Jobs.Job do
 
     {:noreply,
      %{state | io_proxy: io_proxy, eval_pid: eval_pid, eval_ref: eval_ref, flush_scheduled: true}}
+  end
+
+  # Who this cell is, for the shared workspace's provenance (#3967): one
+  # kernel is one session but not one agent, so the job id is the finest
+  # writer identity there is, and its intent is what makes it recognizable
+  # to the agent reading the warning.
+  defp writer(state) do
+    %{
+      job: state.id,
+      intent: state.intent,
+      session_id: state.session_id,
+      session: state.session
+    }
+  end
+
+  # The workspace speaks twice: once before the cell runs, about variables
+  # another cell changed under it and modules it is about to take over, and
+  # once after, about the variables this cell took from somebody else. The
+  # first has to come before evaluation, because the cell holding a clobbered
+  # value is usually the cell that raises, and a raising cell never merges.
+  defp evaluate(code, writer) do
+    case Evaluator.scan(code) do
+      {:ok, quoted, refs} ->
+        # One visit to the workspace, so the warnings describe exactly the
+        # values this cell was handed rather than whatever a concurrent cell
+        # merged between the snapshot and the question.
+        {binding, env, before} = Workspace.begin_cell(refs, writer)
+
+        case Evaluator.eval_quoted(quoted, binding, env) do
+          {:ok, value, binding, env, diags} ->
+            {:done, value, before ++ diags ++ Workspace.merge(binding, env, refs, writer)}
+
+          {:runtime_error, formatted, diags} ->
+            {:failed, formatted, before ++ diags}
+        end
+
+      {:parse_error, message} ->
+        {:failed, "parse error: " <> message, []}
+    end
   end
 
   @impl true

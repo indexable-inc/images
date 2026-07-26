@@ -50,6 +50,42 @@ Bindings, aliases, and modules you define persist: you are building a session,
 not running one-shot snippets. `Api.api("tail")` and `Api.help(Jobs, :tail)`
 are the discovery surface, generated live from module docs.
 
+### A workspace is shared by more agents than you think
+
+One kernel is one MCP connection, and a Claude Code subagent runs on its
+parent's connection. So the parent's cells and every subagent's cells write to
+one binding map, and common names collide: a parent holding `body` as an HTML
+string had it replaced by a subagent's `body`, a list of a file's lines, and
+the parent's next `<>` raised `not a bitstring` (#3967).
+
+Nothing in the MCP protocol says who is calling (a `tools/call` carries only a
+per-call `claudecode/toolUseId`), so the kernel cannot partition bindings by
+agent. What it does instead is refuse to let a takeover be silent. Every write
+records its cell's job, intent, value shape and time, and a cell writing over
+another cell's variable is reported to both sides:
+
+```
+-- warning: shared binding: `body` was bound just now by job 7c5c9b57
+   (intent: "agent A: render the dashboard body") as a 35-byte binary; this
+   cell rebinds it as an 18-element list.
+```
+
+and then, to the cell that goes on to use it, before it uses it:
+
+```
+-- warning: shared binding: `body` changed type under this workspace: job
+   3fab397b (intent: "agent B: read a nix file into lines") rebound it just
+   now from a 35-byte binary to an 18-element list, over the value job
+   7c5c9b57 (intent: "agent A: render the dashboard body") bound just now.
+```
+
+A same-typed takeover is a `note` on the writing side only; nothing downstream
+is about to raise over it. `Ix.bindings()` lists every name with the cell that
+bound it, which is the fast answer to "whose value is this?". Modules get the
+same treatment: they are global to the BEAM whichever cell defines them, so a
+redefinition now names the cell that had it, next to the compiler's own
+`redefining module Page`.
+
 ## Tools
 
 The MCP surface is exactly one tool; everything else the Python server
