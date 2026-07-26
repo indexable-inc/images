@@ -19,8 +19,8 @@
 }: let
   # mix.exs declares `~> 1.18`; the launcher and the check build against the
   # same toolchain so a run never executes code the gate did not.
-  elixir = ix.languages.elixir.toolchain pkgs {version = "1.18";};
-  erlang = ix.languages.erlang.toolchain pkgs {version = "27";};
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.19";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "28";};
 
   src = lib.fileset.toSource {
     root = ./elixir;

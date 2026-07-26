@@ -15,8 +15,8 @@
   # the same toolchain so the release never runs code the gate did not check.
   # 1.18 rather than 1.19: Mix 1.19's PubSub opens a loopback TCP socket at
   # compile time, which the darwin sandbox denies (:eperm).
-  elixir = ix.languages.elixir.toolchain pkgs {version = "1.18";};
-  erlang = ix.languages.erlang.toolchain pkgs {version = "27";};
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.19";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "28";};
 
   version = "0.1.0"; # keep in sync with mix.exs
 

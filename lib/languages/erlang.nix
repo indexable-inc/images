@@ -5,10 +5,15 @@
   the OTP-numbered attributes are for builds that need to pin against
   a specific release line (distribution-protocol compatibility, BEAM
   JIT availability, `gen_statem` API changes between majors).
+
+  Each major is spelled `beamNNPackages.erlang`, never the top-level
+  `pkgs.erlang_NN`: those are `warnAlias` shims whose deprecation
+  warning is fatal under `abort-on-warn` (see `elixir.nix`). OTP 26 is
+  not listed at all -- nixpkgs removed it as EOL on 2026-04-01, so
+  selecting it threw.
   */
   toolchainsFor = pkgs: {
     latest = pkgs.beamPackages.erlang;
-    "26" = pkgs.erlang_26;
     "27" = pkgs.beam27Packages.erlang;
     "28" = pkgs.beam28Packages.erlang;
   };
@@ -23,7 +28,7 @@ in {
 
   Arguments:
   - `pkgs`: nixpkgs instance the toolchain comes from.
-  - `version`: required, one of `"latest" | "26" | "27" | "28"`. Pass
+  - `version`: required, one of `"latest" | "27" | "28"`. Pass
     `"latest"` to follow `pkgs.beamPackages.erlang`.
 
   Example:

@@ -5,14 +5,24 @@
   `elixirc`, `iex`, and `mix` against a chosen Erlang/OTP.
 
   `"latest"` follows whatever `pkgs.beamPackages.elixir` resolves to in
-  the pinned nixpkgs (currently 1.19); the explicit minors are for builds
+  the pinned nixpkgs (currently 1.18); the explicit minors are for builds
   that need to stay on a tested Elixir/OTP pairing.
+
+  Every entry is spelled `beamPackages.*`, never the top-level
+  `pkgs.elixir_1_*`. Nixpkgs turned those into `warnAlias` shims on
+  2026-06-15, and `lib.derivations.warnOnInstantiate` wraps every
+  attribute of the derivation except `meta`/`name`/`type`/`outputName`
+  in `lib.warn` -- so merely forcing `drvPath` emits "'elixir_1_19' is
+  deprecated in favor of using the beamPackages sets", which
+  `abort-on-warn` (set here and in ix) turns into a hard eval failure.
+  Only versions that run on the `beamPackages` OTP are listed. 1.15 and 1.16
+  throw outright (nixpkgs removed them on 2026-04-01 with `erlang_26` as EOL),
+  and 1.17 asserts `OTP >= 25 and <= 27` so it cannot instantiate against the
+  OTP 28 that `beamPackages` now tracks. Reviving 1.17 would mean pinning
+  `beam27Packages`; nothing asked for it, so it is gone.
   */
   toolchainsFor = pkgs: {
     latest = pkgs.beamPackages.elixir;
-    "1.15" = pkgs.elixir_1_15;
-    "1.16" = pkgs.elixir_1_16;
-    "1.17" = pkgs.elixir_1_17;
     "1.18" = pkgs.beamPackages.elixir_1_18;
     "1.19" = pkgs.beamPackages.elixir_1_19;
   };
@@ -32,9 +42,8 @@ in {
 
   Arguments:
   - `pkgs`: nixpkgs instance the toolchain comes from.
-  - `version`: required, one of `"latest" | "1.15" | "1.16" | "1.17"
-    | "1.18" | "1.19"`. Pass `"latest"` to follow
-    `pkgs.beamPackages.elixir`.
+  - `version`: required, one of `"latest" | "1.18" | "1.19"`.
+    Pass `"latest"` to follow `pkgs.beamPackages.elixir`.
 
   Example:
   ```nix

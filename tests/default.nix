@@ -2571,6 +2571,17 @@
   languages = {
     elixirLatest = ix.languages.elixir.toolchain pkgs {version = "latest";};
     erlangLatest = ix.languages.erlang.toolchain pkgs {version = "latest";};
+    # Forcing `drvPath` is the whole point: nixpkgs deprecates a BEAM
+    # attribute by wrapping every attribute of the derivation (except
+    # meta/name/type/outputName) in `lib.warn`, so a table entry still
+    # spelled `pkgs.elixir_1_*` / `pkgs.erlang_*` resolves fine until
+    # something forces it -- and then `abort-on-warn` kills the eval of
+    # whatever host or image reached it. Removed majors (elixir 1.15/1.16,
+    # erlang 26) throw here for the same reason.
+    beamPinnedDrvPaths = builtins.concatStringsSep " " (
+      builtins.map (version: (ix.languages.elixir.toolchain pkgs {inherit version;}).drvPath) ["1.18" "1.19"]
+      ++ builtins.map (version: (ix.languages.erlang.toolchain pkgs {inherit version;}).drvPath) ["27" "28"]
+    );
     erlangRebarDefault = ix.languages.erlang.rebar3 pkgs {};
     erlangRebarExplicit = ix.languages.erlang.rebar3 pkgs {erlang = pkgs.beamPackages.erlang;};
     pythonMissingVersion = builtins.tryEval (
@@ -5539,6 +5550,10 @@
       {
         assertion = languages.erlangLatest.drvPath == pkgs.beamPackages.erlang.drvPath;
         message = "ix.languages.erlang latest should follow beamPackages.erlang";
+      }
+      {
+        assertion = builtins.isString languages.beamPinnedDrvPaths;
+        message = "every advertised Elixir and Erlang minor should instantiate without a deprecation warning";
       }
       {
         assertion = languages.erlangRebarDefault.drvPath == languages.erlangRebarExplicit.drvPath;

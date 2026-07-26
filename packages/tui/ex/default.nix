@@ -20,8 +20,8 @@ let
   # 1.18/27, not the 1.19/28 the other unibind suites use: ix-mcp-ex loads
   # these .beam files at runtime and its release runs on 1.18/OTP 27, and
   # the BEAM does not load bytecode from a newer OTP than its own.
-  elixir = ix.languages.elixir.toolchain pkgs {version = "1.18";};
-  erlang = ix.languages.erlang.toolchain pkgs {version = "27";};
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.19";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "28";};
 
   version = "0.1.0"; # keep in sync with mix/mix.exs
 

@@ -1,0 +1,102 @@
+---
+id: beam-toolchain-beam-packages-only
+postedAt: "2026-07-25"
+title: the BEAM toolchain tables name beamPackages only, because a deprecation warning is a build failure here
+tags:
+  - elixir
+  - erlang
+  - nix
+---
+
+`ix.languages.elixir.toolchain` and `ix.languages.erlang.toolchain` map a
+version string onto a nixpkgs attribute. Every entry now comes out of a beam
+package set (`beamPackages.elixir_1_19`, `beam28Packages.erlang`), and every
+version that cannot instantiate against the current OTP is gone from the
+tables: Elixir 1.15, 1.16 and 1.17, and Erlang/OTP 26. Every consumer in the
+repo moved to the newest pair, Elixir 1.19 on OTP 28.
+
+## why a deprecation is not advice
+
+Nixpkgs deprecated the top-level BEAM attributes on 2026-06-15:
+
+    elixir_1_19 = warnAlias "'elixir_1_19' is deprecated in favor of using
+      the beamPackages sets. Use 'beamPackages.elixir_1_19' instead."
+      beamPackages.elixir_1_19;
+
+`warnAlias` is `lib.derivations.warnOnInstantiate`, which wraps *every*
+attribute of the derivation except `meta`, `name`, `type` and `outputName` in
+`lib.warn`. So the warning does not fire when the attribute is looked up. It
+fires the moment anything forces `drvPath`, `outPath`, or an output attribute
+— which is exactly what a `buildEnv` does when it collects a profile. This
+repo and ix both set `abort-on-warn`, so that is not a warning, it is a hard
+eval failure of whatever host or image reached it.
+
+That is how it surfaced. All six `dev-compute-*` hosts in ix stopped
+evaluating `config.system.build.toplevel.drvPath` with nothing but
+
+    evaluation warning: 'elixir_1_19' is deprecated, use
+    'beamPackages.elixir_1_19' instead
+
+and a trace whose only ix-shaped frame was
+`systemd.services.home-manager-hari.serviceConfig`. Evaluating
+`pkgs.elixir_1_19` on its own looked fine, because the interesting frames were
+`home-manager-path` → `buildenv/default.nix:123` → `drv.${outName}`. The
+package came from a third-party pin (`harivansh-afk/nix`, whose
+`modules/users/user-config/packages.nix` puts `elixir_1_19` on hari's profile),
+so ix carries a scoped shim at the boundary where it hands that tree a package
+set, guarded by a check that throws once the pin stops needing it.
+
+## the removed versions were worse than deprecated
+
+`pkgs.elixir_1_15` and `pkgs.elixir_1_16` are `throw`s, not warnings — nixpkgs
+dropped them on 2026-04-01 along with `erlang_26` as EOL. `elixir.nix` still
+advertised both in its version table and its docstring, so anyone who took the
+documentation at its word got a nixpkgs removal message rather than this repo's
+own "unknown version" error listing what is actually supported. They are gone
+from the table and the docs.
+
+## 1.17 was the trap in the obvious fix
+
+Rewriting `pkgs.elixir_1_17` to `pkgs.beamPackages.elixir_1_17` looks like the
+same mechanical change as 1.18 and 1.19, and it is wrong. Elixir 1.17 asserts
+its Erlang range, and `beamPackages` now tracks OTP 28:
+
+    erlang OTP 28.5.0.3 is not >= 25 and <= 27
+    See https://hexdocs.pm/elixir/1.17.3/compatibility-and-deprecations.html
+
+So the rewrite trades a deprecation warning for a hard assertion failure.
+Keeping 1.17 would mean pinning it to `beam27Packages` specifically, a
+different shape from every other entry, to carry a version nothing in the repo
+selects. It is dropped instead. The `beamPinnedDrvPaths` assertion below is
+what caught this, one step after the rewrite that introduced it.
+
+## every consumer is on the newest pair
+
+Five packages were still asking for Elixir 1.18 on OTP 27: `agent-harness-ex`,
+`tui/ex`, `google/gmail/ex`, `mcp-ex`, and `hive`. All seven Elixir packages in
+the repo declare `elixir: "~> 1.18"` in `mix.exs`, which means `>= 1.18` and
+`< 2.0`, and `plumb` and `unibind/conformance-ex` already ran 1.19 against that
+same constraint. So the five moved to Elixir 1.19 on OTP 28 and nothing selects
+an older toolchain now.
+
+Elixir 1.18 and OTP 27 stay in the tables. They are one release behind current
+and still supported upstream, so dropping them would remove working capability
+rather than cruft.
+
+## the guard
+
+`tests/default.nix` now forces `drvPath` for every advertised minor —
+Elixir 1.18/1.19, Erlang 27/28 — rather than only the `latest` alias it
+checked before. Forcing is the point: a table entry spelled `pkgs.elixir_1_*`
+resolves fine until something forces it, and then it kills the eval of a host
+nobody was thinking about. Reverting `elixir.nix` to the old spelling makes
+that assertion abort with the deprecation warning.
+
+## not done
+
+The upstream spelling in `harivansh-afk/nix` has not been fixed; ix carries a
+local shim instead, and that repo's `main` still spells `elixir_1_19` (it has
+since moved the reference into `lib/nvim-packages.nix`). No sweep was run for
+other top-level nixpkgs aliases this repo may still name — the class here was
+enumerated from the BEAM alias block in `pkgs/top-level/aliases.nix`, not from
+the repo.
