@@ -647,7 +647,13 @@
         promotes keep it; an already-open page keeps its state across
         promotes, so live updates go as imperative statements after the
         store's rehydrate, never as initialState edits. The user reads
-        only the page; chat text is one pointer line at most. Layer the
+        only the page; chat text is one pointer line at most. That line
+        points, it does not summarise: it names what changed and where to
+        look. Everything else goes on the page, including results arriving
+        from background work, corrections to earlier claims, and the
+        question you want answered next. Saying a thing in both places is
+        the standing failure of this rule, and it doubles the reading for
+        nothing. Layer the
         page: the surface is a short causal story in plain words (we
         thought X, but Y, so Z) with named actors, ordered what broke /
         damage / fix / lesson for incidents; a reader who knows none of
