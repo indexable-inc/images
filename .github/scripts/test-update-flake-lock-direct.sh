@@ -20,8 +20,8 @@ git_init() {
   "$real_git" -C "$1" config user.email test@example.com
 }
 
-# Two source commits: the parent starts at old_source while index/main already
-# points at new_source.
+# Two commits in each source repository: the parent starts at the old commits
+# while both remote main branches already point at the new commits.
 git_init "${tmp}/index-seed"
 printf 'old\n' >"${tmp}/index-seed/version"
 "$real_git" -C "${tmp}/index-seed" add version
@@ -33,19 +33,37 @@ printf 'new\n' >"${tmp}/index-seed/version"
 new_source="$("$real_git" -C "${tmp}/index-seed" rev-parse HEAD)"
 "$real_git" -C "${tmp}/index-seed" push --quiet "${tmp}/index.git" main
 
-# Minimal caller repository with the same path-input lock shape as ix.
+git_init "${tmp}/nox-seed"
+printf 'old\n' >"${tmp}/nox-seed/version"
+"$real_git" -C "${tmp}/nox-seed" add version
+"$real_git" -C "${tmp}/nox-seed" commit --quiet -m old
+old_nox="$("$real_git" -C "${tmp}/nox-seed" rev-parse HEAD)"
+"$real_git" clone --quiet --bare "${tmp}/nox-seed" "${tmp}/nox.git"
+printf 'new\n' >"${tmp}/nox-seed/version"
+"$real_git" -C "${tmp}/nox-seed" commit --quiet -am new
+new_nox="$("$real_git" -C "${tmp}/nox-seed" rev-parse HEAD)"
+"$real_git" -C "${tmp}/nox-seed" push --quiet "${tmp}/nox.git" main
+
+# Minimal caller repository with ix's two path-input lock nodes.
 git_init "${tmp}/ix-seed"
 "$real_git" -c protocol.file.allow=always -C "${tmp}/ix-seed" \
   submodule add --quiet "${tmp}/index.git" index
 "$real_git" -C "${tmp}/ix-seed/index" checkout --quiet "$old_source"
 "$real_git" -C "${tmp}/ix-seed" config -f .gitmodules submodule.index.branch main
+"$real_git" -c protocol.file.allow=always -C "${tmp}/ix-seed" \
+  submodule add --quiet "${tmp}/nox.git" nox
+"$real_git" -C "${tmp}/ix-seed/nox" checkout --quiet "$old_nox"
+"$real_git" -C "${tmp}/ix-seed" config -f .gitmodules submodule.nox.branch main
 old_timestamp="$("$real_git" -C "${tmp}/ix-seed/index" show -s --format=%ct "$old_source")"
+old_nox_timestamp="$("$real_git" -C "${tmp}/ix-seed/nox" show -s --format=%ct "$old_nox")"
 jq -n \
   --arg rev "$old_source" \
   --argjson timestamp "$old_timestamp" \
+  --arg noxRev "$old_nox" \
+  --argjson noxTimestamp "$old_nox_timestamp" \
   '{
     nodes: {
-      root: {inputs: {index: "index"}},
+      root: {inputs: {index: "index", nox: "nox"}},
       index: {
         locked: {
           lastModified: $timestamp,
@@ -53,11 +71,19 @@ jq -n \
           rev: $rev,
           type: "path"
         }
+      },
+      nox: {
+        locked: {
+          lastModified: $noxTimestamp,
+          path: "./nox",
+          rev: $noxRev,
+          type: "path"
+        }
       }
     },
     root: "root"
   }' >"${tmp}/ix-seed/flake.lock"
-"$real_git" -C "${tmp}/ix-seed" add .gitmodules index flake.lock
+"$real_git" -C "${tmp}/ix-seed" add .gitmodules index nox flake.lock
 "$real_git" -C "${tmp}/ix-seed" commit --quiet -m initial
 "$real_git" clone --quiet --bare "${tmp}/ix-seed" "${tmp}/ix.git"
 "$real_git" clone --quiet "${tmp}/ix.git" "${tmp}/worker"
@@ -78,7 +104,7 @@ run_worker() {
     GH_TOKEN=test \
     GITHUB_REPOSITORY=test/ix \
     GIT_CONFIG_GLOBAL="${tmp}/gitconfig" \
-    SUBMODULE_PATHS=index \
+    SUBMODULE_PATHS="index nox" \
     TRIGGER_USER='' \
     UPDATE_REMOTE_URL="${tmp}/ix.git" \
     PATH="${tmp}/fake-bin:${PATH}" \
@@ -91,8 +117,11 @@ run_worker
 
 actual="$("$real_git" --git-dir="${tmp}/ix.git" rev-parse main:index)"
 locked="$("$real_git" --git-dir="${tmp}/ix.git" show main:flake.lock | jq -r '.nodes.index.locked.rev')"
-if [ "$actual" != "$new_source" ] || [ "$locked" != "$new_source" ]; then
-  echo "direct update did not move both the gitlink and lock to index/main" >&2
+nox_actual="$("$real_git" --git-dir="${tmp}/ix.git" rev-parse main:nox)"
+nox_locked="$("$real_git" --git-dir="${tmp}/ix.git" show main:flake.lock | jq -r '.nodes.nox.locked.rev')"
+if [ "$actual" != "$new_source" ] || [ "$locked" != "$new_source" ] ||
+  [ "$nox_actual" != "$new_nox" ] || [ "$nox_locked" != "$new_nox" ]; then
+  echo "direct update did not move both gitlinks and locks to remote main" >&2
   exit 1
 fi
 
