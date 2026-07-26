@@ -70,6 +70,62 @@ Matching uses `glob::Pattern` with shell `case`-glob semantics where `*` crosses
 `CLAUDE_CODE_DISABLE_WORKTREE_GUARD`. In claude-code the whole `PreToolUse` block
 is only installed when `primaryCheckouts != []` (`default.nix:257`).
 
+## git-guard (PreToolUse, Bash)
+
+Refuses a destructive git command aimed at a shared primary checkout that
+currently holds uncommitted work. Same protected list as the worktree guard
+above, so it is only installed when `primaryCheckouts != []`. Kill switch:
+`CLAUDE_CODE_DISABLE_GIT_GUARD`.
+
+Why it is a `PreToolUse` hook and not a git hook: git ships no `pre-reset`,
+`pre-checkout`, `pre-clean` or `pre-stash`. `post-checkout` runs after the
+damage, and `reference-transaction` never fires for `git clean` or for a
+`reset --hard` that does not move HEAD. `PreToolUse` is the only seam that sees
+the command before it runs (ENG-9964).
+
+The command string is parsed rather than regex-matched, because the shapes that
+matter are the ones that look indirect:
+
+1. Split into statements on unquoted `;`, newline, `&&`, `||`, `|`, `(`, `)`,
+   tokenizing quote-aware so a quoted path with a space stays one token
+   (`statements`).
+2. Walk the statements in order, tracking `cd`. `cd <primary> && git reset
+   --hard` is judged against the cd target, not the payload `cwd`.
+3. Skip env assignments and wrapper prefixes (`sudo`, `env`, `command`, ...),
+   then require the command word to be `git`.
+4. Walk git's global options, composing every `-C` onto the current directory
+   and stepping over the value-taking options (`-c`, `--git-dir`,
+   `--work-tree`, `--namespace`) so their arguments are not read as the
+   subcommand.
+5. Classify the subcommand with `discards_worktree`, a closed set: `reset
+   --hard|--merge|--keep`, `checkout -f` or its pathspec form, `switch
+   --force|--discard-changes`, `restore` other than `--staged` alone, `clean
+   -f` without `-n`, and any `stash` except `list`, `show` and `create`.
+   Commands git itself refuses against a dirty tree (`merge`, `rebase`,
+   `cherry-pick`) are deliberately absent.
+6. Resolve the target repo. A linked worktree (private git-dir differs from the
+   common dir) is the caller's own and always allowed.
+7. If the toplevel is protected, read `git status --porcelain`. Empty means
+   there is nothing to destroy, so the command proceeds. Otherwise deny, naming
+   the dirty entries, the `git stash create` snapshot that does not touch the
+   tree, and the `worktree add` path under `/tmp/worktree/<org>/<repo>/` derived
+   from the checkout's origin URL.
+
+**This guard does not fail open.** Every other hook here returns silently on any
+error, on the principle that a broken hook is worse than no hook. That trade is
+wrong for the one guard whose failure mode is unrecoverable data loss, so once
+`git-guard` knows the target is a protected checkout it denies when it cannot
+read `git status`, and says why. Before that point (non-Bash tool, unparseable
+payload, no protected list, target not a repo) it still fails open, because
+there is nothing it could be protecting.
+
+Behavioral coverage lives in `packages/claude-code/install-check.nix`: a real
+primary checkout with uncommitted work plus a linked worktree, asserting the
+five destructive shapes deny, the `cd`/`-C`/`sudo`/chained/global-option
+evasions deny, the safe siblings and the recommended rescue commands allow, a
+clean protected checkout allows, the deny message names the dirty files, and the
+kill switch allows silently.
+
 ## prompt-priors (UserPromptSubmit)
 
 Injects score-gated ambient priors from the corpus store, but only after passing

@@ -87,6 +87,7 @@ fn main() -> ExitCode {
         Some("wakeup-gate") => wakeup::wakeup_gate(),
         Some("cargo-guard") => guards::cargo_guard(),
         Some("bash-habits-guard") => guards::bash_habits_guard(),
+        Some("git-guard") => guards::git_guard(),
         Some("search-guard") => guards::search_guard(),
         Some("friction-report") => friction::friction_report(),
         Some("subagent-cache-lookup") => subagent_cache::lookup(),
@@ -305,7 +306,7 @@ fn worktree_guard() {
     }
 }
 
-fn git_rev_parse(git: &str, dir: &Path, what: &str) -> Option<String> {
+pub(crate) fn git_rev_parse(git: &str, dir: &Path, what: &str) -> Option<String> {
     let out = Command::new(git)
         .arg("-C")
         .arg(dir)
@@ -326,7 +327,7 @@ fn git_rev_parse(git: &str, dir: &Path, what: &str) -> Option<String> {
 
 /// User override first, else the wrapper-baked default; colon-separated, empties
 /// dropped. Empty list means no guard.
-fn primary_checkouts() -> Vec<String> {
+pub(crate) fn primary_checkouts() -> Vec<String> {
     let raw = std::env::var("CLAUDE_CODE_PRIMARY_CHECKOUTS")
         .or_else(|_| std::env::var("IX_DEFAULT_PRIMARY_CHECKOUTS"))
         .unwrap_or_default();
@@ -338,7 +339,7 @@ fn primary_checkouts() -> Vec<String> {
 
 /// Shell `case`-glob semantics: `*` crosses `/` (glob's default
 /// `require_literal_separator = false`), matching the whole `toplevel`.
-fn matches_protected(toplevel: &str, patterns: &[String]) -> bool {
+pub(crate) fn matches_protected(toplevel: &str, patterns: &[String]) -> bool {
     patterns
         .iter()
         .any(|p| glob::Pattern::new(p).is_ok_and(|pat| pat.matches(toplevel)))

@@ -27,6 +27,7 @@
     protectedCheckoutGuard = hookRunnerSubcommand "worktree-guard";
     nixCargoGuard = hookRunnerSubcommand "cargo-guard";
     shellHabitGuard = hookRunnerSubcommand "bash-habits-guard";
+    destructiveGitGuard = hookRunnerSubcommand "git-guard";
     indexedSearchGuard = hookRunnerSubcommand "search-guard";
     promptPriors = hookRunnerSubcommand "prompt-priors";
     subagentCacheLookup = hookRunnerSubcommand "subagent-cache-lookup";
@@ -97,6 +98,16 @@
       {
         matcher = "Bash";
         command = hookCommands.shellHabitGuard;
+      }
+      # git has no pre-reset/pre-checkout/pre-clean/pre-stash hook, so the only
+      # seam that sees `git reset --hard` before it runs is PreToolUse
+      # (ENG-9964). Same protected list as the edit guard above: without one
+      # there is nothing to protect, so it is not installed.
+      {
+        matcher = "Bash";
+        command = hookCommands.destructiveGitGuard;
+        timeout = 10;
+        enable = primaryCheckouts != [];
       }
       {
         matcher = "^Search$";

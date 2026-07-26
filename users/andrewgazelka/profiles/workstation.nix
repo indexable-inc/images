@@ -106,9 +106,18 @@
   # (IX_DEFAULT_PRIMARY_CHECKOUTS session variable, index#3871) both derive
   # from it. The package default is `/home/*/{index,ix}` (Linux fleet); on
   # this Mac the long-lived checkouts live under ~/Projects.
+  #
+  # The ~/.config/nix entries are not decoration: they were missing, and that
+  # is why the edit guard allowed the writes that ENG-9964 then destroyed.
+  # ~/.config/nix/ix is the checkout every session on this Mac actually shares,
+  # and `/Users/*/Projects/*/ix` does not match it, so the guard was live,
+  # configured, and silently protecting nothing.
   primaryCheckouts = [
     "/Users/*/Projects/*/index"
     "/Users/*/Projects/*/ix"
+    "/Users/*/.config/nix"
+    "/Users/*/.config/nix/ix"
+    "/Users/*/.config/nix/ix/index"
   ];
 
   # SessionStart memory digest: the derived replacement for the retired
