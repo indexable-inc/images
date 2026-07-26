@@ -70,6 +70,9 @@ on:
       submodule-app-private-key:
         description: "Private key for submodule-app-client-id."
         required: false
+      submodule-read-token:
+        description: "Existing repository-managed token used to fetch private submodules when no dedicated GitHub App installation covers them."
+        required: false
       slack-bot-token:
         description: "Slack bot token (chat:write) for escalation posts; empty escalates through the tracking issue only."
         required: false
@@ -203,7 +206,7 @@ jobs:
         env:
           DIRECT_PUSH: ${{ inputs.direct-push }}
           GH_TOKEN: ${{ steps.direct-app-token.outputs.token || steps.pr-app-token.outputs.token || github.token }}
-          SUBMODULE_READ_TOKEN: ${{ steps.submodule-app-token.outputs.token }}
+          SUBMODULE_READ_TOKEN: ${{ secrets.submodule-read-token || steps.submodule-app-token.outputs.token }}
           SUBMODULE_PATHS: ${{ inputs.submodule-paths }}
           TRIGGER_USER: ${{ steps.trigger.outputs.user }}
         run: |
