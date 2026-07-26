@@ -476,6 +476,110 @@
     pre_guard search-guard "Search tool denied" deny '{"tool_name":"Search"}'
     pre_guard search-guard "WebSearch not denied" allow '{"tool_name":"WebSearch"}'
 
+    # Behavioral net for git-guard (ENG-9964). Reuses the primary/worktree pair
+    # built above, now with real uncommitted work in each: git has no
+    # pre-reset/pre-clean/pre-stash hook, so PreToolUse is the only seam, and
+    # the guard has to parse the command itself. These checks pin that parse.
+    echo dirty > "$primary/tracked.txt"
+    ${lib.getExe git} -C "$primary" add tracked.txt
+    ${lib.getExe git} -C "$primary" -c user.email=ci@ix -c user.name=ci \
+      commit -q -m tracked
+    echo "another session's work" >> "$primary/tracked.txt"
+    echo untracked > "$primary/scratch.txt"
+    echo "my own work" >> "$wt/tracked.txt"
+
+    git_payload() {
+      ${lib.getExe jq} -nc --arg c "$1" --arg k "$2" \
+        '{tool_name:"Bash",cwd:$c,tool_input:{command:$k}}'
+    }
+    git_guard() {
+      local desc="$1" expect="$2" got verdict
+      got="$(git_payload "$3" "$4" \
+        | CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" IX_GIT=${lib.getExe git} \
+          ${hookRunner}/bin/claude-hooks git-guard)"
+      case "$got" in
+      ''') verdict=allow ;;
+      *'"permissionDecision":"deny"'*) verdict=deny ;;
+      *) verdict="unparsed: $got" ;;
+      esac
+      if [ "$verdict" != "$expect" ]; then
+        printf 'git-guard check failed (%s): expected %s, got %s\n' \
+          "$desc" "$expect" "$verdict" >&2
+        exit 1
+      fi
+    }
+
+    # The five destructive shapes ENG-9964 names, in a dirty primary checkout.
+    git_guard "reset --hard in primary"     deny "$primary" "git reset --hard HEAD~1"
+    git_guard "checkout -- . in primary"    deny "$primary" "git checkout -- ."
+    git_guard "clean -fd in primary"        deny "$primary" "git clean -fd"
+    git_guard "stash in primary"            deny "$primary" "git stash"
+    git_guard "restore . in primary"        deny "$primary" "git restore ."
+    # Evasions that must not work: cd into the checkout, -C into it, a wrapper
+    # command in front, a global option before the subcommand, and a
+    # destructive call buried later in a chain.
+    git_guard "cd evasion"                  deny /tmp "cd $primary && git reset --hard"
+    git_guard "-C evasion"                  deny /tmp "git -C $primary clean -fdx"
+    git_guard "sudo prefix"                 deny "$primary" "sudo git reset --hard"
+    git_guard "buried in a chain"           deny "$primary" "make build && echo ok; git checkout -f main"
+    git_guard "-c option before subcommand" deny "$primary" "git -c core.pager=cat reset --hard"
+    # A linked worktree is the caller's own; their dirt is theirs to discard.
+    git_guard "reset --hard in worktree"    allow "$wt" "git reset --hard HEAD~1"
+    git_guard "clean -fd in worktree"       allow "$wt" "git clean -fd"
+    # Non-destructive git in the primary checkout stays usable, or the guard
+    # becomes noise and gets switched off.
+    git_guard "status in primary"           allow "$primary" "git status"
+    git_guard "commit in primary"           allow "$primary" "git commit -am wip"
+    git_guard "reset --soft in primary"     allow "$primary" "git reset --soft HEAD~1"
+    git_guard "checkout -b in primary"      allow "$primary" "git checkout -b feature"
+    git_guard "clean -nd (dry run)"         allow "$primary" "git clean -nd"
+    git_guard "stash list"                  allow "$primary" "git stash list"
+    # The rescue command the deny message tells the caller to run must itself
+    # survive the guard, or the advice is a dead end.
+    git_guard "stash create"                allow "$primary" "git stash create"
+    git_guard "restore --staged"            allow "$primary" "git restore --staged ."
+    # A literal mention inside a quoted string is not a command.
+    git_guard "quoted mention"              allow "$primary" "echo 'git reset --hard'"
+    git_guard "outside any protected repo"  allow /tmp "git reset --hard"
+    if [ -n "$(printf '%s' "{\"tool_name\":\"Edit\",\"cwd\":\"$primary\"}" \
+      | CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" ${hookRunner}/bin/claude-hooks git-guard)" ]; then
+      printf 'git-guard check failed: non-Bash tool must allow silently\n' >&2
+      exit 1
+    fi
+
+    # A clean protected checkout has nothing to lose, so the guard must get out
+    # of the way. This is the allow that proves it reads real repository state
+    # rather than pattern-matching the command string.
+    clean="$checktop/repos/clean"
+    ${lib.getExe git} init -q "$clean"
+    ${lib.getExe git} -C "$clean" -c user.email=ci@ix -c user.name=ci \
+      commit -q --allow-empty -m init
+    if [ -n "$(git_payload "$clean" "git reset --hard" \
+      | CLAUDE_CODE_PRIMARY_CHECKOUTS="$clean" IX_GIT=${lib.getExe git} \
+        ${hookRunner}/bin/claude-hooks git-guard)" ]; then
+      printf 'git-guard check failed: clean checkout has nothing to destroy\n' >&2
+      exit 1
+    fi
+
+    # The deny has to name what would be lost and where to go instead, or the
+    # caller cannot act on it. Assert the message, not just the decision.
+    msg="$(git_payload "$primary" "git reset --hard" \
+      | CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" IX_GIT=${lib.getExe git} \
+        ${hookRunner}/bin/claude-hooks git-guard)"
+    for want in tracked.txt scratch.txt "worktree add" "stash create" ENG-9964; do
+      case "$msg" in
+      *"$want"*) : ;;
+      *) printf 'git-guard message missing %s:\n%s\n' "$want" "$msg" >&2; exit 1 ;;
+      esac
+    done
+
+    if [ -n "$(git_payload "$primary" "git reset --hard" \
+      | CLAUDE_CODE_DISABLE_GIT_GUARD=1 CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" \
+        IX_GIT=${lib.getExe git} ${hookRunner}/bin/claude-hooks git-guard)" ]; then
+      printf 'git-guard check failed: kill switch must allow silently\n' >&2
+      exit 1
+    fi
+
     # Review pair: log-edit records an edited path, the Stop gate then blocks once
     # (JSON decision:block) and consumes the marker; a stop_hook_active re-entry
     # allows silently (the loop guard).
