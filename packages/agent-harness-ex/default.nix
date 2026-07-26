@@ -9,8 +9,8 @@
   # mix.exs declares `~> 1.18`; same toolchain pairing as the consumer
   # (packages/mcp-ex), so the path dep never compiles under a different
   # Elixir than the one that gated it here.
-  elixir = ix.languages.elixir.toolchain pkgs {version = "1.19";};
-  erlang = ix.languages.erlang.toolchain pkgs {version = "28";};
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.20";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "29";};
 
   version = "0.1.0"; # keep in sync with mix.exs
 
@@ -78,7 +78,7 @@
     nativeBuildInputs = [
       erlang
       elixir
-      (pkgs.beamPackages.hex.override {inherit elixir;})
+      (ix.elixirHex {inherit pkgs elixir;})
     ];
 
     env = {

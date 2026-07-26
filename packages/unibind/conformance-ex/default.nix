@@ -19,8 +19,8 @@ let
 
   # The same toolchain pairing the repo's other Elixir gates build against
   # (packages/hive).
-  elixir = ix.languages.elixir.toolchain pkgs {version = "1.19";};
-  erlang = ix.languages.erlang.toolchain pkgs {version = "28";};
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.20";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "29";};
 
   run = pkgs.stdenv.mkDerivation {
     pname = "unibind-conformance-ex-run";

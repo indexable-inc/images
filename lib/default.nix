@@ -222,6 +222,9 @@
   # injected with the single-source-of-truth strict Credo config so every Elixir
   # gate enforces the same policy. The Elixir counterpart of buildUvApplication.
   buildElixirCheck = import ./build/elixir-check.nix {credoConfig = ./elixir/credo.exs;};
+  # hex for a given elixir, carrying the darwin sandbox allowance Mix needs
+  # from 1.19 on. See lib/build/elixir-hex.nix.
+  elixirHex = args: import ./build/elixir-hex.nix args;
   buildPyStrictCheck = import ./build/py-strict-check.nix {inherit lib;};
   buildGradleFatJar = import ./build/gradle-fat-jar.nix {inherit lib;};
   wrapPackage = import ./build/wrap-package.nix {inherit lib;};
@@ -682,6 +685,7 @@
       buildPyStrictCheck
       buildSvelteSite
       buildUvApplication
+      elixirHex
       buildZigPackage
       cache
       cargoUnit

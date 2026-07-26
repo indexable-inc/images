@@ -73,7 +73,7 @@ in
         pkgs.git
       ]
       # hex is only needed when compiling fetched deps; a no-deps build skips it.
-      ++ lib.optional hasDeps (pkgs.beamPackages.hex.override {inherit elixir;})
+      ++ lib.optional hasDeps (import ./elixir-hex.nix {inherit pkgs elixir;})
       ++ extraNativeBuildInputs;
 
     env =

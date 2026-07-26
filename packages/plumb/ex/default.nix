@@ -14,8 +14,8 @@ let
     };
   };
 
-  elixir = ix.languages.elixir.toolchain pkgs {version = "1.19";};
-  erlang = ix.languages.erlang.toolchain pkgs {version = "28";};
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.20";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "29";};
 
   run = pkgs.stdenv.mkDerivation {
     pname = "plumb-ex-run";

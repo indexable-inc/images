@@ -1,0 +1,94 @@
+---
+id: elixir-1-20-otp-29
+postedAt: "2026-07-26"
+title: every Elixir package moves to 1.20 on OTP 29, and hex gets the darwin sandbox allowance that made it possible
+tags:
+  - elixir
+  - erlang
+  - nix
+  - darwin
+---
+
+All seven Elixir packages in the repo now build against Elixir 1.20.2 on
+Erlang/OTP 29: `agent-harness-ex`, `tui/ex`, `google/gmail/ex`, `mcp-ex`,
+`hive`, `plumb/ex`, and `unibind/conformance-ex`. Nothing selects an older
+toolchain.
+
+## the blocker was hex, not Elixir
+
+Every Elixir build on a Mac died before it compiled anything:
+
+```
+** (RuntimeError) failed to start Mix.PubSub, reason: ... failed to open a
+TCP socket in Mix.Sync.PubSub.subscribe/1, reason: :eperm
+```
+
+Mix 1.19 added `Mix.PubSub`. `Mix.Sync.PubSub` binds `@loopback {127, 0, 0, 1}`
+at compile time to coordinate concurrent OS processes, unconditionally: there
+is no environment variable that turns it off. The darwin nix sandbox denies the
+bind. The Linux sandbox permits it, so CI never saw this and the failure only
+ever reproduced on a developer machine.
+
+`nixpkgs`’ `beamPackages.hex` does not set `__darwinAllowLocalNetworking`, and
+hex is itself built with mix, so hex is the first thing to die and every
+package that needs it dies behind it. `lib/build/elixir-hex.nix` is a two-line
+override that adds the allowance:
+
+```nix
+(pkgs.beamPackages.hex.override {inherit elixir;}).overrideAttrs (_: {
+  __darwinAllowLocalNetworking = true;
+})
+```
+
+Three call sites had the same `beamPackages.hex.override` written out
+longhand: `lib/build/elixir-check.nix`, `packages/agent-harness-ex`, and
+`packages/mcp-ex`. They share `ix.elixirHex` now, so the allowance cannot be
+added to two of them and forgotten on the third.
+
+The real fix belongs upstream, in nixpkgs’ `beamPackages.buildMix` and `hex`,
+which should carry the allowance for any Elixir at or past 1.19. This override
+is carried until that lands.
+
+## a bitstring size variable must be pinned from 1.20
+
+`IxMcp.Utf8` walks backward from a byte offset to find a codepoint boundary,
+and matched with `binary-size(cut_at)` where `cut_at` came from the function
+head. Elixir 1.20 reads an unpinned name inside `size(...)` as a new binding
+rather than the existing value, so the match now needs `^cut_at`:
+
+```elixir
+case binary do
+  <<_::binary-size(^cut_at), 0b10::2, _::bitstring>> -> cut(binary, cut_at - 1)
+  <<keep::binary-size(^cut_at), _::binary>> -> keep
+end
+```
+
+## the comments that a mechanical bump erased
+
+An earlier `1.18` to `1.19` sweep across five files rewrote the version strings
+and left the comments explaining why 1.18 was required. One of them, in
+`packages/mcp-ex/default.nix`, described the exact failure the sweep was about
+to cause:
+
+> 1.18 rather than 1.19: Mix 1.19's PubSub opens a loopback TCP socket at
+> compile time, which the darwin sandbox denies (:eperm).
+
+Two more, in `tui/ex` and `google/gmail/ex`, recorded a runtime constraint no
+build catches: `ix-mcp-ex` loads those `.beam` files at runtime, and the BEAM
+will not load bytecode from a newer OTP than its own, so the three have to move
+together. They do, and the comments now say that rather than naming a version.
+
+## not done
+
+`ix-mcp-ex-check` still fails two of 181 tests, both in
+`IxMcp.Memory.SemanticTest`:
+
+```
+** (RuntimeError) weave recall exited 2 before answering: the binary needs
+semantic recall (indexable-inc/weave#339+)
+```
+
+This is not caused by the toolchain move. Building the same package at Elixir
+1.19 with the hex fix applied fails identically, so the pinned weave binary
+predates semantic recall and the failure is independent of the Elixir version.
+The green result on the previous commit was a cache hit, not a fresh run.

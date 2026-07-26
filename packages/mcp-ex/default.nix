@@ -13,10 +13,11 @@
 
   # mix.exs declares `~> 1.18`; the server and the quality gate build against
   # the same toolchain so the release never runs code the gate did not check.
-  # 1.18 rather than 1.19: Mix 1.19's PubSub opens a loopback TCP socket at
-  # compile time, which the darwin sandbox denies (:eperm).
-  elixir = ix.languages.elixir.toolchain pkgs {version = "1.19";};
-  erlang = ix.languages.erlang.toolchain pkgs {version = "28";};
+  # Mix 1.19+ starts Mix.PubSub, which binds a loopback TCP socket at compile
+  # time; the darwin sandbox denies that unless hex carries
+  # __darwinAllowLocalNetworking, which ix.elixirHex supplies.
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.20";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "29";};
 
   version = "0.1.0"; # keep in sync with mix.exs
 
@@ -108,7 +109,7 @@
     nativeBuildInputs = [
       erlang
       elixir
-      (pkgs.beamPackages.hex.override {inherit elixir;})
+      (ix.elixirHex {inherit pkgs elixir;})
       pkgs.makeWrapper
     ];
 

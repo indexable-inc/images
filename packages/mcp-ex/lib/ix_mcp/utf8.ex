@@ -73,9 +73,12 @@ defmodule IxMcp.UTF8 do
   # A continuation byte (0b10xxxxxx) right after the cut means the cut
   # falls mid-sequence; back up until the next byte starts a codepoint.
   defp cut(binary, cut_at) do
+    # `^cut_at`: from Elixir 1.20 a variable used in a bitstring `size(...)`
+    # must be pinned when it comes from outside the match, since an unpinned
+    # name there reads as a new binding rather than the existing value.
     case binary do
-      <<_::binary-size(cut_at), 0b10::2, _::bitstring>> -> cut(binary, cut_at - 1)
-      <<keep::binary-size(cut_at), _::binary>> -> keep
+      <<_::binary-size(^cut_at), 0b10::2, _::bitstring>> -> cut(binary, cut_at - 1)
+      <<keep::binary-size(^cut_at), _::binary>> -> keep
     end
   end
 end
