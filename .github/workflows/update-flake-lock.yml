@@ -23,6 +23,14 @@ on:
         description: "Client id of a GitHub App (contents + pull-requests write) that authors the bump PR; empty falls back to GITHUB_TOKEN, whose PRs never get pull_request CI on private repos."
         type: string
         default: ""
+      submodule-app-client-id:
+        description: "Client id of a read-only GitHub App used to fetch private submodules; empty reuses the push/PR token."
+        type: string
+        default: ""
+      submodule-repositories:
+        description: "Newline-separated private repository names the read-only submodule App token may fetch."
+        type: string
+        default: ""
       runner-label:
         description: >-
           Runner label for the update and escalation jobs. Empty (the default)
@@ -59,6 +67,9 @@ on:
       app-private-key:
         description: "Private key for app-client-id."
         required: false
+      submodule-app-private-key:
+        description: "Private key for submodule-app-client-id."
+        required: false
       slack-bot-token:
         description: "Slack bot token (chat:write) for escalation posts; empty escalates through the tracking issue only."
         required: false
@@ -88,9 +99,9 @@ jobs:
       pull-requests: write
     steps:
       - name: Validate inputs
-        if: ${{ (inputs.submodule-paths != '' && inputs.flake-inputs != '') || (inputs.direct-push && (inputs.submodule-paths == '' || inputs.app-client-id == '')) }}
+        if: ${{ (inputs.submodule-paths != '' && inputs.flake-inputs != '') || (inputs.direct-push && (inputs.submodule-paths == '' || inputs.app-client-id == '')) || (inputs.submodule-repositories != '' && inputs.submodule-app-client-id == '') }}
         run: |
-          echo "::error::submodule-paths and flake-inputs are mutually exclusive, and direct-push requires both submodule-paths and app-client-id."
+          echo "::error::submodule-paths and flake-inputs are mutually exclusive; direct-push requires submodule-paths and app-client-id; private submodule repositories require submodule-app-client-id."
           exit 1
 
       - name: Checkout repository
@@ -134,6 +145,17 @@ jobs:
           client-id: ${{ inputs.app-client-id }}
           private-key: ${{ secrets.app-private-key }}
           permission-contents: write
+
+      - name: Mint private-submodule read token
+        id: submodule-app-token
+        if: ${{ inputs.submodule-repositories != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.submodule-app-client-id }}
+          private-key: ${{ secrets.submodule-app-private-key }}
+          owner: indexable-inc
+          repositories: ${{ inputs.submodule-repositories }}
+          permission-contents: read
 
       # PRs authored by the default GITHUB_TOKEN never get pull_request CI on
       # private repos: GitHub parks every run in action_required and the
@@ -181,6 +203,7 @@ jobs:
         env:
           DIRECT_PUSH: ${{ inputs.direct-push }}
           GH_TOKEN: ${{ steps.direct-app-token.outputs.token || steps.pr-app-token.outputs.token || github.token }}
+          SUBMODULE_READ_TOKEN: ${{ steps.submodule-app-token.outputs.token }}
           SUBMODULE_PATHS: ${{ inputs.submodule-paths }}
           TRIGGER_USER: ${{ steps.trigger.outputs.user }}
         run: |
@@ -188,9 +211,8 @@ jobs:
           read -ra paths <<< "$SUBMODULE_PATHS"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Push and submodule fetches authenticate with the minted token
-          # (private repos; the checkout token is job-scoped and may lack
-          # contents:write when the caller supplies an app).
+          # Pushes authenticate with the write token. Private submodule fetches
+          # use a separate read-only token when the caller supplies one.
           if [ -n "${UPDATE_REMOTE_URL:-}" ]; then
             # Test seam: production never sets this. It lets the workflow test
             # exercise real fetch/commit/push behavior against a local bare
@@ -198,7 +220,8 @@ jobs:
             git remote set-url origin "$UPDATE_REMOTE_URL"
           else
             git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+            clone_token="${SUBMODULE_READ_TOKEN:-${GH_TOKEN}}"
+            git config --global url."https://x-access-token:${clone_token}@github.com/".insteadOf "https://github.com/"
           fi
 
           build_candidate() {

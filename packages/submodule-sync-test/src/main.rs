@@ -13,8 +13,9 @@
 //!
 //! Three behaviours are pinned:
 //!
-//! 1. A stale pin advances the gitlink and `flake.lock` to `index/main`
-//!    together. Either one alone is a broken tree.
+//! 1. Stale Index and Nox pins advance both gitlinks and both `flake.lock`
+//!    nodes to their remote main branches together. Any partial move is a
+//!    broken tree.
 //! 2. A current pin is a true no-op, creating no commit.
 //! 3. A push that loses a race against an unrelated `ix/main` commit retries
 //!    onto the new tip and preserves the other commit rather than clobbering
@@ -93,16 +94,25 @@ fn bump_submodules_script(workflow: &Path) -> Result<String> {
         .ok_or_else(|| eyre!("no 'Bump submodules' step with a run: body"))
 }
 
-/// The lock shape ix uses for its path input: a `rev` the worker must rewrite.
-fn seed_lock(rev: &str, timestamp: i64) -> String {
+/// The lock shape ix uses for its path inputs: revisions the worker must
+/// rewrite together with their gitlinks.
+fn seed_lock(index_rev: &str, index_timestamp: i64, nox_rev: &str, nox_timestamp: i64) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "nodes": {
-            "root": {"inputs": {"index": "index"}},
+            "root": {"inputs": {"index": "index", "nox": "nox"}},
             "index": {
                 "locked": {
-                    "lastModified": timestamp,
+                    "lastModified": index_timestamp,
                     "path": "./index",
-                    "rev": rev,
+                    "rev": index_rev,
+                    "type": "path"
+                }
+            },
+            "nox": {
+                "locked": {
+                    "lastModified": nox_timestamp,
+                    "path": "./nox",
+                    "rev": nox_rev,
                     "type": "path"
                 }
             }
@@ -137,7 +147,7 @@ impl Fixture {
             .env("GH_TOKEN", "test")
             .env("GITHUB_REPOSITORY", "test/ix")
             .env("GIT_CONFIG_GLOBAL", self.tmp.join("gitconfig"))
-            .env("SUBMODULE_PATHS", "index")
+            .env("SUBMODULE_PATHS", "index nox")
             .env("TRIGGER_USER", "")
             .env("UPDATE_REMOTE_URL", &self.ix_git)
             .env("PATH", path);
@@ -156,15 +166,16 @@ impl Fixture {
         Ok(())
     }
 
-    /// The gitlink and the lock's recorded rev, which must always agree.
-    fn pinned(&self) -> Result<(String, String)> {
+    /// One submodule's gitlink and lock rev, which must always agree.
+    fn pinned(&self, name: &str) -> Result<(String, String)> {
         let dir = self.ix_git.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-        let gitlink = git(&["--git-dir", dir, "rev-parse", "main:index"])?;
+        let tree_path = format!("main:{name}");
+        let gitlink = git(&["--git-dir", dir, "rev-parse", &tree_path])?;
         let lock = git(&["--git-dir", dir, "show", "main:flake.lock"])?;
         let locked: serde_json::Value = serde_json::from_str(&lock)?;
-        let rev = locked["nodes"]["index"]["locked"]["rev"]
+        let rev = locked["nodes"][name]["locked"]["rev"]
             .as_str()
-            .ok_or_else(|| eyre!("lock has no nodes.index.locked.rev"))?
+            .ok_or_else(|| eyre!("lock has no nodes.{name}.locked.rev"))?
             .to_owned();
         Ok((gitlink, rev))
     }
@@ -190,8 +201,8 @@ fn main() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let tmp = tempdir.path().to_path_buf();
 
-    // Two source commits: the caller's parent starts at `old` while index/main
-    // has already moved to `new`.
+    // Two commits in each source: the caller starts at the old revisions while
+    // both remote main branches have already moved to the new revisions.
     let seed = tmp.join("index-seed");
     let index_git = tmp.join("index.git");
     git_init(&seed)?;
@@ -213,7 +224,28 @@ fn main() -> Result<()> {
     let index_git_s = index_git.to_str().ok_or_else(|| eyre!("non-utf8"))?;
     git(&["-C", seed_s, "push", "--quiet", index_git_s, "main"])?;
 
-    // Minimal caller repository with ix's path-input lock shape.
+    let nox_seed = tmp.join("nox-seed");
+    let nox_git = tmp.join("nox.git");
+    git_init(&nox_seed)?;
+    let nox_seed_s = nox_seed.to_str().ok_or_else(|| eyre!("non-utf8"))?;
+    fs::write(nox_seed.join("version"), "old\n")?;
+    git(&["-C", nox_seed_s, "add", "version"])?;
+    git(&["-C", nox_seed_s, "commit", "--quiet", "-m", "old"])?;
+    let old_nox = git(&["-C", nox_seed_s, "rev-parse", "HEAD"])?;
+    git(&[
+        "clone",
+        "--quiet",
+        "--bare",
+        nox_seed_s,
+        nox_git.to_str().ok_or_else(|| eyre!("non-utf8"))?,
+    ])?;
+    fs::write(nox_seed.join("version"), "new\n")?;
+    git(&["-C", nox_seed_s, "commit", "--quiet", "-am", "new"])?;
+    let new_nox = git(&["-C", nox_seed_s, "rev-parse", "HEAD"])?;
+    let nox_git_s = nox_git.to_str().ok_or_else(|| eyre!("non-utf8"))?;
+    git(&["-C", nox_seed_s, "push", "--quiet", nox_git_s, "main"])?;
+
+    // Minimal caller repository with ix's two path-input lock nodes.
     let ix_seed = tmp.join("ix-seed");
     git_init(&ix_seed)?;
     let ix_seed_s = ix_seed.to_str().ok_or_else(|| eyre!("non-utf8"))?;
@@ -240,10 +272,36 @@ fn main() -> Result<()> {
         "submodule.index.branch",
         "main",
     ])?;
-    let old_timestamp: i64 = git(&["-C", sub_s, "show", "-s", "--format=%ct", &old_source])?.parse()?;
+    git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "-C",
+        ix_seed_s,
+        "submodule",
+        "add",
+        "--quiet",
+        nox_git_s,
+        "nox",
+    ])?;
+    let nox_sub = ix_seed.join("nox");
+    let nox_sub_s = nox_sub.to_str().ok_or_else(|| eyre!("non-utf8"))?;
+    git(&["-C", nox_sub_s, "checkout", "--quiet", &old_nox])?;
+    git(&[
+        "-C",
+        ix_seed_s,
+        "config",
+        "-f",
+        ".gitmodules",
+        "submodule.nox.branch",
+        "main",
+    ])?;
+    let old_timestamp: i64 =
+        git(&["-C", sub_s, "show", "-s", "--format=%ct", &old_source])?.parse()?;
+    let old_nox_timestamp: i64 =
+        git(&["-C", nox_sub_s, "show", "-s", "--format=%ct", &old_nox])?.parse()?;
     fs::write(
         ix_seed.join("flake.lock"),
-        seed_lock(&old_source, old_timestamp),
+        seed_lock(&old_source, old_timestamp, &old_nox, old_nox_timestamp),
     )?;
     git(&[
         "-C",
@@ -251,6 +309,7 @@ fn main() -> Result<()> {
         "add",
         ".gitmodules",
         "index",
+        "nox",
         "flake.lock",
     ])?;
     git(&["-C", ix_seed_s, "commit", "--quiet", "-m", "initial"])?;
@@ -262,7 +321,9 @@ fn main() -> Result<()> {
         "clone",
         "--quiet",
         ix_git_s,
-        tmp.join("worker").to_str().ok_or_else(|| eyre!("non-utf8"))?,
+        tmp.join("worker")
+            .to_str()
+            .ok_or_else(|| eyre!("non-utf8"))?,
     ])?;
 
     // The step re-stamps the lock itself, so a no-op `nix` proves that without
@@ -284,7 +345,9 @@ fn main() -> Result<()> {
     git(&[
         "config",
         "--file",
-        tmp.join("gitconfig").to_str().ok_or_else(|| eyre!("non-utf8"))?,
+        tmp.join("gitconfig")
+            .to_str()
+            .ok_or_else(|| eyre!("non-utf8"))?,
         "protocol.file.allow",
         "always",
     ])?;
@@ -296,13 +359,20 @@ fn main() -> Result<()> {
         ix_git: ix_git.clone(),
     };
 
-    // 1. A stale pin advances both the gitlink and the lock.
+    // 1. Stale pins advance both gitlinks and both lock nodes.
     fx.run_worker(&[])?;
-    let (gitlink, locked) = fx.pinned()?;
+    let (gitlink, locked) = fx.pinned("index")?;
     if gitlink != new_source || locked != new_source {
         bail!(
             "direct update did not move both the gitlink and lock to index/main\n\
              gitlink={gitlink}\nlocked={locked}\nexpected={new_source}"
+        );
+    }
+    let (nox_gitlink, nox_locked) = fx.pinned("nox")?;
+    if nox_gitlink != new_nox || nox_locked != new_nox {
+        bail!(
+            "direct update did not move both the gitlink and lock to nox/main\n\
+             gitlink={nox_gitlink}\nlocked={nox_locked}\nexpected={new_nox}"
         );
     }
 
@@ -362,22 +432,33 @@ fn main() -> Result<()> {
     fx.run_worker(&[
         (
             "RACE_MARKER",
-            tmp.join("race-fired").to_str().ok_or_else(|| eyre!("non-utf8"))?,
+            tmp.join("race-fired")
+                .to_str()
+                .ok_or_else(|| eyre!("non-utf8"))?,
         ),
         ("RACE_WORK", racer_s),
         ("REAL_GIT", &real_git),
     ])?;
 
     if !tmp.join("race-fired").exists() {
-        bail!("race was never injected -- the shim's push match is stale, so this run proved nothing");
+        bail!(
+            "race was never injected -- the shim's push match is stale, so this run proved nothing"
+        );
     }
 
-    let (gitlink, locked) = fx.pinned()?;
+    let (gitlink, locked) = fx.pinned("index")?;
+    let (nox_gitlink, nox_locked) = fx.pinned("nox")?;
     let race_file = git(&["--git-dir", ix_git_s, "show", "main:race.txt"])?;
     if gitlink != newest_source || locked != newest_source {
         bail!(
             "race retry did not converge to the newest index/main\n\
              gitlink={gitlink}\nlocked={locked}\nexpected={newest_source}"
+        );
+    }
+    if nox_gitlink != new_nox || nox_locked != new_nox {
+        bail!(
+            "race retry changed the current nox pin\n\
+             gitlink={nox_gitlink}\nlocked={nox_locked}\nexpected={new_nox}"
         );
     }
     if race_file.trim() != "preserve me" {
