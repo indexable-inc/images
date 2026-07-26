@@ -57,36 +57,36 @@ in {
   format = "\${custom.submodule_chain}$username$hostname$localip$directory\${custom.vcs}$all$line_break$character";
   aws = {
     disabled = true;
-    symbol = "  ";
+    symbol = " ";
   };
   buf = {
     disabled = true;
-    symbol = " ";
+    symbol = " ";
   };
   bun = {
     disabled = true;
-    symbol = " ";
+    symbol = " ";
   };
   c = {
-    symbol = " ";
+    symbol = " ";
   };
   cpp = {
-    symbol = " ";
+    symbol = " ";
   };
   cmake = {
-    symbol = " ";
+    symbol = " ";
   };
   conda = {
-    symbol = " ";
+    symbol = " ";
   };
   crystal = {
-    symbol = " ";
+    symbol = " ";
   };
   dart = {
-    symbol = " ";
+    symbol = " ";
   };
   deno = {
-    symbol = " ";
+    symbol = " ";
   };
   # directory: candidate tuning kept from the TOML era:
   #   read_only = " 󰌾"
@@ -100,23 +100,23 @@ in {
     };
   };
   docker_context = {
-    symbol = " ";
+    symbol = " ";
   };
   elixir = {
-    symbol = " ";
+    symbol = " ";
   };
   elm = {
-    symbol = " ";
+    symbol = " ";
   };
   fennel = {
-    symbol = " ";
+    symbol = " ";
   };
   fossil_branch = {
-    symbol = " ";
+    symbol = " ";
   };
   gcloud = {
     disabled = true;
-    symbol = " ";
+    symbol = "󱇶 ";
   };
   # Replaced by `custom.vcs` (the vcs-prompt binary), which renders jj state
   # in a jj workspace and git state everywhere else. Neither module can be
@@ -124,6 +124,7 @@ in {
   # exported git view: a detached HEAD at whatever `jj git export` last wrote.
   git_branch = {
     disabled = true;
+    symbol = " ";
   };
   git_status = {
     disabled = true;
@@ -136,34 +137,34 @@ in {
     tag_symbol = "";
   };
   golang = {
-    symbol = " ";
+    symbol = " ";
   };
   guix_shell = {
-    symbol = " ";
+    symbol = " ";
   };
   haskell = {
-    symbol = " ";
+    symbol = " ";
   };
   haxe = {
-    symbol = " ";
+    symbol = " ";
   };
   hg_branch = {
-    symbol = " ";
+    symbol = " ";
   };
   hostname = {
-    ssh_symbol = " ";
+    ssh_symbol = " ";
   };
   java = {
-    symbol = " ";
+    symbol = " ";
   };
   julia = {
-    symbol = " ";
+    symbol = " ";
   };
   kotlin = {
-    symbol = " ";
+    symbol = " ";
   };
   lua = {
-    symbol = " ";
+    symbol = " ";
   };
   memory_usage = {
     disabled = false;
@@ -177,67 +178,80 @@ in {
     symbol = "󰔷 ";
   };
   nim = {
-    symbol = "󰆥 ";
+    symbol = " ";
   };
   nix_shell = {
     disabled = true;
-    symbol = "  ";
+    symbol = " ";
     format = "[$symbol]($style)";
   };
   nodejs = {
     disabled = true;
-    symbol = " ";
+    symbol = " ";
   };
   ocaml = {
-    symbol = " ";
+    symbol = " ";
   };
   os = {
     symbols = {
-      AlmaLinux = " ";
-      Alpaquita = " ";
-      Alpine = " ";
-      Amazon = " ";
-      Android = " ";
-      Arch = " ";
-      Artix = " ";
-      CachyOS = " ";
-      CentOS = " ";
-      Debian = " ";
-      DragonFly = " ";
-      Emscripten = " ";
-      EndeavourOS = " ";
-      Fedora = " ";
-      FreeBSD = " ";
-      Garuda = "󰛓 ";
-      Gentoo = " ";
+      AlmaLinux = " ";
+      Alpaquita = " ";
+      Alpine = " ";
+      Amazon = " ";
+      Android = " ";
+      Arch = " ";
+      Artix = " ";
+      CachyOS = " ";
+      CentOS = " ";
+      Debian = " ";
+      DragonFly = " ";
+      Emscripten = " ";
+      EndeavourOS = " ";
+      Fedora = " ";
+      FreeBSD = " ";
+      Garuda = " ";
+      Gentoo = " ";
       HardenedBSD = "󰞌 ";
-      Illumos = "󰈸 ";
-      Kali = " ";
-      Linux = " ";
-      Mabox = " ";
-      Macos = " ";
-      Manjaro = " ";
-      Mariner = " ";
-      MidnightBSD = " ";
-      Mint = " ";
-      NetBSD = " ";
-      NixOS = " ";
-      Nobara = " ";
-      OpenBSD = "󰈺 ";
-      OracleLinux = "󰌷 ";
-      Pop = " ";
-      Raspbian = " ";
-      RedHatEnterprise = " ";
-      Redhat = " ";
+      Illumos = " ";
+      Kali = " ";
+      Linux = " ";
+      Mabox = " ";
+      Macos = " ";
+      Manjaro = " ";
+      Mariner = " ";
+      MidnightBSD = " ";
+      Mint = " ";
+      NetBSD = " ";
+      NixOS = " ";
+      Nobara = " ";
+      OpenBSD = " ";
+      OracleLinux = "󰺡 ";
+      Pop = " ";
+      Raspbian = " ";
+      RedHatEnterprise = "󱄛 ";
+      Redhat = "󱄛 ";
       Redox = "󰀘 ";
-      RockyLinux = " ";
-      SUSE = " ";
-      Solus = "󰠳 ";
-      Ubuntu = " ";
-      Unknown = " ";
-      Void = " ";
+      RockyLinux = " ";
+      SUSE = " ";
+      Solus = " ";
+      Ubuntu = " ";
+      Unknown = " ";
+      Void = " ";
       Windows = "󰍲 ";
-      openSUSE = " ";
+      openSUSE = " ";
+      AIX = " ";
+      ALTLinux = " ";
+      AOSC = " ";
+      Bluefin = " ";
+      Elementary = " ";
+      InstantOS = " ";
+      Ios = "󰀷 ";
+      OpenCloudOS = " ";
+      openEuler = " ";
+      PikaOS = " ";
+      Ultramarine = " ";
+      Uos = " ";
+      Zorin = " ";
     };
   };
   package = {
@@ -245,48 +259,147 @@ in {
     symbol = "󰏗 ";
   };
   perl = {
-    symbol = " ";
+    symbol = " ";
   };
   php = {
-    symbol = " ";
+    symbol = " ";
   };
   pijul_channel = {
-    symbol = " ";
+    symbol = " ";
   };
   pixi = {
     symbol = "󰏗 ";
   };
   python = {
     disabled = true;
-    symbol = " ";
+    symbol = " ";
   };
   rlang = {
     symbol = "󰟔 ";
   };
   ruby = {
-    symbol = " ";
+    symbol = " ";
   };
   rust = {
     disabled = true;
     symbol = "󱘗 ";
   };
   scala = {
-    symbol = " ";
+    symbol = " ";
   };
   swift = {
     disabled = true;
-    symbol = " ";
+    symbol = " ";
   };
   zig = {
-    symbol = " ";
+    symbol = " ";
   };
   typst = {
     disabled = true;
+    symbol = " ";
   };
+  # Modules this config never named, carrying the nerd-font-symbols glyph so
+  # a module that does fire is not the one box in the line. A symbol enables
+  # nothing on its own; each is still off or conditional as starship ships it.
+  azure = {
+    symbol = " ";
+  };
+  battery = {
+    full_symbol = "󰁹 ";
+    charging_symbol = "󰂄 ";
+    discharging_symbol = "󰂃 ";
+    unknown_symbol = "󰂑 ";
+    empty_symbol = "󰂎 ";
+  };
+  cobol = {
+    symbol = " ";
+  };
+  container = {
+    symbol = " ";
+  };
+  dotnet = {
+    symbol = " ";
+  };
+  erlang = {
+    symbol = " ";
+  };
+  fortran = {
+    symbol = " ";
+  };
+  gleam = {
+    symbol = " ";
+  };
+  helm = {
+    symbol = " ";
+  };
+  kubernetes = {
+    symbol = "󱃾 ";
+  };
+  maven = {
+    symbol = " ";
+  };
+  mojo = {
+    symbol = "󰈸 ";
+  };
+  nats = {
+    symbol = " ";
+  };
+  netns = {
+    symbol = "󰛳 ";
+  };
+  odin = {
+    symbol = "󰟢 ";
+  };
+  opa = {
+    symbol = " ";
+  };
+  openstack = {
+    symbol = " ";
+  };
+  pulumi = {
+    symbol = " ";
+  };
+  purescript = {
+    symbol = " ";
+  };
+  raku = {
+    symbol = "󱖊 ";
+  };
+  red = {
+    symbol = "󱍼 ";
+  };
+  shlvl = {
+    symbol = "󰹍 ";
+  };
+  singularity = {
+    symbol = " ";
+  };
+  solidity = {
+    symbol = " ";
+  };
+  spack = {
+    symbol = " ";
+  };
+  sudo = {
+    symbol = " ";
+  };
+  terraform = {
+    symbol = " ";
+  };
+  vagrant = {
+    symbol = " ";
+  };
+  vlang = {
+    symbol = " ";
+  };
+  xmake = {
+    symbol = " ";
+  };
+
   direnv = {
     disabled = true;
     format = "[$symbol$loaded]($style) ";
-    symbol = "";
+    symbol = " ";
     style = "bold green";
     allowed_msg = "";
     not_allowed_msg = "!";
@@ -295,7 +408,7 @@ in {
     unloaded_msg = "";
   };
   gradle = {
-    symbol = " ";
+    symbol = " ";
   };
   status = {
     symbol = " ";
