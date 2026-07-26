@@ -19,9 +19,11 @@ repo moved to the newest pair, Elixir 1.19 on OTP 28.
 
 Nixpkgs deprecated the top-level BEAM attributes on 2026-06-15:
 
-    elixir_1_19 = warnAlias "'elixir_1_19' is deprecated in favor of using
-      the beamPackages sets. Use 'beamPackages.elixir_1_19' instead."
-      beamPackages.elixir_1_19;
+```nix
+elixir_1_19 = warnAlias "'elixir_1_19' is deprecated in favor of using
+  the beamPackages sets. Use 'beamPackages.elixir_1_19' instead."
+  beamPackages.elixir_1_19;
+```
 
 `warnAlias` is `lib.derivations.warnOnInstantiate`, which wraps *every*
 attribute of the derivation except `meta`, `name`, `type` and `outputName` in
@@ -34,8 +36,10 @@ eval failure of whatever host or image reached it.
 That is how it surfaced. All six `dev-compute-*` hosts in ix stopped
 evaluating `config.system.build.toplevel.drvPath` with nothing but
 
-    evaluation warning: 'elixir_1_19' is deprecated, use
-    'beamPackages.elixir_1_19' instead
+```
+evaluation warning: 'elixir_1_19' is deprecated, use
+'beamPackages.elixir_1_19' instead
+```
 
 and a trace whose only ix-shaped frame was
 `systemd.services.home-manager-hari.serviceConfig`. Evaluating
@@ -61,8 +65,10 @@ Rewriting `pkgs.elixir_1_17` to `pkgs.beamPackages.elixir_1_17` looks like the
 same mechanical change as 1.18 and 1.19, and it is wrong. Elixir 1.17 asserts
 its Erlang range, and `beamPackages` now tracks OTP 28:
 
-    erlang OTP 28.5.0.3 is not >= 25 and <= 27
-    See https://hexdocs.pm/elixir/1.17.3/compatibility-and-deprecations.html
+```
+erlang OTP 28.5.0.3 is not >= 25 and <= 27
+See https://hexdocs.pm/elixir/1.17.3/compatibility-and-deprecations.html
+```
 
 So the rewrite trades a deprecation warning for a hard assertion failure.
 Keeping 1.17 would mean pinning it to `beam27Packages` specifically, a

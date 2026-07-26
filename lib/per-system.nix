@@ -514,6 +514,50 @@
             $"  ($ref.path):($ref.line): ($ref.link) is not a prerendered route($hint)"
           }
       }
+      # mdsvex hands an .svx body to the Svelte compiler, which reads `<` as the
+      # start of a tag whenever the next character could begin a tag name. A
+      # four-space indent does NOT make a code block here -- the renderer emits a
+      # `<p>` -- so `is not >= 25 and <= 27` in an indented block compiled to
+      # `<p>... <= 27` and failed the whole ix-site build with "Expected a valid
+      # element or component name", naming a line number in the generated HTML
+      # rather than the source. That is a 20-minute round trip through the
+      # flake-check gate for a typo. Fence the block instead.
+      #
+      # Deliberately narrow: only `<` NOT followed by a letter, `/`, `!` or `{`,
+      # and only outside fenced blocks and inline code. Real HTML (`<a href=...>`)
+      # and inline `` `< 2.0` `` are both legal and stay legal. Verified to flag
+      # zero of the pages that build today.
+      def svx-tag-errors [] {
+        [plans updates stories]
+        | each {|kind|
+            fd --extension svx . $"packages/site/src/lib/($kind)"
+            | lines
+            | sort
+            | each {|path|
+                open --raw $path
+                | lines
+                | enumerate
+                | reduce --fold {fenced: false, errs: []} {|row, acc|
+                    let line = $row.item
+                    if ($line | str trim | str starts-with '```') {
+                      {fenced: (not $acc.fenced), errs: $acc.errs}
+                    } else if $acc.fenced {
+                      $acc
+                    } else {
+                      let bare = ($line | str replace --all --regex '`[^`]*`' "")
+                      if ($bare =~ '<[^A-Za-z/!{]|<$') {
+                        {fenced: $acc.fenced, errs: ($acc.errs | append $"  ($path):($row.index + 1): unfenced `<` is read as a tag -- ($line | str trim)")}
+                      } else {
+                        $acc
+                      }
+                    }
+                  }
+                | get errs
+              }
+            | flatten
+          }
+        | flatten
+      }
       def "main site-ids" [] {
         let errors = (
           [plans updates stories]
@@ -569,6 +613,7 @@
           | flatten
         )
         let link_errors = (site-link-errors)
+        let tag_errors = (svx-tag-errors)
         if ($errors | is-not-empty) {
           print --stderr "site content identity is enforced by the SvelteKit build, which on a direct push to main reports after the commit is public (#3669); keep filenames and frontmatter agreeing so collisions fail fast:"
           $errors | each {|line| print --stderr $line } | ignore
@@ -577,7 +622,11 @@
           print --stderr "the SvelteKit prerender crawler treats a dangling in-page link as fatal and names the linking route, not the file (ENG-9863); every absolute link must resolve to a prerendered route:"
           $link_errors | each {|line| print --stderr $line } | ignore
         }
-        if (($errors | is-not-empty) or ($link_errors | is-not-empty)) { exit 1 }
+        if ($tag_errors | is-not-empty) {
+          print --stderr "an unfenced `<` in an .svx body fails the Svelte compile for the WHOLE site, reporting a line in the generated HTML instead of the source:"
+          $tag_errors | each {|line| print --stderr $line } | ignore
+        }
+        if (($errors | is-not-empty) or ($link_errors | is-not-empty) or ($tag_errors | is-not-empty)) { exit 1 }
       }
       # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
       # pathlib + pytest + explicit annotations + no `typing.cast`; see
