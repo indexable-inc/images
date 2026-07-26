@@ -13,6 +13,29 @@ defmodule IxMcp.Memory.SemanticTest do
   @mock Path.expand("../../fixtures/weave_mock.exs", __DIR__)
   @env ~w(WEAVE_MEMORY_STORE WEAVE_BIN WEAVE_MOCK_LOG)
 
+  # The fixture is spawned with Port.open({:spawn_executable, ...}), so the
+  # kernel resolves its shebang, and two things about that go wrong in a nix
+  # build sandbox. `#!/usr/bin/env elixir` needs /usr/bin/env, which the
+  # sandbox does not have, and pointing the shebang straight at `elixir`
+  # does not help either: nixpkgs ships `bin/elixir` as a bash script, and
+  # no kernel follows a shebang into another shebang. Both failures are a
+  # silent execve error, reported as port exit status 2 and 8 with no output
+  # at all, which reads exactly like a weave binary that answered badly.
+  # That misreading stood for four days.
+  #
+  # So the test spawns a /bin/sh trampoline instead. /bin/sh is the one
+  # interpreter a nix sandbox always provides, and it is a real binary.
+  defp install_mock(dir) do
+    interpreter =
+      System.find_executable("elixir") ||
+        raise "no elixir on PATH for the weave mock trampoline"
+
+    path = Path.join(dir, "weave_mock")
+    File.write!(path, "#!/bin/sh\nexec #{interpreter} #{@mock} \"$@\"\n")
+    File.chmod!(path, 0o755)
+    path
+  end
+
   setup do
     previous = Map.new(@env, &{&1, System.get_env(&1)})
 
@@ -22,7 +45,7 @@ defmodule IxMcp.Memory.SemanticTest do
     File.mkdir_p!(store)
     log = Path.join(store, "mock.log")
     System.put_env("WEAVE_MEMORY_STORE", store)
-    System.put_env("WEAVE_BIN", @mock)
+    System.put_env("WEAVE_BIN", install_mock(store))
     System.put_env("WEAVE_MOCK_LOG", log)
     stop_port_owner()
 

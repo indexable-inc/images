@@ -1,0 +1,71 @@
+---
+id: port-exec-failure-is-not-a-bad-answer
+postedAt: "2026-07-26"
+title: two mcp-ex tests blamed weave for four days; the fixture's shebang was unrunnable in the sandbox
+tags:
+  - elixir
+  - nix
+  - testing
+---
+
+`IxMcp.Memory.SemanticTest` failed two of its tests in every sandboxed build:
+
+```
+** (RuntimeError) weave recall exited 2 before answering: the binary needs
+semantic recall (indexable-inc/weave#339+); its stderr went to this console
+```
+
+No weave was involved. The suite mocks the binary with
+`test/fixtures/weave_mock.exs`, and the mock never ran. `ix-mcp-ex-check`
+now reports `181 passed, 2 excluded`.
+
+## exit status 2 from a port means execve failed
+
+`Port.open({:spawn_executable, bin}, ...)` asks the kernel to run a file, so
+the kernel resolves its shebang. When that resolution fails the port closes
+with a small status and produces no output at all, which is
+indistinguishable from a program that started and exited badly. Measured
+directly, with a file whose shebang names a path that does not exist:
+
+```
+exit_status=2
+```
+
+The mock was spelled `#!/usr/bin/env elixir`. A nix build sandbox has no
+`/usr/bin/env`, so the mock never started, and the raise in
+`lib/ix_mcp/memory/semantic.ex` attributed the silence to a weave too old
+for semantic recall.
+
+## pointing at elixir directly does not fix it
+
+Rewriting the shebang to the absolute interpreter moved the status from 2 to
+8 and no further. nixpkgs ships `bin/elixir` as a bash script:
+
+```
+#! /nix/store/c9mv5v53f7vy3wd00ah0f77k509mzmn7-bash-5.3p15/bin/bash -e
+```
+
+No kernel follows a shebang into another shebang. The test now writes a
+`/bin/sh` trampoline into its temp store and spawns that. `/bin/sh` is the
+one interpreter a nix sandbox always provides, and it is a real binary.
+
+## the error message was the expensive part
+
+The raise named a cause it had not established. It now distinguishes the two
+cases:
+
+```elixir
+defp bin_hint(status) when status in [2, 8],
+  do: "could not be executed at all -- check its shebang interpreter exists here"
+
+defp bin_hint(_status),
+  do: "the binary may predate semantic recall, indexable-inc/weave#339+"
+```
+
+## not done
+
+The suite still warns that `test/fixtures/weave_mock.exs` matches none of
+Elixir 1.19's `:test_load_filters` / `:test_ignore_filters`. That is noise,
+not a failure, and no filter was added for it. No other fixture in the repo
+uses a `#!/usr/bin/env` shebang, so no sweep was needed, but nothing stops
+the next one from being written that way.

@@ -146,13 +146,26 @@ defmodule IxMcp.Memory.Semantic do
             read_answer(port, buffer <> data, timeout)
 
           {^port, {:exit_status, status}} ->
-            raise "weave recall exited #{status} before answering: the binary needs " <>
-                    "semantic recall (indexable-inc/weave#339+); its stderr went to this console"
+            raise "weave recall exited #{status} before answering " <>
+                    "(#{bin_hint(status)}); any stderr went to this console"
         after
           timeout -> raise "weave recall: no answer within #{timeout}ms"
         end
     end
   end
+
+  # Status 2 from a port is execve failing, not the program running and
+  # exiting: the kernel could not start the file at all, most often because
+  # its shebang interpreter is missing from this environment. Saying "the
+  # binary needs semantic recall" for that sent four days of debugging at
+  # weave when the fault was a  fixture in a sandbox
+  # with no /usr/bin/env.
+  @spec bin_hint(integer()) :: String.t()
+  defp bin_hint(status) when status in [2, 8],
+    do: "could not be executed at all -- check its shebang interpreter exists here"
+
+  defp bin_hint(_status),
+    do: "the binary may predate semantic recall, indexable-inc/weave#339+"
 
   @spec decode_entries(binary()) :: [map()]
   defp decode_entries(line) do
