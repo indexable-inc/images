@@ -167,12 +167,12 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      # Megamerge 403b19c5 (47 patches on 2c6d06e9387c): the 45-patch series
-      # plus the first-transfer lost-wakeup fix (indexable-inc/nix#2, folded
-      # into the patch DAG; index#4122) and the killed-build orphan recovery
-      # (invalid CA scratch-output leftovers are cleared under the build
-      # locks instead of wedging every rebuild of the drv; index#4112).
-      url = "github:indexable-inc/nix/403b19c5a120dcb57f293790fb1ec470d0d1392c";
+      # Megamerge 3e68babb (48 patches on 2c6d06e9387c): the 47-patch series
+      # plus the `queryMissing` thread-pool lifetime fix (ENG-9972). Before it,
+      # `Store::queryMissing` destroyed `state_` and its work-item lambdas
+      # while pool workers were still running them, which produced 123 nix core
+      # dumps across the five CI dispatchers in the retained window.
+      url = "github:indexable-inc/nix/3e68babbd84a3b98eb68e79ff4dcfb40441ff17d";
       flake = false;
     };
 

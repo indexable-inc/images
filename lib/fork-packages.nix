@@ -515,6 +515,15 @@
           upstream = "hold";
           reason = "Genuine upstream bug fix (daemon clientPid always missing on Darwin); wants a human review pass before an attempt mark authorizes the PR.";
         };
+        # A real upstream memory-safety bug, and the most upstream-shaped patch
+        # in this series: it makes `queryMissing` do what `processGraph()` in
+        # the same header already does, with the same reasoning. The evidence
+        # is a fleet of core dumps rather than an argument, so it wants a human
+        # to carry the report as well as the diff.
+        "fix(libstore): join queryMissing's thread pool before its frame dies" = {
+          upstream = "hold";
+          reason = "Use-after-free in upstream `Store::queryMissing`: the frame's `Sync<State>` and work-item lambdas are destroyed before `~ThreadPool` joins the workers that reference them, and the enqueue loop sits outside `ThreadPool::process()`'s exception guard. Diagnosed from 117 of 123 core dumps on our CI dispatchers (ENG-9972). Upstream-worthy and standalone; a human submits it with the core-dump evidence, per this fork's aiPrsAllowed = false.";
+        };
         # Fork-local test adaptations: they exist because fork patches changed
         # failure propagation / added features, so they are meaningless upstream.
         "tests/functional: update failure expectations for preserved leaf errors" = {
