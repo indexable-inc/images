@@ -515,6 +515,15 @@
           upstream = "hold";
           reason = "Genuine upstream bug fix (daemon clientPid always missing on Darwin); wants a human review pass before an attempt mark authorizes the PR.";
         };
+        # A real upstream memory-safety bug, and the most upstream-shaped patch
+        # in this series: it makes `queryMissing` do what `processGraph()` in
+        # the same header already does, with the same reasoning. The evidence
+        # is a fleet of core dumps rather than an argument, so it wants a human
+        # to carry the report as well as the diff.
+        "fix(libstore): join queryMissing's thread pool before its frame dies" = {
+          upstream = "hold";
+          reason = "Use-after-free in upstream `Store::queryMissing`: the frame's `Sync<State>` and work-item lambdas are destroyed before `~ThreadPool` joins the workers that reference them, and the enqueue loop sits outside `ThreadPool::process()`'s exception guard. Diagnosed from 117 of 123 core dumps on our CI dispatchers (ENG-9972). Upstream-worthy and standalone; a human submits it with the core-dump evidence, per this fork's aiPrsAllowed = false.";
+        };
         # Fork-local test adaptations: they exist because fork patches changed
         # failure propagation / added features, so they are meaningless upstream.
         "tests/functional: update failure expectations for preserved leaf errors" = {
@@ -835,6 +844,26 @@
         "libfetchers: resolve git refs lazily and refresh the cached HEAD" = {
           upstream = "hold";
           reason = "Fixes the eval-time network round trips of NixOS/nix#13556 (getDefaultRef never cached effectively) for rev-pinned fetchGit inputs (indexable-inc/index#4028). Upstream-nix candidate; hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # A CA build killed after its builder created $out leaves the floating
+        # scratch path behind on non-chroot stores (the darwin default), owned
+        # by a build user and never registered, so the next build fails writing
+        # over it one phase after the compiler succeeded. The known-path
+        # branches already clear stale paths here; this gives the floating case
+        # the same treatment, under the derivation's output locks.
+        "fix(libstore): clear invalid orphan scratch outputs before rebuilding" = {
+          upstream = "hold";
+          reason = "Clears the invalid build-user-owned scratch output a killed floating-CA build leaves behind, which otherwise wedges every rebuild of that derivation with a bare permission-denied error and needed a manual sudo rm to recover (indexable-inc/index#2247, indexable-inc/index#4112). Upstream master has the same gap; hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # libcurl 8.21.0 drains the wakeup eventfd on entry to
+        # curl_multi_poll, so a wakeup raised while the transfer worker sits
+        # outside the poll is lost. Every process's first transfer hits that
+        # window deterministically and then sleeps the whole 10s idle timeout.
+        # The worker now re-checks the queues under the state lock after
+        # computing its sleep rather than trusting the wakeup.
+        "libstore: never sleep the transfer worker past actionable queued work" = {
+          upstream = "hold";
+          reason = "Lost-wakeup regression against libcurl 8.21.0: every cold `nix run` paid a 10s stall on its first transfer once the fleet's nixpkgs carried 8.21.0 (nix_run_hello p50 5.9s to 16.5s; indexable-inc/index#4122). Upstream-general and standalone, the contract change is upstream's to absorb; hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
       };
     }
