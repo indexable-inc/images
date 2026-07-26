@@ -8,6 +8,8 @@
 //! parser (rnix). The generator favors small programs; hegel shrinks any
 //! counterexample toward the minimal one.
 
+use std::fmt::Write as _;
+
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 use ix2nix::convert;
@@ -68,7 +70,7 @@ fn ty() -> impl Generator<String> {
                     continue; // duplicate keys are ill-formed on purpose
                 }
                 let marker = if optional { "?" } else { "" };
-                out.push_str(&format!("{name}{marker}: {t}; "));
+                write!(out, "{name}{marker}: {t}; ").expect("String write is infallible");
                 seen.push(name);
             }
             out.push('}');
@@ -113,7 +115,7 @@ fn expr() -> impl Generator<String> {
                 if seen.contains(&key) {
                     continue;
                 }
-                out.push_str(&format!("{key}: {value}, "));
+                write!(out, "{key}: {value}, ").expect("String write is infallible");
                 seen.push(key);
             }
             out.push('}');
@@ -158,9 +160,10 @@ fn program() -> impl Generator<String> {
         // and annotations carry the randomness.
         for (index, (annotation, value)) in consts.into_iter().enumerate() {
             let annotation = annotation.map_or(String::new(), |t| format!(": {t}"));
-            out.push_str(&format!("const k{index}{annotation} = {value};\n"));
+            writeln!(out, "const k{index}{annotation} = {value};")
+                .expect("String write is infallible");
         }
-        out.push_str(&format!("export default {default};\n"));
+        writeln!(out, "export default {default};").expect("String write is infallible");
         out
     })
 }

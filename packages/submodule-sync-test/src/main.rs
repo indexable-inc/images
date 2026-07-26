@@ -11,15 +11,14 @@
 //! is committed shell and generated-shell call sites; executing the workflow's
 //! own body is the thing being tested and cannot be ported away from here.
 //!
-//! Three behaviours are pinned:
+//! Three behaviours are pinned, one function each at the bottom of this file:
 //!
-//! 1. Stale Index and Nox pins advance both gitlinks and both `flake.lock`
-//!    nodes to their remote main branches together. Any partial move is a
-//!    broken tree.
+//! 1. Stale pins advance every gitlink and every `flake.lock` node to the
+//!    matching remote main together. Any partial move is a broken tree.
 //! 2. A current pin is a true no-op, creating no commit.
 //! 3. A push that loses a race against an unrelated `ix/main` commit retries
 //!    onto the new tip and preserves the other commit rather than clobbering
-//!    it.
+//!    it, without disturbing the sources it had no reason to move.
 
 use std::{
     fs,
@@ -29,6 +28,13 @@ use std::{
 };
 
 use color_eyre::eyre::{Result, bail, eyre};
+
+/// The sources the caller pins, in the order it mounts them.
+///
+/// `nox` is here because the workflow now syncs a second, private source: a
+/// run that advanced only one of the two would still look like a pass against
+/// a single-submodule fixture.
+const SUBMODULES: [&str; 2] = ["index", "nox"];
 
 /// Run `git` with the real binary, failing loudly with the captured stderr.
 ///
@@ -47,8 +53,18 @@ fn git(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8(out.stdout)?.trim().to_owned())
 }
 
+/// A path as a `str`, for the many git invocations that take one.
+///
+/// Every path here is derived from a `tempfile` root, so a non-utf8 path means
+/// a broken environment rather than unusual input: worth a clear error, not
+/// worth threading `OsStr` through the fixture.
+fn utf8(path: &Path) -> Result<&str> {
+    path.to_str()
+        .ok_or_else(|| eyre!("non-utf8 path: {}", path.display()))
+}
+
 fn git_init(path: &Path) -> Result<()> {
-    let p = path.to_str().ok_or_else(|| eyre!("non-utf8 path"))?;
+    let p = utf8(path)?;
     git(&["init", "--quiet", "--initial-branch=main", p])?;
     git(&["-C", p, "config", "user.name", "test"])?;
     git(&["-C", p, "config", "user.email", "test@example.com"])?;
@@ -94,42 +110,231 @@ fn bump_submodules_script(workflow: &Path) -> Result<String> {
         .ok_or_else(|| eyre!("no 'Bump submodules' step with a run: body"))
 }
 
-/// The lock shape ix uses for its path inputs: revisions the worker must
-/// rewrite together with their gitlinks.
-fn seed_lock(index_rev: &str, index_timestamp: i64, nox_rev: &str, nox_timestamp: i64) -> String {
-    serde_json::to_string_pretty(&serde_json::json!({
-        "nodes": {
-            "root": {"inputs": {"index": "index", "nox": "nox"}},
-            "index": {
-                "locked": {
-                    "lastModified": index_timestamp,
-                    "path": "./index",
-                    "rev": index_rev,
-                    "type": "path"
-                }
-            },
-            "nox": {
-                "locked": {
-                    "lastModified": nox_timestamp,
-                    "path": "./nox",
-                    "rev": nox_rev,
-                    "type": "path"
-                }
-            }
-        },
-        "root": "root"
-    }))
-    .expect("static json")
+/// One gitlink-pinned source the caller tracks.
+struct Submodule {
+    /// Directory the caller mounts it at, and the key of its `flake.lock` node.
+    name: &'static str,
+    /// Working clone; every commit on this source is authored here.
+    seed: PathBuf,
+    /// Bare repository the caller's submodule tracks.
+    bare: PathBuf,
+    /// The revision the caller's initial commit pins: one behind `tip`, which
+    /// is what gives the step something to move.
+    stale: String,
+    /// Current tip of the source's `main`, which a correct run converges onto.
+    tip: String,
 }
 
+impl Submodule {
+    /// Publish two commits: the stale one the caller will pin, and the tip the
+    /// step must advance to.
+    fn publish(tmp: &Path, name: &'static str) -> Result<Self> {
+        let seed = tmp.join(format!("{name}-seed"));
+        let bare = tmp.join(format!("{name}.git"));
+        git_init(&seed)?;
+        let stale = {
+            let s = utf8(&seed)?;
+            fs::write(seed.join("version"), "old\n")?;
+            git(&["-C", s, "add", "version"])?;
+            git(&["-C", s, "commit", "--quiet", "-m", "old"])?;
+            let stale = git(&["-C", s, "rev-parse", "HEAD"])?;
+            git(&["clone", "--quiet", "--bare", s, utf8(&bare)?])?;
+            stale
+        };
+        let mut sub = Self {
+            name,
+            seed,
+            bare,
+            stale,
+            tip: String::new(),
+        };
+        sub.advance("new")?;
+        Ok(sub)
+    }
+
+    /// Author one more commit on the source and publish it, so `tip` is always
+    /// what a correct run converges onto.
+    fn advance(&mut self, version: &str) -> Result<()> {
+        let tip = {
+            let seed = utf8(&self.seed)?;
+            fs::write(self.seed.join("version"), format!("{version}\n"))?;
+            git(&["-C", seed, "commit", "--quiet", "-am", version])?;
+            let tip = git(&["-C", seed, "rev-parse", "HEAD"])?;
+            git(&["-C", seed, "push", "--quiet", utf8(&self.bare)?, "main"])?;
+            tip
+        };
+        self.tip = tip;
+        Ok(())
+    }
+
+    /// Mount the source in `caller` at its stale revision, tracking `main`.
+    fn mount(&self, caller: &Path) -> Result<()> {
+        let caller_s = utf8(caller)?;
+        git(&[
+            "-c",
+            "protocol.file.allow=always",
+            "-C",
+            caller_s,
+            "submodule",
+            "add",
+            "--quiet",
+            utf8(&self.bare)?,
+            self.name,
+        ])?;
+        let checkout = caller.join(self.name);
+        git(&["-C", utf8(&checkout)?, "checkout", "--quiet", &self.stale])?;
+        git(&[
+            "-C",
+            caller_s,
+            "config",
+            "-f",
+            ".gitmodules",
+            &format!("submodule.{}.branch", self.name),
+            "main",
+        ])?;
+        Ok(())
+    }
+
+    /// This source's `flake.lock` node, pinned at the stale revision.
+    fn stale_lock_node(&self) -> Result<serde_json::Value> {
+        let timestamp: i64 = git(&[
+            "-C",
+            utf8(&self.seed)?,
+            "show",
+            "-s",
+            "--format=%ct",
+            &self.stale,
+        ])?
+        .parse()?;
+        Ok(serde_json::json!({
+            "locked": {
+                "lastModified": timestamp,
+                "path": format!("./{}", self.name),
+                "rev": self.stale,
+                "type": "path"
+            }
+        }))
+    }
+}
+
+/// The lock shape ix uses for its path inputs: one `rev` per source, which the
+/// worker must rewrite together with the matching gitlink.
+fn seed_lock(subs: &[Submodule]) -> Result<String> {
+    let mut inputs = serde_json::Map::new();
+    let mut nodes = serde_json::Map::new();
+    for sub in subs {
+        inputs.insert(sub.name.to_owned(), serde_json::json!(sub.name));
+        nodes.insert(sub.name.to_owned(), sub.stale_lock_node()?);
+    }
+    nodes.insert("root".to_owned(), serde_json::json!({"inputs": inputs}));
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "nodes": nodes,
+        "root": "root"
+    }))?)
+}
+
+/// Where `ix/main` says one source sits, read from both places that record it.
+/// The whole point of the step is that these two never disagree.
+struct Pinned {
+    /// `main:<name>`, the gitlink recorded in the tree.
+    gitlink: String,
+    /// `nodes.<name>.locked.rev` in `main:flake.lock`.
+    lock: String,
+}
+
+/// The caller repository, the sources it pins, and the extracted step.
+///
+/// Every path is derived from `tmp`, which the caller owns and deletes.
 struct Fixture {
     tmp: PathBuf,
-    worker_sh: PathBuf,
-    fake_bin: PathBuf,
+    /// Bare repository standing in for `ix`, whose gitlinks and lock must move.
     ix_git: PathBuf,
+    /// Prepended to the worker's PATH: a no-op `nix`, and for the race case a
+    /// `git` shim in front of the real one.
+    fake_bin: PathBuf,
+    /// The `Bump submodules` body, extracted from the workflow.
+    worker_sh: PathBuf,
+    /// The sources the caller pins, in mount order.
+    subs: Vec<Submodule>,
 }
 
 impl Fixture {
+    /// Lay out the repositories and extract the step under test.
+    fn new(tmp: PathBuf, workflow: &Path) -> Result<Self> {
+        let subs = SUBMODULES
+            .into_iter()
+            .map(|name| Submodule::publish(&tmp, name))
+            .collect::<Result<Vec<_>>>()?;
+        let fx = Self {
+            ix_git: tmp.join("ix.git"),
+            fake_bin: tmp.join("fake-bin"),
+            worker_sh: tmp.join("worker.sh"),
+            subs,
+            tmp,
+        };
+        fx.seed_caller_repo()?;
+        fx.stage_worker(workflow)?;
+        Ok(fx)
+    }
+
+    /// Build the caller: every source mounted at its stale revision, plus ix's
+    /// path-input lock recording those same revisions. Publishes it bare and
+    /// clones the worker checkout the step runs in.
+    fn seed_caller_repo(&self) -> Result<()> {
+        let ix_seed = self.tmp.join("ix-seed");
+        git_init(&ix_seed)?;
+        let ix_seed_s = utf8(&ix_seed)?;
+        for sub in &self.subs {
+            sub.mount(&ix_seed)?;
+        }
+        fs::write(ix_seed.join("flake.lock"), seed_lock(&self.subs)?)?;
+        let mut add = vec!["-C", ix_seed_s, "add", ".gitmodules", "flake.lock"];
+        add.extend(self.subs.iter().map(|sub| sub.name));
+        git(&add)?;
+        git(&["-C", ix_seed_s, "commit", "--quiet", "-m", "initial"])?;
+
+        git(&["clone", "--quiet", "--bare", ix_seed_s, utf8(&self.ix_git)?])?;
+        git(&[
+            "clone",
+            "--quiet",
+            utf8(&self.ix_git)?,
+            utf8(&self.tmp.join("worker"))?,
+        ])?;
+        Ok(())
+    }
+
+    /// Extract the step, check it still parses as bash, and stand up the
+    /// ambient state it runs against.
+    ///
+    /// The step re-stamps the lock itself, so a no-op `nix` proves that without
+    /// evaluating a real flake or touching the network. The throwaway global
+    /// gitconfig keeps `protocol.file.allow` off the developer's real config.
+    fn stage_worker(&self, workflow: &Path) -> Result<()> {
+        fs::create_dir_all(&self.fake_bin)?;
+        write_exec(&self.fake_bin.join("nix"), "#!/usr/bin/env bash\nexit 0\n")?;
+
+        fs::write(&self.worker_sh, bump_submodules_script(workflow)?)?;
+        let syntax = Command::new("bash")
+            .arg("-n")
+            .arg(&self.worker_sh)
+            .output()?;
+        if !syntax.status.success() {
+            bail!(
+                "extracted step is not valid bash: {}",
+                String::from_utf8_lossy(&syntax.stderr)
+            );
+        }
+
+        git(&[
+            "config",
+            "--file",
+            utf8(&self.tmp.join("gitconfig"))?,
+            "protocol.file.allow",
+            "always",
+        ])?;
+        Ok(())
+    }
+
     /// Run the extracted workflow step against the worker checkout.
     ///
     /// `extra_env` carries the race-injection wiring; it is empty for the
@@ -140,6 +345,12 @@ impl Fixture {
             self.fake_bin.display(),
             std::env::var("PATH").unwrap_or_default()
         );
+        let submodule_paths = self
+            .subs
+            .iter()
+            .map(|sub| sub.name)
+            .collect::<Vec<_>>()
+            .join(" ");
         let mut cmd = Command::new("bash");
         cmd.arg(&self.worker_sh)
             .current_dir(self.tmp.join("worker"))
@@ -147,7 +358,7 @@ impl Fixture {
             .env("GH_TOKEN", "test")
             .env("GITHUB_REPOSITORY", "test/ix")
             .env("GIT_CONFIG_GLOBAL", self.tmp.join("gitconfig"))
-            .env("SUBMODULE_PATHS", "index nox")
+            .env("SUBMODULE_PATHS", submodule_paths)
             .env("TRIGGER_USER", "")
             .env("UPDATE_REMOTE_URL", &self.ix_git)
             .env("PATH", path);
@@ -166,19 +377,158 @@ impl Fixture {
         Ok(())
     }
 
-    /// One submodule's gitlink and lock rev, which must always agree.
-    fn pinned(&self, name: &str) -> Result<(String, String)> {
-        let dir = self.ix_git.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-        let tree_path = format!("main:{name}");
-        let gitlink = git(&["--git-dir", dir, "rev-parse", &tree_path])?;
-        let lock = git(&["--git-dir", dir, "show", "main:flake.lock"])?;
-        let locked: serde_json::Value = serde_json::from_str(&lock)?;
-        let rev = locked["nodes"][name]["locked"]["rev"]
+    /// Resolve a revision in the `ix` bare repository.
+    fn ix_rev(&self, spec: &str) -> Result<String> {
+        git(&["--git-dir", utf8(&self.ix_git)?, "rev-parse", spec])
+    }
+
+    /// Read a file from `ix/main`.
+    fn ix_show(&self, path: &str) -> Result<String> {
+        git(&[
+            "--git-dir",
+            utf8(&self.ix_git)?,
+            "show",
+            &format!("main:{path}"),
+        ])
+    }
+
+    /// One source's gitlink and lock rev, which must always agree.
+    fn pinned(&self, name: &str) -> Result<Pinned> {
+        let gitlink = self.ix_rev(&format!("main:{name}"))?;
+        let locked: serde_json::Value = serde_json::from_str(&self.ix_show("flake.lock")?)?;
+        let lock = locked["nodes"][name]["locked"]["rev"]
             .as_str()
             .ok_or_else(|| eyre!("lock has no nodes.{name}.locked.rev"))?
             .to_owned();
-        Ok((gitlink, rev))
+        Ok(Pinned { gitlink, lock })
     }
+
+    /// Fail with `complaint` unless every source's gitlink and lock both sit
+    /// on that source's current tip.
+    ///
+    /// Half-moved is the failure worth naming: a tree that builds the old
+    /// source against the new lock. So is a source that moved when nothing
+    /// asked it to, which is why this checks all of them every time.
+    fn assert_pinned_at_tips(&self, complaint: &str) -> Result<()> {
+        for sub in &self.subs {
+            let Pinned { gitlink, lock } = self.pinned(sub.name)?;
+            if gitlink != sub.tip || lock != sub.tip {
+                bail!(
+                    "{complaint} ({})\ngitlink={gitlink}\nlocked={lock}\nexpected={}",
+                    sub.name,
+                    sub.tip
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Move one source's `main` forward, leaving the others where they are.
+    fn advance_source(&mut self, name: &str, version: &str) -> Result<()> {
+        self.subs
+            .iter_mut()
+            .find(|sub| sub.name == name)
+            .ok_or_else(|| eyre!("no submodule named {name} in the fixture"))?
+            .advance(version)
+    }
+
+    /// Clone `ix` and commit `race.txt` there, ready to be pushed from inside
+    /// the worker's first push.
+    fn stage_racer_commit(&self) -> Result<PathBuf> {
+        let racer = self.tmp.join("racer");
+        let racer_s = utf8(&racer)?;
+        git(&["clone", "--quiet", utf8(&self.ix_git)?, racer_s])?;
+        git(&["-C", racer_s, "config", "user.name", "racer"])?;
+        git(&["-C", racer_s, "config", "user.email", "racer@example.com"])?;
+        // Cloned, not `git_init`ed, so it needs the same signing opt-out; without
+        // it this repo alone still picks up the caller's `commit.gpgsign`.
+        git(&["-C", racer_s, "config", "commit.gpgsign", "false"])?;
+        fs::write(racer.join("race.txt"), "preserve me\n")?;
+        git(&["-C", racer_s, "add", "race.txt"])?;
+        git(&["-C", racer_s, "commit", "--quiet", "-m", "race"])?;
+        Ok(racer)
+    }
+
+    /// Put a `git` shim on the fixture's PATH ahead of the real one, and
+    /// return the real one for the shim to exec.
+    ///
+    /// It fires exactly once, on the worker's first push to main, so the race
+    /// is deterministic rather than timing-dependent.
+    fn install_racing_git_shim(&self) -> Result<String> {
+        let real_git = String::from_utf8(
+            Command::new("sh")
+                .arg("-c")
+                .arg("command -v git")
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_owned();
+        // Positional parameters are spelled `$1` behind the arity test rather
+        // than `${1:-}`, so the script contains no `{...}`: clippy's
+        // `literal_string_with_formatting_args` reads a braced parameter
+        // expansion inside a Rust string literal as a stray format argument.
+        write_exec(
+            &self.fake_bin.join("git"),
+            "#!/usr/bin/env bash\n\
+             set -euo pipefail\n\
+             if [ \"$#\" -ge 3 ] && [ \"$1\" = push ] && [ \"$2\" = origin ] &&\n\
+             \x20  [ \"$3\" = HEAD:refs/heads/main ] && [ ! -e \"$RACE_MARKER\" ]; then\n\
+             \x20 : >\"$RACE_MARKER\"\n\
+             \x20 \"$REAL_GIT\" -C \"$RACE_WORK\" push --quiet origin main\n\
+             fi\n\
+             exec \"$REAL_GIT\" \"$@\"\n",
+        )?;
+        Ok(real_git)
+    }
+}
+
+/// Stale pins advance every gitlink and every lock node together.
+fn stale_pins_advance_together(fx: &Fixture) -> Result<()> {
+    fx.run_worker(&[])?;
+    fx.assert_pinned_at_tips(
+        "direct update did not move both the gitlink and lock to the source's main",
+    )
+}
+
+/// A current pin is a true no-op: no commit lands on `ix/main`.
+fn current_pins_are_a_noop(fx: &Fixture) -> Result<()> {
+    let before = fx.ix_rev("main")?;
+    fx.run_worker(&[])?;
+    let after = fx.ix_rev("main")?;
+    if before != after {
+        bail!("current-pin run created an unexpected commit ({before} -> {after})");
+    }
+    Ok(())
+}
+
+/// A push that loses a race against an unrelated `ix/main` commit retries onto
+/// the new tip, keeping the other commit rather than clobbering it, and leaves
+/// the source it had no reason to move exactly where it was.
+fn lost_race_retries_onto_new_tip(fx: &mut Fixture) -> Result<()> {
+    fx.advance_source("index", "newer")?;
+
+    let racer = fx.stage_racer_commit()?;
+    let real_git = fx.install_racing_git_shim()?;
+    let marker = fx.tmp.join("race-fired");
+    fx.run_worker(&[
+        ("RACE_MARKER", utf8(&marker)?),
+        ("RACE_WORK", utf8(&racer)?),
+        ("REAL_GIT", &real_git),
+    ])?;
+
+    if !marker.exists() {
+        bail!(
+            "race was never injected -- the shim's push match is stale, so this run proved nothing"
+        );
+    }
+    fx.assert_pinned_at_tips("race retry did not converge on the source's main")?;
+
+    let race_file = fx.ix_show("race.txt")?;
+    if race_file.trim() != "preserve me" {
+        bail!("race retry lost the concurrent ix/main commit (race.txt={race_file:?})");
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -199,271 +549,11 @@ fn main() -> Result<()> {
     }
 
     let tempdir = tempfile::tempdir()?;
-    let tmp = tempdir.path().to_path_buf();
+    let mut fx = Fixture::new(tempdir.path().to_path_buf(), &workflow)?;
 
-    // Two commits in each source: the caller starts at the old revisions while
-    // both remote main branches have already moved to the new revisions.
-    let seed = tmp.join("index-seed");
-    let index_git = tmp.join("index.git");
-    git_init(&seed)?;
-    let seed_s = seed.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-    fs::write(seed.join("version"), "old\n")?;
-    git(&["-C", seed_s, "add", "version"])?;
-    git(&["-C", seed_s, "commit", "--quiet", "-m", "old"])?;
-    let old_source = git(&["-C", seed_s, "rev-parse", "HEAD"])?;
-    git(&[
-        "clone",
-        "--quiet",
-        "--bare",
-        seed_s,
-        index_git.to_str().ok_or_else(|| eyre!("non-utf8"))?,
-    ])?;
-    fs::write(seed.join("version"), "new\n")?;
-    git(&["-C", seed_s, "commit", "--quiet", "-am", "new"])?;
-    let new_source = git(&["-C", seed_s, "rev-parse", "HEAD"])?;
-    let index_git_s = index_git.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-    git(&["-C", seed_s, "push", "--quiet", index_git_s, "main"])?;
-
-    let nox_seed = tmp.join("nox-seed");
-    let nox_git = tmp.join("nox.git");
-    git_init(&nox_seed)?;
-    let nox_seed_s = nox_seed.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-    fs::write(nox_seed.join("version"), "old\n")?;
-    git(&["-C", nox_seed_s, "add", "version"])?;
-    git(&["-C", nox_seed_s, "commit", "--quiet", "-m", "old"])?;
-    let old_nox = git(&["-C", nox_seed_s, "rev-parse", "HEAD"])?;
-    git(&[
-        "clone",
-        "--quiet",
-        "--bare",
-        nox_seed_s,
-        nox_git.to_str().ok_or_else(|| eyre!("non-utf8"))?,
-    ])?;
-    fs::write(nox_seed.join("version"), "new\n")?;
-    git(&["-C", nox_seed_s, "commit", "--quiet", "-am", "new"])?;
-    let new_nox = git(&["-C", nox_seed_s, "rev-parse", "HEAD"])?;
-    let nox_git_s = nox_git.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-    git(&["-C", nox_seed_s, "push", "--quiet", nox_git_s, "main"])?;
-
-    // Minimal caller repository with ix's two path-input lock nodes.
-    let ix_seed = tmp.join("ix-seed");
-    git_init(&ix_seed)?;
-    let ix_seed_s = ix_seed.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-    git(&[
-        "-c",
-        "protocol.file.allow=always",
-        "-C",
-        ix_seed_s,
-        "submodule",
-        "add",
-        "--quiet",
-        index_git_s,
-        "index",
-    ])?;
-    let sub = ix_seed.join("index");
-    let sub_s = sub.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-    git(&["-C", sub_s, "checkout", "--quiet", &old_source])?;
-    git(&[
-        "-C",
-        ix_seed_s,
-        "config",
-        "-f",
-        ".gitmodules",
-        "submodule.index.branch",
-        "main",
-    ])?;
-    git(&[
-        "-c",
-        "protocol.file.allow=always",
-        "-C",
-        ix_seed_s,
-        "submodule",
-        "add",
-        "--quiet",
-        nox_git_s,
-        "nox",
-    ])?;
-    let nox_sub = ix_seed.join("nox");
-    let nox_sub_s = nox_sub.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-    git(&["-C", nox_sub_s, "checkout", "--quiet", &old_nox])?;
-    git(&[
-        "-C",
-        ix_seed_s,
-        "config",
-        "-f",
-        ".gitmodules",
-        "submodule.nox.branch",
-        "main",
-    ])?;
-    let old_timestamp: i64 =
-        git(&["-C", sub_s, "show", "-s", "--format=%ct", &old_source])?.parse()?;
-    let old_nox_timestamp: i64 =
-        git(&["-C", nox_sub_s, "show", "-s", "--format=%ct", &old_nox])?.parse()?;
-    fs::write(
-        ix_seed.join("flake.lock"),
-        seed_lock(&old_source, old_timestamp, &old_nox, old_nox_timestamp),
-    )?;
-    git(&[
-        "-C",
-        ix_seed_s,
-        "add",
-        ".gitmodules",
-        "index",
-        "nox",
-        "flake.lock",
-    ])?;
-    git(&["-C", ix_seed_s, "commit", "--quiet", "-m", "initial"])?;
-
-    let ix_git = tmp.join("ix.git");
-    let ix_git_s = ix_git.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-    git(&["clone", "--quiet", "--bare", ix_seed_s, ix_git_s])?;
-    git(&[
-        "clone",
-        "--quiet",
-        ix_git_s,
-        tmp.join("worker")
-            .to_str()
-            .ok_or_else(|| eyre!("non-utf8"))?,
-    ])?;
-
-    // The step re-stamps the lock itself, so a no-op `nix` proves that without
-    // evaluating a real flake or touching the network.
-    let fake_bin = tmp.join("fake-bin");
-    fs::create_dir_all(&fake_bin)?;
-    write_exec(&fake_bin.join("nix"), "#!/usr/bin/env bash\nexit 0\n")?;
-
-    let worker_sh = tmp.join("worker.sh");
-    fs::write(&worker_sh, bump_submodules_script(&workflow)?)?;
-    let syntax = Command::new("bash").arg("-n").arg(&worker_sh).output()?;
-    if !syntax.status.success() {
-        bail!(
-            "extracted step is not valid bash: {}",
-            String::from_utf8_lossy(&syntax.stderr)
-        );
-    }
-
-    git(&[
-        "config",
-        "--file",
-        tmp.join("gitconfig")
-            .to_str()
-            .ok_or_else(|| eyre!("non-utf8"))?,
-        "protocol.file.allow",
-        "always",
-    ])?;
-
-    let fx = Fixture {
-        tmp: tmp.clone(),
-        worker_sh,
-        fake_bin: fake_bin.clone(),
-        ix_git: ix_git.clone(),
-    };
-
-    // 1. Stale pins advance both gitlinks and both lock nodes.
-    fx.run_worker(&[])?;
-    let (gitlink, locked) = fx.pinned("index")?;
-    if gitlink != new_source || locked != new_source {
-        bail!(
-            "direct update did not move both the gitlink and lock to index/main\n\
-             gitlink={gitlink}\nlocked={locked}\nexpected={new_source}"
-        );
-    }
-    let (nox_gitlink, nox_locked) = fx.pinned("nox")?;
-    if nox_gitlink != new_nox || nox_locked != new_nox {
-        bail!(
-            "direct update did not move both the gitlink and lock to nox/main\n\
-             gitlink={nox_gitlink}\nlocked={nox_locked}\nexpected={new_nox}"
-        );
-    }
-
-    // 2. A current pin is a true no-op.
-    let before = git(&["--git-dir", ix_git_s, "rev-parse", "main"])?;
-    fx.run_worker(&[])?;
-    let after = git(&["--git-dir", ix_git_s, "rev-parse", "main"])?;
-    if before != after {
-        bail!("current-pin run created an unexpected commit ({before} -> {after})");
-    }
-
-    // 3. Advance index again, then land an unrelated ix/main commit in between
-    //    the worker's fetch and its first push. The first push must lose, and
-    //    the retry must rebuild on the new tip without dropping the other
-    //    commit.
-    fs::write(seed.join("version"), "newer\n")?;
-    git(&["-C", seed_s, "commit", "--quiet", "-am", "newer"])?;
-    let newest_source = git(&["-C", seed_s, "rev-parse", "HEAD"])?;
-    git(&["-C", seed_s, "push", "--quiet", index_git_s, "main"])?;
-
-    let racer = tmp.join("racer");
-    let racer_s = racer.to_str().ok_or_else(|| eyre!("non-utf8"))?;
-    git(&["clone", "--quiet", ix_git_s, racer_s])?;
-    git(&["-C", racer_s, "config", "user.name", "racer"])?;
-    git(&["-C", racer_s, "config", "user.email", "racer@example.com"])?;
-    // Cloned, not `git_init`ed, so it needs the same signing opt-out; without
-    // it this repo alone still picks up the caller's `commit.gpgsign`.
-    git(&["-C", racer_s, "config", "commit.gpgsign", "false"])?;
-    fs::write(racer.join("race.txt"), "preserve me\n")?;
-    git(&["-C", racer_s, "add", "race.txt"])?;
-    git(&["-C", racer_s, "commit", "--quiet", "-m", "race"])?;
-
-    // A `git` shim on PATH ahead of the real one. It fires exactly once, on
-    // the worker's first push to main, so the race is deterministic rather
-    // than timing-dependent.
-    let real_git = String::from_utf8(
-        Command::new("sh")
-            .arg("-c")
-            .arg("command -v git")
-            .output()?
-            .stdout,
-    )?
-    .trim()
-    .to_owned();
-    write_exec(
-        &fake_bin.join("git"),
-        "#!/usr/bin/env bash\n\
-         set -euo pipefail\n\
-         if [ \"${1:-}\" = push ] && [ \"${2:-}\" = origin ] &&\n\
-         \x20  [ \"${3:-}\" = HEAD:refs/heads/main ] && [ ! -e \"$RACE_MARKER\" ]; then\n\
-         \x20 : >\"$RACE_MARKER\"\n\
-         \x20 \"$REAL_GIT\" -C \"$RACE_WORK\" push --quiet origin main\n\
-         fi\n\
-         exec \"$REAL_GIT\" \"$@\"\n",
-    )?;
-
-    fx.run_worker(&[
-        (
-            "RACE_MARKER",
-            tmp.join("race-fired")
-                .to_str()
-                .ok_or_else(|| eyre!("non-utf8"))?,
-        ),
-        ("RACE_WORK", racer_s),
-        ("REAL_GIT", &real_git),
-    ])?;
-
-    if !tmp.join("race-fired").exists() {
-        bail!(
-            "race was never injected -- the shim's push match is stale, so this run proved nothing"
-        );
-    }
-
-    let (gitlink, locked) = fx.pinned("index")?;
-    let (nox_gitlink, nox_locked) = fx.pinned("nox")?;
-    let race_file = git(&["--git-dir", ix_git_s, "show", "main:race.txt"])?;
-    if gitlink != newest_source || locked != newest_source {
-        bail!(
-            "race retry did not converge to the newest index/main\n\
-             gitlink={gitlink}\nlocked={locked}\nexpected={newest_source}"
-        );
-    }
-    if nox_gitlink != new_nox || nox_locked != new_nox {
-        bail!(
-            "race retry changed the current nox pin\n\
-             gitlink={nox_gitlink}\nlocked={nox_locked}\nexpected={new_nox}"
-        );
-    }
-    if race_file.trim() != "preserve me" {
-        bail!("race retry lost the concurrent ix/main commit (race.txt={race_file:?})");
-    }
+    stale_pins_advance_together(&fx)?;
+    current_pins_are_a_noop(&fx)?;
+    lost_race_retries_onto_new_tip(&mut fx)?;
 
     println!("submodule-sync-test: PASS");
     Ok(())
