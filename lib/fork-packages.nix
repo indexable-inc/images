@@ -845,6 +845,26 @@
           upstream = "hold";
           reason = "Fixes the eval-time network round trips of NixOS/nix#13556 (getDefaultRef never cached effectively) for rev-pinned fetchGit inputs (indexable-inc/index#4028). Upstream-nix candidate; hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # A CA build killed after its builder created $out leaves the floating
+        # scratch path behind on non-chroot stores (the darwin default), owned
+        # by a build user and never registered, so the next build fails writing
+        # over it one phase after the compiler succeeded. The known-path
+        # branches already clear stale paths here; this gives the floating case
+        # the same treatment, under the derivation's output locks.
+        "fix(libstore): clear invalid orphan scratch outputs before rebuilding" = {
+          upstream = "hold";
+          reason = "Clears the invalid build-user-owned scratch output a killed floating-CA build leaves behind, which otherwise wedges every rebuild of that derivation with a bare permission-denied error and needed a manual sudo rm to recover (indexable-inc/index#2247, indexable-inc/index#4112). Upstream master has the same gap; hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # libcurl 8.21.0 drains the wakeup eventfd on entry to
+        # curl_multi_poll, so a wakeup raised while the transfer worker sits
+        # outside the poll is lost. Every process's first transfer hits that
+        # window deterministically and then sleeps the whole 10s idle timeout.
+        # The worker now re-checks the queues under the state lock after
+        # computing its sleep rather than trusting the wakeup.
+        "libstore: never sleep the transfer worker past actionable queued work" = {
+          upstream = "hold";
+          reason = "Lost-wakeup regression against libcurl 8.21.0: every cold `nix run` paid a 10s stall on its first transfer once the fleet's nixpkgs carried 8.21.0 (nix_run_hello p50 5.9s to 16.5s; indexable-inc/index#4122). Upstream-general and standalone, the contract change is upstream's to absorb; hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
     {
