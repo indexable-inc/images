@@ -106,30 +106,40 @@ jobs:
       # Partial progress is the property that makes this lane converge.
       fail-fast: false
       matrix:
-        # THREE shards, and the ceiling is not the root count -- it is how many
-        # of these the fleet can hold at once. The dispatcher classifies EVERY
-        # indexable-inc/index job as `large` unconditionally (ix
-        # crates/ci/dispatcher/src/handler/workflow_job.rs `classify`), and the
-        # large class reserves 128 GiB of a host's 176 GiB runner slice. So one
-        # index job per host, five dispatcher hosts, five index jobs fleet-wide
-        # -- shared with Check (the gating lane), CVE scan, and Update content.
+        # Ten shards. The binding constraint is not the root count, it is how
+        # many of these the fleet holds at once, and that is a function of the
+        # resource class the dispatcher gives them.
         #
-        # A first attempt used six shards plus a separate darwin-eval job. That
-        # is seven large-class jobs for a pool of five, so they could not
-        # co-schedule and they crowded out Check. Three leaves room for the
-        # gate and still triples the old single-runner parallelism.
+        # A cache-push shard is routed to the SMALL class (24 GiB) rather than
+        # index's default LARGE (128 GiB), so seven fit a host's 176 GiB runner
+        # slice instead of one, and the fleet's five dispatcher hosts hold
+        # dozens instead of five. That routing lives in ix
+        # crates/ci/dispatcher/src/handler/workflow_job.rs `classify`, keyed on
+        # the same `-cache-push` label suffix the credential gate uses.
         #
-        # The reservation is also ~5x too big for this lane specifically: the
-        # large class is sized from index's flake-check evaluator peaking at
-        # 94.1 GiB, but a cache-push shard evaluates with
-        # `--max-memory-size 6144` and then realises, and realisation happens
-        # in the nix-daemon cgroup rather than the runner unit. Teaching
-        # `classify` to route `-cache-push` to `small` would let this go much
-        # wider; until then the fleet, not the work, sets this number.
+        # THE EVAL FAN-OUT BELOW IS WHAT MAKES THAT SAFE, so the two must move
+        # together. `nix-eval-jobs --max-memory-size` is a bound PER WORKER
+        # ("4GiB per worker by default"), not a total: the flake-check gate's
+        # `--workers 16 --max-memory-size 6144` is a 96 GiB ceiling, and that
+        # product is exactly where index's measured 94.1 GiB peak and its large
+        # class came from. The shards below use `--workers 3` against 4096 MiB,
+        # a 12 GiB ceiling, which fits 24 GiB with room for the checkout, the
+        # xargs fan-out and attic. Raising either number here without raising
+        # the class there OOMs the unit.
+        #
+        # Realisation is not part of that budget at all: builds execute in the
+        # nix-daemon cgroup (nixDaemonMemoryMaxBytes), not in the runner unit
+        # the class sizes. Only eval is charged here, which is why capping eval
+        # is enough to make an otherwise heavy job small.
+        #
+        # History: six shards plus a separate darwin-eval job was seven
+        # large-class jobs for a five-slot pool. They could not co-schedule and
+        # they queued in front of Check, the gating lane; three was the largest
+        # that fit. The class change is what lifted the ceiling.
         #
         # The count is read from `strategy.job-total` below rather than
         # duplicated, so this list is the only edit needed to rebalance.
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     # Warm-store pool shared with check.yml. The dispatcher recognises the
     # `-cache-push` suffix and attaches the push-only ix-public token as a
     # per-job systemd credential (spawn.rs ix_public_push_eligible). The shard
@@ -185,8 +195,8 @@ jobs:
           rows="$workdir/darwin-rows.jsonl"
           "$eval_jobs" \
             --flake .#cachePushRoots.aarch64-darwin \
-            --workers 16 \
-            --max-memory-size 6144 \
+            --workers 3 \
+            --max-memory-size 4096 \
             2>"$workdir/darwin-eval.err" \
             > "$rows" || true
 
@@ -285,8 +295,8 @@ jobs:
           eval_t=$SECONDS
           "$eval_jobs" \
             --flake .#cachePushRoots.x86_64-linux \
-            --workers 16 \
-            --max-memory-size 6144 \
+            --workers 3 \
+            --max-memory-size 4096 \
             2>"$workdir/eval.err" \
             | "$jq" -r 'select(.drvPath != null) | [.drvPath, (.outputs.out // "")] | @tsv' \
             | sort -u > "$all_roots" || true

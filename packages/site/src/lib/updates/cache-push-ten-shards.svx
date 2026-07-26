@@ -1,0 +1,61 @@
+---
+id: cache-push-ten-shards
+postedAt: "2026-07-26"
+title: cache-push runs ten shards, because the dispatcher now sizes them small
+tags:
+  - ci
+  - nix
+---
+
+The cache-push lane went from three parallel shards to ten. Nothing about the
+work changed; what changed is how much of a host each shard reserves.
+
+## the fleet set the number, not the work
+
+A shard's parallelism was never limited by how many roots there are. The
+dispatcher classified every `indexable-inc/index` job as `large`
+unconditionally, and the large class reserves 128 GiB of a host's 176 GiB
+runner slice. One index job per host, five dispatcher hosts, five index jobs
+fleet-wide — shared with Check (the gating lane), CVE scan, and Update
+content. An earlier attempt at six shards plus a separate darwin-eval job was
+seven large-class jobs for a five-slot pool: they could not co-schedule, and
+they queued in front of Check. Three was the largest count that left the gate
+room.
+
+`classify` in ix `crates/ci/dispatcher/src/handler/workflow_job.rs` now routes
+any job whose runner label ends in `-cache-push` to the small class instead,
+keyed on the same suffix the push-credential gate already uses. Small is 24
+GiB, so seven shards fit where one used to, and the constraint moved off the
+fleet.
+
+## the eval budget is what makes small honest
+
+The two must move together. `nix-eval-jobs --max-memory-size` is a bound per
+worker, not a total, so the flake-check gate's `--workers 16 --max-memory-size
+6144` is a 96 GiB ceiling — and that product is exactly where index's measured
+94.1 GiB peak and its large class came from. The shards now run `--workers 3`
+against 4096 MiB, a 12 GiB ceiling, which fits 24 GiB with room for the
+checkout, the xargs fan-out and attic. Raising either number without raising
+the class OOMs the unit.
+
+Realisation is not in that budget at all. Builds execute in the nix-daemon
+cgroup (`nixDaemonMemoryMaxBytes`), not in the runner unit the class sizes.
+Only eval is charged to the shard, which is why capping eval is enough to make
+an otherwise heavy job small.
+
+## what gated it
+
+The routing is a property of the leader, not of the fleet: `classify` runs only
+on the dispatcher leader (`vin-compute-1`), before worker selection, because
+the class is also the placement affinity key. So the widening was parked until
+that host actually carried the routing commit. It does now — prod deploy run
+30184647173 converged with `13eecd8183`, whose `workflow_job.rs` contains the
+`-cache-push` branch.
+
+## not measured yet
+
+Whether ten shards actually balance. The shard count is read from
+`strategy.job-total` rather than duplicated, so rebalancing is a one-line edit,
+but no one has looked at per-shard wall clock to see whether the roots divide
+evenly at ten the way they did at three. The fleet holds roughly 32 small-class
+slots, so ten is well inside capacity; the open question is skew, not room.
