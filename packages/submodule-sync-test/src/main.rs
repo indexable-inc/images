@@ -51,6 +51,15 @@ fn git_init(path: &Path) -> Result<()> {
     git(&["init", "--quiet", "--initial-branch=main", p])?;
     git(&["-C", p, "config", "user.name", "test"])?;
     git(&["-C", p, "config", "user.email", "test@example.com"])?;
+    // Fixture commits must not inherit the caller's signing config. A machine
+    // with `commit.gpgsign` on (ssh format is common) fails fixture setup with
+    // `cannot run ssh-keygen: No such file or directory` / `failed to write
+    // commit object`, which reads as a broken test rather than a broken
+    // environment. The shell original had the same hole: it pointed
+    // GIT_CONFIG_GLOBAL at a throwaway file for the worker only, leaving these
+    // setup commits on the developer's real config.
+    git(&["-C", p, "config", "commit.gpgsign", "false"])?;
+    git(&["-C", p, "config", "tag.gpgsign", "false"])?;
     Ok(())
 }
 
@@ -319,6 +328,9 @@ fn main() -> Result<()> {
     git(&["clone", "--quiet", ix_git_s, racer_s])?;
     git(&["-C", racer_s, "config", "user.name", "racer"])?;
     git(&["-C", racer_s, "config", "user.email", "racer@example.com"])?;
+    // Cloned, not `git_init`ed, so it needs the same signing opt-out; without
+    // it this repo alone still picks up the caller's `commit.gpgsign`.
+    git(&["-C", racer_s, "config", "commit.gpgsign", "false"])?;
     fs::write(racer.join("race.txt"), "preserve me\n")?;
     git(&["-C", racer_s, "add", "race.txt"])?;
     git(&["-C", racer_s, "commit", "--quiet", "-m", "race"])?;
