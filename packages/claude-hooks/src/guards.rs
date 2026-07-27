@@ -1227,18 +1227,24 @@ mod tests {
         }
     }
 
-    /// A fixture checkout plus the environment that protects it, or `None`
-    /// where `git` is absent so the repo-backed tests skip rather than fail.
+    /// A fixture checkout and the environment that protects it.
+    struct Protected {
+        fx: Fixture,
+        env: GitGuardEnv,
+    }
+
+    /// A protected fixture, or `None` where `git` is absent so the repo-backed
+    /// tests skip rather than fail.
     ///
     /// Every test below opens with this, so the skip and the protected glob
     /// cannot drift apart between them.
-    fn protected_fixture() -> Option<(Fixture, GitGuardEnv)> {
+    fn protected_fixture() -> Option<Protected> {
         if !git_available() {
             return None;
         }
         let fx = fixture();
         let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
-        Some((fx, env))
+        Some(Protected { fx, env })
     }
 
     fn bash(cwd: &Path, command: &str) -> Value {
@@ -1473,7 +1479,7 @@ mod tests {
 
     #[test]
     fn mutating_git_in_a_protected_checkout_is_denied() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         let reason = git_guard_decision(&env, &bash(&fx.primary, "git add -A"))
@@ -1561,11 +1567,11 @@ mod tests {
     /// Tests that need committed content inside the snapshot (a `.gitignore`, a
     /// submodule) build it from `protected_fixture` and the two helpers above
     /// instead, so the setup lands before the snapshot is cut.
-    fn snapshotted() -> Option<(Fixture, GitGuardEnv)> {
-        let (fx, env) = protected_fixture()?;
-        dirty_readme(&fx.primary);
-        rescue_branch(&fx.primary, "rescue/test");
-        Some((fx, env))
+    fn snapshotted() -> Option<Protected> {
+        let held = protected_fixture()?;
+        dirty_readme(&held.fx.primary);
+        rescue_branch(&held.fx.primary, "rescue/test");
+        Some(held)
     }
 
     /// ix#8785: the message prescribed a rescue snapshot and then kept saying
@@ -1574,7 +1580,7 @@ mod tests {
     /// command.
     #[test]
     fn a_rescue_snapshot_changes_the_refusal_from_loss_to_policy() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         dirty_readme(&fx.primary);
@@ -1617,7 +1623,7 @@ mod tests {
     /// ref does not hold it. Comparing blob ids said it did.
     #[test]
     fn a_mode_change_is_not_held_by_a_snapshot_taken_before_it() {
-        let Some((fx, env)) = snapshotted() else {
+        let Some(Protected { fx, env }) = snapshotted() else {
             return;
         };
         let mode = std::fs::Permissions::from_mode(0o755);
@@ -1633,7 +1639,7 @@ mod tests {
     /// the refs the message prescribes are consulted.
     #[test]
     fn an_unrelated_branch_is_never_named_as_the_snapshot() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         // A branch from before the file existed, exactly the vacuous match.
@@ -1654,7 +1660,7 @@ mod tests {
     /// checkout can create one, and a fetch can bring one in.
     #[test]
     fn a_refname_carrying_shell_syntax_is_not_pasted_into_the_message() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         dirty_readme(&fx.primary);
@@ -1680,7 +1686,7 @@ mod tests {
     /// does not look at it, so the loss wording is the truthful one.
     #[test]
     fn an_untracked_file_is_never_reported_as_snapshotted() {
-        let Some((fx, env)) = snapshotted() else {
+        let Some(Protected { fx, env }) = snapshotted() else {
             return;
         };
         std::fs::write(fx.primary.join("NEW"), "not in the snapshot\n").expect("untracked file");
@@ -1699,7 +1705,7 @@ mod tests {
     /// pinned here.
     #[test]
     fn ignored_files_only_disqualify_the_commands_that_delete_them() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         std::fs::write(fx.primary.join(".gitignore"), "build/\n").expect("write .gitignore");
@@ -1742,7 +1748,7 @@ mod tests {
     /// held was still lost.
     #[test]
     fn a_masked_dirty_submodule_is_never_reported_as_snapshotted() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         let sub = fx.root.join("sub");
@@ -1782,7 +1788,7 @@ mod tests {
     /// a missing object failed the whole call and took every good ref with it.
     #[test]
     fn a_broken_rescue_ref_does_not_hide_the_good_ones() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         dirty_readme(&fx.primary);
@@ -1806,7 +1812,7 @@ mod tests {
     /// the message promise a way back for content in no commit.
     #[test]
     fn an_assume_unchanged_edit_is_never_reported_as_snapshotted() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         std::fs::write(fx.primary.join("HIDDEN"), "original\n").expect("write HIDDEN");
@@ -1831,7 +1837,7 @@ mod tests {
     /// rather than inherited.
     #[test]
     fn untracked_files_hidden_by_config_still_block_the_snapshot_claim() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         run_git(&fx.primary, &["config", "status.showUntrackedFiles", "no"]);
@@ -1849,7 +1855,7 @@ mod tests {
     /// "None of it is staged" premise cannot be stated unconditionally either.
     #[test]
     fn the_staged_claim_matches_the_index() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         dirty_readme(&fx.primary);
@@ -1871,7 +1877,7 @@ mod tests {
     /// stat cache, so the check has to work off a copy.
     #[test]
     fn the_check_leaves_the_shared_index_untouched() {
-        let Some((fx, env)) = snapshotted() else {
+        let Some(Protected { fx, env }) = snapshotted() else {
             return;
         };
         // Drop the stat cache so any refresh would rewrite the file.
@@ -1891,7 +1897,7 @@ mod tests {
 
     #[test]
     fn read_only_git_in_a_protected_checkout_is_allowed() {
-        let Some((fx, env)) = protected_fixture() else {
+        let Some(Protected { fx, env }) = protected_fixture() else {
             return;
         };
         for cmd in [
@@ -1955,7 +1961,7 @@ mod tests {
 
     #[test]
     fn kill_switch_and_empty_list_disable_the_guard() {
-        let Some((fx, mut env)) = protected_fixture() else {
+        let Some(Protected { fx, mut env }) = protected_fixture() else {
             return;
         };
         assert!(
