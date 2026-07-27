@@ -120,14 +120,13 @@ fn binaries_cross_as_the_wire_newtype() {
         let interface = lower_module_source(case.source);
         let rendered = unibind_backend_ex::render(&interface, None).expect("renders");
         let glue = prettyplease::unparse(&syn::parse2(rendered.glue).expect("glue parses"));
-        for fragment in case.expected {
-            assert!(
-                glue.contains(fragment.text),
-                "{}: {}: {glue}",
-                case.name,
-                fragment.absence_means
-            );
-        }
+        let missing: Vec<&str> = case
+            .expected
+            .iter()
+            .filter(|fragment| !glue.contains(fragment.text))
+            .map(|fragment| fragment.absence_means)
+            .collect();
+        assert!(missing.is_empty(), "{}: {missing:?}: {glue}", case.name);
     }
 }
 
