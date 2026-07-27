@@ -124,6 +124,23 @@ def test_committed_tasks_expect_only_cataloged_behaviors() -> None:
     validate_expects(load_tasks(), load_behaviors())  # must not raise
 
 
+def test_errored_rollout_is_scored_as_absent_not_skipped() -> None:
+    """An error must not be excluded from the denominator.
+
+    If it were, a run where every rollout died would divide 0 by 0 and report a
+    vacuous 1.0 or 0.0 with nothing to distinguish it from a real measurement.
+    Counting it as absent is what makes `errored` worth failing the run on.
+    """
+    tasks = [TaskCase(id="t", task="", expects=("a",))]
+    ok = _result("t", 0, {"a": True})
+    died = RolloutResult(
+        case_id="t", rollout=1, transcript="", error="claude exited 1"
+    )
+    assert overall_rate([ok], tasks) == 1.0
+    assert overall_rate([ok, died], tasks) == 0.5
+    assert overall_rate([died], tasks) == 0.0
+
+
 def _main() -> None:
     tests = [v for name, v in sorted(globals().items()) if name.startswith("test_")]
     for test in tests:
