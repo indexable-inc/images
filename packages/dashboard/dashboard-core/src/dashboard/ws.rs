@@ -42,7 +42,7 @@ use super::hub::{Hub, Merge};
 
 /// The one room this server serves. The hub owns a single document, so a room
 /// id names that document rather than selecting among several.
-pub(crate) const ROOM_ID: &str = "dashboard";
+pub const ROOM_ID: &str = "dashboard";
 
 /// Largest CRDT update carried in one `DocUpdate`. The whole frame has to fit
 /// `MAX_MESSAGE_SIZE`, and the magic, room id, type tag and 8-byte batch id
@@ -75,7 +75,7 @@ const RELAY_CAPACITY: usize = 256;
 /// Shared by reference across every joined connection. Re-encoding per
 /// recipient would be N times the work for byte-identical output, and two
 /// encodes of one update is two chances to disagree.
-pub(crate) type Frames = Arc<Vec<Bytes>>;
+pub type Frames = Arc<Vec<Bytes>>;
 
 /// Batch ids for server-originated updates.
 ///
@@ -94,10 +94,15 @@ fn next_batch() -> BatchId {
 /// what keeps the relay verbatim: each recipient gets the same `Bytes`, not its
 /// own re-encoding. The caller attaches the returned handle to the dashboard so
 /// shutdown winds it down with the server.
-pub(crate) fn start_relay(
-    hub: Arc<Hub>,
-    runtime: &tokio::runtime::Handle,
-) -> (broadcast::Sender<Frames>, JoinHandle<()>) {
+/// The running relay: the channel new sockets subscribe to, and the task that
+/// feeds it. The caller has to keep both -- dropping the handle without winding
+/// the task down leaks it past shutdown.
+pub struct Relay {
+    pub frames: broadcast::Sender<Frames>,
+    pub task: JoinHandle<()>,
+}
+
+pub fn start_relay(hub: Arc<Hub>, runtime: &tokio::runtime::Handle) -> Relay {
     let (frames, _) = broadcast::channel(RELAY_CAPACITY);
     let task = {
         let frames = frames.clone();
@@ -125,7 +130,7 @@ pub(crate) fn start_relay(
             }
         })
     };
-    (frames, task)
+    Relay { frames, task }
 }
 
 /// One connection's protocol state.
@@ -171,7 +176,8 @@ enum Wake {
 }
 
 /// Speak the protocol on one connection until the client goes away.
-pub(crate) async fn serve_socket(
+#[allow(clippy::match_same_arms, reason = "each arm documents a distinct cause; merging them would delete the comment that explains why")]
+pub async fn serve_socket(
     mut socket: WebSocket,
     hub: Arc<Hub>,
     relay: broadcast::Sender<Frames>,
@@ -263,6 +269,7 @@ async fn handle(
 }
 
 /// Decode one binary frame and act on it.
+#[allow(clippy::match_same_arms, reason = "each arm documents a distinct cause; merging them would delete the comment that explains why")]
 async fn protocol(
     socket: &mut WebSocket,
     session: &mut Session,
@@ -1159,7 +1166,7 @@ mod tests {
         }
     }
 
-    /// The client sends JoinError to report that it could not decode something
+    /// The client sends `JoinError` to report that it could not decode something
     /// this server said. It is undocumented but real, and it must not take the
     /// connection down with it.
     #[tokio::test]

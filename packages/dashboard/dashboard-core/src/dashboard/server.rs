@@ -170,7 +170,7 @@ pub async fn serve_hub(
     // that encodes nothing while no websocket client is attached, and starting
     // it lazily would mean the first client races the hub for the deltas it
     // needs, which is exactly the gap the subscribe-then-snapshot order closes.
-    let (frames, relay) = ws::start_relay(Arc::clone(&hub), runtime);
+    let ws::Relay { frames, task: relay } = ws::start_relay(Arc::clone(&hub), runtime);
 
     let app = Router::new()
         .route("/", get(index))

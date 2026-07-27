@@ -163,6 +163,14 @@ fn view_scalars(view: &View) -> Vec<ScalarField> {
             field("topic", e.topic.clone().map_or(Scalar::Absent, Scalar::Str)),
             field(
                 "duration_ms",
+                // Saturating is deliberate and unreachable: a duration is
+                // milliseconds since the exec started, and i64::MAX ms is ~292
+                // million years. If it somehow were reached, a pane showing a
+                // clamped duration still beats one showing none.
+                #[allow(
+                    clippy::fallible_int_fallback,
+                    reason = "u64 milliseconds cannot exceed i64::MAX in any real exec"
+                )]
                 e.duration_ms.map_or(Scalar::Absent, |ms| {
                     Scalar::Int(i64::try_from(ms).unwrap_or(i64::MAX))
                 }),
@@ -369,12 +377,12 @@ impl DocState {
     /// Record `actor` as this hub's identity and write it against the current
     /// peer id straight away, so an owner that declares before its first pane is
     /// still in the document, and a re-declaration takes effect at once.
-    fn declare_identity(&mut self, actor: Actor) -> Result<Option<Vec<u8>>> {
+    fn declare_identity(&mut self, actor: &Actor) -> Result<Option<Vec<u8>>> {
         // The guard has to be gone before the commit below: the first-commit
         // callback takes the same lock, and it is not reentrant.
         *self.identity.lock() = actor.clone();
         let peer = self.doc.peer_id().to_string();
-        write_actor(&self.peers, self.doc.peer_id(), &actor)?;
+        write_actor(&self.peers, self.doc.peer_id(), actor)?;
         self.commit_delta(CommitTag {
             on: "peers",
             add: vec![&peer],
@@ -593,6 +601,10 @@ impl DocState {
     /// Reconcile one existing pane's scalars and text fields to `pane`, writing
     /// only the values that changed so an idle pane produces no delta. Reports
     /// whether anything was written, which is what the commit tag names.
+    #[allow(
+        clippy::useless_let_if_seq,
+        reason = "a chain of independent field reconciliations, not one if/else expression"
+    )]
     fn update_slot(&mut self, key: &str, pane: &Pane) -> Result<bool> {
         let slot = self.panes.get_mut(key).expect("slot exists");
         let mut wrote = false;
@@ -650,6 +662,15 @@ impl DocState {
     /// snapshot from the same scope still reconciles normally through
     /// [`apply_scope`](Self::apply_scope), including deleting panes that are no
     /// longer reported by that producer.
+    #[allow(
+        clippy::unused_self,
+        clippy::needless_pass_by_ref_mut,
+        clippy::unnecessary_wraps,
+        clippy::missing_const_for_fn,
+        reason = "keeps the `&mut self -> Result<delta>` shape its sibling scope \
+                  operations and callers share; narrowing it would make the one \
+                  no-op in the set the odd one out"
+    )]
     fn remove_scope(&mut self, scope: &str) -> Result<Option<Vec<u8>>> {
         let _ = scope;
         Ok(None)
@@ -705,7 +726,7 @@ impl DocState {
     /// import is neither success nor failure: the ops sit in the oplog but not
     /// in the document state, so the edit is invisible until the range it
     /// depends on arrives.
-    fn import(&mut self, bytes: &[u8]) -> Result<(Merge, Option<Vec<u8>>)> {
+    fn import(&mut self, bytes: &[u8]) -> Result<Imported> {
         let status = self.doc.import(bytes).map_err(loro_err)?;
         // A remote edit moves containers this side caches. Left stale, the next
         // `update_slot` compares a producer value against a belief that is no
@@ -723,7 +744,7 @@ impl DocState {
         } else {
             Merge::Applied
         };
-        Ok((merge, delta))
+        Ok(Imported { merge, delta })
     }
 
     /// Refresh every write-through cache from the container it shadows.
@@ -906,7 +927,15 @@ fn loro_err(source: impl std::fmt::Display) -> Error {
 /// lag domain -- two channels would let the same delta sit at different
 /// positions in each, so a subscriber resyncing on one could double-apply
 /// from the other.
-pub(crate) struct Update {
+/// What one [`DocState::import`] did: whether Loro applied the update or only
+/// recorded it, and the delta to broadcast (absent when nothing was pending).
+struct Imported {
+    merge: Merge,
+    delta: Option<Vec<u8>>,
+}
+
+pub struct Update {
+
     /// The raw Loro update, as the websocket transport frames it.
     pub(crate) bytes: Vec<u8>,
     /// The same bytes base64'd, as an SSE `data:` field requires.
@@ -1164,8 +1193,13 @@ impl Hub {
     /// The sender is inside the broadcast set and receives its own ops back --
     /// harmless, because a Loro import is idempotent, and cheaper than tracking
     /// a version vector per subscriber to suppress the echo.
+    /// # Errors
+    ///
+    /// Returns the Loro decode error when `bytes` is not a valid update or
+    /// snapshot. A well-formed update whose dependencies have not arrived is
+    /// not an error: it reports [`Merge::Pending`].
     pub fn import(&self, bytes: &[u8]) -> Result<Merge> {
-        let (merge, delta) = self.state.lock().import(bytes)?;
+        let Imported { merge, delta } = self.state.lock().import(bytes)?;
         self.broadcast(Ok(delta));
         Ok(merge)
     }
@@ -1176,7 +1210,7 @@ impl Hub {
     /// Takes effect for changes already committed too: the entry is one map key
     /// and the newest declaration wins, so an owner that learns its own name
     /// late can still say it.
-    pub fn declare_identity(&self, actor: Actor) {
+    pub fn declare_identity(&self, actor: &Actor) {
         let delta = self.state.lock().declare_identity(actor);
         self.broadcast(delta);
     }
@@ -1382,7 +1416,7 @@ mod tests {
         .expect("remote edit");
         peer.commit();
 
-        let (merge, _) = state
+        let Imported { merge, .. } = state
             .import(&peer.export(ExportMode::Snapshot).expect("export"))
             .expect("merge");
         assert_eq!(merge, Merge::Applied);
@@ -1773,7 +1807,7 @@ mod tests {
         hub.apply_scope("p", &[terminal("t1", "hello")]);
         assert_eq!(hub.history()[0].actor, Some(Actor::agent("producer")));
 
-        hub.declare_identity(Actor::human("ada"));
+        hub.declare_identity(&Actor::human("ada"));
         assert_eq!(
             hub.actors().into_values().collect::<Vec<_>>(),
             vec![Actor::human("ada")]
