@@ -178,8 +178,11 @@
   Build one self-contained OCI archive from a list of NixOS modules.
 
   Each image is independent: ix does not stack images at runtime, it
-  runs one. Returns the OCI-archive derivation; pass it to
-  `ix image push` or use it as a `packages.<system>.<name>` output.
+  runs one. Returns the OCI-archive derivation, which nothing boots from
+  since ix retired the OCI ingest pipeline (ENG-6044 phase 7, ix#6930):
+  the bootable artifact is the CAS manifest `ix.build.casImage` builds
+  from `passthru.toplevel`, and `ix image push-manifest` publishes that.
+  Use this as a `packages.<system>.<name>` output.
   */
   mkImage = args: (evalImageConfig args).ix.build.ociImage;
 

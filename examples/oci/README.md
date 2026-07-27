@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
-    <img src="assets/hero.svg" width="720" alt="a digest-pinned distro userland plus a Nix layer assemble into an OCI archive that ix image push uploads to a registry">
+    <img src="assets/hero.svg" width="720" alt="a digest-pinned distro userland plus a Nix layer assemble into an OCI archive">
   </picture>
 </p>
 
@@ -22,9 +22,13 @@ nix build .#non-nix-ubuntu
 nix build .#non-nix-debian
 ```
 
-Each result is a standard OCI archive, so
-`ix image push <name> registry.ix.dev/...` works on it directly. Get the repo
-with `git clone https://github.com/indexable-inc/index`.
+Each result is a standard OCI archive. There is currently no way to publish one
+to an ix registry: ix deleted the OCI ingest pipeline in ENG-6044 phase 7
+(ix#6930), which removed `ix image push` and the `docker://` source plumbing,
+and the surviving `ix image push-manifest` takes a CAS manifest rather than an
+archive. So these build and are usable with any OCI tool, but not with
+`ix apply` (ENG-10550). Get the repo with
+`git clone https://github.com/indexable-inc/index`.
 
 ## Not VM configs
 
