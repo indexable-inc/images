@@ -1,0 +1,64 @@
+---
+id: svx-frontmatter-parsed-before-merge
+postedAt: 2026-07-27T14:20:00-07:00
+title: "`nix run .#lint` now parses every .svx frontmatter block as YAML"
+tags:
+  - site
+  - lint
+  - ci
+links:
+  - label: "index#4226 (the merge that turned main red)"
+    href: https://github.com/indexable-inc/index/pull/4226
+  - label: ENG-10422
+    href: https://linear.app/indexable/issue/ENG-10422
+---
+
+Every page under `packages/site/src/lib/plans`, `updates` and `stories` opens
+with a `---` block that mdsvex reads as YAML. A new `svx-frontmatter` lint
+stage now reads that block out of each file and hands it to a YAML parser. A
+block that does not parse fails the lint with the file, the line, the column,
+the parser's own message, and the offending source line.
+
+## the failure this replaces
+
+mdsvex does not error on a frontmatter block it cannot parse. It emits a module
+with no `metadata` export. Nothing notices until the collection loaders run at
+prerender: `updates.ts` throws by hand, and `plans.ts` and `stories.ts`
+dereference `mod.metadata.id` and hit a TypeError. All three run inside
+`nix build .#site`, so the first report was a failed site build in flake-check,
+closure-gate and a push shard at once, after the merge.
+
+#4226 did exactly that. One line of an update entry:
+
+```yaml
+- label: index#4218 (git-guard: mutating commands in a protected checkout)
+```
+
+A plain YAML scalar cannot contain `: `. The parser reads `git-guard:` as the
+start of a nested mapping, the block fails, and one prose line takes the whole
+site build down. `nix run .#lint` passed on that file before this change.
+
+## a parser, not a pattern
+
+The stage calls a real YAML reader rather than matching a regex. The whole
+class here is YAML behaving in a way the person writing prose did not expect,
+so a pattern that covers the colon case would still pass the next surprise
+while looking like a gate.
+
+What it reports on the #4226 line:
+
+```
+packages/site/src/lib/updates/worktree-gate-covers-bash.svx:9:33: frontmatter YAML does not parse: mapping values are not allowed in this context
+  - label: index#4218 (git-guard: mutating commands in a protected checkout)
+```
+
+The stage runs in 0.5 seconds over all three collections.
+
+## not covered
+
+The stage checks that the block parses and that it parses to a mapping. It does
+not check which fields are present or what types they hold; `site-ids` already
+covers `id` and `number`, and the loaders check the rest at build time. It also
+uses a different YAML implementation from mdsvex's, so a construct the two read
+differently would slip through. Every `.svx` in the repo today parses under
+both.
