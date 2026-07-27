@@ -179,8 +179,18 @@
         _: entry: let
           load = importIxFor hostSystem (entry.path + "/default.ix");
           args = builtins.functionArgs load;
+          # An example may take flake inputs of its own, and this aggregator
+          # has only `index` to give. Skipping those rather than calling them
+          # is what lets an example depend on a service repo: the alternative
+          # is an eval error for the whole tree the moment one does.
+          # `functionArgs` marks an argument false when it has no default, so
+          # this is exactly the set that would throw.
+          unsuppliable =
+            builtins.filter
+            (name: name != "index" && !args.${name})
+            (builtins.attrNames args);
           value =
-            if args ? index
+            if args ? index && unsuppliable == []
             then load {index = indexShim;}
             else null;
         in
