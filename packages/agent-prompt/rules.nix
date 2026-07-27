@@ -801,6 +801,36 @@
     };
   }
   {
+    classOverInstance = {
+      topics = ["architecture" "agency"];
+      text = ''
+        Fixing one instance is the smaller half. Enumerate the class from
+        its source rather than from a pattern that looks like it covers it,
+        and prefer the gate that makes the class impossible over the patch
+        that removes the instance: one check that fails on the next
+        occurrence is worth more than three fixed by hand. Where no gate is
+        possible, say so and name what a reviewer now has to catch.
+      '';
+      reason = ''
+        Requested 2026-07-27. That night three separate defects turned out
+        to be one class, a failure that returns a plausible value instead
+        of an error: a deploy's cache push skipping silently for a month on
+        a credential that did not exist, a missing gawk publishing a false
+        zero for weeks against five-figure queues, and a probe-priority
+        ordering that is real at selection and inert in effect because the
+        work is batched atomically. Two more were a second class, a red
+        raised from one instantaneous sample: an io stall read once per
+        sweep against a fleet median above its own threshold, and an
+        unreachable row that accused two healthy hosts in one hour. Every
+        one was first fixed as an instance. The two changes that will still
+        be paying next month are gates, not patches: the eval seam that
+        makes an out-of-switch-transaction claim prove itself on every host
+        that renders it, and the comparison of what a bash unit calls
+        against what its derivation provides.
+      '';
+    };
+  }
+  {
     respectGuards = {
       topics = ["agency"];
       text = ''
