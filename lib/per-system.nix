@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone | complexity); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | svx-frontmatter | ruff | clone | complexity); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -630,6 +630,86 @@
         }
         if (($errors | is-not-empty) or ($link_errors | is-not-empty) or ($tag_errors | is-not-empty)) { exit 1 }
       }
+      # mdsvex reads the `---` block at the top of every .svx as YAML. When
+      # that parse fails it does not error: it emits a module with NO
+      # `metadata` export, and the failure surfaces later in the collection
+      # loaders (`packages/site/src/lib/updates.ts` throws by hand; plans.ts
+      # and stories.ts dereference `mod.metadata.id` and hit a TypeError).
+      # Those run at prerender, so the first report is a failed
+      # `nix build .#site` in flake-check, closure-gate and the push shards at
+      # once, after the merge. #4226 turned main red exactly that way
+      # (ENG-10422).
+      #
+      # The trap is YAML, not markdown. An unquoted scalar holding `: ` --
+      # `- label: index#4218 (git-guard: mutating commands in a protected
+      # checkout)` -- reads as a nested mapping and takes the whole block
+      # down. No regex covers that class, and one that looked like it did
+      # would be worse here than nothing, so this hands the block to a real
+      # YAML reader and reports what the reader says.
+      # The reader's own message ("mapping values are not allowed in this
+      # context at line 3 column 33") lives in the error's structured body,
+      # which nushell renamed from `json` to `details` in 0.114. A future
+      # rename degrades this to the bare `msg`, "Unsupported input"; the gate
+      # still fires and the path and source line below still name the fix.
+      def yaml-error-text [err: record] {
+        $err
+        | get -o details.labels.0.text
+        | default $err.msg
+        | str replace 'Could not load YAML: ' ""
+      }
+      def svx-frontmatter-file-errors [path: string] {
+        let all = (open --raw $path | lines)
+        if ($all | get -o 0 | default "") != "---" {
+          return [$"  ($path):1: no `---` frontmatter block; the loader reads its `metadata` export from one"]
+        }
+        let rest = ($all | skip 1)
+        let close = ($rest | enumerate | where {|row| $row.item == "---"} | get -o 0.index)
+        if $close == null {
+          return [$"  ($path):1: the `---` frontmatter block is never closed"]
+        }
+        let parsed = (
+          try {
+            {ok: true, value: ($rest | first $close | str join (char newline) | from yaml)}
+          } catch {|err|
+            {ok: false, why: (yaml-error-text $err)}
+          }
+        )
+        if $parsed.ok {
+          if ($parsed.value | describe | str starts-with "record") { [] } else {
+            [$"  ($path):2: frontmatter is a ($parsed.value | describe), not a mapping of fields"]
+          }
+        } else {
+          # The reader counts lines from the start of the block, which is file
+          # line 2, so shift by one to point at the line an editor opens.
+          let at = ($parsed.why | parse --regex 'at line (?<line>\d+) column (?<col>\d+)' | get -o 0)
+          let line = (if $at == null { 2 } else { ($at.line | into int) + 1 })
+          let col = (if $at == null { 1 } else { $at.col | into int })
+          let why = ($parsed.why | str replace --regex ' at line \d+ column \d+$' "")
+          let source = ($all | get -o ($line - 1) | default "" | str trim)
+          [
+            $"  ($path):($line):($col): frontmatter YAML does not parse: ($why)"
+            $"    ($source)"
+          ]
+        }
+      }
+      def "main svx-frontmatter" [] {
+        let errors = (
+          [plans updates stories]
+          | each {|kind|
+              fd --extension svx . $"packages/site/src/lib/($kind)"
+              | lines
+              | sort
+              | each {|path| svx-frontmatter-file-errors $path }
+              | flatten
+            }
+          | flatten
+        )
+        if ($errors | is-not-empty) {
+          print --stderr "mdsvex drops the `metadata` export when frontmatter YAML fails to parse, and the site loaders only notice at prerender, so the first report today is a red main (ENG-10422); quote any scalar containing `: `:"
+          $errors | each {|line| print --stderr $line } | ignore
+          exit 1
+        }
+      }
       # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
       # pathlib + pytest + explicit annotations + no `typing.cast`; see
       # lib/ruff-ann.nix) over EVERY tracked .py, so non-package dirs
@@ -670,7 +750,7 @@
         complexity . out> /dev/null
       }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone | complexity" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | svx-frontmatter | ruff | clone | complexity" }
       }
     '';
   };
@@ -690,6 +770,7 @@
     "dirnames"
     "svg-dark"
     "site-ids"
+    "svx-frontmatter"
     "ruff"
     "clone"
     "complexity"
