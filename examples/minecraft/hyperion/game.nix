@@ -22,10 +22,34 @@ in {
 
   ix.healthChecks.hyperion-game-server.unit = "hyperion-game-server.service";
 
+  # hyperion opens its skin cache at the relative path `db/heed.mdb`, so it
+  # writes to whatever the working directory is. The unit runs with
+  # `ProtectSystem = strict` and no `WorkingDirectory`, which is `/` and
+  # read-only, so it dies on EROFS before it listens. Point it at the state
+  # directory systemd already creates for it. The cwd-relative path is
+  # hyperion's to fix (ENG-10505); the working directory is the deployment's
+  # to choose either way.
+  systemd.services.hyperion-game-server = {
+    serviceConfig.WorkingDirectory = "/var/lib/hyperion-game-server";
+    # hyperion also caches the world it downloads under the XDG cache
+    # directory, which the `directories` crate resolves from `$HOME`.
+    # `DynamicUser` plus `ProtectHome` leaves that unset, `ProjectDirs::from`
+    # returns None, and the server dies on an `.expect("failed to get AppId")`
+    # that names the wrong thing. Same state directory, so both caches land
+    # together.
+    environment.HOME = "/var/lib/hyperion-game-server";
+  };
+
   services.hyperion-game-server = {
     enable = true;
     package = hyperionGameServer;
     inherit port;
+    # Bracketed, because bedwars builds its listen address by joining `--ip`
+    # and `--port` with a colon and then parsing the result: the module's
+    # default `::` becomes `::35565`, which is not an address, and the process
+    # panics before it binds. A workaround, not the fix -- the join belongs in
+    # the binary (ENG-10494).
+    address = "[::]";
     pki = {
       rootCaCert = "/var/lib/hyperion-pki/root_ca.crt";
       cert = "/var/lib/hyperion-pki/node.crt";
