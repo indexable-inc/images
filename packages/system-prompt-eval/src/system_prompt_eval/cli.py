@@ -204,6 +204,23 @@ def _run(args: argparse.Namespace) -> int:
     print(f"view it: nix run .#system-prompt-eval-viewer -- {json_out}", file=sys.stderr)
 
     rc = 0
+    # An errored rollout is a wrong data point, not a missing one: `overall_rate`
+    # counts its expected behaviors into the denominator and never into the
+    # numerator, so a run where the agent never started scores 0.0 like a run
+    # where it started and behaved badly. With no --fail-under that used to exit
+    # 0, which is how run 30237476504 reported success on 33 of 33 rollouts
+    # dying at `claude exited 1` against an unset ANTHROPIC_API_KEY (#4202).
+    for rep in reports:
+        errored = [case for case in rep.cases if case.get("error")]
+        if not errored:
+            continue
+        rc = 1
+        print(
+            f"FAIL: {rep.name} scored {rep.headline:.2f} but {len(errored)} of "
+            f"{len(rep.cases)} rollouts errored, so that number measures nothing. "
+            f"First error: {errored[0]['error']}",
+            file=sys.stderr,
+        )
     if args.fail_under is not None:
         for rep in reports:
             if rep.headline < args.fail_under:
