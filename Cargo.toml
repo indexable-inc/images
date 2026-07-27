@@ -65,6 +65,8 @@ members = [
   "packages/clone-detect/scanner",
   "packages/clone-detect/test-support",
   "packages/code-highlight",
+  "packages/complexity/cli",
+  "packages/complexity/metric",
   "packages/edit-applier",
   "packages/error-chain",
   "packages/file-language",
@@ -277,6 +279,7 @@ clone-hash = { path = "packages/clone-detect/hash" }
 clone-pragma = { path = "packages/clone-detect/pragma" }
 clone-scanner = { path = "packages/clone-detect/scanner" }
 clone-test-support = { path = "packages/clone-detect/test-support" }
+complexity-metric = { path = "packages/complexity/metric" }
 error-chain = { path = "packages/error-chain" }
 code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }

@@ -49,6 +49,7 @@ User-facing guides for the hosted `ix` platform. Start at
 | [claude-hooks](claude-hooks/overview.md) | `packages/claude-hooks` is one compiled binary with three Claude Code hook subcommands, replacing the old hand-rolled `writeShellScript` hooks in `packages/claude-code`. |
 | [claude-stories](claude-stories/overview.md) | `packages/claude-stories` puts an Instagram-style row of "stories" in the Claude Code status line: each teammate's avatar (initials in a gradient ring) and what they are working on right... |
 | [clone-detect](clone-detect/overview.md) | `packages/clone-detect` finds duplicated code across a tree. |
+| [complexity](complexity/overview.md) | `packages/complexity` ranks the hardest-to-read units and ratchets the count down. |
 | [code-highlight](code-highlight/overview.md) | `packages/code-highlight` is a tree-sitter syntax highlighter that renders a source string (or a line range) as ANSI-colored terminal text. |
 | [code-tokenizer](code-tokenizer/overview.md) | `packages/code-tokenizer` is a tantivy tokenizer that splits identifiers the way a code reviewer reads them: on `camelCase`, `snake_case`, `kebab-case`, and any non-alphanumeric run. |
 | [codex](codex/overview.md) | `packages/codex` repackages the OpenAI Codex CLI (the nixpkgs `codex` package) with baked-in `-c` config defaults. |

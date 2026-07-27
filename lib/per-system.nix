@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone | complexity); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -45,6 +45,7 @@
       pkgs.statix
       repoPackages.astlog
       repoPackages.clone
+      repoPackages.complexity
     ];
     text = ''
       # nu
@@ -189,6 +190,7 @@
           '(^|/)statix\.toml$'
           '(^|/)\.cargo/config\.toml$'
           '^clone\.toml$'
+          '^complexity\.toml$'
           '^packages/cve-scan/whitelist\.toml$'
           '^\.github/.*\.ya?ml$'
           '(^|/)docker-compose\.ya?ml$'
@@ -656,8 +658,19 @@
       def "main clone" [] {
         clone . out> /dev/null
       }
+      # Per-unit complexity over the whole tree (packages/complexity).
+      # `complexity .` walks up for the repo `complexity.toml`, whose
+      # `[budget] max_over_threshold` caps how many units may sit at or above
+      # their language's committed threshold; the binary exits nonzero when
+      # that cap is exceeded, so the count ratchets down without failing on
+      # every unit that is already large. Same stdout convention as `clone`:
+      # the JSON goes to null so a failing stage's log shows the tracing
+      # summary naming the worst units, not the whole report.
+      def "main complexity" [] {
+        complexity . out> /dev/null
+      }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone | complexity" }
       }
     '';
   };
@@ -679,6 +692,7 @@
     "site-ids"
     "ruff"
     "clone"
+    "complexity"
   ];
 
   lintSpec = (pkgs.formats.json {}).generate "lint-dag.json" {

@@ -2111,6 +2111,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "complexity-cli"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-ast",
+ "ast-merge-langs",
+ "clap",
+ "complexity-metric",
+ "glob",
+ "rayon",
+ "repo-walker",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "complexity-metric"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-ast",
+ "ast-merge-langs",
+ "serde",
+ "tree-sitter",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

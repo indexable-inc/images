@@ -1,0 +1,52 @@
+# Complexity budget for this repo, consumed by `nix run .#complexity` and
+# enforced by the `complexity` lint stage.
+#
+# The metric is Campbell cognitive complexity per unit: +1 for each break in
+# linear flow, plus the current nesting depth, so depth costs more than
+# breadth. It is the only code-only metric with a published validation against
+# human-rated understandability, and that validation is narrow. Treat a
+# finding as a prompt to look, not as proof the code is bad.
+
+ignore = [
+    "*/target/*",
+    "*/node_modules/*",
+    "*/.direnv/*",
+    "*/vendored/*",
+    # Generated parser tables and the upstream-authored grammar they come from
+    # (see packages/tree-sitter-nix): a state machine's branching is the
+    # generator's shape, not this repo's to break down.
+    "*/tree-sitter-nix/src/parser.c",
+    "*/tree-sitter-nix/grammar.js",
+]
+
+# Cognitive complexity at which a unit counts against the budget, per language.
+#
+# These are NOT the conventional numbers. McCabe called his 10 "reasonable, but
+# not magical", and SonarSource reached 15 by raising the threshold until the
+# output felt less noisy; neither is empirical. Each number below is instead
+# this repo's own size-weighted 90th percentile, computed by Alves, Ypma and
+# Visser's method (ICSM 2010), so it means something checkable: the worst 10%
+# of this repo by volume, in that language.
+#
+# Re-derive with `nix run .#complexity -- . --quantiles`. Expect them to drift
+# down as units are broken up; lowering one tightens the gate for everyone, so
+# do it deliberately rather than on every re-measure.
+[threshold]
+Elixir = 3
+Go = 1
+JavaScript = 17
+Nix = 4
+Python = 23
+Rust = 10
+TypeScript = 43
+
+# The ratchet. `max_over_threshold` is how many units may sit at or above their
+# language's threshold. Lower it as units are broken down; re-measure with
+# `nix run .#complexity -- . | jq .stats.over_threshold`. Do NOT raise it
+# without a written reason on the line below, and keep roughly 10% headroom
+# above the measured value: a budget set flush against its own measurement
+# reddens main on ordinary drift (the lesson of clone.toml, #4023).
+# 2026-07-27 (#4223): first measurement, 396 units over threshold, budget set
+# to 435 for the ~10% headroom this file's convention calls for.
+[budget]
+max_over_threshold = 435
