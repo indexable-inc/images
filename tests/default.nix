@@ -3469,6 +3469,33 @@
         message = "base profile should remove a stale SQLite dotfile lock on the nix DB at boot (ix#8389)";
       }
       {
+        # Regression fence for ENG-10487. `nix-daemon.socket` carries
+        # `ConditionPathIsReadWrite=/nix/var/nix/daemon-socket`, so a guest
+        # that never creates that directory never listens, and every
+        # flake-target `ix apply` onto a fresh VM ends its switch on "nix
+        # daemon socket did not become ready".
+        #
+        # Deliberately NOT satisfied by a tmpfiles rule, and a future
+        # refactor must not "simplify" it into one: nix already ships exactly
+        # that rule and the guest already receives it, but systemd-tmpfiles
+        # refuses to descend the rootfs's nobody-to-root ownership transition
+        # on `/nix` -> `/nix/var`, exits 73, and the unit's
+        # `SuccessExitStatus=CANTCREAT` reports the miss as success
+        # (ENG-10493). So this asserts the mkdir unit specifically, and that
+        # it is ordered ahead of the socket it exists for.
+        assertion = let
+          # `or null` so a dropped unit reports this message rather than an
+          # "attribute missing" eval error three frames from the point.
+          unit = base.config.systemd.services.nix-daemon-socket-directory or null;
+        in
+          unit
+          != null
+          && lib.hasInfix "/nix/var/nix/daemon-socket" unit.serviceConfig.ExecStart
+          && builtins.elem "nix-daemon.socket" unit.before
+          && builtins.elem "sysinit.target" unit.wantedBy;
+        message = "every image should create /nix/var/nix/daemon-socket before nix-daemon.socket, or nix-daemon never listens and a flake-target `ix apply` fails its switch with \"nix daemon socket did not become ready\" (ENG-10487)";
+      }
+      {
         assertion = let
           firewall = base.config.networking.firewall;
         in

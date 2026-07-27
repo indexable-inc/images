@@ -823,6 +823,52 @@ in {
       daemonIOSchedClass = "idle";
     };
 
+    # `nix-daemon.socket` will not start without its listen directory:
+    # upstream's unit carries
+    # `ConditionPathIsReadWrite=/nix/var/nix/daemon-socket`, and no ix guest
+    # ships that directory, so the condition stays unmet, the daemon never
+    # listens, and every flake-target `ix apply` onto a fresh VM ends its
+    # switch on "nix daemon socket did not become ready" (ENG-10487).
+    #
+    # Nix ships the tmpfiles rule that is supposed to create it
+    # (`lib/tmpfiles.d/nix-daemon.conf`, pulled in by nixpkgs'
+    # `systemd.tmpfiles.packages`), and the guest does receive it at
+    # /etc/tmpfiles.d/nix-daemon.conf, but it cannot run there. The guest
+    # rootfs leaves `/` and `/nix` owned by uid 65534 while `/nix/var` is
+    # root, and systemd-tmpfiles refuses to descend that
+    # unprivileged-to-root ownership transition: it logs "Detected unsafe
+    # path transition", exits 73 (EX_CANTCREAT), and the unit's
+    # `SuccessExitStatus=CANTCREAT` reports that as success. A second
+    # `systemd.tmpfiles.rules` entry here would be skipped the same way, so
+    # the directory needs a mechanism that does no such check. `mkdir` as
+    # root is that mechanism. Delete this unit once the image stops shipping
+    # nobody-owned ancestors (ENG-10493, which also swallows the base
+    # profile's /work/ix rule and several /var/lib ones) and nix's own rule
+    # runs on its own.
+    systemd.services.nix-daemon-socket-directory = {
+      description = "Create the nix daemon socket directory";
+      # Ordered like systemd's own early oneshots. Default dependencies would
+      # put this after basic.target, which is reached after the sockets.target
+      # that pulls nix-daemon.socket in, so the directory would arrive too
+      # late to be of any use.
+      unitConfig.DefaultDependencies = false;
+      after = ["local-fs.target"];
+      before = [
+        "nix-daemon.socket"
+        "sysinit.target"
+        "shutdown.target"
+      ];
+      conflicts = ["shutdown.target"];
+      wantedBy = ["sysinit.target"];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        # `-p` makes the already-created case a no-op rather than an error, so
+        # this is idempotent across boots and across a switch that restarts it.
+        ExecStart = "${lib.getExe' pkgs.coreutils "mkdir"} -p -m 0755 /nix/var/nix/daemon-socket";
+      };
+    };
+
     # /bin/sh and /usr/bin/env are baked into every image root at build time
     # (oci-layer.nix systemRoot here; the CAS systemRoot on the ix side), and
     # the CAS-booted guest reaches /bin and /usr through symlinks into the
