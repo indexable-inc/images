@@ -34,7 +34,15 @@ fn config_dir(home: &Path) -> PathBuf {
 /// The child inherits nothing (`env_clear`), so the ambient environment --
 /// including a real `GOOGLE_OAUTH_CLIENT_ID` on a developer's machine --
 /// cannot change the outcome.
-fn session(home: &Path, env: &[(&str, &str)], requests: &str) -> (Vec<Value>, String) {
+/// One server run as a host sees it: the JSON-RPC messages read off stdout,
+/// and the whole of stderr. Named rather than returned as a pair so a caller
+/// cannot bind the two the wrong way round.
+struct Session {
+    responses: Vec<Value>,
+    stderr: String,
+}
+
+fn session(home: &Path, env: &[(&str, &str)], requests: &str) -> Session {
     let mut child = Command::new(env!("CARGO_BIN_EXE_ix-google-mcp"))
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -78,7 +86,10 @@ fn session(home: &Path, env: &[(&str, &str)], requests: &str) -> (Vec<Value>, St
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).expect("each line is one JSON-RPC message"))
         .collect();
-    (responses, String::from_utf8_lossy(&output.stderr).into_owned())
+    Session {
+        responses,
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
 }
 
 const HANDSHAKE: &str = concat!(
@@ -119,7 +130,7 @@ fn write_client_secret(home: &Path) {
 fn an_unconfigured_server_completes_the_handshake_and_says_what_is_missing() {
     let home = TempDir::new().expect("temp home");
 
-    let (responses, stderr) = session(home.path(), &[], HANDSHAKE);
+    let Session { responses, stderr } = session(home.path(), &[], HANDSHAKE);
 
     // The regression this exists for: the old build exited during startup,
     // so there was no response at all.
@@ -151,7 +162,7 @@ fn every_tool_including_google_status_is_listed_while_unconfigured() {
     let requests =
         format!("{HANDSHAKE}{}\n", r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#);
 
-    let (responses, _stderr) = session(home.path(), &[], &requests);
+    let Session { responses, .. } = session(home.path(), &[], &requests);
 
     let tools = find(&responses, 2)["result"]["tools"]
         .as_array()
@@ -179,7 +190,7 @@ fn a_tool_call_while_unconfigured_names_the_cause_and_the_next_step() {
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mail_search","arguments":{"query":"is:unread"}}}"#
     );
 
-    let (responses, _stderr) = session(home.path(), &[], &requests);
+    let Session { responses, .. } = session(home.path(), &[], &requests);
 
     let message = serde_json::to_string(find(&responses, 2)).expect("serializes");
     assert!(
@@ -196,7 +207,7 @@ fn a_malformed_call_reports_the_schema_error_not_the_setup_error() {
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mail_search","arguments":{"q":"is:unread"}}}"#
     );
 
-    let (responses, _stderr) = session(home.path(), &[], &requests);
+    let Session { responses, .. } = session(home.path(), &[], &requests);
 
     // `q` is not the field name; the caller needs to hear that, not "the
     // server is not set up". An unconfigured server that blamed its own
@@ -213,7 +224,7 @@ fn a_downloaded_client_secret_is_picked_up_without_any_environment() {
     let home = TempDir::new().expect("temp home");
     write_client_secret(home.path());
 
-    let (responses, _stderr) = session(home.path(), &[], HANDSHAKE);
+    let Session { responses, .. } = session(home.path(), &[], HANDSHAKE);
 
     // The whole bring-your-own-client claim: no env vars anywhere, and the
     // server has moved past "no OAuth client" to "nobody has consented".
@@ -232,7 +243,7 @@ fn a_downloaded_client_secret_is_picked_up_without_any_environment() {
 fn smtp_alone_makes_sending_work_with_no_google_configuration() {
     let home = TempDir::new().expect("temp home");
 
-    let (responses, _stderr) = session(
+    let Session { responses, .. } = session(
         home.path(),
         &[
             ("IX_SMTP_HOST", "smtp.fastmail.com"),
@@ -264,7 +275,7 @@ fn the_smtp_password_never_appears_in_anything_the_server_emits() {
     let home = TempDir::new().expect("temp home");
     let password = "super-secret-app-password";
 
-    let (responses, stderr) = session(
+    let Session { responses, stderr } = session(
         home.path(),
         &[
             ("IX_SMTP_HOST", "smtp.fastmail.com"),
