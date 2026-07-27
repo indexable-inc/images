@@ -128,6 +128,18 @@
       };
     };
 
+    agent = {
+      extraSkills = lib.mkOption {
+        type = lib.types.attrsOf lib.types.path;
+        default = {};
+        description = ''
+          Consumer-local Claude Code / Codex skills merged into the shared
+          index catalog. Each value is a skill directory holding a SKILL.md.
+          Names must not collide with a shared skill.
+        '';
+      };
+    };
+
     rbw = {
       email = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
