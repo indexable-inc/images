@@ -1,0 +1,33 @@
+---
+id: svx-frontmatter-gate
+postedAt: 2026-07-27T08:15:00-07:00
+title: "A malformed .svx frontmatter now fails lint instead of main"
+tags: [site, lint, ci, yaml]
+links:
+  - label: issue 4236
+    href: https://github.com/indexable-inc/index/issues/4236
+  - label: lib/per-system.nix
+    href: https://github.com/indexable-inc/index/blob/main/lib/per-system.nix
+---
+
+`Cache push` was red on every push to main for four consecutive runs on 2026-07-27. The site derivation aborted with `./updates/worktree-gate-covers-bash.svx: frontmatter failed to parse (no metadata export)`.
+
+One link label caused it:
+
+```yaml
+  - label: index#4218 (git-guard: mutating commands in a protected checkout)
+```
+
+A plain YAML scalar may not contain a colon followed by a space. `git-guard: mutating` ends the scalar, the mapping becomes invalid, mdsvex exports no `metadata`, and the loader in `src/lib/updates.ts` throws. Quoting the label fixes it. The sibling labels above and below have no colon and parsed fine, which is why one file out of 218 broke the whole site.
+
+Nothing caught it before the merge. The site build runs in the `Cache push` workflow, not in the required `Check`, so branch protection never saw the failure and the author of the merge learned about it from a red main.
+
+`lint` now has a `site-frontmatter` stage. It parses the frontmatter of every `.svx` under `plans`, `updates` and `stories` with a real YAML parser and prints the file, line and column:
+
+```
+  packages/site/src/lib/updates/worktree-gate-covers-bash.svx:9:33: mapping values are not allowed in this context
+```
+
+That is 0.5 seconds over 218 files, and `lint` runs in the pre-push hook, so the failure now arrives before the commit is public. Parsing instead of pattern matching on colons means the stage also catches an unterminated flow sequence, a tab, or bad indentation, which are the other ways a hand-written block stops being YAML.
+
+The gate stops at parseability. A frontmatter block that is valid YAML but missing a field the page reads, or carrying a `postedAt` the loader cannot turn into a date, still gets through here and fails later in the site build.
