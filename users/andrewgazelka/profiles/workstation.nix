@@ -1554,7 +1554,12 @@ in {
         };
         fetch = {
           prune = true;
-          writeCommitGraph = true;
+          # NOT writeCommitGraph: it appends one split-graph increment per
+          # fetch and nothing here compacts the chain, so it eventually dies
+          # with `fatal: invalid commit position. commit-graph is likely
+          # corrupt`. modules/profiles/base/default.nix records the failure in
+          # full. The `gc` block above still keeps a graph current, and gc
+          # rewrites it whole rather than appending.
           recurseSubmodules = false;
           parallel = 0;
           negotiationAlgorithm = "skipping";
