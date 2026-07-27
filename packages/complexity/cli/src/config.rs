@@ -30,6 +30,10 @@ pub struct Budget {
 }
 
 #[derive(Debug, Snafu)]
+// clone:ignore -- identifier-blind shape match with ast-merge-git's unrelated
+// RevisionError: two snafu enums whose variants both carry `{path, source}`
+// normalize to the same tree. Merging them would couple config loading to git
+// revision I/O to satisfy a structural detector, which is the wrong trade.
 pub enum Error {
     #[snafu(display("failed to read {path}"))]
     Read {
