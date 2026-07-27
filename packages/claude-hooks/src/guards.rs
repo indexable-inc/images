@@ -207,6 +207,11 @@ const CMD_PREFIXES: &[&str] = &[
 /// subcommand scan does not mistake that value for the subcommand.
 const GIT_VALUE_OPTS: &[&str] = &["-C", "-c", "--git-dir", "--work-tree", "--namespace"];
 
+/// Shells whose `-c <script>` argument is itself a command line. Without this
+/// the script stays one quoted token, so `bash -c 'git reset --hard'` never
+/// presents `git` as a command word and the guard sees nothing (index#4211).
+const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh"];
+
 /// One shell statement: its tokens, quote-aware and with quotes removed.
 type Statement = Vec<String>;
 
@@ -269,20 +274,71 @@ fn statements(cmd: &str) -> Vec<Statement> {
     out
 }
 
+/// What a statement actually runs: the command word and the tokens after it,
+/// with env assignments and wrapper prefixes (`sudo`, `env`, ...) stepped over.
+struct Invocation<'a> {
+    head: &'a str,
+    args: &'a [String],
+}
+
+fn invocation(stmt: &Statement) -> Option<Invocation<'_>> {
+    let at = stmt
+        .iter()
+        .position(|w| !is_env_assignment(w) && !CMD_PREFIXES.contains(&w.as_str()))?;
+    Some(Invocation {
+        head: stmt[at].as_str(),
+        args: &stmt[at + 1..],
+    })
+}
+
+/// The script a `sh -c '<script>'` statement runs, if that is what it is.
+fn shell_script(stmt: &Statement) -> Option<&str> {
+    let call = invocation(stmt)?;
+    // Match on the file name so `/bin/bash -c` and `/usr/bin/env sh -c` count.
+    let name = std::path::Path::new(call.head).file_name()?.to_str()?;
+    if !SHELLS.contains(&name) {
+        return None;
+    }
+    // The token after the first `-c` is the script. Anything after that is `$0`
+    // and the positional parameters, not code.
+    let at = call
+        .args
+        .iter()
+        .position(|a| a == "-c" || bundles_short(a, 'c'))?;
+    call.args.get(at + 1).map(String::as_str)
+}
+
+/// `statements`, with every `sh -c '<script>'` replaced by the statements of
+/// `<script>`. The recursion terminates because a script token is always
+/// shorter than the command line it was parsed out of.
+fn expanded_statements(cmd: &str) -> Vec<Statement> {
+    let mut out = Vec::new();
+    for stmt in statements(cmd) {
+        match shell_script(&stmt) {
+            Some(script) => out.extend(expanded_statements(script)),
+            None => out.push(stmt),
+        }
+    }
+    out
+}
+
+/// True when `arg` is a bundled short flag group (`-fd`, `-xfd`) containing
+/// `short`.
+fn bundles_short(arg: &str, short: char) -> bool {
+    arg.starts_with('-')
+        && !arg.starts_with("--")
+        && arg.len() > 1
+        && arg[1..].chars().all(char::is_alphanumeric)
+        && arg[1..].contains(short)
+}
+
 /// True when any token is the long flag `long`, or a bundled short flag group
 /// (`-fd`, `-xfd`) containing `short`. Scanning stops at `--`, after which
 /// everything is a pathspec.
 fn has_flag(args: &[String], short: char, long: &str) -> bool {
     args.iter()
         .take_while(|a| a.as_str() != "--")
-        .any(|a| {
-            a == long
-                || (a.starts_with('-')
-                    && !a.starts_with("--")
-                    && a.len() > 1
-                    && a[1..].chars().all(char::is_alphanumeric)
-                    && a[1..].contains(short))
-        })
+        .any(|a| a == long || bundles_short(a, short))
 }
 
 /// Classify a git subcommand as one that can discard uncommitted work, naming
@@ -333,6 +389,63 @@ fn discards_worktree(sub: &str, args: &[String]) -> Option<&'static str> {
         }
         _ => None,
     }
+}
+
+/// The revision a pathspec-form `git checkout`/`git restore` reads from, when
+/// that revision is something other than the checkout's own `HEAD`.
+///
+/// This is a different harm from losing uncommitted work. `git checkout <rev>
+/// -- <path>` writes `<rev>` into the tree and leaves `HEAD` alone, so a shared
+/// checkout stops matching its own `HEAD` for every session using it, and a
+/// clean tree is no protection against that (index#4211).
+fn reads_other_revision<'a>(sub: &str, args: &'a [String]) -> Option<&'a str> {
+    let rev = match sub {
+        "checkout" => {
+            // Branch-creating and detaching forms take a start point; they move
+            // HEAD to it rather than writing it over the tree behind HEAD's back.
+            if args
+                .iter()
+                .any(|a| ["-b", "-B", "--orphan", "--detach"].contains(&a.as_str()))
+            {
+                return None;
+            }
+            let operands: Vec<&String> = args
+                .iter()
+                .take_while(|a| a.as_str() != "--")
+                .filter(|a| !a.starts_with('-'))
+                .collect();
+            // A tree-ish is only present when a pathspec follows it, either
+            // after `--` or as a further operand. A lone operand is a branch to
+            // switch to or a path to restore from the index, and neither reads
+            // another revision.
+            let pathspec_follows = args.iter().any(|a| a == "--") || operands.len() > 1;
+            match operands.first() {
+                Some(first) if pathspec_follows => first.as_str(),
+                _ => return None,
+            }
+        }
+        // `restore` names its source explicitly, so there is nothing to
+        // disambiguate. Without `--source` it reads the index, not a revision.
+        "restore" => {
+            let mut it = args.iter();
+            let mut source = None;
+            while let Some(a) = it.next() {
+                if let Some(v) = a.strip_prefix("--source=") {
+                    source = Some(v);
+                    break;
+                }
+                if a == "--source" || a == "-s" {
+                    source = it.next().map(String::as_str);
+                    break;
+                }
+            }
+            source?
+        }
+        _ => return None,
+    };
+    // Restoring from HEAD leaves the tree and HEAD agreeing, which is the whole
+    // point of the check.
+    (rev != "HEAD" && rev != "@").then_some(rev)
 }
 
 /// `org/repo` from a checkout's origin URL, for the `/tmp/worktree/<org>/<repo>`
@@ -446,6 +559,29 @@ fn deny_message(refusal: &Refusal<'_>) -> String {
     )
 }
 
+/// The refusal for reading another revision into a shared tree. Separate from
+/// `deny_message` because nothing is being lost here; the harm is that everyone
+/// else's tree stops matching their own HEAD.
+fn desync_message(git: &str, top: &str, sub: &str, rev: &str) -> String {
+    let slug = origin_slug(git, top);
+    format!(
+        "Refusing `git {sub} {rev}` in {top}.\n\n\
+         That checkout is shared by every agent session on this machine. `git {sub}` with a \
+         tree-ish other than HEAD writes {rev} over the working tree and leaves HEAD where it \
+         is, so every other session finds a staged diff the size of the gap between {rev} and \
+         HEAD, which reads like a merge that went wrong. A clean tree is no protection: there \
+         is nothing to lose and the desync happens anyway (index#4211: one such call staged \
+         534 files in this checkout and cost an operator session to diagnose).\n\n\
+         Read {rev} without moving anyone's tree:\n\
+         \x20   git -C {top} grep -n <pattern> {rev}\n\
+         \x20   git -C {top} show {rev}:<path>\n\n\
+         Or get a tree of your own at that revision:\n\
+         \x20   git -C {top} worktree add /tmp/worktree/{slug}/<name> -b <branch> {rev}\n\
+         \x20   git -C /tmp/worktree/{slug}/<name> submodule update --init --recursive\n\n\
+         (git-guard hook, index#4211)"
+    )
+}
+
 /// Judge one parsed git call. `Some(reason)` means refuse.
 ///
 /// This is where the guard stops failing open. Up to the point where the target
@@ -454,7 +590,11 @@ fn deny_message(refusal: &Refusal<'_>) -> String {
 /// refusal, because the alternative is allowing the one command whose failure
 /// mode is unrecoverable data loss (ENG-9964).
 fn judge(git: &str, protected: &[String], call: &GitCall) -> Option<String> {
-    let effect = discards_worktree(&call.sub, &call.args)?;
+    let effect = discards_worktree(&call.sub, &call.args);
+    let other_rev = reads_other_revision(&call.sub, &call.args);
+    if effect.is_none() && other_rev.is_none() {
+        return None;
+    }
     let sub = &call.sub;
 
     let Some(top) = crate::git_rev_parse(git, &call.dir, "--show-toplevel") else {
@@ -496,22 +636,25 @@ fn judge(git: &str, protected: &[String], call: &GitCall) -> Option<String> {
         .filter(|l| !l.is_empty())
         .map(str::to_owned)
         .collect();
-    // Nothing uncommitted means nothing for this command to destroy. Not a
-    // silent no-op: the checkout is genuinely empty of work to lose.
-    if dirty.is_empty() {
-        return None;
+    // Uncommitted work that this command would destroy is the first thing to
+    // say, because it is the only unrecoverable one.
+    if let Some(effect) = effect.filter(|_| !dirty.is_empty()) {
+        return Some(deny_message(&Refusal {
+            git,
+            top: &top,
+            sub,
+            effect,
+            dirty: &dirty,
+        }));
     }
-    Some(deny_message(&Refusal {
-        git,
-        top: &top,
-        sub,
-        effect,
-        dirty: &dirty,
-    }))
+    // A clean tree has nothing to destroy, but reading another revision into it
+    // still leaves every session out of sync with its own HEAD.
+    other_rev.map(|rev| desync_message(git, &top, sub, rev))
 }
 
-/// `PreToolUse(Bash)`: refuse a destructive git command aimed at a shared
-/// primary checkout that currently holds uncommitted work.
+/// `PreToolUse(Bash)`: refuse a git command aimed at a shared primary checkout
+/// that would destroy uncommitted work there, or leave the tree out of sync
+/// with its own HEAD.
 ///
 /// Why a hook and not a git hook: git has no `pre-reset`, `pre-checkout`,
 /// `pre-clean` or `pre-stash`, `post-checkout` runs after the damage, and
@@ -542,24 +685,22 @@ pub fn git_guard() {
             ),
     );
 
-    for stmt in statements(&command_of(&payload)) {
-        let mut it = stmt
-            .iter()
-            .skip_while(|w| is_env_assignment(w) || CMD_PREFIXES.contains(&w.as_str()));
-        let Some(head) = it.next() else { continue };
-        let rest: Vec<String> = it.cloned().collect();
+    for stmt in expanded_statements(&command_of(&payload)) {
+        let Some(run) = invocation(&stmt) else {
+            continue;
+        };
         // Track `cd` across the chain: `cd <primary> && git reset --hard` must
         // be judged against the cd target, not the payload cwd.
-        if head == "cd" {
-            if let Some(target) = rest.iter().find(|a| !a.starts_with('-')) {
+        if run.head == "cd" {
+            if let Some(target) = run.args.iter().find(|a| !a.starts_with('-')) {
                 cwd = resolve(&cwd, target);
             }
             continue;
         }
-        if head != "git" {
+        if run.head != "git" {
             continue;
         }
-        let Some(call) = parse_git_call(&rest, &cwd) else {
+        let Some(call) = parse_git_call(run.args, &cwd) else {
             continue;
         };
         if let Some(reason) = judge(&git, &protected, &call) {
@@ -582,7 +723,8 @@ fn resolve(base: &std::path::Path, arg: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        discards_worktree, grep_walks_tree, has_flag, is_recursive_flag, parse_git_call, statements,
+        discards_worktree, expanded_statements, grep_walks_tree, has_flag, is_recursive_flag,
+        parse_git_call, reads_other_revision, statements,
     };
 
     fn toks(v: &[&str]) -> Vec<String> {
@@ -604,6 +746,81 @@ mod tests {
         assert_eq!(statements("a | b ; c\nd").len(), 4);
         // An operator inside quotes is literal text, not a split.
         assert_eq!(statements("echo 'a && b'"), vec![toks(&["echo", "a && b"])]);
+    }
+
+    #[test]
+    fn shell_wrappers_are_unwrapped() {
+        // index#4211: the script stayed one token, so no statement ever had
+        // `git` as its command word and the guard saw nothing.
+        assert_eq!(
+            expanded_statements("bash -c 'cd /a && git checkout -q origin/main -- .'"),
+            vec![
+                toks(&["cd", "/a"]),
+                toks(&["git", "checkout", "-q", "origin/main", "--", "."])
+            ]
+        );
+        // sh, zsh, an absolute path, a wrapper prefix, and bundled `-ec` all
+        // reach the same place.
+        for cmd in [
+            r#"sh -c "git clean -fd""#,
+            "zsh -c 'git clean -fd'",
+            "/bin/bash -c 'git clean -fd'",
+            "sudo sh -c 'git clean -fd'",
+            "bash -ec 'git clean -fd'",
+            // Nesting: one shell inside another.
+            r#"bash -c "sh -c 'git clean -fd'""#,
+        ] {
+            assert_eq!(
+                expanded_statements(cmd),
+                vec![toks(&["git", "clean", "-fd"])],
+                "{cmd}"
+            );
+        }
+        // Tokens after the script are $0 and the positional parameters, so they
+        // are not code and must not be re-parsed.
+        assert_eq!(
+            expanded_statements("bash -c 'git status' bash git clean -fd"),
+            vec![toks(&["git", "status"])]
+        );
+        // A shell that is not running an inline script is left alone.
+        assert_eq!(
+            expanded_statements("bash ./script.sh"),
+            vec![toks(&["bash", "./script.sh"])]
+        );
+    }
+
+    #[test]
+    fn pathspec_checkout_from_another_revision() {
+        let r = |sub: &str, a: &[&str]| reads_other_revision(sub, &toks(a)).map(str::to_owned);
+        // index#4211: the exact shape that desynced the shared checkout.
+        assert_eq!(
+            r("checkout", &["-q", "origin/main", "--", "."]),
+            Some("origin/main".to_owned())
+        );
+        // Without `--`, a second operand is still a pathspec.
+        assert_eq!(
+            r("checkout", &["origin/main", "src"]),
+            Some("origin/main".to_owned())
+        );
+        assert_eq!(
+            r("restore", &["--source=origin/main", "."]),
+            Some("origin/main".to_owned())
+        );
+        assert_eq!(
+            r("restore", &["-s", "HEAD~1", "."]),
+            Some("HEAD~1".to_owned())
+        );
+        // HEAD is the tree's own revision, so it cannot desync anything.
+        assert_eq!(r("checkout", &["HEAD", "--", "."]), None);
+        assert_eq!(r("restore", &["--source", "@", "."]), None);
+        // Forms that read the index, move HEAD, or create a branch.
+        assert_eq!(r("checkout", &["--", "."]), None);
+        assert_eq!(r("checkout", &["."]), None);
+        assert_eq!(r("checkout", &["main"]), None);
+        assert_eq!(r("checkout", &["-b", "feature", "origin/main"]), None);
+        assert_eq!(r("checkout", &["--detach", "origin/main"]), None);
+        assert_eq!(r("restore", &["."]), None);
+        assert_eq!(r("reset", &["--hard", "origin/main"]), None);
     }
 
     #[test]
