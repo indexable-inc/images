@@ -44,12 +44,6 @@ in {
     enable = true;
     package = hyperionGameServer;
     inherit port;
-    # Bracketed, because bedwars builds its listen address by joining `--ip`
-    # and `--port` with a colon and then parsing the result: the module's
-    # default `::` becomes `::35565`, which is not an address, and the process
-    # panics before it binds. A workaround, not the fix -- the join belongs in
-    # the binary (ENG-10494).
-    address = "[::]";
     pki = {
       rootCaCert = "/var/lib/hyperion-pki/root_ca.crt";
       cert = "/var/lib/hyperion-pki/node.crt";
