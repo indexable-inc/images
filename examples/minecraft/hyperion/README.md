@@ -46,6 +46,49 @@ One shared secret rather than three certificates: every node gets the same CA
 key and mints its own leaf at activation, so nothing has to copy a certificate
 from one VM to another.
 
+## State of the deployment, 2026-07-27
+
+The three VMs exist in `us-west-1`. The two proxies hold public addresses,
+`15.204.22.195` and `15.204.22.196`. The game server runs; the fleet as a whole
+does not, and every remaining reason is a platform fault with a ticket, not
+something this directory can fix. Nothing here works around one.
+
+Fixed since this example landed:
+
+1. **Groups can be created.** `ix group create` failed because `vm_groups` is a
+   regional table with a foreign key into globally owned identity, which is a
+   class two earlier sweeps had removed everywhere except here and `volumes`.
+   ix#8841. `hyperion.gameAddress` was the workaround and is gone; the proxies
+   resolve the game server by name again.
+2. **The game server reaches `active`.** Four faults, all fixed in #4246: the
+   PKI material was unreadable by the two `DynamicUser` services that need it,
+   the world database opened relative to a read-only working directory, `$HOME`
+   was unset so the world cache had nowhere to go, and the listen address was
+   built by string concatenation.
+3. **The listen address is a `SocketAddr`.** hyperion#990 gives both events one
+   launcher, so `--ip ::` reaches the socket instead of panicking. The `[::]`
+   workaround this file carried is deleted.
+
+Open, and each one blocks the rest:
+
+- **A fresh machine cannot be configured.** `nix-daemon.socket` has
+  `ConditionPathIsReadWrite=/nix/var/nix/daemon-socket` and the base image does
+  not create it. ENG-10487.
+- **Every store path in the image belongs to nobody.** 1229 paths owned by
+  `65534:65534`, so logrotate refuses its own config, its check unit fails, and
+  `switch-to-configuration` exits 4 with the machine half switched. ENG-10512.
+- **A guest still gets 14 GB.** The size ceiling was removed at source today
+  (block volumes are provisioned lazily now), but no base image built from that
+  source has been published, so an apply still fills the disk part-way through
+  compiling. ENG-10522. This is a publish, not a code change.
+- **An existing VM cannot join a group.** `ix group add` returns an internal
+  server error and nothing logs why. ENG-10515. Until it is fixed, a VM has to
+  be created with `--group`, which is how `hyperion-game` got in.
+
+The first three are properties of one artifact. One base image built from
+current source and published carries all three fixes, and that is the next
+thing that has to happen for this example to run end to end.
+
 ## What this does not yet do
 
 Two things are unverified and would show up on first apply rather than at
@@ -54,40 +97,9 @@ evaluation:
 - **In-guest resolution of `*.ix.internal`.** The group DNS view exists, but
   the boot path passes `use_internal_dns: false` and guests are pointed at a
   public resolver, so whether a group member can resolve a peer's name from
-  inside has not been checked here. If it cannot, the fix is a
-  `networking.hosts` entry per peer, which needs a group address available at
-  evaluation time and `ix.networking.eastWest` exposes only a name.
+  inside has not been checked here.
 - **Group membership and IPv4 on a first apply.** `ix apply` on a flake target
   rejects `--group` and `--ipv4`, and does not read `ix.networking.groups` out
   of the evaluated system, so a first apply from nothing produces VMs in no
   group with no public address. Until that is fixed, create each VM once
   against an image with those flags, then converge with the command above.
-
-## State of the deployment, 2026-07-27
-
-The three VMs exist in `us-west-1`. The two proxies hold public addresses,
-`15.204.22.195` and `15.204.22.196`. Neither runs hyperion yet, and the reason
-is the platform rather than anything here. Three faults, in the order they
-were hit:
-
-1. **Groups cannot be created.** `ix group create hyperion` returns an
-   internal server error, and so does `ix apply <image> --group hyperion`. The
-   same create without the flag works in under two seconds. ENG-10486. The
-   whole shape depends on this: the game server has no public address, so the
-   group is the only route to it. `hyperion.gameAddress` exists as the
-   workaround and should go back to null the day groups work.
-2. **A fresh VM cannot be switched.** Every apply ended on `nix daemon socket
-   did not become ready`, which reads like a timeout. The cause is a missing
-   directory: `nix-daemon.socket` has
-   `ConditionPathIsReadWrite=/nix/var/nix/daemon-socket` and the base image
-   does not create it. ENG-10487. Creating it by hand got the next apply
-   further.
-3. **The guest cannot build this.** `ix apply` compiles the closure inside the
-   VM, from a cache holding the public world but nothing built privately, and
-   a guest gets a 14 GB root with no way to ask for more. A Rust game server
-   does not fit: the disk filled twice, once surfacing as a truncated download
-   and once as `No space left on device`. The same closure builds in minutes
-   on the Linux remote builder. ENG-10488.
-
-The topology, the certificates and the units are written and evaluate. What is
-missing is a way to get a large closure onto a machine.
