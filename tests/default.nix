@@ -1472,14 +1472,16 @@
     ];
   };
 
-  cargoUnitScopeAlphaChangedFixture = fs.toSource {
-    root = ./fixtures/cargo-unit-workspace-scope-alpha-changed;
-    fileset = fs.unions [
-      ./fixtures/cargo-unit-workspace-scope-alpha-changed/Cargo.lock
-      ./fixtures/cargo-unit-workspace-scope-alpha-changed/Cargo.toml
-      ./fixtures/cargo-unit-workspace-scope-alpha-changed/crates
-    ];
-  };
+  # Derived from the base tree rather than checked in beside it. The two differ
+  # by one crate's function bodies and are otherwise the same workspace by
+  # design, so a second copy on disk is duplication the clone gate charges for
+  # every time either side is edited, and a second place to forget when the
+  # fixture grows a target.
+  cargoUnitScopeAlphaChangedFixture = pkgs.runCommand "cargo-unit-workspace-scope-alpha-changed" {} ''
+    cp -R ${cargoUnitScopeFixture}/. "$out"
+    chmod -R u+w "$out"
+    substituteInPlace "$out/crates/alpha/src/lib.rs" --replace-fail 'alpha:' 'alpha changed:'
+  '';
 
   cargoUnitScopeLockChangedFixture = pkgs.runCommand "cargo-unit-workspace-scope-lock-changed" {} ''
     cp -R ${cargoUnitScopeFixture}/. "$out"
@@ -1522,9 +1524,14 @@
       src = cargoUnitScopeFixture;
     };
     alphaChanged = cargoUnitScopeWorkspace {
+      # Both, per the buildWorkspace docstring's rule for patched sources: local
+      # package scopes are carved from `workspaceRoot`, not from `src`, so
+      # leaving the root at the base tree silently rebuilds alpha from the
+      # unpatched body and the "changed crate rebuilds" assertion goes green on
+      # two identical inputs.
       name = "alpha-changed";
       src = cargoUnitScopeAlphaChangedFixture;
-      workspaceRoot = ./fixtures/cargo-unit-workspace-scope-alpha-changed;
+      workspaceRoot = cargoUnitScopeAlphaChangedFixture;
     };
     lockChanged = cargoUnitScopeWorkspace {
       name = "lock-changed";
