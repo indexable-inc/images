@@ -776,6 +776,32 @@
     };
   }
   {
+    tradeoffComments = {
+      topics = ["architecture" "agency"];
+      text = ''
+        Where code picks one option over others that a reader would also
+        consider, the comment says what was given up, not only what was
+        chosen: an alternative rejected silently gets re-proposed, and a cost
+        accepted silently gets discovered by whoever it lands on. Name the
+        alternative, the reason it lost, and what the choice costs. A cost
+        with nobody named to pay it is a cost nobody checked.
+      '';
+      reason = ''
+        Requested 2026-07-27 while designing the vDPA NIC path in ix
+        (ENG-10306), where every load-bearing decision had a rejected sibling
+        that a later reader would reach for first. The device index derives
+        from host_index rather than a new pool because vm_n_allocations is
+        already a race-safe per-node slot table -- unwritten, and the next
+        person adds the second allocator. Refusing an out-of-range slot beats
+        wrapping onto another VM's device or silently demoting to vhost-net,
+        both of which look like working systems. And capture refuses a
+        vdpa NIC rather than proceeding without a dirty log, which costs
+        those VMs fork entirely; that cost is the whole product question and
+        would have been invisible in a diff that only said what it did.
+      '';
+    };
+  }
+  {
     fenceReasons = {
       topics = ["architecture" "agency"];
       text = ''
