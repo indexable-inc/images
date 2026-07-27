@@ -539,6 +539,7 @@ in {
       # starship: installed by programs.starship (configured below)
       zellij # terminal multiplexer (tmux alternative, friendlier UI, pane layouts)
       indexPkgs.tmux # tmux wrapped with index's fleet defaults (truecolor + Claude Code 24-bit escape hatch via CLAUDE_CODE_TMUX_TRUECOLOR); sources personal ~/.tmux.conf last. Pinned via the `index` input.
+      indexPkgs.fleetview # `fleetview`: dispatch and watch a fleet of Claude Code sessions, each on its own PTY; attaches full-screen with ctrl-o to detach. Drives whatever `claude` is on PATH (deliberately unwrapped), so it follows the wrapper installed by programs.claude-code below.
       atuin # SQLite-backed shell history with fuzzy search + sync
       zoxide # smarter `cd` that ranks dirs by frecency (`z foo`)
       # iamb  # broken: compile error in nixpkgs (Matrix TUI client)
