@@ -12,9 +12,10 @@ use crate::{error, function, names, object, record};
 /// `crate_name` is the consuming crate's `CARGO_CRATE_NAME`, used to alias
 /// the plain `nif_init` entry the BEAM dlopens onto rustler's
 /// crate-prefixed one: rustler's `init!` exports `<crate>_nif_init` and
-/// only adds `nif_init` itself when cargo marks the package primary
-/// (`CARGO_PRIMARY_PACKAGE`), which a raw rustc replay like nix-cargo-unit
-/// never sets. `None` skips the alias (validation-only callers).
+/// only adds `nif_init` itself when `CARGO_PRIMARY_PACKAGE` or
+/// `RUSTLER_PRIMARY_NIF_INIT` is set, and a raw rustc replay like
+/// nix-cargo-unit sets neither. `None` skips the alias (validation-only
+/// callers), and so does a build where rustler already emits it.
 ///
 /// # Errors
 ///
@@ -60,9 +61,17 @@ pub fn render(
         .collect::<Result<Vec<_>, _>>()?;
 
     let native_module = format!("Elixir.{ns}.Native");
+    // Emit the alias only when rustler did not: `cargo` sets
+    // `CARGO_PRIMARY_PACKAGE` for the crate it was asked to build, so under
+    // a plain `cargo check -p <binding>` both definitions landed and every
+    // ex binding failed to compile with a duplicate `nif_init` (ENG-10198).
+    // Matching rustler's own condition (rustler_codegen::init) leaves
+    // exactly one definition in both build paths.
+    let rustler_emits_alias = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some()
+        || std::env::var_os("RUSTLER_PRIMARY_NIF_INIT").is_some();
     // Inside the glue module on purpose: rustler's generated entry is a
     // private sibling, unreachable from anywhere else.
-    let init_alias = crate_name.map(|name| {
+    let init_alias = crate_name.filter(|_| !rustler_emits_alias).map(|name| {
         let prefixed = format_ident!("{name}_nif_init");
         quote! {
             #[unsafe(no_mangle)]

@@ -3,7 +3,7 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
-use unibind_core::render::{RenderError, name_ident};
+use unibind_core::render::{Ownership, RenderError, name_ident};
 
 use crate::{error, names, ty};
 
@@ -58,7 +58,7 @@ pub fn borrowed_params(function: &ir::Function, user: &Ident) -> Result<Params, 
         let ident = name_ident(&names::ex_arg_name(arg))?;
         let spelled = ty::rust_type(&arg.ty, user).map_err(|error| at_arg(arg, &error))?;
         params.push(quote!(#ident: #spelled));
-        forwarded.push(quote!(#ident));
+        forwarded.push(ty::forward(&ident, &arg.ty, Ownership::Declared));
     }
     Ok(Params { params, forwarded })
 }
@@ -72,7 +72,7 @@ fn owned_params(function: &ir::Function, user: &Ident) -> Result<Params, RenderE
         let ident = name_ident(&names::ex_arg_name(arg))?;
         let spelled = ty::owned_type(&arg.ty, user).map_err(|error| at_arg(arg, &error))?;
         params.push(quote!(#ident: #spelled));
-        forwarded.push(ty::reborrow(&ident, &arg.ty));
+        forwarded.push(ty::forward(&ident, &arg.ty, Ownership::Owned));
     }
     Ok(Params { params, forwarded })
 }
@@ -96,14 +96,15 @@ fn render_sync_fn(function: &ir::Function, user: &Ident) -> Result<TokenStream, 
     let call = quote!(super::#user::#rust_name(#(#forwarded),*));
     let signature_and_body = if let Some(throws) = &function.throws {
         let term = error::term_ident(throws);
+        let wired = ty::to_wire_ok(&call, function.ret.as_ref());
         SignatureAndBody {
             ret: quote!(::std::result::Result<#ok_ty, #term>),
-            body: quote!(#call.map_err(#term::from)),
+            body: quote!(#wired.map_err(#term::from)),
         }
     } else {
         SignatureAndBody {
             ret: ok_ty,
-            body: call,
+            body: ty::to_wire_value(&call, function.ret.as_ref()),
         }
     };
     let SignatureAndBody { ret, body } = signature_and_body;
@@ -136,15 +137,17 @@ fn render_async_fn(function: &ir::Function, user: &Ident) -> Result<TokenStream,
     let call = quote!(super::#user::#rust_name(#(#forwarded),*).await);
     let fut = function.throws.as_ref().map_or_else(
         || {
+            let wired = ty::to_wire_value(&call, function.ret.as_ref());
             quote! {
                 async move {
-                    ::std::result::Result::<_, ::unibind_ex_runtime::Never>::Ok(#call)
+                    ::std::result::Result::<_, ::unibind_ex_runtime::Never>::Ok(#wired)
                 }
             }
         },
         |throws| {
             let term = error::term_ident(throws);
-            quote!(async move { #call.map_err(#term::from) })
+            let wired = ty::to_wire_ok(&call, function.ret.as_ref());
+            quote!(async move { #wired.map_err(#term::from) })
         },
     );
     Ok(quote! {
@@ -181,6 +184,7 @@ fn render_stream_fn(
     let call = quote!(super::#user::#rust_name(#(#forwarded),*));
     if let Some(throws) = &function.throws {
         let term = error::term_ident(throws);
+        let wired = ty::to_wire_stream(&quote!(stream), item);
         return Ok(quote! {
             #attr
             fn #rust_name(
@@ -195,13 +199,14 @@ fn render_stream_fn(
             > {
                 match #call {
                     ::std::result::Result::Ok(stream) => {
-                        ::unibind_ex_runtime::spawn_stream(env, reference, stream).map(Ok)
+                        ::unibind_ex_runtime::spawn_stream(env, reference, #wired).map(Ok)
                     }
                     ::std::result::Result::Err(error) => Ok(Err(#term::from(error))),
                 }
             }
         });
     }
+    let wired = ty::to_wire_stream(&call, item);
     Ok(quote! {
         #attr
         fn #rust_name(
@@ -209,7 +214,7 @@ fn render_stream_fn(
             reference: ::rustler::Term,
             #(#params),*
         ) -> ::rustler::NifResult<::rustler::ResourceArc<::unibind_ex_runtime::StreamHandle>> {
-            ::unibind_ex_runtime::spawn_stream(env, reference, #call)
+            ::unibind_ex_runtime::spawn_stream(env, reference, #wired)
         }
     })
 }

@@ -36,6 +36,20 @@ pub fn grant(handle: &StreamHandle, n: u64) {
     handle.credits.add_permits(granted);
 }
 
+/// Re-wrap a stream whose items need a wire conversion before rustler can
+/// encode them (`UniStream<Vec<u8>>` into `UniStream<Bytes>`).
+///
+/// Generated glue calls this only when the item type carries binary data;
+/// every other stream reaches [`spawn_stream`] untouched.
+pub fn map_stream<T, U, F>(stream: UniStream<T>, f: F) -> UniStream<U>
+where
+    T: Send + 'static,
+    U: Send + 'static,
+    F: FnMut(T) -> U + Send + 'static,
+{
+    UniStream::new(futures::StreamExt::map(stream, f))
+}
+
 /// Drive `stream` on the shared runtime, sending the calling process one
 /// `{:unibind_stream, reference, {:item, value}}` per granted credit and a
 /// final `{:unibind_stream, reference, :done}`.

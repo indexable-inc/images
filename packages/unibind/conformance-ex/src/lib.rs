@@ -97,6 +97,70 @@ mod _unibind_conformance {
         values
     }
 
+    /// Round-trip a borrowed byte slice; binaries cross as binaries, not
+    /// as lists of integers.
+    pub fn echo_bytes(data: &[u8]) -> Vec<u8> {
+        data.to_vec()
+    }
+
+    /// Round-trip an owned byte buffer.
+    pub fn echo_bytes_owned(data: Vec<u8>) -> Vec<u8> {
+        data
+    }
+
+    /// The length of a borrowed slice: proves the argument arrived whole
+    /// rather than as text, whatever bytes it holds.
+    pub fn bytes_len(data: &[u8]) -> usize {
+        data.len()
+    }
+
+    /// Round-trip an optional binary; `nil` crosses as `None`.
+    pub fn echo_bytes_option(data: Option<Vec<u8>>) -> Option<Vec<u8>> {
+        data
+    }
+
+    /// Round-trip a borrowed optional binary, the other `Option` shape the
+    /// IR allows in argument position.
+    pub fn echo_bytes_option_ref(data: Option<&[u8]>) -> Option<Vec<u8>> {
+        data.map(<[u8]>::to_vec)
+    }
+
+    /// Round-trip a list of binaries: bytes nested one container deep.
+    pub fn echo_bytes_list(data: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+        data
+    }
+
+    /// Round-trip a string-keyed map of binaries: bytes as a map value.
+    pub fn echo_bytes_map(data: HashMap<String, Vec<u8>>) -> HashMap<String, Vec<u8>> {
+        data
+    }
+
+    /// Binaries through a dirty scheduler, where the wrapper is a sync NIF.
+    #[unibind(blocking)]
+    pub fn blocking_bytes(data: &[u8]) -> Vec<u8> {
+        data.to_vec()
+    }
+
+    /// Binaries through a `Result`, where the value rides inside `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// When `fail` is true.
+    pub fn maybe_bytes(fail: bool) -> Result<Vec<u8>, ConformanceError> {
+        if fail {
+            return Err(ConformanceError::Gone {
+                message: "conformance bytes failure".to_owned(),
+            });
+        }
+        Ok(vec![0, 255, 128])
+    }
+
+    /// Binaries through the async path, where owned arguments move into a
+    /// `'static` future.
+    pub async fn echo_bytes_async(data: Vec<u8>) -> Vec<u8> {
+        data
+    }
+
     /// Round-trip a record struct.
     pub fn echo_record(sample: Sample) -> Sample {
         sample
@@ -253,6 +317,17 @@ mod _unibind_conformance {
     /// Yield `0..n`, one item per granted credit.
     pub fn count(n: u64) -> UniStream<u64> {
         UniStream::new(futures::stream::iter(0..n))
+    }
+
+    /// Yield `n` binaries, proving bytes cross the stream codec.
+    pub fn count_blobs(n: u64) -> UniStream<Vec<u8>> {
+        // A NUL and a high byte in every item: a UTF-8 codec would mangle
+        // both, so the assertion in the suite is not just about arity.
+        UniStream::new(futures::stream::iter((0..n).map(|index| {
+            let mut blob = vec![0_u8, 255];
+            blob.extend_from_slice(index.to_string().as_bytes());
+            blob
+        })))
     }
 
     /// Yield `n` records, proving structs cross the stream codec.

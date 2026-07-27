@@ -23,6 +23,9 @@ pub fn render(interface: &ir::Interface) -> String {
     }
     let _ = writeln!(out, "\n  alias {ns}.Native");
 
+    if interface.has_streams() {
+        calls::stream_handle_module(&mut out);
+    }
     for record in &interface.records {
         render_record(&mut out, record, interface, &ns);
     }
@@ -41,9 +44,13 @@ pub fn render(interface: &ir::Interface) -> String {
             ret_override: None,
         };
         calls::render_fn(&mut out, function, &target, interface, &ns, "  ");
+        if matches!(function.ret, Some(ir::Type::Stream(_))) {
+            out.push('\n');
+            calls::render_stream_handle_fn(&mut out, function, &target, interface, &ns, "  ");
+        }
     }
     if interface.has_streams() {
-        calls::stream_helper(&mut out);
+        calls::stream_helper(&mut out, &ns);
     }
     out.push_str("end\n");
     out

@@ -196,16 +196,43 @@ fn ex_host_files_snapshot() {
 #[test]
 fn ex_rejects_what_the_glue_rejects() {
     let mut interface = sample_interface();
-    interface.functions[0].args[0].ty = ir::Type::Bytes { owned: false };
+    interface.functions[0].args[0].ty = ir::Type::Stream(Box::new(owned_string()));
     let emitter = ExEmitter {
         nif_soname: "libsample.so".to_owned(),
     };
     let Err(error) = emitter.emit(&interface) else {
-        panic!("bytes are rejected");
+        panic!("a stream argument is rejected");
     };
     assert!(
-        error.message.contains("binary payloads"),
+        error.message.contains("whole return type"),
         "{}",
         error.message
+    );
+}
+
+/// Binaries reach the Elixir side as `binary()`, not a list of integers:
+/// the glue carries them through `unibind_ex_runtime::Bytes`.
+#[test]
+fn ex_spells_binaries_as_binary() {
+    let mut interface = sample_interface();
+    interface.functions[0].args[0].ty = ir::Type::Bytes { owned: false };
+    interface.functions[1].ret = Some(ir::Type::Bytes { owned: true });
+    let emitter = ExEmitter {
+        nif_soname: "libsample.so".to_owned(),
+    };
+    let files = emitter.emit(&interface).expect("emits");
+    let wrapper = files
+        .iter()
+        .find(|file| file.path == "lib/sample.ex")
+        .expect("wrapper module");
+    assert!(
+        wrapper.contents.contains("@spec rows(binary()"),
+        "{}",
+        wrapper.contents
+    );
+    assert!(
+        wrapper.contents.contains(":: binary()"),
+        "{}",
+        wrapper.contents
     );
 }

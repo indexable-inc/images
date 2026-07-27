@@ -13,4 +13,8 @@ exclude =
 exclude =
   if System.get_env("IX_MCP_GMAIL_EX"), do: exclude, else: [:gmail_ex | exclude]
 
+# Same contract for the dashboard binding (IX_MCP_DASHBOARD_EX).
+exclude =
+  if System.get_env("IX_MCP_DASHBOARD_EX"), do: exclude, else: [:dashboard_ex | exclude]
+
 ExUnit.start(exclude: exclude)

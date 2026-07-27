@@ -24,7 +24,8 @@ defmodule IxMcp.Api do
     IxMcp.PrWatch,
     IxMcp.Tui,
     IxMcp.TuiLocal,
-    IxMcp.Gmail
+    IxMcp.Gmail,
+    IxMcp.Dashboard
   ]
 
   @type row :: %{

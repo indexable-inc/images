@@ -13,7 +13,8 @@ pub fn typespec(ty: &ir::Type, interface: &ir::Interface, ns: &str) -> String {
         ir::Type::Int(_) => "integer()".to_owned(),
         ir::Type::Float(_) => "float()".to_owned(),
         ir::Type::String { .. } | ir::Type::Path { .. } => "String.t()".to_owned(),
-        // Rejected before any spec is rendered; spelled for completeness.
+        // The glue carries these through `unibind_ex_runtime::Bytes`, whose
+        // codec puts them on the BEAM as binaries, not integer lists.
         ir::Type::Bytes { .. } => "binary()".to_owned(),
         ir::Type::Option(inner) => format!("{} | nil", typespec(inner, interface, ns)),
         ir::Type::Vec(inner) => format!("[{}]", typespec(inner, interface, ns)),

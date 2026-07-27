@@ -115,20 +115,22 @@ fn render_method(
     let handle_ty = quote!(::rustler::ResourceArc<super::#user::#obj_ident>);
     if let Some(throws) = &method.throws {
         let term = error::term_ident(throws);
+        let wired = ty::to_wire_ok(&call, method.ret.as_ref());
         return Ok(quote! {
             #attr
             fn #wrapper(
                 handle: #handle_ty,
                 #(#params),*
             ) -> ::std::result::Result<#ok_ty, #term> {
-                #call.map_err(#term::from)
+                #wired.map_err(#term::from)
             }
         });
     }
+    let wired = ty::to_wire_value(&call, method.ret.as_ref());
     Ok(quote! {
         #attr
         fn #wrapper(handle: #handle_ty, #(#params),*) -> #ok_ty {
-            #call
+            #wired
         }
     })
 }

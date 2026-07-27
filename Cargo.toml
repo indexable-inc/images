@@ -78,6 +78,7 @@ members = [
   "packages/darwin-deploy",
   "packages/dashboard/dashboard",
   "packages/dashboard/dashboard-core",
+  "packages/dashboard/ex",
   "packages/efx/cli",
   "packages/efx/engine",
   "packages/efx/ir",
