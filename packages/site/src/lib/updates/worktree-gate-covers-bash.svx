@@ -6,7 +6,7 @@ tags: [claude-code, claude-hooks, agent-prompt, workflow]
 links:
   - label: index#4216 (rule permitted working in a primary checkout)
     href: https://github.com/indexable-inc/index/issues/4216
-  - label: index#4218 (git-guard: mutating commands in a protected checkout)
+  - label: "index#4218 (git-guard: mutating commands in a protected checkout)"
     href: https://github.com/indexable-inc/index/issues/4218
   - label: index#4225 (kernel Cmd bypasses it, open)
     href: https://github.com/indexable-inc/index/issues/4225
