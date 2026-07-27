@@ -351,17 +351,18 @@ fn discards_worktree(sub: &str, args: &[String]) -> Option<&'static str> {
     let flag = |s: char, l: &str| has_flag(args, s, l);
     match sub {
         // --hard throws the tree away; --merge and --keep discard a subset.
-        "reset" if args.iter().any(|a| ["--hard", "--merge", "--keep"].contains(&a.as_str())) => {
+        "reset"
+            if args
+                .iter()
+                .any(|a| ["--hard", "--merge", "--keep"].contains(&a.as_str())) =>
+        {
             Some("overwrites the working tree from a commit, discarding every uncommitted change")
         }
         // Branch-switching checkout refuses to clobber; the pathspec form
         // (`-- <path>`, or a bare `.`) and -f do not.
-        "checkout"
-            if flag('f', "--force")
-                || args.iter().any(|a| a == "--" || a == ".") =>
-        {
-            Some("restores the named paths from the index or a commit, discarding their uncommitted changes")
-        }
+        "checkout" if flag('f', "--force") || args.iter().any(|a| a == "--" || a == ".") => Some(
+            "restores the named paths from the index or a commit, discarding their uncommitted changes",
+        ),
         "switch" if flag('f', "--force") || args.iter().any(|a| a == "--discard-changes") => {
             Some("switches branches discarding local changes")
         }
@@ -381,12 +382,81 @@ fn discards_worktree(sub: &str, args: &[String]) -> Option<&'static str> {
         // tree; every other form moves work out of it or destroys saved work.
         "stash"
             if !matches!(
-                args.iter().find(|a| !a.starts_with('-')).map(String::as_str),
+                args.iter()
+                    .find(|a| !a.starts_with('-'))
+                    .map(String::as_str),
                 Some("list" | "show" | "create")
             ) =>
         {
             Some("moves uncommitted work off the working tree (or destroys already-stashed work)")
         }
+        _ => None,
+    }
+}
+
+/// Classify a git subcommand as one that writes to the repository, the index or
+/// the working tree, naming what it changes. `None` means the call only reads.
+///
+/// This is the broad gate (index#4218). `discards_worktree` above asks the
+/// narrow question "would this destroy someone's uncommitted work"; this one
+/// asks "would this change a checkout that is not yours at all". A protected
+/// primary checkout was found on a branch deleted upstream, 604 commits behind
+/// main, with 534 files staged by nobody -- reached entirely through `git add`
+/// and `git switch`, neither of which loses anything and neither of which the
+/// narrow gate sees.
+///
+/// The set is closed and enumerated rather than "everything not known to be
+/// read-only", to keep the guard's fail-open posture: a subcommand nobody has
+/// classified must not turn into a refusal the first time someone runs it.
+///
+/// Three deliberate holes, all commands this guard's own denial text
+/// recommends: `git stash list|show|create`, `git branch <name>` and `git
+/// worktree add` are how a caller gets work out of a protected checkout, so
+/// denying them would leave the refusal with no exit.
+fn mutates_checkout(sub: &str, args: &[String]) -> Option<&'static str> {
+    // git's universal "print what I would do"; every subcommand below that
+    // accepts it honors it, and the ones that do not reject it and mutate
+    // nothing either way.
+    if args.iter().any(|a| a == "--dry-run") {
+        return None;
+    }
+    // `-n` is only a dry run for the subcommands listed here: on `commit` it is
+    // `--no-verify` and on `clean` it pairs with `-f`.
+    let dry_n = || has_flag(args, 'n', "--dry-run");
+    match sub {
+        "add" => Some("stages changes into the index that every session here shares"),
+        "am" => Some("applies a mailbox of patches onto the current branch"),
+        // `--check`/`--stat`/`--numstat`/`--summary` only report on the patch.
+        "apply"
+            if !args
+                .iter()
+                .any(|a| ["--check", "--stat", "--numstat", "--summary"].contains(&a.as_str())) =>
+        {
+            Some("writes a patch into the working tree or the index")
+        }
+        "checkout" => Some("moves HEAD, or overwrites paths in the working tree"),
+        "cherry-pick" => Some("commits another branch's change onto the current one"),
+        "clean" if has_flag(args, 'f', "--force") && !dry_n() => Some("deletes untracked files"),
+        "commit" => Some("writes a commit out of the index that every session here shares"),
+        "merge" => Some("merges into the current branch"),
+        "mv" if !dry_n() => Some("renames tracked paths"),
+        "pull" => Some("fetches, then merges or rebases the current branch"),
+        "rebase" => Some("rewrites the current branch"),
+        "reset" => Some("moves HEAD, or rewrites the index"),
+        "restore" => Some("restores paths over the index or the working tree"),
+        "revert" => Some("commits the inverse of a change onto the current branch"),
+        "rm" if !dry_n() => Some("deletes tracked paths"),
+        "stash"
+            if !matches!(
+                args.iter()
+                    .find(|a| !a.starts_with('-'))
+                    .map(String::as_str),
+                Some("list" | "show" | "create")
+            ) =>
+        {
+            Some("moves uncommitted work off the working tree")
+        }
+        "switch" => Some("switches the checkout to another branch"),
         _ => None,
     }
 }
@@ -461,7 +531,10 @@ fn origin_slug(git: &str, top: &str) -> String {
         .unwrap_or_default();
     regex::Regex::new(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$")
         .ok()
-        .and_then(|re| re.captures(url.trim()).map(|c| format!("{}/{}", &c[1], &c[2])))
+        .and_then(|re| {
+            re.captures(url.trim())
+                .map(|c| format!("{}/{}", &c[1], &c[2]))
+        })
         .or_else(|| {
             std::path::Path::new(top)
                 .file_name()
@@ -582,6 +655,30 @@ fn desync_message(git: &str, top: &str, sub: &str, rev: &str) -> String {
     )
 }
 
+/// The refusal for mutating a protected primary checkout at all. Separate from
+/// `deny_message` and `desync_message` because nothing is necessarily being
+/// lost and no foreign revision is being read: the harm is that a checkout
+/// every session on the machine shares stops being the tree they all assume
+/// (index#4218).
+fn mutation_message(git: &str, top: &str, sub: &str, effect: &str) -> String {
+    let slug = origin_slug(git, top);
+    format!(
+        "Refusing `git {sub}` in {top}.\n\n\
+         {top} is a protected primary checkout -- shared by every agent session on this \
+         machine, and not yours to change. `git {sub}` {effect}. Never work in a primary \
+         checkout, not even when nothing would be lost: this one was found on a branch that \
+         had been deleted upstream, 604 commits behind main, with 534 files staged by nobody. \
+         No edit tool was involved. `git add` and `git switch` through Bash did all of it \
+         (index#4218, index#4216).\n\n\
+         Do the work in a worktree of your own, where every git command is yours to run:\n\
+         \x20   git -C {top} worktree add /tmp/worktree/{slug}/<name> -b <branch> origin/main\n\
+         \x20   git -C /tmp/worktree/{slug}/<name> submodule update --init --recursive\n\n\
+         Reading here is always fine: status, log, diff, show, grep, ls-files, rev-parse, \
+         branch, fetch, worktree list/add, and anything with --dry-run all still run.\n\n\
+         (git-guard hook, index#4218; kill switch CLAUDE_CODE_DISABLE_GIT_GUARD=1)"
+    )
+}
+
 /// Judge one parsed git call. `Some(reason)` means refuse.
 ///
 /// This is where the guard stops failing open. Up to the point where the target
@@ -592,7 +689,8 @@ fn desync_message(git: &str, top: &str, sub: &str, rev: &str) -> String {
 fn judge(git: &str, protected: &[String], call: &GitCall) -> Option<String> {
     let effect = discards_worktree(&call.sub, &call.args);
     let other_rev = reads_other_revision(&call.sub, &call.args);
-    if effect.is_none() && other_rev.is_none() {
+    let mutation = mutates_checkout(&call.sub, &call.args);
+    if effect.is_none() && other_rev.is_none() && mutation.is_none() {
         return None;
     }
     let sub = &call.sub;
@@ -649,43 +747,60 @@ fn judge(git: &str, protected: &[String], call: &GitCall) -> Option<String> {
     }
     // A clean tree has nothing to destroy, but reading another revision into it
     // still leaves every session out of sync with its own HEAD.
-    other_rev.map(|rev| desync_message(git, &top, sub, rev))
+    if let Some(rev) = other_rev {
+        return Some(desync_message(git, &top, sub, rev));
+    }
+    // Neither of the specific harms applies, so this is the broad rule: the
+    // checkout is not yours and the command writes to it (index#4218).
+    mutation.map(|effect| mutation_message(git, &top, sub, effect))
 }
 
-/// `PreToolUse(Bash)`: refuse a git command aimed at a shared primary checkout
-/// that would destroy uncommitted work there, or leave the tree out of sync
-/// with its own HEAD.
-///
-/// Why a hook and not a git hook: git has no `pre-reset`, `pre-checkout`,
-/// `pre-clean` or `pre-stash`, `post-checkout` runs after the damage, and
-/// `reference-transaction` never fires for `git clean` or for a `reset --hard`
-/// that does not move HEAD. `PreToolUse` is the only seam that sees the command
-/// before it runs (ENG-9964).
-pub fn git_guard() {
-    if crate::flag_set("CLAUDE_CODE_DISABLE_GIT_GUARD") {
-        return;
-    }
-    let Some(payload) = payload() else { return };
-    if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
-        return;
-    }
-    let protected = crate::primary_checkouts();
-    if protected.is_empty() {
-        return;
-    }
-    let git = std::env::var("IX_GIT").unwrap_or_else(|_| "git".to_owned());
-    let mut cwd = std::path::PathBuf::from(
-        payload
-            .get("cwd")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map_or_else(
-                || std::env::var("PWD").unwrap_or_else(|_| ".".to_owned()),
-                str::to_owned,
-            ),
-    );
+/// Everything `git_guard` reads from the process environment, so that the
+/// decision below is a pure function of its inputs and the tests can drive it
+/// without a real hook invocation and without mutating the environment.
+struct GitGuardEnv {
+    /// Kill switch `CLAUDE_CODE_DISABLE_GIT_GUARD`.
+    disabled: bool,
+    /// The `git` to shell out to: `IX_GIT` from the wrapper, else PATH.
+    git: String,
+    /// The `primaryCheckouts` globs. Empty means the guard is not installed.
+    protected: Vec<String>,
+    /// Where a statement runs when the payload carries no `cwd`.
+    fallback_cwd: std::path::PathBuf,
+}
 
-    for stmt in expanded_statements(&command_of(&payload)) {
+impl GitGuardEnv {
+    fn read() -> Self {
+        Self {
+            disabled: crate::flag_set("CLAUDE_CODE_DISABLE_GIT_GUARD"),
+            git: std::env::var("IX_GIT").unwrap_or_else(|_| "git".to_owned()),
+            protected: crate::primary_checkouts(),
+            fallback_cwd: std::path::PathBuf::from(
+                std::env::var("PWD").unwrap_or_else(|_| ".".to_owned()),
+            ),
+        }
+    }
+}
+
+/// The whole decision: `Some(reason)` refuses the Bash call, `None` allows it.
+///
+/// Every early return here is a fail-open: kill switch, non-Bash tool, no
+/// protected list, a payload shape that carries no command. Only `judge` ever
+/// refuses.
+fn git_guard_decision(env: &GitGuardEnv, payload: &Value) -> Option<String> {
+    if env.disabled || env.protected.is_empty() {
+        return None;
+    }
+    if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
+        return None;
+    }
+    let mut cwd = payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map_or_else(|| env.fallback_cwd.clone(), std::path::PathBuf::from);
+
+    for stmt in expanded_statements(&command_of(payload)) {
         let Some(run) = invocation(&stmt) else {
             continue;
         };
@@ -703,10 +818,35 @@ pub fn git_guard() {
         let Some(call) = parse_git_call(run.args, &cwd) else {
             continue;
         };
-        if let Some(reason) = judge(&git, &protected, &call) {
-            deny(reason);
-            return;
+        if let Some(reason) = judge(&env.git, &env.protected, &call) {
+            return Some(reason);
         }
+    }
+    None
+}
+
+/// `PreToolUse(Bash)`: refuse a git command that would mutate a shared primary
+/// checkout -- by destroying uncommitted work there (ENG-9964), by leaving the
+/// tree out of sync with its own HEAD (index#4211), or simply by writing to a
+/// checkout that belongs to every session and to none (index#4218).
+///
+/// Why a hook and not a git hook: git has no `pre-reset`, `pre-checkout`,
+/// `pre-clean` or `pre-stash`, `post-checkout` runs after the damage, and
+/// `reference-transaction` never fires for `git clean` or for a `reset --hard`
+/// that does not move HEAD. `PreToolUse` is the only seam that sees the command
+/// before it runs (ENG-9964).
+///
+/// Why here and not in `worktree-guard`: that guard judges the target path of
+/// an edit tool and never sees Bash, so `git add` and `git switch` walked
+/// straight past it (index#4218).
+pub fn git_guard() {
+    let env = GitGuardEnv::read();
+    if env.disabled {
+        return;
+    }
+    let Some(payload) = payload() else { return };
+    if let Some(reason) = git_guard_decision(&env, &payload) {
+        deny(reason);
     }
 }
 
@@ -722,13 +862,85 @@ fn resolve(base: &std::path::Path, arg: &str) -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use serde_json::{Value, json};
+
     use super::{
-        discards_worktree, expanded_statements, grep_walks_tree, has_flag, is_recursive_flag,
-        parse_git_call, reads_other_revision, statements,
+        GitGuardEnv, discards_worktree, expanded_statements, git_guard_decision, grep_walks_tree,
+        has_flag, is_recursive_flag, mutates_checkout, parse_git_call, reads_other_revision,
+        statements,
     };
 
     fn toks(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// Skip the repo-backed tests where `git` is absent (minimal sandboxes),
+    /// so the suite stays green there rather than failing on a missing tool.
+    fn git_available() -> bool {
+        Command::new("git").arg("--version").output().is_ok()
+    }
+
+    /// `GIT_CONFIG_{GLOBAL,SYSTEM}` are pinned off so the fixture does not
+    /// inherit a developer's hooks path, signing key or default branch.
+    fn run_git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} in {}", dir.display());
+    }
+
+    /// A throwaway primary checkout with one commit, under a canonicalized
+    /// root: git's `--show-toplevel` resolves symlinks and macOS `TMPDIR` is
+    /// one, so an unresolved path would never match a protected glob.
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        primary: PathBuf,
+    }
+
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonical tempdir");
+        let primary = root.join("primary");
+        std::fs::create_dir(&primary).expect("mkdir primary");
+        run_git(&primary, &["init", "--quiet"]);
+        run_git(&primary, &["config", "user.email", "guard@example.com"]);
+        run_git(&primary, &["config", "user.name", "guard"]);
+        std::fs::write(primary.join("README"), "seed\n").expect("write README");
+        run_git(&primary, &["add", "README"]);
+        run_git(&primary, &["commit", "--quiet", "-m", "seed"]);
+        Fixture {
+            _dir: dir,
+            root,
+            primary,
+        }
+    }
+
+    fn guard_env(protected: &[&str]) -> GitGuardEnv {
+        GitGuardEnv {
+            disabled: false,
+            git: "git".to_owned(),
+            protected: protected.iter().map(|s| (*s).to_owned()).collect(),
+            // Distinct from any fixture path: a test that accidentally relied
+            // on the fallback must not silently land inside a protected glob.
+            fallback_cwd: PathBuf::from("/nonexistent/fallback"),
+        }
+    }
+
+    fn bash(cwd: &Path, command: &str) -> Value {
+        json!({
+            "tool_name": "Bash",
+            "cwd": cwd.to_str().expect("utf8 cwd"),
+            "tool_input": {"command": command},
+        })
     }
 
     #[test]
@@ -880,6 +1092,253 @@ mod tests {
         assert!(!d("restore", &["--staged", "."]));
         assert!(!d("status", &[]));
         assert!(!d("commit", &["-am", "x"]));
+    }
+
+    #[test]
+    fn mutating_git_classification() {
+        let m = |sub: &str, a: &[&str]| mutates_checkout(sub, &toks(a)).is_some();
+        // index#4218: the two that reached the shared checkout, plus the rest
+        // of the enumerated set.
+        assert!(m("add", &["-A"]));
+        assert!(m("switch", &["main"]));
+        for sub in [
+            "am",
+            "apply",
+            "checkout",
+            "cherry-pick",
+            "commit",
+            "merge",
+            "mv",
+            "pull",
+            "rebase",
+            "reset",
+            "restore",
+            "revert",
+            "rm",
+            "stash",
+        ] {
+            assert!(m(sub, &[]), "{sub}");
+        }
+        assert!(m("clean", &["-fd"]));
+        // Read-only git in a protected checkout has to keep working, or the
+        // guard is switched off within the hour.
+        for sub in [
+            "status",
+            "log",
+            "diff",
+            "show",
+            "rev-parse",
+            "ls-files",
+            "branch",
+            "worktree",
+            "fetch",
+            "grep",
+            "blame",
+            "describe",
+            "remote",
+            "push",
+            "tag",
+        ] {
+            assert!(!m(sub, &[]), "{sub}");
+        }
+        // `--dry-run` is git's universal "print what I would do".
+        assert!(!m("add", &["--dry-run", "."]));
+        assert!(!m("commit", &["--dry-run"]));
+        assert!(!m("rm", &["-n", "README"]));
+        assert!(!m("mv", &["-n", "a", "b"]));
+        assert!(!m("clean", &["-nd"]));
+        assert!(!m("clean", &[]));
+        // `commit -n` is --no-verify, not a dry run; it must still be denied.
+        assert!(m("commit", &["-n", "-m", "x"]));
+        // `apply` in its reporting forms writes nothing.
+        assert!(!m("apply", &["--check", "p.patch"]));
+        assert!(!m("apply", &["--stat", "p.patch"]));
+        // The escape hatches the denial texts recommend must survive the guard,
+        // or the advice is a dead end.
+        assert!(!m("stash", &["create"]));
+        assert!(!m("stash", &["list"]));
+        assert!(!m("stash", &["show"]));
+        assert!(!m("branch", &["rescue/2026-07-27"]));
+        assert!(!m(
+            "worktree",
+            &["add", "/tmp/worktree/o/r/n", "-b", "b", "origin/main"]
+        ));
+    }
+
+    #[test]
+    fn mutating_git_in_a_protected_checkout_is_denied() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git add -A"))
+            .expect("git add in a protected primary checkout is denied");
+        // The message has to name the path and the way out, or the agent
+        // cannot act on it.
+        assert!(
+            reason.contains(fx.primary.to_str().expect("utf8")),
+            "{reason}"
+        );
+        assert!(reason.contains("worktree add /tmp/worktree/"), "{reason}");
+        // The tree is clean and nothing here loses work: this is exactly the
+        // hole the narrow ENG-9964 gate left open.
+        for cmd in [
+            "git add -A",
+            "git commit -m wip",
+            "git switch -c topic",
+            "git checkout -b topic",
+            "git restore --staged .",
+            "git reset --soft HEAD~1",
+            "git merge origin/main",
+            "git rebase origin/main",
+            "git cherry-pick deadbeef",
+            "git revert HEAD",
+            "git apply /tmp/p.patch",
+            "git rm README",
+            "git mv README R2",
+            "git pull",
+        ] {
+            assert!(
+                git_guard_decision(&env, &bash(&fx.primary, cmd)).is_some(),
+                "{cmd}"
+            );
+        }
+        // The evasions the parser already handles must reach the new rule too.
+        assert!(
+            git_guard_decision(&env, &bash(&fx.root, "cd primary && git add -A")).is_some(),
+            "cd into the checkout"
+        );
+        let dashc = format!("git -C {} add -A", fx.primary.display());
+        assert!(
+            git_guard_decision(&env, &bash(&fx.root, &dashc)).is_some(),
+            "-C into the checkout"
+        );
+        let wrapped = format!("bash -c 'git -C {} commit -am wip'", fx.primary.display());
+        assert!(
+            git_guard_decision(&env, &bash(&fx.root, &wrapped)).is_some(),
+            "buried in bash -c"
+        );
+    }
+
+    #[test]
+    fn read_only_git_in_a_protected_checkout_is_allowed() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        for cmd in [
+            "git status --porcelain",
+            "git log --oneline -5",
+            "git diff",
+            "git show HEAD",
+            "git rev-parse HEAD",
+            "git ls-files",
+            "git branch",
+            "git branch -a",
+            "git worktree list",
+            "git fetch origin",
+            "git grep -n seed",
+            "git add --dry-run .",
+            "git clean -nd",
+            "git stash list",
+            "git stash create",
+            "git apply --check /tmp/p.patch",
+            "git worktree add /tmp/worktree/o/r/n -b b origin/main",
+            // A literal mention is not a command.
+            "echo 'git add -A'",
+        ] {
+            assert_eq!(
+                git_guard_decision(&env, &bash(&fx.primary, cmd)),
+                None,
+                "{cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn mutating_git_in_a_linked_worktree_is_allowed() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let linked = fx.root.join("wt");
+        run_git(
+            &fx.primary,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                linked.to_str().expect("utf8"),
+                "-b",
+                "topic",
+            ],
+        );
+        // The glob deliberately covers the linked worktree as well, so the
+        // only thing that can allow it is the private-git-dir check.
+        let env = guard_env(&[&format!("{}/*", fx.root.display())]);
+        assert!(
+            git_guard_decision(&env, &bash(&fx.primary, "git add -A")).is_some(),
+            "the primary is still protected under the same glob"
+        );
+        for cmd in ["git add -A", "git commit -am wip", "git reset --hard"] {
+            assert_eq!(git_guard_decision(&env, &bash(&linked, cmd)), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn kill_switch_and_empty_list_disable_the_guard() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let mut env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        assert!(
+            git_guard_decision(&env, &bash(&fx.primary, "git add -A")).is_some(),
+            "armed"
+        );
+        // CLAUDE_CODE_DISABLE_GIT_GUARD.
+        env.disabled = true;
+        assert_eq!(
+            git_guard_decision(&env, &bash(&fx.primary, "git add -A")),
+            None
+        );
+        // No `primaryCheckouts` means there is nothing to protect.
+        env.disabled = false;
+        env.protected.clear();
+        assert_eq!(
+            git_guard_decision(&env, &bash(&fx.primary, "git add -A")),
+            None
+        );
+    }
+
+    #[test]
+    fn malformed_input_fails_open() {
+        // A glob that matches nothing the payloads below name: an unreadable
+        // payload must not be rescued into an allow by luck.
+        let env = guard_env(&["/no/such/protected/*"]);
+        for payload in [
+            json!({}),
+            json!({"tool_name": "Bash"}),
+            json!({"tool_name": "Bash", "tool_input": {}}),
+            // Not the Bash tool at all.
+            json!({"tool_name": "Edit", "cwd": "/", "tool_input": {"command": "git add -A"}}),
+            // Wrongly typed fields.
+            json!({"tool_name": 7, "cwd": "/", "tool_input": {"command": "git add -A"}}),
+            json!({"tool_name": "Bash", "cwd": 7, "tool_input": {"command": "git add -A"}}),
+            json!({"tool_name": "Bash", "cwd": "", "tool_input": {"command": "git add -A"}}),
+            json!({"tool_name": "Bash", "cwd": "/", "tool_input": {"command": 7}}),
+            json!({"tool_name": "Bash", "cwd": "/", "tool_input": "git add -A"}),
+            json!([]),
+            json!("git add -A"),
+            Value::Null,
+        ] {
+            assert_eq!(git_guard_decision(&env, &payload), None, "{payload}");
+        }
+        // The JSON that never parses at all never reaches the decision: the
+        // hook's `payload()` returns None and `git_guard` returns silently.
+        assert!(serde_json::from_str::<Value>("{not json").is_err());
     }
 
     #[test]

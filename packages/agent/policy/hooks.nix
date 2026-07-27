@@ -102,7 +102,10 @@
       # git has no pre-reset/pre-checkout/pre-clean/pre-stash hook, so the only
       # seam that sees `git reset --hard` before it runs is PreToolUse
       # (ENG-9964). Same protected list as the edit guard above: without one
-      # there is nothing to protect, so it is not installed.
+      # there is nothing to protect, so it is not installed. The edit guard
+      # judges Edit/Write target paths and never sees Bash, so this is also the
+      # only thing standing between an agent and `git add`/`git switch` in a
+      # shared checkout (index#4218).
       {
         matcher = "Bash";
         command = hookCommands.destructiveGitGuard;

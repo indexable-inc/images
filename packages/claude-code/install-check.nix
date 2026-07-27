@@ -526,18 +526,36 @@
     # A linked worktree is the caller's own; their dirt is theirs to discard.
     git_guard "reset --hard in worktree"    allow "$wt" "git reset --hard HEAD~1"
     git_guard "clean -fd in worktree"       allow "$wt" "git clean -fd"
-    # Non-destructive git in the primary checkout stays usable, or the guard
-    # becomes noise and gets switched off.
+    # Mutating git in the primary checkout, none of which loses anything: the
+    # hole index#4218 closed. `git add` and `git switch` through Bash are what
+    # left the shared checkout on a deleted branch, 604 commits behind main,
+    # with 534 files staged by nobody.
+    git_guard "add in primary"              deny "$primary" "git add -A"
+    git_guard "switch in primary"           deny "$primary" "git switch -c feature"
+    git_guard "commit in primary"           deny "$primary" "git commit -am wip"
+    git_guard "reset --soft in primary"     deny "$primary" "git reset --soft HEAD~1"
+    git_guard "checkout -b in primary"      deny "$primary" "git checkout -b feature"
+    git_guard "restore --staged"            deny "$primary" "git restore --staged ."
+    git_guard "merge in primary"            deny "$primary" "git merge origin/main"
+    git_guard "rebase in primary"           deny "$primary" "git rebase origin/main"
+    # Read-only git in the primary checkout stays usable, or the guard becomes
+    # noise and gets switched off.
     git_guard "status in primary"           allow "$primary" "git status"
-    git_guard "commit in primary"           allow "$primary" "git commit -am wip"
-    git_guard "reset --soft in primary"     allow "$primary" "git reset --soft HEAD~1"
-    git_guard "checkout -b in primary"      allow "$primary" "git checkout -b feature"
+    git_guard "log in primary"              allow "$primary" "git log --oneline -1"
+    git_guard "diff in primary"             allow "$primary" "git diff"
+    git_guard "rev-parse in primary"        allow "$primary" "git rev-parse HEAD"
+    git_guard "ls-files in primary"         allow "$primary" "git ls-files"
+    git_guard "branch listing in primary"   allow "$primary" "git branch -a"
+    git_guard "worktree list in primary"    allow "$primary" "git worktree list"
     git_guard "clean -nd (dry run)"         allow "$primary" "git clean -nd"
+    git_guard "add --dry-run"               allow "$primary" "git add --dry-run ."
     git_guard "stash list"                  allow "$primary" "git stash list"
-    # The rescue command the deny message tells the caller to run must itself
-    # survive the guard, or the advice is a dead end.
+    # The rescue commands the deny messages tell the caller to run must
+    # themselves survive the guard, or the advice is a dead end.
     git_guard "stash create"                allow "$primary" "git stash create"
-    git_guard "restore --staged"            allow "$primary" "git restore --staged ."
+    git_guard "branch rescue/..."           allow "$primary" "git branch rescue/now"
+    git_guard "worktree add"                allow "$primary" \
+      "git worktree add /tmp/worktree/o/r/n -b b origin/main"
     # A literal mention inside a quoted string is not a command.
     git_guard "quoted mention"              allow "$primary" "echo 'git reset --hard'"
     git_guard "outside any protected repo"  allow /tmp "git reset --hard"
@@ -547,19 +565,35 @@
       exit 1
     fi
 
-    # A clean protected checkout has nothing to lose, so the guard must get out
-    # of the way. This is the allow that proves it reads real repository state
-    # rather than pattern-matching the command string.
+    # A clean protected checkout: nothing to lose, and the guard denies anyway
+    # (index#4218). Reads there still pass, which is what proves the guard is
+    # reading real repository state and not pattern-matching the string.
     clean="$checktop/repos/clean"
     ${lib.getExe git} init -q "$clean"
     ${lib.getExe git} -C "$clean" -c user.email=ci@ix -c user.name=ci \
       commit -q --allow-empty -m init
-    if [ -n "$(git_payload "$clean" "git reset --hard" \
-      | CLAUDE_CODE_PRIMARY_CHECKOUTS="$clean" IX_GIT=${lib.getExe git} \
-        ${hookRunner}/bin/claude-hooks git-guard)" ]; then
-      printf 'git-guard check failed: clean checkout has nothing to destroy\n' >&2
+    clean_guard() {
+      git_payload "$clean" "$1" \
+        | CLAUDE_CODE_PRIMARY_CHECKOUTS="$clean" IX_GIT=${lib.getExe git} \
+          ${hookRunner}/bin/claude-hooks git-guard
+    }
+    if [ -n "$(clean_guard "git status")" ]; then
+      printf 'git-guard check failed: reads in a clean protected checkout must allow\n' >&2
       exit 1
     fi
+    cleanmsg="$(clean_guard "git add -A")"
+    case "$cleanmsg" in
+    *'"permissionDecision":"deny"'*) : ;;
+    *) printf 'git-guard check failed: git add in a clean protected checkout must deny, got: %s\n' \
+        "$cleanmsg" >&2; exit 1 ;;
+    esac
+    # The refusal has to name the offending path and the worktree to use.
+    for want in "$clean" "worktree add /tmp/worktree/" index#4218; do
+      case "$cleanmsg" in
+      *"$want"*) : ;;
+      *) printf 'git-guard mutation message missing %s:\n%s\n' "$want" "$cleanmsg" >&2; exit 1 ;;
+      esac
+    done
 
     # The deny has to name what would be lost and where to go instead, or the
     # caller cannot act on it. Assert the message, not just the decision.

@@ -72,10 +72,29 @@ is only installed when `primaryCheckouts != []` (`default.nix:257`).
 
 ## git-guard (PreToolUse, Bash)
 
-Refuses a destructive git command aimed at a shared primary checkout that
-currently holds uncommitted work. Same protected list as the worktree guard
-above, so it is only installed when `primaryCheckouts != []`. Kill switch:
-`CLAUDE_CODE_DISABLE_GIT_GUARD`.
+Refuses a git command that would mutate a shared primary checkout. Same
+protected list as the worktree guard above, so it is only installed when
+`primaryCheckouts != []`. Kill switch: `CLAUDE_CODE_DISABLE_GIT_GUARD`.
+
+Three separate harms, in the order the guard reports them:
+
+1. **Destroying uncommitted work** (ENG-9964): a subcommand from
+   `discards_worktree` against a checkout whose `git status --porcelain` is
+   non-empty.
+2. **Desyncing the tree from its own HEAD** (index#4211): a pathspec `checkout`
+   or `restore` reading a revision other than `HEAD`, which a clean tree does
+   not protect against.
+3. **Mutating a checkout that is not yours at all** (index#4218): any
+   subcommand from `mutates_checkout`, whatever the state of the tree.
+
+The third is the broad rule and the other two are refinements of it that say
+more about what specifically goes wrong. It exists because the first two left a
+hole big enough to walk a shared checkout through: `~/.config/nix/ix` was found
+on a branch deleted upstream, 604 commits behind main, with 534 files staged by
+nobody. No edit tool was involved, so `worktree-guard` (which judges edit-tool
+target paths and never sees Bash) never fired; `git add` and `git switch` lose
+nothing and name no foreign revision, so the narrow git-guard rules did not
+either.
 
 Why it is a `PreToolUse` hook and not a git hook: git ships no `pre-reset`,
 `pre-checkout`, `pre-clean` or `pre-stash`. `post-checkout` runs after the
@@ -97,19 +116,35 @@ matter are the ones that look indirect:
    and stepping over the value-taking options (`-c`, `--git-dir`,
    `--work-tree`, `--namespace`) so their arguments are not read as the
    subcommand.
-5. Classify the subcommand with `discards_worktree`, a closed set: `reset
-   --hard|--merge|--keep`, `checkout -f` or its pathspec form, `switch
-   --force|--discard-changes`, `restore` other than `--staged` alone, `clean
-   -f` without `-n`, and any `stash` except `list`, `show` and `create`.
-   Commands git itself refuses against a dirty tree (`merge`, `rebase`,
-   `cherry-pick`) are deliberately absent.
+5. Classify the subcommand twice, against two closed enumerated sets.
+   `discards_worktree`: `reset --hard|--merge|--keep`, `checkout -f` or its
+   pathspec form, `switch --force|--discard-changes`, `restore` other than
+   `--staged` alone, `clean -f` without `-n`, and any `stash` except `list`,
+   `show` and `create`. `mutates_checkout`: `add`, `am`, `apply`, `checkout`,
+   `cherry-pick`, `clean -f`, `commit`, `merge`, `mv`, `pull`, `rebase`,
+   `reset`, `restore`, `revert`, `rm`, `stash`, `switch`. Both sets are closed
+   so an unclassified subcommand fails open rather than becoming a surprise
+   refusal.
 6. Resolve the target repo. A linked worktree (private git-dir differs from the
    common dir) is the caller's own and always allowed.
-7. If the toplevel is protected, read `git status --porcelain`. Empty means
-   there is nothing to destroy, so the command proceeds. Otherwise deny, naming
-   the dirty entries, the `git stash create` snapshot that does not touch the
-   tree, and the `worktree add` path under `/tmp/worktree/<org>/<repo>/` derived
-   from the checkout's origin URL.
+7. If the toplevel is protected, read `git status --porcelain`. A dirty tree
+   plus a `discards_worktree` hit denies first, naming the entries that would be
+   lost and the `git stash create` snapshot that does not touch the tree. A
+   foreign revision denies next. Otherwise a `mutates_checkout` hit denies,
+   naming the offending path. Every refusal ends at the same `worktree add`
+   under `/tmp/worktree/<org>/<repo>/`, derived from the checkout's origin URL.
+
+What stays allowed in a protected checkout: `status`, `log`, `diff`, `show`,
+`grep`, `ls-files`, `rev-parse`, `branch`, `fetch`, `worktree list|add`, any
+invocation carrying `--dry-run` (plus `-n` for `clean`, `rm` and `mv`, where
+that is what it means), and `apply --check|--stat|--numstat|--summary`. The
+`stash list|show|create`, `branch <name>` and `worktree add` holes are
+deliberate: they are the commands the refusals themselves recommend, so denying
+them would leave the advice with no exit.
+
+Cleaning up a protected checkout by hand -- unstaging someone's stray `git add`,
+say -- is itself a mutation and is refused. That is what
+`CLAUDE_CODE_DISABLE_GIT_GUARD=1` is for, and the refusal names it.
 
 **This guard does not fail open.** Every other hook here returns silently on any
 error, on the principle that a broken hook is worse than no hook. That trade is
@@ -122,9 +157,11 @@ there is nothing it could be protecting.
 Behavioral coverage lives in `packages/claude-code/install-check.nix`: a real
 primary checkout with uncommitted work plus a linked worktree, asserting the
 five destructive shapes deny, the `cd`/`-C`/`sudo`/chained/global-option
-evasions deny, the safe siblings and the recommended rescue commands allow, a
-clean protected checkout allows, the deny message names the dirty files, and the
-kill switch allows silently.
+evasions deny, the mutating subcommands deny even on a clean checkout, reads
+and the recommended rescue commands allow, both deny messages name what the
+caller needs, and the kill switch allows silently. The unit tests in
+`packages/claude-hooks/src/guards.rs` build a throwaway checkout and a linked
+worktree in a tempdir and drive `git_guard_decision` against them directly.
 
 ## prompt-priors (UserPromptSubmit)
 
