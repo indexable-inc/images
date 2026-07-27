@@ -125,7 +125,16 @@
   `extraRustcArgs` fold into every unit, so values or native-library flags for
   one crate bust or perturb the whole dependency closure; scope them with
   `packageBuildEnv.<package> = { ... }` or
-  `packageRustcArgs.<package> = [ ... ]` instead. Top-level
+  `packageRustcArgs.<package> = [ ... ]` instead.
+  Every unit compiles with `--remap-path-prefix` over its own source and over
+  the toolchain's `rust-src`, unconditionally: `file!()` expands to an absolute
+  path, which here is a store path, so without it every `unwrap` location in a
+  dependency pins that dependency's source into the runtime closure of the
+  linked binary and a 23 MB executable retains 2.5 GiB. Panic messages and
+  backtraces name `/build/<crate>-<version>` and `/rustc` in place of the store
+  path; `include_str!` and `env!("CARGO_MANIFEST_DIR")` read the real
+  filesystem and are unaffected, so a crate that deliberately embeds a store
+  path keeps it. Top-level
   `binaries`/`libraries` dedupe by Cargo target name and the first
   `cargoTargets` entry wins, so when one crate roots under several entries,
   select through `targetSets.<set>` instead. Per-case discovery is the

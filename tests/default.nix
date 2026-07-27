@@ -1487,6 +1487,21 @@
     cp ${./fixtures/cargo-unit-workspace-scope/Cargo.itoa-1.0.14.lock} "$out/Cargo.lock"
   '';
 
+  # rust-src on top of the repo default (which omits it). rustc rewrites std's
+  # virtual `/rustc/<commit>` source paths back to this component's real
+  # directory whenever it is installed, so a toolchain carrying it is what makes
+  # the toolchain half of the path remap observable in a linked binary. The
+  # component itself is 19 MB and the rest of the aggregate is shared with the
+  # default toolchain, so this costs a rebuild of five tiny fixture units.
+  cargoUnitScopeRustToolchain = ix.repoRustToolchainFor pkgs {
+    components = [
+      "cargo"
+      "rust-src"
+      "rust-std"
+      "rustc"
+    ];
+  };
+
   cargoUnitScopeWorkspace = {
     name,
     src,
@@ -1496,6 +1511,7 @@
       pname = "cargo-unit-workspace-scope-${name}";
       inherit src;
       inherit workspaceRoot;
+      rustToolchain = cargoUnitScopeRustToolchain;
       cargoArgs = ["--workspace"];
       policy = cargoUnitScopePolicy;
     };
@@ -1559,6 +1575,18 @@
       bravo = cargoUnitScopeUnit cargoUnitScopeWorkspaces.pathSrc "scope_bravo-0.1.0-";
     };
   };
+
+  # A linked binary must not retain the source of everything it was compiled
+  # against. `file!()` expands to an absolute path, which under cargo-unit is a
+  # store path, so every panic location a dependency bakes into its rlib is a
+  # store reference the scanner finds in the binary: before the per-unit
+  # `--remap-path-prefix`, hyperion's 23 MB `bedwars` held 110 direct
+  # references over a 2.5 GiB closure, of which glibc and gcc-lib were the only
+  # real ones (#4249). `scope-alpha-cli` reproduces every flavour of that in
+  # one small binary: it links its own workspace lib (which asserts), two
+  # vendored crates, and std from a toolchain carrying `rust-src`.
+  cargoUnitScopeBinary = cargoUnitScopeWorkspaces.base.binaries.scope-alpha-cli;
+  cargoUnitScopeBinaryReferences = pkgs.writeDirectReferencesToFile cargoUnitScopeBinary;
 
   cargoUnitRealWorkspacePolicy = {
     denyUnusedCrateDependencies = false;
@@ -6217,6 +6245,32 @@
 
     ${cargoUnitHello}/bin/cargo-unit-hello > cargo-unit-hello.out
     grep -q 'hello from cargo-unit' cargo-unit-hello.out
+    ${cargoUnitScopeBinary}/bin/scope-alpha-cli > cargo-unit-scope-cli.out
+    grep -q '^alpha:1$' cargo-unit-scope-cli.out
+    sed 's|^${builtins.storeDir}/[a-z0-9]\{32\}-||' ${cargoUnitScopeBinaryReferences} \
+      > cargo-unit-scope-references.txt
+    test -s cargo-unit-scope-references.txt
+    # Named, so a regression says which build-time dependency came back rather
+    # than only that the count moved. Without the remap this binary retains
+    # cargo-unit-source-scope-alpha (its own workspace rlib, whose `checked`
+    # asserts), itoa (a vendored rlib), and the toolchain, which was 1.9 of
+    # bedwars' 2.5 GiB on its own.
+    for retained in cargo-unit-source-scope-alpha- itoa- ryu- \
+      ${lib.escapeShellArg cargoUnitScopeRustToolchain.name}; do
+      if grep -q "^$retained" cargo-unit-scope-references.txt; then
+        echo "scope-alpha-cli retained its build-time dependency $retained:" >&2
+        cat cargo-unit-scope-references.txt >&2
+        exit 1
+      fi
+    done
+    # The catch-all the named list cannot express: no source derivation of any
+    # crate in the graph, under any name, may survive into a linked binary.
+    if grep -q '^cargo-unit-source-' cargo-unit-scope-references.txt; then
+      echo "scope-alpha-cli retained cargo-unit source derivations:" >&2
+      cat cargo-unit-scope-references.txt >&2
+      exit 1
+    fi
+    grep -q '^glibc-' cargo-unit-scope-references.txt
     ${cargoUnitCargoConfig}/bin/cargo-unit-cargo-config > cargo-unit-cargo-config.out
     grep -q 'cargo-config rustflags applied' cargo-unit-cargo-config.out
     ${cargoUnitBinaries.cargo-unit-goodbye}/bin/cargo-unit-goodbye > cargo-unit-goodbye.out
