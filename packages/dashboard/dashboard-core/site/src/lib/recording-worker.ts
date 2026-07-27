@@ -14,19 +14,8 @@
 // external, and an inlined worker chunk turns a *static* external import into an
 // undefined global. A dynamic `import()` survives that bundling as a real
 // runtime import, matching how the main thread loads loro.
-import type { LoroDoc, OpId } from 'https://esm.sh/loro-crdt@1';
-import type { PaneRecord } from './types';
-import { lastAtOrBefore } from './timeline';
-
-// One change reduced to what scrubbing needs: the id of its last op (the version
-// to check out to land exactly after it) and its timestamp. Mirrors the shape the
-// main thread used before this moved into the worker.
-interface Mark {
-  peer: string;
-  counter: number;
-  ts: number;
-  lamport: number;
-}
+import type { DocJson, LoroDoc } from 'https://esm.sh/loro-crdt@1';
+import { frontierAt, markOf, sortMarks, type Mark } from './frontier.ts';
 
 // Messages the main thread sends in.
 export type RecordingRequest =
@@ -43,9 +32,11 @@ export type RecordingResponse =
       maxTs: number;
       changeCount: number;
       startTs: number;
-      panes: Record<string, PaneRecord>;
+      doc: DocJson;
     }
-  | { type: 'frame'; id: string; ts: number; panes: Record<string, PaneRecord> }
+  // The whole JSON projection, not just the panes: a replayed moment must show
+  // the `inputs` answers as they stood then, not as they stand now.
+  | { type: 'frame'; id: string; ts: number; doc: DocJson }
   | { type: 'error'; id: string; message: string };
 
 let LoroDocCtor: typeof LoroDoc | null = null;
@@ -67,35 +58,27 @@ async function loro(): Promise<typeof LoroDoc> {
   return LoroDocCtor;
 }
 
-// Rebuild the change index from the oplog. The aggregator is the sole editor, so
-// the marks sort cleanly by time then lamport and the last mark at or before a
-// timestamp fully describes the state at that moment.
+// Rebuild the change index from the oplog. A recording holds every peer that ever
+// wrote to the session -- the aggregator, and any viewer who answered an input --
+// so the index keeps each change's peer and the frontier is computed across all
+// of them (see frontier.ts for why one peer's last op is not a version).
 function rebuildIndex(d: LoroDoc): void {
   const next: Mark[] = [];
   for (const [peer, changes] of d.getAllChanges()) {
     for (const c of changes) {
-      next.push({
-        peer: String(peer),
-        counter: c.counter + c.length - 1,
-        ts: c.timestamp,
-        lamport: c.lamport,
-      });
+      // A change with no millisecond timestamp has no place on the axis; every
+      // writer stamps one, so this only skips a change someone forgot to stamp.
+      if (c.timestamp > 0) next.push(markOf(String(c.peer ?? peer), c));
     }
   }
-  next.sort((a, b) => a.ts - b.ts || a.lamport - b.lamport);
+  sortMarks(next);
   marks = next;
 }
 
-// The version (frontier) at or before `ts`: the last mark at or before it.
-function frontierAt(ts: number): OpId[] {
-  const mark = lastAtOrBefore(marks, ts);
-  return mark ? [{ peer: mark.peer, counter: mark.counter }] : [];
-}
-
-function panesAt(d: LoroDoc, ts: number): Record<string, PaneRecord> {
-  const frontier = frontierAt(ts);
+function docAt(d: LoroDoc, ts: number): DocJson {
+  const frontier = frontierAt(marks, ts);
   if (frontier.length) d.checkout(frontier);
-  return (d.toJSON().panes ?? {}) as Record<string, PaneRecord>;
+  return d.toJSON();
 }
 
 // Run the newest pending seek, then any seek that arrived while it ran, until the
@@ -123,8 +106,7 @@ function drainSeek(): void {
       return;
     }
     try {
-      const panes = panesAt(d, ts);
-      const reply: RecordingResponse = { type: 'frame', id, ts, panes };
+      const reply: RecordingResponse = { type: 'frame', id, ts, doc: docAt(d, ts) };
       self.postMessage(reply);
     } catch (err) {
       const reply: RecordingResponse = {
@@ -153,7 +135,7 @@ self.onmessage = async (event: MessageEvent<RecordingRequest>) => {
       const minTs = marks.length ? marks[0].ts : 0;
       const maxTs = marks.length ? marks[marks.length - 1].ts : 0;
       // Open the recording parked at its start, like the old main-thread path.
-      const panes = panesAt(doc, minTs);
+      const json = docAt(doc, minTs);
       const reply: RecordingResponse = {
         type: 'loaded',
         id: msg.id,
@@ -161,7 +143,7 @@ self.onmessage = async (event: MessageEvent<RecordingRequest>) => {
         maxTs,
         changeCount: marks.length,
         startTs: minTs,
-        panes,
+        doc: json,
       };
       self.postMessage(reply);
     } catch (err) {

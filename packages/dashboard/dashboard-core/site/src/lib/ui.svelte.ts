@@ -6,7 +6,16 @@ import type { Selection } from './sidebar';
 
 // Re-export the pure time formatters so components keep one import site (`ui`)
 // for both the reactive clock and the labels it drives.
-export { humanAge, humanTime, humanDuration, runTooltip, humanClock, humanDate, recordingLabel } from './time';
+export {
+  humanAge,
+  humanTime,
+  humanDuration,
+  runTooltip,
+  humanClock,
+  humanDate,
+  recordingLabel,
+  shortAge,
+} from './time';
 
 // ----- fold state (persisted) --------------------------------------------
 // One boolean per fold key: a section id ('sessions'/'resources'/'recordings')
@@ -36,6 +45,19 @@ function loadRailCollapsed(): boolean {
   }
 }
 
+// ----- edit history panel (persisted) ------------------------------------
+const HISTORY_KEY = 'dash-history-open-v1';
+
+// Closed by default: the history is an inspection surface, not the reading
+// surface, and an unasked-for column on every load is chrome.
+function loadHistoryOpen(): boolean {
+  try {
+    return localStorage.getItem(HISTORY_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export const ui = $state({
   // The center-stage target: a run, a resource, or a recording (null = none yet).
   selection: null as Selection | null,
@@ -46,6 +68,8 @@ export const ui = $state({
   folds: loadFolds() as Record<string, boolean>,
   // Whether the right-rail namespace inspector is collapsed.
   railCollapsed: loadRailCollapsed(),
+  // Whether the edit-history panel is showing.
+  historyOpen: loadHistoryOpen(),
   // Wall-clock milliseconds, ticked every second; rows derive their age from it.
   clock: Date.now(),
 });
@@ -95,6 +119,15 @@ export function startClock(): void {
   setInterval(() => {
     ui.clock = Date.now();
   }, 1000);
+}
+
+export function toggleHistory(): void {
+  ui.historyOpen = !ui.historyOpen;
+  try {
+    localStorage.setItem(HISTORY_KEY, ui.historyOpen ? '1' : '0');
+  } catch {
+    // Non-persistent is fine.
+  }
 }
 
 export function focusPane(key: string): void {

@@ -42,6 +42,21 @@ export function humanTime(createdMs: number | undefined, refMs: number): string 
   return started.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+// The tightest possible age, for a dense column of them: "now", "42s", "4m",
+// "2h", "3d". No "ago" -- in a list headed "when" the word is noise on every row,
+// and the column stays narrow enough to align with tabular numerals.
+export function shortAge(atMs: number | undefined, refMs: number): string {
+  if (!atMs) return '';
+  const seconds = Math.max(0, Math.round((refMs - atMs) / 1000));
+  if (seconds < 10) return 'now';
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
 // A compact run-duration label ("420ms", "1.3s", "9.8s", "1m4s").
 export function humanDuration(ms: number | undefined): string {
   if (ms == null || ms < 0) return '';

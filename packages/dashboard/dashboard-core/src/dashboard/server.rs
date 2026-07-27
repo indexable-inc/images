@@ -166,6 +166,7 @@ pub async fn serve_hub(
         .route("/index.html", get(index))
         .route("/events", get(events))
         .route("/recordings", get(list_recordings))
+        .route("/history", get(history))
         .route("/recording/{id}", get(get_recording))
         .route(
             "/apply",
@@ -219,6 +220,18 @@ async fn get_recording(State(state): State<AppState>, Path(id): Path<String>) ->
             || (StatusCode::NOT_FOUND, "no such recording").into_response(),
             |bytes| ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
         )
+}
+
+/// The document's changes as JSON, oldest first, each with its commit tag and
+/// the actor its writing peer declared.
+///
+/// A browser holds the whole oplog already and could walk it itself, but a text
+/// op's position there is an entity index rather than a character offset, and
+/// resolving that is exactly the sort of thing that should exist once. Serving
+/// the resolved form keeps one reading of the oplog in the codebase instead of
+/// two that can disagree.
+async fn history(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.hub.history())
 }
 
 /// Merge a client's CRDT update into the shared document.

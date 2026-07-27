@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { humanTime, humanDuration, runTooltip, humanAge, humanDate, recordingLabel } from '../src/lib/time.ts';
+import { humanTime, humanDuration, runTooltip, humanAge, humanDate, recordingLabel, shortAge } from '../src/lib/time.ts';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -124,5 +124,22 @@ describe('humanAge', () => {
     assert.equal(humanAge(ref - 5 * MIN, ref), '5m ago');
     assert.equal(humanAge(ref - 5 * HOUR, ref), '5h ago');
     assert.equal(humanAge(ref - 5 * DAY, ref), '5d ago');
+  });
+});
+
+describe('shortAge', () => {
+  const ref = 1_000_000_000_000;
+
+  it('reads as a bare age with no "ago"', () => {
+    assert.equal(shortAge(ref - 3_000, ref), 'now');
+    assert.equal(shortAge(ref - 42_000, ref), '42s');
+    assert.equal(shortAge(ref - 4 * MIN, ref), '4m');
+    assert.equal(shortAge(ref - 2 * HOUR, ref), '2h');
+    assert.equal(shortAge(ref - 3 * DAY, ref), '3d');
+  });
+
+  it('is empty for a missing timestamp', () => {
+    assert.equal(shortAge(undefined, ref), '');
+    assert.equal(shortAge(0, ref), '');
   });
 });

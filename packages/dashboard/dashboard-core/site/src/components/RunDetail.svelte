@@ -125,7 +125,10 @@
              default: it carries the code and the result inline. -->
         <details class="panel" open>
           <summary><span class="caret"></span><span class="panel-label">code · output</span></summary>
-          <div class="panel-body panel-body-flush">
+          <!-- `data-edit-mark` names the document field this element draws, so the
+               edit-history panel can scroll to it and mark where an edit landed
+               (App.svelte owns the marking). -->
+          <div class="panel-body panel-body-flush" data-edit-mark={`${pane.key}|stdout`}>
             <InlineTrace source={pane.source ?? ''} lang={pane.lang ?? 'text'} trace={traceArr} />
             {#if pane.stderr}<pre class="exec-out err trace-stderr">{stripAnsi(pane.stderr)}</pre>{/if}
           </div>
@@ -138,7 +141,7 @@
               <span class="caret"></span><span class="panel-label">code</span>
               <span class="panel-hint">{pane.lang || 'source'}</span>
             </summary>
-            <div class="panel-body"><CodeBlock code={pane.source ?? ''} lang={pane.lang ?? 'text'} line={pane.line ?? null} errorLine={pane.error_line ?? null} /></div>
+            <div class="panel-body" data-edit-mark={`${pane.key}|source`}><CodeBlock code={pane.source ?? ''} lang={pane.lang ?? 'text'} line={pane.line ?? null} errorLine={pane.error_line ?? null} /></div>
           </details>
         {/if}
         {#if hasStreamOut || resultIsPrimary || running}
@@ -153,7 +156,7 @@
             <!-- Labelled `stdout` when a rich attachment exists, so the run never
                  shows two panels both called `output`. -->
             <summary><span class="caret"></span><span class="panel-label">{outPane ? 'stdout' : 'output'}</span><span class="panel-hint">{outputHint}</span></summary>
-            <div class="panel-body panel-body-flush">
+            <div class="panel-body panel-body-flush" data-edit-mark={`${pane.key}|stdout`}>
               <ExecBody {pane} chrome={false} expanded hideResult={!resultIsPrimary} />
             </div>
           </details>
@@ -166,7 +169,7 @@
              Expanded by default: the result is a primary section, not stdout. -->
         <details class="panel" open>
           <summary><span class="caret"></span><span class="panel-label">result</span><span class="panel-hint">model view</span></summary>
-          <div class="panel-body panel-body-flush"><pre class="exec-out res">{pane.result}</pre></div>
+          <div class="panel-body panel-body-flush" data-edit-mark={`${pane.key}|result`}><pre class="exec-out res">{pane.result}</pre></div>
         </details>
       {/if}
 
@@ -177,7 +180,7 @@
         <details class="panel" open>
           <summary><span class="caret"></span><span class="panel-label">output</span><span class="panel-hint">{outHint}</span></summary>
           <div class="panel-body panel-body-flush pane">
-            <div class="body" class:html-body={outPane.kind === 'html'}><OutBody pane={outPane} /></div>
+            <div class="body" class:html-body={outPane.kind === 'html'} data-edit-mark={`${outPane.key}|body`}><OutBody pane={outPane} /></div>
           </div>
         </details>
       {/if}
@@ -186,7 +189,7 @@
       {@const Body = rendererFor(k, pane.renderer)}
       <div class="panel">
         <div class="panel-body panel-body-flush pane" class:term={k === 'terminal'}>
-          <div class="body" class:term-body={k === 'terminal'} class:html-body={k === 'html'}>
+          <div class="body" class:term-body={k === 'terminal'} class:html-body={k === 'html'} data-edit-mark={`${pane.key}|body`}>
             <Body {pane} />
           </div>
         </div>
@@ -297,7 +300,6 @@
     border-right: 1.2px solid var(--ink-faint);
     border-bottom: 1.2px solid var(--ink-faint);
     transform: rotate(-45deg);
-    transition: transform 0.12s ease;
   }
   .panel[open] > summary .caret {
     transform: rotate(45deg);
@@ -334,7 +336,6 @@
     overflow: auto;
     max-height: 60vh;
     border: 1px solid var(--edge);
-    border-radius: 4px;
     margin: 2px 0 8px;
   }
   .panel-body-flush.pane .body.html-body {
