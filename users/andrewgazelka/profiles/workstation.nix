@@ -10,7 +10,6 @@
   optionsModule,
   personalServicesModule,
   provenanceModule,
-  indexSkillsSrc,
   tmuxModule,
 }: {
   config,
@@ -323,14 +322,31 @@
   };
 
   # Shared skill source: the index repo's SKILL.md bundles (open Agent-Skills
-  # standard, `packages/agent/skills`). ONE directory, delivered to BOTH agents
-  # bare (no plugin namespace, so `/<skill>` on Claude and `$<skill>` / implicit
-  # on Codex): Claude via `programs.claude-code.skills`, Codex via the upstream
+  # standard, `packages/agent/skills`) plus any consumer-local skills, built
+  # into ONE directory and delivered to BOTH agents bare (no plugin namespace,
+  # so `/<skill>` on Claude and `$<skill>` / implicit on Codex): Claude via
+  # `programs.claude-code.skills`, Codex via the upstream
   # `programs.codex.skills`. Replaces the old per-agent Claude plugin wrapper.
-  # `.outPath` (an unambiguous store-path string), NOT the bare flake-input
-  # attrset: both modules branch on `builtins.isAttrs skills` to choose
-  # attrset-of-skills vs directory mode, and a flake input is an attrset.
-  skillsSrc = indexSkillsSrc;
+  # Built through `skills.mkSkillsDir` rather than handed the bare
+  # `packages/agent/skills` directory, because that directory is only the
+  # repo-local half of the catalog: skills vendored from packaged upstreams
+  # (`vendoredSources`, currently agent-browser) resolve against `pkgs` inside
+  # mkSkillsDir and never reach disk on the bare path. It is also the only
+  # seam a consumer has for its own skills, via `agent.extraSkills`.
+  #
+  # `.outPath`, NOT the derivation: both modules branch on
+  # `builtins.isAttrs skills` to choose attrset-of-skills vs directory mode,
+  # and a derivation is an attrset, so passing it bare makes them read the
+  # derivation's own attributes as skill names. That fails as a type error on
+  # the first non-string one (`programs.codex.skills.__darwinAllowLocalNetworking`
+  # is not lines-or-path), and only when something forces the home config --
+  # `darwinConfigurations.hydra.system.drvPath` evaluates clean either way.
+  skillsSrc =
+    (ix.skills.mkSkillsDir {
+      inherit pkgs;
+      extraSkills = cfg.agent.extraSkills;
+    })
+    .outPath;
 
   # The wrapper carries the shared hooks, system prompt, soft settings, and
   # forced MCP transport. config.toml stays entirely app-owned.
@@ -1168,10 +1184,10 @@ in {
   # Agents, commands, and skills are managed declaratively by the upstream
   # home-manager programs.claude-code module: each is written as an in-store
   # path under ~/.claude (no out-of-store symlink, no SessionStart hook).
-  # SKILLS now ride the module's `skills` option (the shared `skillsSrc` index
-  # dir), delivered bare to ~/.claude/skills/<name> and invoked as `/<skill>`
-  # (no `index:` namespace): the same source Codex gets via programs.codex
-  # below. This replaces the old baked `--plugin-dir` plugin.
+  # SKILLS now ride the module's `skills` option (the built `skillsSrc`
+  # catalog), delivered bare to ~/.claude/skills/<name> and invoked as
+  # `/<skill>` (no `index:` namespace): the same source Codex gets via
+  # programs.codex below. This replaces the old baked `--plugin-dir` plugin.
   # settings.json is NOT declared through the module's native `settings`
   # option (it would render as a read-only store symlink): the index module's
   # materializeSettings default reconciles the wrapper's full render
@@ -1189,7 +1205,7 @@ in {
     # `subagent_type code-reviewer` keeps resolving.
     agentsDir = indexPkgs.agents;
     commandsDir = repoFile "claude/global/commands";
-    # Bare skills (the shared index dir): module symlinks ~/.claude/skills, so
+    # Bare skills (the built catalog): module symlinks ~/.claude/skills, so
     # they invoke as `/<skill>`, not `/index:<skill>`. Same source as Codex.
     skills = skillsSrc;
     # MCP servers are NOT delivered here: `programs.claude-code.mcpServers` bundles

@@ -51,6 +51,9 @@
     extraSkills ? {},
   }: let
     unknownNames = lib.subtractLists allSkills names;
+    # Without this a clash surfaces as a linkFarm duplicate-entry build
+    # failure naming neither side. Same guard claudePlugin.mkPlugin carries.
+    extraCollisions = lib.intersectLists names (lib.attrNames extraSkills);
     farm = pkgs.linkFarm "claude-skills-farm" (
       (map (name: {
           inherit name;
@@ -63,6 +66,9 @@
     assert lib.assertMsg (
       unknownNames == []
     ) "skills.mkSkillsDir contains unknown skills: ${lib.concatStringsSep ", " unknownNames}";
+    assert lib.assertMsg (
+      extraCollisions == []
+    ) "skills.mkSkillsDir: extraSkills name(s) collide with index skills: ${lib.concatStringsSep ", " extraCollisions}";
     # Claude Code's `/`-autocomplete discovery filters directory entries with
     # `Dirent.isFile()` and silently drops symlinks (anthropics/claude-code
     # issues #36659, #55791), so the published tree must be real directories of
