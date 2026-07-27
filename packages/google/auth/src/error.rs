@@ -41,6 +41,47 @@ pub enum Error {
     #[snafu(display("no user config directory on this platform; cannot locate the token file"))]
     NoConfigDir,
 
+    /// No source supplied an OAuth client identity.
+    ///
+    /// Names every place [`crate::ClientSecrets::load`] looked, because the
+    /// fix depends on which one the operator intends to use: a teammate
+    /// exports the shared client, an outside user points at their own
+    /// downloaded `client_secret.json`.
+    #[snafu(display(
+        "no Google OAuth client found. Either export {CLIENT_ID_ENV} and {CLIENT_SECRET_ENV}, \
+         or create your own OAuth client (a two-minute setup) and save the downloaded JSON to \
+         {}. See packages/google/auth/README.md#bring-your-own-oauth-client",
+        path.display()
+    ))]
+    NoClientSecrets {
+        /// Default location searched for a downloaded client-secrets file.
+        path: PathBuf,
+    },
+
+    /// A client-secrets file exists but could not be read.
+    #[snafu(display("failed to read OAuth client secrets {}: {source}", path.display()))]
+    ReadClientSecrets {
+        /// Client-secrets file location.
+        path: PathBuf,
+        /// Underlying I/O error.
+        source: std::io::Error,
+    },
+
+    /// A client-secrets file holds something other than a client identity.
+    ///
+    /// Accepts what the Cloud Console actually hands you: an object under
+    /// `installed` (desktop app) or `web`, or the two fields at the top
+    /// level. Anything else is a wrong-file mistake worth naming.
+    #[snafu(display(
+        "{} is not a Google OAuth client-secrets file: expected `client_id` and `client_secret`, \
+         either at the top level or under an `installed` or `web` key",
+        path.display()
+    ))]
+    ParseClientSecrets {
+        /// Client-secrets file location.
+        path: PathBuf,
+    },
+
     /// No token has been stored yet.
     #[snafu(display(
         "no stored Google token at {}; run `gmail auth` (or `gcal auth`) first",

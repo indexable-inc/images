@@ -22,6 +22,7 @@ mod labels;
 mod messages;
 mod mime;
 mod model;
+mod profile;
 mod threads;
 
 pub use drafts::{DraftMessageStub, DraftStub};
@@ -35,6 +36,7 @@ pub use model::{
     Attachment, Draft, Header, Label, Message, MessagePart, MessagePartBody, MessageQuery,
     OutgoingMessage, Thread,
 };
+pub use profile::Profile;
 pub use threads::ThreadStub;
 
 use google_auth::api_message;

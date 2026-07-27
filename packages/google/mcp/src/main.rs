@@ -14,6 +14,7 @@
 //! [`google_auth::Authenticator`] cache is expiry-aware, so one
 //! `Authenticator` per process is enough for the server's lifetime.
 
+mod health;
 mod tools;
 
 use std::sync::Arc;
@@ -28,11 +29,20 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_logging();
-    let server = tools::GoogleMcp::new().context("building the ix-google-mcp server")?;
+    // Infallible by design: an unconfigured host must still get a server it
+    // can ask what is wrong. Failing here would take the calendar tools down
+    // with the mail ones and leave the agent staring at a dead process.
+    let server = tools::GoogleMcp::new();
+    let announce = server.clone();
     let service = server
         .serve(stdio())
         .await
         .context("starting the MCP service over stdio")?;
+
+    // After the handshake, never during it: probing inside `initialize`
+    // would let one unreachable endpoint stall the connection itself.
+    tokio::spawn(announce.announce_health());
+
     service.waiting().await?;
     Ok(())
 }
@@ -56,17 +66,21 @@ fn init_logging() {
 /// client's refresh, the other client's in-flight refresh can lose that
 /// race and fail once; its next mint re-reads the rotated token the
 /// winner persisted, so the failure heals without re-consent.
+#[derive(Clone)]
 pub(crate) struct Clients {
     pub(crate) calendar: Arc<google_calendar::Client>,
     pub(crate) gmail: Arc<google_gmail::Client>,
 }
 
-/// Construct the API clients from the environment and the token store.
+/// Construct the API clients from whichever OAuth client the host supplies
+/// and the token store.
+///
+/// # Errors
+/// Returns an error when no OAuth client identity can be found or a client
+/// cannot be built. Callers must treat that as a reportable state rather
+/// than a fatal one -- see [`tools::GoogleMcp::new`].
 pub(crate) fn build_clients() -> anyhow::Result<Clients> {
-    let secrets = ClientSecrets::from_env().context(
-        "ix-google-mcp expects GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in the \
-         environment; run gmail auth (or gcal auth) on the host to mint the refresh token",
-    )?;
+    let secrets = ClientSecrets::load()?;
     let store = TokenStore::new()?;
     let scopes: &[&str] = &[CALENDAR_EVENTS, GMAIL_MODIFY, GMAIL_SEND];
 
