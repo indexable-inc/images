@@ -1,6 +1,0 @@
-[workspace]
-members = [
-  "crates/alpha",
-  "crates/bravo",
-]
-resolver = "3"
