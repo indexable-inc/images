@@ -770,6 +770,37 @@
     };
   }
   {
+    fenceReasons = {
+      topics = ["architecture" "agency"];
+      text = ''
+        Every guard, threshold and exception carries, beside it, what it
+        defends against and what evidence set its number: a reader who
+        cannot tell a fence from a fossil removes both. Encountering one
+        without that reason, go find it before touching it, and write it
+        down when you do. State a reason that is a property of the world in
+        a form something can check, since a comment asserting a false
+        property is worse than none.
+      '';
+      reason = ''
+        Requested 2026-07-27, after one night in which each clause bit. ix's
+        nix/modules/services/observability/grafana/alerting/cgroup-limits.nix
+        spends fifteen lines explaining why it refuses to alert on memory
+        percent-of-cap, and that comment is what let an agent classify 25
+        false fleet alerts in minutes; test-ide carried the same heuristic
+        with no such note and reconstructing it took hours and produced a
+        72%-wrong first diagnosis. A check in nix/checks/ci-cache-push.nix
+        asserted the probe's pending root was gone after the enqueue leg,
+        pinning as intended behaviour the exact bug that was failing three
+        deploys in four. And activation-timeouts.nix excepted
+        ix-cache-push-drain with a comment asserting it "is not
+        activation-wanted", which was true of its wantedBy and false of what
+        switch-to-configuration reads; the unit blocked activation for up to
+        895 seconds a node until an eval seam was added to make such claims
+        prove themselves.
+      '';
+    };
+  }
+  {
     respectGuards = {
       topics = ["agency"];
       text = ''
