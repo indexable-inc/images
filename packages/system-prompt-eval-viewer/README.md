@@ -7,13 +7,16 @@
 
 # system-prompt-eval-viewer
 
-Got a `system-prompt-eval` result JSON and want to actually read it? This is a
-modern Svelte + Vite single-page app that renders one: the eval emits the
-machine JSON (`--json-out`); this app is the view.
+Got a system-prompt eval result JSON and want to actually read it? This is a
+modern Svelte + Vite single-page app that renders one.
+
+The harness that produced those reports lived here as
+`packages/system-prompt-eval` and is gone (#4204): it drove live, billed
+`claude -p` rollouts, and this repo does not spend against a paid API. The
+viewer stays because it spends nothing and still reads any report already in
+hand; `src/sample.json` is a committed example of the schema it renders.
 
 ```sh
-# run an eval, then open its result in the viewer
-nix run github:indexable-inc/index#system-prompt-eval -- run --eval all --json-out /tmp/result.json
 nix run github:indexable-inc/index#system-prompt-eval-viewer -- /tmp/result.json
 
 # no argument -> bundled sample
