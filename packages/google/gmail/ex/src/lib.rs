@@ -53,18 +53,12 @@ mod _gmail_ex {
         },
     }
 
-    impl std::fmt::Display for GmailError {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::Auth { message }
-                | Self::Api { message }
-                | Self::Http { message }
-                | Self::BadInput { message } => write!(formatter, "{message}"),
-            }
-        }
-    }
-
-    impl std::error::Error for GmailError {}
+    unibind_ex_runtime::message_error!(GmailError {
+        Auth,
+        Api,
+        Http,
+        BadInput,
+    });
 
     /// A sent message's handles.
     #[unibind::record]

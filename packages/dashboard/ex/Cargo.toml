@@ -1,0 +1,26 @@
+[package]
+name = "dashboard-ex"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Elixir NIF for the dashboard Hub via unibind: publish panes into a served CRDT document from the BEAM and get woken when a human edits it"
+
+[lib]
+name = "dashboard_ex"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+dashboard-core.workspace = true
+futures.workspace = true
+loro.workspace = true
+parking_lot.workspace = true
+rustler.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-stream.workspace = true
+unibind = { workspace = true, features = ["ex"] }
+unibind-ex-runtime.workspace = true
+unibind-runtime.workspace = true

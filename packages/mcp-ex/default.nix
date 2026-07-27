@@ -1,10 +1,11 @@
 {
   lib,
   ix,
-  # The sibling package set: the compiled :tui_ex and :gmail_ex OTP apps
-  # (packages/tui/ex, packages/google/gmail/ex) ride into the release and
-  # the check env as `IX_MCP_TUI_EX`/`IX_MCP_GMAIL_EX`, never as mix deps,
-  # so the kernel and the NIF bindings ship independently.
+  # The sibling package set: the compiled :tui_ex, :gmail_ex and
+  # :dashboard_ex OTP apps (packages/tui/ex, packages/google/gmail/ex,
+  # packages/dashboard/ex) ride into the release and the check env as
+  # `IX_MCP_TUI_EX`/`IX_MCP_GMAIL_EX`/`IX_MCP_DASHBOARD_EX`, never as mix
+  # deps, so the kernel and the NIF bindings ship independently.
   repoPackages,
 }: let
   # Read the package set from `ix` rather than a `pkgs` callPackage formal
@@ -72,6 +73,10 @@
   # Same pattern for IxMcp.Gmail: the compiled :gmail_ex app.
   gmailExApp = "${repoPackages.google-gmail-ex}/lib/gmail_ex";
 
+  # Same pattern for IxMcp.Dashboard: the compiled :dashboard_ex app, which
+  # also carries the watch stream the notification bridge subscribes to.
+  dashboardExApp = "${repoPackages.dashboard-ex}/lib/dashboard_ex";
+
   # The required Elixir quality lane: compile --warnings-as-errors (Elixir
   # 1.18's set-theoretic type checker), format, `mix credo --strict` against
   # the shared lib/elixir/credo.exs, and the ExUnit suite.
@@ -80,13 +85,15 @@
     inherit version src elixir erlang;
     mixDeps = mixFodDeps;
     setupHook = stageAgentHarness;
-    # IX_MCP_TUI_EX / IX_MCP_GMAIL_EX make the suite's NIF-binding tests
-    # run in the sandbox (test_helper.exs skips them when unset).
+    # IX_MCP_TUI_EX / IX_MCP_GMAIL_EX / IX_MCP_DASHBOARD_EX make the suite's
+    # NIF-binding tests run in the sandbox (test_helper.exs skips them when
+    # unset).
     extraEnv =
       rebar3Env
       // {
         IX_MCP_TUI_EX = tuiExApp;
         IX_MCP_GMAIL_EX = gmailExApp;
+        IX_MCP_DASHBOARD_EX = dashboardExApp;
       };
   };
 
@@ -165,6 +172,7 @@
         --set-default IX_MCP_GH ${lib.getExe pkgs.gh} \
         --set-default IX_MCP_TUI_EX ${tuiExApp} \
         --set-default IX_MCP_GMAIL_EX ${gmailExApp} \
+        --set-default IX_MCP_DASHBOARD_EX ${dashboardExApp} \
         --add-flags start
       runHook postInstall
     '';

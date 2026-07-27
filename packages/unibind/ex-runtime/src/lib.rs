@@ -3,9 +3,10 @@
 //! The glue that `unibind-backend-ex` generates leans on three pieces that
 //! cannot live in generated code: one process-wide tokio [`runtime`] shared
 //! by every unibind NIF library in the node, the [`spawn_reply`] plumbing
-//! that runs an `async fn` and messages the calling process, and the
+//! that runs an `async fn` and messages the calling process, the
 //! [`spawn_stream`] plumbing that drives a [`unibind_runtime::UniStream`]
-//! under consumer demand. Aside from [`ensure_sigchld_default`], which a NIF
+//! under consumer demand, and the [`Bytes`] wire newtype that puts binary
+//! payloads on the BEAM as binaries. Aside from [`ensure_sigchld_default`], which a NIF
 //! that spawns OS child processes calls by hand before its first spawn, user
 //! crates never name this crate in their own code (streams are `UniStream<T>`
 //! from `unibind-runtime`, shared with every backend); the rest is called by
@@ -27,13 +28,46 @@
 //! work is dropped, which the user's `Drop` impls observe as cancellation.
 
 mod atoms;
+mod bytes;
 mod reply;
 mod runtime;
 mod stream;
 
+pub use bytes::Bytes;
 pub use reply::{InFlight, Never, spawn_reply};
 pub use runtime::runtime;
-pub use stream::{StreamHandle, grant, spawn_stream};
+pub use stream::{StreamHandle, grant, map_stream, spawn_stream};
+
+/// `Display` and `Error` for a `#[unibind::error]` enum whose every variant
+/// carries a single `message` field.
+///
+/// unibind renders the exception a caller sees from the variant's `Display`
+/// text, so every binding has to write one; when the message is already the
+/// only field, that impl is the same eleven lines in every crate. Naming the
+/// variants here is the whole declaration:
+///
+/// ```ignore
+/// unibind_ex_runtime::message_error!(TuiError {
+///     Spawn, NotFound, Io, BadKey, Timeout,
+/// });
+/// ```
+///
+/// A binding whose messages are computed rather than stored writes its own
+/// `Display` instead; this only covers the pass-through case.
+#[macro_export]
+macro_rules! message_error {
+    ($error:ident { $($variant:ident),+ $(,)? }) => {
+        impl ::std::fmt::Display for $error {
+            fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                match self {
+                    $(Self::$variant { message })|+ => ::std::write!(formatter, "{message}"),
+                }
+            }
+        }
+
+        impl ::std::error::Error for $error {}
+    };
+}
 
 /// Restore `SIGCHLD` to its default disposition, once per process.
 ///

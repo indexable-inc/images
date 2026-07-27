@@ -53,19 +53,13 @@ mod _tui_ex {
         },
     }
 
-    impl std::fmt::Display for TuiError {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::Spawn { message }
-                | Self::NotFound { message }
-                | Self::Io { message }
-                | Self::BadKey { message }
-                | Self::Timeout { message } => write!(formatter, "{message}"),
-            }
-        }
-    }
-
-    impl std::error::Error for TuiError {}
+    unibind_ex_runtime::message_error!(TuiError {
+        Spawn,
+        NotFound,
+        Io,
+        BadKey,
+        Timeout,
+    });
 
     /// One manager (and one tokio runtime) per BEAM node, alive for the
     /// process lifetime, exactly like tui-py's `global_manager`.

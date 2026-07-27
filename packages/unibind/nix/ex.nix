@@ -1,8 +1,8 @@
 # The `ex` target of `unibind.lib.build`: the Elixir host modules generated
 # straight from the crate's built NIF library (the IR travels in its link
-# section), merged with the hand-written mix project into one mix-importable
-# package: `lib/` (generated .ex), `priv/native/<soname>.so`, and the
-# caller's `mix.exs` and tests.
+# section), merged with the caller's tests into one mix-importable package:
+# `lib/` (generated .ex), `mix.exs` (also generated, from the same
+# interface), `priv/native/<soname>.so`, and the caller's test suite.
 {
   lib,
   pkgs,
@@ -10,10 +10,10 @@
   rustWorkspace,
 }: {
   crate,
-  # Directory with the hand-written mix project files (`mix.exs`, tests,
-  # `.formatter.exs`) overlaid onto the generated tree. `null` means the
-  # package is fully generated (no runnable mix project, just `lib/` and the
-  # NIF).
+  # Directory with the hand-written parts of the mix project (the test suite
+  # and `.formatter.exs`) overlaid onto the generated tree. `mix.exs` is not
+  # among them: it is generated, and a hand-written copy trips the shadow
+  # check below. `null` means the package ships no test suite.
   mixSource ? null,
 }: let
   entry =

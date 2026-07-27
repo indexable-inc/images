@@ -1,10 +1,62 @@
+# A consumer that never blocks: every stream message arrives through
+# `handle_info/2`, which is the shape a real GenServer needs and the reason
+# the `Enumerable` form alone was not enough (its `receive` owns the
+# process until the producer answers).
+defmodule UnibindConformanceTest.Collector do
+  @moduledoc false
+  use GenServer
+
+  alias UnibindConformance, as: Conf
+
+  def start_link(n), do: GenServer.start_link(__MODULE__, n)
+
+  @doc "The collected items, once the stream has finished."
+  def take(pid), do: GenServer.call(pid, :take, 5_000)
+
+  @doc "Round-trip a call while the stream is still running."
+  def ping(pid), do: GenServer.call(pid, :ping, 5_000)
+
+  @impl true
+  def init(n) do
+    stream = Conf.count_stream(n)
+    :ok = Conf.stream_demand(stream, 1)
+    {:ok, %{stream: stream, items: [], waiting: nil, done: false}}
+  end
+
+  @impl true
+  def handle_call(:ping, _from, state), do: {:reply, :pong, state}
+
+  def handle_call(:take, _from, %{done: true} = state) do
+    {:reply, Enum.reverse(state.items), state}
+  end
+
+  def handle_call(:take, from, state), do: {:noreply, %{state | waiting: from}}
+
+  @impl true
+  def handle_info(message, state) do
+    case Conf.stream_message(state.stream, message) do
+      {:item, item} ->
+        :ok = Conf.stream_demand(state.stream, 1)
+        {:noreply, %{state | items: [item | state.items]}}
+
+      :done ->
+        if state.waiting, do: GenServer.reply(state.waiting, Enum.reverse(state.items))
+        {:noreply, %{state | done: true, waiting: nil}}
+
+      :nomatch ->
+        {:noreply, state}
+    end
+  end
+end
+
 defmodule UnibindConformanceTest do
   # Not async: the NIF exposes process-global counters
   # (cancelled_count/dropped_sessions) that concurrent tests would race.
   use ExUnit.Case, async: false
 
   alias UnibindConformance, as: Conf
-  alias UnibindConformance.{ConformanceError, Native, Sample}
+  alias UnibindConformance.{ConformanceError, Native, Sample, StreamHandle}
+  alias UnibindConformanceTest.Collector
 
   import UnibindTest.Eventually
 
@@ -63,6 +115,90 @@ defmodule UnibindConformanceTest do
     test "nested Vec<record> round-trips" do
       inputs = [sample(1), sample(2)]
       assert Conf.echo_records(inputs) == inputs
+    end
+  end
+
+  describe "binary payloads" do
+    # NUL and high bytes in every fixture: a UTF-8 or charlist path would
+    # mangle both, so these assertions fail loudly if bytes ever regress to
+    # rustler's element-wise Vec<u8> codec (a list of integers).
+    @blob <<0, 255, 254, 128, 1>>
+
+    test "&[u8] round-trips as a binary, not a list of integers" do
+      assert echoed = Conf.echo_bytes(@blob)
+      assert is_binary(echoed)
+      assert echoed == @blob
+    end
+
+    test "Vec<u8> round-trips" do
+      assert Conf.echo_bytes_owned(@blob) == @blob
+    end
+
+    test "empty binaries round-trip" do
+      assert Conf.echo_bytes(<<>>) == <<>>
+      assert Conf.echo_bytes_owned(<<>>) == <<>>
+      assert Conf.bytes_len(<<>>) == 0
+    end
+
+    test "the whole binary arrives: length counts bytes, not codepoints" do
+      assert Conf.bytes_len(@blob) == 5
+      # 3 bytes of UTF-8, 1 codepoint: a text codec would answer 1.
+      assert Conf.bytes_len("世") == 3
+    end
+
+    test "a list is not a binary: the decoder rejects it" do
+      assert_raise ArgumentError, fn -> Conf.echo_bytes([0, 255, 254]) end
+    end
+
+    test "Option<Vec<u8>> round-trips nil and value" do
+      assert Conf.echo_bytes_option(nil) == nil
+      assert Conf.echo_bytes_option(@blob) == @blob
+    end
+
+    test "Option<&[u8]> round-trips nil and value" do
+      assert Conf.echo_bytes_option_ref(nil) == nil
+      assert Conf.echo_bytes_option_ref(@blob) == @blob
+    end
+
+    test "Vec<Vec<u8>> round-trips as a list of binaries" do
+      inputs = [@blob, <<>>, <<7>>]
+      assert echoed = Conf.echo_bytes_list(inputs)
+      assert Enum.all?(echoed, &is_binary/1)
+      assert echoed == inputs
+    end
+
+    test "HashMap<String, Vec<u8>> round-trips binary values" do
+      inputs = %{"a" => @blob, "b" => <<>>}
+      assert Conf.echo_bytes_map(inputs) == inputs
+    end
+
+    test "a blocking (DirtyIo) NIF carries binaries" do
+      assert Conf.blocking_bytes(@blob) == @blob
+    end
+
+    test "binaries ride inside {:ok, _} and the error variant still works" do
+      assert Conf.maybe_bytes(false) == {:ok, <<0, 255, 128>>}
+      assert {:error, %ConformanceError{variant: :gone}} = Conf.maybe_bytes(true)
+    end
+
+    test "async replies carry binaries" do
+      assert Conf.echo_bytes_async(@blob) == @blob
+    end
+
+    test "raw async contract: the reply term is a binary" do
+      ref = make_ref()
+      _inflight = Native.echo_bytes_async(ref, @blob)
+      assert_receive {:unibind, ^ref, {:ok, reply}}, 1_000
+      assert is_binary(reply)
+      assert reply == @blob
+    end
+
+    test "streams yield binaries" do
+      assert Enum.to_list(Conf.count_blobs(3)) == [
+               <<0, 255, ?0>>,
+               <<0, 255, ?1>>,
+               <<0, 255, ?2>>
+             ]
     end
   end
 
@@ -205,6 +341,49 @@ defmodule UnibindConformanceTest do
       ref = make_ref()
       _handle = Native.count(ref, 3)
       refute_receive {:unibind_stream, ^ref, _}, 100
+    end
+
+    test "count_stream/1 returns a handle, not an Enumerable" do
+      assert %StreamHandle{ref: ref, handle: handle} = Conf.count_stream(3)
+      assert is_reference(ref)
+      assert is_reference(handle)
+    end
+
+    test "stream_demand/2 and stream_message/2 drive the handle without a blocking receive" do
+      stream = Conf.count_stream(2)
+      refute_receive {:unibind_stream, _, _}, 100
+
+      assert :ok = Conf.stream_demand(stream, 1)
+      assert_receive item_message, 1_000
+      assert Conf.stream_message(stream, item_message) == {:item, 0}
+
+      assert :ok = Conf.stream_demand(stream, 2)
+      assert_receive second, 1_000
+      assert Conf.stream_message(stream, second) == {:item, 1}
+      assert_receive done, 1_000
+      assert Conf.stream_message(stream, done) == :done
+    end
+
+    test "stream_message/2 answers :nomatch for a foreign message" do
+      stream = Conf.count_stream(1)
+      assert Conf.stream_message(stream, {:tcp, self(), "data"}) == :nomatch
+      assert Conf.stream_message(stream, {:unibind_stream, make_ref(), :done}) == :nomatch
+    end
+
+    test "a GenServer consumes a stream from handle_info and stays responsive" do
+      {:ok, pid} = Collector.start_link(4)
+      # The point of the handle API: the server answers other calls while
+      # the stream is still in flight, which the Enumerable form cannot do.
+      assert Collector.ping(pid) == :pong
+      assert Collector.take(pid) == [0, 1, 2, 3]
+    end
+
+    test "binary stream items cross the handle API too" do
+      stream = Conf.count_blobs_stream(1)
+      assert :ok = Conf.stream_demand(stream, 1)
+      assert_receive message, 1_000
+      assert {:item, blob} = Conf.stream_message(stream, message)
+      assert blob == <<0, 255, ?0>>
     end
 
     test "demand convention: one credit, one {:unibind_stream, ref, {:item, _}}; :done after the end" do

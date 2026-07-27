@@ -2,18 +2,26 @@
 // testable and reusable. The reactive clock that drives their `refMs` argument
 // lives in ui.svelte.ts.
 
+// The unit ladder both age formatters walk: seconds, then minutes, hours, days,
+// each stopping at the first unit that fits. They differ only in how recent
+// counts as "now" and whether the unit carries " ago", so those are the
+// parameters and the ladder itself is written once.
+function age(atMs: number | undefined, refMs: number, nowBelowSec: number, suffix: string): string {
+  if (!atMs) return '';
+  const seconds = Math.max(0, Math.round((refMs - atMs) / 1000));
+  if (seconds < nowBelowSec) return 'now';
+  if (seconds < 60) return `${seconds}s${suffix}`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${suffix}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h${suffix}`;
+  return `${Math.floor(hours / 24)}d${suffix}`;
+}
+
 // A compact human age ("now", "3s ago", "2m ago", "4h ago", "3d ago") for a
 // `created_at` relative to a reference time.
 export function humanAge(createdMs: number | undefined, refMs: number): string {
-  if (!createdMs) return '';
-  const seconds = Math.max(0, Math.round((refMs - createdMs) / 1000));
-  if (seconds < 1) return 'now';
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  return age(createdMs, refMs, 1, ' ago');
 }
 
 // The sidebar's start-stamp: a relative age ("12s ago" / "3m ago") while under an
@@ -40,6 +48,13 @@ export function humanTime(createdMs: number | undefined, refMs: number): string 
     });
   }
   return started.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// The tightest possible age, for a dense column of them: "now", "42s", "4m",
+// "2h", "3d". No "ago" -- in a list headed "when" the word is noise on every row,
+// and the column stays narrow enough to align with tabular numerals.
+export function shortAge(atMs: number | undefined, refMs: number): string {
+  return age(atMs, refMs, 10, '');
 }
 
 // A compact run-duration label ("420ms", "1.3s", "9.8s", "1m4s").

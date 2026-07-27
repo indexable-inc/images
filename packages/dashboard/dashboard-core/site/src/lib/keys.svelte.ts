@@ -7,7 +7,7 @@
 // friends): for every key we bind we stopImmediatePropagation, so the dashboard's
 // own bindings win over an extension's instead of fighting it.
 
-import { ui, clearFocus } from './ui.svelte';
+import { ui, clearFocus, toggleHistory } from './ui.svelte';
 
 // What the sidebar exposes to the global keymap. It registers these on mount and
 // clears them on destroy.
@@ -137,6 +137,10 @@ export function installKeymap(): () => void {
         return swallow(e);
       case 'h':
         nav?.back();
+        return swallow(e);
+      case 'e':
+        // The edit history: who changed what, and where it landed.
+        toggleHistory();
         return swallow(e);
       case '/':
         nav?.filter();

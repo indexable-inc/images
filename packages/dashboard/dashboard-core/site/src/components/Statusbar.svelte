@@ -15,8 +15,11 @@
     loadRecording,
     leaveRecording,
     shareUrl,
+    writes,
+    retryWrites,
+    dismissWriteError,
   } from '$lib/stream.svelte';
-  import { humanClock, recordingLabel } from '$lib/ui.svelte';
+  import { humanClock, recordingLabel, toggleHistory } from '$lib/ui.svelte';
 
   let { sessionCount, runCount }: { sessionCount: number; runCount: number } = $props();
 
@@ -58,8 +61,22 @@
   <span class="status-sep">|</span>
   <span class="status-counts">{sessionCount} {sessionCount === 1 ? 'session' : 'sessions'} · {runCount} {runCount === 1 ? 'run' : 'runs'}</span>
 
+  <!-- A refused write is the one thing here that must not be quiet: the human who
+       clicked has no other way to learn their answer did not land. Red ink, the
+       reason the server gave, and the one retry that can work (reposting a full
+       snapshot, which depends on nothing). -->
+  {#if writes.error}
+    <span class="status-writefail">
+      <span class="status-writemsg" title={writes.error}>{writes.error}</span>
+      <button class="status-writebtn" onclick={retryWrites}>retry</button>
+      <button class="status-writebtn" onclick={dismissWriteError}>dismiss</button>
+    </span>
+  {:else if writes.pending}
+    <span class="status-writing">sending {writes.pending}…</span>
+  {/if}
+
   <span class="hints">
-    <kbd>j/k</kbd>move <kbd>o</kbd>open <kbd>/</kbd>filter <kbd>?</kbd>help
+    <kbd>j/k</kbd>move <kbd>o</kbd>open <kbd>e</kbd><button class="hint-btn" onclick={toggleHistory}>edits</button> <kbd>?</kbd>help
   </span>
 
   <div class="scrubber-wrap">
@@ -143,12 +160,6 @@
   }
   .status-live.on .dot {
     background: var(--live);
-    animation: led-pulse 1.4s ease-in-out infinite;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .status-live.on .dot {
-      animation: none;
-    }
   }
   .status-sep {
     color: var(--edge-strong);
@@ -162,6 +173,45 @@
     display: flex;
     align-items: center;
     gap: 4px;
+  }
+  .status-writefail {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    color: var(--dead);
+  }
+  .status-writemsg {
+    max-width: 42ch;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status-writebtn {
+    font: inherit;
+    color: var(--dead);
+    background: none;
+    border: 1px solid color-mix(in srgb, var(--dead) 45%, transparent);
+    padding: 0 5px;
+    cursor: pointer;
+  }
+  .status-writebtn:hover {
+    background: color-mix(in srgb, var(--dead) 14%, transparent);
+  }
+  .status-writing {
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .hint-btn {
+    font: inherit;
+    color: var(--ink-faint);
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+  .hint-btn:hover {
+    color: var(--ink-dim);
   }
   .hints kbd {
     font-family: var(--mono);
@@ -197,17 +247,6 @@
   }
   .scrub-tag.seeking {
     color: var(--accent);
-    animation: seek-pulse 1s ease-in-out infinite;
-  }
-  @keyframes seek-pulse {
-    50% {
-      opacity: 0.45;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .scrub-tag.seeking {
-      animation: none;
-    }
   }
   .scrub-tag:hover {
     color: var(--ink);

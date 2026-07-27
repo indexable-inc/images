@@ -15,11 +15,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Json};
-use axum::routing::get;
+use axum::routing::{get, post};
 use futures::{Stream, StreamExt as _};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -27,8 +29,9 @@ use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
-use super::hub::Hub;
+use super::hub::{Hub, Merge};
 use super::recordings::RecordingStore;
+use super::ws;
 use crate::{Error, Result};
 
 /// The single page the dashboard serves; it connects back over `/events`.
@@ -39,12 +42,23 @@ use crate::{Error, Result};
 /// compile-time embed rather than a runtime asset dir.
 const DASHBOARD_HTML: &str = include_str!(concat!(env!("OUT_DIR"), "/dashboard.html"));
 
+/// Ceiling on one inbound update.
+///
+/// A Loro update for a keystroke is tens of bytes; the large case is a client
+/// that fell behind reposting a whole snapshot. Set well above that and far
+/// below anything that could exhaust the process, because `/apply` is the one
+/// route a browser can push bytes through.
+const MAX_UPDATE_BYTES: usize = 8 * 1024 * 1024;
+
 /// Shared router state: the live document and, optionally, the on-disk
 /// recordings. Cloning is cheap: both fields are `Arc`s.
 #[derive(Clone)]
 struct AppState {
     hub: Arc<Hub>,
     recordings: Option<Arc<RecordingStore>>,
+    /// Protocol frames for the websocket clients, encoded once per hub delta by
+    /// the relay task. Cheap to clone: a broadcast sender.
+    frames: tokio::sync::broadcast::Sender<ws::Frames>,
 }
 
 /// What [`serve_hub`] hands back: the running dashboard plus the shutdown
@@ -152,13 +166,29 @@ pub async fn serve_hub(
 
     let (shutdown, stop_rx) = watch::channel(false);
 
+    // Started whether or not anyone speaks the protocol: it costs one idle task
+    // that encodes nothing while no websocket client is attached, and starting
+    // it lazily would mean the first client races the hub for the deltas it
+    // needs, which is exactly the gap the subscribe-then-snapshot order closes.
+    let (frames, relay) = ws::start_relay(Arc::clone(&hub), runtime);
+
     let app = Router::new()
         .route("/", get(index))
         .route("/index.html", get(index))
         .route("/events", get(events))
+        .route("/ws", get(sync))
         .route("/recordings", get(list_recordings))
+        .route("/history", get(history))
         .route("/recording/{id}", get(get_recording))
-        .with_state(AppState { hub, recordings });
+        .route(
+            "/apply",
+            post(apply).layer(DefaultBodyLimit::max(MAX_UPDATE_BYTES)),
+        )
+        .with_state(AppState {
+            hub,
+            recordings,
+            frames,
+        });
 
     let http = {
         let mut rx = shutdown.subscribe();
@@ -173,7 +203,7 @@ pub async fn serve_hub(
     let dashboard = Dashboard {
         addr: bound,
         shutdown: Some(shutdown),
-        tasks: vec![http],
+        tasks: vec![http, relay],
     };
     Ok(ServedDashboard {
         dashboard,
@@ -183,6 +213,12 @@ pub async fn serve_hub(
 
 async fn index() -> Html<&'static str> {
     Html(DASHBOARD_HTML)
+}
+
+/// Upgrade to the Loro sync protocol, the interoperable twin of `/events` plus
+/// `/apply`. See [`ws`] for the wire format and what this side promises.
+async fn sync(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl IntoResponse {
+    upgrade.on_upgrade(move |socket| ws::serve_socket(socket, state.hub, state.frames))
 }
 
 /// List saved recordings as JSON, newest first. Without a store (the in-process
@@ -208,6 +244,42 @@ async fn get_recording(State(state): State<AppState>, Path(id): Path<String>) ->
         )
 }
 
+/// The document's changes as JSON, oldest first, each with its commit tag and
+/// the actor its writing peer declared.
+///
+/// A browser holds the whole oplog already and could walk it itself, but a text
+/// op's position there is an entity index rather than a character offset, and
+/// resolving that is exactly the sort of thing that should exist once. Serving
+/// the resolved form keeps one reading of the oplog in the codebase instead of
+/// two that can disagree.
+async fn history(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.hub.history())
+}
+
+/// Merge a client's CRDT update into the shared document.
+///
+/// The inbound half of `/events`. A viewer exports its local ops and posts the
+/// bytes here; the hub merges them and fans the result back out, so every other
+/// viewer converges on the same document. Raw `application/octet-stream` rather
+/// than base64: the outbound stream encodes only because SSE is a text protocol,
+/// and a request body has no such constraint.
+async fn apply(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
+    match state.hub.import(&body) {
+        Ok(Merge::Applied) => StatusCode::NO_CONTENT.into_response(),
+        // The client built on ops this document has never seen, so its edit is
+        // recorded but invisible. A specific status because the fix is specific
+        // and the client can perform it: take a fresh snapshot from `/events`,
+        // rebase, and post again. Answering 204 here would tell a human their
+        // edit landed when it did not.
+        Ok(Merge::Pending) => (
+            StatusCode::CONFLICT,
+            "update depends on unknown ops; resync from /events and repost",
+        )
+            .into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
 async fn events(State(state): State<AppState>) -> impl IntoResponse {
     let hub = state.hub;
     // Loro imports are idempotent, so an overlapping snapshot/update is harmless.
@@ -224,7 +296,7 @@ async fn events(State(state): State<AppState>) -> impl IntoResponse {
 
     let tail = BroadcastStream::new(subscription.updates).map(move |item| {
         let event = match item {
-            Ok(encoded) => Event::default().event("update").data(encoded.as_ref()),
+            Ok(update) => Event::default().event("update").data(&update.encoded),
             Err(BroadcastStreamRecvError::Lagged(_)) => {
                 Event::default().event("snapshot").data(hub.snapshot_b64())
             }

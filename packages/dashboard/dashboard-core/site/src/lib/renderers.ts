@@ -11,6 +11,7 @@ import DataBody from '$components/DataBody.svelte';
 import ExecBody from '$components/ExecBody.svelte';
 import FileViewBody from '$components/FileViewBody.svelte';
 import HtmlBody from '$components/HtmlBody.svelte';
+import InputChoice from '$components/InputChoice.svelte';
 import NamespaceBody from '$components/NamespaceBody.svelte';
 import NixBuildBody from '$components/NixBuildBody.svelte';
 import TermBody from '$components/TermBody.svelte';
@@ -35,6 +36,9 @@ const dataRenderers: Record<string, Component<{ pane: Pane }>> = {
   // A live Nix build tree (the kernel's `nix.run`/`nix.build`), streamed from the
   // nix-web-monitor emitter's BuildView.
   'nix-build': NixBuildBody,
+  // A choice or approval whose answer is written back INTO the document, not sent
+  // as a message. See InputChoice.svelte for the body shape.
+  input: InputChoice,
 };
 
 export const fallback: Component<{ pane: Pane }> = DataBody;

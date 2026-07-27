@@ -9,10 +9,10 @@ description = "BEAM-side support for unibind's rustler backend: the shared tokio
 workspace = true
 
 [dependencies]
+# `StreamExt::map`, for re-wrapping a stream whose items need the `Bytes`
+# wire conversion before they can be encoded.
+futures.workspace = true
 libc.workspace = true
 rustler.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 unibind-runtime.workspace = true
-
-[dev-dependencies]
-futures.workspace = true

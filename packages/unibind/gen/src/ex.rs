@@ -2,9 +2,12 @@
 //!
 //! Two files land under `lib/`: `lib/<app>/native.ex` with the NIF stubs
 //! behind `@on_load`, and `lib/<app>.ex` with the typespec'd public
-//! wrapper. The rendering itself lives in `unibind-backend-ex` (next to the
-//! glue renderer, so NIF names and arities cannot drift apart); this
-//! emitter only decides where the modules land.
+//! wrapper. A third, `mix.exs`, makes the output a mix package rather than
+//! loose modules; its app name and namespace come from the same interface,
+//! so the project and the modules in it cannot name different apps. The
+//! rendering itself lives in `unibind-backend-ex` (next to the glue
+//! renderer, so NIF names and arities cannot drift apart); this emitter only
+//! decides where the files land.
 
 use unibind_core::ir::Interface;
 
@@ -38,6 +41,10 @@ impl HostEmitter for ExEmitter {
             HostFile {
                 path: format!("lib/{app}.ex"),
                 contents: modules.wrapper,
+            },
+            HostFile {
+                path: "mix.exs".to_owned(),
+                contents: modules.mix_project,
             },
         ])
     }

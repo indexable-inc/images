@@ -6,7 +6,16 @@ import type { Selection } from './sidebar';
 
 // Re-export the pure time formatters so components keep one import site (`ui`)
 // for both the reactive clock and the labels it drives.
-export { humanAge, humanTime, humanDuration, runTooltip, humanClock, humanDate, recordingLabel } from './time';
+export {
+  humanAge,
+  humanTime,
+  humanDuration,
+  runTooltip,
+  humanClock,
+  humanDate,
+  recordingLabel,
+  shortAge,
+} from './time';
 
 // ----- fold state (persisted) --------------------------------------------
 // One boolean per fold key: a section id ('sessions'/'resources'/'recordings')
@@ -25,14 +34,32 @@ function loadFolds(): Record<string, boolean> {
   }
 }
 
-// ----- right rail collapse (persisted) -----------------------------------
+// ----- persisted boolean panes -------------------------------------------
+// The rail's collapse and the history panel's visibility are the same kind of
+// state: one boolean each, mirrored to localStorage under its own key, and off
+// when storage is unavailable or has never been written.
 const RAIL_KEY = 'dash-rail-collapsed-v1';
+// The history is an inspection surface, not the reading surface, so it is
+// closed by default: an unasked-for column on every load is chrome.
+const HISTORY_KEY = 'dash-history-open-v1';
 
-function loadRailCollapsed(): boolean {
+function loadFlag(key: string): boolean {
   try {
-    return localStorage.getItem(RAIL_KEY) === '1';
+    return localStorage.getItem(key) === '1';
   } catch {
     return false;
+  }
+}
+
+// Flip a persisted flag and mirror it back. A storage failure (private mode,
+// quota) is not worth failing the toggle over: the flag still flips, it just
+// resets to its default next load.
+function toggleFlag(field: 'railCollapsed' | 'historyOpen', key: string): void {
+  ui[field] = !ui[field];
+  try {
+    localStorage.setItem(key, ui[field] ? '1' : '0');
+  } catch {
+    // Non-persistent is fine.
   }
 }
 
@@ -45,7 +72,9 @@ export const ui = $state({
   // Fold state by key; missing keys fall back to the per-key default (see isOpen).
   folds: loadFolds() as Record<string, boolean>,
   // Whether the right-rail namespace inspector is collapsed.
-  railCollapsed: loadRailCollapsed(),
+  railCollapsed: loadFlag(RAIL_KEY),
+  // Whether the edit-history panel is showing.
+  historyOpen: loadFlag(HISTORY_KEY),
   // Wall-clock milliseconds, ticked every second; rows derive their age from it.
   clock: Date.now(),
 });
@@ -79,12 +108,7 @@ export function select(selection: Selection | null): void {
 }
 
 export function toggleRail(): void {
-  ui.railCollapsed = !ui.railCollapsed;
-  try {
-    localStorage.setItem(RAIL_KEY, ui.railCollapsed ? '1' : '0');
-  } catch {
-    // Non-persistent is fine.
-  }
+  toggleFlag('railCollapsed', RAIL_KEY);
 }
 
 let ticking = false;
@@ -95,6 +119,10 @@ export function startClock(): void {
   setInterval(() => {
     ui.clock = Date.now();
   }, 1000);
+}
+
+export function toggleHistory(): void {
+  toggleFlag('historyOpen', HISTORY_KEY);
 }
 
 export function focusPane(key: string): void {

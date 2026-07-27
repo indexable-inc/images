@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashboard_core::{ExecView, Hub, Pane, ProducerSnapshot, Publisher, RecordingStore, serve_hub};
-use loro::LoroDoc;
+use loro::{ExportMode, LoroDoc};
 
 fn exec_pane() -> Pane {
     Pane::exec(
@@ -153,6 +153,108 @@ fn http_serves_page_and_lists_recordings() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The inbound half, over HTTP: a viewer's edit posted to `/apply` merges into
+/// the shared document. This is what makes the page writable rather than a
+/// read-only mirror, and it is the whole round trip in one test -- snapshot out,
+/// edit, bytes back in, edit visible to the next reader.
+#[test]
+fn http_apply_merges_a_viewer_edit() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = runtime.enter();
+
+    let hub = Hub::new();
+    let probe = Arc::clone(&hub);
+    let addr = "127.0.0.1:0".parse().unwrap();
+    let served = runtime
+        .block_on(serve_hub(hub, addr, None, runtime.handle()))
+        .expect("serve");
+    let addr = served.dashboard.addr();
+
+    probe.apply_scope("producer-1", &[exec_pane()]);
+
+    // A viewer behaves as the browser does: start from the snapshot, edit, export.
+    let peer = LoroDoc::new();
+    peer.import(&probe.export_snapshot())
+        .expect("snapshot imports");
+    peer.get_map("inputs")
+        .insert("verdict", "splice")
+        .expect("edit");
+    peer.commit();
+    let update = peer.export(ExportMode::Snapshot).expect("export");
+
+    let response = http_post(addr, "/apply", &update);
+    assert!(
+        response.starts_with("HTTP/1.1 204"),
+        "apply must accept a well-founded update: {response}"
+    );
+
+    let reader = LoroDoc::new();
+    reader
+        .import(&probe.export_snapshot())
+        .expect("reader imports");
+    let dump = format!("{:?}", reader.get_deep_value());
+    assert!(
+        dump.contains("splice"),
+        "posted edit missing from the shared document: {dump}"
+    );
+}
+
+/// An update the document cannot found is refused with a status the client can
+/// act on. Answering 204 would tell a human their edit landed when it did not.
+#[test]
+fn http_apply_refuses_an_unfounded_update() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = runtime.enter();
+
+    // Two sequential commits; ship only the second, so its dependency is absent.
+    let peer = LoroDoc::new();
+    peer.get_map("inputs").insert("first", "a").expect("write");
+    peer.commit();
+    let after_first = peer.oplog_vv();
+    peer.get_map("inputs").insert("second", "b").expect("write");
+    peer.commit();
+    let tail_only = peer
+        .export(ExportMode::updates(&after_first))
+        .expect("export");
+
+    let hub = Hub::new();
+    let addr = "127.0.0.1:0".parse().unwrap();
+    let served = runtime
+        .block_on(serve_hub(hub, addr, None, runtime.handle()))
+        .expect("serve");
+    let response = http_post(served.dashboard.addr(), "/apply", &tail_only);
+    assert!(
+        response.starts_with("HTTP/1.1 409"),
+        "an unfounded update must be refused, not silently dropped: {response}"
+    );
+}
+
+/// A minimal blocking HTTP/1.1 POST of a raw body, sibling of [`http_get`].
+fn http_post(addr: std::net::SocketAddr, path: &str, body: &[u8]) -> String {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut stream = loop {
+        match TcpStream::connect(addr) {
+            Ok(stream) => break stream,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => panic!("connect {addr}: {error}"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+         Content-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .expect("write request head");
+    stream.write_all(body).expect("write body");
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    response
 }
 
 /// A minimal blocking HTTP/1.1 GET that reads the whole response to EOF

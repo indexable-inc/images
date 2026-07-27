@@ -11,6 +11,7 @@ defmodule IxMcp.Application do
       ├── IxMcp.Serve.State     served-app bookkeeping (url, jobs, gate outcome)
       ├── IxMcp.MCP.Notifier    server-initiated notification fan-out (+ outbox replay)
       ├── IxMcp.MCP.ClientRequests  server-initiated requests (elicitation) awaiting client replies
+      ├── IxMcp.Dashboard.Bridge  dashboard watch streams -> per-viewer outbox notifications
       ├── IxMcp.Jobs.Reaper     monitors job processes; finalizes any that die unreported
       ├── IxMcp.Jobs.Supervisor (DynamicSupervisor)  one child per cell/job
       │   └── IxMcp.Jobs.Job*   runs one evaluation in a monitored process
@@ -56,6 +57,10 @@ defmodule IxMcp.Application do
         # before any job can start (#3839).
         IxMcp.MCP.Notifier,
         IxMcp.MCP.ClientRequests,
+        # After the notifier it publishes through: it holds the dashboard
+        # documents' native watch streams and fans each edit out to the
+        # sessions viewing that document.
+        IxMcp.Dashboard.Bridge,
         IxMcp.Jobs.Reaper,
         {DynamicSupervisor, name: IxMcp.Jobs.Supervisor, strategy: :one_for_one},
         {Task.Supervisor, name: IxMcp.PrWatch.Supervisor},

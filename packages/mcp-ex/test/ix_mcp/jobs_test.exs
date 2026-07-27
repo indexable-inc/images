@@ -1,6 +1,8 @@
 defmodule IxMcp.JobsTest do
   use ExUnit.Case, async: false
 
+  import IxMcpTest.Eventually
+
   alias IxMcp.ActionLog
   alias IxMcp.Jobs
   alias IxMcp.Jobs.Reaper
@@ -420,20 +422,6 @@ defmodule IxMcp.JobsTest do
       {content, meta}
     else
       receive_channel_mentioning(id)
-    end
-  end
-
-  defp eventually(probe, tries \\ 50) do
-    case probe.() do
-      nil when tries > 0 ->
-        Process.sleep(20)
-        eventually(probe, tries - 1)
-
-      nil ->
-        flunk("condition never became true")
-
-      value ->
-        value
     end
   end
 end

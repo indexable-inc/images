@@ -1,35 +1,50 @@
 :root {
   color-scheme: light dark;
 
-  /* The "Obsidian" palette: dark is near-black, flat, with one periwinkle accent;
-     light is a calm near-monochrome paper. Each token carries both schemes via
-     light-dark(). Surfaces step bg -> panel -> elev (board, card, raised); the
-     only saturated colors are the accent and the status/kind hues below. */
-  --bg:          light-dark(#f4f4f5, #08080a);
-  --panel:       light-dark(#fbfbfc, #0d0d10);
-  --elev:        light-dark(#ffffff, #141417);
-  --edge:        light-dark(#e6e6e9, #18181b);
-  --edge-strong: light-dark(#d3d3d8, #242429);
-  --ink:         light-dark(#1b1c21, #ececef);
-  --ink-dim:     light-dark(#5c5e66, #82828c);
-  --ink-faint:   light-dark(#9a9ba2, #4a4a53);
-  --live:        light-dark(#3f9a52, #52c98e);
-  --dead:        light-dark(#cf4b46, #e0635b);
-  --accent:      light-dark(#5358e0, #a8b0ff);
-  /* A faint accent wash for selected fills and text selection. */
-  --accent-soft: light-dark(rgba(83, 88, 224, 0.10), rgba(168, 176, 255, 0.13));
-  --cursor:      light-dark(#9a9ba2, #a8b0ff);
-  --sel:         light-dark(#ededf0, #18181c);
+  /* The "Soft Machine" palette, the same one the test-ide app defines in
+     src/app.css: warm olive charcoal in the dark, warm cream in the light, one
+     dusty-pink accent shared by both. Values are that app's tokens carried over
+     verbatim; only the names differ, because this app addresses its palette
+     through light-dark() pairs rather than a Tailwind theme block.
 
-  /* Kind/status hues for namespace badges and chips — used sparingly, tinted. */
-  --k-green: light-dark(#3f9a52, #52c98e);
-  --k-amber: light-dark(#b4801f, #d6a44a);
-  --k-red:   light-dark(#cf4b46, #e0635b);
-  --k-blue:  light-dark(#3a6fd0, #7fb4ff);
-  --k-pink:  light-dark(#b85a9c, #e08fc7);
+       --bg   = background   --panel = sidebar   --elev = card
+       --edge = border       --ink   = foreground
+       --ink-dim = muted-foreground  --accent = primary   --sel = secondary
 
-  --ui: ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', Segoe UI, sans-serif;
-  --mono: 'Berkeley Mono', ui-monospace, 'SF Mono', SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+     Ranking is by INK, never by opacity: foreground for what you are reading,
+     muted-foreground for its context, red/amber for severity. Alpha appears only
+     on backgrounds and hairline borders, never on a text colour. */
+
+  /* IntelliJ-flat: square corners everywhere, no decorative chrome. */
+  --radius: 0;
+
+  --bg:          light-dark(oklch(0.977 0.005 105), oklch(0.205 0.009 120));
+  --panel:       light-dark(oklch(0.96 0.006 105),  oklch(0.225 0.009 120));
+  --elev:        light-dark(oklch(0.995 0.003 105), oklch(0.238 0.009 120));
+  --edge:        light-dark(oklch(0.895 0.009 105), oklch(0.95 0.01 110 / 9%));
+  --edge-strong: light-dark(oklch(0.845 0.009 105), oklch(0.95 0.01 110 / 16%));
+  --ink:         light-dark(oklch(0.28 0.012 110),  oklch(0.92 0.006 106));
+  --ink-dim:     light-dark(oklch(0.51 0.014 110),  oklch(0.67 0.012 110));
+  /* The third rank of ink. Still a solid colour, not the foreground at reduced
+     alpha: dimmed text is the one thing this palette never does. */
+  --ink-faint:   light-dark(oklch(0.655 0.014 110), oklch(0.52 0.012 110));
+  --live:        light-dark(oklch(0.65 0.12 150),   oklch(0.72 0.12 150));
+  --dead:        light-dark(oklch(0.577 0.245 27.325), oklch(0.66 0.185 25));
+  --accent:      light-dark(oklch(0.62 0.125 355),  oklch(0.75 0.105 350));
+  /* The accent as a FILL: what a selection is drawn with. Never used for text. */
+  --accent-soft: light-dark(oklch(0.93 0.016 350),  oklch(0.75 0.105 350 / 16%));
+  --cursor:      light-dark(oklch(0.62 0.125 355),  oklch(0.75 0.105 350));
+  --sel:         light-dark(oklch(0.945 0.006 105), oklch(0.285 0.009 120));
+
+  /* Kind/status hues (the chart ramp), for badges and chips — used sparingly. */
+  --k-green: light-dark(oklch(0.65 0.12 150),  oklch(0.72 0.12 150));
+  --k-amber: light-dark(oklch(0.75 0.13 80),   oklch(0.8 0.12 80));
+  --k-red:   light-dark(oklch(0.577 0.245 27.325), oklch(0.66 0.185 25));
+  --k-blue:  light-dark(oklch(0.62 0.11 250),  oklch(0.7 0.1 250));
+  --k-pink:  light-dark(oklch(0.6 0.12 300),   oklch(0.68 0.11 300));
+
+  --ui: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', Segoe UI, sans-serif;
+  --mono: 'Berkeley Mono', 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 }
 
 /* light-dark() is unsupported on ~15% of browsers as of 2026; restore the dark
@@ -37,12 +52,14 @@
 @supports not (color: light-dark(#000, #fff)) {
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #08080a; --panel: #0d0d10; --elev: #141417; --edge: #18181b; --edge-strong: #242429;
-      --ink: #ececef; --ink-dim: #82828c; --ink-faint: #4a4a53;
-      --live: #52c98e; --dead: #e0635b; --accent: #a8b0ff;
-      --accent-soft: rgba(168, 176, 255, 0.13); --cursor: #a8b0ff;
-      --sel: #18181c;
-      --k-green: #52c98e; --k-amber: #d6a44a; --k-red: #e0635b; --k-blue: #7fb4ff; --k-pink: #e08fc7;
+      --bg: oklch(0.205 0.009 120); --panel: oklch(0.225 0.009 120); --elev: oklch(0.238 0.009 120);
+      --edge: oklch(0.95 0.01 110 / 9%); --edge-strong: oklch(0.95 0.01 110 / 16%);
+      --ink: oklch(0.92 0.006 106); --ink-dim: oklch(0.67 0.012 110); --ink-faint: oklch(0.52 0.012 110);
+      --live: oklch(0.72 0.12 150); --dead: oklch(0.66 0.185 25); --accent: oklch(0.75 0.105 350);
+      --accent-soft: oklch(0.75 0.105 350 / 16%); --cursor: oklch(0.75 0.105 350);
+      --sel: oklch(0.285 0.009 120);
+      --k-green: oklch(0.72 0.12 150); --k-amber: oklch(0.8 0.12 80); --k-red: oklch(0.66 0.185 25);
+      --k-blue: oklch(0.7 0.1 250); --k-pink: oklch(0.68 0.11 300);
     }
   }
 }
@@ -63,9 +80,16 @@ body {
 #app { height: 100%; }
 ::selection { background: var(--accent-soft); }
 
-::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--edge); border: 2px solid var(--panel); }
+/* Discreet scrollbars: hairline, translucent, square. The thumb only asserts
+   itself under the cursor, so dense panels read as content, not chrome. */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--ink-dim) 22%, transparent); }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in oklab, var(--ink-dim) 45%, transparent); }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--ink-dim) 25%, transparent) transparent; }
+}
 
 /* ----- shared status LED ------------------------------------------------ */
 /* One primitive for run/resource status, used by the sidebar and run detail.
@@ -76,11 +100,12 @@ body {
   width: 7px; height: 7px; border-radius: 50%;
   display: inline-block;
 }
+/* Nothing here animates. A running resource is told by a FILLED amber dot against
+   a hollow ring, which is the whole signal; the pulse it used to carry was
+   motion for its own sake, and this palette animates only red severity. */
 .led-ok { border: 1px solid var(--live); background: transparent; }
-.led-running { background: var(--k-amber); animation: led-pulse 1.4s ease-in-out infinite; }
+.led-running { background: var(--k-amber); }
 .led-error { background: var(--dead); }
-@keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-@media (prefers-reduced-motion: reduce) { .led-running { animation: none; } }
 
 /* ----- pane body -------------------------------------------------------- */
 /* The `.pane` wrapper carries no chrome of its own: it is just the box the kind's
@@ -288,4 +313,14 @@ body {
 .trace-stderr { margin: 0; border-top: 1px solid var(--edge); }
 @media (prefers-color-scheme: dark) {
   .trace-code .line, .trace-code .line span { color: var(--shiki-dark); }
+}
+
+/* ----- the edit marker -------------------------------------------------- */
+/* Where the edit selected in the history panel landed. A selection is DRAWN, not
+   subtracted: the marked region gains an accent fill and an accent rule down its
+   leading edge, and nothing else on the page changes. No transition — the mark
+   appears with the scroll, it does not animate into place. */
+.edit-marked {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 0 var(--accent);
 }

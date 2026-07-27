@@ -21,6 +21,14 @@
 //! pane is stamped with a `created_at` the first time it appears. Together they
 //! let a browser scrub the document to any past moment and show each resource's
 //! age, with no producer opting in.
+//!
+//! Two more root containers hang off the same document, each with a different
+//! owner. `__peers` maps a peer id to the [`Actor`] behind it, so a change reads
+//! as "the agent" or "Ada" rather than as a random `u64`. `inputs` holds viewer
+//! answers and is the one surface no producer writes: it is how a browser talks
+//! back. Every commit also carries a JSON tag as its Loro commit message, which
+//! is both what a history UI reads to label a change ([`Hub::history`]) and what
+//! keeps a session's edits from collapsing into one change.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -28,8 +36,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use loro::{ExportMode, LoroDoc, LoroMap, LoroText, VersionVector};
+use loro::{
+    Container, ExportMode, JsonMapOp, JsonOp, JsonOpContent, JsonTextOp, LoroDoc, LoroMap,
+    LoroText, LoroValue, Subscription as LoroSubscription, ValueOrContainer, VersionVector,
+};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::pane::{Pane, View};
@@ -44,8 +56,47 @@ const BROADCAST_CAPACITY: usize = 256;
 /// contains it, so the split back into `(scope, id)` is unambiguous.
 const SCOPE_SEP: char = '\u{1f}';
 
+/// Root map from peer id to the [`Actor`] behind it, keyed by the id in decimal
+/// because a Loro peer id is a `u64` and a JSON number is not.
+const PEERS_ROOT: &str = "__peers";
+
+/// Root map holding viewer answers, keyed `"<scope>\x1f<pane>\x1f<field>"`.
+const INPUTS_ROOT: &str = "inputs";
+
 fn doc_key(scope: &str, id: &str) -> String {
     format!("{scope}{SCOPE_SEP}{id}")
+}
+
+/// The pane id half of a root-map key, for naming what a commit touched.
+fn pane_id(key: &str) -> &str {
+    key.rsplit(SCOPE_SEP).next().unwrap_or(key)
+}
+
+/// The key one viewer answer lives under in [`INPUTS_ROOT`].
+fn input_key(scope: &str, pane: &str, field: &str) -> String {
+    format!("{scope}{SCOPE_SEP}{pane}{SCOPE_SEP}{field}")
+}
+
+/// Split an input key back into its three parts, or `None` when it is not one.
+///
+/// A viewer writing a key of its own invention is not an error the hub can
+/// answer -- the write already merged -- so an unparseable key is skipped by
+/// [`DocState::inputs`] rather than guessed at.
+fn split_input_key(key: &str) -> Option<InputParts<'_>> {
+    let mut parts = key.split(SCOPE_SEP);
+    let parsed = InputParts {
+        scope: parts.next()?,
+        pane: parts.next()?,
+        field: parts.next()?,
+    };
+    parts.next().is_none().then_some(parsed)
+}
+
+/// The three parts of an input key.
+struct InputParts<'a> {
+    scope: &'a str,
+    pane: &'a str,
+    field: &'a str,
 }
 
 /// Milliseconds since the Unix epoch, saturating instead of panicking on a clock
@@ -252,8 +303,21 @@ impl Slot {
 struct DocState {
     doc: LoroDoc,
     root: LoroMap,
+    /// Peer id (decimal) to actor. See [`PEERS_ROOT`].
+    peers: LoroMap,
+    /// Viewer answers. See [`INPUTS_ROOT`].
+    inputs: LoroMap,
     panes: HashMap<String, Slot>,
     streamed: VersionVector,
+    /// What this hub calls itself, shared with the first-commit callback because
+    /// that callback runs while the `DocState` lock is held and so cannot read
+    /// it back through `self`.
+    identity: Arc<Mutex<Actor>>,
+    /// Distinguishes one commit's message from the next. See [`CommitTag`].
+    seq: u64,
+    /// Held only for its `Drop`: a dropped `Subscription` unsubscribes, and an
+    /// unregistered callback would leave every change unattributed.
+    _attribution: LoroSubscription,
 }
 
 impl DocState {
@@ -265,19 +329,179 @@ impl DocState {
         // keeps any commit that bypasses that path timestamped too.
         doc.set_record_timestamp(true);
         let root = doc.get_map("panes");
+        let peers = doc.get_map(PEERS_ROOT);
+        let inputs = doc.get_map(INPUTS_ROOT);
         let streamed = doc.oplog_vv();
+        let identity = Arc::new(Mutex::new(Actor::default()));
+
+        // Loro fires this once per peer that commits *locally*, and a write made
+        // inside the callback joins that same commit -- so a peer can never
+        // appear in the history before it has said who it is. A remote peer is
+        // introduced by its own document the same way and arrives with the
+        // merge; the hub does not guess on anyone else's behalf.
+        let attribution = {
+            let peers = peers.clone();
+            let identity = Arc::clone(&identity);
+            doc.subscribe_first_commit_from_peer(Box::new(move |payload| {
+                let actor = identity.lock().clone();
+                // A Loro callback has no channel to report through. The only way
+                // this write fails is a detached document, which the hub never
+                // does; if it ever did, the cost is an unlabelled peer id in the
+                // history rather than a lost pane.
+                let _ = write_actor(&peers, payload.peer, &actor);
+                true
+            }))
+        };
+
         Self {
             doc,
             root,
+            peers,
+            inputs,
             panes: HashMap::new(),
             streamed,
+            identity,
+            seq: 0,
+            _attribution: attribution,
         }
+    }
+
+    /// Record `actor` as this hub's identity and write it against the current
+    /// peer id straight away, so an owner that declares before its first pane is
+    /// still in the document, and a re-declaration takes effect at once.
+    fn declare_identity(&mut self, actor: Actor) -> Result<Option<Vec<u8>>> {
+        // The guard has to be gone before the commit below: the first-commit
+        // callback takes the same lock, and it is not reentrant.
+        *self.identity.lock() = actor.clone();
+        let peer = self.doc.peer_id().to_string();
+        write_actor(&self.peers, self.doc.peer_id(), &actor)?;
+        self.commit_delta(CommitTag {
+            on: "peers",
+            add: vec![&peer],
+            ..CommitTag::default()
+        })
+    }
+
+    /// Every peer that has introduced itself in this document.
+    fn actors(&self) -> HashMap<u64, Actor> {
+        let mut actors = HashMap::new();
+        self.peers.for_each(|key, value| {
+            let (Ok(peer), Some(actor)) = (key.parse::<u64>(), read_actor(&value)) else {
+                return;
+            };
+            actors.insert(peer, actor);
+        });
+        actors
+    }
+
+    /// Create the text container for a note field if it is not there yet.
+    ///
+    /// `ensure_mergeable_text` rather than `insert_container`: a plain child
+    /// container gets an op-derived id, so two viewers creating one at the same
+    /// key concurrently produce two containers and the map keeps exactly one --
+    /// discarding everything the loser typed. A mergeable child has a key-derived
+    /// id, so concurrent creation converges on one container and both viewers'
+    /// sentences survive. Declaring it here as well means the container is
+    /// already in the snapshot every viewer imports, so no viewer has to create
+    /// it at all.
+    fn declare_note(&mut self, scope: &str, pane: &str, field: &str) -> Result<Option<Vec<u8>>> {
+        let key = input_key(scope, pane, field);
+        self.inputs.ensure_mergeable_text(&key).map_err(loro_err)?;
+        self.commit_delta(CommitTag {
+            on: "inputs",
+            scope: Some(scope),
+            pane: Some(pane),
+            add: vec![field],
+            ..CommitTag::default()
+        })
+    }
+
+    /// The answer to a single-answer field, or `None` when nobody has answered.
+    fn choice(&self, scope: &str, pane: &str, field: &str) -> Option<String> {
+        match self.inputs.get(&input_key(scope, pane, field))? {
+            ValueOrContainer::Value(value) => scalar_answer(&value),
+            ValueOrContainer::Container(_) => None,
+        }
+    }
+
+    /// The text of a note field, or `None` when the field was never declared.
+    /// An empty string means declared and untouched, which is a different thing.
+    fn note(&self, scope: &str, pane: &str, field: &str) -> Option<String> {
+        match self.inputs.get(&input_key(scope, pane, field))? {
+            ValueOrContainer::Container(Container::Text(text)) => Some(text.to_string()),
+            _ => None,
+        }
+    }
+
+    /// Every input in the document, sorted so two reads of an unchanged document
+    /// agree (Loro's map iteration order is its own business).
+    fn inputs(&self) -> Vec<InputEntry> {
+        let mut entries = Vec::new();
+        self.inputs.for_each(|key, value| {
+            let Some(parts) = split_input_key(key) else {
+                return;
+            };
+            let input = match value {
+                ValueOrContainer::Container(Container::Text(text)) => Input::Note {
+                    text: text.to_string(),
+                },
+                ValueOrContainer::Value(value) => match scalar_answer(&value) {
+                    Some(value) => Input::Choice { value },
+                    None => return,
+                },
+                ValueOrContainer::Container(_) => return,
+            };
+            entries.push(InputEntry {
+                scope: parts.scope.to_owned(),
+                pane: parts.pane.to_owned(),
+                field: parts.field.to_owned(),
+                value: input,
+            });
+        });
+        entries.sort_by(|left, right| {
+            (&left.scope, &left.pane, &left.field).cmp(&(&right.scope, &right.pane, &right.field))
+        });
+        entries
+    }
+
+    /// The whole oplog as changes, oldest first, each attributed to the actor its
+    /// peer declared.
+    ///
+    /// `export_json_updates_without_peer_compression` rather than the compressed
+    /// form: the compressed one replaces peer ids with indices into a side table,
+    /// which a consumer then has to join back before it can attribute anything.
+    fn history(&self) -> Vec<HistoryChange> {
+        let actors = self.actors();
+        let updates = self.doc.export_json_updates_without_peer_compression(
+            &VersionVector::default(),
+            &self.doc.oplog_vv(),
+        );
+        updates
+            .changes
+            .into_iter()
+            .map(|change| HistoryChange {
+                peer: change.id.peer.to_string(),
+                counter: change.id.counter,
+                lamport: change.lamport,
+                timestamp: change.timestamp,
+                message: change.msg,
+                actor: actors.get(&change.id.peer).cloned(),
+                deps: change
+                    .deps
+                    .iter()
+                    .map(|dep| format!("{}@{}", dep.peer, dep.counter))
+                    .collect(),
+                ops: change.ops.iter().map(history_op).collect(),
+            })
+            .collect()
     }
 
     /// Reconcile the panes under `scope` to exactly `panes`. Entries under other
     /// scopes are left alone. Returns the CRDT delta since the last broadcast
     /// when anything changed.
     fn apply_scope(&mut self, scope: &str, panes: &[Pane]) -> Result<Option<Vec<u8>>> {
+        let mut added: Vec<&str> = Vec::new();
+        let mut changed: Vec<&str> = Vec::new();
         for pane in panes {
             let key = doc_key(scope, &pane.id);
             let kind = pane.view.kind();
@@ -289,10 +513,16 @@ impl DocState {
                 self.drop_keys(std::slice::from_ref(&key))?;
             }
 
-            if !self.panes.contains_key(&key) {
+            let fresh = !self.panes.contains_key(&key);
+            if fresh {
                 self.create_slot(&key, pane)?;
+                added.push(&pane.id);
             }
-            self.update_slot(&key, pane)?;
+            // A created pane's first values are part of creating it, so listing
+            // it twice would only pad the commit tag.
+            if self.update_slot(&key, pane)? && !fresh {
+                changed.push(&pane.id);
+            }
         }
 
         let prefix = format!("{scope}{SCOPE_SEP}");
@@ -303,9 +533,17 @@ impl DocState {
             .filter(|key| key.starts_with(&prefix) && !live.contains(*key))
             .cloned()
             .collect();
+        let dropped: Vec<&str> = dead.iter().map(|key| pane_id(key)).collect();
         self.drop_keys(&dead)?;
 
-        self.commit_delta()
+        self.commit_delta(CommitTag {
+            on: "panes",
+            scope: Some(scope),
+            add: added,
+            set: changed,
+            del: dropped,
+            ..CommitTag::default()
+        })
     }
 
     /// Create the Loro containers for a new pane and cache them. The scalars and
@@ -353,20 +591,24 @@ impl DocState {
     }
 
     /// Reconcile one existing pane's scalars and text fields to `pane`, writing
-    /// only the values that changed so an idle pane produces no delta.
-    fn update_slot(&mut self, key: &str, pane: &Pane) -> Result<()> {
+    /// only the values that changed so an idle pane produces no delta. Reports
+    /// whether anything was written, which is what the commit tag names.
+    fn update_slot(&mut self, key: &str, pane: &Pane) -> Result<bool> {
         let slot = self.panes.get_mut(key).expect("slot exists");
+        let mut wrote = false;
         if slot.title != pane.title {
             slot.meta
                 .insert("title", pane.title.as_str())
                 .map_err(loro_err)?;
             slot.title.clone_from(&pane.title);
+            wrote = true;
         }
         if slot.subtitle != pane.subtitle {
             slot.meta
                 .insert("subtitle", pane.subtitle.as_str())
                 .map_err(loro_err)?;
             slot.subtitle.clone_from(&pane.subtitle);
+            wrote = true;
         }
         if slot.parent != pane.parent {
             match &pane.parent {
@@ -377,11 +619,13 @@ impl DocState {
                 None => slot.meta.delete("parent").map_err(loro_err)?,
             }
             slot.parent.clone_from(&pane.parent);
+            wrote = true;
         }
         for field in view_scalars(&pane.view) {
             if slot.scalars.get(field.name) != Some(&field.value) {
                 write_scalar(&slot.meta, field.name, &field.value)?;
                 slot.scalars.insert(field.name, field.value);
+                wrote = true;
             }
         }
         for field in view_texts(&pane.view) {
@@ -393,9 +637,10 @@ impl DocState {
             {
                 set_text(&text_slot.text, &field.value)?;
                 text_slot.value = field.value;
+                wrote = true;
             }
         }
-        Ok(())
+        Ok(wrote)
     }
 
     /// Keep panes under `scope` when its producer disconnects.
@@ -420,8 +665,17 @@ impl DocState {
 
     /// Commit the pending edits and export the delta since the last broadcast,
     /// or `None` when nothing changed. Stamps the commit with a millisecond
-    /// wall-clock timestamp so the browser timeline has a fine-grained axis.
-    fn commit_delta(&mut self) -> Result<Option<Vec<u8>>> {
+    /// wall-clock timestamp so the browser timeline has a fine-grained axis, and
+    /// with `tag` as its commit message so the change is legible and stays its
+    /// own change.
+    fn commit_delta(&mut self, tag: CommitTag<'_>) -> Result<Option<Vec<u8>>> {
+        self.seq += 1;
+        let tag = CommitTag {
+            seq: self.seq,
+            ..tag
+        };
+        let message = serde_json::to_string(&tag).map_err(loro_err)?;
+        self.doc.set_next_commit_message(&message);
         self.doc.set_next_commit_timestamp(now_ms());
         self.doc.commit();
         let current = self.doc.oplog_vv();
@@ -442,6 +696,183 @@ impl DocState {
     /// past version, not only the latest state.
     fn snapshot(&self) -> Result<Vec<u8>> {
         self.doc.export(ExportMode::Snapshot).map_err(loro_err)
+    }
+
+    /// Merge remote CRDT bytes into the document and export the delta, so every
+    /// live client converges on the merged result.
+    ///
+    /// Reports whether Loro applied the update or only recorded it. A pending
+    /// import is neither success nor failure: the ops sit in the oplog but not
+    /// in the document state, so the edit is invisible until the range it
+    /// depends on arrives.
+    fn import(&mut self, bytes: &[u8]) -> Result<(Merge, Option<Vec<u8>>)> {
+        let status = self.doc.import(bytes).map_err(loro_err)?;
+        // A remote edit moves containers this side caches. Left stale, the next
+        // `update_slot` compares a producer value against a belief that is no
+        // longer true, and either skips a write that is needed or repeats one
+        // that is not -- so refresh before anything reads them.
+        self.resync_caches();
+        // The merged changes carry their writers' own messages; this commit only
+        // flushes anything local that was pending, and is usually empty.
+        let delta = self.commit_delta(CommitTag {
+            on: "import",
+            ..CommitTag::default()
+        })?;
+        let merge = if status.pending.is_some() {
+            Merge::Pending
+        } else {
+            Merge::Applied
+        };
+        Ok((merge, delta))
+    }
+
+    /// Refresh every write-through cache from the container it shadows.
+    ///
+    /// Scoped to the panes this side already tracks. Producers own the pane set
+    /// and remotes edit values inside it, so a remote that adds or removes a
+    /// pane entry is outside the model; a handle whose container a remote
+    /// deleted fails loudly on its next write rather than silently no-oping.
+    fn resync_caches(&mut self) {
+        for slot in self.panes.values_mut() {
+            // An absent key resyncs to the sentinel, not to empty: empty is a
+            // value a producer can legitimately hold, and matching it would
+            // suppress the write that recreates the key.
+            slot.title = read_str(&slot.meta, "title").unwrap_or_else(sentinel);
+            slot.subtitle = read_str(&slot.meta, "subtitle").unwrap_or_else(sentinel);
+            slot.parent = read_str(&slot.meta, "parent");
+            let names: Vec<&'static str> = slot.scalars.keys().copied().collect();
+            for name in names {
+                let fresh = read_scalar(&slot.meta, name);
+                slot.scalars.insert(name, fresh);
+            }
+            for text in &mut slot.texts {
+                text.value = text.text.to_string();
+            }
+        }
+    }
+}
+
+/// The commit message every hub commit carries, as JSON.
+///
+/// Two jobs. It tells a history UI what a change was for without decoding its
+/// ops. And it keeps that change separate at all: Loro's change-merge interval
+/// defaults to 1000 *seconds*, so consecutive local commits fold into one change
+/// unless something about them differs, and the commit message is one of the
+/// fields that comparison covers. `seq` is therefore not decoration -- without a
+/// field that differs every time, a whole session of pane edits arrives at the
+/// history UI as a single change.
+#[derive(Default, Serialize)]
+struct CommitTag<'a> {
+    /// What the commit is: `panes`, `inputs`, `peers`, or `import`.
+    on: &'static str,
+    /// Monotonic per hub. Gaps are commits that turned out to write nothing.
+    seq: u64,
+    /// The producer scope, when the commit belongs to one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'a str>,
+    /// The pane the commit is about, when it is about exactly one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pane: Option<&'a str>,
+    /// Keys this commit created.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    add: Vec<&'a str>,
+    /// Keys whose values this commit rewrote.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    set: Vec<&'a str>,
+    /// Keys this commit removed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    del: Vec<&'a str>,
+}
+
+/// Write one peer's actor entry.
+///
+/// `ensure_mergeable_map` so the entry converges even in the one case that could
+/// collide -- two documents that drew the same random peer id -- instead of one
+/// of them shadowing the other's label.
+fn write_actor(peers: &LoroMap, peer: u64, actor: &Actor) -> Result<()> {
+    let entry = peers
+        .ensure_mergeable_map(&peer.to_string())
+        .map_err(loro_err)?;
+    entry.insert("kind", actor.kind.tag()).map_err(loro_err)?;
+    entry
+        .insert("label", actor.label.as_str())
+        .map_err(loro_err)?;
+    Ok(())
+}
+
+/// Read one peer's actor entry back, or `None` when it is missing the fields a
+/// reader needs -- an entry written by a peer that speaks a later dialect.
+fn read_actor(entry: &ValueOrContainer) -> Option<Actor> {
+    let ValueOrContainer::Container(Container::Map(entry)) = entry else {
+        return None;
+    };
+    Some(Actor {
+        kind: ActorKind::from_tag(&read_str(entry, "kind")?)?,
+        label: read_str(entry, "label")?,
+    })
+}
+
+/// One viewer answer as a string, whatever scalar spelling it arrived in: a
+/// radio group posts `"approve"` and a checkbox posts `true`, and a producer
+/// branching on the answer wants one type rather than three. A container is not
+/// a single answer, so it is not one of these.
+fn scalar_answer(value: &LoroValue) -> Option<String> {
+    match value {
+        LoroValue::String(text) => Some(text.to_string()),
+        LoroValue::Bool(flag) => Some(flag.to_string()),
+        LoroValue::I64(int) => Some(int.to_string()),
+        _ => None,
+    }
+}
+
+/// Summarise one JSON op for the history surface.
+fn history_op(op: &JsonOp) -> HistoryOp {
+    let container = op.container.to_string();
+    match &op.content {
+        JsonOpContent::Map(JsonMapOp::Insert { key, .. }) => HistoryOp::MapSet {
+            container,
+            key: key.clone(),
+        },
+        JsonOpContent::Map(JsonMapOp::Delete { key }) => HistoryOp::MapDelete {
+            container,
+            key: key.clone(),
+        },
+        JsonOpContent::Text(JsonTextOp::Insert { text, .. }) => HistoryOp::TextInsert {
+            container,
+            chars: text.chars().count(),
+        },
+        JsonOpContent::Text(JsonTextOp::Delete { len, start_id, .. }) => HistoryOp::TextDelete {
+            container,
+            // A backwards delete is spelled with a negative length.
+            chars: len.unsigned_abs() as usize,
+            start: format!("{}@{}", start_id.peer, start_id.counter),
+        },
+        _ => HistoryOp::Other { container },
+    }
+}
+
+/// Read one scalar meta value back out of a pane's map.
+///
+/// The inverse of [`write_scalar`], and it exists for [`DocState::import`]:
+/// after a remote merge the write-through caches hold this side's stale belief,
+/// and the only truth about what a field now contains is the container itself. A
+/// key that is absent, or holds a type no view writes, reads as
+/// [`Scalar::Absent`] -- the same value that means "ensure it is not present",
+/// so a resync followed by a producer tick converges either way.
+fn read_scalar(meta: &LoroMap, name: &str) -> Scalar {
+    match meta.get(name).map(|value| value.get_deep_value()) {
+        Some(LoroValue::Bool(flag)) => Scalar::Bool(flag),
+        Some(LoroValue::I64(int)) => Scalar::Int(int),
+        Some(LoroValue::String(text)) => Scalar::Str(text.to_string()),
+        _ => Scalar::Absent,
+    }
+}
+
+/// Read one string meta value, or `None` when absent or holding another type.
+fn read_str(meta: &LoroMap, name: &str) -> Option<String> {
+    match meta.get(name).map(|value| value.get_deep_value()) {
+        Some(LoroValue::String(text)) => Some(text.to_string()),
+        _ => None,
     }
 }
 
@@ -467,14 +898,227 @@ fn loro_err(source: impl std::fmt::Display) -> Error {
     }
 }
 
+/// One broadcast delta in both of the forms its transports need.
+///
+/// SSE is a text protocol and has to base64 its payload; the Loro websocket
+/// protocol frames the same bytes raw. Carrying both means the encode happens
+/// once at fan-in rather than once per subscriber, and one channel keeps one
+/// lag domain -- two channels would let the same delta sit at different
+/// positions in each, so a subscriber resyncing on one could double-apply
+/// from the other.
+pub(crate) struct Update {
+    /// The raw Loro update, as the websocket transport frames it.
+    pub(crate) bytes: Vec<u8>,
+    /// The same bytes base64'd, as an SSE `data:` field requires.
+    pub(crate) encoded: String,
+}
+
 /// A new subscriber's starting point: the current full snapshot taken under the
 /// hub lock, plus the live update stream whose first item lines up with it.
 pub struct Subscription {
     /// The full document snapshot at subscribe time, for the client to import
     /// before applying any update.
     pub(crate) snapshot: Vec<u8>,
-    /// The base64 CRDT update stream, consistent with `snapshot`.
-    pub(crate) updates: broadcast::Receiver<Arc<str>>,
+    /// The CRDT update stream, consistent with `snapshot`.
+    pub(crate) updates: broadcast::Receiver<Arc<Update>>,
+}
+
+/// Who is behind a peer id.
+///
+/// A Loro peer id is a random `u64` per document and the library forbids pinning
+/// one per actor without a lock, so the id alone says nothing about who made a
+/// change. Instead each participant writes its own `__peers` entry on its first
+/// local commit, the one moment it can speak for itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Actor {
+    /// Software or a person -- the first thing a reviewer of a change asks.
+    pub kind: ActorKind,
+    /// Display label: an agent's run name, a human's handle.
+    pub label: String,
+}
+
+impl Actor {
+    /// An agent-driven writer.
+    #[must_use]
+    pub fn agent(label: impl Into<String>) -> Self {
+        Self {
+            kind: ActorKind::Agent,
+            label: label.into(),
+        }
+    }
+
+    /// A person at a browser.
+    #[must_use]
+    pub fn human(label: impl Into<String>) -> Self {
+        Self {
+            kind: ActorKind::Human,
+            label: label.into(),
+        }
+    }
+}
+
+impl Default for Actor {
+    /// What the hub calls itself until its owner says otherwise
+    /// ([`Hub::declare_identity`]). Every frame source on the producer side is a
+    /// program, so guessing `Human` here would be wrong far more often than not.
+    fn default() -> Self {
+        Self::agent("producer")
+    }
+}
+
+/// Which side of the collaboration a peer is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActorKind {
+    /// A program: a producer, an agent run, the hub itself.
+    Agent,
+    /// A person editing through a browser.
+    Human,
+}
+
+impl ActorKind {
+    /// The spelling stored in the document and on the wire.
+    const fn tag(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Human => "human",
+        }
+    }
+
+    /// The inverse of [`tag`](Self::tag); `None` for a spelling this build does
+    /// not know, which is how a newer peer's kind arrives.
+    fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "agent" => Some(Self::Agent),
+            "human" => Some(Self::Human),
+            _ => None,
+        }
+    }
+}
+
+/// One viewer answer, tagged with the merge semantics it was stored under.
+///
+/// The distinction is the whole point of the type. Putting free text on a map
+/// key would resolve two people typing at once by keeping one sentence and
+/// discarding the other, silently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "shape", rename_all = "lowercase")]
+pub enum Input {
+    /// A single-answer field (a verdict, an approval) on a map key, so the last
+    /// write wins -- which is what "one answer" means.
+    Choice {
+        /// The answer as written, whatever scalar the viewer sent.
+        value: String,
+    },
+    /// Free text in its own text container, so two viewers' edits both survive.
+    Note {
+        /// The merged text.
+        text: String,
+    },
+}
+
+/// One input the document holds, with the pane it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InputEntry {
+    /// The producer scope the pane belongs to.
+    pub scope: String,
+    /// The pane id, as the producer spelled it.
+    pub pane: String,
+    /// The field name within that pane.
+    pub field: String,
+    /// The answer, and how it merges.
+    pub value: Input,
+}
+
+/// One change in the document's history, with its writer resolved to an actor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HistoryChange {
+    /// The writing peer in decimal, the same spelling as the `__peers` key,
+    /// because a `u64` does not survive a JSON number.
+    pub peer: String,
+    /// Counter of the change's first op; `"<peer>@<counter>"` is its id.
+    pub counter: i32,
+    /// Logical clock, for ordering changes that are concurrent in wall time.
+    pub lamport: u32,
+    /// Wall clock the writer stamped, in milliseconds (see
+    /// [`commit_delta`](DocState::commit_delta)).
+    pub timestamp: i64,
+    /// The commit tag, a JSON object for a change this hub wrote. Absent for a
+    /// writer that set no message.
+    pub message: Option<String>,
+    /// Who the peer said it was, absent when it never introduced itself.
+    pub actor: Option<Actor>,
+    /// Change ids this one builds on, `"<peer>@<counter>"`, for the DAG.
+    pub deps: Vec<String>,
+    /// What the change did.
+    pub ops: Vec<HistoryOp>,
+}
+
+/// One operation inside a change, summarised for display.
+///
+/// Deliberately not a transcription of Loro's JSON op. A text op's `pos` there
+/// is an *entity* index -- style anchors take slots of their own -- so showing
+/// it as a character offset would point at the wrong place in the body. The
+/// length is meaningful and the position is not, so only the length is here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum HistoryOp {
+    /// A map key was written. The value is not copied here: it is in the
+    /// document at this version, and a nested container's value would make one
+    /// history row larger than the whole document.
+    MapSet {
+        /// The container id, `"cid:root-panes:Map"` and friends.
+        container: String,
+        /// The key written.
+        key: String,
+    },
+    /// A map key was removed.
+    MapDelete {
+        /// The container id.
+        container: String,
+        /// The key removed.
+        key: String,
+    },
+    /// Characters were inserted into a text container.
+    TextInsert {
+        /// The container id.
+        container: String,
+        /// How many characters, not where.
+        chars: usize,
+    },
+    /// Characters were removed from a text container.
+    TextDelete {
+        /// The container id.
+        container: String,
+        /// How many characters.
+        chars: usize,
+        /// Id of the first character removed, `"<peer>@<counter>"`. The only
+        /// stable handle on the deleted span, since the position is an entity
+        /// index.
+        start: String,
+    },
+    /// A list, tree, or richtext-mark op. Named by container so a history UI can
+    /// still show that something happened, without this enum having to grow a
+    /// variant per Loro container type.
+    Other {
+        /// The container id.
+        container: String,
+    },
+}
+
+/// What [`Hub::import`] did with an update.
+///
+/// Named rather than a bare `bool` because the two cases need different handling
+/// by the caller and "false" does not say which is which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Merge {
+    /// Every op applied, and the delta has gone out to live clients.
+    Applied,
+    /// The update depends on ops this document does not have, so Loro recorded
+    /// it in the oplog without applying it to the document state. The edit is
+    /// invisible until the missing range arrives, so a caller must answer with
+    /// the sender's missing history rather than treat this as done.
+    Pending,
 }
 
 /// Owns the shared document and fans CRDT updates out to SSE subscribers.
@@ -485,7 +1129,7 @@ pub struct Subscription {
 /// [`remove_scope`](Self::remove_scope); the hub serializes them under one lock.
 pub struct Hub {
     state: Mutex<DocState>,
-    updates: broadcast::Sender<Arc<str>>,
+    updates: broadcast::Sender<Arc<Update>>,
 }
 
 impl Hub {
@@ -512,10 +1156,89 @@ impl Hub {
         self.broadcast(delta);
     }
 
+    /// Merge remote CRDT bytes into the shared document and broadcast the
+    /// result, so every other connected client converges on it.
+    ///
+    /// This is the half that makes the document a CRDT rather than a codec:
+    /// without it the hub has exactly one writer and a browser can only read.
+    /// The sender is inside the broadcast set and receives its own ops back --
+    /// harmless, because a Loro import is idempotent, and cheaper than tracking
+    /// a version vector per subscriber to suppress the echo.
+    pub fn import(&self, bytes: &[u8]) -> Result<Merge> {
+        let (merge, delta) = self.state.lock().import(bytes)?;
+        self.broadcast(Ok(delta));
+        Ok(merge)
+    }
+
+    /// Declare who this hub is, so its changes are attributed to a named actor
+    /// instead of to a bare peer id.
+    ///
+    /// Takes effect for changes already committed too: the entry is one map key
+    /// and the newest declaration wins, so an owner that learns its own name
+    /// late can still say it.
+    pub fn declare_identity(&self, actor: Actor) {
+        let delta = self.state.lock().declare_identity(actor);
+        self.broadcast(delta);
+    }
+
+    /// Every peer that has introduced itself, keyed by peer id.
+    #[must_use]
+    pub fn actors(&self) -> HashMap<u64, Actor> {
+        self.state.lock().actors()
+    }
+
+    /// Declare a free-text input on a pane, creating its text container.
+    ///
+    /// Free text goes in a text container rather than on a map key because a map
+    /// key is last-write-wins: two people typing into the same box would resolve
+    /// to one of the two sentences, and the other would be gone without a trace.
+    /// A single-answer field wants exactly that resolution and so needs no
+    /// declaration -- a viewer writes the key directly, and the newest answer is
+    /// the answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Dashboard`] when the key already holds something that is
+    /// not a mergeable text container.
+    pub fn declare_note(&self, scope: &str, pane: &str, field: &str) -> Result<()> {
+        let delta = self.state.lock().declare_note(scope, pane, field)?;
+        self.broadcast(Ok(delta));
+        Ok(())
+    }
+
+    /// The answer to a single-answer field, or `None` if nobody has answered.
+    ///
+    /// A viewer writes it by inserting `"<scope>\x1f<pane>\x1f<field>"` into the
+    /// root `inputs` map of its own document and posting the update to `/apply`.
+    #[must_use]
+    pub fn choice(&self, scope: &str, pane: &str, field: &str) -> Option<String> {
+        self.state.lock().choice(scope, pane, field)
+    }
+
+    /// The text of a note field, or `None` when it was never declared. An empty
+    /// string means declared and untouched, which is a different answer.
+    #[must_use]
+    pub fn note(&self, scope: &str, pane: &str, field: &str) -> Option<String> {
+        self.state.lock().note(scope, pane, field)
+    }
+
+    /// Every viewer answer in the document, ordered by scope, pane, then field.
+    #[must_use]
+    pub fn inputs(&self) -> Vec<InputEntry> {
+        self.state.lock().inputs()
+    }
+
+    /// The document's changes, oldest first, each with its commit tag and the
+    /// actor its peer declared -- everything a history UI draws a timeline from.
+    #[must_use]
+    pub fn history(&self) -> Vec<HistoryChange> {
+        self.state.lock().history()
+    }
+
     fn broadcast(&self, delta: Result<Option<Vec<u8>>>) {
         if let Ok(Some(bytes)) = delta {
-            let encoded: Arc<str> = Arc::from(BASE64.encode(&bytes).as_str());
-            let _ = self.updates.send(encoded);
+            let encoded = BASE64.encode(&bytes);
+            let _ = self.updates.send(Arc::new(Update { bytes, encoded }));
         }
     }
 
@@ -529,6 +1252,17 @@ impl Hub {
             snapshot: state.snapshot().unwrap_or_default(),
             updates,
         }
+    }
+
+    /// A receiver on the update stream alone.
+    ///
+    /// [`subscribe`](Self::subscribe) pairs a receiver with the snapshot it
+    /// lines up with, which is what a client needs. The websocket relay is a
+    /// fan-out middleman that seeds nobody -- each websocket client takes its
+    /// own snapshot after subscribing to the relay -- so it wants the stream
+    /// without paying for a snapshot export per hub delta.
+    pub(crate) fn updates(&self) -> broadcast::Receiver<Arc<Update>> {
+        self.updates.subscribe()
     }
 
     /// A base64 full snapshot, for a client the broadcast stream outran.
@@ -547,6 +1281,8 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use loro::{Container, ValueOrContainer};
+
     use crate::pane::{ExecTraceLine, ExecView, TerminalView};
 
     fn terminal(id: &str, screen: &str) -> Pane {
@@ -574,6 +1310,160 @@ mod tests {
             .meta
             .get(field)
             .and_then(|value| value.get_deep_value().into_i64().ok())
+    }
+
+    /// The CRDT half. A second peer's edit merges into the shared document
+    /// instead of being refused, which is what `import` exists to make true.
+    #[test]
+    fn a_remote_edit_merges_into_the_shared_document() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "before")]);
+
+        // A browser starts from the snapshot, as the real client does.
+        let peer = LoroDoc::new();
+        peer.import(&hub.export_snapshot())
+            .expect("snapshot imports");
+        // Inputs live in their own root container: producers own `panes` and
+        // never write here, so an answer and a producer tick cannot collide.
+        peer.get_map("inputs")
+            .insert("t1.verdict", "splice")
+            .expect("remote write");
+        peer.commit();
+
+        assert_eq!(
+            hub.import(&peer.export(ExportMode::Snapshot).expect("export"))
+                .expect("merge"),
+            Merge::Applied
+        );
+
+        // Read back through a third peer, so the assertion crosses the wire
+        // rather than reading the hub's own handles.
+        let reader = LoroDoc::new();
+        reader
+            .import(&hub.export_snapshot())
+            .expect("reader imports");
+        let dump = format!("{:?}", reader.get_deep_value());
+        assert!(
+            dump.contains("splice"),
+            "remote edit lost in the merge: {dump}"
+        );
+    }
+
+    /// The write-through cache is this side's belief about the document, and a
+    /// remote edit invalidates it. Without the resync the cache still matches
+    /// the producer's value, the write is skipped, and the pane is stuck on the
+    /// remote's text for as long as the producer keeps reporting the same thing.
+    #[test]
+    fn a_remote_body_edit_is_not_masked_by_the_write_through_cache() {
+        let mut state = DocState::new();
+        state
+            .apply_scope("p", &[terminal("t1", "hello")])
+            .expect("apply");
+        let key = doc_key("p", "t1");
+
+        let peer = LoroDoc::new();
+        peer.import(&state.snapshot().expect("snapshot"))
+            .expect("import");
+        let Some(ValueOrContainer::Container(Container::Map(meta))) =
+            peer.get_map("panes").get(&key)
+        else {
+            panic!("pane meta must be a map");
+        };
+        let Some(ValueOrContainer::Container(Container::Text(body))) = meta.get("body") else {
+            panic!("body must be a text container");
+        };
+        body.update(
+            "clobbered",
+            loro::UpdateOptions {
+                timeout_ms: None,
+                use_refined_diff: true,
+            },
+        )
+        .expect("remote edit");
+        peer.commit();
+
+        let (merge, _) = state
+            .import(&peer.export(ExportMode::Snapshot).expect("export"))
+            .expect("merge");
+        assert_eq!(merge, Merge::Applied);
+        assert_eq!(
+            state.panes[&key].text("body"),
+            "clobbered",
+            "the merge must reach the container"
+        );
+
+        // The producer's next tick still reports "hello", and must win.
+        let delta = state
+            .apply_scope("p", &[terminal("t1", "hello")])
+            .expect("re-apply");
+        assert!(
+            delta.is_some(),
+            "producer tick must re-assert its own value over a remote edit"
+        );
+        assert_eq!(state.panes[&key].text("body"), "hello");
+    }
+
+    /// The other direction of the same cache invariant: a resync must restore
+    /// the caches exactly, so an import cannot make an idle pane look changed
+    /// and start a delta per tick on a document nobody is touching.
+    #[test]
+    fn an_import_does_not_make_an_idle_pane_look_changed() {
+        let mut state = DocState::new();
+        state
+            .apply_scope("p", &[terminal("t1", "hello")])
+            .expect("apply");
+
+        let peer = LoroDoc::new();
+        peer.import(&state.snapshot().expect("snapshot"))
+            .expect("import");
+        peer.get_map("inputs")
+            .insert("t1.verdict", "splice")
+            .expect("write");
+        peer.commit();
+        state
+            .import(&peer.export(ExportMode::Snapshot).expect("export"))
+            .expect("merge");
+
+        assert!(
+            state
+                .apply_scope("p", &[terminal("t1", "hello")])
+                .expect("re-apply")
+                .is_none(),
+            "an unchanged tick after an import must still be a no-op"
+        );
+    }
+
+    /// An update whose dependencies are absent is recorded but not applied, and
+    /// saying so is the whole point of the return type: treated as success, the
+    /// human's edit is silently invisible.
+    #[test]
+    fn an_update_missing_its_dependencies_reports_pending() {
+        let peer = LoroDoc::new();
+        peer.get_map("inputs").insert("first", "a").expect("write");
+        peer.commit();
+        let after_first = peer.oplog_vv();
+        peer.get_map("inputs").insert("second", "b").expect("write");
+        peer.commit();
+        let tail_only = peer
+            .export(ExportMode::updates(&after_first))
+            .expect("export");
+
+        let hub = Hub::new();
+        assert_eq!(
+            hub.import(&tail_only).expect("import"),
+            Merge::Pending,
+            "an update whose deps are absent is recorded, not applied"
+        );
+
+        let reader = LoroDoc::new();
+        reader
+            .import(&hub.export_snapshot())
+            .expect("reader imports");
+        let dump = format!("{:?}", reader.get_deep_value());
+        assert!(
+            !dump.contains("second"),
+            "a pending op must not be visible in the document: {dump}"
+        );
     }
 
     /// The core multi-producer invariant: one producer's reconcile never touches
@@ -811,5 +1701,331 @@ mod tests {
         let slot = &state.panes[&doc_key("p", "x")];
         assert_eq!(slot.kind, "html");
         assert_eq!(slot.text("body"), "<i>swapped</i>");
+    }
+
+    /// A browser: a second document started from the hub's snapshot, which is
+    /// exactly what `/events` hands a real one.
+    fn viewer(hub: &Hub) -> LoroDoc {
+        let doc = LoroDoc::new();
+        doc.import(&hub.export_snapshot())
+            .expect("snapshot imports");
+        doc
+    }
+
+    /// What a viewer posts to `/apply`.
+    fn posted(doc: &LoroDoc) -> Vec<u8> {
+        doc.export(ExportMode::Snapshot).expect("export")
+    }
+
+    /// The note container as a viewer reaches it. Panics rather than creating
+    /// one: a viewer that has to create the container is the bug
+    /// [`Hub::declare_note`] exists to prevent.
+    fn viewer_note(doc: &LoroDoc, scope: &str, pane: &str, field: &str) -> LoroText {
+        let Some(ValueOrContainer::Container(Container::Text(text))) =
+            doc.get_map(INPUTS_ROOT).get(&input_key(scope, pane, field))
+        else {
+            panic!("the declared note must be in the snapshot the viewer imported");
+        };
+        text
+    }
+
+    /// The hub's peer introduces itself inside the very change it first writes,
+    /// so no change in the history is ever unattributed.
+    #[test]
+    fn the_first_change_carries_its_own_attribution() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "hello")]);
+
+        let history = hub.history();
+        assert_eq!(history.len(), 1, "one apply, one change");
+        assert_eq!(history[0].actor, Some(Actor::agent("producer")));
+        assert!(
+            history[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, HistoryOp::MapSet { key, .. } if key == "label")),
+            "the peer entry must ride in the pane change, not trail it: {:?}",
+            history[0].ops
+        );
+
+        // The shape a browser reads out of `doc.toJSON()`. Asserted through a
+        // second document because that is where the frontend stands.
+        let reader = LoroDoc::new();
+        reader
+            .import(&hub.export_snapshot())
+            .expect("reader imports");
+        let peers: serde_json::Value =
+            serde_json::to_value(reader.get_map(PEERS_ROOT).get_deep_value())
+                .expect("peers serialise");
+        let peer = hub.actors().into_keys().next().expect("one peer");
+        assert_eq!(
+            peers[peer.to_string()],
+            serde_json::json!({ "kind": "agent", "label": "producer" })
+        );
+    }
+
+    /// An owner that names itself late still owns its earlier changes: the entry
+    /// is one map key resolved when the history is read, not a label copied into
+    /// each change as it is written.
+    #[test]
+    fn a_late_identity_relabels_earlier_changes() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "hello")]);
+        assert_eq!(hub.history()[0].actor, Some(Actor::agent("producer")));
+
+        hub.declare_identity(Actor::human("ada"));
+        assert_eq!(
+            hub.actors().into_values().collect::<Vec<_>>(),
+            vec![Actor::human("ada")]
+        );
+        assert_eq!(hub.history()[0].actor, Some(Actor::human("ada")));
+    }
+
+    /// Loro merges consecutive local commits unless something about them differs
+    /// -- its merge interval is 1000 *seconds*, so wall-clock spacing will not do
+    /// it -- and a history UI that shows a whole session as one change is no
+    /// history at all. Each apply has to stay its own change.
+    #[test]
+    fn each_apply_is_its_own_change() {
+        let mut state = DocState::new();
+        for tick in 0..5 {
+            state
+                .apply_scope("p", &[terminal("t1", &format!("screen {tick}"))])
+                .expect("apply");
+        }
+        assert_eq!(state.doc.len_changes(), 5, "five applies, five changes");
+
+        let messages: Vec<String> = state
+            .history()
+            .into_iter()
+            .filter_map(|change| change.message)
+            .collect();
+        assert_eq!(messages.len(), 5);
+        assert_eq!(
+            messages.iter().collect::<HashSet<_>>().len(),
+            5,
+            "identical messages are what merges changes: {messages:?}"
+        );
+        assert_eq!(
+            messages[0],
+            r#"{"on":"panes","seq":1,"scope":"p","add":["t1"]}"#
+        );
+        assert_eq!(
+            messages[4],
+            r#"{"on":"panes","seq":5,"scope":"p","set":["t1"]}"#
+        );
+    }
+
+    /// Free text merges: two viewers typing into one note both keep what they
+    /// wrote. This is the property a map key would silently destroy, and the
+    /// reason a note is a text container.
+    #[test]
+    fn a_note_keeps_both_viewers_edits() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "hello")]);
+        hub.declare_note("p", "t1", "review").expect("declare");
+
+        // Both fork from the same snapshot, so neither has seen the other.
+        let one = viewer(&hub);
+        viewer_note(&one, "p", "t1", "review")
+            .insert(0, "ship it")
+            .expect("type");
+        one.commit();
+        let two = viewer(&hub);
+        viewer_note(&two, "p", "t1", "review")
+            .insert(0, "hold on ")
+            .expect("type");
+        two.commit();
+
+        hub.import(&posted(&one)).expect("merge one");
+        hub.import(&posted(&two)).expect("merge two");
+
+        let note = hub.note("p", "t1", "review").expect("note present");
+        assert_eq!(
+            note.len(),
+            "ship it".len() + "hold on ".len(),
+            "no edit may be dropped: {note}"
+        );
+        assert!(
+            note.contains("ship it") && note.contains("hold on "),
+            "{note}"
+        );
+    }
+
+    /// A single-answer field is last-write-wins on purpose: two viewers answering
+    /// produce one answer, and the newest one is it.
+    #[test]
+    fn a_choice_keeps_one_answer() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "hello")]);
+        let key = input_key("p", "t1", "verdict");
+
+        let first = viewer(&hub);
+        first
+            .get_map(INPUTS_ROOT)
+            .insert(&key, "hold")
+            .expect("answer");
+        first.commit();
+        hub.import(&posted(&first)).expect("merge");
+        assert_eq!(hub.choice("p", "t1", "verdict").as_deref(), Some("hold"));
+
+        // A viewer that has seen the first answer overwrites it.
+        let second = viewer(&hub);
+        second
+            .get_map(INPUTS_ROOT)
+            .insert(&key, "ship")
+            .expect("answer");
+        second.commit();
+        hub.import(&posted(&second)).expect("merge");
+        assert_eq!(hub.choice("p", "t1", "verdict").as_deref(), Some("ship"));
+        assert_eq!(hub.inputs().len(), 1, "one field holds one answer");
+    }
+
+    /// The read side a producer polls: both shapes come back parsed, and a
+    /// checkbox's `true` reads as an answer rather than as nothing.
+    #[test]
+    fn inputs_read_back_with_their_merge_shape() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "hello")]);
+        hub.declare_note("p", "t1", "review").expect("declare");
+
+        let browser = viewer(&hub);
+        browser
+            .get_map(INPUTS_ROOT)
+            .insert(&input_key("p", "t1", "approve"), true)
+            .expect("tick the box");
+        viewer_note(&browser, "p", "t1", "review")
+            .insert(0, "looks good")
+            .expect("type");
+        browser.commit();
+        hub.import(&posted(&browser)).expect("merge");
+
+        assert_eq!(
+            hub.inputs(),
+            vec![
+                InputEntry {
+                    scope: "p".to_owned(),
+                    pane: "t1".to_owned(),
+                    field: "approve".to_owned(),
+                    value: Input::Choice {
+                        value: "true".to_owned()
+                    },
+                },
+                InputEntry {
+                    scope: "p".to_owned(),
+                    pane: "t1".to_owned(),
+                    field: "review".to_owned(),
+                    value: Input::Note {
+                        text: "looks good".to_owned()
+                    },
+                },
+            ]
+        );
+        assert_eq!(hub.choice("p", "t1", "approve").as_deref(), Some("true"));
+        assert_eq!(hub.note("p", "t1", "review").as_deref(), Some("looks good"));
+        // A note read as a choice is not an answer, and neither is the reverse:
+        // getting those two crossed is what loses a colleague's sentence.
+        assert_eq!(hub.choice("p", "t1", "review"), None);
+        assert_eq!(hub.note("p", "t1", "approve"), None);
+    }
+
+    /// The ownership partition, both directions: a producer tick rewrites its
+    /// pane and leaves the answers alone, and an answer leaves the pane alone.
+    #[test]
+    fn a_producer_tick_and_a_viewer_answer_do_not_collide() {
+        let mut state = DocState::new();
+        state
+            .apply_scope("p", &[terminal("t1", "before")])
+            .expect("apply");
+        assert!(
+            state
+                .declare_note("p", "t1", "review")
+                .expect("declare")
+                .is_some(),
+            "a declared note has to reach viewers that are already connected"
+        );
+
+        let browser = LoroDoc::new();
+        browser
+            .import(&state.snapshot().expect("snapshot"))
+            .expect("import");
+        browser
+            .get_map(INPUTS_ROOT)
+            .insert(&input_key("p", "t1", "verdict"), "hold")
+            .expect("answer");
+        let Some(ValueOrContainer::Container(Container::Text(note))) = browser
+            .get_map(INPUTS_ROOT)
+            .get(&input_key("p", "t1", "review"))
+        else {
+            panic!("declared note must be in the snapshot");
+        };
+        note.insert(0, "typed").expect("type");
+        browser.commit();
+        state
+            .import(&browser.export(ExportMode::Snapshot).expect("export"))
+            .expect("merge");
+
+        let key = doc_key("p", "t1");
+        assert_eq!(
+            state.panes[&key].text("body"),
+            "before",
+            "an answer is not a pane edit"
+        );
+
+        state
+            .apply_scope("p", &[terminal("t1", "after")])
+            .expect("apply");
+        assert_eq!(state.panes[&key].text("body"), "after");
+        assert_eq!(state.choice("p", "t1", "verdict").as_deref(), Some("hold"));
+        assert_eq!(state.note("p", "t1", "review").as_deref(), Some("typed"));
+    }
+
+    /// What a history UI renders for a viewer's edit: the viewer's own name, the
+    /// change it built on, and the size of the text it typed. The position is
+    /// deliberately absent -- Loro's JSON `pos` is an entity index, not an offset
+    /// into the body.
+    #[test]
+    fn history_attributes_a_viewer_edit_to_the_viewer() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "hello")]);
+        hub.declare_note("p", "t1", "review").expect("declare");
+
+        let browser = viewer(&hub);
+        // A browser introduces itself into `__peers` exactly as the hub does.
+        write_actor(
+            &browser.get_map(PEERS_ROOT),
+            browser.peer_id(),
+            &Actor::human("ada"),
+        )
+        .expect("introduce");
+        viewer_note(&browser, "p", "t1", "review")
+            .insert(0, "looks good")
+            .expect("type");
+        browser.commit();
+        hub.import(&posted(&browser)).expect("merge");
+
+        let change = hub
+            .history()
+            .into_iter()
+            .find(|change| change.peer == browser.peer_id().to_string())
+            .expect("the viewer's change is in the history");
+        assert_eq!(change.actor, Some(Actor::human("ada")));
+        assert_eq!(
+            change.deps.len(),
+            1,
+            "it builds on the snapshot it imported"
+        );
+        assert!(
+            change
+                .ops
+                .iter()
+                .any(|op| matches!(op, HistoryOp::TextInsert { chars, .. } if *chars == 10)),
+            "the typed run must be reported by length: {:?}",
+            change.ops
+        );
+        assert!(
+            hub.history().iter().all(|change| change.actor.is_some()),
+            "every change in the document is attributable"
+        );
     }
 }

@@ -1,6 +1,8 @@
 defmodule IxMcp.NotifierTest do
   use ExUnit.Case, async: false
 
+  import IxMcpTest.Eventually
+
   alias IxMcp.ActionLog
   alias IxMcp.Jobs
   alias IxMcp.MCP.Notifier
@@ -186,20 +188,6 @@ defmodule IxMcp.NotifierTest do
     assert_receive {:mcp_send,
                     %{"params" => %{"meta" => %{"severity" => "info", "source" => "test"}}}},
                    1_000
-  end
-
-  defp eventually(probe, tries \\ 50) do
-    case probe.() do
-      nil when tries > 0 ->
-        Process.sleep(20)
-        eventually(probe, tries - 1)
-
-      nil ->
-        flunk("condition never became true")
-
-      value ->
-        value
-    end
   end
 
   # Register the test process as this session's transport and sync on the
