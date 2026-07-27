@@ -704,16 +704,14 @@ def classify_pull_requests(
     )
 
 
-def render_comment(classification: Classification) -> str:
+def render_comment(classification: Classification, repository: str) -> str:
     queue_minutes = queue_start_minutes()
     if classification.big_change:
         matches = classification.reason["matches"]
         if matches:
             detail = f"Extended validation: matched `{matches[0]['path']}`."
         elif "label" in classification.reason["sources"]:
-            detail = (
-                f"Extended validation: the `{POLICY.big_change_label}` label is present."
-            )
+            detail = f"Extended validation: the `{POLICY.big_change_label}` label is present."
         else:
             detail = "Extended validation: this run was explicitly classified as large."
     else:
@@ -721,10 +719,13 @@ def render_comment(classification: Classification) -> str:
     policy_text = (
         f"Required workers must start within {queue_minutes} minutes after GitHub "
         f"marks them ready. Once assigned, each has {POLICY.setup_allowance_seconds} "
-        f"seconds for setup, then {validation_seconds(big_change=classification.big_change)} "
+        f"seconds for setup, then "
+        f"{validation_seconds(repository, big_change=classification.big_change)} "
         f"seconds for validation, then {POLICY.termination_grace_seconds} seconds for "
-        f"cleanup. Add the `{POLICY.big_change_label}` label for extended validation. "
-        "Lockfile and Rust toolchain changes are labeled automatically."
+        f"cleanup. Add the `{POLICY.big_change_label}` label and then re-run the whole "
+        "workflow for extended validation; a `--failed` re-run reuses the budget this "
+        "comment describes. Lockfile and Rust toolchain changes are labeled "
+        "automatically."
     )
     return f"{COMMENT_MARKER}\n{policy_text}\n\n{detail}"
 
@@ -810,7 +811,9 @@ def main() -> int:
     if publish and pull_request_number:
         if classification.reason["matches"] and POLICY.big_change_label not in labels:
             client.add_label(pull_request_number, POLICY.big_change_label)
-        client.upsert_comment(pull_request_number, render_comment(classification))
+        client.upsert_comment(
+            pull_request_number, render_comment(classification, repository)
+        )
 
     reason = json.dumps(classification.reason, separators=(",", ":"), sort_keys=True)
     write_output("big_change", str(classification.big_change).lower())
@@ -819,14 +822,12 @@ def main() -> int:
     write_output("setup_allowance_seconds", str(POLICY.setup_allowance_seconds))
     write_output(
         "validation_seconds",
-        str(validation_seconds(big_change=classification.big_change)),
+        str(validation_seconds(repository, big_change=classification.big_change)),
     )
-    write_output(
-        "termination_grace_seconds", str(POLICY.termination_grace_seconds)
-    )
+    write_output("termination_grace_seconds", str(POLICY.termination_grace_seconds))
     write_output(
         "worker_timeout_minutes",
-        str(worker_timeout_minutes(big_change=classification.big_change)),
+        str(worker_timeout_minutes(repository, big_change=classification.big_change)),
     )
     attempt_head_sha = attempt.get("head_sha")
     if not isinstance(attempt_head_sha, str):

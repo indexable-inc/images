@@ -666,13 +666,29 @@ class RenderingTests(unittest.TestCase):
         result = ci_budget.Classification(
             big_change=False, reason={"sources": [], "matches": []}
         )
-        comment = ci_budget.render_comment(result)
+        comment = ci_budget.render_comment(result, "indexable-inc/ix")
         assert comment.startswith(ci_budget.COMMENT_MARKER)
         assert "start within 120 minutes" in comment
         assert "120 seconds for setup" in comment
-        assert "300 seconds for validation" in comment
+        # The sticky comment quotes the repository's own measured routine tier,
+        # not the catalog default: a comment that names someone else's budget is
+        # how an operator learns the wrong number for their own PR.
+        assert "5400 seconds for validation" in comment
         assert "10 seconds for cleanup" in comment
         assert "Routine validation applies" in comment
+        # ENG-10273: the label alone does nothing to an attempt whose budget is
+        # already published, so the comment must not imply that it does.
+        assert "re-run the whole workflow" in comment
+        assert "`--failed` re-run reuses the budget" in comment
+
+    def test_routine_comment_quotes_the_other_repository_budget(self) -> None:
+        result = ci_budget.Classification(
+            big_change=False, reason={"sources": [], "matches": []}
+        )
+
+        comment = ci_budget.render_comment(result, "indexable-inc/index")
+
+        assert "2400 seconds for validation" in comment
 
 
 if __name__ == "__main__":

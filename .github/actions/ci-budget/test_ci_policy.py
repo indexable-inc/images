@@ -20,6 +20,13 @@ def valid_policy() -> dict[str, object]:
     return {
         "big_change_label": "ci/big-change",
         "extended_validation_seconds": 10_800,
+        "notes": {
+            "extended_validation_seconds": "why",
+            "queue_start_seconds": "why",
+            "routine_validation_seconds": "why",
+            "setup_allowance_seconds": "why",
+            "termination_grace_seconds": "why",
+        },
         "queue_start_seconds": 300,
         "repositories": {
             "indexable-inc/index": {
@@ -44,10 +51,54 @@ def policy_error(path: Path) -> RuntimeError:
 class PolicyTests(unittest.TestCase):
     def test_shared_phase_clocks_and_worker_envelopes(self) -> None:
         assert queue_start_minutes() == 120
-        assert validation_seconds(big_change=False) == 300
-        assert validation_seconds(big_change=True) == 10_800
-        assert worker_timeout_minutes(big_change=False) == 8
-        assert worker_timeout_minutes(big_change=True) == 183
+        # The extended tier and every clock outside validation stay shared; only
+        # the routine tier is measured per repository, so these are the numbers
+        # that must not drift apart between repositories.
+        for repository in ("indexable-inc/ix", "indexable-inc/index"):
+            with self.subTest(repository=repository):
+                assert validation_seconds(repository, big_change=True) == 10_800
+                assert worker_timeout_minutes(repository, big_change=True) == 183
+
+    def test_routine_budget_is_measured_per_repository(self) -> None:
+        # ix's gate has passed in as much as 5012s where index's slowest pass was
+        # 1862s (see catalog/policy.json notes). One shared routine number cannot
+        # be right for both, and the previous shared 300s was killing 54.5% of
+        # the ix gates that went on to pass.
+        assert validation_seconds("indexable-inc/ix", big_change=False) == 5_400
+        assert worker_timeout_minutes("indexable-inc/ix", big_change=False) == 93
+        assert validation_seconds("indexable-inc/index", big_change=False) == 2_400
+        assert worker_timeout_minutes("indexable-inc/index", big_change=False) == 43
+
+    def test_routine_budget_falls_back_to_the_catalog_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text(json.dumps(valid_policy()))
+
+            policy = load_policy(path)
+
+            assert policy.routine_seconds("indexable-inc/index") == 300
+
+    def test_a_threshold_without_its_evidence_fails_the_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            policy = valid_policy()
+            repositories = policy["repositories"]
+            assert isinstance(repositories, dict)
+            repositories["indexable-inc/index"]["routine_validation_seconds"] = 900
+            path.write_text(json.dumps(policy))
+
+            assert "notes keys must be" in str(policy_error(path))
+
+    def test_an_orphaned_note_fails_the_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            policy = valid_policy()
+            notes = policy["notes"]
+            assert isinstance(notes, dict)
+            notes["repositories.indexable-inc/nope.routine_validation_seconds"] = "why"
+            path.write_text(json.dumps(policy))
+
+            assert "notes keys must be" in str(policy_error(path))
 
     def test_reusable_workflows_load_the_action_from_their_exact_version(self) -> None:
         workflows = Path(__file__).resolve().parents[2] / "workflows"
@@ -71,8 +122,19 @@ class PolicyTests(unittest.TestCase):
         ).read_text()
         assert "runner-label:" in workflow
         assert "nix-preinstalled:" in workflow
-        assert "runs-on: ${{ inputs.runner-label || 'ubuntu-latest' }}" in workflow
-        assert "if: ${{ !inputs.nix-preinstalled }}" in workflow
+        # The default moved from a hosted runner to a dispatcher claim in
+        # c58cb13; what this guards is that `runner-label` still overrides it,
+        # not which runner the default names.
+        assert (
+            'runs-on: ["${{ inputs.runner-label || '
+            "format('ix-ci-run-{0}-{1}-update-flake-lock', "
+            'github.run_id, github.run_attempt) }}"]' in workflow
+        )
+        # `nix-preinstalled` is accepted and ignored now that every runner this
+        # job lands on provides Nix; it survives only so indexable-inc/ix's
+        # existing caller keeps validating. Guard that it is still accepted, not
+        # that it still gates a step.
+        assert "Accepted and ignored" in workflow
 
     def test_owner_policy_classifies_repository_data(self) -> None:
         costly_paths = (
@@ -148,6 +210,22 @@ class PolicyTests(unittest.TestCase):
         assert decision.termination_grace_seconds == 10
         assert decision.worker_timeout_minutes == 183
 
+    def test_cli_contract_carries_the_repository_routine_budget(self) -> None:
+        decision = cli_decision(
+            {
+                "changed_paths": ["nix/modules/services/host/ci-dispatcher/module.nix"],
+                "force_big_change": False,
+                "labels": [],
+                "repository": "indexable-inc/ix",
+                "workflow_path": ".github/workflows/ci.yml",
+            },
+            POLICY,
+        )
+
+        assert not decision.classification.big_change
+        assert decision.validation_seconds == 5_400
+        assert decision.worker_timeout_minutes == 93
+
     def test_policy_rejects_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.json"
@@ -159,7 +237,7 @@ class PolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.json"
             policy = valid_policy()
-            policy["queue_start_seconds"] = True
+            policy["setup_allowance_seconds"] = True
             path.write_text(json.dumps(policy))
 
             assert "positive integer" in str(policy_error(path))

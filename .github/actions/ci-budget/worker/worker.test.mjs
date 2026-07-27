@@ -411,8 +411,45 @@ test("setup has its own 120 second allowance", () => {
 
 test("validation starts with the complete tier allowance after setup", () => {
   const policy = loadPolicy();
-  assert.equal(validationSeconds({ bigChange: false, policy }), 300);
-  assert.equal(validationSeconds({ bigChange: true, policy }), 10_800);
+  // The routine tier is measured per repository (see catalog/policy.json
+  // notes); the extended tier is shared.
+  assert.equal(
+    validationSeconds({
+      bigChange: false,
+      policy,
+      repository: "indexable-inc/ix",
+    }),
+    5_400,
+  );
+  assert.equal(
+    validationSeconds({
+      bigChange: false,
+      policy,
+      repository: "indexable-inc/index",
+    }),
+    2_400,
+  );
+  for (const repository of ["indexable-inc/ix", "indexable-inc/index"]) {
+    assert.equal(
+      validationSeconds({ bigChange: true, policy, repository }),
+      10_800,
+    );
+  }
+});
+
+test("an unknown repository is a configuration error, not a default", () => {
+  const policy = loadPolicy();
+  // A typo in the `repository` input must not silently hand the run whichever
+  // budget happens to be the catalog default.
+  assert.throws(
+    () =>
+      validationSeconds({
+        bigChange: false,
+        policy,
+        repository: "indexable-inc/typo",
+      }),
+    /no repository entry for indexable-inc\/typo/,
+  );
 });
 
 test("budget kill message names the clock, the elapsed time, and the remedy", () => {
@@ -426,6 +463,14 @@ test("budget kill message names the clock, the elapsed time, and the remedy", ()
   assert.match(routine, /routine_validation_seconds=300s exceeded after 301s/);
   assert.match(routine, /add the ci\/big-change label/);
   assert.match(routine, /extended_validation_seconds=10800s budget/);
+  // ix#8688: three agents read a budget kill as a style violation because the
+  // only red context they saw was `lint`. The message must deny that first.
+  assert.match(routine, /wall-clock timeout, not a failed check/);
+  assert.match(routine, /mirroring this timeout rather than a lint or build error/);
+  // ENG-10273: the label reaches a fresh attempt only, so the message must not
+  // let anyone believe `--failed` will pick it up.
+  assert.match(routine, /re-run the WHOLE workflow/);
+  assert.match(routine, /`gh run rerun --failed` reuses this attempt's published budget/);
 
   const extended = budgetExceededMessage({
     allowedSeconds: 10_800,
@@ -435,6 +480,7 @@ test("budget kill message names the clock, the elapsed time, and the remedy", ()
   });
   assert.match(extended, /extended_validation_seconds=10800s exceeded after 10930s/);
   assert.match(extended, /already held the extended budget/);
+  assert.match(extended, /wall-clock timeout, not a failed check/);
 });
 
 test("budget verdicts fill only the outputs the script never published", async () => {
@@ -516,6 +562,7 @@ test("timeout announces the budget kill and backfills mirror verdicts", async (t
   try {
     const script = join(directory, "gate.sh");
     const output = join(directory, "github-output");
+    const summary = join(directory, "github-step-summary");
     // Publish one honest phase result, then outlive the clock, like
     // run-ci-phases.sh does when the Nix phase overruns after lint finished.
     await writeFile(
@@ -529,6 +576,7 @@ test("timeout announces the budget kill and backfills mirror verdicts", async (t
       ].join("\n"),
     );
     await writeFile(output, "");
+    await writeFile(summary, "");
 
     const logged = [];
     t.mock.method(console, "log", (line) => logged.push(line));
@@ -545,6 +593,7 @@ test("timeout announces the budget kill and backfills mirror verdicts", async (t
           bigChange: false,
           githubOutputPath: output,
           policy,
+          summaryPath: summary,
         }),
       scriptPath: "gate.sh",
       validationSeconds: 0.5,
@@ -557,7 +606,13 @@ test("timeout announces the budget kill and backfills mirror verdicts", async (t
     assert.match(logText, /published nix_result=budget-exceeded/);
     assert.match(
       annotated.join("\n"),
-      /^::error title=CI worker budget exceeded::validation budget routine_validation_seconds=0\.5s .* add the ci\/big-change label for the extended_validation_seconds=10800s budget\.$/m,
+      /^::error title=CI budget exceeded \(timeout, not a lint failure\)::validation budget routine_validation_seconds=0\.5s .* the label will not take effect\.$/m,
+    );
+    // The job summary is the first surface a reader reaches from the checks
+    // pane, and before this it said nothing at all about the kill.
+    assert.match(
+      await readFile(summary, "utf8"),
+      /^## CI budget exceeded \(timeout, not a lint failure\)$/m,
     );
     // The honest lint verdict survives; only the killed phase reads as policy.
     assert.equal(
