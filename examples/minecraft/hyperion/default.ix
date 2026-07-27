@@ -1,0 +1,45 @@
+// One hyperion game server behind two proxies, each proxy on its own VM:
+//
+//   players -> hyperion-proxy-0 \
+//                                >-- hyperion-game (private)
+//   players -> hyperion-proxy-1 /
+//
+// Apply the whole thing with one command:
+//
+//   ix apply .#hyperion-game .#hyperion-proxy-0 .#hyperion-proxy-1
+//
+// Traffic direction is what makes this simple. Proxies dial the game server,
+// so the game server needs no public address at all and lives only on the
+// east-west group. Adding a third proxy is one more line here; the game
+// server does not change, because it has supported several connected proxies
+// since hyperion#940.
+export default ({ index, hyperion }) => {
+  const packages = {
+    _module: {
+      args: {
+        // Guests are Linux whatever the machine running `ix apply` is.
+        hyperionGameServer: hyperion.packages["x86_64-linux"].bedwars,
+        hyperionProxy: hyperion.packages["x86_64-linux"]["hyperion-proxy"],
+      },
+    },
+  };
+
+  return index.lib.mkFleet({
+    // One private segment. A VM outside it has no route to the game server,
+    // which is the only thing keeping an unproxied client off it.
+    defaults: [
+      { ix: { networking: { groups: ["hyperion"] } } },
+      packages,
+      import("./pki.nix"),
+      hyperion.nixosModules["game-server"],
+      hyperion.nixosModules.proxy,
+    ],
+    nodes: {
+      "hyperion-game": { modules: [import("./game.nix")] },
+      // Interchangeable. Players land on whichever one their address resolves
+      // to; both hold their own connections and multiplex onto the one link.
+      "hyperion-proxy-0": { modules: [import("./proxy.nix")], deployment: { ipv4: true } },
+      "hyperion-proxy-1": { modules: [import("./proxy.nix")], deployment: { ipv4: true } },
+    },
+  });
+};
