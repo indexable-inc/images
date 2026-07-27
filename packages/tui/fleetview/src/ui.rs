@@ -367,38 +367,25 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn a_short_path_under_home_is_just_tilded() {
-        assert_eq!(
-            short_path(Path::new("/home/me/src/index"), Some(Path::new("/home/me"))),
-            "~/src/index"
-        );
-    }
-
-    #[test]
-    fn a_long_path_keeps_only_the_last_two_components() {
-        assert_eq!(
-            short_path(
-                Path::new("/home/me/.config/nix/ix/index/.claude/worktrees/fleetview"),
-                Some(Path::new("/home/me"))
+    fn a_path_is_shortened_only_as_far_as_the_header_needs() {
+        let home = Some(Path::new("/home/me"));
+        let cases = [
+            ("/home/me/src/index", home, "~/src/index"),
+            (
+                "/home/me/.config/nix/ix/index/.claude/worktrees/fleetview",
+                home,
+                "~/…/worktrees/fleetview",
             ),
-            "~/…/worktrees/fleetview"
-        );
-    }
-
-    #[test]
-    fn a_path_outside_home_shortens_without_a_tilde() {
-        assert_eq!(
-            short_path(
-                Path::new("/var/lib/some/very/long/path/to/a/checkout"),
-                Some(Path::new("/home/me"))
+            (
+                "/var/lib/some/very/long/path/to/a/checkout",
+                home,
+                "/…/a/checkout",
             ),
-            "/…/a/checkout"
-        );
-    }
-
-    #[test]
-    fn a_path_with_no_home_to_strip_still_renders() {
-        assert_eq!(short_path(Path::new("/srv/repo"), None), "/srv/repo");
+            ("/srv/repo", None, "/srv/repo"),
+        ];
+        for (path, home, expected) in cases {
+            assert_eq!(short_path(Path::new(path), home), expected, "{path}");
+        }
     }
 
     #[test]
