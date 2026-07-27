@@ -1227,6 +1227,20 @@ mod tests {
         }
     }
 
+    /// A fixture checkout plus the environment that protects it, or `None`
+    /// where `git` is absent so the repo-backed tests skip rather than fail.
+    ///
+    /// Every test below opens with this, so the skip and the protected glob
+    /// cannot drift apart between them.
+    fn protected_fixture() -> Option<(Fixture, GitGuardEnv)> {
+        if !git_available() {
+            return None;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        Some((fx, env))
+    }
+
     fn bash(cwd: &Path, command: &str) -> Value {
         json!({
             "tool_name": "Bash",
@@ -1459,11 +1473,9 @@ mod tests {
 
     #[test]
     fn mutating_git_in_a_protected_checkout_is_denied() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        };
         let reason = git_guard_decision(&env, &bash(&fx.primary, "git add -A"))
             .expect("git add in a protected primary checkout is denied");
         // The message has to name the path and the way out, or the agent
@@ -1531,18 +1543,41 @@ mod tests {
             .to_owned()
     }
 
+    /// The one uncommitted edit these tests are about. It is what puts the
+    /// checkout on the refusal path where the snapshot is looked for at all.
+    fn dirty_readme(dir: &Path) {
+        std::fs::write(dir.join("README"), "seed\nedited\n").expect("dirty README");
+    }
+
+    /// Point `name` at a snapshot of `dir` exactly as it stands: the `git
+    /// branch rescue/... "$(git stash create)"` line the deny message prints.
+    fn rescue_branch(dir: &Path, name: &str) {
+        run_git(dir, &["branch", name, &stash_create(dir)]);
+    }
+
+    /// The state the message describes once the operator has taken the snapshot
+    /// it prescribes: a dirty protected checkout, held by `rescue/test`.
+    ///
+    /// Tests that need committed content inside the snapshot (a `.gitignore`, a
+    /// submodule) build it from `protected_fixture` and the two helpers above
+    /// instead, so the setup lands before the snapshot is cut.
+    fn snapshotted() -> Option<(Fixture, GitGuardEnv)> {
+        let (fx, env) = protected_fixture()?;
+        dirty_readme(&fx.primary);
+        rescue_branch(&fx.primary, "rescue/test");
+        Some((fx, env))
+    }
+
     /// ix#8785: the message prescribed a rescue snapshot and then kept saying
     /// "no blob in the object database and no way back" after the operator had
     /// taken it, which reads as if the snapshot should have unlocked the
     /// command.
     #[test]
     fn a_rescue_snapshot_changes_the_refusal_from_loss_to_policy() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        };
+        dirty_readme(&fx.primary);
 
         let before = git_guard_decision(&env, &bash(&fx.primary, "git stash push -m wip"))
             .expect("a dirty shared checkout is denied");
@@ -1553,10 +1588,7 @@ mod tests {
             "{before}"
         );
 
-        run_git(
-            &fx.primary,
-            &["branch", "rescue/test", &stash_create(&fx.primary)],
-        );
+        rescue_branch(&fx.primary, "rescue/test");
 
         let after = git_guard_decision(&env, &bash(&fx.primary, "git stash push -m wip"))
             .expect("the refusal stands: this is policy, not recoverability");
@@ -1571,7 +1603,7 @@ mod tests {
         assert!(after.contains("-b <branch> rescue/test"), "{after}");
 
         // A ref that no longer matches the working tree does not count.
-        std::fs::write(fx.primary.join("README"), "seed\nedited again\n").expect("dirty README");
+        std::fs::write(fx.primary.join("README"), "seed\nedited again\n").expect("re-dirty");
         let moved = git_guard_decision(&env, &bash(&fx.primary, "git stash push -m wip"))
             .expect("still denied");
         assert!(moved.contains("no way back"), "{moved}");
@@ -1585,16 +1617,9 @@ mod tests {
     /// ref does not hold it. Comparing blob ids said it did.
     #[test]
     fn a_mode_change_is_not_held_by_a_snapshot_taken_before_it() {
-        if !git_available() {
+        let Some((fx, env)) = snapshotted() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
-        run_git(
-            &fx.primary,
-            &["branch", "rescue/test", &stash_create(&fx.primary)],
-        );
+        };
         let mode = std::fs::Permissions::from_mode(0o755);
         std::fs::set_permissions(fx.primary.join("README"), mode).expect("chmod +x");
 
@@ -1608,11 +1633,9 @@ mod tests {
     /// the refs the message prescribes are consulted.
     #[test]
     fn an_unrelated_branch_is_never_named_as_the_snapshot() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        };
         // A branch from before the file existed, exactly the vacuous match.
         run_git(&fx.primary, &["branch", "ancient"]);
         std::fs::write(fx.primary.join("LATER"), "later\n").expect("write LATER");
@@ -1631,12 +1654,10 @@ mod tests {
     /// checkout can create one, and a fetch can bring one in.
     #[test]
     fn a_refname_carrying_shell_syntax_is_not_pasted_into_the_message() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        };
+        dirty_readme(&fx.primary);
         let snap = stash_create(&fx.primary);
         // Sorts ahead of the safe one, so the test pins that filtering happens
         // before the candidate cap rather than by luck of ordering.
@@ -1659,16 +1680,9 @@ mod tests {
     /// does not look at it, so the loss wording is the truthful one.
     #[test]
     fn an_untracked_file_is_never_reported_as_snapshotted() {
-        if !git_available() {
+        let Some((fx, env)) = snapshotted() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
-        run_git(
-            &fx.primary,
-            &["branch", "rescue/test", &stash_create(&fx.primary)],
-        );
+        };
         std::fs::write(fx.primary.join("NEW"), "not in the snapshot\n").expect("untracked file");
 
         let reason = git_guard_decision(&env, &bash(&fx.primary, "git clean -fd"))
@@ -1685,19 +1699,14 @@ mod tests {
     /// pinned here.
     #[test]
     fn ignored_files_only_disqualify_the_commands_that_delete_them() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        };
         std::fs::write(fx.primary.join(".gitignore"), "build/\n").expect("write .gitignore");
         run_git(&fx.primary, &["add", ".gitignore"]);
         run_git(&fx.primary, &["commit", "--quiet", "-m", "ignore build"]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
-        run_git(
-            &fx.primary,
-            &["branch", "rescue/test", &stash_create(&fx.primary)],
-        );
+        dirty_readme(&fx.primary);
+        rescue_branch(&fx.primary, "rescue/test");
         std::fs::create_dir(fx.primary.join("build")).expect("mkdir build");
         std::fs::write(fx.primary.join("build/out"), "artifact\n").expect("write artifact");
 
@@ -1733,11 +1742,9 @@ mod tests {
     /// held was still lost.
     #[test]
     fn a_masked_dirty_submodule_is_never_reported_as_snapshotted() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        };
         let sub = fx.root.join("sub");
         std::fs::create_dir(&sub).expect("mkdir sub");
         run_git(&sub, &["init", "--quiet"]);
@@ -1759,11 +1766,8 @@ mod tests {
             ],
         );
         run_git(&fx.primary, &["commit", "--quiet", "-m", "add sub"]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
-        run_git(
-            &fx.primary,
-            &["branch", "rescue/test", &stash_create(&fx.primary)],
-        );
+        dirty_readme(&fx.primary);
+        rescue_branch(&fx.primary, "rescue/test");
         // The mask, plus content that lives only in the submodule's tree.
         run_git(&fx.primary, &["config", "submodule.sub.ignore", "all"]);
         std::fs::write(fx.primary.join("sub/s.txt"), "irreplaceable\n").expect("dirty submodule");
@@ -1778,20 +1782,11 @@ mod tests {
     /// a missing object failed the whole call and took every good ref with it.
     #[test]
     fn a_broken_rescue_ref_does_not_hide_the_good_ones() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
-        run_git(
-            &fx.primary,
-            &[
-                "branch",
-                "rescue/2026-07-27-0400",
-                &stash_create(&fx.primary),
-            ],
-        );
+        };
+        dirty_readme(&fx.primary);
+        rescue_branch(&fx.primary, "rescue/2026-07-27-0400");
         std::fs::write(
             fx.primary.join(".git/refs/heads/rescue/2026-07-27-0500"),
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
@@ -1811,19 +1806,14 @@ mod tests {
     /// the message promise a way back for content in no commit.
     #[test]
     fn an_assume_unchanged_edit_is_never_reported_as_snapshotted() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        };
         std::fs::write(fx.primary.join("HIDDEN"), "original\n").expect("write HIDDEN");
         run_git(&fx.primary, &["add", "HIDDEN"]);
         run_git(&fx.primary, &["commit", "--quiet", "-m", "hidden"]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
-        run_git(
-            &fx.primary,
-            &["branch", "rescue/test", &stash_create(&fx.primary)],
-        );
+        dirty_readme(&fx.primary);
+        rescue_branch(&fx.primary, "rescue/test");
         run_git(
             &fx.primary,
             &["update-index", "--assume-unchanged", "HIDDEN"],
@@ -1841,17 +1831,12 @@ mod tests {
     /// rather than inherited.
     #[test]
     fn untracked_files_hidden_by_config_still_block_the_snapshot_claim() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        };
         run_git(&fx.primary, &["config", "status.showUntrackedFiles", "no"]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
-        run_git(
-            &fx.primary,
-            &["branch", "rescue/test", &stash_create(&fx.primary)],
-        );
+        dirty_readme(&fx.primary);
+        rescue_branch(&fx.primary, "rescue/test");
         std::fs::write(fx.primary.join("NEW"), "not in the snapshot\n").expect("untracked file");
 
         let reason = git_guard_decision(&env, &bash(&fx.primary, "git clean -fd"))
@@ -1864,12 +1849,10 @@ mod tests {
     /// "None of it is staged" premise cannot be stated unconditionally either.
     #[test]
     fn the_staged_claim_matches_the_index() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        };
+        dirty_readme(&fx.primary);
         let unstaged =
             git_guard_decision(&env, &bash(&fx.primary, "git reset --hard")).expect("denied");
         assert!(unstaged.contains("None of it is staged"), "{unstaged}");
@@ -1888,16 +1871,9 @@ mod tests {
     /// stat cache, so the check has to work off a copy.
     #[test]
     fn the_check_leaves_the_shared_index_untouched() {
-        if !git_available() {
+        let Some((fx, env)) = snapshotted() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
-        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
-        run_git(
-            &fx.primary,
-            &["branch", "rescue/test", &stash_create(&fx.primary)],
-        );
+        };
         // Drop the stat cache so any refresh would rewrite the file.
         run_git(&fx.primary, &["read-tree", "HEAD"]);
         let index = fx.primary.join(".git/index");
@@ -1915,11 +1891,9 @@ mod tests {
 
     #[test]
     fn read_only_git_in_a_protected_checkout_is_allowed() {
-        if !git_available() {
+        let Some((fx, env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        };
         for cmd in [
             "git status --porcelain",
             "git log --oneline -5",
@@ -1981,11 +1955,9 @@ mod tests {
 
     #[test]
     fn kill_switch_and_empty_list_disable_the_guard() {
-        if !git_available() {
+        let Some((fx, mut env)) = protected_fixture() else {
             return;
-        }
-        let fx = fixture();
-        let mut env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        };
         assert!(
             git_guard_decision(&env, &bash(&fx.primary, "git add -A")).is_some(),
             "armed"
