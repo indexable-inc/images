@@ -18,12 +18,18 @@ defmodule IxMcp.Cmd do
   called before any cell can run), immutable for the life of the instance.
   Working anywhere else takes an explicit `cd:` (or `git -C`).
 
+  Git commands that would mutate a protected primary checkout are refused
+  here (`IxMcp.GitGuard`, #4225), because the Bash-side `git-guard` hook
+  never sees a kernel spawn.
+
   A `cd:` directory that does not exist raises before the spawn. Erlang's
   child setup reports a failed `chdir` by exiting with the raw errno --
   `{"", 2}` for ENOENT, `{"", 20}` for ENOTDIR -- indistinguishable from
   the command's own exit status, so a session whose launch dir was deleted
   mid-session saw every command "fail" with empty exit-2 output (#3979).
   """
+
+  alias IxMcp.GitGuard
 
   @launch_cwd_key {__MODULE__, :launch_cwd}
 
@@ -55,6 +61,16 @@ defmodule IxMcp.Cmd do
   @spec run(binary(), [binary()], keyword()) :: {Collectable.t(), non_neg_integer()}
   def run(cmd, args \\ [], opts \\ []) do
     opts = validate_cd!(opts)
+    GitGuard.check!(cmd, args, opts[:cd])
+    run_unguarded(cmd, args, opts)
+  end
+
+  @doc false
+  # The spawn without the git guard, for the guard's own `git rev-parse`
+  # probes: a guard that can refuse the question it asks cannot answer it.
+  @spec run_unguarded(binary(), [binary()], keyword()) :: {Collectable.t(), non_neg_integer()}
+  def run_unguarded(cmd, args \\ [], opts \\ []) do
+    opts = validate_cd!(opts)
 
     # `$0` is `cmd` and `$@` the args, so no shell parsing touches them.
     System.cmd("/bin/sh", ["-c", ~S(exec "$0" "$@" </dev/null), cmd | args], opts)
@@ -70,6 +86,7 @@ defmodule IxMcp.Cmd do
   @spec sh(binary(), keyword()) :: {Collectable.t(), non_neg_integer()}
   def sh(script, opts \\ []) do
     opts = validate_cd!(opts)
+    GitGuard.check_script!(script, opts[:cd])
 
     System.cmd("/bin/sh", ["-c", "exec </dev/null\n" <> script], opts)
     |> guard_cd_race(opts[:cd])

@@ -89,8 +89,45 @@
       shardName: fileset: lib.nameValuePair "stock-nix-parse-${shardName}" (mkStockParseCheck shardName fileset)
     )
     stockParseShards;
+  # The kernel's git guard (packages/mcp-ex, index#4225) enumerates the same
+  # mutating git subcommands as the Bash-side hook's `mutates_checkout`
+  # (packages/claude-hooks, index#4218). Two enumerations of one policy drift
+  # silently -- a subcommand added to the hook keeps mutating shared checkouts
+  # through the kernel -- so the sets are compared here rather than trusted.
+  # Both extractions take the first quoted lowercase token of each line in the
+  # relevant block, which is the arm head in Rust and the map key in Elixir.
+  gitGuardParitySource = fs.toSource {
+    inherit (paths) root;
+    fileset = fs.unions [
+      (paths.packagesRoot + "/claude-hooks/src/guards.rs")
+      (paths.packagesRoot + "/mcp-ex/lib/ix_mcp/git_guard.ex")
+    ];
+  };
 in
   {
+    git-guard-parity = mkCheck "git-guard-parity" {
+      nativeBuildInputs = [pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.diffutils];
+      script = ''
+        heads() { grep -oE '^[[:space:]]*"[a-z][a-z0-9-]*"' | tr -d ' "' | sort -u; }
+
+        sed -n '/^fn mutates_checkout/,/^}/p' \
+          ${gitGuardParitySource}/packages/claude-hooks/src/guards.rs | heads > hook.txt
+        sed -n '/^  @mutating %{/,/^  }/p' \
+          ${gitGuardParitySource}/packages/mcp-ex/lib/ix_mcp/git_guard.ex | heads > kernel.txt
+
+        # An empty side means the extraction stopped matching the source, which
+        # would otherwise pass as "both agree on nothing".
+        [ -s hook.txt ] || { echo "no subcommands found in guards.rs" >&2; exit 1; }
+        [ -s kernel.txt ] || { echo "no subcommands found in git_guard.ex" >&2; exit 1; }
+
+        if ! diff -u hook.txt kernel.txt; then
+          echo "the hook and kernel git guards disagree on what mutates a checkout" >&2
+          echo "(-: only in packages/claude-hooks, +: only in packages/mcp-ex)" >&2
+          exit 1
+        fi
+      '';
+    };
+
     lint = mkCheck "lint" {
       nativeBuildInputs = [pkgs.coreutils];
       script = ''
