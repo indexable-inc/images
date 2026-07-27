@@ -30,7 +30,7 @@ use pyo3::types::PyBytes;
 // ---------------------------------------------------------------------
 
 fn build_authenticator(scopes: &[&str]) -> PyResult<Authenticator> {
-    let secrets = ClientSecrets::from_env().map_err(into_py_runtime_error)?;
+    let secrets = ClientSecrets::load().map_err(into_py_runtime_error)?;
     let store = TokenStore::new().map_err(into_py_runtime_error)?;
     Authenticator::new(secrets, store, scopes).map_err(into_py_runtime_error)
 }

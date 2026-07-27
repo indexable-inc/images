@@ -22,6 +22,7 @@ mod labels;
 mod messages;
 mod mime;
 mod model;
+mod profile;
 mod threads;
 
 pub use drafts::{DraftMessageStub, DraftStub};
@@ -30,11 +31,13 @@ pub use google_auth::scopes::{ALL_KNOWN as ALL_KNOWN_SCOPES, GMAIL_MODIFY, GMAIL
 pub use google_auth::{
     AuthCode, Authenticator, ClientSecrets, PendingConsent, StoredToken, TokenStore, begin_consent,
 };
+pub use mime::build_rfc5322;
 pub use messages::{InvalidMessageFormat, LABEL_INBOX, LABEL_UNREAD, MessageFormat, MessageStub};
 pub use model::{
     Attachment, Draft, Header, Label, Message, MessagePart, MessagePartBody, MessageQuery,
     OutgoingMessage, Thread,
 };
+pub use profile::Profile;
 pub use threads::ThreadStub;
 
 use google_auth::api_message;

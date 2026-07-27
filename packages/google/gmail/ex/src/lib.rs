@@ -17,7 +17,7 @@ mod _gmail_ex {
     use std::sync::OnceLock;
 
     use google_auth::scopes::{GMAIL_MODIFY, GMAIL_SEND};
-    use google_auth::{Authenticator, CLIENT_ID_ENV, CLIENT_SECRET_ENV, ClientSecrets, TokenStore};
+    use google_auth::{Authenticator, ClientSecrets, TokenStore};
     use google_gmail::{Client, MessageFormat, MessagePart, MessageQuery, OutgoingMessage};
 
     /// Scopes every call here needs on the stored grant: read/modify for
@@ -152,7 +152,7 @@ mod _gmail_ex {
     }
 
     fn authenticator() -> Result<Authenticator, String> {
-        let secrets = ClientSecrets::from_env().map_err(|error| error.to_string())?;
+        let secrets = ClientSecrets::load().map_err(|error| error.to_string())?;
         let store = TokenStore::new().map_err(|error| error.to_string())?;
         Authenticator::new(secrets, store, REQUIRED_SCOPES).map_err(|error| error.to_string())
     }
@@ -294,7 +294,11 @@ mod _gmail_ex {
     /// result. Blocking (DirtyIo) for the file read.
     #[unibind(blocking)]
     pub fn status() -> AuthStatus {
-        let configured = env_present(CLIENT_ID_ENV) && env_present(CLIENT_SECRET_ENV);
+        // Any source the auth crate accepts counts as configured, not just
+        // the environment: a bring-your-own-client user has a
+        // `client_secret.json` and no env vars, and reporting them
+        // unconfigured would send them chasing the wrong fix.
+        let configured = ClientSecrets::load().is_ok();
         let store = TokenStore::new().ok();
         let token_path = store
             .as_ref()
@@ -316,9 +320,5 @@ mod _gmail_ex {
             missing_scopes,
             token_path,
         }
-    }
-
-    fn env_present(name: &str) -> bool {
-        std::env::var(name).is_ok_and(|value| !value.is_empty())
     }
 }

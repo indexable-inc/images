@@ -26,42 +26,136 @@ use google_gmail::{Attachment, MessageFormat, MessageQuery, OutgoingMessage};
 
 const SERVER: mcp_server_info::ToolServer = mcp_server_info::ToolServer {
     name: "ix-google-mcp",
-    instructions: "Gmail and Google Calendar via the shared google-auth grant. Run `gmail auth` \
-                   (or `gcal auth`) on the host once to mint the refresh token before invoking \
-                   any tool.",
+    instructions: "Gmail and Google Calendar over one OAuth grant. Setup is two steps on the \
+                   host: supply an OAuth client (either GOOGLE_OAUTH_CLIENT_ID and \
+                   GOOGLE_OAUTH_CLIENT_SECRET, or your own client_secret.json downloaded from \
+                   the Google Cloud Console), then run `gmail auth` once to consent. \
+                   `google_status` reports exactly which of those is missing.",
 };
 
-/// The MCP server. Holds the two API clients shared across tool calls.
+/// The MCP server.
+///
+/// Holds the API clients when the host is set up, and the reason it is not
+/// when it is not. Both are serviceable states: an unconfigured server still
+/// answers `google_status` and still tells the agent what to do about it.
 #[derive(Clone)]
 pub struct GoogleMcp {
-    calendar: Arc<google_calendar::Client>,
-    gmail: Arc<google_gmail::Client>,
+    clients: Option<crate::Clients>,
+    /// Why [`crate::build_clients`] failed, kept verbatim for the operator.
+    setup_error: Option<Arc<str>>,
+    /// SMTP submission, when the host configured it. Independent of the
+    /// Google clients: sending works with neither an OAuth client nor a
+    /// Google account.
+    smtp: Option<Arc<mail_smtp::SmtpSender>>,
     tool_router: ToolRouter<Self>,
 }
 
 impl GoogleMcp {
-    /// Build the server from the environment (`GOOGLE_OAUTH_CLIENT_ID`,
-    /// `GOOGLE_OAUTH_CLIENT_SECRET`) and the on-disk token store.
+    /// Build the server. Never fails.
     ///
-    /// # Errors
-    /// Returns an error if the env vars are unset, the store is empty, or
-    /// either API client cannot be constructed.
-    pub fn new() -> anyhow::Result<Self> {
-        let crate::Clients { calendar, gmail } = crate::build_clients()?;
-        Ok(Self {
-            calendar,
-            gmail,
+    /// A missing OAuth client or an empty token store is something to report,
+    /// not something to die of: an MCP client that watches its server exit
+    /// during startup shows the user nothing actionable, and takes the
+    /// working half of the tool surface down with the broken half.
+    #[must_use]
+    pub fn new() -> Self {
+        let (clients, setup_error) = match crate::build_clients() {
+            Ok(clients) => (Some(clients), None),
+            Err(error) => (None, Some(Arc::from(format!("{error:#}").as_str()))),
+        };
+        // A half-configured SMTP block is a mistake worth surfacing, not a
+        // reason to refuse to start; it lands in the status report instead.
+        let smtp = match mail_smtp::SmtpSender::from_env() {
+            Ok(sender) => sender.map(Arc::new),
+            Err(error) => {
+                tracing::warn!("SMTP is configured but unusable: {error}");
+                None
+            }
+        };
+        Self {
+            clients,
+            setup_error,
+            smtp,
             tool_router: Self::tool_router(),
-        })
+        }
+    }
+
+    /// The Gmail client, or an error naming the next step.
+    fn gmail(&self) -> Result<&Arc<google_gmail::Client>, ErrorData> {
+        self.clients
+            .as_ref()
+            .map(|clients| &clients.gmail)
+            .ok_or_else(|| self.not_set_up())
+    }
+
+    /// The Calendar client, or an error naming the next step.
+    fn calendar(&self) -> Result<&Arc<google_calendar::Client>, ErrorData> {
+        self.clients
+            .as_ref()
+            .map(|clients| &clients.calendar)
+            .ok_or_else(|| self.not_set_up())
+    }
+
+    /// The error every tool returns while the host is unconfigured. It
+    /// carries the real cause and the tool that explains the fix, so the
+    /// agent can resolve this with the user instead of reporting a failure.
+    fn not_set_up(&self) -> ErrorData {
+        let cause = self
+            .setup_error
+            .as_deref()
+            .unwrap_or("no Google OAuth client is configured");
+        let smtp_hint = if self.smtp.is_some() {
+            "\n\nSMTP is configured, so `mail_send_message` works; only the Google-backed \
+             tools (reading, labels, calendar) need this."
+        } else {
+            ""
+        };
+        ErrorData::new(
+            ErrorCode::INVALID_REQUEST,
+            format!(
+                "{cause}\n\nCall `google_status` for the full setup state and next \
+                 step.{smtp_hint}"
+            ),
+            None,
+        )
+    }
+
+    /// Verify every capability and report what is broken, once the handshake
+    /// is complete.
+    ///
+    /// `instructions` already told the agent the locally-knowable state.
+    /// This is the second audience: stderr is where an MCP host collects a
+    /// stdio server's output and shows it to the operator, and it is what
+    /// SEP-2577 points to now that protocol logging is deprecated.
+    ///
+    /// Runs after `initialize`, never during it. Probing inside the handshake
+    /// would let one unreachable Google endpoint stall the connection, which
+    /// is a worse failure than the misconfiguration being reported.
+    pub(crate) async fn announce_health(self) {
+        let health = match &self.clients {
+            Some(clients) => crate::health::Health::probe(clients).await,
+            None => crate::health::Health::offline(),
+        }
+        .with_smtp(self.smtp.as_deref());
+        if !health.any_broken() {
+            tracing::info!("Google integration ready\n{}", health.report());
+            return;
+        }
+        let report = health.report();
+        if health.all_broken() {
+            tracing::error!("Google integration is not working:\n{report}");
+        } else {
+            tracing::warn!("Google integration is partly working:\n{report}");
+        }
     }
 
     async fn delete_draft(&self, id: &str) -> Result<String, ErrorData> {
-        acknowledged(self.gmail.delete_draft(id).await, "deleted", id)
+        acknowledged(self.gmail()?.delete_draft(id).await, "deleted", id)
     }
 
     async fn list_messages(&self, query: MessageQuery) -> Result<String, ErrorData> {
         let messages = self
-            .gmail
+            .gmail()?
             .list_messages(&query)
             .await
             .map_err(into_tool_error)?;
@@ -75,10 +169,10 @@ impl GoogleMcp {
     ) -> Result<String, ErrorData> {
         match mutation {
             MessageMutation::Trash => {
-                acknowledged(self.gmail.trash_message(id).await, "trashed", id)
+                acknowledged(self.gmail()?.trash_message(id).await, "trashed", id)
             }
             MessageMutation::Untrash => {
-                acknowledged(self.gmail.untrash_message(id).await, "untrashed", id)
+                acknowledged(self.gmail()?.untrash_message(id).await, "untrashed", id)
             }
         }
     }
@@ -115,7 +209,7 @@ impl GoogleMcp {
             .unwrap_or(PRIMARY_CALENDAR)
             .to_owned();
         let events = self
-            .calendar
+            .calendar()?
             .list_events(&calendar, &query)
             .await
             .map_err(into_tool_error)?;
@@ -133,7 +227,7 @@ impl GoogleMcp {
             .unwrap_or(PRIMARY_CALENDAR)
             .to_owned();
         let event = self
-            .calendar
+            .calendar()?
             .get_event(&calendar, &args.event_id)
             .await
             .map_err(into_tool_error)?;
@@ -171,7 +265,7 @@ impl GoogleMcp {
             .unwrap_or(PRIMARY_CALENDAR)
             .to_owned();
         let created = self
-            .calendar
+            .calendar()?
             .create_event(&calendar, &draft, send_updates(args.notify.as_deref())?)
             .await
             .map_err(into_tool_error)?;
@@ -188,7 +282,7 @@ impl GoogleMcp {
             .as_deref()
             .unwrap_or(PRIMARY_CALENDAR)
             .to_owned();
-        self.calendar
+        self.calendar()?
             .cancel_event(
                 &calendar,
                 &args.event_id,
@@ -231,7 +325,7 @@ impl GoogleMcp {
         Parameters(args): Parameters<MailGetMessageArgs>,
     ) -> Result<String, ErrorData> {
         let message = self
-            .gmail
+            .gmail()?
             .get_message(&args.message_id, message_format(args.format.as_deref())?)
             .await
             .map_err(into_tool_error)?;
@@ -244,7 +338,7 @@ impl GoogleMcp {
         Parameters(args): Parameters<MailSearchArgs>,
     ) -> Result<String, ErrorData> {
         let threads = self
-            .gmail
+            .gmail()?
             .list_threads(&args.into_query())
             .await
             .map_err(into_tool_error)?;
@@ -257,7 +351,7 @@ impl GoogleMcp {
         Parameters(args): Parameters<MailGetThreadArgs>,
     ) -> Result<String, ErrorData> {
         let thread = self
-            .gmail
+            .gmail()?
             .get_thread(&args.thread_id, message_format(args.format.as_deref())?)
             .await
             .map_err(into_tool_error)?;
@@ -278,12 +372,67 @@ impl GoogleMcp {
         Parameters(args): Parameters<MailComposeArgs>,
     ) -> Result<String, ErrorData> {
         let message = build_outgoing(args)?;
+
+        // SMTP wins when it is configured, because configuring it is a
+        // deliberate act: nobody sets IX_SMTP_HOST by accident, and the
+        // people who do are the ones with no Google project to fall back on.
+        if let Some(smtp) = self.smtp.as_ref() {
+            let raw = google_gmail::build_rfc5322(&message).map_err(into_tool_error)?;
+            // The envelope, not the headers, decides delivery -- so it must
+            // carry Bcc recipients, who never appear in the headers.
+            let recipients: Vec<String> = message
+                .to
+                .iter()
+                .chain(&message.cc)
+                .chain(&message.bcc)
+                .cloned()
+                .collect();
+            smtp.send(&recipients, &raw)
+                .await
+                .map_err(|error| ErrorData::new(ErrorCode::INTERNAL_ERROR, error.to_string(), None))?;
+            return Ok(json!({
+                "sent": true,
+                "via": "smtp",
+                "from": smtp.from_address(),
+                "recipients": recipients,
+            })
+            .to_string());
+        }
+
         let sent = self
-            .gmail
+            .gmail()?
             .send_message(&message)
             .await
             .map_err(into_tool_error)?;
         json_string(&sent)
+    }
+
+    // -----------------------------------------------------------------
+    // Readiness
+    // -----------------------------------------------------------------
+
+    #[tool(
+        description = "Check what this server can actually do right now: whether an OAuth \
+                       client is configured, whether a grant is stored, and -- by making one \
+                       cheap live call per capability -- whether mail and calendar really \
+                       work. Call this before concluding a failure is the user's fault, and \
+                       whenever a tool reports the server is not set up. Reports each \
+                       capability separately; a working mailbox does not imply a working \
+                       calendar."
+    )]
+    async fn google_status(
+        &self,
+        Parameters(_args): Parameters<EmptyArgs>,
+    ) -> Result<String, ErrorData> {
+        // Probe when we can, fall back to the local view when there is no
+        // client to probe with. Never an error: "it is broken, here is why"
+        // is the successful outcome of asking.
+        let health = match &self.clients {
+            Some(clients) => crate::health::Health::probe(clients).await,
+            None => crate::health::Health::offline(),
+        }
+        .with_smtp(self.smtp.as_deref());
+        json_string(&health)
     }
 
     #[tool(description = "Save a Gmail draft from the same fields as mail_send_message.")]
@@ -293,7 +442,7 @@ impl GoogleMcp {
     ) -> Result<String, ErrorData> {
         let message = build_outgoing(args)?;
         let draft = self
-            .gmail
+            .gmail()?
             .create_draft(&message)
             .await
             .map_err(into_tool_error)?;
@@ -307,7 +456,7 @@ impl GoogleMcp {
     ) -> Result<String, ErrorData> {
         let message = build_outgoing(args.compose)?;
         let draft = self
-            .gmail
+            .gmail()?
             .update_draft(&args.draft_id, &message)
             .await
             .map_err(into_tool_error)?;
@@ -319,7 +468,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailDraftIdArgs>,
     ) -> Result<String, ErrorData> {
-        json_tool_result(self.gmail.get_draft(&args.draft_id).await)
+        json_tool_result(self.gmail()?.get_draft(&args.draft_id).await)
     }
 
     #[tool(description = "List Gmail drafts.")]
@@ -327,7 +476,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailDraftListArgs>,
     ) -> Result<String, ErrorData> {
-        json_tool_result(self.gmail.list_drafts(args.max_results.unwrap_or(20)).await)
+        json_tool_result(self.gmail()?.list_drafts(args.max_results.unwrap_or(20)).await)
     }
 
     #[tool(description = "Delete a Gmail draft by id.")]
@@ -343,7 +492,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailDraftIdArgs>,
     ) -> Result<String, ErrorData> {
-        json_tool_result(self.gmail.send_draft(&args.draft_id).await)
+        json_tool_result(self.gmail()?.send_draft(&args.draft_id).await)
     }
 
     // -----------------------------------------------------------------
@@ -355,7 +504,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailMessageIdArgs>,
     ) -> Result<String, ErrorData> {
-        json_tool_result(self.gmail.archive_message(&args.message_id).await)
+        json_tool_result(self.gmail()?.archive_message(&args.message_id).await)
     }
 
     #[tool(description = "Move a Gmail message to Trash.")]
@@ -381,7 +530,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailMessageIdArgs>,
     ) -> Result<String, ErrorData> {
-        json_tool_result(self.gmail.mark_message_read(&args.message_id).await)
+        json_tool_result(self.gmail()?.mark_message_read(&args.message_id).await)
     }
 
     #[tool(description = "Mark a Gmail message unread (add UNREAD).")]
@@ -389,7 +538,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailMessageIdArgs>,
     ) -> Result<String, ErrorData> {
-        json_tool_result(self.gmail.mark_message_unread(&args.message_id).await)
+        json_tool_result(self.gmail()?.mark_message_unread(&args.message_id).await)
     }
 
     // -----------------------------------------------------------------
@@ -401,7 +550,7 @@ impl GoogleMcp {
         &self,
         Parameters(_): Parameters<EmptyArgs>,
     ) -> Result<String, ErrorData> {
-        let labels = self.gmail.list_labels().await.map_err(into_tool_error)?;
+        let labels = self.gmail()?.list_labels().await.map_err(into_tool_error)?;
         json_string(&labels)
     }
 
@@ -411,7 +560,7 @@ impl GoogleMcp {
         Parameters(args): Parameters<MailLabelMutateArgs>,
     ) -> Result<String, ErrorData> {
         let message = self
-            .gmail
+            .gmail()?
             .modify_labels(&args.message_id, &[args.label_id], &[])
             .await
             .map_err(into_tool_error)?;
@@ -424,7 +573,7 @@ impl GoogleMcp {
         Parameters(args): Parameters<MailLabelMutateArgs>,
     ) -> Result<String, ErrorData> {
         let message = self
-            .gmail
+            .gmail()?
             .modify_labels(&args.message_id, &[], &[args.label_id])
             .await
             .map_err(into_tool_error)?;
@@ -444,7 +593,7 @@ impl GoogleMcp {
     ) -> Result<String, ErrorData> {
         use base64::Engine as _;
         let bytes = self
-            .gmail
+            .gmail()?
             .get_attachment(&args.message_id, &args.attachment_id)
             .await
             .map_err(into_tool_error)?;
@@ -460,7 +609,18 @@ impl GoogleMcp {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for GoogleMcp {
     fn get_info(&self) -> ServerInfo {
-        SERVER.info(env!("CARGO_PKG_VERSION"))
+        // Answered synchronously during `initialize`, so this reads the
+        // environment and the token file and nothing else. The live probe
+        // runs after the handshake and reports through `notifications/message`
+        // and `google_status`.
+        let instructions = format!(
+            "{}{}",
+            SERVER.instructions,
+            crate::health::Health::offline()
+                .with_smtp(self.smtp.as_deref())
+                .instructions_block()
+        );
+        SERVER.live_info(env!("CARGO_PKG_VERSION"), &instructions)
     }
 }
 
