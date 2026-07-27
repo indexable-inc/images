@@ -22,7 +22,7 @@ pub struct Unit {
     pub lines: usize,
     /// Campbell cognitive complexity: the headline metric.
     pub cognitive: u32,
-    /// McCabe cyclomatic complexity, computed as decision points plus one.
+    /// `McCabe` cyclomatic complexity, computed as decision points plus one.
     /// Reported as a testability number, not a readability one: it has no
     /// measured correlation with comprehension time (Peitek et al., ICSE 2021).
     pub cyclomatic: u32,
@@ -228,8 +228,7 @@ fn logical_operator<'a>(
         return profile.logical_ops.iter().find(|op| **op == text);
     }
     let mut cursor = node.walk();
-    let children: Vec<_> = node.children(&mut cursor).collect();
-    children.into_iter().find_map(|child| {
+    node.children(&mut cursor).find_map(|child| {
         if child.is_named() {
             return None;
         }
