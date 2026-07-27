@@ -442,6 +442,21 @@
       contentAddressed = rawArgs.contentAddressed or true;
 
       extraFlags = lib.optional contentAddressed "--content-addressed" ++ effects.renderFlags;
+
+      # `src` as the store path this derivation actually receives as an input,
+      # and the only spelling of it used below. Interpolating a path value and
+      # `toString`-ing one disagree whenever `src` is a bare path rather than a
+      # derivation: a flake's `src = ./.` interpolates to a fresh store copy of
+      # the tree but stringifies to the flake source itself, and a plain
+      # directory stringifies to a location outside the store entirely.
+      # Spelling it both ways named one tree in the graph rewrite and a
+      # different one as the root to slice against, so every local unit came
+      # out "outside workspace root" (#4239). Interpolation is the correct one
+      # of the two: the renderer both strips this prefix off the rewritten
+      # graph paths and reads the tree behind it to include-scan file
+      # contents, and only the interpolated form is a declared, readable
+      # input of this derivation.
+      srcRoot = "${args.src}";
     in
       pkgs.runCommand "cargo-units.nix"
       {
@@ -455,10 +470,10 @@
         # units actually compile from. Planning is content-independent, so
         # the rewritten graph is byte-identical to one planned in `src`
         # directly. `|` and `&` never appear in a store path.
-        sed -e 's|${plannerSource}|${args.src}|g' ${unitGraphJson} > "$TMPDIR/unit-graph.json"
+        sed -e 's|${plannerSource}|${srcRoot}|g' ${unitGraphJson} > "$TMPDIR/unit-graph.json"
 
         nix-cargo-unit render \
-          --workspace-root ${escapeShellArg args.src} \
+          --workspace-root ${escapeShellArg srcRoot} \
           --vendor-root ${escapeShellArg args.vendorDir} \
           --toolchain-id ${escapeShellArg workspaceToolchainId} \
           ${lib.escapeShellArgs extraFlags} \
