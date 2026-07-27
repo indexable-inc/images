@@ -34,6 +34,7 @@ members = [
   "modules/services/sandboxed-agent/launch",
   "modules/services/sandboxed-agent/proxy",
   "packages/claude-hooks",
+  "packages/ix-credential",
   "packages/claude-stories",
   "packages/subagent-cache",
   "packages/submodule-sync-test",
