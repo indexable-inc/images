@@ -19,6 +19,7 @@ chrono = { workspace = true, features = ["alloc", "clock", "serde"] }
 google-auth.workspace = true
 google-calendar.workspace = true
 google-gmail.workspace = true
+mail-smtp.workspace = true
 mcp-server-info.workspace = true
 rmcp.workspace = true
 schemars = "1"

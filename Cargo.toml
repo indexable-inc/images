@@ -101,6 +101,7 @@ members = [
   "packages/indexbench/filesystem",
   "packages/ix-dev-diagnose",
   "packages/ix-windows",
+  "packages/mail-smtp",
   "packages/mcp/server-info",
   "packages/minecraft/bot",
   "packages/minecraft/nbt",
@@ -369,6 +370,7 @@ oxc_diagnostics = "0.141"
 oxc_parser = "0.141"
 oxc_span = "0.141"
 mc-protocol = { path = "packages/minecraft/protocol" }
+mail-smtp = { path = "packages/mail-smtp" }
 mcp-server-info = { path = "packages/mcp/server-info" }
 md-5 = "0.10"
 panes-protocol = { path = "packages/panes/protocol" }
@@ -397,6 +399,15 @@ ratatui = "0.30"
 regex = "1"
 repo-walker = { path = "packages/repo-walker" }
 image = { version = "0.25", default-features = false }
+lettre = { version = "0.11", default-features = false, features = [
+  "smtp-transport",
+  "tokio1",
+  "tokio1-rustls",
+  "rustls",
+  "ring",
+  "rustls-native-certs",
+  "hostname",
+] }
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",

@@ -31,6 +31,35 @@ From a clone (`git clone https://github.com/indexable-inc/index`): `nix run .#gm
 The crate itself (`google-gmail`) is an unmirrored workspace library; consume it
 through Nix or one of the three surfaces above.
 
+## Just want to send mail? Skip Google entirely
+
+`mail_send_message` in the MCP server submits over SMTP whenever SMTP is
+configured, which needs no Google Cloud project, no OAuth client, and no
+consent flow:
+
+```sh
+export IX_SMTP_HOST=smtp.fastmail.com
+export IX_SMTP_USER=you@fastmail.com
+export IX_SMTP_PASSWORD='<app password>'
+# optional: IX_SMTP_PORT (default 587; 465 for implicit TLS), IX_SMTP_FROM
+```
+
+That covers Fastmail, Proton Bridge, iCloud, Zoho, Migadu, self-hosted, and
+corporate Exchange. It builds the message with the same MIME builder the
+Gmail path uses, so headers and attachments behave identically; only the
+transport differs.
+
+A **personal** Gmail account also works this way with a 16-character app
+password (Account → Security → 2-Step Verification → App passwords), no
+Cloud project required. A Google **Workspace** account does not: Google
+ended password authentication for Workspace on 2025-05-01, so those accounts
+need the OAuth path below. Accounts enrolled in Advanced Protection cannot
+create app passwords at all.
+
+Reading, searching, labelling and calendar still need the Google API, and so
+still need an OAuth client. `google_status` reports each capability
+separately, so a working SMTP sender does not read as a working mailbox.
+
 ## Bring your own OAuth client
 
 You do not need a credential of ours. Create an OAuth client in your own

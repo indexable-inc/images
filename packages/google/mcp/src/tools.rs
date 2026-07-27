@@ -43,6 +43,10 @@ pub struct GoogleMcp {
     clients: Option<crate::Clients>,
     /// Why [`crate::build_clients`] failed, kept verbatim for the operator.
     setup_error: Option<Arc<str>>,
+    /// SMTP submission, when the host configured it. Independent of the
+    /// Google clients: sending works with neither an OAuth client nor a
+    /// Google account.
+    smtp: Option<Arc<mail_smtp::SmtpSender>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -59,9 +63,19 @@ impl GoogleMcp {
             Ok(clients) => (Some(clients), None),
             Err(error) => (None, Some(Arc::from(format!("{error:#}").as_str()))),
         };
+        // A half-configured SMTP block is a mistake worth surfacing, not a
+        // reason to refuse to start; it lands in the status report instead.
+        let smtp = match mail_smtp::SmtpSender::from_env() {
+            Ok(sender) => sender.map(Arc::new),
+            Err(error) => {
+                tracing::warn!("SMTP is configured but unusable: {error}");
+                None
+            }
+        };
         Self {
             clients,
             setup_error,
+            smtp,
             tool_router: Self::tool_router(),
         }
     }
@@ -90,9 +104,18 @@ impl GoogleMcp {
             .setup_error
             .as_deref()
             .unwrap_or("no Google OAuth client is configured");
+        let smtp_hint = if self.smtp.is_some() {
+            "\n\nSMTP is configured, so `mail_send_message` works; only the Google-backed \
+             tools (reading, labels, calendar) need this."
+        } else {
+            ""
+        };
         ErrorData::new(
             ErrorCode::INVALID_REQUEST,
-            format!("{cause}\n\nCall `google_status` for the full setup state and next step."),
+            format!(
+                "{cause}\n\nCall `google_status` for the full setup state and next \
+                 step.{smtp_hint}"
+            ),
             None,
         )
     }
@@ -112,7 +135,8 @@ impl GoogleMcp {
         let health = match &self.clients {
             Some(clients) => crate::health::Health::probe(clients).await,
             None => crate::health::Health::offline(),
-        };
+        }
+        .with_smtp(self.smtp.as_deref());
         if !health.any_broken() {
             tracing::info!("Google integration ready\n{}", health.report());
             return;
@@ -348,6 +372,33 @@ impl GoogleMcp {
         Parameters(args): Parameters<MailComposeArgs>,
     ) -> Result<String, ErrorData> {
         let message = build_outgoing(args)?;
+
+        // SMTP wins when it is configured, because configuring it is a
+        // deliberate act: nobody sets IX_SMTP_HOST by accident, and the
+        // people who do are the ones with no Google project to fall back on.
+        if let Some(smtp) = self.smtp.as_ref() {
+            let raw = google_gmail::build_rfc5322(&message).map_err(into_tool_error)?;
+            // The envelope, not the headers, decides delivery -- so it must
+            // carry Bcc recipients, who never appear in the headers.
+            let recipients: Vec<String> = message
+                .to
+                .iter()
+                .chain(&message.cc)
+                .chain(&message.bcc)
+                .cloned()
+                .collect();
+            smtp.send(&recipients, &raw)
+                .await
+                .map_err(|error| ErrorData::new(ErrorCode::INTERNAL_ERROR, error.to_string(), None))?;
+            return Ok(json!({
+                "sent": true,
+                "via": "smtp",
+                "from": smtp.from_address(),
+                "recipients": recipients,
+            })
+            .to_string());
+        }
+
         let sent = self
             .gmail()?
             .send_message(&message)
@@ -379,7 +430,8 @@ impl GoogleMcp {
         let health = match &self.clients {
             Some(clients) => crate::health::Health::probe(clients).await,
             None => crate::health::Health::offline(),
-        };
+        }
+        .with_smtp(self.smtp.as_deref());
         json_string(&health)
     }
 
@@ -564,7 +616,9 @@ impl ServerHandler for GoogleMcp {
         let instructions = format!(
             "{}{}",
             SERVER.instructions,
-            crate::health::Health::offline().instructions_block()
+            crate::health::Health::offline()
+                .with_smtp(self.smtp.as_deref())
+                .instructions_block()
         );
         SERVER.live_info(env!("CARGO_PKG_VERSION"), &instructions)
     }

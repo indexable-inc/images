@@ -1,0 +1,21 @@
+[package]
+name = "mail-smtp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "SMTP submission for outgoing mail: any provider, an app password, and no OAuth client"
+
+[lints]
+workspace = true
+
+[lib]
+name = "mail_smtp"
+path = "src/lib.rs"
+
+[dependencies]
+lettre = { workspace = true }
+snafu.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

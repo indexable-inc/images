@@ -94,6 +94,23 @@ pub struct Health {
 }
 
 impl Health {
+    /// Fold a configured SMTP endpoint into the report.
+    ///
+    /// SMTP satisfies `mail.send` on its own -- no OAuth client, no Google
+    /// account -- so a host with SMTP set up must not be told sending is
+    /// broken just because Google is not configured.
+    #[must_use]
+    pub fn with_smtp(mut self, smtp: Option<&mail_smtp::SmtpSender>) -> Self {
+        if let Some(smtp) = smtp {
+            self.apply(Capability::new(
+                "mail.send",
+                State::Ok,
+                format!("SMTP: {}", smtp.describe()),
+            ));
+        }
+        self
+    }
+
     /// The instantly-knowable state: environment variables, a client-secrets
     /// file, the token file and the scopes it records. No network, so this
     /// is safe to call while answering `initialize`.
@@ -223,6 +240,8 @@ impl Health {
         else {
             return;
         };
+        // Only ever upgrades an `Unknown`, so an SMTP verdict (already `Ok`)
+        // and a missing-scope verdict both survive.
         match (mail_state, send.state) {
             (Some(State::Ok), State::Unknown) => {
                 send.state = State::Ok;
