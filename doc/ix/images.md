@@ -1,39 +1,55 @@
 # Images
 
-An ix VM boots from one OCI image. You build that image from a NixOS
-configuration with the index library, push it to your private registry
-namespace, then point a VM at it. This page is the build -> tag -> push -> boot
-model and the `ix image` verbs; for flags on any verb run `ix image --help`.
+An ix VM boots from one image. You build that image from a NixOS configuration
+with the index library, publish it to your private registry namespace, then
+point a VM at it. This page is the build -> tag -> publish -> boot model and the
+`ix image` verbs; for flags on any verb run `ix image --help`.
 
 ## The model
 
 1. **Build.** Evaluate a NixOS config through the index image library
-   (`index.lib.mkImage`, `lib/image/default.nix:99`). A baseline platform
+   (`index.lib.mkImage`, `lib/image/default.nix:184`). A baseline platform
    module is applied to every image automatically (`./platform.nix`, layered in
-   at `lib/image/default.nix:68-90`). The evaluated config yields the OCI
-   archive at `config.ix.build.ociImage`
-   (`lib/image/oci-layer.nix:28-31`, `:64`); `mkImage` returns exactly that
-   derivation. Each image is self-contained: ix runs one image per VM, it does
-   not stack images at runtime (`lib/image/default.nix:92-99`).
+   at `lib/image/default.nix:68-90`). Each image is self-contained: ix runs one
+   image per VM, it does not stack images at runtime.
 2. **Tag.** The image name comes from `ix.image.name`
-   (`lib/image/oci-layer.nix:17-20`); the built archive is always tagged
-   `latest` (`lib/image/oci-layer.nix:79`). In a fleet the node name seeds
-   `ix.image.name` by default (`lib/image/fleet.nix:238`). The registry tag is
-   chosen at push time by the destination ref.
-3. **Push.** Send the archive to your registry namespace with
-   `ix image push <source> <destination>`. A bare destination is stored under
-   `registry.ix.dev/<your-username>/`.
+   (`lib/image/oci-layer.nix:17`). In a fleet the node name seeds
+   `ix.image.name` by default (`lib/image/fleet.nix:304`). The registry tag is
+   chosen at publish time by the destination ref.
+3. **Publish.** The bootable artifact is a CAS manifest, and it is built on the
+   ix side rather than here: index declares the contract as
+   `ix.build.casImageBuilder` and ix supplies the implementation
+   (`lib/image/cas-layer.nix:34`, whose doc-comment is canonical). Building
+   `config.ix.build.casImage` yields a directory holding `manifest.cas` and
+   `locator.bin`, and `ix image push-manifest` uploads that pair:
+
+   ```sh
+   ix image push-manifest --region <region> \
+     --locator <out>/locator.bin <out>/manifest.cas <destination>
+   ```
+
+   A bare destination is stored under `registry.ix.dev/<your-username>/`.
 4. **Boot.** Create a VM from a registry ref with `ix apply <ref>` (or
    `ix run`). See [cli.md](cli.md).
 
-## Pushing, listing, removing
+`mkImage` returns `config.ix.build.ociImage`, an OCI archive
+(`lib/image/oci-layer.nix:58`). Nothing boots from it. ix deleted the OCI
+ingest pipeline in ENG-6044 phase 7 (ix#6930), which removed `ix image push`
+and every `docker://` source with it, leaving `push-manifest` as the only push
+path; the archive and its builder survive only until the companion index change
+retires `lib/image/oci-layer.nix`.
+
+## Publishing, listing, removing
 
 `ix image` manages the registry layer before any VM exists:
 
-- `ix image push <source> <destination>` - push an archive or ref. A plain
-  path source is read as `oci-archive:<path>`; a plain ref as `docker://<ref>`.
-  `--public` lets other ix users pull it; `--region` selects the target
-  registry.
+- `ix image push-manifest --locator <locator.bin> <manifest.cas> <destination>` -
+  upload a CAS manifest. Chunk bytes stream straight from their origin
+  `/nix/store` files, which is what the locator names, so the store paths the
+  manifest was built from have to be present on the pushing machine. `--public`
+  lets other ix users pull it; `--region` selects the target registry. This is
+  builder-facing: the publish pipeline is its usual caller, and `--admin`
+  unlocks the system namespace.
 - `ix image ls` - list system images and your private images in a region.
 - `ix image rm <reference>` - delete one tag you own (digest refs are
   rejected).
@@ -57,8 +73,9 @@ The flake-converge path needs a NixOS base so it can activate closures in place.
 ```
 
 ```sh
-# build the archive (your flake exposes the mkImage output), then:
-ix image push ./result registry.ix.dev/<you>/hello:v1
+# build the CAS manifest for that config (the ix flake owns the builder), then:
+ix image push-manifest --region us-west-1 \
+  --locator ./result/locator.bin ./result/manifest.cas hello:v1
 ix apply registry.ix.dev/<you>/hello:v1 --name hello
 ```
 

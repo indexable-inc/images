@@ -778,6 +778,26 @@
     };
   }
   {
+    staleReferences = {
+      topics = ["architecture" "writing"];
+      text = ''
+        Always delete references to things that no longer exist. When you
+        retire or rename a command, flag, option, path or artifact, grep the
+        tree for its old name and remove every doc line, comment, example and
+        diagram label that still promises it. A doc naming a command that
+        errors out is worse than no doc: the reader trusts it, runs it, and
+        debugs the wrong thing.
+      '';
+      reason = ''
+        Requested 2026-07-27. ix deleted `ix image push` two weeks earlier
+        (ENG-6044 phase 7, ix#6930) and `doc/ix/images.md`, the
+        `examples/oci` README and both its hero SVGs still documented it as
+        the way to publish an image; an agent followed that page and lost an
+        hour building and pushing an artifact nothing consumes.
+      '';
+    };
+  }
+  {
     commentDensityRewrite = {
       topics = ["architecture" "agency"];
       text = ''
