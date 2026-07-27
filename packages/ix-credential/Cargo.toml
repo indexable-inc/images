@@ -1,0 +1,21 @@
+[package]
+name = "ix-credential"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Lend a GitHub credential to a remote host over a forwarded unix socket, for the life of one ssh session"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "ix-credential"
+path = "src/main.rs"
