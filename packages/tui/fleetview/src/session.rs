@@ -455,92 +455,71 @@ mod tests {
         assert_eq!(snapshot.exit_code, Some(2));
     }
 
+    /// Every screen shape an agent paints, and the one line worth previewing.
+    /// The Claude Code cases are copied off live sessions (v2.1.220).
     #[test]
-    fn preview_takes_the_last_line_with_content_undecorated() {
-        let screen = lines("│ old news │\n│ ❯ the latest thing │\n╰────────────╯\n   ");
-        assert_eq!(preview_line(&screen).as_deref(), Some("the latest thing"));
+    fn preview_is_the_last_thing_the_agent_said() {
+        let cases = [
+            (
+                "a finished turn: the reply, over the rules and the statusline",
+                concat!(
+                    "⏺ FLEETVIEW LIVES\n",
+                    "✻ Cooked for 2s\n",
+                    "────────────────────────────────────────\n",
+                    "❯\n",
+                    "────────────────────────────────────────\n",
+                    "  ⟡ ix | ░░░░░ | Opus 5 (1M context) | high | v2.1.220\n",
+                    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+                ),
+                "FLEETVIEW LIVES",
+            ),
+            (
+                "a boxed input and a footer below it",
+                concat!(
+                    "● Hi there, five words exactly\n",
+                    "\n",
+                    "╭──────────────────────────────╮\n",
+                    "│ > Try \"fix the lint error\"   │\n",
+                    "╰──────────────────────────────╯\n",
+                    "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+                ),
+                "Hi there, five words exactly",
+            ),
+            (
+                "a gate: the tool call it is waiting on, not the question",
+                concat!(
+                    "⏺ Bash(rm -rf /tmp/scratch)\n",
+                    "╭──────────────────────────────╮\n",
+                    "│ Do you want to run this?     │\n",
+                    "│ ❯ 1. Yes                     │\n",
+                    "╰──────────────────────────────╯\n",
+                ),
+                "Bash(rm -rf /tmp/scratch)",
+            ),
+            (
+                "an agent with no bullets: the last line above its input rule",
+                concat!(
+                    "compiling 12 crates\n",
+                    "────────────────────\n",
+                    "❯\n",
+                    "────────────────────\n",
+                    "  ~/repo  main  100%\n",
+                ),
+                "compiling 12 crates",
+            ),
+        ];
+        for (shape, screen, expected) in cases {
+            assert_eq!(
+                preview_line(&lines(screen)).as_deref(),
+                Some(expected),
+                "{shape}"
+            );
+        }
     }
 
     #[test]
     fn preview_is_none_for_a_blank_screen() {
         assert_eq!(preview_line(&lines("\n   \n───")), None);
-    }
-
-    #[test]
-    fn preview_looks_past_the_input_box_and_the_footer() {
-        // The shape Claude Code actually paints: reply, input box, footer.
-        let screen = lines(concat!(
-            "● Hi there, five words exactly\n",
-            "\n",
-            "╭──────────────────────────────╮\n",
-            "│ > Try \"fix the lint error\"   │\n",
-            "╰──────────────────────────────╯\n",
-            "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
-        ));
-        assert_eq!(
-            preview_line(&screen).as_deref(),
-            Some("Hi there, five words exactly")
-        );
-    }
-
-    /// The exact shape Claude Code 2.1.220 paints, copied off a live session.
-    #[test]
-    fn preview_of_a_finished_claude_turn_is_its_reply() {
-        let screen = lines(concat!(
-            "⏺ FLEETVIEW LIVES\n",
-            "✻ Cooked for 2s\n",
-            "────────────────────────────────────────\n",
-            "❯\n",
-            "────────────────────────────────────────\n",
-            "  ⟡ ix | ░░░░░ | Opus 5 (1M context) | high | v2.1.220\n",
-            "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-        ));
-        assert_eq!(preview_line(&screen).as_deref(), Some("FLEETVIEW LIVES"));
-    }
-
-    #[test]
-    fn preview_ignores_a_statusline_below_the_input_box() {
-        // A user's statusline is arbitrary text under the box, so no blacklist
-        // can catch it; only its position below the prompt gives it away.
-        let screen = lines(concat!(
-            "⏺ FLEETVIEW LIVES\n",
-            "╭──────────────────────────────╮\n",
-            "│ > │\n",
-            "╰──────────────────────────────╯\n",
-            "⟡ ix | ░░░░░░ | Opus 5 (1M context) | 12% context left\n",
-        ));
-        assert_eq!(preview_line(&screen).as_deref(), Some("FLEETVIEW LIVES"));
-    }
-
-    #[test]
-    fn a_gated_session_previews_the_tool_call_it_is_waiting_on() {
-        let screen = lines(concat!(
-            "⏺ Bash(rm -rf /tmp/scratch)\n",
-            "╭──────────────────────────────╮\n",
-            "│ Do you want to run this?     │\n",
-            "│ ❯ 1. Yes                     │\n",
-            "╰──────────────────────────────╯\n",
-        ));
-        assert_eq!(
-            preview_line(&screen).as_deref(),
-            Some("Bash(rm -rf /tmp/scratch)")
-        );
-    }
-
-    #[test]
-    fn an_unbulleted_agent_previews_its_last_line_above_the_input_rule() {
-        // The shape a non-Claude agent paints: output, a rule, its prompt.
-        let screen = lines(concat!(
-            "compiling 12 crates\n",
-            "────────────────────\n",
-            "❯\n",
-            "────────────────────\n",
-            "  ~/repo  main  100%\n",
-        ));
-        assert_eq!(
-            preview_line(&screen).as_deref(),
-            Some("compiling 12 crates")
-        );
     }
 
     #[test]
