@@ -90,13 +90,54 @@
       system-prompt-eval list | grep -q first-principles
       mkdir -p "$out"
     '';
+  # The workflow is this CLI's only caller that passes flags nothing else
+  # exercises, so it drifted silently: `--html-out` outlived the flag it names
+  # by the whole life of the viewer app, and every `/run-evals` since exited 2
+  # on "unrecognized arguments" with no one watching. Assert every long flag the
+  # workflow's eval step passes is one `run --help` still lists.
+  workflowSource = lib.fileset.toSource {
+    inherit (ix.paths) root;
+    fileset = ix.paths.root + "/.github/workflows/system-prompt-eval.yml";
+  };
+
+  workflowFlags =
+    pkgs.runCommand "system-prompt-eval-workflow-flags"
+    {
+      nativeBuildInputs = [
+        package
+        pkgs.yq-go
+      ];
+      strictDeps = true;
+    }
+    ''
+      step=$(yq '.jobs.run-evals.steps[] | select(.name == "Run the eval").run' \
+        ${workflowSource}/.github/workflows/system-prompt-eval.yml)
+      flags=$(printf '%s' "$step" | grep -o -- '--[a-z][a-z-]*' | sort -u)
+      if [ -z "$flags" ]; then
+        echo "no flags found in the workflow's eval step; this check has drifted" >&2
+        printf '%s\n' "$step" >&2
+        exit 1
+      fi
+      help=$(system-prompt-eval run --help)
+      for flag in $flags; do
+        case "$help" in
+          *"$flag"*) ;;
+          *)
+            echo "system-prompt-eval.yml passes $flag, which \`run\` does not accept" >&2
+            printf '%s\n' "$help" >&2
+            exit 1
+            ;;
+        esac
+      done
+      mkdir -p "$out"
+    '';
 in
   package.overrideAttrs (old: {
     passthru =
       (old.passthru or {})
       // {
         tests = {
-          inherit scoring printsHelp;
+          inherit scoring printsHelp workflowFlags;
         };
       };
   })

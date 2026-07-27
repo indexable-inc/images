@@ -93,13 +93,19 @@ probe is stable. Web tools are denied so it cannot look the answer up. Headline
 
 ## Scorecard
 
-Every run writes a self-contained HTML scorecard (`--html-out`, or a temp file
-by default; the path is printed) with three drill-in layers: summary cards per
-eval; a behaviors panel (name + full rubric + pass-rate + a clickable pass/fail
-dot per rollout); and per rollout, the verdicts with the judge's evidence plus
-the **full action timeline**: every assistant message, thinking block, tool
-call with its input, tool result, and the final answer. The `--json-out` report
-carries the same `steps` as machine-readable raw data.
+Every run writes one JSON report (`--json-out`, or a temp file by default; the
+path is printed). Read it with the viewer, which the run prints a command for:
+
+```sh
+nix run .#system-prompt-eval-viewer -- result.json
+```
+
+The viewer has three drill-in layers: summary cards per eval; a behaviors panel
+(name + full rubric + pass-rate + a clickable pass/fail dot per rollout); and
+per rollout, the verdicts with the judge's evidence plus the **full action
+timeline**: every assistant message, thinking block, tool call with its input,
+tool result, and the final answer. The report's `steps` carry the same data
+machine-readably.
 
 ## Time series
 
