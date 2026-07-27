@@ -109,10 +109,12 @@
     worktree = {
       topics = ["workflow"];
       text = ''
-        Never edit in a primary checkout: work on a dedicated `git worktree`
-        branch at `/tmp/worktree/<org>/<repo>/<name>` (org and repo from
-        the checkout's origin URL) and verify root and branch before
-        committing. Right after `git worktree add`, run
+        Never work in a primary checkout: the first action in any repo is a
+        dedicated `git worktree` branch at `/tmp/worktree/<org>/<repo>/<name>`
+        (org and repo from the checkout's origin URL), and root and branch
+        get verified before committing. A shared checkout is for reading:
+        staging a file there, or switching its branch, changes what every
+        other session sees. Right after `git worktree add`, run
         `git submodule update --init --recursive`: a new worktree leaves
         submodules uninitialized even when the build needs them. An
         isolation worktree belongs to the session's repo, not necessarily
@@ -128,7 +130,11 @@
         received index worktrees and hand-rolled replacements, one
         clobbering a sibling's (index#4008). Ad-hoc worktree locations
         made parallel sessions and cleanup unpredictable; standardized
-        path requested in index#4062.
+        path requested in index#4062. Restated from "never edit" to
+        "never work" after the shared ix checkout was found on a deleted
+        branch 604 commits behind main, holding 534 files staged by
+        nobody, 51 of which matched neither that branch nor main
+        (index#4216).
       '';
     };
   }
