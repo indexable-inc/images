@@ -556,12 +556,24 @@
       text = ''
         CI runs only on self-hosted fleet linux runners: no hosted runners,
         no mac in CI (darwin cross-compiles). A hosted or mac job you touch
-        is a defect to fix or file.
+        is a defect to fix or file. A job claims exactly one dispatcher
+        label and nothing else: `runs-on: ["''${{ format('ix-ci-run-{0}-{1}-<suffix>',
+        github.run_id, github.run_attempt) }}"]`. A second label or none is
+        dropped silently, and a suffix ending `-ephemeral-vm` waits forever
+        on a lane that is off, with no runner and no timeout. Fleet runners
+        carry no `jq` and no `gh`; take them from `nix build
+        .#github-actions-shell-tools`.
       '';
       reason = ''
         The darwin cache-push leg ran 2h+ on hosted macos-14 against 4 min
         self-hosted linux, on every deploy's critical path (2026-07-18;
-        ix#7609 direction).
+        ix#7609 direction). The label form and its two traps were added
+        2026-07-27 alongside ix#8876, the lint that enforces them: the
+        ephemeral-VM lane has never been admitted by
+        execution_environment_enabled and gave ix's deploy-test 101
+        dispatches and zero passes (ENG-10402, ENG-10508), and agents
+        converting a hosted job kept hitting a missing jq because the fleet
+        PATH is not the ubuntu-latest image's.
       '';
     };
   }
