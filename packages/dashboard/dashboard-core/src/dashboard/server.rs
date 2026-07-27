@@ -15,11 +15,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Json};
-use axum::routing::get;
+use axum::routing::{get, post};
 use futures::{Stream, StreamExt as _};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -27,7 +28,7 @@ use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
-use super::hub::Hub;
+use super::hub::{Hub, Merge};
 use super::recordings::RecordingStore;
 use crate::{Error, Result};
 
@@ -38,6 +39,14 @@ use crate::{Error, Result};
 /// generated bundle never lives in the repo. See `build.rs` for why this is a
 /// compile-time embed rather than a runtime asset dir.
 const DASHBOARD_HTML: &str = include_str!(concat!(env!("OUT_DIR"), "/dashboard.html"));
+
+/// Ceiling on one inbound update.
+///
+/// A Loro update for a keystroke is tens of bytes; the large case is a client
+/// that fell behind reposting a whole snapshot. Set well above that and far
+/// below anything that could exhaust the process, because `/apply` is the one
+/// route a browser can push bytes through.
+const MAX_UPDATE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Shared router state: the live document and, optionally, the on-disk
 /// recordings. Cloning is cheap: both fields are `Arc`s.
@@ -158,6 +167,10 @@ pub async fn serve_hub(
         .route("/events", get(events))
         .route("/recordings", get(list_recordings))
         .route("/recording/{id}", get(get_recording))
+        .route(
+            "/apply",
+            post(apply).layer(DefaultBodyLimit::max(MAX_UPDATE_BYTES)),
+        )
         .with_state(AppState { hub, recordings });
 
     let http = {
@@ -206,6 +219,30 @@ async fn get_recording(State(state): State<AppState>, Path(id): Path<String>) ->
             || (StatusCode::NOT_FOUND, "no such recording").into_response(),
             |bytes| ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
         )
+}
+
+/// Merge a client's CRDT update into the shared document.
+///
+/// The inbound half of `/events`. A viewer exports its local ops and posts the
+/// bytes here; the hub merges them and fans the result back out, so every other
+/// viewer converges on the same document. Raw `application/octet-stream` rather
+/// than base64: the outbound stream encodes only because SSE is a text protocol,
+/// and a request body has no such constraint.
+async fn apply(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
+    match state.hub.import(&body) {
+        Ok(Merge::Applied) => StatusCode::NO_CONTENT.into_response(),
+        // The client built on ops this document has never seen, so its edit is
+        // recorded but invisible. A specific status because the fix is specific
+        // and the client can perform it: take a fresh snapshot from `/events`,
+        // rebase, and post again. Answering 204 here would tell a human their
+        // edit landed when it did not.
+        Ok(Merge::Pending) => (
+            StatusCode::CONFLICT,
+            "update depends on unknown ops; resync from /events and repost",
+        )
+            .into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
 }
 
 async fn events(State(state): State<AppState>) -> impl IntoResponse {
