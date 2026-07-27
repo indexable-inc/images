@@ -193,6 +193,49 @@ impl Style {
     }
 }
 
+/// How many columns the character in a cell occupies, and which of those
+/// columns this cell is.
+///
+/// Ghostty answers this once, when the character is laid onto the grid, and
+/// the answer is a Unicode width table plus grapheme rules plus the mode
+/// bits the application set. Anything downstream that needs to know where a
+/// character starts and ends -- re-wrapping captured output at a new width is
+/// the case this was surfaced for -- reads that answer instead of computing a
+/// second one, because two width tables that disagree draw two different
+/// pictures of the same bytes and only one of them is what the program saw.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum CellWide {
+    /// One column wide, which is nearly every cell.
+    #[default]
+    Narrow,
+    /// The first column of a two-column character.
+    Wide,
+    /// The second column of a two-column character. Carries no glyph of its
+    /// own and must never be separated from the [`CellWide::Wide`] before it.
+    SpacerTail,
+    /// The last column of a soft-wrapped row, left blank because the next
+    /// character was two columns wide and one column was left. It is padding
+    /// the terminal inserted, not something the program printed, so a reflow
+    /// that rejoins the row has to drop it.
+    SpacerHead,
+}
+
+impl CellWide {
+    /// Map libghostty-vt's `GhosttyCellWide` tag.
+    ///
+    /// Taken as a raw `u32` and matched rather than materialized as the C
+    /// enum, for the reason [`Terminal::row_semantic_prompt`] gives: forming
+    /// a Rust enum from an out-of-range FFI value is UB.
+    const fn from_raw(raw: u32) -> Self {
+        match raw {
+            1 => Self::Wide,
+            2 => Self::SpacerTail,
+            3 => Self::SpacerHead,
+            _ => Self::Narrow,
+        }
+    }
+}
+
 /// A single rendered terminal cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
@@ -213,6 +256,8 @@ pub struct Cell {
     /// `GHOSTTY_ROW_DATA_HYPERLINK` flag (which may false-positive), this is
     /// only `Some` when the library resolved a real URI for the cell.
     pub hyperlink: Option<String>,
+    /// Which column of its character this cell is; see [`CellWide`].
+    pub wide: CellWide,
 }
 
 /// The terminal cursor's visual style (the shape requested via DECSCUSR).
@@ -256,6 +301,44 @@ pub struct Cursor {
     pub viewport: Option<(u16, u16)>,
 }
 
+/// One row of a [`Snapshot`]: its cells, and whether the line it belongs to
+/// carries on into the next row.
+///
+/// The wrap flag is the difference between a grid and a transcript. A grid
+/// row is just a row, but a reader of captured output needs to know why a
+/// row ended: because the terminal ran out of columns, in which case the
+/// text is one line that can be laid out again at another width, or because
+/// the program printed a newline, in which case joining it to the next row
+/// would scramble anything that positioned its output deliberately. Nothing
+/// else in the row distinguishes the two.
+///
+/// Derefs to its cells, so every reader that only wants the row's content
+/// keeps reading it as a slice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    /// The row's cells, `cols` of them.
+    pub cells: Vec<Cell>,
+    /// The row was soft-wrapped: its line continues on the row below.
+    pub wrapped: bool,
+}
+
+impl std::ops::Deref for Row {
+    type Target = [Cell];
+
+    fn deref(&self) -> &Self::Target {
+        &self.cells
+    }
+}
+
+impl<'a> IntoIterator for &'a Row {
+    type Item = &'a Cell;
+    type IntoIter = std::slice::Iter<'a, Cell>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.cells.iter()
+    }
+}
+
 /// An immutable snapshot of a terminal's render state.
 ///
 /// Produced by [`Terminal::render`]. All data is copied out of the C render
@@ -267,7 +350,7 @@ pub struct Snapshot {
     /// Viewport height in rows.
     pub rows: u16,
     /// The visible viewport as `rows` rows, each `cols` cells wide.
-    pub viewport: Vec<Vec<Cell>>,
+    pub viewport: Vec<Row>,
     /// Number of rows held in scrollback above the viewport.
     pub scrollback: u64,
     /// The cursor state.
@@ -986,8 +1069,8 @@ impl RenderState {
         })
     }
 
-    /// Read the full viewport as owned rows of [`Cell`]s.
-    fn viewport(&self, cols: u16) -> Result<Vec<Vec<Cell>>> {
+    /// Read the full viewport as owned [`Row`]s.
+    fn viewport(&self, cols: u16) -> Result<Vec<Row>> {
         let mut iterator = RowIterator::new()?;
         check(unsafe {
             sys::ghostty_render_state_get(
@@ -1000,6 +1083,7 @@ impl RenderState {
         let mut cells = RowCells::new()?;
         let mut viewport = Vec::new();
         while unsafe { sys::ghostty_render_state_row_iterator_next(iterator.raw) } {
+            let wrapped = read_wrapped(&iterator)?;
             check(unsafe {
                 sys::ghostty_render_state_row_get(
                     iterator.raw,
@@ -1007,7 +1091,10 @@ impl RenderState {
                     (&raw mut cells.raw).cast::<c_void>(),
                 )
             })?;
-            viewport.push(read_row(&cells, cols)?);
+            viewport.push(Row {
+                cells: read_row(&cells, cols)?,
+                wrapped,
+            });
         }
         Ok(viewport)
     }
@@ -1074,6 +1161,51 @@ impl Drop for RowCells {
     }
 }
 
+/// Whether the iterator's current row is soft-wrapped onto the next one.
+///
+/// Two hops, because the render state and the screen are two surfaces over
+/// the same row: the iterator hands back the raw `GhosttyRow` handle, and the
+/// wrap bit lives on the screen side with the rest of the row flags. The
+/// render state's own row data is only dirty/raw/cells.
+fn read_wrapped(iterator: &RowIterator) -> Result<bool> {
+    let mut raw_row: sys::GhosttyRow = 0;
+    check(unsafe {
+        sys::ghostty_render_state_row_get(
+            iterator.raw,
+            sys::GhosttyRenderStateRowData::GHOSTTY_RENDER_STATE_ROW_DATA_RAW,
+            (&raw mut raw_row).cast::<c_void>(),
+        )
+    })?;
+    let mut wrapped = false;
+    check(unsafe {
+        sys::ghostty_row_get(
+            raw_row,
+            sys::GhosttyRowData::GHOSTTY_ROW_DATA_WRAP,
+            (&raw mut wrapped).cast::<c_void>(),
+        )
+    })?;
+    Ok(wrapped)
+}
+
+/// The selected cell's [`CellWide`].
+///
+/// Same two hops as [`read_wrapped`] and for the same reason: the wide tag is
+/// a screen-side cell property, and the render state's cell view only reaches
+/// it through the raw handle.
+fn read_wide(cells: &RowCells) -> Result<CellWide> {
+    let raw_cell: sys::GhosttyCell =
+        unsafe { cells.get(sys::GhosttyRenderStateRowCellsData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW) }?;
+    let mut wide: u32 = 0;
+    check(unsafe {
+        sys::ghostty_cell_get(
+            raw_cell,
+            sys::GhosttyCellData::GHOSTTY_CELL_DATA_WIDE,
+            (&raw mut wide).cast::<c_void>(),
+        )
+    })?;
+    Ok(CellWide::from_raw(wide))
+}
+
 /// Read every cell of the selected row into owned [`Cell`]s.
 fn read_row(cells: &RowCells, cols: u16) -> Result<Vec<Cell>> {
     use sys::GhosttyRenderStateRowCellsData as CellData;
@@ -1113,6 +1245,7 @@ fn read_row(cells: &RowCells, cols: u16) -> Result<Vec<Cell>> {
         )?;
 
         let hyperlink = read_hyperlink(cells)?;
+        let wide = read_wide(cells)?;
 
         row.push(Cell {
             ch,
@@ -1121,6 +1254,7 @@ fn read_row(cells: &RowCells, cols: u16) -> Result<Vec<Cell>> {
             fg,
             bg,
             hyperlink,
+            wide,
         });
     }
     Ok(row)
