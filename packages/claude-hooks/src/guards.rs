@@ -580,6 +580,253 @@ fn parse_git_call(rest: &[String], base: &std::path::Path) -> Option<GitCall> {
     None
 }
 
+/// Run `git -C <top> --no-optional-locks <args>` and return stdout on a clean
+/// exit. `None` on any failure, which every caller reads as "cannot tell".
+///
+/// `--no-optional-locks` because this runs against a checkout other sessions
+/// are using: a plain `git status` takes `.git/index.lock` and rewrites the
+/// index to refresh its stat cache, which can lose a race with someone else's
+/// `git add`.
+fn git_stdout(git: &str, top: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(git)
+        .args(["-C", top, "--no-optional-locks"])
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status.success().then_some(())?;
+    String::from_utf8(out.stdout).ok()
+}
+
+/// The refs the deny message itself prescribes: a `rescue/*` branch cut from
+/// `git stash create`.
+///
+/// Deliberately not every ref in the checkout. A path the working tree has
+/// deleted is absent from every ref that never had it, so scanning everything
+/// names an ancient unrelated branch as the rescue snapshot, which is worse
+/// than saying nothing. `refs/stash` is out for its own reasons: a successful
+/// `git stash push` leaves the tree clean, so a stash can only be stale by the
+/// time this runs, and its short name `stash` means `stash@{0}`, which moves.
+const SNAPSHOT_REF_PATTERN: &str = "refs/heads/rescue";
+/// Rescue refs compared before giving up, newest first.
+///
+/// The message prescribes one branch per incident and nothing prunes them, so
+/// this namespace grows without bound. `git-guard` has a 10s hook timeout and a
+/// timed-out `PreToolUse` hook emits no deny at all, so an accumulated history
+/// must not be able to walk the check into failing open.
+const SNAPSHOT_CANDIDATE_LIMIT: usize = 4;
+
+/// The status codes `git status --porcelain` uses for an unmerged path.
+const UNMERGED: [&str; 7] = ["DD", "AU", "UD", "UA", "DU", "AA", "UU"];
+
+/// What a subcommand destroys beyond tracked content, and therefore what a
+/// snapshot has to cover before the message may promise a way back.
+///
+/// Scoping this per subcommand is the difference between a working feature and
+/// a dead one. Every protected checkout has ignored content in it (74 entries
+/// in `~/.config/nix` as this was written), so treating ignored files as
+/// disqualifying for every command means the snapshot wording never appears at
+/// all. `git reset --hard`, `git checkout`, `git restore`, `git switch` and a
+/// plain `git stash push` do not touch untracked or ignored files.
+#[derive(Clone, Copy)]
+struct Destroys {
+    untracked: bool,
+    ignored: bool,
+}
+
+fn destroys_beyond_tracked(sub: &str, args: &[String]) -> Destroys {
+    // `git clean`'s `-x` and `-X` have no long form, so they are matched on the
+    // short flag alone rather than through `has_flag`.
+    let short = |c: char| {
+        args.iter()
+            .take_while(|a| a.as_str() != "--")
+            .any(|a| bundles_short(a, c))
+    };
+    match sub {
+        // `git clean -f` deletes untracked files; `-x` and `-X` extend it to
+        // ignored ones.
+        "clean" => Destroys {
+            untracked: true,
+            ignored: short('x') || short('X'),
+        },
+        // `stash push -u` takes untracked files with it, `-a` ignored ones too.
+        "stash" => Destroys {
+            untracked: has_flag(args, 'u', "--include-untracked") || has_flag(args, 'a', "--all"),
+            ignored: has_flag(args, 'a', "--all"),
+        },
+        _ => Destroys {
+            untracked: false,
+            ignored: false,
+        },
+    }
+}
+
+/// A ref that already holds this working tree exactly as it stands, if there
+/// is one.
+///
+/// `git stash create` writes such a commit and the deny message tells the
+/// operator to point a `rescue/*` branch at it. Once they have, "there is no
+/// blob in the object database and no way back" is false, and the message read
+/// as if the snapshot were a precondition that should have unlocked the command
+/// (ix#8785).
+///
+/// Read-only against the shared checkout: no object is written, no ref moves,
+/// and the index `git diff` refreshes is a private copy. It runs only on the
+/// refusal path.
+fn snapshot_ref(git: &str, top: &str, common: &str, destroys: Destroys) -> Option<String> {
+    if !diff_covers_working_tree(git, top, destroys) {
+        return None;
+    }
+    // Sorted here rather than with `--sort=-committerdate`, which reads every
+    // ref's object and so fails the whole call on one ref with a missing
+    // object, silently taking every good rescue ref with it. The prescribed
+    // name is `rescue/$(date +%Y-%m-%d-%H%M)`, so reverse lexicographic order
+    // is newest first.
+    let refs = git_stdout(
+        git,
+        top,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            SNAPSHOT_REF_PATTERN,
+        ],
+    )?;
+    let mut candidates: Vec<&str> = refs.lines().filter(|r| shell_safe_ref(r)).collect();
+    candidates.sort_unstable_by(|a, b| b.cmp(a));
+    candidates.truncate(SNAPSHOT_CANDIDATE_LIMIT);
+    if candidates.is_empty() {
+        return None;
+    }
+    let index = scratch_index(common)?;
+    candidates
+        .into_iter()
+        .find(|rev| holds_working_tree(git, top, index.path(), rev))
+        .map(str::to_owned)
+}
+
+/// Whether `git diff <rev>` looks at everything this command would destroy.
+///
+/// A snapshot cannot be said to hold content that no comparison looks at.
+/// `git stash create` captures neither untracked nor ignored files, and `git
+/// diff` skips those as well as any path flagged assume-unchanged or
+/// skip-worktree. Where the command about to run would delete such a path,
+/// `diff --quiet` comes back clean and the message promises a way back for an
+/// ignored build tree that is in no commit, so those cases are refused instead.
+///
+/// A sparse checkout marks every out-of-cone path skip-worktree, so this
+/// returns false there and the message keeps its unrecoverable wording.
+///
+/// Anything unreadable is a no: this decides whether to make a promise.
+fn diff_covers_working_tree(git: &str, top: &str, destroys: Destroys) -> bool {
+    // Spelled out rather than left to the repo: `status.showUntrackedFiles =
+    // no` hides exactly the files this has to see, and
+    // `submodule.<name>.ignore` hides dirty submodule content from both the
+    // status and the diff below, which is the one way the two can agree while
+    // content is still lost. `traditional` and `normal` collapse whole
+    // directories, which is all it takes to answer "is there any", without
+    // enumerating a build tree.
+    let untracked = if destroys.untracked {
+        "--untracked-files=normal"
+    } else {
+        "--untracked-files=no"
+    };
+    let ignored = if destroys.ignored {
+        "--ignored=traditional"
+    } else {
+        "--ignored=no"
+    };
+    let Some(status) = git_stdout(
+        git,
+        top,
+        &[
+            "status",
+            "--porcelain",
+            "--ignore-submodules=none",
+            untracked,
+            ignored,
+        ],
+    ) else {
+        return false;
+    };
+    let uncovered = status.lines().any(|line| {
+        let xy = line.get(..2).unwrap_or_default();
+        xy == "??" || xy == "!!" || UNMERGED.contains(&xy)
+    });
+    if uncovered {
+        return false;
+    }
+    // `ls-files -v` tags skip-worktree `S` and assume-unchanged with a
+    // lowercase letter. Both make a path invisible to `git diff` while leaving
+    // it in reach of `git reset --hard`.
+    let Some(files) = git_stdout(git, top, &["ls-files", "-v"]) else {
+        return false;
+    };
+    !files
+        .lines()
+        .any(|l| l.starts_with(|c: char| c == 'S' || c.is_ascii_lowercase()))
+}
+
+/// Whether `rev` holds the working tree exactly as it stands.
+///
+/// `git diff` and not a comparison of blob ids, because a tree entry carries a
+/// mode that a blob does not. `chmod +x` and a symlink replaced by a regular
+/// file of the same text both leave every blob id untouched, and both are real
+/// losses. Comparing the whole tree also means a path deleted in the working
+/// tree cannot match a ref that simply never had it.
+fn holds_working_tree(git: &str, top: &str, index: &std::path::Path, rev: &str) -> bool {
+    std::process::Command::new(git)
+        .args([
+            "-C",
+            top,
+            "--no-optional-locks",
+            "diff",
+            "--quiet",
+            // `diff.ignoreSubmodules` would otherwise hide dirty submodule
+            // content that `git stash create` never captured.
+            "--ignore-submodules=none",
+            rev,
+            "--",
+        ])
+        .env("GIT_INDEX_FILE", index)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.code() == Some(0))
+}
+
+/// A private copy of the index for `git diff` to refresh.
+///
+/// `git diff` rewrites the index stat cache even under `--no-optional-locks`,
+/// and this checkout belongs to every session on the machine, so it gets a
+/// copy rather than the real one.
+fn scratch_index(common: &str) -> Option<tempfile::NamedTempFile> {
+    // Written, not `fs::copy`d: copy carries the source's mode over the 0600
+    // the temp file was created with, and an index names every tracked path in
+    // a checkout whose whole premise is that the machine has other principals
+    // on it.
+    let bytes = std::fs::read(std::path::Path::new(common).join("index")).ok()?;
+    let mut scratch = tempfile::NamedTempFile::new().ok()?;
+    std::io::Write::write_all(&mut scratch, &bytes).ok()?;
+    std::io::Write::flush(&mut scratch).ok()?;
+    Some(scratch)
+}
+
+/// Whether a refname is safe to paste into the command the message tells the
+/// operator to run.
+///
+/// `git branch` accepts `rescue/$(id)`, every session on the machine shares
+/// this checkout and can create one, and a fetch can bring one in. This message
+/// exists to be run, so a name outside this set falls back to the no-snapshot
+/// wording rather than becoming a command injection.
+fn shell_safe_ref(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'/' | b'-'))
+}
+
 /// The refusal text. Names every entry that would be lost, the snapshot that
 /// does not touch the tree, and the worktree to do the work in instead.
 struct Refusal<'a> {
@@ -590,6 +837,8 @@ struct Refusal<'a> {
     effect: &'a str,
     /// `git status --porcelain` lines, one per entry that would be lost.
     dirty: &'a [String],
+    /// A ref that already holds this exact content, from `snapshot_ref`.
+    snapshot: Option<&'a str>,
 }
 
 fn deny_message(refusal: &Refusal<'_>) -> String {
@@ -599,6 +848,7 @@ fn deny_message(refusal: &Refusal<'_>) -> String {
         sub,
         effect,
         dirty,
+        snapshot,
     } = *refusal;
     let shown = dirty
         .iter()
@@ -613,21 +863,56 @@ fn deny_message(refusal: &Refusal<'_>) -> String {
     };
     let slug = origin_slug(git, top);
     let count = dirty.len();
-    format!(
+    let head = format!(
         "Refusing `git {sub}` in {top}.\n\n\
          That checkout is shared by every agent session on this machine, it currently \
-         holds {count} entries of uncommitted work, and `git {sub}` {effect}. None of it is \
-         staged, so there is no blob in the object database and no way back (ENG-9964: \
-         exactly this command destroyed 7 uncommitted lines belonging to another session, \
-         recovered only because a nix eval had happened to copy the dirty tree into the \
-         store).\n\n\
+         holds {count} entries of uncommitted work, and `git {sub}` {effect}."
+    );
+    let worktree = format!(
+        "Do the work in a worktree of your own, where destructive commands are yours to \
+         run:\n\
+         \x20   git -C {top} worktree add /tmp/worktree/{slug}/<name> -b <branch> {start}\n\
+         \x20   git -C /tmp/worktree/{slug}/<name> submodule update --init --recursive",
+        start = snapshot.unwrap_or("origin/main"),
+    );
+    // With a snapshot in hand the old text is false, and it read as if taking
+    // the snapshot were the precondition that unlocks the command (ix#8785).
+    if let Some(rescue) = snapshot {
+        return format!(
+            "{head} {rescue} already holds this working tree exactly as it stands, so there \
+             is a way back. The \
+             refusal is not about recoverability, it is policy: that working tree is every \
+             session's, so a snapshot does not make it yours to move.\n\n\
+             Held by {rescue}:\n{shown}{more}\n\n\
+             {worktree}\n\n\
+             That worktree opens with the content above already committed, as the WIP \
+             commit `git stash create` wrote, so nothing there needs `git {sub}`. To carry \
+             on from it as uncommitted work:\n\
+             \x20   git -C /tmp/worktree/{slug}/<name> reset --soft HEAD^\n\n\
+             (git-guard hook, ENG-9964, ix#8785)"
+        );
+    }
+    // A staged blob is in the object database whatever else is true, so the
+    // original sentence was its own small version of this bug.
+    let staged = dirty
+        .iter()
+        .any(|l| l.starts_with(|c: char| !matches!(c, ' ' | '?')));
+    let loss = if staged {
+        "Some of it is staged, so those blobs are in the object database, but no snapshot \
+         holds this working tree as it stands"
+    } else {
+        "None of it is staged, so there is no blob in the object database and no way back"
+    };
+    format!(
+        "{head} {loss} (ENG-9964: exactly this command destroyed 7 uncommitted lines \
+         belonging to another session, recovered only because a nix eval had happened to \
+         copy the dirty tree into the store).\n\n\
          Would be lost:\n{shown}{more}\n\n\
          Snapshot it first, which does not touch the working tree:\n\
          \x20   git -C {top} branch rescue/$(date +%Y-%m-%d-%H%M) \"$(git -C {top} stash create)\"\n\n\
-         Then do the work in a worktree of your own, where destructive commands are yours \
-         to run:\n\
-         \x20   git -C {top} worktree add /tmp/worktree/{slug}/<name> -b <branch> origin/main\n\
-         \x20   git -C /tmp/worktree/{slug}/<name> submodule update --init --recursive\n\n\
+         The snapshot does not unlock `git {sub}` here. It saves the work where it stands, \
+         and gives the worktree below something to start from.\n\n\
+         {worktree}\n\n\
          (git-guard hook, ENG-9964)"
     )
 }
@@ -716,8 +1001,10 @@ fn judge(git: &str, protected: &[String], call: &GitCall) -> Option<String> {
         return None;
     }
 
+    // `--no-optional-locks`: a plain `git status` rewrites the index to refresh
+    // its stat cache, and this checkout belongs to every session on the machine.
     let status = std::process::Command::new(git)
-        .args(["-C", &top, "status", "--porcelain"])
+        .args(["-C", &top, "--no-optional-locks", "status", "--porcelain"])
         .output()
         .ok()
         .filter(|o| o.status.success());
@@ -737,12 +1024,16 @@ fn judge(git: &str, protected: &[String], call: &GitCall) -> Option<String> {
     // Uncommitted work that this command would destroy is the first thing to
     // say, because it is the only unrecoverable one.
     if let Some(effect) = effect.filter(|_| !dirty.is_empty()) {
+        // Only on this branch, so the snapshot lookup never runs on a call the
+        // guard is about to allow.
+        let snapshot = snapshot_ref(git, &top, &common, destroys_beyond_tracked(sub, &call.args));
         return Some(deny_message(&Refusal {
             git,
             top: &top,
             sub,
             effect,
             dirty: &dirty,
+            snapshot: snapshot.as_deref(),
         }));
     }
     // A clean tree has nothing to destroy, but reading another revision into it
@@ -862,6 +1153,7 @@ fn resolve(base: &std::path::Path, arg: &str) -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -1218,6 +1510,406 @@ mod tests {
         assert!(
             git_guard_decision(&env, &bash(&fx.root, &wrapped)).is_some(),
             "buried in bash -c"
+        );
+    }
+
+    /// `git -C <dir> stash create`, the exact rescue command the deny message
+    /// prescribes, returning the commit it wrote.
+    fn stash_create(dir: &Path) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["stash", "create"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git stash create");
+        assert!(out.status.success(), "git stash create");
+        String::from_utf8(out.stdout)
+            .expect("utf8 sha")
+            .trim()
+            .to_owned()
+    }
+
+    /// ix#8785: the message prescribed a rescue snapshot and then kept saying
+    /// "no blob in the object database and no way back" after the operator had
+    /// taken it, which reads as if the snapshot should have unlocked the
+    /// command.
+    #[test]
+    fn a_rescue_snapshot_changes_the_refusal_from_loss_to_policy() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+
+        let before = git_guard_decision(&env, &bash(&fx.primary, "git stash push -m wip"))
+            .expect("a dirty shared checkout is denied");
+        assert!(before.contains("no way back"), "{before}");
+        assert!(before.contains("Would be lost:"), "{before}");
+        assert!(
+            before.contains("The snapshot does not unlock `git stash` here."),
+            "{before}"
+        );
+
+        run_git(
+            &fx.primary,
+            &["branch", "rescue/test", &stash_create(&fx.primary)],
+        );
+
+        let after = git_guard_decision(&env, &bash(&fx.primary, "git stash push -m wip"))
+            .expect("the refusal stands: this is policy, not recoverability");
+        assert!(!after.contains("no way back"), "{after}");
+        assert!(!after.contains("Would be lost:"), "{after}");
+        assert!(after.contains("Held by rescue/test:"), "{after}");
+        assert!(
+            after.contains("rescue/test already holds this working tree exactly as it stands"),
+            "{after}"
+        );
+        // The way forward has to name the snapshot, or it is the same dead end.
+        assert!(after.contains("-b <branch> rescue/test"), "{after}");
+
+        // A ref that no longer matches the working tree does not count.
+        std::fs::write(fx.primary.join("README"), "seed\nedited again\n").expect("dirty README");
+        let moved = git_guard_decision(&env, &bash(&fx.primary, "git stash push -m wip"))
+            .expect("still denied");
+        assert!(moved.contains("no way back"), "{moved}");
+    }
+
+    /// Everything below pins the direction that matters: claiming a snapshot
+    /// that does not cover the work is the dangerous way to be wrong, while
+    /// missing one only restores the old behaviour.
+    ///
+    /// A mode change is a real loss and no blob carries it, so an older rescue
+    /// ref does not hold it. Comparing blob ids said it did.
+    #[test]
+    fn a_mode_change_is_not_held_by_a_snapshot_taken_before_it() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        run_git(
+            &fx.primary,
+            &["branch", "rescue/test", &stash_create(&fx.primary)],
+        );
+        let mode = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(fx.primary.join("README"), mode).expect("chmod +x");
+
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git reset --hard"))
+            .expect("a dirty shared checkout is denied");
+        assert!(reason.contains("no way back"), "{reason}");
+    }
+
+    /// A path the working tree has deleted is absent from every ref that never
+    /// had it, so scanning all refs matched an arbitrary ancient branch. Only
+    /// the refs the message prescribes are consulted.
+    #[test]
+    fn an_unrelated_branch_is_never_named_as_the_snapshot() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        // A branch from before the file existed, exactly the vacuous match.
+        run_git(&fx.primary, &["branch", "ancient"]);
+        std::fs::write(fx.primary.join("LATER"), "later\n").expect("write LATER");
+        run_git(&fx.primary, &["add", "LATER"]);
+        run_git(&fx.primary, &["commit", "--quiet", "-m", "later"]);
+        std::fs::remove_file(fx.primary.join("LATER")).expect("delete LATER");
+
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git reset --hard"))
+            .expect("a dirty shared checkout is denied");
+        assert!(reason.contains("no way back"), "{reason}");
+        assert!(!reason.contains("ancient"), "{reason}");
+    }
+
+    /// The message is written to be run. A refname carrying shell syntax is not
+    /// pasted into it, however well it matches: any session sharing the
+    /// checkout can create one, and a fetch can bring one in.
+    #[test]
+    fn a_refname_carrying_shell_syntax_is_not_pasted_into_the_message() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        let snap = stash_create(&fx.primary);
+        // Sorts ahead of the safe one, so the test pins that filtering happens
+        // before the candidate cap rather than by luck of ordering.
+        run_git(&fx.primary, &["branch", "rescue/a$(id)", &snap]);
+
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git reset --hard"))
+            .expect("a dirty shared checkout is denied");
+        assert!(!reason.contains("$(id)"), "{reason}");
+        assert!(reason.contains("no way back"), "{reason}");
+
+        // A safe name alongside it is still found.
+        run_git(&fx.primary, &["branch", "rescue/safe", &snap]);
+        let ok =
+            git_guard_decision(&env, &bash(&fx.primary, "git reset --hard")).expect("still denied");
+        assert!(ok.contains("Held by rescue/safe:"), "{ok}");
+        assert!(!ok.contains("$(id)"), "{ok}");
+    }
+
+    /// An untracked file is not in a `git stash create` snapshot and `git diff`
+    /// does not look at it, so the loss wording is the truthful one.
+    #[test]
+    fn an_untracked_file_is_never_reported_as_snapshotted() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        run_git(
+            &fx.primary,
+            &["branch", "rescue/test", &stash_create(&fx.primary)],
+        );
+        std::fs::write(fx.primary.join("NEW"), "not in the snapshot\n").expect("untracked file");
+
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git clean -fd"))
+            .expect("a dirty shared checkout is denied");
+        assert!(reason.contains("no way back"), "{reason}");
+    }
+
+    /// `git clean -fdx` deletes ignored files, which no `git stash create`
+    /// snapshot holds, so the loss wording is the truthful one there.
+    ///
+    /// `git reset --hard` does not touch them, and every protected checkout has
+    /// ignored content in it, so disqualifying on ignored files for every
+    /// subcommand made the whole feature inert in production. Both halves are
+    /// pinned here.
+    #[test]
+    fn ignored_files_only_disqualify_the_commands_that_delete_them() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        std::fs::write(fx.primary.join(".gitignore"), "build/\n").expect("write .gitignore");
+        run_git(&fx.primary, &["add", ".gitignore"]);
+        run_git(&fx.primary, &["commit", "--quiet", "-m", "ignore build"]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        run_git(
+            &fx.primary,
+            &["branch", "rescue/test", &stash_create(&fx.primary)],
+        );
+        std::fs::create_dir(fx.primary.join("build")).expect("mkdir build");
+        std::fs::write(fx.primary.join("build/out"), "artifact\n").expect("write artifact");
+
+        let cleaned = git_guard_decision(&env, &bash(&fx.primary, "git clean -fdx"))
+            .expect("a dirty shared checkout is denied");
+        assert!(cleaned.contains("no way back"), "{cleaned}");
+        assert!(!cleaned.contains("rescue/test"), "{cleaned}");
+
+        // An ignored build tree is none of these commands' business, and
+        // without -x that includes `git clean` itself.
+        for cmd in [
+            "git clean -fd",
+            "git reset --hard",
+            "git checkout .",
+            "git stash push -m wip",
+        ] {
+            let reason = git_guard_decision(&env, &bash(&fx.primary, cmd)).expect("denied");
+            assert!(reason.contains("Held by rescue/test:"), "{cmd}\n{reason}");
+        }
+
+        // An untracked file flips `git clean -fd`, which deletes it, but not
+        // the commands that never touch it.
+        std::fs::write(fx.primary.join("NEW"), "untracked\n").expect("untracked file");
+        let swept = git_guard_decision(&env, &bash(&fx.primary, "git clean -fd")).expect("denied");
+        assert!(swept.contains("no way back"), "{swept}");
+        let reset =
+            git_guard_decision(&env, &bash(&fx.primary, "git reset --hard")).expect("denied");
+        assert!(reset.contains("Held by rescue/test:"), "{reset}");
+    }
+
+    /// `submodule.<name>.ignore` hides dirty submodule content from both the
+    /// status and the diff, so the two agreed while content that no snapshot
+    /// held was still lost.
+    #[test]
+    fn a_masked_dirty_submodule_is_never_reported_as_snapshotted() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        let sub = fx.root.join("sub");
+        std::fs::create_dir(&sub).expect("mkdir sub");
+        run_git(&sub, &["init", "--quiet"]);
+        run_git(&sub, &["config", "user.email", "guard@example.com"]);
+        run_git(&sub, &["config", "user.name", "guard"]);
+        std::fs::write(sub.join("s.txt"), "s\n").expect("write s.txt");
+        run_git(&sub, &["add", "s.txt"]);
+        run_git(&sub, &["commit", "--quiet", "-m", "s"]);
+        run_git(
+            &fx.primary,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--quiet",
+                sub.to_str().expect("utf8"),
+                "sub",
+            ],
+        );
+        run_git(&fx.primary, &["commit", "--quiet", "-m", "add sub"]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        run_git(
+            &fx.primary,
+            &["branch", "rescue/test", &stash_create(&fx.primary)],
+        );
+        // The mask, plus content that lives only in the submodule's tree.
+        run_git(&fx.primary, &["config", "submodule.sub.ignore", "all"]);
+        std::fs::write(fx.primary.join("sub/s.txt"), "irreplaceable\n").expect("dirty submodule");
+
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git reset --hard"))
+            .expect("a dirty shared checkout is denied");
+        assert!(reason.contains("no way back"), "{reason}");
+        assert!(!reason.contains("rescue/test"), "{reason}");
+    }
+
+    /// `--sort=-committerdate` reads every ref's object, so one rescue ref with
+    /// a missing object failed the whole call and took every good ref with it.
+    #[test]
+    fn a_broken_rescue_ref_does_not_hide_the_good_ones() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        run_git(
+            &fx.primary,
+            &[
+                "branch",
+                "rescue/2026-07-27-0400",
+                &stash_create(&fx.primary),
+            ],
+        );
+        std::fs::write(
+            fx.primary.join(".git/refs/heads/rescue/2026-07-27-0500"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        )
+        .expect("plant a broken ref");
+
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git reset --hard"))
+            .expect("a dirty shared checkout is denied");
+        assert!(
+            reason.contains("Held by rescue/2026-07-27-0400:"),
+            "{reason}"
+        );
+    }
+
+    /// An assume-unchanged path is invisible to `git status` and to `git diff`,
+    /// but not to `git reset --hard`. Trusting the guard's own status list let
+    /// the message promise a way back for content in no commit.
+    #[test]
+    fn an_assume_unchanged_edit_is_never_reported_as_snapshotted() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        std::fs::write(fx.primary.join("HIDDEN"), "original\n").expect("write HIDDEN");
+        run_git(&fx.primary, &["add", "HIDDEN"]);
+        run_git(&fx.primary, &["commit", "--quiet", "-m", "hidden"]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        run_git(
+            &fx.primary,
+            &["branch", "rescue/test", &stash_create(&fx.primary)],
+        );
+        run_git(
+            &fx.primary,
+            &["update-index", "--assume-unchanged", "HIDDEN"],
+        );
+        std::fs::write(fx.primary.join("HIDDEN"), "irreplaceable\n").expect("hidden edit");
+
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git reset --hard"))
+            .expect("a dirty shared checkout is denied");
+        assert!(reason.contains("no way back"), "{reason}");
+        assert!(!reason.contains("rescue/test"), "{reason}");
+    }
+
+    /// `status.showUntrackedFiles = no` is a common large-repo setting and it
+    /// hides the files the check has to see, so the modes are spelled out
+    /// rather than inherited.
+    #[test]
+    fn untracked_files_hidden_by_config_still_block_the_snapshot_claim() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        run_git(&fx.primary, &["config", "status.showUntrackedFiles", "no"]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        run_git(
+            &fx.primary,
+            &["branch", "rescue/test", &stash_create(&fx.primary)],
+        );
+        std::fs::write(fx.primary.join("NEW"), "not in the snapshot\n").expect("untracked file");
+
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git clean -fd"))
+            .expect("a dirty shared checkout is denied");
+        assert!(reason.contains("no way back"), "{reason}");
+        assert!(!reason.contains("rescue/test"), "{reason}");
+    }
+
+    /// A staged blob is in the object database whatever else is true, so the
+    /// "None of it is staged" premise cannot be stated unconditionally either.
+    #[test]
+    fn the_staged_claim_matches_the_index() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        let unstaged =
+            git_guard_decision(&env, &bash(&fx.primary, "git reset --hard")).expect("denied");
+        assert!(unstaged.contains("None of it is staged"), "{unstaged}");
+
+        run_git(&fx.primary, &["add", "README"]);
+        let staged =
+            git_guard_decision(&env, &bash(&fx.primary, "git reset --hard")).expect("denied");
+        assert!(!staged.contains("None of it is staged"), "{staged}");
+        assert!(
+            staged.contains("Some of it is staged, so those blobs are in the object database"),
+            "{staged}"
+        );
+    }
+
+    /// The shared index is not the guard's to refresh: `git diff` rewrites its
+    /// stat cache, so the check has to work off a copy.
+    #[test]
+    fn the_check_leaves_the_shared_index_untouched() {
+        if !git_available() {
+            return;
+        }
+        let fx = fixture();
+        let env = guard_env(&[fx.primary.to_str().expect("utf8")]);
+        std::fs::write(fx.primary.join("README"), "seed\nedited\n").expect("dirty README");
+        run_git(
+            &fx.primary,
+            &["branch", "rescue/test", &stash_create(&fx.primary)],
+        );
+        // Drop the stat cache so any refresh would rewrite the file.
+        run_git(&fx.primary, &["read-tree", "HEAD"]);
+        let index = fx.primary.join(".git/index");
+        let before = std::fs::read(&index).expect("read index");
+
+        let reason = git_guard_decision(&env, &bash(&fx.primary, "git reset --hard"))
+            .expect("a dirty shared checkout is denied");
+        assert!(reason.contains("Held by rescue/test:"), "{reason}");
+        assert_eq!(
+            before,
+            std::fs::read(&index).expect("read index"),
+            "the guard rewrote the shared index"
         );
     }
 
