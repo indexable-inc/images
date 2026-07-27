@@ -16,7 +16,7 @@ use ast_merge_langs::Lang;
 /// incrementing (a closure body).
 pub struct Profile {
     /// Kinds that open a reported unit. A unit nested inside another unit is
-    /// absorbed into it rather than reported separately, matching SonarQube.
+    /// absorbed into it rather than reported separately, matching `SonarQube`.
     pub units: &'static [&'static str],
     /// Elixir has no `def` node kind: a definition is a `call` whose target
     /// identifier is `def`. Empty for every grammar with real function nodes.

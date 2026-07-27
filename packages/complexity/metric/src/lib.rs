@@ -5,7 +5,7 @@
 //! understandability (Munoz Baron, Wyrich and Wagner, ESEM 2020). That
 //! validation is narrow: a replication found it no better than the older
 //! metrics it replaces (Lavazza et al., JSS 2023), and an fMRI study found
-//! McCabe cyclomatic complexity has no correlation at all with comprehension
+//! `McCabe` cyclomatic complexity has no correlation at all with comprehension
 //! time or correctness (Peitek et al., ICSE 2021). Treat the output as
 //! triage, not as a measurement of difficulty.
 
