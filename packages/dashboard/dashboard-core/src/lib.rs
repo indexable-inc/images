@@ -32,7 +32,7 @@ mod publish;
 mod subscribe;
 
 pub use dashboard::{
-    Dashboard, Hub, Recorder, RecordingInfo, RecordingStore, ServedDashboard, serve_hub,
+    Dashboard, Hub, Merge, Recorder, RecordingInfo, RecordingStore, ServedDashboard, serve_hub,
 };
 pub use error::{Error, Result};
 pub use pane::{

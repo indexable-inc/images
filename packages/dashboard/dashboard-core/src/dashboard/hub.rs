@@ -28,7 +28,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use loro::{ExportMode, LoroDoc, LoroMap, LoroText, VersionVector};
+use loro::{ExportMode, LoroDoc, LoroMap, LoroText, LoroValue, VersionVector};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
@@ -443,6 +443,79 @@ impl DocState {
     fn snapshot(&self) -> Result<Vec<u8>> {
         self.doc.export(ExportMode::Snapshot).map_err(loro_err)
     }
+
+    /// Merge remote CRDT bytes into the document and export the delta, so every
+    /// live client converges on the merged result.
+    ///
+    /// Reports whether Loro applied the update or only recorded it. A pending
+    /// import is neither success nor failure: the ops sit in the oplog but not
+    /// in the document state, so the edit is invisible until the range it
+    /// depends on arrives.
+    fn import(&mut self, bytes: &[u8]) -> Result<(Merge, Option<Vec<u8>>)> {
+        let status = self.doc.import(bytes).map_err(loro_err)?;
+        // A remote edit moves containers this side caches. Left stale, the next
+        // `update_slot` compares a producer value against a belief that is no
+        // longer true, and either skips a write that is needed or repeats one
+        // that is not -- so refresh before anything reads them.
+        self.resync_caches();
+        let delta = self.commit_delta()?;
+        let merge = if status.pending.is_some() {
+            Merge::Pending
+        } else {
+            Merge::Applied
+        };
+        Ok((merge, delta))
+    }
+
+    /// Refresh every write-through cache from the container it shadows.
+    ///
+    /// Scoped to the panes this side already tracks. Producers own the pane set
+    /// and remotes edit values inside it, so a remote that adds or removes a
+    /// pane entry is outside the model; a handle whose container a remote
+    /// deleted fails loudly on its next write rather than silently no-oping.
+    fn resync_caches(&mut self) {
+        for slot in self.panes.values_mut() {
+            // An absent key resyncs to the sentinel, not to empty: empty is a
+            // value a producer can legitimately hold, and matching it would
+            // suppress the write that recreates the key.
+            slot.title = read_str(&slot.meta, "title").unwrap_or_else(sentinel);
+            slot.subtitle = read_str(&slot.meta, "subtitle").unwrap_or_else(sentinel);
+            slot.parent = read_str(&slot.meta, "parent");
+            let names: Vec<&'static str> = slot.scalars.keys().copied().collect();
+            for name in names {
+                let fresh = read_scalar(&slot.meta, name);
+                slot.scalars.insert(name, fresh);
+            }
+            for text in &mut slot.texts {
+                text.value = text.text.to_string();
+            }
+        }
+    }
+}
+
+/// Read one scalar meta value back out of a pane's map.
+///
+/// The inverse of [`write_scalar`], and it exists for [`DocState::import`]:
+/// after a remote merge the write-through caches hold this side's stale belief,
+/// and the only truth about what a field now contains is the container itself. A
+/// key that is absent, or holds a type no view writes, reads as
+/// [`Scalar::Absent`] -- the same value that means "ensure it is not present",
+/// so a resync followed by a producer tick converges either way.
+fn read_scalar(meta: &LoroMap, name: &str) -> Scalar {
+    match meta.get(name).map(|value| value.get_deep_value()) {
+        Some(LoroValue::Bool(flag)) => Scalar::Bool(flag),
+        Some(LoroValue::I64(int)) => Scalar::Int(int),
+        Some(LoroValue::String(text)) => Scalar::Str(text.to_string()),
+        _ => Scalar::Absent,
+    }
+}
+
+/// Read one string meta value, or `None` when absent or holding another type.
+fn read_str(meta: &LoroMap, name: &str) -> Option<String> {
+    match meta.get(name).map(|value| value.get_deep_value()) {
+        Some(LoroValue::String(text)) => Some(text.to_string()),
+        _ => None,
+    }
 }
 
 /// A cache sentinel that no real scalar value equals, forcing the first write.
@@ -475,6 +548,21 @@ pub struct Subscription {
     pub(crate) snapshot: Vec<u8>,
     /// The base64 CRDT update stream, consistent with `snapshot`.
     pub(crate) updates: broadcast::Receiver<Arc<str>>,
+}
+
+/// What [`Hub::import`] did with an update.
+///
+/// Named rather than a bare `bool` because the two cases need different handling
+/// by the caller and "false" does not say which is which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Merge {
+    /// Every op applied, and the delta has gone out to live clients.
+    Applied,
+    /// The update depends on ops this document does not have, so Loro recorded
+    /// it in the oplog without applying it to the document state. The edit is
+    /// invisible until the missing range arrives, so a caller must answer with
+    /// the sender's missing history rather than treat this as done.
+    Pending,
 }
 
 /// Owns the shared document and fans CRDT updates out to SSE subscribers.
@@ -512,6 +600,20 @@ impl Hub {
         self.broadcast(delta);
     }
 
+    /// Merge remote CRDT bytes into the shared document and broadcast the
+    /// result, so every other connected client converges on it.
+    ///
+    /// This is the half that makes the document a CRDT rather than a codec:
+    /// without it the hub has exactly one writer and a browser can only read.
+    /// The sender is inside the broadcast set and receives its own ops back --
+    /// harmless, because a Loro import is idempotent, and cheaper than tracking
+    /// a version vector per subscriber to suppress the echo.
+    pub fn import(&self, bytes: &[u8]) -> Result<Merge> {
+        let (merge, delta) = self.state.lock().import(bytes)?;
+        self.broadcast(Ok(delta));
+        Ok(merge)
+    }
+
     fn broadcast(&self, delta: Result<Option<Vec<u8>>>) {
         if let Ok(Some(bytes)) = delta {
             let encoded: Arc<str> = Arc::from(BASE64.encode(&bytes).as_str());
@@ -547,6 +649,8 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use loro::{Container, ValueOrContainer};
+
     use crate::pane::{ExecTraceLine, ExecView, TerminalView};
 
     fn terminal(id: &str, screen: &str) -> Pane {
@@ -574,6 +678,146 @@ mod tests {
             .meta
             .get(field)
             .and_then(|value| value.get_deep_value().into_i64().ok())
+    }
+
+    /// The CRDT half. A second peer's edit merges into the shared document
+    /// instead of being refused, which is what `import` exists to make true.
+    #[test]
+    fn a_remote_edit_merges_into_the_shared_document() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "before")]);
+
+        // A browser starts from the snapshot, as the real client does.
+        let peer = LoroDoc::new();
+        peer.import(&hub.export_snapshot()).expect("snapshot imports");
+        // Inputs live in their own root container: producers own `panes` and
+        // never write here, so an answer and a producer tick cannot collide.
+        peer.get_map("inputs")
+            .insert("t1.verdict", "splice")
+            .expect("remote write");
+        peer.commit();
+
+        assert_eq!(
+            hub.import(&peer.export(ExportMode::Snapshot).expect("export"))
+                .expect("merge"),
+            Merge::Applied
+        );
+
+        // Read back through a third peer, so the assertion crosses the wire
+        // rather than reading the hub's own handles.
+        let reader = LoroDoc::new();
+        reader.import(&hub.export_snapshot()).expect("reader imports");
+        let dump = format!("{:?}", reader.get_deep_value());
+        assert!(dump.contains("splice"), "remote edit lost in the merge: {dump}");
+    }
+
+    /// The write-through cache is this side's belief about the document, and a
+    /// remote edit invalidates it. Without the resync the cache still matches
+    /// the producer's value, the write is skipped, and the pane is stuck on the
+    /// remote's text for as long as the producer keeps reporting the same thing.
+    #[test]
+    fn a_remote_body_edit_is_not_masked_by_the_write_through_cache() {
+        let mut state = DocState::new();
+        state.apply_scope("p", &[terminal("t1", "hello")]).expect("apply");
+        let key = doc_key("p", "t1");
+
+        let peer = LoroDoc::new();
+        peer.import(&state.snapshot().expect("snapshot")).expect("import");
+        let Some(ValueOrContainer::Container(Container::Map(meta))) =
+            peer.get_map("panes").get(&key)
+        else {
+            panic!("pane meta must be a map");
+        };
+        let Some(ValueOrContainer::Container(Container::Text(body))) = meta.get("body") else {
+            panic!("body must be a text container");
+        };
+        body.update(
+            "clobbered",
+            loro::UpdateOptions {
+                timeout_ms: None,
+                use_refined_diff: true,
+            },
+        )
+        .expect("remote edit");
+        peer.commit();
+
+        let (merge, _) = state
+            .import(&peer.export(ExportMode::Snapshot).expect("export"))
+            .expect("merge");
+        assert_eq!(merge, Merge::Applied);
+        assert_eq!(
+            state.panes[&key].text("body"),
+            "clobbered",
+            "the merge must reach the container"
+        );
+
+        // The producer's next tick still reports "hello", and must win.
+        let delta = state
+            .apply_scope("p", &[terminal("t1", "hello")])
+            .expect("re-apply");
+        assert!(
+            delta.is_some(),
+            "producer tick must re-assert its own value over a remote edit"
+        );
+        assert_eq!(state.panes[&key].text("body"), "hello");
+    }
+
+    /// The other direction of the same cache invariant: a resync must restore
+    /// the caches exactly, so an import cannot make an idle pane look changed
+    /// and start a delta per tick on a document nobody is touching.
+    #[test]
+    fn an_import_does_not_make_an_idle_pane_look_changed() {
+        let mut state = DocState::new();
+        state.apply_scope("p", &[terminal("t1", "hello")]).expect("apply");
+
+        let peer = LoroDoc::new();
+        peer.import(&state.snapshot().expect("snapshot")).expect("import");
+        peer.get_map("inputs")
+            .insert("t1.verdict", "splice")
+            .expect("write");
+        peer.commit();
+        state
+            .import(&peer.export(ExportMode::Snapshot).expect("export"))
+            .expect("merge");
+
+        assert!(
+            state
+                .apply_scope("p", &[terminal("t1", "hello")])
+                .expect("re-apply")
+                .is_none(),
+            "an unchanged tick after an import must still be a no-op"
+        );
+    }
+
+    /// An update whose dependencies are absent is recorded but not applied, and
+    /// saying so is the whole point of the return type: treated as success, the
+    /// human's edit is silently invisible.
+    #[test]
+    fn an_update_missing_its_dependencies_reports_pending() {
+        let peer = LoroDoc::new();
+        peer.get_map("inputs").insert("first", "a").expect("write");
+        peer.commit();
+        let after_first = peer.oplog_vv();
+        peer.get_map("inputs").insert("second", "b").expect("write");
+        peer.commit();
+        let tail_only = peer
+            .export(ExportMode::updates(&after_first))
+            .expect("export");
+
+        let hub = Hub::new();
+        assert_eq!(
+            hub.import(&tail_only).expect("import"),
+            Merge::Pending,
+            "an update whose deps are absent is recorded, not applied"
+        );
+
+        let reader = LoroDoc::new();
+        reader.import(&hub.export_snapshot()).expect("reader imports");
+        let dump = format!("{:?}", reader.get_deep_value());
+        assert!(
+            !dump.contains("second"),
+            "a pending op must not be visible in the document: {dump}"
+        );
     }
 
     /// The core multi-producer invariant: one producer's reconcile never touches

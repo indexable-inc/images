@@ -25,7 +25,7 @@ mod server;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-pub use hub::Hub;
+pub use hub::{Hub, Merge};
 pub use recordings::{Recorder, RecordingInfo, RecordingStore};
 pub use server::{Dashboard, ServedDashboard, serve_hub};
 
