@@ -31,6 +31,42 @@ From a clone (`git clone https://github.com/indexable-inc/index`): `nix run .#gm
 The crate itself (`google-gmail`) is an unmirrored workspace library; consume it
 through Nix or one of the three surfaces above.
 
+## Bring your own OAuth client
+
+You do not need a credential of ours. Create an OAuth client in your own
+Google Cloud project and this works for any Google account, at no cost and
+with no review:
+
+1. Create (or pick) a GCP project and enable the **Gmail API** and the
+   **Google Calendar API** (APIs & Services → Library).
+2. APIs & Services → Credentials → Create credentials → **OAuth client ID**
+   → application type **Desktop app**. Download the JSON.
+3. Save it to `~/.config/google/client_secret.json` (on macOS,
+   `~/Library/Application Support/google/client_secret.json`), or point
+   `GOOGLE_OAUTH_CLIENT_SECRETS_FILE` at wherever you keep it.
+4. **Click "Publish app" on the OAuth consent screen.** Read the next
+   paragraph before skipping this.
+5. `nix run .#gmail -- auth`.
+
+### Publishing is not optional, and this is the part that bites
+
+A new OAuth client starts in publishing status **Testing**, and Google
+expires *both the consent and the refresh token* seven days after they are
+issued for a client in that state. Everything here depends on a long-lived
+refresh token in `token.json`, so a client left in Testing works perfectly
+for a week and then fails with `invalid_grant`, over and over, looking for
+all the world like a bug in this tool.
+
+Setting the publishing status to **In production** removes that expiry. You
+do *not* need verification to do it. An unverified published app shows the
+consenting user a warning screen once ("Google hasn't verified this app" →
+Advanced → continue), and is capped at 100 users total — irrelevant when the
+project is your own and you are the only user.
+
+Verification, and the CASA security assessment behind it, only matter if you
+want to hand your client to strangers without that warning. For your own
+account, publishing unverified is the intended path.
+
 ## One-time team setup: the OAuth client
 
 Same client as the calendar crate. Skip if you already followed
@@ -55,6 +91,11 @@ export GOOGLE_OAUTH_CLIENT_ID="$(rbw get <the client-id entry>)"
 export GOOGLE_OAUTH_CLIENT_SECRET="$(rbw get <the client-secret entry>)"
 nix run .#gmail -- auth
 ```
+
+The environment wins when it is set; with nothing exported, the client comes
+from `GOOGLE_OAUTH_CLIENT_SECRETS_FILE` or
+`~/.config/google/client_secret.json` (see "Bring your own OAuth client"
+above), so the two setups do not interfere.
 
 `gmail auth` prints a consent URL and waits on a loopback listener; with
 a browser on the same machine the redirect lands there and the flow

@@ -41,8 +41,9 @@ use uuid::Uuid;
 
 use crate::error::{
     ConsentDeniedSnafu, ConsoleIoSnafu, HttpSnafu, ListenSnafu, MissingClientIdSnafu,
-    MissingClientSecretSnafu, MissingCodeSnafu, MissingRefreshTokenSnafu, NoConfigDirSnafu,
-    NoTokenSnafu, ParseTokenSnafu, ReadTokenSnafu, RedirectParseSnafu, ScopeMissingSnafu,
+    MissingClientSecretSnafu, MissingCodeSnafu, MissingRefreshTokenSnafu, NoClientSecretsSnafu,
+    NoConfigDirSnafu, NoTokenSnafu, ParseClientSecretsSnafu, ParseTokenSnafu,
+    ReadClientSecretsSnafu, ReadTokenSnafu, RedirectParseSnafu, ScopeMissingSnafu,
     StateMismatchSnafu, TokenExchangeSnafu, TokenRevokedSnafu, WriteTokenSnafu,
 };
 
@@ -51,6 +52,12 @@ pub const CLIENT_ID_ENV: &str = "GOOGLE_OAUTH_CLIENT_ID";
 
 /// Environment variable holding the OAuth client secret.
 pub const CLIENT_SECRET_ENV: &str = "GOOGLE_OAUTH_CLIENT_SECRET";
+
+/// Environment variable holding a path to a downloaded `client_secret.json`.
+///
+/// The bring-your-own-client escape hatch: point this at the file the Cloud
+/// Console hands you and no team credential is involved anywhere.
+pub const CLIENT_SECRETS_FILE_ENV: &str = "GOOGLE_OAUTH_CLIENT_SECRETS_FILE";
 
 /// Google's OAuth consent endpoint.
 const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -94,6 +101,90 @@ impl ClientSecrets {
         Ok(Self {
             client_id,
             client_secret,
+        })
+    }
+
+    /// Read the client identity from whichever source the operator has set
+    /// up, preferring the most explicit.
+    ///
+    /// 1. [`CLIENT_ID_ENV`] + [`CLIENT_SECRET_ENV`] — how a teammate uses
+    ///    the shared client from the team vault.
+    /// 2. [`CLIENT_SECRETS_FILE_ENV`] — an explicit path to a downloaded
+    ///    `client_secret.json`.
+    /// 3. [`Self::default_secrets_path`] — the same file at its well-known
+    ///    location, so bringing your own client is drop-a-file with nothing
+    ///    to export.
+    ///
+    /// Sources 2 and 3 are what make this usable by someone outside the
+    /// team: they create an OAuth client in their own Cloud project and
+    /// never need a credential of ours.
+    ///
+    /// # Errors
+    /// Returns [`Error::NoClientSecrets`] naming every location searched if
+    /// none of them supplies a client, and read/parse errors for a file
+    /// that exists but is unusable.
+    pub fn load() -> Result<Self> {
+        if let Ok(secrets) = Self::from_env() {
+            return Ok(secrets);
+        }
+        if let Some(path) = non_empty_env(CLIENT_SECRETS_FILE_ENV) {
+            return Self::from_file(Path::new(&path));
+        }
+        let default = Self::default_secrets_path()?;
+        if default.exists() {
+            return Self::from_file(&default);
+        }
+        NoClientSecretsSnafu { path: default }.fail()
+    }
+
+    /// Where [`Self::load`] looks for a downloaded client-secrets file when
+    /// nothing more explicit is set: `<config dir>/google/client_secret.json`.
+    ///
+    /// # Errors
+    /// Returns an error if the platform exposes no config directory.
+    pub fn default_secrets_path() -> Result<PathBuf> {
+        let config = dirs::config_dir().context(NoConfigDirSnafu)?;
+        Ok(config.join("google").join("client_secret.json"))
+    }
+
+    /// Read a client identity from a Cloud Console `client_secret.json`.
+    ///
+    /// Accepts the file as downloaded — the fields live under `installed`
+    /// for a desktop client and `web` for a web client — and also a flat
+    /// object, so a hand-written file works too.
+    ///
+    /// # Errors
+    /// Returns [`Error::ReadClientSecrets`] if the file cannot be read and
+    /// [`Error::ParseClientSecrets`] if it carries no client identity.
+    pub fn from_file(path: &Path) -> Result<Self> {
+        let bytes = std::fs::read(path).context(ReadClientSecretsSnafu { path })?;
+        let document: serde_json::Value =
+            serde_json::from_slice(&bytes).ok().context(ParseClientSecretsSnafu { path })?;
+
+        // Try the wrapper keys the console emits before the flat shape, so a
+        // file carrying both (never seen in the wild, but cheap to define)
+        // resolves to the one the console meant.
+        ["installed", "web"]
+            .into_iter()
+            .filter_map(|key| document.get(key))
+            .chain(std::iter::once(&document))
+            .find_map(Self::from_json_object)
+            .context(ParseClientSecretsSnafu { path })
+    }
+
+    /// Pull `client_id` and `client_secret` out of one JSON object, if both
+    /// are present and non-empty.
+    fn from_json_object(object: &serde_json::Value) -> Option<Self> {
+        let field = |name: &str| {
+            object
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        Some(Self {
+            client_id: field("client_id")?,
+            client_secret: field("client_secret")?,
         })
     }
 }
@@ -772,7 +863,7 @@ pub async fn run_cli_consent(paste: bool, json: bool, scopes: &[&str]) -> Result
     use std::io::Write as _;
     use tokio::io::{AsyncBufReadExt as _, BufReader};
 
-    let secrets = ClientSecrets::from_env()?;
+    let secrets = ClientSecrets::load()?;
     let store = TokenStore::new()?;
     let pending = begin_consent(secrets.clone(), scopes).await?;
 

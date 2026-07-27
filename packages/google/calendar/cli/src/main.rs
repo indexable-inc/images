@@ -235,7 +235,7 @@ async fn main() -> anyhow::Result<()> {
 /// hands the token to a downstream caller that decides which scope set
 /// it needs, and rejecting here would be a false negative.
 async fn run_print_access_token(args: PrintAccessTokenArgs) -> anyhow::Result<()> {
-    let auth = Authenticator::new(ClientSecrets::from_env()?, TokenStore::new()?, &[])?;
+    let auth = Authenticator::new(ClientSecrets::load()?, TokenStore::new()?, &[])?;
     let minted = auth.mint_access_token().await?;
     if args.json {
         println!(
@@ -255,7 +255,7 @@ async fn run_print_access_token(args: PrintAccessTokenArgs) -> anyhow::Result<()
 /// A client over the env credentials and the default token store.
 fn client() -> anyhow::Result<Client> {
     let auth = Authenticator::new(
-        ClientSecrets::from_env()?,
+        ClientSecrets::load()?,
         TokenStore::new()?,
         &[EVENTS_SCOPE],
     )?;

@@ -335,7 +335,7 @@ async fn main() -> anyhow::Result<()> {
 /// A client over the env credentials and the default token store.
 fn client() -> anyhow::Result<Client> {
     let auth = Authenticator::new(
-        ClientSecrets::from_env()?,
+        ClientSecrets::load()?,
         TokenStore::new()?,
         &[GMAIL_MODIFY, GMAIL_SEND],
     )?;
