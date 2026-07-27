@@ -61,6 +61,7 @@ export function loadPolicy(
   const expected = [
     "big_change_label",
     "extended_validation_seconds",
+    "notes",
     "queue_start_seconds",
     "repositories",
     "routine_validation_seconds",
@@ -80,10 +81,34 @@ export function loadPolicy(
   ) {
     throw new Error(`CI budget policy keys must be ${expected.join(", ")}`);
   }
+  // `notes` carries each threshold's justification, enforced against the
+  // threshold set by ci_policy.py's catalog lint. Accepted and ignored here:
+  // the kill path must not depend on prose.
+  const repositories = Object.fromEntries(
+    Object.entries(parsed.repositories).map(([name, entry]) => {
+      if (entry === null || Array.isArray(entry) || typeof entry !== "object") {
+        throw new Error(`CI budget policy repositories.${name} must be an object`);
+      }
+      const override = entry.routine_validation_seconds;
+      return [
+        name,
+        {
+          routine_validation_seconds:
+            override === undefined
+              ? undefined
+              : parsePositiveInteger(
+                  override,
+                  `repositories.${name}.routine_validation_seconds`,
+                ),
+        },
+      ];
+    }),
+  );
   return {
     // The label is part of the budget-exceeded remedy text: a killed run must
     // name the exact label that buys the extended tier (index#4139).
     big_change_label: parsed.big_change_label,
+    repositories,
     ...Object.fromEntries(
       numeric.map((name) => [name, parsePositiveInteger(parsed[name], name)]),
     ),
@@ -299,9 +324,22 @@ export function assertSetupAllowance({
   }
 }
 
-export function validationSeconds({ bigChange, policy }) {
+/// The routine tier is measured per repository: what a gate costs is a property
+/// of that repository's check surface, not of this policy. A repository with no
+/// measured override falls back to the catalog default, and an unknown
+/// repository is a configuration error rather than a silent default -- a typo in
+/// the `repository` input must not quietly hand out someone else's budget.
+export function routineSeconds({ policy, repository }) {
+  const entry = policy.repositories[repository];
+  if (entry === undefined) {
+    throw new Error(`CI budget policy has no repository entry for ${repository}`);
+  }
+  return entry.routine_validation_seconds ?? policy.routine_validation_seconds;
+}
+
+export function validationSeconds({ bigChange, policy, repository }) {
   if (bigChange) return policy.extended_validation_seconds;
-  return policy.routine_validation_seconds;
+  return routineSeconds({ policy, repository });
 }
 
 export function budgetExceededMessage({
@@ -315,14 +353,30 @@ export function budgetExceededMessage({
   const budgetName = bigChange
     ? "extended_validation_seconds"
     : "routine_validation_seconds";
+  // Three separate agents read a budget kill as a style violation and went
+  // hunting for a lint error that did not exist, because the only red thing
+  // they saw was a `lint` context (indexable-inc/ix#8688, ENG-10212). Say what
+  // this is before saying what to do about it.
+  const nature =
+    "This is a wall-clock timeout, not a failed check: nothing the gate " +
+    "inspected reported a defect, and any red lint/nix/build context " +
+    "downstream is mirroring this timeout rather than a lint or build error.";
+  // The tier is published once per attempt and frozen into the job's own
+  // timeout-minutes, so a label added afterwards can only reach a fresh
+  // attempt. `gh run rerun --failed` reuses the published budget and silently
+  // re-runs at the same tier, which is how one label edit cost 25 minutes and a
+  // false failure diagnosis (ENG-10273).
   const remedy = bigChange
     ? "the run already held the extended budget; split the change or revisit " +
       "the ci-budget policy catalog"
-    : `add the ${policy.big_change_label} label for the ` +
-      `extended_validation_seconds=${policy.extended_validation_seconds}s budget`;
+    : `add the ${policy.big_change_label} label and then re-run the WHOLE ` +
+      `workflow (\`gh run rerun <run-id>\`) for the ` +
+      `extended_validation_seconds=${policy.extended_validation_seconds}s ` +
+      "budget; `gh run rerun --failed` reuses this attempt's published budget " +
+      "and the label will not take effect";
   return (
     `validation budget ${budgetName}=${allowedSeconds}s exceeded after ` +
-    `${elapsedSeconds}s; terminating the gate's process group. ` +
+    `${elapsedSeconds}s; terminating the gate's process group. ${nature} ` +
     `To get more time, ${remedy}.`
   );
 }
@@ -371,6 +425,7 @@ export function reportBudgetExceeded({
   elapsedSeconds,
   githubOutputPath = process.env.GITHUB_OUTPUT,
   policy,
+  summaryPath = process.env.GITHUB_STEP_SUMMARY,
 }) {
   const message = budgetExceededMessage({
     allowedSeconds,
@@ -381,9 +436,26 @@ export function reportBudgetExceeded({
   // Plain line as well as the annotation: whoever tails the raw job log sees
   // output stop mid-build, and this names the killer inline at that spot.
   console.log(`ci-budget: ${message}`);
-  console.error(`::error title=CI worker budget exceeded::${message}`);
+  console.error(`::error title=CI budget exceeded (timeout, not a lint failure)::${message}`);
+  // The job summary is what the PR's checks pane links to first, and it is the
+  // one surface a reader reaches without opening a raw log and searching for
+  // the word "budget".
+  if (summaryPath) {
+    try {
+      appendFileSync(
+        summaryPath,
+        `\n## CI budget exceeded (timeout, not a lint failure)\n\n${message}\n`,
+      );
+    } catch (error) {
+      // Best-effort context; a summary write must not mask the kill.
+      console.error(`ci-budget: summary write failed: ${error.message}`);
+    }
+  }
   for (const name of recordBudgetVerdicts({ githubOutputPath })) {
-    console.log(`ci-budget: published ${name}=budget-exceeded for the mirror jobs`);
+    console.log(
+      `ci-budget: published ${name}=budget-exceeded for the mirror jobs ` +
+        "(they will fail as a mirror of this timeout, not of a lint defect)",
+    );
   }
 }
 
@@ -578,7 +650,7 @@ export async function main() {
     startedAtMilliseconds: timing.startedAtMilliseconds,
   });
   const scriptPath = input("script", { required: true });
-  const allowedSeconds = validationSeconds({ bigChange, policy });
+  const allowedSeconds = validationSeconds({ bigChange, policy, repository });
   return runBudgetedScript({
     graceSeconds: policy.termination_grace_seconds,
     onBudgetExceeded: (expiry) =>

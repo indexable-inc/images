@@ -17,6 +17,13 @@ POLICY_PATH = Path(__file__).with_name("catalog") / "policy.json"
 class RepositoryPolicy:
     costly_paths: tuple[str, ...]
     managed_workflows: tuple[str, ...]
+    # A repository's own measured routine budget. What a gate costs is a
+    # property of that repository's check surface and store warmth, not of this
+    # policy, so one shared number cannot be right for two repositories at once:
+    # ix's gate passed in 5012s at its slowest while the shared default was
+    # 300s. None falls back to the catalog default, which exists only for a
+    # repository nobody has measured yet.
+    routine_validation_seconds: int | None
 
 
 @dataclass(frozen=True)
@@ -29,15 +36,21 @@ class Policy:
     termination_grace_seconds: int
     repositories: Mapping[str, RepositoryPolicy]
 
-    def validation_seconds(self, *, big_change: bool) -> int:
+    def routine_seconds(self, repository: str) -> int:
+        override = repository_policy(repository, self).routine_validation_seconds
+        if override is None:
+            return self.routine_validation_seconds
+        return override
+
+    def validation_seconds(self, repository: str, *, big_change: bool) -> int:
         if big_change:
             return self.extended_validation_seconds
-        return self.routine_validation_seconds
+        return self.routine_seconds(repository)
 
-    def worker_timeout_minutes(self, *, big_change: bool) -> int:
+    def worker_timeout_minutes(self, repository: str, *, big_change: bool) -> int:
         seconds = (
             self.setup_allowance_seconds
-            + self.validation_seconds(big_change=big_change)
+            + self.validation_seconds(repository, big_change=big_change)
             + self.termination_grace_seconds
         )
         return ceil(seconds / 60)
@@ -106,11 +119,38 @@ def exact_keys(value: Mapping[str, object], expected: set[str], name: str) -> No
         )
 
 
+ROOT_THRESHOLDS = (
+    "extended_validation_seconds",
+    "queue_start_seconds",
+    "routine_validation_seconds",
+    "setup_allowance_seconds",
+    "termination_grace_seconds",
+)
+
+
+def check_notes(value: object, thresholds: Sequence[str]) -> None:
+    """Every threshold in the catalog must carry its justification next to it.
+
+    A number in a JSON catalog cannot hold a comment, and an undocumented
+    threshold is how 300s survived long enough to kill 54.5% of the ix gates
+    that went on to pass (indexable-inc/ix#8688). Requiring the note key set to
+    equal the threshold set exactly means a threshold cannot be added, renamed,
+    or removed without its evidence moving with it. The worker's own JavaScript
+    loader accepts `notes` and ignores it: this is a catalog lint, checked
+    wherever `load_policy` runs, not a runtime invariant of the kill path.
+    """
+    notes = object_mapping(value, "notes")
+    for name, note in notes.items():
+        non_empty_string(note, f"notes.{name}")
+    exact_keys(notes, set(thresholds), "notes")
+
+
 def load_policy(path: Path = POLICY_PATH) -> Policy:
     parsed: object = json.loads(path.read_text())
     root = object_mapping(parsed, "root")
     expected = {
         "big_change_label",
+        "notes",
         "queue_start_seconds",
         "setup_allowance_seconds",
         "routine_validation_seconds",
@@ -123,13 +163,24 @@ def load_policy(path: Path = POLICY_PATH) -> Policy:
     if not raw_repositories:
         raise RuntimeError("CI budget policy repositories must not be empty")
     repositories: dict[str, RepositoryPolicy] = {}
+    documented: list[str] = list(ROOT_THRESHOLDS)
     for repository, raw_repository in raw_repositories.items():
         repository_value = object_mapping(raw_repository, f"repositories.{repository}")
-        exact_keys(
-            repository_value,
-            {"costly_paths", "managed_workflows"},
-            f"repositories.{repository}",
-        )
+        required = {"costly_paths", "managed_workflows"}
+        optional = {"routine_validation_seconds"}
+        if not required <= set(repository_value) <= required | optional:
+            raise RuntimeError(
+                f"CI budget policy repositories.{repository} keys must be "
+                f"{sorted(required)} plus at most {sorted(optional)}, "
+                f"got {sorted(repository_value)}"
+            )
+        routine_override: int | None = None
+        if "routine_validation_seconds" in repository_value:
+            routine_override = positive_int(
+                repository_value["routine_validation_seconds"],
+                f"repositories.{repository}.routine_validation_seconds",
+            )
+            documented.append(f"repositories.{repository}.routine_validation_seconds")
         repositories[repository] = RepositoryPolicy(
             costly_paths=string_tuple(
                 repository_value["costly_paths"],
@@ -139,7 +190,9 @@ def load_policy(path: Path = POLICY_PATH) -> Policy:
                 repository_value["managed_workflows"],
                 f"repositories.{repository}.managed_workflows",
             ),
+            routine_validation_seconds=routine_override,
         )
+    check_notes(root["notes"], documented)
     return Policy(
         big_change_label=non_empty_string(root["big_change_label"], "big_change_label"),
         queue_start_seconds=positive_int(
@@ -168,12 +221,12 @@ def queue_start_minutes() -> int:
     return ceil(POLICY.queue_start_seconds / 60)
 
 
-def validation_seconds(*, big_change: bool) -> int:
-    return POLICY.validation_seconds(big_change=big_change)
+def validation_seconds(repository: str, *, big_change: bool) -> int:
+    return POLICY.validation_seconds(repository, big_change=big_change)
 
 
-def worker_timeout_minutes(*, big_change: bool) -> int:
-    return POLICY.worker_timeout_minutes(big_change=big_change)
+def worker_timeout_minutes(repository: str, *, big_change: bool) -> int:
+    return POLICY.worker_timeout_minutes(repository, big_change=big_change)
 
 
 def repository_policy(repository: str, policy: Policy = POLICY) -> RepositoryPolicy:
@@ -236,11 +289,11 @@ def decide(
         queue_start_seconds=policy.queue_start_seconds,
         setup_allowance_seconds=policy.setup_allowance_seconds,
         validation_seconds=policy.validation_seconds(
-            big_change=classification.big_change
+            repository, big_change=classification.big_change
         ),
         termination_grace_seconds=policy.termination_grace_seconds,
         worker_timeout_minutes=policy.worker_timeout_minutes(
-            big_change=classification.big_change
+            repository, big_change=classification.big_change
         ),
     )
 
