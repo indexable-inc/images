@@ -19,5 +19,5 @@ computation, source resolution, the driver, and evaluation. The change removes t
 `reference::Input` enum and JSON lock attribute map. Source subdirectory selection is shared, and
 `narHash` verification covers the full source root before `dir` selects a subtree.
 
-A live differential matched Nix 2.34.7 on 19 of 19 accepted and rejected references. The affected
-Rust suite passed 1,482 tests with 55 skipped.
+A live differential matched Nix 2.34.7 on 652 of 652 JSON cases and 11 of 11 raw-byte cases. The
+affected Rust suite passed 1,089 of 1,089 tests with 54 skipped.
