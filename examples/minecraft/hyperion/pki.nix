@@ -66,57 +66,76 @@ in {
   };
 
   config = {
-    # Ordered before both services rather than merely enabled: a service that
-    # started first would read a directory that does not exist yet and die on
-    # a missing file, which reads as a configuration error.
-    systemd.services.hyperion-pki = {
-      description = "mint this node's hyperion TLS certificate";
-      wantedBy = ["multi-user.target"];
-      before = ["hyperion-game-server.service" "hyperion-proxy.service"];
+    # Who may read the minted material. Both hyperion services run with
+    # `DynamicUser`, so they have no stable uid to own these files with and no
+    # way to read root-only ones; a supplementary group is the one thing
+    # systemd will grant a dynamic user.
+    users.groups.hyperion-pki = {};
 
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        StateDirectory = "hyperion-pki";
-        StateDirectoryMode = "0750";
-        UMask = "0077";
-      };
+    systemd.services = lib.mkMerge [
+      (lib.mkIf config.services.hyperion-game-server.enable {
+        hyperion-game-server.serviceConfig.SupplementaryGroups = ["hyperion-pki"];
+      })
+      (lib.mkIf config.services.hyperion-proxy.enable {
+        hyperion-proxy.serviceConfig.SupplementaryGroups = ["hyperion-pki"];
+      })
+      {
+        # Ordered before both services rather than merely enabled: a service that
+        # started first would read a directory that does not exist yet and die on
+        # a missing file, which reads as a configuration error.
+        hyperion-pki = {
+          description = "mint this node's hyperion TLS certificate";
+          wantedBy = ["multi-user.target"];
+          before = ["hyperion-game-server.service" "hyperion-proxy.service"];
 
-      path = [pkgs.openssl];
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            StateDirectory = "hyperion-pki";
+            StateDirectoryMode = "0750";
+            # Root writes, the group reads. systemd applies both to the state
+            # directory it creates, so the readers can traverse it.
+            Group = "hyperion-pki";
+            UMask = "0027";
+          };
 
-      script = ''
-        set -euo pipefail
-        cd ${dir}
+          path = [pkgs.openssl];
 
-        install -m 0400 ${cfg.caKeyFile} ca.key
+          script = ''
+            set -euo pipefail
+            cd ${dir}
 
-        # The CA certificate is derived from the key rather than shipped
-        # beside it, so the two cannot drift apart. Every node computes the
-        # same one because they share the key and these fields.
-        openssl req -x509 -new -key ca.key -sha256 -days 3650 \
-          -subj '/CN=hyperion-fleet-ca' \
-          -addext 'basicConstraints=critical,CA:TRUE' \
-          -addext 'keyUsage=critical,keyCertSign' \
-          -out root_ca.crt
+            install -m 0400 ${cfg.caKeyFile} ca.key
 
-        openssl genpkey -algorithm ED25519 -out node_private_key.pem
-        openssl req -new -key node_private_key.pem \
-          -subj '/CN=${cfg.serverName}' -out node.csr
+            # The CA certificate is derived from the key rather than shipped
+            # beside it, so the two cannot drift apart. Every node computes the
+            # same one because they share the key and these fields.
+            openssl req -x509 -new -key ca.key -sha256 -days 3650 \
+              -subj '/CN=hyperion-fleet-ca' \
+              -addext 'basicConstraints=critical,CA:TRUE' \
+              -addext 'keyUsage=critical,keyCertSign' \
+              -out root_ca.crt
 
-        # Both roles on every leaf: a proxy authenticates as a client to the
-        # game server, and the game server authenticates as a server to it.
-        # One template is one thing to get wrong instead of two.
-        openssl x509 -req -in node.csr -CA root_ca.crt -CAkey ca.key \
-          -CAcreateserial -days 365 -sha256 \
-          -extfile <(printf '%s\n' \
-            'subjectAltName=DNS:${cfg.serverName}' \
-            'extendedKeyUsage=serverAuth,clientAuth') \
-          -out node.crt
+            openssl genpkey -algorithm ED25519 -out node_private_key.pem
+            openssl req -new -key node_private_key.pem \
+              -subj '/CN=${cfg.serverName}' -out node.csr
 
-        rm -f node.csr ca.key
-        chmod 0400 node_private_key.pem
-        chmod 0444 root_ca.crt node.crt
-      '';
-    };
+            # Both roles on every leaf: a proxy authenticates as a client to the
+            # game server, and the game server authenticates as a server to it.
+            # One template is one thing to get wrong instead of two.
+            openssl x509 -req -in node.csr -CA root_ca.crt -CAkey ca.key \
+              -CAcreateserial -days 365 -sha256 \
+              -extfile <(printf '%s\n' \
+                'subjectAltName=DNS:${cfg.serverName}' \
+                'extendedKeyUsage=serverAuth,clientAuth') \
+              -out node.crt
+
+            rm -f node.csr ca.key
+            chmod 0440 node_private_key.pem
+            chmod 0444 root_ca.crt node.crt
+          '';
+        };
+      }
+    ];
   };
 }
