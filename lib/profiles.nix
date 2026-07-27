@@ -44,7 +44,6 @@ in {
       provenanceModule
       optionsModule
       ;
-    indexSkillsSrc = paths.skills;
     tmuxModule = paths.modules + "/home/tmux.nix";
     activationTimingModule = paths.modules + "/home/activation-timing.nix";
   };
