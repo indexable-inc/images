@@ -19,6 +19,24 @@
   cfg = config.hyperion.pki;
   dir = "/var/lib/hyperion-pki";
 in {
+  options.hyperion = {
+    gameAddress = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "2604:2dc0:500:8400:45:110a:2e70:881";
+      description = ''
+        The game server's address, pinned into every proxy's hosts file.
+
+        Null means the proxies resolve the game server by name over the group,
+        which is how this is supposed to work. Set it while
+        `ix group create` is returning an internal server error (ENG-10486),
+        because without a group there is no private network and no name
+        service on it, and the proxies have to be told where the game server
+        is.
+      '';
+    };
+  };
+
   options.hyperion.pki = {
     caKeyFile = lib.mkOption {
       type = lib.types.path;

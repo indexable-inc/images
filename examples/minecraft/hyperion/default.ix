@@ -27,8 +27,14 @@ export default ({ index, hyperion }) => {
   return index.lib.mkFleet({
     // One private segment. A VM outside it has no route to the game server,
     // which is the only thing keeping an unproxied client off it.
+    // While `ix group create` returns an internal server error (ENG-10486)
+    // there is no private network to resolve names on, so the proxies are told
+    // where the game server is. Its value is the game VM's own address, read
+    // from `ix ls` after the VMs exist. Set it back to null the day groups
+    // work again, and the proxies go back to resolving a name.
     defaults: [
       { ix: { networking: { groups: ["hyperion"] } } },
+      { hyperion: { gameAddress: "2604:2dc0:500:8400:48:989f:dc04:4fc" } },
       packages,
       import("./pki.nix"),
       hyperion.nixosModules["game-server"],

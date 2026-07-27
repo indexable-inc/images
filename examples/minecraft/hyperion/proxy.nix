@@ -5,6 +5,7 @@
   config,
   hyperionProxy,
   ix,
+  lib,
   nodes,
   ...
 }: let
@@ -26,6 +27,15 @@ in {
   };
 
   ix.healthChecks.hyperion-proxy.unit = "hyperion-proxy.service";
+
+  # Pinned only when the group is unavailable. Group members are supposed to
+  # resolve each other by name, and the name is load bearing: the proxy uses it
+  # as the TLS server name, so substituting an address here would fail the
+  # handshake. Mapping the name to an address in /etc/hosts keeps the name and
+  # skips the resolver.
+  networking.hosts = lib.mkIf (config.hyperion.gameAddress != null) {
+    ${config.hyperion.gameAddress} = [gameFqdn];
+  };
 
   services.hyperion-proxy = {
     enable = true;

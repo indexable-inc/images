@@ -62,3 +62,32 @@ evaluation:
   of the evaluated system, so a first apply from nothing produces VMs in no
   group with no public address. Until that is fixed, create each VM once
   against an image with those flags, then converge with the command above.
+
+## State of the deployment, 2026-07-27
+
+The three VMs exist in `us-west-1`. The two proxies hold public addresses,
+`15.204.22.195` and `15.204.22.196`. Neither runs hyperion yet, and the reason
+is the platform rather than anything here. Three faults, in the order they
+were hit:
+
+1. **Groups cannot be created.** `ix group create hyperion` returns an
+   internal server error, and so does `ix apply <image> --group hyperion`. The
+   same create without the flag works in under two seconds. ENG-10486. The
+   whole shape depends on this: the game server has no public address, so the
+   group is the only route to it. `hyperion.gameAddress` exists as the
+   workaround and should go back to null the day groups work.
+2. **A fresh VM cannot be switched.** Every apply ended on `nix daemon socket
+   did not become ready`, which reads like a timeout. The cause is a missing
+   directory: `nix-daemon.socket` has
+   `ConditionPathIsReadWrite=/nix/var/nix/daemon-socket` and the base image
+   does not create it. ENG-10487. Creating it by hand got the next apply
+   further.
+3. **The guest cannot build this.** `ix apply` compiles the closure inside the
+   VM, from a cache holding the public world but nothing built privately, and
+   a guest gets a 14 GB root with no way to ask for more. A Rust game server
+   does not fit: the disk filled twice, once surfacing as a truncated download
+   and once as `No space left on device`. The same closure builds in minutes
+   on the Linux remote builder. ENG-10488.
+
+The topology, the certificates and the units are written and evaluate. What is
+missing is a way to get a large closure onto a machine.
