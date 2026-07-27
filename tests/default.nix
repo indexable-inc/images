@@ -1880,6 +1880,35 @@
 
   prefixedFleet = prefixedFleetBase.withNodePrefix "tprefix-";
 
+  # `ix.networking.ipv4` is the image-level twin of `deployment.ipv4`, and the
+  # same option `ix apply` reads off a flake target before it creates the VM.
+  # Either source turns the address on; a node that declares neither keeps the
+  # plan default off, so nothing silently starts paying for an address.
+  declaredIpv4Fleet = ix.mkFleet {
+    nodes = {
+      edge.modules = [
+        {
+          ix.networking.ipv4 = true;
+          # A host-side reachability probe is exactly the check the fleet eval
+          # refuses without an address, so it doubles as proof the assertion
+          # now accepts the image-declared source.
+          ix.healthChecks.public-reachable = {
+            description = "answers on its public address";
+            from = "host";
+            requiresIpv4 = true;
+            command = ["true"];
+          };
+        }
+      ];
+      internal.modules = [{}];
+      # Declared nowhere in the image, added by the deployment: the other
+      # direction of the union has to keep working.
+      deployed.deployment.ipv4 = true;
+    };
+  };
+
+  declaredIpv4Plan = declaredIpv4Fleet.planValue.nodes;
+
   # No casImageBuilder is threaded into prefixedFleetBase, so forcing a CAS
   # image must abort with the module system's "used but not defined" error
   # rather than falling back to anything.
@@ -5806,6 +5835,23 @@
       {
         assertion = fleetPlan.web.groups == ["public-apps"];
         message = "fleet wrapped-node east-west groups should flow into the generated plan";
+      }
+      {
+        assertion = declaredIpv4Plan.edge.ipv4;
+        message = "an image declaring ix.networking.ipv4 should get a public address in the plan without deployment.ipv4";
+      }
+      {
+        assertion = declaredIpv4Plan.deployed.ipv4;
+        message = "deployment.ipv4 should still turn the public address on for an image that does not declare one";
+      }
+      {
+        assertion = !declaredIpv4Plan.internal.ipv4;
+        message = "a node that declares no public address anywhere should not be given one";
+      }
+      {
+        assertion =
+          declaredIpv4Plan.edge.healthChecks ? public-reachable;
+        message = "a requiresIpv4 health check should be accepted when the image itself declares ix.networking.ipv4";
       }
       {
         assertion = fleetPlan.web.ipv4;

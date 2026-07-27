@@ -318,13 +318,20 @@ rendered fleet plan, image attrset, and wrapped CLI app.
         # fleet-level `nodes.<name>.groups`: the image carries its own network
         # identity, the fleet adds deployment-specific memberships on top.
         nodeGroups = lib.unique (spec.groups ++ config.ix.networking.groups);
+        # Same two sources for the public address: the image can declare it
+        # travels with a public IPv4 (`ix.networking.ipv4`, which is also what
+        # `ix apply` reads on the flake path), and a deployment can add one to
+        # an image that does not ask for it. Either source turns it on; no
+        # source can turn the other off, because an address is allocated once
+        # at create.
+        nodeIpv4 = deploy.ipv4 || config.ix.networking.ipv4;
         # Mirrors the server's validate_group_slug rule (63 = the DNS label
         # octet limit) so a bad slug fails the eval, not the create RPC
         # mid-deploy.
         invalidGroups = filter (slug: builtins.match "[a-z0-9_-]{1,63}" slug == null) nodeGroups;
       in
-        assert lib.assertMsg (deploy.ipv4 || ipv4HealthChecks == {})
-        "fleet node '${name}' has health checks that require deployment.ipv4 = true: ${lib.concatStringsSep ", " (lib.attrNames ipv4HealthChecks)}";
+        assert lib.assertMsg (nodeIpv4 || ipv4HealthChecks == {})
+        "fleet node '${name}' has health checks that require a public IPv4 (set deployment.ipv4 = true or ix.networking.ipv4 = true): ${lib.concatStringsSep ", " (lib.attrNames ipv4HealthChecks)}";
         assert lib.assertMsg (invalidGroups == [])
         "fleet node '${name}' has invalid east-west group slug(s) (allowed: [a-z0-9_-], max 63 chars): ${lib.concatStringsSep ", " invalidGroups}"; {
           inherit
@@ -357,7 +364,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
             sourceInstallable = ".#${name}";
           };
           inherit (deploy) region;
-          inherit (deploy) ipv4;
+          ipv4 = nodeIpv4;
           inherit (deploy) snapshot;
           recreateOnUp = deploy.recreateOnUp or false;
           inherit (spec) tags;

@@ -36,13 +36,21 @@ ix.networking.groups = [ "shared-db" ];
 
 Slugs are scoped per owner, limited to `[a-z0-9_-]`, and capped at 63 characters (the DNS label limit); the fleet eval rejects anything else before any RPC runs (`lib/image/platform.nix:341-343`). The platform sets `networking.search` to `ix.internal`, so unqualified names like `shared-db-primary` resolve within a group without the suffix.
 
-To create or manage groups and membership directly from the CLI, use `ix group` (`create`, `add`, `members`, ...) and join at VM creation with `ix apply --group <slug>` (repeatable). Run `ix group --help` and `ix apply --help` for the exact flags.
+To create or manage groups and membership directly from the CLI, use `ix group` (`create`, `add`, `members`, ...) and join at VM creation with `ix apply --group <slug>` (repeatable) on an **image** target. Run `ix group --help` and `ix apply --help` for the exact flags.
+
+### A flake target reads its membership out of the configuration
+
+`ix apply .#api .#client` gets each VM's group list from that target's own `ix.networking.groups`, evaluated before the VM is created, so a purely declarative multi-VM apply comes up already able to talk to itself. `--group` is refused on a flake target, and the error names the option to set instead: a flag would put the VM's network identity on whoever typed the command, so the next apply from a shell that forgot it would converge the membership away again.
+
+Re-applying converges membership rather than freezing it. A slug added to the configuration is joined on the running VM (the node hot-plugs the east-west TAP; no reboot), and a slug removed from the configuration is left. Both are printed. A configuration that never imported the platform module has no `ix.networking` at all, and apply leaves its VM's memberships alone rather than reading the absent option as "no groups".
 
 ## Make a VM public (north-south)
 
 Public reachability is per VM and is a plain on/off, set at creation or changed later:
 
-- `ix apply --ipv4` allocates a public IPv4 address (default is IPv6/proxy-based ingress).
+- `ix.networking.ipv4 = true` in the image declares that the VM is allocated a public IPv4 address when it is created. This is what `ix apply .#web` reads; `--ipv4` is refused on a flake target for the same reason `--group` is. The address costs one out of the region's IPv4 ingress block, and only a region that has such a block configured can serve one (today that is `us-west-1`).
+- `ix apply --ipv4` allocates a public IPv4 address on an **image** target (default is IPv6/proxy-based ingress).
+- An address is allocated once, at create. Turning `ix.networking.ipv4` on for a VM that already exists is refused with the recreate spelled out, because no operation adds an address to a live VM; turning it back off never revokes one, so use `ix rm` and re-apply to drop it.
 - `ix apply --l7-proxy-port <PORT>` publishes an application port through the HTTP/TLS proxy; repeat for several ports.
 - `ix share <vm> <port>` publishes a guest TCP port on a public share hostname. Use `--public` for an open hostname or `--to <email>` (repeatable) for an email-gated one. Bare `ix share` lists existing shares.
 - `ix vm set --internet-ingress on|off` and `--internet-egress on|off` toggle inbound and outbound internet for an existing VM. East-west group traffic and the control plane keep working regardless.
