@@ -1,0 +1,25 @@
+[package]
+name = "fleetview"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Terminal fleet view for Claude Code sessions: dispatch a task, watch every agent's PTY for activity, attach to one full-screen"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+crossterm.workspace = true
+ndarray.workspace = true
+ratatui.workspace = true
+tui.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "fleetview"
+path = "src/main.rs"
