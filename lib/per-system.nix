@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone | complexity); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | site-frontmatter | ruff | clone | complexity); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -630,6 +630,73 @@
         }
         if (($errors | is-not-empty) or ($link_errors | is-not-empty) or ($tag_errors | is-not-empty)) { exit 1 }
       }
+      # Every `.svx` frontmatter block must be valid YAML. mdsvex parses it with
+      # a real YAML parser and, when that fails, emits a page carrying no
+      # `metadata` export; packages/site/src/lib/updates.ts then throws at load
+      # time and the WHOLE ix-site build dies. That build runs in `Cache push`,
+      # not in the required `Check`, so branch protection never sees it and main
+      # goes red only after the merge (#4236).
+      #
+      # The trigger is ordinary typing: a plain YAML scalar may not contain a
+      # colon followed by a space, so a link label like `index#4218 (git-guard:
+      # mutating commands in a protected checkout)` ends the scalar early and
+      # invalidates the mapping. Quoting the label fixes it. Parse the block
+      # rather than pattern matching on colons, so tabs, bad indentation and
+      # unbalanced brackets are caught by the same gate.
+      def "main site-frontmatter" [] {
+        let errors = (
+          [plans updates stories]
+          | each {|kind|
+              fd --extension svx . $"packages/site/src/lib/($kind)"
+              | lines
+              | sort
+              | each {|path|
+                  let front = (
+                    open --raw $path
+                    | lines
+                    | skip 1
+                    | take until {|line| $line == '---'}
+                    | str join "\n"
+                  )
+                  try {
+                    $front | from yaml | ignore
+                    []
+                  } catch {|err|
+                    # `$err.msg` is the generic "Unsupported input"; the parser's
+                    # own text, carrying its line and column, sits in `$err.debug`.
+                    # Read it from there rather than from the structured field,
+                    # which nushell renamed from `json` to `details` between
+                    # 0.112 and 0.114 and would silently break this stage on the
+                    # next bump.
+                    let quoted = ($err.debug | parse --regex 'Could not load YAML: (?<detail>[^"]+)')
+                    let detail = (if ($quoted | is-empty) { $err.debug } else { $quoted | get 0.detail })
+                    # The block opens on file line 2, so the parser's line N is
+                    # file line N + 1. Report as `file:line:column` and drop the
+                    # parser's own block-relative coordinates from the text, so
+                    # an editor can jump straight to the offending line.
+                    let place = ($detail | parse --regex 'at line (?<line>\d+) column (?<col>\d+)')
+                    let reason = ($detail | str replace --all --regex ' at line \d+ column \d+' "")
+                    let at = (
+                      if ($place | is-empty) {
+                        $path
+                      } else {
+                        let line = (($place | get 0.line | into int) + 1)
+                        $"($path):($line):($place | get 0.col)"
+                      }
+                    )
+                    [$"  ($at): ($reason)"]
+                  }
+                }
+              | flatten
+            }
+          | flatten
+        )
+        if ($errors | is-not-empty) {
+          print --stderr "an .svx frontmatter block that is not valid YAML compiles to a page with no `metadata` export, and the site loader throws, failing the whole ix-site build (#4236); a plain YAML scalar may not contain a colon followed by a space, so quote any label that has one:"
+          $errors | each {|line| print --stderr $line } | ignore
+          exit 1
+        }
+      }
       # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
       # pathlib + pytest + explicit annotations + no `typing.cast`; see
       # lib/ruff-ann.nix) over EVERY tracked .py, so non-package dirs
@@ -670,7 +737,7 @@
         complexity . out> /dev/null
       }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | ruff | clone | complexity" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | site-frontmatter | ruff | clone | complexity" }
       }
     '';
   };
@@ -690,6 +757,7 @@
     "dirnames"
     "svg-dark"
     "site-ids"
+    "site-frontmatter"
     "ruff"
     "clone"
     "complexity"
