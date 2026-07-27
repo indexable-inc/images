@@ -21,6 +21,7 @@
 mod hub;
 mod recordings;
 mod server;
+mod ws;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;

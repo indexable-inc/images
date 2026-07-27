@@ -9,10 +9,12 @@ description = "Engine-free wire types, a generic pane publisher, and the browser
 workspace = true
 
 [dependencies]
-axum.workspace = true
+# `ws` carries the Loro sync protocol endpoint (`src/dashboard/ws.rs`).
+axum = { workspace = true, features = ["ws"] }
 base64.workspace = true
 futures.workspace = true
 loro.workspace = true
+loro-protocol.workspace = true
 parking_lot.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -23,5 +25,9 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+futures.workspace = true
 loro.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+# The client half of the websocket tests: they drive the real endpoint over a
+# real socket, so they exercise the framing an official client would send.
+tokio-tungstenite.workspace = true

@@ -898,14 +898,29 @@ fn loro_err(source: impl std::fmt::Display) -> Error {
     }
 }
 
+/// One broadcast delta in both of the forms its transports need.
+///
+/// SSE is a text protocol and has to base64 its payload; the Loro websocket
+/// protocol frames the same bytes raw. Carrying both means the encode happens
+/// once at fan-in rather than once per subscriber, and one channel keeps one
+/// lag domain -- two channels would let the same delta sit at different
+/// positions in each, so a subscriber resyncing on one could double-apply
+/// from the other.
+pub(crate) struct Update {
+    /// The raw Loro update, as the websocket transport frames it.
+    pub(crate) bytes: Vec<u8>,
+    /// The same bytes base64'd, as an SSE `data:` field requires.
+    pub(crate) encoded: String,
+}
+
 /// A new subscriber's starting point: the current full snapshot taken under the
 /// hub lock, plus the live update stream whose first item lines up with it.
 pub struct Subscription {
     /// The full document snapshot at subscribe time, for the client to import
     /// before applying any update.
     pub(crate) snapshot: Vec<u8>,
-    /// The base64 CRDT update stream, consistent with `snapshot`.
-    pub(crate) updates: broadcast::Receiver<Arc<str>>,
+    /// The CRDT update stream, consistent with `snapshot`.
+    pub(crate) updates: broadcast::Receiver<Arc<Update>>,
 }
 
 /// Who is behind a peer id.
@@ -1114,7 +1129,7 @@ pub enum Merge {
 /// [`remove_scope`](Self::remove_scope); the hub serializes them under one lock.
 pub struct Hub {
     state: Mutex<DocState>,
-    updates: broadcast::Sender<Arc<str>>,
+    updates: broadcast::Sender<Arc<Update>>,
 }
 
 impl Hub {
@@ -1222,8 +1237,8 @@ impl Hub {
 
     fn broadcast(&self, delta: Result<Option<Vec<u8>>>) {
         if let Ok(Some(bytes)) = delta {
-            let encoded: Arc<str> = Arc::from(BASE64.encode(&bytes).as_str());
-            let _ = self.updates.send(encoded);
+            let encoded = BASE64.encode(&bytes);
+            let _ = self.updates.send(Arc::new(Update { bytes, encoded }));
         }
     }
 
@@ -1237,6 +1252,17 @@ impl Hub {
             snapshot: state.snapshot().unwrap_or_default(),
             updates,
         }
+    }
+
+    /// A receiver on the update stream alone.
+    ///
+    /// [`subscribe`](Self::subscribe) pairs a receiver with the snapshot it
+    /// lines up with, which is what a client needs. The websocket relay is a
+    /// fan-out middleman that seeds nobody -- each websocket client takes its
+    /// own snapshot after subscribing to the relay -- so it wants the stream
+    /// without paying for a snapshot export per hub delta.
+    pub(crate) fn updates(&self) -> broadcast::Receiver<Arc<Update>> {
+        self.updates.subscribe()
     }
 
     /// A base64 full snapshot, for a client the broadcast stream outran.

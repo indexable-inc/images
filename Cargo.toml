@@ -332,6 +332,13 @@ source-linear = { path = "packages/source/linear" }
 source-github = { path = "packages/source/github" }
 mixedbread = { path = "packages/mixedbread" }
 loro = "1.12"
+# Encoder/decoder for loro-dev's websocket sync wire format (MIT, zero
+# dependencies of its own). Taken rather than hand-rolled because the framing
+# has two details a reimplementation gets wrong silently: a DocUpdate's 8-byte
+# batch id is a raw *suffix* after the update list, and JoinResponseOk's
+# `extra` is mandatory on the wire. Sharing the encoder with the official
+# client means a spec change lands as a version bump, not as a bug report.
+loro-protocol = "0.3"
 napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
 napi-build = "2"
 napi-derive = "3"
@@ -439,6 +446,10 @@ tokio = "1"
 tokio-postgres = "0.7"
 tokio-stream = "0.1"
 tokio-util = "0.7"
+# WebSocket client for tests that drive a server end of the same protocol.
+# Already in the graph as axum's `ws` backend, so this pins the one version
+# rather than adding a second.
+tokio-tungstenite = "0.29"
 toml = { version = "1.1.2", default-features = false }
 # Format-preserving TOML rewriting for packages/mirror: inlining workspace
 # inheritance into standalone manifests without losing comments.

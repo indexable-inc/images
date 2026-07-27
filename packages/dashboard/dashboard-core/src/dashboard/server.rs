@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Bytes;
+use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -30,6 +31,7 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use super::hub::{Hub, Merge};
 use super::recordings::RecordingStore;
+use super::ws;
 use crate::{Error, Result};
 
 /// The single page the dashboard serves; it connects back over `/events`.
@@ -54,6 +56,9 @@ const MAX_UPDATE_BYTES: usize = 8 * 1024 * 1024;
 struct AppState {
     hub: Arc<Hub>,
     recordings: Option<Arc<RecordingStore>>,
+    /// Protocol frames for the websocket clients, encoded once per hub delta by
+    /// the relay task. Cheap to clone: a broadcast sender.
+    frames: tokio::sync::broadcast::Sender<ws::Frames>,
 }
 
 /// What [`serve_hub`] hands back: the running dashboard plus the shutdown
@@ -161,10 +166,17 @@ pub async fn serve_hub(
 
     let (shutdown, stop_rx) = watch::channel(false);
 
+    // Started whether or not anyone speaks the protocol: it costs one idle task
+    // that encodes nothing while no websocket client is attached, and starting
+    // it lazily would mean the first client races the hub for the deltas it
+    // needs, which is exactly the gap the subscribe-then-snapshot order closes.
+    let (frames, relay) = ws::start_relay(Arc::clone(&hub), runtime);
+
     let app = Router::new()
         .route("/", get(index))
         .route("/index.html", get(index))
         .route("/events", get(events))
+        .route("/ws", get(sync))
         .route("/recordings", get(list_recordings))
         .route("/history", get(history))
         .route("/recording/{id}", get(get_recording))
@@ -172,7 +184,11 @@ pub async fn serve_hub(
             "/apply",
             post(apply).layer(DefaultBodyLimit::max(MAX_UPDATE_BYTES)),
         )
-        .with_state(AppState { hub, recordings });
+        .with_state(AppState {
+            hub,
+            recordings,
+            frames,
+        });
 
     let http = {
         let mut rx = shutdown.subscribe();
@@ -187,7 +203,7 @@ pub async fn serve_hub(
     let dashboard = Dashboard {
         addr: bound,
         shutdown: Some(shutdown),
-        tasks: vec![http],
+        tasks: vec![http, relay],
     };
     Ok(ServedDashboard {
         dashboard,
@@ -197,6 +213,12 @@ pub async fn serve_hub(
 
 async fn index() -> Html<&'static str> {
     Html(DASHBOARD_HTML)
+}
+
+/// Upgrade to the Loro sync protocol, the interoperable twin of `/events` plus
+/// `/apply`. See [`ws`] for the wire format and what this side promises.
+async fn sync(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl IntoResponse {
+    upgrade.on_upgrade(move |socket| ws::serve_socket(socket, state.hub, state.frames))
 }
 
 /// List saved recordings as JSON, newest first. Without a store (the in-process
@@ -274,7 +296,7 @@ async fn events(State(state): State<AppState>) -> impl IntoResponse {
 
     let tail = BroadcastStream::new(subscription.updates).map(move |item| {
         let event = match item {
-            Ok(encoded) => Event::default().event("update").data(encoded.as_ref()),
+            Ok(update) => Event::default().event("update").data(&update.encoded),
             Err(BroadcastStreamRecvError::Lagged(_)) => {
                 Event::default().event("snapshot").data(hub.snapshot_b64())
             }
