@@ -486,6 +486,32 @@ in {
           before any RPC runs.
         '';
       };
+
+      ipv4 = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        example = true;
+        description = ''
+          Whether this image's VM is allocated a public IPv4 address at
+          creation, so it can serve the internet on its own address rather
+          than only through a share or the L7 proxy.
+
+          This costs a real address out of the region's IPv4 ingress block,
+          and only a region that has such a block configured can serve one
+          (today that is `us-west-1`): creating there with this set fails the
+          create RPC with "no IPv4 address available in the regional pool"
+          rather than coming up quietly unreachable. Leave it off unless the
+          VM is a public entrypoint.
+
+          The allocation happens once, at create: `ix apply` cannot add an
+          address to a VM that already exists (there is no `ix vm set --ipv4`),
+          so turning this on for a live VM is refused with the recreate step
+          spelled out. Turning it back off likewise never revokes an address
+          the VM already holds, because the option's `false` default cannot be
+          told apart from a config that never had an opinion; use `ix rm` and
+          re-apply to drop one.
+        '';
+      };
     };
   };
 
