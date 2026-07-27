@@ -48,64 +48,85 @@ fn async_stream_functions_are_rejected() {
     assert!(message.contains("plain fn"), "{message}");
 }
 
+/// A fragment the rendered glue must contain, and what its absence would mean.
+struct Fragment {
+    text: &'static str,
+    absence_means: &'static str,
+}
+
+/// One module to render, and the fragments its glue must carry.
+struct BinaryCodecCase {
+    name: &'static str,
+    source: &'static str,
+    expected: &'static [Fragment],
+}
+
 /// The binary codec, case by case: what to render, and the glue fragments the
 /// rendering must contain paired with what their absence would mean.
 ///
 /// One table rather than one test per module: every case asserts the same
 /// property (a byte-carrying value crosses as the wire newtype and is converted
 /// back at the call site) and differs only in these two columns.
-const BINARY_CODEC_CASES: &[(&str, &str, &[(&str, &str)])] = &[
-    (
-        "an argument takes the wire newtype and borrows back out",
-        "mod m { pub fn write(data: &[u8]) -> Vec<u8> { data.to_vec() } }",
-        &[
-            (
-                "data: ::unibind_ex_runtime::Bytes",
-                "argument keeps rustler's list codec",
-            ),
-            ("write(&data.0)", "argument does not borrow back out"),
-            (
-                "::unibind_ex_runtime::Bytes(super::m::write(&data.0))",
-                "return is not re-wrapped",
-            ),
+const BINARY_CODEC_CASES: &[BinaryCodecCase] = &[
+    BinaryCodecCase {
+        name: "an argument takes the wire newtype and borrows back out",
+        source: "mod m { pub fn write(data: &[u8]) -> Vec<u8> { data.to_vec() } }",
+        expected: &[
+            Fragment {
+                text: "data: ::unibind_ex_runtime::Bytes",
+                absence_means: "argument keeps rustler's list codec",
+            },
+            Fragment {
+                text: "write(&data.0)",
+                absence_means: "argument does not borrow back out",
+            },
+            Fragment {
+                text: "::unibind_ex_runtime::Bytes(super::m::write(&data.0))",
+                absence_means: "return is not re-wrapped",
+            },
         ],
-    ),
-    (
-        "nested binaries convert element-wise",
-        "mod m { pub fn blobs(all: Vec<Vec<u8>>) -> Option<Vec<u8>> { let _ = all; None } }",
-        &[
-            (
-                "all: ::std::vec::Vec<::unibind_ex_runtime::Bytes>",
-                "nested argument keeps rustler's list codec",
-            ),
-            (
-                "all.into_iter().map(|value| value.0).collect()",
-                "nested argument is not unwrapped element-wise",
-            ),
-            (
-                ".map(|value| ::unibind_ex_runtime::Bytes(value))",
-                "nested return is not re-wrapped element-wise",
-            ),
+    },
+    BinaryCodecCase {
+        name: "nested binaries convert element-wise",
+        source: "mod m { pub fn blobs(all: Vec<Vec<u8>>) -> Option<Vec<u8>> { let _ = all; None } }",
+        expected: &[
+            Fragment {
+                text: "all: ::std::vec::Vec<::unibind_ex_runtime::Bytes>",
+                absence_means: "nested argument keeps rustler's list codec",
+            },
+            Fragment {
+                text: "all.into_iter().map(|value| value.0).collect()",
+                absence_means: "nested argument is not unwrapped element-wise",
+            },
+            Fragment {
+                text: ".map(|value| ::unibind_ex_runtime::Bytes(value))",
+                absence_means: "nested return is not re-wrapped element-wise",
+            },
         ],
-    ),
-    (
-        "stream items are re-wrapped",
-        "mod m { pub fn blobs() -> UniStream<Vec<u8>> { unimplemented!() } }",
-        &[(
-            "::unibind_ex_runtime::map_stream(",
-            "stream items are not re-wrapped",
-        )],
-    ),
+    },
+    BinaryCodecCase {
+        name: "stream items are re-wrapped",
+        source: "mod m { pub fn blobs() -> UniStream<Vec<u8>> { unimplemented!() } }",
+        expected: &[Fragment {
+            text: "::unibind_ex_runtime::map_stream(",
+            absence_means: "stream items are not re-wrapped",
+        }],
+    },
 ];
 
 #[test]
 fn binaries_cross_as_the_wire_newtype() {
-    for (case, source, expected) in BINARY_CODEC_CASES {
-        let interface = lower_module_source(source);
+    for case in BINARY_CODEC_CASES {
+        let interface = lower_module_source(case.source);
         let rendered = unibind_backend_ex::render(&interface, None).expect("renders");
         let glue = prettyplease::unparse(&syn::parse2(rendered.glue).expect("glue parses"));
-        for (fragment, why) in *expected {
-            assert!(glue.contains(fragment), "{case}: {why}: {glue}");
+        for fragment in case.expected {
+            assert!(
+                glue.contains(fragment.text),
+                "{}: {}: {glue}",
+                case.name,
+                fragment.absence_means
+            );
         }
     }
 }
