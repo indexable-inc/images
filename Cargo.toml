@@ -153,6 +153,7 @@ members = [
   "packages/kitty",
   "packages/terminal-theme",
   "packages/tui/ex",
+  "packages/tui/fleetview",
   "packages/tui/reel",
   "packages/tui/tui",
   "packages/tui/tui-node",

@@ -4001,6 +4001,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleetview"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "color-eyre",
+ "crossterm",
+ "ndarray",
+ "ratatui",
+ "tempfile",
+ "tui",
+ "uuid",
+]
+
+[[package]]
 name = "fluent"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
