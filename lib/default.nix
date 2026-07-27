@@ -807,7 +807,6 @@
     })
     evalImageConfig
     mkImage
-    mkNonNixImage
     mkFleetFor
     mkFleet
     mkVmFor
@@ -924,7 +923,6 @@
         mkFleet
         mkFleetFor
         mkImage
-        mkNonNixImage
         mkPackageRegistry
         mkPackageSet
         mkVm
