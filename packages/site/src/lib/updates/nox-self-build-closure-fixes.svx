@@ -1,7 +1,7 @@
 ---
 id: nox-self-build-closure-fixes
 postedAt: 2026-07-27T00:56:00Z
-title: "nox self-build crosses four repaired boundaries"
+title: "nox self-build crosses five repaired boundaries"
 tags: [nox, nix, rust, ci]
 links:
   - label: first closure fix
@@ -12,6 +12,8 @@ links:
     href: https://github.com/indexable-inc/nox/pull/388
   - label: trusted cache selection
     href: https://github.com/indexable-inc/nox/pull/390
+  - label: fleet cache trust
+    href: https://github.com/indexable-inc/ix/pull/8631
 ---
 
 The nox release-fast self-build now completes the command that first failed while
@@ -26,7 +28,7 @@ in 276.6 seconds. It evaluated 5,115 derivations, delegated a 4,019-derivation
 import-from-derivation closure, expanded 511 Cargo units, and finalized 511 build
 nodes.
 
-Four bugs appeared in order:
+Five bugs appeared in order:
 
 1. The worker-protocol export rebuilt a shallow registry value and changed a
    child derivation path. It now reads the canonical derivation recorded when
@@ -41,6 +43,9 @@ Four bugs appeared in order:
    applying signature policy. It now considers responses in priority order and
    selects the first trusted narinfo. A cached response that no longer satisfies
    the active policy triggers a fresh query.
+5. The fleet trusted four cache keys but omitted the signer used by the CI plain
+   cache. The fleet trust source now includes `ix-nix-cache-1`. A deploy-surface
+   check requires the signer on all five dispatcher nodes.
 
 Format, both workspace clippy gates, and 217 affected-package tests passed on
 the final branch. The repeated `HTTP/3.0` warnings did not stop this build.
