@@ -302,10 +302,18 @@
   # feature for one session).
   featureSettingsEnv =
     disabledFeatureEnv
+    // agentTeamsEnv
     // lib.optionalAttrs (effectiveFeatures.autoCompactWindow != null) {
       CLAUDE_CODE_AUTO_COMPACT_WINDOW = toString effectiveFeatures.autoCompactWindow;
     };
-  wrapperEnvDefaults = disabledFeatureEnv;
+  # SendMessage is gated on this as well as its permission row: agent teams is
+  # experimental, so setting one without the other leaves the tool hidden and
+  # the permission a lie.
+  agentTeamsEnv = lib.optionalAttrs effectiveSystemTools.SendMessage {
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
+  };
+
+  wrapperEnvDefaults = disabledFeatureEnv // agentTeamsEnv;
 
   # Disabling a tool here puts its BARE name in `permissions.deny`, which
   # strips the tool's schema from the model context entirely; Claude Code has
@@ -341,16 +349,23 @@
     ReadMcpResourceDirTool = false;
     ReadMcpResourceTool = false;
     RemoteTrigger = true;
-    ReportFindings = false;
+    # On: how a subagent hands structured review findings back. Same family
+    # as SendMessage -- agent-to-caller reporting -- and cheap.
+    ReportFindings = true;
     ScheduleWakeup = false;
-    # Off: agent-teams peer messaging (needs env
-    # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS too). The Claude Fable 5 system
-    # card's Multi-Agent ProgramBench (sec. 8.15.2) found the SendMessage
-    # peer mesh reaches similar solutions faster in wall clock but with no
-    # better final quality and much worse token efficiency than one agent
-    # working sequentially, so subagents (Agent, Task*) are on and the mesh
-    # stays off (#4095).
-    SendMessage = false;
+    # On: the peer mesh is a worse default than sequential subagents -- the
+    # Claude Fable 5 system card's Multi-Agent ProgramBench (sec. 8.15.2)
+    # found it reaches similar solutions faster in wall clock but with no
+    # better final quality and much worse token efficiency (#4095). It is on
+    # anyway because denying it is worse than the cost it saves: the Agent
+    # tool's own description tells the model to use SendMessage to continue a
+    # running subagent, so with the tool absent the model follows that
+    # instruction into the only fallback it has and spawns a SECOND agent on
+    # the files the first is editing. Observed doing exactly that. A wasteful
+    # tool beats an instruction whose only available fallback corrupts state.
+    # Retire this once the Agent description stops naming a tool the
+    # permission set may deny (#4221 follow-up).
+    SendMessage = true;
     SendUserFile = true;
     ShareOnboardingGuide = true;
     Skill = true;

@@ -88,8 +88,12 @@
     in_app_browser = false;
   };
 
+  # Monitor is deliberately absent: the Bash tool description tells the model
+  # to use it to wait on a condition, and the kernel's Jobs.await only
+  # replaces it while the kernel is the spawning path -- which is not the
+  # standard one. A native instruction with no native tool sends the model
+  # to foreground sleep loops instead.
   claudeHouseDeniedTools = [
-    "Monitor"
     "CronCreate"
     "CronDelete"
     "CronList"

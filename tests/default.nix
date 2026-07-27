@@ -4400,6 +4400,10 @@
             "WebSearch"
             "WebFetch"
           ]
+          # Monitor stays available: the Bash tool description names it as the
+          # way to wait on a condition, and the kernel is not the standard
+          # spawning path, so denying it leaves that instruction unsatisfiable.
+          && !(builtins.elem "Monitor" baked.claude.deniedToolPatterns)
           && !(overlay.codex.forcedSettings.features ? shell_tool)
           && overlay.codex.forcedSettings.features.standalone_web_search == false
           # With the index kernel + exa baked, file and web tools are folded in.
@@ -4413,13 +4417,16 @@
             "NotebookEdit"
             "Glob"
             "Grep"
-            "Monitor"
             "CronCreate"
             "CronDelete"
             "CronList"
             "WebSearch"
             "WebFetch"
           ]
+          # Monitor stays available: the Bash tool description names it as the
+          # way to wait on a condition, and the kernel is not the standard
+          # spawning path, so denying it leaves that instruction unsatisfiable.
+          && !(builtins.elem "Monitor" baked.claude.deniedToolPatterns)
           && !(baked.codex.forcedSettings.features ? shell_tool)
           && !(baked.codex.forcedSettings.features ? unified_exec)
           && baked.codex.forcedSettings.features.standalone_web_search == false;
