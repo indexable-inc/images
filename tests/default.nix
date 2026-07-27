@@ -1514,6 +1514,19 @@
       name = "lock-changed";
       src = cargoUnitScopeLockChangedFixture;
     };
+    # The shape the buildWorkspace docstring recommends and that every other
+    # caller here avoided: `src` and `workspaceRoot` both the caller's own
+    # directory, as a bare path rather than a pre-filtered derivation. A path
+    # value interpolates to a different store path than it stringifies to, so
+    # rendering used to name one tree in the unit-graph rewrite and the other
+    # as the root to slice against, and refused every local unit as "outside
+    # workspace root" (#4239). The fixture directory holds one file the
+    # filtered `base` source drops (an alternate lockfile), which the planner
+    # stubs and nothing reads, so the two must still render identically.
+    pathSrc = cargoUnitScopeWorkspace {
+      name = "path-src";
+      src = ./fixtures/cargo-unit-workspace-scope;
+    };
   };
 
   cargoUnitScopeUnit = workspace: prefix: let
@@ -1540,6 +1553,10 @@
     lockChanged = {
       itoa = cargoUnitScopeUnit cargoUnitScopeWorkspaces.lockChanged "itoa-1.0.14-";
       ryu = cargoUnitScopeUnit cargoUnitScopeWorkspaces.lockChanged "ryu-1.0.23-";
+    };
+    pathSrc = {
+      alpha = cargoUnitScopeUnit cargoUnitScopeWorkspaces.pathSrc "scope_alpha-0.1.0-";
+      bravo = cargoUnitScopeUnit cargoUnitScopeWorkspaces.pathSrc "scope_bravo-0.1.0-";
     };
   };
 
@@ -5380,6 +5397,39 @@
           source: source.base == "workspace" && source.scope == "package" && source.relative == "crates/alpha"
         ) (builtins.attrValues cargoUnitScopeWorkspaces.base.sourceAudit);
         message = "cargo-unit source audit should record package-shaped workspace sources";
+      }
+      {
+        # Forcing this at all is most of the test: with `src` a bare path the
+        # render IFD used to abort with "outside workspace root" before any
+        # audit existed to read (#4239). The relative paths are then what says
+        # the tie-back found the right root and not merely a root: a rebase
+        # onto some other tree would still render, just with member paths
+        # carved from the wrong place.
+        assertion =
+          builtins.sort builtins.lessThan (
+            map (source: source.relative) (
+              builtins.filter (source: source.base == "workspace") (
+                builtins.attrValues cargoUnitScopeWorkspaces.pathSrc.sourceAudit
+              )
+            )
+          )
+          == [
+            "crates/alpha"
+            "crates/bravo"
+          ];
+        message = "cargo-unit should scope local units against `src` when `src` and `workspaceRoot` are the same bare path (#4239)";
+      }
+      {
+        # Same members, same contents, so the two spellings of one source tree
+        # must produce the same unit derivations. This is what a tie-back that
+        # resolved to a convenient root rather than the right one would fail:
+        # different relatives mean differently scoped sources mean different
+        # units, built from the wrong subtree.
+        assertion =
+          cargoUnitScope.pathSrc.alpha.drvPath
+          == cargoUnitScope.base.alpha.drvPath
+          && cargoUnitScope.pathSrc.bravo.drvPath == cargoUnitScope.base.bravo.drvPath;
+        message = "a bare-path `src` and a pre-filtered `src` over the same tree must render identical units (#4239)";
       }
       {
         assertion = builtins.any (
