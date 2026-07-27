@@ -32,6 +32,19 @@
     "IX_BEAM_NODES"
   ];
 
+  # The fleet's log store (ix ClickHouse). Same split as the BEAM vars above:
+  # the operator's config repo holds the endpoint and the credential, and only
+  # the NAMES are forwarded here. The password rides as `_FILE` for the same
+  # reason the erlang cookie does, so no fleet credential enters the process
+  # environment as a value. All four unset is the ordinary case off the
+  # tailnet, and the server treats that as "nothing was asked" rather than as
+  # an error, so forwarding them costs nothing where they are absent.
+  fleetLogStoreEnvVars = [
+    "FLEET_CLICKHOUSE_PASSWORD_FILE"
+    "FLEET_CLICKHOUSE_URL"
+    "FLEET_CLICKHOUSE_USER"
+  ];
+
   defaultServers = {
     indexCommand ? null,
     # The Python kernel's entrypoint needs its `serve` subcommand; the Elixir
@@ -44,7 +57,7 @@
         transport = "stdio";
         command = indexCommand;
         args = indexArgs;
-        envVars = indexApiEnvVars ++ fleetBeamEnvVars;
+        envVars = indexApiEnvVars ++ fleetBeamEnvVars ++ fleetLogStoreEnvVars;
         env = {
           # New-issue channel broadcasting (IssueWatch, #3877) off for now:
           # every kernel hears every filed issue, so unrelated agents pick
