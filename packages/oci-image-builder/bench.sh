@@ -6,7 +6,10 @@
 #
 #   packages/oci-image-builder/bench.sh [flake-image-attr] [runs]
 #
-# Default image attr is `non-nix-ubuntu`. Needs `nix` and pulls `hyperfine`.
+# The image attr is required. It used to default to `non-nix-ubuntu`, which was
+# deleted with the plain-OCI examples (ENG-10550); nothing in this repo now
+# calls the describe path this benchmarks, so there is no honest default left
+# to pick. Needs `nix` and pulls `hyperfine`.
 #
 # Definitions:
 #   OCI one-shot     the eager path: plan -> full OCI tar in one process. It is a
@@ -22,7 +25,12 @@
 #                    this work; only needed when real bytes are required (push).
 set -euo pipefail
 
-IMAGE="${1:-non-nix-ubuntu}"
+if [ $# -lt 1 ]; then
+  echo "usage: $0 <flake-image-attr> [runs]" >&2
+  echo "  no default: the plain-OCI examples this used to benchmark are gone (ENG-10550)." >&2
+  exit 2
+fi
+IMAGE="$1"
 RUNS="${2:-3}"
 
 nb() { nix build --no-link --print-out-paths "$@" 2>/dev/null; }

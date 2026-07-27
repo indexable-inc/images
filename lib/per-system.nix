@@ -1880,38 +1880,6 @@
     modules = [(paths.root + "/images/system/vcfs-guest-eval")];
   };
 
-  # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
-  # `examples/oci` with the same hierarchical shape as the VM examples, but
-  # return images instead of VM plans and are exposed as opt-in packages only.
-  nonNixExampleImages =
-    lib.mapAttrs'
-    (
-      name: entry:
-        lib.nameValuePair "non-nix-${name}" (
-          ix.importIxFor system (entry.path + "/default.ix") {
-            index = {
-              lib = ix;
-            };
-          }
-        )
-    )
-    (
-      ix.discoverTree {
-        root = paths.examples + "/oci";
-        requiredFiles = ["default.ix"];
-      }
-    );
-
-  # The content-addressed `image.json` for each non-Nix example, surfaced as its
-  # own package so the small artifact is buildable directly (`nix build
-  # .#non-nix-ubuntu-description`) and cached independently of the materialized
-  # tar it regenerates. See #679.
-  nonNixExampleDescriptions =
-    lib.mapAttrs' (
-      name: image: lib.nameValuePair "${name}-description" image.passthru.description
-    )
-    nonNixExampleImages;
-
   # Build the check catalog from a rust-package keying. `checks` (flat: one
   # derivation per `checks.<system>.<name>`, required by the flake schema and
   # `nix flake check`) and `ciChecks` (sharded: one `recurseForDerivations` group
@@ -2044,8 +2012,6 @@
     }
     // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
     // repoFlakePackages
-    // nonNixExampleImages
-    // nonNixExampleDescriptions
     // crossPackages;
   securityRootRegistry = let
     mkRoot = ix.securityRoots.mkRoot;
