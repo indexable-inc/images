@@ -30,7 +30,7 @@ Push the current branch and watch CI. If CI fails, fix the issues and retry unti
    - Error is external/flaky (network, service outage) - retry once, then stop and explain
    - Stuck in loop (same error 3+ times) - stop and ask user for help
 
-7. **Enable auto-merge**: Once CI passes, run `gh pr merge --auto --squash` to enable auto-merge with squash
+7. **Enable auto-merge**: Once CI passes, run `gh pr merge --auto --merge` to enable auto-merge. Squash and rebase are both disabled on these repositories, so `--squash` fails with "Squash merges are not allowed on this repository"
 
 8. **Post-merge cleanup**: After the PR is merged:
    - Get the default branch: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`
