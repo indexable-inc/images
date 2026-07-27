@@ -306,6 +306,25 @@
     };
   }
   {
+    noHandMirrors = {
+      topics = ["architecture"];
+      text = ''
+        A type restated by hand in a second language is a mirror, and mirrors
+        drift silently. Generate the second copy from the first, or make the
+        second copy the only copy. One of these almost always fits: a codegen
+        derive checked by a CI diff, a wasm-bindgen `.d.ts`, a definition both
+        sides read from one file. Ask the user before hand-maintaining a
+        mirror.
+      '';
+      reason = ''
+        `packages/term/src/lib/types.ts` in ix hand-mirrors
+        `term_proto::ShellEntry` and `term_nu::NuValue` across 684 lines with
+        no generator and no agreement test, so drift is caught by nothing
+        (index#4251).
+      '';
+    };
+  }
+  {
     fixAtSource = {
       topics = ["architecture"];
       text = ''
