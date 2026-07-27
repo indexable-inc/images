@@ -272,6 +272,9 @@ struct SourceEntry {
     relative: String,
     include_relatives: Vec<String>,
     source_key: String,
+    /// Placeholder this source's store path is rewritten to, see
+    /// [`source_remap_prefix`].
+    remap_prefix: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -660,13 +663,14 @@ fn render_source_audit_entries(prepared: &PreparedGraph) -> String {
     for (key, source) in &prepared.source_entries {
         let _ = writeln!(
             entries,
-            "    {} = {{ base = {}; scope = {}; relative = {}; includeRelatives = {}; sourceKey = {}; }};",
+            "    {} = {{ base = {}; scope = {}; relative = {}; includeRelatives = {}; sourceKey = {}; remapPrefix = {}; }};",
             nix_attr(key),
             nix_attr(source.base.audit_label()),
             nix_attr(source.base.scope().audit_label()),
             nix_attr(&source.relative),
             nix_string_list(&source.include_relatives),
             nix_attr(&source.source_key),
+            nix_attr(&source.remap_prefix),
         );
     }
     entries
@@ -1161,6 +1165,7 @@ fn render_driver_build_phase(
     append_direct_dependency_metadata_exports(&mut script, graph, prepared, index)?;
 
     push_rustc_args(&mut script, unit, &prepared.hashes[index], driver);
+    append_path_remap_args(&mut script, source);
     append_target_linker_arg(&mut script, unit);
     append_extra_rustc_args(&mut script, unit);
 
@@ -1436,6 +1441,45 @@ fn push_codegen(script: &mut String, key: &str, value: &str) {
 
 fn push_arg(script: &mut String, value: &str) {
     let _ = writeln!(script, "rustc_args+=( {} )", shell::quote(value));
+}
+
+/// Rewrites the store paths rustc would otherwise bake into this unit's output.
+///
+/// Two prefixes, because half a remap leaves half the closure:
+///
+/// - `$src`, the unit's own scoped source, which supplies the `file!()` of
+///   every panic location in this crate (see [`source_remap_prefix`]).
+/// - the toolchain's `rust-src`, which supplies them for std. Upstream
+///   compiles std against a virtual `/rustc/<commit>` prefix, but rustc
+///   translates that straight back to the local `rust-src` directory when the
+///   component is installed (`-Ztranslate-remapped-path-to-local-path`, on by
+///   default), so a single `unwrap` on a std generic monomorphized here pins
+///   the entire ~1.9 GiB toolchain into the binary's closure. The directory is
+///   absent from toolchains built without `rust-src`, where the mapping simply
+///   never matches.
+///
+/// Emitted for every driver and every unit rather than left to
+/// `extraRustcArgs`, so that a crate baking a location and the crate linking
+/// it agree, and so that a caller who has never heard of this gets the small
+/// closure anyway.
+///
+/// The cost is that panic messages and backtraces name `/build/<crate>-<ver>`
+/// and `/rustc` instead of a real store path. Nothing resolves those paths;
+/// `include_str!`, `include!` and `env!("CARGO_MANIFEST_DIR")` all read the
+/// real filesystem and are untouched by `--remap-path-prefix`, so a crate that
+/// deliberately embeds a store path for a data file or helper binary keeps
+/// both the path and its reference. Coverage does read them back, and
+/// `normalize_source_path` in the units template maps them to workspace
+/// relative paths using the `remapPrefix` recorded in `sourceAudit`.
+fn append_path_remap_args(script: &mut String, source: &SourceEntry) {
+    let _ = writeln!(
+        script,
+        "rustc_args+=( --remap-path-prefix \"$src={}\" )",
+        source.remap_prefix
+    );
+    script.push_str(
+        "rustc_args+=( --remap-path-prefix \"${rustToolchain}/lib/rustlib/src/rust=/rustc\" )\n",
+    );
 }
 
 fn append_target_linker_arg(script: &mut String, unit: &Unit) {
@@ -2573,6 +2617,7 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
             relative: scoped.relative,
             include_relatives: scoped.include_relatives,
             source_key,
+            remap_prefix: source_remap_prefix(unit),
         });
     }
 
@@ -2590,6 +2635,7 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
         relative: scoped.relative,
         include_relatives: scoped.include_relatives,
         source_key,
+        remap_prefix: source_remap_prefix(unit),
     })
 }
 
@@ -2687,6 +2733,32 @@ fn source_name(base: SourceBase, unit: &Unit, source_key: &str, relative: &str) 
     format!(
         "cargo-unit-source-{}-{}-{hash}",
         store_name_component(package_name.as_ref()),
+        store_name_component(unit.package_version())
+    )
+}
+
+/// Build-time placeholder that stands in for a unit's source store path.
+///
+/// `file!()` expands to the absolute path of the source file, which here is a
+/// store path, so every `panic!`, `unwrap`, `assert` and `#[track_caller]`
+/// location bakes one into the compiled artifact as ordinary string data that
+/// no `strip` removes. Nix's reference scanner looks for the 32-character hash
+/// part of a store path anywhere in an output, so each of those strings pins
+/// the whole vendored crate into the binary's runtime closure. Remapping to a
+/// hash-free placeholder is what keeps a 23 MB executable from dragging its
+/// entire build-time closure behind it (indexable-inc/index#4249).
+///
+/// Derived from the package name and version rather than the source store name
+/// so it stays readable in a backtrace and, more importantly, so it is a pure
+/// function of the graph: relocating a source (a rename, a filter change, a
+/// different but identical checkout) no longer perturbs the bytes of the rlib
+/// that quotes it, which is exactly the early cutoff content addressing is for.
+/// Every unit sharing a source entry shares this prefix, because
+/// [`source_name`] keys on the same package identity.
+fn source_remap_prefix(unit: &Unit) -> String {
+    format!(
+        "/build/{}-{}",
+        store_name_component(unit.package_name().as_ref()),
         store_name_component(unit.package_version())
     )
 }
@@ -4947,6 +5019,97 @@ version = "0.1.0"
         assert!(!rendered.contains("${src}/crates/core"));
         assert!(!rendered.contains("${src}/crates/cli"));
         assert!(!rendered.contains("${vendorDir}/itoa-1.0.15"));
+    }
+
+    #[test]
+    fn every_compile_unit_remaps_its_source_and_the_toolchain_out_of_its_output() {
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.15",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "itoa",
+                    "src_path": "/vendor/itoa-1.0.15/src/lib.rs",
+                    "edition": "2021"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/crates/cli#scope-cli@0.1.0",
+                  "target": {
+                    "kind": ["custom-build"],
+                    "crate_types": ["bin"],
+                    "name": "build-script-build",
+                    "src_path": "/workspace/crates/cli/build.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/crates/cli#scope-cli@0.1.0",
+                  "target": {
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "scope_cli",
+                    "src_path": "/workspace/crates/cli/src/main.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": [
+                    { "index": 0, "extern_crate_name": "itoa" }
+                  ]
+                }
+              ],
+              "roots": [1, 2]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: Some(PathBuf::from("/vendor")),
+                cargo_lock_sources: cargo_lock_sources(&[(
+                    "itoa",
+                    "1.0.15",
+                    "registry+https://github.com/rust-lang/crates.io-index",
+                )]),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        // A vendored crate, a workspace bin and a build script all bake
+        // `file!()` locations, so all three must lose their source store path.
+        let source_remap =
+            |prefix: &str| format!("rustc_args+=( --remap-path-prefix \"$src={prefix}\" )");
+        assert!(rendered.contains(&source_remap("/build/itoa-1.0.15")));
+        assert!(rendered.contains(&source_remap("/build/scope-cli-0.1.0")));
+        // `rustc_args=()` opens exactly one rustc or clippy invocation, so
+        // matching counts is what says no driver was left un-remapped.
+        assert_eq!(
+            rendered
+                .matches(
+                    "rustc_args+=( --remap-path-prefix \"${rustToolchain}/lib/rustlib/src/rust=/rustc\" )"
+                )
+                .count(),
+            rendered.matches("rustc_args=()").count()
+        );
+        assert!(rendered.contains("remapPrefix = \"/build/itoa-1.0.15\";"));
+        assert!(rendered.contains("remapPrefix = \"/build/scope-cli-0.1.0\";"));
     }
 
     #[test]

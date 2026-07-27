@@ -477,10 +477,11 @@ let
               packageRoot = if source.relative == "" then "." else source.relative;
             in
             pkgs.lib.optionalString (source.base == "workspace") ''
-              printf '%s\t%s\t%s\n' \
+              printf '%s\t%s\t%s\t%s\n' \
                 ${pkgs.lib.escapeShellArg sourceName} \
                 ${pkgs.lib.escapeShellArg packageRoot} \
                 ${pkgs.lib.escapeShellArg source.scope} \
+                ${pkgs.lib.escapeShellArg source.remapPrefix} \
                 >> "$source_roots"
             ''
           ) sourceAudit
@@ -524,9 +525,35 @@ let
           )
         '') testTargets
         + ''
+          emit_source_path() {
+            local package_root="$1" source_scope="$2" suffix="$3"
+
+            if [ "$source_scope" = "closure" ] || [ -z "$package_root" ] || [ "$package_root" = "." ]; then
+              printf '%s\n' "$suffix"
+            else
+              printf '%s\n' "$package_root/$suffix"
+            fi
+          }
+
           normalize_source_path() {
             local path="$1"
-            local store_relative store_dir store_name suffix source_store_name package_root source_scope candidate
+            local store_relative store_dir store_name suffix source_store_name package_root source_scope remap_prefix candidate
+
+            # Instrumented units carry the placeholder every compile unit remaps
+            # its source store path to (append_path_remap_args), so this is the
+            # form coverage sees for workspace crates. The /nix/store branch
+            # below still matters for prebuilt units injected through
+            # `extraUnits`, which this graph never compiled and never remapped.
+            while IFS=$'\t' read -r source_store_name package_root source_scope remap_prefix; do
+              if [ -z "$remap_prefix" ]; then
+                continue
+              fi
+              suffix="''${path#"$remap_prefix"/}"
+              if [ "$suffix" != "$path" ]; then
+                emit_source_path "$package_root" "$source_scope" "$suffix"
+                return 0
+              fi
+            done < "$source_roots"
 
             case "$path" in
               /nix/store/*)
@@ -535,18 +562,12 @@ let
                 store_name="''${store_dir#*-}"
                 suffix="''${store_relative#*/}"
 
-                while IFS=$'\t' read -r source_store_name package_root source_scope; do
+                while IFS=$'\t' read -r source_store_name package_root source_scope remap_prefix; do
                   if [ -z "$source_store_name" ] || [ "$store_name" != "$source_store_name" ]; then
                     continue
                   fi
 
-                  if [ "$source_scope" = "closure" ] || [ -z "$package_root" ]; then
-                    printf '%s\n' "$suffix"
-                  elif [ "$package_root" = "." ]; then
-                    printf '%s\n' "$suffix"
-                  else
-                    printf '%s\n' "$package_root/$suffix"
-                  fi
+                  emit_source_path "$package_root" "$source_scope" "$suffix"
                   return 0
                 done < "$source_roots"
                 ;;
