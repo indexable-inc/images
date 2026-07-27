@@ -740,7 +740,7 @@ let abbreviations = abbr flatten-abbreviations {
     gp: "git push"
     gpf: "git push --force-with-lease"
     gpl: "git pull"
-    gpm: "gh pr merge --auto --squash"
+    gpm: "gh pr merge --auto --merge"
     gpp: "git push -u origin (git_current_branch)"
     gpr: "gh pr view -w"
     gprl: "gh pr list --author @me"
