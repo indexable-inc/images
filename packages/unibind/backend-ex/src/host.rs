@@ -1,6 +1,7 @@
 //! Generate the Elixir host modules from the interface.
 
 mod calls;
+mod mix;
 mod native;
 mod typespec;
 mod wrapper;
@@ -19,6 +20,8 @@ pub struct HostModules {
     pub native: String,
     /// The `<Ns>` module: typespec'd public wrapper functions.
     pub wrapper: String,
+    /// `mix.exs` for the package the two modules ship in.
+    pub mix_project: String,
 }
 
 /// Render the Elixir side of the boundary.
@@ -42,5 +45,6 @@ pub fn host_modules(
         app: names::ns_snake(interface),
         native: native::render(interface, nif_soname),
         wrapper: wrapper::render(interface),
+        mix_project: mix::render(interface),
     })
 }

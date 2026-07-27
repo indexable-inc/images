@@ -23,7 +23,7 @@ let
   elixir = ix.languages.elixir.toolchain pkgs {version = "1.20";};
   erlang = ix.languages.erlang.toolchain pkgs {version = "29";};
 
-  version = "0.1.0"; # keep in sync with mix/mix.exs
+  version = "0.1.0"; # keep in sync with unibind's generated mix.exs
 
   sharedEnv = {
     HEX_OFFLINE = "1";

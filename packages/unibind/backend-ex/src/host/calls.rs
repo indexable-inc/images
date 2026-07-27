@@ -193,18 +193,41 @@ fn stream_body(
     forwards: &[String],
     pad: &str,
 ) {
+    stream_call(
+        out,
+        function,
+        target,
+        forwards,
+        pad,
+        "unibind_stream(ref, handle)",
+    );
+}
+
+/// The body both stream forms share: mint the caller's reference, call the
+/// NIF with it, and wrap the handle it answers with.
+///
+/// `wrapped` is the Elixir expression the raw handle becomes -- an
+/// `Enumerable` for the blocking form, a `StreamHandle` struct for the
+/// demand-driven one -- and is the only difference between them. The `throws`
+/// split has to be written once per form otherwise, and a `case` arm that only
+/// appears in one of them is a difference no test would catch.
+fn stream_call(
+    out: &mut String,
+    function: &ir::Function,
+    target: &Target<'_>,
+    forwards: &[String],
+    pad: &str,
+    wrapped: &str,
+) {
     let _ = writeln!(out, "{pad}  ref = make_ref()");
     if function.throws.is_some() {
         let _ = writeln!(out, "{pad}  case {} do", call_with_ref(target, forwards));
-        let _ = writeln!(
-            out,
-            "{pad}    {{:ok, handle}} -> {{:ok, unibind_stream(ref, handle)}}"
-        );
+        let _ = writeln!(out, "{pad}    {{:ok, handle}} -> {{:ok, {wrapped}}}");
         let _ = writeln!(out, "{pad}    {{:error, error}} -> {{:error, error}}");
         let _ = writeln!(out, "{pad}  end");
     } else {
         let _ = writeln!(out, "{pad}  handle = {}", call_with_ref(target, forwards));
-        let _ = writeln!(out, "{pad}  unibind_stream(ref, handle)");
+        let _ = writeln!(out, "{pad}  {wrapped}");
     }
 }
 
@@ -259,21 +282,14 @@ pub fn render_stream_handle_fn(
     );
     let _ = writeln!(out, "{pad}@spec {name}({}) :: {ret}", specs.join(", "));
     let _ = writeln!(out, "{pad}def {name}({}) do", params.join(", "));
-    let _ = writeln!(out, "{pad}  ref = make_ref()");
-    let built = "%StreamHandle{ref: ref, handle: handle}";
-    if function.throws.is_some() {
-        let _ = writeln!(out, "{pad}  case {} do", call_with_ref(target, &forwards));
-        let _ = writeln!(out, "{pad}    {{:ok, handle}} -> {{:ok, {built}}}");
-        let _ = writeln!(out, "{pad}    {{:error, error}} -> {{:error, error}}");
-        let _ = writeln!(out, "{pad}  end");
-    } else {
-        let _ = writeln!(
-            out,
-            "{pad}  handle = {}",
-            call_with_ref(target, &forwards)
-        );
-        let _ = writeln!(out, "{pad}  {built}");
-    }
+    stream_call(
+        out,
+        function,
+        target,
+        &forwards,
+        pad,
+        "%StreamHandle{ref: ref, handle: handle}",
+    );
     let _ = writeln!(out, "{pad}end");
 }
 

@@ -47,19 +47,7 @@ pub fn annotation(interface: &ir::Interface, ty: &ir::Type, position: Position) 
 /// Whether `ty` mentions a filesystem path anywhere; a stub that renders one
 /// in argument position needs `import os` for the `os.PathLike` form.
 pub fn mentions_path(ty: &ir::Type) -> bool {
-    match ty {
-        ir::Type::Path { .. } => true,
-        ir::Type::Option(inner) | ir::Type::Vec(inner) | ir::Type::Stream(inner) => {
-            mentions_path(inner)
-        }
-        ir::Type::Map { key, value } => mentions_path(key) || mentions_path(value),
-        ir::Type::Bool
-        | ir::Type::Int(_)
-        | ir::Type::Float(_)
-        | ir::Type::String { .. }
-        | ir::Type::Bytes { .. }
-        | ir::Type::Named(_) => false,
-    }
+    ty.any_leaf(&|leaf| matches!(leaf, ir::Type::Path { .. }))
 }
 
 /// Render a literal default as Python source.

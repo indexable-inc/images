@@ -48,55 +48,66 @@ fn async_stream_functions_are_rejected() {
     assert!(message.contains("plain fn"), "{message}");
 }
 
-/// Lower and render `source`, returning the rendered glue as text.
-fn render_glue(source: &str) -> String {
-    let interface = lower_module_source(source);
-    let rendered = unibind_backend_ex::render(&interface, None).expect("renders");
-    prettyplease::unparse(&syn::parse2(rendered.glue).expect("glue parses"))
-}
-
-#[test]
-fn binary_arguments_take_the_wire_newtype_and_borrow_back_out() {
-    let glue = render_glue("mod m { pub fn write(data: &[u8]) -> Vec<u8> { data.to_vec() } }");
-    assert!(
-        glue.contains("data: ::unibind_ex_runtime::Bytes"),
-        "argument keeps rustler's list codec: {glue}"
-    );
-    assert!(glue.contains("write(&data.0)"), "{glue}");
-    assert!(
-        glue.contains("::unibind_ex_runtime::Bytes(super::m::write(&data.0))"),
-        "return is not re-wrapped: {glue}"
-    );
-}
-
-#[test]
-fn nested_binaries_convert_element_wise() {
-    let glue = render_glue(
+/// The binary codec, case by case: what to render, and the glue fragments the
+/// rendering must contain paired with what their absence would mean.
+///
+/// One table rather than one test per module: every case asserts the same
+/// property (a byte-carrying value crosses as the wire newtype and is converted
+/// back at the call site) and differs only in these two columns.
+const BINARY_CODEC_CASES: &[(&str, &str, &[(&str, &str)])] = &[
+    (
+        "an argument takes the wire newtype and borrows back out",
+        "mod m { pub fn write(data: &[u8]) -> Vec<u8> { data.to_vec() } }",
+        &[
+            (
+                "data: ::unibind_ex_runtime::Bytes",
+                "argument keeps rustler's list codec",
+            ),
+            ("write(&data.0)", "argument does not borrow back out"),
+            (
+                "::unibind_ex_runtime::Bytes(super::m::write(&data.0))",
+                "return is not re-wrapped",
+            ),
+        ],
+    ),
+    (
+        "nested binaries convert element-wise",
         "mod m { pub fn blobs(all: Vec<Vec<u8>>) -> Option<Vec<u8>> { let _ = all; None } }",
-    );
-    assert!(
-        glue.contains("all: ::std::vec::Vec<::unibind_ex_runtime::Bytes>"),
-        "{glue}"
-    );
-    assert!(
-        glue.contains("all.into_iter().map(|value| value.0).collect()"),
-        "{glue}"
-    );
-    assert!(
-        glue.contains(".map(|value| ::unibind_ex_runtime::Bytes(value))"),
-        "{glue}"
-    );
-}
+        &[
+            (
+                "all: ::std::vec::Vec<::unibind_ex_runtime::Bytes>",
+                "nested argument keeps rustler's list codec",
+            ),
+            (
+                "all.into_iter().map(|value| value.0).collect()",
+                "nested argument is not unwrapped element-wise",
+            ),
+            (
+                ".map(|value| ::unibind_ex_runtime::Bytes(value))",
+                "nested return is not re-wrapped element-wise",
+            ),
+        ],
+    ),
+    (
+        "stream items are re-wrapped",
+        "mod m { pub fn blobs() -> UniStream<Vec<u8>> { unimplemented!() } }",
+        &[(
+            "::unibind_ex_runtime::map_stream(",
+            "stream items are not re-wrapped",
+        )],
+    ),
+];
 
 #[test]
-fn binary_stream_items_are_re_wrapped() {
-    let glue = render_glue(
-        "mod m { pub fn blobs() -> UniStream<Vec<u8>> { unimplemented!() } }",
-    );
-    assert!(
-        glue.contains("::unibind_ex_runtime::map_stream("),
-        "{glue}"
-    );
+fn binaries_cross_as_the_wire_newtype() {
+    for (case, source, expected) in BINARY_CODEC_CASES {
+        let interface = lower_module_source(source);
+        let rendered = unibind_backend_ex::render(&interface, None).expect("renders");
+        let glue = prettyplease::unparse(&syn::parse2(rendered.glue).expect("glue parses"));
+        for (fragment, why) in *expected {
+            assert!(glue.contains(fragment), "{case}: {why}: {glue}");
+        }
+    }
 }
 
 #[test]

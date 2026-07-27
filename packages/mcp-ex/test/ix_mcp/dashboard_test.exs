@@ -3,6 +3,8 @@ defmodule IxMcp.DashboardTest do
   # the bridge is a singleton whose viewer set is shared state.
   use ExUnit.Case, async: false
 
+  import IxMcpTest.Eventually
+
   alias IxMcp.ActionLog
   alias IxMcp.Dashboard
   alias IxMcp.Session
@@ -55,7 +57,12 @@ defmodule IxMcp.DashboardTest do
     # ledger rather than on a delivered message: with no transport
     # registered nothing is delivered and nothing is acked.
     row =
-      eventually(fn -> Enum.find(ActionLog.unacked_outbox(session), &dashboard_row?(&1, doc)) end)
+      eventually(
+        fn -> Enum.find(ActionLog.unacked_outbox(session), &dashboard_row?(&1, doc)) end,
+        # Twice the default window: this row only lands after the NIF's watch
+        # stream has pushed and the bridge has written it.
+        100
+      )
 
     assert row.status == :done
     assert row.session_id == session
@@ -66,19 +73,5 @@ defmodule IxMcp.DashboardTest do
 
   defp dashboard_row?(row, doc) do
     is_binary(row.job_id) and String.starts_with?(row.job_id, "dashboard-#{doc}-")
-  end
-
-  defp eventually(probe, tries \\ 100) do
-    case probe.() do
-      nil when tries > 0 ->
-        Process.sleep(20)
-        eventually(probe, tries - 1)
-
-      nil ->
-        flunk("condition never became true")
-
-      value ->
-        value
-    end
   end
 end

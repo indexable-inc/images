@@ -111,19 +111,13 @@ mod _dashboard_ex {
         },
     }
 
-    impl std::fmt::Display for DashboardError {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::Serve { message }
-                | Self::NotFound { message }
-                | Self::AlreadyOpen { message }
-                | Self::Crdt { message }
-                | Self::BadInput { message } => write!(formatter, "{message}"),
-            }
-        }
-    }
-
-    impl std::error::Error for DashboardError {}
+    unibind_ex_runtime::message_error!(DashboardError {
+        Serve,
+        NotFound,
+        AlreadyOpen,
+        Crdt,
+        BadInput,
+    });
 
     /// One container's worth of change in a document, as `watch` pushes it.
     ///

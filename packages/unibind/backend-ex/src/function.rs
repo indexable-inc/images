@@ -52,27 +52,35 @@ pub struct Params {
 /// Parameters spelled as the IR declares them; borrows decode zero-copy
 /// from the calling term.
 pub fn borrowed_params(function: &ir::Function, user: &Ident) -> Result<Params, RenderError> {
-    let mut params = Vec::new();
-    let mut forwarded = Vec::new();
-    for arg in &function.args {
-        let ident = name_ident(&names::ex_arg_name(arg))?;
-        let spelled = ty::rust_type(&arg.ty, user).map_err(|error| at_arg(arg, &error))?;
-        params.push(quote!(#ident: #spelled));
-        forwarded.push(ty::forward(&ident, &arg.ty, Ownership::Declared));
-    }
-    Ok(Params { params, forwarded })
+    params_for(function, user, Ownership::Declared)
 }
 
 /// Parameters owned outright, re-borrowed at the call site: async wrappers
 /// move their arguments into a `'static` future.
 fn owned_params(function: &ir::Function, user: &Ident) -> Result<Params, RenderError> {
+    params_for(function, user, Ownership::Owned)
+}
+
+/// Both parameter spellings walk the argument list identically; the ownership
+/// is the only thing that differs, and it picks both the Rust type the wrapper
+/// declares and how the call site forwards it. Keeping them one function is
+/// what stops those two choices from drifting apart.
+fn params_for(
+    function: &ir::Function,
+    user: &Ident,
+    ownership: Ownership,
+) -> Result<Params, RenderError> {
     let mut params = Vec::new();
     let mut forwarded = Vec::new();
     for arg in &function.args {
         let ident = name_ident(&names::ex_arg_name(arg))?;
-        let spelled = ty::owned_type(&arg.ty, user).map_err(|error| at_arg(arg, &error))?;
+        let spelled = match ownership {
+            Ownership::Declared => ty::rust_type(&arg.ty, user),
+            Ownership::Owned => ty::owned_type(&arg.ty, user),
+        }
+        .map_err(|error| at_arg(arg, &error))?;
         params.push(quote!(#ident: #spelled));
-        forwarded.push(ty::forward(&ident, &arg.ty, Ownership::Owned));
+        forwarded.push(ty::forward(&ident, &arg.ty, ownership));
     }
     Ok(Params { params, forwarded })
 }

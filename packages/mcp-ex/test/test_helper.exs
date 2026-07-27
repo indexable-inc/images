@@ -17,4 +17,8 @@ exclude =
 exclude =
   if System.get_env("IX_MCP_DASHBOARD_EX"), do: exclude, else: [:dashboard_ex | exclude]
 
+# Shared helpers the suites import; required before ExUnit.start/1 so every
+# test module can `import` them at compile time.
+Code.require_file("support/eventually.exs", __DIR__)
+
 ExUnit.start(exclude: exclude)

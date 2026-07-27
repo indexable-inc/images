@@ -45,17 +45,7 @@ mod _unibind_conformance {
         Gone { message: String },
     }
 
-    impl std::fmt::Display for ConformanceError {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::Deliberate { message } | Self::Gone { message } => {
-                    write!(formatter, "{message}")
-                }
-            }
-        }
-    }
-
-    impl std::error::Error for ConformanceError {}
+    unibind_ex_runtime::message_error!(ConformanceError { Deliberate, Gone });
 
     /// Round-trip a bool.
     pub fn echo_bool(value: bool) -> bool {

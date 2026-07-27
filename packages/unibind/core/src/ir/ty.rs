@@ -44,6 +44,30 @@ pub enum Type {
     Stream(Box<Self>),
 }
 
+impl Type {
+    /// Whether any leaf of the type tree satisfies `leaf`.
+    ///
+    /// The containers (`Option`/`Vec`/`Stream`/`Map`) are transparent, so a
+    /// backend asking "does this type mention bytes / a path anywhere" gets one
+    /// answer for the whole tree. Every such question walks the same shape, and
+    /// a walk that forgets a container silently answers `false`, so the walk
+    /// lives here once rather than per backend.
+    #[must_use]
+    pub fn any_leaf(&self, leaf: &impl Fn(&Self) -> bool) -> bool {
+        match self {
+            Self::Option(inner) | Self::Vec(inner) | Self::Stream(inner) => inner.any_leaf(leaf),
+            Self::Map { key, value } => key.any_leaf(leaf) || value.any_leaf(leaf),
+            Self::Bool
+            | Self::Int(_)
+            | Self::Float(_)
+            | Self::String { .. }
+            | Self::Path { .. }
+            | Self::Bytes { .. }
+            | Self::Named(_) => leaf(self),
+        }
+    }
+}
+
 /// Integer width and signedness.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum IntKind {

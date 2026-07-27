@@ -371,6 +371,33 @@ fn serves(crdt: CrdtType, room_id: &str) -> bool {
     matches!(crdt, CrdtType::Loro) && room_id == ROOM_ID
 }
 
+/// Refuse a batch-carrying frame that arrived before a successful join, or for
+/// a room this server does not serve.
+///
+/// Every such frame is refused identically, so the rule lives here once rather
+/// than at each handler's head. `Some` is the handler's return value (whether
+/// the Ack reached the socket); `None` admits the frame.
+async fn refuse_unjoined(
+    socket: &mut WebSocket,
+    session: &Session,
+    crdt: CrdtType,
+    room_id: &str,
+    batch_id: BatchId,
+) -> Option<bool> {
+    if session.joined.is_some() && serves(crdt, room_id) {
+        return None;
+    }
+    Some(
+        ack(
+            socket,
+            room_id,
+            batch_id,
+            UpdateStatusCode::PermissionDenied,
+        )
+        .await,
+    )
+}
+
 /// Admit a client to the room and seed it with the current document.
 async fn join(
     socket: &mut WebSocket,
@@ -449,14 +476,8 @@ async fn doc_update(
     batch_id: BatchId,
     frame_len: usize,
 ) -> bool {
-    if session.joined.is_none() || !serves(crdt, room_id) {
-        return ack(
-            socket,
-            room_id,
-            batch_id,
-            UpdateStatusCode::PermissionDenied,
-        )
-        .await;
+    if let Some(refused) = refuse_unjoined(socket, session, crdt, room_id, batch_id).await {
+        return refused;
     }
     // The limit binds the whole frame, and a client that overshoots it has a
     // fragmenting bug rather than a bad update, so it gets its own code.
@@ -481,14 +502,8 @@ async fn fragment_header(
     fragment_count: u64,
     total_size_bytes: u64,
 ) -> bool {
-    if session.joined.is_none() || !serves(crdt, room_id) {
-        return ack(
-            socket,
-            room_id,
-            batch_id,
-            UpdateStatusCode::PermissionDenied,
-        )
-        .await;
+    if let Some(refused) = refuse_unjoined(socket, session, crdt, room_id, batch_id).await {
+        return refused;
     }
     // Both numbers are the client's to claim and this process's to allocate
     // against, so they are bounded before either is believed.
@@ -531,14 +546,8 @@ async fn take_fragment(
     index: u64,
     fragment: Vec<u8>,
 ) -> bool {
-    if session.joined.is_none() || !serves(crdt, room_id) {
-        return ack(
-            socket,
-            room_id,
-            batch_id,
-            UpdateStatusCode::PermissionDenied,
-        )
-        .await;
+    if let Some(refused) = refuse_unjoined(socket, session, crdt, room_id, batch_id).await {
+        return refused;
     }
     let Some(batch) = session.batches.get_mut(&batch_id) else {
         // No header, or a batch this connection already expired. `invalid_update`

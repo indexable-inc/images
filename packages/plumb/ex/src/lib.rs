@@ -41,18 +41,12 @@ mod _plumb {
         },
     }
 
-    impl std::fmt::Display for PlumbError {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::Parse { message }
-                | Self::Strict { message }
-                | Self::Io { message }
-                | Self::Exit { message } => write!(formatter, "{message}"),
-            }
-        }
-    }
-
-    impl std::error::Error for PlumbError {}
+    unibind_ex_runtime::message_error!(PlumbError {
+        Parse,
+        Strict,
+        Io,
+        Exit,
+    });
 
     fn convert(error: plumb_core::Error) -> PlumbError {
         use plumb_core::Error;

@@ -189,6 +189,11 @@ fn ex_host_files_snapshot() {
                 "sample.wrapper.ex",
                 include_str!("snapshots/sample.wrapper.ex"),
             ),
+            (
+                "mix.exs",
+                "sample.mix.exs",
+                include_str!("snapshots/sample.mix.exs"),
+            ),
         ],
     );
 }

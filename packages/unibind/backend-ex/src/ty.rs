@@ -75,19 +75,7 @@ fn wire_type(ty: &ir::Type, user: &Ident, ownership: Ownership) -> TokenStream {
 /// because a record's Elixir codec is a `NifStruct` derive spliced onto
 /// the user's own struct and has no call site to convert at.
 pub fn contains_bytes(ty: &ir::Type) -> bool {
-    match ty {
-        ir::Type::Bytes { .. } => true,
-        ir::Type::Option(inner) | ir::Type::Vec(inner) | ir::Type::Stream(inner) => {
-            contains_bytes(inner)
-        }
-        ir::Type::Map { key, value } => contains_bytes(key) || contains_bytes(value),
-        ir::Type::Bool
-        | ir::Type::Int(_)
-        | ir::Type::Float(_)
-        | ir::Type::String { .. }
-        | ir::Type::Path { .. }
-        | ir::Type::Named(_) => false,
-    }
+    ty.any_leaf(&|leaf| matches!(leaf, ir::Type::Bytes { .. }))
 }
 
 /// The call-site expression forwarding a wrapper argument to the user's
