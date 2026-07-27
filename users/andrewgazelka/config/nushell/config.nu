@@ -69,7 +69,7 @@ def maybe-unix-time [field: string] {
         return $value
     }
 
-    let lower = ($field | str lowercase)
+    let lower = ($field | str downcase)
     let text = ($value | into string)
 
     if (not ($lower | str contains "time")) or (not ($text =~ '^-?\d+$')) {
@@ -1746,10 +1746,10 @@ def "nu-complete c" [context: string] {
     }
 
     # cwd's own dirs, substring-filtered by the token ourselves (filter is off).
-    let lc = ($token | str lowercase)
+    let lc = ($token | str downcase)
     let local = (
         ls --short-names | where type == dir
-        | where {|row| ($lc | is-empty) or ($row.name | str lowercase | str contains $lc) }
+        | where {|row| ($lc | is-empty) or ($row.name | str downcase | str contains $lc) }
         | each {|row| { value: ($row.name + '/'), description: dir } }
     )
     let local_names = ($local | get value)
