@@ -35,7 +35,16 @@ pub fn build_raw(message: &OutgoingMessage) -> Result<String> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn build_rfc5322(message: &OutgoingMessage) -> Result<Vec<u8>> {
+/// Build the RFC 5322 bytes for `message`.
+///
+/// The Gmail API wants these base64url-encoded ([`build_raw`]); an SMTP
+/// transport wants them verbatim. Both callers share one builder so a fix
+/// to the header handling cannot reach only one transport.
+///
+/// # Errors
+/// Returns [`Error::UnsafeHeader`] if any header value contains a bare
+/// newline or an ASCII control character.
+pub fn build_rfc5322(message: &OutgoingMessage) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(1024);
     write_address_list(&mut out, "To", &message.to)?;
     if !message.cc.is_empty() {

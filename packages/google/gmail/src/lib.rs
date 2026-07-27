@@ -31,6 +31,7 @@ pub use google_auth::scopes::{ALL_KNOWN as ALL_KNOWN_SCOPES, GMAIL_MODIFY, GMAIL
 pub use google_auth::{
     AuthCode, Authenticator, ClientSecrets, PendingConsent, StoredToken, TokenStore, begin_consent,
 };
+pub use mime::build_rfc5322;
 pub use messages::{InvalidMessageFormat, LABEL_INBOX, LABEL_UNREAD, MessageFormat, MessageStub};
 pub use model::{
     Attachment, Draft, Header, Label, Message, MessagePart, MessagePartBody, MessageQuery,
