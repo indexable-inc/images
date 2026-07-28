@@ -180,12 +180,15 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      # Megamerge 3e68babb (48 patches on 2c6d06e9387c): the 47-patch series
-      # plus the `queryMissing` thread-pool lifetime fix (ENG-9972). Before it,
-      # `Store::queryMissing` destroyed `state_` and its work-item lambdas
-      # while pool workers were still running them, which produced 123 nix core
-      # dumps across the five CI dispatchers in the retained window.
-      url = "github:indexable-inc/nix/3e68babbd84a3b98eb68e79ff4dcfb40441ff17d";
+      # Megamerge 6520ebcb (49 patches on 2c6d06e9387c): the 48-patch series
+      # plus the mid-build output-validity fix. Before it, `registerOutputs`
+      # asserted that only a content-addressed output can find its path
+      # already valid -- true only where a store's output locks cover every
+      # writer of its validity, which a local-overlay store's lower store
+      # breaks by design. The ephemeral-upper CI lane (ix#8445) publishes each
+      # job's closure into the shared durable lower store other jobs are
+      # building against, so a concurrent job's nix aborted outright.
+      url = "github:indexable-inc/nix/6520ebcbdd790ee2b20081c66f0630fc381aa268";
       flake = false;
     };
 

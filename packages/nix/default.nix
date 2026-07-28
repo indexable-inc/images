@@ -358,6 +358,14 @@ let
   # test now asserts sparse child-lock semantics (stale copied nodes refresh
   # from the child's own flake.lock; in-sync locks stay byte-identical).
   sparseLocks = focusedFunctionalTest {name = "relative-paths-lockfile";};
+  # `fix(libstore): don't abort when an output path becomes valid mid-build`
+  # regression coverage: a local-overlay store whose LOWER store gains an
+  # input-addressed output while the overlay is still building that very
+  # derivation must keep the registered path and carry on, not abort the
+  # process on `assert(newInfo.ca)`. That is the shape of the ephemeral-upper
+  # CI lane (ix#8445), where concurrent jobs publish into the shared durable
+  # store the others build against.
+  overlayLowerGainsOutput = focusedFunctionalTest {name = "lower-gains-output";};
 in
   package.overrideAttrs (old: {
     passthru =
@@ -371,7 +379,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // lib.optionalAttrs (!isCross) {
-            inherit autoGcInterrupt buildStatus daemonSignal fetchGitHeadCache smoke sparseLocks;
+            inherit autoGcInterrupt buildStatus daemonSignal fetchGitHeadCache overlayLowerGainsOutput smoke sparseLocks;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {
