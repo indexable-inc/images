@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -45,9 +45,20 @@ struct Spec {
     /// Directories prepended to `PATH` (ahead of the caller's PATH).
     #[serde(default)]
     path_prepend: Vec<String>,
-    /// Flags prepended before the user argv, unconditionally.
+    /// Flags prepended before the user argv.
     #[serde(default)]
     flags: Vec<String>,
+    /// First-argv tokens that select a subcommand rather than a session, so
+    /// `flags` are withheld for them. Claude Code dispatches subcommands
+    /// positionally and then re-reads the raw argv by fixed index
+    /// (`remote-control` hands `process.argv.slice(3)` to its own parser, which
+    /// rejects anything it does not own; the entry fast paths compare
+    /// `process.argv[2]`), so a prepended root flag lands inside the
+    /// subcommand's argv and it exits with `Unknown argument`
+    /// (index#4269). Withholding is safe in the other
+    /// direction too: a root flag means nothing to a subcommand.
+    #[serde(default)]
+    subcommands: Vec<String>,
 }
 
 fn expand_tilde(path: &str) -> String {
@@ -102,6 +113,13 @@ fn build_path(prepend: &[String], current: Option<&str>) -> String {
     p
 }
 
+/// True when the user's first argument selects a subcommand, so nothing may be
+/// prepended ahead of it. Exact match only: subcommand tokens are literals the
+/// target compares with `===`.
+fn selects_subcommand(subcommands: &[String], first: Option<&OsString>) -> bool {
+    first.is_some_and(|arg| subcommands.iter().any(|name| OsStr::new(name) == arg))
+}
+
 fn load_spec() -> Result<Spec, String> {
     let path = std::env::var("IX_LAUNCH_SPEC").map_err(|_| "IX_LAUNCH_SPEC not set".to_owned())?;
     let text = std::fs::read_to_string(&path).map_err(|e| format!("read spec {path}: {e}"))?;
@@ -131,8 +149,11 @@ fn main() -> ExitCode {
             .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
     };
 
-    let mut prepended = spec.flags.clone();
-    prepended.extend(build_config_flags(&spec, cfg.as_ref()));
+    let mut prepended = Vec::new();
+    if !selects_subcommand(&spec.subcommands, user_args.first()) {
+        prepended.extend(spec.flags.clone());
+        prepended.extend(build_config_flags(&spec, cfg.as_ref()));
+    }
 
     let mut cmd = Command::new(&spec.target);
     cmd.arg0(&argv0);
@@ -190,6 +211,7 @@ mod tests {
             env_defaults: BTreeMap::new(),
             path_prepend: Vec::new(),
             flags: Vec::new(),
+            subcommands: Vec::new(),
         }
     }
 

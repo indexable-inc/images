@@ -523,6 +523,23 @@
     ]
   );
 
+  # Argv tokens Claude Code dispatches positionally: the launcher withholds
+  # every prepended flag when the user's first argument is one of these.
+  # Prepending ahead of a subcommand token does not just fail to help, it
+  # breaks the subcommand: the CLI selects the command from the first token and
+  # then re-reads the raw `process.argv` by fixed index, so `claude
+  # remote-control` handed its parser our `--dangerously-load-development-channels`
+  # and died with `Unknown argument` (index#4269). Generated from the pinned
+  # CLI (`--help` for the registered commands, a curated list with byte proofs
+  # for the hidden ones); see ./extract-subcommands.py for what each source
+  # covers and why a feature-gated name is deliberately absent.
+  subcommands = let
+    rows = lib.filter (
+      line: line != "" && !lib.hasPrefix "#" line
+    ) (lib.splitString "\n" (builtins.readFile ./subcommands.tsv));
+  in
+    map (row: builtins.head (lib.splitString "\t" row)) rows;
+
   # Prepend root flags. Use `--opt=value` for every option that takes a value:
   # space-form options can be swallowed by subcommands or variadic flags.
   wrapperFlags =
@@ -583,6 +600,7 @@
     env_defaults = lib.mapAttrs (_: toString) wrapperEnvDefaults;
     path_prepend = pathPrepend;
     flags = wrapperFlags;
+    inherit subcommands;
   };
 
   inherit (stdenv.hostPlatform) system;
@@ -696,7 +714,7 @@
     else
       import ./update.nix {
         writeNushellApplication = updateScriptWriter;
-        inherit gnupg;
+        inherit gnupg python3;
         nix = repoPackages.nix-ix;
       };
 in
@@ -773,6 +791,7 @@ in
         launchSpec
         settingsDefaultsFile
         wrapperFlags
+        subcommands
         wrapperEnvDefaults
         featureSettingsEnv
         houseSettingsRender
@@ -842,6 +861,18 @@ in
         envRegistry = pkgs.runCommand "claude-code-env-registry.tsv" {
           nativeBuildInputs = [python3];
         } "python3 ${./extract-env-registry.py} ${stockCli}/bin/claude ${version} > $out";
+
+        # The extractor behind subcommands.tsv, the argv tokens the CLI
+        # dispatches positionally (index#4269). Not a derivation, unlike
+        # `envRegistry`: it asks the stock CLI for its own command list, and
+        # `claude --help` never returns inside the build sandbox (it hung past
+        # 6 minutes and swallowed the extractor's own 120s timeout, because a
+        # spawned helper keeps the captured stdout pipe open). The updater runs
+        # it impurely instead, where the CLI behaves; the committed TSV is
+        # pinned to manifest.json's version by
+        # checks.claude-code-knob-reference, so a bump that skips the
+        # regeneration goes red.
+        subcommandExtractor = "${./extract-subcommands.py}";
 
         # The exact string baked into the `--system-prompt-file` flag in
         # `wrapperFlags` -- same binding as the flag, so passthru and argv

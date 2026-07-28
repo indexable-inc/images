@@ -1,0 +1,32 @@
+# claude-code positional argv tokens, extracted from Claude Code cli.js 2.1.220
+# by packages/claude-code/extract-subcommands.py. Regenerate with
+#   nix run .#claude-code.updateScript -- <version>
+# token	source
+--bg-pty-host	hidden
+--bg-spare	hidden
+--chrome-native-host	hidden
+--claude-in-chrome-mcp	hidden
+--computer-use-mcp	hidden
+--daemon-worker	hidden
+--preload	hidden
+agents	help
+auth	help
+auto-mode	help
+bridge	hidden
+daemon	hidden
+doctor	help
+gateway	help
+import-conversations	hidden
+install	help
+mcp	help
+plugin	help
+plugins	help
+project	help
+rc	hidden
+remote	hidden
+remote-control	hidden
+setup-token	help
+sync	hidden
+ultrareview	help
+update	help
+upgrade	help
