@@ -18,7 +18,10 @@ export default ({ index, hyperion }) => {
     _module: {
       args: {
         // Guests are Linux whatever the machine running `ix apply` is.
-        hyperionGameServer: hyperion.packages["x86_64-linux"].bedwars,
+        //
+        // An event is compiled in rather than chosen by a runtime flag, so
+        // which game this fleet serves is exactly this one attribute.
+        hyperionGameServer: hyperion.packages["x86_64-linux"].smash,
         hyperionProxy: hyperion.packages["x86_64-linux"]["hyperion-proxy"],
       },
     },
