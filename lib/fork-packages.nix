@@ -954,6 +954,23 @@
           upstream = "hold";
           reason = "Fixes the lazy-trees mid-eval mutation race for mutable local trees (indexable-inc/index#3749). Carries an unfixed cost on large trees: the snapshot is unfiltered, so its teardown dominated eval on hydra and the setting was turned back off (indexable-inc/index#4297). Upstream-nix candidate once lazy trees settle there and the snapshot filters by the git file set, held: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # getFingerprint bailed to std::nullopt the moment a dirty repo had
+        # any submodule, so every flake with `submodules = true` on a dirty
+        # checkout was permanently uncacheable: fetchToStore skips its cache
+        # without a fingerprint, so the whole source tree was re-hashed and
+        # re-copied into the store on every eval, forever. Nix says so on such
+        # a tree: `_NIX_TEST_BARF_ON_UNCACHEABLE=1` reports "source path
+        # '/Users/andrewgazelka/.config/nix/' is uncacheable". Folds each
+        # submodule workdir's HEAD rev and dirty state into the digest the
+        # parent already builds, recursively; only when the input mounts them
+        # (without submodules = true the accessor renders each as an empty
+        # directory, so their content cannot reach the result and must not
+        # reach the fingerprint), and an unopenable submodule declines to
+        # cache rather than throwing.
+        "libfetchers: fingerprint dirty git workdirs that have submodules" = {
+          upstream = "hold";
+          reason = "Dirty workdirs with submodules were permanently uncacheable, so the source tree was re-hashed and re-copied to the store on every eval (indexable-inc/index#4301). Verified on aarch64-darwin: stock nix reports a minimal dirty-parent-with-submodule fixture uncacheable and patched nix does not; an unchanged tree logs `cache hit in /nix/store/...-source`, so the copy is skipped rather than merely permitted; editing a file inside the submodule changes the evaluated result, so no stale store path is served; and a 698k-file real flake's activation-package derivation is byte-identical to stock. Stock-nix behavior rather than a fork regression, so genuinely upstream, held: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
         # 0033: a daemon worker whose client dies can sleep forever in
         # waitForInput's poll (interrupt delivery is edge-triggered; a
         # trigger landing between the last checkInterrupt and the poll
