@@ -339,6 +339,17 @@
           # repos and run `git status` against them. The test sandbox has no
           # git otherwise, so the tests panic spawning it.
           nix-web-monitor = [workspacePkgs.git];
+          # tree-sync's file set comes from `git ls-files`, and its tests build
+          # real repositories, worktrees and submodules to prove the .git-is-a-
+          # file cases work. The remote tests run the generated far-end commands
+          # (`mkdir -p`, `tar -x`, `find -printf`, `xargs rm`) through a stand-in
+          # for ssh, so the sandbox needs those too.
+          tree-sync = [
+            workspacePkgs.git
+            workspacePkgs.gnutar
+            workspacePkgs.findutils
+            workspacePkgs.coreutils
+          ];
           # upstream-sync's upstream-pr integration test builds a local git
           # upstream and runs the real fetch/am/branch mechanism against it.
           upstream-sync = [workspacePkgs.git];
