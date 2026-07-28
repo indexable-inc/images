@@ -1,0 +1,41 @@
+---
+id: claude-subcommand-argv
+postedAt: 2026-07-27T19:00:00-07:00
+title: "claude subcommands work again: the wrapper stops prepending flags ahead of them"
+tags: [claude-code, nix, tooling]
+links:
+  - label: issue #4269
+    href: https://github.com/indexable-inc/index/issues/4269
+---
+
+`claude remote-control` answered with `Error: Unknown argument:
+--dangerously-load-development-channels`, and so did every other subcommand.
+The flag was ours. Our wrapper prepends six root flags (`--debug`, the
+development-channels pair, `--thinking-display=`, `--system-prompt-file=`,
+`--mcp-config=`) before whatever you typed.
+
+Claude Code picks a subcommand from the first argv token and then reads the raw
+`process.argv` again by fixed index: `remote-control` hands
+`process.argv.slice(3)` to its own parser, and the entry fast paths compare
+`process.argv[2]` against `remote-control`, `rc`, `daemon`, `--bg-spare` and
+friends. Six tokens in front shift every one of those indices, so the
+subcommand's parser gets handed the wrapper's flags and rejects them.
+
+The launch spec now carries the tokens the CLI dispatches positionally, and
+`config-launch` prepends nothing when the first user argument is one of them. A
+root flag means nothing to a subcommand, so nothing is lost; env, PATH and the
+settings layer still apply to every invocation. A prompt is matched whole, so
+`claude "mcp is broken, fix it"` is still a session with the house prompt.
+
+Three things keep it fixed. `packages/claude-code/subcommands.tsv` is generated:
+the registered commands come from `claude --help`, so one Anthropic adds appears
+at the next version bump, and the hidden ones are curated with the byte pattern
+in the bundle that proves each is still dispatched. The knob-reference check pins
+that file to the pinned CLI version, so a bump that skips regeneration turns main
+red. And the install check drives every token through the real launcher and
+asserts the target sees it as `argv[2]` with nothing ahead of it. That check
+previously used `claude mcp list` as its example and asserted the flags rode in
+front, which is the broken behavior written down as a guarantee.
+
+A new hidden subcommand is still undetectable from outside, so it would break the
+same way. The failure is loud, not silent.

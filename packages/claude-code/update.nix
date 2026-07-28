@@ -2,8 +2,9 @@
 # version, so a bump cannot land half-applied: manifest.json (from Anthropic's
 # published per-version manifest, converting its hex checksums to the SRI hashes
 # the fetcher pins), env-registry.tsv (from the `envRegistry` derivation), the
-# version marker and name count in the Home Manager env reference block, and the
-# stock system-prompt snapshots. The slug map lives here as the single owner;
+# version marker and name count in the Home Manager env reference block,
+# subcommands.tsv (the argv tokens the launcher must not prepend ahead of), and
+# the stock system-prompt snapshots. The slug map lives here as the single owner;
 # default.nix only reads it back. The updater fails closed unless the manifest's
 # detached GPG signature verifies against the pinned release signing key
 # (release-signing-key.asc, fingerprint 31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF
@@ -13,11 +14,13 @@
   writeNushellApplication,
   nix,
   gnupg,
+  python3,
 }:
 writeNushellApplication {
   name = "claude-code-update";
   runtimeInputs = [
     nix
+    python3
     gnupg
   ];
   meta.description = "Refresh the signed Claude Code manifest and every artifact that carries its version";
@@ -33,6 +36,7 @@ writeNushellApplication {
     }
 
     const registry_tsv = "packages/claude-code/env-registry.tsv"
+    const subcommands_tsv = "packages/claude-code/subcommands.tsv"
     const hm_module = "packages/agent/home-manager/claude-code.nix"
 
     # The two lines in the Home Manager env reference block that carry a value
@@ -113,6 +117,29 @@ writeNushellApplication {
       print $"updated ($hm_module) env reference: cli.js ($version), ($count) names"
     }
 
+    # Regenerates subcommands.tsv, the tokens packages/config-launch refuses to
+    # prepend flags ahead of (index#4269). The extractor asks the stock CLI for
+    # its own command list, so it runs the binary; that is why this is a step
+    # here and not a derivation like envRegistry, since `claude --help` never
+    # returns inside the build sandbox.
+    def refresh_subcommands [] {
+      # Read back from the working tree, so the version is substituted from the
+      # one place main wrote it.
+      let version = (open packages/claude-code/manifest.json | get version)
+      let build = (^nix build --no-link --print-out-paths .#claude-code.stockCli | complete)
+      if $build.exit_code != 0 {
+        error make { msg: $"claude-code: failed to build .#claude-code.stockCli\n($build.stderr)" }
+      }
+      let cli = $"($build.stdout | lines | last)/bin/claude"
+      let extracted = (^python3 ${./extract-subcommands.py} $cli $version | complete)
+      if $extracted.exit_code != 0 {
+        error make { msg: $"claude-code: failed to extract subcommands\n($extracted.stderr)" }
+      }
+      $extracted.stdout | save --force $subcommands_tsv
+      let tokens = (open --raw $subcommands_tsv | lines | where {|row| not ($row | str starts-with "#") } | length)
+      print $"updated ($subcommands_tsv): ($tokens) tokens"
+    }
+
     def refresh_prompts [] {
       let prompts_dir = "packages/claude-code/system-prompts"
       let models = (open $"($prompts_dir)/models.json")
@@ -162,7 +189,7 @@ writeNushellApplication {
     # Run from the repo root: `nix run .#claude-code.updateScript -- [version]`.
     # Without a version argument it tracks Anthropic's `latest` pointer.
     # Use --prompts-only to recapture snapshots for the already-pinned package,
-    # --registry-only to re-extract the env registry for it, or --skip-prompts
+    # --registry-only to re-extract the env and subcommand registries for it, or --skip-prompts
     # when only the signed binary manifest and the env registry should move.
     def main [
       version?: string
@@ -176,6 +203,7 @@ writeNushellApplication {
       }
       if $registry_only {
         refresh_env_registry
+        refresh_subcommands
         return
       }
 
@@ -216,6 +244,7 @@ writeNushellApplication {
       # Everything downstream of manifest.json reads it back out of the working
       # tree, so the version is substituted from exactly one place.
       refresh_env_registry
+      refresh_subcommands
 
       if not $skip_prompts {
         refresh_prompts

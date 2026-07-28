@@ -356,6 +356,61 @@ fn static_flags_prepend_before_argv() {
     );
 }
 
+/// Claude Code reads the raw argv by fixed index once a subcommand is
+/// selected (index#4269), so anything prepended ahead of the subcommand token
+/// reaches the subcommand's own parser and it exits with `Unknown argument`.
+#[test]
+fn flags_withheld_when_first_arg_selects_a_subcommand() {
+    let tmp = TempDir::new().unwrap();
+    let stub = write_stub(&tmp);
+    let spec = write_json_spec(
+        &tmp,
+        &serde_json::json!({
+            "target": stub.to_str().unwrap(),
+            "flags": ["--debug", "--thinking-display=summarized"],
+            "subcommands": ["remote-control", "mcp", "--bg-spare"],
+        }),
+    );
+    let run = |args: &[&str]| -> Vec<String> {
+        let out = Command::new(BIN)
+            .env("IX_LAUNCH_SPEC", &spec)
+            .args(args)
+            .output()
+            .expect("run");
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    };
+
+    assert_eq!(run(&["remote-control"]), vec!["remote-control"]);
+    assert_eq!(run(&["mcp", "serve"]), vec!["mcp", "serve"]);
+    // Flag-shaped tokens the target matches positionally are withheld the same way.
+    assert_eq!(run(&["--bg-spare", "3"]), vec!["--bg-spare", "3"]);
+
+    // A session invocation still gets every flag: a prompt whose first word
+    // merely looks like a subcommand does not match, because the target
+    // compares the whole token.
+    assert_eq!(
+        run(&["remote-controlled devices"]),
+        vec![
+            "--debug",
+            "--thinking-display=summarized",
+            "remote-controlled devices"
+        ]
+    );
+    assert_eq!(
+        run(&["-p", "hi"]),
+        vec!["--debug", "--thinking-display=summarized", "-p", "hi"]
+    );
+    assert_eq!(
+        run(&[]),
+        vec!["--debug", "--thinking-display=summarized"],
+        "an empty argv is an interactive session, which takes the flags"
+    );
+}
+
 #[test]
 fn missing_spec_env_exits_78() {
     let output = Command::new(BIN)

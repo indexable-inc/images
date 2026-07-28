@@ -1,9 +1,12 @@
 # Argv regression net for the launcher spec, run against a stub target so it is
 # offline and instant. Guards the properties the wrapper exists for: injected
-# flags ride BEFORE the user argv (subcommands keep parsing), every injected
-# option-argument is one `=` token (nothing can swallow a positional), and no
-# settings ride argv (#3180: the render materializes into the writable user
-# settings layer). Drives the real generated spec with its `@helper@`
+# flags ride BEFORE the user argv of a session, they are WITHHELD entirely when
+# the first argument selects a subcommand (index#4269: the CLI re-reads the raw
+# argv by fixed index once a subcommand is chosen, so a prepended flag reaches
+# its parser and it exits `Unknown argument`), every injected option-argument is
+# one `=` token (nothing can swallow a positional), and no settings ride argv
+# (#3180: the render materializes into the writable user settings layer).
+# Drives the real generated spec with its `@helper@`
 # target swapped for the stub, through the actual launcher binary (the built
 # `$out/bin/${binName}` forces IX_LAUNCH_SPEC via makeBinaryWrapper `--set`, so
 # the launcher is exercised directly here).
@@ -19,6 +22,7 @@
   launchSpec,
   settingsDefaultsFile,
   wrapperFlags,
+  subcommands,
   wrapperEnvDefaults,
   featureSettingsEnv,
   houseSettingsRender,
@@ -196,13 +200,36 @@
       lib.concatStringsSep "\n" (
         wrapperFlags
         ++ [
-          "mcp"
-          "list"
+          "explain this repo"
         ]
       )
     )
   } \
-      mcp list
+      'explain this repo'
+
+    # Every token the CLI dispatches positionally must reach it as argv[2],
+    # with nothing of ours ahead of it.
+    subcommand_tokens=(${lib.escapeShellArgs subcommands})
+    for token in "''${subcommand_tokens[@]}"
+    do
+      check "no flags ahead of the $token subcommand" "$token" "$token"
+    done
+    check "no flags ahead of mcp serve" "$(printf 'mcp\nserve')" mcp serve
+
+    # A prompt is not a subcommand, even when it starts with one's name: the
+    # match is on the whole token, so the session keeps every flag.
+    check "a prompt that starts with a subcommand name keeps the flags" \
+      ${
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "mcp is broken, fix it"
+        ]
+      )
+    )
+  } \
+      'mcp is broken, fix it'
 
     check "caller --settings passes through untouched" \
       ${
@@ -222,13 +249,13 @@
     # addDirs/pluginDirs render as single, prepended `=` tokens. `--add-dir` is
     # variadic in the CLI, so a space-form token would swallow the next positional
     # (proven against the real binary); this guards that the launcher keeps each as
-    # one argv entry, ahead of the subcommand. Synthesize a spec with the two flags
+    # one argv entry, ahead of the caller argv. Synthesize a spec with the two flags
     # appended to `flags` (mirrors what `map (d: "--add-dir=${"\${d}"}") addDirs`
     # produces in the wrapper) and assert they land between the baked flags and the
     # caller argv.
     ${lib.getExe jq} '.flags += ["--add-dir=/nix/store/sample-skills", "--plugin-dir=/nix/store/sample-plugin"]' \
       "$PWD/test-spec.json" > "$PWD/dirs-spec.json"
-    dirs_got="$(IX_LAUNCH_SPEC="$PWD/dirs-spec.json" "$launcher" mcp list)"
+    dirs_got="$(IX_LAUNCH_SPEC="$PWD/dirs-spec.json" "$launcher" 'explain this repo')"
     dirs_want=${
     lib.escapeShellArg (
       lib.concatStringsSep "\n" (
@@ -236,8 +263,7 @@
         ++ [
           "--add-dir=/nix/store/sample-skills"
           "--plugin-dir=/nix/store/sample-plugin"
-          "mcp"
-          "list"
+          "explain this repo"
         ]
       )
     )
