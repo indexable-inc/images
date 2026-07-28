@@ -38,7 +38,9 @@
   # `dashboard-core`'s build script embeds it at compile time via
   # `IX_DASHBOARD_SITE_HTML` below, so the generated bundle is built by nix
   # rather than committed to the repo. Only `dashboard-core` reads the env var,
-  # the same shape as `IX_VT_GHOSTTY_LIB_DIR`.
+  # and it is handed over through `packageBuildEnv` rather than the
+  # workspace-wide `env` so the site stays out of every other unit's build
+  # closure.
   dashboardSiteRoot = root + "/packages/dashboard/dashboard-core/site";
   dashboardSite = buildSvelteSite workspacePkgs {
     sourceRoot = dashboardSiteRoot;
@@ -376,19 +378,32 @@
         # nixpkgs' libclang plus clang's builtin and libc include dirs.
         # Scoped per-package so the env does not invalidate every other unit
         # in the dependency closure (see cargo-unit's buildWorkspace docs).
-        packageBuildEnv = lib.optionalAttrs targetIsLinux {
-          libsqlite3-sys = {
-            LIBCLANG_PATH = "${workspacePkgs.llvmPackages.libclang.lib}/lib";
-            BINDGEN_EXTRA_CLANG_ARGS = lib.concatStringsSep " " [
-              "-isystem"
-              "${workspacePkgs.llvmPackages.libclang.lib}/lib/clang/${
-                lib.versions.major workspacePkgs.llvmPackages.libclang.version
-              }/include"
-              "-isystem"
-              "${workspacePkgs.stdenv.cc.libc.dev}/include"
-            ];
+        packageBuildEnv =
+          {
+            # dashboard-core's build script reads this to embed the dashboard
+            # page. Scoped per-package: workspace-wide it made the Svelte/Vite
+            # site (and its npm install) a build input of EVERY unit in the
+            # graph, so anything that had to build an ix binary from source --
+            # an `ix apply` guest, most of all -- ran `npm install` for a
+            # SvelteKit app first. That is what ran a 14 GB guest root out of
+            # space on `dashboard-site-node-modules` (ENG-10488).
+            dashboard-core = {
+              IX_DASHBOARD_SITE_HTML = dashboardSiteHtml;
+            };
+          }
+          // lib.optionalAttrs targetIsLinux {
+            libsqlite3-sys = {
+              LIBCLANG_PATH = "${workspacePkgs.llvmPackages.libclang.lib}/lib";
+              BINDGEN_EXTRA_CLANG_ARGS = lib.concatStringsSep " " [
+                "-isystem"
+                "${workspacePkgs.llvmPackages.libclang.lib}/lib/clang/${
+                  lib.versions.major workspacePkgs.llvmPackages.libclang.version
+                }/include"
+                "-isystem"
+                "${workspacePkgs.stdenv.cc.libc.dev}/include"
+              ];
+            };
           };
-        };
         # Per-package rustc args for pyo3 extension-module cdylibs (registry
         # `pyExtension`). Scoped per package so the relaxed link cannot mask
         # genuine undefined-symbol errors elsewhere in the workspace. rustc
@@ -404,9 +419,6 @@
             # ix-vt-sys's build script reads this to emit the libghostty-vt link
             # search path. Set workspace-wide; only ix-vt-sys reads it.
             IX_VT_GHOSTTY_LIB_DIR = ghosttyLibDir;
-            # dashboard-core's build script reads this to embed the dashboard page.
-            # Set workspace-wide; only dashboard-core reads it.
-            IX_DASHBOARD_SITE_HTML = dashboardSiteHtml;
           }
           // lib.optionalAttrs targetIsLinux {
             PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
