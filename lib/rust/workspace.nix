@@ -373,11 +373,17 @@
         # libsqlite3-sys to `buildtime_bindgen`: the pregenerated bundled
         # bindings do not cover the sqlite3session_* API, so its build script
         # runs bindgen, which dlopens libclang at runtime and parses the
-        # bundled sqlite3 headers. macOS's relaxed sandbox lets clang-sys find
-        # a system libclang, but the Linux sandbox has none, so hand it
-        # nixpkgs' libclang plus clang's builtin and libc include dirs.
-        # Scoped per-package so the env does not invalidate every other unit
-        # in the dependency closure (see cargo-unit's buildWorkspace docs).
+        # bundled sqlite3 headers. No sandbox has a libclang on the default
+        # dlopen search path -- macOS was assumed to leak one in from the
+        # system, but it does not, and the build script panicked with `Unable
+        # to find libclang` on aarch64-darwin (#4272) -- so hand it nixpkgs'
+        # libclang plus the include dirs clang would otherwise get from its
+        # driver, which bindgen (a bare libclang caller, not a driver) never
+        # sees. Gated on the *build host*, not the target: build scripts are
+        # compiled and executed for the machine doing the building, so it is
+        # that machine's libclang and header layout that a cross graph needs
+        # too. Scoped per-package so the env does not invalidate every other
+        # unit in the dependency closure (see cargo-unit's buildWorkspace docs).
         packageBuildEnv =
           {
             # dashboard-core's build script reads this to embed the dashboard
@@ -391,17 +397,24 @@
               IX_DASHBOARD_SITE_HTML = dashboardSiteHtml;
             };
           }
-          // lib.optionalAttrs targetIsLinux {
+          // {
             libsqlite3-sys = {
               LIBCLANG_PATH = "${workspacePkgs.llvmPackages.libclang.lib}/lib";
-              BINDGEN_EXTRA_CLANG_ARGS = lib.concatStringsSep " " [
-                "-isystem"
-                "${workspacePkgs.llvmPackages.libclang.lib}/lib/clang/${
-                  lib.versions.major workspacePkgs.llvmPackages.libclang.version
-                }/include"
-                "-isystem"
-                "${workspacePkgs.stdenv.cc.libc.dev}/include"
-              ];
+              BINDGEN_EXTRA_CLANG_ARGS = lib.concatStringsSep " " (
+                [
+                  "-isystem"
+                  "${workspacePkgs.llvmPackages.libclang.lib}/lib/clang/${
+                    lib.versions.major workspacePkgs.llvmPackages.libclang.version
+                  }/include"
+                ]
+                # glibc's headers live in a separate `dev` output that only the
+                # cc wrapper knows about. Darwin's come from the SDK sysroot
+                # libclang is already configured with, so it needs no equivalent.
+                ++ lib.optionals buildHostIsLinux [
+                  "-isystem"
+                  "${workspacePkgs.stdenv.cc.libc.dev}/include"
+                ]
+              );
             };
           };
         # Per-package rustc args for pyo3 extension-module cdylibs (registry
