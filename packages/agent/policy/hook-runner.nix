@@ -10,6 +10,11 @@
 #  - worktree-guard (PreToolUse): deny edits whose TARGET path resolves into a
 #    protected primary checkout, judging the target not the session (ENG-2692).
 #    Kill switch: CLAUDE_CODE_DISABLE_WORKTREE_GUARD=1.
+#  - write-guard (PreToolUse on Bash): deny a shell command whose write targets
+#    resolve into a protected primary checkout -- redirections and heredocs plus
+#    a closed table of writing commands -- because the edit-guard above judges
+#    `file_path` and never sees Bash (index#4310). Shares that guard's protected
+#    list, refusal prescription and kill switch: one policy, one switch.
 #  - prompt-priors (UserPromptSubmit): triple-gated, score-gated ambient priors
 #    from the corpus store (ENG-2707), capped ~1200 tokens. Kill switch:
 #    CLAUDE_CODE_DISABLE_PROMPT_PRIORS=1.

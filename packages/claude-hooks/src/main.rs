@@ -88,6 +88,7 @@ fn main() -> ExitCode {
         Some("cargo-guard") => guards::cargo_guard(),
         Some("bash-habits-guard") => guards::bash_habits_guard(),
         Some("git-guard") => guards::git_guard(),
+        Some("write-guard") => guards::write_guard(),
         Some("search-guard") => guards::search_guard(),
         Some("friction-report") => friction::friction_report(),
         Some("subagent-cache-lookup") => subagent_cache::lookup(),
@@ -235,8 +236,13 @@ fn session_id_context(payload: &Value) -> Option<String> {
 
 // --- worktree-guard ---
 
+/// One switch for one policy. "Never write in a primary checkout" is enforced
+/// at two seams -- the typed edit tools here and Bash in `guards::write_guard`
+/// -- and an operator turning it off means it for both, so both read this name.
+pub(crate) const WORKTREE_GUARD_KILL_SWITCH: &str = "CLAUDE_CODE_DISABLE_WORKTREE_GUARD";
+
 fn worktree_guard() {
-    if flag_set("CLAUDE_CODE_DISABLE_WORKTREE_GUARD") {
+    if flag_set(WORKTREE_GUARD_KILL_SWITCH) {
         return;
     }
     let Some(input) = read_stdin() else { return };
@@ -254,56 +260,82 @@ fn worktree_guard() {
 
     // Judge the target, never the session: a relative path resolves against the
     // payload cwd, an absolute one stands alone.
-    let target = if file.starts_with('/') {
-        PathBuf::from(file)
-    } else {
-        let cwd = payload
-            .get("cwd")
-            .and_then(Value::as_str)
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("PWD").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("."));
-        cwd.join(file)
-    };
+    let target = payload_cwd(&payload).join(file);
 
-    // A new file's parent may not exist yet; the nearest existing ancestor's
-    // repo decides.
-    let mut dir = target
-        .parent()
-        .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
+    let git = std::env::var("IX_GIT").unwrap_or_else(|_| "git".to_owned());
+    if let Some(toplevel) = protected_toplevel(&git, &target, &primary_checkouts()) {
+        emit(DenyOutput {
+            hook_event_name: "PreToolUse",
+            permission_decision: "deny",
+            permission_decision_reason: primary_checkout_refusal(
+                &format!("Refusing to edit {toplevel}: it"),
+                &toplevel,
+            ),
+        });
+    }
+}
+
+/// Where a tool call's relative paths resolve: the payload's `cwd`, else the
+/// hook process's own `PWD`. `Path::join` discards this for an absolute
+/// argument, so callers can join unconditionally.
+pub(crate) fn payload_cwd(payload: &Value) -> PathBuf {
+    payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("PWD").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// `path`'s repo toplevel when that toplevel is a protected primary checkout;
+/// `None` when the path is fine: outside any git repo, inside a linked
+/// worktree, or in a toplevel no glob matches.
+///
+/// Mirrored by `IxMcp.PrimaryCheckouts.protected_toplevel/2`, which answers the
+/// same question for kernel calls because hooks never see those.
+pub(crate) fn protected_toplevel(git: &str, path: &Path, protected: &[String]) -> Option<String> {
+    if protected.is_empty() {
+        return None;
+    }
+    // A directory target is judged from inside itself, so `rm -rf <primary>` is
+    // refused rather than measured against whatever repo the parent happens to
+    // sit in. For a file it is the parent that decides, and since a new file's
+    // parent may not exist yet, the nearest existing ancestor stands in.
+    let mut dir = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map_or_else(|| PathBuf::from("/"), Path::to_path_buf)
+    };
     while dir.as_path() != Path::new("/") && !dir.is_dir() {
         dir = dir
             .parent()
             .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
     }
 
-    let git = std::env::var("IX_GIT").unwrap_or_else(|_| "git".to_owned());
-    let Some(gitdir) = git_rev_parse(&git, &dir, "--git-dir") else {
-        return;
-    };
-    let Some(common) = git_rev_parse(&git, &dir, "--git-common-dir") else {
-        return;
-    };
+    let gitdir = git_rev_parse(git, &dir, "--git-dir")?;
+    let common = git_rev_parse(git, &dir, "--git-common-dir")?;
     // Linked worktree: private git-dir differs from the shared common dir.
     if gitdir != common {
-        return;
+        return None;
     }
-    let Some(toplevel) = git_rev_parse(&git, &dir, "--show-toplevel") else {
-        return;
-    };
+    let toplevel = git_rev_parse(git, &dir, "--show-toplevel")?;
+    matches_protected(&toplevel, protected).then_some(toplevel)
+}
 
-    if matches_protected(&toplevel, &primary_checkouts()) {
-        emit(DenyOutput {
-            hook_event_name: "PreToolUse",
-            permission_decision: "deny",
-            permission_decision_reason: format!(
-                "Refusing to edit {toplevel}: it is a primary checkout, not a worktree, \
-                 and other work may be in flight there. Create a dedicated worktree \
-                 (`git -C {toplevel} worktree add <dir> -b <branch> origin/main`) and edit \
-                 the file there instead. Reads are always fine."
-            ),
-        });
-    }
+/// The refusal every primary-checkout write guard emits. `opening` is the
+/// caller's first clause, ending with the noun this function's `is` attaches to,
+/// so a shell redirect and the typed edit tools hand the agent one prescription
+/// rather than two subtly different ones. `IxMcp.Edit` carries the same text for
+/// the kernel's write seam.
+pub(crate) fn primary_checkout_refusal(opening: &str, toplevel: &str) -> String {
+    format!(
+        "{opening} is a primary checkout, not a worktree, \
+         and other work may be in flight there. Create a dedicated worktree \
+         (`git -C {toplevel} worktree add <dir> -b <branch> origin/main`) and edit \
+         the file there instead. Reads are always fine."
+    )
 }
 
 pub(crate) fn git_rev_parse(git: &str, dir: &Path, what: &str) -> Option<String> {

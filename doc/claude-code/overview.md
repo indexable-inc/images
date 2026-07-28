@@ -175,6 +175,14 @@ open and silent
   `/home/*/ix` (`default.nix:54-57`), overridable per machine via
   `CLAUDE_CODE_PRIMARY_CHECKOUTS`; `[ ]` disables it. Kill switch
   `CLAUDE_CODE_DISABLE_WORKTREE_GUARD=1`.
+- `PreToolUse` (Bash) -> `write-guard`: denies a shell command whose write
+  targets resolve into a protected primary checkout -- output redirections and
+  heredocs, plus a closed table of writing commands (`cp`, `mv`, `rm`, `tee`,
+  `install`, `sed -i`, `truncate`, `patch`, ...). Same protected list, same
+  worktree prescription and same kill switch as `worktree-guard` above: the
+  edit-tool guard never sees Bash, so a subagent holding only `Bash` wrote into
+  the shared checkout through heredocs, `cp` and `rm` with nothing to stop it
+  (index#4310). `git` is left to `git-guard`.
 - `UserPromptSubmit` -> `prompt-priors` (only when the `search` sibling is in
   scope): score-gated ambient priors from the corpus store, capped ~1200
   tokens. Kill switch `CLAUDE_CODE_DISABLE_PROMPT_PRIORS=1`.
