@@ -3046,6 +3046,7 @@
   rustPolicyLinkArgs = userPolicy: platform:
     rustPolicy.rustcArgsForPolicyForPlatform (rustPolicy.resolvePolicy userPolicy) platform;
   buildIdArg = ["-C" "link-arg=-Wl,--build-id=sha1"];
+  moldArg = ["-C" "link-arg=-fuse-ld=mold"];
 
   groups = {
     macos-guests = [
@@ -3077,24 +3078,42 @@
     # is missing, and its error message points here (indexable-inc/ix#8936).
     rust-build-id = [
       {
-        assertion = rustPolicyLinkArgs {} "x86_64-unknown-linux-gnu" == buildIdArg;
-        # useMold defaults to the *host* platform, so on a darwin host this is
-        # the build-id arg alone. The assertion is equality rather than
-        # containment so a stray extra arg is caught too.
+        # Every equality assertion here pins `linker.useMold`, because its
+        # default is the *eval host's* platform: a bare `{}` policy yields the
+        # build-id arg alone on a darwin host and `mold ++ build-id` on a linux
+        # one. This suite is only reached by the x86_64-linux gate, so an
+        # expectation written from the darwin result passes locally and fails in
+        # CI, which is how index#4296 turned main red (index#4312).
+        assertion = rustPolicyLinkArgs {linker.useMold = false;} "x86_64-unknown-linux-gnu" == buildIdArg;
         message = "a linux-gnu link should be told to emit a sha1 GNU build-id";
       }
       {
-        assertion = rustPolicyLinkArgs {} "x86_64-unknown-linux-musl" == buildIdArg;
+        assertion = rustPolicyLinkArgs {linker.useMold = false;} "x86_64-unknown-linux-musl" == buildIdArg;
         message = "a linux-musl link should be told to emit a sha1 GNU build-id";
       }
       {
+        # The note is gated on the ELF triple rather than on the linker choice,
+        # so a mold link carries it too, appended after the mold arg rather than
+        # replacing it. Equality rather than containment so a stray arg is
+        # caught, and this is the combination the fleet actually links with.
+        assertion = rustPolicyLinkArgs {linker.useMold = true;} "x86_64-unknown-linux-gnu" == (moldArg ++ buildIdArg);
+        message = "a mold linux link should be told to emit a sha1 GNU build-id as well";
+      }
+      {
         # Mach-O has no GNU build-id (it carries an LC_UUID), so the flag would
-        # be an unrecognized linker argument rather than a no-op.
+        # be an unrecognized linker argument rather than a no-op. Absence rather
+        # than equality here because the darwin lld branch is gated on the eval
+        # host as well, which no user policy can override.
         assertion = !(lib.elem "link-arg=-Wl,--build-id=sha1" (rustPolicyLinkArgs {} "aarch64-apple-darwin"));
         message = "a darwin link should not be told to emit a GNU build-id";
       }
       {
-        assertion = rustPolicyLinkArgs {linker.buildId = false;} "x86_64-unknown-linux-gnu" == [];
+        assertion =
+          rustPolicyLinkArgs {
+            linker.buildId = false;
+            linker.useMold = false;
+          } "x86_64-unknown-linux-gnu"
+          == [];
         message = "linker.buildId = false should emit no build-id arg";
       }
       {
