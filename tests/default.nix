@@ -3483,6 +3483,18 @@
         message = "base profile should put each user's ~/.local/bin on the login PATH";
       }
       {
+        assertion = base.config.programs.starship.enable;
+        message = "base profile should wire the prompt at system level, where it lands in /etc/zshrc and needs no activation";
+      }
+      {
+        assertion = !base.config.home-manager.users.root.programs.starship.enable;
+        message = "base profile should not ALSO wire the prompt through Home Manager: two starship inits would run per shell";
+      }
+      {
+        assertion = lib.hasInfix "starship" base.config.programs.zsh.promptInit;
+        message = "base profile's system prompt should reach zsh's promptInit, which is what /etc/zshrc runs";
+      }
+      {
         assertion = base.config.home-manager.users.root.programs.fzf.historyWidget.command == "";
         message = "base profile should leave Ctrl-R history search to Atuin";
       }
