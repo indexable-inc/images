@@ -1,0 +1,1 @@
+{:lint-as {com.biffweb.ring/defroute clojure.core/def}}

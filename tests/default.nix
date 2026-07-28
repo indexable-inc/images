@@ -84,6 +84,8 @@
   # an explicit `ix apply` line, single- and multi-VM alike, with no stale
   # references to the pre-`default.ix` config name.
   applyReadmes = [
+    "biff/reading-list"
+    "biff/todo-app"
     "declared/groups"
     "dev/vm"
     "east-west/firewall"
@@ -2127,6 +2129,46 @@
     timer = config.systemd.timers.daily-scraper;
   };
 
+  # The Biff example's nested flake builds its Clojure application with
+  # clj-nix. At Index eval time we only need to prove the public `.ix` entry
+  # point and NixOS module contract, so use a small stand-in derivation here;
+  # the example flake's own VM check boots the real Biff package.
+  biffReadingListExample = let
+    biffApp = pkgs.linkFarm "biff-reading-list-test-app" [
+      {
+        name = "bin/biff-reading-list";
+        path = lib.getExe' pkgs.coreutils "true";
+      }
+    ];
+    fleet = ix.importIx (paths.examples + "/biff/reading-list/default.ix") {
+      index = {lib = ix;};
+      inherit biffApp;
+    };
+    config = fleet.nodes.biff-reading-list;
+  in {
+    inherit fleet config biffApp;
+    plan = fleet.planValue.nodes.biff-reading-list;
+    service = config.systemd.services.biff-reading-list;
+  };
+
+  biffTodoAppExample = let
+    biffApp = pkgs.linkFarm "biff-todo-app-test-app" [
+      {
+        name = "bin/biff-todo-app";
+        path = lib.getExe' pkgs.coreutils "true";
+      }
+    ];
+    fleet = ix.importIx (paths.examples + "/biff/todo-app/default.ix") {
+      index = {lib = ix;};
+      inherit biffApp;
+    };
+    config = fleet.nodes.biff-todo-app;
+  in {
+    inherit fleet config biffApp;
+    plan = fleet.planValue.nodes.biff-todo-app;
+    service = config.systemd.services.biff-todo-app;
+  };
+
   nginxLifecycleExample = let
     fleet = ix.importIx (paths.examples + "/nginx/lifecycle/default.ix") {
       index = {
@@ -3888,6 +3930,171 @@
           ]
           && dailyScraperS3.service.serviceConfig.EnvironmentFile == "%d/aws-env";
         message = "python-daily-scraper service should support S3 sync through systemd credentials";
+      }
+    ];
+
+    biff-reading-list = [
+      {
+        assertion =
+          biffReadingListExample.config.networking.hostName
+          == "biff-reading-list"
+          && biffReadingListExample.plan.snapshot
+          && !biffReadingListExample.plan.ipv4;
+        message = "biff reading-list should remain a private, stateful mkVm target";
+      }
+      {
+        assertion =
+          biffReadingListExample.service.serviceConfig.User
+          == "biff"
+          && biffReadingListExample.service.serviceConfig.StateDirectory == "biff-reading-list"
+          && biffReadingListExample.service.serviceConfig.StateDirectoryMode == "0750"
+          && biffReadingListExample.service.serviceConfig.WorkingDirectory == "/var/lib/biff-reading-list"
+          && biffReadingListExample.service.serviceConfig.ProtectSystem == "strict"
+          && biffReadingListExample.service.serviceConfig.NoNewPrivileges
+          && biffReadingListExample.service.serviceConfig.PrivateDevices
+          && biffReadingListExample.service.serviceConfig.SuccessExitStatus == [143]
+          && biffReadingListExample.service.serviceConfig.ExecStart == "${biffReadingListExample.biffApp}/bin/biff-reading-list";
+        message = "biff reading-list should run as a hardened, durable systemd service";
+      }
+      {
+        assertion =
+          biffReadingListExample.config.users.users.biff.isSystemUser
+          && biffReadingListExample.config.users.users.biff.group == "biff"
+          && biffReadingListExample.config.users.groups ? biff
+          && biffReadingListExample.service.serviceConfig.Group == "biff"
+          && biffReadingListExample.service.serviceConfig.Restart == "on-failure"
+          && biffReadingListExample.service.serviceConfig.RestartSec == "2s"
+          && lib.hasSuffix "/bin/biff-reading-list-cookie-secret" biffReadingListExample.service.serviceConfig.ExecStartPre
+          && lib.any (package: lib.getName package == "sqldef") biffReadingListExample.service.path
+          && builtins.elem "multi-user.target" biffReadingListExample.service.wantedBy;
+        message = "biff reading-list should provision a least-privilege identity, deterministic migration tool, and restart policy";
+      }
+      {
+        assertion = let
+          claim = biffReadingListExample.config.ix.networking.portClaims.http;
+        in
+          claim.protocol
+          == "tcp"
+          && claim.port == 8080
+          && builtins.elem 8080 biffReadingListExample.config.networking.firewall.allowedTCPPorts
+          && biffReadingListExample.service.environment.HOST == "0.0.0.0"
+          && biffReadingListExample.service.environment.PORT == "8080"
+          && biffReadingListExample.service.environment.COOKIE_SECRET_FILE == "/var/lib/biff-reading-list/cookie-secret"
+          && biffReadingListExample.service.environment.SQLITE_DB_PATH == "/var/lib/biff-reading-list/reading-list.db"
+          && biffReadingListExample.service.environment.SQLITE_SCHEMA_PATH == "/var/lib/biff-reading-list/schema.sql"
+          && builtins.elem "network.target" biffReadingListExample.service.after;
+        message = "biff reading-list should declare its listener and keep mutable state outside the store";
+      }
+      {
+        assertion = let
+          unit = biffReadingListExample.plan.healthChecks.biff-reading-list;
+          http = biffReadingListExample.plan.healthChecks.biff-reading-list-http;
+        in
+          unit.from
+          == "guest"
+          && unit.command
+          == [
+            (lib.getExe' biffReadingListExample.config.systemd.package "systemctl")
+            "is-active"
+            "--quiet"
+            "biff-reading-list.service"
+          ]
+          && http.from == "guest"
+          && lib.hasSuffix "/bin/curl" (builtins.head http.command)
+          && builtins.tail http.command
+          == [
+            "--fail"
+            "--silent"
+            "--show-error"
+            "http://127.0.0.1:8080/"
+          ];
+        message = "biff reading-list should expose unit and functional HTTP deployment health checks";
+      }
+    ];
+
+    biff-todo-app = [
+      {
+        assertion =
+          biffTodoAppExample.config.networking.hostName
+          == "biff-todo-app"
+          && biffTodoAppExample.plan.snapshot
+          && !biffTodoAppExample.plan.ipv4;
+        message = "biff todo-app should remain a private, stateful mkVm target";
+      }
+      {
+        assertion =
+          biffTodoAppExample.service.serviceConfig.User
+          == "biff"
+          && biffTodoAppExample.service.serviceConfig.Group == "biff"
+          && biffTodoAppExample.service.serviceConfig.StateDirectory == "biff-todo-app"
+          && biffTodoAppExample.service.serviceConfig.StateDirectoryMode == "0750"
+          && biffTodoAppExample.service.serviceConfig.WorkingDirectory == "/var/lib/biff-todo-app"
+          && biffTodoAppExample.service.serviceConfig.UMask == "0077"
+          && biffTodoAppExample.service.serviceConfig.ProtectSystem == "strict"
+          && biffTodoAppExample.service.serviceConfig.NoNewPrivileges
+          && biffTodoAppExample.service.serviceConfig.PrivateDevices
+          && biffTodoAppExample.service.serviceConfig.SuccessExitStatus == [143];
+        message = "biff todo-app should run as a hardened, durable systemd service";
+      }
+      {
+        assertion =
+          biffTodoAppExample.config.users.users.biff.isSystemUser
+          && biffTodoAppExample.config.users.users.biff.group == "biff"
+          && biffTodoAppExample.config.users.groups ? biff
+          && biffTodoAppExample.service.serviceConfig.Restart == "on-failure"
+          && biffTodoAppExample.service.serviceConfig.RestartSec == "2s"
+          && lib.hasSuffix "/bin/biff-todo-app-cookie-secret" biffTodoAppExample.service.serviceConfig.ExecStartPre
+          && biffTodoAppExample.service.serviceConfig.ExecStart == "${biffTodoAppExample.biffApp}/bin/biff-todo-app"
+          && biffTodoAppExample.service.serviceConfig.EnvironmentFile == "-/var/lib/biff-todo-app/config.env"
+          && lib.any (package: lib.getName package == "sqldef") biffTodoAppExample.service.path
+          && builtins.elem "multi-user.target" biffTodoAppExample.service.wantedBy;
+        message = "biff todo-app should provision a least-privilege identity, persistent secret, migration tool, and restart policy";
+      }
+      {
+        assertion = let
+          claim = biffTodoAppExample.config.ix.networking.portClaims.http;
+          env = biffTodoAppExample.service.environment;
+        in
+          claim.protocol
+          == "tcp"
+          && claim.port == 8080
+          && builtins.elem 8080 biffTodoAppExample.config.networking.firewall.allowedTCPPorts
+          && env.HOST == "0.0.0.0"
+          && env.PORT == "8080"
+          && env.BASE_URL == "http://localhost:8080"
+          && env.SECURE == "false"
+          && env.BIFF_AUTH_SKIP_CAPTCHA == "true"
+          && env.COOKIE_SECRET_FILE == "/var/lib/biff-todo-app/cookie-secret"
+          && env.SQLITE_DB_PATH == "/var/lib/biff-todo-app/todo-app.db"
+          && env.SQLITE_SCHEMA_PATH == "/var/lib/biff-todo-app/schema.sql"
+          && !(env ? COOKIE_SECRET)
+          && builtins.elem "network.target" biffTodoAppExample.service.after;
+        message = "biff todo-app should declare its listener, mutable state, and private-demo auth boundary without exporting its cookie secret";
+      }
+      {
+        assertion = let
+          unit = biffTodoAppExample.plan.healthChecks.biff-todo-app;
+          http = biffTodoAppExample.plan.healthChecks.biff-todo-app-http;
+        in
+          unit.from
+          == "guest"
+          && unit.command
+          == [
+            (lib.getExe' biffTodoAppExample.config.systemd.package "systemctl")
+            "is-active"
+            "--quiet"
+            "biff-todo-app.service"
+          ]
+          && http.from == "guest"
+          && lib.hasSuffix "/bin/curl" (builtins.head http.command)
+          && builtins.tail http.command
+          == [
+            "--fail"
+            "--silent"
+            "--show-error"
+            "http://127.0.0.1:8080/"
+          ];
+        message = "biff todo-app should expose unit and functional HTTP deployment health checks";
       }
     ];
 
