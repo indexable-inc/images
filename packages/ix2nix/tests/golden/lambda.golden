@@ -1,0 +1,2 @@
+{ __dir, __importIx, __ixTy }:
+a: b: c: a + b * c

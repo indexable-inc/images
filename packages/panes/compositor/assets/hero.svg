@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 250" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { stroke: #8250df; }
+    .accent-t { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .back { fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow-accent); }
+    .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+      .accent-t { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="accent-t" d="M 0 0 L 10 5 L 0 10 z"/>
+    </marker>
+  </defs>
+  <rect class="box" x="20" y="70" width="150" height="64" rx="6"/>
+  <text x="95" y="95" text-anchor="middle">Wayland clients</text>
+  <text class="muted" x="95" y="115" text-anchor="middle" font-size="11">any app in the VM</text>
+  <path class="edge" d="M 170 102 L 218 102"/>
+  <text class="muted" x="194" y="90" text-anchor="middle" font-size="11">commit</text>
+  <rect class="box" x="220" y="70" width="150" height="64" rx="6"/>
+  <text class="mono" x="295" y="95" text-anchor="middle">FrameStore</text>
+  <text class="muted" x="295" y="115" text-anchor="middle" font-size="11">diff vs host mirror</text>
+  <path class="edge" d="M 370 102 L 418 102"/>
+  <text class="muted" x="394" y="90" text-anchor="middle" font-size="11">bands</text>
+  <rect class="box" x="420" y="70" width="140" height="64" rx="6"/>
+  <text x="490" y="95" text-anchor="middle">LZ4 tiles</text>
+  <text class="muted" x="490" y="115" text-anchor="middle" font-size="11">&#8804;256 rows each</text>
+  <path class="edge" d="M 560 102 L 608 102"/>
+  <text class="muted" x="584" y="90" text-anchor="middle" font-size="11">vsock</text>
+  <rect class="box" x="610" y="70" width="90" height="64" rx="6"/>
+  <text class="mono" x="655" y="107" text-anchor="middle">host</text>
+  <path class="back accent" d="M 640 134 C 600 200 160 200 100 136"/>
+  <text class="accent-t" x="370" y="205" text-anchor="middle" font-size="11">Ack{id, seq} on present &#8594; fires wl_surface frame callbacks (genlocked, no timer)</text>
+</svg>

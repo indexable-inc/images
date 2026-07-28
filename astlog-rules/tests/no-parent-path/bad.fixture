@@ -1,0 +1,4 @@
+# A `../` path literal reaches out of this file's directory: moving the file
+# silently breaks it. This is exactly what the rule forbids.
+{ lib }:
+import ../util/writers.nix { inherit lib; }

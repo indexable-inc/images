@@ -1,0 +1,62 @@
+---
+id: ix-term-web-terminal
+postedAt: 2026-07-20T16:30:00-07:00
+title: "ix-term: a tailnet web terminal on server-side libghostty-vt"
+tags: [terminal, rust, svelte, interesting]
+links:
+  - label: issue 3797
+    href: https://github.com/indexable-inc/index/issues/3797
+  - label: server crate
+    href: https://github.com/indexable-inc/index/tree/3e9b48f0f6d9f4bcdde8de7fa8092131558d6437/packages/ix-term/server
+  - label: ixterm CLI
+    href: https://github.com/indexable-inc/index/tree/3e9b48f0f6d9f4bcdde8de7fa8092131558d6437/packages/ixterm
+---
+
+`ix-term-server` is a web terminal meant to live inside the tailnet
+(term.ix.dev): a Rust server owns one libghostty-vt terminal state per
+session as the single source of truth, spawns PTY login shells on the
+serving host, and streams *dirty rows* to a Svelte frontend over a
+websocket. Browsers are thin views — reconnecting, or opening the same
+session on a second machine, always shows exactly what the server knows.
+
+The UI is an Arc-style left tab bar of sessions (create, inline rename,
+close), a DOM-rendered grid, and one seat rule: the last keystroke wins the
+driver seat, the driver's viewport owns the PTY size, and everyone else sees
+the driver-sized grid CSS-scaled down. No resize fights.
+
+Sessions carry `IX_TERM_SESSION_ID`, and the server publishes each
+session's pts path at `/run/ix-term/sessions/<id>/pts`. That is the whole
+contract behind `ixterm open`:
+
+```sh
+ixterm open /tmp/report.html
+```
+
+writes a private OSC (`ESC ] 5522 ; open ; <abs path> BEL`) straight to the
+session pts in one `write(2)`. The server strips it from the byte stream
+before the VT engine sees it (ghostty's OSC enum is closed, so a scanner in
+front of `vt_write` is also the seam that keeps the engine swappable) and
+opens the HTML file as a split next to the terminal — a sandboxed iframe
+whose CSP forbids all network fetches. Bad paths render as an error inside
+the session; there is no backchannel to the writer.
+
+Operators get a NixOS module with typed options:
+
+```nix
+services.ix-term = {
+  enable = true;
+  port = 7533;            # loopback by default
+  user = "andrewgazelka"; # sessions are this account's login shells
+};
+```
+
+Auth is the reverse proxy / tailnet boundary; per-request Tailscale WhoIs is
+the tracked TODO before the term.ix.dev host wiring lands in the ix repo.
+The wire format was benchmarked under a synthetic full-screen redraw storm
+(numbers in the PR) and stays abstract enough to swap the client for
+ghostty-web WASM later.
+
+*Update (2026-07-20): ix-term development moved to the private ix repo, and
+the packages were removed from index
+([#3810](https://github.com/indexable-inc/index/issues/3810)). The source
+links above point at the last index commit that carried them.*

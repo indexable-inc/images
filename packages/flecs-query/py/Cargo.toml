@@ -1,0 +1,18 @@
+[package]
+name = "flecs-query-py"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Python bindings for flecs-query-core: parse Flecs Query Language expressions into plain dicts"
+
+[lib]
+name = "flecs_query_py"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+flecs-query-core = { workspace = true, features = ["serde"] }
+pyo3 = { workspace = true, features = ["extension-module"] }
+pythonize.workspace = true

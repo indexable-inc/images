@@ -1,0 +1,159 @@
+//! macOS host agent: presents guest-Linux toplevels as native `NSWindow`s and
+//! forwards input back to the guest compositor. See index#1686 and
+//! `panes-protocol` for the wire contract.
+//!
+//! Process shape: the `AppKit` main thread owns every window and all state
+//! (`app::APP` is a main-thread `thread_local`); a supervisor thread owns the
+//! socket, reconnects with backoff, and `dispatch_async`s decoded [`ToHost`]
+//! messages onto the main queue; a writer thread drains outgoing [`ToGuest`]
+//! messages so the main thread never blocks on the socket.
+//!
+//! [`ToHost`]: panes_protocol::ToHost
+//! [`ToGuest`]: panes_protocol::ToGuest
+
+mod mock;
+
+#[cfg(target_os = "macos")]
+mod app;
+#[cfg(target_os = "macos")]
+mod audio;
+#[cfg(target_os = "macos")]
+mod conn;
+// The jitter buffer is pure logic and compiles everywhere so its unit tests
+// run on any development host; outside macOS nothing calls it, hence the
+// dead_code allow (the compositor's `frame` module pattern).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod jitter;
+#[cfg(target_os = "macos")]
+mod keymap;
+#[cfg(target_os = "macos")]
+mod render;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod send_queue;
+#[cfg(target_os = "macos")]
+mod trace;
+#[cfg(target_os = "macos")]
+mod transport;
+#[cfg(target_os = "macos")]
+mod view;
+#[cfg(target_os = "macos")]
+mod window;
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(about = "Present guest-Linux windows as native macOS windows")]
+struct Cli {
+    /// Unix socket to connect to (the guest side of the vsock port map).
+    #[arg(long, value_name = "PATH")]
+    connect: Option<PathBuf>,
+
+    /// TCP address to connect to instead of a unix socket (debugging).
+    #[arg(long, value_name = "ADDR", conflicts_with = "connect")]
+    tcp: Option<String>,
+
+    /// Unix socket for the guest's audio stream (the host side of vsock port
+    /// 7102, `--vsock-port 7102:PATH` on the vmkit boot line). Optional: with
+    /// no audio flag the guest runs silent, exactly as before the audio
+    /// channel existed.
+    #[arg(long, value_name = "PATH", conflicts_with = "audio_tcp")]
+    audio_connect: Option<PathBuf>,
+
+    /// TCP address for the guest's audio stream instead of a unix socket
+    /// (debugging, e.g. against `panes-audio --listen-tcp`).
+    #[arg(long, value_name = "ADDR")]
+    audio_tcp: Option<String>,
+
+    /// Prefix prepended to every window title.
+    #[arg(long, value_name = "PREFIX", default_value = "")]
+    title_prefix: String,
+
+    /// Use the stock macOS titlebar (title text + traffic lights) instead of
+    /// the default ghostty-style hidden titlebar.
+    #[arg(long)]
+    native_titlebar: bool,
+
+    /// Forward Cmd chords to the guest as raw Super chords (Linux
+    /// semantics) instead of the default translation to Linux editing
+    /// equivalents (Cmd+A/C/V/X/Z -> Ctrl+same, Cmd+Backspace ->
+    /// Ctrl+Backspace, Cmd+Left/Right -> Home/End; unmapped Cmd chords are
+    /// swallowed like a native app without that shortcut).
+    #[arg(long)]
+    no_chord_translation: bool,
+
+    /// Serve the built-in mock guest on a temp socket and connect to it:
+    /// one animated test window, received input logged to stderr.
+    #[arg(long, conflicts_with_all = ["connect", "tcp"])]
+    mock: bool,
+
+    /// Only serve the mock guest on PATH and block (headless; works on any
+    /// OS). Point a separately-launched `panes-host --connect PATH` at it.
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["connect", "tcp", "mock"])]
+    mock_serve: Option<PathBuf>,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+
+    if let Some(path) = cli.mock_serve {
+        return match mock::serve(&path) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("panes-host: mock guest failed: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    run_host(cli)
+}
+
+#[cfg(target_os = "macos")]
+fn run_host(cli: Cli) -> ExitCode {
+    let target = if cli.mock {
+        let path =
+            std::env::temp_dir().join(format!("panes-host-mock-{}.sock", std::process::id()));
+        let serve_path = path.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = mock::serve(&serve_path) {
+                eprintln!("panes-host: mock guest failed: {error}");
+                std::process::exit(1);
+            }
+        });
+        transport::Target::Unix(path)
+    } else if let Some(path) = cli.connect {
+        transport::Target::Unix(path)
+    } else if let Some(addr) = cli.tcp {
+        transport::Target::Tcp(addr)
+    } else {
+        eprintln!("panes-host: one of --connect, --tcp, --mock, --mock-serve is required");
+        return ExitCode::FAILURE;
+    };
+
+    // The audio stream rides its own socket (vsock 7102) with its own
+    // supervisor thread; window presentation neither waits for it nor learns
+    // about it.
+    if let Some(path) = cli.audio_connect {
+        audio::spawn(transport::Target::Unix(path));
+    } else if let Some(addr) = cli.audio_tcp {
+        audio::spawn(transport::Target::Tcp(addr));
+    }
+
+    app::run(
+        target,
+        app::RunOptions {
+            title_prefix: cli.title_prefix,
+            native_titlebar: cli.native_titlebar,
+            chord_translation: !cli.no_chord_translation,
+        },
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_host(_cli: Cli) -> ExitCode {
+    eprintln!("panes-host: the window agent requires macOS (only --mock-serve works here)");
+    ExitCode::FAILURE
+}

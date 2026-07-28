@@ -1,0 +1,1650 @@
+;; Nix lint rules, ported from the ast-grep YAML rules that used to live in
+;; ast-grep/nix/rules/ (see #1060, #1062). One relation per rule, named
+;; exactly after the original rule id. Each rule carries a
+;; (lint <rule> error "message") declaration, so `astlog scan` turns every
+;; derived row into a located finding and gates CI on it; a legitimate
+;; exception is silenced in place with an `astlog-ignore: <rule>` comment on
+;; the finding's line or the line above it.
+;;
+;; Fixtures: astlog-rules/tests/<rule-id>/{good,bad}.fixture hold one valid
+;; and one violating snippet per rule; the `astlog-nix-rules` flake check
+;; copies them to .nix files and asserts each lint fires exactly on the
+;; violating one.
+
+;; mkderivation-missing-strict-deps: mkDerivation without strictDeps = true.
+;; Add it to prevent build/host dependency leaking.
+(rule (mkderivation-missing-strict-deps n)
+  (match nix "
+    (apply_expression
+      function: (select_expression) @f
+      argument: (attrset_expression) @attrs) @n")
+  (text f "pkgs.stdenv.mkDerivation")
+  (no-descendant attrs "identifier" "strictDeps"))
+(lint mkderivation-missing-strict-deps error
+  "mkDerivation without strictDeps = true; add it to prevent build/host dependency leaking")
+
+;; no-abort: `abort` is a hard abort with no recovery. Use `throw` (catchable)
+;; or `lib.assertMsg` (typed assertion) instead.
+(rule (no-abort n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f) @n")
+  (text-match f "^(builtins\\.)?abort$"))
+(lint no-abort error
+  "`abort` is a hard abort with no recovery; use `throw` (catchable) or `lib.assertMsg` (typed assertion) instead")
+
+;; no-allow-builtin-fetch-git: `allowBuiltinFetchGit = true` lets
+;; `builtins.fetchGit` run while Nix evaluates the package, so ordinary NixOS
+;; evaluation can hit the network and block on Git clones. Pin each Cargo git
+;; dependency under `rustPlatform.importCargoLock` `outputHashes` instead.
+(rule (no-allow-builtin-fetch-git n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (variable_expression) @v) @n")
+  (text-match p "(^|\\.)allowBuiltinFetchGit$")
+  (text v "true"))
+(lint no-allow-builtin-fetch-git error
+  "allowBuiltinFetchGit fetches Cargo git dependencies during evaluation; pin rustPlatform.importCargoLock outputHashes instead")
+
+;; no-ambiguous-gpl-license: Ambiguous GPL/AGPL/LGPL license identifier. Use
+;; the `-Only` / `-Plus` flavor: `gpl2Only`, `gpl3Plus`, `agpl3Only`, etc.
+(rule (no-ambiguous-gpl-license n)
+  (match nix "(select_expression) @n")
+  (text-match n "^(lib\\.)?licenses\\.(gpl2|gpl3|lgpl2|lgpl3|agpl3)$"))
+(lint no-ambiguous-gpl-license error
+  "ambiguous GPL/AGPL/LGPL license identifier; use the `-Only` / `-Plus` flavor: `gpl2Only`, `gpl3Plus`, `agpl3Only`, etc.")
+
+;; no-bare-assert: Bare `assert <cond>;` gives an opaque failure. Use
+;; `assert lib.assertMsg <cond> "<why>";` (or `lib.assertOneOf`) so the
+;; diagnostic names the invariant.
+(rule (no-bare-assert n)
+  (match nix "(assert_expression) @n")
+  (no-descendant n "select_expression" "lib.assertMsg")
+  (no-descendant n "select_expression" "lib.assertOneOf"))
+(lint no-bare-assert error
+  "bare `assert <cond>;` gives an opaque failure; use `assert lib.assertMsg <cond> \"<why>\";` (or `lib.assertOneOf`) so the diagnostic names the invariant")
+
+;; no-buildphase-pure-default: `buildPhase = "make";` and
+;; `installPhase = "make install";` restate the stdenv default. Drop the
+;; override or document the deviation.
+(rule (no-buildphase-pure-default n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (string_expression) @v) @n")
+  (text p "buildPhase")
+  (text v "\"make\""))
+(rule (no-buildphase-pure-default n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (string_expression) @v) @n")
+  (text p "installPhase")
+  (text v "\"make install\""))
+(lint no-buildphase-pure-default error
+  "`buildPhase = \"make\"` / `installPhase = \"make install\"` restates the stdenv default; drop the override or document the deviation")
+
+;; no-buildrustpackage: `buildRustPackage` is the legacy entry point. Use
+;; `rustPlatform.buildRustPackage` (typed `cargoLock` shape) or `crane`.
+(rule (no-buildrustpackage n)
+  (match nix "
+    (apply_expression
+      function: (variable_expression) @f
+      argument: (attrset_expression)) @n")
+  (text f "buildRustPackage"))
+(lint no-buildrustpackage error
+  "`buildRustPackage` is the legacy entry point; use `rustPlatform.buildRustPackage` (typed `cargoLock` shape) or `crane`")
+
+;; no-builtin-length-list-zero: `builtins.length xs == 0` is `xs == [ ]`;
+;; same for `> 0` -> `xs != [ ]`. Drop the function call.
+(rule (no-builtin-length-list-zero n)
+  (match nix "
+    (binary_expression
+      left: (apply_expression
+        function: [(variable_expression) (select_expression)] @f)
+      operator: [\"==\" \">\"]
+      right: (integer_expression) @z) @n")
+  (text-match f "^(builtins\\.)?length$")
+  (text z "0"))
+(lint no-builtin-length-list-zero error
+  "`builtins.length xs == 0` is `xs == [ ]` (and `> 0` is `xs != [ ]`); drop the function call")
+
+;; no-builtins-current-system: builtins.currentSystem is impure. Pass system
+;; explicitly via flake or function args.
+(rule (no-builtins-current-system n)
+  (match nix "(select_expression) @n")
+  (text n "builtins.currentSystem"))
+(lint no-builtins-current-system error
+  "builtins.currentSystem is impure; pass system explicitly via flake or function args")
+
+;; no-builtins-fetch: builtins.fetch* runs on eval, is not a fixed-output
+;; derivation, and does not substitute. Use the matching pkgs.* fetcher.
+(rule (no-builtins-fetch n)
+  (match nix "(select_expression) @n")
+  (text-match n "^builtins\\.(fetchurl|fetchTarball|fetchGit|fetchTree)$"))
+(lint no-builtins-fetch error
+  "builtins.fetch* runs on eval, is not a fixed-output derivation, and does not substitute; use the matching pkgs.* fetcher")
+
+;; no-builtins-get-env: builtins.getEnv is impure. Pass values explicitly via
+;; function args or flake inputs.
+(rule (no-builtins-get-env n)
+  (match nix "
+    (apply_expression
+      function: (select_expression) @f) @n")
+  (text f "builtins.getEnv"))
+(lint no-builtins-get-env error
+  "builtins.getEnv is impure; pass values explicitly via function args or flake inputs")
+
+;; no-builtins-path-without-name: `builtins.path { path = ...; }` without
+;; `name` derives the store-path name from the working directory. Set
+;; `name = "<stable>"` so the result is reproducible across clones.
+;; `name` can be bound directly or brought in with `inherit`/`inherit (x)`;
+;; the inherit forms carry no `attrpath` node, so a helper relation covers
+;; them (#3747).
+(rule (attrset-inherits-name attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (inherit attrs: (inherited_attrs attr: (identifier) @a)))) @attrs")
+  (text a "name"))
+(rule (attrset-inherits-name attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (inherit_from attrs: (inherited_attrs attr: (identifier) @a)))) @attrs")
+  (text a "name"))
+(rule (no-builtins-path-without-name n)
+  (match nix "
+    (apply_expression
+      function: (select_expression) @f
+      argument: (attrset_expression) @attrs) @n")
+  (text f "builtins.path")
+  (no-descendant attrs "attrpath" "name")
+  (not (attrset-inherits-name attrs)))
+(lint no-builtins-path-without-name error
+  "`builtins.path` without `name` derives the store-path name from the working directory; set `name = \"<stable>\"` so the result is reproducible across clones")
+
+;; package-overlay-intent-explicit: Public package metadata must make the
+;; overlay decision explicit. `flake = true` publishes a CLI/build surface;
+;; `packageSet = true` publishes the repo-internal package-set surface. The
+;; nixpkgs overlay surface is intentionally separate, so write `overlay = false`
+;; for leaf packages that should stay out of `pkgs`, `overlay = true` for
+;; packages that should be available as `pkgs.<id>`, or `overlay.attrName = ...`
+;; when the nixpkgs name needs a repo-owned prefix.
+(rule (package-metadata-id attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (binding attrpath: (attrpath) @id_path))) @attrs")
+  (text id_path "id"))
+(rule (package-metadata-package-set attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (binding attrpath: (attrpath) @package_set_path
+          expression: (variable_expression) @package_set_value))) @attrs")
+  (text package_set_path "packageSet")
+  (text package_set_value "true"))
+(rule (package-metadata-flake attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (binding attrpath: (attrpath) @flake_path))) @attrs")
+  (text-match flake_path "^flake(\\.|$)"))
+(rule (package-overlay-intent-explicit n)
+  (package-metadata-id n)
+  (package-metadata-package-set n)
+  (package-metadata-flake n)
+  (no-descendant n "identifier" "overlay"))
+(lint package-overlay-intent-explicit error
+  "flake-exposed package metadata with `packageSet = true` must make overlay intent explicit: `overlay = false`, `overlay = true`, or `overlay.attrName = ...`")
+
+;; no-chained-attrset-update: `A // { ... } // { ... }` builds one attrset in
+;; two steps. Merge the adjacent literals into a single `// { ... }`.
+;; `//` is right-associative, so the chain parses as `A // ({...} // {...})`
+;; and the two adjacent literals sit in the right-hand binary expression.
+(rule (no-chained-attrset-update n)
+  (match nix "
+    (binary_expression
+      operator: \"//\"
+      right: (binary_expression
+        left: (attrset_expression)
+        operator: \"//\"
+        right: (attrset_expression))) @n"))
+(lint no-chained-attrset-update error
+  "`A // {{ ... }} // {{ ... }}` builds one attrset in two steps; merge the adjacent literals into a single `// {{ ... }}`")
+
+;; no-deprecated-iflist-empty: `if cond then [ x ] else [ ]` is
+;; `lib.optional cond x`.
+(rule (no-deprecated-iflist-empty n)
+  (match nix "
+    (if_expression
+      consequence: (list_expression . (_) @only .)
+      alternative: (list_expression) @empty) @n")
+  (text-match empty "^\\[\\s*\\]$"))
+(lint no-deprecated-iflist-empty error
+  "`if cond then [ x ] else [ ]` is `lib.optional cond x`")
+
+;; no-deprecated-trace: `builtins.trace` left in tracked code prints during
+;; every eval. Remove it or guard behind a debug flag.
+(rule (no-deprecated-trace n)
+  (match nix "(select_expression) @n")
+  (text-match n "^(builtins\\.trace|lib\\.traceVal|lib\\.traceSeq)$"))
+(lint no-deprecated-trace error
+  "`builtins.trace` left in tracked code prints during every eval; remove it or guard behind a debug flag")
+
+;; no-derivation-name-version-interp: `name = "${pname}-${version}"` restates
+;; stdenv. Set `pname` and `version`; stdenv constructs `name` automatically.
+(rule (no-derivation-name-version-interp n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (string_expression) @v) @n")
+  (text p "name")
+  (text-match v "^\"\\$\\{(finalAttrs\\.)?pname\\}-\\$\\{(finalAttrs\\.)?version\\}\"$"))
+(lint no-derivation-name-version-interp error
+  "`name = \"${{pname}}-${{version}}\"` restates stdenv; set `pname` and `version`, and stdenv constructs `name` automatically")
+
+;; no-double-paren: `(($X))` is double-grouped. Drop one layer of parens.
+(rule (no-double-paren n)
+  (match nix "
+    (parenthesized_expression
+      expression: (parenthesized_expression)) @n"))
+(lint no-double-paren error
+  "`(($X))` is double-grouped; drop one layer of parens")
+
+;; no-empty-list-concat: `[] ++ X` and `X ++ []` are no-ops. Drop the empty
+;; operand.
+(rule (no-empty-list-concat n)
+  (match nix "
+    (binary_expression
+      operator: \"++\"
+      right: (list_expression) @l) @n")
+  (text-match l "^\\[\\s*\\]$"))
+(rule (no-empty-list-concat n)
+  (match nix "
+    (binary_expression
+      left: (list_expression) @l
+      operator: \"++\") @n")
+  (text-match l "^\\[\\s*\\]$"))
+(lint no-empty-list-concat error
+  "`[ ] ++ X` and `X ++ [ ]` are no-ops; drop the empty operand")
+
+;; no-escapeshellargs-for-loop: `for <var> in ${lib.escapeShellArgs xs}` in a
+;; nix-rendered bash string iterates a word list that is nix-computed, so when
+;; the list dedups/filters to a single element the loop renders as
+;; `for v in one-word`, which shellcheck flags SC2043 ("loop only runs once")
+;; and `writeBashApplication` treats as a fatal build error. This surfaces only
+;; when the toplevel is built (deploy job), never in PR CI, so a single-element
+;; render turns main red after merge (ix#6688). Materialize the list into a bash
+;; array and iterate it: `xs=(${lib.escapeShellArgs xs}); for v in "''${xs[@]}"`
+;; renders zero, one, or many elements uniformly and never trips SC2043. The
+;; preceding string fragment is the `... for <var> in ` text; the interpolation
+;; is the escapeShellArgs call.
+(rule (no-escapeshellargs-for-loop n frag f)
+  (match nix "
+    (string_expression
+      (string_fragment) @frag
+      .
+      (interpolation
+        expression: (apply_expression
+          function: [(variable_expression) (select_expression)] @f)) @n)")
+  (text-match f "^(lib\\.)?escapeShellArgs$")
+  (text-match frag "(^|[^A-Za-z0-9_])for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]*$"))
+(rule (no-escapeshellargs-for-loop n frag f)
+  (match nix "
+    (indented_string_expression
+      (string_fragment) @frag
+      .
+      (interpolation
+        expression: (apply_expression
+          function: [(variable_expression) (select_expression)] @f)) @n)")
+  (text-match f "^(lib\\.)?escapeShellArgs$")
+  (text-match frag "(^|[^A-Za-z0-9_])for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]*$"))
+(lint no-escapeshellargs-for-loop error
+  "`for <var> in ${{lib.escapeShellArgs xs}}` trips shellcheck SC2043 when the nix-computed list renders single-element, failing writeBashApplication only at deploy time; materialize a bash array (`xs=(${{lib.escapeShellArgs xs}}); for v in \"${{xs[@]}}\"`) so zero/one/many elements iterate uniformly")
+
+;; no-fake-hash: Fake hashes are banned. Compute the real SRI hash before
+;; editing tracked Nix files.
+(rule (no-fake-hash n)
+  (match nix "(select_expression) @n")
+  (text-match n "^(pkgs\\.)?lib\\.(fakeHash|fakeSha256|fakeSha512)$"))
+(rule (no-fake-hash n)
+  (match nix "(string_expression) @n")
+  (text n "\"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\""))
+(lint no-fake-hash error
+  "fake hashes are banned; compute the real SRI hash before editing tracked Nix files")
+
+;; no-fetchfromgithub-fixed-hash: Do not pin GitHub source with
+;; `fetchFromGitHub { ... hash = ...; }`. Add it as a flake input with
+;; `flake = false` and consume that source instead.
+(rule (no-fetchfromgithub-fixed-hash n)
+  (match nix "
+    (apply_expression
+      function: (variable_expression) @f
+      argument: (attrset_expression
+        (binding_set
+          (binding attrpath: (attrpath) @h)))) @n")
+  (text f "fetchFromGitHub")
+  (text h "hash"))
+(rule (no-fetchfromgithub-fixed-hash n)
+  (match nix "
+    (apply_expression
+      function: (variable_expression) @f
+      argument: (attrset_expression
+        (binding_set
+          (inherit attrs: (inherited_attrs attr: (identifier) @h))))) @n")
+  (text f "fetchFromGitHub")
+  (text h "hash"))
+(lint no-fetchfromgithub-fixed-hash error
+  "do not pin GitHub source with `fetchFromGitHub {{ ... hash = ...; }}`; add it as a flake input with `flake = false` and consume that source instead")
+
+;; no-fixup-phase-override: `fixupPhase = ...` wipes the default fixup pass.
+;; Use `preFixup` / `postFixup` instead.
+(rule (no-fixup-phase-override n)
+  (match nix "(binding attrpath: (attrpath) @p) @n")
+  (text p "fixupPhase"))
+(lint no-fixup-phase-override error
+  "`fixupPhase = ...` wipes the default fixup pass; use `preFixup` / `postFixup` instead")
+
+;; no-flake-utils-eachsystem: `flake-utils.lib.eachSystem` is discouraged.
+;; Use `flake-parts` (`mkFlake` + `perSystem`) or a plain `lib.genAttrs
+;; systems` helper.
+(rule (no-flake-utils-eachsystem n)
+  (match nix "(select_expression) @n")
+  (text-match n "^flake-utils\\.lib\\.(eachSystem|eachDefaultSystem)$"))
+(lint no-flake-utils-eachsystem error
+  "`flake-utils.lib.eachSystem` is discouraged; use `flake-parts` (`mkFlake` + `perSystem`) or a plain `lib.genAttrs systems` helper")
+
+;; no-getflake-tostring: `builtins.getFlake (toString ./...)` uses path-flake
+;; semantics, copying the entire tree including non-regular files. Use
+;; `"git+file:///..."` instead.
+(rule (no-getflake-tostring n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f
+      argument: (parenthesized_expression
+        expression: (apply_expression
+          function: (variable_expression) @g))) @n")
+  (text-match f "^(builtins\\.)?getFlake$")
+  (text g "toString"))
+(lint no-getflake-tostring error
+  "`builtins.getFlake (toString ./...)` uses path-flake semantics, copying the entire tree including non-regular files; use `\"git+file:///...\"` instead")
+
+;; no-handrolled-shell-script: `writeText "*.sh" ...` hand-rolls a shell script
+;; with no shellcheck and no declared runtime deps (the same gap that bans
+;; writeShellApplication / writeShellScriptBin). Prefer a compiled wrapper: a
+;; small Rust launcher built via ix.rustWorkspace (see packages/config-launch,
+;; used by packages/codex) for argv0-preserving exec, or
+;; ix.writeNushellApplication / ix.writePythonApplication for logic scripts. A
+;; launch wrapper that needs install-time `@placeholder@` substitution the
+;; writers cannot express may keep writeText with an
+;; `astlog-ignore: no-handrolled-shell-script` comment plus a reason.
+(rule (no-handrolled-shell-script n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (string_expression) @s)) @n")
+  (text-match f "^(pkgs\\.)?writeText$")
+  (text-match s "\\.sh\"$"))
+(lint no-handrolled-shell-script warning
+  "`writeText \"*.sh\"` hand-rolls an unchecked shell script; prefer a compiled Rust launcher (ix.rustWorkspace, see packages/config-launch / packages/codex) or ix.writeNushellApplication / ix.writePythonApplication, or keep it with an `astlog-ignore: no-handrolled-shell-script` comment + reason")
+
+;; no-handrolled-toml-scalar: a local `toToml` binding re-rolls the scalar ->
+;; TOML literal encoder used to render `key = value` config flags. Use
+;; ix.toml.scalar from `lib/util/toml.nix` (and ix.attrs.flattenToDotted from
+;; `lib/util/attrs.nix` to collapse a nested config tree into dotted-leaf keys).
+;; Matches the binding name only; `toToml` exists nowhere else, so it is the
+;; tell-tale of a copy-pasted encoder.
+(rule (no-handrolled-toml-scalar n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p) @n")
+  (text p "toToml"))
+(lint no-handrolled-toml-scalar error
+  "hand-rolled `toToml` scalar encoder; use ix.toml.scalar from `lib/util/toml.nix` (and ix.attrs.flattenToDotted from `lib/util/attrs.nix` for nested config trees)")
+
+;; no-import-in-imports: Use 'imports = [ ./foo.nix ]', not
+;; 'imports = [ (import ./foo.nix) ]'. NixOS modules auto-import paths.
+(rule (no-import-in-imports n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (list_expression
+        element: (parenthesized_expression
+          expression: (apply_expression
+            function: (variable_expression) @f)))) @n")
+  (text p "imports")
+  (text f "import"))
+(lint no-import-in-imports error
+  "use `imports = [ ./foo.nix ]`, not `imports = [ (import ./foo.nix) ]`; NixOS modules auto-import paths")
+
+;; no-impure: __impure = true: prefer ix.writeNushellApplication for
+;; side-effect orchestrators. __impure is only for network side effects that
+;; must live inside the derivation graph.
+(rule (no-impure n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (variable_expression) @v) @n")
+  (text p "__impure")
+  (text v "true"))
+(lint no-impure error
+  "__impure = true: prefer ix.writeNushellApplication for side-effect orchestrators; __impure is only for network side effects that must live inside the derivation graph")
+
+;; no-legacy-let-block: `let { ... }` is the undocumented legacy let form.
+;; Use `let ... in` or a normal attrset.
+(rule (no-legacy-let-block n)
+  (match nix "(let_attrset_expression) @n"))
+(lint no-legacy-let-block error
+  "`let {{ ... }}` is the undocumented legacy let form; use `let ... in` or a normal attrset")
+
+;; no-mddoc: `lib.mdDoc` / `mdDoc` is a no-op and was removed from nixpkgs.
+;; Pass the description string directly.
+(rule (no-mddoc n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f) @n")
+  (text-match f "^((lib|lib\\.options|options)\\.)?mdDoc$"))
+(lint no-mddoc error
+  "`lib.mdDoc` / `mdDoc` is a no-op and was removed from nixpkgs; pass the description string directly")
+
+;; no-mkforce: mkForce is banned. Use priority composition (mkDefault,
+;; mkOverride) instead.
+(rule (no-mkforce n)
+  (match nix "(identifier) @n")
+  (text n "mkForce"))
+(lint no-mkforce error
+  "mkForce is banned; use priority composition (mkDefault, mkOverride) instead")
+
+;; no-mkif-true: `mkIf true x` is `x`; `mkIf false x` is empty. Drop the
+;; wrapper.
+(rule (no-mkif-true n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (variable_expression) @c)) @n")
+  (text-match f "^(lib\\.)?mkIf$")
+  (text-match c "^(true|false)$"))
+(lint no-mkif-true error
+  "`mkIf true x` is `x` and `mkIf false x` is empty; drop the wrapper")
+
+;; no-mkmerge-singleton: `mkMerge [ x ]` is identity. Drop the wrapper.
+(rule (no-mkmerge-singleton n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f
+      argument: (list_expression . (_) @only .)) @n")
+  (text-match f "^(lib\\.)?mkMerge$"))
+(lint no-mkmerge-singleton error
+  "`mkMerge [ x ]` is identity; drop the wrapper")
+
+;; no-mkoption-conditional-default: `mkOption.default = if cond then ... else
+;; ...` couples the declaration to a sibling option. Keep `default` a
+;; self-contained literal and move the branch into `config` as
+;; `mkIf <cond> (mkDefault ...)`.
+(rule (no-mkoption-conditional-default n)
+  (match nix "
+    (apply_expression
+      function: (_) @f
+      argument: (attrset_expression
+        (binding_set
+          (binding
+            attrpath: (attrpath) @p
+            expression: (if_expression))))) @n")
+  (text-match f "(^|\\.)mkOption$")
+  (text p "default"))
+(lint no-mkoption-conditional-default error
+  "a conditional `mkOption.default` couples the declaration to a sibling option; keep `default` self-contained and move the branch into `config` as `mkIf <cond> (mkDefault ...)`")
+
+;; no-mkoverride-numeric: `mkOverride <literal>` is the back-door for
+;; `mkForce`. Use module priority composition (`mkDefault`, `mkOptionDefault`,
+;; `mkBefore`, `mkAfter`) or fix the module boundary.
+(rule (no-mkoverride-numeric n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f
+      argument: (integer_expression)) @n")
+  (text-match f "^(lib\\.)?mkOverride$"))
+(lint no-mkoverride-numeric error
+  "`mkOverride <literal>` is the back-door for `mkForce`; use module priority composition (`mkDefault`, `mkOptionDefault`, `mkBefore`, `mkAfter`) or fix the module boundary")
+
+;; no-negate-bool-literal: `!true` / `!false` is the opposite literal. Use
+;; the literal directly.
+(rule (no-negate-bool-literal n)
+  (match nix "
+    (unary_expression
+      operator: \"!\"
+      argument: (variable_expression) @v) @n")
+  (text-match v "^(true|false)$"))
+(lint no-negate-bool-literal error
+  "`!true` / `!false` is the opposite literal; use the literal directly")
+
+;; no-nix-in-generated-shell: a `writeShellApplication` whose body shells out to
+;; `nix run/build/flake check` hides dependencies from the evaluator and cache,
+;; repeats evaluation, and moves failures into runtime logs. Pass realized store
+;; paths into the script, or move orchestration into the outer workflow. Largely
+;; subsumed by `no-write-shell-application` (writeShellApplication is banned
+;; outright), but kept as a distinct rule for any suppressed use.
+(rule (no-nix-in-generated-shell n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f
+      argument: (attrset_expression) @attrs) @n")
+  (text-match f "^(pkgs\\.)?writeShellApplication$")
+  (text-match attrs "\\bnix (run|build|flake check)\\b"))
+(lint no-nix-in-generated-shell error
+  "Nix-generated shell applications must not call nix again; pass realized store paths into the script instead")
+
+;; no-nixpkgs-channel-ref: '<nixpkgs>' channel reference is banned. Use flake
+;; inputs.
+(rule (no-nixpkgs-channel-ref n)
+  (match nix "(spath_expression) @n")
+  (text n "<nixpkgs>"))
+(lint no-nixpkgs-channel-ref error
+  "`<nixpkgs>` channel reference is banned; use flake inputs")
+
+;; no-optional-true: `lib.optional true x` is always `[ x ]`; `lib.optional
+;; false x` is always `[ ]`. Inline the literal.
+(rule (no-optional-true n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (variable_expression) @c)) @n")
+  (text-match f "^(lib\\.)?(optional|optionals)$")
+  (text-match c "^(true|false)$"))
+(lint no-optional-true error
+  "`lib.optional true x` is always `[ x ]` and `lib.optional false x` is always `[ ]`; inline the literal")
+
+;; no-path-flake-ref: Whole-tree `path:` flake refs copy the working tree
+;; byte-for-byte. Use `.#...`, `git+file:///abs/path`, a relative
+;; `path:./<subtree>` input, or a proper flake input.
+(rule (no-path-flake-ref n)
+  (match nix "(string_expression) @n")
+  (text-match n "^\"path:(/|\\.[^/])"))
+(lint no-path-flake-ref error
+  "whole-tree `path:` flake refs copy the working tree byte-for-byte; use `.#...`, `git+file:///abs/path`, a relative `path:./<subtree>` input, or a proper flake input")
+
+;; no-parent-path: a `../` (parent-directory) path literal reaches across a
+;; directory boundary, so moving the file silently breaks the reference. Reach
+;; cross-tree through a named handle instead: `ix.<helper>` / `index.lib.<helper>`
+;; for code, `ix.paths.<root>` (or `index.lib.paths.<root>`) + a relative string
+;; for a file path, or the package registry for a sibling package. Downward
+;; `./...` paths are fine. Matches the `..` segment in a path literal only, so
+;; comments and strings (e.g. a `"../bad"` traversal-rejection test fixture) are
+;; never flagged.
+(rule (no-parent-path n)
+  (match nix "(path_expression) @n")
+  (text-match n "(^|/)\\.\\.(/|$)"))
+(lint no-parent-path error
+  "relative parent path `../` reaches across a directory; use ix.<helper> / index.lib, ix.paths.<root> + a relative string, or the package registry instead of a `../` literal")
+
+;; no-pkgs-lib: `pkgs.lib.X` reaches through `pkgs`. Use the bare `lib`
+;; binding (or `inherit (pkgs) lib;`).
+(rule (no-pkgs-lib n)
+  (match nix "
+    (select_expression
+      expression: (variable_expression) @base
+      attrpath: (attrpath . attr: (identifier) @first . attr: (_) .)) @n")
+  (text base "pkgs")
+  (text first "lib"))
+(lint no-pkgs-lib error
+  "`pkgs.lib.X` reaches through `pkgs`; use the bare `lib` binding (or `inherit (pkgs) lib;`)")
+
+;; no-pname-finalattrs-self-ref: `finalAttrs.pname` as the value of `repo`,
+;; `owner`, or `pname` itself is usually a copy-paste artifact. Use the
+;; literal.
+(rule (no-pname-finalattrs-self-ref n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (select_expression) @v) @n")
+  (text-match p "^(repo|owner|pname)$")
+  (text v "finalAttrs.pname"))
+(lint no-pname-finalattrs-self-ref error
+  "`finalAttrs.pname` as the value of `repo`, `owner`, or `pname` itself is usually a copy-paste artifact; use the literal")
+
+;; no-rec-attrset: 'rec { }' is banned in derivations and overlays. Use let,
+;; finalAttrs:, or final/prev.
+(rule (no-rec-attrset n)
+  (match nix "(rec_attrset_expression) @n"))
+(lint no-rec-attrset error
+  "`rec {{ }}` is banned in derivations and overlays; use let, finalAttrs:, or final/prev")
+
+;; no-recursive-update: lib.recursiveUpdate silently replaces at leaf
+;; collisions. Use ix.deepMerge.strict (throws on collision) or
+;; ix.deepMerge.rhs (rhs wins) from `lib/util/deep-merge.nix`.
+(rule (no-recursive-update n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f)) @n")
+  (text-match f "^(lib\\.)?recursiveUpdate$"))
+(lint no-recursive-update error
+  "lib.recursiveUpdate silently replaces at leaf collisions; use ix.deepMerge.strict (throws on collision) or ix.deepMerge.rhs (rhs wins) from `lib/util/deep-merge.nix`")
+
+;; no-root-string-interp: coercing a repository root inside a string records
+;; the whole tree as a derivation input. Select the file or subtree as a path
+;; before interpolation so unrelated repository edits preserve the dependency.
+(rule (no-root-string-interp n)
+  (match nix "
+    (string_expression
+      (interpolation
+        expression: (_) @v)) @n")
+  (text-match v "^(([^[:space:]]+\\.)*paths\\.root|root|workspaceRoot|repoRoot)$"))
+(rule (no-root-string-interp n)
+  (match nix "
+    (indented_string_expression
+      (interpolation
+        expression: (_) @v)) @n")
+  (text-match v "^(([^[:space:]]+\\.)*paths\\.root|root|workspaceRoot|repoRoot)$"))
+(lint no-root-string-interp error
+  "string interpolation coerces a repository root into a whole-tree store dependency; select the file or subtree as a path before interpolation")
+
+;; no-stringly-flags: Build flag attrs are list-of-string, not one string
+;; with spaces. Whitespace inside flag values breaks paths-with-spaces and
+;; shell quoting.
+(rule (no-stringly-flags n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (string_expression)) @n")
+  (text-match p "^(configureFlags|cmakeFlags|mesonFlags|makeFlags|ninjaFlags|xorgserverFlags)$"))
+(lint no-stringly-flags error
+  "build flag attrs are list-of-string, not one string with spaces; whitespace inside flag values breaks paths-with-spaces and shell quoting")
+
+;; no-substitute-all: `substituteAll` / `substituteAllFiles` was removed from
+;; nixpkgs. Use `replaceVars` or `replaceVarsWith` instead.
+(rule (no-substitute-all n)
+  (match nix "(select_expression) @n")
+  (text-match n "^pkgs\\.(substituteAll|substituteAllFiles)$"))
+(rule (no-substitute-all n)
+  (match nix "
+    (apply_expression
+      function: (variable_expression) @f
+      argument: (attrset_expression)) @n")
+  (text-match f "^(substituteAll|substituteAllFiles)$"))
+(lint no-substitute-all error
+  "`substituteAll` / `substituteAllFiles` was removed from nixpkgs; use `replaceVars` or `replaceVarsWith` instead")
+
+;; no-throw-without-message: `throw ""` is an empty placeholder message. Pass
+;; a message that names the failing invariant.
+(rule (no-throw-without-message n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f
+      argument: (string_expression) @s) @n")
+  (text-match f "^(builtins\\.)?throw$")
+  (text s "\"\""))
+(lint no-throw-without-message error
+  "`throw \"\"` is an empty placeholder message; pass a message that names the failing invariant")
+
+;; no-tofile-unsafediscardstringcontext: `builtins.toFile X
+;; (builtins.unsafeDiscardStringContext Y)` drops the runtime dependency. Use
+;; `pkgs.writeText X Y` (or `passAsFile`) instead.
+(rule (no-tofile-unsafediscardstringcontext n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f)
+      argument: (parenthesized_expression
+        expression: (apply_expression
+          function: [(variable_expression) (select_expression)] @g))) @n")
+  (text-match f "^(builtins\\.)?toFile$")
+  (text-match g "^(builtins\\.)?unsafeDiscardStringContext$"))
+(lint no-tofile-unsafediscardstringcontext error
+  "`builtins.toFile X (builtins.unsafeDiscardStringContext Y)` drops the runtime dependency; use `pkgs.writeText X Y` (or `passAsFile`) instead")
+
+;; no-types-attrs: `types.attrs` is the give-up type. Use a typed `submodule`
+;; with `freeformType` (or `attrsOf <real-type>`) so options merge, document,
+;; and validate.
+(rule (no-types-attrs n)
+  (match nix "(select_expression) @n")
+  (text-match n "^(lib\\.)?types\\.attrs$"))
+(lint no-types-attrs error
+  "`types.attrs` is the give-up type; use a typed `submodule` with `freeformType` (or `attrsOf <real-type>`) so options merge, document, and validate")
+
+;; no-types-unspecified: `types.unspecified` accepts anything, including
+;; bottom. Use a real type or `attrsOf <type>` / `oneOf [ ... ]`.
+(rule (no-types-unspecified n)
+  (match nix "(select_expression) @n")
+  (text-match n "^(lib\\.)?types\\.unspecified$"))
+(lint no-types-unspecified error
+  "`types.unspecified` accepts anything, including bottom; use a real type or `attrsOf <type>` / `oneOf [ ... ]`")
+
+;; prefer-bare-attr-name: quoted attribute names that are valid Nix
+;; identifiers are JSON-shaped noise. The full string check excludes escapes and
+;; interpolation; reserved words still require quotes in an attribute path.
+(rule (nix-reserved-attr-name name)
+  (match nix "(string_fragment) @name")
+  (text-match name "^(assert|else|if|in|inherit|let|rec|then|with)$"))
+(rule (prefer-bare-attr-name quoted name)
+  (match nix "(attrpath (string_expression (string_fragment) @name) @quoted)")
+  (text-match quoted "^\"[A-Za-z_][A-Za-z0-9_'-]*\"$")
+  (text-match name "^[A-Za-z_][A-Za-z0-9_'-]*$")
+  (not (nix-reserved-attr-name name)))
+(rewrite unquote-bare-attr-name (prefer-bare-attr-name quoted name)
+  (replace quoted "{name}"))
+(lint prefer-bare-attr-name error
+  "attribute name `{name}` is a valid bare identifier; remove the unnecessary quotes")
+
+;; no-unquoted-splice: `legacyPackages.${system}` interpolates outside a
+;; string. Prefer `import nixpkgs { inherit system; }` to get a package set;
+;; if you must index dynamically, quote the antiquote:
+;; `legacyPackages."${system}"`.
+(rule (no-unquoted-splice n)
+  (match nix "
+    (select_expression
+      attrpath: (attrpath . attr: (identifier) @a . attr: (interpolation) .)) @n")
+  (text-match a "^(legacyPackages|packages)$"))
+(lint no-unquoted-splice error
+  "`legacyPackages.${{system}}` interpolates outside a string; prefer `import nixpkgs {{ inherit system; }}`, or quote the antiquote: `legacyPackages.\"${{system}}\"`")
+
+;; no-update-empty-set: `X // { }` and `{ } // X` are no-ops. Drop the empty
+;; operand.
+(rule (no-update-empty-set n)
+  (match nix "
+    (binary_expression
+      operator: \"//\"
+      right: (attrset_expression) @a) @n")
+  (text-match a "^\\{\\s*\\}$"))
+(rule (no-update-empty-set n)
+  (match nix "
+    (binary_expression
+      left: (attrset_expression) @a
+      operator: \"//\") @n")
+  (text-match a "^\\{\\s*\\}$"))
+(lint no-update-empty-set error
+  "`X // {{ }}` and `{{ }} // X` are no-ops; drop the empty operand")
+
+;; no-with-builtins: 'with builtins;' is banned. Use explicit builtins.foo
+;; qualifications.
+(rule (no-with-builtins n)
+  (match nix "
+    (with_expression
+      environment: (variable_expression) @e) @n")
+  (text e "builtins"))
+(lint no-with-builtins error
+  "`with builtins;` is banned; use explicit builtins.foo qualifications")
+
+;; no-with-lib: File-scope 'with lib;' is banned. Use explicit lib.foo
+;; qualifications.
+(rule (no-with-lib n)
+  (match nix "
+    (with_expression
+      environment: (variable_expression) @e) @n")
+  (text e "lib"))
+(lint no-with-lib error
+  "file-scope `with lib;` is banned; use explicit lib.foo qualifications")
+
+;; no-with-pkgs: File-scope 'with pkgs;' is banned. Use explicit pkgs.foo
+;; qualifications.
+(rule (no-with-pkgs n)
+  (match nix "
+    (with_expression
+      environment: (variable_expression) @e) @n")
+  (text e "pkgs"))
+(lint no-with-pkgs error
+  "file-scope `with pkgs;` is banned; use explicit pkgs.foo qualifications")
+
+;; no-write-shell-application: writeShellApplication is banned (#3823).
+;; Write a compiled Rust tool instead (ix.rustWorkspace).
+(rule (no-write-shell-application n)
+  (match nix "(identifier) @n")
+  (text n "writeShellApplication"))
+(lint no-write-shell-application error
+  "writeShellApplication is banned (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks)")
+
+;; no-write-shell-script: writeShellScript hand-rolls an UNCHECKED shell script
+;; (no shellcheck, no declared runtime deps, the same gap that bans
+;; writeShellApplication / writeShellScriptBin). Prefer a compiled Rust
+;; launcher/tool (ix.rustWorkspace, see packages/config-launch and
+;; packages/claude-hooks), or ix.writeNushellApplication /
+;; ix.writePythonApplication for logic; for a genuine POSIX-process script that
+;; must be bash, use ix.writeBashApplication (checked: bash -n + shellcheck).
+(rule (no-write-shell-script n)
+  (match nix "(identifier) @n")
+  (text n "writeShellScript"))
+(lint no-write-shell-script error
+  "writeShellScript is unchecked (no shellcheck, no declared deps); prefer a compiled Rust launcher/tool (ix.rustWorkspace, see packages/config-launch / packages/claude-hooks), else ix.writeNushellApplication / ix.writePythonApplication for logic, else ix.writeBashApplication (checked) for must-be-bash")
+
+;; no-write-shell-script-bin: writeShellScriptBin is banned (#3823).
+;; Write a compiled Rust tool instead (ix.rustWorkspace).
+(rule (no-write-shell-script-bin n)
+  (match nix "(identifier) @n")
+  (text n "writeShellScriptBin"))
+(lint no-write-shell-script-bin error
+  "writeShellScriptBin is banned (#3823): write a compiled Rust tool (ix.rustWorkspace; see packages/config-launch, packages/claude-hooks)")
+
+;; prefer-attrvalues-over-mapattrs-identity: `lib.mapAttrsToList (_: v: v) X`
+;; is `builtins.attrValues X`. Drop the identity map.
+(rule (prefer-attrvalues-over-mapattrs-identity n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (parenthesized_expression
+          expression: (function_expression
+            universal: (identifier)
+            body: (function_expression
+              universal: (identifier) @p
+              body: (variable_expression name: (identifier) @b)))))) @n")
+  (text-match f "^(lib\\.)?mapAttrsToList$")
+  (same-text p b))
+(lint prefer-attrvalues-over-mapattrs-identity error
+  "`lib.mapAttrsToList (_: v: v) X` is `builtins.attrValues X`; drop the identity map")
+
+;; prefer-fileset-over-cleansource: `lib.cleanSource` is a blunt filter.
+;; Prefer `lib.fileset.toSource { root; fileset = ...; }` so the source
+;; closure names exactly what the build needs.
+(rule (prefer-fileset-over-cleansource n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f) @n")
+  (text-match f "^(lib\\.(sources\\.)?)?(cleanSource|cleanSourceWith)$"))
+(lint prefer-fileset-over-cleansource error
+  "`lib.cleanSource` is a blunt filter; prefer `lib.fileset.toSource {{ root; fileset = ...; }}` so the source closure names exactly what the build needs")
+
+;; prefer-formats-json-generate: Use `(pkgs.formats.json { }).generate
+;; "name" value` instead of `pkgs.writeText "name" (builtins.toJSON value)`.
+(rule (prefer-formats-json-generate n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f)
+      argument: (parenthesized_expression
+        expression: (apply_expression
+          function: [(variable_expression) (select_expression)] @g))) @n")
+  (text-match f "^(pkgs\\.)?writeText$")
+  (text-match g "^(builtins\\.)?toJSON$"))
+(lint prefer-formats-json-generate error
+  "use `(pkgs.formats.json {{ }}).generate \"name\" value` instead of `pkgs.writeText \"name\" (builtins.toJSON value)`")
+
+;; prefer-genattrs-listtoattrs: `listToAttrs (map f xs)` is
+;; `lib.genAttrs' xs f`. When each entry is keyed by the element itself, it
+;; simplifies further to `lib.genAttrs xs f`.
+(rule (prefer-genattrs-listtoattrs n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f
+      argument: (parenthesized_expression
+        expression: (apply_expression
+          function: (apply_expression
+            function: (variable_expression) @g)))) @n")
+  (text-match f "^(lib\\.|builtins\\.)?listToAttrs$")
+  (text g "map"))
+(lint prefer-genattrs-listtoattrs error
+  "`listToAttrs (map f xs)` is `lib.genAttrs' xs f`; when each entry is keyed by the element itself it simplifies further to `lib.genAttrs xs f`")
+
+;; prefer-genattrs-mapattrs-identity: `lib.mapAttrs (_: _: v) X` discards
+;; both name and value. Use `lib.genAttrs (lib.attrNames X) (_: v)` when the
+;; value is constant, or `builtins.mapAttrs (_: f) X` when only the value
+;; matters.
+(rule (prefer-genattrs-mapattrs-identity n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (parenthesized_expression
+          expression: (function_expression
+            universal: (identifier) @p1
+            body: (function_expression
+              universal: (identifier) @p2))))) @n")
+  (text-match f "^(lib\\.)?mapAttrs$")
+  (text p1 "_")
+  (text p2 "_"))
+(lint prefer-genattrs-mapattrs-identity error
+  "`lib.mapAttrs (_: _: v) X` discards both name and value; use `lib.genAttrs (lib.attrNames X) (_: v)` when the value is constant, or `builtins.mapAttrs (_: f) X` when only the value matters")
+
+;; prefer-genlist-over-map-range: `map f (lib.range 0 (n - 1))` collapses to
+;; `lib.genList f n`.
+(rule (prefer-genlist-over-map-range n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: (variable_expression) @m)
+      argument: (parenthesized_expression
+        expression: (apply_expression
+          function: (apply_expression
+            function: [(variable_expression) (select_expression)] @r
+            argument: (integer_expression) @z)
+          argument: (parenthesized_expression
+            expression: (binary_expression
+              operator: \"-\"
+              right: (integer_expression) @one))))) @n")
+  (text m "map")
+  (text-match r "^(lib\\.)?range$")
+  (text z "0")
+  (text one "1"))
+(lint prefer-genlist-over-map-range error
+  "`map f (lib.range 0 (n - 1))` collapses to `lib.genList f n`")
+
+;; prefer-imap0-over-genlist-identity: `lib.genList lib.id n` just
+;; materializes the index list `[ 0 1 ... n-1 ]`. Iterate the data with
+;; `lib.imap0`, or use `lib.range 0 (n - 1)` if you only need the integers.
+(rule (prefer-imap0-over-genlist-identity n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: [(variable_expression) (select_expression)] @g)) @n")
+  (text-match f "^(lib\\.|builtins\\.)?genList$")
+  (text-match g "^(lib\\.)?id$"))
+(rule (prefer-imap0-over-genlist-identity n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (parenthesized_expression
+          expression: (function_expression
+            universal: (identifier) @p
+            body: (variable_expression name: (identifier) @b))))) @n")
+  (text-match f "^(lib\\.|builtins\\.)?genList$")
+  (same-text p b))
+(lint prefer-imap0-over-genlist-identity error
+  "`lib.genList lib.id n` just materializes the index list; iterate the data with `lib.imap0`, or use `lib.range 0 (n - 1)` if you only need the integers")
+
+;; prefer-lib-import-format: Use `lib.importJSON path` / `lib.importTOML
+;; path` instead of `fromJSON (readFile path)` / `fromTOML (readFile path)`.
+(rule (prefer-lib-import-format n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f
+      argument: (parenthesized_expression
+        expression: (apply_expression
+          function: [(variable_expression) (select_expression)] @g))) @n")
+  (text-match f "^(builtins\\.)?(fromJSON|fromTOML)$")
+  (text-match g "^(builtins\\.)?readFile$"))
+(lint prefer-lib-import-format error
+  "use `lib.importJSON path` / `lib.importTOML path` instead of `fromJSON (readFile path)` / `fromTOML (readFile path)`")
+
+;; prefer-lib-optional-singleton: `lib.optionals cond [ x ]` collapses to
+;; `lib.optional cond x`.
+(rule (prefer-lib-optional-singleton n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f)
+      argument: (list_expression . (_) @only .)) @n")
+  (text-match f "^(lib\\.)?optionals$"))
+(lint prefer-lib-optional-singleton error
+  "`lib.optionals cond [ x ]` collapses to `lib.optional cond x`")
+
+;; prefer-or-default-over-has-attr-guard: `(s ? k) && <expr using s.k>`
+;; guards a lookup with an existence check. Push the default into the lookup
+;; with `s.k or DEFAULT`.
+(rule (prefer-or-default-over-has-attr-guard n)
+  (match nix "
+    (binary_expression
+      left: (parenthesized_expression
+        expression: (has_attr_expression
+          expression: (_) @s1
+          attrpath: (attrpath) @k1))
+      operator: \"&&\"
+      right: (select_expression
+        expression: (_) @s2
+        attrpath: (attrpath) @k2)) @n")
+  (same-text s1 s2)
+  (same-text k1 k2))
+(rule (prefer-or-default-over-has-attr-guard n)
+  (match nix "
+    (binary_expression
+      left: (parenthesized_expression
+        expression: (has_attr_expression
+          expression: (_) @s1
+          attrpath: (attrpath) @k1))
+      operator: \"&&\"
+      right: (unary_expression
+        operator: \"!\"
+        argument: (select_expression
+          expression: (_) @s2
+          attrpath: (attrpath) @k2))) @n")
+  (same-text s1 s2)
+  (same-text k1 k2))
+(rule (prefer-or-default-over-has-attr-guard n)
+  (match nix "
+    (binary_expression
+      left: (parenthesized_expression
+        expression: (has_attr_expression
+          expression: (_) @s1
+          attrpath: (attrpath) @k1))
+      operator: \"&&\"
+      right: (parenthesized_expression
+        expression: (binary_expression
+          left: (select_expression
+            expression: (_) @s2
+            attrpath: (attrpath) @k2)
+          operator: [\"==\" \"!=\"]))) @n")
+  (same-text s1 s2)
+  (same-text k1 k2))
+(rule (prefer-or-default-over-has-attr-guard n)
+  (match nix "
+    (if_expression
+      condition: (has_attr_expression
+        expression: (_) @s1
+        attrpath: (attrpath) @k1)
+      consequence: (select_expression
+        expression: (_) @s2
+        attrpath: (attrpath) @k2)) @n")
+  (same-text s1 s2)
+  (same-text k1 k2))
+(lint prefer-or-default-over-has-attr-guard error
+  "`(s ? k) && <expr using s.k>` guards a lookup with an existence check; push the default into the lookup with `s.k or DEFAULT`")
+
+;; prefer-sorton-over-keyed-sort: `sort (a: b: (f a) < (f b))` is a keyed
+;; comparator. Use `lib.sortOn f xs`, which evaluates the key once per
+;; element.
+(rule (prefer-sorton-over-keyed-sort n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (parenthesized_expression
+          expression: (function_expression
+            universal: (identifier) @a
+            body: (function_expression
+              universal: (identifier) @b
+              body: (binary_expression
+                left: (select_expression
+                  expression: (variable_expression) @la
+                  attrpath: (attrpath) @lf)
+                operator: \"<\"
+                right: (select_expression
+                  expression: (variable_expression) @rb
+                  attrpath: (attrpath) @rf))))))) @n")
+  (text-match f "^(lib\\.|builtins\\.)?sort$")
+  (same-text a la)
+  (same-text b rb)
+  (same-text lf rf))
+(rule (prefer-sorton-over-keyed-sort n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (parenthesized_expression
+          expression: (function_expression
+            universal: (identifier) @a
+            body: (function_expression
+              universal: (identifier) @b
+              body: (binary_expression
+                left: (apply_expression
+                  function: (_) @lg
+                  argument: (variable_expression) @la)
+                operator: \"<\"
+                right: (apply_expression
+                  function: (_) @rg
+                  argument: (variable_expression) @rb))))))) @n")
+  (text-match f "^(lib\\.|builtins\\.)?sort$")
+  (same-text lg rg)
+  (same-text a la)
+  (same-text b rb))
+(rule (prefer-sorton-over-keyed-sort n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (parenthesized_expression
+          expression: (function_expression
+            universal: (identifier) @a
+            body: (function_expression
+              universal: (identifier) @b
+              body: (binary_expression
+                left: (parenthesized_expression
+                  expression: (apply_expression
+                    function: (_) @lg
+                    argument: (variable_expression) @la))
+                operator: \"<\"
+                right: (parenthesized_expression
+                  expression: (apply_expression
+                    function: (_) @rg
+                    argument: (variable_expression) @rb)))))))) @n")
+  (text-match f "^(lib\\.|builtins\\.)?sort$")
+  (same-text lg rg)
+  (same-text a la)
+  (same-text b rb))
+(lint prefer-sorton-over-keyed-sort error
+  "`sort (a: b: (f a) < (f b))` is a keyed comparator; use `lib.sortOn f xs`, which evaluates the key once per element")
+
+;; prefer-sri-hash: Legacy `sha256`-flavored hash attr (fetcher `sha256`, or
+;; the removed `cargoSha256` / `vendorSha256` / `npmDepsSha256` builder
+;; slots). Use the SRI `hash` slot instead. The one legitimate exception is a
+;; hex digest that must round-trip verbatim (e.g. a Cargo.lock checksum fed
+;; back into `.cargo-checksum.json`): keep it on `sha256` and suppress with
+;; an `astlog-ignore: prefer-sri-hash` comment naming the reason.
+(rule (prefer-sri-hash n)
+  (match nix "(binding attrpath: (attrpath) @p) @n")
+  (text-match p "^(sha256|[a-zA-Z][a-zA-Z0-9]*Sha256)$"))
+(lint prefer-sri-hash error
+  "legacy `sha256`-flavored hash attr; use the SRI `hash` slot: `hash` in fetchers, `cargoHash` / `vendorHash` / `npmDepsHash` in the language builders (or the typed `cargoLock` block for Rust)")
+
+;; runcommand-missing-structured-attrs: `pkgs.runCommand name {} body` passes an
+;; empty attrset, so the derivation gets no `__structuredAttrs = true`. Add
+;; `{ __structuredAttrs = true; }` for consistent derivation behavior (attrs
+;; passed as JSON: no env-var length limits, preserved list/nested types).
+;; Warning severity: a large pre-existing tail still carries `{}`.
+(rule (runcommand-missing-structured-attrs n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: (apply_expression
+          function: [(variable_expression) (select_expression)] @f
+          argument: (_))
+        argument: (attrset_expression) @attrs)) @n")
+  (text-match f "^(pkgs\\.)?runCommand$")
+  (text-match attrs "^\\{\\s*\\}$"))
+(lint runcommand-missing-structured-attrs warning
+  "runCommand with empty attrs {{}}; add {{ __structuredAttrs = true; }} for consistent derivation behavior")
+
+
+;; ---------------------------------------------------------------------------
+;; Nixcademy anti-pattern lints (ported from the Nixcademy "Nix Anti-Patterns"
+;; booklet, #TBD). Same shape as the rules above: one relation per lint named
+;; after its id, plus a (lint ...) declaration. Helper relations (no lint
+;; declaration) carry the joins/negation a single tree-sitter query cannot.
+;; ---------------------------------------------------------------------------
+
+;; no-at-pattern-shortcut: `{ foo, ... }@args` then reaching `args.bar` hides a
+;; required input behind the `...`. Match every attribute you use in the
+;; formals. Forwarding the whole captured set onward (no `.` access) is fine, so
+;; the rule fires only when the at-bound name is used as a select base.
+(rule (at-bound-fn n a)
+  (match nix "(function_expression (formals) (identifier) @a) @n"))
+(rule (at-bound-fn n a)
+  (match nix "(function_expression (identifier) @a (formals)) @n"))
+(rule (body-var-select s base)
+  (match nix "(select_expression expression: (variable_expression) @base) @s"))
+(rule (no-at-pattern-shortcut n)
+  (at-bound-fn n a)
+  (body-var-select s base)
+  (same-text a base)
+  (ancestor n s))
+(lint no-at-pattern-shortcut error
+  "`{{ foo, ... }}@args` then reaching `args.bar` hides a required input; match every attribute you use in the formals")
+
+;; nixpkgs-explicit-config: `import nixpkgs { }` inherits ambient config and
+;; overlays from the environment; pass `config = { }; overlays = [ ];` so the
+;; package set is self-contained.
+(rule (nixpkgs-explicit-config n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: (variable_expression) @imp
+        argument: (variable_expression) @np)
+      argument: (attrset_expression) @attrs) @n")
+  (text imp "import")
+  (text np "nixpkgs")
+  (no-descendant attrs "attrpath" "config"))
+(lint nixpkgs-explicit-config error
+  "`import nixpkgs {{ }}` inherits ambient config and overlays from the environment; pass `config = {{ }}; overlays = [ ];`")
+
+;; import-nixpkgs-once: an optional `pkgs ? import <nixpkgs> { }` default
+;; re-imports Nixpkgs as an accidental singleton with a possibly different
+;; release/config/overlays. Require `pkgs` and thread the one instance through.
+(rule (import-nixpkgs-once n)
+  (match nix "(formal) @n")
+  (text-match n "\\?\\s*import\\b.*nixpkgs"))
+(lint import-nixpkgs-once error
+  "optional `pkgs ? import <nixpkgs> {{ }}` default re-imports Nixpkgs as an accidental singleton; require `pkgs` and thread it through")
+
+;; set-docheck: `checkPhase` is off by default; set `doCheck = true;` so the
+;; build runs the package's tests. Warning severity: advice, not a behavior bug.
+(rule (set-docheck n)
+  (match nix "
+    (apply_expression
+      function: (select_expression) @f
+      argument: (attrset_expression) @attrs) @n")
+  (text-match f "(^|\\.)mkDerivation$")
+  (no-descendant attrs "attrpath" "doCheck"))
+(lint set-docheck warning
+  "`checkPhase` is off by default; set `doCheck = true;` so the build runs the package's tests")
+
+;; declare-env-explicitly: a list attr coerces to a single space-joined env var
+;; (`[ "-a" "-b c d" ]` -> `"-a -b c d"`); use the `env` slot with
+;; `lib.escapeShellArgs`. Heuristic: an UPPER_SNAKE attr name bound to a list.
+(rule (declare-env-explicitly n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (list_expression)) @n")
+  (text-match p "^[A-Z][A-Z0-9_]*$"))
+(lint declare-env-explicitly error
+  "a list attr coerces to a single space-joined env var; use the `env` slot with `lib.escapeShellArgs`")
+
+;; extend-makeflagsarray: assigning `makeFlagsArray` directly re-splits
+;; space-containing values; append to it in a `preBuild` shell snippet with
+;; proper bash quoting.
+(rule (extend-makeflagsarray n)
+  (match nix "(binding attrpath: (attrpath) @p) @n")
+  (text p "makeFlagsArray"))
+(lint extend-makeflagsarray error
+  "assigning `makeFlagsArray` directly mangles space-containing values; append to it in a `preBuild` shell snippet")
+
+;; no-pkgs-in-callpackage: taking `pkgs` in a `callPackage`-style package
+;; argument set routes dependencies through `pkgs.foo`, which `override` cannot
+;; reach; list the exact dependencies as parameters so each is overridable.
+;; Scoped to package functions -- a `pkgs` formal on a function whose body
+;; builds a derivation (mkDerivation / buildPythonPackage / buildGoModule / ...)
+;; -- so a NixOS module or flake output that legitimately takes `pkgs` is not
+;; flagged.
+(rule (mkderivation-call m)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f) @m")
+  (text-match f "(^|\\.)(mkDerivation|mkDerivationNoCC|buildPythonPackage|buildPythonApplication|buildGoModule|buildGoApplication|buildRustPackage|buildPerlPackage|buildNpmPackage)$"))
+(rule (no-pkgs-in-callpackage n)
+  (match nix "(function_expression (formals (formal name: (identifier) @id) @n)) @fn")
+  (text id "pkgs")
+  (mkderivation-call m)
+  (ancestor fn m))
+(lint no-pkgs-in-callpackage error
+  "taking `pkgs` in a `callPackage` package argument set breaks `override`; list the exact dependencies you need")
+
+;; keep-python-composable: pulling deps out of `python3Packages` blocks
+;; per-dependency overrides; take the package names directly (each interpreter's
+;; `callPackage` adds them to scope).
+(rule (keep-python-composable n)
+  (match nix "(select_expression) @n")
+  (text-match n "^python3?[0-9]*Packages\\."))
+(lint keep-python-composable error
+  "pulling deps out of `python3Packages` blocks per-dependency overrides; take the package names directly")
+
+;; future-proof-overrideattrs: `overrideAttrs` with a plain attrset silently
+;; drops values the original later adds; use the `(old: { ... })` function form
+;; with `old.x or [ ]`.
+(rule (future-proof-overrideattrs n)
+  (match nix "
+    (apply_expression
+      function: (select_expression) @f
+      argument: (attrset_expression)) @n")
+  (text-match f "(^|\\.)overrideAttrs$"))
+(lint future-proof-overrideattrs error
+  "`overrideAttrs` with an attrset drops pre-existing values; use the `(old: {{ ... }})` function form with `old.x or [ ]`")
+
+;; keep-phase-hooks: a wholesale phase override must keep BOTH its
+;; `runHook pre<Phase>` and `runHook post<Phase>` calls, or downstream consumers
+;; lose the ability to prepend/append via pre/post overrides.
+;; `phase-correctly-hooked` holds only when the matching pre AND post hook for
+;; that exact phase are both present; the lint fires on any phase string missing
+;; either, or carrying a different phase's hooks.
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "buildPhase")
+  (text-match v "runHook\\s+preBuild")
+  (text-match v "runHook\\s+postBuild"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "installPhase")
+  (text-match v "runHook\\s+preInstall")
+  (text-match v "runHook\\s+postInstall"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "checkPhase")
+  (text-match v "runHook\\s+preCheck")
+  (text-match v "runHook\\s+postCheck"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "configurePhase")
+  (text-match v "runHook\\s+preConfigure")
+  (text-match v "runHook\\s+postConfigure"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "unpackPhase")
+  (text-match v "runHook\\s+preUnpack")
+  (text-match v "runHook\\s+postUnpack"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "patchPhase")
+  (text-match v "runHook\\s+prePatch")
+  (text-match v "runHook\\s+postPatch"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "distPhase")
+  (text-match v "runHook\\s+preDist")
+  (text-match v "runHook\\s+postDist"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "installCheckPhase")
+  (text-match v "runHook\\s+preInstallCheck")
+  (text-match v "runHook\\s+postInstallCheck"))
+(rule (phase-binding-str n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text-match p "^(buildPhase|installPhase|checkPhase|configurePhase|unpackPhase|patchPhase|distPhase|installCheckPhase)$"))
+(rule (keep-phase-hooks n)
+  (phase-binding-str n)
+  (not (phase-correctly-hooked n)))
+(lint keep-phase-hooks error
+  "a phase override that drops its `runHook pre<Phase>` / `runHook post<Phase>` calls strips downstream hooks; keep both hooks for that phase")
+
+;; phase-string-syntax-comment: multiline shell phases should opt into editor
+;; shell highlighting with a harmless first-line shell comment.
+(rule (phase-string-syntax-comment n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text-match p "(^|\\.)(prePatch|postPatch|patchPhase|preBuild|postBuild|buildPhase|preInstall|postInstall|installPhase|preCheck|postCheck|checkPhase|preConfigure|postConfigure|configurePhase|preFixup|postFixup|fixupPhase|unpackPhase|distPhase|installCheckPhase|shellHook)$")
+  (text-match v "^''[[:space:]]*# (shell|bash|sh|syntax: (shell|bash|sh))"))
+(rule (phase-string-without-syntax-comment n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text-match p "(^|\\.)(prePatch|postPatch|patchPhase|preBuild|postBuild|buildPhase|preInstall|postInstall|installPhase|preCheck|postCheck|checkPhase|preConfigure|postConfigure|configurePhase|preFixup|postFixup|fixupPhase|unpackPhase|distPhase|installCheckPhase|shellHook)$")
+  (not (phase-string-syntax-comment n)))
+(lint phase-string-without-syntax-comment error
+  "multiline shell phase strings need `# shell` as their first line so editors highlight the embedded shell")
+
+;; nushell-text-without-syntax-comment: embedded Nushell app bodies should opt
+;; into editor highlighting with a harmless first-line Nushell comment.
+(rule (nushell-text-syntax-comment n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "text")
+  (text-match v "^''[[:space:]]*# (nu|nushell|syntax: (nu|nushell))"))
+(rule (nushell-looking-text n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "text")
+  (text-match v "^''[[:space:]]*(def |def --wrapped |const |let |use |source |export def |module )"))
+(rule (nushell-text-without-syntax-comment n)
+  (nushell-looking-text n)
+  (not (nushell-text-syntax-comment n)))
+(lint nushell-text-without-syntax-comment error
+  "multiline Nushell `text` strings need `# nu` as their first line so editors highlight the embedded Nushell")
+
+;; python-text-without-syntax-comment: embedded Python source files should opt
+;; into editor highlighting with a harmless first-line Python comment.
+(rule (python-text-syntax-comment n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (string_expression) @s)
+      argument: (indented_string_expression) @v) @n")
+  (text-match f "^(pkgs\\.)?writeText$")
+  (text-match s "\\.py\"$")
+  (text-match v "^''[[:space:]]*# (python|py|syntax: (python|py))"))
+(rule (python-text n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (string_expression) @s)
+      argument: (indented_string_expression)) @n")
+  (text-match f "^(pkgs\\.)?writeText$")
+  (text-match s "\\.py\"$"))
+(rule (python-text-without-syntax-comment n)
+  (python-text n)
+  (not (python-text-syntax-comment n)))
+(lint python-text-without-syntax-comment error
+  "multiline Python `writeText \"*.py\"` strings need `# python` as their first line so editors highlight the embedded Python")
+
+;; prefer-substituteinplace: `sed -i` / `awk` in a phase fails silently when the
+;; pattern stops matching; use `substituteInPlace ... --replace-fail`.
+(rule (prefer-substituteinplace n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: [(string_expression) (indented_string_expression)] @v) @n")
+  (text-match p "(^|\\.)(postPatch|prePatch|patchPhase|preBuild|postBuild|preInstall|postInstall|installPhase|buildPhase|preConfigure|postConfigure|configurePhase|preFixup|postFixup|fixupPhase)$")
+  (text-match v "(\\bsed\\b.*-i|\\bawk\\b)"))
+(lint prefer-substituteinplace error
+  "`sed -i` / `awk` in a phase fails silently when the match disappears; use `substituteInPlace ... --replace-fail`")
+
+;; overlay-prev-fn: an overlay's `prev:` (or `final: prev:`) function. Shared by
+;; the two overlay lints below to scope them to overlay context.
+(rule (overlay-prev-fn f)
+  (match nix "(function_expression (identifier) @id) @f")
+  (text id "prev"))
+
+;; overlay-preserve-nested: an overlay `a = { b = foo; };` at the TOP LEVEL of
+;; the returned set replaces all of `prev.a`; merge with
+;; `prev.a or { } // { ... }`. Scoped to direct members of the overlay body
+;; (`parent`), so an attrset-valued binding nested deeper (a `meta`, an
+;; `overrideAttrs` lambda) is not flagged.
+(rule (overlay-body-bset bset)
+  (match nix "
+    (function_expression
+      (identifier) @id
+      body: (attrset_expression (binding_set) @bset)) @f")
+  (text id "prev"))
+(rule (overlay-preserve-nested n)
+  (overlay-body-bset bset)
+  (match nix "(binding expression: (attrset_expression)) @n")
+  (parent bset n))
+(lint overlay-preserve-nested error
+  "overlay `a = {{ b; }}` drops the rest of `prev.a`; merge with `prev.a or {{ }} // {{ ... }}`")
+
+;; keep-overrides-composable: building a custom package in an overlay `let`
+;; hides it from later overlays; expose it as a real attr and inject via
+;; `final.<name>`.
+(rule (keep-overrides-composable n)
+  (overlay-prev-fn f)
+  (match nix "(let_expression) @n")
+  (text-match n "callPackage")
+  (ancestor f n))
+(lint keep-overrides-composable error
+  "hiding a custom package in an overlay `let` blocks later overlays; expose it as a real attr and inject via `final.<name>`")
+
+;; parametrize-with-options: wrapping a module in a top-level function arg
+;; (`pkg: { config, ... }: ...`) locks the choice in; declare an `mkOption` and
+;; read it from `config`.
+(rule (parametrize-with-options n)
+  (match nix "
+    (function_expression
+      (identifier) @outer
+      body: (function_expression (formals) @f)) @n")
+  (text-match f "(^|[^A-Za-z0-9_])config([^A-Za-z0-9_]|$)"))
+(lint parametrize-with-options error
+  "a top-level function arg on a module locks the choice in; declare an `mkOption` and read it from `config`")
+
+;; avoid-specialargs: `specialArgs` injection scales badly and can clash; prefer
+;; a Nixpkgs overlay and read `pkgs.<name>`.
+(rule (avoid-specialargs n)
+  (match nix "(binding attrpath: (attrpath) @p) @n")
+  (text p "specialArgs"))
+(lint avoid-specialargs error
+  "`specialArgs` injection scales badly and can clash; prefer a Nixpkgs overlay and read `pkgs.<name>`")
+
+;; separate-host-guest-pkgs: a test node defined as a bare attrset that
+;; references the orchestrating host's `pkgs` pulls guest packages from the
+;; wrong set; take `pkgs` from the node module function instead.
+(rule (nixostest-call n)
+  (match nix "(apply_expression function: (select_expression) @f) @n")
+  (text-match f "runNixOSTest$"))
+(rule (node-attrset-binding b)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (attrset_expression) @v) @b")
+  (text-match p "^nodes\\.")
+  (text-match v "\\bpkgs\\b"))
+(rule (separate-host-guest-pkgs n)
+  (nixostest-call n)
+  (node-attrset-binding b)
+  (ancestor n b))
+(lint separate-host-guest-pkgs error
+  "referencing the host's `pkgs` inside a test node breaks when host and guest platforms differ; take `pkgs` from the node module function")
+
+;; wait-for-unit-and-port: curling a service after only `wait_for_unit` races on
+;; fast hosts; wait for `network-online.target`, the unit, and the open port.
+;; `has-open-port` is the absence check negated by the lint.
+(rule (test-script-curl n)
+  (match nix "(indented_string_expression) @n")
+  (text-match n "wait_for_unit")
+  (text-match n "curl"))
+(rule (has-open-port n)
+  (match nix "(indented_string_expression) @n")
+  (text-match n "wait_for_open_port"))
+(rule (wait-for-unit-and-port n)
+  (test-script-curl n)
+  (not (has-open-port n)))
+(lint wait-for-unit-and-port error
+  "curling a service after only `wait_for_unit` races on fast hosts; wait for `network-online.target`, the unit, and the open port")
+
+;; minimize-with-scope: `with x;` over any target other than a bare
+;; `lib`/`pkgs`/`builtins` (those have their own dedicated lints) lifts every
+;; key into scope and obscures name origins. `with-allowed-env` is the
+;; already-covered set, negated so this rule only adds the delta.
+(rule (with-allowed-env e)
+  (match nix "(with_expression environment: (variable_expression) @e) @w")
+  (text-match e "^(lib|pkgs|builtins)$"))
+(rule (minimize-with-scope n)
+  (match nix "(with_expression environment: (_) @e) @n")
+  (not (with-allowed-env e)))
+(lint minimize-with-scope error
+  "`with x;` obscures name origins; bind with `let`/`inherit` or `builtins.attrValues {{ inherit (pkgs) ...; }}` (a tightly-scoped `with pkgs;` around one list is the one exception)")
+
+;; filter-src: `src = ./.;` copies the whole working tree into the store; filter
+;; with `lib.fileset.toSource` (or at least `lib.cleanSource`). Warning
+;; severity: a large pre-existing tree can adopt this incrementally.
+(rule (filter-src n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (path_expression) @v) @n")
+  (text p "src")
+  (text-match v "^\\.(/\\.?)?$"))
+(lint filter-src warning
+  "`src = ./.;` copies the whole tree into the store; filter with `lib.fileset.toSource` (or at least `lib.cleanSource`)")
+
+;; no-whole-repo-fileset-source: `fileset = gitTracked <repo-root>` binds every
+;; tracked file in the repository as one source, so any edit anywhere
+;; invalidates the consumer (index#3896; blast-radius-test was the worst case).
+;; Intersect with the owning subtree instead:
+;; `fs.intersection (fs.gitTracked root) (root + "/<dir>")`. A consumer whose
+;; subject really is the whole tree (the repo linter) carries an in-place
+;; astlog-ignore naming the reason.
+(rule (no-whole-repo-fileset-source n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (apply_expression
+        function: (select_expression) @f
+        argument: [(variable_expression) (select_expression)] @a)) @n")
+  (text p "fileset")
+  (text-match f "(^|\\.)(fileset|fs)\\.gitTracked$")
+  (text-match a "^(paths\\.)?root$"))
+(lint no-whole-repo-fileset-source error
+  "`fileset = gitTracked <repo-root>` makes every tracked edit invalidate this source; intersect with the owning subtree (index#3896)")
+
+;; pname-with-version: a literal `name = "package"` set alongside a `version`
+;; restates what stdenv derives; use `pname` and let stdenv build
+;; `<pname>-<version>`. Joined on the shared `binding_set` so it fires only when
+;; both siblings are present, and the literal (non-interpolated) name keeps it
+;; distinct from no-derivation-name-version-interp.
+(rule (literal-name-binding n bs)
+  (match nix "
+    (binding_set
+      (binding
+        attrpath: (attrpath) @p
+        expression: (string_expression) @v) @n) @bs")
+  (text p "name")
+  (text-match v "^\"[^$]*\"$"))
+(rule (version-sibling bs)
+  (match nix "(binding_set (binding attrpath: (attrpath) @p)) @bs")
+  (text p "version"))
+(rule (pname-with-version n)
+  (literal-name-binding n bs)
+  (version-sibling bs))
+(lint pname-with-version error
+  "a literal `name` set alongside `version` restates what stdenv derives; use `pname` and let stdenv build `<pname>-<version>`")
+
+;; cross-compile-ready-deps: build-time tools (`pkg-config`, `cmake`, ...) in
+;; `buildInputs` instead of `nativeBuildInputs` break cross-compilation; split
+;; them and set `strictDeps = true`.
+(rule (cross-compile-ready-deps n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (list_expression) @v) @n")
+  (text p "buildInputs")
+  (text-match v "(^|[^A-Za-z0-9_-])(pkg-config|pkgconf|pkgconfig|cmake|meson|ninja|autoconf|automake|autoreconfHook|makeWrapper|installShellFiles)([^A-Za-z0-9_-]|$)"))
+(lint cross-compile-ready-deps error
+  "build-time tools (`pkg-config`, `cmake`, ...) belong in `nativeBuildInputs`, not `buildInputs`; split them and set `strictDeps = true`")
+
+;; prefer-phase-flags: a whole-phase override carrying custom targets/flags
+;; disables everything else the phase does and cannot be composed; route them to
+;; `makeFlags` / `buildFlags` / `configureFlags` / `installTargets`.
+(rule (prefer-phase-flags n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: [(string_expression) (indented_string_expression)] @v) @n")
+  (text-match p "^(buildPhase|installPhase)$")
+  (text-match v "\\bmake\\b.*[A-Za-z_][A-Za-z0-9_]*="))
+(rule (prefer-phase-flags n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: [(string_expression) (indented_string_expression)] @v) @n")
+  (text-match p "^configurePhase$")
+  (text-match v "\\./configure\\b"))
+(lint prefer-phase-flags error
+  "a whole-phase override carrying custom targets/flags should be `makeFlags` / `buildFlags` / `configureFlags` / `installTargets`")
+
+;; Digit grouping in numeric literals (Rust convention): a literal with five
+;; or more consecutive digits is read by counting digits; group them in
+;; threes with underscore separators (`10_000`, `0.000_001`), grouping the
+;; integer part and the exponent from the right and the fraction from the
+;; left of the decimal point. The toolchain speaks this dialect end to end:
+;; the patched nix lexer
+;; (packages/nix/patches/0014-libexpr-accept-underscore-digit-separators)
+;; strips the separators before parsing the value, and the in-repo
+;; tree-sitter-nix fork (packages/tree-sitter-nix) lexes an underscore
+;; literal as one integer/float node, so these rules see whole literals.
+;; One lint polices literals that already carry separators, with a rewrite so
+;; `astlog fix` repairs the literal:
+;; - no-misgrouped-digit-separators (error): a literal that already carries
+;;   separators must use exactly the canonical grouping (`1_0000` ->
+;;   `10_000`).
+;; Bare literals are NOT nudged toward separators: underscore digit literals
+;; are a patched-nix dialect that stock Nix rejects (`25_565` lexes as `25`
+;; then `_565`), so consumer flakes importing this tree must stay
+;; stock-parseable. 0a394ab7 un-grouped the consumer-reachable literals and
+;; #3422 retired the prefer-digit-grouping lint that demanded them.
+(rule (misgrouped-number n fixed)
+  (match nix "[(integer_expression) (float_expression)] @n")
+  (misgrouped-digits n fixed))
+(rule (no-misgrouped-digit-separators n fixed)
+  (misgrouped-number n fixed)
+  (text-match n "_"))
+(lint no-misgrouped-digit-separators error
+  "underscore separators must group digits in threes (integer part and exponent from the right, fraction from the left); write `{fixed}`")
+(rewrite regroup-digit-separators (no-misgrouped-digit-separators n fixed)
+  (replace n "{fixed}"))

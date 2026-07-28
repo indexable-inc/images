@@ -1,0 +1,22 @@
+[package]
+name = "source-github"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Adapter turning a GitHub issue/PR export into embeddable search documents"
+
+[lints]
+workspace = true
+
+[dependencies]
+source-meta.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+# The workspace pins chrono with `default-features = false`; `alloc` re-enables
+# the RFC3339 parser (`DateTime::parse_from_rfc3339`) without pulling in `clock`
+# or `std` time, which this crate never needs.
+chrono = { workspace = true, features = ["alloc"] }
+
+[dev-dependencies]
+# fixture-based tests

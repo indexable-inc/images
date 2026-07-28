@@ -1,0 +1,73 @@
+---
+id: index-cargo-features-inherit
+postedAt: "2026-07-25T16:50:00-07:00"
+title: bare cargo could not run in index at all, because ix's config leaks in
+tags:
+  - rust
+  - tooling
+---
+
+Every bare cargo command in this repo failed, debug builds included:
+
+```
+$ cargo check -p submodule-sync-test
+error: failed to parse manifest
+Caused by: feature `profile-rustflags` is required
+```
+
+index is a git submodule of ix, and cargo merges every `.cargo/config.toml`
+from the working directory up to the filesystem root. So cargo inside index
+reads `../.cargo/config.toml`, which sets:
+
+```toml
+[profile.release]
+rustflags = ["--remap-path-prefix=/app=/build", ...]
+```
+
+That key is gated behind the unstable `profile-rustflags` feature. ix opts into
+it at the top of *its* `Cargo.toml`, and that declaration does not reach this
+workspace, so cargo saw the key without the opt-in and aborted before doing
+anything.
+
+One line in `index/Cargo.toml` fixes it:
+
+```toml
+cargo-features = ["profile-rustflags"]
+```
+
+`cargo check` now runs in 2.32s. The flags themselves are `--remap-path-prefix`
+entries for `/app` and `/opt/cargo` and are inert on a developer checkout,
+where those paths do not exist.
+
+## what this cost before it was found
+
+Adding a workspace member without cargo means adding its `Cargo.lock` entry by
+hand, which is what happened for `packages/submodule-sync-test`. Every attempt
+to let cargo do it hit the parse error, so the entry was written manually and
+verified by a full `nix build`. That is a slow loop for something cargo does
+instantly.
+
+## the leak this does NOT fix
+
+The same parent config sets:
+
+```toml
+[build]
+target = "x86_64-unknown-linux-musl"
+```
+
+A child config cannot unset a parent key, so bare cargo in index still
+cross-compiles to musl by default and fails on `ring`, `aws-lc-sys` and
+`libmimalloc-sys`. Pass the host triple for a local check:
+
+```
+cargo check -p <pkg> --target aarch64-apple-darwin
+```
+
+Both facts are recorded in a comment above the new line rather than left for
+the next person to rediscover.
+
+None of this touches packaged builds. Those run in a Nix sandbox from a store
+path, which has no parent directory to inherit from. Confirmed by rebuilding
+`.#submodule-sync-test` before and after: the same output path,
+`01l447vj502n1r3x6jzfk3v9kxnhj84g`, so the declaration is build-neutral.

@@ -1,0 +1,1 @@
+package.overrideAttrs (old: { patches = old.patches or [ ] ++ [ ./my-bugfix.patch ]; })

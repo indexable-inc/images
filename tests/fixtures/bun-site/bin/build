@@ -1,0 +1,9 @@
+#!/usr/bin/env node
+import { mkdir } from "node:fs/promises";
+import { clsx } from "clsx";
+
+const classFlag = process.argv.indexOf("--class");
+const className = classFlag === -1 ? "ix bun missing-flag" : process.argv[classFlag + 1];
+
+await mkdir("dist", { recursive: true });
+await Bun.write("dist/index.html", `<main class="${clsx(className)}">Bun lock OK</main>\n`);

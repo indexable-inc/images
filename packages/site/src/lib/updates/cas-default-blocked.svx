@@ -1,0 +1,38 @@
+---
+id: cas-default-blocked
+postedAt: 2026-05-26T04:21:18-07:00
+title: "CAS defaults need a cache plan before they can carry ix builds"
+tags: [interesting, nix, cache]
+links:
+  - label: ca-derivations feature
+    href: https://nix.dev/manual/nix/2.34/development/experimental-features.html#xp-feature-ca-derivations
+  - label: content-addressed outputs
+    href: https://nix.dev/manual/nix/2.34/store/derivation/outputs/content-address.html
+  - label: nixpkgs default switch
+    href: https://github.com/NixOS/nixpkgs/blob/0590cd39f728e129122770c029970378a79d076a/pkgs/top-level/config.nix#L202
+---
+
+ix VM images already enable the `ca-derivations` experimental feature for in-VM Nix commands. The harder default is the nixpkgs switch, `config.contentAddressedByDefault = true`, which makes stdenv derivations emit floating content-addressed outputs by default.
+
+That switch is not ready to carry this repo's default checks. Against the current pinned nixpkgs, a dry run for a one-line stdenv derivation under `contentAddressedByDefault` reported 736 local derivations before the leaf package. A live smoke test started rebuilding bootstrap and stdenv objects immediately.
+
+```bash
+nix build --dry-run --impure --expr '
+let
+  f = builtins.getFlake (toString ./.);
+  pkgs = import f.inputs.nixpkgs {
+    system = "x86_64-linux";
+    config.contentAddressedByDefault = true;
+  };
+in
+pkgs.stdenv.mkDerivation {
+  name = "ca-stdenv-smoke";
+  dontUnpack = true;
+  installPhase = "echo ok > $out";
+}
+'
+```
+
+The issue is cache shape. Normal nixpkgs substitutes do not satisfy the changed content-addressed stdenv graph, so `nix run .#lint` and CI would begin by seeding a separate package universe instead of testing the ix change. That cost belongs in a cache rollout, not in every contributor's first validation run.
+
+The useful near-term path is narrower. Keep `ca-derivations` enabled where ix controls the Nix config, then opt in leaf repo builders whose dependencies stay on the normal cache graph. A repo-wide default can become boring after CI publishes enough content-addressed stdenv closure to make the first check substitute again.

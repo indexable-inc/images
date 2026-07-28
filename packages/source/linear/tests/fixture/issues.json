@@ -1,0 +1,206 @@
+[
+  {
+    "id": "aaaaaaaa-0000-0000-0000-000000000001",
+    "identifier": "FIX-1",
+    "number": 1,
+    "title": "First issue with comments and a PR",
+    "description": "This issue links a pull request and has two comments.",
+    "priority": 2,
+    "priorityLabel": "High",
+    "estimate": 3,
+    "url": "https://linear.app/acme/issue/FIX-1/first-issue-with-comments-and-a-pr",
+    "branchName": "alex/fix-1-first-issue",
+    "createdAt": "2026-01-02T10:00:00.000Z",
+    "updatedAt": "2026-01-03T12:30:00.000Z",
+    "startedAt": "2026-01-02T10:05:00.000Z",
+    "completedAt": null,
+    "canceledAt": null,
+    "archivedAt": null,
+    "dueDate": null,
+    "state": {
+      "id": "s1",
+      "name": "In Progress",
+      "type": "started",
+      "color": "#f2c94c"
+    },
+    "assignee": {
+      "id": "u-alex",
+      "name": "Alex",
+      "displayName": "alex",
+      "email": "alex@acme.test"
+    },
+    "creator": {
+      "id": "u-alex",
+      "name": "Alex",
+      "displayName": "alex",
+      "email": "alex@acme.test"
+    },
+    "labels": {
+      "nodes": [
+        { "id": "l-bug", "name": "bug", "color": "#eb5757" },
+        { "id": "l-stab", "name": "stability", "color": "#bec2c8" }
+      ]
+    },
+    "project": { "id": "p1", "name": "Launch" },
+    "projectMilestone": { "id": "m1", "name": "Beta" },
+    "cycle": { "id": "c1", "name": "Cycle 4", "number": 4 },
+    "parent": null,
+    "subscribers": { "nodes": [] },
+    "attachments": {
+      "nodes": [
+        {
+          "id": "a1",
+          "title": "First issue with comments and a PR",
+          "url": "https://github.com/acme/repo/pull/42",
+          "sourceType": "github"
+        },
+        {
+          "id": "a2",
+          "title": "Design doc",
+          "url": "https://docs.acme.test/design",
+          "sourceType": "link"
+        }
+      ]
+    },
+    "comments": {
+      "nodes": [
+        {
+          "id": "cmt-2",
+          "body": "Second comment in time, but first in the export array.",
+          "createdAt": "2026-01-03T11:00:00.000Z",
+          "updatedAt": "2026-01-03T11:00:00.000Z",
+          "user": { "id": "u-alex", "displayName": "alex", "email": "alex@acme.test" }
+        },
+        {
+          "id": "cmt-1",
+          "body": "First comment in time, last in the export array.",
+          "createdAt": "2026-01-02T15:00:00.000Z",
+          "updatedAt": "2026-01-02T15:00:00.000Z",
+          "user": null
+        }
+      ]
+    }
+  },
+  {
+    "id": "aaaaaaaa-0000-0000-0000-000000000002",
+    "identifier": "FIX-2",
+    "number": 2,
+    "title": "Archived issue",
+    "description": "An issue that has been archived.",
+    "priority": 0,
+    "priorityLabel": "No priority",
+    "estimate": null,
+    "url": "https://linear.app/acme/issue/FIX-2/archived-issue",
+    "branchName": "alex/fix-2-archived-issue",
+    "createdAt": "2025-12-01T10:00:00.000Z",
+    "updatedAt": "2025-12-10T10:00:00.000Z",
+    "startedAt": null,
+    "completedAt": "2025-12-09T10:00:00.000Z",
+    "canceledAt": null,
+    "archivedAt": "2025-12-10T10:00:00.000Z",
+    "dueDate": null,
+    "state": {
+      "id": "s2",
+      "name": "Done",
+      "type": "completed",
+      "color": "#5e6ad2"
+    },
+    "assignee": {
+      "id": "u-bo",
+      "name": "Bo",
+      "displayName": "bo",
+      "email": "bo@acme.test"
+    },
+    "creator": {
+      "id": "u-bo",
+      "name": "Bo",
+      "displayName": "bo",
+      "email": "bo@acme.test"
+    },
+    "labels": { "nodes": [] },
+    "project": null,
+    "projectMilestone": null,
+    "cycle": null,
+    "parent": { "id": "aaaaaaaa-0000-0000-0000-000000000001", "identifier": "FIX-1" },
+    "subscribers": { "nodes": [] },
+    "attachments": { "nodes": [] },
+    "comments": { "nodes": [] }
+  },
+  {
+    "id": "aaaaaaaa-0000-0000-0000-000000000003",
+    "identifier": "FIX-3",
+    "number": 3,
+    "title": "Unassigned issue",
+    "description": "Nobody is assigned to this one.",
+    "priority": 1,
+    "priorityLabel": "Urgent",
+    "estimate": 1.5,
+    "url": "https://linear.app/acme/issue/FIX-3/unassigned-issue",
+    "branchName": "fix-3-unassigned-issue",
+    "createdAt": "2026-01-04T10:00:00.000Z",
+    "updatedAt": "2026-01-04T10:00:00.000Z",
+    "startedAt": null,
+    "completedAt": null,
+    "canceledAt": null,
+    "archivedAt": null,
+    "dueDate": null,
+    "state": {
+      "id": "s3",
+      "name": "Triage",
+      "type": "backlog",
+      "color": "#95a2b3"
+    },
+    "assignee": null,
+    "creator": {
+      "id": "u-alex",
+      "name": "Alex",
+      "displayName": "alex",
+      "email": "alex@acme.test"
+    },
+    "labels": {
+      "nodes": [{ "id": "l-feat", "name": "feature", "color": "#0e8a16" }]
+    },
+    "project": null,
+    "projectMilestone": null,
+    "cycle": null,
+    "parent": null,
+    "subscribers": { "nodes": [] },
+    "attachments": { "nodes": [] },
+    "comments": { "nodes": [] }
+  },
+  {
+    "id": "aaaaaaaa-0000-0000-0000-000000000004",
+    "identifier": "FIX-4",
+    "number": 4,
+    "title": "Issue with no description",
+    "description": null,
+    "priority": 3,
+    "priorityLabel": "Medium",
+    "estimate": null,
+    "url": "https://linear.app/acme/issue/FIX-4/issue-with-no-description",
+    "branchName": "fix-4-issue-with-no-description",
+    "createdAt": "2026-01-05T10:00:00.000Z",
+    "updatedAt": "2026-01-06T10:00:00.000Z",
+    "startedAt": null,
+    "completedAt": null,
+    "canceledAt": "2026-01-06T10:00:00.000Z",
+    "archivedAt": null,
+    "dueDate": null,
+    "state": {
+      "id": "s4",
+      "name": "Won't do",
+      "type": "canceled",
+      "color": "#95a2b3"
+    },
+    "assignee": null,
+    "creator": null,
+    "labels": { "nodes": [] },
+    "project": null,
+    "projectMilestone": null,
+    "cycle": null,
+    "parent": null,
+    "subscribers": { "nodes": [] },
+    "attachments": { "nodes": [] },
+    "comments": { "nodes": [] }
+  }
+]

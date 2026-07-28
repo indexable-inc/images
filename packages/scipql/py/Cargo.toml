@@ -1,0 +1,19 @@
+[package]
+name = "scipql-py"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Python bindings for scipql-core: Soufflé datalog + find/replace over a SCIP index"
+
+[lib]
+name = "scipql_py"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+error-chain.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
+scipql-core.workspace = true
+unibind = { workspace = true, features = ["py"] }

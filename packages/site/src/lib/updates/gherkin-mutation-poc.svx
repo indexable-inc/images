@@ -1,0 +1,18 @@
+---
+id: gherkin-mutation-poc
+postedAt: 2026-07-23T12:05:00-07:00
+title: "POC: Gherkin (cucumber-rs) specs audited with cargo-mutants"
+tags: [rust, testing, bdd, mutation-testing]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/4091
+  - label: gherkin-poc
+    href: https://github.com/indexable-inc/index/tree/main/packages/gherkin-poc
+---
+
+`packages/gherkin-poc` is a worked example of two testing techniques the repo had no sample of:
+
+- **Gherkin / BDD**: the behavior lives in `tests/features/account.feature` as plain-language Given/When/Then scenarios (overdraft floor, rejected operations leaving the balance untouched), bound to the crate API by cucumber-rs step definitions. The suite runs under the normal libtest harness (cucumber's suggested `harness = false` is only about output ordering), so nextest and cargo-unit treat it like any other test.
+- **Mutation testing**: the crate README records a `cargo mutants --package gherkin-poc` run against the suite, per the rust-style skill's guidance that cargo-mutants is a package-owner audit tool, not a CI gate.
+
+The crate is deliberately tiny: an `Account` with integer-cent balances and an overdraft limit, just enough arithmetic and boundary conditions to give mutants something to bite.

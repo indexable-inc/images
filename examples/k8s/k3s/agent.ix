@@ -1,0 +1,16 @@
+export default ({ nodes, ...rest }) => {
+  const ports = import("./ports.ix");
+  // Join by the server's east-west hostname, so the reference stays correct
+  // regardless of which IP the server lands on.
+  const serverHost = nodes["k3s-server"].config.ix.networking.eastWest.hostName;
+  return {
+    imports: [import("./node.ix")],
+
+    services: {
+      k3s: {
+        role: "agent",
+        serverAddr: `https://${serverHost}:${builtins.toString(ports.api)}`,
+      },
+    },
+  };
+};

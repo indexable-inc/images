@@ -1,0 +1,267 @@
+---
+id: libffi-macos-27-ctypes
+postedAt: 2026-07-24T22:30:00-07:00
+title: "`import ctypes` works again on macOS 27"
+tags: [nix, darwin]
+links:
+  - label: "nixpkgs#541367: the assert"
+    href: https://github.com/NixOS/nixpkgs/issues/541367
+  - label: "nixpkgs#541990: the fix"
+    href: https://github.com/NixOS/nixpkgs/pull/541990
+---
+
+On macOS 27, every nixpkgs Python aborted the moment it imported `ctypes`:
+
+```
+Assertion failed: (trampoline_handle), function ffi_trampoline_table_alloc_block_invoke, file closures.c, line 258.
+```
+
+nixpkgs on Darwin builds Apple's libffi (`libffi-40`, from opensource.apple.com)
+instead of the upstream project. Apple's arm64 closure code cannot map
+executable memory on demand, so it `dlopen`s a companion
+`libffi-trampolines.dylib` holding pre-built trampoline pages, and nixpkgs links
+its own copy from `src/aarch64/trampoline.S`. That copy carried an
+`LC_DYLD_CHAINED_FIXUPS` header whose `seg_count` was larger than the number of
+segments in the binary. dyld on macOS 26 ignored the mismatch. dyld on macOS 27
+rejects the load with `chained fixups, seg_count exceeds number of segments`,
+`dlopen` returns NULL, and the `assert` fires.
+
+The symptom looked nothing like the cause. A `home-manager switch` died building
+h5py 3.15.1, which runs `build_ext` under a Python that imports `ctypes`, making
+it the first derivation in the closure to hit the abort. Nix prints the last 25
+log lines on failure, and all 25 were `copying h5py/tests/...` from the phase
+before, so the assert never appeared in the error at all. `nix log` on the drv
+has it.
+
+nixpkgs #541990 adds `-Wl,-no_fixup_chains` to the trampoline link, which drops
+the malformed header. The `nixpkgs` input here moves from `61b7c44c`
+(2026-07-17) to `e2587cae` (2026-07-23) to pick that up. Everything downstream
+follows `index/nixpkgs`, so the workstation config and the fleet inherit the fix
+from this one bump.
+
+That bump also carries git 2.54.0 to 2.55.0, and there is no rev in between:
+nixpkgs bumped git on 2026-07-11, four days before the libffi fix merged, so
+any tree with the fix already has the new git. `packages/git` asserts that
+nixpkgs' git version matches the `git-src` pin, so the single ix patch (linked
+worktrees borrowing the common-dir submodule object store, #3610) is rebased
+onto the `v2.55.0` tag. The rebase lands on a new branch,
+`ix-patched-v2.55.0`, instead of rewriting `ix-patched`. `git-src` is pinned by
+rev, and force-pushing the old branch would eventually let GitHub collect the
+old commit and break every index rev still pointing at it.
+
+The bump has one more piece of fallout. msgpack moved to 1.2.1, and mitmproxy
+12.2.3 declares `msgpack>=1.0.0,<=1.1.2`, so `pythonRuntimeDepsCheckHook`
+refused the wheel:
+
+```
+- msgpack<=1.1.2,>=1.0.0 not satisfied by version 1.2.1
+```
+
+There is no newer mitmproxy to move to. 12.2.3 is the latest release, and
+nixpkgs master still hits this, since its recipe relaxes eight other mitmproxy
+pins through `pythonRelaxDeps` and has not reached msgpack.
+
+The ceiling itself is stale. Upstream deleted the msgpack dependency outright
+after 12.2.3, and relaxing the cap locally builds clean with mitmproxy's own
+suite at 1776 passed and 1 skipped against msgpack 1.2.1. So a one-line
+`pythonRelaxDeps` override would have worked. The reason it is not the fix here
+is the pattern behind it. mitmproxy generates an upper bound for every
+dependency from its `uv.lock`, most of them pinned to a single version:
+
+```
+"aioquic>=1.2.0,<=1.2.0",
+"h11>=0.16.0,<=0.16.0",
+"pyparsing>=3.3.2,<=3.3.2",
+"certifi>=2019.9.11",           # no upper bound here to get latest CA bundle
+"cryptography>=42.0,<=49.0.0",  # relaxed upper bound here to get security fixes
+```
+
+That is a lockfile-first policy which assumes one private environment per tool,
+and it cannot hold against a distribution that ships one version of each
+library. nixpkgs already carries `aioquic_1_2` as a version-pinned attribute for
+this exact recipe. Every nixpkgs bump that moves a library past one of those
+ceilings breaks the build again, so the override would be permanent maintenance
+rather than a fix.
+
+mitmproxy is therefore no longer a nix package. `uvx mitmproxy` gives it the
+private environment its dependency policy expects, resolves `msgpack` to 1.1.2
+inside that environment, and leaves the shared python set at 1.2.1 for everyone
+else. It also brings its own CPython, so it sits outside the libffi problem this
+page opens with. Verified on this host: mitmproxy 12.2.3 on Python 3.12.13,
+macOS-27.0-arm64, seven seconds cold.
+
+The `~/.mitmproxy` out-of-store symlink stays. `uvx mitmproxy` reads the same
+directory, so the private CA is not regenerated and does not have to be
+re-trusted.
+
+Behind mitmproxy sat a second failure, which only became visible once mitmproxy
+stopped aborting the build first. gunicorn 26.0.0 has a fixture that asks the
+kernel for a free port:
+
+```python
+@pytest.fixture
+def free_port(self):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+```
+
+The Darwin build sandbox has no loopback interface unless a derivation opts in
+with `__darwinAllowLocalNetworking`, so the fixture errors at setup and the
+build fails. Linux sandboxes do provide loopback, which is why nixpkgs ships it
+this way: the recipe already disables two sibling integration tests for the same
+class of failure, "failure while starting a gunicorn instance", and simply never
+needed the sandbox flag on the platform its CI runs.
+
+`lib/overlay.nix` sets the flag on Darwin only, so the Linux build keeps
+matching cache.nixos.org. Setting it beats skipping the test: the suite then
+runs in full at 1874 passed and 350 skipped, with `test_asgi_worker.py`
+exercised rather than deselected.
+
+Nothing wants gunicorn directly. It arrives as a test input of aiohttp, which
+the python env depends on, so a package nobody asked for failing its own test
+suite is enough to stop a `home-manager switch`.
+
+dunamai stopped the next attempt for a different reason. One of its tests
+commits to a scratch repo and asserts the commit timestamp is within a minute of
+`now`:
+
+```
+AssertionError: assert (datetime(2026, 7, 25, 11, 22, 11) - timedelta(seconds=60))
+                       <= datetime(2026, 7, 25, 11, 20, 59)
+```
+
+That minute is a wall-clock budget for the test's own setup, and a busy machine
+loses it. This host had ten other agents building, the suite took 194 seconds,
+and the commit was 72 seconds old by the time the assertion ran. 55 other cases
+passed. The overlay widens the window to 30 minutes rather than deleting the
+test, since dunamai read the timestamp correctly and only the freshness bound was
+wrong. The suite is then 56 passed and 6 skipped.
+
+Machine load is not usually thought of as an input to a build, but a test with a
+wall-clock budget makes it one.
+
+ipython is the same story with a worse disguise. `test_system_interrupt` starts a
+subprocess that sleeps five seconds and asserts a SIGINT interrupts it. Under
+load the `pexpect` spawn behind that fails, and ipython's own error path then
+reads `child` before it is assigned, so the case dies as:
+
+```
+UnboundLocalError: cannot access local variable 'child' where it is not associated with a value
+IPython/utils/_process_posix.py:141: UnboundLocalError
+```
+
+which looks like a code bug rather than a timeout. 1592 other cases passed and
+the suite took twelve minutes. There is no bound to widen here, so the case joins
+the list nixpkgs already keeps in this recipe for exactly this reason, labelled
+"timing sensitive", which holds `test_debug_magic_passes_through_generators` and
+`test_nest_embed` and had simply not reached this one.
+
+Four failures came out from behind the libffi fix, and none of them were caused
+by it. A stale dependency ceiling, a sandbox without loopback, and two tests with
+wall-clock budgets were all sitting in the closure already. Each became visible
+only when the one in front of it stopped aborting the build first.
+
+Behind all four sat the actual cost. With the failures cleared, 947 of the 1205
+remaining derivations turned out to be Haskell: GHC 9.10.3 itself, then
+QuickCheck, tasty, HUnit, prettyprinter, optparse-applicative, ghc-exactprint.
+Nothing was substitutable, because `packages/nix-output-monitor` patches
+`haskellPackages` with a forked `nix-derivation`, and patching the set
+invalidates all of it. cache.nixos.org has the unpatched set and cache.ix.dev
+only carries revs index CI has already built, so a nixpkgs bump means compiling a
+Haskell toolchain from source on the workstation.
+
+That fork exists for a small reason: upstream `nom` cannot parse
+content-addressed derivations and spams `DerivationParseError` on this repo's
+builds. A GHC bootstrap per nixpkgs bump is a steep price for quieter build
+output, so the workstation now takes the plain nixpkgs `nix-output-monitor` that
+the base profile already ships, which substitutes as a single 8.9 MiB download.
+`nom` and `nh` keep working and the parse noise comes back.
+
+The `programs.nh` override mattered as much as the package entry. nh puts its own
+`nom` on PATH ahead of `home.packages`, so it had been rewired to the patched
+fork; leaving that override in place would have kept pulling GHC in even with the
+`home.packages` entry commented out.
+
+Dropping the fork did not remove GHC, though. `nix why-depends` puts it behind
+something else entirely:
+
+```
+home-manager-generation
+└── ix-mcp-fish-completions
+    └── ix-mcp
+        └── svelte-bundle
+            └── shellcheck-0.11.0
+                └── pandoc-cli-3.7.0.2
+                    └── ghc-9.10.3
+```
+
+shellcheck is Haskell and nixpkgs builds its man page with pandoc. Plain nixpkgs
+shellcheck substitutes as 14.4 KiB of fetches, so the question was never why we
+want Haskell. It was why ours does not match the cache.
+
+Comparing the two shellcheck derivations input by input answers it. They have the
+same five inputs and an identical `stdenv-darwin`; the divergence is one patch,
+ten levels down:
+
+```
+ShellCheck → Diff → QuickCheck → ghc → sphinx
+  → pytest-xdist → execnet → hatch-vcs → git-minimal → curl-8.21.0
+      +curl-8.21.0-fix-multi-wakeup.patch
+```
+
+GHC's build needs Sphinx, Sphinx pulls `git-minimal`, and `git-minimal` links
+curl. So the curl wakeup patch sits inside GHC's own build closure, and every
+Haskell package follows. The same patch reaches `rustc-bootstrap`,
+`cargo-bootstrap` and the cargo vendor tooling.
+
+That patch is worth keeping: curl 8.21.0 eats the `curl_multi_wakeup()` eventfd
+from `curl_multi_perform()` and can stall Nix's file-transfer worker for its full
+ten-second idle timeout. But its real cost is not the rebuild time. It is that we
+compile packages nixpkgs ships prebuilt, so their test suites run here, on macOS
+27, under whatever load the machine has. Six packages failed that way in one
+switch, and five of the six failed on a hardcoded time budget: 60 seconds for a
+git commit, 3 seconds for a CTest case, 70 milliseconds for an event-loop timer.
+None of them was broken.
+
+The patch is kept and the cost is not. It applies to one component now:
+
+```nix
+nix-store = prev.nix-store.override {curl = curlWithMultiWakeupFix;};
+```
+
+`modular/src/libstore/package.nix` is the only nix component that takes curl as
+an input, and libstore owns the file-transfer worker the regression stalls, so
+scoping it there keeps the fix exactly where the stall happens. Everything else
+goes back to matching cache.nixos.org. `packages/nix/default.nix` already had
+the seam: the same `overrideScope` that wires wasmtime into libexpr for
+`builtins.wasm`.
+
+Measuring first is what changed the shape of this. Against nixpkgs `e2587cae`
+on aarch64-darwin, `nix-store --query --requisites` puts
+`curl-8.21.0-fix-multi-wakeup.patch.drv` inside arrow-cpp (2376 input drvs),
+souffle (1574) and erlang, and plain nixpkgs fetches all three as binaries:
+arrow-cpp at 28.5 MiB, souffle at 2.8 MiB. torch is 75.7 MiB, pyspark 433.6
+MiB, ray 70.8 MiB. `packages/mcp/default.nix` says as much in a comment already
+written against `ps.torch`, "torch substitutes from the official cache", which
+was true when it was written and had quietly stopped being true.
+
+Ten of the overrides on this page are gone with the cause: graphite2, harfbuzz,
+gunicorn, requests-futures, watchfiles, dunamai, ipython, inquirer3, uvloop and
+the python valkey client. All ten substitute at this rev, so none of their
+suites runs here any more. `lib/overlay.nix` drops from 330 lines to 119.
+
+That leaves the trap worth naming, because it hides itself. An override changes
+the derivation hash, which forces the local build, which runs the suite, which
+is what the override was working around. Adding one always looks like it fixed
+something, and it did, but it also created the work it fixed. Two of these,
+graphite2 and harfbuzz, were not Darwin-gated the way the python ones were, so
+they were detaching the Linux tree for CI and the fleet as well, with pango and
+gtk sitting under harfbuzz.
+
+The valkey server override stays. That failure was reproduced five consecutive
+times from source across two Linux machine classes, loaded and idle, sandboxed
+and unsandboxed, so it is not an artifact of this host.
+
+Publishing to cache.ix.dev from index CI is still worth doing, and it is now a
+smaller claim: it would cover the paths that genuinely have no upstream binary,
+rather than paying for a bootstrap we were creating ourselves.

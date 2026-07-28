@@ -1,0 +1,22 @@
+---
+id: claude-code-2-1-215
+postedAt: "2026-07-19T12:30:00-07:00"
+title: "Claude Code bumps to 2.1.215"
+links:
+  - label: "the bump issue"
+    href: "https://github.com/indexable-inc/index/issues/3663"
+tags:
+  - agent
+  - claude-code
+---
+
+The vendored Claude Code moves from 2.1.206 to 2.1.215 via the signed
+updater: `nix run .#claude-code.updateScript` fetched Anthropic's
+per-version `manifest.json`, verified its detached GPG signature against
+the pinned release key, and rewrote the per-platform SRI hashes in
+`packages/claude-code/manifest.json`.
+
+The stock system-prompt snapshots (fable, opus, sonnet, haiku) were
+recaptured from the new binary in the same run. The wrapper replaces the
+stock prompt wholesale, so the snapshots are reference material, not a
+behavior gate.

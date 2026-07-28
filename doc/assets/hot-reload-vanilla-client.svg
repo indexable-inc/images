@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" width="900" height="560" font-family="'Berkeley Mono', ui-monospace, SFMono-Regular, Menlo, monospace">
+  <style>
+    :root {
+      --bg: #ffffff;
+      --panel: #f6f8fa;
+      --ink: #1a1a1a;
+      --muted: #57606a;
+      --persist: #1a7f37;
+      --swap: #bc4c00;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --ink: #e6edf3;
+        --muted: #8b949e;
+        --persist: #3fb950;
+        --swap: #e3873c;
+      }
+    }
+    .bg { fill: var(--bg); }
+    .panel { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; }
+    .ink { fill: var(--ink); }
+    .muted { fill: var(--muted); }
+    .title { font-size: 22px; font-weight: 700; fill: var(--ink); }
+    .h { font-size: 15px; font-weight: 700; fill: var(--ink); }
+    .t { font-size: 12px; fill: var(--muted); }
+    .lbl { font-size: 11px; fill: var(--muted); }
+    .persist { stroke: var(--persist); }
+    .persistFill { fill: var(--persist); }
+    .swap { stroke: var(--swap); }
+    .swapFill { fill: var(--swap); }
+    .wire { stroke: var(--ink); stroke-width: 2; fill: none; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="900" height="560"/>
+
+  <text class="title" x="40" y="46">Hot-reload the whole game under a live vanilla client</text>
+  <text class="t" x="40" y="68">the player never logs out; the proxy owns the socket, the backend is swappable</text>
+
+  <!-- arrowheads -->
+  <defs>
+    <marker id="ah-persist" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="var(--persist)"/>
+    </marker>
+    <marker id="ah-swap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="var(--swap)"/>
+    </marker>
+  </defs>
+
+  <!-- ===== Client ===== -->
+  <rect class="panel" x="40" y="150" width="210" height="170"/>
+  <text class="h" x="60" y="182">Vanilla client</text>
+  <text class="t" x="60" y="206">stock Minecraft</text>
+  <text class="t" x="60" y="224">no mods</text>
+  <text class="t" x="60" y="242">no resource-pack hooks</text>
+  <text class="t" x="60" y="272">it is just a renderer:</text>
+  <text class="t" x="60" y="290">rebuilds all world state</text>
+  <text class="t" x="60" y="308">from the server stream</text>
+
+  <!-- ===== Proxy ===== -->
+  <rect class="panel" x="345" y="120" width="210" height="230"/>
+  <text class="h" x="365" y="152">Connection proxy</text>
+  <text class="t" x="365" y="176">holds the TCP +</text>
+  <text class="t" x="365" y="194">encryption session</text>
+  <text class="t" x="365" y="222">replays login &amp; keepalive</text>
+  <text class="t" x="365" y="250">re-syncs world on</text>
+  <text class="t" x="365" y="268">backend reconnect</text>
+  <text class="t" x="365" y="296">(respawn + chunk resend;</text>
+  <text class="t" x="365" y="314">the client tolerates it)</text>
+
+  <!-- ===== Backend ===== -->
+  <rect class="panel" x="650" y="110" width="210" height="320"/>
+  <text class="h" x="670" y="142">Authoritative game</text>
+  <text class="t" x="670" y="164">hot-swappable</text>
+
+  <!-- logic reload -->
+  <rect class="panel" x="668" y="184" width="174" height="74"/>
+  <text class="h" x="682" y="208" font-size="13">logic reload</text>
+  <text class="t" x="682" y="228">dlopen / recompile</text>
+  <text class="t" x="682" y="246">+ rebind, no restart</text>
+
+  <!-- content swap stack -->
+  <rect class="panel" x="668" y="274" width="174" height="138"/>
+  <text class="h" x="682" y="298" font-size="13">content swap</text>
+  <text class="t" x="682" y="320">lobby</text>
+  <path class="wire swap" d="M714 326 L714 340" marker-end="url(#ah-swap)"/>
+  <text class="t" x="682" y="356">minigame</text>
+  <path class="wire swap" d="M714 362 L714 376" marker-end="url(#ah-swap)"/>
+  <text class="t" x="682" y="392">not-Minecraft-shaped</text>
+
+  <!-- ===== persistent link: client <-> proxy ===== -->
+  <line class="wire persist" x1="250" y1="235" x2="345" y2="235" stroke-width="3.5" marker-start="url(#ah-persist)" marker-end="url(#ah-persist)"/>
+  <text class="lbl persistFill" x="297" y="221" text-anchor="middle">one session</text>
+  <text class="lbl persistFill" x="297" y="257" text-anchor="middle">never drops</text>
+
+  <!-- ===== swappable link: proxy <-> backend ===== -->
+  <line class="wire swap" x1="555" y1="235" x2="650" y2="235" stroke-dasharray="7 5" marker-start="url(#ah-swap)" marker-end="url(#ah-swap)"/>
+  <text class="lbl swapFill" x="602" y="221" text-anchor="middle">may restart</text>
+  <text class="lbl swapFill" x="602" y="257" text-anchor="middle">reconnects</text>
+
+  <!-- ===== generalization footer ===== -->
+  <line class="wire" x1="40" y1="468" x2="860" y2="468" stroke-width="1" stroke-dasharray="3 4" opacity="0.5"/>
+  <text x="40" y="498"><tspan class="h" font-size="13">Generalizes to:&#160;</tspan><tspan class="t">thin/dumb client + authoritative server + a client that already tolerates a full state resync.</tspan></text>
+  <text class="t" x="40" y="522">Breaks where the client persists authoritative local state, or anti-cheat pins the session to one backend process.</text>
+</svg>

@@ -1,0 +1,8 @@
+{
+  "loader": "velocity",
+  "project": "velocity",
+  "releaseChannel": "default",
+  "versions": [
+    "3.4.0-SNAPSHOT"
+  ]
+}

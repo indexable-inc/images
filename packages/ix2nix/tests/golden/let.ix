@@ -1,0 +1,8 @@
+const base = 10;
+const scale = (x) => {
+  const doubled = x * 2;
+  const shifted = doubled + base;
+  return shifted;
+};
+
+export default scale(16);

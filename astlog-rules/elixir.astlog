@@ -1,0 +1,181 @@
+
+;; Elixir lint rules, two families. The type-discipline rules push code toward
+;; the shape Elixir 1.18's set-theoretic type checker can actually check: typed
+;; structs and spec'd public functions, plus a self-documenting module. They are
+;; name/structure-matched via stratified negation, so they are sound up to arity
+;; (see the note on public-def-needs-spec). The correctness/security rules ban
+;; specific call shapes that are real footguns regardless of typing
+;; (unsafe atom creation, leftover debug output); they are simple positive
+;; matches, no negation. Both families are the Elixir analogue of the repo-wide
+;; ruff gate (lib/ruff-ann.nix): every rule catches a real bug, security issue,
+;; or stale idiom, none is pure style. Fixtures live in
+;; astlog-rules/tests/<rule-id>/ and run as `.ex` by the `astlog-rules`
+;; flake-check self-test.
+
+;; --- shared building blocks ---
+
+(rule (defmodule m)
+  (match elixir "(call (identifier) @i) @m")
+  (text i "defmodule"))
+
+;; A public `def` and the node of its function name, across the three surface
+;; forms: `def f(args)`, `def f(args) when guard`, and bare `def f`.
+(rule (def-name d n)
+  (match elixir "(call (identifier) @kw (arguments (call (identifier) @n))) @d")
+  (text kw "def"))
+(rule (def-name d n)
+  (match elixir "(call (identifier) @kw (arguments (binary_operator left: (call (identifier) @n)))) @d")
+  (text kw "def"))
+(rule (def-name d n)
+  (match elixir "(call (identifier) @kw (arguments (identifier) @n)) @d")
+  (text kw "def"))
+
+;; A `@spec` and the node of the function name it documents.
+(rule (spec-name s n)
+  (match elixir "(unary_operator (call (identifier) @kw (arguments (binary_operator left: (call (identifier) @n))))) @s")
+  (text kw "spec"))
+
+;; The actual `@type`/`@typep`/`@opaque` attribute (a `@` unary_operator over a
+;; call to `type`/...), not merely any identifier with text `type`.
+(rule (type-attr a)
+  (match elixir "(unary_operator (call (identifier) @ti)) @a")
+  (text-match ti "^(type|typep|opaque)$"))
+(rule (defstruct-call c)
+  (match elixir "(call (identifier) @i) @c")
+  (text i "defstruct"))
+
+;; --- nearest enclosing module ---
+;; A spec/impl/struct/type belongs to its NEAREST enclosing `defmodule`, not every
+;; ancestor module: otherwise a nested module's `@spec foo` would also count for
+;; the outer module and wrongly exempt an unspec'd `Outer.foo`. `nearest-mod x m`
+;; holds when `m` is a defmodule ancestor of `x` with no defmodule between them.
+(rule (mod-candidate x)
+  (def-name x n))
+(rule (mod-candidate x)
+  (spec-name x n))
+(rule (mod-candidate x)
+  (defstruct-call x))
+(rule (mod-candidate x)
+  (type-attr x))
+;; `m` is an ancestor module of `x` but a closer module `mid` sits in between.
+(rule (mod-shadowed x m)
+  (mod-candidate x)
+  (defmodule m)
+  (ancestor m x)
+  (defmodule mid)
+  (ancestor m mid)
+  (ancestor mid x))
+(rule (nearest-mod x m)
+  (mod-candidate x)
+  (defmodule m)
+  (ancestor m x)
+  (not (mod-shadowed x m)))
+
+;; --- defstruct-needs-type: a struct module must declare a @type ---
+(rule (module-has-type m)
+  (type-attr a)
+  (nearest-mod a m))
+(rule (module-has-struct m)
+  (defstruct-call c)
+  (nearest-mod c m))
+(rule (defstruct-needs-type m)
+  (module-has-struct m)
+  (not (module-has-type m)))
+(lint defstruct-needs-type error
+  "module defines a struct but no @type; add a `@type t` for it so the 1.18 type checker can type its fields")
+
+;; --- public-def-needs-spec: a public def needs a @spec (or @impl) ---
+;; A def is flagged unless its nearest module has a @spec, or an @impl-annotated
+;; def, with the SAME function name. Name-matching makes one `@spec`/`@impl` cover
+;; every clause of a multi-clause function, and prevents a spec for a different
+;; function from exempting an unspec'd def. Behaviour callbacks are exempt via
+;; @impl.
+;;
+;; Residual: matching is by name, not name+arity (astlog has no aggregation to
+;; count arguments), so `@spec foo/1` also exempts `def foo/2`. Rare, and the real
+;; type gate -- `mix compile --warnings-as-errors` -- is unaffected.
+
+;; module m directly contains a @spec for the function named t.
+(rule (spec-in-module m t)
+  (spec-name s n)
+  (text n t)
+  (nearest-mod s m))
+
+;; a def whose annotation block carries an `@impl` (a behaviour callback).
+(rule (impl-def d)
+  (def-name d n)
+  (attached-sibling d "identifier" "impl"))
+
+;; module m directly contains an @impl-annotated def named t.
+(rule (impl-in-module m t)
+  (impl-def d)
+  (def-name d n)
+  (text n t)
+  (nearest-mod d m))
+
+(rule (public-def-needs-spec d)
+  (def-name d n)
+  (text n t)
+  (nearest-mod d m)
+  (not (spec-in-module m t))
+  (not (impl-in-module m t)))
+(lint public-def-needs-spec error
+  "public def without a @spec; add a `@spec` for it so the type checker has a signature")
+
+;; --- moduledoc-required: every module documents its purpose ---
+;; A `defmodule` must carry a `@moduledoc` -- a doc string, or `@moduledoc false`
+;; for a deliberately-undocumented internal module. The moduledoc belongs to its
+;; NEAREST enclosing module via the same `nearest-mod` machinery as the
+;; struct/spec rules, so a nested module's moduledoc does not exempt its parent.
+;; (Credo.Check.Readability.ModuleDoc, on by default in stock Credo.) Deliberately
+;; stricter than Credo here: there is no `ignore_names` exemption for
+;; `*Controller`/`*Live`/`*Test`/`Endpoint` etc., so a Phoenix or generated module
+;; opts out with an explicit `@moduledoc false` rather than a name convention.
+(rule (moduledoc-attr a)
+  (match elixir "(unary_operator (call (identifier) @i)) @a")
+  (text i "moduledoc"))
+(rule (mod-candidate x)
+  (moduledoc-attr x))
+(rule (module-has-moduledoc m)
+  (moduledoc-attr a)
+  (nearest-mod a m))
+(rule (moduledoc-required m)
+  (defmodule m)
+  (not (module-has-moduledoc m)))
+(lint moduledoc-required error
+  "module without a @moduledoc; add `@moduledoc \"...\"`, or `@moduledoc false` for an internal module")
+
+;; --- correctness / security: banned call shapes ---
+;; Unlike the rules above these need no negation: a single forbidden call shape
+;; is the violation. The Elixir counterpart of ruff's bugbear/bandit families.
+
+;; --- no-unsafe-to-atom: dynamic atom creation can exhaust the atom table ---
+;; `String.to_atom/1`, `List.to_atom/1` and the `:erlang.*_to_atom` builtins mint
+;; a fresh atom per distinct input. Atoms are never garbage-collected and the
+;; table is fixed-size, so on attacker-controlled input this is a denial of
+;; service (the VM crashes when the table fills). Use the `to_existing_atom`
+;; variants, or keep the value a string. (Credo.Check.Warning.UnsafeToAtom;
+;; Sobelow DOS.StringToAtom.)
+(rule (no-unsafe-to-atom c)
+  (match elixir "(call (dot left: (alias) @m right: (identifier) @f)) @c")
+  (text-match m "^(String|List)$")
+  (text f "to_atom"))
+(rule (no-unsafe-to-atom c)
+  (match elixir "(call (dot left: (atom) @m right: (identifier) @f)) @c")
+  (text m ":erlang")
+  (text-match f "^(binary_to_atom|list_to_atom)$"))
+(lint no-unsafe-to-atom error
+  "dynamic atom creation (String.to_atom / List.to_atom / :erlang.*_to_atom) can exhaust the atom table on attacker-controlled input; use the to_existing_atom variant or keep it a string")
+
+;; --- no-io-inspect: `IO.inspect` is debug output, not production logging ---
+;; `IO.inspect` left in `lib/` is almost always a forgotten debug print: it writes
+;; uncontrolled output to stdout outside the Logger level/metadata machinery. Use
+;; `Logger` for intentional logging, or `dbg/2` while actively debugging. Bare
+;; `inspect/1` (formatting a value) is fine -- only the stdout-writing IO.inspect
+;; is flagged. (Credo.Check.Warning.IoInspect.)
+(rule (no-io-inspect c)
+  (match elixir "(call (dot left: (alias) @m right: (identifier) @f)) @c")
+  (text m "IO")
+  (text f "inspect"))
+(lint no-io-inspect error
+  "IO.inspect in lib/ is leftover debug output; remove it, or use Logger for intentional logging")

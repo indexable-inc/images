@@ -1,0 +1,53 @@
+---
+id: build-id-on-every-linux-link
+postedAt: 2026-07-27T23:30:00-07:00
+title: Every Rust binary now carries a GNU build-id, and the build refuses one that does not
+tags: [rust, nix, observability, debugging]
+links:
+  - label: index #4296
+    href: https://github.com/indexable-inc/index/pull/4296
+  - label: ix #8936
+    href: https://github.com/indexable-inc/ix/issues/8936
+  - label: ix #8937
+    href: https://github.com/indexable-inc/ix/issues/8937
+---
+
+Every binary the fleet ran was missing the twenty bytes that let a tool find
+its symbols. Read off a live production daemon, the complete list of its ELF
+notes was `.note.ABI-tag` and `.note.gnu.property`. No `.note.gnu.build-id`.
+
+That note is the key an address is looked up by. debuginfod queries by it, a
+separate `.debug` file is named after it, `coredumpctl debug` finds symbols
+through it, a continuous profiler caches symbols under it, and Antithesis
+symbolizes coverage with it. None of them has a fallback. Neither rustc nor
+mold emits it unless asked, and only one derivation in the tree asked: the
+Antithesis build, which needed it and said so in a comment.
+
+index's Rust policy now emits `-Wl,--build-id=sha1` on every `-linux-` triple,
+under a typed `linker.buildId` option. It is gated on the platform rather than
+on the linker choice, because mold and lld both accept the flag and neither
+emits the note by default, so it belongs to the output format. sha1 over the
+linked output rather than a UUID keeps a reproducible build's build-id
+reproducible, and twenty bytes is the length consumers are actually tested
+against.
+
+On the ix side, `workspace-bins.nix` is the one place every shipped binary
+passes through, so it is where a build-id-less binary becomes impossible rather
+than merely unlikely: the build now reads the note off the installed copy,
+after any patchelf, and fails naming the binary if it is absent. Guest binaries
+get the stronger check, that the stripped wire copy and the unstripped `debug/`
+copy carry the *same* build-id. The comment beside that strip had always
+claimed strip preserves the note; it is checked now.
+
+The reason this came up is profiling. The OpenTelemetry eBPF profiler emits the
+GNU build-id as an OTLP mapping attribute and reports a native frame's address
+as an offset into the file, which makes `(build-id, file offset)` the join key
+for turning a production stack trace into Rust function names. Without the note
+there is nothing to join on.
+
+Measuring the debug info to make that work turned up something worse, filed
+separately as ix#8937: every host's system closure carries 36 GiB of `.dwp`
+split-DWARF sidecars, thirty files between 1.3 and 1.5 GiB each, and the
+binaries still contain about 50 MB of `.debug_*` sections apiece. The split
+that was supposed to move DWARF out of the ELF is leaving it in and shipping a
+copy beside it.

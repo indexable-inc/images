@@ -1,0 +1,16 @@
+---
+id: check-main-per-commit
+postedAt: '2026-07-19T04:35:00-07:00'
+title: every main commit now gets a completed Check verdict
+links:
+  - label: 'index#3669'
+    href: 'https://github.com/indexable-inc/index/issues/3669'
+  - label: 'the 8.5h incident fix'
+    href: 'https://github.com/indexable-inc/index/pull/3668'
+tags:
+  - ci
+---
+
+Main's Check runs used to share one concurrency slot: each push cancelled the previous commit's run, so during a merge storm no main commit finished validation (every run from 10:56Z to 11:08Z on 2026-07-19 was cancelled). Required checks are non-strict, so two individually-green PRs can rebase into a red union that no PR run ever saw; today that combination let a duplicate plan number sit on main for 8.5 hours, surfacing as a frozen `cache-ready` pin instead of a named commit.
+
+Check now groups main runs per-commit (`github.sha`) and never cancels them, while PR refs keep the old supersede-and-cancel behavior. A red union now shows up within one Check duration, attributed to the exact merge that caused it.

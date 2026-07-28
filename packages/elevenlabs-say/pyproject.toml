@@ -1,0 +1,15 @@
+[project]
+name = "elevenlabs-say"
+version = "0.1.0"
+description = "A say-style ElevenLabs text-to-speech CLI"
+requires-python = ">=3.13"
+dependencies = [
+    "elevenlabs>=2.50.0,<3.0.0",
+]
+
+[project.scripts]
+elevenlabs-say = "elevenlabs_say:main"
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"

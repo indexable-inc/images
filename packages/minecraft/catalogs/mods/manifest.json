@@ -1,0 +1,48 @@
+{
+  "loader": "fabric",
+  "common": {
+    "mods": ["ksyxis", "lmd"],
+    "game_versions": ["26.1.2", "26.2-snapshot-5"]
+  },
+  "versions": {
+    "1.21.11": [
+      "fabric-api",
+      "distanthorizons",
+      "spark",
+      "viaversion",
+      "viabackwards",
+      "viarewind",
+      {
+        "slug": "terrain-diffusion",
+        "url": "https://github.com/xandergos/terrain-diffusion-mc/releases/download/v2.1.0/terrain-diffusion-mc-2.1.0-cpu%2B1.21.11.jar"
+      }
+    ],
+    "26.1.2": ["fabric-api", "lithium", "c2me-fabric", "krypton", "ferrite-core", "distanthorizons", "servercore", "vmp-fabric", "clumps", "chunky", "bluemap", "luckperms", "simple-voice-chat", "spark", "terralith", "tectonic", "grimac", "viaversion", "viabackwards", "viarewind"],
+    "26.2-snapshot-5": ["fabric-api", "c2me-fabric"]
+  },
+  "searches": {
+    "fabric-1.21.11-server-popular": {
+      "limit": 100,
+      "index": "downloads",
+      "game_versions": ["1.21.11"],
+      "loaders": ["fabric"],
+      "facets": [
+        ["project_type:mod"],
+        ["versions:1.21.11"],
+        ["categories:fabric"],
+        ["server_side:required", "server_side:optional"]
+      ]
+    },
+    "paper-1.21.11-server-popular": {
+      "limit": 100,
+      "index": "downloads",
+      "game_versions": ["1.21.11"],
+      "loaders": ["paper"],
+      "facets": [
+        ["versions:1.21.11"],
+        ["categories:paper"],
+        ["server_side:required", "server_side:optional"]
+      ]
+    }
+  }
+}

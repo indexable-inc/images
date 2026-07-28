@@ -1,0 +1,97 @@
+---
+id: cargo-unit-path-remap
+postedAt: "2026-07-27T13:20:00-07:00"
+title: a 23 MB Rust binary was dragging 2.5 GiB of build inputs behind it
+tags:
+  - rust
+  - nix
+  - tooling
+---
+
+`bedwars`, a game server built out of hyperion with `cargoUnit.buildWorkspace`,
+is a 23 MB executable. Its runtime closure was 2.5 GiB across 559 store paths,
+with 110 direct references:
+
+```
+$ nix path-info -Sh .#packages.x86_64-linux.bedwars
+/nix/store/sldj955...-bedwars-0.1.0     2.5 GiB
+$ nix-store -q --references /nix/store/sldj955...-bedwars-0.1.0 | wc -l
+110
+```
+
+Two of those references were real: glibc and gcc's runtime library. The other
+108 were crates the binary links, retained as source trees, plus the Rust
+toolchain.
+
+## the mechanism is `file!()`, not linkage
+
+`panic!`, `unwrap`, `assert` and every `#[track_caller]` location expand
+`file!()` to the absolute path of the source file. Under cargo-unit that path
+is a store path, so the location string of a panic in a vendored crate is a
+literal store path sitting in the binary's read-only data:
+
+```
+$ strings -a .../bin/bedwars | grep -oE '/nix/store/[a-z0-9]{32}-[^ "]{0,40}'
+/nix/store/8glgqfd0...-sharded-slab-0.1.7/src/tid.rs:163:21
+```
+
+Nix's reference scanner looks for the 32-character hash part of a store path
+anywhere in an output, so that one string pins the whole `sharded-slab` source
+derivation into the closure. Debug info was already off (`-C debuginfo=0 -C
+strip=debuginfo`); these are ordinary string constants and no `strip` removes
+them.
+
+The single biggest entry was not a crate. Upstream compiles std against a
+virtual `/rustc/<commit>` prefix, but rustc translates that straight back to
+the local `rust-src` directory whenever the component is installed
+(`-Ztranslate-remapped-path-to-local-path`, on by default). One `unwrap` on a
+std generic monomorphized in your crate therefore names the toolchain, and the
+toolchain was 1.9 of the 2.5 GiB.
+
+## every unit now compiles with `--remap-path-prefix`
+
+cargo-unit maps two prefixes on every rustc and clippy invocation it renders:
+the unit's own source to `/build/<crate>-<version>`, and the toolchain's
+`rust-src` to `/rustc`. Not an opt-in flag: a caller who has never heard of
+this gets the small closure anyway, and a crate that bakes a location agrees
+with the crate that links it.
+
+The same `bedwars`:
+
+```
+$ nix path-info -Sh .#packages.x86_64-linux.bedwars
+/nix/store/d9fmh7m...-bedwars-0.1.0     68.3 MiB
+$ nix-store -q --references /nix/store/d9fmh7m...-bedwars-0.1.0
+/nix/store/l8si8gn...-glibc-2.42-67
+/nix/store/0iv8glc...-gcc-15.3.0-lib
+```
+
+2.5 GiB to 68.3 MiB, 559 paths to 7, 110 direct references to 2.
+
+## what changes for you
+
+Panic messages and backtraces now read `/build/anyhow-1.0.104/src/error.rs` and
+`/rustc/library/core/src/option.rs` where they used to read a store path. The
+crate, version, file and line are all still there; only the hash is gone.
+
+Nothing resolves those paths at runtime, so nothing breaks.
+`--remap-path-prefix` rewrites source spans, not environment variables or file
+loading, so `include_str!`, `include!` and `env!("CARGO_MANIFEST_DIR")` are
+untouched. A crate that deliberately embeds a store path to reach a data file
+keeps both the path and its reference: the ix2nix golden test does exactly
+that, still resolves its fixtures, and still lists
+`cargo-unit-source-ix2nix-0.1.0-...` among its references.
+
+Coverage reads these paths back, so `coverageReport` maps the placeholder to a
+workspace-relative `SF:` line using a `remapPrefix` now recorded in
+`sourceAudit`.
+
+## why this was blocking a deployment
+
+`ix apply` builds a closure inside the guest and a guest gets a 14 GB root
+disk. A NixOS system carrying two of these binaries came to 7.0 GiB over 1743
+paths and filled the disk twice. The false references were most of it.
+
+A `tests/default.nix` fixture now links a workspace rlib, two vendored crates
+and a `rust-src` toolchain into one small binary and fails by name if any of
+them comes back.

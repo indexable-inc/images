@@ -1,0 +1,35 @@
+[
+  {
+    "type": "message",
+    "subtype": "channel_join",
+    "ts": "1735689600.000100",
+    "user": "U0SYNTHBBB",
+    "text": "<@U0SYNTHBBB> has joined the channel"
+  },
+  {
+    "type": "message",
+    "ts": "1735689700.000200",
+    "thread_ts": "1735689700.000200",
+    "user": "U0SYNTHAAA",
+    "text": "what docker image should we use for <@U0SYNTHBBB> &amp; the demo?",
+    "reactions": [{ "name": "eyes", "count": 2 }]
+  },
+  {
+    "type": "message",
+    "ts": "1735689900.000300",
+    "user": "U0SYNTHBBB",
+    "text": "standalone note: see <https://ix.dev|the docs> and <#C0SYNTH002|old-stuff>"
+  },
+  {
+    "type": "message",
+    "subtype": "bot_message",
+    "ts": "1735690000.000400",
+    "bot_id": "B0SYNTH",
+    "app_id": "A0SYNTH",
+    "bot_profile": { "name": "Better Stack" },
+    "text": "",
+    "attachments": [
+      { "fallback": "Monitor recovered", "text": "Monitor *ix.dev* recovered after 3m", "title": "Recovery" }
+    ]
+  }
+]

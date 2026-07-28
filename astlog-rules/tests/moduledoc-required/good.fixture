@@ -1,0 +1,13 @@
+defmodule Documented do
+  @moduledoc "Explains what this module is for."
+
+  defmodule Internal do
+    # A nested module documents itself too; `@moduledoc false` is the explicit
+    # opt-out for a deliberately-private module, and the nearest-mod join means
+    # this moduledoc covers Internal, not its parent.
+    @moduledoc false
+  end
+
+  @spec id(term()) :: term()
+  def id(x), do: x
+end

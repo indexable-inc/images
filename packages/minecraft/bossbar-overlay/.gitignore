@@ -1,0 +1,15 @@
+# Rust build output
+/app/target
+
+# Minecraft art is Mojang's and is not redistributed here. The `minecraft-assets`
+# Nix derivation extracts it from the official client jar; the Nix build copies it
+# into each crate before compiling, and `app/scripts/fetch-assets.sh` does the
+# same for local `cargo` builds. See packages/minecraft-assets.
+/app/crates/*/assets/*.png
+/app/crates/*/assets/**/*.png
+
+# Editor / OS cruft
+.vscode/
+.idea
+.DS_Store
+*.swp

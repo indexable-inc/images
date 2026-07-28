@@ -1,0 +1,41 @@
+{
+  "name": "ix-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && eslint . && vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "lint": "eslint .",
+    "test": "svelte-kit sync && vitest run",
+    "test:list": "svelte-kit sync && vitest list --json --static-parse"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.61.1",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@types/node": "^25.9.1",
+    "@vitest/browser-playwright": "^4.1.7",
+    "eslint": "^10.4.0",
+    "eslint-plugin-svelte": "^3.17.1",
+    "globals": "^17.6.0",
+    "playwright": "^1.61.1",
+    "svelte": "^5.55.9",
+    "svelte-check": "^4.4.8",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.0",
+    "vite": "^8.0.14",
+    "vitest": "^4.1.7"
+  },
+  "overrides": {
+    "cookie": "^0.7.0"
+  },
+  "dependencies": {
+    "@xyflow/svelte": "^1.5.2",
+    "mdsvex": "^0.12.7",
+    "shiki": "^4.1.0"
+  }
+}

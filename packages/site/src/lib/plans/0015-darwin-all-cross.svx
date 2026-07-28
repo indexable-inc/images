@@ -1,0 +1,42 @@
+---
+id: 0015-darwin-all-cross
+number: '0015'
+title: Retire the Mac from CI entirely
+status: Sketch
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 6, why: 'finishes what Plan 0009 started: zero darwin execution anywhere in CI' }
+  impact: { value: 7, why: 'darwin lanes are the flakiest and least observable part of CI' }
+  effort: { value: 6, why: 'every remaining darwin-only check needs a cross or emulated equivalent' }
+  risk: { value: 5, why: 'cross-built artifacts can diverge from what a real Mac runs' }
+  maturity: { value: 5, why: 'the cross substrate is load-bearing; the long tail of checks is not moved' }
+  leverage: { value: 7, why: 'every new package skips the mac lane by construction' }
+  taste: { value: 4, why: 'the destination is agreed; the tail is enumeration and porting' }
+description: 'Finish Plan 0009: no CI step executes on macOS. Every darwin artifact is cross-compiled from the Linux fleet, every darwin check gets a cross-built or host-independent equivalent, and the Mac becomes purely a substitution target.'
+---
+
+## Summary
+
+Plan 0009 made cross-compiled darwin packages load-bearing, but CI still
+runs darwin-only steps for the parts nobody has ported: native checks,
+cache pushes from Macs, lint lanes that assume a darwin host. Those lanes
+are the least reliable part of CI and the issues keep coming. The end state
+is simple: the Linux fleet builds everything, `cache.ix.dev` serves
+everything, and a Mac only ever substitutes.
+
+## Non-goals
+
+Dropping darwin support; the point is darwin artifacts without darwin
+executors.
+
+## Absorbed issues
+
+[#3606](https://github.com/indexable-inc/index/issues/3606), [#3586](https://github.com/indexable-inc/index/issues/3586), [#3585](https://github.com/indexable-inc/index/issues/3585), [#3582](https://github.com/indexable-inc/index/issues/3582), [#3573](https://github.com/indexable-inc/index/issues/3573), [#3133](https://github.com/indexable-inc/index/issues/3133), [#1142](https://github.com/indexable-inc/index/issues/1142), [#1093](https://github.com/indexable-inc/index/issues/1093), [#1088](https://github.com/indexable-inc/index/issues/1088), [#1082](https://github.com/indexable-inc/index/issues/1082), [#1076](https://github.com/indexable-inc/index/issues/1076), [#1065](https://github.com/indexable-inc/index/issues/1065), [#1061](https://github.com/indexable-inc/index/issues/1061), [#2672](https://github.com/indexable-inc/index/issues/2672), [#2671](https://github.com/indexable-inc/index/issues/2671), [#2670](https://github.com/indexable-inc/index/issues/2670)
+
+Drafted by Claude Code (Fable) from the open-issue corpus; scores are seed
+estimates.

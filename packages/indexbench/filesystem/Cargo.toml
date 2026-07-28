@@ -1,0 +1,26 @@
+[package]
+name = "indexbench-filesystem"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "fio-based filesystem benchmark: identical workloads against two directories, one honest ratio"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ix-bench-filesystem"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { workspace = true, features = ["clock"] }
+clap = { workspace = true, features = ["derive"] }
+# `sync(2)` for the coreutils-`sync PATH` fallback; see `sync_path`.
+libc.workspace = true
+# `feature` gates `sys::utsname::uname` (the report's `system` line); `fs`
+# gates `sys::statfs` (the filesystem-type probe on Darwin).
+nix = { workspace = true, features = ["feature", "fs"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted  { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .good   { fill: #1a7f37; }
+    .bad    { fill: #cf222e; }
+    .box    { stroke: currentColor; fill: none; stroke-width: 1.2; }
+    .goodbox { stroke: #1a7f37; fill: none; stroke-width: 1.2; }
+    .badbox  { stroke: #cf222e; fill: none; stroke-width: 1.2; stroke-dasharray: 4 3; }
+    text    { fill: currentColor; font-size: 13px; }
+    .small  { font-size: 11px; }
+    .mono   { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+    .edge   { stroke: currentColor; fill: none; stroke-width: 1.2; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted  { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+      .good   { fill: #3fb950; }
+      .bad    { fill: #f85149; }
+      .goodbox { stroke: #3fb950; }
+      .badbox  { stroke: #f85149; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <!-- agent -->
+  <rect class="box" x="16" y="86" width="104" height="48" rx="8"/>
+  <text x="68" y="106" text-anchor="middle">agent</text>
+  <text x="68" y="122" text-anchor="middle" class="small muted">MCP client</text>
+
+  <!-- exec edge -->
+  <line class="edge" x1="120" y1="110" x2="196" y2="110"/>
+  <text x="158" y="100" text-anchor="middle" class="small mono accent">exec</text>
+
+  <!-- BEAM box -->
+  <rect class="box" x="200" y="18" width="330" height="184" rx="10"/>
+  <text x="365" y="40" text-anchor="middle">one BEAM, one persistent workspace</text>
+  <text x="365" y="56" text-anchor="middle" class="small mono muted">x = 41   df = big_result   defmodule Helper</text>
+
+  <!-- job processes -->
+  <rect class="goodbox" x="222" y="76" width="88" height="44" rx="8"/>
+  <text x="266" y="94" text-anchor="middle" class="small mono">job a1f2</text>
+  <text x="266" y="110" text-anchor="middle" class="small good">running</text>
+
+  <rect class="badbox" x="322" y="76" width="88" height="44" rx="8"/>
+  <text x="366" y="94" text-anchor="middle" class="small mono">job 9c04</text>
+  <text x="366" y="110" text-anchor="middle" class="small bad">blocked</text>
+
+  <rect class="goodbox" x="422" y="76" width="88" height="44" rx="8"/>
+  <text x="466" y="94" text-anchor="middle" class="small mono">job 77b8</text>
+  <text x="466" y="110" text-anchor="middle" class="small good">running</text>
+
+  <!-- supervisor note -->
+  <text x="365" y="150" text-anchor="middle" class="small muted">each cell is a supervised process: preemptive scheduling,</text>
+  <text x="365" y="166" text-anchor="middle" class="small muted">a blocked cell stalls only itself; cancel kills its OS subtree</text>
+  <text x="365" y="188" text-anchor="middle" class="small mono muted">trace / restart from outside, bindings restored</text>
+
+  <!-- notification edge -->
+  <line class="edge" x1="530" y1="110" x2="606" y2="110"/>
+  <text x="568" y="100" text-anchor="middle" class="small muted">channel</text>
+
+  <rect class="box" x="610" y="86" width="94" height="48" rx="8"/>
+  <text x="657" y="106" text-anchor="middle" class="small">job finished</text>
+  <text x="657" y="122" text-anchor="middle" class="small muted">crash + state</text>
+</svg>

@@ -1,0 +1,18 @@
+[project]
+name = "daily-scraper"
+version = "0.1.0"
+description = "Example ix daily Python scraper"
+requires-python = ">=3.13"
+dependencies = [
+    "duckdb>=1.4.0,<2.0.0",
+    "httpx>=0.28.0,<0.29.0",
+    "pydantic>=2,<3",
+    "pydantic-settings>=2,<3",
+]
+
+[project.scripts]
+daily-scraper = "daily_scraper:main"
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"

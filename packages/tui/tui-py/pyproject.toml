@@ -1,0 +1,30 @@
+# The wheel is built by Nix, not a PEP 517 backend: packages/tui/tui-py/default.nix
+# compiles the PyO3 cdylib through the shared cargo-unit workspace graph and
+# packages it with the shared lib/build/pyo3-wheel.py. This file stays as project metadata (the
+# version is read by the Nix build) plus the pyright config. There is no
+# `[build-system]`; `pip install .` is not a supported path. Build with
+# `nix build .#tui-py`.
+
+[project]
+name = "ix-tui"
+version = "0.1.0"
+description = "Python bindings for the tui PTY-backed terminal UI management library. Imported as `tui`."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "indexable" }]
+classifiers = [
+  "License :: Other/Proprietary License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Rust",
+  "Operating System :: POSIX",
+]
+dependencies = ["numpy>=1.26"]
+
+[tool.pyright]
+include = ["python"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+useLibraryCodeForTypes = false
+reportMissingModuleSource = "none"

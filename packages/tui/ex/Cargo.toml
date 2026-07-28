@@ -1,0 +1,19 @@
+[package]
+name = "tui-ex"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Elixir NIF for the local tui PTY driver via unibind: spawn real terminal programs from the BEAM, send keystrokes, read the rendered screen"
+
+[lib]
+name = "tui_ex"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+rustler.workspace = true
+tui.workspace = true
+unibind = { workspace = true, features = ["ex"] }
+unibind-ex-runtime.workspace = true

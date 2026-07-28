@@ -1,0 +1,31 @@
+[package]
+name = "screencast"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Capture the macOS desktop as hardware-encoded H.265 (VideoToolbox) and stream it as fragmented-MP4 HLS to a screencast-ingest server"
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["clock"] }
+clap = { workspace = true, features = ["derive", "env"] }
+color-eyre.workspace = true
+reqwest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = [
+  "macros",
+  "rt-multi-thread",
+  "process",
+  "signal",
+  "time",
+  "fs",
+  "io-util",
+] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[[bin]]
+name = "screencast"
+path = "src/main.rs"

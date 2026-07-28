@@ -1,0 +1,387 @@
+name: Sync fork repos
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 3 hours. De-forked packages live as jj megamerge fork repos
+    # (lib/fork-packages.nix): every patch is a commit whose parents are its
+    # true dependencies, and the flake input pins the sealed megamerge
+    # commit. This job jj-rebases each auto-updatable fork's series onto its
+    # upstream tip, pushes the bookmark plus a permanent pin ref in one
+    # atomic push, then floats the input. It is separate from
+    # update-flake-lock.yml because a bare `nix flake update` of a fork input
+    # cannot move the series; here the rebase and the lock bump move
+    # together. Rev-pinned forks (autoUpdate = false: nix is the daemon
+    # toolchain, clippy is nightly-coupled, codex carries vendored-dep
+    # hashes, ...) are never free-floated by the cron; see each entry's
+    # comment in lib/fork-packages.nix.
+    - cron: "23 */3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+env:
+  # The self-hosted runner's Nix daemon owns substituters and trusted keys,
+  # so only client-side eval knobs are set here, and nothing installs a nix. Same
+  # posture and reasoning as check.yml (the ephemeral runner UID is
+  # untrusted, so flake config would only produce ignored-setting warnings;
+  # ca-derivations is needed to evaluate the rust workspace units).
+  # `max-jobs` and `cores` are deliberately absent: unlike every other knob
+  # they are not daemon-owned, and a client value silently overrides the
+  # fleet tuning. check.yml owns the explanation.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    accept-flake-config = false
+    timeout = 600
+
+jobs:
+  fork-sync:
+    # Dispatched to the org-wide ix-ci-dispatcher, the same self-hosted
+    # runner scheme as check.yml: the `ix-ci-run-*` label is claimed by the
+    # dispatcher, which mints an ephemeral runner per job on a host with a
+    # warm, persistent /nix/store.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-fork-sync', github.run_id, github.run_attempt) }}"]
+    # Clone + rebase + push per fork plus a flake update and the drift
+    # report: minutes, not the hour-scale of the old patch-regeneration
+    # lane. 45m is generous headroom for a cold upstream fetch.
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Provision missing CLI tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: awk=gawk curl gh
+
+      # MIRROR_TOKEN is minted per run from the org-owned ix-mirror-sync
+      # GitHub App (Contents write on the org's repos): short-lived, no
+      # long-lived PAT to rotate. The default GITHUB_TOKEN cannot push to
+      # the fork repos. When the app secrets are absent the step is skipped
+      # and the shell guard below skips loudly instead of half-running.
+      - name: Mint fork-push token
+        id: mirror-token
+        if: ${{ vars.MIRROR_APP_CLIENT_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MIRROR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
+          owner: indexable-inc
+
+      # Every fork input is fetched by Nix's UNAUTHENTICATED github fetcher,
+      # so a fork repo that is private (or a pinned rev whose pin ref was
+      # lost to GC) breaks flake eval everywhere with a bare HTTP 404. That
+      # exact failure shipped with the migration itself: indexable-inc/ghostty
+      # was created private and the first post-merge Check on #4032 died in
+      # eval. Probe each locked rev's archive URL anonymously -- the
+      # fetcher's own view, before any token exists in this job -- and fail
+      # naming the repo and the remedy.
+      - name: Verify fork repos are anonymously fetchable
+        run: |
+          set -euo pipefail
+          mapfile -t rows < <(
+            nix eval --json '.#lib.forkPackages' \
+              | nix run nixpkgs#jq -- -c '.[] | {name, input, forkRepo}'
+          )
+          failed=0
+          for row in "${rows[@]}"; do
+            name=$(nix run nixpkgs#jq -- -r '.name' <<<"$row")
+            input=$(nix run nixpkgs#jq -- -r '.input' <<<"$row")
+            fork_repo=$(nix run nixpkgs#jq -- -r '.forkRepo' <<<"$row")
+            rev=$(nix run nixpkgs#jq -- -r --arg i "$input" \
+              '.nodes[$i].locked.rev' flake.lock)
+            url="https://github.com/${fork_repo}/archive/${rev}.tar.gz"
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 60 "$url")
+            if [ "$code" != "200" ]; then
+              echo "::error::fork-sync: $name: $url is not anonymously fetchable (HTTP $code). A private fork repo must be made public (gh repo edit $fork_repo --visibility public); a vanished rev needs its refs/pins/* ref restored."
+              failed=1
+            fi
+          done
+          [ "$failed" = 0 ]
+
+      # Per auto-updatable fork: colocated jj clone, rebase the series onto
+      # the upstream tip, refuse to push any conflicted commit (git readers,
+      # including GitHub and the Nix fetchers, cannot parse jj's conflict
+      # encoding), then ONE atomic `git push` moving the bookmark and minting
+      # the permanent refs/pins/<date>-<sha12> ref: jj rebases rewrite
+      # history, and GitHub GCs commits reachable from no ref, so every rev
+      # flake.lock has ever pinned must stay fetchable via a pin ref.
+      - name: Rebase fork repos onto their upstream tips
+        env:
+          MIRROR_TOKEN: ${{ steps.mirror-token.outputs.token }}
+          # jj stamps rewritten commits with its own committer identity.
+          JJ_USER: ix-mirror-sync
+          JJ_EMAIL: ix-mirror-sync[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          if [ -z "$MIRROR_TOKEN" ]; then
+            echo "MIRROR_TOKEN is not configured; skipping fork-repo rebases." \
+                 "See packages/mirror/README.md (Permissions)."
+            exit 0
+          fi
+          jj() { nix run nixpkgs#jujutsu -- "$@"; }
+          mapfile -t rows < <(
+            nix eval --json '.#lib.forkPackages' \
+              --apply 'fs: builtins.filter (f: f.autoUpdate) fs' \
+              | nix run nixpkgs#jq -- -c '.[] | {name, forkRepo, bookmark, upstreamUrl, upstreamRef}'
+          )
+          echo "auto-updatable forks: ${#rows[@]}"
+          for row in "${rows[@]}"; do
+            name=$(nix run nixpkgs#jq -- -r '.name' <<<"$row")
+            fork_repo=$(nix run nixpkgs#jq -- -r '.forkRepo' <<<"$row")
+            bookmark=$(nix run nixpkgs#jq -- -r '.bookmark' <<<"$row")
+            upstream_url=$(nix run nixpkgs#jq -- -r '.upstreamUrl' <<<"$row")
+            echo "::group::fork-sync: $name ($fork_repo@$bookmark)"
+            dir="$RUNNER_TEMP/forks/$name"
+            jj git clone --colocate \
+              "https://x-access-token:${MIRROR_TOKEN}@github.com/${fork_repo}.git" "$dir"
+            pushd "$dir" >/dev/null
+
+            # jj 0.43: an untracked local bookmark is left behind by the
+            # rebase (only tracked bookmarks follow their rewritten commits).
+            jj bookmark track "${bookmark}@origin"
+
+            # The rebase targets the CURRENT tip of the branch the fork
+            # tracks: the registry's `upstreamRef` when the base sits off
+            # the default branch (#4038), else the upstream's default
+            # branch, discovered from its HEAD symref -- never our pinned
+            # base.
+            git remote add upstream "$upstream_url"
+            head_ref=$(nix run nixpkgs#jq -- -r '.upstreamRef // empty' <<<"$row")
+            if [ -n "$head_ref" ]; then
+              echo "$name: upstream ref pinned by the registry: $head_ref"
+            else
+              head_ref=$(git ls-remote --symref upstream HEAD \
+                | awk '$1 == "ref:" { sub("refs/heads/", "", $2); print $2; exit }')
+              echo "$name: upstream default branch is $head_ref"
+            fi
+            git fetch --no-tags upstream "refs/heads/$head_ref"
+            upstream_tip=$(git rev-parse FETCH_HEAD)
+
+            merge_base=$(git merge-base "refs/remotes/origin/$bookmark" "$upstream_tip")
+            if [ "$merge_base" = "$upstream_tip" ]; then
+              echo "$name: already based on the upstream tip; nothing to rebase."
+              popd >/dev/null
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Rebase the whole series (the commits between the old base and
+            # the bookmark) onto the new tip. jj 0.43: the remote bookmark
+            # makes these commits immutable, hence --ignore-immutable.
+            jj rebase --ignore-immutable \
+              -s "roots(${merge_base}..${bookmark})" -d "$upstream_tip"
+
+            # A conflicted commit must never reach the remote; fail naming
+            # the commits so the conflict is resolved deliberately (locally,
+            # with jj) instead of half-pushed.
+            conflicts=$(jj log --no-graph -r 'conflicts()' \
+              -T 'commit_id.short() ++ " " ++ description.first_line() ++ "\n"')
+            if [ -n "$conflicts" ]; then
+              echo "::error::fork-sync: $name: rebase onto $upstream_tip produced conflicted commits; pushing NOTHING (git readers cannot parse jj conflict commits). Resolve locally with jj:"
+              printf '%s\n' "$conflicts"
+              exit 1
+            fi
+
+            sha=$(jj log --no-graph -r "$bookmark" -T 'commit_id')
+            pin="refs/pins/$(date -u +%Y-%m-%d)-${sha:0:12}"
+            echo "$name: pushing $sha to $bookmark and $pin"
+            git push --force origin "$sha:refs/heads/$bookmark" "$sha:$pin"
+            popd >/dev/null
+            echo "::endgroup::"
+          done
+
+      # Float each auto-updatable fork input to the bookmark tip just
+      # pushed. Runs even when the push was skipped (no token): the lock
+      # then converges on whatever the fork repos already hold.
+      - name: Float fork inputs
+        run: |
+          set -euo pipefail
+          mapfile -t inputs < <(
+            nix eval --json '.#lib.forkPackages' \
+              --apply 'fs: builtins.filter (f: f.autoUpdate) fs' \
+              | nix run nixpkgs#jq -- -r '.[].input'
+          )
+          for input in "${inputs[@]}"; do
+            echo "::group::nix flake update $input"
+            nix flake update "$input"
+            echo "::endgroup::"
+          done
+
+      # One rolling PR reusing the `fork-sync` branch, so each run advances
+      # the same PR instead of stacking. create-pull-request no-ops on an
+      # empty diff (no fork moved). `token`: a PR opened with the default
+      # GITHUB_TOKEN does not trigger `pull_request` workflows (flake-check),
+      # so branch protection blocks the merge; the AUTOBUMP_TOKEN secret
+      # makes the PR run CI.
+      # Drift visibility (RFC 0010, #2098): how far each pinned base trails
+      # its upstream default branch, patch stances, and retired-awaiting-drop
+      # counts. Read-only; forge errors degrade to unknown cells inside the
+      # tool, so this step fails only when the tool itself cannot run. The
+      # table lands in the step summary and the rolling PR body (body-path
+      # below); the body file is written outside the workspace so
+      # create-pull-request cannot commit it.
+      # Notify the human behind a manual dispatch: review request + assignee
+      # + body mention, all empty (a no-op) on the scheduled runs, which
+      # have no triggering human.
+      # Open the PRs the registry authorizes, for the repos that opted in.
+      # `--auto` adds a third gate to the two upstream-sync already applied:
+      # prsWelcome and aiPrsAllowed say whether a PR is acceptable at all,
+      # autoContribute says whether it is acceptable with nobody watching.
+      # Every repo except nushell is currently out, each with its reason in
+      # lib/fork-packages.nix.
+      #
+      # UPSTREAM_PR_TOKEN, not GITHUB_TOKEN: these PRs live on repos we do
+      # not own, so the token has to be a user token that can push our fork
+      # branch and open a PR upstream. Absent, the step skips loudly rather
+      # than half-running.
+      # A skipped step reads as a passing step. The lane's state goes in a
+      # file the drift report folds into the step summary and the rolling PR
+      # body, so "the contribution lane did nothing again" is visible where
+      # somebody actually looks, rather than only in a ::notice:: nobody
+      # scrolls to.
+      # Runs even when an earlier step failed. Contributing a patch upstream
+      # has nothing to do with rebasing our fork bookmarks, and coupling
+      # them means one breakage hides the other: on 2026-07-28 the btop
+      # rebase could not push (the mirror App lacks Workflows:write and
+      # upstream btop touched .github/workflows/cmake-netbsd.yml, #4045
+      # again), the job died there, and the contribution lane below never
+      # ran at all. `!cancelled()` rather than `always()` so a cancelled run
+      # still stops.
+      - name: Open authorized upstream PRs
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            {
+              echo "**The upstream contribution lane is inert.** \`UPSTREAM_PR_TOKEN\` is not set, so no upstream PR was opened or updated this run."
+              echo ""
+              echo "It cannot be a \`GITHUB_TOKEN\` or a GitHub App token: opening or editing a PR on a repo we do not own needs \`pull_requests: write\` on THAT repo, and an App installation only carries permissions for repos in its own installation. It has to be a user PAT with \`public_repo\`, and PRs then carry that person's name, which is what upstreams like NixOS/nix ask for anyway."
+            } > "$RUNNER_TEMP/upstream-lane.md"
+            echo "::warning::UPSTREAM_PR_TOKEN is not configured; the upstream contribution lane did nothing."
+            exit 0
+          fi
+          nix run .#upstream-sync -- --auto --open --check-stale
+          echo "Upstream contribution lane ran with \`--auto --open\`." > "$RUNNER_TEMP/upstream-lane.md"
+
+      # Keep the team @-mention current on every PR we track. Change-gated on
+      # the rendered block, so an unchanged PR costs one read and no write:
+      # safe to run on every scheduled pass. Editing a PR body needs the
+      # authoring identity, which is the same token as above.
+      - name: Reconcile upstream PR mentions
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            exit 0
+          fi
+          nix run .#upstream-sync -- notify --apply | tee "$RUNNER_TEMP/notify.txt"
+          {
+            echo ""
+            tail -1 "$RUNNER_TEMP/notify.txt"
+          } >> "$RUNNER_TEMP/upstream-lane.md"
+
+      - name: Resolve triggering human
+        if: ${{ !cancelled() }}
+        id: trigger
+        uses: ./.github/actions/triggering-actor
+
+      - name: Fork drift report
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_MENTION: ${{ steps.trigger.outputs.mention }}
+        run: |
+          set -euo pipefail
+          nix run .#upstream-sync -- drift --markdown > "$RUNNER_TEMP/drift.md"
+          {
+            echo "## Fork drift"
+            echo ""
+            cat "$RUNNER_TEMP/drift.md"
+            echo ""
+            echo "## Upstream contribution"
+            echo ""
+            cat "$RUNNER_TEMP/upstream-lane.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            cat <<'BODY'
+          Automated fork-sync: jj-rebase each auto-updatable fork repo's patch series onto its upstream tip, push the bookmark plus a permanent pin ref, and float the flake input to the new megamerge commit.
+
+          Driven by `lib/fork-packages.nix` (`autoUpdate = true`). Rev-pinned forks (`autoUpdate = false`) move only under a deliberate manual rebase; see each entry's comment for why (daemon toolchain, nightly coupling, vendored-dep hashes).
+
+          A conflicted rebase pushes nothing and fails the run naming the commits, so this PR only ever carries fork inputs whose series applied cleanly. The PR's `flake-check` CI rebuilds the packages from the new megamerge trees.
+
+          If this PR shows no `flake-check` run, the repo needs the `AUTOBUMP_TOKEN` secret and/or "Allow GitHub Actions to create and approve pull requests" enabled once.
+
+          ### Fork drift
+
+          BODY
+            cat "$RUNNER_TEMP/drift.md"
+            echo ""
+            echo "### Upstream contribution"
+            echo ""
+            cat "$RUNNER_TEMP/upstream-lane.md"
+            echo ""
+            echo "Auto-bump, made with Claude Opus 4.8."
+            if [ -n "${TRIGGER_MENTION}" ]; then
+              echo ""
+              echo "${TRIGGER_MENTION}"
+            fi
+          } > "$RUNNER_TEMP/pr-body.md"
+
+      # GitHub refuses ANY App push that creates or updates a file under
+      # .github/workflows/ unless the app holds Workflows:write, and neither
+      # GITHUB_TOKEN nor the apps here do (#4045). create-pull-request pushes
+      # the rolling branch over git, so when that branch does not exist the
+      # push creates every file in the tree -- workflow files included -- and
+      # the whole run dies with "refusing to allow a GitHub App to create or
+      # update workflow ...", having already rebased and pushed the fork
+      # repos. That is what killed run 30132019124.
+      #
+      # Move the branch with the git refs API instead, which only repoints an
+      # existing commit and so introduces no new blob for the restriction to
+      # object to. create-pull-request then only ever pushes the flake.lock
+      # commit on top of a branch that already matches this run's tree, and a
+      # flake.lock-only diff contains no workflow file at all. `delete-branch`
+      # is off to match: a branch that survives is one this step keeps aligned.
+      - name: Sync the rolling branch to this commit
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${REPOSITORY}/git/ref/heads/fork-sync" --jq .object.sha; then
+            gh api -X PATCH "repos/${REPOSITORY}/git/refs/heads/fork-sync" \
+              -F sha="${SHA}" -F force=true --jq .object.sha
+          else
+            gh api -X POST "repos/${REPOSITORY}/git/refs" \
+              -f ref=refs/heads/fork-sync -f sha="${SHA}" --jq .object.sha
+          fi
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          assignees: ${{ steps.trigger.outputs.user }}
+          reviewers: ${{ steps.trigger.outputs.user }}
+          base: main
+          branch: fork-sync
+          # Kept alive deliberately; see the ref-sync step above.
+          delete-branch: false
+          commit-message: "fork-sync: rebase fork repos onto upstream and float inputs"
+          title: "fork-sync: rebase fork repos onto upstream and float inputs"
+          # The body (preamble + live fork-drift table) is assembled by the
+          # "Fork drift report" step above; body-path keeps this step dumb.
+          body-path: ${{ runner.temp }}/pr-body.md

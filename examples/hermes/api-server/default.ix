@@ -1,0 +1,21 @@
+// The Hermes operator VM exposing the OpenAI-compatible `hermes
+// api-server` to sibling VMs. Chat frontends (LobeChat, Open WebUI,
+// LibreChat) running in the same east-west group point their OpenAI
+// base URL at this VM and get the full agent (tools, memory, persona)
+// behind a plain chat-completions endpoint. The group membership lives
+// in api-server.nix (`ix.networking.groups`), so the network identity
+// travels with the image. See README.md.
+export default ({ index }) =>
+  index.lib.mkVm({
+    name: "hermes",
+    deployment: {
+      secrets: {
+        hermes_env: { file: "hermes.env", owner: "hermes", mode: "0400" },
+      },
+    },
+    modules: [
+      index.lib.hermesAgent.nixosModules.default,
+      index.lib.hermes.profile,
+      import("./api-server.nix"),
+    ],
+  });

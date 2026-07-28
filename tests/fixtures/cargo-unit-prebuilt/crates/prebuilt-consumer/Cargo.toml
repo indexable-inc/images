@@ -1,0 +1,15 @@
+[package]
+name = "prebuilt-consumer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "prebuilt-consumer"
+path = "src/main.rs"
+
+[dependencies]
+# Fixture exercises cargo-unit's path-dep resolution; the explicit `path` edge is
+# the thing under test, not a real workspace dep.
+# astlog-ignore: no-cargo-path-dep
+prebuilt-lib = { path = "../prebuilt-lib" }

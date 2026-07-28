@@ -1,0 +1,32 @@
+---
+id: vcs-prompt-jj-segment
+postedAt: "2026-07-24"
+title: the prompt reads jj state in a jj workspace instead of the exported git view
+links: []
+tags:
+  - nix
+  - cli
+---
+
+Starship's `git_branch` and `git_status` cannot be disabled per directory, so
+inside a colocated jj repo — every fork this repo maintains — the prompt
+described the exported git view: a detached HEAD parked wherever
+`jj git export` last wrote, with none of the working-copy commit's state.
+
+`packages/vcs-prompt` replaces both modules. It walks up from the prompt
+directory, taking `.jj` over `.git` within a level so colocation resolves to
+jj while a git checkout nested inside a jj workspace still resolves to git,
+then renders one segment. In a jj workspace that is the working-copy change
+id, the nearest ancestor bookmark with the distance to it, and the
+conflict / divergent / non-empty flags: `on 󱗆 lsurukvy ix-patched+2 *`.
+Anywhere else it is the branch, the same status symbols `git_status` was
+configured with, and the upstream distance: `on  main !3?1⇡2`.
+
+Both backends shell out to the VCS rather than linking it. `jj-lib` is a heavy
+build for a prompt, which is why the third-party `jj-starship` stayed
+commented out here, and `jj log --ignore-working-copy` answers in ~20ms
+without snapshotting the working copy on every render. The git side started on
+libgit2 and moved to `git status --porcelain=v2` after measuring: in the
+workstation config repo, three levels of submodules deep, the libgit2 status
+walk took ~180ms against git's ~50ms, and dropping the dependency took a
+vendored C build out of the crate as well.

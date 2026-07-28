@@ -1,0 +1,1 @@
+{ makeFlagsArray = [ "CFLAGS=-O0 -g" "LDFLAGS=-la -lb" ]; }

@@ -1,0 +1,17 @@
+[package]
+name = "prebuilt-mid"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+# A library WITH a dependency, so the self-test can prove a prebuilt unit's
+# recorded `depUnits` are auto-injected into the consuming graph: injecting the
+# prebuilt-mid rlib only links when the prebuilt-lib rlib it was compiled
+# against rides along.
+
+[dependencies]
+# Fixture exercises cargo-unit's path-dep resolution; the explicit `path` edge is
+# the thing under test, not a real workspace dep.
+# astlog-ignore: no-cargo-path-dep
+prebuilt-lib = { path = "../prebuilt-lib" }

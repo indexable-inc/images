@@ -1,0 +1,25 @@
+[package]
+name = "ix-usage"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Agent-first CLI over the local ix usage store: consent, captured failures as JSON, spool compaction, and count-only uploads"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+ix-usage-core.workspace = true
+rusqlite.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+ureq = { workspace = true, features = ["json"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "ix-usage"
+path = "src/main.rs"

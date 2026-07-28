@@ -1,0 +1,65 @@
+{
+  // astlog rules are S-expressions (no dedicated grammar/LSP yet, #1703):
+  // The Scheme extension gives paren matching + sexp highlighting.
+  "file_types": {
+    "Nu": ["nu"],
+    "JSONC": ["common.json", "*-mods.json"],
+    "Scheme": ["astlog"],
+    // .ix is TypeScript-syntax (ix2nix checks the annotations); as JS, Zed
+    // rejects `type` aliases.
+    "TypeScript": ["ix"]
+  },
+  "languages": {
+    "Rust": {
+      "formatter": "language_server",
+      "format_on_save": "on"
+    },
+    "Python": {
+      "language_servers": ["basedpyright", "ruff", "..."],
+      "code_actions_on_format": {
+        "source.organizeImports.ruff": true
+      },
+      "formatter": {
+        "language_server": {
+          "name": "ruff"
+        }
+      },
+      "format_on_save": "on"
+    },
+    "Nu": {
+      "language_servers": ["nu", "..."]
+    }
+  },
+  "lsp": {
+    "nixd": {
+      "binary": {
+        "path": "typenix-lsp",
+        "arguments": []
+      }
+    },
+    "basedpyright": {
+      "settings": {
+        "basedpyright.analysis": {
+          "typeCheckingMode": "standard"
+        }
+      }
+    },
+    "rust-analyzer": {
+      "initialization_options": {
+        "check": {
+          "command": "clippy"
+        },
+        "linkedProjects": [
+          "modules/services/resource-monitor/stats-writer/Cargo.toml",
+          "packages/dag-runner/Cargo.toml",
+          "packages/loop/Cargo.toml",
+          "packages/minecraft/nbt/Cargo.toml",
+          "packages/minecraft/sync-managed/Cargo.toml",
+          "packages/nix-cargo-unit/Cargo.toml",
+          "packages/oci-image-builder/Cargo.toml",
+          "tests/fixtures/cargo-unit-hello/Cargo.toml"
+        ]
+      }
+    }
+  }
+}

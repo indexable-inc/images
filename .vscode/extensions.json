@@ -1,0 +1,25 @@
+{
+  "recommendations": [
+    "jnoortheen.nix-ide",
+    "CucumberOpen.cucumber-official",
+    "coopermaruyama.nix-embedded-languages",
+    "rust-lang.rust-analyzer",
+    "mkhl.direnv",
+    "thenuprojectcontributors.vscode-nushell-lang",
+    "tamasfe.even-better-toml",
+    "redhat.vscode-yaml",
+    "charliermarsh.ruff",
+    "detachhead.basedpyright",
+    "svelte.svelte-vscode",
+    "vscjava.vscode-java-pack",
+    "usernamehw.errorlens",
+    "vadimcn.vscode-lldb",
+    "gleam.gleam",
+    "pgourlain.erlang",
+    "elixir-lsp.elixir-ls",
+    "sumneko.lua",
+    "fwcd.kotlin",
+    "redhat.vscode-xml",
+    "rdfox.rdfox-rdf"
+  ]
+}

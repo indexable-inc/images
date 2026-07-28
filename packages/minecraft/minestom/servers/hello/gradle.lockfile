@@ -1,0 +1,32 @@
+# This is a Gradle generated file for dependency locking.
+# Manual edits can break the build and are not advised.
+# This file is expected to be part of source control.
+ch.qos.logback:logback-classic:1.5.38=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+ch.qos.logback:logback-core:1.5.38=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.google.auto.service:auto-service-annotations:1.1.1=compileClasspath,testCompileClasspath
+com.google.code.gson:gson:2.14.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.google.errorprone:error_prone_annotations:2.48.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+it.unimi.dsi:fastutil:8.5.18=runtimeClasspath,testRuntimeClasspath
+net.kyori:adventure-api:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:adventure-bom:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:adventure-key:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:adventure-nbt:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:adventure-text-logger-slf4j:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:adventure-text-serializer-ansi:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:adventure-text-serializer-commons:5.2.0=runtimeClasspath,testRuntimeClasspath
+net.kyori:adventure-text-serializer-gson:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:adventure-text-serializer-json:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:adventure-text-serializer-legacy:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:adventure-text-serializer-plain:5.2.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:ansi:1.1.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.kyori:option:1.1.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.minestom:data:26.2-rv2=runtimeClasspath,testRuntimeClasspath
+org.jctools:jctools-core-jdk11:4.0.6=runtimeClasspath,testRuntimeClasspath
+org.jctools:jctools-core:4.0.6=runtimeClasspath,testRuntimeClasspath
+org.jetbrains:annotations:26.1.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+org.jspecify:jspecify:1.0.0=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+org.slf4j:slf4j-api:2.0.17=compileClasspath,testCompileClasspath
+org.slf4j:slf4j-api:2.0.18=runtimeClasspath,testRuntimeClasspath
+space.vectrix.flare:flare-fastutil:2.0.1=runtimeClasspath,testRuntimeClasspath
+space.vectrix.flare:flare:2.0.1=runtimeClasspath,testRuntimeClasspath
+empty=annotationProcessor,testAnnotationProcessor

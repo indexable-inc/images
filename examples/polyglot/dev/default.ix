@@ -1,0 +1,7 @@
+// `ix apply` reads this VM through flake.nix. The syntax is JavaScript,
+// the semantics are Nix (index's ix2nix converts it during evaluation).
+export default ({ index }) =>
+  index.lib.mkVm({
+    name: "workbench",
+    modules: [import("./tools.nix")],
+  });

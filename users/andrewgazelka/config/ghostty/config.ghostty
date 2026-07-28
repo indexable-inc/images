@@ -1,0 +1,115 @@
+# Ghostty configuration. Deployed as an out-of-store symlink to this file
+# (users/andrewgazelka/config/home/ghostty.nix), so an edit here is live after
+# `cmd+shift+r` with no switch. Ghostty expands `~/` in path-valued keys, and
+# the `cd` keybinds type text into a shell that expands `~` itself, so nothing
+# here needs Nix interpolation.
+#
+# Themes (custom-dark/custom-light) and shaders are shared, and live in
+# modules/home/ghostty/{themes,shaders}; profiles/workstation.nix links them
+# into ~/.config/ghostty. This file only references them by name and path.
+
+font-family = Berkeley Mono
+font-size = 10
+theme = dark:custom-dark,light:custom-light
+
+split-divider-color = 2a2a2a
+scrollback-limit = 4294967295
+scrollbar = never
+link-previews = true
+
+clipboard-paste-protection = false
+clipboard-read = allow
+
+macos-icon = custom-style
+macos-icon-ghost-color = 111111
+macos-icon-screen-color = 222222
+macos-icon-frame = chrome
+macos-titlebar-proxy-icon = hidden
+macos-option-as-alt = true
+macos-window-buttons = hidden
+
+window-padding-x = 5
+window-padding-y = 5
+window-decoration = none
+
+cursor-style = block
+cursor-style-blink = false
+
+background-blur = 20
+background-opacity = 1.0
+background-opacity-cells = true
+
+confirm-close-surface = false
+
+# Interim mitigation for index#3768: tip's undo-close retention (upstream
+# ghostty#7535) fails to expire, so closed surfaces stay fully alive -
+# measured 69 live sessions vs 6 visible windows, some 21h old. 0 skips undo
+# registration so close tears the surface down immediately. Remove once the
+# vendored ghostty teardown patch lands.
+undo-timeout = 0
+
+# Track Ghostty nightlies. The declared Homebrew cask is `ghostty@tip`, so keep
+# the in-app Sparkle updater OFF but pinned to the matching `tip` channel so any
+# reload reports the right track. Updates come from the cask
+# (`brew upgrade --cask ghostty@tip`), not the in-app updater.
+auto-update = off
+auto-update-channel = tip
+
+# Applied in order: subtle CRT look, then a static dim-white outline on the
+# focused pane (gated by iFocus).
+custom-shader = ~/.config/ghostty/shaders/crt.glsl
+custom-shader = ~/.config/ghostty/shaders/focus-border.glsl
+custom-shader-animation = true
+
+# Send Ctrl+U for Cmd+Backspace (delete to start of line).
+keybind = cmd+backspace=text:\x15
+
+keybind = cmd+n=new_window
+keybind = cmd+t=new_tab
+keybind = cmd+shift+]=next_tab
+keybind = cmd+shift+[=previous_tab
+keybind = cmd+w=close_surface
+
+# Copy entire scrollback: select all, then copy.
+keybind = cmd+shift+c=select_all
+keybind = chain=copy_to_clipboard
+keybind = cmd+shift+v=paste_from_clipboard
+
+keybind = cmd+0=reset_font_size
+keybind = cmd+plus=increase_font_size:1
+keybind = cmd+minus=decrease_font_size:1
+keybind = cmd+shift+r=reload_config
+
+# Split focus: sequential, then directional.
+keybind = cmd+]=goto_split:next
+keybind = cmd+[=goto_split:previous
+keybind = alt+tab=goto_split:next
+keybind = shift+alt+tab=goto_split:previous
+keybind = cmd+shift+left=goto_split:left
+keybind = cmd+shift+right=goto_split:right
+keybind = cmd+shift+up=goto_split:up
+keybind = cmd+shift+down=goto_split:down
+
+# Copy file path/URL to clipboard.
+keybind = performable:cmd+shift+u=copy_url_to_clipboard
+
+# Scrollback navigation.
+keybind = cmd+up=scroll_to_top
+keybind = cmd+down=scroll_to_bottom
+
+keybind = shift+enter=text:\x1b\r
+keybind = cmd+enter=text:\x1b[13;9u
+keybind = cmd+a=unbind
+keybind = cmd+shift+a=toggle_command_palette
+keybind = cmd+shift+s=write_screen_file:copy
+
+# cmd+<n> clears the half-typed line (Ctrl-U = \x15) then types `cd <repo>\r`.
+# Native Ghostty text injection, so no Accessibility permission and no leaking
+# keys to other apps. MUST bind the physical `digit_N` position: since Ghostty
+# 1.2.0 the default `cmd+digit_N=goto_tab:N` (physical) wins over a logical
+# `cmd+1`, so binding `cmd+digit_N` is what overrides the tab switch. AeroSpace
+# must NOT bind cmd-1/2/3 or its global tap swallows them before Ghostty sees
+# the keys (see profiles/workstation.nix).
+keybind = cmd+digit_1=text:\x15cd ~/Projects/indexable-inc/ix\r
+keybind = cmd+digit_2=text:\x15cd ~/Projects/indexable-inc/index\r
+keybind = cmd+digit_3=text:\x15cd ~/.config/nix\r

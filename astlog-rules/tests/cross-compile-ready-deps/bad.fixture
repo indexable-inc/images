@@ -1,0 +1,1 @@
+{ stdenv, boost, pkg-config }: stdenv.mkDerivation { buildInputs = [ boost pkg-config ]; }

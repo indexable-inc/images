@@ -1,0 +1,61 @@
+name: Sync ix submodule
+
+# ix vendors this repository at ./index. Notify it immediately whenever main
+# moves; ix reads index/main itself, so the payload is diagnostic rather than
+# an instruction that could make the gitlink move backward.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mint ix-scoped dispatch token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MIRROR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
+          owner: indexable-inc
+          repositories: ix
+          permission-contents: write
+
+      - name: Dispatch latest-index sync
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          payload="$(
+            jq -nc \
+              --arg repository "$SOURCE_REPOSITORY" \
+              --arg sha "$SOURCE_SHA" \
+              '{
+                event_type: "index-main-updated",
+                client_payload: {
+                  source_repository: $repository,
+                  source_sha: $sha
+                }
+              }'
+          )"
+
+          for attempt in 1 2 3; do
+            if gh api --method POST \
+                repos/indexable-inc/ix/dispatches \
+                --input - <<<"$payload"; then
+              echo "dispatched index-main-updated for ${SOURCE_SHA}"
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::could not dispatch index-main-updated after three attempts"
+              exit 1
+            fi
+            echo "::warning::dispatch attempt ${attempt} failed; retrying"
+            sleep $(( attempt * 2 ))
+          done

@@ -1,0 +1,12 @@
+{ __dir, __importIx, __ixTy }:
+a: b: {
+  sum = a + b;
+  difference = a - b - 1;
+  product = (a + b) * 2;
+  quotient = a / b;
+  compared = a <= b && b > 0;
+  equal = a == b || a != 0;
+  negated = !(a < b);
+  minus = -a + b;
+  chosen = if a >= 0 then a else -a;
+}

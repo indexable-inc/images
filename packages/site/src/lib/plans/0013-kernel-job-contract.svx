@@ -1,0 +1,57 @@
+---
+id: 0013-kernel-job-contract
+number: '0013'
+title: The kernel job contract
+status: Sketch
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 5, why: 'the Elixir cutover built the foundation; this finishes the contract' }
+  impact: { value: 8, why: 'every agent session on every machine touches the kernel job surface' }
+  effort: { value: 6, why: 'one lifecycle and one result type across spawn, observe, cancel, reap' }
+  risk: { value: 4, why: 'supervised BEAM processes already isolate the blast radius' }
+  maturity: { value: 3, why: 'jobs exist and are supervised; the uniform contract does not' }
+  leverage: { value: 8, why: 'every tool built on the kernel inherits the contract for free' }
+  taste: { value: 5, why: 'the API shape is a judgment call; the plumbing is mechanical' }
+description: 'One typed lifecycle for kernel work: spawn, observe, cancel, reap, with one result surface. Sixty-plus issues about lost output, orphaned processes, wedged sessions, and inconsistent result types collapse into one contract the Elixir kernel enforces.'
+---
+
+<script>
+  import Dag from '../Dag.svelte';
+</script>
+
+## Summary
+
+The largest issue cluster in the repo is kernel work falling between the
+cracks of an implicit contract: job output that never reaches the caller,
+processes that outlive their jobs, sessions wedged by a blocking call,
+result surfaces that differ between call sites. The Elixir cutover
+(supervised per-cell processes) fixed the substrate. This plan finishes the
+job: one lifecycle every kernel operation follows, one result type every
+caller reads, and no way to spawn work outside it.
+
+<Dag
+  nodes={[
+    { id: 'spawn', label: 'spawn', sub: 'supervised, owned', col: 0, row: 0, state: 'done' },
+    { id: 'observe', label: 'observe', sub: 'tail, await, trace', col: 1, row: 0, state: 'active' },
+    { id: 'cancel', label: 'cancel', sub: 'whole tree, no orphans', col: 1, row: 1 },
+    { id: 'reap', label: 'reap', sub: 'exit + output, one type', col: 2, row: 0 }
+  ]}
+  edges={[['spawn', 'observe'], ['spawn', 'cancel'], ['observe', 'reap'], ['cancel', 'reap']]}
+/>
+
+## Non-goals
+
+New job kinds or scheduling policy; this is the contract for what already
+exists.
+
+## Absorbed issues
+
+[#3481](https://github.com/indexable-inc/index/issues/3481), [#3430](https://github.com/indexable-inc/index/issues/3430), [#3172](https://github.com/indexable-inc/index/issues/3172), [#3148](https://github.com/indexable-inc/index/issues/3148), [#3140](https://github.com/indexable-inc/index/issues/3140), [#3124](https://github.com/indexable-inc/index/issues/3124), [#3123](https://github.com/indexable-inc/index/issues/3123), [#3113](https://github.com/indexable-inc/index/issues/3113), [#3098](https://github.com/indexable-inc/index/issues/3098), [#3065](https://github.com/indexable-inc/index/issues/3065), [#3001](https://github.com/indexable-inc/index/issues/3001), [#2769](https://github.com/indexable-inc/index/issues/2769), [#2888](https://github.com/indexable-inc/index/issues/2888), [#2848](https://github.com/indexable-inc/index/issues/2848), [#2841](https://github.com/indexable-inc/index/issues/2841), [#2809](https://github.com/indexable-inc/index/issues/2809), [#2833](https://github.com/indexable-inc/index/issues/2833), [#2785](https://github.com/indexable-inc/index/issues/2785), [#2739](https://github.com/indexable-inc/index/issues/2739), [#2737](https://github.com/indexable-inc/index/issues/2737), [#2741](https://github.com/indexable-inc/index/issues/2741), [#2517](https://github.com/indexable-inc/index/issues/2517), [#2370](https://github.com/indexable-inc/index/issues/2370), [#2756](https://github.com/indexable-inc/index/issues/2756), [#2335](https://github.com/indexable-inc/index/issues/2335), [#2357](https://github.com/indexable-inc/index/issues/2357), [#2441](https://github.com/indexable-inc/index/issues/2441), [#2716](https://github.com/indexable-inc/index/issues/2716), [#2740](https://github.com/indexable-inc/index/issues/2740), [#2324](https://github.com/indexable-inc/index/issues/2324), [#2536](https://github.com/indexable-inc/index/issues/2536), [#2700](https://github.com/indexable-inc/index/issues/2700), [#2727](https://github.com/indexable-inc/index/issues/2727), [#2520](https://github.com/indexable-inc/index/issues/2520), [#2361](https://github.com/indexable-inc/index/issues/2361), [#2462](https://github.com/indexable-inc/index/issues/2462), [#2365](https://github.com/indexable-inc/index/issues/2365), [#2438](https://github.com/indexable-inc/index/issues/2438), [#2428](https://github.com/indexable-inc/index/issues/2428), [#2466](https://github.com/indexable-inc/index/issues/2466), [#2399](https://github.com/indexable-inc/index/issues/2399), [#2477](https://github.com/indexable-inc/index/issues/2477), [#2524](https://github.com/indexable-inc/index/issues/2524), [#2545](https://github.com/indexable-inc/index/issues/2545), [#2469](https://github.com/indexable-inc/index/issues/2469), [#2491](https://github.com/indexable-inc/index/issues/2491), [#2465](https://github.com/indexable-inc/index/issues/2465), [#2495](https://github.com/indexable-inc/index/issues/2495), [#2527](https://github.com/indexable-inc/index/issues/2527), [#2572](https://github.com/indexable-inc/index/issues/2572), [#2723](https://github.com/indexable-inc/index/issues/2723), [#2725](https://github.com/indexable-inc/index/issues/2725), [#2755](https://github.com/indexable-inc/index/issues/2755), [#2845](https://github.com/indexable-inc/index/issues/2845), [#2887](https://github.com/indexable-inc/index/issues/2887), [#2801](https://github.com/indexable-inc/index/issues/2801), [#2975](https://github.com/indexable-inc/index/issues/2975), [#2842](https://github.com/indexable-inc/index/issues/2842), [#2630](https://github.com/indexable-inc/index/issues/2630), [#2622](https://github.com/indexable-inc/index/issues/2622), [#2696](https://github.com/indexable-inc/index/issues/2696), [#2537](https://github.com/indexable-inc/index/issues/2537), [#2695](https://github.com/indexable-inc/index/issues/2695), [#2117](https://github.com/indexable-inc/index/issues/2117), [#1945](https://github.com/indexable-inc/index/issues/1945), [#1400](https://github.com/indexable-inc/index/issues/1400)
+
+Drafted by Claude Code (Fable) from the open-issue corpus; scores are seed
+estimates.

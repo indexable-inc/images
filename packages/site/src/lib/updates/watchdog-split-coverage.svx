@@ -1,0 +1,32 @@
+---
+id: watchdog-split-coverage
+postedAt: 2026-07-19T06:11:00-07:00
+title: "Cache watchdog covers both publish lanes, with lane-correct wedge ceilings"
+tags: [ci]
+links:
+  - label: "#3693: stale ceiling, unwatched darwin lane"
+    href: https://github.com/indexable-inc/index/issues/3693
+  - label: "PR #3672: the darwin split"
+    href: https://github.com/indexable-inc/index/pull/3672
+---
+
+A wedged linux cache push is now flagged after 190 minutes instead of 520,
+and the darwin publish lane is watched at all. `cache-push-watchdog.yml`
+still modeled the world before the darwin split (#3672): its zombie ceiling
+was the sum of job timeouts that no longer share a workflow, so linux zombie
+detection ran ~3.4x slower than the lane's real budget, and the darwin lane
+had no watchdog whatsoever -- no zombie detection, no stall detection, and no
+drift signal for `cache-ready-darwin`, a pin ref that has never been created
+and so could drift unboundedly without an alert.
+
+The watchdog's one cron now sweeps a two-row matrix of (workflow, pin ref,
+ceiling): `cache-push.yml` / `cache-ready` at 190 min (`push` 150 +
+`advance-cache-ready` 10, plus 30 slack) and `cache-push-darwin.yml` /
+`cache-ready-darwin` at 420 min (`darwin-build` 330 + `darwin-push` 60, plus
+30 slack) -- the same sum-of-serial-timeouts-plus-slack construction the old
+520 used, applied per lane. The three signals and the tracking-issue
+mechanics are unchanged, evaluated per lane: each lane files its own
+tracking issue naming the workflow that wedged (linux keeps the pre-split
+thread), and the missing `cache-ready-darwin` ref reports "does not exist
+yet; nothing to compare" until the first darwin publish creates it. When
+#3587 deletes the darwin lane, its matrix row goes with it.

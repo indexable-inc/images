@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 170" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .arrow { fill: #1f2328; }
+    .group { stroke: #8250df; fill: none; stroke-dasharray: 6 4; }
+    .accent { fill: #8250df; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .arrow { fill: #e6edf3; }
+      .group { stroke: #a371f7; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrow"/>
+    </marker>
+  </defs>
+  <rect x="300" y="8" width="330" height="152" rx="10" class="group"/>
+  <text x="316" y="26" font-size="11" class="accent">hermes-minecraft group</text>
+  <rect x="330" y="34" width="270" height="50" rx="6" class="box"/>
+  <text x="465" y="55" font-size="13" text-anchor="middle">minecraft</text>
+  <text x="465" y="72" font-size="11" text-anchor="middle" class="muted">Paper, RCON east-west only</text>
+  <rect x="330" y="102" width="270" height="50" rx="6" class="box"/>
+  <text x="465" y="123" font-size="13" text-anchor="middle">hermes</text>
+  <text x="465" y="140" font-size="11" text-anchor="middle" class="muted">agent + run_command MCP tool</text>
+  <line x1="420" y1="102" x2="420" y2="88" class="edge"/>
+  <text x="432" y="98" font-size="11" class="muted">RCON</text>
+  <rect x="60" y="36" width="120" height="44" rx="6" class="box"/>
+  <text x="120" y="62" font-size="13" text-anchor="middle">players</text>
+  <line x1="180" y1="58" x2="322" y2="58" class="edge"/>
+  <text x="251" y="50" font-size="11" text-anchor="middle" class="muted">ipv4 :25565</text>
+  <rect x="60" y="104" width="120" height="44" rx="6" class="box"/>
+  <text x="120" y="130" font-size="13" text-anchor="middle">you</text>
+  <line x1="180" y1="126" x2="322" y2="126" class="edge"/>
+  <text x="251" y="118" font-size="11" text-anchor="middle" class="muted">chat</text>
+</svg>

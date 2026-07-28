@@ -1,0 +1,28 @@
+---
+id: import-ix-stable-entry
+postedAt: "2026-07-23"
+title: scaffolded flakes eval again, and index.lib.importIxWasm ends the deep-path era
+links:
+  - label: "index#4125"
+    href: https://github.com/indexable-inc/index/issues/4125
+  - label: "index#4119"
+    href: https://github.com/indexable-inc/index/issues/4119
+tags:
+  - nix
+  - ix2nix
+---
+
+The package flattening (#4119) moved `packages/nix/ix2nix/import-ix.nix` to
+`packages/ix2nix/import-ix.nix`, and every flake `ix init` had ever
+scaffolded imports the old path from index main, so all existing projects
+failed eval with "path does not exist". A compat shim now lives at the old
+path: one expression forwarding to the moved file, kept only because
+scaffolded user flakes are external consumers we cannot migrate by editing
+this repo.
+
+The class is closed by a stable entry point: `index.lib.importIxWasm` (and
+`importIxWasmFor <system>`) is the in-eval `builtins.wasm` importer already
+wired to the compiled ix2nix converter, so consumer flakes never spell a
+repo-internal path or the converter's store layout again. The `ix init`
+template and the in-repo example flakes now bind
+`importIx = index.lib.importIxWasm;` instead of importing the deep path.

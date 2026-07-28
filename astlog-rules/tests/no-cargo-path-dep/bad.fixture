@@ -1,0 +1,11 @@
+# An inter-crate `path` dependency declared directly in a member dependency
+# table: moving the crate breaks the relative path. This is what the rule bans.
+[package]
+name = "consumer"
+version = "0.1.0"
+
+[dependencies]
+my-lib = { path = "../my-lib" }
+
+[target.'cfg(unix)'.dependencies]
+unix-only = { path = "../unix-only" }

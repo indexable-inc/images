@@ -1,0 +1,18 @@
+[package]
+name = "github-avatar"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Resolve a git commit author to a GitHub user and fetch their avatar PNG"
+
+[lints]
+workspace = true
+
+[dependencies]
+# GitHub's `<login>.png` endpoint sometimes serves the original upload (JPEG,
+# WebP, GIF, …), but kitty's f=100 format needs PNG, so decode any of those and
+# re-encode as PNG. `png` brings the encoder; the rest are input decoders.
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+snafu.workspace = true

@@ -1,0 +1,19 @@
+---
+id: manifest-scoped-cargo-planner
+postedAt: 2026-07-22T09:00:00-07:00
+title: "cargo-unit plans against a manifest-scoped stub, so a source edit no longer re-resolves the workspace"
+tags: [rust, nix, cargo-unit, ifd]
+links:
+  - label: cargo-unit.nix
+    href: https://github.com/indexable-inc/index/blob/main/lib/rust/cargo-unit.nix
+  - label: "#3900"
+    href: https://github.com/indexable-inc/index/issues/3900
+---
+
+Fixes #3900. Every `buildWorkspace` evaluation runs two eval-time IFD stages: a whole-workspace `cargo build --unit-graph` resolve and a `nix-cargo-unit render`. Both used to take the full source tree as input, so editing one line in any crate re-ran both planners before a single unit could cache-hit.
+
+Cargo's planning phase reads manifest contents (`Cargo.toml`, `Cargo.lock`, the in-tree cargo config) and discovers targets by file existence alone; it never opens a target file and runs no build script. The unit-graph stage now plans inside a stub tree built from exactly those inputs: manifests verbatim, every other source file an empty stub at its exact relative path. A body edit changes neither the manifest slice nor the path list, so the planner derivation is untouched; adding or removing files, or editing a manifest, still re-plans. The render stage keeps the real tree as input because its `include_str!` closure scan reads file contents, and it rewrites the stub's store prefix back to the real source so rendered output is byte-identical to the old path.
+
+Net effect on the repo workspace: a `.rs` body edit re-runs one cheap render instead of the render plus four whole-workspace cargo resolves, and the edited crate's unit is the only unit derivation that changes.
+
+(authored by Claude Code, Fable 5)

@@ -1,0 +1,17 @@
+[package]
+name = "darwin-deploy"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Deploy nix-darwin configurations to remote macOS hosts over ssh"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+shlex = { workspace = true }

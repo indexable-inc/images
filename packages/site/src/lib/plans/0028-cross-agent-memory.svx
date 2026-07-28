@@ -1,0 +1,106 @@
+---
+id: 0028-cross-agent-memory
+number: '0028'
+title: 'Cross-agent memory: share the fact files, keep the format'
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 5, why: 'extends a working per-user convention across the fleet; the moonshot version is plan 0026' }
+  impact: { value: 7, why: 'the second agent to hit a known problem starts from the fact instead of relearning it' }
+  effort: { value: 3, why: 'a git repo, a share command with a scanner gate, one extra grep path at recall' }
+  risk: { value: 5, why: 'a wrong or leaked shared fact has fleet blast radius instead of one-machine blast radius' }
+  maturity: { value: 1, why: 'unbuilt; the private layer it extends is daily-driven' }
+  leverage: { value: 8, why: 'every shared fact cheapens every future session on every host' }
+  taste: { value: 5, why: 'what is shareable by default and who may edit whose fact are the judgment calls' }
+description: 'Agent memories are per-user, per-machine silos: two agents solving the same problem relearn the same facts, and a mid-task agent has no way to see what a concurrent agent just learned. Add a shared layer with the exact format that already works (one fact per file, an index line per file, write at the moment of learning) in a private git repo, with provenance frontmatter on every fact, a scanner gate on every share, and a recall path that greps shared after private. Git fetch is the subscription mechanism; no new service.'
+---
+
+## Summary
+
+Add a shared memory repo that mirrors the private auto-memory layout: `facts/<slug>.md`, one fact per file, indexed one line per file. A `memory share` command promotes a private memory into it at the moment of learning, stamping provenance frontmatter (writer, host, session id) and refusing to push anything the secret scanner flags. Recall greps the private directory first, then a local clone of the shared repo that a background fetch keeps fresh. The format does not change; the only new thing is a second place the existing grep looks.
+
+## Problem
+
+Memory today is a per-user directory on one machine (`autoMemoryDirectory` in `users/andrewgazelka/profiles/workstation.nix`). The convention works: write at the moment of learning, one fact per file with a concrete handle, a curated `MEMORY.md` line per file, recall by grep. But the directory is a silo. An agent on vin-compute-1 that spends an hour learning why a cache push wedges leaves nothing an agent on hydra can grep tomorrow. Two concurrent agents in the same repo relearn the same gotcha in parallel. There is no shared surface where "I just verified X" lands while the other agent still needs it.
+
+## What exists, and where each falls short
+
+- **Auto-memory files plus `MEMORY.md`**: the right capture format, wrong scope. Private per user and per machine; nothing crosses a host boundary.
+- **claude-history sync and semantic search** (`packages/search`, source `claude_history`): fleet-wide and searchable, but it stores raw transcripts. A fact is buried in a session; recall costs a semantic query plus reading someone else's transcript to re-extract what they already distilled once. Plan 0027 makes transcripts citable provenance; it does not make them cheap recall.
+- **Kernel MCP shared workspaces**: live, federated, good as a mid-task blackboard, and ephemeral by design. Bindings die with the workspace; nothing persists as a greppable fact.
+- **Task lists and gossip (plan 0025)**: coordination and complaints. Gossip captures friction; it deliberately carries no verified fact.
+- **Plan 0026 (shared agent brain)**: the destination. A fleet-wide graph with reinforcement and decay replaces storage and recall underneath. It has effort 8 and maturity 1; this plan is the transport step that ships first and gives 0026 a populated corpus to rank.
+
+## Detailed design
+
+### Store
+
+A private git repo, `agent-memory`, cloned to a fixed path on every fleet host and workstation:
+
+```
+facts/<slug>.md          # one fact per file, same body format as today
+index/<writer>.md        # per-writer index shard, one curated line per fact
+```
+
+The writer id is `<user>@<host>` for interactive sessions and the agent name for fleet agents. Sharding the index per writer keeps the hot file (the index) conflict-free in the common case; a single shared `MEMORY.md` would be the write-contention point of the whole design.
+
+### Write path
+
+`memory share <file>` runs at the moment of learning, right after the private write:
+
+1. Copy the private fact into `facts/`, adding provenance frontmatter: `writer`, `host`, `session`, `shared` date, and the existing `metadata.type`.
+2. Gate: only `project` and `reference` types are shareable; `user` and `feedback` types are refused. The repo secret scanner runs on the body and refuses on findings, same posture as plan 0027's uploader. There is no flag that pushes unscanned content.
+3. Append the index line to `index/<writer>.md`, commit, push with a pull-rebase retry.
+
+Sharing is a promotion of an existing private memory, so the private layer keeps working offline and nothing about the write-at-learning habit changes.
+
+### Read path
+
+Recall greps two roots: private first, shared second. A slug present in both resolves to the private copy, so a user's own correction always beats the fleet's version. The harness config grows a `sharedMemoryDirectory` sibling next to `autoMemoryDirectory`; the grep recipe in the memory rule (`packages/agent-prompt/rules.nix`) is unchanged apart from the second root.
+
+### Freshness for concurrent agents
+
+Git fetch is the subscription mechanism. A session pulls the shared clone at start, and a timer unit fetches every few minutes, so a long-running agent sees facts written by concurrent agents on its next recall. This is polling on purpose: memories are facts that outlive a task, and minutes of staleness is acceptable for them. Sub-minute coordination stays on the kernel workspace and task lists; a live blackboard is a non-goal here.
+
+### Conflict and correction rules
+
+- A fact file is append-only for everyone except its writer. To dispute a fact you did not write, add a new fact with `supersedes: <slug>` in frontmatter; the recall layer prefers the superseding fact.
+- Slug collisions between concurrent writers surface as ordinary git conflicts; the loser renames with a writer suffix and both facts survive.
+- The existing verify-before-use rule carries more weight here than in the private layer, because the reader did not witness the learning. Provenance frontmatter is what makes verification possible: it names who learned the fact, where, and in which session (which plan 0027 makes readable).
+
+## Tradeoffs
+
+- **Staleness**: a shared fact outlives the world that made it true, and the person who would notice is not the one who wrote it. Mitigation is the verify rule plus `supersedes`; real decay is 0026's job.
+- **Trust**: one confidently wrong fact now misleads the whole fleet. Mandatory provenance and append-only-for-others keep the blast radius auditable and reversible; nothing here prevents the wrong fact, only anonymous ones.
+- **Write contention**: absorbed by per-writer index shards and one-file-per-fact; the push-rebase retry handles the rest.
+- **Secret leakage**: private memories are full of machine paths, tokens in context, and personal facts. The type gate plus the scanner is the line of defense, and like all scanners it has false negatives; a private repo (this is one) bounds the damage to the org.
+
+## Non-goals
+
+- Ranking, reinforcement, decay, consolidation: plan 0026.
+- Publishing transcripts or linking commits to sessions: plan 0027.
+- Capturing friction below the bar of a verified fact: plan 0025.
+- A live mid-task blackboard: the kernel workspace already is one.
+
+## Rollout
+
+1. Create `agent-memory`, ship `memory share` with the type and scanner gates.
+2. Add `sharedMemoryDirectory` to the harness home-manager module and the second grep root to the memory rule.
+3. Ship the fetch timer to fleet hosts and workstations.
+4. Eval per plan 0023: time and success rate on the second encounter of a known problem class, where the first encounter happened on a different host. That number against the private-only baseline decides whether the layer stays.
+
+## Unresolved questions
+
+- Default posture: share every `project`/`reference` memory automatically, or keep sharing an explicit one-command act? Automatic sharing maximizes the corpus and the leak surface at once.
+- Should index shards stay hand-curated lines (the current rule exists because a regeneration once destroyed curation) or be generated from fact frontmatter now that every fact has a `description`?
+- One fleet-wide namespace, or per-repo scopes so weave facts do not pollute index recall?
+- Writer identity when a session fans out subagents: does the fact belong to the parent session or the subagent that learned it?
+- Retention: does a superseded fact ever get pruned, and by whom?
+
+Drafted by an AI agent via Claude Code; comments wanted, hence the RFC flag.

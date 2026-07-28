@@ -1,0 +1,560 @@
+# Inherited from the PARENT ix checkout, not wanted here.
+#
+# index is a git submodule of ix, and cargo merges every `.cargo/config.toml`
+# from the cwd up to the filesystem root. So a cargo invocation inside index
+# picks up `../.cargo/config.toml`, which sets `[profile.release] rustflags`.
+# That key is gated behind the unstable `profile-rustflags` feature, which ix
+# opts into at the top of ITS Cargo.toml -- a declaration that does not reach
+# this workspace. The result was that every bare cargo command in index failed,
+# debug builds included:
+#
+#     error: failed to parse manifest
+#     Caused by: feature `profile-rustflags` is required
+#
+# Declaring it here makes cargo parse the inherited config instead of aborting.
+# The flags themselves are `--remap-path-prefix` entries for /app and /opt/cargo
+# and are inert on a developer checkout, where those paths do not exist.
+#
+# One leak is NOT fixed by this line: the same parent config sets
+# `[build] target = "x86_64-unknown-linux-musl"`, and a child config cannot
+# unset a parent key. Bare cargo in index therefore cross-compiles to musl by
+# default and fails on ring / aws-lc-sys / libmimalloc-sys. Pass the host triple
+# explicitly for a local check:
+#
+#     cargo check -p <pkg> --target aarch64-apple-darwin
+#
+# None of this affects the packaged builds, which run in a Nix sandbox from a
+# store path with no parent directory to inherit from.
+cargo-features = ["profile-rustflags"]
+
+[workspace]
+members = [
+  "modules/services/resource-monitor/stats-writer",
+  "modules/services/sandboxed-agent/egress-check",
+  "modules/services/sandboxed-agent/launch",
+  "modules/services/sandboxed-agent/proxy",
+  "packages/claude-hooks",
+  "packages/ix-credential",
+  "packages/claude-stories",
+  "packages/subagent-cache",
+  "packages/submodule-sync-test",
+  "packages/audio/app",
+  "packages/audio/blob",
+  "packages/audio/clock",
+  "packages/audio/dsp",
+  "packages/audio/e2e",
+  "packages/audio/engine",
+  "packages/audio/instrument",
+  "packages/audio/melody",
+  "packages/audio/net",
+  "packages/audio/score",
+  "packages/blast-radius",
+  "packages/nix-dag",
+  "packages/chromium-cookies",
+  "packages/ast-merge/ast",
+  "packages/ast-merge/cli",
+  "packages/ast-merge/diff",
+  "packages/ast-merge/git",
+  "packages/ast-merge/langs",
+  "packages/ast-merge/matcher",
+  "packages/astlog/cli",
+  "packages/astlog/core",
+  "packages/astlog/py",
+  "packages/clone-detect/cli",
+  "packages/clone-detect/detect",
+  "packages/clone-detect/hash",
+  "packages/clone-detect/pragma",
+  "packages/clone-detect/scanner",
+  "packages/clone-detect/test-support",
+  "packages/code-highlight",
+  "packages/complexity/cli",
+  "packages/complexity/metric",
+  "packages/edit-applier",
+  "packages/error-chain",
+  "packages/file-language",
+  "packages/scipql/cli",
+  "packages/scipql/core",
+  "packages/scipql/py",
+  "packages/tree-sitter-nix",
+  "packages/config-launch",
+  "packages/cve-scan",
+  "packages/dag-runner",
+  "packages/darwin-deploy",
+  "packages/dashboard/dashboard",
+  "packages/dashboard/dashboard-core",
+  "packages/dashboard/ex",
+  "packages/efx/cli",
+  "packages/efx/engine",
+  "packages/efx/ir",
+  "packages/efx/lang",
+  "packages/flecs-query/core",
+  "packages/flecs-query/mcp",
+  "packages/flecs-query/py",
+  "packages/gherkin-poc",
+  "packages/git-log-pretty",
+  "packages/github-avatar",
+  "packages/google/auth",
+  "packages/google/calendar",
+  "packages/google/calendar/cli",
+  "packages/google/gmail",
+  "packages/google/gmail/cli",
+  "packages/google/gmail/ex",
+  "packages/google/mcp",
+  "packages/google/py",
+  "packages/index-delta",
+  "packages/indexbench",
+  "packages/indexbench/filesystem",
+  "packages/ix-dev-diagnose",
+  "packages/ix-windows",
+  "packages/mail-smtp",
+  "packages/mcp/server-info",
+  "packages/minecraft/bot",
+  "packages/minecraft/nbt",
+  "packages/minecraft/protocol",
+  "packages/minecraft/protocol/jvm",
+  "packages/minecraft/protocol/py",
+  "packages/minecraft/sound",
+  "packages/minecraft/sync-managed",
+  "packages/mirror",
+  "packages/mynoise",
+  "packages/net-trace",
+  "packages/tree-sync",
+  "packages/ix2nix",
+  "packages/ix2nix/wasm",
+  "packages/nix-web-monitor/parser",
+  "packages/nix-web-monitor/server",
+  "packages/oci-image-builder",
+  "packages/nu-py",
+  "packages/plumb/cli",
+  "packages/plumb/ex",
+  "packages/plumb/core",
+  "packages/plumb/syntax",
+  "packages/progress-style",
+  "packages/repo-walker",
+  "packages/screencast/screencast",
+  "packages/screencast/screencast-ingest",
+  "packages/code-tokenizer",
+  "packages/file-search",
+  "packages/indexer",
+  "packages/lake/iceberg",
+  "packages/mixedbread",
+  "packages/polars-mixedbread",
+  "packages/search",
+  "packages/search-core",
+  "packages/search-py",
+  "packages/sink/mixedbread",
+  "packages/sink/parquet",
+  "packages/source/atuin",
+  "packages/source/claude",
+  "packages/source/codex",
+  "packages/source/debug",
+  "packages/source/git",
+  "packages/source/github",
+  "packages/source/journald",
+  "packages/source/linear",
+  "packages/source/meta",
+  "packages/source/parquet",
+  "packages/source/slack",
+  "packages/skill-lint",
+  "packages/sqlmerge",
+  "packages/kitty",
+  "packages/terminal-theme",
+  "packages/tui/ex",
+  "packages/tui/fleetview",
+  "packages/tui/reel",
+  "packages/tui/tui",
+  "packages/tui/tui-node",
+  "packages/tui/tui-py",
+  "packages/tui/vt/ix-vt",
+  "packages/tui/vt/ix-vt-sys",
+  "packages/unibind/backend-ex",
+  "packages/unibind/backend-jvm",
+  "packages/unibind/backend-py",
+  "packages/unibind/backend-ts",
+  "packages/unibind/conformance",
+  "packages/unibind/conformance-ex",
+  "packages/unibind/conformance-jvm",
+  "packages/unibind/conformance-ts",
+  "packages/unibind/core",
+  "packages/unibind/ex-runtime",
+  "packages/unibind/gen",
+  "packages/unibind/jvm-runtime",
+  "packages/unibind/macros",
+  "packages/unibind/py-runtime",
+  "packages/unibind/runtime",
+  "packages/unibind/test-support",
+  "packages/upstream-sync",
+  "packages/usage/cli",
+  "packages/usage/core",
+  "packages/usage/wrap",
+  "packages/panes/audio",
+  "packages/panes/compositor",
+  "packages/panes/guest-transport",
+  "packages/panes/host",
+  "packages/panes/protocol",
+  "packages/vmkit",
+  "packages/vcs-prompt",
+]
+# nix-cargo-unit is the bootstrap tool that renders this workspace's unit graph,
+# so it owns its own Cargo.toml + Cargo.lock (it carries its own `[workspace]`).
+# Excluding it here keeps the root lockfile from pulling it in, so a root-lock
+# bump never recompiles it; its Nix build keys only on its own folder.
+exclude = [
+  "packages/nix-cargo-unit",
+  "packages/nix-kbuild-unit",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# builtins.wasm plugins (packages/ix2nix/wasm): wasm32-unknown-unknown
+# ships no unwinder, so the plugin unit graph builds under this profile's
+# panic=abort -- the release profile's implicit panic=unwind fails at the
+# final cdylib link ("the crate `panic_unwind` does not have the panic
+# strategy `unwind`").
+[profile.wasm-plugin]
+inherits = "release"
+panic = "abort"
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+# Group lints need priority below per-lint overrides so allowlist entries
+# (such as `multiple_crate_versions`) can opt out without disabling the group.
+# Cargo emits `lint_groups_priority` errors otherwise.
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+multiple_crate_versions = "allow"
+# Restriction lint (off even in `all`): forbid anonymous tuple return types so a
+# multi-value return is a named struct the reader understands at the call site,
+# not a positional `(i32, i32)`. Provided by the indexable-inc/clippy fork.
+anonymous_tuple_return_type = "deny"
+# Restriction lint (off even in `all`): forbid silently defaulting a fallible
+# integer conversion (`u8::try_from(x).unwrap_or(..)` / `.unwrap_or_default()` /
+# `.unwrap_or_else(..)`), which clamps or zeroes an out-of-range value and hides
+# the overflow. Propagate the `TryFromIntError` instead. Provided by the
+# indexable-inc/clippy fork.
+fallible_int_fallback = "deny"
+
+[workspace.dependencies]
+aes = "0.8"
+anstream = "1"
+anstyle = "1"
+anyhow = "1"
+arrow = "59"
+ast-merge-ast = { path = "packages/ast-merge/ast" }
+audio-blob = { path = "packages/audio/blob" }
+audio-clock = { path = "packages/audio/clock" }
+audio-dsp = { path = "packages/audio/dsp" }
+audio-engine = { path = "packages/audio/engine" }
+audio-instrument = { path = "packages/audio/instrument" }
+audio-net = { path = "packages/audio/net" }
+audio-score = { path = "packages/audio/score" }
+ast-merge-diff = { path = "packages/ast-merge/diff" }
+ast-merge-git = { path = "packages/ast-merge/git" }
+ast-merge-langs = { path = "packages/ast-merge/langs" }
+ast-merge-matcher = { path = "packages/ast-merge/matcher" }
+astlog-core = { path = "packages/astlog/core" }
+axum = "0.8"
+base64 = "0.22"
+bytes = "1"
+cbc = "0.1"
+# Pure-Rust bzip2 (the 0.6 default backend is libbz2-rs-sys), used to read
+# Nix's build logs, which are bzip2-compressed on disk while being written.
+bzip2 = "0.6"
+cc = "1"
+chrono = { version = "0.4", default-features = false }
+clap = "4"
+source-atuin = { path = "packages/source/atuin" }
+source-claude = { path = "packages/source/claude" }
+source-codex = { path = "packages/source/codex" }
+source-debug = { path = "packages/source/debug" }
+source-git = { path = "packages/source/git" }
+source-journald = { path = "packages/source/journald" }
+clone-detect = { path = "packages/clone-detect/detect" }
+clone-hash = { path = "packages/clone-detect/hash" }
+clone-pragma = { path = "packages/clone-detect/pragma" }
+clone-scanner = { path = "packages/clone-detect/scanner" }
+clone-test-support = { path = "packages/clone-detect/test-support" }
+complexity-metric = { path = "packages/complexity/metric" }
+error-chain = { path = "packages/error-chain" }
+code-highlight = { path = "packages/code-highlight" }
+code-tokenizer = { path = "packages/code-tokenizer" }
+file-search = { path = "packages/file-search" }
+github-avatar = { path = "packages/github-avatar" }
+google-auth = { path = "packages/google/auth" }
+google-calendar = { path = "packages/google/calendar" }
+google-gmail = { path = "packages/google/gmail" }
+indexbench = { path = "packages/indexbench" }
+ix-vt = { path = "packages/tui/vt/ix-vt" }
+ix-vt-sys = { path = "packages/tui/vt/ix-vt-sys", version = "0.1.0" }
+ix-usage-core = { path = "packages/usage/core" }
+kitty = { path = "packages/kitty" }
+lake-iceberg = { path = "packages/lake/iceberg" }
+color-eyre = "0.6"
+crossterm = "0.29"
+cucumber = "0.23"
+dashboard-core = { path = "packages/dashboard/dashboard-core" }
+deadpool-postgres = "0.14"
+devicons = "0.6"
+dirs = "6"
+edit-applier = { path = "packages/edit-applier" }
+efx-engine = { path = "packages/efx/engine" }
+efx-ir = { path = "packages/efx/ir" }
+efx-lang = { path = "packages/efx/lang" }
+file-language = { path = "packages/file-language" }
+plumb-core = { path = "packages/plumb/core" }
+plumb-syntax = { path = "packages/plumb/syntax" }
+flate2 = "1"
+flecs-query-core = { path = "packages/flecs-query/core" }
+fontdue = "0.9"
+futures = "0.3"
+git2 = { version = "0.21", default-features = false }
+glob = "0.3"
+heck = "0.5"
+hex = "0.4"
+httparse = "1"
+hegeltest = { version = "0.28.2", default-features = false }
+# Reparse oracle for ix2nix property tests: emitted Nix must parse cleanly.
+rnix = "0.14"
+# The Iceberg corpus lake (issue #752). iceberg 0.9 pins arrow/parquet ^57.1
+# while the workspace parquet pair is on 59; the 57 tree stays isolated inside
+# lake-iceberg (see its Cargo.toml).
+iceberg = "0.9"
+iceberg-catalog-rest = "0.9"
+iceberg-storage-opendal = { version = "0.9", features = ["opendal-s3"] }
+ignore = "0.4"
+indexmap = "2"
+indicatif = "0.18"
+insta = { version = "1.42", features = ["json"] }
+lazy-regex = "3.4"
+libc = "0.2"
+libloading = "0.8"
+source-linear = { path = "packages/source/linear" }
+source-github = { path = "packages/source/github" }
+mixedbread = { path = "packages/mixedbread" }
+loro = "1.12"
+# Encoder/decoder for loro-dev's websocket sync wire format (MIT, zero
+# dependencies of its own). Taken rather than hand-rolled because the framing
+# has two details a reimplementation gets wrong silently: a DocUpdate's 8-byte
+# batch id is a raw *suffix* after the update list, and JoinResponseOk's
+# `extra` is mandatory on the wire. Sharing the encoder with the official
+# client means a spec change lands as a version bump, not as a bug report.
+loro-protocol = "0.3"
+napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
+napi-build = "2"
+napi-derive = "3"
+ndarray = "0.17"
+nix = "0.31"
+nix-web-monitor-parser = { path = "packages/nix-web-monitor/parser" }
+# The embedded nushell engine nu-py wraps. One version for the whole family,
+# aligned with pkgs.nushell so embedded semantics match the CLI on PATH.
+# nu-command drops its default `sqlite` feature (`stor`, `into sqlite`): its
+# rusqlite 0.37 pins libsqlite3-sys 0.35, which collides with source-atuin's
+# rusqlite 0.40 on the one-per-graph `links = "sqlite3"` native library.
+nu-cmd-extra = "0.114.0"
+nu-cmd-lang = "0.114.0"
+nu-command = { version = "0.114.0", default-features = false, features = ["os", "network", "rustls-tls"] }
+nu-engine = "0.114.0"
+nu-experimental = "0.114.0"
+nu-parser = "0.114.0"
+nu-protocol = "0.114.0"
+numpy = "0.28"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-core-foundation = "0.3"
+objc2-foundation = "0.3"
+objc2-quartz-core = "0.3"
+objc2-security = "0.3"
+objc2-web-kit = "0.3"
+object = { version = "0.39", default-features = false, features = ["read"] }
+object_store = { version = "0.14", features = ["aws"] }
+ix2nix = { path = "packages/ix2nix" }
+# JavaScript-syntax parser for ix2nix (packages/ix2nix): .ix modules are
+# parsed as ES modules and mapped 1:1 onto a typed Nix expression tree.
+oxc_allocator = "0.141"
+oxc_ast = "0.141"
+oxc_diagnostics = "0.141"
+oxc_parser = "0.141"
+oxc_span = "0.141"
+mc-protocol = { path = "packages/minecraft/protocol" }
+mail-smtp = { path = "packages/mail-smtp" }
+mcp-server-info = { path = "packages/mcp/server-info" }
+md-5 = "0.10"
+panes-protocol = { path = "packages/panes/protocol" }
+panes-guest-transport = { path = "packages/panes/guest-transport" }
+parking_lot = "0.12"
+parquet = { version = "59", features = ["arrow"] }
+pbkdf2 = { version = "0.12", default-features = false }
+percent-encoding = "2"
+# Apple property lists for index-delta's logical-diff engines: macOS `defaults`
+# domains and LaunchAgents are plists (XML and binary), so drift in them must be
+# diffed as parsed values, not bytes.
+plist = "1"
+prettyplease = "0.2"
+proc-macro2 = "1"
+progress-style = { path = "packages/progress-style" }
+rmcp = { version = "2.0", default-features = false, features = ["server", "macros", "transport-io"] }
+protobuf = "3"
+pty-process = { version = "0.5", features = ["async"] }
+pyo3 = { version = "0.28", features = ["abi3-py311"] }
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+pythonize = "0.28"
+quartz_nbt = "0.2.9"
+quote = "1"
+rayon = "1"
+ratatui = "0.30"
+regex = "1"
+repo-walker = { path = "packages/repo-walker" }
+image = { version = "0.25", default-features = false }
+lettre = { version = "0.11", default-features = false, features = [
+  "smtp-transport",
+  "tokio1",
+  "tokio1-rustls",
+  "rustls",
+  "ring",
+  "rustls-native-certs",
+  "hostname",
+] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+  "multipart",
+] }
+reedline = "0.49"
+rmp-serde = "1"
+rodio = { version = "0.22", default-features = false, features = ["playback", "vorbis"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+rustc-hash = "2.1"
+rustler = "0.38"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+scip = "0.9"
+scipql-core = { path = "packages/scipql/core" }
+search-core = { path = "packages/search-core" }
+source-meta = { path = "packages/source/meta" }
+serde = "1"
+serde_json = "1"
+serde_norway = "0.9"
+sha1 = "0.10"
+sha2 = "0.11"
+shlex = "1"
+similar = "3"
+source-slack = { path = "packages/source/slack" }
+source-parquet = { path = "packages/source/parquet" }
+sink-mixedbread = { path = "packages/sink/mixedbread" }
+sink-parquet = { path = "packages/sink/parquet" }
+snafu = "0.9"
+strip-ansi-escapes = "0.2"
+syn = { version = "2", features = ["full"] }
+tango-bench = "0.7"
+tantivy = "0.26"
+tao = "0.35"
+tar = "0.4"
+tempfile = "3"
+terminal-light = "1"
+terminal-theme = { path = "packages/terminal-theme" }
+tokio = "1"
+tokio-postgres = "0.7"
+tokio-stream = "0.1"
+tokio-util = "0.7"
+# WebSocket client for tests that drive a server end of the same protocol.
+# Already in the graph as axum's `ws` backend, so this pins the one version
+# rather than adding a second.
+tokio-tungstenite = "0.29"
+toml = { version = "1.1.2", default-features = false }
+# Format-preserving TOML rewriting for packages/mirror: inlining workspace
+# inheritance into standalone manifests without losing comments.
+toml_edit = "0.25"
+tower = "0.5"
+tower-http = "0.7"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tree-sitter = "0.26"
+tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-cpp = "0.23"
+tree-sitter-css = "0.25"
+tree-sitter-dockerfile-updated = "0.2"
+tree-sitter-elixir = "0.3"
+tree-sitter-go = "0.25"
+tree-sitter-haskell = "0.23"
+tree-sitter-highlight = "0.26"
+tree-sitter-html = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-kotlin-ng = "1.1"
+tree-sitter-language = "0.1"
+tree-sitter-lua = "0.5"
+tree-sitter-md = "0.5"
+# Patched with underscore digit separators in numeric literals: the
+# [patch.crates-io] entry below substitutes the in-repo fork
+# (packages/tree-sitter-nix) for this crates-io release everywhere the
+# workspace resolves it.
+tree-sitter-nix = "0.3"
+tree-sitter-ocaml = "0.25"
+tree-sitter-php = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-ruby = "0.23"
+tree-sitter-rust = "0.24"
+tree-sitter-scala = "0.26"
+tree-sitter-sequel = "0.3"
+tree-sitter-svelte-ng = "1.0"
+tree-sitter-swift = "0.7"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-typescript = "0.23"
+tree-sitter-yaml = "0.7"
+tui = { path = "packages/tui/tui" }
+unibind = { path = "packages/unibind/macros" }
+unibind-backend-ex = { path = "packages/unibind/backend-ex" }
+unibind-backend-jvm = { path = "packages/unibind/backend-jvm" }
+unibind-backend-py = { path = "packages/unibind/backend-py" }
+unibind-backend-ts = { path = "packages/unibind/backend-ts" }
+unibind-core = { path = "packages/unibind/core" }
+unibind-test-support = { path = "packages/unibind/test-support" }
+unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
+unibind-jvm-runtime = { path = "packages/unibind/jvm-runtime" }
+unibind-py-runtime = { path = "packages/unibind/py-runtime" }
+unibind-runtime = { path = "packages/unibind/runtime" }
+ureq = "3"
+url = { version = "2.5.8", default-features = false }
+uuid = "1"
+webpki-roots = "1"
+# `transparent` is a non-default feature: without it `with_transparent(true)`
+# is a silent no-op and the webview paints an opaque canvas, hiding the
+# ix-windows blur behind a flat card.
+# Sandboxed deterministic runtime for shared-audio instrument modules
+# (packages/audio/instrument). Minimal feature set: Cranelift JIT, the
+# runtime itself, WAT text support for built-in/demo instruments, and the
+# std/signals/parallel-compilation platform features.
+wasmtime = { version = "46", default-features = false, features = [
+  "anyhow",
+  "cranelift",
+  "runtime",
+  "wat",
+  "std",
+  "parallel-compilation",
+] }
+wry = { version = "0.55", features = ["transparent"] }
+x509-parser = "0.18"
+xxhash-rust = { version = "0.8", default-features = false }
+# Container format only (ReplayMod .mcpr archives); the compression backends
+# are opted into per consumer, so the default heavyweight codecs (zstd, lzma,
+# bzip2) stay out of the build graph.
+zip = { version = "7", default-features = false }
+
+# Workspace-wide crate substitutions. `tree-sitter-nix` is the in-repo fork
+# carrying underscore digit separators in numeric literals (the dialect the
+# patched nix-ix lexer accepts; see packages/tree-sitter-nix/README.md),
+# so astlog, clone-detect, and every other ast-merge-langs consumer parse the
+# same numbers nix does.
+[patch.crates-io]
+tree-sitter-nix = { path = "packages/tree-sitter-nix" }

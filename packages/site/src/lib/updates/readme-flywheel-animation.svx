@@ -1,0 +1,17 @@
+---
+id: readme-flywheel-animation
+postedAt: 2026-07-19T14:00:00-07:00
+title: "The README flywheel cycles the tools this repo actually sharpens"
+tags: [readme, svg, animation]
+links:
+  - label: readme heroes
+    href: https://github.com/indexable-inc/index/tree/main/.github/readme
+---
+
+The flywheel hero animates its own thesis: a pulse circles the loop and each
+lap is shorter than the last. Under "a change lands once", a slot names the
+tool that just landed, primed to mark the new version, and swaps once per full
+loop. It cycled four generic entries, one of them a literal placeholder; it
+now draws from twelve tools this repo actually improves: nix', clippy', fmt',
+mgrep', astlog', cargo', kernel', tui', sdk', vt', ci', site'. Reduced-motion
+readers get a static nix'.

@@ -1,0 +1,38 @@
+---
+id: submodule-flake-metadata
+postedAt: 2026-07-19T15:40:00-07:00
+title: "Submodule flake inputs now carry lastModified and rev"
+tags: [nix, flakes, fork]
+links:
+  - label: PR 3750
+    href: https://github.com/indexable-inc/index/pull/3750
+  - label: patch 0030
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0030-libflake-stamp-submodule-metadata-on-relative-path-f.patch
+---
+
+A `path:./submodule` flake input used to be a metadata black hole: no
+`lastModified`, no `rev`. Anything consuming the pin's age got epoch 0,
+which is how a starship prompt segment came to report a two-hour-old
+index pin as 20653 days stale.
+
+Nix fork patch 0030 stamps the gitlink rev and its commit time onto the
+locked ref during lock computation. Both now appear in `flake.lock`
+(`path:./index?lastModified=...&rev=...`) and in
+`inputs.index.lastModified`, `.rev`, and `.shortRev`, exactly like a git
+input. Plain subdirectory subflakes stay unstamped on purpose: their
+history is the parent's, and stamping them would rewrite the lock on
+every parent commit.
+
+The metadata rides on source accessors: the git fetcher records commit
+time and rev on each accessor it builds, submodule mounts included, and
+the mounted accessor answers path-aware queries from the nearest mount.
+Lock computation reuses the fetch's accessor through the input cache
+(now also keyed by the locked input), and falls back to the previous
+lock's values when a flattened store copy knows nothing, so stamps never
+flap between fetch modes.
+
+Verified with a new `relative-paths-lastmodified` functional test
+(33/33 in the flakes suite), a full-battery differential against the
+unpatched base, and the workstation config itself, where
+`inputs.index.lastModified` now equals `git -C index log -1 --format=%ct`
+byte for byte. Takes effect per host once its system nix includes p30.

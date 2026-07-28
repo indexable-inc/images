@@ -1,0 +1,5 @@
+{ lib, paths }:
+lib.fileset.toSource {
+  inherit (paths) root;
+  fileset = lib.fileset.intersection (lib.fileset.gitTracked paths.root) (paths.root + "/packages/blast-radius/tests");
+}

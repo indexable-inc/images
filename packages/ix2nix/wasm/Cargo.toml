@@ -1,0 +1,19 @@
+[package]
+name = "ix2nix-wasm"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "builtins.wasm plugin exporting ix2nix's .ix -> Nix conversion to the patched Nix evaluator"
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+# The whole crate body is `cfg(target_arch = "wasm32")`, so the native
+# workspace graph compiles an empty cdylib with no dependency edge; only the
+# wasm32-unknown-unknown graph (packages/ix2nix/wasm/default.nix) pulls in
+# the converter.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ix2nix.workspace = true

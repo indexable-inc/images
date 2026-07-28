@@ -1,0 +1,15 @@
+[project]
+name = "ix-fleet"
+version = "0.1.0"
+description = "Render and execute ix fleet plans"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.0.0,<3.0.0",
+]
+
+[project.scripts]
+ix-fleet = "ix_fleet:run"
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"

@@ -1,0 +1,210 @@
+"""Unit tests for the pure helpers in `tui.harness`.
+
+These cover the parsing/diffing logic that has no PTY dependency, so they run
+anywhere (`python -m unittest tui.harness_test`) without spawning an agent. The
+live, agent-driven behavior is exercised separately against a real `claude`.
+"""
+
+from __future__ import annotations
+
+import re
+import unittest
+
+from . import WaitTimeout
+from .harness import (
+    Agent,
+    Claude,
+    Codex,
+    Cursor,
+    _gate_matches,
+    _parse_claude_reply,
+    _parse_cursor_reply,
+    _run_oneshot,
+    _shquote,
+    _submit_probe,
+    _tail_delta,
+)
+
+
+class TailDeltaTests(unittest.TestCase):
+    def test_returns_appended_suffix(self) -> None:
+        before = ["a", "b", "c"]
+        after = ["a", "b", "c", "d", "e"]
+        assert _tail_delta(before, after) == "d\ne"
+
+    def test_trims_blank_edges(self) -> None:
+        before = ["a"]
+        after = ["a", "", "  ", "x", "y", "", ""]
+        assert _tail_delta(before, after) == "x\ny"
+
+    def test_redrawn_viewport_diverges_midway(self) -> None:
+        before = ["p", "q", "OLD"]
+        after = ["p", "q", "NEW", "z"]
+        assert _tail_delta(before, after) == "NEW\nz"
+
+    def test_no_change_is_empty(self) -> None:
+        assert _tail_delta(["a", "b"], ["a", "b"]) == ""
+
+
+class SubmitProbeTests(unittest.TestCase):
+    def test_first_line_capped(self) -> None:
+        assert _submit_probe("hello world\nsecond") == "hello world"
+
+    def test_long_line_truncated_to_24(self) -> None:
+        assert len(_submit_probe("x" * 100)) == 24
+
+
+class ShQuoteTests(unittest.TestCase):
+    def test_plain(self) -> None:
+        assert _shquote("/var/repo") == "'/var/repo'"
+
+    def test_embedded_quote(self) -> None:
+        assert _shquote("a'b") == "'a'\\''b'"
+
+
+class GateMatchTests(unittest.TestCase):
+    def test_substring(self) -> None:
+        assert _gate_matches("trust", "do you trust this folder")
+        assert not _gate_matches("trust", "nothing here")
+
+    def test_regex(self) -> None:
+        assert _gate_matches(re.compile(r"hooks?\b"), "review hooks")
+
+
+class OneshotArgvTests(unittest.TestCase):
+    def test_claude_defaults(self) -> None:
+        assert Claude._oneshot_argv("q") == ["claude", "-p", "q"]
+
+    def test_claude_model(self) -> None:
+        assert Claude._oneshot_argv("q", model="haiku") == [
+            "claude",
+            "-p",
+            "--model",
+            "haiku",
+            "q",
+        ]
+
+    def test_codex_reply_goes_to_last_message_file(self) -> None:
+        argv = Codex._exec_argv("q", "/scratch/last.txt")
+        assert argv[:2] == ["codex", "exec"]
+        assert argv[-1] == "q"
+        assert argv[argv.index("--output-last-message") + 1] == "/scratch/last.txt"
+
+    def test_cursor_defaults(self) -> None:
+        argv = Cursor._oneshot_argv("q")
+        assert argv[:2] == ["cursor-agent", "-p"]
+        assert "--force" in argv
+        assert argv[-1] == "q"
+
+
+class OneshotSharedTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_without_headless_mode_raises(self) -> None:
+        try:
+            await Agent.oneshot("q")
+        except NotImplementedError:
+            return
+        self.fail("expected NotImplementedError")
+
+
+class RunOneshotTests(unittest.IsolatedAsyncioTestCase):
+    # #3184: the timeout is a parameter, not a hardcoded cap, and None disables
+    # it entirely (the caller owns the deadline).
+    async def test_returns_stripped_stdout(self) -> None:
+        assert await _run_oneshot(["echo", " hi "], cwd=None, timeout=10.0) == "hi"
+
+    async def test_timeout_none_means_no_cap(self) -> None:
+        assert await _run_oneshot(["echo", "hi"], cwd=None, timeout=None) == "hi"
+
+    async def test_past_timeout_raises_wait_timeout(self) -> None:
+        # Not assertRaises/pytest.raises: the file stays runnable by bare
+        # `python -m unittest` (no pytest dep) and lint-clean (PT027).
+        try:
+            await _run_oneshot(["sleep", "60"], cwd=None, timeout=0.1)
+        except WaitTimeout:
+            return
+        self.fail("expected WaitTimeout")
+
+
+class ClaudeGateTests(unittest.TestCase):
+    # The dev-channels warning screen as rendered by claude 2.1.x launched with
+    # --dangerously-load-development-channels (#2508).
+    def test_dev_channels_screen_matches_a_gate(self) -> None:
+        screen = (
+            "  WARNING: Loading development channels\n\n"
+            "  Channels: server:index\n\n"
+            "  ❯ 1. I am using this for local development\n"
+            "    2. Exit\n"
+        )
+        assert any(_gate_matches(g.pattern, screen) for g in Claude.gates)
+
+
+class ClaudeReplyTests(unittest.TestCase):
+    def test_extracts_last_marker_block(self) -> None:
+        transcript = (
+            "❯ first question\n"
+            "⏺ first answer\n"
+            "✻ Churned for 1s\n"
+            "❯ second question\n"
+            "⏺ the real answer\n"
+            "  spanning two lines\n"
+            "✻ Baked for 2s"
+        )
+        assert (
+            _parse_claude_reply(transcript)
+            == "the real answer\n  spanning two lines"
+        )
+
+    def test_falls_back_when_no_marker(self) -> None:
+        assert _parse_claude_reply("  plain text  ") == "plain text"
+
+
+class CursorReplyTests(unittest.TestCase):
+    # Grounded against a real cursor-agent 2026.06 session (issue #1987): the
+    # echoed prompt, a shell tool block, the answer, then the input-box footer.
+    def test_extracts_answer_after_tool_block(self) -> None:
+        transcript = (
+            "  Run `ls` in this directory, then reply with just the count.\n"
+            "\n"
+            "  $ ls -1 /private/tmp | wc -l 24s\n"
+            "    1894\n"
+            "\n"
+            "  1894\n"
+            "\n"
+            " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+            "  → Add a follow-up\n"
+            " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+            "  Composer 2.5 Fast · 13%\n"
+            "  /private/tmp"
+        )
+        assert _parse_cursor_reply(transcript) == "1894"
+
+    def test_plain_turn_drops_prompt_echo(self) -> None:
+        transcript = (
+            "  Reply with exactly: hello from cursor.\n"
+            "\n"
+            " ⠘⠤ Composing\n"
+            "  hello from cursor\n"
+            "\n"
+            " ▄▄▄▄▄▄▄▄\n"
+            "  → Add a follow-up\n"
+            " ▀▀▀▀▀▀▀▀"
+        )
+        assert _parse_cursor_reply(transcript) == "hello from cursor"
+
+    def test_multi_paragraph_answer_survives(self) -> None:
+        transcript = (
+            "  question\n"
+            "\n"
+            "  first paragraph\n"
+            "\n"
+            "  second paragraph\n"
+            "\n"
+            " ▄▄▄▄▄▄▄▄"
+        )
+        assert _parse_cursor_reply(transcript) == "first paragraph\n\nsecond paragraph"
+
+    def test_falls_back_when_nothing_survives(self) -> None:
+        assert _parse_cursor_reply("  $ ls 1s\n    out\n") == "$ ls 1s\n    out"
+
+if __name__ == "__main__":
+    unittest.main()

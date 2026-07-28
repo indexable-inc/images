@@ -1,0 +1,34 @@
+---
+id: mcp-per-module-dirs
+postedAt: 2026-07-22T09:00:00-07:00
+title: "each bundled mcp module's Nix definition now lives next to its Python source"
+tags: [nix, mcp, layout]
+links:
+  - label: "#3928"
+    href: https://github.com/indexable-inc/index/issues/3928
+  - label: packages/mcp
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp/default.nix
+---
+
+packages/mcp/default.nix had grown into a 5,900-line file holding every
+bundled module's definition and most of its 77 test derivations. Each module
+directory now carries a module.nix next to its Python source
+(src/imessage/module.nix, plus ix_notebook_mcp/module.nix for the server
+package), discovered by the same marker-file walk the package registry uses
+for package.nix. A module file declares only the slice of the assembly it
+touches and returns its module derivation and tests; sibling modules arrive
+under their historical bindings, so the per-module test envs from #3897
+(passthru.ixFirstPartyDeps, firstPartyClosure) moved verbatim with their
+modules. default.nix shrinks to assembly: third-party pins, the pinned
+interpreter, env composition, the shipped wrappers, and the genuinely
+cross-module tests.
+
+Adding a bundled module is now mkdir src/&lt;name&gt; plus a module.nix; no
+registry edit. Behavior is preserved: the test attribute list is
+byte-identical on darwin and linux, and 75 of the 77 test derivations kept
+their exact store paths (the two that moved only re-order the interpreter
+env's inputs).
+
+Fixes #3928
+
+(authored by Claude Code, Fable 5)

@@ -1,0 +1,1 @@
+{ pkgs, value }: pkgs.writeText "data.json" (builtins.toJSON value)

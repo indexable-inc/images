@@ -1,0 +1,83 @@
+---
+id: 0030-global-knowledge-graph
+number: '0030'
+title: 'Global knowledge graph: one ontology for people, biases, facts, and posts'
+status: Sketch
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-19'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 9, why: 'one typed graph over everything the org knows; plan 0026 is one subsystem of this' }
+  impact: { value: 7, why: 'every consumer that links entities instead of restating them compounds: recall, review, writing, onboarding' }
+  effort: { value: 8, why: 'ontology design, entity resolution, and migration of several existing corpora; quarters, not weekends' }
+  risk: { value: 6, why: 'ontologies rot when the schema outruns the curators; a half-adopted graph is worse than none' }
+  maturity: { value: 1, why: 'unbuilt; the substrate pieces (memory files, contacts, playbook people pages) exist separately' }
+  leverage: { value: 9, why: 'each new entity class and each new consumer makes every existing node more connected and more useful' }
+  taste: { value: 8, why: 'which classes deserve to exist and when two nodes are the same entity are judgment calls all the way down' }
+description: 'Org knowledge lives in disconnected piles: agent memory facts, a contacts directory, playbook people pages, blog essays, plan documents. Each names the same people, tools, concepts, and failure modes with no shared identity. Sketch one global ontology, a typed entity graph whose classes span people, orgs, tools, concepts, cognitive biases, incidents, decisions, facts, and posts, shared by every consumer, with the shared agent memory of plans 0026 and 0028 as the seed corpus and the ix.dev blog of plan 0029 as the first public consumer. Agents communicate through it too: subscriptions on nodes, classes, or standing queries turn every write into a notification, so ideas sync across agents instead of waiting to be re-grepped. Every node is an attested claim with an observation-or-inference basis, never bare truth, and visibility is a selector policy in the same query language.'
+---
+
+## Summary
+
+Define one global ontology: a small set of entity classes (person, org, tool, concept, bias, incident, decision, fact, post) and typed edges between them (authored-by, about, cites, supersedes, refutes, exhibits, learned-in), shared by every consumer in the org rather than one per subsystem. Existing corpora become views over the graph instead of silos: shared memory facts (plan 0028) are `fact` nodes, contacts and playbook people pages are `person` nodes, plans and blog posts (plan 0029) are `post` nodes. The graph is the identity layer; plan 0026's reinforcement and decay is its ranking layer.
+
+## Motivation
+
+The same real-world entity exists today in five places with five spellings and zero links. A vendor rep is a memory file, a contacts entry, and a Slack thread. A failure mode is a memory fact, a playbook page, and two plan documents that each re-explain it. Nothing connects a decision to the person who made it, the incident that motivated it, or the bias it risks. Every consumer re-derives context that another consumer already wrote down, which is the same silo problem plan 0028 attacks for facts, generalized to everything.
+
+Biases earn a class of their own: agents and humans both make recurring judgment errors (recency, sunk cost, confirmation via a single grep), and today a postmortem can only restate them in prose. As first-class nodes, a decision or incident links to the bias it exhibits, and the pattern across incidents becomes queryable instead of anecdotal.
+
+## Sketch of the design
+
+- **One ontology, all classes, global.** Classes and edge types live in one versioned schema file that every consumer imports; no subsystem forks its own. Adding a class is a reviewed schema change, not a local convention.
+- **Nodes are files first.** Following plan 0028, a node is a markdown file with typed frontmatter in a git repo; edges are frontmatter references by stable id. The graph database, if one ever exists, is derived from the files, never the source of truth.
+- **Seed corpora.** Shared memory facts (0028), the contacts directory, playbook people pages, plan documents, and blog posts (0029) each get a one-time migration that stamps ids and extracts the edges already implicit in their prose and links.
+- **Consumers.** Agent recall follows edges instead of grepping flat files. The blog renders margin notes by resolving entity links. Plan pages show who decided what and which incidents motivated them. Session provenance (plan 0027) gives `learned-in` edges real targets.
+
+## Agents communicating over the graph
+
+Storage alone leaves agents polling. The graph also wants to be the medium agents talk through: an agent publishes an idea by writing a node, and other agents hear about it because they subscribed to the part of the graph it landed in.
+
+- **Subscriptions are queries, not channels.** An agent subscribes to a node and its neighborhood (this incident and everything within two edges), to a class (any new `bias` node), or to a standing datalog-style query (any new `fact` whose `about` edge reaches a tool my current task touches). No topic naming, no fan-out lists: the graph structure is the routing table.
+- **Publish is just write.** Writing a node or edge is the only publish primitive. A subscription matching the write produces a notification to the subscriber: a kernel-workspace message for live agents, a queued digest for sessions that start later. Two concurrent agents converging on the same concept discover each other because each one's write trips the other's subscription.
+- **Ideas propagate as nodes, not messages.** An agent that wants input publishes an `idea` node with edges to what it concerns; agents subscribed nearby respond by attaching their own nodes (supporting fact, refuting fact, prior incident) rather than replying in a channel. The conversation is the subgraph it leaves behind, which means it is durable, citable, and greppable after both agents are gone, unlike a chat thread.
+- **Standing queries replace polling loops.** Today a long-running agent re-greps memory hoping something changed. A standing query with a notification callback inverts that: the agent declares what part of the world it cares about once, and the graph pushes deltas.
+
+This is deliberately not a message bus with a graph bolted on. The kernel workspace and task lists remain the sub-minute coordination surface; graph notifications carry durable knowledge events (a node appeared, an edge changed) at the minutes-fresh cadence plan 0028 already accepts for memory.
+
+## Claims, not truth
+
+An agent writing a node does not make the node true. The graph stores attestations: every node and edge carries who asserted it, and readers see the claim with its claimant, never a bare fact. This is the same posture the memory rules already take (verify before use, provenance frontmatter in plan 0028), promoted to a structural invariant: the graph has no unattributed statements, so a confidently wrong agent pollutes its own credibility, not the shared record.
+
+- **Attestation is mandatory.** Every write stamps the asserting identity (person, or agent plus session per plan 0027) and the basis of the claim. A node without an attestor is unrepresentable, not merely discouraged.
+- **Observations outrank inferences.** The basis field distinguishes an observation (the agent ran the command and saw the output, with a provenance link to where) from an inference (the agent concluded it from other nodes) from hearsay (restating another claimant). Consumers rank accordingly: recall prefers observations, and a chain of inferences never silently hardens into an observation.
+- **Disagreement is data.** Two contradictory claims coexist as two attested nodes joined by a `disputes` edge; nothing forces a winner. Consensus, where it matters, is a query (how many independent observers attest this) rather than an edit war.
+- **Privacy by selector.** Visibility is a policy over the graph, not a per-node checkbox: selectors in the same query language as subscriptions (this class, this neighborhood, claims attested by me) grant audiences read access. Person nodes sourced from private memory match a private-by-default selector; a blog margin note (plan 0029) can only render nodes the public selector reaches. One language for what you hear about and what you may see keeps the two from drifting apart.
+
+## Relationship to other plans
+
+- **0028 cross-agent memory** is the transport and format substrate; this plan gives its facts identity and edges.
+- **0026 shared agent brain** is the ranking layer (reinforcement, decay) over this graph; this plan is its schema.
+- **0029 blog on ix.dev** is the first public consumer: posts as nodes, margin links as edges. The two plans land independently but are designed together; a blog outside index could not join the graph.
+- **0027 session provenance** supplies the citation targets for `learned-in` and `decided-in` edges.
+- **0025 agent gossip** carries friction and complaints below the bar of a durable node; a gossip item that gets verified graduates into the graph, and subscriptions are the delivery mechanism gossip lacked.
+
+## Drawbacks
+
+Ontologies are where knowledge projects go to die: schema debates replace writing, entity resolution is unbounded curation work, and a graph that only some consumers adopt fragments identity worse than the silos did. The mitigation is scope discipline: start with two classes (person, fact) and two consumers (recall, blog), and let every further class earn its way in with a consumer that needs it.
+
+## Unresolved questions
+
+- Where does the schema live and who owns changes to it?
+- Entity resolution: who merges two nodes that turn out to be the same person or concept, and what happens to inbound edges?
+- Privacy selectors: how expressive before policy evaluation itself becomes the bottleneck, and who audits that the public selector reaches nothing it should not?
+- Is a bias catalog seeded from the literature, or only from biases actually observed in incidents here?
+- Query language for subscriptions: real datalog, a fixed menu of patterns (node, class, k-hop neighborhood), or start with the menu and grow into datalog when a consumer needs a join?
+- Notification transport: kernel workspace messages exist today, but what wakes an agent that subscribed and then went idle?
+- Attestation strength: is naming the claimant enough, or do claims want signatures so an agent cannot be impersonated in the graph?
+
+Drafted by an AI agent via Claude Code; comments wanted, hence the RFC flag.

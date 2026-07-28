@@ -1,0 +1,14 @@
+{
+  "wire-manifest": {
+    "url": "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/rlib/ix-sdk-wire/a95096d6b0ee69a6/manifest.json",
+    "hash": "sha256-UV6/vT5zasDrJyIp9o2AvXoqS9H5X+VOvQykxAmaPco="
+  },
+  "wire-rlib": {
+    "url": "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/rlib/ix-sdk-wire/a95096d6b0ee69a6/libix_sdk_wire-a95096d6b0ee69a6.rlib",
+    "hash": "sha256-JCv83V3NQeSuA/oG/zYoX3AmM5u9jKPOxSH6V6OQQDs="
+  },
+  "wire-rmeta": {
+    "url": "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/rlib/ix-sdk-wire/a95096d6b0ee69a6/libix_sdk_wire-a95096d6b0ee69a6.rmeta",
+    "hash": "sha256-Bt37uG3ImMhjt9dPX3W+pIoNAQvUMAFVOIdNMvUcT3E="
+  }
+}

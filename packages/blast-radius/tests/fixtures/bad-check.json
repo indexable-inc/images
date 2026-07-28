@@ -1,0 +1,2 @@
+{"base":"aaaaaaa","head":"bbbbbbb","total":1,"changed":[],"added":[],"removed":[],
+ "causes":[{"name":"x","checks":["ok","`rm -rf`"]}],"phaseTimings":{"total":1.0}}

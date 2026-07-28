@@ -1,0 +1,326 @@
+:root {
+  color-scheme: light dark;
+
+  /* The "Soft Machine" palette, the same one the test-ide app defines in
+     src/app.css: warm olive charcoal in the dark, warm cream in the light, one
+     dusty-pink accent shared by both. Values are that app's tokens carried over
+     verbatim; only the names differ, because this app addresses its palette
+     through light-dark() pairs rather than a Tailwind theme block.
+
+       --bg   = background   --panel = sidebar   --elev = card
+       --edge = border       --ink   = foreground
+       --ink-dim = muted-foreground  --accent = primary   --sel = secondary
+
+     Ranking is by INK, never by opacity: foreground for what you are reading,
+     muted-foreground for its context, red/amber for severity. Alpha appears only
+     on backgrounds and hairline borders, never on a text colour. */
+
+  /* IntelliJ-flat: square corners everywhere, no decorative chrome. */
+  --radius: 0;
+
+  --bg:          light-dark(oklch(0.977 0.005 105), oklch(0.205 0.009 120));
+  --panel:       light-dark(oklch(0.96 0.006 105),  oklch(0.225 0.009 120));
+  --elev:        light-dark(oklch(0.995 0.003 105), oklch(0.238 0.009 120));
+  --edge:        light-dark(oklch(0.895 0.009 105), oklch(0.95 0.01 110 / 9%));
+  --edge-strong: light-dark(oklch(0.845 0.009 105), oklch(0.95 0.01 110 / 16%));
+  --ink:         light-dark(oklch(0.28 0.012 110),  oklch(0.92 0.006 106));
+  --ink-dim:     light-dark(oklch(0.51 0.014 110),  oklch(0.67 0.012 110));
+  /* The third rank of ink. Still a solid colour, not the foreground at reduced
+     alpha: dimmed text is the one thing this palette never does. */
+  --ink-faint:   light-dark(oklch(0.655 0.014 110), oklch(0.52 0.012 110));
+  --live:        light-dark(oklch(0.65 0.12 150),   oklch(0.72 0.12 150));
+  --dead:        light-dark(oklch(0.577 0.245 27.325), oklch(0.66 0.185 25));
+  --accent:      light-dark(oklch(0.62 0.125 355),  oklch(0.75 0.105 350));
+  /* The accent as a FILL: what a selection is drawn with. Never used for text. */
+  --accent-soft: light-dark(oklch(0.93 0.016 350),  oklch(0.75 0.105 350 / 16%));
+  --cursor:      light-dark(oklch(0.62 0.125 355),  oklch(0.75 0.105 350));
+  --sel:         light-dark(oklch(0.945 0.006 105), oklch(0.285 0.009 120));
+
+  /* Kind/status hues (the chart ramp), for badges and chips — used sparingly. */
+  --k-green: light-dark(oklch(0.65 0.12 150),  oklch(0.72 0.12 150));
+  --k-amber: light-dark(oklch(0.75 0.13 80),   oklch(0.8 0.12 80));
+  --k-red:   light-dark(oklch(0.577 0.245 27.325), oklch(0.66 0.185 25));
+  --k-blue:  light-dark(oklch(0.62 0.11 250),  oklch(0.7 0.1 250));
+  --k-pink:  light-dark(oklch(0.6 0.12 300),   oklch(0.68 0.11 300));
+
+  --ui: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', Segoe UI, sans-serif;
+  --mono: 'Berkeley Mono', 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* light-dark() is unsupported on ~15% of browsers as of 2026; restore the dark
+   palette there with the classic prefers-color-scheme override. */
+@supports not (color: light-dark(#000, #fff)) {
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: oklch(0.205 0.009 120); --panel: oklch(0.225 0.009 120); --elev: oklch(0.238 0.009 120);
+      --edge: oklch(0.95 0.01 110 / 9%); --edge-strong: oklch(0.95 0.01 110 / 16%);
+      --ink: oklch(0.92 0.006 106); --ink-dim: oklch(0.67 0.012 110); --ink-faint: oklch(0.52 0.012 110);
+      --live: oklch(0.72 0.12 150); --dead: oklch(0.66 0.185 25); --accent: oklch(0.75 0.105 350);
+      --accent-soft: oklch(0.75 0.105 350 / 16%); --cursor: oklch(0.75 0.105 350);
+      --sel: oklch(0.285 0.009 120);
+      --k-green: oklch(0.72 0.12 150); --k-amber: oklch(0.8 0.12 80); --k-red: oklch(0.66 0.185 25);
+      --k-blue: oklch(0.7 0.1 250); --k-pink: oklch(0.68 0.11 300);
+    }
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.5 var(--ui);
+  /* A hair of negative tracking reads as more refined at UI sizes. */
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  /* The shell owns its own scrolling; the page itself never scrolls. */
+  overflow: hidden;
+}
+#app { height: 100%; }
+::selection { background: var(--accent-soft); }
+
+/* Discreet scrollbars: hairline, translucent, square. The thumb only asserts
+   itself under the cursor, so dense panels read as content, not chrome. */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--ink-dim) 22%, transparent); }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in oklab, var(--ink-dim) 45%, transparent); }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--ink-dim) 25%, transparent) transparent; }
+}
+
+/* ----- shared status LED ------------------------------------------------ */
+/* One primitive for run/resource status, used by the sidebar and run detail.
+   Only a live run (amber pulse) and a failure (red) get a filled dot; success
+   and idle stay a hollow ring so a column of "fine" doesn't compete for the eye. */
+.led {
+  flex: none;
+  width: 7px; height: 7px; border-radius: 50%;
+  display: inline-block;
+}
+/* Nothing here animates. A running resource is told by a FILLED amber dot against
+   a hollow ring, which is the whole signal; the pulse it used to carry was
+   motion for its own sake, and this palette animates only red severity. */
+.led-ok { border: 1px solid var(--live); background: transparent; }
+.led-running { background: var(--k-amber); }
+.led-error { background: var(--dead); }
+
+/* ----- pane body -------------------------------------------------------- */
+/* The `.pane` wrapper carries no chrome of its own: it is just the box the kind's
+   renderer (terminal/html/json/exec) is scoped under, reused by the run detail,
+   the focus view, and the resource stage, each of which supplies its own framing. */
+.pane {
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+/* ----- terminal body ---------------------------------------------------- */
+.pane pre {
+  margin: 0; padding: 8px 12px;
+  font-family: var(--mono); line-height: 1.35;
+  color: var(--ink);
+  /* Sized to the terminal's natural width; clip any sub-pixel remainder rather
+     than show a scrollbar. */
+  white-space: pre; overflow: hidden; tab-size: 8;
+}
+.pane pre .b { font-weight: 700; }
+.pane pre .i { font-style: italic; }
+.pane pre .u { text-decoration: underline; }
+
+.pane pre .cur { position: relative; }
+.pane pre .cur::after {
+  content: ''; position: absolute; pointer-events: none;
+  left: 0; top: 0; right: 0; bottom: 0;
+}
+.pane pre .cur.block::after { background: var(--cursor); mix-blend-mode: difference; }
+.pane pre .cur.bar::after { right: auto; width: 1px; background: var(--cursor); }
+.pane pre .cur.underline::after { top: auto; height: 1px; background: var(--cursor); }
+
+.pane .placeholder { color: var(--ink-faint); font-style: italic; }
+
+/* ----- html body -------------------------------------------------------- */
+/* A producer-rendered document in a sandboxed frame. Fixed viewport height so the
+   card stays a card; the producer owns everything inside. */
+.pane .body.html-body { height: 240px; }
+.html-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--panel); }
+
+/* ----- data body (JSON tree) -------------------------------------------- */
+.pane .json {
+  padding: 10px 12px; max-height: 360px; overflow: auto;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; color: var(--ink);
+}
+.json-children { display: flex; flex-direction: column; gap: 1px; }
+/* Nested structures indent under their key with a faint guide rule. */
+.json-children .json-children { padding-left: 10px; margin-left: 1px; border-left: 1px solid var(--edge); }
+.json-row { display: flex; gap: 8px; align-items: baseline; }
+/* A row whose value is itself a structure drops the structure below the key. */
+.json-row:has(> .json-children) { flex-direction: column; gap: 1px; }
+.json-key { color: var(--ink-dim); white-space: nowrap; }
+.json-str { color: var(--ink); }
+.json-num { color: var(--accent); font-variant-numeric: tabular-nums; }
+.json-bool { color: var(--accent); }
+.json-null { color: var(--ink-faint); font-style: italic; }
+.json-empty { color: var(--ink-faint); }
+.json-raw { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
+
+/* ----- namespace kind icon ---------------------------------------------- */
+/* The lead glyph on a namespace row (KindIcon), an IDE-autocomplete-style icon
+   tinted by kind. Lives in global scope because KindIcon is its own component. */
+.ns-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; color: var(--ink-dim);
+}
+.ns-icon svg { width: 16px; height: 16px; display: block; }
+.ns-icon[data-kind='frame'],
+.ns-icon[data-kind='array'] { color: var(--k-blue); }
+.ns-icon[data-kind='mapping'],
+.ns-icon[data-kind='sequence'] { color: var(--k-green); }
+.ns-icon[data-kind='object'] { color: var(--ink-dim); }
+.ns-icon[data-kind='module'] { color: var(--k-pink); }
+.ns-icon[data-kind='function'],
+.ns-icon[data-kind='class'] { color: var(--k-amber); }
+.ns-icon[data-kind='scalar'] { color: var(--accent); }
+.ns-icon[data-kind='text'] { color: var(--ink-dim); }
+
+/* ----- exec body -------------------------------------------------------- */
+/* A captured run's streams, rendered by ExecBody (chrome off in the run detail).
+   Output keeps its own whitespace and scrolls sideways rather than wrapping, so
+   aligned columns stay aligned and nothing is clipped. */
+.exec { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; overflow-x: hidden; }
+.exec.expanded { max-height: none; }
+.exec-out {
+  margin: 0; padding: 8px 12px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.4; color: var(--ink);
+  white-space: pre; overflow-x: auto;
+}
+.exec-out.err { color: var(--dead); }
+.exec-out.res { color: var(--accent); }
+/* Auto-detected JSON output: a wrapper holding a shiki block (or raw fallback). */
+.exec-json { padding: 8px 12px; overflow-x: auto; }
+.exec-json pre,
+.exec-json .shiki {
+  margin: 0; padding: 0; font-family: var(--mono); font-size: 11.5px; line-height: 1.4; white-space: pre;
+}
+.exec-json .cb-raw { color: var(--ink); }
+.exec-empty { padding: 8px 12px; color: var(--ink-faint); font-style: italic; font-family: var(--mono); font-size: 11.5px; }
+/* The source toggle + status footer, drawn only when ExecBody has chrome on
+   (the focus view); the run detail shows the source in its own panel instead. */
+.exec-foot {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 4px 12px 8px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint);
+}
+.exec-srctoggle {
+  font: inherit; color: var(--ink-faint); background: none; border: 0; padding: 0; cursor: pointer;
+}
+.exec-srctoggle:hover, .exec-srctoggle.on { color: var(--ink-dim); text-decoration: underline; }
+.exec-lang { color: var(--ink-faint); }
+.exec-spacer { flex: 1; }
+.exec-state { letter-spacing: 0.3px; }
+.exec-state.err { color: var(--dead); }
+.exec-state.run { color: light-dark(#d68a00, #e5c07b); }
+.exec-source {
+  margin: 0; padding: 8px 12px; border-top: 1px solid var(--edge);
+  font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--ink-faint);
+  white-space: pre; overflow-x: auto; background: var(--bg);
+}
+
+/* ----- focus view ------------------------------------------------------- */
+.focus {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; flex-direction: column;
+  background: var(--bg);
+}
+.focus-head {
+  flex: none; display: flex; align-items: baseline; gap: 10px;
+  padding: 10px clamp(12px, 2vw, 24px); border-bottom: 1px solid var(--edge);
+}
+.focus-title { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--ink); }
+.focus-sub { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); }
+.focus-spacer { flex: 1; }
+.focus-age { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.focus-kind { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); }
+.focus-close {
+  font: inherit; font-size: 13px; color: var(--ink-dim);
+  background: var(--panel); border: 1px solid var(--edge); padding: 2px 9px; cursor: pointer;
+}
+.focus-close:hover { color: var(--ink); border-color: var(--edge-strong); }
+.focus-body {
+  flex: 1 1 auto; min-height: 0; overflow: auto;
+  display: grid; place-items: start center; padding: clamp(12px, 2vw, 24px);
+}
+.focus-pane { align-self: start; max-width: 100%; background: var(--panel); border: 1px solid var(--edge); }
+.focus-pane.term { width: max-content; }
+.focus-pane .body.html-body { height: 72vh; width: min(960px, 90vw); }
+.focus-pane .json { max-height: none; }
+.focus-pane .exec { max-height: none; }
+.focus-absent { color: var(--ink-faint); font-family: var(--mono); align-self: center; }
+
+/* ----- shiki (code blocks + JSON output) -------------------------------- */
+/* shiki output sits flush on the panel and uses the dashboard's mono font; every
+   token carries both palettes as CSS vars and the right one is picked from the OS
+   color-scheme. */
+.shiki { background: transparent !important; }
+.shiki code { font-family: inherit; }
+.shiki, .shiki span { color: var(--shiki-light); }
+@media (prefers-color-scheme: dark) {
+  .shiki, .shiki span { color: var(--shiki-dark); }
+}
+
+/* ----- inline-trace view ------------------------------------------------ */
+/* The code shown once, full width. Each line that produced output shows its first
+   output line inline in gray; a line whose output has more lines is hoverable to
+   reveal the full output in a popover that overlays the code below it, so nothing
+   ever shifts. Imports fold away by default. */
+.trace { padding: 6px 0; user-select: text; }
+.trace-fold {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint);
+  background: none; border: 0; border-bottom: 1px dashed var(--edge); padding: 5px 12px;
+}
+.trace-fold:hover { color: var(--ink-dim); }
+.trace-row { position: relative; min-height: 19px; padding: 0 12px; }
+.trace-content {
+  display: flex; align-items: baseline; gap: 16px; min-width: 0; overflow-x: auto;
+  line-height: 1.6;
+}
+.trace-code {
+  white-space: pre; flex: none;
+  font-family: var(--mono); font-size: 11.5px;
+}
+.trace-inline {
+  flex: none; max-width: 64ch; white-space: pre; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint);
+}
+.trace-rawline { color: var(--ink-dim); }
+/* shiki tokens (injected as bare `.line` spans, no `.shiki` ancestor here). */
+.trace-code .line, .trace-code .line span { color: var(--shiki-light); }
+/* A line whose output has more than one line is hoverable for the full text. */
+.trace-row.multi:hover { background: var(--sel); }
+/* The full-output overlay: pinned just under the line, above the code that follows. */
+.trace-pop {
+  display: none; position: absolute; left: 12px; top: 100%; z-index: 6;
+  max-width: min(72ch, calc(100% - 24px));
+  background: var(--panel); border: 1px solid var(--edge-strong); padding: 6px 10px;
+}
+.trace-pop pre {
+  margin: 0; font-family: var(--mono); font-size: 11px; line-height: 1.4; color: var(--ink);
+  white-space: pre; overflow: auto; max-height: 240px;
+}
+.trace-row.multi:hover .trace-pop { display: block; }
+.trace-stderr { margin: 0; border-top: 1px solid var(--edge); }
+@media (prefers-color-scheme: dark) {
+  .trace-code .line, .trace-code .line span { color: var(--shiki-dark); }
+}
+
+/* ----- the edit marker -------------------------------------------------- */
+/* Where the edit selected in the history panel landed. A selection is DRAWN, not
+   subtracted: the marked region gains an accent fill and an accent rule down its
+   leading edge, and nothing else on the page changes. No transition — the mark
+   appears with the scroll, it does not animate into place. */
+.edit-marked {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}

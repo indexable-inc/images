@@ -1,0 +1,13 @@
+---
+id: elixir-mcp-native-shell
+postedAt: 2026-07-23T12:00:00-07:00
+title: "Agents use the Elixir kernel and keep a native shell"
+tags: [agent, mcp, elixir]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/4099
+---
+
+Agent wrappers now start the persistent Elixir MCP server by default. The old default started the Python notebook kernel even after the workstation configuration had moved to BEAM.
+
+Codex also keeps its native shell when the kernel is present. Commands and search use the native shell. Stateful Elixir, fleet, and data work stay in the kernel. A dead MCP connection no longer removes the only command path.

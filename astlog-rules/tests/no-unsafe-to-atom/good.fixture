@@ -1,0 +1,20 @@
+defmodule SafeAtom do
+  @moduledoc false
+
+  # to_existing_atom/1 only resolves atoms that already exist, so it cannot grow
+  # the table; the rule must stay silent on it.
+  @spec parse(String.t()) :: atom()
+  def parse(s), do: String.to_existing_atom(s)
+end
+
+defmodule Catalog do
+  @moduledoc false
+
+  # A user module with its own `to_atom/1` is unrelated to the
+  # String/List/:erlang builtins the rule targets, so calling it must not fire.
+  @spec to_atom(term()) :: atom()
+  def to_atom(_), do: :ok
+
+  @spec register(term()) :: atom()
+  def register(x), do: Catalog.to_atom(x)
+end

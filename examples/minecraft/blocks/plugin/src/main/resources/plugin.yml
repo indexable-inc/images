@@ -1,0 +1,6 @@
+name: BlockEvents
+version: 0.1.0
+main: dev.ix.example.blockevents.BlockEventsPlugin
+api-version: "1.21"
+description: Emits each block placement as a JSON Lines domain fact for the log.
+author: ix

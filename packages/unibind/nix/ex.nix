@@ -1,0 +1,117 @@
+# The `ex` target of `unibind.lib.build`: the Elixir host modules generated
+# straight from the crate's built NIF library (the IR travels in its link
+# section), merged with the caller's tests into one mix-importable package:
+# `lib/` (generated .ex), `mix.exs` (also generated, from the same
+# interface), `priv/native/<soname>.so`, and the caller's test suite.
+{
+  lib,
+  pkgs,
+  packageRegistry,
+  rustWorkspace,
+}: {
+  crate,
+  # Directory with the hand-written parts of the mix project (the test suite
+  # and `.formatter.exs`) overlaid onto the generated tree. `mix.exs` is not
+  # among them: it is generated, and a hand-written copy trips the shadow
+  # check below. `null` means the package ships no test suite.
+  mixSource ? null,
+}: let
+  entry =
+    packageRegistry.byId.${crate}
+      or (throw "unibind.lib.build: `${crate}` has no package.nix in the registry; add one with `inRustWorkspace = true`");
+
+  libraryKey = lib.replaceStrings ["-"] ["_"] crate;
+  library =
+    rustWorkspace.units.libraries.${libraryKey}
+      or (throw "unibind.lib.build: the shared workspace graph has no library unit `${libraryKey}` for `${crate}` (packages/${entry.relativePath})");
+
+  genBin = rustWorkspace.units.binaries.unibind-gen;
+
+  # `:erlang.load_nif/2` appends the platform extension itself, and the BEAM
+  # loads `.so` on every unix including darwin, so the library installs
+  # under one canonical name on both. The darwin link needs `-undefined
+  # dynamic_lookup` for the `enif_*` symbols; unlike the py target's
+  # `pyExtension` registry marker, the crate carries that itself in a
+  # build.rs (see packages/unibind/conformance-ex/build.rs).
+  soname = "lib${libraryKey}.so";
+
+  # Locate the built NIF library: the unit output may suffix the metadata
+  # hash, and the extension differs per OS. Same loop as ./py.nix.
+  findCdylib = ''
+    cdylib=""
+    for candidate in \
+      ${library}/lib/lib${libraryKey}.so \
+      ${library}/lib/lib${libraryKey}-*.so \
+      ${library}/lib/lib${libraryKey}.dylib \
+      ${library}/lib/lib${libraryKey}-*.dylib
+    do
+      if [ -f "$candidate" ]; then
+        cdylib="$candidate"
+        break
+      fi
+    done
+    if [ -z "$cdylib" ]; then
+      echo "unibind: no cdylib under ${library}/lib" >&2
+      ls -la ${library}/lib >&2 || true
+      exit 1
+    fi
+  '';
+
+  # The generated Elixir side: `lib/<app>/native.ex` (NIF stubs whose load
+  # path is derived from the soname) and `lib/<app>.ex` (typespec'd
+  # wrapper). The artifact is staged under the canonical soname so the
+  # generated load call and the installed file cannot drift apart.
+  generated =
+    pkgs.runCommand "unibind-${crate}-ex-generated"
+    {
+      strictDeps = true;
+      nativeBuildInputs = [genBin];
+      meta.description = "unibind-generated Elixir host modules for ${crate}";
+    }
+    ''
+      set -euo pipefail
+      ${findCdylib}
+      staged="$TMPDIR/${soname}"
+      cp "$cdylib" "$staged"
+      mkdir -p "$out"
+      unibind-gen ex --artifact "$staged" --out "$out"
+    '';
+
+  # The mix-importable package: generated lib/ first, the NIF under
+  # priv/native/, hand-written sources layered on top. A hand-written file
+  # that shadows a generated one fails the build instead of silently
+  # winning (mirrors ./py.nix).
+  mixPackage =
+    pkgs.runCommand "unibind-${crate}-mix-package"
+    {
+      strictDeps = true;
+      meta.description = "Mix package for ${crate}: generated .ex modules plus the NIF library";
+    }
+    ''
+      set -euo pipefail
+      mkdir -p "$out/priv/native"
+      cp -R ${generated}/. "$out/"
+      chmod -R u+w "$out"
+      ${findCdylib}
+      install -m555 "$cdylib" "$out/priv/native/${soname}"
+      ${lib.optionalString (mixSource != null) ''
+        # Shared ExUnit support for every binding suite (loaded from the
+        # suite's test_helper.exs): NIF-side observables are asynchronous,
+        # so suites poll via one staged helper instead of per-suite copies
+        # (#3901). Staged ahead of the overlay loop so a hand-written copy
+        # trips the same shadow check as a generated file.
+        mkdir -p "$out/test/support"
+        cp ${./ex-support/eventually.exs} "$out/test/support/eventually.exs"
+        (cd ${mixSource} && find . -type f -print) | sed 's|^\./||' | while read -r file; do
+          if [ -e "$out/$file" ]; then
+            echo "unibind: $file is generated or staged by the ex target; delete the hand-written copy" >&2
+            exit 1
+          fi
+          mkdir -p "$out/$(dirname "$file")"
+          cp ${mixSource}/"$file" "$out/$file"
+        done
+      ''}
+    '';
+in {
+  inherit generated library mixPackage soname;
+}

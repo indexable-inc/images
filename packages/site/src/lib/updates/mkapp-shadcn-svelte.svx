@@ -1,0 +1,30 @@
+---
+id: mkapp-shadcn-svelte
+postedAt: 2026-07-22T22:40:00-07:00
+title: mkapp scaffolds ship the real shadcn-svelte registry, themed from the ghostty palettes
+tags: [mkapp, agents, ui]
+links:
+  - label: index#4064
+    href: https://github.com/indexable-inc/index/issues/4064
+---
+
+The mkapp template used to carry three hand-rolled components (Button, Card,
+Skeleton) that imitated the shadcn look in scoped CSS. Agents building
+anything past a card wall were on their own. The template now vendors the
+actual shadcn-svelte registry: 54 components (accordion to tooltip, including
+dialog, table, tabs, sidebar, and sonner) under `staging/lib/components/ui/`,
+on Tailwind v4 and bits-ui, imported through a `$lib` alias that the staging
+typecheck resolves against the tree the agent actually edited. Only `chart`
+(layerchart) and `form` (needs SvelteKit) are left out.
+
+Colors come from the operator's terminal. A build-time script parses the
+ghostty themes (`modules/home/ghostty/themes/custom-light`, `custom-dark`)
+and emits the shadcn variable block as `light-dark()` pairs, so scaffolded
+apps match the terminal in both modes, follow the OS scheme with no `.dark`
+class to toggle, and never hand-copy a hex value. Changing the terminal theme
+re-themes every future scaffold at the next `nix build`.
+
+The cost is measured and modest: a cold `npm install` in a fresh scaffold
+goes from 4.7s to 7.5s, and node_modules from 55MB to 124MB. The serve gate
+(`npm run check:staging`, then promote) typechecks the full vendored tree,
+about 1100 files, in roughly 3s.

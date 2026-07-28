@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { stroke: #8250df; }
+    .accent-t { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .back { fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow-accent); }
+    .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+      .accent-t { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="accent-t" d="M 0 0 L 10 5 L 0 10 z"/>
+    </marker>
+  </defs>
+  <rect class="box" x="20" y="70" width="190" height="64" rx="6"/>
+  <text class="mono" x="115" y="95" text-anchor="middle">nix run .#chrome-vm</text>
+  <text class="muted" x="115" y="115" text-anchor="middle" font-size="11">macOS host runner</text>
+  <path class="edge" d="M 210 102 L 273 102"/>
+  <text class="muted" x="242" y="90" text-anchor="middle" font-size="11">vmkit boot</text>
+  <rect class="box" x="275" y="70" width="200" height="64" rx="6"/>
+  <text x="375" y="95" text-anchor="middle">aarch64 Linux guest</text>
+  <text class="mono muted" x="375" y="115" text-anchor="middle" font-size="11">chromium --headless</text>
+  <path class="edge" d="M 475 102 L 538 102"/>
+  <text class="muted" x="507" y="90" text-anchor="middle" font-size="11">screenshot</text>
+  <rect class="box" x="540" y="70" width="160" height="64" rx="6"/>
+  <text class="mono" x="620" y="95" text-anchor="middle">out.png</text>
+  <text class="muted" x="620" y="115" text-anchor="middle" font-size="11">opened on the host</text>
+  <path class="back accent" d="M 375 134 C 400 185 580 185 610 136"/>
+  <text class="accent-t" x="490" y="192" text-anchor="middle" font-size="11">base64 over the serial console, no network or sharing</text>
+</svg>

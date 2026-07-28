@@ -1,0 +1,9 @@
+[package]
+name = "scope-bravo"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+itoa = "1"
+ryu = "1"

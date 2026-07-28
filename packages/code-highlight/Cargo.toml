@@ -1,0 +1,43 @@
+[package]
+name = "code-highlight"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Tree-sitter syntax highlighter that renders source files and line-numbered snippets with ANSI color, falling back to plain text for unsupported languages"
+
+[lints]
+workspace = true
+
+[dependencies]
+anstyle.workspace = true
+file-language.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tree-sitter.workspace = true
+tree-sitter-highlight.workspace = true
+tree-sitter-bash.workspace = true
+tree-sitter-c.workspace = true
+tree-sitter-c-sharp.workspace = true
+tree-sitter-cpp.workspace = true
+tree-sitter-css.workspace = true
+tree-sitter-elixir.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-haskell.workspace = true
+tree-sitter-html.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-json.workspace = true
+tree-sitter-lua.workspace = true
+tree-sitter-md.workspace = true
+tree-sitter-nix.workspace = true
+tree-sitter-ocaml.workspace = true
+tree-sitter-php.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-ruby.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-scala.workspace = true
+tree-sitter-sequel.workspace = true
+tree-sitter-swift.workspace = true
+tree-sitter-toml-ng.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-yaml.workspace = true

@@ -1,0 +1,21 @@
+[package]
+name = "ix-vt"
+description = "Safe Rust wrapper over libghostty-vt: drive a terminal VT engine and snapshot its render state"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/indexable-inc/index"
+readme = "README.md"
+keywords = ["terminal", "vt", "ghostty"]
+categories = ["command-line-interface"]
+publish = true
+
+[dependencies]
+# Inherited from the root [workspace.dependencies], which carries both the path
+# (for in-workspace builds) and `version = "0.1.0"` (so `cargo publish -p ix-vt`
+# accepts the dependency: a path-only dep is rejected for a `publish = true`
+# crate). Declaring it once there is what `no-cargo-path-dep` enforces.
+ix-vt-sys.workspace = true
+
+[lints]
+workspace = true

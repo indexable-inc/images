@@ -1,0 +1,57 @@
+---
+id: 0012-pr-landing-loop
+number: '0012'
+title: One PR landing loop
+status: Sketch
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 5, why: 'consolidation of existing watch, check, and merge machinery, not new theory' }
+  impact: { value: 8, why: 'the largest single issue cluster; every landed change pays the current tax' }
+  effort: { value: 6, why: 'one owned primitive replacing pr_watch, check polling, and merge scripts' }
+  risk: { value: 4, why: 'the old paths keep working while the loop absorbs them' }
+  maturity: { value: 1, why: 'sketch drafted from the issue corpus' }
+  leverage: { value: 8, why: 'every future PR, human or agent, rides the same loop' }
+  taste: { value: 4, why: 'failure modes are catalogued in forty issues; mostly disciplined engineering' }
+description: 'One owned primitive that takes a PR from pushed to merged: state and checks polled together, failures fixed or surfaced, merge executed, superseded PRs disposed. Replaces the pr_watch, check-polling, and merge-script pile that forty-plus issues describe.'
+---
+
+<script>
+  import Dag from '../Dag.svelte';
+</script>
+
+## Summary
+
+Landing a PR today involves `pr_watch`, `gh pr checks --watch`, manual state
+polls, and merge commands that each miss states the others see: conflicting
+PRs that skip CI, stale failed runs beside passing reruns, merges that land
+without the watcher noticing, superseded drafts nobody closes. Over forty
+open issues describe corners of the same machine. This plan builds that
+machine once: a single landing loop that owns a PR from push to merged.
+
+<Dag
+  nodes={[
+    { id: 'push', label: 'push branch', col: 0, row: 0, state: 'done' },
+    { id: 'watch', label: 'watch state+checks', sub: 'one poller, both signals', col: 1, row: 0, state: 'active' },
+    { id: 'fix', label: 'fix or surface', sub: 'failing check -> evidence', col: 2, row: 0 },
+    { id: 'merge', label: 'merge on green', col: 3, row: 0 },
+    { id: 'dispose', label: 'dispose superseded', sub: 'close stale drafts', col: 3, row: 1 }
+  ]}
+  edges={[['push', 'watch'], ['watch', 'fix'], ['fix', 'watch'], ['watch', 'merge'], ['merge', 'dispose']]}
+/>
+
+## Non-goals
+
+Changing merge policy (squash-only, required checks) or CI itself; the loop
+observes and acts, it does not redefine the gates.
+
+## Absorbed issues
+
+[#3494](https://github.com/indexable-inc/index/issues/3494), [#3168](https://github.com/indexable-inc/index/issues/3168), [#3387](https://github.com/indexable-inc/index/issues/3387), [#3349](https://github.com/indexable-inc/index/issues/3349), [#3306](https://github.com/indexable-inc/index/issues/3306), [#3280](https://github.com/indexable-inc/index/issues/3280), [#3281](https://github.com/indexable-inc/index/issues/3281), [#3147](https://github.com/indexable-inc/index/issues/3147), [#3114](https://github.com/indexable-inc/index/issues/3114), [#3097](https://github.com/indexable-inc/index/issues/3097), [#3373](https://github.com/indexable-inc/index/issues/3373), [#3369](https://github.com/indexable-inc/index/issues/3369), [#3359](https://github.com/indexable-inc/index/issues/3359), [#3319](https://github.com/indexable-inc/index/issues/3319), [#3138](https://github.com/indexable-inc/index/issues/3138), [#3002](https://github.com/indexable-inc/index/issues/3002), [#2973](https://github.com/indexable-inc/index/issues/2973), [#2948](https://github.com/indexable-inc/index/issues/2948), [#2855](https://github.com/indexable-inc/index/issues/2855), [#2849](https://github.com/indexable-inc/index/issues/2849), [#2846](https://github.com/indexable-inc/index/issues/2846), [#2839](https://github.com/indexable-inc/index/issues/2839), [#2818](https://github.com/indexable-inc/index/issues/2818), [#2816](https://github.com/indexable-inc/index/issues/2816), [#2815](https://github.com/indexable-inc/index/issues/2815), [#2885](https://github.com/indexable-inc/index/issues/2885), [#2897](https://github.com/indexable-inc/index/issues/2897), [#3054](https://github.com/indexable-inc/index/issues/3054), [#2279](https://github.com/indexable-inc/index/issues/2279), [#2254](https://github.com/indexable-inc/index/issues/2254), [#2075](https://github.com/indexable-inc/index/issues/2075), [#2198](https://github.com/indexable-inc/index/issues/2198), [#2149](https://github.com/indexable-inc/index/issues/2149), [#3029](https://github.com/indexable-inc/index/issues/3029), [#3028](https://github.com/indexable-inc/index/issues/3028), [#3027](https://github.com/indexable-inc/index/issues/3027), [#3026](https://github.com/indexable-inc/index/issues/3026), [#3025](https://github.com/indexable-inc/index/issues/3025), [#2914](https://github.com/indexable-inc/index/issues/2914), [#2913](https://github.com/indexable-inc/index/issues/2913), [#2831](https://github.com/indexable-inc/index/issues/2831), [#2860](https://github.com/indexable-inc/index/issues/2860), [#2857](https://github.com/indexable-inc/index/issues/2857), [#2834](https://github.com/indexable-inc/index/issues/2834), [#2812](https://github.com/indexable-inc/index/issues/2812)
+
+Drafted by Claude Code (Fable) from the open-issue corpus; scores are seed
+estimates.

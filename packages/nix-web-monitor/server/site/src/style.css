@@ -1,0 +1,1359 @@
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: local('Berkeley Mono'), local('BerkeleyMono-Variable'), local('BerkeleyMono');
+  font-weight: 100 700;
+  font-style: normal;
+  font-display: optional;
+}
+
+:root {
+  --bg: #f8fafc;
+  --panel: #ffffff;
+  --panel-soft: #f1f5f9;
+  --ink: #111827;
+  --muted: #6b7280;
+  --faint: #9ca3af;
+  --line: #d4d4d8;
+  --line-soft: #e4e4e7;
+  --green: #15803d;
+  --amber: #b45309;
+  --red: #b91c1c;
+  --blue: #1d4ed8;
+  --accent: #2563eb;
+  --font-mono:
+    'Berkeley Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', monospace;
+  color-scheme: light dark;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #09090b;
+    --panel: #111113;
+    --panel-soft: #18181b;
+    --ink: #f4f4f5;
+    --muted: #a1a1aa;
+    --faint: #71717a;
+    --line: #27272a;
+    --line-soft: #1f1f23;
+    --green: #4ade80;
+    --amber: #fbbf24;
+    --red: #f87171;
+    --blue: #93c5fd;
+    --accent: #60a5fa;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+h1, h2, h3, h4, h5, h6,
+p, span, a, li, td, th, div, label,
+input, button, select, textarea,
+code, pre, blockquote, figcaption,
+summary, dt, dd, time, small,
+strong, em, b, i, u, s {
+  font-size: inherit !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+main {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+/* ---------- summary header ---------- */
+
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+  margin-right: 0.5rem;
+}
+
+.kpi-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.kpi {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-num {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.kpi-faint {
+  color: var(--faint);
+  font-weight: 400;
+}
+
+.kpi-sep {
+  color: var(--faint);
+}
+
+.kpi-label {
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  font-size: inherit !important;
+}
+
+.kpi-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.kpi[data-status='live'] {
+  color: var(--green);
+}
+.kpi[data-status='live'] .kpi-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 60%, transparent);
+  animation: pulse 1.8s ease-out infinite;
+}
+
+.kpi[data-status='connecting'],
+.kpi[data-status='reconnecting'] {
+  color: var(--amber);
+}
+.kpi[data-status='connecting'] .kpi-dot,
+.kpi[data-status='reconnecting'] .kpi-dot {
+  background: var(--amber);
+}
+.kpi[data-status='reconnecting'] .kpi-dot {
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.kpi[data-status='closed'] {
+  color: var(--muted);
+}
+.kpi[data-status='closed'] .kpi-dot {
+  background: var(--muted);
+}
+
+.kpi[data-status='error'] {
+  color: var(--red);
+}
+.kpi[data-status='error'] .kpi-dot {
+  background: var(--red);
+}
+
+.kpi-good { color: var(--green); }
+.kpi-good .kpi-num { color: var(--green); }
+
+.kpi-warn { color: var(--amber); }
+.kpi-warn .kpi-num { color: var(--amber); }
+
+.kpi-bad { color: var(--red); }
+.kpi-bad .kpi-num { color: var(--red); }
+
+.kpi-info { color: var(--blue); }
+.kpi-info .kpi-num { color: var(--blue); }
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 60%, transparent); }
+  70% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--green) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 0%, transparent); }
+}
+
+.progress {
+  position: relative;
+  margin-left: auto;
+  width: 14rem;
+  max-width: 30%;
+  height: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.progress-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--progress, 0%);
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--green)));
+  transition: width 200ms ease-out;
+}
+
+.progress-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  mix-blend-mode: difference;
+  font-size: inherit !important;
+}
+
+/* ---------- error panel ---------- */
+
+.topbar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.error-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 11rem;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--red) 9%, var(--panel));
+}
+
+.error-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--red) 25%, var(--line));
+}
+
+.error-title {
+  color: var(--red);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.error-overflow {
+  color: var(--muted);
+}
+
+.error-dismiss {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.error-list {
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  min-height: 0;
+  overflow: auto;
+}
+
+.error-item {
+  display: block;
+  width: 100%;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--red);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.1rem 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.error-item:hover {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+.tree-toggle {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+/* ---------- workspace layout ---------- */
+
+/* The pane system (src/lib/panes) owns the shell layout now: splits, tab
+ * groups, floating windows, and their persistence. This file keeps only the
+ * shared panel-content language the individual panels render inside a pane. */
+
+/* The topbar strip: the run summary plus the pane-layout reset affordance. */
+.topbar-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.topbar-row .summary {
+  flex: 1 1 auto;
+  border-bottom: 0;
+}
+
+.layout-reset {
+  flex: 0 0 auto;
+  appearance: none;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--faint);
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0 0.75rem;
+  white-space: nowrap;
+}
+
+.layout-reset:hover {
+  color: var(--ink);
+  background: var(--panel-soft);
+}
+
+/* A panel fills whatever pane region hosts it. */
+.panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+}
+
+/* A panel's own slim control strip (filters, counts, sort chips), rendered
+ * under the pane tab bar. Replaces the per-panel title headers: the pane tab
+ * carries the name now. */
+.pane-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.6rem;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.pane-toolbar .panel-meta {
+  margin-left: auto;
+}
+
+.panel-meta {
+  color: var(--faint);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- daemon panel ---------- */
+
+.daemon-body,
+.global-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.4rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.daemon-body {
+  gap: 0.4rem;
+}
+
+/* Not-tracing reason / idle note. */
+.daemon-status {
+  color: var(--muted);
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.daemon-ops {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+/* label | proportional bar | count, columns aligned across rows. */
+.daemon-op {
+  display: grid;
+  grid-template-columns: 3.5rem 1fr 3.5rem;
+  align-items: center;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.daemon-op-label {
+  color: var(--muted);
+}
+
+.daemon-op-bar {
+  height: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.daemon-op-fill {
+  display: block;
+  height: 100%;
+  width: var(--p, 0%);
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--green)));
+}
+
+.daemon-op-count {
+  text-align: right;
+  color: var(--ink);
+}
+
+/* The store path the daemon last touched -- the "currently working on" line. */
+.daemon-path {
+  display: flex;
+  gap: 0.4rem;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.daemon-path-label {
+  flex: none;
+  color: var(--muted);
+}
+
+/* Head-side ellipsis for path readouts: the leaf carries the identity, so
+ * overflow must eat the prefix, never the tail (#2487). `direction: rtl`
+ * moves the line's overflow edge (and its ellipsis) to the left; the &lrm;
+ * marks wrapping the text in the markup keep the characters themselves in
+ * left-to-right order, so nothing visually reorders. */
+.daemon-path-value,
+.daemon-hot-path {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.daemon-path-value {
+  flex: 1 1 auto;
+}
+
+.daemon-hot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.daemon-hot-title {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* path | current rate | cumulative count. */
+.daemon-hot-row {
+  display: grid;
+  grid-template-columns: 1fr 3rem 3.5rem;
+  gap: 0.35rem;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.daemon-hot-path {
+  color: var(--ink);
+}
+
+.daemon-hot-rate,
+.daemon-hot-count {
+  text-align: right;
+}
+
+.daemon-hot-rate {
+  color: var(--accent);
+}
+
+.daemon-hot-count {
+  color: var(--faint);
+}
+
+/* ---------- machine builds panel (patched nix only) ---------- */
+
+/* Sits above the daemon panel in the side pane; caps its height so the daemon
+ * panel and activity graph below stay visible. Self-hides on stock nix (the
+ * component renders nothing when `detected` is false). */
+.global-body {
+  gap: 0.5rem;
+}
+
+.global-status {
+  color: var(--muted);
+}
+
+/* The why-chain forest. Rows reuse the build-tree row language (guides,
+ * twirl, drv columns) at side-panel scale; the body already provides the
+ * horizontal padding, so rows drop their own. */
+.global-tree {
+  display: flex;
+  flex-direction: column;
+}
+
+.global-tree .activity-row {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.global-tree .activity-row:last-child {
+  border-bottom: none;
+}
+
+/* Skeleton ancestors: chain hops nothing is actively building, kept only to
+ * show where the active leaves hang. Dimmed so live goals read as the
+ * foreground. */
+.global-tree .global-tree-row.skeleton .drv-name {
+  color: var(--muted);
+}
+
+/* Requesting user as a per-row annotation, now that rows nest by why-chain
+ * instead of grouping by user. */
+.global-user {
+  flex: 0 0 auto;
+  max-width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.global-badge {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+}
+
+/* Server-sampled per-build cpu / resident-memory readouts (patched nix +
+ * procfs only; the spans self-hide when the sampler has no figure). */
+.global-stat {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Flat (sorted) machine-build rows share the tree rows' language minus the
+ * guides; the body provides the horizontal padding. */
+.global-tree .global-flat-row {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.global-badge-substitution {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+
+/* Toggle for the row's inline log tail; styled as a quiet chip that fills with
+ * the accent while the drawer is open. */
+.global-log-toggle {
+  appearance: none;
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  font-family: inherit;
+  font-size: 0.72rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.global-log-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.global-log-toggle.open {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+}
+
+/* Inline log tail under a row: a short fixed-height stream pinned to the
+ * newest lines, mirroring the main log drawer's look at panel scale. */
+.global-log-view {
+  margin: 0.15rem 0 0;
+  padding: 0.3rem 0.4rem;
+  max-height: 9rem;
+  overflow: auto;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.global-log-note {
+  margin-top: 0.15rem;
+  color: var(--faint);
+  font-size: 0.8rem;
+}
+
+/* ---------- activation + diff panels (switch only) ---------- */
+
+.activation-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.3rem 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.activation-status {
+  color: var(--muted);
+  white-space: normal;
+  line-height: 1.4;
+  padding: 0.1rem 0.2rem;
+}
+
+/* step dot | name | line-count badge | duration */
+.activation-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.15rem 0.2rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.activation-row:disabled {
+  cursor: default;
+}
+
+.activation-row:not(:disabled):hover {
+  background: var(--panel-soft);
+}
+
+.activation-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activation-lines-count {
+  color: var(--faint);
+  font-size: 0.85em;
+}
+
+.activation-duration {
+  color: var(--muted);
+}
+
+/* Activation steps finish "done"; reuse the succeeded colour for the dot. */
+.state[data-state='done'] {
+  background: var(--green);
+}
+
+.activation-lines {
+  margin: 0 0 0.2rem 1rem;
+  padding: 0.3rem 0.4rem;
+  background: var(--panel-soft);
+  border-radius: 3px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.3rem 0.4rem;
+}
+
+.diff-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+/* ---------- activity graph ---------- */
+
+.graph,
+.build-table,
+.log-stream {
+  min-height: 0;
+  overflow: auto;
+}
+
+.graph {
+  padding: 0.3rem 0;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.12rem 0.5rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line-soft);
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+/* Push finished rows well into the background so the handful of in-flight
+ * rows read as the foreground in a long, mostly-stopped list. */
+.activity-row.stopped {
+  opacity: 0.4;
+}
+
+/* Lift in-flight rows out of the muted default so active work stands out. */
+.activity-row:not(.stopped) .activity-text,
+.activity-row:not(.stopped) .drv-name {
+  color: var(--ink);
+}
+
+.activity-row:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* Dependency-tree rows reuse the activity-row layout but are selectable like
+ * build rows, so they carry the same affordances as the flat build list. */
+.dep-row.clickable {
+  cursor: pointer;
+}
+
+.dep-row.clickable:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.dep-row.selected {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+/* Keyboard cursor (vim j/k/h/l): a left rail plus a faint wash, distinct from
+ * the accent fill of a click-selected row so both can show at once. */
+.activity-row.cursor,
+.build-row.cursor {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.dep-row .where {
+  flex: 0 0 auto;
+}
+
+.dep-row .phase {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* The single tree root: the Nix command plus a rolled-up status line. Sits
+ * above every derivation so the whole build reads as one tree from the goal. */
+.root-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  gap: 0.5rem;
+  padding-top: 0.22rem;
+  padding-bottom: 0.22rem;
+}
+
+.root-cmd {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.root-stats {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat {
+  color: var(--muted);
+}
+
+.stat.done {
+  color: var(--ink);
+}
+
+.stat.running {
+  color: var(--amber);
+}
+
+.stat.failed {
+  color: var(--red);
+}
+
+.stat-sep {
+  color: var(--faint);
+  margin: 0 0.1ch;
+}
+
+/* Box-drawing guides. Fixed-width cells keep the vertical stems aligned
+ * column-to-column so a child's connector meets its ancestor's line. */
+.guides {
+  flex: 0 0 auto;
+  color: var(--faint);
+  white-space: pre;
+  user-select: none;
+}
+
+.guide {
+  display: inline-block;
+  width: 1.1ch;
+}
+
+.guide.connector {
+  color: var(--line);
+}
+
+.twirl {
+  flex: 0 0 auto;
+  width: 1.1rem;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+  line-height: 1;
+}
+
+.twirl:hover {
+  color: var(--ink);
+}
+
+.twirl.hidden {
+  visibility: hidden;
+  cursor: default;
+}
+
+.state {
+  flex: 0 0 auto;
+}
+
+.activity-kind {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  text-transform: lowercase;
+  white-space: nowrap;
+  min-width: 4.5rem;
+}
+
+.activity-text,
+.activity-drv {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subtree-count {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.group-count {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+/* Fixed-width trailing column. The flexible name column (`.activity-text` /
+ * `.activity-drv`, `flex: 1 1 auto`) grows to absorb the slack instead, so the
+ * `where` badge and duration land in the same place on every row. An
+ * `auto` left margin here would swallow that slack first and leave the badges
+ * ragged against variable-length names. */
+.activity-dur {
+  flex: 0 0 3.2rem;
+  padding-left: 0.5rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Inline copy/download progress: a compact bar plus a byte (and live rate)
+ * readout, so a slow "copying …" / "downloading …" row shows how much data is
+ * moving and how fast instead of only a ticking duration. */
+.activity-progress {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-progress .pbar {
+  position: relative;
+  width: 4rem;
+  height: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.activity-progress .pbar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--p, 0%);
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--green)));
+  transition: width 200ms ease-out;
+}
+
+.activity-progress .pbar-text {
+  white-space: nowrap;
+}
+
+/* Measured size of a source copy Nix reports without byte progress. */
+.activity-size {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A store I/O activity (copy / substitute / optimise / query) still running
+ * past the slow threshold. The daemon goes silent while it writes a path or
+ * hard-links files (auto-optimise-store), so an in-flight store step would
+ * otherwise read as just another long-ticking row; the amber rail plus the
+ * `slow` tag pull it to the foreground. Scoped to in-flight rows so a finished
+ * row keeps the muted/stopped treatment. */
+.activity-row.slow:not(.stopped) {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.activity-row.slow:not(.stopped) .activity-text,
+.activity-row.slow:not(.stopped) .activity-kind {
+  color: var(--amber);
+}
+
+.slow-tag {
+  flex: 0 0 auto;
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* ---------- builds ---------- */
+
+.build-table {
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem 0;
+}
+
+.build-row {
+  display: grid;
+  grid-template-columns:
+    0.85rem
+    minmax(0, 1fr)
+    auto
+    minmax(0, auto)
+    3rem
+    1.6rem;
+  align-items: center;
+  column-gap: 0.5rem;
+  padding: 0.2rem 0.6rem;
+  border-left: 2px solid transparent;
+}
+
+.build-row.clickable {
+  cursor: pointer;
+}
+
+.build-row.clickable:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.build-row.clickable:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.build-row.selected {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-left-color: var(--accent);
+}
+
+.state {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.state[data-state='running'] {
+  background: var(--amber);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 35%, transparent);
+}
+.state[data-state='stopped'] {
+  background: var(--blue);
+}
+.state[data-state='succeeded'] {
+  background: var(--green);
+}
+.state[data-state='failed'] {
+  background: var(--red);
+}
+/* Planned builds are announced but not started: a hollow ring reads as
+ * "pending" against the filled dots of work that has actually begun. */
+.state[data-state='planned'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--faint);
+}
+
+/* Planned rows are upcoming work: present so the whole tree shows from the
+ * start, but recessive so in-flight and finished builds stay the foreground. */
+.activity-row.planned,
+.build-row.planned {
+  opacity: 0.55;
+}
+.activity-row.planned .drv-name,
+.build-row.planned .drv-name {
+  color: var(--muted);
+}
+
+.drv {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drv-name {
+  color: var(--ink);
+}
+
+/* Version trails the name, dimmed: there for disambiguation but not competing
+ * with the package name for attention. The store hash and `.drv` suffix are
+ * dropped entirely (the full path stays in the row's title for copy/inspect). */
+.drv-version {
+  color: var(--faint);
+  margin-left: 0.5ch;
+}
+
+/* The store hash, shown on every build row so the path is identifiable and the
+ * many same-named units one build produces (e.g. `ix-0.1.0`) stay distinct. It
+ * stays faint but selectable for copy/inspect. */
+.drv-hash {
+  color: var(--faint);
+  opacity: 0.75;
+  margin-left: 0.5ch;
+  user-select: all;
+}
+
+/* Marks a content-addressed derivation: Nix resolved it before building, so its
+ * resolved build is folded onto this row instead of appearing as a look-alike. */
+.drv-ca {
+  margin-left: 0.5ch;
+  padding: 0 0.3ch;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-size: 0.85em;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Marks a root-cause derivation: its whole input closure is cache hits, so its
+ * own inputs changed and it is *why* this build happened. Every other build is a
+ * forced cascade beneath one of these. Filled accent so the triggers stand out
+ * from the cascade in a wall of rebuilding rows. */
+.drv-cause {
+  margin-left: 0.5ch;
+  padding: 0 0.3ch;
+  border-radius: 3px;
+  font-size: 0.85em;
+  background: var(--accent);
+  color: var(--bg);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat.cause {
+  color: var(--accent);
+}
+
+/* The "what changed" reason on a root-cause row (e.g. "input rustc changed").
+ * Muted accent text so it reads as an annotation, not a badge. */
+.drv-reason {
+  margin-left: 0.5ch;
+  font-size: 0.85em;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 32ch;
+}
+
+.where {
+  font-size: inherit !important;
+  color: var(--muted);
+  text-transform: lowercase;
+  padding: 0 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-soft);
+  white-space: nowrap;
+}
+
+.where.remote {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-soft));
+}
+
+.phase {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.duration {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.right {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 1.5rem;
+}
+
+.chip.selection {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border-radius: 4px;
+}
+
+.chip.selection:hover {
+  background: var(--accent);
+  color: var(--panel);
+}
+
+/* ---------- logs ---------- */
+
+.log-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
+.filter-chips {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.chip {
+  appearance: none;
+  background: var(--panel);
+  border: 0;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  padding: 0.15rem 0.55rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-transform: lowercase;
+  font-size: inherit !important;
+}
+
+.chip:last-child {
+  border-right: 0;
+}
+
+.chip:hover {
+  background: var(--panel-soft);
+  color: var(--ink);
+}
+
+.chip.active {
+  background: var(--accent);
+  color: var(--panel);
+}
+
+.chip.jump {
+  border-radius: 4px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.chip.jump:hover {
+  background: var(--accent);
+  color: var(--panel);
+}
+
+.search {
+  appearance: none;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  padding: 0.15rem 0.5rem;
+  font-family: inherit;
+  width: 9rem;
+  font-size: inherit !important;
+}
+
+.search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.log-stream {
+  flex: 1 1 auto;
+  padding: 0.35rem 0.6rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.line {
+  display: grid;
+  grid-template-columns: 3.2rem minmax(0, 1fr);
+  column-gap: 0.5rem;
+  line-height: 1.3;
+  padding: 0.02rem 0;
+}
+
+.line:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.idx {
+  color: var(--faint);
+  user-select: none;
+}
+
+.text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-error { color: var(--red); }
+.log-warn { color: var(--amber); }
+.log-notice {
+  color: var(--ink);
+  font-weight: 600;
+}
+.log-debug { color: var(--faint); }
+
+.empty {
+  color: var(--faint);
+  padding: 0.75rem;
+}
+
+.wide {
+  grid-column: 1 / -1;
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 960px) {
+  .progress {
+    margin-left: 0;
+    width: 100%;
+    max-width: none;
+  }
+}

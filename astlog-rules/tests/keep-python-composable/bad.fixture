@@ -1,0 +1,1 @@
+{ buildPythonPackage, python3Packages }: buildPythonPackage { propagatedBuildInputs = [ python3Packages.numpy ]; }

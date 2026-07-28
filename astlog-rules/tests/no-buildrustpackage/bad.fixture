@@ -1,0 +1,1 @@
+{ buildRustPackage }: buildRustPackage { pname = "x"; }

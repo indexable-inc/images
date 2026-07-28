@@ -1,0 +1,1 @@
+path: builtins.fromJSON (builtins.readFile path)

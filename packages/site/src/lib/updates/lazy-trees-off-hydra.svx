@@ -1,0 +1,55 @@
+---
+id: lazy-trees-off-hydra
+postedAt: 2026-07-27T23:05:00-07:00
+title: "lazy trees is off again: its own mutation fix costs hydra 13x the kernel time"
+tags: [nix, fork, performance, flakes]
+links:
+  - label: index#4297
+    href: https://github.com/indexable-inc/index/issues/4297
+  - label: index#3749
+    href: https://github.com/indexable-inc/index/issues/3749
+  - label: index#3645
+    href: https://github.com/indexable-inc/index/issues/3645
+---
+
+`lazy-trees` is back to `false` on hydra, the only host that had it on. Measured on the flake it was enabled for, with the arms interleaved so machine load cannot favour one: the same warm-cache `nix eval` of `homeConfigurations."andrewgazelka@hydra".activationPackage.drvPath` spends **118.1s, 123.2s and 118.9s of system CPU** with the setting on, against **6.6s and 12.2s** with it off. Roughly 13x, and the three readings with it on agree within 4%.
+
+Wall clock is the number people ask for and the one worth refusing to quote precisely here: it ranged 222-328s on and 36-92s off, about 4x, on a box that other agent sessions keep busy and whose flake tree they keep writing to mid-measurement. System CPU is the work itself rather than time spent waiting, which is why it holds steady while wall clock does not. User CPU is 17-22s either way, so none of the gap is the evaluator.
+
+Two measurements taken a different way agree with the kernel time. A stack sample of a live `nix eval` caught 3131 of 3131 samples in `AutoDelete` -> `_deletePath` -> `unlinkat`, after evaluation had already finished. And unlink runs at 11,257 entries/s on this host, so a 698,301-file clone is about 62 seconds of teardown per invocation on its own.
+
+Lazy trees exists to avoid copying source trees into the store. On hydra it now performs a larger copy than the one it avoids.
+
+## How that happened
+
+Reading the live worktree for the whole evaluation means a concurrent writer can change a file between the mount-time hash and the on-demand copy, which aborts the eval (#3749: two `home-manager switch` runs died that way in one day, the writer being agent sessions editing files under the flake). Patch 0032 fixed it by cloning the mutable tree into `$TMPDIR` with `clonefile(2)` at mount time and evaluating from the clone. The patch measured 70ms on a 4,000-file worktree, which is honest.
+
+Two costs were not in that 70ms.
+
+`clonefile` on a directory is copy-on-write, so creating the clone is nearly free, but deleting it is one `unlinkat` per file. Measured on this host: 11,257 entries per second, so a 698,301-file tree is 62 seconds of teardown per nix invocation.
+
+And the clone is unfiltered. `paths.cc:126-141` widens the clone source to the repo root deliberately, because a git workdir accessor omits `.git` and the re-fetch of the snapshot needs it. Hydra's `~/.config/nix` holds 698,301 files; git tracks 18,299. The other 680,002 are agent worktrees, `node_modules`, Rust `target/` and a venv, all gitignored, all cloned and deleted on every nix command. Git filtering does run, but afterwards, when the clone is hashed.
+
+The fallback the snapshot replaced is strictly better on a tree this shape: `FetchMode::Copy` goes through the git accessor, so it copies the 18,299 tracked files, and the result is content-addressed, so an unchanged tree is a cache hit next time.
+
+## A third symptom
+
+Cleanup is a function-local `static AutoDelete`, so it runs on normal exit and nowhere else, and `_deletePath` checks for an interrupt at every node. A Ctrl-C during the multi-minute teardown throws mid-recursion, the destructor swallows it, and the partial clone stays. The slowness therefore manufactures the leak: teardown looks like a hang, the operator interrupts it, and the interrupt is what strands the tree. hydra had 707 abandoned snapshot directories holding 22,048,824 entries, the oldest 16 hours old, accumulating at one to five per minute.
+
+Manual cleanup needs `chmod -R u+w` first: store-sourced directories are mode 555 and `clonefile` preserves that, so a bare `rm -rf` fails inside them (verified: it removed 82,003 of 82,188 entries and stranded 185). Nix's own `_deletePath` chmods as it descends, so this affects only the manual sweep.
+
+## What is unchanged
+
+None of the patches were removed. Patches 0025-0029 stay as the off-by-default backport of the upstream-merged NixOS/nix#15711 lineage; 0032 stays because it is the only thing preventing the #3749 race for anyone who turns the setting on, and it is correct for a normally sized tree. This is a setting decision, not a patch defect: drvPath byte-equality on and off was verified when the setting was enabled, and the escape hatch was written into the config comment at the time.
+
+Linux was never affected. `cloneTreeSnapshot` is inside `#ifdef __APPLE__` and returns `std::nullopt` everywhere else, so Linux hosts always took the eager filtered path, and none of them set `lazy-trees` in the first place. Checked live: `dev-compute-1` and `hil-compute-2` report the setting off and hold zero snapshot directories.
+
+## What would make it worth turning back on
+
+Two fixes, tracked in #4297.
+
+Clone the git file set plus `.git` rather than the directory. Both halves are already at the call site: for a git workdir `readDirectory` (`source-accessor.hh:139`) returns the filtered view and `getPhysicalPath` (`:153`) gives each entry's real path, so the snapshot becomes a walk of the accessor with `mkdir` per directory and `clonefile` per file. Syscalls go from 1 to 18,299; 680,002 inodes are never created and never deleted; measured teardown falls from 62s to 1.6s.
+
+Make teardown survive a kill, either with an uninterruptible delete or a reaper over `nix-eval-snapshot-*` whose owning pid is gone, chmoding as it descends.
+
+There is a larger question behind both. `clonefile` appears exactly once in the whole nix tree, in patch 0032, aimed at a temporary that gets deleted. The copy that happens on every platform and every invocation, the eager copy of the git file set into the store, still moves every byte; upstream has a standing TODO about it at `derivation-builder.cc:1776`. Reflinking that copy where the filesystem supports it (`clonefile` on APFS, `FICLONE` on btrfs, XFS and bcachefs, an ordinary copy elsewhere) attacks the same cost on the path that actually runs, over the files that actually matter, with a result the store keeps.

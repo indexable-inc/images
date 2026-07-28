@@ -1,0 +1,27 @@
+---
+id: js-nix-wasm-builtin
+postedAt: 2026-07-22T04:30:00-07:00
+title: "js-nix: write Nix in JavaScript syntax, compiled at eval time by `builtins.wasm`"
+tags: [nix, wasm, language]
+links:
+  - label: builtins.wasm import (PR 4009)
+    href: https://github.com/indexable-inc/index/pull/4009
+  - label: ix2nix (PR 4022)
+    href: https://github.com/indexable-inc/index/pull/4022
+  - label: upstream PR
+    href: https://github.com/NixOS/nix/pull/15380
+---
+
+The nix-ix daemon now carries `builtins.wasm` (patches 0038-0039, imported from the open upstream PR NixOS/nix#15380, the upstream form of Determinate Nix's Wasm support): Nix expressions can call functions in WebAssembly modules, gated behind the `wasm-builtin` experimental feature. Our import goes one step past upstream and forces deterministic execution (NaN canonicalization, deterministic relaxed SIMD), because eval results cross machines here and one implementation-defined bit means divergent store hashes. Upstream left that off after measuring ~3.6x on a float-heavy kernel; eval plugins are string/AST-shaped and do not pay it.
+
+First consumer: js-nix. A `.ix` file is JavaScript syntax mapped 1:1 onto Nix semantics; `packages/ix2nix` (Rust, oxc parser, typed Nix AST, one renderer) converts it, compiled to an 884 KB wasm plugin the evaluator runs directly:
+
+```js
+const lib = import("./lib.ix");
+export default ({ pkgs }) => ({
+  packages: [pkgs.ripgrep],
+  motd: `doubled: ${lib.double(21)}`,
+});
+```
+
+`importIx` (from `packages/ix2nix/import-ix.nix`) evaluates that through `builtins.wasm` + `builtins.toFile`; relative `.ix` imports work via a threaded `__dir`. Anything without a 1:1 Nix equivalent is a positioned compile error surfaced through the eval error (`===` gets "use ==" with line and column). The e2e passthru test builds nix-ix from the flake in-sandbox and runs the whole chain.

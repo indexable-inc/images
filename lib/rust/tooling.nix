@@ -1,0 +1,130 @@
+{
+  lib,
+  packagePath,
+  languages,
+  writePythonApplication,
+  rustWorkspaceFor,
+  clippy-src,
+  repoRoot,
+  lists,
+  # Shared pins reader, threaded through to policy.nix (see its arg doc).
+  pins,
+  # Flips `allowSubstitutes` back on for darwin cross-lane eval-time IFD nodes;
+  # threaded down to vendor.nix / patched-src.nix. See its doc comment.
+  evalTimeSubstitutable,
+}: let
+  inherit (builtins) toString;
+
+  # llm-clippy bootstraps before the full `ix` handle exists (below cargoUnit /
+  # rustWorkspace), so build the patched-source util here to hand it the same
+  # `ix.patchedSrc` the packageSet path gets. Since the jj megamerge migration
+  # it only applies the fork's nix-derived patches (lib/fork-packages.nix
+  # `derivedPatches`) on top of the already-patched `clippy-src` tree. Reached
+  # via `repoRoot` (not a `../` literal, which the astlog `no-parent-path`
+  # rule bans).
+  patchedSrcFor = pkgs:
+    import (repoRoot + "/lib/util/patched-src.nix") {
+      inherit lib evalTimeSubstitutable pkgs;
+      inherit (pkgs) applyPatches;
+      inherit (import (repoRoot + "/lib/fork-packages.nix")) forkPackages;
+      patchesRoot = repoRoot;
+    };
+
+  repoRustToolchainFile = lib.importTOML (repoRoot + "/rust-toolchain.toml");
+  repoRustChannel = repoRustToolchainFile.toolchain.channel;
+  repoRustNightlyDate = assert lib.assertMsg (lib.hasPrefix "nightly-" repoRustChannel)
+  "rust-toolchain.toml must pin a nightly channel for repo-owned Rust packages";
+    lib.removePrefix "nightly-" repoRustChannel;
+  # The repo's pinned toolchain (rust-toolchain.toml) as a buildable
+  # aggregate, for consumers outside the cargo-unit graph that must run the
+  # exact nightly the workspace builds with (the lint rust fixer lane runs
+  # `cargo fmt` through it, #3433). `args` passes through to
+  # `languages.rust.toolchain` (typically `components`); the channel and
+  # date always come from the repo pin so the toolchain version has exactly
+  # one statement.
+  repoRustToolchainFor = pkgs: args:
+    languages.rust.toolchain pkgs (args
+      // {
+        channel = "nightly";
+        version = repoRustNightlyDate;
+      });
+  rustFor = pkgs:
+    import ./build.nix {
+      inherit
+        lib
+        pkgs
+        lists
+        pins
+        evalTimeSubstitutable
+        ;
+      # llm-clippy bootstraps before cargoUnit / rustWorkspace exist, so the
+      # `ix` closure it receives carries only `buildRustPackage` plus the
+      # `patchedSrc` util that appends its derived patches to `clippy-src`.
+      # `buildIxRustTool` adds the richer surface for packages that need it.
+      clippyPackage = pkgs.callPackage (packagePath "llm-clippy") {
+        ix = {
+          inherit buildRustPackage pkgs;
+          patchedSrc = patchedSrcFor pkgs;
+        };
+        inherit clippy-src;
+      };
+      rustToolchain = repoRustToolchainFor pkgs {};
+      writePythonApplication = writePythonApplication pkgs;
+    };
+  # Build a repo-owned Rust tool while keeping nix-cargo-unit itself on the
+  # pre-cargo-unit bootstrap path.
+  # Returns the policy-unchecked variant when present, so generators that
+  # only need the binary do not drag the policy-check graph into their closure.
+  buildIxRustTool = hostPkgs: path: let
+    usesCargoUnit = toString path != toString (packagePath "nix-cargo-unit");
+
+    hostRustWorkspace = rustWorkspaceFor hostPkgs;
+
+    checked = hostPkgs.callPackage path {
+      ix =
+        {
+          inherit buildRustPackage;
+          pkgs = hostPkgs;
+          rustWorkspace = hostRustWorkspace;
+        }
+        // lib.optionalAttrs usesCargoUnit {
+          cargoUnit = cargoUnitFor hostPkgs;
+        };
+    };
+
+    hasUnchecked = checked.passthru ? unchecked;
+  in
+    # Repo Rust tools built through `ix.buildRustPackage` expose the
+    # policy-unchecked binary as `passthru.unchecked`; prefer it so a generator
+    # that only needs the binary doesn't pull the policy-check graph into its
+    # closure. A package built another way has no such variant, so use it as-is.
+    if hasUnchecked
+    then let
+      unchecked = checked.passthru.unchecked;
+      meta = (unchecked.meta or {}) // (checked.meta or {});
+    in
+      unchecked // {inherit meta;}
+    else checked;
+
+  cargoUnitFor = pkgs:
+    import ./cargo-unit.nix {
+      inherit lib pkgs;
+      rust = rustFor pkgs;
+      nixCargoUnit = buildIxRustTool pkgs (packagePath "nix-cargo-unit");
+    };
+  /**
+  Build a repo-owned Rust package with the shared Rust policy.
+
+  Wraps `rustPlatform.buildRustPackage`, enables parallel test execution by
+  default, and attaches the repo's `llm-clippy` and unused-dependency checks
+  as `passthru.tests` plus policy dependencies of the returned package.
+  */
+  buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
+in {
+  inherit
+    buildIxRustTool
+    cargoUnitFor
+    buildRustPackage
+    repoRustToolchainFor
+    ;
+}

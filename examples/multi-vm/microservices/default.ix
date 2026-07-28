@@ -1,0 +1,51 @@
+// A five-VM service chain: a gateway load-balancing three api VMs over one
+// shared cache. `ix apply .#cache .#api-0 .#api-1 .#api-2 .#gateway`.
+export default ({ index }) => {
+  // One private east-west network between the VMs.
+  const group = { ix: { networking: { groups: ["multi-vm-micro"] } } };
+  const cache = index.lib.mkVm({
+    name: "cache",
+    modules: [import("./cache.nix"), group],
+  });
+  // Three interchangeable api VMs; each resolves the cache through its
+  // `nodes` module argument. Scaling is one more line here: the gateway's
+  // upstream pool grows to match.
+  const api = (name: string) =>
+    index.lib.mkVm({
+      name: name,
+      modules: [import("./api.nix"), group],
+      nodes: cache.nixosConfigurations,
+    });
+  const apiZero = api("api-0");
+  const apiOne = api("api-1");
+  const apiTwo = api("api-2");
+  const gateway = index.lib.mkVm({
+    name: "gateway",
+    modules: [import("./gateway.nix"), group],
+    // The gateway's upstream pool and per-VM probes are derived from the
+    // api VMs wired in here.
+    nodes: {
+      ...apiZero.nixosConfigurations,
+      ...apiOne.nixosConfigurations,
+      ...apiTwo.nixosConfigurations,
+    },
+  });
+  return {
+    nixosConfigurations: {
+      ...cache.nixosConfigurations,
+      ...apiZero.nixosConfigurations,
+      ...apiOne.nixosConfigurations,
+      ...apiTwo.nixosConfigurations,
+      ...gateway.nixosConfigurations,
+    },
+    // Per-VM results (plans, lifecycle wrappers), for tooling and the
+    // repo's eval tests.
+    vms: {
+      cache: cache,
+      "api-0": apiZero,
+      "api-1": apiOne,
+      "api-2": apiTwo,
+      gateway: gateway,
+    },
+  };
+};

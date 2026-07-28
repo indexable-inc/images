@@ -1,0 +1,33 @@
+# Suppressions for OSSF Scorecard / osv-scanner.
+#
+# Every entry here is an informational "unmaintained" advisory or a Windows-only
+# soundness note, in a dep we cannot reach: a transitive dev-dep of an upstream
+# test crate, or inside a verbatim mirror of an external project's Cargo.lock
+# used as a Nix-side test fixture. None of these reach a built image.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+reason = """
+paste 1.0.15 is unmaintained. Pulled in as a transitive dev-dep of hegeltest
+0.14.6 (packages/minecraft/nbt), which declares `paste = "1.0"` at the crate
+root. Tracked upstream at hegeldev/hegel-rust; remove this ignore when
+hegeltest drops the dep.
+"""
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0375"
+reason = """
+atty 0.2.14 is unmaintained. Lives only in
+tests/fixtures/cargo-unit-real-workspaces/regex/Cargo.lock, a verbatim mirror
+of rust-lang/regex@839d16bc used as a fixture for the cargo-unit Nix builder.
+Latest regex master is that commit, so no upstream bump is available. Reaches
+no built image.
+"""
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2021-0145"
+reason = """
+atty 0.2.14 potential unaligned read. Windows-only, mitigated in practice,
+and unreachable: same regex Cargo.lock fixture as RUSTSEC-2024-0375, and
+ix VMs are linux-only.
+"""

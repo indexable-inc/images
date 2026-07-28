@@ -1,0 +1,31 @@
+[package]
+name = "search"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "CLI for read-only semantic and regex search over the shared corpus store (thin wrapper over search-core)"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "search"
+path = "src/main.rs"
+
+[dependencies]
+anstream.workspace = true
+anstyle.workspace = true
+anyhow.workspace = true
+# The workspace pins chrono with `default-features = false`; `alloc` re-enables
+# the formatting used to print hit timestamps. No clock feature: "now" comes
+# from SystemTime.
+chrono = { workspace = true, features = ["alloc"] }
+clap = { workspace = true, features = ["derive", "env"] }
+code-highlight.workspace = true
+indicatif.workspace = true
+mixedbread.workspace = true
+progress-style.workspace = true
+search-core.workspace = true
+serde_json.workspace = true
+terminal-theme.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

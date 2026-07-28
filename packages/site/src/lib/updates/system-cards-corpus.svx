@@ -1,0 +1,17 @@
+---
+id: system-cards-corpus
+postedAt: 2026-07-19T05:43:18-07:00
+title: "Every frontier system card, committed as markdown with a one-command regen"
+tags: [packages, corpus, nix]
+links:
+  - label: system-cards
+    href: https://github.com/indexable-inc/index/tree/main/packages/system-cards
+  - label: "#3685"
+    href: https://github.com/indexable-inc/index/issues/3685
+---
+
+packages/system-cards commits the frontier-model system cards as searchable markdown: all 17 Anthropic cards listed at anthropic.com/system-cards, Claude 2 (July 2023) through Claude Sonnet 5 and the Fable 5 / Mythos 5 card (June 2026), plus OpenAI's GPT-5.6 preview and final cards. 19 documents, 4.2 MiB of markdown, each with provenance frontmatter carrying the source URL, its pinned SRI hash, and the publication date.
+
+The pipeline is pure: catalog.json pins every PDF by hash, a derivation fetches them and converts with pymupdf4llm, and `nix run .#system-cards` copies the build product over cards/. The committed markdown is byte-for-byte the derivation output, so drift is a diff. Adding a card is one catalog entry plus a regen.
+
+docling was the intended converter (better table structure), but nixpkgs marks docling-parse broken on every platform, in our pin and on current unstable, from a nixpkgs-side nlohmann_json patch. The swap is tracked as issue 3690.

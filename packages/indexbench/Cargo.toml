@@ -1,0 +1,45 @@
+[package]
+name = "indexbench"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Continuous-benchmarking framework: metric-centric micro/macro harnesses, durable history, and a statistical regression gate"
+
+[lints]
+workspace = true
+
+[lib]
+name = "indexbench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "indexbench"
+path = "src/main.rs"
+
+# Worked example of the reproducible alloc-count path: installs the counting
+# allocator and prints an `@bench name=allocations …` line. Run by the
+# `indexbench-self-demo-alloc` flake check.
+[[bin]]
+name = "indexbench-alloc-demo"
+path = "src/bin/alloc-demo.rs"
+
+[dependencies]
+chrono = { workspace = true, features = ["clock"] }
+clap = { workspace = true, features = ["derive"] }
+# `wait4(2)` returns the *child's own* `rusage`, so peak RSS is attributed
+# per-run; `nix` 0.30 has no `wait4` (only `waitpid`, whose
+# `getrusage(RUSAGE_CHILDREN)` accumulates across all reaped children), so the
+# reaping path uses `libc::wait4` directly.
+libc.workspace = true
+# `hostname` exposes `gethostname` for the machine id.
+nix = { workspace = true, features = ["hostname"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+# Temp dirs for the local-store / runner unit tests, the git-store round-trip
+# test, and the `loop` integration test. Test-only: the git store now builds its
+# tree with `git mktree` and needs no scratch index.
+tempfile.workspace = true

@@ -1,0 +1,5 @@
+// `b` fails its int check in assert mode; erase mode never reads `b`, so
+// the same module evaluates to 1. The wasm e2e asserts both.
+const first = (a: int, b: int): int => a;
+
+export default first(1, "two");

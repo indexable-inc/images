@@ -1,0 +1,7 @@
+defmodule DebugLeftover do
+  @moduledoc false
+
+  # A forgotten IO.inspect debug print writes to stdout outside Logger.
+  @spec run(term()) :: term()
+  def run(x), do: IO.inspect(x)
+end

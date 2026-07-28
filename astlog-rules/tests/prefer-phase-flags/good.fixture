@@ -1,0 +1,1 @@
+{ makeFlags = [ "FOO=123" ]; buildFlags = [ "target1" "target2" ]; }

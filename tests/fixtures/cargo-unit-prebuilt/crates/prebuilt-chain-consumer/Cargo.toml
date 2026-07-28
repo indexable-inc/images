@@ -1,0 +1,18 @@
+[package]
+name = "prebuilt-chain-consumer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "prebuilt-chain-consumer"
+path = "src/main.rs"
+
+# Depends only on prebuilt-mid: prebuilt-lib enters this binary's link line
+# purely as mid's transitive dep, which is the path depUnits auto-injection
+# exercises.
+[dependencies]
+# Fixture exercises cargo-unit's path-dep resolution; the explicit `path` edge is
+# the thing under test, not a real workspace dep.
+# astlog-ignore: no-cargo-path-dep
+prebuilt-mid = { path = "../prebuilt-mid" }

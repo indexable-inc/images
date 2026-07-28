@@ -1,0 +1,113 @@
+name: Update Rust nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly ships once a day, so a daily check is enough (unlike the hourly
+    # cargo/flake-lock/content updaters). The minute+hour is offset from
+    # those (:17, :37, :47) so no two updaters start in the same tick.
+    - cron: "23 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-rust-nightly
+  cancel-in-progress: false
+
+env:
+  # Client-side eval knobs only; the self-hosted runner's Nix daemon owns
+  # substituters and trusted keys. Same posture as check.yml / fork-sync.yml.
+  # `max-jobs` and `cores` are deliberately absent: unlike every other knob
+  # they are not daemon-owned, and a client value silently overrides the
+  # fleet tuning. check.yml owns the explanation.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    accept-flake-config = false
+    timeout = 600
+
+jobs:
+  update-rust-nightly:
+    # Dispatched to the org-wide ix-ci-dispatcher, the same self-hosted runner
+    # scheme as check.yml: the `ix-ci-run-*` label is claimed by the
+    # dispatcher, which mints an ephemeral runner per job on a host with a
+    # warm, persistent /nix/store. A hosted runner ships no nix at all, which
+    # is why every scheduled run of this workflow since #1706 died 127 on
+    # `nix: command not found` before reaching a single real step.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-rust-nightly', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
+      # The rolling Rust manifest can publish before rust-overlay has generated
+      # that day's expressions. Advance the overlay first so a toolchain bump
+      # and the resolver data required to evaluate it land atomically.
+      - name: Update Rust overlay
+        run: nix flake update rust-overlay
+
+      - name: Provision missing CLI tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: python3
+
+      # python3's stdlib tomllib parses both the pin and the upstream manifest
+      # properly instead of grepping dates out of TOML by hand.
+      - name: Compute latest available nightly
+        run: python3 .github/scripts/bump-rust-nightly.py
+
+      - name: Verify the pinned nightly evaluates
+        run: nix eval .#packages.x86_64-linux.agents.drvPath
+
+      # Opens (or updates) a single PR, and only when something changed:
+      # create-pull-request no-ops on an empty diff (which is also what the
+      # script above produces when the manifest isn't newer, or when the
+      # newer nightly is missing a component this repo's rust-toolchain.toml
+      # requires). It reuses the `update-rust-nightly` branch so each run
+      # advances the same PR.
+      #
+      # `token`: a PR opened with the default GITHUB_TOKEN does not trigger
+      # the `pull_request` workflows (`flake-check`), so branch protection
+      # would block the merge. Set an `AUTOBUMP_TOKEN` repo secret (a PAT or
+      # GitHub App token) to make the PR run CI; without it this falls back
+      # to GITHUB_TOKEN and a maintainer must re-trigger `flake-check`.
+      # Notify the human behind a manual dispatch: review request + assignee +
+      # body mention, all empty (a no-op) on the scheduled runs, which have no
+      # triggering human.
+      - name: Resolve triggering human
+        id: trigger
+        uses: ./.github/actions/triggering-actor
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          assignees: ${{ steps.trigger.outputs.user }}
+          reviewers: ${{ steps.trigger.outputs.user }}
+          base: main
+          branch: update-rust-nightly
+          delete-branch: true
+          commit-message: "rust-toolchain: bump nightly"
+          title: "rust-toolchain: bump nightly"
+          body: |
+            Automated bump of the pinned nightly in `rust-toolchain.toml` to the latest date published in [`channel-rust-nightly.toml`](https://static.rust-lang.org/dist/channel-rust-nightly.toml).
+
+            The bump is skipped (no PR, or the rolling PR is left as-is) whenever the newer nightly is missing a component or target this repo's `rust-toolchain.toml` requires, so this never lands a toolchain the repo can't actually install.
+
+            The matching `rust-overlay` lock is advanced in the same PR so the new nightly evaluates immediately.
+
+            `flake-check` is what proves the new toolchain actually builds, so review its result before merging.
+
+            Refs indexable-inc/index#1698.
+
+            (sent by an AI agent via Claude Code)
+
+            ${{ steps.trigger.outputs.mention }}

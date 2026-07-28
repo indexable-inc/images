@@ -1,0 +1,23 @@
+[package]
+name = "mixedbread"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Minimal async Rust client for the Mixedbread vector store API (stores, files, search, question-answering)"
+
+[lints]
+workspace = true
+
+[dependencies]
+dirs.workspace = true
+percent-encoding.workspace = true
+reqwest = { workspace = true, features = ["json", "rustls-tls", "multipart"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+# `time` only: backoff sleeps between retries. The consumer owns the runtime.
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util"] }

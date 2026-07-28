@@ -1,0 +1,45 @@
+[package]
+name = "indexer"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Sync every configured corpus source into Mixedbread (semantic) and S3/R2 parquet"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "indexer"
+path = "src/main.rs"
+
+[dependencies]
+source-meta.workspace = true
+source-claude.workspace = true
+source-codex.workspace = true
+source-debug.workspace = true
+source-git.workspace = true
+source-journald.workspace = true
+source-atuin.workspace = true
+source-slack.workspace = true
+source-linear.workspace = true
+source-github.workspace = true
+source-parquet.workspace = true
+lake-iceberg.workspace = true
+search-core.workspace = true
+sink-mixedbread.workspace = true
+sink-parquet.workspace = true
+mixedbread.workspace = true
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+dirs.workspace = true
+nix = { workspace = true, features = ["hostname"] }
+
+[dev-dependencies]
+# The lake-consume tests drive run_cursor_consume against iceberg's in-memory
+# catalog (the same harness lake-iceberg's own suite uses).
+iceberg.workspace = true
+rusqlite = { workspace = true, features = ["bundled"] }
+tempfile.workspace = true

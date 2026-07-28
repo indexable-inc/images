@@ -1,0 +1,35 @@
+---
+id: action-log-call-outwaits-busy
+postedAt: 2026-07-21T19:30:00-07:00
+title: Action-log busy waits stop camping on dirty schedulers and outwaiting their callers
+tags: [kernel, mcp, sqlite, reliability]
+links:
+  - label: issue #3903
+    href: https://github.com/indexable-inc/index/issues/3903
+  - label: ActionLog
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/action_log.ex
+---
+
+The action log waits out a sibling instance's sqlite write lock before failing
+loudly. Two things were wrong with how it waited. First, the wait ran entirely
+inside the exqlite NIF, which occupies one of the BEAM's roughly ten dirty IO
+scheduler slots for its whole duration; stack a few concurrent waiters and the
+pool starves out the very COMMIT or ROLLBACK that would release the lock, so
+waits sailed past every configured bound. Second, the 5-second busy bound
+equaled the default `GenServer.call` timeout, so a caller always timed out
+before the server could raise its diagnosis naming the blocked statement. The
+busy-wait regression test caught the combination live: it failed once and
+passed once on the identical derivation, dying as a bare 5-second call timeout
+even though the blocking transaction had been released after 300ms.
+
+The busy bound is now a wall-clock deadline enforced in Elixir: each NIF call
+waits at most 50ms inside sqlite, and the rest of the budget is scheduler-free
+sleeps between attempts, so a blocked statement never starves its own release.
+Every public ActionLog function calls with a 30-second bound, comfortably above
+the busy budget, and a compile-time guard keeps that ordering so the
+loud-failure path stays reachable. The issue-claim API, which had still been on
+the 5-second default and outside the restart-retry seam, now rides both, and a
+claim retried across a server restart reads back as the win it already is
+instead of reporting the claimant as losing the issue to itself. The contention
+tests give the lock holder 20 seconds of headroom so a loaded sandbox cannot
+starve the release past the busy wait.

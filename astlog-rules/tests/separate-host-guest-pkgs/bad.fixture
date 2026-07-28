@@ -1,0 +1,1 @@
+{ pkgs }: pkgs.testers.runNixOSTest { nodes.machine = { environment.systemPackages = [ pkgs.hello ]; }; }

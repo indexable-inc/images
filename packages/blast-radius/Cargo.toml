@@ -1,0 +1,19 @@
+[package]
+name = "blast-radius"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Report how many .#checks.x86_64-linux derivations a PR would rebuild, and which changed inputs caused each rebuild"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[[bin]]
+name = "blast-radius"
+path = "src/main.rs"

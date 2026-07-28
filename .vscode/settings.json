@@ -1,0 +1,88 @@
+{
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "direnv.restart.automatic": true,
+  "files.associations": {
+    "*.astlog": "datalog",
+    "*.nu": "nushell",
+    "common.json": "jsonc",
+    "*-mods.json": "jsonc"
+  },
+  "python.languageServer": "None",
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+  "basedpyright.analysis.typeCheckingMode": "standard",
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.formatOnSave": true
+  },
+  "rust-analyzer.linkedProjects": [
+    "modules/services/resource-monitor/stats-writer/Cargo.toml",
+    "packages/dag-runner/Cargo.toml",
+    "packages/loop/Cargo.toml",
+    "packages/minecraft/nbt/Cargo.toml",
+    "packages/minecraft/sync-managed/Cargo.toml",
+    "packages/nix-cargo-unit/Cargo.toml",
+    "packages/oci-image-builder/Cargo.toml",
+    "tests/fixtures/cargo-unit-hello/Cargo.toml"
+  ],
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.check.extraArgs": [
+    "--all-targets",
+    "--all-features"
+  ],
+  "rust-analyzer.cargo.features": "all",
+  "rust-analyzer.imports.granularity.group": "module",
+  "rust-analyzer.imports.prefix": "crate",
+  "rust-analyzer.completion.callable.snippets": "fill_arguments",
+  "rust-analyzer.inlayHints.bindingModeHints.enable": true,
+  "rust-analyzer.inlayHints.closureReturnTypeHints.enable": "with_block",
+  "rust-analyzer.inlayHints.lifetimeElisionHints.enable": "skip_trivial",
+  "rust-analyzer.inlayHints.expressionAdjustmentHints.enable": "reborrow",
+  "rust-analyzer.semanticHighlighting.operator.specialization.enable": true,
+  "rust-analyzer.semanticHighlighting.punctuation.enable": true,
+  "rust-analyzer.semanticHighlighting.punctuation.specialization.enable": true,
+  "rust-analyzer.diagnostics.experimental.enable": true,
+  "nix.serverSettings": {
+    "nixd": {
+      "formatting": {
+        "command": [
+          "nixfmt"
+        ]
+      }
+    }
+  },
+  "nix-embedded-languages.include": {
+    "nu|nushell": {
+      "name": "Nushell",
+      "scopeName": "source.nushell"
+    }
+  },
+  "search.exclude": {
+    "**/.direnv": true,
+    "**/.claude/worktrees": true,
+    "**/result": true,
+    "**/result-*": true,
+    "**/node_modules": true,
+    "**/target": true,
+    "**/.gradle": true,
+    "**/build": true
+  },
+  "files.exclude": {
+    "**/.claude/worktrees": true
+  },
+  "files.watcherExclude": {
+    "**/.direnv/**": true,
+    "**/.claude/worktrees/**": true,
+    "**/result": true,
+    "**/result-*": true,
+    "**/target/**": true,
+    "**/.gradle/**": true,
+    "**/build/**": true
+  }
+}

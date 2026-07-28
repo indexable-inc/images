@@ -1,0 +1,13 @@
+---
+id: claude-rainbow-no-self-install
+postedAt: 2026-07-19T03:30:00-07:00
+title: "claude-code-rainbow can no longer self-install over the wrapped claude"
+tags: [agent, claude-code, nix]
+links:
+  - label: package
+    href: https://github.com/indexable-inc/index/tree/main/packages/claude-code-rainbow
+---
+
+The rainbow POC shipped the raw byte-patched binary at `bin/claude`, without the `DISABLE_UPDATES=1` guard the stock `claude-code` launch spec sets. Running it directly let Claude Code's self-installer go to work: with `installMethod: native` recorded in `~/.claude.json`, it downloaded a stock native build into `~/.local/share/claude/versions` and wrote a `~/.local/bin/claude` launcher. On a machine whose PATH puts `~/.local/bin` before `~/.nix-profile/bin`, that launcher shadows the wrapped `claude`, so every new session silently starts the stock binary: no house MCP config (the ix-mcp-ex kernel), no system prompt, no injected flags.
+
+The package now installs the patched binary under `libexec` behind a `makeBinaryWrapper` shim that pins `DISABLE_UPDATES=1`, matching the stock package's guard, so running the rainbow build can never mutate the machine's `claude` resolution. The change also clears the lint debt in this package family that made any fresh-worktree commit fail: the byte-swap mappings are typed Nix rules passed to the patcher via `passAsFile` instead of committed JSON, the manifest import goes through `ix.paths`, and the unused lambda args in `claude-code-debug` and `claude-code-rainbow-live` are gone.

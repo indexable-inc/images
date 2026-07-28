@@ -1,0 +1,76 @@
+# Standalone Cargo workspace for the Minecraft desktop overlays. It is its own
+# workspace root (not listed in the repo's top-level `members`) so the GUI crates
+# stay off the strict `cargo --workspace` graph: winit/wgpu desktop apps would
+# otherwise trip the repo's restriction lints and darwin platform-gating, and
+# their heavy deps would slow every workspace build.
+#
+# `overlay-core` owns the reusable float window + wgpu pixel/text engine; the
+# binaries (`bossbar`, `book`, `orb`) are thin domain layers on top. One vendored
+# `Cargo.lock` is shared, and `app/default.nix` builds the whole workspace.
+[workspace]
+resolver = "2"
+members = [
+  "crates/overlay-core",
+  "crates/bossbar",
+  "crates/book",
+  "crates/orb",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Andrew Gazelka"]
+
+[workspace.dependencies]
+overlay-core = { path = "crates/overlay-core" }
+winit = "0.30"
+wgpu = "28"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Bundled SQLite so users don't need a system libsqlite3.
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "6"
+# 2D vectors for window positions, instead of bare (f64, f64).
+glam = "0.30"
+# Wayland layer-shell backend for compositor-owned overlay placement on wlroots
+# compositors such as Hyprland.
+layershellev = "0.18.1"
+# macOS AppKit, reached through the raw window handle for two things winit has no
+# API for: raise a hovered window above its always-on-top siblings without taking
+# keyboard focus (`-[NSWindow orderFrontRegardless]`), a right-click context menu
+# to close an overlay (`NSMenu`/`NSMenuItem`/`NSEvent`), and an always-active
+# `NSTrackingArea` so a background overlay still receives hover. These
+# features/version are a subset of what winit 0.30 already enables, so this pulls
+# in no extra crate.
+objc2 = "0.5"
+# `RcBlock` for the `NSEvent` scroll-momentum monitor's handler block (matches
+# objc2 0.5's block ABI; enables the `block2` feature on objc2-app-kit below).
+block2 = "0.5"
+# NSString for menu labels, NSThread for `MainThreadMarker`, NSObjCRuntime for
+# `NSObjectProtocol`, NSGeometry for `NSRect`/`NSPoint`/`NSSize` (declared here
+# rather than relying on winit's feature unification).
+objc2-foundation = { version = "0.2.2", features = [
+  "NSGeometry",
+  "NSObjCRuntime",
+  "NSString",
+  "NSThread",
+] }
+objc2-app-kit = { version = "0.2.2", features = [
+  # `block2` exposes `NSEvent::addLocalMonitorForEventsMatchingMask_handler`,
+  # used to filter out the macOS scroll-momentum tail before winit sees it.
+  "block2",
+  "NSEvent",
+  "NSMenu",
+  "NSMenuItem",
+  "NSResponder",
+  "NSScreen",
+  "NSTrackingArea",
+  "NSView",
+  "NSWindow",
+] }
+
+[profile.release]
+# Desktop HUDs: trim the binaries, no need for fat debug info.
+opt-level = "s"
+strip = true

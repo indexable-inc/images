@@ -1,0 +1,15 @@
+[project]
+name = "mlx-tts"
+version = "0.1.0"
+description = "Quality-first local Apple Silicon text-to-speech through MLX-Audio"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mlx-audio[tts]>=0.4.4,<0.5.0",
+]
+
+[project.scripts]
+mlx-tts = "mlx_tts:main"
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"

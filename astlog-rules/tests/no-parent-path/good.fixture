@@ -1,0 +1,11 @@
+# Cross-tree references go through named handles, not `../`. Downward `./...`
+# paths are fine; a root-anchored path uses `ix.paths.<root>` + a relative
+# string. A traversal-rejection test fixture string like "../bad" stays a
+# string literal and is never a path expression, so the rule ignores it.
+{ ix, lib }:
+{
+  helper = ix.writeBashApplication;
+  rules = ix.paths.root + "/astlog-rules/nix.astlog";
+  local = import ./sibling.nix { inherit lib; };
+  rejected = ix.relativePath.isSafe "../bad";
+}

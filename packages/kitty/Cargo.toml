@@ -1,0 +1,12 @@
+[package]
+name = "kitty"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Encoder for the kitty terminal graphics protocol (escape-sequence framing only, no image decoding or terminal IO)"
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true

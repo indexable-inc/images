@@ -1,0 +1,53 @@
+---
+id: nox-self-build-closure-fixes
+postedAt: 2026-07-27T00:56:00Z
+title: "nox self-build crosses five repaired boundaries"
+tags: [nox, nix, rust, ci]
+links:
+  - label: first closure fix
+    href: https://github.com/indexable-inc/nox/pull/383
+  - label: canonical build request
+    href: https://github.com/indexable-inc/nox/pull/386
+  - label: sandbox closure fix
+    href: https://github.com/indexable-inc/nox/pull/388
+  - label: trusted cache selection
+    href: https://github.com/indexable-inc/nox/pull/390
+  - label: fleet cache trust
+    href: https://github.com/indexable-inc/ix/pull/8631
+---
+
+The nox release-fast self-build now completes the command that first failed while
+registering a Rust crate derivation with the system Nix daemon:
+
+```console
+./target/x86_64-unknown-linux-musl/release-fast/nox build --local --rebuild .#nox-native
+```
+
+The verified run on main commit `6bab9bc` plus the cache-selection fix completed
+in 276.6 seconds. It evaluated 5,115 derivations, delegated a 4,019-derivation
+import-from-derivation closure, expanded 511 Cargo units, and finalized 511 build
+nodes.
+
+Five bugs appeared in order:
+
+1. The worker-protocol export rebuilt a shallow registry value and changed a
+   child derivation path. It now reads the canonical derivation recorded when
+   that path was first computed.
+2. Build submission rebuilt requests from shallow selector values. It now takes
+   the builder, arguments, environment, outputs, and inputs from the same
+   canonical derivation record.
+3. The Linux sandbox closure considered only physically present candidates. It
+   now resolves declared references across the host and nox stores, then unions
+   validity metadata into the mount graph.
+4. A concurrent multi-cache lookup selected the first HTTP response before
+   applying signature policy. It now considers responses in priority order and
+   selects the first trusted narinfo. A cached response that no longer satisfies
+   the active policy triggers a fresh query.
+5. The fleet trusted four cache keys but omitted the signer used by the CI plain
+   cache. The fleet trust source now includes `ix-nix-cache-1`. A deploy-surface
+   check requires the signer on all five dispatcher nodes.
+
+Format, both workspace clippy gates, and 217 affected-package tests passed on
+the final branch. The repeated `HTTP/3.0` warnings did not stop this build.
+[Issue 387](https://github.com/indexable-inc/nox/issues/387) tracks that
+transport diagnostic separately.

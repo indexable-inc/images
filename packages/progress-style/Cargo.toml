@@ -1,0 +1,12 @@
+[package]
+name = "progress-style"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Shared indicatif progress-bar and spinner styling for ix command-line tools"
+
+[lints]
+workspace = true
+
+[dependencies]
+indicatif.workspace = true

@@ -1,0 +1,50 @@
+# Metadata-faithful STUB of the private `ix-sdk-wire` crate.
+#
+# This is NOT the real ix-sdk-wire source. It exists only so Cargo can resolve
+# the public SDK's dependency edge on `ix-sdk-wire`, and so the cargo-unit
+# renderer computes the SAME source-independent unit hash that the real crate
+# produced when its rlib+rmeta were built in the ix repo and uploaded to R2.
+#
+# The cargo-unit hash folds in package identity (name + version), edition,
+# crate-types, features, the resolved dependency identities, the build profile,
+# and the toolchain id, but NEVER the source bytes
+# (`packages/nix-cargo-unit/src/model.rs:612-672`, `hash.rs:18-26`). So the
+# fields below must match the real crate's metadata exactly, but `src/lib.rs`
+# can stay trivial: the prebuilt unit injected via `extraUnits` OVERRIDES this
+# unit, and the stub source is never compiled into the consumer's closure.
+#
+# Faithful to crates/ix/sdk-wire/Cargo.toml in indexable-inc/ix with the ix
+# workspace inheritance resolved to concrete values:
+#   version.workspace -> 0.1.0   edition.workspace -> 2024
+#   snafu.workspace   -> the shepmaster git fork at the rev ix pins
+#   strum.workspace   -> 0.28 with the `derive` feature
+# Keep these in lockstep with ix, or the generated unit hash diverges from the
+# R2 artifact's and the injection is rejected by buildWorkspace's C1 assert.
+[package]
+name = "ix-sdk-wire"
+version = "0.1.0"
+edition = "2024"
+# Proprietary, source-available: governed by sdk/LICENSE (the Indexable SDK
+# License), which supersedes the repo-root MIT for everything under sdk/. The
+# `license`/`license-file` field is NOT folded into the cargo-unit identity hash
+# (only name+version, edition, crate-types, features, profile, lints, deps,
+# toolchain are; see packages/nix-cargo-unit/src/model.rs:write_unit_identity),
+# so this change does not perturb the stub's generated unit key.
+license-file = "../../../LICENSE"
+description = "Self-contained wire types crossing the ix SDK C-ABI boundary (no private ix deps)"
+publish = false
+
+[lib]
+
+[dependencies]
+# Bare git URL (no `rev` in the spec), exactly as ix declares it; the rev is
+# pinned in Cargo.lock. A `rev =` here would make cargo resolve the source as
+# `...snafu.git?rev=...` instead of the bare `...snafu.git#<rev>` the vendor
+# config (and ix's lock) key on, breaking offline vendoring.
+snafu = { git = "https://github.com/shepmaster/snafu.git" }
+# strum's VariantArray derive backs the error-code roster; the `derive` feature
+# pulls in strum_macros, matching the real crate's resolved feature set.
+strum = { version = "0.28", features = ["derive"] }
+
+[lints]
+workspace = true

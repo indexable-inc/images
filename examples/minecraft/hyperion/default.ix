@@ -1,0 +1,52 @@
+// One hyperion game server behind two proxies, each proxy on its own VM:
+//
+//   players -> hyperion-proxy-0 \
+//                                >-- hyperion-game (private)
+//   players -> hyperion-proxy-1 /
+//
+// Apply the whole thing with one command:
+//
+//   ix apply .#hyperion-game .#hyperion-proxy-0 .#hyperion-proxy-1
+//
+// Traffic direction is what makes this simple. Proxies dial the game server,
+// so the game server needs no public address at all and lives only on the
+// east-west group. Adding a third proxy is one more line here; the game
+// server does not change, because it has supported several connected proxies
+// since hyperion#940.
+export default ({ index, hyperion }) => {
+  const packages = {
+    _module: {
+      args: {
+        // Guests are Linux whatever the machine running `ix apply` is.
+        //
+        // An event is compiled in rather than chosen by a runtime flag, so
+        // which game this fleet serves is exactly this one attribute.
+        hyperionGameServer: hyperion.packages["x86_64-linux"].smash,
+        hyperionProxy: hyperion.packages["x86_64-linux"]["hyperion-proxy"],
+      },
+    },
+  };
+
+  return index.lib.mkFleet({
+    // One private segment. A VM outside it has no route to the game server,
+    // which is the only thing keeping an unproxied client off it. The proxies
+    // resolve the game server by name on that segment, so nothing here carries
+    // an address.
+    defaults: [
+      { ix: { networking: { groups: ["hyperion"] } } },
+      packages,
+      import("./pki.nix"),
+      hyperion.nixosModules["game-server"],
+      hyperion.nixosModules.proxy,
+    ],
+    nodes: {
+      "hyperion-game": { modules: [import("./game.nix")] },
+      // Interchangeable. Players land on whichever one their address resolves
+      // to; both hold their own connections and multiplex onto the one link.
+      // Each carries a public IPv4, declared in proxy.nix because it is a
+      // property of being an entrypoint rather than of this deployment.
+      "hyperion-proxy-0": { modules: [import("./proxy.nix")] },
+      "hyperion-proxy-1": { modules: [import("./proxy.nix")] },
+    },
+  });
+};

@@ -1,0 +1,6 @@
+defmodule Undocumented do
+  # No @moduledoc at all: the module does not say what it is for. A @spec'd
+  # public def keeps every other rule silent, so only moduledoc-required fires.
+  @spec id(term()) :: term()
+  def id(x), do: x
+end

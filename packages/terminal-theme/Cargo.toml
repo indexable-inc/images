@@ -1,0 +1,12 @@
+[package]
+name = "terminal-theme"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Detect whether the terminal background is light or dark, gated on stdout being a TTY so pipes and captures stay clean"
+
+[lints]
+workspace = true
+
+[dependencies]
+terminal-light.workspace = true

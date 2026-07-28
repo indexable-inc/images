@@ -1,0 +1,15 @@
+[package]
+name = "source-atuin"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Adapter turning atuin shell history (nushell/zsh/bash) into embeddable, tagged search documents"
+
+[lints]
+workspace = true
+
+[dependencies]
+source-meta.workspace = true
+rusqlite = { workspace = true, features = ["bundled"] }
+serde_json.workspace = true
+snafu.workspace = true

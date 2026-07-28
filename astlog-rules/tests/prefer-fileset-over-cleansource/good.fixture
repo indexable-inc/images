@@ -1,0 +1,1 @@
+{ lib }: lib.fileset.toSource { root = ./.; fileset = ./src; }

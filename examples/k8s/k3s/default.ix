@@ -1,0 +1,19 @@
+// A three-VM k3s cluster, declared as one fleet:
+// `ix apply .#k3s-server .#k3s-agent-0 .#k3s-agent-1`.
+// Every node sees every other through its `nodes` module argument (the
+// agents join by the server's east-west hostname, the server's readiness
+// check waits for each agent), with no ordering between them: agents boot
+// in parallel with the server and retry the join until the API answers, so
+// bring-up converges regardless of order.
+export default ({ index }) =>
+  index.lib.mkFleet({
+    // One private east-west network for the cluster; a VM outside it has no
+    // route to the API or the kubelets.
+    defaults: [{ ix: { networking: { groups: ["k8s-k3s"] } } }],
+    nodes: {
+      "k3s-server": { modules: [import("./server.ix")] },
+      // Two interchangeable agents; adding a third is one more line here.
+      "k3s-agent-0": { modules: [import("./agent.ix")] },
+      "k3s-agent-1": { modules: [import("./agent.ix")] },
+    },
+  });

@@ -1,0 +1,592 @@
+/**
+Colmena-style fleet evaluation for ix images.
+
+Curried: the outer function takes the build dependencies (`lib`,
+`pkgs`, `evalImageConfig`, the `ix fleet` script, and the Nushell
+application helper); the inner takes a fleet spec
+(`defaults`, `deployment`, `nodes`) and returns the
+rendered fleet plan, image attrset, and wrapped CLI app.
+*/
+{
+  lib,
+  pkgs,
+  evalImageConfig,
+  ixFleet,
+  writeNushellApplication,
+  bootstrapImage,
+}: {
+  defaults ? [],
+  deployment ? {},
+  nodes,
+  # Peer VMs evaluated elsewhere, merged into the `nodes` module argument
+  # so cross-VM references (`ix.endpointOf nodes.<peer> ...`) work when
+  # VMs are wired together one `mkVm` at a time instead of in one fleet
+  # spec (ix#8306). Values are `{ config }` wrappers, i.e. exactly the
+  # entries of another result's `nixosConfigurations`. Own nodes win on
+  # name collisions.
+  peers ? {},
+}: let
+  inherit
+    (builtins)
+    attrNames
+    elem
+    filter
+    hasAttr
+    isAttrs
+    isInt
+    unsafeDiscardStringContext
+    ;
+
+  inherit (lib) toList;
+
+  moduleList = spec: toList (spec.modules or spec.module or []);
+
+  # Default `switch.sourceInstallable`. The remote path goes through `ix apply`,
+  # which rewrites a bare `.#<node>` to `nixosConfigurations.<node>...` and (for
+  # the native multi-VM switch) derives the VM name from that attr. The local
+  # path runs a plain `nix build <installable>` with no such rewrite, so it must
+  # name the `.#<node>-system` package alias that resolves to the toplevel.
+  defaultSourceInstallable = nodeName: buildOn:
+    if buildOn == "local"
+    then ".#${nodeName}-system"
+    else ".#${nodeName}";
+
+  deploymentDefaults = {
+    bootstrapImage = "registry.ix.dev/${bootstrapImage.name}:${bootstrapImage.tag}";
+    region = "us-west-1";
+    ipv4 = false;
+    snapshot = true;
+    switch.buildOn = "remote";
+  };
+  isSecretName = name: builtins.match "[a-z][a-z0-9_]*" name != null;
+
+  normalizeSecretAttachment = sourceName: value:
+    assert lib.assertMsg (isSecretName sourceName)
+    "secret key '${sourceName}' must be lower snake_case: [a-z][a-z0-9_]*";
+    assert lib.assertMsg (isAttrs value) "secret '${sourceName}' must be an attrset";
+      if value ? env
+      then
+        assert lib.assertMsg (!(value ? file)) "secret '${sourceName}' cannot set both env and file"; {
+          name = sourceName;
+          target = {
+            name = value.env;
+            injectAs = "env";
+          };
+        }
+      else if value ? file
+      then {
+        name = sourceName;
+        target =
+          {
+            name = value.file;
+            injectAs = "file";
+          }
+          // lib.optionalAttrs (value ? owner) {inherit (value) owner;}
+          // lib.optionalAttrs (value ? mode) {inherit (value) mode;};
+      }
+      else throw "secret '${sourceName}' must set either env or file";
+
+  normalizeSecrets = secrets: lib.mapAttrsToList normalizeSecretAttachment secrets;
+
+  mergeDeployments = parts:
+    lib.mergeAttrsList parts
+    // {
+      env = lib.mergeAttrsList (map (part: part.env or {}) parts);
+      l7ProxyPorts = lib.unique (lib.concatMap (part: part.l7ProxyPorts or []) parts);
+      # User-store secret keys merge by source name; node layers can override a
+      # fleet-wide delivery target while unrelated refs compose.
+      secrets = lib.foldl' lib.recursiveUpdate {} (map (part: part.secrets or {}) parts);
+    };
+
+  # Deployment keys split by who reads them, because the two answers have
+  # different failure modes.
+  #
+  # `ix apply` is the supported path and it reads only the evaluated system:
+  # `ix.networking.groups` and `ix.networking.ipv4`, nothing else (ix's
+  # `DECLARED_NETWORKING`, `crates/ix/cli/src/run/client_command/apply_command.rs`).
+  # The plan this file renders is read by the deprecated `ix-fleet` alone. So a
+  # key describing the VM that gets created, rather than the workflow that
+  # deploys it, is a key `ix apply` cannot see unless something puts it into a
+  # module. That is how ENG-10846 shipped: `deployment.ipv4 = true` produced
+  # proxies with no public address, no warning, and no way to tell the result
+  # apart from a fleet that never asked.
+  #
+  # `identityModule` below is the path into the evaluated config, and
+  # `unwiredIdentityKeys` is the assertion that every create-identity key has
+  # one. Adding a key to `createIdentityDeploymentKeys` without wiring it fails
+  # the eval instead of shipping another silent drop.
+  createIdentityDeploymentKeys = ["ipv4"];
+
+  # Create-identity keys with no evaluated-config path today, listed so the
+  # gap is in the source rather than in someone's memory. `region` is one:
+  # `ix apply` takes it as `--region` and defaults it, so a fleet declaring
+  # `deployment.region` and applied without the flag lands in the default
+  # region and says nothing. There is no `ix.networking.region` to map it to,
+  # so closing it needs an option in `lib/image/platform.nix` first (ENG-10846).
+  # A reviewer has to catch this class for these keys; for everything in
+  # `createIdentityDeploymentKeys` the eval catches it.
+  unmappedIdentityDeploymentKeys = ["region"];
+
+  # Read by `ix-fleet`'s deploy loop, not by the created VM. No
+  # evaluated-config analogue by design.
+  workflowDeploymentKeys = [
+    "bootstrapImage"
+    "destination"
+    "env"
+    "l7ProxyPorts"
+    "recreateOnUp"
+    "secrets"
+    "snapshot"
+    "switch"
+  ];
+
+  # The module fragment each create-identity key contributes to its node's
+  # evaluated configuration, so `ix apply` reads the same answer the plan does.
+  # `mkIf` rather than a plain assignment because `false` is both the default
+  # and the "no opinion" value, and must never override a module that asked for
+  # an address itself.
+  identityModule = deploy: {
+    ipv4 = {ix.networking.ipv4 = lib.mkIf deploy.ipv4 true;};
+  };
+
+  unwiredIdentityKeys =
+    lib.subtractLists
+    (attrNames (identityModule deploymentDefaults) ++ unmappedIdentityDeploymentKeys)
+    createIdentityDeploymentKeys;
+
+  # Every deployment key the plan consumes. `deployment` is a plain attrset
+  # (not a NixOS module), so a typo or an imagined option would otherwise be
+  # merged and silently dropped. `healthChecks` gets a dedicated message
+  # because examples historically wrote `deployment.healthChecks = [ ... ]`
+  # as if it selected checks to wait for: checks are declared by the node's
+  # modules via `ix.healthChecks.<name>` (with `from`, `command`, retries)
+  # and `ix-fleet up` always waits for every declared check, so there is no
+  # per-deployment selector.
+  knownDeploymentKeys = assert lib.assertMsg (unwiredIdentityKeys == []) ''
+    fleet deployment key(s) describe the created VM but have no path into the evaluated
+    configuration, so `ix apply` would ignore them silently: ${lib.concatStringsSep ", " unwiredIdentityKeys}
+      add each one to `identityModule` in lib/image/fleet.nix, or, if no `ix.*` option exists
+      to carry it yet, list it in `unmappedIdentityDeploymentKeys` with the reason.
+  '';
+    createIdentityDeploymentKeys
+    ++ unmappedIdentityDeploymentKeys
+    ++ workflowDeploymentKeys;
+  checkedDeployment = name: deploy: let
+    unknown = lib.subtractLists knownDeploymentKeys (attrNames deploy);
+  in
+    assert lib.assertMsg (!(elem "healthChecks" unknown)) ''
+      fleet node '${name}' sets deployment.healthChecks, but health checks are not selected per deployment:
+        declare checks as `ix.healthChecks.<name>` in one of the node's modules (service modules
+        such as minecraft and nginx already declare theirs), and `ix-fleet up` waits for every
+        declared check. Remove deployment.healthChecks; there is no allowlist to configure.
+    '';
+    assert lib.assertMsg (unknown == []) ''
+      fleet node '${name}' deployment has unknown option(s): ${lib.concatStringsSep ", " unknown}
+        valid options: ${lib.concatStringsSep ", " knownDeploymentKeys}
+    ''; deploy;
+
+  wrappedNodeKeys = [
+    "module"
+    "modules"
+    "deployment"
+    "tags"
+    "groups"
+    "dependsOn"
+    "replicas"
+    "updateStrategy"
+  ];
+
+  # `updateStrategy` bounds how many of a node's replicas `ix-fleet up` /
+  # `replace` recreate concurrently (Kubernetes RollingUpdate semantics): with
+  # `maxUnavailable = k`, replica `i` waits for replica `i - k` to finish its
+  # whole workflow -- recreate, boot, health checks -- so at most `k` replicas
+  # are down at once and a failing health check halts the rollout before it
+  # takes the remaining replicas down. Default (null) keeps today's behavior:
+  # every replica converges in parallel.
+  knownUpdateStrategyKeys = ["maxUnavailable"];
+  checkedUpdateStrategy = name: strategy:
+    if strategy == null
+    then null
+    else let
+      unknown = lib.subtractLists knownUpdateStrategyKeys (attrNames (
+        assert lib.assertMsg (isAttrs strategy)
+        "fleet node '${name}': updateStrategy must be an attrset like { maxUnavailable = 1; }"; strategy
+      ));
+    in
+      assert lib.assertMsg (unknown == []) ''
+        fleet node '${name}' updateStrategy has unknown option(s): ${lib.concatStringsSep ", " unknown}
+          valid options: ${lib.concatStringsSep ", " knownUpdateStrategyKeys}
+      '';
+      assert lib.assertMsg (
+        isInt (strategy.maxUnavailable or null) && strategy.maxUnavailable > 0
+      )
+      "fleet node '${name}': updateStrategy.maxUnavailable must be a positive integer"; {
+        inherit (strategy) maxUnavailable;
+      };
+
+  isWrappedNode = value: isAttrs value && lib.any (key: value ? "${key}") wrappedNodeKeys;
+
+  normalizeNode = name: value: let
+    spec =
+      if isWrappedNode value
+      then value
+      else {modules = [value];};
+    deploymentParts =
+      [
+        deploymentDefaults
+        deployment
+      ]
+      ++ [
+        (spec.deployment or {})
+      ];
+    groups = toList (spec.groups or []);
+  in {
+    inherit name;
+    modules = toList defaults ++ moduleList spec;
+    tags = lib.unique (toList (spec.tags or []));
+    groups = lib.unique groups;
+    deployment = checkedDeployment name (mergeDeployments deploymentParts);
+    dependsOn = toList (spec.dependsOn or []);
+    replicas = spec.replicas or 1;
+    updateStrategy = checkedUpdateStrategy name (spec.updateStrategy or null);
+  };
+
+  expandReplicas = name: spec:
+    assert lib.assertMsg (
+      isInt spec.replicas && spec.replicas > 0
+    ) "fleet node '${name}': replicas must be a positive integer";
+      if spec.replicas == 1
+      then {
+        ${name} =
+          spec
+          // {
+            baseName = name;
+          };
+      }
+      else
+        lib.listToAttrs (
+          lib.genList (
+            index:
+              lib.nameValuePair "${name}-${toString index}" (
+                spec
+                // {
+                  name = "${name}-${toString index}";
+                  baseName = name;
+                  replicaIndex = index;
+                }
+              )
+          )
+          spec.replicas
+        );
+
+  rawNodeSpecs = lib.mapAttrs normalizeNode nodes;
+  nodeSpecs = lib.concatMapAttrs expandReplicas rawNodeSpecs;
+  knownDependency = dep: hasAttr dep rawNodeSpecs || hasAttr dep nodeSpecs;
+  unknownDependencies = lib.filterAttrs (_: deps: deps != []) (
+    lib.mapAttrs (_name: spec: filter (dep: !(knownDependency dep)) spec.dependsOn) rawNodeSpecs
+  );
+  renderUnknownDependencies = name: deps: "${name}: ${lib.concatStringsSep ", " deps}";
+  checkedKnownNodeSpecs = assert lib.assertMsg (unknownDependencies == {}) ''
+    fleet nodes reference unknown dependencies:
+      ${lib.concatMapAttrsStringSep "\n  " renderUnknownDependencies unknownDependencies}
+  ''; nodeSpecs;
+  expandDependency = dep:
+    if hasAttr dep rawNodeSpecs
+    then
+      if rawNodeSpecs.${dep}.replicas == 1
+      then [dep]
+      else lib.genList (index: "${dep}-${toString index}") rawNodeSpecs.${dep}.replicas
+    else [dep];
+  expandedDependencies =
+    lib.mapAttrs (
+      _name: spec: lib.unique (lib.concatMap expandDependency spec.dependsOn)
+    )
+    checkedKnownNodeSpecs;
+  # `before a b` holds when a must be ordered before b, i.e. b depends on a.
+  # toposort returns `{ result = … }` when acyclic and `{ cycle; loops; }` otherwise.
+  dependencyOrder = lib.toposort (a: b: elem a expandedDependencies.${b}) (
+    attrNames expandedDependencies
+  );
+  checkedNodeSpecs = assert lib.assertMsg (dependencyOrder ? result) ''
+    fleet nodes contain a dependency cycle:
+      ${lib.concatStringsSep " -> " (dependencyOrder.cycle or [])}
+  ''; checkedKnownNodeSpecs;
+
+  nodeConfigs =
+    lib.mapAttrs (
+      name: spec:
+        evalImageConfig {
+          modules =
+            [
+              {
+                _module.args = {
+                  inherit name;
+                  nodes = nodeRefs;
+                  fleet.nodes = nodeRefs;
+                };
+
+                ix.image.name = lib.mkDefault name;
+                networking.hostName = lib.mkDefault name;
+              }
+            ]
+            # Every create-identity deployment key, one module each, so the
+            # thing `ix apply` reads agrees with the plan `ix-fleet` reads.
+            ++ lib.attrValues (identityModule spec.deployment)
+            ++ spec.modules;
+        }
+    )
+    checkedNodeSpecs;
+
+  nodeRefs = peers // lib.mapAttrs (_name: config: {inherit config;}) nodeConfigs;
+  planHealthChecks = config:
+    lib.mapAttrs (_name: check: {
+      inherit
+        (check)
+        attempts
+        description
+        from
+        intervalSec
+        requiresIpv4
+        timeoutSec
+        ;
+      command = map unsafeDiscardStringContext check.command;
+    })
+    config.ix.healthChecks;
+
+  nodePlan =
+    lib.mapAttrs (
+      name: spec: let
+        config = nodeConfigs.${name};
+        imageName = config.ix.image.name;
+        deploy = spec.deployment;
+        replacementDestination = deploy.destination or "${imageName}:latest";
+        switchBuildOn = deploy.switch.buildOn or "remote";
+        ipv4HealthChecks = lib.filterAttrs (_: check: check.requiresIpv4) config.ix.healthChecks;
+        # ix apply expects a system out-path for local copy and a .drv for remote
+        # build. Picking the wrong shape uploads the build-time closure and tries
+        # to run `<drv>/bin/switch-to-configuration`, which deadlocks.
+        switchTarget = deploy.switch.target or unsafeDiscardStringContext (
+          if switchBuildOn == "local"
+          then "${config.system.build.toplevel}"
+          else config.system.build.toplevel.drvPath
+        );
+        # Image-declared membership (`ix.networking.groups`) unions with the
+        # fleet-level `nodes.<name>.groups`: the image carries its own network
+        # identity, the fleet adds deployment-specific memberships on top.
+        nodeGroups = lib.unique (spec.groups ++ config.ix.networking.groups);
+        # Read off the evaluated system, not off the plan. A deployment can
+        # still add an address to an image that does not ask for one, but
+        # `deployment.ipv4` reaches here by way of `ix.networking.ipv4` (see
+        # `nodeConfigs`) rather than as a second input, so the plan and
+        # `ix apply` cannot disagree about whether this node is public.
+        nodeIpv4 = config.ix.networking.ipv4;
+        # Mirrors the server's validate_group_slug rule (63 = the DNS label
+        # octet limit) so a bad slug fails the eval, not the create RPC
+        # mid-deploy.
+        invalidGroups = filter (slug: builtins.match "[a-z0-9_-]{1,63}" slug == null) nodeGroups;
+      in
+        assert lib.assertMsg (nodeIpv4 || ipv4HealthChecks == {})
+        "fleet node '${name}' has health checks that require a public IPv4 (set ix.networking.ipv4 = true in a module, or deployment.ipv4 = true, which now sets it): ${lib.concatStringsSep ", " (lib.attrNames ipv4HealthChecks)}";
+        assert lib.assertMsg (invalidGroups == [])
+        "fleet node '${name}' has invalid east-west group slug(s) (allowed: [a-z0-9_-], max 63 chars): ${lib.concatStringsSep ", " invalidGroups}"; {
+          inherit
+            name
+            ;
+          inherit (spec) baseName;
+          replicaIndex = spec.replicaIndex or null;
+          system = unsafeDiscardStringContext "${config.system.build.toplevel}";
+          switch = {
+            target = switchTarget;
+            buildOn = switchBuildOn;
+            buildVm = deploy.switch.buildVm or null;
+            # Remote switches default to the bare `.#<node>` so the native multi-VM
+            # `ix apply` can derive each VM name from the attr; local switches keep the
+            # `.#<node>-system` package alias (see `defaultSourceInstallable`).
+            sourceInstallable =
+              deploy.switch.sourceInstallable or (defaultSourceInstallable name switchBuildOn);
+            overrideInputs = deploy.switch.overrideInputs or {};
+          };
+          inherit (deploy) bootstrapImage;
+          # The plan carries only the `.#<node>` installable string (the
+          # fleet's `packages.<node>` attr, the node's CAS image): ix-fleet
+          # `nix build`s it at push time, mirroring `switch.sourceInstallable`.
+          # Never put the image's outPath/drvPath here: the CAS manifest
+          # builder reads its closure at eval (IFD), so forcing either would
+          # build every node's system closure just to render this plan.
+          replacementImage = {
+            inherit imageName;
+            destination = replacementDestination;
+            sourceInstallable = ".#${name}";
+          };
+          inherit (deploy) region;
+          ipv4 = nodeIpv4;
+          inherit (deploy) snapshot;
+          recreateOnUp = deploy.recreateOnUp or false;
+          inherit (spec) tags;
+          groups = nodeGroups;
+          inherit (deploy) env;
+          inherit (deploy) l7ProxyPorts;
+          # Per-VM user-store secret references plus delivery targets. ix-fleet
+          # verifies the source keys exist before deploying.
+          secrets = normalizeSecrets (deploy.secrets or {});
+          dependsOn = expandedDependencies.${name};
+          healthChecks = planHealthChecks config;
+          # Rolling-update window for this node's replica group; ix-fleet
+          # turns it into serialization edges among replicas sharing
+          # `baseName` (see checkedUpdateStrategy above).
+          inherit (spec) updateStrategy;
+        }
+    )
+    checkedNodeSpecs;
+
+  planValue = {
+    order = attrNames checkedNodeSpecs;
+    nodes = nodePlan;
+  };
+
+  # Rename a fleet's external identities without re-evaluating any NixOS
+  # closure: only plan data (node names, `dependsOn`, east-west `groups`, the
+  # registry `destination` the replacement image is pushed to, and the two
+  # installable attrs) carries the prefix, while `system`/`switch` `target`
+  # keep pointing at the shared base closures. The prefixed installables
+  # (`.#${prefix}${name}`) still resolve to the shared base closure because
+  # `nixosConfigurations.<external>` and `packages.<external>` are thin
+  # renames over the once-evaluated `nodeConfigs.<name>`
+  # (see `resultFor`), so the native multi-VM `ix apply` can name the prefixed VM
+  # without a second eval. The health-check
+  # runner relies on this so the 10 example fleets are evaluated once per
+  # `nix flake check`/`.#packages` eval instead of twice (ENG-2411). The
+  # guest-side identity (`networking.hostName`, `ix.image.name`) therefore
+  # stays base-named; the safety property the prefix exists for (lifecycle
+  # scripts only ever force-delete VMs named after plan nodes, e.g.
+  # `health-check-*`) lives entirely in the plan names.
+  prefixedPlanValue = prefix: let
+    prefixName = name: prefix + name;
+  in {
+    order = map prefixName planValue.order;
+    nodes =
+      lib.mapAttrs' (
+        name: node:
+          lib.nameValuePair (prefixName name) (
+            node
+            // {
+              name = prefixName name;
+              baseName = prefixName node.baseName;
+              dependsOn = map prefixName node.dependsOn;
+              groups = map prefixName node.groups;
+              replacementImage =
+                node.replacementImage
+                // {
+                  destination = prefixName node.replacementImage.destination;
+                  # Always re-derived: unlike `switch.sourceInstallable` there
+                  # is no user-facing override, the installable is defined as
+                  # this fleet's `packages.<external>` attr.
+                  sourceInstallable = ".#${prefixName name}";
+                };
+              # Re-derive only the default installable to the prefixed attr, keyed
+              # on whether the user set `switch.sourceInstallable` in the spec (not
+              # on the rendered string, which an explicit `.#<node>` override would
+              # match). An explicit installable points at a real flake attr and is
+              # left untouched.
+              switch =
+                node.switch
+                // lib.optionalAttrs (!((checkedNodeSpecs.${name}.deployment.switch or {}) ? sourceInstallable)) {
+                  sourceInstallable = defaultSourceInstallable (prefixName name) node.switch.buildOn;
+                };
+            }
+          )
+      )
+      planValue.nodes;
+  };
+
+  userLocalBinPath = ''
+    let home = ($env.HOME? | default "")
+    if $home != "" {
+      $env.PATH = [$"($home)/.local/bin"] ++ $env.PATH
+    }
+  '';
+
+  resultFor = prefix: let
+    externalName = name: prefix + name;
+    externalKeyed = lib.mapAttrs' (name: value: lib.nameValuePair (externalName name) value);
+    planValueFor =
+      if prefix == ""
+      then planValue
+      else prefixedPlanValue prefix;
+    plan = (pkgs.formats.json {}).generate "ix-fleet-plan.json" planValueFor;
+    # Wraps `ix-fleet [sub]` with a stable PATH that includes ~/.local/bin so
+    # users see their installed `ix` binary, not whatever nix happens to find.
+    mkFleetCmd = sub:
+      writeNushellApplication pkgs {
+        name =
+          if sub == null
+          then "ix-fleet"
+          else "ix-fleet-${sub}";
+        runtimeInputs = [ixFleet];
+        text = ''
+          # nu
+          def --wrapped main [...args] {
+            ${userLocalBinPath}
+            exec ${lib.getExe ixFleet} --plan ${plan} ${lib.optionalString (sub != null) "${sub} "}...$args
+          }
+        '';
+      };
+
+    subcommands =
+      lib.genAttrs [
+        "bootstrap"
+        "diff"
+        "down"
+        "health"
+        "logs"
+        "replace"
+        "status"
+        "switch"
+        "up"
+      ]
+      mkFleetCmd;
+  in {
+    inherit
+      (subcommands)
+      bootstrap
+      diff
+      down
+      replace
+      health
+      logs
+      status
+      switch
+      up
+      ;
+    command = mkFleetCmd null;
+    planCommand = mkFleetCmd "plan";
+
+    inherit plan;
+    planValue = planValueFor;
+    nodes = externalKeyed nodeConfigs;
+    meta = externalKeyed checkedNodeSpecs;
+    # Each node's CAS-manifest image, the target of the plan's
+    # `replacementImage.sourceInstallable`; merge into a flake's top-level
+    # `packages` so `nix build .#<node>` resolves it. Lazy: forcing one
+    # requires the ix-side `ix.build.casImageBuilder` module (cas-layer.nix).
+    packages = externalKeyed (lib.mapAttrs (_: config: config.ix.build.casImage) nodeConfigs);
+    systemPackages =
+      lib.mapAttrs' (
+        name: config: lib.nameValuePair "${externalName name}-system" config.system.build.toplevel
+      )
+      nodeConfigs;
+    # Each node's NixOS system under its bare external name, so `ix apply .#<node>`
+    # (and the native multi-VM `ix apply .#a .#b --build-vm <builder>`) resolves
+    # `nixosConfigurations.<node>.config.system.build.toplevel`. `nodeConfigs`
+    # is already the evaluated `config` (`evalImageConfig` returns `.config`),
+    # so the `{ config }` wrapper reuses that closure with no second eval; this
+    # is the same closure `systemPackages.<node>-system` points at. Merge this
+    # into a flake's top-level `nixosConfigurations`.
+    nixosConfigurations = externalKeyed (lib.mapAttrs (_name: config: {inherit config;}) nodeConfigs);
+    # Prepend `newPrefix` to every external name; the underlying NixOS
+    # closures stay shared with the unprefixed fleet (see
+    # `prefixedPlanValue` above).
+    withNodePrefix = newPrefix: resultFor (newPrefix + prefix);
+  };
+in
+  resultFor ""

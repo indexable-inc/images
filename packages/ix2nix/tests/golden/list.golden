@@ -1,0 +1,5 @@
+{ __dir, __importIx, __ixTy }:
+let
+  tail = [ 4 5 ];
+in
+([ 1 2 3 ] ++ tail) ++ [ 6 ]

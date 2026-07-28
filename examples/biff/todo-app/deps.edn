@@ -1,0 +1,44 @@
+{:paths ["src" "resources" "target/resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.5"}
+
+        ;; Keep every Biff library on the exact revision from which this app
+        ;; was adapted. deps-lock.json fixes the complete transitive closure.
+        com.biffweb/admin {:git/url "https://github.com/jacobobryant/biff"
+                           :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                           :deps/root "libs/admin"}
+        com.biffweb/authenticate {:git/url "https://github.com/jacobobryant/biff"
+                                  :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                                  :deps/root "libs/authenticate"}
+        com.biffweb/background {:git/url "https://github.com/jacobobryant/biff"
+                                :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                                :deps/root "libs/background"}
+        com.biffweb/config {:git/url "https://github.com/jacobobryant/biff"
+                            :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                            :deps/root "libs/config"}
+        com.biffweb/core {:git/url "https://github.com/jacobobryant/biff"
+                          :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                          :deps/root "libs/core"}
+        com.biffweb/datastar {:git/url "https://github.com/jacobobryant/biff"
+                              :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                              :deps/root "libs/datastar"}
+        com.biffweb/fx {:git/url "https://github.com/jacobobryant/biff"
+                        :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                        :deps/root "libs/fx"}
+        com.biffweb/graph {:git/url "https://github.com/jacobobryant/biff"
+                           :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                           :deps/root "libs/graph"}
+        com.biffweb/ring {:git/url "https://github.com/jacobobryant/biff"
+                          :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                          :deps/root "libs/ring"}
+        com.biffweb/sqlite {:git/url "https://github.com/jacobobryant/biff"
+                            :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                            :deps/root "libs/sqlite"}
+
+        cheshire/cheshire {:mvn/version "5.13.0"}
+        com.lambdaisland/hiccup {:mvn/version "0.14.67"}
+        hato/hato {:mvn/version "1.0.0"}
+        org.clojure/tools.logging {:mvn/version "1.3.1"}
+        org.slf4j/slf4j-simple {:mvn/version "2.0.18"}}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :main-opts ["-m" "com.example.todo-app-test"]}}}

@@ -1,0 +1,54 @@
+---
+id: nix-ninja-incremental-fork-lane
+postedAt: 2026-07-19T12:30:00-07:00
+title: "nix fork: incremental per-compilation-unit builds via nix-ninja"
+tags: [nix, fork, nix-ninja, ca-derivations, dynamic-derivations]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/3655
+  - label: nix-ninja
+    href: https://github.com/pdtpartners/nix-ninja
+---
+
+Iterating on the nix fork's patch series used to mean rebuilding the whole
+modular package on every change. The new lane hands the same patched tree to
+[nix-ninja](https://github.com/pdtpartners/nix-ninja), which parses the ninja
+graph meson emits and turns every compilation unit into its own
+content-addressed derivation, so a one-file change recompiles one derivation
+and relinks its dependents.
+
+`nix run .#nix-ninja-build-nix` (x86_64-linux) materializes the patched source
+(the identical `ix.patchedSrc` tree `packages/nix` ships, with the fork
+version written into `.version`), configures it with meson inside upstream's
+own dev shell with `$NINJA` pointed at nix-ninja, and builds `src/nix/nix`.
+The result runs and identifies itself as the fork
+(`nix (Nix) 2.34.7+ix.p<count>.h<digest>`, the same version string the
+packaged fork reports). Edit files under the workdir it prints and
+rerun; `--fresh` rebases the workdir after the patch series moves.
+
+Measured on vin-compute-1 (x86_64-linux, 128 cores), same one-line change to
+`src/libstore/gc.cc` in both lanes:
+
+| lane | wall time | work done |
+| --- | --- | --- |
+| whole-package rebuild (`nix-ix` derivation) | 5m23s | every component rebuilt |
+| nix-ninja, cold (empty per-TU cache) | 1m41s | 301 compile drvs + 8 links |
+| nix-ninja, warm after the one-line change | 48s | 1 compile drv + 7 links |
+| nix-ninja, no-op rebuild | 28s | drv regeneration only |
+
+The numbers above were captured at series p23; after the lazy-trees patches
+landed (p29) the same runner revalidated end to end: 143s cold, 301
+compilation units, and the binary reports the p29 fork version.
+
+The lane uses nix-ninja's local mode: the client generates dynamic derivations
+and calls `nix build` itself, which needs the `dynamic-derivations` and
+`ca-derivations` experimental features on the daemon (the Linux fleet builders
+already enable both; `recursive-nix` is only needed for the in-derivation mode
+this lane does not use). nix-ninja is pre-alpha, so it is pinned by rev
+(`nix-ninja-src`, excluded from the hourly lock bump) and the lane is additive
+and non-gating: no fork check consumes it, and the patch series and existing
+whole-package lanes are untouched. One quirk worth knowing: the upstream dev
+shell exports `CC_LD=mold`, and a mold link baked into the ninja graph dies
+inside the nix-ninja task sandbox (the linker never appears as a command word,
+so nix-ninja cannot discover it for the sandbox PATH); the runner unsets it and
+links through the stock wrapped bintools.

@@ -1,0 +1,8 @@
+defmodule Formatted do
+  @moduledoc false
+
+  # Bare `inspect/1` (formatting a value into a string) is fine; only
+  # `IO.inspect`, which writes to stdout, is the debug-leftover smell.
+  @spec describe(term()) :: String.t()
+  def describe(x), do: inspect(x)
+end

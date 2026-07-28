@@ -1,0 +1,1023 @@
+//! Lay each boss bar out as the same stack of [`Quad`]s Minecraft's
+//! `BossHealthOverlay` draws: a color background, a color progress layer cropped
+//! to the fill, then the optional notch background and notch progress, with the
+//! title above in the vanilla bitmap font. A hovered bar can grow, breathe, and
+//! unfold a description panel beneath it.
+//!
+//! This is the boss bar's domain layer on top of [`overlay_core`]: it owns no GPU
+//! state and decodes no font. It registers its sprite textures once into the
+//! shared [`Gpu`] and otherwise just builds a `Vec<Quad>` that the live window
+//! ([`crate::overlay`]) or the headless snapshot ([`crate::snapshot`]) paints.
+
+use std::collections::HashMap;
+
+use overlay_core::{Gpu, Quad, TexHandle, SHADOW};
+
+use crate::assets;
+use crate::bars::{BossBar, Color, Notch};
+use crate::theme::ThemeSprites;
+
+/// Native vanilla sprite dimensions, in unscaled pixels.
+const BAR_W: u32 = 182;
+const BAR_H: u32 = 5;
+
+/// Default opacity, matching the old CSS `--bar-opacity`: the HUD reads as an
+/// overlay by letting the desktop bleed through a little.
+pub const DEFAULT_OPACITY: f32 = 0.85;
+
+/// How much a fully-hovered bar grows, before breathing. A small, deliberate
+/// scale-up (on top of going opaque) so the hover is unmistakable.
+pub const HOVER_SCALE: f32 = 1.06;
+
+/// Breathing amplitude: a hovered bar gently scales +/- this fraction around its
+/// grown size on a slow sine, so it reads as alive rather than frozen.
+pub const BREATHE_AMP: f32 = 0.02;
+
+/// Largest scale a bar can reach (grown + breathing in). Each window reserves
+/// this much headroom so the bar grows and breathes in place without the window
+/// resizing or shifting.
+const MAX_SCALE: f32 = HOVER_SCALE * (1.0 + BREATHE_AMP);
+
+/// White tint: a sprite shows its texture unchanged.
+const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
+/// Gap (source px) between a bar's square icon and its title text. The icon is
+/// drawn as a square the height of the title row, so `[icon][gap]title` reads as
+/// one centered unit above the bar.
+const ICON_GAP: f32 = 2.0;
+
+/// How tall the title row grows when a bar has an icon, as a multiple of the
+/// glyph height. The square avatar fills the row, so a value > 1 makes the face
+/// large enough to recognize while the text stays centered beside it. The bar
+/// track and the rest of the layout shift down to keep the avatar from
+/// overlapping the bar.
+const ICON_SCALE: f32 = 2.0;
+
+/// Glyph height (source px) of one title row. The avatar is a square of the row
+/// height; with an icon the row is [`ICON_SCALE`] glyphs tall, else one glyph.
+const GLYPH_PX: f32 = 8.0;
+
+/// Title-row height in physical px: `ICON_SCALE` glyphs when the bar carries an
+/// icon (room for the square avatar), one glyph otherwise. `glyph_px` is the
+/// glyph height at the current scale (`GLYPH_PX * s`). Shared by the live and
+/// snapshot layout paths and the window-sizing helpers so geometry stays in sync.
+fn title_row_h(glyph_px: f32, has_icon: bool) -> f32 {
+    if has_icon {
+        glyph_px * ICON_SCALE
+    } else {
+        glyph_px
+    }
+}
+
+/// Largest dimension (px) an icon texture is downscaled to on upload. The icon
+/// draws at roughly the title-row height (tens of px), so a small cap keeps the
+/// nearest-sampled avatar legible without holding a full-size photo on the GPU.
+pub const ICON_MAX_PX: u32 = 96;
+
+/// Description pop-down panel, in native (unscaled) pixels. Everything is
+/// multiplied by the sprite `scale`, so the panel stays proportional to the bars
+/// at any display scale.
+mod panel {
+    /// Body glyph size (source px) and line advance (leading). The face matches
+    /// the title's bitmap font; the extra leading gives wrapped paragraphs room.
+    pub const FONT: f32 = 8.0;
+    pub const LINE: f32 = 10.0;
+    /// Inner text padding and the flat one-pixel border frame.
+    pub const PAD: f32 = 5.0;
+    pub const BORDER: f32 = 1.0;
+    /// Gap between the bar's reserved (hover-headroom) area and the panel top.
+    pub const GAP: f32 = 3.0;
+    /// Flat dark-slate fill, kept slightly translucent so the desktop bleeds
+    /// through like the bars. Straight (non-premultiplied) RGBA in 0..=1.
+    pub const BG: [f32; 4] = [0x12 as f32 / 255.0, 0x0f as f32 / 255.0, 0x1a as f32 / 255.0, 0.92];
+    /// Border opacity; its RGB comes from the bar color's accent.
+    pub const BORDER_ALPHA: f32 = 0.95;
+}
+
+/// Straight-alpha RGBA in 0..=1 from an 8-bit RGB triple and an alpha.
+fn rgba(rgb: [u8; 3], a: f32) -> [f32; 4] {
+    [
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+        a,
+    ]
+}
+
+/// Smoothstep ramp: 0 below `lo`, 1 above `hi`, eased between. Lets the panel
+/// text fade in only after the box has begun to unfold.
+fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
+    let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Compact elapsed time that ticks every second: "M:SS" under an hour, else
+/// "H:MM:SS". Drives the live counter a bar with a `since` shows in its title.
+fn fmt_elapsed(secs: i64) -> String {
+    let secs = secs.max(0);
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = secs / 3600;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// A bar's on-screen title: the stored title plus a live elapsed counter when the
+/// bar has a `since` (e.g. "US East: VMs (2:05)"). An empty title stays empty, so
+/// a counter never appears on its own.
+fn title_with_elapsed(title: &str, since: Option<i64>, now_unix: i64) -> String {
+    match since {
+        Some(start) if !title.is_empty() => format!("{title} ({})", fmt_elapsed(now_unix - start)),
+        _ => title.to_string(),
+    }
+}
+
+/// Color of the live elapsed counter: a dim gray so the ticking timer recedes
+/// behind the title instead of competing with it for attention.
+const TIMER_GRAY: [f32; 3] = [0.5, 0.5, 0.5];
+
+/// Conventional-commit types recognized without a scope (`fix: ...`). A header
+/// carrying a `(scope)` is treated as conventional regardless (the parens are a
+/// strong signal); without parens we require a known type so a plain
+/// `repo: branch` label is never mistaken for a commit and recolored.
+const CC_TYPES: &[&str] = &[
+    "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert",
+    "merge",
+];
+
+fn is_ident(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// Parse a conventional-commit subject `type(scope)?!?: subject` into
+/// `(type, scope, subject)`. Returns `None` for anything not clearly conventional
+/// so ordinary titles (downtime labels, free-form PR names) render unchanged.
+fn parse_conventional(title: &str) -> Option<(&str, Option<&str>, &str)> {
+    let (head, subject) = title.split_once(": ")?;
+    if subject.is_empty() {
+        return None;
+    }
+    // A breaking-change `!` may trail the type or the scope: `feat!:` / `feat(x)!:`.
+    let head = head.strip_suffix('!').unwrap_or(head);
+    if let Some(open) = head.find('(') {
+        let kind = &head[..open];
+        let scope = head[open + 1..].strip_suffix(')')?;
+        // Tolerate a non-canonical `!` inside the parens (`feat(api!)`); the
+        // canonical `feat(api)!` is already handled by the head-level strip above.
+        let scope = scope.strip_suffix('!').unwrap_or(scope);
+        if is_ident(kind) && !scope.is_empty() {
+            Some((kind, Some(scope), subject))
+        } else {
+            None
+        }
+    } else if CC_TYPES.contains(&head) {
+        Some((head, None, subject))
+    } else {
+        None
+    }
+}
+
+/// Deterministic hue in `0..360` for a label, so a given type or scope always
+/// gets the same color across runs and hosts. FNV-1a keeps it stable without
+/// depending on the std hasher's (unspecified) seed.
+fn hue_for(s: &str) -> f32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in s.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    (h % 360) as f32
+}
+
+/// HSL -> sRGB in `0..1`. Used with a fixed saturation/lightness so hashed hues
+/// read as distinct, legible label colors over the semi-transparent bars.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h / 60.0;
+    let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    [r + m, g + m, b + m]
+}
+
+/// Color for a hashed label (the type or scope of a conventional commit).
+fn label_rgb(s: &str) -> [f32; 3] {
+    hsl_to_rgb(hue_for(s), 0.65, 0.62)
+}
+
+/// Break a bar's title into colored segments to render. A conventional-commit
+/// header becomes `type scope subject`, dropping the `():` punctuation, with the
+/// type and scope in their hashed hues and the subject white; any other title
+/// stays one white run. A live elapsed counter (when the bar has `since`) is
+/// appended as a dim-gray segment. Whitespace separators are their own segments;
+/// their color is irrelevant since spaces draw nothing.
+fn title_segments(title: &str, since: Option<i64>, now_unix: i64) -> Vec<(String, [f32; 3])> {
+    let white = [WHITE[0], WHITE[1], WHITE[2]];
+    let mut segs: Vec<(String, [f32; 3])> = Vec::new();
+    match parse_conventional(title) {
+        Some((kind, scope, subject)) => {
+            segs.push((kind.to_string(), label_rgb(kind)));
+            segs.push((" ".to_string(), white));
+            if let Some(scope) = scope {
+                segs.push((scope.to_string(), label_rgb(scope)));
+                segs.push((" ".to_string(), white));
+            }
+            segs.push((subject.to_string(), white));
+        }
+        None if !title.is_empty() => segs.push((title.to_string(), white)),
+        None => {}
+    }
+    if let (Some(start), false) = (since, title.is_empty()) {
+        segs.push((" ".to_string(), white));
+        segs.push((
+            format!("({})", fmt_elapsed(now_unix - start)),
+            TIMER_GRAY,
+        ));
+    }
+    segs
+}
+
+/// Which preloaded sprite a bar layer samples.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum TexId {
+    ColorBg(Color),
+    ColorFill(Color),
+    NotchBg(Notch),
+    NotchFill(Notch),
+}
+
+/// The boss bar sprite textures, registered once into the shared [`Gpu`]. Flat
+/// fills and borders use [`Gpu::white`], so no solid texture is tracked here.
+pub struct BarTextures {
+    sprites: HashMap<TexId, TexHandle>,
+}
+
+impl BarTextures {
+    fn get(&self, id: TexId) -> TexHandle {
+        self.sprites[&id]
+    }
+}
+
+/// Register every color and notch sprite into `gpu`. Called once per `Gpu`, the
+/// same way the live overlay and the snapshot each build their own engine.
+pub fn register(gpu: &mut Gpu) -> BarTextures {
+    let mut sprites = HashMap::new();
+    for c in assets::COLORS {
+        let (bg, fill) = assets::color_sprites(c);
+        sprites.insert(TexId::ColorBg(c), gpu.register_png(bg));
+        sprites.insert(TexId::ColorFill(c), gpu.register_png(fill));
+    }
+    for n in assets::NOTCHES {
+        let (bg, fill) = assets::notch_sprites(n);
+        sprites.insert(TexId::NotchBg(n), gpu.register_png(bg));
+        sprites.insert(TexId::NotchFill(n), gpu.register_png(fill));
+    }
+    BarTextures { sprites }
+}
+
+/// Physical-pixel geometry of one laid-out bar, in the target's local space.
+#[derive(Clone, Copy)]
+struct BarBox {
+    left: f32,
+    title_top: f32,
+    track_y: f32,
+    bar_w: f32,
+    bar_h: f32,
+    title_px: f32,
+    has_title: bool,
+}
+
+/// Physical-pixel geometry of the description pop-down panel, plus its current
+/// reveal. The box unfolds downward as `reveal` goes 0..1; the text fades in via
+/// `text_alpha` slightly behind it. Width matches the bar.
+#[derive(Clone, Copy)]
+struct PanelBox {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    border: f32,
+    pad: f32,
+    font_px: f32,
+    line_px: f32,
+    /// Vertical unfold of the box in `0..=1`, anchored at the top edge.
+    reveal: f32,
+    /// Text fade in `0..=1`, lagged behind `reveal` so the box opens first.
+    text_alpha: f32,
+    /// Border RGB (the bar color's accent), 0..=255; the fill is [`panel::BG`].
+    border_rgb: [u8; 3],
+}
+
+/// One bar to paint: which bar, its box in target-local pixels, its opacity, and
+/// an optional description panel unfolding beneath it.
+struct DrawItem<'a> {
+    bar: &'a BossBar,
+    geom: BarBox,
+    alpha: f32,
+    panel: Option<PanelBox>,
+    /// Loaded texture for the bar's square icon, if it has one and it decoded.
+    /// Drawn left of the title; `None` draws the title alone, as before.
+    icon: Option<TexHandle>,
+    /// Loaded user-supplied texture set named by `bar.theme`, replacing the
+    /// vanilla color background/progress pair (and, when the set ships them,
+    /// the notch overlays). `None` renders vanilla, including when the theme
+    /// is missing or broken.
+    theme: Option<&'a ThemeSprites>,
+}
+
+/// The fill fraction to draw: extrapolated live from `since`/`eta` when both are
+/// set, otherwise the stored `progress`. With `eta` the bar advances as
+/// `(now - since) / eta` (clamped just under full), so a long task's bar moves
+/// smoothly on the overlay's own once-a-second redraws instead of stepping only
+/// when the writer repolls. It tops out near 1.0 on overrun and is cleared when
+/// the writer removes the bar.
+fn live_progress(b: &BossBar, now_unix: i64) -> f32 {
+    match (b.since, b.eta) {
+        (Some(since), Some(eta)) if eta > 0 => {
+            let elapsed = (now_unix - since).max(0) as f32;
+            (elapsed / eta as f32).clamp(0.02, 0.97)
+        }
+        _ => b.progress.clamp(0.0, 1.0),
+    }
+}
+
+/// Append one draw item's quads (bar layers, title, optional panel) to `quads`.
+fn build_item(gpu: &Gpu, tex: &BarTextures, scale: f32, now_unix: i64, item: &DrawItem<'_>, quads: &mut Vec<Quad>) {
+    let b = item.bar;
+    let bx = item.geom;
+    let alpha = item.alpha;
+    // Effective fill: live-extrapolated from since/eta when present (see
+    // `live_progress`), else the stored value. Used in place of `b.progress`.
+    let progress = live_progress(b, now_unix);
+    // Bars sample real sprites, so the tint is white with the bar's opacity; only
+    // the alpha channel matters for them.
+    let tint = [1.0, 1.0, 1.0, alpha];
+    let shadow_off = scale.max(1.0);
+
+    if bx.has_title {
+        // The title is split into colored segments: a conventional-commit header
+        // renders as `type scope subject` with the type/scope in hashed hues and
+        // a dim-gray live elapsed counter (recomputed each frame so it ticks on
+        // the overlay's own redraws, with no DB write to advance it). A plain
+        // title is a single white segment, unchanged from before.
+        let segments = title_segments(&b.title, b.since, now_unix);
+        // Bitmap glyphs are 8 source px tall, so a title row of `title_px` px
+        // means a scale of `title_px / 8`.
+        let glyph_scale = bx.title_px / 8.0;
+        let text_w: f32 = segments.iter().map(|(t, _)| gpu.measure(t, glyph_scale)).sum();
+        // A square avatar (when present and loaded) leads the title: lay them out
+        // as one `[icon][gap]title` unit centered within the bar width, so the
+        // title stays visually centered with the face beside it. The avatar fills
+        // the title row, which is taller (see `title_row_h`) when the bar has an
+        // icon; the text is vertically centered in that row beside the face. The
+        // row height tracks `b.icon` (what the geometry reserved) so the layout is
+        // stable even if the image failed to decode and no avatar is drawn.
+        let has_icon = !b.icon.is_empty();
+        let row_h = title_row_h(bx.title_px, has_icon);
+        let text_y = bx.title_top + (row_h - bx.title_px) * 0.5;
+        let icon_side = if item.icon.is_some() { row_h } else { 0.0 };
+        let icon_gap = if item.icon.is_some() { ICON_GAP * glyph_scale } else { 0.0 };
+        let unit_w = icon_side + icon_gap + text_w;
+        let unit_left = bx.left + (bx.bar_w - unit_w) * 0.5;
+        if let Some(icon) = item.icon {
+            quads.push(Quad::new(icon, unit_left, bx.title_top, icon_side, icon_side, tint));
+        }
+        let tx = unit_left + icon_side + icon_gap;
+        let shadow = with_alpha(SHADOW, alpha);
+        // Render each colored segment in sequence, advancing the pen by the
+        // returned advance width. The shadow offset is a fixed (unscaled) pixel
+        // (`shadow_off`), not scaled with the grown glyph.
+        let mut pen = tx;
+        for (text, rgb) in &segments {
+            let fg = [rgb[0], rgb[1], rgb[2], alpha];
+            let _ = gpu.text(text, pen + shadow_off, text_y + shadow_off, glyph_scale, shadow, quads);
+            let w = gpu.text(text, pen, text_y, glyph_scale, fg, quads);
+            pen += w;
+        }
+    }
+
+    // Background, then progress cropped to the fill. A themed bar samples its
+    // user-supplied texture set in place of the vanilla color pair; the layer
+    // stack and crop math are identical either way.
+    let (bg_tex, fill_tex) = match item.theme {
+        Some(t) => (t.bg, t.fill),
+        None => (tex.get(TexId::ColorBg(b.color)), tex.get(TexId::ColorFill(b.color))),
+    };
+    quads.push(Quad::new(bg_tex, bx.left, bx.track_y, bx.bar_w, bx.bar_h, tint));
+    if progress > 0.0 {
+        quads.push(Quad::sub(
+            fill_tex,
+            bx.left,
+            bx.track_y,
+            bx.bar_w * progress,
+            bx.bar_h,
+            [0.0, 0.0, progress, 1.0],
+            tint,
+        ));
+    }
+    // Optional notch overlay on top, same draw order. A theme may ship its own
+    // notch pair; otherwise the vanilla notch sprites layer over the themed
+    // track (they are mostly-transparent dividers, so this composes).
+    if let Some(n) = b.overlay.notch() {
+        let (notch_bg, notch_fill) = item
+            .theme
+            .and_then(|t| t.notch(n))
+            .unwrap_or_else(|| (tex.get(TexId::NotchBg(n)), tex.get(TexId::NotchFill(n))));
+        quads.push(Quad::new(notch_bg, bx.left, bx.track_y, bx.bar_w, bx.bar_h, tint));
+        if progress > 0.0 {
+            quads.push(Quad::sub(
+                notch_fill,
+                bx.left,
+                bx.track_y,
+                bx.bar_w * progress,
+                bx.bar_h,
+                [0.0, 0.0, progress, 1.0],
+                tint,
+            ));
+        }
+    }
+
+    // Description pop-down: a flat bordered box that unfolds downward, with the
+    // wrapped paragraph fading in behind it.
+    if let Some(p) = item.panel.filter(|p| p.reveal > 0.001) {
+        let white = gpu.white();
+        let revealed_h = (p.h * p.reveal).max(0.0);
+        // Border frame first, then the fill inset by the border. While unfolding
+        // (revealed_h < 2*border) only the accent strip shows, so the box reads as
+        // opening from a thin line.
+        quads.push(Quad::new(
+            white,
+            p.x,
+            p.y,
+            p.w,
+            revealed_h,
+            rgba(p.border_rgb, panel::BORDER_ALPHA),
+        ));
+        let inner_x = p.x + p.border;
+        let inner_w = (p.w - 2.0 * p.border).max(0.0);
+        let inner_y = p.y + p.border;
+        let inner_h = (revealed_h - 2.0 * p.border).max(0.0);
+        quads.push(Quad::new(white, inner_x, inner_y, inner_w, inner_h, panel::BG));
+
+        if p.text_alpha > 0.001 && !b.description.trim().is_empty() {
+            let text_w = (p.w - 2.0 * (p.border + p.pad)).max(1.0);
+            let glyph_scale = p.font_px / 8.0;
+            // overlay-core has no text clipping, so the reveal is approximated by
+            // the text fade alone (it fades in as the box unfolds); the box still
+            // unfolds via `revealed_h`. Accepted simplification.
+            let fg = with_alpha(WHITE, p.text_alpha);
+            let shadow = with_alpha(SHADOW, p.text_alpha);
+            let mut ty = inner_y + p.pad;
+            let tx = inner_x + p.pad;
+            for line in gpu.wrap_text(&b.description, text_w, glyph_scale) {
+                if !line.is_empty() {
+                    let _ = gpu.text(&line, tx + shadow_off, ty + shadow_off, glyph_scale, shadow, quads);
+                    let _ = gpu.text(&line, tx, ty, glyph_scale, fg, quads);
+                }
+                ty += p.line_px;
+            }
+        }
+    }
+}
+
+/// Scale a straight-alpha RGBA's alpha channel by `mul`.
+fn with_alpha(c: [f32; 4], mul: f32) -> [f32; 4] {
+    [c[0], c[1], c[2], c[3] * mul]
+}
+
+
+/// Panel metrics in physical pixels at `scale`: `(border, pad, font, line, gap)`.
+fn panel_metrics(scale: f32) -> (f32, f32, f32, f32, f32) {
+    let s = scale.max(1.0);
+    (
+        panel::BORDER * s,
+        panel::PAD * s,
+        panel::FONT * s,
+        panel::LINE * s,
+        panel::GAP * s,
+    )
+}
+
+/// Physical-pixel size `(width, height)` of the description panel for
+/// `description` at `scale`: width matches the bar, height fits the wrapped,
+/// padded text. `None` for an empty description (no panel).
+fn panel_size(gpu: &Gpu, description: &str, scale: f32) -> Option<(f32, f32)> {
+    if description.trim().is_empty() {
+        return None;
+    }
+    let (border, pad, font_px, line_px, _gap) = panel_metrics(scale);
+    let panel_w = BAR_W as f32 * scale.max(1.0);
+    let text_w = (panel_w - 2.0 * (border + pad)).max(1.0);
+    let lines = gpu
+        .wrap_text(description, text_w, font_px / 8.0)
+        .len()
+        .max(1);
+    let panel_h = 2.0 * (border + pad) + lines as f32 * line_px;
+    Some((panel_w, panel_h))
+}
+
+/// Physical-pixel advance width of `bar`'s on-screen title (the stored title plus
+/// its live elapsed counter) at the fully grown hover scale, where it is widest,
+/// or 0 when the bar has no title. [`bar_window_px`] reserves at least this width
+/// so a title longer than the 182px bar is never clipped at the window edge. It
+/// measures through the shared CPU font, so the first window can be sized before
+/// any GPU surface exists.
+pub fn title_extent_px(bar: &BossBar, scale: f32, now_unix: i64) -> f32 {
+    if bar.title.is_empty() {
+        return 0.0;
+    }
+    let shown = title_with_elapsed(&bar.title, bar.since, now_unix);
+    // The grown title row is `8 * scale * MAX_SCALE` px tall, so each glyph samples
+    // at `scale * MAX_SCALE` source-px (the `title_px / 8` of `build_one`, maxed).
+    let glyph_scale = scale.max(1.0) * MAX_SCALE;
+    let text_w = overlay_core::bitmap_font::shared().measure(&shown, glyph_scale);
+    // Reserve room for the square avatar (a row-height square, so `ICON_SCALE`
+    // glyphs wide) plus its gap, so the window holds `[icon][gap]title` without
+    // the title being clipped. Over-reserves harmlessly if the icon later fails
+    // to load.
+    let icon_w = if bar.icon.is_empty() {
+        0.0
+    } else {
+        (GLYPH_PX * ICON_SCALE + ICON_GAP) * glyph_scale
+    };
+    text_w + icon_w
+}
+
+/// Physical-pixel size of the window that holds one bar at `scale` (base scale
+/// times the display factor), including the [`HOVER_SCALE`] headroom so a hovered
+/// bar grows in place. `title_w` is the grown title advance (see
+/// [`title_extent_px`]); the window widens to hold a title longer than the bar,
+/// and a nonzero `title_w` adds the title row. Plus a one-pixel-scaled shadow
+/// margin on the right and bottom.
+pub fn bar_window_px(scale: f32, title_w: f32, has_icon: bool) -> (u32, u32) {
+    let s = scale.max(1.0) * MAX_SCALE;
+    let bar_w = BAR_W as f32 * s;
+    let bar_h = BAR_H as f32 * s;
+    let has_title = title_w > 0.0;
+    // The title row grows for the square avatar when the bar has an icon; reserve
+    // that height plus the one-px title gap so the taller row is never clipped.
+    let title = if has_title {
+        title_row_h(GLYPH_PX * s, has_icon) + 1.0 * s
+    } else {
+        0.0
+    };
+    let shadow = scale.max(1.0);
+    // Hold whichever is wider, the bar sprite or the title text; both trail the
+    // one-pixel shadow down-right, so the shadow margin covers the right edge too.
+    let content_w = bar_w.max(title_w) + shadow;
+    (content_w.ceil() as u32, (title + bar_h + shadow).ceil() as u32)
+}
+
+/// Physical-pixel window size for `bar` with its hover panel open: the collapsed
+/// bar window grown downward by the gap plus the panel. Returns the collapsed
+/// size when the bar has no description. The overlay grows the window to this on
+/// hover so the panel has room to unfold.
+pub fn expanded_window_px(gpu: &Gpu, bar: &BossBar, scale: f32, now_unix: i64) -> (u32, u32) {
+    let (cw, ch) = bar_window_px(scale, title_extent_px(bar, scale, now_unix), !bar.icon.is_empty());
+    match panel_size(gpu, &bar.description, scale) {
+        Some((panel_w, panel_h)) => {
+            let gap = panel::GAP * scale.max(1.0);
+            (
+                cw.max(panel_w.ceil() as u32),
+                ch + (gap + panel_h).ceil() as u32,
+            )
+        }
+        None => (cw, ch),
+    }
+}
+
+/// Build the quads for one bar centered in its own window. `hover` is the eased
+/// hover amount (0 = resting, 1 = fully hovered); `breathe` is a sine in `-1..1`
+/// for the idle breathing. Together they grow the bar by up to [`MAX_SCALE`] and
+/// fade it to opaque; at `hover == 0` the bar is base size and translucent and
+/// the hover headroom is transparent margin. The window size must come from
+/// [`bar_window_px`] so the grown bar fits without resizing.
+///
+/// When the bar has a description and the window has grown tall enough (the
+/// overlay enlarges it on hover, see [`expanded_window_px`]), a description panel
+/// unfolds beneath the bar, revealing with `hover`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_one(
+    gpu: &Gpu,
+    tex: &BarTextures,
+    icon: Option<TexHandle>,
+    theme: Option<&ThemeSprites>,
+    scale: f32,
+    width: u32,
+    height: u32,
+    now_unix: i64,
+    bar: &BossBar,
+    hover: f32,
+    breathe: f32,
+) -> Vec<Quad> {
+    let scale = scale.max(1.0);
+    let opacity = DEFAULT_OPACITY;
+    let hover = hover.clamp(0.0, 1.0);
+    // Grow toward HOVER_SCALE with hover, then breathe around that; the breathe
+    // fades in with hover so a resting bar is perfectly still.
+    let grow = 1.0 + (HOVER_SCALE - 1.0) * hover;
+    let scale_mul = grow * (1.0 + BREATHE_AMP * breathe * hover);
+    let alpha = opacity + (1.0 - opacity) * hover;
+    let s = scale * scale_mul;
+    let shadow = scale;
+    let has_title = !bar.title.is_empty();
+    let has_icon = !bar.icon.is_empty();
+    let title_px = GLYPH_PX * s;
+    // The row grows to fit a square avatar when the bar has an icon; the title
+    // text is vertically centered within it (see `build_item`).
+    let title_h = if has_title {
+        title_row_h(title_px, has_icon)
+    } else {
+        0.0
+    };
+    let title_gap = if has_title { 1.0 * s } else { 0.0 };
+    let bar_w = BAR_W as f32 * s;
+    let bar_h = BAR_H as f32 * s;
+
+    // The bar lives in the top region: the collapsed window size, which holds it
+    // plus its grow/breathe headroom. Any extra window height below that is the
+    // panel's drop area, so the bar stays put as the panel unfolds. Only the
+    // height is read here, so the title width need not be exact.
+    let collapsed_h = bar_window_px(scale, title_extent_px(bar, scale, now_unix), has_icon).1 as f32;
+    let top_region_h = collapsed_h.min(height as f32);
+
+    // Center the content (plus its shadow offset) in the top region so growth on
+    // hover expands evenly from the middle rather than shifting a corner.
+    let content_w = bar_w + shadow;
+    let content_h = title_h + title_gap + bar_h + shadow;
+    let left = ((width as f32 - content_w) * 0.5).max(0.0);
+    let top = ((top_region_h - content_h) * 0.5).max(0.0);
+
+    let geom = BarBox {
+        left,
+        title_top: top,
+        track_y: top + title_h + title_gap,
+        bar_w,
+        bar_h,
+        title_px,
+        has_title,
+    };
+
+    // Only build the panel when the bar opts into the box (`expandable`) and the
+    // window was actually grown for it; a collapsed window (height ==
+    // top_region_h) has no room and skips it. The expandable check is also the
+    // live gate (via the overlay's window sizing); repeating it here keeps a
+    // non-expandable bar boxless even if something grows its window (e.g. a
+    // snapshot rendered at expanded size).
+    let panel = if bar.expandable && height as f32 > collapsed_h + 0.5 {
+        panel_size(gpu, &bar.description, scale).map(|(panel_w, panel_h)| {
+            let (border, pad, font_px, line_px, gap) = panel_metrics(scale);
+            PanelBox {
+                x: ((width as f32 - panel_w) * 0.5).max(0.0),
+                y: collapsed_h + gap,
+                w: panel_w,
+                h: panel_h,
+                border,
+                pad,
+                font_px,
+                line_px,
+                reveal: hover,
+                text_alpha: ramp(hover, 0.35, 1.0),
+                border_rgb: bar.color.accent_rgb(),
+            }
+        })
+    } else {
+        None
+    };
+
+    let item = DrawItem {
+        bar,
+        geom,
+        alpha,
+        panel,
+        icon,
+        theme,
+    };
+    let mut quads = Vec::new();
+    build_item(gpu, tex, scale, now_unix, &item, &mut quads);
+    quads
+}
+
+/// Build the quads for every bar auto-stacked down the top-center column (the
+/// `--snapshot` PNG path). `highlight` is the id of a bar to paint opaque. Every
+/// bar with a description shows its panel fully open, so the snapshot verifies the
+/// pop-down the live overlay only reveals on hover.
+#[allow(clippy::too_many_arguments)]
+pub fn build_all(
+    gpu: &Gpu,
+    tex: &BarTextures,
+    icons: &[Option<TexHandle>],
+    themes: &[Option<ThemeSprites>],
+    scale: f32,
+    width: u32,
+    now_unix: i64,
+    bars: &[BossBar],
+    highlight: Option<i64>,
+) -> Vec<Quad> {
+    let scale = scale.max(1.0);
+    let opacity = DEFAULT_OPACITY;
+    let (border, pad, font_px, line_px, gap) = panel_metrics(scale);
+    // A non-expandable bar has no box, so it reserves no panel size (and so no
+    // layout gap and no panel quads), matching the live per-window path.
+    let sizes: Vec<Option<(f32, f32)>> = bars
+        .iter()
+        .map(|b| {
+            if b.expandable {
+                panel_size(gpu, &b.description, scale)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let boxes = layout(scale, bars, width as f32, &sizes, gap);
+
+    let mut quads = Vec::new();
+    for ((((bar, geom), size), icon), theme) in bars
+        .iter()
+        .zip(boxes)
+        .zip(&sizes)
+        .zip(icons.iter().copied().chain(std::iter::repeat(None)))
+        .zip(
+            themes
+                .iter()
+                .map(Option::as_ref)
+                .chain(std::iter::repeat(None)),
+        )
+    {
+        let panel = size.map(|(panel_w, panel_h)| PanelBox {
+            x: ((width as f32 - panel_w) * 0.5).max(0.0),
+            y: geom.track_y + geom.bar_h + gap,
+            w: panel_w,
+            h: panel_h,
+            border,
+            pad,
+            font_px,
+            line_px,
+            reveal: 1.0,
+            text_alpha: 1.0,
+            border_rgb: bar.color.accent_rgb(),
+        });
+        let item = DrawItem {
+            bar,
+            geom,
+            alpha: if Some(bar.id) == highlight { 1.0 } else { opacity },
+            panel,
+            icon,
+            theme,
+        };
+        build_item(gpu, tex, scale, now_unix, &item, &mut quads);
+    }
+    quads
+}
+
+/// Physical-pixel geometry of every bar auto-stacked down the top-center column,
+/// in draw order. `panels` is the per-bar panel size (parallel to `bars`); a bar
+/// with a panel reserves `gap + panel_h` extra vertical space so the next bar
+/// clears it.
+fn layout(
+    scale: f32,
+    bars: &[BossBar],
+    width: f32,
+    panels: &[Option<(f32, f32)>],
+    gap: f32,
+) -> Vec<BarBox> {
+    let s = scale.max(1.0);
+    let bar_w = BAR_W as f32 * s;
+    let bar_h = BAR_H as f32 * s;
+    let title_px = 8.0 * s;
+    let title_gap = 1.0 * s;
+    let bar_gap = 4.0 * s;
+    let top_pad = 16.0 * s;
+    let center_x = (width - bar_w) * 0.5;
+
+    let mut boxes = Vec::with_capacity(bars.len());
+    let mut y = top_pad;
+    for (b, panel) in bars.iter().zip(panels) {
+        let has_title = !b.title.is_empty();
+        // Same icon-aware taller row as the live path, so the snapshot reserves
+        // room for the avatar and matches what the overlay draws.
+        let title_h = if has_title {
+            title_row_h(title_px, !b.icon.is_empty())
+        } else {
+            0.0
+        };
+        let track_y = y + title_h + if has_title { title_gap } else { 0.0 };
+        boxes.push(BarBox {
+            left: center_x,
+            title_top: y,
+            track_y,
+            bar_w,
+            bar_h,
+            title_px,
+            has_title,
+        });
+        // Advance past whatever this bar drew last: its panel bottom when it has
+        // one (sitting `gap` below the bar), otherwise the bar bottom.
+        let bottom = match panel {
+            Some((_, panel_h)) => track_y + bar_h + gap + panel_h,
+            None => track_y + bar_h,
+        };
+        y = bottom + bar_gap;
+    }
+    boxes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bars::Overlay;
+
+    #[test]
+    fn fmt_elapsed_ticks_in_seconds_then_minutes_then_hours() {
+        assert_eq!(fmt_elapsed(0), "0:00");
+        assert_eq!(fmt_elapsed(5), "0:05");
+        assert_eq!(fmt_elapsed(65), "1:05");
+        assert_eq!(fmt_elapsed(600), "10:00");
+        assert_eq!(fmt_elapsed(3661), "1:01:01");
+        // A clock that ran backwards (since in the future) clamps to zero.
+        assert_eq!(fmt_elapsed(-10), "0:00");
+    }
+
+    #[test]
+    fn parse_conventional_splits_type_scope_subject() {
+        assert_eq!(
+            parse_conventional("feat(antithesis): cas-fabric durability"),
+            Some(("feat", Some("antithesis"), "cas-fabric durability"))
+        );
+        // No scope, but a known type.
+        assert_eq!(
+            parse_conventional("chore: nix flake update"),
+            Some(("chore", None, "nix flake update"))
+        );
+        // Breaking-change `!` on the type or the scope is stripped.
+        assert_eq!(
+            parse_conventional("feat!: drop v1"),
+            Some(("feat", None, "drop v1"))
+        );
+        assert_eq!(
+            parse_conventional("refactor(api)!: rename"),
+            Some(("refactor", Some("api"), "rename"))
+        );
+        // Any `(scope)` header is conventional even with an unknown type.
+        assert_eq!(
+            parse_conventional("wip(ui): tweak"),
+            Some(("wip", Some("ui"), "tweak"))
+        );
+        // A plain `repo: branch` label (unknown type, no scope) is NOT recolored.
+        assert_eq!(parse_conventional("index: main"), None);
+        assert_eq!(parse_conventional("US East: Health lifecycle"), None);
+        // No `: ` at all, or an empty subject, is not conventional.
+        assert_eq!(parse_conventional("just a title"), None);
+        assert_eq!(parse_conventional("feat: "), None);
+    }
+
+    #[test]
+    fn hue_is_deterministic_and_per_label() {
+        assert_eq!(hue_for("feat"), hue_for("feat"));
+        assert_ne!(hue_for("feat"), hue_for("fix"));
+        assert!((0.0..360.0).contains(&hue_for("antithesis")));
+    }
+
+    #[test]
+    fn title_segments_color_type_scope_and_dim_timer() {
+        let segs = title_segments("feat(antithesis): durability", Some(1000), 1125);
+        // type, sep, scope, sep, subject, sep, counter.
+        let texts: Vec<&str> = segs.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(texts, ["feat", " ", "antithesis", " ", "durability", " ", "(2:05)"]);
+        assert_eq!(segs[0].1, label_rgb("feat"));
+        assert_eq!(segs[2].1, label_rgb("antithesis"));
+        assert_eq!(segs.last().unwrap().1, TIMER_GRAY);
+        // A non-conventional title stays a single white run (plus a timer).
+        let plain = title_segments("index: main", None, 0);
+        assert_eq!(plain.len(), 1);
+        assert_eq!(plain[0].0, "index: main");
+        assert_eq!(plain[0].1, [WHITE[0], WHITE[1], WHITE[2]]);
+    }
+
+    #[test]
+    fn title_with_elapsed_only_appends_when_counting() {
+        // since=1000, now=1125 -> 125s = 2:05.
+        assert_eq!(
+            title_with_elapsed("US East: VMs", Some(1000), 1125),
+            "US East: VMs (2:05)"
+        );
+        // No `since` leaves the title untouched.
+        assert_eq!(title_with_elapsed("Idle", None, 1125), "Idle");
+        // A counter never appears on its own when there is no title.
+        assert_eq!(title_with_elapsed("", Some(1000), 1125), "");
+    }
+
+    fn bar_with_title(title: &str, since: Option<i64>) -> BossBar {
+        BossBar {
+            id: 1,
+            title: title.to_string(),
+            description: String::new(),
+            since,
+            url: String::new(),
+            progress: 0.5,
+            color: Color::Purple,
+            overlay: Overlay::None,
+            position: 0,
+            pos: None,
+            expandable: true,
+            eta: None,
+            icon: String::new(),
+            theme: String::new(),
+        }
+    }
+
+    /// The whole point of the title-aware window: a title longer than the 182px
+    /// bar must fit inside the window the overlay reserves for it, at the widest
+    /// the bar ever draws (fully hovered and breathing in). This mirrors the
+    /// placement math in `build_one`, so a regression there that re-clips the
+    /// title (the bug this fixes) trips the assert. The pre-fix `bar_window_px`
+    /// sized to the bar alone, so this would have failed.
+    #[test]
+    fn long_title_fits_reserved_window() {
+        // A real downtime title plus a live H:MM:SS counter, far wider than 182px.
+        let bar = bar_with_title("US East: Health lifecycle image", Some(0));
+        let now = 6815; // 1:53:35
+
+        for scale in [1.0f32, 2.0, 3.0, 4.0] {
+            let text_w = title_extent_px(&bar, scale, now);
+            let (width, _h) = bar_window_px(scale, text_w, false);
+            let width = width as f32;
+
+            // The title overflows the bar, so the window must be widened for it.
+            let s_max = scale * MAX_SCALE;
+            let bar_w = BAR_W as f32 * s_max;
+            assert!(
+                text_w > bar_w,
+                "test title should exceed the bar at scale {scale}: {text_w} vs {bar_w}",
+            );
+            let bar_only = bar_window_px(scale, 0.0, false).0 as f32;
+            assert!(width > bar_only, "window must grow past bar-only at scale {scale}");
+
+            // Reproduce build_one's widest layout (hover = breathe = 1 → MAX_SCALE).
+            let shadow = scale;
+            let content_w = bar_w + shadow;
+            let left = ((width - content_w) * 0.5).max(0.0);
+            let tx = left + (bar_w - text_w) * 0.5;
+            // Drawn extent runs from the foreground left edge to the shadow's right
+            // edge (one scaled pixel past the glyphs). Both must lie in [0, width].
+            assert!(tx >= -0.01, "title left edge clipped at scale {scale}: tx={tx}");
+            let right = tx + text_w + shadow;
+            assert!(
+                right <= width + 0.01,
+                "title right edge clipped at scale {scale}: right={right} width={width}",
+            );
+        }
+    }
+
+    /// Visual check (run with `--ignored`): render `build_one` for a long-titled
+    /// bar into the exact window the overlay reserves, both at rest and fully
+    /// grown, so the title can be eyeballed for clipping. Writes PNGs under the
+    /// system temp dir and prints their paths.
+    #[test]
+    #[ignore = "renders PNGs for manual inspection; needs a GPU adapter"]
+    fn render_long_title_window() {
+        let bar = bar_with_title("US East: Health lifecycle image", Some(0));
+        let now = 6815; // 1:53:35
+        let scale = 3.0f32;
+        let (width, height) = bar_window_px(scale, title_extent_px(&bar, scale, now), false);
+        let dir = std::env::temp_dir();
+        for (tag, hover, breathe) in [("rest", 0.0f32, 0.0f32), ("grown", 1.0, 1.0)] {
+            let out = dir.join(format!("bossbar_title_{tag}_{width}x{height}.png"));
+            overlay_core::snapshot::render_to_png(
+                width,
+                height,
+                |gpu| {
+                    let tex = register(gpu);
+                    build_one(gpu, &tex, None, None, scale, width, height, now, &bar, hover, breathe)
+                },
+                &out,
+            )
+            .expect("render");
+            println!("wrote {} ({width}x{height})", out.display());
+        }
+    }
+
+    /// A bar with no title reserves no title row and stays bar-width, exactly as
+    /// before, so the title-aware path does not bloat untitled bars.
+    #[test]
+    fn untitled_bar_is_bar_width() {
+        let bar = bar_with_title("", None);
+        let scale = 3.0f32;
+        assert_eq!(title_extent_px(&bar, scale, 1234), 0.0);
+        let s_max = scale * MAX_SCALE;
+        let expected_w = (BAR_W as f32 * s_max + scale).ceil() as u32;
+        assert_eq!(bar_window_px(scale, 0.0, false).0, expected_w);
+    }
+}

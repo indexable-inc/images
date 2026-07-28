@@ -1,0 +1,119 @@
+---
+id: 0033-agent-truthfulness-claim-audit
+number: '0033'
+title: 'Agent truthfulness: decomposed claims, per-claim provenance, and an audit eval'
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-19'
+updated: '2026-07-19'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 5, why: 'a reporting contract for every agent surface, enforced by rules and measured by an eval' }
+  impact: { value: 7, why: 'a wrong-altitude summary sent the user back to re-verify upstream state by hand' }
+  effort: { value: 4, why: 'rules text, a claim-audit pass, and an eval suite; no new infrastructure' }
+  risk: { value: 3, why: 'worst case is heavier reports and provenance tags readers skim past' }
+  maturity: { value: 2, why: 'faithfulReporting already has an audit sentence; nothing enforces decomposition or provenance' }
+  leverage: { value: 7, why: 'every status report, upstream-status answer, and handoff inherits the contract' }
+  taste: { value: 6, why: 'the judgment is which claims deserve decomposition without turning prose into a form' }
+description: 'Agents compress verified facts, stale recall, and inference into one confident sentence. This plan separates them: every factual claim in a report maps to a tool result or is marked unverified, volatile state carries a checked-at timestamp, and claims with sub-claims of different truth values are stated separately. An eval with known-answer upstream-status questions measures whether the rules change works.'
+---
+
+## Summary
+
+Make agent reports decomposable into auditable claims. Three contract changes: a claim-audit pass before any report (every factual claim maps to a tool result from the current session or is marked unverified), per-claim provenance (checked now, recalled, or inferred, with timestamps on volatile state), and a decomposition rule (sub-claims with different truth values are never merged into one verdict). Delivery is a rules change in `packages/agent-prompt/rules.nix`, and the gate for adopting it is an eval with known-answer questions whose correct answers require splitting a claim.
+
+## Motivation: a real miss, 2026-07-19
+
+An agent (Claude Opus 4.5 via Claude Code) summarized the state of Nix sparse lock files:
+
+> #7730 (sparse lock files - parent lock stores a pointer to the child's flake.lock instead of copying its nodes) is the proper fix and is still open, years on. There's no released Nix where the parent just defers to index/flake.lock.
+
+What verification found afterwards (2026-07-19): NixOS/nix#7730 (since retitled "Reuse input lock files") is indeed still open, and its body says "Status: Not implemented yet", with a sparseNodes migration plan posted Nov 2025. But the summary omitted load-bearing context. NixOS/nix PR #13437 ("lockFlake(): When updating a lock, respect the input's lock file", edolstra) merged 2025-07-10 and shipped in Nix 2.31 (backported to a 2.30.x point release), and it is the exact mechanism the workflow under discussion (`nix flake update <input>` copying the child's pins) relies on.
+
+The claim collapsed two questions into one verdict:
+
+- Eval-time deferral (the parent lock stores a pointer, #7730): not implemented.
+- Update-time respect (updating an input copies the child's locked pins, #13437): implemented and released.
+
+So the user reasonably asked "has this been implemented yet" and could not tell which half was true. The verdict was right at one altitude and wrong at the altitude the user was operating at. Diagnosis: a compressed claim synthesized from search-result snippets, without separating adjacent facts and without stating which sub-claim each citation supports.
+
+The same session had a second failure mode. Two PR watcher processes died silently (a known pre-fix MCP build bug), and the agent initially trusted that a watcher existed instead of verifying liveness. Later it reported a PR as blocked while the user believed it had landed, because the two of them had checked state at different times and neither statement carried a timestamp.
+
+The general problem: agents make compressed claims that mix verified facts, stale facts, and inference, all in the same confident register. The reader has no way to tell which words are load-bearing.
+
+## Detailed design
+
+Five mechanisms, evaluated independently. The first three are the reporting contract; the last two are how it ships and how it is measured.
+
+### a. Claim-audit pass before reporting
+
+Before a report goes out, every factual claim in it must map to a tool result from the current session. A claim with no backing tool result is either cut or explicitly marked unverified. The `faithfulReporting` rule already contains this sentence (sourced from the Claude Fable 5 system card guidance, where it measurably reduced fabricated status reports). The case study shows the audit alone is not sufficient: every sentence in the quoted claim did map to a tool result (search snippets mentioning #7730), and the report was still misleading. The audit catches fabrication; it does not catch compression. It stays, and the next two mechanisms cover what it misses.
+
+### b. Per-claim provenance with timestamps
+
+Three provenance classes, distinguished in the report:
+
+- Checked at source now: the agent fetched the artifact this session (the issue body, the PR state, the CI log).
+- Recalled: from memory files or training data, not re-checked.
+- Inferred: derived from other claims, not observed.
+
+Volatile state (PR status, CI status, issue status, deploy state) always carries when it was checked. "Blocked as of 14:32Z" and "landed, checked 13:10Z" can both be true; "blocked" and "landed" without timestamps read as a contradiction, which is precisely the watcher disagreement from the case study. Liveness claims are provenance-class checked-now by definition: "a watcher exists" is only reportable after probing the watcher, never from remembering that one was started.
+
+### c. Decomposition rule
+
+When a claim has sub-claims with different truth values, state them separately, never as one merged verdict. The 7730 answer under this rule reads: "Eval-time deferral (#7730): not implemented, issue still open. Update-time respect (#13437): merged 2025-07-10, released in Nix 2.31." Each half cites the artifact that supports it. The rule triggers on a cheap test: if a yes/no question about the claim has the answer "yes for X, no for Y", the claim must be split. Most claims do not need this; the skill is noticing the ones that do, which is why the eval below exists.
+
+### d. An eval that measures splitting
+
+Seed tasks with known-answer upstream-status questions where the correct answer requires decomposition, modeled on the 7730/13437 pair: an issue that is open while an adjacent PR shipped the workflow-relevant half, a feature flag that is merged but not in any release, a CVE fixed on main but not backported. Grading, per rollout: did the agent state the halves separately (y/n), did each half cite the right artifact (y/n), did volatile state carry a timestamp (y/n). Run with the experiment skill and `tui.harness.Claude` (`packages/tui/tui-py/python/tui/harness.py`), N fresh-context rollouts per task, baseline rules vs changed rules, report pass rates per task. Plan 0023 (evals as the gate for behavioral change) is the discipline this slots into; plan 0032 builds the adjacent search-backend suite and shares the harness pattern.
+
+### e. Delivery: rules change validated by prompt-eval
+
+The mechanisms land as edits to `packages/agent-prompt/rules.nix` (the `faithfulReporting` and `validate` rules are the anchors), validated with the prompt-eval approach: baseline vs changed prompt, N fresh sessions on the eval suite from (d), adopt only on a measured win. No harness code changes are required for (a) through (c); they are prompt-level contracts. If prompt-level enforcement proves too weak, a structured report format (claims as data, prose rendered from them) is the escalation, noted under future possibilities.
+
+## Why the existing rules were not enough
+
+The house rules already say "Never guess what you can check: verify load-bearing facts at the strongest source" (`validate`) and "audit each claim against a tool result from this session; report only what you can point to evidence for" (`faithfulReporting`). Both gate the wrong thing for this failure. `validate` gates acting on unverified facts; the agent did verify that #7730 was open. `faithfulReporting` gates claims with no evidence; every clause had evidence. Neither rule constrains the altitude of a summary: which adjacent facts may be merged, which citation supports which clause, and when a timestamp is part of the claim. The miss was in synthesis, after verification and before reporting, and that step currently has no rule.
+
+## Success criteria
+
+- On the eval suite from (d), the changed rules beat baseline on split-rate and per-claim citation accuracy, with at least a repeat of the 7730/13437 shape answered correctly in a majority of rollouts where baseline fails it.
+- Volatile-state claims in real session reports carry checked-at timestamps (spot-audited from history, plan 0027 makes this samplable).
+- No regression in report length beyond a small constant factor; provenance is a tag, never a paragraph.
+- Zero recurrence of the watcher-liveness shape: existence claims about monitors backed by a liveness probe in the same session.
+
+## Drawbacks
+
+- Provenance tags add friction to every report; over-applied, they read as hedging and train readers to skim. The rule must scope to factual claims about external state, never to code the agent just wrote.
+- Decomposition can be overdone: a report that splits every sentence into sub-claims is worse to read than the compressed one was to trust. The trigger test in (c) is the guard.
+- Prompt-level contracts decay; without the eval in (d) re-run on rule changes, this regresses silently.
+
+## Alternatives
+
+- Do nothing: the existing audit sentence keeps catching fabrication and keeps missing compression; the next 7730-shaped miss is a matter of time.
+- Structured claims-as-data reports from day one: strongest enforcement, but a large harness change, and the case study does not yet justify it over prose contracts.
+- Post-hoc verifier agent that fact-checks reports before delivery: catches misses but doubles latency on every report, and the verifier has the same compression incentives.
+
+## Prior art
+
+- `faithfulReporting` in `packages/agent-prompt/rules.nix`: the claim-audit sentence and its measured effect on fabricated reports, per the Claude Fable 5 system card guidance.
+- FActScore (arXiv:2305.14251): factuality scoring by decomposing long-form output into atomic claims and verifying each one independently; the same move mechanism (c) asks the agent to perform on itself.
+- SAFE, "Long-form factuality in large language models" (arXiv:2403.18802): claim decomposition plus per-claim search-backed verification, evidence that per-claim grading is tractable at scale.
+- Plan 0023 (evals as the gate for behavioral change): the adopt-only-on-measured-win discipline that (d) and (e) follow.
+- Plan 0027 (session provenance): commit-level provenance; this plan is claim-level provenance inside a single report.
+
+## Unresolved questions
+
+- Where does the claim-audit pass live: a sentence in the rules, a pre-report checklist in the harness, or a Stop-hook gate that samples reports?
+- What is the timestamp convention: absolute UTC, session-relative, or both? Volatile-state comparisons across agents need a shared clock.
+- Does provenance apply to chat replies or only to durable artifacts (reports, issues, PR bodies)? Chat is where the 7730 miss happened, and chat is also where tags cost the most.
+- How large does the eval suite in (d) need to be before a pass-rate difference is decision-grade? Plan 0023 has the same open question.
+
+## Future possibilities
+
+If prompt-level contracts hold, the same decomposition makes reports machine-checkable: claims as structured data with provenance and timestamps, prose rendered from them, and the claim-audit pass becomes a mechanical diff between claims and the session's tool results. That is also the natural attestation shape for plan 0030's claim graph.
+
+Drafted by an AI agent via Claude Code; comments wanted, hence the RFC flag.

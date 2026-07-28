@@ -1,0 +1,32 @@
+---
+id: nix-run-site
+postedAt: 2026-05-26T01:22:16-07:00
+title: "`nix run .#site` previews the page locally"
+tags: [nix, site, cli]
+links:
+  - label: per-system wiring
+    href: https://github.com/indexable-inc/index/blob/main/lib/per-system.nix
+  - label: build-svelte-site
+    href: https://github.com/indexable-inc/index/blob/main/lib/build-svelte-site.nix
+---
+
+The `site` package now includes the deploy artifact and a small `miniserve` preview command, so `nix build .#site` emits the GitHub Pages tree and `nix run .#site` boots a preview at `http://127.0.0.1:8080/index/`.
+
+```bash
+nix build github:indexable-inc/index#site   # GitHub Pages tree under result/share/ix-site
+nix run   github:indexable-inc/index#site   # preview at http://127.0.0.1:8080/index/
+```
+
+The wrapper serves the same SvelteKit build that Pages deploys. `ix.buildSvelteSite` passes miniserve a route prefix instead of rebuilding with a different `BASE_PATH`, so local preview exercises the production `/index` URL layout.
+
+```nix
+siteBuild = ix.buildSvelteSite pkgs {
+  pname = "ix-site";
+  src = siteSrc;
+  distDir = "build";
+  serve = {
+    name = "ix-site";
+    routePrefix = "/index";
+  };
+};
+```

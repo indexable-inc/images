@@ -1,0 +1,36 @@
+---
+id: per-system-split
+postedAt: 2026-07-21T18:30:00-07:00
+title: "Checks live next to what they check; flake.nix goes back to being a manifest"
+tags: [nix, ci, tooling]
+links:
+  - label: "#3898: split per-system.nix"
+    href: https://github.com/indexable-inc/index/issues/3898
+  - label: "#3899: flake.nix wiring"
+    href: https://github.com/indexable-inc/index/issues/3899
+---
+
+lib/per-system.nix had grown to 2,600 lines, about 600 of them inline
+`pkgs.runCommand` policy checks: the lint gate, the astlog rule self-test,
+the cross-Darwin smokes, one user's zellij and nushell config validation.
+Every check re-stated the same success-marker epilogue, and most took the
+whole tracked tree as their source, so any file edit anywhere rebuilt them.
+
+Each check now lives in a `checks.nix` next to what it checks
+(astlog-rules/, packages/blast-radius/, packages/scipql/,
+users/andrewgazelka/, lib/dev/, lib/util/, lib/services/,
+lib/darwin/) and builds through the one shared `mkScriptCheck` shape in
+lib/checks.nix. Sources are scoped filesets: the astlog self-test rebuilds
+only when rules or fixtures change, the personal config checks read only the
+tracked dotfiles, and the whole-tree exception (the repo lint gate) is
+documented at its binding. The personal zellij/nushell wiring, including the
+owner's hardcoded XDG path, moved under users/andrewgazelka; the aggregator
+only imports the check surface that directory exposes.
+
+The flake top level got the same treatment (#3899): the ~230 lines of
+output wiring (the Linux-to-Darwin alias graft, the required-gate root
+union, and the 18 inline homeModules/darwinModules compositions) moved
+behind lib/flake-outputs.nix and lib/home-modules.nix (with the personal
+profile composition in lib/profiles.nix), so flake.nix names inputs and
+delegates. Check names, package attrs, and module surfaces are unchanged;
+the attrName lists eval byte-identical before and after.

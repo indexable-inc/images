@@ -1,0 +1,165 @@
+# OCI layer: builds the final OCI archive from the NixOS system closure.
+#
+# The closure is split into ~67 OCI layers (`streamLayeredImage`) so the
+# registry deduplicates shared store paths across images. A `systemRoot`
+# layer adds FHS entries (/bin, /etc, /usr, ...) needed at boot.
+#
+# nixpkgs' layer planner is reused, but the final archive is streamed as OCI
+# directly so large images do not pay for a Docker archive transcode pass.
+{
+  config,
+  pkgs,
+  lib,
+  ...
+}: {
+  options.ix = {
+    image = {
+      name = lib.mkOption {
+        type = lib.types.str;
+        description = "Image name (the OCI repository).";
+      };
+    };
+    build.ociImage = lib.mkOption {
+      type = lib.types.package;
+      internal = true;
+    };
+    build.ociEfficiency = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Analyze generated OCI layers and fail builds when wasted payload crosses the configured limits.";
+      };
+      minEfficiency = lib.mkOption {
+        type = lib.types.number;
+        default = 0.95;
+        description = "Minimum layer efficiency score accepted by the build. The score is required payload bytes divided by discovered payload bytes.";
+      };
+      maxWastedBytes = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 20 * 1024 * 1024;
+        description = "Maximum wasted layer payload bytes accepted before the build fails.";
+      };
+      maxWastedPercent = lib.mkOption {
+        type = lib.types.number;
+        default = 0.20;
+        description = "Maximum wasted payload ratio accepted before the build fails.";
+      };
+      reportTopPaths = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 10;
+        description = "Number of repeated or removed paths to print when wasted payload is present.";
+      };
+    };
+  };
+
+  config.ix = {
+    profiles.base.enable = lib.mkDefault true;
+
+    build.ociImage = let
+      inherit (config.system.build) toplevel;
+
+      # The SQLite journal mode the guest's nix will use on /nix/var/nix/db,
+      # derived from this image's own nix.conf (`use-sqlite-wal`, default true).
+      dbJournalMode =
+        if config.nix.settings.use-sqlite-wal or true
+        then "WAL"
+        else "DELETE";
+
+      # FHS layout pointing into the NixOS toplevel. /etc stays a writable
+      # directory: NixOS first boot populates it. /bin/sh and /usr/bin/env
+      # are baked at build time with the exact targets the binsh/usrbinenv
+      # activation snippets would have linked: platform.nix blanks those
+      # snippets because the CAS-booted guest reaches /bin and /usr through
+      # symlinks into the read-only store, where their recreate-and-rename
+      # can never succeed (ix#8307).
+      systemRoot = pkgs.runCommand "system-root" {} ''
+        mkdir -p $out
+        ln -s ${toplevel}/init $out/init
+        mkdir -p $out/etc
+        mkdir -p $out/bin
+        ${lib.optionalString (config.environment.binsh != null) ''
+          ln -s ${config.environment.binsh} $out/bin/sh
+        ''}
+        ln -s ${toplevel}/sw/sbin $out/sbin
+        ln -s ${toplevel}/sw/lib $out/lib
+        mkdir -p $out/usr/bin
+        ${lib.optionalString (config.environment.usrbinenv != null) ''
+          ln -s ${config.environment.usrbinenv} $out/usr/bin/env
+        ''}
+        ln -s ${toplevel}/sw/lib $out/usr/lib
+        ln -s ${toplevel}/sw/sbin $out/usr/sbin
+        mkdir -p $out/tmp $out/var $out/run $out/proc $out/sys $out/dev $out/root
+      '';
+
+      stream = pkgs.dockerTools.streamLayeredImage {
+        inherit (config.ix.image) name;
+        tag = "latest";
+        # Below the 127-layer registry limit with headroom for systemRoot
+        # plus a few user layers.
+        maxLayers = 67;
+        contents = [systemRoot];
+        config.Entrypoint = ["${toplevel}/init"];
+        # Bake `/nix/var/nix/db/db.sqlite` registering the whole closure as
+        # valid. Without it the guest boots with an empty store DB, so the
+        # nixpkgs source the registry pins (present in the image, valid nowhere)
+        # reads as invalid; nix's `narHash` short-circuit only skips re-ingest
+        # for a VALID path, so the first `nix run`/`nix eval` in a fresh VM
+        # re-copies the ~45k-file tree through VCFS: measured 5m40s first eval,
+        # ~1s once registered (2026-07-03). dockerTools runs closureInfo +
+        # `nix-store --load-db` at build time into the customisation layer,
+        # which oci-image-builder copies verbatim. ix#6043, index #1748/#1749/#1815.
+        # The `base-image-nix-db` check asserts the baked DB actually registers
+        # the nixpkgs source as valid (a bare db.sqlite is not enough).
+        includeNixDB = true;
+        # dockerTools' load-db runs under the BUILD nix's default
+        # `use-sqlite-wal = true`, so the baked db.sqlite header is WAL-marked.
+        # The guest opens that DB with whatever journal mode this image's own
+        # nix.conf selects: with `use-sqlite-wal = false` (the base profile's
+        # VCFS mitigation, ix#6259) nix picks SQLite's `unix-dotfile` VFS,
+        # which has no shared-memory support and refuses WAL-marked databases
+        # (SQLITE_CANTOPEN). Every per-connection nix-daemon child then dies
+        # and clients see "Connection reset by peer" (ix#6563). Rewrite the
+        # journal mode to match the image's nix.conf, so the baked DB and the
+        # runtime flag agree by construction. This composes AFTER load-db in
+        # the same customisation-layer script, with cwd at the layer root.
+        extraCommands = ''
+          ${lib.getExe pkgs.buildPackages.sqlite} nix/var/nix/db/db.sqlite \
+            'PRAGMA journal_mode=${dbJournalMode};'
+        '';
+      };
+
+      efficiency = config.ix.build.ociEfficiency;
+      efficiencyArgs =
+        if efficiency.enable
+        then [
+          "--min-efficiency"
+          (toString efficiency.minEfficiency)
+          "--max-wasted-bytes"
+          (toString efficiency.maxWastedBytes)
+          "--max-wasted-percent"
+          (toString efficiency.maxWastedPercent)
+          "--efficiency-top-paths"
+          (toString efficiency.reportTopPaths)
+        ]
+        else ["--skip-efficiency-check"];
+    in
+      pkgs.runCommand "${config.ix.image.name}-oci.tar"
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.gnutar
+          pkgs.oci-image-builder
+        ];
+        # Expose the NixOS system closure the OCI archive is packed from, so
+        # CI can gate on "the image's closure builds" (cheap: a relink over
+        # already-built store paths) without paying the streamLayeredImage
+        # tar+compress pass. The full archive is still this derivation's
+        # output, built only where the bytes are consumed (a registry push at
+        # release). CI checks NixOS system closures directly when a caller opts into one.
+        passthru.toplevel = toplevel;
+      }
+      ''
+        oci-image-builder ${lib.escapeShellArgs (efficiencyArgs ++ ["${stream.passthru.conf}"])} "$out"
+      '';
+  };
+}

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 250" role="img" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; stroke-width: 1.2; }
+    .accent { stroke: #8250df; fill: none; stroke-width: 1.4; }
+    .edge { stroke: currentColor; fill: none; stroke-width: 1.2; marker-end: url(#arrow); }
+    .head { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head"/>
+    </marker>
+  </defs>
+  <rect class="box" x="20" y="100" width="200" height="50" rx="6"/>
+  <text x="120" y="121" text-anchor="middle">annotated Rust module</text>
+  <text class="muted" x="120" y="139" text-anchor="middle" font-size="11">#[unibind::export]</text>
+
+  <path class="edge" d="M220,125 L296,125"/>
+  <text class="muted" x="258" y="110" text-anchor="middle" font-size="11">syn lowering</text>
+
+  <rect class="accent" x="300" y="108" width="120" height="34" rx="6"/>
+  <text x="360" y="129" text-anchor="middle">Interface IR</text>
+
+  <path class="edge" d="M420,117 C470,108 470,59 526,57"/>
+  <path class="edge" d="M420,125 L526,125" stroke-dasharray="5 4"/>
+  <path class="edge" d="M420,133 C470,142 470,191 526,193" stroke-dasharray="5 4"/>
+  <text class="muted" x="472" y="98" text-anchor="middle" font-size="11">render</text>
+
+  <rect class="box" x="530" y="40" width="170" height="34" rx="6"/>
+  <text x="615" y="61" text-anchor="middle">pyo3 (Python)</text>
+  <rect class="box" x="530" y="108" width="170" height="34" rx="6" stroke-dasharray="5 4"/>
+  <text x="615" y="129" text-anchor="middle">napi-rs (TypeScript)</text>
+  <rect class="box" x="530" y="176" width="170" height="34" rx="6" stroke-dasharray="5 4"/>
+  <text x="615" y="197" text-anchor="middle">rustler (Elixir)</text>
+  <text class="muted" x="615" y="230" text-anchor="middle" font-size="11">dashed = planned phases</text>
+</svg>

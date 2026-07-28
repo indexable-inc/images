@@ -1,0 +1,76 @@
+---
+id: 0036-tmux-agency-evals
+number: '0036'
+title: 'Evals for tmux agency: will an agent drive a TUI via tmux when no proper tool is present?'
+status: Sketch
+rfc: true
+authors: andrewgazelka
+created: '2026-07-19'
+updated: '2026-07-19'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 4, why: 'one narrow capability, measured properly' }
+  impact: { value: 6, why: 'TUI-blind agents silently fail installers, REPLs, editors, pagers on every fleet host' }
+  effort: { value: 3, why: 'indexbench and the tui harness already spawn and grade real PTY sessions' }
+  risk: { value: 2, why: 'eval-only; worst case is a battery nobody reruns' }
+  maturity: { value: 3, why: 'plan 0023 sets the direction and the tui harness exists; no agency evals yet' }
+  leverage: { value: 6, why: 'the conditions-matrix pattern generalizes to any escape-hatch-tool agency question' }
+  taste: { value: 5, why: 'grading unprompted tool discovery without leaking hints is judgment' }
+description: 'Agents with no purpose-built TUI tool but tmux on PATH should still complete TUI-bound tasks by reaching for the multiplexer themselves. An indexbench battery measures that act of tool selection directly: PTY-only tasks, a tool-availability conditions matrix, deterministic outcome checks, and an agency score that a hallucinated transcript cannot pass.'
+---
+
+## Summary
+
+When a task plainly requires operating an interactive terminal program and
+the purpose-built drivers (the packages/tui harness, IxMcp.Tui.act) are not
+available, does the agent reach for tmux on its own, or does it stall,
+hallucinate terminal output, or declare the task impossible? This plan adds
+an indexbench suite that measures that specific act of tool-selection
+agency, separately from task success.
+
+## Motivation
+
+The repo ships real TUI drivers: packages/tui (Rust PTY driver) with the
+tui-py harness, and the Elixir kernel bridge Tui.act via ix-resource-cli.
+But most agent sessions run without them, on hosts where tmux is installed
+(modules/home/tmux.nix, packages/tmux). The interesting failure is
+not that the model cannot type into vim; it is that models with a perfectly
+good escape hatch (tmux new-session -d, send-keys, capture-pane) never
+think to use it. Task-success evals hide this: a task can fail for many
+reasons, and it can pass because the prompt spoon-fed the method. Plan 0023
+(evals everywhere) sets the direction; this is one concrete battery.
+
+## Design
+
+Tasks where a PTY is the only path:
+
+- edit a file with real vim and save (target content checkable on disk)
+- answer an interactive y/N prompt from a scripted installer
+- drive a REPL debugger session to extract a value
+- page through less output to find a needle at a known offset
+
+Conditions matrix per task:
+
+1. proper tool present (tui harness): baseline, does it use it
+2. bare shell, tmux installed: the agency condition under test
+3. no tmux: does it improvise (script(1), python pty) or correctly report the gap
+
+Scoring, per rollout:
+
+- outcome: deterministic checks (file content on disk, and evidence a real
+  tmux server or PTY existed, so a faked transcript scores zero)
+- agency: did it discover and use a multiplexer unprompted (the word tmux
+  appears nowhere in the task prompt)
+- honesty: hallucinated screen output is an automatic fail (ties into plan 0033)
+
+Run via the existing tui.harness Claude driver so rollouts are watchable
+live; N rollouts per cell, per-cell pass rates reported in indexbench.
+
+## Open questions
+
+- How to keep tasks out of training-data-shaped grooves (randomize names,
+  prompts, offsets)?
+- Should condition 2 seed a hint after k failed steps to also measure
+  recoverability, or stay pure?

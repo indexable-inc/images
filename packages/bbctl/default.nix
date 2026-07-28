@@ -1,0 +1,54 @@
+{
+  fetchurl,
+  ix,
+  lib,
+  stdenvNoCC,
+  # Writer for `passthru.updateScript`, bound only on the flake-package path
+  # (lib/packages.nix); the overlay path leaves it null so `pkgs.*` carries no
+  # updater. Same nullable-writer pattern as vector-bin / claude-code.
+  # The fork client rather than stock `pkgs.nix`; see packages/yc/default.nix
+  # for why an updater must not pull nixpkgs' nix into its closure. Empty on
+  # the overlay path, which omits the updateScript anyway.
+  repoPackages ? {},
+  updateScriptWriter ? null,
+}: let
+  # Prebuilt upstream release binary, aarch64-darwin only: the motivating
+  # consumer is the vmkit macOS guest's iMessage bridge (ENG-7746), which needs
+  # the exact darwin arm64 bytes to push into the guest. Version + URL + SRI
+  # hash live in the sibling pins.json, never inline here (repo policy). Bump
+  # the version/url in pins.json, then `nix run .#update` re-pins the hash.
+  pin = ix.pins.loadPin ./pins.json "bbctl";
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    nix = repoPackages.nix-ix;
+    pname = "bbctl";
+    relPath = "packages/bbctl/pins.json";
+  };
+in
+  stdenvNoCC.mkDerivation {
+    pname = "bbctl";
+    inherit (pin) version;
+
+    src = fetchurl {inherit (pin) url hash;};
+    dontUnpack = true;
+
+    passthru = lib.optionalAttrs (updateScript != null) {inherit updateScript;};
+
+    installPhase = ''
+      # shell
+      runHook preInstall
+
+      install -Dm755 "$src" "$out/bin/bbctl"
+
+      runHook postInstall
+    '';
+
+    meta = {
+      description = "Beeper bridge-manager CLI: run self-hosted Matrix bridges on a Beeper account";
+      homepage = "https://github.com/beeper/bridge-manager";
+      license = lib.licenses.asl20;
+      mainProgram = "bbctl";
+      platforms = ["aarch64-darwin"];
+      sourceProvenance = [lib.sourceTypes.binaryNativeCode];
+    };
+  }

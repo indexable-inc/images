@@ -1,0 +1,1 @@
+{ pkgs }: let inherit (pkgs) lib; in [ (lib.getLib pkgs.hello) ]

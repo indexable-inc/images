@@ -1,0 +1,73 @@
+---
+id: clippy-red-on-main
+postedAt: "2026-07-25"
+title: two clippy gates were red on main, and the log tail hid why
+tags:
+  - rust
+  - ci
+---
+
+`flake-check` on main was failing `rust-submodule-sync-test.clippy` and
+`rust-ix2nix.clippy`. Both are green again. Neither lint was silenced.
+
+## what was actually wrong
+
+The GitHub annotation for a failed nix build is the last 25 lines of the
+builder log, which for a clippy check is the shell hook trace after the
+diagnostics have already scrolled past. Nothing in run 30183590379 named a
+lint. Reproducing was the only way to find out, and `nix log` on the
+derivation is no help either, because failed builds have no cached log.
+
+`submodule-sync-test` tripped three lints:
+
+- `clippy::anonymous_tuple_return_type` on
+  `fn pinned(&self, name) -> Result<(String, String)>`. A caller reading
+  `let (gitlink, locked) = fx.pinned("index")?;` has to trust the order. It
+  returns a named `Pinned { gitlink, lock }` now.
+- `clippy::too_many_lines` on a `main()` measured at 181 lines against a
+  limit of 100. The three behaviours the test pins are three named functions
+  -- `stale_pins_advance_together`, `current_pins_are_a_noop`,
+  `lost_race_retries_onto_new_tip` -- over a `Fixture` that owns its own
+  setup and holds the pinned sources as a `Vec<Submodule>` rather than one
+  copy of the setup per source.
+- `clippy::literal_string_with_formatting_args` on the embedded `git` shim,
+  which spelled its positional parameters `"${1:-}"`. A braced parameter
+  expansion inside a Rust string literal reads to clippy as a stray format
+  argument. The braces were only there to survive `set -u`, so the shim tests
+  its arity and uses `"$1"`.
+
+`ix2nix` tripped `clippy::format_push_string` four times in
+`tests/properties.rs`, all of the shape
+`out.push_str(&format!("{key}: {value}, "))`. They are `write!` and `writeln!`
+into the same `String` now.
+
+One assertion got wider on the way through. The race case previously checked
+the second source only for "unchanged" and the no-op case checked neither pin
+at all. `assert_pinned_at_tips` walks every source on every case, so a pin
+that moves when nothing asked it to now fails wherever it happens.
+
+## why it surfaced when it did
+
+The `ix2nix` violation is older than the failure. `tests/properties.rs` landed
+on 23 July and the check passed, from cache, on a clippy built before
+[the fork inputs were repinned](https://github.com/indexable-inc/index/commit/40c913bd).
+A cargo unit's source is its whole package directory, so
+[moving the .ix converter back to IFD](/ifd-ix2nix-wasm/) -- which only edited
+`import-ix.nix` and `wasm/default.nix` -- re-keyed the unit and re-ran a check
+that had been answered from cache since before the repin. The lint had been
+firing for anyone who ran it; nobody ran it.
+
+That is the general shape worth remembering: a green cargo-unit check means
+"green at the last source hash", not "green today". A toolchain bump does not
+invalidate a cached check result until something else touches the unit.
+
+## what is still awkward
+
+Reproducing a clippy failure on darwin does not work locally. Stock
+`cargo clippy` dies with `E0602` on the two lints the
+[indexable-inc/rust-clippy](https://github.com/indexable-inc/rust-clippy) fork
+adds, and `nix eval` of any Rust unit's `tests` attribute fails on
+aarch64-darwin before it gets that far, because building the test manifest
+runs a natively built `unibind` that cannot find its own `libstd` dylib. The
+route that works is `nix build` of the check derivation for `x86_64-linux`,
+which lands on a remote builder and takes tens of minutes.

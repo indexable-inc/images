@@ -1,0 +1,1 @@
+{ lib, attrs }: lib.mapAttrsToList (name: v: { inherit name v; }) attrs

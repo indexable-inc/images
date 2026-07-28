@@ -1,0 +1,9 @@
+[unsafe](javascript:alert(1))
+[protocol-relative](//evil.example/path)
+[root](/index/notes)
+[fragment](#notes)
+[absolute](https://example.com/a%22b)
+
+```not-a-real-language
+plain fallback
+```

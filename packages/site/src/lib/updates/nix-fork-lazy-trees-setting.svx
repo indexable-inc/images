@@ -1,0 +1,24 @@
+---
+id: nix-fork-lazy-trees-setting
+postedAt: 2026-07-19T12:00:00-07:00
+title: "nix fork: lazy trees vendored as an off-by-default `lazy-trees` setting"
+tags: [nix, fork, performance, flakes]
+links:
+  - label: patches 0025-0029
+    href: https://github.com/indexable-inc/index/tree/main/packages/nix/patches
+  - label: NixOS/nix#15711
+    href: https://github.com/NixOS/nix/pull/15711
+  - label: NixOS/nix#13225
+    href: https://github.com/NixOS/nix/pull/13225
+---
+
+The fork's nix now carries lazy trees: with `lazy-trees = true`, flake inputs are no longer copied into `/nix/store` at evaluation time. `mountInput()` computes each input's store path and NAR hash with a dry run, mounts the input's source tree at that path inside the evaluator, and only materializes the store object when something forces it (instantiating a derivation that references the path, `builtins.storePath`, IFD, `nix eval` output that leaks the path). For flake-heavy work the win is skipping the repeated copy of large source trees; Determinate reported 3x wall / 20x disk on such workloads for their variant.
+
+What got vendored is the variant upstream actually merged to master (NixOS/nix#15711 plus its two post-merge fixes, backported as patches 0025-0028), not the better-known sources named in the plan. Both were examined:
+
+- edolstra's lazy-trees-v2 (NixOS/nix#13225) mounts inputs at random virtual store paths and devirtualizes on demand. roberth blocked it: "Using randomness or even fingerprints for placeholders makes the language non-deterministic and impure." Path equality and ordering must remain observably identical to eager evaluation; his preferred alternative, rope-structured strings with lazily computed fixed-length substrings (lazy hashing), has not been built by anyone. The PR was closed on 2026-07-16 pointing at #15711 as the mergeable subset, "modulo the `StorePath::random()` bits".
+- Determinate's fork shipped lazy trees to their users via staged rollouts since Determinate Nix 3.8.0, and was the preferred source going in. But their current tree (v2.35.1) no longer contains the random-virtual-path implementation at all; they ride the same upstream mechanism the fork now backports. #15711 describes itself as "a slightly less lazy (but also more deterministic) approach than determinate nix has taken": it still hashes every input once, so the mounted path is the real content-addressed store path and paths, hashes, and lock files are byte-identical to eager mode by construction.
+
+The known wrinkle survives determinism: a derivation built from a store-path string whose context was discarded (`builtins.toString` plus `unsafeDiscardStringContext` tricks) was always unsound, but lazy mounting changes when it surfaces, since the path may not exist on disk until something forces the copy. #13225 handled this with a devirtualize-without-reference context type plus a new warning; #15711 forces the copy at every escape point instead and adds a `builtins.getFlake` compatibility lookup for discarded-context store paths.
+
+Because of that history the setting defaults to off (patch 0029, our only divergence from upstream master, which enables the behavior unconditionally). Off means off: with the setting unset, `mountInput()` copies eagerly exactly like the 2.34.7 base, and the drvPath of index's own attrs is byte-identical to the previous fork build. Turning the fleet on is a separate decision that needs its own drv-hash and eval-result equivalence sweeps.

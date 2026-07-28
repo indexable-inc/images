@@ -1,0 +1,10 @@
+{ __dir, __importIx, __ixTy }:
+let
+  add = a: b: a + b;
+in
+{
+  simple = add 1 2;
+  nested = add (add 1 2) 3;
+  lambda = (x: x) 5;
+  mapped = builtins.map (x: x * 2) [ 1 2 3 ];
+}

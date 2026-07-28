@@ -1,0 +1,61 @@
+---
+id: 0023-evals-everywhere
+number: '0023'
+title: Evals as the gate for behavioral change
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 6, why: 'makes measured-before-merged the norm for every behavioral surface' }
+  impact: { value: 7, why: 'prompt and harness changes ship on vibes today; regressions are invisible' }
+  effort: { value: 6, why: 'shared harness, task suites per surface, CI lanes that fit the budget' }
+  risk: { value: 3, why: 'a weak eval is still better than none; worst case it is ignored' }
+  maturity: { value: 3, why: 'system-prompt-eval exists; nothing generalizes it across surfaces' }
+  leverage: { value: 8, why: 'every future prompt, method, and UI change inherits the gate' }
+  taste: { value: 7, why: 'what to measure per surface is the hard judgment; harnesses are plumbing' }
+description: 'One eval discipline across the repo: behavioral changes (prompt rules, agent methods, UI properties) merge with measurements, not vibes. Generalizes the existing system-prompt-eval machinery into shared harnesses and per-surface suites, the gates plans 0020 and 0022 already assume.'
+---
+
+## Summary
+
+Plans 0020 (stuck-agent recovery) and 0022 (Bombadil UI properties) both
+end the same way: adopt only if an eval says it wins. That gate should not
+be per-plan improvisation. The repo already has system-prompt-eval
+machinery for one surface; this plan generalizes the discipline: a shared
+way to define a task suite, run it against baseline and change (including
+SOTA model matrices), and report a comparison a reviewer can read in the
+PR.
+
+## Surfaces, in order
+
+1. Prompt rules and skills (machinery exists, needs a paved road).
+2. Agent methods and harness changes (0020's gate).
+3. UI properties (0022's gate).
+
+## Triggering
+
+The lane runs exactly when it can change a decision:
+
+- A PR that touches a behavioral surface (prompt rules, skills, agent
+  definitions, harness code) runs the full eval lane on that PR, and the
+  baseline-vs-change comparison lands as the review artifact. Everything
+  else skips it.
+- A nightly cron run executes only when a behavioral surface changed
+  since the last recorded run, catching drift no PR diff names (model
+  and dependency bumps). Unchanged days cost nothing.
+
+Both paths record what they ran against (surface hash, model matrix), so
+"did evals cover this change" is answerable from the record rather than
+CI archaeology.
+
+## Eval gate, applied to itself
+
+The paved road wins if plan-gated changes actually use it instead of
+hand-rolling: measured by the next three behavioral merges.
+
+Drafted by Claude Code (Fable); comments wanted, hence the RFC flag.

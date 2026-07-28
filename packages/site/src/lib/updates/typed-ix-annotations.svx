@@ -1,0 +1,47 @@
+---
+id: typed-ix-annotations
+postedAt: 2026-07-23T12:00:00-07:00
+title: "`.ix` modules accept TypeScript type annotations, lowered to runtime checks"
+tags: [ix2nix, types, nix]
+links:
+  - label: ix2nix
+    href: https://github.com/indexable-inc/index/tree/main/packages/ix2nix
+  - label: "issue #4103"
+    href: https://github.com/indexable-inc/index/issues/4103
+---
+
+`.ix` files can now carry TypeScript annotations: parameter and return
+types, `type` aliases, and `as` casts. ix2nix lowers each annotation to a
+runtime check in the emitted Nix, so passing a set where a string goes
+fails with a positioned error naming the module, line, column, and
+argument instead of a deep eval trace:
+
+```text
+error: .ix type error at examples/typed-error.ix:3:24 argument `b`: expected int, got string
+```
+
+The pieces:
+
+- Annotations lower to calls against a small `__ixTy` runtime the import
+  shims pass per module; the wrapper convention is now
+  `{ __dir, __importIx, __ixTy }:`.
+- Two modes, chosen at import time over identical emitted source:
+  `assert` (the default in both shims) runs the checks; `erase` makes
+  them free.
+- Checks are force-safe: a check may force the annotated value to weak
+  head normal form and read attrset keys, never field values or list
+  elements, so typed code never evaluates deeper than untyped code.
+- Type spellings: `string`, `bool`, `int`, `float`, `drv`, `object`,
+  `T[]`, `Record<string, T>`, inline object types with optional fields,
+  function types, literal unions, `T | null`, Rust-width integer
+  refinements `u8`/`u16`/`u32`/`i8`/`i16`/`i32`, and the nixpkgs
+  `lib.types` basics `port`, `path`, `nonEmptyStr`. `number` is a hard
+  error (Nix splits int and float), as are interfaces, generics, and
+  `satisfies`, in keeping with the converter's no-fallbacks rule.
+- `as T` checks at the cast site, the opposite of TypeScript erasure, on
+  purpose: casts are where JSON and imported plain Nix enter typed code.
+  `as unknown` stays the escape hatch.
+
+Annotations are optional everywhere; unannotated modules emit no
+`__ixTy` reference at all. Static checking (tsc against an ambient
+`ix.d.ts`) and a deep-checking mode are follow-ups.

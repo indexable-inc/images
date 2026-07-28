@@ -1,0 +1,15 @@
+[package]
+name = "nix-web-monitor-parser"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Parser and state model for Nix internal-json build events"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+strip-ansi-escapes.workspace = true

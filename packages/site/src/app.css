@@ -1,0 +1,478 @@
+@import './lib/styles/tokens.css';
+
+/* The whole site renders on a TUI character grid. One base cell: 14px mono
+   with an exact 21px line-height (--cell-h in tokens.css). Vertical rhythm
+   uses only whole --cell-h multiples, horizontal spacing only ch units, and
+   there is exactly one font size; hierarchy comes from weight, UPPERCASE,
+   letter-spacing, color, and inverse-video blocks. 1px rules are absorbed
+   into adjacent padding (calc(cell - 1px)) so baselines stay on the grid. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 14px;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: var(--cell-h);
+  font-feature-settings:
+    'calt' on,
+    'liga' on;
+}
+
+/* One font size and one line height everywhere, like a terminal. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+span,
+a,
+li,
+td,
+th,
+div,
+label,
+input,
+button,
+select,
+textarea,
+code,
+pre,
+blockquote,
+figcaption,
+summary,
+dt,
+dd,
+time,
+small,
+strong,
+em,
+b,
+i,
+u,
+s {
+  font-size: inherit !important;
+  line-height: var(--cell-h) !important;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: 700 !important;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--fg) 18%, var(--bg));
+  color: var(--fg-strong);
+}
+
+a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--fg-faint);
+  text-underline-offset: 3px;
+}
+
+/* Links go inverse-video on hover, like a TUI selection. */
+a:hover {
+  background: var(--fg);
+  color: var(--bg);
+  text-decoration: none;
+}
+
+a:hover code {
+  background: transparent;
+  color: inherit;
+}
+
+/* Page-level titles are inverse-video blocks: ink ground, paper text. */
+h1 {
+  display: table;
+  padding: 0 1ch;
+  background: var(--fg-strong);
+  color: var(--bg);
+  letter-spacing: 0.04em;
+}
+
+h1 code {
+  background: transparent !important;
+  color: inherit;
+}
+
+/* Full-bleed sticky bar: rule spans the viewport, content stays on the
+   page column. Bar interior is 2 cells; the 1px rule is absorbed below. */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  width: 100%;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  border-bottom: 1px solid var(--rule);
+  backdrop-filter: blur(12px);
+}
+
+.site-header .bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2ch;
+  max-width: 76ch;
+  height: calc(var(--cell-h) * 2 - 1px);
+  margin: 0 auto;
+  padding: 0 2ch;
+}
+
+.brand {
+  text-decoration: none;
+}
+
+.brand:hover {
+  background: transparent;
+  color: inherit;
+}
+
+.brand-mark {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--fg-strong);
+}
+
+/* Terminal cursor after the wordmark, echoing ix.dev's `ix_`. */
+.brand-mark::after {
+  content: '_';
+  color: var(--fg-faint);
+}
+
+.brand:hover .brand-mark::after {
+  color: var(--fg-strong);
+}
+
+.site-header nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0 2ch;
+  min-width: 0;
+  color: var(--fg-muted);
+}
+
+.site-header nav a {
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.site-header nav a:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+main {
+  max-width: 76ch;
+  margin: 0 auto;
+  padding: 0 2ch calc(var(--cell-h) * 6);
+}
+
+/* Route-level prose flow: whole blank rows between blocks. */
+main > h1 {
+  margin-top: calc(var(--cell-h) * 2);
+}
+
+main > h2 {
+  margin-top: calc(var(--cell-h) * 2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+main > p,
+main > ul,
+main > ol,
+main > dl,
+main > figure {
+  margin-top: var(--cell-h);
+  margin-bottom: 0;
+}
+
+.hero {
+  padding: calc(var(--cell-h) * 3) 0 calc(var(--cell-h) * 2);
+}
+
+.hero h1 {
+  margin-top: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.hero p {
+  margin-top: var(--cell-h);
+  max-width: 62ch;
+  color: var(--fg-muted);
+}
+
+.log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Each entry is a grid-aligned panel row: two blank rows of padding, and
+   the closing 1px rule is absorbed into the bottom padding. */
+.log > li {
+  padding: calc(var(--cell-h) * 2) 0 calc(var(--cell-h) * 2 - 1px);
+  border-bottom: 1px solid var(--rule);
+}
+
+time {
+  display: block;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+.log h2 {
+  margin-top: 0;
+}
+
+.log h2 a {
+  text-decoration: none;
+}
+
+.log h2 a:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.log h2 code {
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.body {
+  margin-top: var(--cell-h);
+  color: var(--fg-muted);
+}
+
+.body > * {
+  margin-top: var(--cell-h);
+  margin-bottom: 0;
+}
+
+.body > *:first-child {
+  margin-top: 0;
+}
+
+.body strong {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+/* Markdown headings inside rendered bodies keep their source glyphs,
+   the way a terminal pager shows markdown. */
+.body h2,
+.body h3 {
+  margin-top: calc(var(--cell-h) * 2);
+  color: var(--fg);
+}
+
+.body h2::before {
+  content: '## ';
+  font-weight: 400;
+  color: var(--fg-faint);
+}
+
+.body h3::before {
+  content: '### ';
+  font-weight: 400;
+  color: var(--fg-faint);
+}
+
+code {
+  background: var(--code);
+  border-radius: var(--radius);
+  padding: 0 0.5ch;
+  color: var(--fg);
+}
+
+.body pre {
+  padding: calc(var(--cell-h) - 1px) 2ch;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--code);
+  overflow-x: auto;
+}
+
+.body pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: 0;
+}
+
+/* shiki dual-theme: ship both colors per span as CSS vars, pick one here */
+.body pre.shiki,
+.body pre.shiki code {
+  background: var(--code) !important;
+}
+
+.body pre.shiki span {
+  color: var(--shiki-light);
+  background-color: transparent !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .body pre.shiki span {
+    color: var(--shiki-dark);
+  }
+}
+
+.body ul,
+.body ol {
+  padding-left: 4ch;
+}
+
+.refs {
+  margin-top: var(--cell-h);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1ch;
+  color: var(--fg-muted);
+}
+
+.refs a {
+  text-decoration: none;
+}
+
+.refs a:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.refs span {
+  color: var(--fg-faint);
+}
+
+/* Tag chips read as bracketed TUI tokens: [nix] [rust]. */
+.tags {
+  list-style: none;
+  margin: var(--cell-h) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 2ch;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.tags li::before {
+  content: '[';
+  color: var(--fg-faint);
+}
+
+.tags li::after {
+  content: ']';
+  color: var(--fg-faint);
+}
+
+.subtitle {
+  color: var(--fg-muted);
+  margin-top: var(--cell-h);
+}
+
+/* Plan frontmatter: number/status/authors/etc, one field per row. */
+dl.frontmatter {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0 2ch;
+  margin: calc(var(--cell-h) * 2) 0;
+}
+
+dl.frontmatter dt {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
+dl.frontmatter dd {
+  margin: 0;
+}
+
+/* Table rules are inset box-shadows, not borders: they take no layout
+   space, so every row stays exactly one cell tall and content after the
+   table lands back on the grid (collapsed 1px borders would push it off).
+   Cells draw their left and bottom rules; the table closes the frame with
+   the top and right ones. */
+.body table {
+  border-collapse: collapse;
+  width: 100%;
+  box-shadow:
+    inset 0 1px 0 var(--rule),
+    inset -1px 0 0 var(--rule);
+}
+
+.body th,
+.body td {
+  padding: 0 1ch;
+  text-align: left;
+  vertical-align: top;
+  box-shadow:
+    inset 1px 0 0 var(--rule),
+    inset 0 -1px 0 var(--rule);
+}
+
+.body th {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--code);
+}
+
+/* Boxed aside with its title sitting inline in the top rule, TUI-panel
+   style. The chip backgrounds match the page ground to mask the rule. */
+.body .note {
+  position: relative;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--bg);
+  padding: calc(var(--cell-h) - 1px) 2ch;
+  margin-top: calc(var(--cell-h) * 2);
+}
+
+.body .note::before {
+  content: 'NOTE';
+  position: absolute;
+  top: calc(var(--cell-h) / -2);
+  left: 2ch;
+  padding: 0 1ch;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}

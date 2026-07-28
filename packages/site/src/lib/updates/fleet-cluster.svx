@@ -1,0 +1,27 @@
+---
+id: fleet-cluster
+postedAt: 2026-06-13T13:30:00-07:00
+title: "`fleet` turns the tailnet into one Ray cluster you can compute on"
+tags: [mcp, fleet, ray, distributed]
+links:
+  - label: fleet
+    href: https://github.com/indexable-inc/index/tree/main/packages/mcp/src/fleet
+  - label: services.ix-ray
+    href: https://github.com/indexable-inc/index/tree/main/modules/services/ray
+  - label: ix-mcp
+    href: https://github.com/indexable-inc/index/tree/main/packages/mcp
+---
+
+The `fleet` module bundled in every ix-mcp kernel now sees and computes on the whole tailnet, not just the local machine. `await fleet.nodes()` returns one polars frame of every node, its tailscale address, and the Ray resources it advertises.
+
+Ship a Python callable to the cluster and the Ray object store carries the data:
+
+```python
+import fleet, socket
+await fleet.run(lambda: socket.gethostname(), on="all")   # {node: hostname}
+refs = fleet.submit(heavy, x); await fleet.get(refs)       # futures + object store
+```
+
+Ray (bundled in the interpreter) provides the distributed object store, peer-to-peer transfer between nodes, spill-to-disk under memory pressure, and true multi-process, multi-node parallelism, so a CPU-bound job is no longer stuck behind one kernel's GIL. `fleet.in_kernel(node, code)` runs a line in another node's live ix-mcp session (tailnet-gated) to read what it is actually doing, and the original `fleet.scan` still fans a shell command over SSH for nodes with no Python.
+
+Deploy with the `services.ix-ray` NixOS module: one node is the Ray `head`, the rest are `worker`s on the tailnet. The trust boundary is the tailnet, the same one Ray's own data plane relies on, so `in_kernel` works across the fleet with no secret; set `services.ix-ray.tokenFile` to additionally require a shared `IX_MCP_EXEC_TOKEN`. An off-cluster box drives the cluster by pointing `IX_FLEET_RAY_ADDRESS` at `ray://<head>:10001`.

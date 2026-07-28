@@ -1,0 +1,1 @@
+{ config, lib, ... }: { options.services.foo.package = lib.mkOption { type = lib.types.package; }; config.systemd.services.foo.serviceConfig.ExecStart = "${config.services.foo.package}/bin/cmd"; }

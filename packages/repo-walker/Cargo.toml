@@ -1,0 +1,15 @@
+[package]
+name = "repo-walker"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Iterator over text files in a directory tree, honoring .gitignore and skipping known binary extensions"
+
+[lints]
+workspace = true
+
+[dependencies]
+ignore.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

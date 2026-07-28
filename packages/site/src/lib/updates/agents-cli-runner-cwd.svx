@@ -1,0 +1,25 @@
+---
+id: agents-cli-runner-cwd
+postedAt: 2026-07-22T09:30:00-07:00
+title: Child-agent spawns name a missing working directory instead of dying as exit 2
+tags: [kernel, mcp, agents, reliability]
+links:
+  - label: issue #3989
+    href: https://github.com/indexable-inc/index/issues/3989
+  - label: PR #3985
+    href: https://github.com/indexable-inc/index/pull/3985
+---
+
+The Cmd fix for the missing-working-directory failure left one sibling
+untouched: the agent CLI runner opens its child port the same way, so a
+child spawned into a deleted or bogus directory died as the raw `chdir`
+errno -- exit 2 for a missing path, exit 20 for a file -- with empty
+output, indistinguishable from the CLI failing on its own.
+
+The runner now validates the working directory before the spawn and raises
+an error naming the path (with the launch-dir hint when the boot-time
+default vanished), so the lead sees the real culprit instead of a bare
+exit status. A directory deleted after the check is caught too: a nonzero
+exit with the directory now gone raises with the errno caveat rather than
+reporting a status that may not be the CLI's own. Clean exits and runs
+that already produced a final result are never second-guessed.

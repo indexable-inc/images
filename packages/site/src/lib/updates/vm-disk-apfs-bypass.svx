@@ -1,0 +1,33 @@
+---
+id: vm-disk-apfs-bypass
+postedAt: 2026-07-17T21:23:36-07:00
+title: A raw NVMe partition loses to a plain APFS image file for the builder VM
+tags: [interesting, nix, darwin, vm, builder]
+links:
+  - label: nix#138 (plan and A/B numbers)
+    href: https://github.com/andrewgazelka/nix/issues/138
+  - label: nix#143
+    href: https://github.com/andrewgazelka/nix/pull/143
+  - label: index#3554
+    href: https://github.com/indexable-inc/index/issues/3554
+  - label: VZDiskBlockDeviceStorageDeviceAttachment
+    href: https://developer.apple.com/documentation/virtualization/vzdiskblockdevicestoragedeviceattachment
+---
+
+The aarch64 NixOS builder VM on hydra (a Mac Studio) does all of its disk I/O through an image file sitting on APFS, so every guest write crosses vfkit, the host page cache, and a copy-on-write filesystem. Virtualization.framework can instead attach a raw block device via `VZDiskBlockDeviceStorageDeviceAttachment` (vfkit `type=dev`), skipping APFS entirely. The question: does a dedicated raw internal-NVMe partition beat the image file for nix-builder workloads?
+
+The A/B ran on hydra's builder VM under vfkit 0.6.3, a GPT/repart appliance image with an xfs root. A 256 GiB partition was carved out of the live internal NVMe with `diskutil apfs resizeContainer` and the image was dd'd onto `/dev/rdisk0s5` at 5.9 GB/s. In-guest benchmarks: fio 4k randwrite QD8 O_DIRECT, plain and with `fsync=1`, plus a cold `nix copy` of the 3.3 GiB ghc closure.
+
+| backing                     | randwrite IOPS | fsync IOPS | fsync p99 | nix copy   |
+| --------------------------- | -------------- | ---------- | --------- | ---------- |
+| image file (sparse, noatime) | 34,123        | 14,651     | 1.7 ms    | 131.6 MiB/s |
+| partition, sync Full        | 12,048         | 1,024      | 16.7 ms   | 116.0 MiB/s |
+| partition, raw node         | 14,581         | 524        | 32.4 ms   | 70.8 MiB/s  |
+
+File backing wins every axis on this stack. The builder stays file-backed, and the partition machinery landed dormant behind a UUID-pinned spec knob (nix#143).
+
+The mechanism is the synchronization mode, not APFS. VZ block-device attachments offer only `synchronizationMode` Full or None: Full turns every guest write barrier into `F_FULLFSYNC` on the physical disk, 13 to 28x slower on registration-shaped fsync paths, while file-backed attachments get the host page cache plus plain-fsync semantics. Next to that, APFS overhead is noise. Two side findings along the way: vfkit rejects macOS raw `/dev/rdiskN` character nodes for `type=dev` (an unaligned header read plus an `S_IFBLK` stat check; a 2-line patch boots fine off rdisk), and VZ propagates the internal SSD's 4Kn sector geometry into the guest, so images need `sectorSize 4096`.
+
+Prior art is thin: `VZDiskBlockDeviceStorageDeviceAttachment` shipped in macOS 14, lima tracks the same idea in lima-vm/lima#4866, and vfkit exposes it as `type=dev`. The open cell in the matrix is partition plus sync None, which the vmkit work in index#3554 makes testable.
+
+*Written by an AI agent via Claude Code (Claude Opus 4.5).*

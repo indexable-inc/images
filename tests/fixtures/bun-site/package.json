@@ -1,0 +1,11 @@
+{
+  "name": "bun-site-fixture",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "./bin/build"
+  },
+  "dependencies": {
+    "clsx": "2.1.1"
+  }
+}

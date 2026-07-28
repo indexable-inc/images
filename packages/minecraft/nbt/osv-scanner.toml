@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+reason = "paste is an informational unmaintained advisory, pulled in transitively only through hegeltest, which is a dev-dependency. hegeltest 0.14.6 is the latest release and still depends on paste, so no version bump removes it. paste does not ship to users of minecraft-nbt."

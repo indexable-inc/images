@@ -1,0 +1,17 @@
+---
+id: prompt-calibrated-claims
+postedAt: 2026-07-19T05:18:05-07:00
+title: "House prompt gains a calibrated-wording rule: no absolutes without a measurement"
+tags: [agent, prompt]
+links:
+  - label: rules.nix
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent-prompt/rules.nix
+  - label: "#3684"
+    href: https://github.com/indexable-inc/index/issues/3684
+---
+
+Agent reports drifted into absolutes: "works", "never happens", "impossible". The house prompt now carries a `calibratedClaims` rule that words each claim at the strength of its evidence: "passed 40 of 41" over "works", "did not reproduce in 20 runs" over "impossible", and an absolute only as a measurement report. Where the measurement is missing, the rule prescribes the estimative ladder (unlikely, roughly even, likely, almost certainly, plus cannot-rule-out for severe tails) with the check's coverage named, and a regression disclosed next to the win it accompanies.
+
+The register is borrowed from the Claude Fable 5 system card, which the `faithfulReporting` rule already cites: findings there read "extremely difficult (though not impossible)" and "a much less clear judgement than for previous models", with safety regressions listed beside headline results. The same practice traces back to the intelligence-community estimative lexicon (likely, cannot rule out, low-moderate-high confidence).
+
+Rendered prompts pick the rule up on the next wrapper build; `omitRules = [ "calibratedClaims" ]` drops it.

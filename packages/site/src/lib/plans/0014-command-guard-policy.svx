@@ -1,0 +1,44 @@
+---
+id: 0014-command-guard-policy
+number: '0014'
+title: Guards as typed policy
+status: Sketch
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 4, why: 'replaces regex accretion with one policy layer; the concept exists elsewhere' }
+  impact: { value: 7, why: 'guard false positives block real work daily; gaps let footguns through' }
+  effort: { value: 5, why: 'one evaluator, a typed rule set, and migration of every existing guard' }
+  risk: { value: 4, why: 'a bad rule blocks work loudly rather than corrupting anything' }
+  maturity: { value: 2, why: 'guards exist as scattered patterns; the policy layer does not' }
+  leverage: { value: 7, why: 'every new footgun becomes one declarative rule, not a new hook' }
+  taste: { value: 5, why: 'deciding what to block is policy taste; the evaluator is mechanical' }
+description: 'One typed policy layer for command and git guards, replacing scattered regex hooks. Thirty-plus issues of guard false positives, guard gaps, and tool-permission drift become declarative rules with tests, versioned next to the prompt policy they enforce.'
+---
+
+## Summary
+
+Command guards accreted as regex hooks: each footgun got a pattern, each
+pattern got false positives, and the set drifted from what agent tool
+declarations promise. The issues split evenly between "the guard blocked
+legitimate work" and "the guard missed the thing it existed to stop". This
+plan replaces the pile with one policy layer: typed rules (command shape,
+path scope, repo state) evaluated in one place, tested like code, and
+rendered into whatever hook or permission surface each runtime needs, the
+same way `policy/permissions.nix` already renders deny lists.
+
+## Non-goals
+
+Changing what is forbidden; existing policy migrates as-is, then rules get
+tightened one PR at a time with the false-positive corpus as tests.
+
+## Absorbed issues
+
+[#3042](https://github.com/indexable-inc/index/issues/3042), [#3032](https://github.com/indexable-inc/index/issues/3032), [#3023](https://github.com/indexable-inc/index/issues/3023), [#2955](https://github.com/indexable-inc/index/issues/2955), [#2956](https://github.com/indexable-inc/index/issues/2956), [#2938](https://github.com/indexable-inc/index/issues/2938), [#2936](https://github.com/indexable-inc/index/issues/2936), [#2880](https://github.com/indexable-inc/index/issues/2880), [#2908](https://github.com/indexable-inc/index/issues/2908), [#2825](https://github.com/indexable-inc/index/issues/2825), [#2882](https://github.com/indexable-inc/index/issues/2882), [#2804](https://github.com/indexable-inc/index/issues/2804), [#2798](https://github.com/indexable-inc/index/issues/2798), [#2796](https://github.com/indexable-inc/index/issues/2796), [#2789](https://github.com/indexable-inc/index/issues/2789), [#2788](https://github.com/indexable-inc/index/issues/2788), [#2787](https://github.com/indexable-inc/index/issues/2787), [#2771](https://github.com/indexable-inc/index/issues/2771), [#2799](https://github.com/indexable-inc/index/issues/2799), [#2758](https://github.com/indexable-inc/index/issues/2758), [#2744](https://github.com/indexable-inc/index/issues/2744), [#2722](https://github.com/indexable-inc/index/issues/2722), [#2675](https://github.com/indexable-inc/index/issues/2675), [#2673](https://github.com/indexable-inc/index/issues/2673), [#2667](https://github.com/indexable-inc/index/issues/2667), [#2447](https://github.com/indexable-inc/index/issues/2447), [#2748](https://github.com/indexable-inc/index/issues/2748), [#2448](https://github.com/indexable-inc/index/issues/2448), [#2730](https://github.com/indexable-inc/index/issues/2730), [#2676](https://github.com/indexable-inc/index/issues/2676), [#3176](https://github.com/indexable-inc/index/issues/3176), [#3171](https://github.com/indexable-inc/index/issues/3171), [#3142](https://github.com/indexable-inc/index/issues/3142), [#3106](https://github.com/indexable-inc/index/issues/3106), [#3099](https://github.com/indexable-inc/index/issues/3099), [#3130](https://github.com/indexable-inc/index/issues/3130), [#2421](https://github.com/indexable-inc/index/issues/2421), [#2395](https://github.com/indexable-inc/index/issues/2395), [#2367](https://github.com/indexable-inc/index/issues/2367), [#2362](https://github.com/indexable-inc/index/issues/2362), [#2764](https://github.com/indexable-inc/index/issues/2764), [#2729](https://github.com/indexable-inc/index/issues/2729), [#2735](https://github.com/indexable-inc/index/issues/2735), [#2731](https://github.com/indexable-inc/index/issues/2731), [#2461](https://github.com/indexable-inc/index/issues/2461), [#2602](https://github.com/indexable-inc/index/issues/2602), [#2597](https://github.com/indexable-inc/index/issues/2597), [#2546](https://github.com/indexable-inc/index/issues/2546)
+
+Drafted by Claude Code (Fable) from the open-issue corpus; scores are seed
+estimates.

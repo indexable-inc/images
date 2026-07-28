@@ -1,0 +1,15 @@
+---
+id: hm-activation-timings
+postedAt: 2026-07-19T12:00:00-07:00
+title: "Home Manager activation gets per-step timings; claude stays nix-pinned"
+tags: [home-manager, nix, claude-code]
+links:
+  - label: timings issue
+    href: https://github.com/indexable-inc/index/issues/3673
+  - label: claude pin issue
+    href: https://github.com/indexable-inc/index/issues/3671
+---
+
+Running `home-manager switch` used to print a bare "Activating step" line per activation entry with no hint of where the time went. A new `homeModules.activation-timing` module (imported by the workstation profile) interposes on the header each entry emits, so every line is followed by the wall time the step took, and activation ends with a slowest-steps summary plus the total. Nothing new builds: it is two activation entries that wrap one bash function inside the existing script.
+
+Separately, the claude-code home module now force-links `.local/bin/claude` back to the nix-managed wrapper on every switch. Claude Code's stock auto-updater installs native builds under `.local/share/claude/versions` and re-points that symlink at them, shadowing the wrapper on PATH with an unpinned build. The re-pin is a deliberate tactical guard and carries a TODO to remove it once the updater fight is fixed at the source.

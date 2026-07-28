@@ -1,0 +1,19 @@
+# Portable send-side audio enhancement: pure processing stages (48 kHz mono
+# f32 frames in, same frames out) with no I/O and no platform dependencies,
+# so the same crate serves native pipelines (e.g. panes audio) and browser
+# builds (compiled to wasm32 and wrapped with wasm-bindgen in the ix repo).
+[package]
+name = "audio-dsp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Composable send-side audio enhancement stages (RNNoise denoising) for 48 kHz mono voice"
+
+[dependencies]
+# Pure-Rust RNNoise port (BSD-3-Clause). No C toolchain, no platform deps,
+# builds everywhere including wasm32-unknown-unknown. Default features pull
+# in the CLI (clap/hound/dasp); the library alone needs none of them.
+nnnoiseless = { version = "0.5.2", default-features = false }
+
+[lints]
+workspace = true

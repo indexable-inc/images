@@ -1,0 +1,79 @@
+---
+id: submodule-sync-test-rust
+postedAt: "2026-07-25"
+title: the submodule-sync test moves to Rust, and the shell fence goes green
+links:
+  - label: "index#3823"
+    href: https://github.com/indexable-inc/index/issues/3823
+tags:
+  - ci
+  - rust
+---
+
+`nix run .#lint` has failed on a clean `main` checkout since 2026-07-24. One
+stage of thirteen:
+
+```
+new shell/nushell is fenced (#3823); write a compiled Rust tool instead
+  .github/scripts/test-update-flake-lock-direct.sh
+```
+
+`6000b487` added that 155-line script and never touched `shell-allowlist.txt`.
+The allowlist says in its own header that it only shrinks, so the fix is a
+port, not an entry. `packages/submodule-sync-test` replaces it and the fence
+now passes 13 of 13.
+
+## why it merged red
+
+`shell-fence` is not a required check on the index main ruleset, so a PR that
+fails only the fence can merge. Everyone who pulled afterward saw a red stage
+they did not cause, on a file they had never opened. That is the expensive
+part: a gate that is red for someone else's reason trains people to skip
+reading it, and the next real finding gets skipped with it.
+
+This is the second one in a day. ix `main` was simultaneously red on every
+commit because a rustfmt violation reached it the same way, through a ruleset
+that requires `build` while `treefmt-check` runs inside `nix`.
+
+## what the test pins
+
+Three behaviours of the `Bump submodules` step in `update-flake-lock.yml`, all
+carried over:
+
+1. A stale pin advances the gitlink and `flake.lock` together. Either alone is
+   a broken tree.
+2. A current pin is a true no-op, creating no commit.
+3. A push that loses a race against an unrelated `ix/main` commit retries onto
+   the new tip and preserves that commit instead of clobbering it.
+
+The third is the one worth having. It works by putting a `git` shim on `PATH`
+that fires exactly once, on the worker's first push to `main`, and lands a
+competing commit in that window. The race is deterministic rather than
+timing-dependent.
+
+## one assertion the shell version was missing
+
+The original never checked that the shim fired. If the worker's push arguments
+ever changed, the `[ "$3" = HEAD:refs/heads/main ]` guard would stop matching,
+no race would be injected, and the test would still pass all three assertions
+while proving nothing about retry behaviour. The port fails loudly instead:
+
+```rust
+if !tmp.join("race-fired").exists() {
+    bail!("race was never injected -- the shim's push match is stale, so this run proved nothing");
+}
+```
+
+A test that silently stops testing is worse than a missing test, because it
+reports success.
+
+## what stayed shell
+
+The step under test is bash inside a workflow YAML, so the port still extracts
+that block and runs it under `bash`. That is the thing being tested and cannot
+be ported away from here. What the fence targets is committed shell and
+generated-shell call sites, and there is now one fewer of the former.
+
+Dropping `jq` and `yq` fell out of it: the Rust version parses the workflow
+YAML with `serde_norway` and the lock with `serde_json` in-process, so
+`check.yml` no longer provisions either tool.

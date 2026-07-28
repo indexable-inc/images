@@ -1,0 +1,6 @@
+# Pinned to match cuda-oxide: it hooks unstable rustc internals, so the nightly
+# and the `rustc-dev` / `rust-src` / `llvm-tools` components are not optional.
+# Keep this in lockstep with the cuda-oxide rev pinned in Cargo.toml.
+[toolchain]
+channel = "nightly-2026-04-03"
+components = ["rust-src", "rustc-dev", "rust-analyzer", "clippy", "llvm-tools"]

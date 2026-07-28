@@ -1,0 +1,156 @@
+{
+  "cards": [
+    {
+      "vendor": "anthropic",
+      "slug": "claude-sonnet-5",
+      "title": "Claude Sonnet 5",
+      "date": "2026-06",
+      "url": "https://www-cdn.anthropic.com/283ef97c476cf442c91d9a37d5b214242a55bb92/Claude%20Sonnet%205%20System%20Card.pdf",
+      "sha256": "sha256-M1c6258YcbkD95t313VaRMwgu5E+9IrJAA3bCQ5B9+0="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-opus-4-8",
+      "title": "Claude Opus 4.8",
+      "date": "2026-05",
+      "url": "https://www-cdn.anthropic.com/0f0c97ad20d8005706296bd92aa1c27c6b2f4f61/Claude%20Opus%204.8%20System%20Card.pdf",
+      "sha256": "sha256-DfXQYbZojC1YOUdmINZpYAEctpBDGF2+2H7R9oq3bY8="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-fable-5-mythos-5",
+      "title": "Claude Fable 5 and Claude Mythos 5",
+      "date": "2026-06",
+      "url": "https://www-cdn.anthropic.com/57a52ea7d8f0e54e8a542e908266086df425cdf5/Claude%20Fable%205%20&%20Claude%20Mythos%205%20System%20Card.pdf",
+      "sha256": "sha256-+V1BOEWthiTzhLoCaWPyutIVjxDyYmV1u0XoI+PC4Mo="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-opus-4-7",
+      "title": "Claude Opus 4.7",
+      "date": "2026-04",
+      "url": "https://www-cdn.anthropic.com/037f06850df7fbe871e206dad004c3db5fd50340/Claude%20Opus%204.7%20System%20Card.pdf",
+      "sha256": "sha256-p3KaDl62HcaBj1U648J6t3RBHNWrTtf0FEVtdKBcJtI="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-mythos-preview",
+      "title": "Claude Mythos Preview",
+      "date": "2026-04",
+      "url": "https://www-cdn.anthropic.com/7624816413e9b4d2e3ba620c5a5e091b98b190a5/Claude%20Mythos%20Preview%20System%20Card.pdf",
+      "sha256": "sha256-VfbtHAc17BtbFNmckXlPt1msRkftxkOBEjtovon9MiU="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-sonnet-4-6",
+      "title": "Claude Sonnet 4.6",
+      "date": "2026-02",
+      "url": "https://www-cdn.anthropic.com/bbd8ef16d70b7a1665f14f306ee88b53f686aa75/Claude%20Sonnet%204.6%20System%20Card.pdf",
+      "sha256": "sha256-ZyM5qzJ+h5hXizVZ6EiVYdta0l6BtCfeTjBjkxCOkLY="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-opus-4-6",
+      "title": "Claude Opus 4.6",
+      "date": "2026-02",
+      "url": "https://www-cdn.anthropic.com/6a5fa276ac68b9aeb0c8b6af5fa36326e0e166dd/Claude%20Opus%204.6%20System%20Card.pdf",
+      "sha256": "sha256-TbZ8a2rqCofn+KeEuD/AWg8aYaPodhX+eVbjSGuVGzw="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-opus-4-5",
+      "title": "Claude Opus 4.5",
+      "date": "2025-11",
+      "url": "https://www-cdn.anthropic.com/bf10f64990cfda0ba858290be7b8cc6317685f47.pdf",
+      "sha256": "sha256-M76S78tY+QHZ0sF+Yb8nevvVFKGscKZC8h6RjCHKJag="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-haiku-4-5",
+      "title": "Claude Haiku 4.5",
+      "date": "2025-10",
+      "url": "https://www-cdn.anthropic.com/7aad69bf12627d42234e01ee7c36305dc2f6a970.pdf",
+      "sha256": "sha256-G5rl9PZqZcGzegMRea89ujWVlHGjpdGV5P5wC4dVgUE="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-sonnet-4-5",
+      "title": "Claude Sonnet 4.5",
+      "date": "2025-09",
+      "url": "https://www-cdn.anthropic.com/963373e433e489a87a10c823c52a0a013e9172dd.pdf",
+      "sha256": "sha256-1dHOKP6hAa47IBpdTaEACQpda3Mkb32oIMr9fbsREA4="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-opus-4-1",
+      "title": "Claude Opus 4.1",
+      "date": "2025-08",
+      "url": "https://www-cdn.anthropic.com/9fa30625273bafdf5af82c93719d7ca606485a16.pdf",
+      "sha256": "sha256-srW+uj7ThqWN52DmZPXJi5CmzhJ1x+5m2ovrcOEG4PI="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-4",
+      "title": "Claude Sonnet 4 and Claude Opus 4",
+      "date": "2025-05",
+      "url": "https://www-cdn.anthropic.com/07b2a3f9902ee19fe39a36ca638e5ae987bc64dd.pdf",
+      "sha256": "sha256-w1hGQoniQoP8nVYT0qZ2/YqrpRDxRJvO2uAadNgjKrQ="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-sonnet-3-7",
+      "title": "Claude Sonnet 3.7",
+      "date": "2025-02",
+      "url": "https://www-cdn.anthropic.com/9ff93dfa8f445c932415d335c88852ef47f1201e.pdf",
+      "sha256": "sha256-gpR6RvwtG5odaVAe+XP8PFsyi3A7mhe9ihQ8JnL4oaY="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-haiku-3-5-sonnet-3-5-new",
+      "title": "Claude Haiku 3.5 and Claude Sonnet 3.5 (new)",
+      "date": "2024-10",
+      "url": "https://www-cdn.anthropic.com/c7822cdc35ad788ec87e14b3a9d45010f1f86c38.pdf",
+      "sha256": "sha256-VCXd5JtkmRYADjj7hsRyHP4xqL3+MLu5jodfo9ZUgEw="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-sonnet-3-5",
+      "title": "Claude Sonnet 3.5",
+      "date": "2024-06",
+      "url": "https://www-cdn.anthropic.com/fed9cc193a14b84131812372d8d5857f8f304c52/Model_Card_Claude_3_Addendum.pdf",
+      "sha256": "sha256-rDlsfxVdy/szzrNCtIZH4zDKUYwBx/UIAB1qrZMlegM="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-3",
+      "title": "Claude 3",
+      "date": "2024-03",
+      "url": "https://www-cdn.anthropic.com/c6a80a657af445f40e31afac050f3bf76d3b1404.pdf",
+      "sha256": "sha256-iK6FH1PDA01DaBYWTOSah2szP6m1UPt+8pg4GCtZun0="
+    },
+    {
+      "vendor": "anthropic",
+      "slug": "claude-2",
+      "title": "Claude 2",
+      "date": "2023-07",
+      "url": "https://www-cdn.anthropic.com/bd2a28d2535bfb0494cc8e2a3bf135d2e7523226/Model-Card-Claude-2.pdf",
+      "sha256": "sha256-SM2llyG9fb2opd4cjkmCU+utUiFLs2YfaNvvP0kOtms="
+    },
+    {
+      "vendor": "openai",
+      "slug": "gpt-5-6-preview",
+      "title": "GPT-5.6 Preview",
+      "date": "2026-06",
+      "url": "https://deploymentsafety.openai.com/gpt-5-6-preview/gpt-5-6-preview.pdf",
+      "sha256": "sha256-AsmNTgz9stV/Mw0ELjTJgK9Q5BCtQG1H9cmO3ZYTsTA="
+    },
+    {
+      "vendor": "openai",
+      "slug": "gpt-5-6",
+      "title": "GPT-5.6",
+      "date": "2026-07",
+      "url": "https://deploymentsafety.openai.com/gpt-5-6/gpt-5-6.pdf",
+      "sha256": "sha256-Z7QAiyUegrcB2FtgTyxeMtmdFL5yEIGlo7iOyBHLHrc="
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{ cond, x }: if cond then [ x ] else [ ]

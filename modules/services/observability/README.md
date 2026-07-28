@@ -1,0 +1,134 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="App SDKs, host metrics, and logs flow through per-node agent Collectors to one gateway that writes ClickHouse, read by Grafana and ix-observe">
+  </picture>
+</p>
+
+# ix Observability
+
+How do you see every trace, metric, and log from an ix fleet in one place? `services.ix-observability` is a self-hosted [OpenTelemetry](https://opentelemetry.io/) pipeline: one module, one Collector, one job. Every service emits telemetry, it lands in [ClickHouse](https://clickhouse.com/), and it renders in [Grafana](https://grafana.com/).
+
+This is telemetry only. The search corpus used to ride this same Collector (RFC
+0004), but it moved to its own Parquet-log pipeline (issue #736, the
+`source-parquet` + `sink-parquet` crates): an append-only Parquet log on object
+storage as the source of truth, with the Mixedbread index as a materialized view
+replayed from it. OTel is back to what it is good at.
+
+The Collector is the one moving part everything else hangs off. Each application
+node runs a local Collector (the **agent**) that forwards to one gateway node
+(the **stack**) over OTLP/gRPC; the gateway writes to ClickHouse, and Grafana and
+the `ix-observe` CLI read from it. That is the whole hero diagram above.
+
+## Use it
+
+The flake exposes the module as `nixosModules.observability`; inside this repo's
+own VM configs it is auto-discovered, so no import line is needed there (the
+examples just set `services.ix-observability.*`). From another flake:
+
+```nix
+{
+  inputs.index.url = "github:indexable-inc/index";
+  # in a NixOS host configuration:
+  imports = [ inputs.index.nixosModules.observability ];
+}
+```
+
+Single node, everything local:
+
+```nix
+{ services.ix-observability.enable = true; }
+```
+
+Fleet: one gateway, many agents (the [observability-stack example](../../../examples/observability/stack/)
+wires exactly this):
+
+```nix
+# observability node
+{ services.ix-observability.stack.enable = true; }
+
+# each app node
+{
+  services.ix-observability.agent = {
+    enable = true;
+    endpoint = "observability:4317";
+    filelog.paths = [ "/var/log/my-service/*.log" ];
+  };
+  services.ix-observability.resourceAttributes."ix.app" = "my-service";
+}
+```
+
+Point your application's OpenTelemetry SDK at `127.0.0.1:4317`; the local
+Collector handles batching, resource labels, and the remote write. Every option
+is declared in [`default.nix`](default.nix).
+
+## How telemetry flows through the Collector
+
+The generated [`opentelemetry-collector`](default.nix) config has three stages.
+
+- **Receivers** take signals in: `otlp` (gRPC `4317`, HTTP `4318`) always; plus
+  `hostmetrics`, `filelog/app`, and `journald` on an agent.
+- **Processors** run in order on every pipeline: `memory_limiter` (backpressure),
+  `resource` (stamps `service.namespace=ix`, `deployment.environment`,
+  `ix.collector.node`, and your `resourceAttributes` without overwriting
+  signal-supplied values), then `batch`.
+- **Exporters** send signals out: `clickhouse` (on the stack) and `otlp` (forward
+  east-west to another collector).
+
+Three pipelines wire them together:
+
+```mermaid
+flowchart TB
+  otlp["otlp"] --> P
+  hostmetrics["hostmetrics"] --> P
+  filelog["filelog / journald"] --> P
+  P["memory_limiter, resource, batch"]
+  P --> traces["traces to clickhouse / otlp"]
+  P --> metrics["metrics to clickhouse / otlp"]
+  P --> logs["logs to clickhouse / otlp"]
+```
+
+All three pipelines share the same exporters: ClickHouse on the stack, the `otlp`
+forward on an agent.
+
+## Two roles
+
+The module is the same everywhere; two flags decide what a node runs.
+
+| | `agent` | `stack` |
+|---|---|---|
+| Runs a Collector | yes (local, loopback) | yes (gateway, `0.0.0.0`) |
+| Collects host metrics / app logs | yes | no |
+| Runs ClickHouse + Grafana | no | yes |
+| Default exporter | forwards OTLP to the gateway | writes ClickHouse |
+
+`enable = true` turns on both for a single-node setup. For a fleet, run `stack`
+on one observability node and `agent` on each app node pointed at it.
+
+## Where the data lands
+
+- **ClickHouse** (`otel` database): `otel_logs`, `otel_traces`, and
+  `otel_metrics_*`. Native SQL on `9000`, HTTP on `8123`. Retention is the
+  `clickhouse.ttl` default of `168h` (7 days).
+- **Grafana** on `3000`, with the ClickHouse datasource and the
+  [`overview`](_dashboards/overview.nix) dashboard provisioned.
+
+Ports are claimed through `ix.networking.portClaims` and only opened in the guest
+firewall when the matching `openFirewall` flag is set.
+
+## Querying
+
+The stack installs `ix-observe`, a nushell helper that queries ClickHouse as
+`JSONEachRow`:
+
+```sh
+ix shell observability -- ix-observe logs --limit 20    # recent logs
+ix shell observability -- ix-observe errors             # error-status spans
+ix shell observability -- ix-observe slow-spans         # slowest spans
+ix shell observability -- ix-observe trace <trace-id>   # one trace, ordered
+ix shell observability -- ix-observe sql "SELECT ..."   # arbitrary SQL
+```
+
+---
+
+<sub>Written with Claude (Opus 4.8).</sub>

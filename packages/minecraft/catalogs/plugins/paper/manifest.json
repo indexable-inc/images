@@ -1,0 +1,187 @@
+{
+  "loader": "paper",
+  "versions": {
+    "26.1.2": [
+      {
+        "slug": "luckperms",
+        "pluginName": "LuckPerms"
+      },
+      {
+        "slug": "teams-api",
+        "pluginName": "TeamsAPI"
+      },
+      {
+        "slug": "placeholderapi",
+        "pluginName": "PlaceholderAPI"
+      },
+      {
+        "slug": "vaultunlocked",
+        "pluginName": "Vault"
+      },
+      {
+        "slug": "essentialsx",
+        "pluginName": "Essentials",
+        "version": "2.22.0-20260512.224021-100",
+        "url": "https://repo.essentialsx.net/snapshots/net/essentialsx/EssentialsX/2.22.0-SNAPSHOT/EssentialsX-2.22.0-20260512.224021-100.jar"
+      },
+      {
+        "slug": "essentialsx-spawn",
+        "pluginName": "EssentialsSpawn",
+        "version": "2.22.0-20260512.224021-100",
+        "url": "https://repo.essentialsx.net/snapshots/net/essentialsx/EssentialsXSpawn/2.22.0-SNAPSHOT/EssentialsXSpawn-2.22.0-20260512.224021-100.jar"
+      },
+      {
+        "slug": "coreprotect",
+        "pluginName": "CoreProtect",
+        "version": "23.2",
+        "url": "https://cdn.modrinth.com/data/Lu3KuzdV/versions/6W2ad1iI/CoreProtect-CE-23.2.jar"
+      },
+      {
+        "slug": "eternaleconomy",
+        "pluginName": "EternalEconomy"
+      },
+      {
+        "slug": "quickshop-hikari",
+        "pluginName": "QuickShop-Hikari"
+      },
+      {
+        "slug": "tradepost",
+        "pluginName": "TradePost"
+      },
+      {
+        "slug": "worldedit",
+        "pluginName": "WorldEdit"
+      },
+      {
+        "slug": "worldguard",
+        "pluginName": "WorldGuard"
+      },
+      {
+        "slug": "terraformgenerator",
+        "pluginName": "TerraformGenerator"
+      },
+      {
+        "slug": "pvpindex-factions",
+        "pluginName": "PvPIndexFactions"
+      },
+      {
+        "slug": "combatlogplugin",
+        "pluginName": "CombatLog"
+      },
+      {
+        "slug": "simple-voice-chat",
+        "pluginName": "voicechat"
+      },
+      {
+        "slug": "distant-horizons-support",
+        "pluginName": "DHSupport"
+      },
+      {
+        "slug": "bluemap",
+        "pluginName": "BlueMap"
+      },
+      {
+        "slug": "skript",
+        "pluginName": "Skript"
+      },
+      {
+        "slug": "plugmanx",
+        "pluginName": "PlugManX",
+        "version": "3.0.4",
+        "url": "https://cdn.modrinth.com/data/yro4niHu/versions/hrMAp7Ww/PlugManX-3.0.4.jar"
+      },
+      {
+        "slug": "viaversion",
+        "pluginName": "ViaVersion"
+      },
+      {
+        "slug": "viabackwards",
+        "pluginName": "ViaBackwards"
+      },
+      {
+        "slug": "viarewind",
+        "pluginName": "ViaRewind"
+      },
+      {
+        "slug": "discordsrv",
+        "pluginName": "DiscordSRV"
+      }
+    ],
+    "1.21.11": [
+      {
+        "slug": "discordsrv",
+        "pluginName": "DiscordSRV"
+      }
+    ]
+  },
+  "searches": {
+    "paper-26.1.2-server-popular": {
+      "limit": 100,
+      "index": "downloads",
+      "game_versions": [
+        "26.1.2"
+      ],
+      "loaders": [
+        "paper"
+      ],
+      "facets": [
+        [
+          "versions:26.1.2"
+        ],
+        [
+          "categories:paper"
+        ],
+        [
+          "server_side:required",
+          "server_side:optional"
+        ]
+      ]
+    },
+    "paper-26.1.2-factions": {
+      "limit": 50,
+      "index": "relevance",
+      "query": "factions",
+      "game_versions": [
+        "26.1.2"
+      ],
+      "loaders": [
+        "paper"
+      ],
+      "facets": [
+        [
+          "versions:26.1.2"
+        ],
+        [
+          "categories:paper"
+        ],
+        [
+          "server_side:required",
+          "server_side:optional"
+        ]
+      ]
+    },
+    "paper-26.1.2-worldgen": {
+      "limit": 50,
+      "index": "downloads",
+      "query": "world generation",
+      "game_versions": [
+        "26.1.2"
+      ],
+      "loaders": [
+        "paper"
+      ],
+      "facets": [
+        [
+          "versions:26.1.2"
+        ],
+        [
+          "categories:paper"
+        ],
+        [
+          "server_side:required",
+          "server_side:optional"
+        ]
+      ]
+    }
+  }
+}

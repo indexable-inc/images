@@ -1,0 +1,58 @@
+---
+id: 0017-delegation-contract
+number: '0017'
+title: One delegation contract for agents
+status: Sketch
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 6, why: 'one dispatch primitive across overseer, background agents, and bg sessions' }
+  impact: { value: 7, why: 'fifty issues of stale dispatches, lost lifecycle signals, and blind handoffs' }
+  effort: { value: 7, why: 'session identity, state visibility, and lifecycle signaling across runtimes' }
+  risk: { value: 5, why: 'delegation bugs waste fleets quietly; migration must not add a new silent path' }
+  maturity: { value: 2, why: 'several dispatch mechanisms exist; none is the contract' }
+  leverage: { value: 8, why: 'every multi-agent workflow builds on whichever primitive wins' }
+  taste: { value: 6, why: 'what a dispatch owes its parent is a design judgment, not plumbing' }
+description: 'One contract for handing work to another agent: identity (which session, which worktree), state (live, stalled, done, with evidence), and lifecycle (started, progress, terminal signal, no silent stops). Overseer dispatch, background agents, and bg sessions converge on it.'
+---
+
+<script>
+  import Dag from '../Dag.svelte';
+</script>
+
+## Summary
+
+The repo has grown three ways to hand work to another agent (overseer
+fixers, background claude sessions, kernel-spawned agents) and fifty issues
+about the same failures in each: dispatches with stale context, agents that
+stop without a terminal signal, no PID-to-session mapping, parents that
+cannot tell stalled from working. The fix is not a fourth mechanism; it is
+one contract the existing three implement: every dispatch carries its
+context snapshot, every delegate emits a terminal signal, and every parent
+can ask "alive, and doing what?" and get an evidence-backed answer.
+
+<Dag
+  nodes={[
+    { id: 'dispatch', label: 'dispatch', sub: 'context snapshot, owner', col: 0, row: 0 },
+    { id: 'work', label: 'work', sub: 'liveness queryable', col: 1, row: 0 },
+    { id: 'signal', label: 'terminal signal', sub: 'done, failed, blocked', col: 2, row: 0 },
+    { id: 'verify', label: 'parent verifies', sub: 'evidence, not status', col: 3, row: 0 }
+  ]}
+  edges={[['dispatch', 'work'], ['work', 'signal'], ['signal', 'verify']]}
+/>
+
+## Non-goals
+
+Choosing which orchestrator wins; the contract is orchestrator-neutral by
+design.
+
+## Absorbed issues
+
+[#2505](https://github.com/indexable-inc/index/issues/2505), [#2422](https://github.com/indexable-inc/index/issues/2422), [#2440](https://github.com/indexable-inc/index/issues/2440), [#2467](https://github.com/indexable-inc/index/issues/2467), [#2470](https://github.com/indexable-inc/index/issues/2470), [#2474](https://github.com/indexable-inc/index/issues/2474), [#2476](https://github.com/indexable-inc/index/issues/2476), [#2498](https://github.com/indexable-inc/index/issues/2498), [#2346](https://github.com/indexable-inc/index/issues/2346), [#2358](https://github.com/indexable-inc/index/issues/2358), [#2363](https://github.com/indexable-inc/index/issues/2363), [#2377](https://github.com/indexable-inc/index/issues/2377), [#2336](https://github.com/indexable-inc/index/issues/2336), [#2328](https://github.com/indexable-inc/index/issues/2328), [#2434](https://github.com/indexable-inc/index/issues/2434), [#2451](https://github.com/indexable-inc/index/issues/2451), [#2351](https://github.com/indexable-inc/index/issues/2351), [#2366](https://github.com/indexable-inc/index/issues/2366), [#2383](https://github.com/indexable-inc/index/issues/2383), [#2692](https://github.com/indexable-inc/index/issues/2692), [#2711](https://github.com/indexable-inc/index/issues/2711), [#2323](https://github.com/indexable-inc/index/issues/2323), [#2317](https://github.com/indexable-inc/index/issues/2317), [#2312](https://github.com/indexable-inc/index/issues/2312), [#2308](https://github.com/indexable-inc/index/issues/2308), [#2306](https://github.com/indexable-inc/index/issues/2306), [#2296](https://github.com/indexable-inc/index/issues/2296), [#2271](https://github.com/indexable-inc/index/issues/2271), [#2268](https://github.com/indexable-inc/index/issues/2268), [#2262](https://github.com/indexable-inc/index/issues/2262), [#2225](https://github.com/indexable-inc/index/issues/2225), [#2212](https://github.com/indexable-inc/index/issues/2212), [#2158](https://github.com/indexable-inc/index/issues/2158), [#2193](https://github.com/indexable-inc/index/issues/2193), [#2201](https://github.com/indexable-inc/index/issues/2201), [#2298](https://github.com/indexable-inc/index/issues/2298), [#3310](https://github.com/indexable-inc/index/issues/3310), [#3289](https://github.com/indexable-inc/index/issues/3289), [#3127](https://github.com/indexable-inc/index/issues/3127), [#3190](https://github.com/indexable-inc/index/issues/3190), [#3221](https://github.com/indexable-inc/index/issues/3221), [#3219](https://github.com/indexable-inc/index/issues/3219), [#3205](https://github.com/indexable-inc/index/issues/3205), [#3194](https://github.com/indexable-inc/index/issues/3194), [#2180](https://github.com/indexable-inc/index/issues/2180), [#2092](https://github.com/indexable-inc/index/issues/2092), [#2008](https://github.com/indexable-inc/index/issues/2008), [#2153](https://github.com/indexable-inc/index/issues/2153), [#2077](https://github.com/indexable-inc/index/issues/2077), [#2178](https://github.com/indexable-inc/index/issues/2178), [#2229](https://github.com/indexable-inc/index/issues/2229), [#2243](https://github.com/indexable-inc/index/issues/2243), [#2300](https://github.com/indexable-inc/index/issues/2300), [#2277](https://github.com/indexable-inc/index/issues/2277), [#2025](https://github.com/indexable-inc/index/issues/2025)
+
+Drafted by Claude Code (Fable) from the open-issue corpus; scores are seed
+estimates.

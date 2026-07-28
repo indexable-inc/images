@@ -1,0 +1,27 @@
+{
+  "name": "@indexable/tui",
+  "version": "0.1.0",
+  "description": "Node.js bindings for the tui PTY-backed terminal manager (spawn and drive vim, a REPL, a shell) with a Loro-backed web dashboard.",
+  "license": "UNLICENSED",
+  "private": false,
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./native/tui_node.node": "./native/tui_node.node"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "native"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "linux"
+  ]
+}

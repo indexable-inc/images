@@ -1,0 +1,21 @@
+---
+id: ix-mcp-pinned-interpreter
+postedAt: 2026-05-29T14:05:00-07:00
+title: "`ix-mcp` Python sessions run on one pinned interpreter"
+tags: [interesting, mcp, agents, python]
+links:
+  - label: mcp package
+    href: https://github.com/indexable-inc/index/tree/main/packages/mcp
+---
+
+`python_session_create` no longer takes a `command`, and the CLI drops `--python`. Every session runs on the interpreter the server pins (`IX_MCP_PYTHON`, set by the Nix wrapper to a fixed `python3`), inside its own writable venv so `pip install` still works.
+
+Bring-your-own interpreter sounded flexible but bought little. It made each session depend on the host's ambient Python, and its failure modes (missing interpreter, wrong version, no `pip`) all read as "your environment is weird." One pinned interpreter makes every session reproducible and deletes that whole class of failure.
+
+`cwd` stays, so a session can still root itself in a project directory:
+
+```json
+{ "name": "python_session_create", "arguments": { "cwd": "/path/to/project" } }
+```
+
+What you give up: a session can't use a project's own resolved dependencies (a `uv` or `poetry` env). If that need comes back, the right shape is a typed "project env" door: the caller names a project and the server resolves the interpreter, no raw command vector.

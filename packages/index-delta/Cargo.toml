@@ -1,0 +1,30 @@
+[package]
+name = "index-delta"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Drift tracker for Nix-declared mutable files: seed writable overlays from store bases, report logical (format-aware) diffs, and resolve them with explicit verbs instead of auto-merge"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+crossterm.workspace = true
+plist.workspace = true
+ratatui.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+serde_norway.workspace = true
+sha2.workspace = true
+similar.workspace = true
+toml = { workspace = true, features = ["parse", "serde"] }
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "index-delta"
+path = "src/main.rs"

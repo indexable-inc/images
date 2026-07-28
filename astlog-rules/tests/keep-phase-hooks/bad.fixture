@@ -1,0 +1,5 @@
+{ buildPhase = ''
+  runHook preBuild
+  make something
+  do something else
+''; }

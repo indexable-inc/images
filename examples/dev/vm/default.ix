@@ -1,0 +1,10 @@
+// `mkDev` consumes the dev module in ./dev.nix and returns the same shape
+// `mkVm` does, so `ix apply` can consume it. `src` is the flake's `self`
+// (defaulting to this directory for direct imports); it gets materialized
+// at /ix on the VM for recursion (a VM can bring up more VMs from its own
+// source).
+export default ({ index, src = __dir }) =>
+  index.lib.mkDev({
+    module: import("./dev.nix"),
+    src: src,
+  });

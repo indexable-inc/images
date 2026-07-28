@@ -1,0 +1,19 @@
+---
+id: humanlayer-daemon
+postedAt: 2026-06-18T09:00:00-07:00
+title: "HumanLayer remote daemon in an ix VM"
+tags: [interesting, images, agents]
+links:
+  - label: image source
+    href: https://github.com/indexable-inc/index/blob/main/images/dev/humanlayer-daemon/default.nix
+  - label: service module
+    href: https://github.com/indexable-inc/index/blob/main/modules/services/humanlayer/default.nix
+  - label: CLI package
+    href: https://github.com/indexable-inc/index/blob/main/packages/humanlayer/default.nix
+---
+
+The `humanlayer-daemon` image boots an ix VM that runs the HumanLayer (riptide) remote daemon, so a guest can act as a remote HumanLayer host driving coding sessions. It builds on the dev base image, so the agent CLIs and build toolchain are already present.
+
+The daemon is the `services.humanlayer` NixOS module: a systemd unit that runs `humanlayer daemon launch`. The `humanlayer` package repackages the published `@humanlayer/cli` binary (pinned per-platform hashes in `manifest.json`, refreshed by `nix run .#humanlayer.updateScript`).
+
+Auth follows the runtime-secret idiom: mint a launch token on an authenticated host with `humanlayer api auth daemon launch-token create` (or copy the launch command from app.humanlayer.com) and drop it at `/run/secrets/humanlayer/launch-token`. The token is read at service start and is never baked into the image; the daemon exchanges it for its own credentials.

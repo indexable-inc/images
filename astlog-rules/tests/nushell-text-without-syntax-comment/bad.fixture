@@ -1,0 +1,7 @@
+{
+  text = ''
+    def main [] {
+      print "ok"
+    }
+  '';
+}

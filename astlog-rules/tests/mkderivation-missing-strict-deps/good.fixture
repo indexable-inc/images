@@ -1,0 +1,1 @@
+{ pkgs }: pkgs.stdenv.mkDerivation { pname = "x"; version = "1"; strictDeps = true; }

@@ -1,0 +1,68 @@
+---
+id: starship-pin-dirty-checkout
+postedAt: "2026-07-25T17:05:00-07:00"
+title: a dirty ix checkout broke home-manager switch outright
+tags:
+  - nix
+  - home-manager
+---
+
+`home-manager switch` failed with no obvious connection to anything being
+switched:
+
+```
+error: attribute 'lastModified' missing
+at .../home/common.nix:75:22:
+    75|     ixPinTimestamp = inputs.ix.lastModified;
+```
+
+The trigger is having uncommitted work in `~/.config/nix/ix`, which is the
+normal state while working in it. A `path:` flake input carries no
+`lastModified` when its checkout is dirty, and this read it unguarded, so the
+whole switch aborted over a decorative prompt segment.
+
+## the comment was the bug
+
+The parameter it fed was documented as safe:
+
+```
+# ix pin: a git flake input, so its commit epoch is real at eval time and
+# baked at switch time.
+ixPinTimestamp,
+```
+
+That was true when written. ix later became a vendored submodule
+(`ix.url = "path:./ix"`, nix#147) and the comment did not follow. The sibling
+index pin already handles exactly this, and says why:
+
+```
+# index pin repo: ... Its path: input carries no lastModified (git+file
+# fetch canonicalizes mtimes, index#3733), so the segment asks git for the
+# commit epoch at prompt time
+```
+
+So the fix was to stop treating the two differently. `ixPinTimestamp` (an
+epoch, `ints.positive`) becomes `ixPinRepo` (a path), and the segment shells
+out to `git log -1 --format=%ct` at prompt time like index's does. There is no
+eval-time input left to be missing, and the prompt now tracks a bump without a
+switch.
+
+## the index pin had been dead for a while
+
+Reading the same code turned up a second one, silent rather than loud:
+
+```nix
+indexPinRepo = "${cfg.paths.privateConfigDirectory}/index";
+```
+
+That resolves to `~/.config/nix/index`. index lives at `~/.config/nix/ix/index`
+(ix#8119) and this path never followed the move, so it named a directory that
+does not exist. `pinModule` deliberately short-circuits a failing epoch
+substitution so a host without the checkout renders an empty segment instead of
+a bogus age, which meant this failure looked exactly like "you don't have that
+checkout". The index pin age had simply been blank.
+
+`cfg.paths.indexCheckout` already held the correct path. The two bugs are
+opposites worth noticing together: one aborted a whole switch over a prompt
+decoration, the other silently rendered nothing for weeks. Neither is the
+behaviour you want from a status segment.

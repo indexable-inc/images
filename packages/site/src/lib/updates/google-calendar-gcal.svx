@@ -1,0 +1,15 @@
+---
+id: google-calendar-gcal
+postedAt: 2026-06-04T22:25:16-07:00
+title: "`gcal`: Google Calendar as a CLI and as ix-mcp tools, over one Rust crate"
+tags: [interesting, rust, mcp, cli, integration]
+links:
+  - label: google-calendar
+    href: https://github.com/indexable-inc/index/tree/main/packages/google/calendar
+  - label: "issue #643"
+    href: https://github.com/indexable-inc/index/issues/643
+---
+
+`nix run .#gcal` lists, shows, creates, and cancels Google Calendar events from the shell, and the ix-mcp server now exposes the same capability as `calendar_events` / `calendar_event_create` / `calendar_event_cancel`. Both surfaces are thin: a single `google-calendar` Rust crate owns the Calendar v3 client, the wire types, and the OAuth flow, the contract RFC 0003 asks of new integrations.
+
+Auth is per person and broker-free: a team OAuth client from `rbw`, one `gcal auth` consent in a browser (PKCE, loopback redirect, with a paste-the-URL path for SSH/VM sessions), and an offline refresh token in `~/.config/gcal/token.json`. Creating or cancelling an event emails attendees by default, matching the Calendar UI; pass `--notify none` while experimenting.

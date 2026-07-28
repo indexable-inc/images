@@ -1,0 +1,422 @@
+{
+  "version": 0,
+  "name": "sample",
+  "names": {
+    "py": null
+  },
+  "docs": [
+    "A sample boundary exercising the elixir surface."
+  ],
+  "functions": [
+    {
+      "name": "rows",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Fetch rows.",
+        "",
+        "Docs become `@doc`s."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "store",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "limit",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "Usize"
+          },
+          "default": {
+            "Int": 10
+          }
+        },
+        {
+          "name": "root",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Option": {
+              "String": {
+                "owned": false
+              }
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Vec": {
+          "Named": "Row"
+        }
+      },
+      "throws": "SampleError"
+    },
+    {
+      "name": "recount",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Recount everything; long-running, so scheduled dirty."
+      ],
+      "asyncness": "Sync",
+      "blocking": true,
+      "args": [
+        {
+          "name": "home",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Path": {
+              "owned": true
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Int": "U64"
+      },
+      "throws": null
+    },
+    {
+      "name": "label",
+      "names": {
+        "py": null,
+        "ex": "label_of"
+      },
+      "docs": [
+        "Resolve a label off the scheduler."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [
+        {
+          "name": "id",
+          "names": {
+            "py": null,
+            "ex": "key"
+          },
+          "ty": {
+            "Int": "U64"
+          },
+          "default": null
+        },
+        {
+          "name": "prefix",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "String": {
+          "owned": true
+        }
+      },
+      "throws": null
+    },
+    {
+      "name": "store",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Persist a row."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [
+        {
+          "name": "row",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Named": "Row"
+          },
+          "default": null
+        }
+      ],
+      "ret": null,
+      "throws": "SampleError"
+    },
+    {
+      "name": "tags",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Every tag, on demand."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "prefix",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": false
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Stream": {
+          "String": {
+            "owned": true
+          }
+        }
+      },
+      "throws": null
+    },
+    {
+      "name": "scan",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Stream rows, verifying the store first."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "store",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": false
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Stream": {
+          "Named": "Row"
+        }
+      },
+      "throws": "SampleError"
+    }
+  ],
+  "records": [
+    {
+      "name": "Row",
+      "names": {
+        "py": null,
+        "ex": "Line"
+      },
+      "docs": [
+        "A row."
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Identifier."
+          ],
+          "ty": {
+            "Int": "U64"
+          }
+        },
+        {
+          "name": "name",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          }
+        },
+        {
+          "name": "weights",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Map": {
+              "key": {
+                "String": {
+                  "owned": true
+                }
+              },
+              "value": {
+                "Float": "F64"
+              }
+            }
+          }
+        },
+        {
+          "name": "home",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Option": {
+              "Path": {
+                "owned": true
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "enums": [],
+  "errors": [
+    {
+      "name": "SampleError",
+      "names": {
+        "py": null,
+        "ex": "SampleFault"
+      },
+      "docs": [
+        "Boundary failures."
+      ],
+      "py_base": "RuntimeError",
+      "variants": [
+        {
+          "name": "StoreGone",
+          "names": {
+            "py": null,
+            "ex": "MissingStore"
+          },
+          "docs": [
+            "The store is gone."
+          ]
+        },
+        {
+          "name": "Invalid",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Bad input."
+          ]
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "name": "Cursor",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "A live cursor."
+      ],
+      "resource": false,
+      "constructor": {
+        "name": "open",
+        "names": {
+          "py": null
+        },
+        "docs": [
+          "Open at the start."
+        ],
+        "asyncness": "Sync",
+        "blocking": false,
+        "args": [
+          {
+            "name": "store",
+            "names": {
+              "py": null
+            },
+            "ty": {
+              "String": {
+                "owned": false
+              }
+            },
+            "default": null
+          }
+        ],
+        "ret": null,
+        "throws": "SampleError"
+      },
+      "methods": [
+        {
+          "name": "position",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "The current position."
+          ],
+          "asyncness": "Sync",
+          "blocking": false,
+          "args": [],
+          "ret": {
+            "Int": "U64"
+          },
+          "throws": null
+        },
+        {
+          "name": "skip",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Skip ahead; long-running, so scheduled dirty."
+          ],
+          "asyncness": "Sync",
+          "blocking": true,
+          "args": [
+            {
+              "name": "n",
+              "names": {
+                "py": null
+              },
+              "ty": {
+                "Int": "U64"
+              },
+              "default": null
+            }
+          ],
+          "ret": {
+            "Int": "U64"
+          },
+          "throws": null
+        }
+      ]
+    }
+  ]
+}

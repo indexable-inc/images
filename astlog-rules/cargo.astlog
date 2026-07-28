@@ -1,0 +1,25 @@
+;; Cargo.toml lint rules (TOML grammar). Same shape as nix.astlog / rust.astlog:
+;; one relation per rule named after its id, each carrying a (lint <rule> ...)
+;; declaration so `astlog scan` gates CI on it, suppressible in place with an
+;; `astlog-ignore: <rule>` comment. Fixtures live in astlog-rules/tests/<rule-id>/
+;; and are run as `.toml` by the `astlog-rules` flake-check self-test.
+
+;; no-cargo-path-dep: an inter-crate `path = "..."` dependency in a member
+;; dependency table ([dependencies], [dev-dependencies], [build-dependencies],
+;; or [target.*.dependencies], inline or [<table>.<name>] subtable form). Moving
+;; a crate then breaks every relative path that pointed at it. Declare the local
+;; crate ONCE in that workspace's [workspace.dependencies] (the one table where a
+;; `path` is allowed) and inherit it in the member with `name.workspace = true`.
+;; The table header is captured as the anchored first child so each dependency
+;; matches once (no per-sibling blow-up); the positive header alternation matches
+;; the member dependency tables and deliberately never `workspace.dependencies`.
+(rule (no-cargo-path-dep n)
+  (match toml "(table . [(bare_key) (dotted_key)] @hdr (pair (bare_key) (inline_table (pair (bare_key) @key (string)))) @n)")
+  (text key "path")
+  (text-match hdr "^(dependencies|dev-dependencies|build-dependencies|target\\..*\\.dependencies)$"))
+(rule (no-cargo-path-dep n)
+  (match toml "(table . (dotted_key) @hdr (pair (bare_key) @key (string)) @n)")
+  (text key "path")
+  (text-match hdr "^((dependencies|dev-dependencies|build-dependencies)\\.|target\\..*\\.dependencies\\.)"))
+(lint no-cargo-path-dep error
+  "inter-crate `path` dependency in a member table; declare the crate once in [workspace.dependencies] and inherit it with `name.workspace = true`")

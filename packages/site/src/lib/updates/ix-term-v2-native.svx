@@ -1,0 +1,80 @@
+---
+id: ix-term-v2-native
+postedAt: 2026-07-21T09:00:00-07:00
+title: "ix-term v2: scrollback, Berkeley Mono, Ghostty-parity keys, a native shell"
+tags: [terminal, rust, svelte, fleet, interesting]
+links:
+  - label: v2 issue (ix 7989)
+    href: https://github.com/indexable-inc/ix/issues/7989
+  - label: v2 PR (ix 7991)
+    href: https://github.com/indexable-inc/ix/pull/7991
+  - label: polish PR (ix 8007)
+    href: https://github.com/indexable-inc/ix/pull/8007
+  - label: ix-vt mode accessors (index 3815)
+    href: https://github.com/indexable-inc/index/pull/3815
+  - label: index removal (3811)
+    href: https://github.com/indexable-inc/index/pull/3811
+  - label: v1 update
+    href: https://ix.dev/updates/ix-term-web-terminal
+---
+
+term.ix.dev now scrolls, renders in Berkeley Mono, answers the operator's
+Ghostty keybinds byte for byte, and runs as a real NixOS service. This is
+the sequel to [the v1 post](https://ix.dev/updates/ix-term-web-terminal):
+development moved to the private ix repo ([index#3810](https://github.com/indexable-inc/index/issues/3810)
+removed the index packages), and v2 landed there as
+[ix#7991](https://github.com/indexable-inc/ix/pull/7991) with follow-ups
+[7993](https://github.com/indexable-inc/ix/pull/7993),
+[7994](https://github.com/indexable-inc/ix/pull/7994),
+[8002](https://github.com/indexable-inc/ix/pull/8002), and
+[8003](https://github.com/indexable-inc/ix/pull/8003), then a polish pass
+([ix#8004](https://github.com/indexable-inc/ix/issues/8004),
+[PR 8007](https://github.com/indexable-inc/ix/pull/8007)). The v1 core
+carries over: multiplayer sessions where the driver owns the PTY size and
+everyone else sees a scaled mirror, and `ixterm open` popping HTML docs
+from inside a session over a private OSC 5522.
+
+Scrolling routes on terminal state. When the program asks for mouse
+reporting, the wheel forwards as SGR mouse events; on the alt screen it
+becomes arrow keys, so `less` and vim scroll the way they do in a native
+terminal. The routing reads new mode accessors added to ix-vt in
+[index#3815](https://github.com/indexable-inc/index/pull/3815). Sessions
+also show live viewer counts, and a Tauri shell wraps the client as a
+macOS app.
+
+The font stack is Berkeley Mono with Symbols Nerd Font Mono as fallback
+for glyphs it lacks. Two fixes made that stack honest: the fallback gets
+`size-adjust: 60%` so symbol glyphs match the cell width, and the cursor
+x-position is measured from the rendered row prefix instead of assumed
+from a uniform advance ([ix#8003](https://github.com/indexable-inc/ix/pull/8003)).
+The Berkeley Mono OTFs carry only a `calt` table, no `liga`, so nothing
+was lost by skipping ligature shaping.
+
+The polish pass copies the operator's Ghostty config byte-exact:
+cmd+backspace sends `0x15` (kill line), shift+enter sends `ESC CR`,
+cmd+enter sends CSI-u `13;9u`, option acts as alt, cmd+0/plus/minus set
+font size, cmd+shift+c copies the whole screen, and cmd+a stays unbound
+so readline keeps it. The custom-dark and custom-light Ghostty palettes
+follow `prefers-color-scheme`. OSC 0/2 titles become tab names, a bell
+badges the tab, and SGR underline styles render, colored underlines
+included.
+
+Deployment is a typed `services.ix.ixTerm` NixOS module, live on
+hil-compute-3 behind nginx on tcp/443. The polish deploy used a targeted
+closure: `nix store diff-closures` showed only ix-term changed (145.7
+KiB), so the switch restarted no prod VM services. The engine numbers
+from v1 benchmarking still hold: about 1.03M rows/sec of VT ingest, and
+29fps at 192KiB/s on the wire under a full-screen redraw storm.
+
+Parked with issues: OSC 8 anchors
+([8008](https://github.com/indexable-inc/ix/issues/8008)), bracketed
+paste, focus reporting, and mode 2026
+([8009](https://github.com/indexable-inc/ix/issues/8009)), OSC 52
+clipboard ([8010](https://github.com/indexable-inc/ix/issues/8010)),
+kitty keyboard protocol
+([8011](https://github.com/indexable-inc/ix/issues/8011)), kitty
+graphics and sixel ([8012](https://github.com/indexable-inc/ix/issues/8012)),
+OSC 133 prompt marks and OSC 7 cwd
+([8013](https://github.com/indexable-inc/ix/issues/8013)), and
+scrollback copy plus terminfo
+([8014](https://github.com/indexable-inc/ix/issues/8014)).

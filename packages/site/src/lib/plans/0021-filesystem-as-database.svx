@@ -1,0 +1,45 @@
+---
+id: 0021-filesystem-as-database
+number: '0021'
+title: The filesystem as a queryable database
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 7, why: 'treats a core OS surface as an indexed store rather than a tree to walk' }
+  impact: { value: 6, why: 'every tool that currently walks the tree to find tagged things gets O(query)' }
+  effort: { value: 6, why: 'an incrementally maintained xattr index plus a query surface' }
+  risk: { value: 4, why: 'the index is derived state; worst case it is stale and rebuilt' }
+  maturity: { value: 1, why: 'idea stage' }
+  leverage: { value: 7, why: 'a query primitive other tools compose, not a feature' }
+  taste: { value: 7, why: 'the query model and what counts as a component is the design work' }
+description: 'Query all files or folders carrying a given xattr without traversing the tree: an incrementally maintained index makes attributes queryable the way a database queries columns. Prior art: flecs, files as entities, xattrs as components.'
+---
+
+## Summary
+
+Finding every file or folder tagged with an xattr today means walking the
+whole tree and asking each entry, which is why nobody builds on xattrs.
+Make the filesystem answer like a database instead: an index, maintained
+incrementally from filesystem events, that answers "everything with
+attribute X" in query time rather than traversal time.
+
+## Example
+
+A systemd service that keeps every repo on a machine fresh: query "every
+folder containing `.git`" (or every folder deliberately tagged with a `git`
+xattr) and `git pull` each one every 30 seconds. Today that is a full
+filesystem scan per tick or a hand-maintained list; with the index it is
+one query, and newly cloned repos join automatically.
+
+## Prior art
+
+flecs: entities with components, queried by component. Files are entities,
+xattrs are components; the same query model applies.
+
+Drafted by Claude Code (Fable); comments wanted, hence the RFC flag.

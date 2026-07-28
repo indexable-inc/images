@@ -1,0 +1,890 @@
+# Base runtime profile.
+#
+# Auto-enabled by `lib/image/oci-layer.nix`. The bar: the first ten minutes of
+# a person or agent in a fresh VM must just work. That means the consensus
+# baseline every competitor's default sandbox ships (VCS, downloaders,
+# archivers, a Python and Node runtime, a C toolchain) plus the cross-cutting
+# debugging and introspection CLI. Image-specific runtime dependencies still
+# belong in the image or service that needs them; sealed appliances disable
+# the profile to drop the interactive stack.
+{
+  config,
+  ix,
+  lib,
+  pkgs,
+  ...
+}: let
+  cfg = config.ix.profiles.base;
+in {
+  options.ix.profiles.base = {
+    enable = lib.mkEnableOption "base runtime tools";
+
+    shellWorkspace = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Pre-create a writable workspace directory and auto-cd login
+          shells into it. Disable for sealed appliances where there is
+          no interactive workflow to land in.
+        '';
+      };
+
+      directory = lib.mkOption {
+        type = lib.types.str;
+        default = "/work/ix";
+        description = "Workspace directory entered by login shells.";
+      };
+    };
+  };
+
+  config = lib.mkIf config.ix.profiles.base.enable {
+    # `cache.ix.dev` is the ix pull-through cache for guest Nix operations. Put
+    # it in the auto-enabled base profile so every image gets the same warm
+    # binary-cache path unless an image explicitly disables the profile.
+    #
+    # The matching `ix-workspace:` key has to be trusted alongside it. The
+    # guests keep `require-sigs` on, so without the key the daemon rejects every
+    # `cache.ix.dev` narinfo as unsigned ("ignoring substitute ... not signed by
+    # any of the keys in 'trusted-public-keys'") and silently rebuilds the whole
+    # system closure from source, which then dies on the guest's no-namespace
+    # sandbox and fails `ix apply`. Both fields come from the one cache-identity
+    # source of truth (lib/cache.nix), exposed here as `ix.cache`.
+    nix = {
+      # `ix init` emits fleets whose evaluator is `ix2nix-wasm`, so every
+      # managed builder and workload VM must provide IX's patched Nix. Leaving
+      # this at nixpkgs' default makes `ix apply` accept the generated project,
+      # create a builder, and then fail late with `attribute 'wasm' missing`.
+      package = ix.packages.nix-ix;
+
+      settings = {
+        substituters = lib.mkBefore [ix.cache.url];
+        trusted-public-keys = lib.mkAfter [ix.cache.publicKey];
+
+        # Rollback-journal mode for `/nix/var/nix/db/db.sqlite`, against nix's
+        # own default of WAL.
+        #
+        # The reason this was added no longer exists. It compensated for a
+        # guest whose writable layer was a virtiofs+FUSE mount with no DAX:
+        # SQLite's WAL needs an mmap'd `*-shm` that is a coherent shared window
+        # plus strict WAL/main fsync ordering on checkpoint, that layer gave
+        # neither, and the DB degraded to `database disk image is malformed`
+        # (indexable-inc/ix#6259). ix#7192 then deleted that layer -- VCFS root
+        # serving is channel-only and VCFS carries no `fuse`/`fuser` dependency
+        # at all -- and ix#6259 was closed NOT_PLANNED on 2026-07-25 because the
+        # thing it described was gone. A guest today boots xfs on a virtio-blk
+        # device, where WAL is safe and faster:
+        #
+        #   $ ix shell <vm> -- sh -lc 'grep " / " /proc/self/mountinfo; grep -c virtiofs /proc/self/mountinfo'
+        #   26 1 254:0 / / rw,noatime - xfs /dev/root rw,...
+        #   0
+        #
+        # It stays for now only because `Rootfs::Virtiofs` is still a live
+        # variant in ix (legacy per-VM `config.json` recovery, and golden-capture
+        # topology), so "no guest root is ever FUSE-backed" is not something the
+        # tree currently proves. Retiring this needs that established, or better,
+        # needs the mode derived from the filesystem the DB actually sits on
+        # rather than assumed fleet-wide here. ENG-10689.
+        use-sqlite-wal = false;
+      };
+    };
+
+    # Install terminfo for every common terminal emulator so ncurses tools
+    # (`clear`, `tmux`, `vim`, ...) work no matter what `$TERM` an operator's
+    # client propagates in. Without this, shelling in from Ghostty fails with
+    # `'xterm-ghostty': unknown terminal type.` because the guest only ships
+    # ncurses' built-in set. Pulls only the small `terminfo` outputs (ghostty,
+    # kitty, alacritty, wezterm, foot, ...), not the terminal binaries.
+    environment = {
+      enableAllTerminfo = true;
+      # Native CLI installers use the XDG-standard per-user binary directory.
+      # Make those binaries available on the next login without asking every
+      # image user to edit a shell-specific startup file.
+      localBinInPath = true;
+    };
+
+    # Cubic halves cwnd on any loss, so a residential last-mile at
+    # 30 ms and a couple percent loss caps a single TCP flow far
+    # below the path's real capacity. BBR models bottleneck bandwidth
+    # and RTT from delivery-rate measurements and is largely loss-
+    # insensitive, which matches every workload here that accepts
+    # inbound from arbitrary internet endpoints (Minecraft players,
+    # Xpra browser clients, repo fetches via `git-clone`). fq is the
+    # qdisc BBR was designed to pace with; BBR without fq leaves
+    # bandwidth on the table.
+    #
+    # If `tcp_bbr` is not present in the running kernel, the sysctl
+    # write is a no-op and Cubic stays in place. Per-socket buffer
+    # caps (`rmem_max`, `wmem_max`, `tcp_{r,w}mem`) are deliberately
+    # left at kernel defaults: a 64 MiB per-socket ceiling is real
+    # memory cost on small VMs with many accepted sockets, and the
+    # default 4 MiB cap fits the BDP of every workload shipped here.
+    boot.kernel.sysctl = {
+      "net.ipv4.tcp_congestion_control" = "bbr";
+      "net.core.default_qdisc" = "fq";
+    };
+
+    # Per-tool config for root lives in Home Manager (used here as a
+    # NixOS module per AGENTS.md). Nushell's config.nu ships as a real
+    # `.nu` file next to this module; HM writes it to the right XDG path
+    # under /root/.config/nushell/ and follow-up tool integrations
+    # (atuin, zoxide, direnv, fzf) hang off the same root user attrset.
+    #
+    # The prompt deliberately does NOT live here; see `programs.starship`
+    # further down for why anything an operator sees on their first line
+    # has to survive activation not running.
+    home-manager.users.root = {
+      home.stateVersion = "25.11";
+
+      # Workaround for upstream nixpkgs#485682: `make-options-doc` strips
+      # string context from `options.json` via `unsafeDiscardStringContext`,
+      # which Nix flags as "references store path without a proper context"
+      # every time the derivation is constructed. Home Manager's
+      # `manual.manpages.enable` (default true) is the only thing in our
+      # base closure that pulls `nixosOptionsDoc`, so toggling it off
+      # silences seven warnings per `nix run .#health-checks` (one per
+      # fleet node) until the upstream fix lands. Per-package `man tar`
+      # etc. are unaffected (NixOS `documentation.man.enable` is left
+      # alone). Re-enable per-image when an operator actually wants
+      # `man home-configuration.nix` from inside the VM, e.g. a dev box
+      # that's editing the source checkout in place.
+      manual.manpages.enable = false;
+      programs = {
+        nushell = {
+          enable = true;
+          configFile.source = ./config.nu;
+          loginFile.source = ./login.nu;
+          # env.nu is tiny machine-owned glue: one line that surfaces
+          # the workspace path from the shellWorkspace option into the
+          # Nushell session so login.nu can read it. Generating it
+          # inline keeps the workspace path in one Nix source of truth.
+          envFile.text = ''
+            $env.IX_WORKDIR = "${cfg.shellWorkspace.directory}"
+          '';
+        };
+        # Let Home Manager own root's bash/zsh/fish rc files. Without this
+        # the `enable*Integration` flags below (atuin, zoxide, direnv, fzf)
+        # are inert for these shells: Home Manager only writes
+        # the init snippets into a shell's rc when that shell's module is
+        # enabled, so an operator who `chsh`-ed into bash or fish would land
+        # at a bare prompt with none of the wiring. The NixOS
+        # `programs.zsh`/`programs.fish` modules further down handle
+        # system-wide registration; these are the per-user HM counterparts.
+        bash.enable = true;
+        zsh = {
+          enable = true;
+          # Match Nushell's login.nu behavior for the platform-default shell.
+          # Keep non-login interactive shells in their caller's directory.
+          initContent = lib.mkIf cfg.shellWorkspace.enable (lib.mkBefore ''
+            if [[ -o login && -d ${lib.escapeShellArg cfg.shellWorkspace.directory} ]]; then
+              builtin cd -- ${lib.escapeShellArg cfg.shellWorkspace.directory}
+            fi
+          '');
+        };
+        fish.enable = true;
+        # fish 4.8.0 (current nixpkgs nixos-unstable) removed
+        # share/fish/tools/create_manpage_completions.py, which Home Manager's
+        # default `generateCompletions = true` invokes to derive completions
+        # from man pages. Every `<pkg>-fish-completions` derivation then fails
+        # ("python: can't open file …create_manpage_completions.py"), failing
+        # the whole system closure and breaking `ix apply` for every fleet. The
+        # shell rc/integration wiring above is what we want from fish here;
+        # man-page completions are an orthogonal nicety.
+        # https://github.com/indexable-inc/index/issues/1632
+        fish.generateCompletions = false;
+        # btop resource monitor, configured natively through the Home
+        # Manager module (no opaque btop.conf to hand-maintain) so every
+        # VM opens btop with the same tuned layout: 500 ms refresh, just
+        # the proc+cpu boxes, process tree, vim keys, Fahrenheit temps.
+        # `color_theme = "gotham"` is a bare name, which btop resolves
+        # against its bundled themes dir ($out/share/btop/themes, found
+        # relative to the binary) at startup, so no absolute store path is
+        # baked in. btop is also in environment.systemPackages below so
+        # non-root users get the binary; both reference the same
+        # derivation, so there is no second copy in the store.
+        btop = {
+          enable = true;
+          settings = {
+            color_theme = "gotham";
+            theme_background = false;
+            truecolor = true;
+            force_tty = false;
+            disable_presets = "Off";
+            presets = "cpu:1:default,proc:0:default cpu:0:default,mem:0:default,net:0:default cpu:0:block,net:0:tty";
+            vim_keys = true;
+            disable_mouse = false;
+            rounded_corners = true;
+            terminal_sync = true;
+            graph_symbol = "block";
+            graph_symbol_cpu = "default";
+            graph_symbol_gpu = "default";
+            graph_symbol_mem = "default";
+            graph_symbol_net = "default";
+            graph_symbol_proc = "default";
+            shown_boxes = "proc cpu";
+            update_ms = 500;
+            proc_sorting = "cpu lazy";
+            proc_reversed = false;
+            proc_tree = true;
+            proc_colors = true;
+            proc_gradient = true;
+            proc_per_core = true;
+            proc_mem_bytes = true;
+            proc_cpu_graphs = true;
+            proc_info_smaps = false;
+            proc_left = false;
+            proc_filter_kernel = false;
+            proc_follow_detailed = true;
+            proc_aggregate = true;
+            keep_dead_proc_usage = false;
+            cpu_graph_upper = "total";
+            cpu_graph_lower = "total";
+            show_gpu_info = "Auto";
+            cpu_invert_lower = true;
+            cpu_single_graph = false;
+            cpu_bottom = false;
+            show_uptime = true;
+            show_cpu_watts = true;
+            check_temp = true;
+            cpu_sensor = "Auto";
+            show_coretemp = true;
+            cpu_core_map = "";
+            temp_scale = "fahrenheit";
+            base_10_sizes = false;
+            show_cpu_freq = true;
+            clock_format = "%X";
+            background_update = true;
+            custom_cpu_name = "";
+            disks_filter = "/";
+            mem_graphs = true;
+            mem_below_net = false;
+            zfs_arc_cached = true;
+            show_swap = true;
+            swap_disk = true;
+            show_disks = false;
+            only_physical = true;
+            use_fstab = true;
+            zfs_hide_datasets = false;
+            disk_free_priv = false;
+            show_io_stat = true;
+            io_mode = false;
+            io_graph_combined = false;
+            io_graph_speeds = "";
+            swap_upload_download = false;
+            net_download = 100;
+            net_upload = 100;
+            net_auto = false;
+            net_sync = true;
+            net_iface = "";
+            base_10_bitrate = "Auto";
+            show_battery = true;
+            selected_battery = "Auto";
+            show_battery_watts = true;
+            log_level = "WARNING";
+            save_config_on_exit = false;
+            nvml_measure_pcie_speeds = true;
+            rsmi_measure_pcie_speeds = true;
+            gpu_mirror_graph = true;
+            shown_gpus = "nvidia amd intel apple";
+            custom_gpu_name0 = "";
+            custom_gpu_name1 = "";
+            custom_gpu_name2 = "";
+            custom_gpu_name3 = "";
+            custom_gpu_name4 = "";
+            custom_gpu_name5 = "";
+          };
+        };
+        # SQLite-backed, searchable shell history that follows the
+        # operator across bash/zsh/fish/nushell. Local-only by default;
+        # sync to an atuin server only when the operator chooses to.
+        atuin = {
+          enable = true;
+          enableNushellIntegration = true;
+          enableBashIntegration = true;
+          enableZshIntegration = true;
+          enableFishIntegration = true;
+        };
+        # Frecency-ranked directory jumper: `z minecraft` jumps to the
+        # most-used directory matching that fragment. SSH dev sessions
+        # bounce between /etc, /var/log, /work/ix, and service data dirs
+        # constantly; full paths get old fast.
+        zoxide = {
+          enable = true;
+          enableNushellIntegration = true;
+          enableBashIntegration = true;
+          enableZshIntegration = true;
+          enableFishIntegration = true;
+        };
+        # Per-directory environment loading. nix-direnv caches nix-shell
+        # evaluation so cd'ing into a repo with a shell.nix or flake.nix
+        # gets its environment without re-evaluating Nix every time.
+        direnv = {
+          enable = true;
+          nix-direnv.enable = true;
+          enableNushellIntegration = true;
+          enableBashIntegration = true;
+          enableZshIntegration = true;
+          enableFishIntegration = true;
+        };
+        # Fuzzy finder for files, processes, branches, and anything else the
+        # operator pipes into fzf. Atuin owns Ctrl-R history search above, so
+        # leave fzf's overlapping history widget disabled.
+        fzf = {
+          enable = true;
+          enableBashIntegration = true;
+          enableZshIntegration = true;
+          enableFishIntegration = true;
+          historyWidget.command = "";
+        };
+        # AST-aware merge driver. Parses 30+ languages (Nix, Rust,
+        # Python, TS/JS, Go, Java, ...) and resolves structural conflicts
+        # that the line-based three-way merge would otherwise mark. The
+        # HM module wires the driver, sets `* merge=mergiraf` globally,
+        # and forces conflictStyle = diff3 (required by the driver).
+        # `enableGitIntegration` is set explicitly because home-manager
+        # plans to flip the default in a future release.
+        mergiraf = {
+          enable = true;
+          enableGitIntegration = true;
+        };
+        # delta replaces git's pager for diffs and the interactive
+        # add/checkout selection screens. Side-by-side rendering and
+        # syntax highlighting make review usable over an SSH session.
+        # `enableGitIntegration` is set explicitly because home-manager
+        # deprecated the automatic-on-when-git-enabled behavior.
+        delta = {
+          enable = true;
+          enableGitIntegration = true;
+          options = {
+            navigate = true;
+            side-by-side = true;
+            features = "interactive";
+          };
+        };
+        # Generic git defaults for any operator working in an ix VM.
+        # Identity (user.name/email), commit signing, GPG/SSH agent
+        # paths, and per-host credential helpers stay out of here: those
+        # are personal and belong in the operator's own dotfiles, not
+        # baked into every image.
+        git = {
+          enable = true;
+          # Route SQLite database files to the sqlmerge driver instead of
+          # mergiraf's global `* merge=mergiraf`. gitattributes resolves each
+          # attribute by the LAST matching line, and the mergiraf HM module
+          # contributes its wildcard line at default order, so pin these after
+          # it with mkAfter or the wildcard would win for .db files too.
+          attributes = lib.mkAfter [
+            "*.db merge=sqlite"
+            "*.sqlite merge=sqlite"
+            "*.sqlite3 merge=sqlite"
+          ];
+          settings = {
+            alias = {
+              # Compact log: subject + short hash, one per line.
+              lg = "log --pretty=format:'%s %C(dim)%h%C(reset)'";
+              # Pull rebase then push, the recovery move after a rejected push.
+              sync = "!git pull --rebase && git push";
+              # Delete local branches whose remote-tracking branch is gone.
+              cleanup = "!git fetch --prune && git branch -vv | grep \": gone]\" | grep -v \"\\\\*\" | awk \"{print \\$1}\" | xargs -r git branch -d";
+            };
+            init = {
+              defaultBranch = "main";
+              # Git 3.0 flips new repos to SHA-256 objects; adopt ahead of the
+              # default flip. GitHub started hosting sha256 repos in mid-2026
+              # (actions/checkout and gh already handle them). The object
+              # format is per-repo and fixed at init, so existing SHA-1 clones
+              # are untouched.
+              defaultObjectFormat = "sha256";
+              # reftable (also the Git 3.0 direction) replaces the loose-file
+              # + packed-refs backend: atomic multi-ref transactions and no
+              # D/F or case-sensitivity ref-name collisions, which matters on
+              # VMs that script branch churn. Per-repo and fixed at init,
+              # like the object format.
+              defaultRefFormat = "reftable";
+            };
+            # Refuse to operate on a bare repository unless it is named
+            # explicitly (--git-dir / GIT_DIR). A cloned repo can embed a
+            # bare repo with a malicious config in a subdirectory; without
+            # this, any git command that walks into it executes that config's
+            # hooks and aliases (the attack safe.bareRepository was added
+            # for). Agents cd through untrusted checkouts constantly, so the
+            # hardening default is worth the rare explicit --git-dir.
+            safe.bareRepository = "explicit";
+            pull.rebase = true;
+            push = {
+              autoSetupRemote = true;
+              default = "simple";
+              followTags = true;
+            };
+            fetch = {
+              prune = true;
+              # NOT writeCommitGraph. It writes a *split* commit-graph, adding
+              # one small increment per fetch on top of the existing chain, and
+              # nothing here ever compacts that chain: `maintenance.auto` is
+              # false below (deliberately, see its comment), and
+              # `maintenance.repo` covers only registered repos. So the chain
+              # grows one file per fetch without bound, and a chain that grows
+              # without bound eventually breaks.
+              #
+              # Observed 2026-07-25 on ~/.config/nix at five chained graphs:
+              # every `git pull --rebase` died with `fatal: invalid commit
+              # position. commit-graph is likely corrupt`, while `git fsck
+              # --connectivity-only` passed, so the object store was fine and
+              # only the cache was bad. Deleting the chain did not stick,
+              # because the next fetch immediately wrote a fresh increment.
+              # `git commit-graph write --reachable --split=replace` collapses
+              # it back to one verified file and is the manual repair.
+              #
+              # `gc.writeCommitGraph` below still keeps a graph current, and gc
+              # rewrites it whole rather than appending, so the read speedup
+              # survives without the unbounded chain.
+              negotiationAlgorithm = "skipping";
+              parallel = 0;
+            };
+            rebase = {
+              autoSquash = true;
+              autoStash = true;
+              updateRefs = true;
+            };
+            rerere = {
+              enabled = true;
+              autoupdate = true;
+            };
+            merge = {
+              # mergiraf's HM module sets conflictStyle = "diff3" globally
+              # because mergiraf needs classic diff3 markers to parse the
+              # three-way merge output; we set ff/renormalize alongside.
+              ff = "only";
+              renormalize = true;
+              # Three-way merge for SQLite database files (repo crate
+              # `packages/sqlmerge`, via the session extension). Without a
+              # driver a .db file is binary to git and every concurrent edit
+              # is a full-file conflict. The `attributes` lines above route
+              # *.db/*.sqlite/*.sqlite3 here; mergiraf keeps everything else.
+              sqlite = {
+                name = "SQLite three-way merge (sqlmerge)";
+                driver = "${lib.getExe pkgs.sqlmerge} %O %A %B";
+              };
+            };
+            diff = {
+              algorithm = "histogram";
+              statNameWidth = 500;
+              statGraphWidth = 500;
+            };
+            log = {
+              date = "relative";
+              decorate = "auto";
+            };
+            blame.coloring = "highlightRecent";
+            column.worktree = "auto";
+            branch.sort = "-committerdate";
+            tag.sort = "-version:refname";
+            status.aheadBehind = true;
+            advice = {
+              statusHints = false;
+              addEmptyPathspec = false;
+            };
+            core = {
+              commitGraph = true;
+              multiPackIndex = true;
+              untrackedcache = true;
+              preloadindex = true;
+            };
+            gc = {
+              writeCommitGraph = true;
+              auto = 256;
+            };
+            index = {
+              threads = 0;
+              version = 4;
+            };
+            checkout.workers = 0;
+            feature.manyFiles = true;
+            submodule = {
+              recurse = true;
+              fetchJobs = 16;
+            };
+            # Never let ordinary git commands spawn background `git
+            # maintenance run --auto`: each auto run detaches an uncapped
+            # `git repack --cruft`, and at agent-fleet commit/fetch volume
+            # those stack without bound -- 1,033 of them piled up in ~12
+            # minutes and swapped a 128 GB workstation (ix#8161, #4001).
+            # Repos that want maintenance get scheduled runs via
+            # `git maintenance register` (maintenance.repo) instead.
+            maintenance.auto = false;
+          };
+        };
+      };
+    };
+
+    # Ship every common operator shell so an SSH session can chsh into
+    # whatever the operator already knows. bash is implicit in NixOS;
+    # zsh and fish get their NixOS modules so /etc/shells registration
+    # and system-wide completion paths are wired without per-image
+    # setup. Zsh is the platform default user shell (see
+    # lib/image/platform.nix); Home Manager owns its root-user config
+    # and the login-time workspace behavior above.
+    # Every command-not-found points at the escape hatch: with cache.ix.dev
+    # warm, `nix run nixpkgs#<tool>` materializes most tools in about a
+    # second, but nothing surfaces that to someone staring at a bare
+    # "command not found". One hint line per shell; no auto-run (executing
+    # an unreviewed store path on a typo is not a default anyone wants).
+    programs = let
+      hint = tool: "hint: 'nix run nixpkgs#${tool}' runs it without installing (warm cache, about a second); 'nix shell nixpkgs#${tool}' puts it on PATH.";
+    in {
+      zsh = {
+        enable = true;
+        interactiveShellInit = ''
+          command_not_found_handler() {
+            print -u2 "zsh: command not found: $1"
+            print -u2 "${hint "$1"}"
+            return 127
+          }
+        '';
+      };
+      fish = {
+        enable = true;
+        interactiveShellInit = ''
+          function fish_command_not_found
+            echo "fish: Unknown command: $argv[1]" >&2
+            echo "${hint "$argv[1]"}" >&2
+          end
+        '';
+      };
+      bash.interactiveShellInit = ''
+        command_not_found_handle() {
+          echo "bash: $1: command not found" >&2
+          echo "${hint "$1"}" >&2
+          return 127
+        }
+      '';
+
+      # The prompt, at system level rather than in Home Manager, because a
+      # prompt must not depend on activation having run. Home Manager writes
+      # its shell rc files during `home-manager-<user>.service`, which is an
+      # activation step that can fail (in an ix guest it does: the service's
+      # first act is a nix store sanity check, and a VM whose image lacks
+      # /nix/var/nix/daemon-socket has no nix-daemon to answer it), leaving
+      # /root with no .zshrc at all and every shell on the stock
+      # `prompt suse` from /etc/zshrc. The NixOS module instead renders the
+      # init into programs.{bash,zsh,fish}.promptInit, i.e. into /etc/zshrc
+      # and /etc/bashrc, which are plain files in the toplevel: present the
+      # moment the image boots, for every user and every shell, with nothing
+      # to activate and no daemon to wait for.
+      #
+      # Glyphs are deliberately ASCII. The prompt renders in whatever
+      # terminal the operator attached with (ix shell, ix console, ssh, a
+      # browser terminal), and a nerd-font symbol in a font-less terminal is
+      # a replacement box, not a prompt.
+      starship = {
+        enable = true;
+        settings = {
+          # Timeouts, not defaults (2000/500 ms): the prompt renders on a
+          # guest disk that can be faulting chunks in from CAS, and a prompt
+          # that stalls on a slow `git status` is worse than one that omits
+          # the branch for one redraw.
+          scan_timeout = 30;
+          command_timeout = 500;
+          add_newline = false;
+          format = lib.concatStrings [
+            "$directory"
+            "$git_branch"
+            "$git_status"
+            "$nix_shell"
+            "$cmd_duration"
+            "$line_break"
+            "$character"
+          ];
+          # No username or hostname module: every ix VM shell is root on a
+          # host called "nixos", so both would print the same two words on
+          # every line forever. The `#` in the character module below is the
+          # root cue that actually carries information.
+          directory = {
+            style = "bold cyan";
+            truncation_length = 4;
+            truncation_symbol = ".../";
+          };
+          git_branch = {
+            symbol = "";
+            format = "[git:$branch]($style) ";
+            style = "bold magenta";
+          };
+          git_status = {
+            format = "([$all_status$ahead_behind]($style) )";
+            style = "bold yellow";
+          };
+          nix_shell = {
+            symbol = "";
+            format = "[nix:$state]($style) ";
+            style = "bold blue";
+          };
+          # Only annotate commands slow enough that the number is news.
+          cmd_duration = {
+            min_time = 2000;
+            format = "[took $duration]($style) ";
+            style = "yellow";
+          };
+          character = {
+            success_symbol = "[#](bold green)";
+            error_symbol = "[#](bold red)";
+            vimcmd_symbol = "[#](bold blue)";
+          };
+        };
+      };
+
+      # nixpkgs' channel-DB command-not-found defines these same three
+      # handler functions when enabled; its default is only false here
+      # because a flake-pinned nixpkgs tarball lacks programs.sqlite.
+      # Pin it off so the handlers above stay the single owner instead
+      # of colliding by module-include order.
+      command-not-found.enable = false;
+
+      # git for every user, not just root: the curated per-user config
+      # (delta, mergiraf, aliases) stays in Home Manager above, but the
+      # binary itself must not depend on whose profile is on PATH --
+      # DynamicUser services and any future non-root user get git too.
+      # The system gitconfig also carries a fallback identity so the
+      # first `git commit` in a fresh VM never dies with "unable to
+      # auto-detect email address"; system scope is git's lowest
+      # precedence, so any real identity (global or repo-local) wins.
+      git = {
+        enable = true;
+        config = {
+          user = {
+            name = "ix";
+            email = "root@ix.local";
+          };
+        };
+      };
+
+      # Neovim is wired through the NixOS module because the wrapper
+      # bakes the curated config into the binary itself, so XDG never
+      # has to find anything in `~/.config/nvim/` for the operator to
+      # land in the configured experience. (HM's neovim module on
+      # release-25.05 and release-25.11 extends nixpkgs' plugin
+      # submodule with a `runtime` attr that the wrapped binary's
+      # submodule rejects; the `suppressIncompatibleConfig` cleanup
+      # only landed on master, so until 26.05 ships it the HM path is
+      # unusable for any plugin set anyway.) Operators can still drop
+      # `~/.config/nvim/` overrides; the wrapper's config is the
+      # system-wide XDG default they fall back to.
+      #
+      # defaultEditor wires EDITOR via environment.sessionVariables;
+      # vi/vim aliases mean muscle memory from any other Unix box
+      # lands on nvim. init.lua ships the base options (numbers,
+      # leader, undo, soft wrap, ...) and each plugin's setup() lives
+      # in its own plugins/<name>.lua so the file is editable as
+      # ordinary Lua. treesitter ships every grammar (cross-tenant
+      # dedup makes this free, see AGENTS.md).
+      neovim = {
+        enable = true;
+        defaultEditor = true;
+        viAlias = true;
+        vimAlias = true;
+        configure = {
+          customLuaRC =
+            lib.concatMapStringsSep "\n" builtins.readFile [
+              ./nvim/init.lua
+              ./nvim/plugins/treesitter.lua
+              ./nvim/plugins/telescope.lua
+              ./nvim/plugins/gitsigns.lua
+              ./nvim/plugins/which-key.lua
+              ./nvim/plugins/oil.lua
+            ]
+            + ''
+              local agent = (function()
+              ${builtins.readFile ./nvim/agent.lua}
+              end)()
+              agent.setup()
+            '';
+          packages.ix.start =
+            [
+              pkgs.vimPlugins.nvim-treesitter.withAllGrammars
+            ]
+            ++ builtins.attrValues {
+              inherit
+                (pkgs.vimPlugins)
+                plenary-nvim
+                telescope-nvim
+                gitsigns-nvim
+                which-key-nvim
+                oil-nvim
+                ;
+            };
+        };
+        # ix-islands colorscheme, generated from the shared islands palette so
+        # the editor and the search `-c` highlighter never drift. Both
+        # variants live in packages/code-highlight/src/islands-theme.json (the
+        # single source of truth, exposed here as ix.islandsTheme), and
+        # nvim/islands-body.lua holds the highlight-group wiring both variants
+        # share. Faithful port of JetBrains Islands Dark/Light (see
+        # andrewgazelka/vscode-islands for the VS Code variant); init.lua picks
+        # the dark variant by default. Both are available via
+        # `:colorscheme ix-islands-{dark,light}` at runtime.
+        runtime = let
+          body = builtins.readFile ./nvim/islands-body.lua;
+          colorscheme = variant: slots: let
+            colorTable = lib.concatMapAttrsStringSep "\n" (slot: hex: ''${slot} = "${hex}",'') slots;
+          in
+            pkgs.writeText "ix-islands-${variant}.lua" ''
+              -- ix-islands-${variant}
+              --
+              -- Generated from packages/code-highlight/src/islands-theme.json
+              -- and nvim/islands-body.lua. Edit those, not this file.
+              vim.cmd("highlight clear")
+              if vim.fn.exists("syntax_on") == 1 then
+                vim.cmd("syntax reset")
+              end
+              vim.o.background = "${variant}"
+              vim.g.colors_name = "ix-islands-${variant}"
+
+              local c = {
+              ${colorTable}
+              }
+
+              ${body}
+            '';
+        in {
+          "colors/ix-islands-dark.lua".source = colorscheme "dark" ix.islandsTheme.dark;
+          "colors/ix-islands-light.lua".source = colorscheme "light" ix.islandsTheme.light;
+        };
+      };
+    };
+
+    environment.systemPackages = builtins.attrValues {
+      inherit
+        (pkgs)
+        ast-grep
+        bat
+        bpftrace
+        btop
+        # dig/nslookup for DNS debugging; `host` alone (shipped via
+        # NixOS defaults) answers "does it resolve" but not "from which
+        # server, with which record details".
+        dnsutils
+        # Stack unwinder and ELF/DWARF inspector. `eu-stack` resolves
+        # stripped binaries against separate debuginfo, `eu-readelf`
+        # gives a saner view of section/note contents than `readelf`,
+        # and `eu-unstrip` recombines a stripped binary with its
+        # debug companion before feeding it to gdb/drgn/pahole.
+        elfutils
+        eza
+        fd
+        file
+        # C toolchain: `pip install` of any package with a native
+        # extension, node-gyp, and every "./configure && make" README
+        # assume cc + make exist. 5 of 7 competitor default images ship
+        # one; a VM that can't build a C extension fails the first
+        # real Python or Node session.
+        gcc
+        gdb
+        gnumake
+        # gnutar, gzip, and zstd ride along so any VM switched once stays
+        # switchable: the `ix apply` source upload streams a tarball through
+        # `tar -x -I zstd` inside the guest, and these binaries are not
+        # on NixOS' default system PATH.
+        gnutar
+        gzip
+        # Alternative editors next to the default neovim. Helix is the
+        # modern single-binary editor; micro is the nano-style fallback
+        # for operators who want predictable bindings without modes.
+        helix
+        htop
+        micro
+        jq
+        lldb
+        lsof
+        mgrep
+        ncdu
+        # nh wraps nixos-rebuild/home-manager/darwin-rebuild with a
+        # build tree (via nom), pre-activation diffs (via dix), and
+        # confirmation prompts. nix-output-monitor is shipped
+        # separately so plain `nom nix build .#foo` works outside nh.
+        # nix-tree is the interactive TUI for exploring a derivation's
+        # dependency graph.
+        nh
+        nix-output-monitor
+        nix-tree
+        # Default language runtimes. python3 and node are the two
+        # interpreters "run this script" instructions assume exist
+        # (both ship in 5 of 7 competitor default sandboxes); uv is
+        # the package/venv path for Python that doesn't fight the
+        # read-only store the way bare pip does.
+        nodejs
+        python3
+        uv
+        # TLS/cert debugging (s_client, x509) plus the digest/keygen
+        # one-liners every deploy doc reaches for.
+        openssl
+        # Walks DWARF/BTF type info to pretty-print kernel and userspace
+        # structs out of core dumps, /proc/kcore, or VM RAM memfds. The
+        # canonical tool for "I have raw memory and I need to know what
+        # struct lives at this offset", which gdb/lldb both fumble.
+        pahole
+        # killall/pstree muscle memory from every other Unix box.
+        psmisc
+        # drgn complements pahole: pahole answers "what is the layout of
+        # struct foo?", drgn lets you start from a typed root and walk
+        # the live value graph in Python (dereference pointers, follow
+        # intrusive lists, dump fields). Packaged in `packages/drgn/`
+        # against the v0.2.0 upstream release until the open nixpkgs PR
+        # (#446138) lands and the pin moves.
+        drgn
+        pv
+        ripgrep
+        # The `sqlite3` CLI: half of local app state (browsers, package
+        # managers, our own atuin history) is a SQLite file, and
+        # inspecting one without the CLI means writing a script.
+        sqlite
+        strace
+        tcpdump
+        # zellij (below) is the curated multiplexer, but tmux is the
+        # one operators and agent recipes actually type; both are tiny.
+        tmux
+        tree
+        # Complements ripgrep with what it lacks: boolean queries
+        # (-%), fuzzy match (-Z), and searching inside archives and
+        # compressed files (-z).
+        ugrep
+        # Half the internet distributes .zip; gnutar/zstd cover the
+        # rest of the archive formats but reject zip, which turns a
+        # plain `curl -LO <github archive>` into a dead end.
+        unzip
+        # wget rides along for the copy-paste commands that assume it;
+        # curl comes from NixOS' core packages.
+        wget
+        # Hex dump/reverse for quick binary pokes without pulling
+        # a full vim install (nvim's wrapper does not expose xxd).
+        xxd
+        # Pane and tab multiplexer for one session. Connection survival
+        # across SSH drops is handled by ix itself (AGENTS.md "VM
+        # assumptions"), so zellij is shipped for splits, not reattach.
+        zellij
+        zip
+        zstd
+        ;
+    };
+
+    systemd.tmpfiles.rules =
+      [
+        # With `use-sqlite-wal = false` (above) nix opens db.sqlite on
+        # SQLite's unix-dotfile VFS, whose lock is a real directory entry
+        # (`db.sqlite.lock`) rather than a POSIX lock that dies with its
+        # holder. A rootfs captured while nix held that lock (golden
+        # template capture of a mid-write guest) therefore boots with the
+        # lock still present, and every later nix invocation spins forever
+        # in SQLITE_BUSY retries -- `ix apply` then fails its 5s
+        # wasm-capability probe with "stream into guest failed" (ix#8389).
+        # After a fresh boot no process can hold the lock, so removing it
+        # here ("!" = boot only, before nix-daemon or any login shell can
+        # run nix) is always safe. The sibling db.sqlite-journal must
+        # stay: a hot journal is how SQLite rolls back the interrupted
+        # write on next open.
+        "R! /nix/var/nix/db/db.sqlite.lock"
+      ]
+      # Pre-create the workspace at boot so login.nu can cd into it
+      # without racing tmpfiles or relying on mkdir from the shell.
+      ++ lib.optional cfg.shellWorkspace.enable
+      "d ${cfg.shellWorkspace.directory} 0755 root root -";
+  };
+}

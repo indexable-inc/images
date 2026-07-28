@@ -1,0 +1,768 @@
+name: Update flake.lock
+
+on:
+  workflow_dispatch:
+    inputs:
+      flake-inputs:
+        description: "Space-separated flake inputs to update; empty updates all."
+        type: string
+        default: ""
+  # Reusable: ix (and any other indexable-inc repo) calls this same job via
+  # `uses: indexable-inc/index/.github/workflows/update-flake-lock.yml@main`
+  # so the flake-bump mechanics live in one place. The caller supplies the
+  # schedule and the contents/PR permissions. A caller whose flake has private
+  # inputs the GitHub-hosted runner cannot fetch passes `flake-inputs` to
+  # update only the public ones (e.g. ix scopes to `index`).
+  workflow_call:
+    inputs:
+      flake-inputs:
+        description: "Space-separated flake inputs to update; empty updates all."
+        type: string
+        default: ""
+      app-client-id:
+        description: "Client id of a GitHub App (contents + pull-requests write) that authors the bump PR; empty falls back to GITHUB_TOKEN, whose PRs never get pull_request CI on private repos."
+        type: string
+        default: ""
+      submodule-app-client-id:
+        description: "Client id of a read-only GitHub App used to fetch private submodules; empty reuses the push/PR token."
+        type: string
+        default: ""
+      submodule-repositories:
+        description: "Newline-separated private repository names the read-only submodule App token may fetch."
+        type: string
+        default: ""
+      runner-label:
+        description: >-
+          Runner label for the update and escalation jobs. Empty (the default)
+          dispatches to the org-wide ix-ci-dispatcher, whose ephemeral runners
+          already carry a nix daemon and a warm store; no caller should need a
+          hosted runner, which has no nix at all.
+        type: string
+        default: ""
+      submodule-paths:
+        description: "Space-separated git submodule paths to bump to their remote HEAD instead of updating flake inputs. Mutually exclusive with flake-inputs: the DS update-flake-lock action can only write flake.lock, and composing both PR mechanisms on one rolling branch would fight over it."
+        type: string
+        default: ""
+      direct-push:
+        description: "Push a submodule bump directly to main instead of opening the rolling PR. Requires submodule-paths, an App token with contents:write, and a ruleset bypass for that App."
+        type: boolean
+        default: false
+      nix-preinstalled:
+        description: >-
+          Accepted and ignored. Every runner this job lands on provides Nix
+          now that the hosted fallback and its installer are gone. Retained
+          only so indexable-inc/ix's existing caller keeps validating; drop it
+          there, then delete this input.
+        type: boolean
+        default: true
+      escalate-after-hours:
+        description: "Hours the rolling bump PR may stay failing before the escalate job alerts; see the escalate job below."
+        type: number
+        default: 6
+      slack-channel:
+        description: "Slack channel id for escalation posts; used only when slack-bot-token is provided."
+        type: string
+        default: "C0A4TD9G7HR"
+    secrets:
+      app-private-key:
+        description: "Private key for app-client-id."
+        required: false
+      submodule-app-private-key:
+        description: "Private key for submodule-app-client-id."
+        required: false
+      submodule-read-token:
+        description: "Existing repository-managed token used to fetch private submodules when no dedicated GitHub App installation covers them."
+        required: false
+      slack-bot-token:
+        description: "Slack bot token (chat:write) for escalation posts; empty escalates through the tracking issue only."
+        required: false
+  # Scheduled self-bumps are DISABLED for index (operator decision,
+  # 2026-07-20): an unattended nixpkgs/input bump invalidates huge build
+  # closures (fork patch DAGs, the znver5 base, every dependent check) and,
+  # done often, drifts CI ahead of the nix-controlled workstation and fleet
+  # pins, so local funs/builds fall out of sync with what main expects.
+  # Bump deliberately via workflow_dispatch instead; may be re-enabled once
+  # the rebuild cost and pin-sync story are solved.
+  # schedule:
+  #   - cron: "17 * * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  update-flake-lock:
+    # Schedule/dispatch have no workflow_call inputs, so retain the hosted
+    # default for index itself and for callers that have not opted into a
+    # Nix-owned runner profile.
+    runs-on: ["${{ inputs.runner-label || format('ix-ci-run-{0}-{1}-update-flake-lock', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Validate inputs
+        if: ${{ (inputs.submodule-paths != '' && inputs.flake-inputs != '') || (inputs.direct-push && (inputs.submodule-paths == '' || inputs.app-client-id == '')) || (inputs.submodule-repositories != '' && inputs.submodule-app-client-id == '') }}
+        run: |
+          echo "::error::submodule-paths and flake-inputs are mutually exclusive; direct-push requires submodule-paths and app-client-id; private submodule repositories require submodule-app-client-id."
+          exit 1
+
+      - name: Checkout repository
+        # v5, not v7: v7 wires its auth header through includeIf.gitdir
+        # credential files that never fire on ix dispatcher runners (realpath
+        # mismatch under /var/lib/ix-ci-job-*), so a private caller's fetch
+        # runs unauthenticated and dies (#3959). v5's local extraheader works
+        # everywhere the fleet runs.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # The bump below sets an App-authenticated origin. Keeping checkout's
+          # GITHUB_TOKEN extraheader would override that URL credential, make
+          # the push appear as github-actions[bot], and suppress the push/PR
+          # workflows the App-authenticated update is meant to trigger.
+          persist-credentials: false
+        # Never checkout's `submodules:` option: on ix runners the
+        # dispatcher's per-job GIT_CONFIG_GLOBAL defeats checkout's
+        # temp-HOME token plumbing (ix#8123). The bump step below runs its
+        # own anonymous `git submodule update --init`.
+
+      # Underscore digit separators require the patched client in index and in
+      # downstream callers such as ix. The action reads its source lock from
+      # index and fetches that source independently when the checkout belongs
+      # to a caller. Fully qualified (not `./.github/actions/...`) because a
+      # reusable workflow's checkout is the CALLER's repository, which does not
+      # contain index's local composite actions; a local-path `uses:` then
+      # fails with "Can't find 'action.yml'" (that broke ix's hourly bump when
+      # #2064 introduced the local action).
+      - name: Bootstrap patched Nix client
+        if: ${{ inputs.submodule-paths == '' }}
+        uses: indexable-inc/index/.github/actions/bootstrap-patched-nix@main
+
+      # Direct pushes need only contents:write. Keep that token narrower than
+      # the PR token: ix grants the App a ruleset bypass for this path, so
+      # carrying unrelated App permissions would enlarge a sensitive grant.
+      - name: Mint direct-push token
+        id: direct-app-token
+        if: ${{ inputs.app-client-id != '' && inputs.direct-push }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+
+      - name: Mint private-submodule read token
+        id: submodule-app-token
+        if: ${{ inputs.submodule-repositories != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.submodule-app-client-id }}
+          private-key: ${{ secrets.submodule-app-private-key }}
+          owner: indexable-inc
+          repositories: ${{ inputs.submodule-repositories }}
+          permission-contents: read
+
+      # PRs authored by the default GITHUB_TOKEN never get pull_request CI on
+      # private repos: GitHub parks every run in action_required and the
+      # fork-approval API cannot clear them (ix#6566). When the caller supplies
+      # a GitHub App, mint a token scoped to only what the rolling PR path uses.
+      - name: Mint PR token
+        id: pr-app-token
+        if: ${{ inputs.app-client-id != '' && !inputs.direct-push }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      # Notify the human behind a manual dispatch (of this workflow or of a
+      # cross-repo caller such as ix: a reusable workflow shares the caller's
+      # event and actor): review request + assignee, both empty (a no-op) on
+      # the scheduled runs, which have no triggering human. The PR body stays
+      # a one-line template, so the review request is the notification
+      # channel here. Fully qualified for the same reason as the bootstrap
+      # action above.
+      - name: Resolve triggering human
+        id: trigger
+        if: ${{ !inputs.direct-push }}
+        uses: indexable-inc/index/.github/actions/triggering-actor@main
+
+      # Submodule mode: move each listed pin to its remote HEAD on the same
+      # rolling branch the flake bump uses, so the escalate watcher below works
+      # identically in both modes. Manual branch/commit/PR because the DS
+      # action can only write flake.lock.
+      # ix's self-hosted runner jobs expose a minimal PATH (git + nix, no gh,
+      # jq, curl, awk; see indexable-inc/ix run 29892367191). Extend PATH from
+      # nixpkgs via the preinstalled nix only for what is missing, so hosted
+      # Fully qualified for the same reason as the bootstrap action below: a
+      # reusable workflow's checkout is the CALLER's repository, which has no
+      # copy of index's local composite actions.
+      - name: Provision missing CLI tools
+        uses: indexable-inc/index/.github/actions/ensure-tools@main
+        with:
+          tools: gh jq
+
+      - name: Bump submodules
+        if: ${{ inputs.submodule-paths != '' }}
+        env:
+          DIRECT_PUSH: ${{ inputs.direct-push }}
+          GH_TOKEN: ${{ steps.direct-app-token.outputs.token || steps.pr-app-token.outputs.token || github.token }}
+          SUBMODULE_READ_TOKEN: ${{ secrets.submodule-read-token || steps.submodule-app-token.outputs.token }}
+          SUBMODULE_PATHS: ${{ inputs.submodule-paths }}
+          TRIGGER_USER: ${{ steps.trigger.outputs.user }}
+        run: |
+          set -euo pipefail
+          read -ra paths <<< "$SUBMODULE_PATHS"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Pushes authenticate with the write token. Private submodule fetches
+          # use a separate read-only token when the caller supplies one.
+          if [ -n "${UPDATE_REMOTE_URL:-}" ]; then
+            # Test seam: production never sets this. It lets the workflow test
+            # exercise real fetch/commit/push behavior against a local bare
+            # remote without putting a fake credential in process output.
+            git remote set-url origin "$UPDATE_REMOTE_URL"
+          else
+            clone_token="${SUBMODULE_READ_TOKEN:-${GH_TOKEN}}"
+            git config --global url."https://x-access-token:${clone_token}@github.com/".insteadOf "https://github.com/"
+            # Keep the fetch URL credential-free so relative submodule URLs
+            # such as ../nox.git resolve to https://github.com/... and receive
+            # clone_token through the rewrite above. Embedding GH_TOKEN in the
+            # fetch URL makes Git carry that ix-only token into the resolved
+            # Nox URL before insteadOf matching, so the private clone fails.
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+            # Pushes still use the narrowly scoped write App token. A URL with
+            # userinfo does not match the credential-free insteadOf prefix.
+            git remote set-url --push origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          build_candidate() {
+            # Rebuild from the current main tip on every attempt. A concurrent
+            # human main push is preserved; the bot never rebases or overwrites
+            # it and never force-pushes main.
+            git fetch origin main
+            git checkout -B "$target_branch" origin/main
+            git submodule update --init -- "${paths[@]}"
+            git submodule update --remote -- "${paths[@]}"
+
+            # Plain git/bash: the self-hosted runner PATH has git and gh but
+            # not awk (run 29892186766 died on it).
+            summary=""
+            for p in "${paths[@]}"; do
+              summary="${summary:+${summary}, }${p}@$(git -C "$p" rev-parse --short=8 HEAD)"
+            done
+            bumped=""
+            if ! git diff --quiet; then
+              git commit -am "submodules: bump ${summary}"
+              bumped=1
+            fi
+
+            # Relock every flake input pinned by a listed gitlink (path:./<sub>
+            # locked with a rev, as ix pins `index`; ix#8180). Relock AFTER
+            # committing: nix resolves the path input's rev from committed
+            # HEAD, not the worktree or index (ix#8143).
+            relock=()
+            if [ -f flake.lock ]; then
+              for p in "${paths[@]}"; do
+                gitlink="$(git rev-parse "HEAD:${p}")"
+                while IFS= read -r name; do
+                  relock+=("$name")
+                done < <(jq -r --arg path "./$p" --arg rev "$gitlink" '.nodes as $n
+                  | $n[.root].inputs // {} | to_entries[]
+                  | select(.value | type == "string")
+                  | select(($n[.value].locked.type? == "path")
+                           and ($n[.value].locked.path? == $path)
+                           and (($n[.value].locked.rev? // "") != $rev))
+                  | .key' flake.lock)
+              done
+            fi
+            if [ -z "$bumped" ] && [ "${#relock[@]}" -eq 0 ]; then
+              echo "submodules already at their remote HEADs and every pin locked; nothing to bump"
+              exit 0
+            fi
+            if [ "${#relock[@]}" -gt 0 ]; then
+              nix flake update "${relock[@]}"
+              # Re-stamp the gitlink pin when an older runner client drops it
+              # (#3982). Both values are facts from the selected commit.
+              for p in "${paths[@]}"; do
+                rev="$(git -C "$p" rev-parse HEAD)"
+                ts="$(git -C "$p" show -s --format=%ct HEAD)"
+                jq --arg path "./${p}" --arg rev "$rev" --argjson ts "$ts" '
+                  (.nodes[.root].inputs // {} | [to_entries[]
+                    | select(.value | type == "string") | .value]) as $rootNodes
+                  | .nodes |= with_entries(
+                      if (.key as $k | ($rootNodes | index($k)))
+                         and .value.locked.type? == "path" and .value.locked.path? == $path
+                      then .value.locked = ((.value.locked + {rev: $rev, lastModified: $ts})
+                                            | to_entries | sort_by(.key) | from_entries)
+                      else . end)
+                ' flake.lock > flake.lock.tmp
+                mv flake.lock.tmp flake.lock
+              done
+              git add flake.lock
+              if [ -n "$bumped" ]; then
+                git commit --amend --no-edit
+              else
+                git commit -m "flake.lock: relock ${relock[*]} to the ${summary} gitlink"
+              fi
+            fi
+
+            # Refuse to push a lock that disagrees with any gitlink pin.
+            if [ -f flake.lock ]; then
+              for p in "${paths[@]}"; do
+                rev="$(git rev-parse "HEAD:${p}")"
+                bad="$(jq -r --arg path "./${p}" --arg rev "$rev" '
+                  (.nodes[.root].inputs // {} | [to_entries[]
+                    | select(.value | type == "string") | .value]) as $rootNodes
+                  | [.nodes | to_entries[]
+                     | select((.key as $k | ($rootNodes | index($k)))
+                              and .value.locked.type? == "path" and .value.locked.path? == $path)
+                     | select((.value.locked.rev? // "missing") != $rev)
+                     | .key] | join(", ")' flake.lock)"
+                if [ -n "$bad" ]; then
+                  echo "::error::flake.lock node(s) ${bad} do not pin ./${p} at gitlink ${rev}; refusing to push a stale lock (#3982)"
+                  exit 1
+                fi
+              done
+              jq -r '.nodes | to_entries[]
+                  | select(.value.locked.type? == "path" and (.value.locked | has("rev")))
+                  | "\(.key) \(.value.locked.path) \(.value.locked.rev)"' flake.lock \
+              | while read -r name lock_path lock_rev; do
+                  entry="$(git ls-tree HEAD -- "${lock_path#./}")"
+                  read -r mode _type oid _rest <<< "$entry" || true
+                  if [ "${mode:-}" != 160000 ] || [ "$oid" != "$lock_rev" ]; then
+                    echo "::error::flake.lock node '${name}' pins ${lock_path} at ${lock_rev} but the tree has '${entry:-nothing}'; refusing to push a stale lock (#3982)"
+                    exit 1
+                  fi
+                done
+            fi
+
+            # ix carries the stricter committed-tree guard. Run it when a
+            # caller provides it, before a direct ruleset-bypassing push.
+            if [ "$DIRECT_PUSH" = true ] && [ -x scripts/ci/check-submodule-lock-sync.sh ]; then
+              scripts/ci/check-submodule-lock-sync.sh HEAD
+            fi
+          }
+
+          if [ "$DIRECT_PUSH" != true ]; then
+            target_branch=update-flake-lock
+            build_candidate
+            git push -f origin update-flake-lock
+            if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
+              gh pr create --base main --head update-flake-lock \
+                --title "Update Nix flake inputs" \
+                --body "Automated bump: ${summary}." \
+                ${TRIGGER_USER:+--assignee "$TRIGGER_USER" --reviewer "$TRIGGER_USER"}
+            fi
+            exit 0
+          fi
+
+          target_branch=direct-submodule-sync
+          for attempt in 1 2 3; do
+            build_candidate
+            if git push origin HEAD:refs/heads/main; then
+              echo "pushed ${summary} directly to main"
+              exit 0
+            fi
+
+            # Retry only a real concurrent-main race. Permission/ruleset/network
+            # failures leave origin/main as an ancestor of our candidate and
+            # must fail immediately rather than burning three identical tries.
+            git fetch origin main
+            if git merge-base --is-ancestor origin/main HEAD; then
+              echo "::error::direct push failed without a concurrent main update; not retrying"
+              exit 1
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::main advanced during all three direct-push attempts"
+              exit 1
+            fi
+            echo "::warning::main advanced during direct-push attempt ${attempt}; rebuilding from the new tip"
+          done
+
+      # Hand-rolled rather than DeterminateSystems/update-flake-lock: the
+      # `relock -> commit -> force-push the rolling branch -> ensure one open
+      # PR` shape is exactly what the submodule branch above already does by
+      # hand, and inlining it keeps the lane on our own nix client instead of
+      # a third-party action that assumes the Determinate toolchain.
+      - name: Update flake.lock
+        if: ${{ inputs.submodule-paths == '' }}
+        env:
+          GH_TOKEN: ${{ steps.pr-app-token.outputs.token || github.token }}
+          # Empty for schedule/dispatch on index (all inputs public); a caller
+          # scopes this to avoid fetching private inputs it can't auth for.
+          FLAKE_INPUTS: ${{ inputs.flake-inputs }}
+          TRIGGER_USER: ${{ steps.trigger.outputs.user }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Push authenticates with the minted token: the checkout token is
+          # job-scoped and may lack contents:write when the caller supplies an
+          # app. Same reasoning as the submodule branch above.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git checkout -B update-flake-lock origin/main
+          read -ra scoped <<< "$FLAKE_INPUTS"
+          # No inputs named means relock everything; naming them keeps a
+          # caller off inputs it cannot authenticate for.
+          nix flake update "${scoped[@]}"
+          if git diff --quiet -- flake.lock; then
+            echo "flake.lock is already current; nothing to bump"
+            exit 0
+          fi
+          git commit -m "flake.lock: update" -- flake.lock
+          git push -f origin update-flake-lock
+          if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
+            gh pr create --base main --head update-flake-lock \
+              --title "Update Nix flake inputs" \
+              --body "Automated bump of the pinned flake inputs." \
+              ${TRIGGER_USER:+--assignee "$TRIGGER_USER" --reviewer "$TRIGGER_USER"}
+          fi
+
+  # A watcher that only fires on the success path (merge) is silent on
+  # sustained failure: ix's `index` pin sat 4 days stale behind red bump PRs
+  # with no alert (indexable-inc/ix#7235). This job is the failure-path
+  # watcher, running after every bump attempt (`always()`: the bump job
+  # failing is itself one of the states to report). Unhealthy states:
+  #
+  #   - RED PR: the rolling bump PR's latest head has failing checks.
+  #   - STUCK PR: the PR has been open past the threshold without merging
+  #     (each scheduled branch update resets checks to pending, so an episode can
+  #     look pending at every observation; age is the churn-proof signal).
+  #   - ORPHANED BUMP: the bump branch is ahead of main with no open PR
+  #     (closed unmerged, or PR creation failed).
+  #   - BUMP JOB FAILED: the update job itself concluded failure.
+  #
+  # Episode state lives in one labeled tracking issue (find-or-reopen, as
+  # cache-push-watchdog.yml): created at onset, body refreshed each tick,
+  # closed with a comment on recovery. Once the episode age crosses
+  # `escalate-after-hours` it escalates ONCE: a threshold comment on the
+  # issue plus a Slack post (when the caller supplies slack-bot-token),
+  # recorded as a body marker so later ticks do not re-fire. Watcher-internal
+  # failures (API errors) exit loudly without claiming health or closing the
+  # issue. Callers must grant `issues: write` on the calling job.
+  escalate:
+    needs: update-flake-lock
+    if: ${{ always() && inputs.direct-push != true }}
+    # Reuse the caller-selected runner for both halves of the transaction. A
+    # hosted escalation tail would make a supposedly self-hosted reusable
+    # workflow silently depend on GitHub capacity after the update job exits.
+    runs-on: ["${{ inputs.runner-label || format('ix-ci-run-{0}-{1}-update-flake-lock', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      # Must match the `branch:` given to update-flake-lock above.
+      BUMP_BRANCH: update-flake-lock
+      UPDATE_RESULT: ${{ needs.update-flake-lock.result }}
+      # `inputs.*` is empty on index's own schedule/dispatch runs; the ||
+      # arms mirror the workflow_call defaults for those events.
+      ESCALATE_AFTER_HOURS: ${{ inputs.escalate-after-hours || 6 }}
+      SLACK_CHANNEL: ${{ inputs.slack-channel || 'C0A4TD9G7HR' }}
+      SLACK_BOT_TOKEN: ${{ secrets.slack-bot-token }}
+    steps:
+      # Same minimal-PATH provisioning as the update job above; the escalate
+      # script needs gh, jq, and curl.
+      - name: Provision missing CLI tools
+        run: |
+          set -euo pipefail
+          ensure() {
+            command -v "$1" >/dev/null 2>&1 && return
+            # --print-out-paths prints one line per output (jq: bin + man);
+            # add /bin per path, not to the joined string.
+            while IFS= read -r p; do
+              echo "${p}/bin" >> "$GITHUB_PATH"
+            done < <(nix build "nixpkgs#$1" --no-link --print-out-paths)
+          }
+          ensure gh
+          ensure jq
+          ensure curl
+      - name: Escalate a stuck flake bump
+        run: |
+          set -euo pipefail
+
+          marker="<!-- update-flake-lock-escalation -->"
+          issue_title="update-flake-lock: rolling bump PR is stuck"
+          label="flake-bump-stuck"
+          now_epoch="$(date -u +%s)"
+          now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          threshold_s=$(( ESCALATE_AFTER_HOURS * 3600 ))
+
+          note() { echo "::notice::escalate: $*"; }
+          # Internal failure is loud and neither claims health nor closes the
+          # tracking issue (same contract as cache-push-watchdog.yml).
+          fail_loud() { echo "::error::flake-bump escalation internal failure: $*"; exit 2; }
+
+          reasons=""
+          add_reason() { reasons="${reasons}$1"$'\n'; }
+
+          # Slack signals rejection in-body (ok:false) with HTTP 200, so parse
+          # the response; non-zero return means the message did NOT post.
+          slack_post() {
+            local text="$1" resp
+            resp="$(jq -n --arg channel "${SLACK_CHANNEL}" --arg text "$text" \
+                '{channel: $channel, text: $text}' \
+              | curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+                  -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+                  -H "Content-Type: application/json; charset=utf-8" \
+                  --data @-)" \
+              || { echo "::error::slack chat.postMessage transport failed"; return 1; }
+            if [ "$(jq -r '.ok' <<<"$resp")" != "true" ]; then
+              echo "::error::slack rejected the escalation post: $(jq -r '.error // "unknown"' <<<"$resp")"
+              return 1
+            fi
+          }
+
+          # --- State: the bump job itself failed ------------------------------
+          if [ "${UPDATE_RESULT}" = "failure" ]; then
+            add_reason "- **Bump job failed**: \`update-flake-lock\` concluded \`failure\` in run [${GITHUB_RUN_ID}](https://github.com/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+          fi
+
+          # --- State: the rolling PR (red, or stuck past the threshold) -------
+          pr_json=/tmp/bump-pr.json
+          gh pr list --repo "${REPOSITORY}" --head "${BUMP_BRANCH}" --base main \
+              --state open --json number,url,createdAt,statusCheckRollup \
+              --jq '.[0] // empty' > "$pr_json" \
+            || fail_loud "listing the rolling bump PR failed"
+
+          pr_number=""
+          pr_url=""
+          failing_checks=""
+          pending_count=0
+          pr_age_s=0
+          if [ -s "$pr_json" ]; then
+            pr_number="$(jq -r '.number' "$pr_json")"
+            pr_url="$(jq -r '.url' "$pr_json")"
+            pr_age_s=$(( now_epoch - $(date -u -d "$(jq -r '.createdAt' "$pr_json")" +%s) ))
+            # CheckRun rows carry .conclusion ("" until completed), StatusContext
+            # rows carry .state; normalize both shapes before classifying.
+            failing_checks="$(jq -r '[(.statusCheckRollup // [])[]
+                | ((.conclusion // .state // "") | ascii_upcase) as $c
+                | select($c == "FAILURE" or $c == "TIMED_OUT" or $c == "CANCELLED"
+                         or $c == "ERROR" or $c == "STARTUP_FAILURE")
+                | (.name // .context)] | unique | join(", ")' "$pr_json")" \
+              || fail_loud "parsing the PR check rollup failed"
+            pending_count="$(jq -r '[(.statusCheckRollup // [])[]
+                | ((.conclusion // .state // "") | ascii_upcase)
+                | select(. == "" or . == "PENDING" or . == "EXPECTED"
+                         or . == "QUEUED" or . == "IN_PROGRESS")] | length' "$pr_json")" \
+              || fail_loud "counting pending checks failed"
+            # No checks materialized yet (head pushed moments ago) is pending,
+            # not green: reading it as green would flap the tracking issue.
+            if [ "$(jq -r '(.statusCheckRollup // []) | length' "$pr_json")" -eq 0 ]; then
+              pending_count=1
+            fi
+            pr_age_h=$(( pr_age_s / 3600 ))
+            if [ -n "$failing_checks" ]; then
+              add_reason "- **Red bump PR**: [#${pr_number}](${pr_url}) (open ${pr_age_h}h) failing: \`${failing_checks}\`."
+            elif [ "$pending_count" -gt 0 ] && [ "$pr_age_s" -ge "$threshold_s" ]; then
+              add_reason "- **Stuck bump PR**: [#${pr_number}](${pr_url}) open ${pr_age_h}h (>= ${ESCALATE_AFTER_HOURS}h) and unmerged; checks pending on the latest head."
+            fi
+          fi
+
+          # --- State: bump branch ahead of main with no open PR ---------------
+          branch_ref=""
+          if [ -z "$pr_number" ]; then
+            set +e
+            branch_ref="$(gh api "repos/${REPOSITORY}/git/ref/heads/${BUMP_BRANCH}" --jq '.object.sha' 2>/tmp/ref-err)"
+            ref_rc=$?
+            set -e
+            if [ "$ref_rc" -ne 0 ]; then
+              # Only a missing branch reads as clean; any other API failure is
+              # an internal error, never a claim of health.
+              if grep -q "Not Found" /tmp/ref-err; then
+                branch_ref=""
+              else
+                fail_loud "reading the ${BUMP_BRANCH} ref failed: $(cat /tmp/ref-err)"
+              fi
+            fi
+            if [ -n "$branch_ref" ]; then
+              ahead="$(gh api "repos/${REPOSITORY}/compare/main...${branch_ref}" --jq '.ahead_by')" \
+                || fail_loud "comparing ${BUMP_BRANCH} to main failed"
+              if [ "$ahead" -gt 0 ]; then
+                add_reason "- **Bump without a PR**: \`${BUMP_BRANCH}\` is ${ahead} commit(s) ahead of main with no open PR (closed unmerged?)."
+              else
+                branch_ref=""
+              fi
+            fi
+          fi
+
+          # --- Input rev range: locked on main -> candidate on the branch -----
+          rev_range=""
+          if [ -n "$pr_number" ] || [ -n "$branch_ref" ]; then
+            fetch_lock() {
+              gh api -H "Accept: application/vnd.github.raw" \
+                "repos/${REPOSITORY}/contents/flake.lock?ref=$1"
+            }
+            fetch_lock main > /tmp/lock-main.json \
+              || fail_loud "fetching flake.lock at main failed"
+            fetch_lock "refs/heads/${BUMP_BRANCH}" > /tmp/lock-bump.json \
+              || fail_loud "fetching flake.lock at ${BUMP_BRANCH} failed"
+            # Only the root node's direct inputs: internal dedup nodes
+            # (nixpkgs_2, flake-parts_4, ...) are noise in an alert.
+            rev_range="$(jq -rn --slurpfile base /tmp/lock-main.json --slurpfile bump /tmp/lock-bump.json '
+                ($base[0]) as $B | ($bump[0]) as $H |
+                [($H.nodes[$H.root].inputs // {}) | keys[] | . as $name
+                  | ($H.nodes[$H.root].inputs[$name]) as $hk
+                  | select(($hk | type) == "string")
+                  | ($B.nodes[$B.root].inputs[$name]? // null) as $bk
+                  | (if ($bk | type) == "string"
+                     then ($B.nodes[$bk].locked.rev? // "absent") else "absent" end) as $old
+                  | ($H.nodes[$hk].locked.rev? // "absent") as $new
+                  | select($old != $new)
+                  | "\($name) \($old[0:11]) -> \($new[0:11])"]
+                | join(", ")')" \
+              || fail_loud "diffing flake.lock revs failed"
+          fi
+
+          # --- Locate the tracking issue (label filter, not search: the search
+          # index lags minutes to hours and a lagged miss would mint duplicate
+          # episode issues) ----------------------------------------------------
+          issue_json=/tmp/tracking-issue.json
+          gh issue list --repo "${REPOSITORY}" --label "$label" --state all \
+              --json number,url,state,body --jq '.[0] // empty' > "$issue_json" \
+            || fail_loud "listing tracking issues failed"
+          issue_number=""
+          issue_state=""
+          issue_url=""
+          : > /tmp/issue-body.md
+          if [ -s "$issue_json" ]; then
+            issue_number="$(jq -r '.number' "$issue_json")"
+            issue_state="$(jq -r '.state' "$issue_json")"
+            issue_url="$(jq -r '.url' "$issue_json")"
+            jq -r '.body // ""' "$issue_json" > /tmp/issue-body.md
+          fi
+
+          # --- Healthy: PR merged/green, branch clean, bump job green ---------
+          healthy=""
+          if [ -z "$reasons" ]; then
+            if [ -z "$pr_number" ] || { [ -z "$failing_checks" ] && [ "$pending_count" -eq 0 ]; }; then
+              healthy=1
+            fi
+          fi
+          if [ -n "$healthy" ]; then
+            note "flake bump healthy (bump job ${UPDATE_RESULT}, no stuck PR, branch clean)"
+            if [ -n "$issue_number" ] && [ "$issue_state" = "OPEN" ]; then
+              if grep -q '<!-- slack-escalated:' /tmp/issue-body.md && [ -n "${SLACK_BOT_TOKEN}" ]; then
+                slack_post "flake bump recovered in ${REPOSITORY}; closing <${issue_url}|the tracking issue>." \
+                  || echo "::warning::recovery note did not post to Slack"
+              fi
+              gh issue comment "$issue_number" --repo "${REPOSITORY}" \
+                  --body "Resolved: flake bump healthy at \`${now_iso}\` (run ${GITHUB_RUN_ID}). Closing." \
+                || fail_loud "commenting the resolution failed"
+              gh issue close "$issue_number" --repo "${REPOSITORY}" \
+                || fail_loud "closing the tracking issue failed"
+            fi
+            exit 0
+          fi
+
+          # A young all-pending PR with no episode open is just CI in flight.
+          if [ -z "$reasons" ] && { [ -z "$issue_number" ] || [ "$issue_state" != "OPEN" ]; }; then
+            note "bump PR checks pending and below the ${ESCALATE_AFTER_HOURS}h threshold; nothing to escalate yet"
+            exit 0
+          fi
+          if [ -z "$reasons" ]; then
+            add_reason "- **Episode continuing**: bump PR [#${pr_number}](${pr_url}) checks pending on the latest head."
+          fi
+
+          # --- Episode clock: persisted in the issue body; a red PR that
+          # predates the first observation backdates the start to PR creation --
+          first_detected=""
+          escalated_at=""
+          if [ "$issue_state" = "OPEN" ]; then
+            first_detected="$(sed -n 's/.*<!-- first-detected: \([0-9TZ:-]*\) -->.*/\1/p' /tmp/issue-body.md | head -n1)"
+            escalated_at="$(sed -n 's/.*<!-- slack-escalated: \([0-9TZ:-]*\) -->.*/\1/p' /tmp/issue-body.md | head -n1)"
+          fi
+          if [ -z "$first_detected" ]; then first_detected="$now_iso"; fi
+          first_epoch="$(date -u -d "$first_detected" +%s)"
+          if [ -n "$pr_number" ] && [ "$pr_age_s" -gt $(( now_epoch - first_epoch )) ]; then
+            first_epoch=$(( now_epoch - pr_age_s ))
+            first_detected="$(date -u -d "@${first_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
+          fi
+          failing_for_s=$(( now_epoch - first_epoch ))
+          failing_for_h=$(( failing_for_s / 3600 ))
+
+          fire=""
+          if [ "$failing_for_s" -ge "$threshold_s" ] && [ -z "$escalated_at" ]; then
+            fire=1
+          fi
+
+          write_body() {
+            {
+              echo "${marker}"
+              echo "<!-- first-detected: ${first_detected} -->"
+              if [ -n "$escalated_at" ]; then
+                echo "<!-- slack-escalated: ${escalated_at} -->"
+              fi
+              echo "## Rolling flake bump is stuck"
+              echo
+              echo "Failing since \`${first_detected}\` (${failing_for_h}h; escalation threshold ${ESCALATE_AFTER_HOURS}h). Last checked \`${now_iso}\` by run [${GITHUB_RUN_ID}](https://github.com/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+              echo
+              echo "${reasons}"
+              if [ -n "$rev_range" ]; then
+                echo "Input revisions waiting to land: \`${rev_range}\`"
+                echo
+              fi
+              echo "Maintained by the \`escalate\` job of the reusable update-flake-lock workflow (indexable-inc/index): refreshed each scheduled run while the episode persists, closed automatically once a bump lands cleanly. Motivating incident: indexable-inc/ix#7235."
+              echo
+              echo "_Made with Claude Opus 4.5._"
+            } > /tmp/tracking-body.md
+          }
+
+          # --force: create-or-update, so the label pre-existing is fine.
+          gh label create "$label" --repo "${REPOSITORY}" --force \
+              --color D93F0B --description "rolling flake bump failing past its escalation threshold" \
+            || fail_loud "ensuring the ${label} label failed"
+
+          write_body
+          if [ -z "$issue_number" ]; then
+            issue_url="$(gh issue create --repo "${REPOSITORY}" --title "$issue_title" \
+                --label "$label" --body-file /tmp/tracking-body.md)" \
+              || fail_loud "creating the tracking issue failed"
+            issue_number="${issue_url##*/}"
+          else
+            if [ "$issue_state" = "CLOSED" ]; then
+              gh issue reopen "$issue_number" --repo "${REPOSITORY}" \
+                || fail_loud "reopening the tracking issue failed"
+            fi
+            gh issue edit "$issue_number" --repo "${REPOSITORY}" --body-file /tmp/tracking-body.md \
+              || fail_loud "updating the tracking issue failed"
+          fi
+
+          if [ -n "$fire" ]; then
+            # The comment (unlike body edits) notifies issue subscribers: the
+            # issue channel escalates even when no Slack token is configured.
+            gh issue comment "$issue_number" --repo "${REPOSITORY}" \
+                --body "Failing for ${failing_for_h}h, past the ${ESCALATE_AFTER_HOURS}h threshold: escalating." \
+              || fail_loud "posting the threshold comment failed"
+            slack_ok=1
+            if [ -n "${SLACK_BOT_TOKEN}" ]; then
+              slack_text="flake bump stuck in ${REPOSITORY}: failing for ${failing_for_h}h (threshold ${ESCALATE_AFTER_HOURS}h)."
+              if [ -n "$pr_number" ] && [ -n "$failing_checks" ]; then
+                slack_text="${slack_text} <${pr_url}|#${pr_number}> failing: \`${failing_checks}\`."
+              elif [ -n "$pr_number" ]; then
+                slack_text="${slack_text} <${pr_url}|#${pr_number}> unmerged."
+              fi
+              if [ -n "$rev_range" ]; then
+                slack_text="${slack_text} Waiting revs: \`${rev_range}\`."
+              fi
+              slack_text="${slack_text} Tracking: <${issue_url}|#${issue_number}>."
+              # A rejected post leaves the marker unset so the next tick retries.
+              slack_post "$slack_text" || slack_ok=""
+            else
+              note "no slack-bot-token configured; escalated via the tracking issue only"
+            fi
+            if [ -n "$slack_ok" ]; then
+              escalated_at="$now_iso"
+              write_body
+              gh issue edit "$issue_number" --repo "${REPOSITORY}" --body-file /tmp/tracking-body.md \
+                || fail_loud "recording the escalation marker failed"
+            fi
+          fi
+
+          # Red in the Actions tab too, not only in the issue.
+          echo "::error::flake bump stuck for ${failing_for_h}h; see ${issue_url}"
+          exit 1

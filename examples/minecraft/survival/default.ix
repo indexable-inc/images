@@ -1,0 +1,12 @@
+// `ix apply` reads this VM through flake.nix. The syntax is JavaScript,
+// the semantics are Nix (index's ix2nix converts it during evaluation).
+//
+// The minecraft module declares `ix.healthChecks.minecraft`; every
+// declared check is waited on after the VM converges, so nothing needs
+// selecting here. `ipv4` gives players a public address to join.
+export default ({ index }) =>
+  index.lib.mkVm({
+    name: "survival",
+    deployment: { ipv4: true },
+    modules: [import("./minecraft.nix")],
+  });

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 190" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    text { fill: currentColor; }
+    .box { stroke: currentColor; fill: none; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="20" y="55" width="180" height="80" rx="8"/>
+  <text x="110" y="80" text-anchor="middle" font-size="14" font-weight="600">app VM</text>
+  <text x="110" y="99" text-anchor="middle" font-size="11" class="muted">collector agent</text>
+  <text x="110" y="116" text-anchor="middle" font-size="11" class="muted">spans + tailed app.log</text>
+
+  <line class="edge" x1="200" y1="95" x2="348" y2="95"/>
+  <text x="274" y="85" text-anchor="middle" font-size="12" class="muted">OTLP :4317</text>
+
+  <rect class="box" x="350" y="25" width="350" height="140" rx="8"/>
+  <text x="525" y="47" text-anchor="middle" font-size="13" font-weight="600">observability VM</text>
+
+  <rect class="box" x="368" y="65" width="94" height="52" rx="6"/>
+  <text x="415" y="95" text-anchor="middle" font-size="12">collector</text>
+
+  <line class="edge" x1="462" y1="91" x2="490" y2="91"/>
+
+  <rect class="box" x="492" y="65" width="100" height="52" rx="6"/>
+  <text x="542" y="95" text-anchor="middle" font-size="12">ClickHouse</text>
+
+  <line class="edge" x1="592" y1="91" x2="614" y2="91"/>
+
+  <rect class="box" x="616" y="65" width="70" height="52" rx="6"/>
+  <text x="651" y="89" text-anchor="middle" font-size="12">Grafana</text>
+  <text x="651" y="105" text-anchor="middle" font-size="10" class="muted">:3000</text>
+
+  <text x="525" y="147" text-anchor="middle" font-size="11" class="accent">health: rows land in otel_traces + otel_logs</text>
+</svg>

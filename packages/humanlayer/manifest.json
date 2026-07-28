@@ -1,0 +1,22 @@
+{
+  "version": "0.28.0",
+  "cliHash": "sha256-ym2SsO8qvfeNbvG9HcduPwqGeZUAyqguZn0SD9tgG2M=",
+  "platforms": {
+    "x86_64-linux": {
+      "slug": "linux-x64",
+      "hash": "sha256-Y8VsSO7LZqkXqQhTqGcztgYX/IU/10IcKqev81bw4TA="
+    },
+    "aarch64-linux": {
+      "slug": "linux-arm64",
+      "hash": "sha256-szaGp9bdMdVqhhYtR01/K23R2jpT1U1wnwpH+AJ0rHw="
+    },
+    "aarch64-darwin": {
+      "slug": "darwin-arm64",
+      "hash": "sha256-RXNo4NYe/HPTY54Gb2vmcieOzWx7Cogl7GUtx12mnY8="
+    },
+    "x86_64-darwin": {
+      "slug": "darwin-x64",
+      "hash": "sha256-jG1wGtTilmhJTk7GIGGeUabgoT/rhL12avE16pL+9gU="
+    }
+  }
+}

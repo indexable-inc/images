@@ -1,0 +1,24 @@
+[package]
+name = "cargo-unit-hello"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "cargo_unit_hello"
+path = "src/lib.rs"
+
+[dev-dependencies]
+tango-bench = "0.7.2"
+
+[[bin]]
+name = "cargo-unit-hello"
+path = "src/main.rs"
+
+[[bin]]
+name = "cargo-unit-goodbye"
+path = "src/goodbye.rs"
+
+[[bench]]
+name = "greeting"
+harness = false

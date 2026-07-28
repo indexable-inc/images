@@ -1,0 +1,80 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero.svg" width="720" alt="the shared mk-pi-harness builder wraps the pinned pi binary into six harness packages, one posture each">
+  </picture>
+</p>
+
+# pi-harnesses
+
+How do you ship six different agent postures without six forks of the coding
+agent? Each harness here is a thin, declarative wrapper around
+[`pi`](https://pi.dev) with a fixed posture and (optionally) one or more
+bundled extensions, shipped as its own Nix package. One shared builder owns the
+wrapping; each harness owns only its flags and extensions.
+
+## Layout
+
+```
+pi-harnesses/
+  shared/
+    mk-pi-harness.nix     # the builder: wraps `pi` with flags + extensions + a model table
+    wrapper.sh.in         # launcher template (model-alias resolution, -e wiring)
+    models.nix            # canonical alias -> { provider, model } table
+    ext-lib/              # reusable extension helpers (trust, child-agent, probes, scoring, turn-cap)
+  engine/                 # id: pi-harness   - the locked-down Room engine (tools ABSENT, JSON event stream)
+  base/                   # id: pi-base       - base UX pack: live tok/s, git widget, /diff, /lg
+  prosecutor/             # id: pi-prosecutor - executor under a skeptical, earned-trust supervisor
+  beam/                   # id: pi-beam       - executor with beam search over isolated worktree branches
+  fusion/                 # id: pi-fusion     - primary agent delegating to a gpt-5.6-sol sidekick at low reasoning
+  omp/                    # id: omp           - oh-my-pi: pinned upstream release binary + Claude bridges (not mk-pi-harness)
+```
+
+`engine/` is the original `packages/pi-harness` (ENG-2261/2262), moved here
+unchanged so the family lives in one place. Its `id` is still `pi-harness`, so
+`nix run .#pi-harness` and `index.packages.<sys>.pi-harness` are unaffected. It
+keeps its own hardened C launcher for the secret-bearing Room posture; the new
+harnesses use the simpler shared shell builder.
+
+## The key difference in posture
+
+The engine deliberately removes the model's tools (`--no-builtin-tools
+--no-extensions --no-skills --no-session`) so Room gets a sandboxed, single-shot
+engine. The orchestration harnesses need the opposite: the executor must do real
+work and the child agents must probe real state.
+
+| | engine (`pi-harness`) | prosecutor / beam |
+| --- | --- | --- |
+| built-in tools | absent (`--no-builtin-tools`) | present |
+| extensions | only the ix-mcp bridge | the harness extension(s) |
+| session | `--no-session` (ephemeral) | persistent |
+| child agents | none | isolated `pi` subprocesses |
+| posture set by | hardened C launcher | `mk-pi-harness.nix` (`lockdown = false`) |
+
+## Run
+
+```sh
+nix run github:indexable-inc/index#pi-prosecutor -- "your task"   # opus-4-8 executor + prosecutor (same model)
+nix run github:indexable-inc/index#pi-beam       -- "your task"
+nix run github:indexable-inc/index#pi-fusion     -- "your task"   # fable-5 primary + gpt-5.6-sol sidekick at low reasoning
+PI_HARNESS_MODEL=codex nix run github:indexable-inc/index#pi-prosecutor -- "..."   # gpt-5.6-sol medium
+PI_HARNESS_MODEL=kimi  nix run github:indexable-inc/index#pi-base       -- "..."   # kimi-k3, needs MOONSHOT_API_KEY
+```
+
+API keys come from the caller's environment (`ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` / `MOONSHOT_API_KEY`); the harness owns model *selection* only. Every harness execs
+nixpkgs' pinned `pi-coding-agent` binary, never a `pi` resolved from the
+caller's PATH (host-level wrappers there inject conflicting flags and
+extensions); swap it with `.override { pi = ...; }`.
+
+## Adding a harness
+
+1. Create `pi-harnesses/<name>/` with a `package.nix` (`{ id = "pi-<name>";
+   packageSet = true; flake = true; }`) and a `default.nix` that calls
+   `../shared/mk-pi-harness.nix`.
+2. Put the entry extension under `<name>/extension/`, shared helpers in
+   `shared/ext-lib/` (passed as `libFiles`).
+3. The registry auto-discovers it; no central list to edit.
+
+Working in-repo assumes a clone:
+`git clone https://github.com/indexable-inc/index`.

@@ -1,0 +1,19 @@
+---
+id: stock-nix-parse-shards
+postedAt: 2026-07-22T00:00:00-07:00
+title: "the stock-Nix parse gate is sharded per top-level directory"
+tags: [nix, ci, checks]
+links:
+  - label: repo-policy checks
+    href: https://github.com/indexable-inc/index/blob/main/lib/dev/checks.nix
+  - label: issue 3929
+    href: https://github.com/indexable-inc/index/issues/3929
+---
+
+The stock-Nix parse gate (`stock-nix-parse`, from #3898) parsed every tracked `.nix` outside `tests/` in one derivation, so touching any `.nix` file anywhere invalidated the whole check and re-parsed the entire tree.
+
+The gate is now one check per top-level directory: `checks.<system>.stock-nix-parse-lib`, `stock-nix-parse-packages`, and so on, plus `stock-nix-parse-root` for the top-level files themselves (`flake.nix`). Each shard's source is the intersection of the git-tracked `.nix` fileset with that subtree, so an edit under `packages/` rebuilds only the packages shard; every other shard stays a byte-identical derivation and a cache hit.
+
+The shard set is discovered from the repo tree with `builtins.readDir`, never hand-listed, so a new top-level directory cannot silently escape coverage. Directories without tracked `.nix` files drop out, and `tests/` stays excluded the same way it always was: it is the fork-syntax island, the one place fork-only literals are allowed. An eval-time assertion compares the union of the shard filesets against the original whole-surface fileset, so a shard-construction bug fails evaluation instead of quietly narrowing the gate.
+
+Fixes #3929 (authored by Claude Code, Fable 5)

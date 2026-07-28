@@ -1,0 +1,52 @@
+---
+title: "CI incident: the evaluator patch outran the daemon protocol"
+date: 2026-07-09
+---
+
+Required `flake-check` jobs began failing with unbuilt
+`cargo-unit-test-manifest` outputs. The same logs also contained SQLite
+`database is busy` warnings, and a live daemon experiment started just
+before the failures. Both were plausible causes. Neither was the root
+protocol incompatibility.
+
+## Root cause
+
+The repo's patched `nix-eval-jobs` resolves floating content-addressed
+outputs by calling `store.queryRealisation(id)`. The call itself is
+fine; the problem was a client/daemon mismatch. The evaluator's Nix
+libraries had drifted to a Nix-master component set whose
+`queryRealisation` client demands the `realisation-with-path-not-hash`
+protocol feature, while the shared CI daemon runs the Nix 2.34 family,
+which does not advertise it. With mismatched families, evaluation
+cannot obtain the manifest output path.
+
+A Nix `2.36.0pre20260708_ac94798` experiment from `/tmp/nix-fixed` had
+replaced the deployed daemon at 01:03:33 UTC. After its active builds
+finished, the host was restored to the Nix 2.34.7 system service and the
+store endpoint was verified. Fresh CI still printed the missing-feature
+warning and failed on the same manifest. The experiment explained the
+host drift, but both daemon builds lacked the feature the evaluator
+patch assumed.
+
+## Differentials
+
+- PR #2600 passed `eval-cache=false` to both evaluator phases. SQLite
+  warnings disappeared, while the manifest failure remained.
+- Restoring the deployed Nix 2.34.7 daemon removed the live experiment,
+  while the missing protocol feature and manifest failure remained.
+- The failure site is the patched evaluator's `store.queryRealisation`
+  call, not the manifest builder itself.
+
+## Status
+
+- PR #2600 fixed parallel evaluator cache contention.
+- Issue #2592 is closed. PR #2606 relinked `nix-eval-jobs` against the
+  daemon's pinned Nix 2.34 component set
+  (`packages/nix-eval-jobs/default.nix`), with a smoke test that
+  fails the build if the evaluator ever drifts off the daemon's family
+  again.
+- CI evaluates content-addressed derivations again. The durable fix was
+  aligning the client with the deployed daemon protocol, not upgrading
+  the daemon.
+
+*Written by Codex, an AI coding agent.*

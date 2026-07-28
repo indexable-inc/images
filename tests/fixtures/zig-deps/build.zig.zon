@@ -1,0 +1,16 @@
+.{
+    .name = .zig_deps_fixture,
+    .version = "0.1.0",
+    .fingerprint = 0x15f7be3eeebd2a7c,
+    .dependencies = .{
+        .known_folders = .{
+            .url = "https://github.com/ziglibs/known-folders/archive/refs/tags/0.7.0.tar.gz",
+            .hash = "N-V-__8AAEBMAACmUnVy2ktNSZm4TZ8-sbPnRWUmlW5boAAS",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

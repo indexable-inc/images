@@ -1,0 +1,23 @@
+---
+id: drop-precommit-lint
+postedAt: "2026-07-19T08:20:00-07:00"
+title: "commits stop running the whole lint suite locally"
+links:
+  - label: "the hook removal"
+    href: "https://github.com/indexable-inc/index/pull/3627"
+tags:
+  - ci
+  - workflow
+---
+
+`.githooks/pre-commit` was `exec nix run .#lint`: every commit re-ran the
+entire lint suite on the committer's machine, minutes per commit on a
+laptop, serially, before CI ran the identical suite again on fleet
+hardware. Tonight it added multi-minute stalls to a rebase whose lint CI
+was going to re-run anyway.
+
+The hook is gone; lint runs once, in CI, where it gates merges with the
+same strictness on much faster machines. `nix run .#lint` remains available
+for anyone who wants the check before pushing. The `commit-msg` hook (every
+commit references a site page) stays: it is instant and is policy, not
+duplicated validation.

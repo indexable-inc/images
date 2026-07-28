@@ -1,0 +1,46 @@
+---
+id: nix-daemon-dead-client-wedge
+postedAt: 2026-07-19T18:30:00-07:00
+title: "Daemon workers now die with their client, and zombie-owned builds stop reading as in flight"
+tags: [nix, daemon, fork, reliability]
+links:
+  - label: issue 3752
+    href: https://github.com/indexable-inc/index/issues/3752
+  - label: patch 0033
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0033-libstore-wake-the-goal-loop-when-the-process-is-inte.patch
+  - label: patch 0034
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0034-libstore-prove-build-status-writers-alive-with-a-lif.patch
+---
+
+On hydra this morning, `nix store builds` reported 33 builds "in
+flight" for 10.5 hours, owned by three daemon workers that existed only
+as zombies; new builds of the same derivations (`strsim` et al.) sat
+"building" for 55 minutes with flat logs, and only
+`launchctl kickstart -k system/org.nixos.nix-daemon` cleared the jam.
+Sibling of the CLOSE-WAIT downloader wedge (p22): that was the cache
+half-close, this is the client-death half.
+
+Two fork patches close it. Patch 0033 gives the goal loop a
+level-triggered interrupt wakeup: interrupts used to be a flag plus a
+one-shot SIGUSR1, so one landing between the last `checkInterrupt()`
+and the `poll()` syscall was lost, and a worker whose builders were
+silent (no `max-silent-time`, no `timeout`, no `min-free` -- our daemon
+config) slept forever, holding goals, builders, build users, and path
+locks of a client that no longer existed. A self-pipe in the
+`waitForInput` poll set now makes client death (via `MonitorFdHup`) and
+SIGTERM abort the worker deterministically. Upstream master has the
+same gap; its `Waker` pipe is not interrupt-wired.
+
+Patch 0034 makes the status directory stop trusting corpses: writers
+hold a lifetime `flock` on their entry (`"livenessLock": true`), which
+the kernel releases on any death -- SIGKILL, crash, or surviving as a
+zombie -- so `nix store builds` prunes them on sight. The old
+`kill(pid, 0)` probe kept phantom entries alive precisely because it
+succeeds for zombies; it remains only as a zombie-aware fallback for
+entries written by older daemons.
+
+Repro receipts on a throwaway daemon: before, a SIGKILLed worker's
+entry stayed listed with its builder orphaned; after, the SIGKILL
+client-disconnect and zombie-writer cases are functional tests
+(`tests/functional/build-status.sh`). Rolls to hosts on the next pin
+bump and to workstations via home-manager switch (p34).

@@ -1,0 +1,127 @@
+---
+id: nixpkgs-alias-sweep
+postedAt: "2026-07-25"
+title: the version tables only advertise versions that still build, after a sweep of every nixpkgs alias this repo names
+tags:
+  - nix
+  - toolchains
+---
+
+The BEAM fix earlier today ended with a known gap: "No sweep was run for other
+top-level nixpkgs aliases this repo may still name." This is that sweep. The
+pinned nixpkgs (26.11, `e2587ca`) carries **2412 top-level alias attributes**.
+Two of them were live breakages in ix. Fourteen more were dead entries in the
+`ix.languages.*` version tables, waiting for the first caller to name them.
+
+## how the class was enumerated
+
+Not by guessing names. `config.allowAliases = false` removes exactly the
+attributes `pkgs/top-level/aliases.nix` contributes, so the alias set is the
+difference between the two package sets:
+
+    with allowAliases:    27682 attributes
+    without allowAliases: 25270 attributes
+    alias set:             2412
+
+Classified against their definition sites in that file: **1957 throws** (1779
+written out one per line, 162 generated from the `deprecatedPlasma5Packages`
+list, 16 written as dotted paths under a parent attribute like
+`lxde.lxpanel`), **183 `warnAlias` shims** (182 plus the whole `xorg` set,
+which is one attribute mapping `warnAlias` over ~30 members), and **272 silent
+renames**. The three classes fail in three different ways, and only one of them
+is visible at lookup:
+
+- a `throw` alias fails the moment the attribute is selected;
+- a dropped attribute raises `attribute missing`;
+- a `warnAlias` resolves fine and fails only when something forces `drvPath`,
+  because `lib.derivations.warnOnInstantiate` wraps every attribute of the
+  derivation except `meta`/`name`/`type`/`outputName` in `lib.warn`. Under
+  `abort-on-warn` -- set in both repos -- that is a hard eval failure.
+
+A fourth shape turned up that is not an alias at all: `gradle_7` is marked
+insecure, so forcing its `drvPath` trips an assert unless the caller opts into
+`permittedInsecurePackages`.
+
+## the two live breakages were in ix, not here
+
+`pkgs.system` is a `warnAlias` for `stdenv.hostPlatform.system` now. ix named
+it in three places, and all three were already broken:
+
+    $ nix eval .#packages.x86_64-linux.casImage.drvPath
+    evaluation warning: system has been renamed to/replaced by
+      stdenv.hostPlatform.system
+    error: aborting to reveal stack trace of warning, as abort-on-warn is set
+
+`nix build .#casImage`, `.#cloudflare`, `.#status-page` and `.#ovh` could not
+evaluate. None of them is in a host closure, which is why the twelve fleet
+hosts stayed green and nobody noticed.
+
+## what changed here
+
+`xorg.libX11` and friends are the deprecated spelling; the set was retired on
+2026-01-29 and the packages live at the top level under lowercase names now.
+`packages/minecraft/bossbar-overlay` takes the four it uses as `libx11`,
+`libxcursor`, `libxrandr`, `libxi` -- the rename is lowercase-x, not a
+capitalisation-preserving move.
+
+The version tables in `lib/languages` advertised fourteen versions that could
+not be produced:
+
+| table | removed | why |
+| --- | --- | --- |
+| `cpp` gcc | 9, 10, 11, 12 | unmaintained, removed upstream |
+| `cpp` clang | 16, 17 | unmaintained, removed upstream |
+| `go` | 1.23 | EOL |
+| `zig` | 0.12 | removed upstream |
+| `javascript` | 20, 25 | EOL 2026-04-30 and 2026-06-01 |
+| `python` | 3.10 | attribute gone from the channel entirely |
+| `java` openjdk/temurin/zulu | 23, 24 | EOL |
+| `java` gradle | 7 | no security updates since Gradle 9; marked insecure |
+
+Nothing in either repo selected any of them, so they are deleted rather than
+pinned back to something that still builds. The docstrings that advertised them
+are corrected in the same commit -- a table that lies in its documentation is
+how a caller ends up reading a nixpkgs removal message instead of this
+repo's own "unknown version, here is what is supported" error.
+
+Four newest-available versions were added where the table had drifted behind
+the channel: gcc 16.1.0, Node 26.5.0, Elixir 1.20.2, Erlang/OTP 29.0.3.
+
+## deliberately not the newest
+
+`go_1_27` and `python315` exist in the pinned channel and are not in the
+tables. They resolve to `go-1.27rc2` and `python3-3.15.0b4`. A release
+candidate is not a version to advertise as selectable, and both were caught by
+forcing `drvPath` and reading the version out of the store path rather than
+trusting the attribute name. `temurin-bin-26` exists too, but only in that one
+distribution, and a JDK major that resolves for Temurin and throws for OpenJDK,
+Corretto and Zulu is worse than not offering it.
+
+## the guard
+
+The BEAM change added `beamPinnedDrvPaths`, which forced `drvPath` for every
+advertised Elixir and Erlang minor. That is now `languageTableDrvPaths` and
+covers every version table in `lib/languages`: 60 versions across Elixir,
+Erlang, Go, Zig, Node, Python, gcc, clang, four JDK distributions, and Gradle.
+Forcing is the point -- an entry spelled `pkgs.gcc12` looks fine in a diff and
+in `nix repl` until something instantiates it.
+
+Watched failing before being trusted. Re-adding `"12" = pkgs.gcc12;` to the gcc
+table:
+
+    error: gcc12 has been removed from Nixpkgs, as it is unmaintained
+      and obsolete
+
+## not done
+
+The 272 silent-rename aliases are mostly untouched. Three were fixed because
+the modern spelling is unambiguous and the rename is free (`nettools` to
+`net-tools`, `nixos-rebuild` to `nixos-rebuild-ng`, plus the xorg set above).
+The rest -- `linux_6_12`, `linuxPackages_6_18`, `wasm-bindgen-cli`, `utfcpp`,
+`wlroots` -- are aliases upstream deliberately maintains, several marked
+`preserve` in `aliases.nix`, and rewriting them would pin a version this repo
+does not want to own. They emit nothing and break nothing.
+
+No sweep was run over the *nested* alias sets -- `python3Packages`,
+`haskellPackages`, `nodePackages` each carry their own aliases file, and only
+the top-level set was enumerated here.

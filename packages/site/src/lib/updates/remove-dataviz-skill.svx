@@ -1,0 +1,32 @@
+---
+id: remove-dataviz-skill
+postedAt: "2026-07-19T12:30:00-07:00"
+title: "the bundled dataviz skill is gone, not just blocked"
+links:
+  - label: "the issue"
+    href: "https://github.com/indexable-inc/index/issues/3659"
+  - label: "the original deny"
+    href: "https://github.com/indexable-inc/index/issues/3607"
+tags:
+  - agents
+---
+
+Claude Code ships a bundled `dataviz` skill that injects Anthropic's own
+chart-style guidance. We never wanted it steering output, so #3607 denied
+it with `Skill(dataviz)` -- which blocked invocation but left the skill in
+every session's listing, spending context on a skill that could never run.
+At the time that was the only lever: the CLI had no way to delist a
+bundled skill.
+
+It does now. `skillOverrides` (CLI v2.1.129+, our pin is 2.1.206) accepts
+`"dataviz": "off"`, which removes the skill from the listing and refuses
+invocation outright, and holds under `--dangerously-skip-permissions`.
+Probed headlessly against 2.1.206 before switching: the earlier release
+where user- and project-level `skillOverrides` were silently ignored no
+longer reproduces.
+
+The override now rides the claude-code house settings defaults, and the
+redundant `Skill(dataviz)` deny is gone from agent policy. Wrapped
+sessions simply never see the skill. `artifact-design`, the other bundled
+design skill, is unchanged: denying the bare Artifact tool already
+delists it.

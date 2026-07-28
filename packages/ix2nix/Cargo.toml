@@ -1,0 +1,24 @@
+[package]
+name = "ix2nix"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Converts .ix modules (JavaScript syntax as a 1:1 skin over Nix semantics) into Nix source"
+
+[lints]
+workspace = true
+
+[dependencies]
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_diagnostics.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+
+[dev-dependencies]
+hegeltest = { workspace = true, default-features = false }
+rnix.workspace = true
+
+[[bin]]
+name = "ix2nix"
+path = "src/main.rs"

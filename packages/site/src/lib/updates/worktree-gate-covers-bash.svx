@@ -1,0 +1,23 @@
+---
+id: worktree-gate-covers-bash
+postedAt: 2026-07-27T05:58:00-07:00
+title: "A primary checkout is now read-only to agents, not just uneditable"
+tags: [claude-code, claude-hooks, agent-prompt, workflow]
+links:
+  - label: index#4216 (rule permitted working in a primary checkout)
+    href: https://github.com/indexable-inc/index/issues/4216
+  - label: "index#4218 (git-guard: mutating commands in a protected checkout)"
+    href: https://github.com/indexable-inc/index/issues/4218
+  - label: index#4225 (kernel Cmd bypasses it, open)
+    href: https://github.com/indexable-inc/index/issues/4225
+---
+
+The shared ix checkout on this workstation was found on 2026-07-27 sitting on a branch deleted upstream, 604 commits behind main, with 534 files staged by nobody. 157 of those files differed from `origin/main`: 106 were stale copies main had moved past, 51 had been edited away from both. Telling one group from the other took a classification pass before the checkout could be reset, and the contents were preserved as `ix@rescue/2026-07-27-primary-checkout` first. This is the second such rescue branch in two days.
+
+No edit tool call produced any of it. The worktree guard denies Edit and Write whose target resolves into a protected checkout, and the workstation profile already listed this checkout among the protected globs, so the guard was live and correct the whole time. `git add` and `git switch` through Bash are not edits.
+
+Both layers now say the same thing. The prompt rule opens `Never work in a primary checkout` instead of `Never edit in a primary checkout`, phrased as a gate on starting work rather than advice about edits (#4217). And `git-guard` grew a third rule: a state-mutating git subcommand aimed at a protected checkout is refused whatever the tree looks like -- `add`, `commit`, `switch`, `checkout`, `reset`, `stash`, `rebase` and the rest of a closed enumerated set, so an unrecognised subcommand still fails open (#4219). Reads are untouched, and so are the three commands the refusals themselves recommend: `worktree add`, `stash list`, and naming a branch. The refusal prints the `worktree add` line for the repo you are standing in, derived from that checkout's own origin URL.
+
+Two consequences worth knowing before you meet them. Hand-cleaning a protected checkout is now refused too, because unstaging a stray `git add` is itself a mutation; `CLAUDE_CODE_DISABLE_GIT_GUARD=1` is the way through and the refusal names it. And `git submodule update` stays allowed on purpose, since it is half of the `worktree add` recipe the refusals print.
+
+One layer is still open. `git-guard` is a PreToolUse hook, so it sees the Bash tool and nothing else, while the kernel's `Cmd.run` and `Cmd.sh` never pass through hooks. `Cmd.sh("git add -A", cd: "<protected checkout>")` from an exec cell is still unrefused, which is the same shape as #3871, where kernel `Edit.write` bypassed the Edit-side guard and the fix was to enforce the denylist inside the kernel. Tracked as #4225.

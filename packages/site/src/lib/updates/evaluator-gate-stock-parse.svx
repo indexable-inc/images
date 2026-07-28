@@ -1,0 +1,21 @@
+---
+id: evaluator-gate-stock-parse
+postedAt: 2026-07-19T01:05:06-07:00
+title: "stock Nix now gets an install message instead of a parse error, and the bootstrap seam is enforced"
+tags: [nix, fork, ci]
+links:
+  - label: evaluator gate
+    href: https://github.com/indexable-inc/index/blob/main/lib/evaluator-gate.nix
+  - label: issue 3635
+    href: https://github.com/indexable-inc/index/issues/3635
+---
+
+The repo pins its own Nix evaluator: the fork source lives in-tree (`lib/fork-packages.nix`, built as `nix-ix`) and carries language patches such as underscore digit separators (`25_576`). `tests/default.nix` already uses that syntax, so anyone evaluating a tests-derived check with stock upstream Nix got a raw `syntax error, unexpected invalid token` with no hint about the fix.
+
+Two additions make the boundary explicit:
+
+- `ix.evaluatorGate.require` wraps the import of each fork-syntax island (today: `tests/`). Syntax errors happen at parse time, before any version check can run, so the gate sits at the import seam and stays frozen-syntax itself, the same trick as nixpkgs' `lib/minver.nix`. Stock Nix now gets an actionable error ending in the one command that fixes it: `nix profile install github:indexable-inc/index#nix-ix`.
+
+- `checks.<system>.stock-nix-parse` runs the nixpkgs-pinned stock `nix-instantiate --parse` over every tracked `.nix` outside `tests/`. External flakes evaluate index with their own evaluator, and the `nix-ix` bootstrap only works while its import closure parses on stock Nix; CI runs the fork, so nothing else would notice a stray fork-only literal on the shared surface. The check turns "stock Nix can always build the fork" from luck into law.
+
+The gate detects the fork through the `+ix.` suffix in `builtins.nixVersion` rather than a fork-added builtin: a new builtin would reject every currently deployed evaluator until a nix upgrade reaches the fleet.

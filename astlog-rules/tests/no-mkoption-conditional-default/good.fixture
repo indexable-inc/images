@@ -1,0 +1,1 @@
+{ lib }: lib.mkOption { default = 1; }

@@ -1,0 +1,26 @@
+---
+id: unibind-ex-shared-eventually
+postedAt: 2026-07-21
+title: unibind ex suites share one staged eventually helper
+tags: [elixir, unibind, clone-detect]
+links:
+  - label: "index#3901"
+    href: https://github.com/indexable-inc/index/issues/3901
+---
+
+The three unibind Elixir binding suites (plumb, tui, the conformance crate)
+each carried a verbatim copy of the `eventually/2` + `poll/2` ExUnit polling
+helper, 26 lines flagged as a type-1 group once clone detection gated Elixir.
+
+All three suites only run inside the mix package assembled by
+`unibind.build`'s ex target, so the helper now belongs to that harness:
+`packages/unibind/nix/ex.nix` stages a single
+`packages/unibind/nix/ex-support/eventually.exs` into every assembled package
+as `test/support/eventually.exs`, each `test_helper.exs` loads it, and the
+three copies are gone. A hand-written file at that path trips the same
+shadow check that protects generated output.
+
+Incremental builds are unchanged in shape: the shared file is an input to the
+three mixPackage derivations only, so editing it rebuilds the suites but never
+`unibind-gen` or the NIF libraries. The duplication ratchet tightens from
+0.37 to 0.365 (measured 0.3623 percent).

@@ -1,0 +1,19 @@
+---
+id: nom-cross-ghc
+postedAt: 2026-07-18T23:30:00-07:00
+title: "nom on Macs: cross-compiled from Linux by a patched cross-GHC"
+tags: [nix, darwin, haskell, ci]
+links:
+  - label: "#3606"
+    href: https://github.com/indexable-inc/index/issues/3606
+  - label: PR
+    href: https://github.com/indexable-inc/index/pull/3617
+  - label: RFC 0009
+    href: https://github.com/indexable-inc/index/blob/main/packages/site/src/lib/rfcs/0009-cross-compiled-darwin-packages.svx
+---
+
+`packages.aarch64-darwin.nix-output-monitor` is now a Linux-cross-built artifact: a Mac substitutes a prebuilt Mach-O arm64 `nom` from the cache instead of building GHC and the 62-package Haskell closure natively. The verdict in #3584 ("Haskell cross to darwin is infeasible") only condemned nixpkgs' pkgsCross road, which dies bootstrapping the Apple SDK; building GHC itself as a cross compiler the way upstream's wasm and mingw lanes do -- `./configure --target=aarch64-apple-darwin` + hadrian, with the RFC 0009 clang/ld64.lld/SDK toolchain as target tools -- works.
+
+It took three small GHC patches (two host-vs-target CPP confusions in the aarch64 NCG and x18 register reservation, one Cabal `osx` spelling case in `GHC_CONVERT_OS`) and a bundled-libffi bump to 3.5.2 for a Mach-O CFI atom rule. Template Haskell splice execution is impossible in this lane (no darwin iserv on Linux); an audit showed nom's closure runs zero splices, so nothing had to be faked. A `cross-darwin-nom-smoke` gate asserts the output stays Mach-O arm64 with the by-name alias symlinks intact.
+
+*Written by an AI agent via Claude Code (Claude Fable 5).*

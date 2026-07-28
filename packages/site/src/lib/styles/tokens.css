@@ -1,0 +1,85 @@
+/* Design tokens for the index site, cloned from ix's design language
+   (ix repo packages/web/src/styles/tokens-{light,dark}.css): monochrome
+   terminal on zinc grounds, everything monospace, accent = ink. Emphasis
+   comes from weight, case, and spacing, never from hue. Only the semantic
+   status ladder and the filter-expression syntax tokens carry color, the
+   same way ix reserves color for code syntax.
+
+   Berkeley Mono is commercially licensed, so the woff2 files live in the
+   ix repo only; this public repo ships the stack and falls back to
+   ui-monospace elsewhere. Single source of truth: app.css imports this
+   file, and consumers import `@indexable/site/styles/tokens.css`. */
+
+:root {
+  color-scheme: light dark;
+
+  --radius: 2px;
+
+  /* The character cell. 14px mono with an exact 21px line-height; every
+     vertical distance on the site is a whole multiple of --cell-h and every
+     horizontal distance is in ch, so the page renders on a TUI grid. */
+  --cell-h: 21px;
+
+  /* Terminal aesthetic: everything is monospace. */
+  --font-sans:
+    'Berkeley Mono', 'Symbols Nerd Font Mono', ui-monospace, 'SF Mono',
+    'JetBrains Mono', monospace;
+  --font-mono:
+    'Berkeley Mono', 'Symbols Nerd Font Mono', ui-monospace, 'SF Mono',
+    'JetBrains Mono', monospace;
+
+  /* Grounds and ink. Each token carries both schemes via light-dark(), so a
+     token is defined once instead of in a :root block shadowed by a
+     @media (prefers-color-scheme: dark) override. Light: zinc grounds,
+     near-black ink; dark: near-black grounds, zinc ink. */
+  --bg: light-dark(#fafafa, #09090b);
+  --bg-secondary: light-dark(#f4f4f5, #131316);
+  --fg: light-dark(#18181b, #e4e4e7);
+  --fg-strong: light-dark(#09090b, #fafafa);
+  --fg-muted: light-dark(#71717a, #8b8b96);
+  --fg-faint: light-dark(#a1a1aa, #636370);
+  --rule: light-dark(#e4e4e7, #27272a);
+  --code: light-dark(#f4f4f5, #131316);
+  --destructive: light-dark(#dc2626, #f87171);
+
+  /* Plan status ladder, faint to saturated as a Plan gains weight. A
+     semantic family (like ix's code-syntax tokens) so it keeps color;
+     values are tuned to sit on the zinc grounds above. Consumed by
+     StatusBadge and the /plans chart; one source of truth. */
+  --status-sketch: light-dark(#a1a1aa, #52525b);
+  --status-draft: light-dark(#71717a, #a1a1aa);
+  --status-input-wanted: light-dark(#a16207, #f0c674);
+  --status-last-call: light-dark(#7c3aed, #a78bfa);
+  --status-accepted: light-dark(#0969da, #6cb6ff);
+  --status-load-bearing: light-dark(#0f7b53, #3dd68c);
+  --status-rejected: light-dark(#dc2626, #f87171);
+  --status-withdrawn: light-dark(#a1a1aa, #52525b);
+  --status-superseded: light-dark(#71717a, #a1a1aa);
+  /* Chip for plans that actively request comments. */
+  --status-rfc: light-dark(#0891b2, #50c8e8);
+
+  /* Filter-expression syntax tokens (FilterBar operators), drawn from the
+     same palette ix uses for code syntax. */
+  --syntax-and: light-dark(#0891b2, #50c8e8);
+  --syntax-or: light-dark(#c2410c, #f0c674);
+  --syntax-not: light-dark(#7c3aed, #a78bfa);
+  --syntax-error: light-dark(#dc2626, #f87171);
+}
+
+/* light-dark() is unsupported on ~15% of browsers as of 2026; restore the dark
+   palette there with the classic prefers-color-scheme override. Light is the
+   default, so only the dark scheme needs restating. */
+@supports not (color: light-dark(#000, #fff)) {
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #09090b; --bg-secondary: #131316; --fg: #e4e4e7; --fg-strong: #fafafa;
+      --fg-muted: #8b8b96; --fg-faint: #636370; --rule: #27272a; --code: #131316;
+      --destructive: #f87171;
+      --status-sketch: #52525b; --status-draft: #a1a1aa; --status-input-wanted: #f0c674;
+      --status-last-call: #a78bfa; --status-accepted: #6cb6ff; --status-load-bearing: #3dd68c;
+      --status-rejected: #f87171; --status-withdrawn: #52525b; --status-superseded: #a1a1aa;
+      --status-rfc: #50c8e8;
+      --syntax-and: #50c8e8; --syntax-or: #f0c674; --syntax-not: #a78bfa; --syntax-error: #f87171;
+    }
+  }
+}

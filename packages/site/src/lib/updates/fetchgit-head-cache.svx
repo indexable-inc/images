@@ -1,0 +1,31 @@
+---
+id: fetchgit-head-cache
+postedAt: 2026-07-22T07:45:00-07:00
+title: "Rev-pinned `builtins.fetchGit` inputs evaluate without network once cached"
+tags: [nix, fetchers, performance]
+links:
+  - label: issue #4028
+    href: https://github.com/indexable-inc/index/issues/4028
+  - label: the patch commit
+    href: https://github.com/indexable-inc/nix/commit/6f5d017a872250dde01fb6eccdf25bed755bd41c
+---
+
+Evals that use `builtins.fetchGit` with a pinned `rev` (crane's `vendorCargoDeps`
+for Cargo.lock git dependencies, for example) used to spawn a serial
+`git ls-remote --symref <url> HEAD` per input on every evaluation, even when the
+rev was already in the local git cache: the fetcher resolved the remote's
+default ref before deciding whether anything needed fetching, and the cached
+HEAD file could never refresh once fetches stopped happening, so after one
+`tarball-ttl` expiry the network round trip recurred forever. On hydra this put
+40-100s of git subprocess wall time on top of an ~18s-cpuTime home-manager eval
+(#4028).
+
+The `libfetchers: resolve git refs lazily and refresh the cached HEAD` patch
+in the `nix-ix` fork series (an [indexable-inc/nix](https://github.com/indexable-inc/nix)
+megamerge commit) makes the daemon resolve git refs lazily
+(a cached rev-pinned input now runs zero remote git subprocesses, `allRefs`
+included) and refreshes the cached HEAD after every successful network lookup,
+bounding HEAD resolution for unpinned inputs to once per `tarball-ttl` instead
+of once per eval. Measured on a warm `nix eval --no-eval-cache` of a rev-pinned
+github input: 448ms and one network `ls-remote` per eval before, 37ms and zero
+git subprocesses after.

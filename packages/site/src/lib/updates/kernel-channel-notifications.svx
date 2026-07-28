@@ -1,0 +1,19 @@
+---
+id: kernel-channel-notifications
+postedAt: 2026-07-20T12:45:00-07:00
+title: "Kernel wakes reach Claude Code again: mcp-ex speaks the claude/channel contract"
+tags: [mcp, elixir, claude-code]
+links:
+  - label: issue 3785
+    href: https://github.com/indexable-inc/index/issues/3785
+  - label: Notifier
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/mcp/notifier.ex
+  - label: channels reference
+    href: https://code.claude.com/docs/en/channels-reference
+---
+
+Since the Elixir cutover, every server-initiated kernel notification (finished background jobs, `PrWatch` outcomes, subagent events) was sent as an MCP logging notification, `notifications/message`. Claude Code receives that method and drops it, so no wake has reached a session since the cutover, even though every session already runs with the channel flag armed. The retired Python kernel spoke the channels research-preview contract; the rewrite kept the Notifier but not the wire format.
+
+`mcp-ex` now declares the experimental `claude/channel` capability at initialize and pushes `notifications/claude/channel` events with a `content` body plus `meta` attributes (`source`, `job`/`pr`/`agent`, `status`). Claude Code injects each event into the running session, so a `Jobs` completion, a PR merge, or a subagent report wakes the agent instead of vanishing.
+
+`Notifier.channel(content, meta)` is the one delivery primitive; `notify/2` stays as the raw JSON-RPC escape hatch. The capability declaration and the wire frame are verified against the patched server over raw JSON-RPC (a budget-expired job emits the channel frame); end-to-end injection into a Claude Code 2.1.215 session lands with the next kernel deploy and is verified there.

@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# bossbar - tiny CLI for the Boss Bar Overlay's SQLite database.
+#
+# Resolves the same database the overlay reads (BOSSBAR_DB, else the per-OS
+# app-data path) and creates the schema on demand, so it works whether or not
+# the overlay app has ever run. The overlay picks up every change live.
+set -euo pipefail
+
+COLORS="pink blue red green yellow purple white"
+OVERLAYS="progress notched_6 notched_10 notched_12 notched_20"
+
+db_path() {
+  if [ -n "${BOSSBAR_DB:-}" ]; then
+    printf '%s\n' "$BOSSBAR_DB"
+    return
+  fi
+  case "$(uname -s)" in
+    Darwin) printf '%s\n' "$HOME/Library/Application Support/bossbar-overlay/bossbars.db" ;;
+    *) printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/bossbar-overlay/bossbars.db" ;;
+  esac
+}
+
+DB="$(db_path)"
+
+ensure_db() {
+  mkdir -p "$(dirname "$DB")"
+  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS bossbars (
+    id          INTEGER PRIMARY KEY,
+    title       TEXT    NOT NULL DEFAULT '',
+    description TEXT    NOT NULL DEFAULT '',
+    progress    REAL    NOT NULL DEFAULT 1.0,
+    color       TEXT    NOT NULL DEFAULT 'purple',
+    overlay     TEXT    NOT NULL DEFAULT 'progress',
+    visible     INTEGER NOT NULL DEFAULT 1,
+    position    INTEGER NOT NULL DEFAULT 0,
+    since       INTEGER,
+    url         TEXT    NOT NULL DEFAULT '',
+    expandable  INTEGER NOT NULL DEFAULT 1,
+    eta         INTEGER,
+    icon        TEXT    NOT NULL DEFAULT '',
+    theme       TEXT    NOT NULL DEFAULT ''
+  );"
+  # Columns that shipped after the first schema; add each to a pre-existing table
+  # so its flag works on a DB created by an older bossbar. SQLite has no
+  # ADD COLUMN IF NOT EXISTS, so guard on the column being absent.
+  add_col() {
+    if [ -z "$(sqlite3 "$DB" "SELECT 1 FROM pragma_table_info('bossbars') WHERE name = '$1' LIMIT 1;")" ]; then
+      sqlite3 "$DB" "ALTER TABLE bossbars ADD COLUMN $1 $2;"
+    fi
+  }
+  add_col description "TEXT NOT NULL DEFAULT ''"
+  add_col since "INTEGER"
+  add_col url "TEXT NOT NULL DEFAULT ''"
+  add_col expandable "INTEGER NOT NULL DEFAULT 1"
+  add_col eta "INTEGER"
+  add_col icon "TEXT NOT NULL DEFAULT ''"
+  add_col theme "TEXT NOT NULL DEFAULT ''"
+}
+
+die() {
+  printf 'bossbar: %s\n' "$1" >&2
+  exit 1
+}
+
+# Double single quotes for safe inlining into SQL string literals.
+sq() { printf "%s" "${1//\'/\'\'}"; }
+
+# A numeric argument matches by id; anything else matches by title.
+selector() {
+  case "$1" in
+    '' ) die "empty selector" ;;
+    *[!0-9]* ) printf "title = '%s'" "$(sq "$1")" ;;
+    * ) printf "id = %s" "$1" ;;
+  esac
+}
+
+in_list() {
+  local needle="$1" item
+  shift
+  for item in $1; do [ "$item" = "$needle" ] && return 0; done
+  return 1
+}
+
+usage() {
+  cat <<'EOF'
+bossbar - control the Minecraft boss bar overlay (SQLite-backed)
+
+Usage:
+  bossbar add <title> [--description D] [--since EPOCH] [--eta SECS] [--url U]
+                      [--icon PATH] [--progress P] [--color C] [--overlay O]
+                      [--theme NAME] [--position N] [--box 0|1]
+  bossbar set <id|title> [--title T] [--description D] [--since EPOCH] [--eta SECS]
+                         [--url U] [--icon PATH] [--progress P] [--color C]
+                         [--overlay O] [--theme NAME] [--position N]
+                         [--visible 0|1] [--box 0|1]
+  bossbar rm <id|title>
+  bossbar list
+  bossbar clear
+  bossbar db                 print the database path
+
+  D        longer text shown in a panel that unfolds below the bar on hover
+           (newlines start new paragraphs); pass '' to clear it
+  EPOCH    Unix seconds to count up from; the overlay appends a live elapsed
+           timer to the title (e.g. "2:05") and ticks it. 0 clears the timer
+  SECS     expected total duration; with --since the overlay extrapolates the
+           fill live as (now-since)/eta (ignoring --progress), capped near full
+           and ticking each second. 0 clears it (back to the static --progress)
+  U        URL (or any URI/path the system opener accepts) opened when the bar
+           is clicked without dragging; pass '' to clear it
+  PATH     path to a small image (PNG/JPEG) drawn as a square icon left of the
+           title, e.g. a GitHub avatar; pass '' to clear it
+  P        fill fraction 0.0 .. 1.0
+  C        pink | blue | red | green | yellow | purple | white
+  O        progress | notched_6 | notched_10 | notched_12 | notched_20
+  NAME     a user-supplied texture set directory under the themes root
+           (BOSSBAR_THEMES, else themes/ next to the database); the bar renders
+           from its background.png/progress.png instead of the vanilla color
+           sprites. Unknown/missing themes draw vanilla; pass '' to clear
+  --box    1 (default) lets hover unfold the description panel; 0 keeps the bar
+           bar-sized on hover with no pop-down box
+
+Examples:
+  bossbar add "Ender Dragon" --color pink --overlay notched_20 \
+    --description "Destroy the End Crystals first or it heals to full." \
+    --url "https://minecraft.wiki/w/Ender_Dragon"
+  bossbar add "US East: VMs" --color red --since "$(date +%s)"   # live timer
+  bossbar set "Ender Dragon" --progress 0.5
+  bossbar rm "Ender Dragon"
+EOF
+}
+
+# Parse --flags into a single comma-joined SET clause ("a = 1, b = '...'").
+# Validates enums and ranges. Joined here rather than echoed one-per-line so a
+# value may itself contain newlines (a multi-paragraph --description) without the
+# caller splitting it apart; command substitution preserves interior newlines.
+parse_fields() {
+  local clause="" sep="" assign
+  while [ "$#" -gt 0 ]; do
+    local flag="$1" val="${2:-}"
+    [ "$#" -ge 2 ] || die "missing value for $flag"
+    case "$flag" in
+      --title)       assign="title = '$(sq "$val")'" ;;
+      --description) assign="description = '$(sq "$val")'" ;;
+      # Numeric flags are inlined into SQL, so validate them rather than trust the
+      # caller: an integer for the counters, a decimal for the fill fraction.
+      --since)
+        [[ "$val" =~ ^-?[0-9]+$ ]] || die "--since must be an integer"
+        assign="since = $val" ;;
+      --eta)
+        [[ "$val" =~ ^-?[0-9]+$ ]] || die "--eta must be an integer"
+        assign="eta = $val" ;;
+      --url)         assign="url = '$(sq "$val")'" ;;
+      --icon)        assign="icon = '$(sq "$val")'" ;;
+      --progress)
+        [[ "$val" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || die "--progress must be a number"
+        assign="progress = $val" ;;
+      --position)
+        [[ "$val" =~ ^-?[0-9]+$ ]] || die "--position must be an integer"
+        assign="position = $val" ;;
+      --visible)
+        case "$val" in 0 | 1) ;; *) die "--visible must be 0 or 1" ;; esac
+        assign="visible = $val" ;;
+      --box)
+        case "$val" in 0|1) ;; *) die "--box must be 0 or 1" ;; esac
+        assign="expandable = $val" ;;
+      --color)
+        in_list "$val" "$COLORS" || die "color must be one of: $COLORS"
+        assign="color = '$val'" ;;
+      --overlay)
+        in_list "$val" "$OVERLAYS" || die "overlay must be one of: $OVERLAYS"
+        assign="overlay = '$val'" ;;
+      --theme)
+        # One path component, no traversal: same rule the overlay enforces.
+        [[ "$val" =~ ^([A-Za-z0-9_-][A-Za-z0-9._-]*)?$ ]] || die "--theme must be a plain directory name (letters, digits, . _ -)"
+        assign="theme = '$val'" ;;
+      *) die "unknown flag: $flag" ;;
+    esac
+    clause+="$sep$assign"
+    sep=", "
+    shift 2
+  done
+  printf '%s' "$clause"
+}
+
+cmd="${1:-}"
+[ "$#" -gt 0 ] && shift || true
+
+case "$cmd" in
+  add)
+    [ "$#" -ge 1 ] || die "add needs a <title>"
+    # Reject an empty/whitespace title, not just a missing arg: `add ""` would
+    # otherwise INSERT DEFAULT VALUES and leave a title-less, url-less bar that
+    # no prune reaps (ci-bars only prunes github.com bars, downtime matches by
+    # title), so a stray empty add accumulates phantom purple bars forever.
+    [ -n "${1//[[:space:]]/}" ] || die "add needs a non-empty <title>"
+    title="$1"; shift
+    ensure_db
+    set_clause="title = '$(sq "$title")'"
+    extra="$(parse_fields "$@")"
+    if [ -n "$extra" ]; then
+      set_clause+=", $extra"
+    fi
+    sqlite3 "$DB" "INSERT INTO bossbars DEFAULT VALUES;
+                   UPDATE bossbars SET $set_clause WHERE id = last_insert_rowid();"
+    ;;
+  set)
+    [ "$#" -ge 1 ] || die "set needs an <id|title>"
+    sel="$(selector "$1")"; shift
+    [ "$#" -ge 1 ] || die "set needs at least one field flag"
+    ensure_db
+    set_clause="$(parse_fields "$@")"
+    sqlite3 "$DB" "UPDATE bossbars SET $set_clause WHERE $sel;"
+    ;;
+  rm)
+    [ "$#" -ge 1 ] || die "rm needs an <id|title>"
+    ensure_db
+    sqlite3 "$DB" "DELETE FROM bossbars WHERE $(selector "$1");"
+    ;;
+  list)
+    ensure_db
+    sqlite3 -header -column "$DB" \
+      "SELECT id, title, round(progress,2) AS progress, color, overlay, visible, position
+       FROM bossbars ORDER BY position, id;"
+    ;;
+  clear)
+    ensure_db
+    sqlite3 "$DB" "DELETE FROM bossbars;"
+    ;;
+  db)
+    printf '%s\n' "$DB"
+    ;;
+  ""|-h|--help|help)
+    usage
+    ;;
+  *)
+    die "unknown command: $cmd (try 'bossbar --help')"
+    ;;
+esac

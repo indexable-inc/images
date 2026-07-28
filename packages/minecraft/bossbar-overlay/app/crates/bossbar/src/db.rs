@@ -1,0 +1,381 @@
+//! SQLite is the overlay's only data source. Anyone can write to it
+//! (`sqlite3 bossbars.db "INSERT ..."`, or the `bossbar` CLI) and the change
+//! shows up on screen. Cross-process writes are detected with
+//! `PRAGMA data_version`, which bumps whenever *another* connection commits, so
+//! a 200ms poll is cheap and never misses a WAL write the way file-mtime
+//! watching does.
+
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+use rusqlite::Connection;
+
+use crate::bars::{BossBar, Color, Overlay};
+
+/// How often the watcher checks `PRAGMA data_version`. The issue's contract is
+/// that an external write lands on screen within ~200ms.
+pub const POLL: Duration = Duration::from_millis(200);
+
+const SCHEMA: &str = "\
+CREATE TABLE IF NOT EXISTS bossbars (
+  id          INTEGER PRIMARY KEY,
+  title       TEXT    NOT NULL DEFAULT '',
+  description TEXT    NOT NULL DEFAULT '',
+  progress    REAL    NOT NULL DEFAULT 1.0,
+  color       TEXT    NOT NULL DEFAULT 'purple',
+  overlay     TEXT    NOT NULL DEFAULT 'progress',
+  visible     INTEGER NOT NULL DEFAULT 1,
+  position    INTEGER NOT NULL DEFAULT 0,
+  x           REAL,
+  y           REAL,
+  since       INTEGER,
+  url         TEXT    NOT NULL DEFAULT '',
+  expandable  INTEGER NOT NULL DEFAULT 1,
+  eta         INTEGER,
+  icon        TEXT    NOT NULL DEFAULT '',
+  theme       TEXT    NOT NULL DEFAULT ''
+);";
+
+/// Columns added after the initial schema shipped. `ALTER TABLE ADD COLUMN` is
+/// the supported online migration in SQLite, and it errors if the column
+/// already exists, so each runs through `add_column_if_missing`. A constant
+/// default keeps the migration legal on an existing table.
+const ADDED_COLUMNS: &[(&str, &str)] = &[
+    ("x", "REAL"),
+    ("y", "REAL"),
+    ("description", "TEXT NOT NULL DEFAULT ''"),
+    ("since", "INTEGER"),
+    ("url", "TEXT NOT NULL DEFAULT ''"),
+    ("expandable", "INTEGER NOT NULL DEFAULT 1"),
+    ("eta", "INTEGER"),
+    ("icon", "TEXT NOT NULL DEFAULT ''"),
+    ("theme", "TEXT NOT NULL DEFAULT ''"),
+];
+
+/// Rows inserted only when the DB file is created for the first time, so a
+/// brand-new install shows something and documents the contract by example. The
+/// Ender Dragon bar carries a hover panel and a click URL; the Build bar stamps
+/// `since` so its title shows a live elapsed counter from first launch.
+const SEED: &str = "\
+INSERT INTO bossbars (title, description, progress, color, overlay, position, since, url) VALUES
+  ('Ender Dragon', 'The final boss of the End. Destroy all the End Crystals on the obsidian pillars first, or it heals back to full.', 0.82, 'pink', 'notched_20', 0, NULL, 'https://minecraft.wiki/w/Ender_Dragon'),
+  ('Wither', '', 0.55, 'blue', 'notched_6', 1, NULL, ''),
+  ('Build: compiling', 'Hover any bar to read more.\n\nThe panel wraps long lines and keeps your paragraph breaks, so a bar can carry a sentence or a few.', 0.40, 'green', 'progress', 2, strftime('%s','now'), '');";
+
+/// Resolve the database path: `BOSSBAR_DB` wins, otherwise the per-OS app-data
+/// path the `bossbar` CLI also computes.
+pub fn resolve_path() -> PathBuf {
+    overlay_core::resolve_data_path("BOSSBAR_DB", "bossbar-overlay", "bossbars.db")
+}
+
+fn open(path: &Path) -> rusqlite::Result<Connection> {
+    let fresh = !path.exists();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let conn = Connection::open(path)?;
+    // WAL lets external `sqlite3` writers commit without blocking our reader.
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.execute_batch(SCHEMA)?;
+    for (name, ty) in ADDED_COLUMNS {
+        add_column_if_missing(&conn, name, ty)?;
+    }
+    if fresh {
+        conn.execute_batch(SEED)?;
+    }
+    Ok(conn)
+}
+
+/// Add a column to `bossbars` only when a pre-existing database lacks it, so
+/// upgrading an old DB does not error on the duplicate-column `ALTER TABLE`.
+fn add_column_if_missing(conn: &Connection, name: &str, ty: &str) -> rusqlite::Result<()> {
+    let present = conn
+        .prepare("SELECT 1 FROM pragma_table_info('bossbars') WHERE name = ?1")?
+        .exists([name])?;
+    if !present {
+        // Column names and types here are compile-time constants, never user
+        // input, so the format! cannot carry untrusted SQL.
+        conn.execute_batch(&format!("ALTER TABLE bossbars ADD COLUMN {name} {ty};"))?;
+    }
+    Ok(())
+}
+
+/// Persist a dragged bar's pinned location (logical screen points). Uses its own
+/// connection so the overlay's read/watch connection is untouched; the commit
+/// bumps `data_version`, so the watcher re-reads and the move sticks. This runs
+/// on the UI thread during a drag, so it deliberately skips the schema/migration
+/// setup `open` does: by drag time the table exists, and WAL is a persistent DB
+/// property, so a bare connection plus the `UPDATE` keeps each write cheap.
+pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<()> {
+    let conn = Connection::open(path)?;
+    conn.execute(
+        "UPDATE bossbars SET x = ?1, y = ?2 WHERE id = ?3",
+        rusqlite::params![pos.x, pos.y, id],
+    )?;
+    Ok(())
+}
+
+fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url, expandable, eta, icon, theme
+         FROM bossbars
+         WHERE visible != 0
+         ORDER BY position ASC, id ASC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let x: Option<f64> = r.get(6)?;
+        let y: Option<f64> = r.get(7)?;
+        // A non-positive stored value reads as "no counter", so a caller can clear
+        // the clock with `--since 0` without a NULL.
+        let since: Option<i64> = r.get::<_, Option<i64>>(9)?.filter(|s| *s > 0);
+        // Same convention for eta: a non-positive value means "no extrapolation".
+        let eta: Option<i64> = r.get::<_, Option<i64>>(12)?.filter(|s| *s > 0);
+        Ok(BossBar {
+            id: r.get(0)?,
+            title: r.get(1)?,
+            description: r.get(8)?,
+            since,
+            url: r.get(10)?,
+            eta,
+            // Default-1 column; any non-zero value keeps the hover panel enabled.
+            expandable: r.get::<_, i64>(11)? != 0,
+            progress: r.get::<_, f64>(2)?.clamp(0.0, 1.0) as f32,
+            color: Color::parse(&r.get::<_, String>(3)?),
+            overlay: Overlay::parse(&r.get::<_, String>(4)?),
+            position: r.get(5)?,
+            // Both coordinates must be present to pin a bar; a half-written row
+            // falls back to auto-stacking rather than placing it at an edge.
+            pos: x.zip(y).map(|(x, y)| glam::DVec2::new(x, y)),
+            icon: r.get(13)?,
+            theme: r.get(14)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn data_version(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("PRAGMA data_version", [], |r| r.get(0))
+}
+
+/// Read the current bars once, for the first paint before the watcher ticks.
+pub fn read_once(path: &Path) -> rusqlite::Result<Vec<BossBar>> {
+    let conn = open(path)?;
+    read(&conn)
+}
+
+/// Background loop: re-read bars whenever the DB changes and hand them to
+/// `sink`. The loop exits as soon as `sink` returns `false`, which is how the
+/// UI thread signals the window has closed.
+overlay_core::define_data_watcher!(
+    Vec<BossBar>,
+    POLL,
+    "bossbar-overlay",
+    open,
+    data_version,
+    read
+);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bb-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("bossbars.db")
+    }
+
+    fn create_legacy_db(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let legacy = Connection::open(path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE bossbars (
+                   id       INTEGER PRIMARY KEY,
+                   title    TEXT    NOT NULL DEFAULT '',
+                   progress REAL    NOT NULL DEFAULT 1.0,
+                   color    TEXT    NOT NULL DEFAULT 'purple',
+                   overlay  TEXT    NOT NULL DEFAULT 'progress',
+                   visible  INTEGER NOT NULL DEFAULT 1,
+                   position INTEGER NOT NULL DEFAULT 0
+                 );
+                 INSERT INTO bossbars (title) VALUES ('old');",
+            )
+            .unwrap();
+    }
+
+    fn assert_optional_positive_column(
+        column: &str,
+        value: i64,
+        get: fn(&BossBar) -> Option<i64>,
+    ) {
+        let path = temp_db(column);
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            &format!(
+                "INSERT INTO bossbars (title, {column}) VALUES ('positive', ?1), ('zero', 0), ('null', NULL)"
+            ),
+            [value],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |title: &str| bars.iter().find(|bar| bar.title == title).unwrap();
+        assert_eq!(get(by("positive")), Some(value));
+        assert_eq!(get(by("zero")), None);
+        assert_eq!(get(by("null")), None);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn fresh_db_seeds_and_reads_back() {
+        let path = temp_db("seed");
+        let conn = open(&path).unwrap();
+        let bars = read(&conn).unwrap();
+        assert_eq!(bars.len(), 3, "fresh DB should seed 3 example bars");
+        assert_eq!(bars[0].title, "Ender Dragon");
+        assert_eq!(bars[0].color, Color::Pink);
+        assert_eq!(bars[0].overlay, Overlay::Notched20);
+        assert!((bars[0].progress - 0.82).abs() < 1e-6);
+        // The seed documents the description contract by example.
+        assert!(bars[0].description.contains("End Crystals"));
+        assert_eq!(bars[1].description, "", "the Wither seed has no panel");
+        // The Build seed stamps `since`, so it shows a live counter from launch.
+        assert!(bars[2].since.is_some(), "Build seed should have a live counter");
+        // The Ender Dragon seed carries a click URL; the others none.
+        assert!(bars[0].url.contains("minecraft.wiki"));
+        assert_eq!(bars[1].url, "");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn url_round_trips() {
+        let path = temp_db("url");
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            "INSERT INTO bossbars (title, url) VALUES ('link', 'https://example.com/x'), ('plain', '')",
+            [],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
+        assert_eq!(by("link").url, "https://example.com/x");
+        assert_eq!(by("plain").url, "");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn optional_timestamps_round_trip_and_reject_nonpositive_values() {
+        assert_optional_positive_column("since", 1_700_000_000, |bar| bar.since);
+        assert_optional_positive_column("eta", 300, |bar| bar.eta);
+    }
+
+    #[test]
+    fn display_options_round_trip_and_use_schema_defaults() {
+        let path = temp_db("display-options");
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            "INSERT INTO bossbars (title, expandable, theme) VALUES
+             ('boxed', 1, 'wither'),
+             ('boxless', 0, '')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO bossbars (title) VALUES ('default')", [])
+            .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
+        assert!(by("boxed").expandable);
+        assert!(!by("boxless").expandable, "expandable=0 reads as no box");
+        assert!(by("default").expandable, "missing value defaults to a box");
+        assert_eq!(by("boxed").theme, "wither");
+        assert_eq!(by("boxless").theme, "");
+        assert_eq!(by("default").theme, "", "missing theme defaults to vanilla");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn legacy_db_without_description_is_migrated_and_round_trips() {
+        // A database created before `description` shipped (no description, x, or
+        // y columns) must gain the column on open and read back as empty, then
+        // accept a written description.
+        let path = temp_db("legacy-desc");
+        create_legacy_db(&path);
+
+        let conn = open(&path).unwrap();
+        let bars = read(&conn).unwrap();
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0].title, "old");
+        assert_eq!(bars[0].description, "", "migrated column defaults to empty");
+        assert!(
+            bars[0].expandable,
+            "the migrated expandable column defaults to a box"
+        );
+
+        conn.execute(
+            "UPDATE bossbars SET description = ?1 WHERE id = ?2",
+            rusqlite::params!["line one\n\nline two", bars[0].id],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        assert_eq!(bars[0].description, "line one\n\nline two");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn legacy_db_without_theme_is_migrated() {
+        // A database created before `theme` shipped must gain the column on
+        // open (the ADDED_COLUMNS migration) and read back as vanilla.
+        let path = temp_db("legacy-theme");
+        create_legacy_db(&path);
+
+        let conn = open(&path).unwrap();
+        let bars = read(&conn).unwrap();
+        assert_eq!(bars[0].theme, "", "migrated column defaults to vanilla");
+        conn.execute(
+            "UPDATE bossbars SET theme = 'dragon' WHERE id = ?1",
+            rusqlite::params![bars[0].id],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        assert_eq!(bars[0].theme, "dragon");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn out_of_range_progress_is_clamped() {
+        let path = temp_db("clamp");
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            "INSERT INTO bossbars (title, progress) VALUES ('hi', 5.0), ('lo', -2.0)",
+            [],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        assert!(bars.iter().all(|b| (0.0..=1.0).contains(&b.progress)));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn data_version_detects_another_connections_write() {
+        // The invariant the whole watcher relies on: a commit from a
+        // *different* connection must bump our reader's PRAGMA data_version.
+        let path = temp_db("ver");
+        let reader = open(&path).unwrap();
+        let before = data_version(&reader).unwrap();
+
+        let writer = Connection::open(&path).unwrap();
+        writer
+            .execute("INSERT INTO bossbars (title) VALUES ('new')", [])
+            .unwrap();
+
+        let after = data_version(&reader).unwrap();
+        assert_ne!(before, after, "writer's commit must change data_version");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+}

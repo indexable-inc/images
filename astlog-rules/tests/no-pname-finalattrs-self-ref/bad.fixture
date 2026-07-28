@@ -1,0 +1,1 @@
+finalAttrs: { repo = finalAttrs.pname; }

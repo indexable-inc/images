@@ -1,0 +1,242 @@
+//! `ToGuest` input messages -> smithay seat events.
+//!
+//! Coordinates arrive surface-local (the host tracks which `NSWindow` the
+//! event hit), so pointer focus is set explicitly per event with the target
+//! surface anchored at the global origin; there is no shared scene the
+//! pointer roams across, which is exactly why no window positions exist
+//! here.
+
+use panes_protocol::{AxisSource as WireAxisSource, ButtonState as WireButtonState, ToGuest};
+use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
+use smithay::input::keyboard::{FilterResult, Keycode};
+use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent};
+use smithay::utils::{Point, SERIAL_COUNTER};
+
+use super::App;
+
+pub fn handle(app: &mut App, msg: &ToGuest) {
+    match msg {
+        ToGuest::PointerMotion { id, x, y } => pointer_motion(app, *id, *x, *y),
+        ToGuest::PointerRelative { id, dx, dy } => pointer_relative(app, *id, *dx, *dy),
+        ToGuest::PointerButton { id, button, state } => pointer_button(app, *id, *button, *state),
+        ToGuest::PointerAxis {
+            id,
+            source,
+            horizontal,
+            vertical,
+            v120,
+            stop,
+        } => pointer_axis(app, *id, *source, *horizontal, *vertical, *v120, *stop),
+        ToGuest::PointerLeave { id } => pointer_leave(app, *id),
+        ToGuest::Key { id, keycode, state } => key(app, *id, *keycode, *state),
+        // Non-input messages are dispatched before reaching this module.
+        _ => {}
+    }
+}
+
+fn pointer_motion(app: &mut App, id: panes_protocol::WindowId, x: f64, y: f64) {
+    let Some(surface) = app.pane_surface(id) else {
+        return;
+    };
+    let Some(pointer) = app.seat.get_pointer() else {
+        return;
+    };
+    app.pointer_focus = Some(id);
+    let time = app.now_ms();
+    // Wire coords are drawable pixels (panes-protocol convention); smithay's
+    // pointer space is logical, so divide by the window's scale, mirroring
+    // the xdg configure division in `on_configure`.
+    let scale = wire_scale(app, id);
+    // Focus is handed over explicitly (second tuple element = the surface's
+    // origin in "global" space, which for us is always 0,0), so smithay
+    // emits enter/leave pairs as the host moves between windows.
+    pointer.motion(
+        app,
+        Some((surface, Point::default())),
+        &MotionEvent {
+            location: (x / scale, y / scale).into(),
+            serial: SERIAL_COUNTER.next_serial(),
+            time,
+        },
+    );
+    pointer.frame(app);
+}
+
+/// Relative deltas while `id` holds the pointer lock. The pointer does not
+/// move: focus is pinned on the locked surface (the host stops sending
+/// absolute motion while captured) and only `zwp_relative_pointer` listeners
+/// see the event.
+fn pointer_relative(app: &mut App, id: panes_protocol::WindowId, dx: f64, dy: f64) {
+    let Some(surface) = app.pane_surface(id) else {
+        return;
+    };
+    let Some(pointer) = app.seat.get_pointer() else {
+        return;
+    };
+    // Wire deltas are buffer pixels (same convention as PointerMotion), so
+    // the same pixel->logical division applies.
+    let scale = wire_scale(app, id);
+    let delta = Point::from((dx / scale, dy / scale));
+    let utime = app.now_us();
+    pointer.relative_motion(
+        app,
+        Some((surface, Point::default())),
+        &RelativeMotionEvent {
+            delta,
+            // NSEvent deltas are already pointer-accelerated and macOS
+            // exposes no raw counterpart, so mirror the accelerated vector
+            // (the usual compositor fallback for non-libinput sources).
+            delta_unaccel: delta,
+            utime,
+        },
+    );
+    pointer.frame(app);
+}
+
+/// The divisor that takes one window's wire pixel coordinates to logical
+/// surface coordinates: that window's own backing scale from the host's last
+/// `Configure`. Per window because displays mix scales -- dividing a
+/// 1x-screen window's coordinates by a global scale of 2 puts its cursor at
+/// half the true position (the index#1686 mixed-scale skew). Falls back to
+/// the global Hello scale for a window the host has not configured yet, and
+/// to 1 before Hello (a startup race, not a silent unit change: input only
+/// flows after Hello).
+fn wire_scale(app: &App, id: panes_protocol::WindowId) -> f64 {
+    let scale = app
+        .pane_index(id)
+        .and_then(|idx| app.panes[idx].configured_scale)
+        .or_else(|| app.host.as_ref().map(|host| host.scale))
+        .unwrap_or(1);
+    f64::from(scale.max(1))
+}
+
+fn pointer_button(
+    app: &mut App,
+    id: panes_protocol::WindowId,
+    button: u32,
+    state: WireButtonState,
+) {
+    if app.pane_surface(id).is_none() {
+        return;
+    }
+    let Some(pointer) = app.seat.get_pointer() else {
+        return;
+    };
+    let time = app.now_ms();
+    pointer.button(
+        app,
+        &ButtonEvent {
+            serial: SERIAL_COUNTER.next_serial(),
+            time,
+            button,
+            state: match state {
+                WireButtonState::Pressed => ButtonState::Pressed,
+                WireButtonState::Released => ButtonState::Released,
+            },
+        },
+    );
+    pointer.frame(app);
+}
+
+fn pointer_axis(
+    app: &mut App,
+    id: panes_protocol::WindowId,
+    source: WireAxisSource,
+    horizontal: f64,
+    vertical: f64,
+    v120: Option<(i32, i32)>,
+    stop: bool,
+) {
+    if app.pane_surface(id).is_none() {
+        return;
+    }
+    let Some(pointer) = app.seat.get_pointer() else {
+        return;
+    };
+    let time = app.now_ms();
+    // Finger/Continuous deltas arrive in drawable pixels (the host multiplies
+    // precise trackpad deltas by `backingScaleFactor`), so they get the same
+    // pixel->logical division as motion. Wheel values are line-based axis
+    // units (15 per detent) that never were in pixel space.
+    let (horizontal, vertical) = if source == WireAxisSource::Wheel {
+        (horizontal, vertical)
+    } else {
+        let scale = wire_scale(app, id);
+        (horizontal / scale, vertical / scale)
+    };
+    let source = match source {
+        WireAxisSource::Wheel => AxisSource::Wheel,
+        WireAxisSource::Finger => AxisSource::Finger,
+        WireAxisSource::Continuous => AxisSource::Continuous,
+    };
+    let mut frame = AxisFrame::new(time).source(source);
+    // value120 is only defined for wheel steps (wl_pointer v8); smithay
+    // derives legacy discrete events from it for older clients.
+    if source == AxisSource::Wheel
+        && let Some((h120, v120)) = v120
+    {
+        frame = frame
+            .v120(Axis::Horizontal, h120)
+            .v120(Axis::Vertical, v120);
+    }
+    frame = frame
+        .value(Axis::Horizontal, horizontal)
+        .value(Axis::Vertical, vertical);
+    if stop {
+        frame = frame.stop(Axis::Horizontal).stop(Axis::Vertical);
+    }
+    pointer.axis(app, frame);
+    pointer.frame(app);
+}
+
+fn pointer_leave(app: &mut App, id: panes_protocol::WindowId) {
+    if app.pointer_focus != Some(id) {
+        return;
+    }
+    app.pointer_focus = None;
+    let Some(pointer) = app.seat.get_pointer() else {
+        return;
+    };
+    let time = app.now_ms();
+    pointer.motion(
+        app,
+        None,
+        &MotionEvent {
+            location: Point::default(),
+            serial: SERIAL_COUNTER.next_serial(),
+            time,
+        },
+    );
+    pointer.frame(app);
+}
+
+fn key(app: &mut App, id: panes_protocol::WindowId, keycode: u32, state: WireButtonState) {
+    let Some(surface) = app.pane_surface(id) else {
+        return;
+    };
+    let Some(keyboard) = app.seat.get_keyboard() else {
+        return;
+    };
+    let serial = SERIAL_COUNTER.next_serial();
+    // The host routes keys by which NSWindow is key; follow it so wl_keyboard
+    // focus matches even if no Configure{activated} raced ahead.
+    if app.key_focus != Some(id) {
+        keyboard.set_focus(app, Some(surface), serial);
+        app.key_focus = Some(id);
+    }
+    let time = app.now_ms();
+    // Wire keycodes are evdev (already xkb - 8 per the protocol comment);
+    // smithay/xkb expects the +8 offset form, same as its libinput backend.
+    let xkb_keycode = Keycode::from(keycode.saturating_add(8));
+    keyboard.input::<(), _>(
+        app,
+        xkb_keycode,
+        match state {
+            WireButtonState::Pressed => KeyState::Pressed,
+            WireButtonState::Released => KeyState::Released,
+        },
+        serial,
+        time,
+        |_, _, _| FilterResult::Forward,
+    );
+}

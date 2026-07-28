@@ -1,0 +1,4 @@
+const lib = import("./lib.ix");
+const overlay = import("../overlays/default.nix");
+
+export default lib.compose(overlay);

@@ -1,0 +1,16 @@
+# Local-crate paths live ONLY in [workspace.dependencies] (the one table where a
+# `path` is allowed); members inherit them with `name.workspace = true`. External
+# version deps and a [lib] target `path` are not dependency-path edges.
+[workspace.dependencies]
+my-lib = { path = "crates/my-lib" }
+
+[package]
+name = "consumer"
+version = "0.1.0"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+my-lib.workspace = true
+serde = "1"

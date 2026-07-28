@@ -1,0 +1,20 @@
+[package]
+name = "astlog-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Datalog over tree-sitter ASTs: patterns as relations, joins as rules, rewrites as templates"
+
+[lints]
+workspace = true
+
+[dependencies]
+ast-merge-langs.workspace = true
+edit-applier.workspace = true
+ignore.workspace = true
+regex.workspace = true
+snafu.workspace = true
+tree-sitter.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

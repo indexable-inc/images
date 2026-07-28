@@ -1,0 +1,6 @@
+Manifest-Version: 1.0
+Premain-Class: dev.ix.minecraft.hotreload.HotReloadAgent
+Agent-Class: dev.ix.minecraft.hotreload.HotReloadAgent
+Main-Class: dev.ix.minecraft.hotreload.HotReloadAgent
+Can-Redefine-Classes: true
+Can-Retransform-Classes: true

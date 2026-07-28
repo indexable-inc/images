@@ -1,0 +1,110 @@
+---
+id: 0041-provenance-lookback
+number: '0041'
+title: 'Provenance lookback: from an installed thing to the line that put it there'
+status: Draft
+authors: andrewgazelka
+created: '2026-07-21'
+updated: '2026-07-21'
+trackingIssue: '#2412'
+scores:
+  ambition: { value: 3, why: 'extends a landed walker to one more option family' }
+  impact: { value: 6, why: 'every "who installed X" question drops from an 85s eval to a file read' }
+  effort: { value: 2, why: 'one collector in lib/provenance.nix plus a name-lookup arm in whence' }
+  risk: { value: 2, why: 'manifest is additive per generation; worst case is a wrong attribution line' }
+  maturity: { value: 5, why: 'the file half is daily-driven since #2418; the package half is unbuilt' }
+  leverage: { value: 6, why: 'every agent session that asks where a package comes from rides it' }
+  taste: { value: 7, why: 'provenance recorded where eval already happens, read where it is free' }
+supersedes: null
+supersededBy: null
+description: 'Nix evaluation is a one-way pipe: forward is fast, backward costs an 85s re-eval and lands one hop short. Documents the landed whence design (per-generation provenance manifests) as the house pattern for lookback, and extends it to the remaining gap: package elements (#3942) and _file attribution for value-exported modules (#3938).'
+---
+
+## Summary
+
+Nix answers "build me this environment" quickly and "which line of which file put this thing in my environment" barely at all. The house answer, landed under #2412, is to record provenance at eval time, when the module system already knows it, and bake the result into each profile generation as `provenance.json`, so lookback at query time is a JSON read. That machinery covers deployed config files today (`whence <path>`). This plan writes the design down as the house pattern and extends it to the half still missing: package list elements (`whence <pname>`, #3942) and correct attribution through value-exported modules (#3938).
+
+## Motivation
+
+### Background: profiles are the oldest part of Nix
+
+Every package lives at an immutable store path. Installing therefore cannot mean mutation; it means building a union environment in the store and flipping one symlink at it. Each flip leaves the old target behind as a numbered generation, which buys atomic upgrades, rollback, and GC roots in one trick. Three tools each run this same mechanism on a workstation: the `nix profile` CLI on `~/.nix-profile` (generation 99 on hydra as of 2026-07-21), home-manager on `~/.local/state/nix/profiles/home-manager` (generation 595), nix-darwin on `/nix/var/nix/profiles/system` (generation 119). Home-manager and nix-darwin reimplement none of it; each builds one big derivation and asks Nix to make it the next generation.
+
+The point for this plan: a generation is the one durable artifact both the build and the user share. Anything baked into it is readable later for free, survives rollback, and ages out with normal GC. That makes the generation the right place to store provenance.
+
+### The lookback pain, measured
+
+Forward is fast. Backward is archaeology. Asking which file defines `agent-browser` in the hydra home configuration:
+
+```sh
+nix eval '.#homeConfigurations."andrewgazelka@hydra".options.home.packages.definitionsWithLocations' \
+  --apply 'defs: map (d: d.file)
+           (builtins.filter
+             (d: builtins.any (p: (p.pname or "") == "agent-browser") d.value)
+             defs)' --json
+```
+
+took ~85s (full config eval, hydra, 2026-07-21) and returned `home/common.nix` in the config repo. The real definition sits in `users/andrewgazelka/profiles/workstation.nix` in this repo; attribution stopped at the importing file because the module is exported as a plain value, so the module system has no path to record (#3938). `builtins.unsafeGetAttrPos "agent-browser" pkgs` returned null: the ix overlay builds its attrset programmatically, so no source position survives. Practice today is grep-first, with the 85s eval as tie-breaker.
+
+The module system knows all of this at eval time. It records a file per definition (`definitionsWithLocations`) and a position per literal attr (`builtins.unsafeGetAttrPos`, the machinery behind nixpkgs `meta.position`). The information exists exactly once, at eval, and is thrown away. Lookback is expensive only because nothing saves it.
+
+## Detailed design
+
+### What is landed (the pattern)
+
+- `lib/provenance.nix`: a pure-eval walker over file-materializing options (`home.file`, `xdg.configFile`, `launchd.agents`/`daemons`, `environment.etc`). Per deployed path it emits `file`, `line`, `rev`, `drv`, `source`, the full definition chain, and linked `programs.<x>.settings` sites. Positions from `unsafeGetAttrPos` are trusted only when they land in the module file that made the definition; computed attrs degrade to the defining module file with no line.
+- `modules/home/provenance.nix` and `modules/darwin/provenance.nix` (#2415): render the walker output into the activation package, so the live profile carries `provenance.json` for its own generation and old generations keep theirs.
+- `packages/whence` (#2416): reads the live generation's manifest and answers `whence <path>` with zero eval.
+
+Verified live on hydra today: generation 595 of the home-manager profile carries `provenance.json`; each entry maps a deployed file to its defining module and rev.
+
+### The extension: packages (#3942)
+
+Add a packages collector to the walker. For `home.packages` and `environment.systemPackages`, emit one entry per definition site with the elements it contributed:
+
+```
+"packages": {
+  "agent-browser": {
+    "version": "...",
+    "file": ".../users/andrewgazelka/profiles/workstation.nix",
+    "line": 828,
+    "definitions": [ ... ]
+  }
+}
+```
+
+written next to the existing `files` key. `whence agent-browser` (any argument that is not an existing path) answers from it. Granularity is honest and matches the file half: per definition site, with `unsafeGetAttrPos` line numbers only for literally-written attrs, degrading to the defining module file for computed lists.
+
+### The attribution fix (#3938)
+
+Package entries are only as truthful as `_file`. Every homeModule this flake exports as a plain value must carry attribution, either a `_file` wrapper attrset at the export site or `lib.modules.importApply`-style wiring. This is a prerequisite for the packages collector to point past the consumer's importing file into this repo.
+
+### Out of scope
+
+Imperative `nix profile install` entries already record `attrPath` and `originalUrl` in the profile's own `manifest.json` (version 3); no work needed. NixOS `environment.systemPackages` on fleet VMs can adopt the same module later; this plan commits only to home-manager and nix-darwin, where the pain was measured.
+
+## Drawbacks
+
+The walker runs at every switch; the packages collector adds one pass over two list options, bounded by eval work already being done, but it is not free and a regression there taxes every activation. Attribution quality is capped by `_file` discipline: a newly exported module without it silently reintroduces the one-hop-short answer, and nothing fails loudly when that happens. The manifest is per generation, so questions about a package removed ten generations ago require walking old generations by hand.
+
+## Alternatives
+
+- Do nothing: grep-first plus the 85s `definitionsWithLocations` eval as tie-breaker. Works, and stays the fallback for configurations without the module, but the cost lands on every question and the answer is still one hop short.
+- Upstream a provenance manifest into home-manager or Nix itself. Right endgame, wrong sequencing: the house walker is the working prototype an upstream proposal would cite. Needs user go-ahead per house rules on third-party endgames.
+- `nixos-option`-style query tooling that evals on demand. Pays the eval cost at question time, exactly the cost this design exists to avoid.
+
+## Prior art
+
+- Guix records provenance as a first-class feature: `guix system describe` names the channels and the config file a generation was built from.
+- nixpkgs `meta.position` and `nixos-option` surface the same eval-time machinery this design persists.
+- `dpkg -S` answers file-to-package on Debian; `whence` is the same reflex for path-to-source-line.
+- In-repo: #2412 (master issue), #2413 through #2418 (landed pieces), plan 0027 (session provenance, the same record-at-write-time instinct applied to agent sessions).
+
+## Unresolved questions
+
+- Should `whence` merge the `files` and `packages` namespaces (one positional argument, path-vs-name sniffed) or take a flag? Sniffing reads better; a package named like a relative path is the collision case.
+- Is a lint or eval-time assertion feasible for #3938, so a value-exported module without `_file` fails the build instead of silently degrading attribution?
+
+## Future possibilities
+
+Generation diffing: with per-generation manifests, "why does generation 596 differ from 595" is a JSON diff, which would make rollback decisions self-explaining. Fleet-wide, the same manifests make "which host installs X and from which module" a query over files instead of a fan-out of evals.

@@ -1,0 +1,10 @@
+// `ix apply` reads this VM through flake.nix. The syntax is JavaScript,
+// the semantics are Nix (index's ix2nix converts it during evaluation).
+//
+// No `recreateOnUp`: this VM holds object data, so it persists across
+// `ix apply` runs instead of being rebuilt each time like the nginx demo.
+export default ({ index }) =>
+  index.lib.mkVm({
+    name: "s3",
+    modules: [import("./service.nix")],
+  });

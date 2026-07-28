@@ -1,0 +1,1 @@
+v: builtins.toFile "out.json" (builtins.unsafeDiscardStringContext v)

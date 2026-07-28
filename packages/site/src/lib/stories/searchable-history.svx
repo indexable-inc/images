@@ -1,0 +1,41 @@
+---
+id: searchable-history
+title: Every session becomes searchable memory
+hook: Shell history and full agent transcripts from every machine flow into one semantic index. "Has anyone solved this before?" has an answer.
+order: 4
+---
+
+The most expensive thing a team loses is what it already figured out. A
+debugging session that cracked a gnarly failure lives in one terminal's
+scrollback; three weeks later someone else pays for the same lesson again.
+
+Every machine here ships its shell history and its full Claude and Codex
+transcripts into one corpus, continuously. The corpus is semantically
+indexed next to the code itself, so the question is not "grep for what I
+hope someone typed" but "find the session where someone fought this class
+of bug", and the answer comes back as the actual transcript: the wrong
+turns, the fix, and the reasoning between them.
+
+<svg viewBox="0 0 640 210" role="img" aria-label="Sessions from every machine flow into one searchable corpus" style="width: 100%; height: auto;">
+  <rect x="20" y="20" width="130" height="44" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <rect x="20" y="83" width="130" height="44" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <rect x="20" y="146" width="130" height="44" rx="10" fill="var(--code)" stroke="var(--rule)" />
+  <text x="85" y="46" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg)">shell history</text>
+  <text x="85" y="109" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg)">claude sessions</text>
+  <text x="85" y="172" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg)">codex sessions</text>
+  <path d="M 150 42 L 250 100" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 150 105 L 250 105" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <path d="M 150 168 L 250 110" stroke="var(--fg-faint)" stroke-width="1.5" fill="none" />
+  <rect x="250" y="77" width="150" height="56" rx="10" fill="none" stroke="var(--fg-muted)" stroke-width="1.5" />
+  <text x="325" y="102" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--fg)">one corpus</text>
+  <text x="325" y="120" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">semantic index</text>
+  <path d="M 400 105 L 480 105" stroke="var(--status-load-bearing)" stroke-width="2" />
+  <text x="484" y="96" font-family="var(--font-mono)" font-size="11" fill="var(--status-load-bearing)">"who fought this</text>
+  <text x="484" y="112" font-family="var(--font-mono)" font-size="11" fill="var(--status-load-bearing)">bug before?"</text>
+  <text x="484" y="132" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">the actual session</text>
+</svg>
+
+Agents use the same index: before starting work, a session can check what
+prior agents already tried. The machinery lives around
+[`packages/search`](https://github.com/indexable-inc/index/tree/main/packages/search)
+and the history shippers next to it.

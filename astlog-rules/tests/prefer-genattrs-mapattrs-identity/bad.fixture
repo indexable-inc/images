@@ -1,0 +1,1 @@
+{ lib, attrs, v }: lib.mapAttrs (_: _: v) attrs

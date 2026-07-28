@@ -1,0 +1,10 @@
+{ __dir, __importIx, __ixTy }:
+let
+  who = "world";
+in
+{
+  plain = "say \"hi\"";
+  template = "hello ${who}, 1 + 1 = ${1 + 1}";
+  dollars = "cost: \${notInterpolated}";
+  multiline = "line1\nline2";
+}

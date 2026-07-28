@@ -1,0 +1,15 @@
+---
+id: tui-local-elixir-kernel
+postedAt: 2026-07-19T12:00:00-07:00
+title: "The Elixir kernel can drive local TUIs"
+tags: [mcp, elixir, tui, unibind]
+links:
+  - label: binding
+    href: https://github.com/indexable-inc/index/blob/main/packages/tui/ex
+  - label: cell surface
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/tui_local.ex
+---
+
+The Elixir MCP kernel (ix-mcp-ex) lost the Python kernel's local TUI driver in the cutover: `Tui.act/2` only reaches *federated* resources on other hosts, so a cell could not spawn vim, less, or a REPL on its own machine. Now it can. `TuiLocal` is aliased into every cell: `TuiLocal.spawn("vim", [])` puts a real PTY child under a VT100 emulator and returns a terminal id; `send/2` types literal text (arrows stay DECCKM-aware in the driver), `send_key/2` takes named keys (`enter`, `esc`, `f1`..`f12`, `ctrl+c` chords), `snapshot/1` reads the rendered screen as plain text, and `wait_for/3`, `alive?/1`, `exit_code/1`, `kill/1`, `close/1` cover the poll-and-teardown loop.
+
+The plumbing is the second production consumer of unibind's Elixir backend: `packages/tui/ex` exports the Rust `tui` PTY manager as the `:tui_ex` NIF app (id-keyed free functions on dirty IO schedulers, since PTY I/O legitimately blocks). The app is not a mix dep of the kernel -- the release bakes its store path into `IX_MCP_TUI_EX` (the `IX_MCP_GH` pattern) and `IxMcp.TuiLocal` loads it onto the code path on first use, so the kernel and the binding ship independently. A conformance-style ExUnit suite (`checks.*.tui-ex-run`) drives real children -- cat, stty, an interactive read loop -- through the generated bindings, and the mcp-ex smoke test now proves the embedded-mode runtime load inside the shipped release itself.

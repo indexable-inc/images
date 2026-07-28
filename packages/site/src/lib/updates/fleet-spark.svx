@@ -1,0 +1,28 @@
+---
+id: fleet-spark
+postedAt: 2026-06-13T16:30:00-07:00
+title: "`fleet.spark()` adds big-data SQL to the cluster, alongside Ray"
+tags: [mcp, fleet, spark, ray]
+links:
+  - label: fleet
+    href: https://github.com/indexable-inc/index/tree/main/packages/mcp/src/fleet
+  - label: services.ix-spark
+    href: https://github.com/indexable-inc/index/tree/main/modules/services/spark
+  - label: services.ix-ray
+    href: https://github.com/indexable-inc/index/tree/main/modules/services/ray
+---
+
+The `fleet` module now spans two complementary cluster engines: **Ray** for distributed Python (`fleet.run`/`submit`) and **Spark** for big-data SQL/DataFrames (`fleet.spark`) — handy for querying logs gathered across every node.
+
+```python
+import fleet, polars as pl, asyncio
+s = await fleet.spark("spark-head")
+rows = await asyncio.to_thread(
+    lambda: s.sql("select level, count(*) c from logs group by level").toPandas()
+)
+pl.from_pandas(rows)
+```
+
+`fleet.spark()` opens a SparkSession over **Spark Connect** (`sc://<master>:15002`): the client in the kernel is pure gRPC (no local JVM), heavy work runs on the cluster with the **Gluten/Velox** native engine, and results stream back as Arrow. The bundled client is pinned to the cluster's Spark 3.5 with its JVM jars stripped, so only the Connect path's deps ride along.
+
+Deploy with `services.ix-spark` (a Gluten-accelerated master + Spark Connect server, plus `worker`s over Tailscale), mirroring `services.ix-ray`. The Ray cluster service was also renamed from `services.ix-fleet` to `services.ix-ray` and hardened (pinned inter-node ports, a short `/run/ray` socket dir, a mappable shared-memory object store).

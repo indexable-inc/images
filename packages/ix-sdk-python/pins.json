@@ -1,0 +1,10 @@
+{
+  "x86_64-linux": {
+    "url": "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/wheel/ix-sdk/g6rnka3jcy51v9i38i8q08np8r860519/ix_sdk-0.1.0-cp313-abi3-manylinux_2_34_x86_64.whl",
+    "hash": "sha256-4bMvd0Opzlw6/jU5omfKZBKGcUboM1C94BqXE+YqRjc="
+  },
+  "aarch64-darwin": {
+    "url": "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/wheel/ix-sdk/35m8l85d7rz62h7ay46lpkd51yb79b9n/ix_sdk-0.1.0-cp313-abi3-macosx_11_0_arm64.whl",
+    "hash": "sha256-wA7YPMkxJuraLkxeL3YXSvx6ESidUu6o+EW/yjWun8E="
+  }
+}

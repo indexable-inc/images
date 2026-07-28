@@ -1,0 +1,122 @@
+{
+  "bluemap": {
+    "hash": "sha512-plP6O+JPxgbA6hmRVkbSv7r/Zx4exFU4833z3DOX/d7MEHpBJc8bmze3MbonNgFxu42a+Uf3p7dnQEUp3CTzmA==",
+    "pluginName": "BlueMap",
+    "url": "https://cdn.modrinth.com/data/swbUV1cr/versions/jPyegm5Q/bluemap-5.20-paper.jar"
+  },
+  "combatlogplugin": {
+    "hash": "sha512-7tmc9SSx4gFiaKp6zTrTZg7b26xmKZiFcXgOALWDnwq9VOF6MvJmnbov3IoAUVhkXd2QgGxKQMw0TEWkga7Jzw==",
+    "pluginName": "CombatLog",
+    "url": "https://cdn.modrinth.com/data/TZGNkl3q/versions/kmCJefQE/CombatLogPlugin-1.2.1-26.1%2B.jar"
+  },
+  "coreprotect": {
+    "hash": "sha256-LXi76LC049bJW334AiyzMTLI0YrMUxlcJz7tPisEkls=",
+    "pluginName": "CoreProtect",
+    "url": "https://cdn.modrinth.com/data/Lu3KuzdV/versions/6W2ad1iI/CoreProtect-CE-23.2.jar"
+  },
+  "discordsrv": {
+    "hash": "sha512-7zHH3Ylix/kHvDe212LA69G1LyD/crst017bDjVAEMA9PrTK+o96zsQqpekZiIFL0MM4pbztBglcB6a5s2ZQXA==",
+    "pluginName": "DiscordSRV",
+    "url": "https://cdn.modrinth.com/data/UmLGoGij/versions/ATlquwiT/DiscordSRV-Build-1.30.5.jar"
+  },
+  "distant-horizons-support": {
+    "hash": "sha512-eyxQSdPch9lYAX/T/8if+Pmv8ViOskyCTgU9PTkh1ZkIuqLdc66erl+7Rg859LVHjjO6C8Oa7OMDGB9I0RtO9A==",
+    "pluginName": "DHSupport",
+    "url": "https://cdn.modrinth.com/data/IjY7seTG/versions/v7By0W81/DistantHorizonsSupport-0.13.1.jar"
+  },
+  "essentialsx": {
+    "hash": "sha256-X7xAnAFPbVxLMvi4rTS/vXSsZ9wb0YT+lj6m1Htg5oU=",
+    "pluginName": "Essentials",
+    "url": "https://repo.essentialsx.net/snapshots/net/essentialsx/EssentialsX/2.22.0-SNAPSHOT/EssentialsX-2.22.0-20260512.224021-100.jar"
+  },
+  "essentialsx-spawn": {
+    "hash": "sha256-TVCKrAe29k8Fh/xIH+FeXQoWc89iiv69up3KF7L75Y4=",
+    "pluginName": "EssentialsSpawn",
+    "url": "https://repo.essentialsx.net/snapshots/net/essentialsx/EssentialsXSpawn/2.22.0-SNAPSHOT/EssentialsXSpawn-2.22.0-20260512.224021-100.jar"
+  },
+  "eternaleconomy": {
+    "hash": "sha512-DucqFS10tswfbXkP5a5L7rGFEwnd10NJB1HbIBXJdIVfElAUiC2UKJKGKTMYfuVG69IJVCVVm1nNy6nXZ79e8w==",
+    "pluginName": "EternalEconomy",
+    "url": "https://cdn.modrinth.com/data/2p0LH33p/versions/iJ7s5W89/EternalEconomy%20v1.0.0.jar"
+  },
+  "luckperms": {
+    "hash": "sha512-dziVZEJgsziBi/7/DHj41PWQ9WsPcRw3ik7skb5uizc1QJm12x6lstzkwCSGITKXptoJZ1yb9vAU+aQAtXcs8w==",
+    "pluginName": "LuckPerms",
+    "url": "https://cdn.modrinth.com/data/Vebnzrzj/versions/OrIs0S6b/LuckPerms-Bukkit-5.5.17.jar"
+  },
+  "placeholderapi": {
+    "hash": "sha512-lK3fmWukXhbb3tP8rwXotEIhLODVd/ftxCt0OtlTLB4kEVJjl2Em028nwIaKscA8QMLROUeYUSS5LavKRSfd2w==",
+    "pluginName": "PlaceholderAPI",
+    "url": "https://cdn.modrinth.com/data/lKEzGugV/versions/UmbIiI5H/PlaceholderAPI-2.12.2.jar"
+  },
+  "plugmanx": {
+    "hash": "sha256-LLb7Ddfm9YZ7ypv6PwN1HW2J1rlJ6LbTdAUHtVrmqcA=",
+    "pluginName": "PlugManX",
+    "url": "https://cdn.modrinth.com/data/yro4niHu/versions/hrMAp7Ww/PlugManX-3.0.4.jar"
+  },
+  "pvpindex-factions": {
+    "hash": "sha512-A0G8WtqH1N9euqb0lt9jaQwjIhvkeCum8jY+tZq/MHqGERIP4gx7i0GUludv2c74Z18wziH9AqD1dsEGjf1BQw==",
+    "pluginName": "PvPIndexFactions",
+    "url": "https://cdn.modrinth.com/data/trDfzeaq/versions/bFsPe5KJ/pvpindex-factions-1.1.1.jar"
+  },
+  "quickshop-hikari": {
+    "hash": "sha512-jW8TiJHoqV8+aAzCyFHU4S7pTDKaqYqVIgkcJDazDoKaBOw67jRZIolRTvy9V3bHkQ28RGasHN9oEhEwnJr1lg==",
+    "pluginName": "QuickShop-Hikari",
+    "url": "https://cdn.modrinth.com/data/ijC5dDkD/versions/QdShnamC/QuickShop-Hikari-6.2.0.11.jar"
+  },
+  "simple-voice-chat": {
+    "hash": "sha512-hdB1H+M6GF27OeDDCGzk+5WLCmLlpaloC1zBblyoumqbh9H47TP+20T4jnO7uOaAIwZgV0KXpObejuVGti49SA==",
+    "pluginName": "voicechat",
+    "url": "https://cdn.modrinth.com/data/9eGKb6K1/versions/Qnk9puxN/voicechat-bukkit-2.6.17.jar"
+  },
+  "skript": {
+    "hash": "sha512-c7wMB4iYtFQCPmwoghfYMLXDO43A0ql5nxMvpOyQ2p03wG2zFO9Qh0n7RETWKdFQr332Bjv9C6lS/uocwZe/Yw==",
+    "pluginName": "Skript",
+    "url": "https://cdn.modrinth.com/data/xFNYAvMk/versions/uA0AEenw/Skript-2.15.2.jar"
+  },
+  "teams-api": {
+    "hash": "sha512-Fv8WKVvstKp2T4ipfbplulP2Z+VDwRteP82YPb4pWnoxBWIMGT5K1qDkhgETHad15cTDSVd0XwiM5HZ1+Ic+qQ==",
+    "pluginName": "TeamsAPI",
+    "url": "https://cdn.modrinth.com/data/2NJKwgXC/versions/UrPpLreN/teams-api-plugin-2.0.0.jar"
+  },
+  "terraformgenerator": {
+    "hash": "sha512-UZ0zxJW8JrHwy737DJIaL5X25Rwjiqn2wURTzPtPDe8JfshHTy3h+p+OPEsioI015R/eIcv119Td17yWvRFiAQ==",
+    "pluginName": "TerraformGenerator",
+    "url": "https://cdn.modrinth.com/data/8JQgYY94/versions/rBqVUgFS/TerraformGenerator-26.1.0.jar"
+  },
+  "tradepost": {
+    "hash": "sha512-peI3hqQsfw57Cs27CQ/nlnmeYiUuYk6yL2xxi6/ItBRpKNl+BH4/UVSMtafuLtHkRX81vzdOIISa1QIWnAwYvg==",
+    "pluginName": "TradePost",
+    "url": "https://cdn.modrinth.com/data/3gTYwJXk/versions/MLV8MCW1/tradepost-2.9.jar"
+  },
+  "vaultunlocked": {
+    "hash": "sha512-JKi/Gsiee6uAOkq7XTCFmDZxzq9s8bwK2JJfcph+8hrKgqRKF2+DpSqK943OHZUXUffKKW3ruM0JovaN9onIAA==",
+    "pluginName": "Vault",
+    "url": "https://cdn.modrinth.com/data/ayRaM8J7/versions/ypDodbNn/VaultUnlocked-2.19.1.jar"
+  },
+  "viabackwards": {
+    "hash": "sha512-PdqWj0OKGlqmDChW8Pp2fbZQGiexqOvR3HK6CYBEVu5gjL2CumahxymKCMnw450a464nzBa9+ssuMz6Tr/fsdQ==",
+    "pluginName": "ViaBackwards",
+    "url": "https://cdn.modrinth.com/data/NpvuJQoq/versions/W890fNPl/ViaBackwards-5.9.1.jar"
+  },
+  "viarewind": {
+    "hash": "sha512-HB9Nt3XZ374oh3a9vS4LL0kQZDuQNGB9gT7lCdol/EXoTPsBg838MFYLJjLyTHXcxRpKm7Dej/KayeJL2J78lA==",
+    "pluginName": "ViaRewind",
+    "url": "https://cdn.modrinth.com/data/TbHIxhx5/versions/cOg14EE7/ViaRewind-4.1.1.jar"
+  },
+  "viaversion": {
+    "hash": "sha512-e4nyd5xIc0L4p32ydYOpiGi7IBF6T6aKLgfaC7Ytpa70Rru8AXIKCpg6HqLpGmvSb8lHvv7hQP8eTiUev2As+A==",
+    "pluginName": "ViaVersion",
+    "url": "https://cdn.modrinth.com/data/P1OZGk5p/versions/OGj9YIQN/ViaVersion-5.9.1.jar"
+  },
+  "worldedit": {
+    "hash": "sha512-Q9L4hloG1jxx0ri8De1mwsf15BPbGmS8L2Zds78l7CiuQHiYhK9L2vQHQKZjIZZJTSiX+ndnXwur+vefGEAIUw==",
+    "pluginName": "WorldEdit",
+    "url": "https://cdn.modrinth.com/data/1u6JkXh5/versions/yDUBafTJ/worldedit-bukkit-7.4.3.jar"
+  },
+  "worldguard": {
+    "hash": "sha512-cO0H8UWhtobicLrTuiNaOl5wAF2DV8E+MTC/AysEit0aod0AD1Uh93QJxToUERHaL2vz62EGVMBfR2ZnadEdTA==",
+    "pluginName": "WorldGuard",
+    "url": "https://cdn.modrinth.com/data/DKY9btbd/versions/EZl3moba/worldguard-bukkit-7.0.16.jar"
+  }
+}

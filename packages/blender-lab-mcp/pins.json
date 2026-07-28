@@ -1,0 +1,9 @@
+{
+  "blender-lab-mcp": {
+    "version": "1.0.0",
+    "rev": "98b0e49d98321d321c7e631389200f513f765d59",
+    "url": "https://github.com/bpype/blender_mcp/archive/98b0e49d98321d321c7e631389200f513f765d59.tar.gz",
+    "prefetch": "unpack",
+    "hash": "sha256-rzP12jkdE1cmg0G35mKupdl2IAHIl5MS3dE0jwlrKzA="
+  }
+}

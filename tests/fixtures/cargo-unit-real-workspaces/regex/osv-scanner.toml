@@ -1,0 +1,7 @@
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0375"
+reason = "Upstream regex 1.10.6 Cargo.lock copied verbatim as test input for the cargo-unit builder. Not a build dependency of any repo-owned crate; atty does not enter our closure."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2021-0145"
+reason = "Same upstream regex fixture lockfile. atty is not in our build closure, and the unaligned read only triggers under a non-default global allocator on Windows."

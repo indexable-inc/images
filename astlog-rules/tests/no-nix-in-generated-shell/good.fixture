@@ -1,0 +1,6 @@
+pkgs.writeShellApplication {
+  name = "deploy";
+  text = ''
+    ${thing}/bin/thing run
+  '';
+}

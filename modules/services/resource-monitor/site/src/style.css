@@ -1,0 +1,98 @@
+/* Berkeley Mono is a commercial font from Berkeley Graphics. The standard
+   license permits self-hosted web use but not redistribution, so the woff2 is
+   not in this public repo. `local()` asks the browser to render with the
+   visitor's already-installed copy (matching ix/packages/web's typography for
+   anyone with a license) and falls through to the system monospace stack
+   otherwise. No font files need to be served. */
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: local('Berkeley Mono'), local('BerkeleyMono-Variable'), local('BerkeleyMono');
+  font-weight: 100 700;
+  font-style: normal;
+  font-display: optional;
+}
+
+:root {
+  --ix-bg: #fafafa;
+  --ix-ink: #18181b;
+  --ix-ink-muted: #71717a;
+  --ix-ink-faint: #a1a1aa;
+  --ix-ink-strong: #09090b;
+  --ix-ink-soft: #52525b;
+  --ix-border: #e4e4e7;
+  --font-mono:
+    'Berkeley Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', monospace;
+  color-scheme: light dark;
+  background: var(--ix-bg);
+  color: var(--ix-ink);
+  font-family: var(--font-mono);
+  font-feature-settings: 'calt' on, 'liga' on;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ix-bg: #09090b;
+    --ix-ink: #e4e4e7;
+    --ix-ink-muted: #8b8b96;
+    --ix-ink-faint: #636370;
+    --ix-ink-strong: #fafafa;
+    --ix-ink-soft: #a1a1aa;
+    --ix-border: #27272a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Terminal aesthetic: everything is one size. Differentiate by weight, case,
+   and spacing instead. Mirrors the rule in ix/packages/web base.css. */
+h1, h2, h3, h4, h5, h6,
+p, span, a, li, td, th, div, label,
+input, button, select, textarea,
+code, pre, blockquote, figcaption,
+summary, dt, dd, time, small,
+strong, em, b, i, u, s {
+  font-size: inherit !important;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 700 !important;
+}
+
+body {
+  margin: 0;
+  background: var(--ix-bg);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.landing {
+  width: min(100%, 40rem);
+  margin: 0 auto;
+  padding: 2lh 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2lh;
+}
+
+.mark {
+  color: var(--ix-ink-strong);
+  font-weight: 700;
+}
+
+@media (max-width: 520px) {
+  .landing {
+    padding: 1lh 1.5rem;
+  }
+}

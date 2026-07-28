@@ -1,0 +1,1 @@
+{ pkgs }: pkgs.fetchurl { url = "https://example.org/x.tar.gz"; hash = "sha256-2vBmJBzPyVcEMrAQUegW2BIvBI0Ld38d5fjLnVZQNN0="; }

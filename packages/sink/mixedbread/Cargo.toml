@@ -1,0 +1,20 @@
+[package]
+name = "sink-mixedbread"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Mixedbread sink: reconcile a record source into a Mixedbread store (upload changed, skip unchanged, GC stale)"
+
+[lints]
+workspace = true
+
+[dependencies]
+search-core.workspace = true
+source-meta.workspace = true
+mixedbread.workspace = true
+futures.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+serde_json.workspace = true

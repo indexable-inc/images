@@ -1,0 +1,4 @@
+# Consumed by cargoUnit only when `cargoConfigRustflags = true`. Sets the cfg
+# that src/main.rs requires to compile.
+[build]
+rustflags = ["--cfg", "cargo_config_ok"]

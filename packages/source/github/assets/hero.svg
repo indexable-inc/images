@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 210" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { stroke: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <rect class="box" x="20" y="70" width="140" height="64" rx="6"/>
+  <text x="90" y="95" text-anchor="middle">GitHub</text>
+  <text class="muted" x="90" y="115" text-anchor="middle" font-size="11">issues &#183; PRs &#183; failed CI</text>
+  <path class="edge" d="M 160 102 L 213 102"/>
+  <text class="mono muted" x="187" y="88" text-anchor="middle" font-size="11">export.sh</text>
+  <rect class="box" x="215" y="70" width="150" height="64" rx="6"/>
+  <text class="mono" x="290" y="95" text-anchor="middle">export/*.json</text>
+  <text class="muted" x="290" y="115" text-anchor="middle" font-size="11">items &#183; ci_runs &#183; metadata</text>
+  <path class="edge" d="M 365 102 L 418 102"/>
+  <text class="mono muted" x="392" y="88" text-anchor="middle" font-size="11">source-github</text>
+  <rect class="box" x="420" y="70" width="130" height="64" rx="6"/>
+  <text x="485" y="95" text-anchor="middle">Documents</text>
+  <text class="muted" x="485" y="115" text-anchor="middle" font-size="11">one per item</text>
+  <path class="edge" d="M 550 102 L 603 102"/>
+  <text class="mono muted" x="577" y="88" text-anchor="middle" font-size="11">indexer</text>
+  <rect class="box" x="605" y="70" width="95" height="64" rx="6"/>
+  <text x="652" y="95" text-anchor="middle">corpus</text>
+  <text class="muted" x="652" y="115" text-anchor="middle" font-size="11">store</text>
+</svg>

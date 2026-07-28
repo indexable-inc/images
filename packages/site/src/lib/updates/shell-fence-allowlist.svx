@@ -1,0 +1,15 @@
+---
+id: shell-fence-allowlist
+postedAt: 2026-07-21T12:00:00-07:00
+title: "lint fences new shell and nushell behind a shrinking allowlist"
+tags: [lint, rust, shell]
+links:
+  - label: issue
+    href: https://github.com/indexable-inc/index/issues/3823
+  - label: allowlist
+    href: https://github.com/indexable-inc/index/blob/main/shell-allowlist.txt
+---
+
+The lint suite gains a `shell-fence` stage: no new generated shell or nushell enters the repo. A new ruleset (`astlog-rules/shell-fence.astlog`) matches call sites of `writeShellApplication`, `writeShellScript`, `writeShellScriptBin`, `ix.writeBashApplication`, and `ix.writeNushellApplication` as AST identifiers, so comments never count, and the stage also sweeps committed `.sh`/`.bash`/`.nu` files. Everything found is compared against `shell-allowlist.txt`, which freezes the surface as measured today: 96 script files and 171 call sites across 80 file entries.
+
+The allowlist only shrinks. A call site or script missing from it fails the lint with a pointer at the replacement (a compiled Rust tool via `ix.rustWorkspace`, in the shape of `packages/config-launch` and `packages/claude-hooks`), and an entry whose target shrank or vanished fails too, so deletions must be carried into the list. Call sites are pinned as `path:identifier:count` rather than line numbers, so unrelated edits that shift lines do not churn the file while a new call in an already listed file still trips the fence. This is phase 1 of #3823; later phases port the listed scripts to Rust.

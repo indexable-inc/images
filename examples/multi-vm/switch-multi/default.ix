@@ -1,0 +1,30 @@
+// Several NixOS VMs switched in one command: `ix apply .#web .#worker .#edge`
+// builds each closure on its target VM and activates it in place.
+//
+// Each configuration is a normal NixOS system that differs only by a sentinel
+// package, so a switch onto it moves `/run/current-system` to a new store
+// path you can observe with `command -v <tool>`.
+export default ({ nixpkgs }) => {
+  // ix VMs are x86_64-linux, and the build runs on the target VM's guest, so
+  // the target system is fixed rather than discovered from the host.
+  const system = "x86_64-linux";
+
+  const mkSystem = (packages) =>
+    nixpkgs.lib.nixosSystem({
+      system: system,
+      modules: [
+        import("./configuration.nix"),
+        ({ pkgs, ...args }) => ({
+          environment: { systemPackages: packages(pkgs) },
+        }),
+      ],
+    });
+
+  return {
+    nixosConfigurations: {
+      web: mkSystem((pkgs) => [pkgs.ripgrep]),
+      worker: mkSystem((pkgs) => [pkgs.jq]),
+      edge: mkSystem((pkgs) => [pkgs.hello]),
+    },
+  };
+};

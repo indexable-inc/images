@@ -1,0 +1,17 @@
+# The "instrument": a sandboxed WASM host. A module received from a peer is
+# handed a controls buffer and an absolute frame index and hands back
+# samples; it can touch nothing else. Instantiated and warmed off the render
+# path; render does no allocation and no host calls.
+[package]
+name = "audio-instrument"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Sandboxed wasmtime host for shared-audio instrument modules"
+
+[dependencies]
+anyhow.workspace = true
+wasmtime.workspace = true
+
+[lints]
+workspace = true

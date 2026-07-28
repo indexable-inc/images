@@ -1,0 +1,1 @@
+{ lib, cond, x }: lib.mkIf cond x

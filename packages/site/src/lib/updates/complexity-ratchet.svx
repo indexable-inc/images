@@ -1,0 +1,23 @@
+---
+id: complexity-ratchet
+postedAt: 2026-07-27T06:20:00-07:00
+title: "A complexity ratchet, with thresholds measured instead of quoted"
+tags: [complexity, lint, quality, ratchet]
+links:
+  - label: packages/complexity
+    href: https://github.com/indexable-inc/index/tree/main/packages/complexity
+  - label: doc/complexity/overview.md
+    href: https://github.com/indexable-inc/index/blob/main/doc/complexity/overview.md
+  - label: issue 4223
+    href: https://github.com/indexable-inc/index/issues/4223
+---
+
+`nix run .#complexity` ranks every function in the tree by cognitive complexity and, as the `complexity` lint stage, fails the build when more units sit above their language's threshold than `complexity.toml` allows. 19,771 units across 2,065 files, measured in 1.1 seconds. It reuses `ast-merge-langs` and `repo-walker`, so it adds no new parsing dependency.
+
+The metric is Campbell cognitive complexity, not cyclomatic: each break in linear flow costs one plus the current nesting depth, so twenty nested branches cost far more than twenty flat ones. That distinction is the point. An fMRI study of 19 programmers found cyclomatic complexity has no correlation with either comprehension time or correctness (Peitek et al., ICSE 2021), and a survey of 121 metrics against 63 developers found none of them captured understandability (Scalabrino et al., TSE 2021). Cognitive complexity is the only code-only metric with a published validation against human ratings, and a reanalysis of that same data found it no better than the metrics it replaces. The tool says as much in its own module docs: it is triage, not measurement.
+
+The thresholds are the part worth copying. None of the familiar numbers are empirical — McCabe called his 10 "reasonable, but not magical", and SonarSource arrived at 15 by raising it until the output felt less noisy. Each threshold here is instead this repo's own size-weighted 90th percentile, derived by the method in Alves, Ypma and Visser (ICSM 2010), so it means the worst 10% of this repo by volume in that language: Rust 10, Nix 4, Elixir 3, Python 23, TypeScript 43. Re-derive them with `--quantiles`. A single global threshold would have been wrong for at least four of the six languages.
+
+Two languages needed semantics nobody has published. Elixir has no keyword node kinds at all, so `def`, `case` and `if` are ordinary calls told apart by the text of their target and the dispatch arms are `stab_clause` nodes. Nix has no functions in the usual sense, so the unit is the attribute binding — with the rule that a binding whose value is an attribute set is a namespace and is descended into. Without that second rule the top of the ranking was a single 2,964-line `groups = {` that had absorbed every member's score.
+
+The gate opens at 435 against a measured 396, the roughly 10% headroom `clone.toml` learned to leave after a flush budget reddened main on ordinary drift. What is missing is the strongest signal of all: change history predicts defects better than any static metric, but it needs a `.git` the lint derivation does not have, so it belongs in the ranking rather than the gate and is not built yet.

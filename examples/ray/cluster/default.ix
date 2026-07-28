@@ -1,0 +1,40 @@
+// A three-VM Ray cluster: `ix apply .#ray-head .#ray-worker-0 .#ray-worker-1`.
+// The head's health check attaches a driver, waits until every VM in its
+// `nodes` module argument has joined, and fans tasks across the cluster.
+export default ({ index }) => {
+  // One private east-west network for the cluster.
+  const group = { ix: { networking: { groups: ["ray-cluster"] } } };
+  const head = index.lib.mkVm({
+    name: "ray-head",
+    modules: [import("./head.nix"), group],
+    // Peer wiring: the head's cluster check counts these VMs.
+    nodes: {
+      ...workerZero.nixosConfigurations,
+      ...workerOne.nixosConfigurations,
+    },
+  });
+  // Two interchangeable workers; adding one more is one more line here.
+  const worker = (name: string) =>
+    index.lib.mkVm({
+      name: name,
+      modules: [import("./worker.nix"), group],
+      // Workers bootstrap off the head's GCS by its east-west hostname.
+      nodes: head.nixosConfigurations,
+    });
+  const workerZero = worker("ray-worker-0");
+  const workerOne = worker("ray-worker-1");
+  return {
+    nixosConfigurations: {
+      ...head.nixosConfigurations,
+      ...workerZero.nixosConfigurations,
+      ...workerOne.nixosConfigurations,
+    },
+    // Per-VM results (plans, lifecycle wrappers), for tooling and the
+    // repo's eval tests.
+    vms: {
+      "ray-head": head,
+      "ray-worker-0": workerZero,
+      "ray-worker-1": workerOne,
+    },
+  };
+};

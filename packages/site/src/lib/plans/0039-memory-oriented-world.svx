@@ -1,0 +1,67 @@
+---
+id: 0039-memory-oriented-world
+number: '0039'
+title: One memory, queryable across the whole world
+status: Input wanted
+rfc: true
+authors: andrewgazelka
+created: '2026-07-18'
+updated: '2026-07-18'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+scores:
+  ambition: { value: 8, why: 'one query language over memory, telemetry, and live system state' }
+  impact: { value: 7, why: 'cross-cutting questions about the fleet become queries instead of archaeology' }
+  effort: { value: 5, why: 'weave substrate is executed; the delta is adapters, projections, and a read surface' }
+  risk: { value: 4, why: 'rollups over noisy claims can mislead; projections are derived and cheap to fix' }
+  maturity: { value: 2, why: 'substrate landed in weave; no consumer rollup exists yet' }
+  leverage: { value: 8, why: 'every future dashboard or fleet question is a saved projection, not a subsystem' }
+  taste: { value: 7, why: 'deciding what becomes a claim and which rollups earn a surface is the judgment' }
+description: 'Agents write observations and claims into one Datalog memory (weave); consumers query the world instead of grepping hosts. Fleet rollups like "top things agents are irritated by, above a threshold" are saved projections, not features.'
+---
+
+## Summary
+
+Agents write observations and claims into one memory: weave, Datalog
+facts with provenance envelopes (weave#281, executed). Consumers then
+query the world instead of grepping hosts. "The world" is wider than
+what agents journal: pull and push adapters make live state facts by
+evaluation time (weave docs/weave-datalog-over-everything.html), so one
+query language spans memory, telemetry, and system state.
+
+## Motivation
+
+Cross-cutting questions ("what are agents most irritated by this week,
+across the cluster?") have no query today; the evidence is scattered
+over transcripts, issues, and per-host logs. Once every irritation,
+blocker, and gotcha is a stated claim with provenance, that question is
+a saved projection: group by subject, count distinct stating sessions,
+filter to current, apply a threshold, rank.
+
+## Detailed design
+
+- Substrate: weave agent memory plus the datalog-over-everything adapter
+  model for non-journal sources. Nothing here reopens those designs.
+- Consumer rollups are projections a consumer registers, not server
+  features. First dashboards: top irritations above a threshold,
+  recurring blockers, most-hit gotchas, per-repo friction.
+- ix-mcp stays the write choke point; the delta this plan owns is the
+  read surface where projections render for humans (site page or TUI
+  panel).
+- Plan 0021 (filesystem as database) becomes one adapter in this frame:
+  files are entities, xattrs components, its index a pull-through
+  source.
+- Plans 0025 (agent gossip), 0026 (shared brain), 0028 (cross-agent
+  memory), and 0030 (knowledge graph) name write paths and stores; this
+  plan names the query substrate they can share: facts in Datalog,
+  rollups as saved projections. 0025's irritation clusters are the
+  first projection this plan wants rendered.
+
+## Open questions
+
+- Which rollups earn a rendered dashboard versus staying ad hoc queries?
+- Threshold semantics: absolute counts, distinct sessions, or
+  recency-decayed?
+
+Drafted by Claude Code (Fable); comments wanted, hence the RFC flag.

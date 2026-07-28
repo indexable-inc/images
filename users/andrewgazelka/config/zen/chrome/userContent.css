@@ -1,0 +1,39 @@
+/* /* TEST RULE - If this works, you'll see a red border around everything */ */
+/* @-moz-document domain("claude.ai") { */
+/*     body { */
+/*         border: 10px solid red !important; */
+/*     } */
+/* } */
+/**/
+/* /* Make claude.ai transparent in Zen browser */ */
+/* @-moz-document domain("claude.ai") { */
+/*     /* Override CSS custom properties (variables) for backgrounds */ */
+/*     :root, */
+/*     [data-theme="claude"], */
+/*     [data-theme="claude"][data-mode="light"], */
+/*     [data-theme="claude"][data-mode="dark"] { */
+/*         --bg-000: 0 0% 0% / 0 !important; */
+/*         --bg-100: 0 0% 0% / 0 !important; */
+/*         --bg-200: 0 0% 0% / 0 !important; */
+/*         --bg-300: 0 0% 0% / 0 !important; */
+/*         --bg-400: 0 0% 0% / 0 !important; */
+/*         --bg-500: 0 0% 0% / 0 !important; */
+/*     } */
+/**/
+/*     /* Force transparent backgrounds on key elements */ */
+/*     html, body, #__next { */
+/*         background: transparent !important; */
+/*         background-color: transparent !important; */
+/*     } */
+/**/
+/*     /* Main containers */ */
+/*     main, [role="main"] { */
+/*         background: transparent !important; */
+/*         background-color: transparent !important; */
+/*     } */
+/**/
+/*     /* Remove background images */ */
+/*     * { */
+/*         background-image: none !important; */
+/*     } */
+/* } */

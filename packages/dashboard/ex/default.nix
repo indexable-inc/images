@@ -1,0 +1,132 @@
+{ix}:
+# The consumable artifact is the compiled `:dashboard_ex` OTP app (generated
+# Elixir host modules + the NIF under priv/native), laid out so a BEAM can
+# `Code.append_path`/`Application.load` it at runtime -- ix-mcp-ex does
+# exactly that via `IX_MCP_DASHBOARD_EX` (mirrors packages/tui/ex and
+# packages/google/gmail/ex). `passthru.tests.run` compiles the mix package
+# warnings-as-errors and drives a real served hub -- publish a pane, merge a
+# peer's edit, take the watch stream's push -- through the generated
+# bindings with ExUnit, gated in CI as `checks.<system>.dashboard-ex-run`.
+let
+  inherit (ix) pkgs;
+
+  built = ix.unibind.build {
+    crate = "dashboard-ex";
+    targets.ex = {
+      mixSource = ./mix;
+    };
+  };
+
+  # Must match ix-mcp-ex exactly: it loads these .beam files at runtime, so a
+  # different OTP is a runtime failure no build catches. Both are on 1.20/29, and
+  # the BEAM does not load bytecode from a newer OTP than its own.
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.20";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "29";};
+
+  version = "0.1.0"; # keep in sync with unibind's generated mix.exs
+
+  sharedEnv = {
+    HEX_OFFLINE = "1";
+    LANG = "C.UTF-8";
+    LC_CTYPE = "C.UTF-8";
+  };
+
+  app = pkgs.stdenv.mkDerivation {
+    pname = "dashboard-ex";
+    inherit version;
+    src = built.ex.mixPackage;
+    strictDeps = true;
+
+    nativeBuildInputs = [erlang elixir];
+    env = sharedEnv // {MIX_ENV = "prod";};
+
+    # Mix 1.18+ opens a loopback socket unconditionally (Mix.Sync.PubSub)
+    # and the darwin sandbox denies it (:eperm) without this.
+    __darwinAllowLocalNetworking = true;
+
+    postUnpack = ''
+      export HOME="$TEMPDIR"
+      export MIX_HOME="$TEMPDIR/mix"
+      export HEX_HOME="$TEMPDIR/hex"
+    '';
+
+    buildPhase = ''
+      # shell
+      runHook preBuild
+      mix compile --warnings-as-errors
+      runHook postBuild
+    '';
+
+    # `-L` resolves mix's priv symlink so the app dir is self-contained;
+    # the layout ($out/lib/dashboard_ex/{ebin,priv}) is what `:code.priv_dir`
+    # expects once $out/lib/dashboard_ex/ebin is on the code path.
+    installPhase = ''
+      # shell
+      runHook preInstall
+      mkdir -p "$out/lib"
+      cp -RL _build/prod/lib/dashboard_ex "$out/lib/dashboard_ex"
+      runHook postInstall
+    '';
+
+    meta.description = "Compiled dashboard_ex OTP app: unibind-generated Elixir bindings over the dashboard Hub";
+  };
+
+  run = pkgs.stdenv.mkDerivation {
+    pname = "dashboard-ex-run";
+    inherit version;
+    src = built.ex.mixPackage;
+    strictDeps = true;
+
+    # The ExUnit suite has zero hex deps, so the sandbox never fetches;
+    # HEX_OFFLINE guards regressions.
+    nativeBuildInputs = [erlang elixir];
+    env = sharedEnv // {MIX_ENV = "test";};
+
+    # Also what lets the suite bind the hub's own HTTP listener on loopback.
+    __darwinAllowLocalNetworking = true;
+
+    postUnpack = ''
+      export HOME="$TEMPDIR"
+      export MIX_HOME="$TEMPDIR/mix"
+      export HEX_HOME="$TEMPDIR/hex"
+    '';
+
+    buildPhase = ''
+      # shell
+      runHook preBuild
+      mix compile --warnings-as-errors
+      runHook postBuild
+    '';
+
+    doCheck = true;
+    checkPhase = ''
+      # shell
+      runHook preCheck
+      mix format --check-formatted
+      # --trace prints every test name and runs sequentially, which the
+      # process-global document registry wants anyway.
+      mix test --trace
+      runHook postCheck
+    '';
+
+    installPhase = ''
+      # shell
+      runHook preInstall
+      mkdir -p "$out"
+      runHook postInstall
+    '';
+
+    meta.description = "dashboard Elixir binding smoke suite: a real served hub driven through the generated bindings (ExUnit)";
+  };
+in
+  app.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            inherit run;
+          };
+      };
+  })

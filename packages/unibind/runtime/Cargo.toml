@@ -1,0 +1,15 @@
+[package]
+name = "unibind-runtime"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Language-free boundary types exported code references at runtime: UniStream and its PullStream handle"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true
+# `sync` for the pull gate and closed flag, `macros` for the `select!`
+# racing a pull against close.
+tokio = { workspace = true, features = ["macros", "sync"] }

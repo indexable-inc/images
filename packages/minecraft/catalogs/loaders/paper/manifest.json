@@ -1,0 +1,9 @@
+{
+  "loader": "paper",
+  "project": "paper",
+  "releaseChannel": "default",
+  "versions": [
+    "1.21.11",
+    "26.1.2"
+  ]
+}

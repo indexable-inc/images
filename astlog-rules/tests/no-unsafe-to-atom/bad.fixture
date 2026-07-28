@@ -1,0 +1,8 @@
+defmodule UnsafeAtom do
+  @moduledoc false
+
+  # String.to_atom/1 on external input mints a new atom per distinct string;
+  # the fixed atom table fills and the VM crashes (a denial of service).
+  @spec parse(String.t()) :: atom()
+  def parse(s), do: String.to_atom(s)
+end

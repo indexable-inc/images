@@ -1,0 +1,11 @@
+{
+  "name": "npm-site-fixture",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node bin/build.js"
+  },
+  "dependencies": {
+    "clsx": "2.1.1"
+  }
+}

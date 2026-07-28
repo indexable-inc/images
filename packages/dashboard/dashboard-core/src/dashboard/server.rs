@@ -1,0 +1,310 @@
+//! The HTTP surface: one page, an SSE endpoint, and the recordings routes,
+//! served from a [`Hub`] (and an optional [`RecordingStore`]).
+//!
+//! [`serve_hub`] binds the listener, starts the server task, and hands back a
+//! [`Dashboard`] handle plus a shutdown receiver the caller threads into its own
+//! frame-source tasks (the in-process poller, or the aggregator's socket
+//! readers). One owner for the router means the in-process dashboard and the
+//! standalone aggregator render through exactly the same page and stream. When a
+//! store is supplied, `/recordings` lists saved sessions and `/recording/<id>`
+//! serves one snapshot for replay; without one, those routes report no
+//! recordings, so the in-process dashboard works unchanged.
+
+use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use axum::Router;
+use axum::body::Bytes;
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::http::{StatusCode, header};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{Html, IntoResponse, Json};
+use axum::routing::{get, post};
+use futures::{Stream, StreamExt as _};
+use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+
+use super::hub::{Hub, Merge};
+use super::recordings::RecordingStore;
+use super::ws;
+use crate::{Error, Result};
+
+/// The single page the dashboard serves; it connects back over `/events`.
+///
+/// The page is the Vite build of `site/`, embedded at compile time. `build.rs`
+/// writes it into `OUT_DIR` from the nix-built `IX_DASHBOARD_SITE_HTML`, so the
+/// generated bundle never lives in the repo. See `build.rs` for why this is a
+/// compile-time embed rather than a runtime asset dir.
+const DASHBOARD_HTML: &str = include_str!(concat!(env!("OUT_DIR"), "/dashboard.html"));
+
+/// Ceiling on one inbound update.
+///
+/// A Loro update for a keystroke is tens of bytes; the large case is a client
+/// that fell behind reposting a whole snapshot. Set well above that and far
+/// below anything that could exhaust the process, because `/apply` is the one
+/// route a browser can push bytes through.
+const MAX_UPDATE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Shared router state: the live document and, optionally, the on-disk
+/// recordings. Cloning is cheap: both fields are `Arc`s.
+#[derive(Clone)]
+struct AppState {
+    hub: Arc<Hub>,
+    recordings: Option<Arc<RecordingStore>>,
+    /// Protocol frames for the websocket clients, encoded once per hub delta by
+    /// the relay task. Cheap to clone: a broadcast sender.
+    frames: tokio::sync::broadcast::Sender<ws::Frames>,
+}
+
+/// What [`serve_hub`] hands back: the running dashboard plus the shutdown
+/// receiver the caller threads into its own frame-source tasks so one signal
+/// stops the whole dashboard.
+pub struct ServedDashboard {
+    /// The running dashboard handle.
+    pub dashboard: Dashboard,
+    /// Fires `true` when the dashboard is stopping; the caller's frame-source
+    /// tasks watch it to wind down with the server.
+    pub shutdown: watch::Receiver<bool>,
+}
+
+/// A running dashboard server. Dropping it, or calling [`Dashboard::stop`],
+/// shuts the HTTP server and every attached frame-source task down.
+pub struct Dashboard {
+    addr: SocketAddr,
+    shutdown: Option<watch::Sender<bool>>,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+impl Dashboard {
+    /// The address the server bound to (the resolved port when `:0` was given).
+    #[must_use]
+    pub const fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// The URL to open in a browser.
+    #[must_use]
+    pub fn url(&self) -> String {
+        format!("http://{}/", self.addr)
+    }
+
+    /// Attach a frame-source task whose lifetime is tied to this dashboard, so
+    /// [`stop`](Self::stop) and `Drop` wind it down with the server.
+    pub fn push_task(&mut self, task: JoinHandle<()>) {
+        self.tasks.push(task);
+    }
+
+    /// Stop the server and every attached task, waiting for them to wind down.
+    /// Idempotent.
+    ///
+    /// The tasks are aborted, not just signalled: an open Server-Sent-Events
+    /// stream never ends on its own, so `axum`'s graceful shutdown would block
+    /// forever while any browser is connected. Aborting drops those streams and
+    /// returns promptly.
+    pub async fn stop(&mut self) {
+        let Some(shutdown) = self.shutdown.take() else {
+            return;
+        };
+        let _ = shutdown.send(true);
+        for task in self.tasks.drain(..) {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
+impl Drop for Dashboard {
+    /// Best-effort, non-blocking teardown for a dropped handle that was never
+    /// `stop`ped: signal shutdown and abort the tasks. They wind down on the
+    /// runtime; `Drop` cannot await, so it does not join them.
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(true);
+        }
+        for task in self.tasks.drain(..) {
+            task.abort();
+        }
+    }
+}
+
+/// Bind `addr`, start the HTTP server for `hub`, and return the handle plus a
+/// shutdown receiver.
+///
+/// The server task runs on `runtime`, which must outlive the dashboard (the
+/// manager's runtime for the in-process `tui::serve`, the process runtime for
+/// the aggregator). The caller spawns its frame-source tasks on the same runtime
+/// against the returned receiver and attaches them with
+/// [`Dashboard::push_task`], so one shutdown signal stops the whole dashboard.
+///
+/// `recordings` enables the replay routes: pass the aggregator's
+/// [`RecordingStore`] to serve saved sessions, or `None` (the in-process
+/// dashboard) to leave the routes reporting an empty list.
+///
+/// # Errors
+///
+/// Returns [`Error::Dashboard`] when `addr` cannot be bound or its resolved
+/// local address cannot be read.
+pub async fn serve_hub(
+    hub: Arc<Hub>,
+    addr: SocketAddr,
+    recordings: Option<Arc<RecordingStore>>,
+    runtime: &tokio::runtime::Handle,
+) -> Result<ServedDashboard> {
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|source| Error::Dashboard {
+            message: format!("bind {addr}: {source}"),
+        })?;
+    let bound = listener.local_addr().map_err(|source| Error::Dashboard {
+        message: format!("local_addr: {source}"),
+    })?;
+
+    let (shutdown, stop_rx) = watch::channel(false);
+
+    // Started whether or not anyone speaks the protocol: it costs one idle task
+    // that encodes nothing while no websocket client is attached, and starting
+    // it lazily would mean the first client races the hub for the deltas it
+    // needs, which is exactly the gap the subscribe-then-snapshot order closes.
+    let ws::Relay { frames, task: relay } = ws::start_relay(Arc::clone(&hub), runtime);
+
+    let app = Router::new()
+        .route("/", get(index))
+        .route("/index.html", get(index))
+        .route("/events", get(events))
+        .route("/ws", get(sync))
+        .route("/recordings", get(list_recordings))
+        .route("/history", get(history))
+        .route("/recording/{id}", get(get_recording))
+        .route(
+            "/apply",
+            post(apply).layer(DefaultBodyLimit::max(MAX_UPDATE_BYTES)),
+        )
+        .with_state(AppState {
+            hub,
+            recordings,
+            frames,
+        });
+
+    let http = {
+        let mut rx = shutdown.subscribe();
+        runtime.spawn(async move {
+            let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+                let _ = rx.wait_for(|stop| *stop).await;
+            });
+            let _ = server.await;
+        })
+    };
+
+    let dashboard = Dashboard {
+        addr: bound,
+        shutdown: Some(shutdown),
+        tasks: vec![http, relay],
+    };
+    Ok(ServedDashboard {
+        dashboard,
+        shutdown: stop_rx,
+    })
+}
+
+async fn index() -> Html<&'static str> {
+    Html(DASHBOARD_HTML)
+}
+
+/// Upgrade to the Loro sync protocol, the interoperable twin of `/events` plus
+/// `/apply`. See [`ws`] for the wire format and what this side promises.
+async fn sync(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> impl IntoResponse {
+    upgrade.on_upgrade(move |socket| ws::serve_socket(socket, state.hub, state.frames))
+}
+
+/// List saved recordings as JSON, newest first. Without a store (the in-process
+/// dashboard) the list is empty, so the frontend simply offers no recordings.
+async fn list_recordings(State(state): State<AppState>) -> impl IntoResponse {
+    let recordings = state
+        .recordings
+        .map(|store| store.list())
+        .unwrap_or_default();
+    Json(recordings)
+}
+
+/// Serve one recording's snapshot bytes for the frontend to import into a
+/// detached document and replay. The id is validated by the store, so a bad or
+/// traversing id is a 404 rather than a path escape.
+async fn get_recording(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    state
+        .recordings
+        .and_then(|store| store.load(&id))
+        .map_or_else(
+            || (StatusCode::NOT_FOUND, "no such recording").into_response(),
+            |bytes| ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
+        )
+}
+
+/// The document's changes as JSON, oldest first, each with its commit tag and
+/// the actor its writing peer declared.
+///
+/// A browser holds the whole oplog already and could walk it itself, but a text
+/// op's position there is an entity index rather than a character offset, and
+/// resolving that is exactly the sort of thing that should exist once. Serving
+/// the resolved form keeps one reading of the oplog in the codebase instead of
+/// two that can disagree.
+async fn history(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.hub.history())
+}
+
+/// Merge a client's CRDT update into the shared document.
+///
+/// The inbound half of `/events`. A viewer exports its local ops and posts the
+/// bytes here; the hub merges them and fans the result back out, so every other
+/// viewer converges on the same document. Raw `application/octet-stream` rather
+/// than base64: the outbound stream encodes only because SSE is a text protocol,
+/// and a request body has no such constraint.
+async fn apply(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
+    match state.hub.import(&body) {
+        Ok(Merge::Applied) => StatusCode::NO_CONTENT.into_response(),
+        // The client built on ops this document has never seen, so its edit is
+        // recorded but invisible. A specific status because the fix is specific
+        // and the client can perform it: take a fresh snapshot from `/events`,
+        // rebase, and post again. Answering 204 here would tell a human their
+        // edit landed when it did not.
+        Ok(Merge::Pending) => (
+            StatusCode::CONFLICT,
+            "update depends on unknown ops; resync from /events and repost",
+        )
+            .into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+async fn events(State(state): State<AppState>) -> impl IntoResponse {
+    let hub = state.hub;
+    // Loro imports are idempotent, so an overlapping snapshot/update is harmless.
+    let subscription = hub.subscribe();
+
+    let snapshot = subscription.snapshot;
+    let first = futures::stream::once(async move {
+        Ok::<_, Infallible>(
+            Event::default()
+                .event("snapshot")
+                .data(super::b64(&snapshot)),
+        )
+    });
+
+    let tail = BroadcastStream::new(subscription.updates).map(move |item| {
+        let event = match item {
+            Ok(update) => Event::default().event("update").data(&update.encoded),
+            Err(BroadcastStreamRecvError::Lagged(_)) => {
+                Event::default().event("snapshot").data(hub.snapshot_b64())
+            }
+        };
+        Ok::<_, Infallible>(event)
+    });
+
+    let stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
+        Box::pin(first.chain(tail));
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}

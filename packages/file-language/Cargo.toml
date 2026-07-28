@@ -1,0 +1,9 @@
+[package]
+name = "file-language"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Maps a file path, name, or extension to the source language it holds, with no grammar or parser dependencies"
+
+[lints]
+workspace = true
