@@ -578,7 +578,28 @@ fn handle_patch(
         return refresh_tracked(ctx, subject, &tracked, doc, plan);
     }
 
-    // 2. No tracked PR: search for a duplicate before opening.
+    // 2. No tracked PR in our state, but there may be one on the forge: a
+    // `upstream-pr --open` run by hand pushes the branch and opens the PR
+    // without going through this loop, so the status file never learned
+    // about it. Ask about our own head branch first; the duplicate search
+    // below cannot tell our PR from a competing one and would skip the
+    // patch as a duplicate of itself.
+    let branch = format!("upstream/{}", series::slug(subject));
+    if let Some(ours) = gh::find_ours(ctx.slug, ctx.fork.fork_owner(), &branch)? {
+        doc.append_log(&format!(
+            "{subject}: adopted existing PR #{} from our branch {branch}",
+            ours.number
+        ));
+        if let Some(entry) = doc.patches.get_mut(subject) {
+            // A previous run may have recorded this very PR as a competing
+            // one. It is ours; leaving it in the duplicates list would read
+            // as someone else having proposed the same change.
+            entry.duplicates.retain(|d| d.number != ours.number);
+        }
+        return refresh_tracked(ctx, subject, &ours, doc, plan);
+    }
+
+    // 3. Nothing of ours: search for a duplicate before opening.
     let dupes = gh::find_duplicates(ctx.slug, subject)?;
     if let Some(first) = dupes.first() {
         let first_url = first.url.clone();
@@ -598,7 +619,7 @@ fn handle_patch(
         return Ok(());
     }
 
-    // 3. No PR, no duplicate: open one ONLY when --open was passed. Without
+    // 4. No PR, no duplicate: open one ONLY when --open was passed. Without
     // it (the safe default) this is a would-open plan entry: the status file
     // still records the pending attempt, but no PR is created.
     if !ctx.open {
