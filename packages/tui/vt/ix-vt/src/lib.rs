@@ -226,7 +226,7 @@ impl CellWide {
     /// Taken as a raw `u32` and matched rather than materialized as the C
     /// enum, for the reason [`Terminal::row_semantic_prompt`] gives: forming
     /// a Rust enum from an out-of-range FFI value is UB.
-    fn from_raw(raw: u32) -> Self {
+    const fn from_raw(raw: u32) -> Self {
         match raw {
             1 => Self::Wide,
             2 => Self::SpacerTail,
