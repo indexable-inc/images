@@ -258,6 +258,14 @@
       flake = false;
     };
 
+    # Upstream tags by ISO year+week rather than semver, so the ref is the whole
+    # version; bump it and `packages/ebpf-profiler/default.nix`'s `version`
+    # together or versionCheckHook fails the build.
+    ebpf-profiler-src = {
+      url = "git+https://github.com/open-telemetry/opentelemetry-ebpf-profiler?ref=refs/tags/v0.0.202627";
+      flake = false;
+    };
+
     # PostgreSQL uint128 extension source. The package marks the extension trusted
     # so non-superuser database owners can run `CREATE EXTENSION uint128`.
     pg-uint128-src = {
@@ -391,6 +399,7 @@
     jj-src,
     drgn-src,
     perftest-src,
+    ebpf-profiler-src,
     pg-uint128-src,
     fff-src,
     nu-jupyter-kernel-src,
@@ -477,6 +486,7 @@
         jj-src
         drgn-src
         perftest-src
+        ebpf-profiler-src
         fff-src
         nu-jupyter-kernel-src
         launchk-src

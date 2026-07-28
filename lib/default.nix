@@ -17,6 +17,7 @@
   jj-src,
   drgn-src,
   perftest-src,
+  ebpf-profiler-src,
   fff-src,
   nu-jupyter-kernel-src,
   launchk-src,
@@ -770,6 +771,7 @@
     rnix-0-14Src = rnix-0-14-src;
     drgnSrc = drgn-src;
     perftestSrc = perftest-src;
+    ebpfProfilerSrc = ebpf-profiler-src;
     fffSrc = fff-src;
     nuJupyterKernelSrc = nu-jupyter-kernel-src;
     launchkSrc = launchk-src;

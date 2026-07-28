@@ -70,6 +70,23 @@
         "url": "https://github.com/osandov/drgn"
       }
     },
+    "ebpf-profiler-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783057880,
+        "narHash": "sha256-nGJ79EEAkqiKCHhPsKbi+Le037L5/canSUdmBr6fp9E=",
+        "ref": "refs/tags/v0.0.202627",
+        "rev": "f4181a560ab3c6f376711c6df98a527d0b31cac9",
+        "revCount": 1074,
+        "type": "git",
+        "url": "https://github.com/open-telemetry/opentelemetry-ebpf-profiler"
+      },
+      "original": {
+        "ref": "refs/tags/v0.0.202627",
+        "type": "git",
+        "url": "https://github.com/open-telemetry/opentelemetry-ebpf-profiler"
+      }
+    },
     "examples": {
       "flake": false,
       "locked": {
@@ -569,6 +586,7 @@
         "clippy-src": "clippy-src",
         "codex-src": "codex-src",
         "drgn-src": "drgn-src",
+        "ebpf-profiler-src": "ebpf-profiler-src",
         "examples": "examples",
         "fff-src": "fff-src",
         "ghostty-src": "ghostty-src",
