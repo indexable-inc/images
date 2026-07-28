@@ -342,7 +342,11 @@
       if proc.poll() is not None:
           break
 
-  if proc.poll() is None:
+  # Keep the status the target reached on its own. Closing a live UI is the
+  # expected path; exiting or dying before we closed it is a distinct outcome and
+  # has to be reported as one.
+  self_exit = proc.poll()
+  if self_exit is None:
       proc.terminate()
       try:
           proc.wait(timeout=2)
@@ -351,12 +355,35 @@
           proc.wait()
 
   os.close(master)
-  raw = b"".join(chunks).decode("utf-8", "replace")
-  plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw)
+  raw = b"".join(chunks)
+  plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw.decode("utf-8", "replace"))
   compact = re.sub(r"\s+", "", plain)
+
+  # No bytes at all means the target never wrote, so no needle can be present and
+  # "missing <needle>" would name the wrong problem: that reading cost hours on
+  # index#4324, where the real cause was the sandbox denying /usr/share/icu and
+  # the kernel force-exiting the process during ICU init. Report the emptiness and
+  # the signal instead, and say where the reason is recorded.
+  if not raw:
+      if self_exit is None:
+          how = "still running when we closed it"
+      elif self_exit < 0:
+          how = f"killed by signal {-self_exit}"
+      else:
+          how = f"exited {self_exit} on its own"
+      sys.stderr.write(f"claude doctor check failed: captured 0 bytes, {how}\n")
+      sys.stderr.write(
+          "A signal here is usually the sandbox refusing a host path the binary\n"
+          "needs at startup. `sudo dmesg` names the path on a 'Sandbox: ... deny'\n"
+          "line, and /Library/Logs/DiagnosticReports holds the crash report.\n"
+      )
+      sys.exit(1)
+
   for needle in ("Running:native", "Search:OK"):
       if needle not in compact:
-          sys.stderr.write(f"claude doctor check failed: missing {needle!r}\n")
+          sys.stderr.write(
+              f"claude doctor check failed: missing {needle!r} in {len(raw)} bytes\n"
+          )
           sys.stderr.write(plain[-4000:])
           sys.exit(1)
   PY

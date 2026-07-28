@@ -772,6 +772,20 @@ in
     dontStrip = true;
     strictDeps = true;
 
+    # The CLI reads macOS's ICU data during startup initialization, and the build
+    # sandbox exposes only the stdenv default host paths, so ICU's init traps and
+    # the kernel force-exits the process with SIGKILL before it writes a byte
+    # (EXC_BREAKPOINT, two nested call_once frames off `dyld start`). That kills
+    # the `claude doctor` check below, the only check that execs the real binary.
+    # Eight builds failed with the stock sandbox and three passed with this path
+    # added, same derivation, nothing else changed (index#4324). nixpkgs appends to
+    # the stdenv defaults and drops the attribute off darwin, so this neither
+    # replaces those nor affects Linux. The host has to permit the request
+    # separately: without /usr/share/icu in its `allowed-impure-host-deps` a
+    # darwin build fails at start with `requested impure path ... not in
+    # allowed-impure-host-deps` (andrewgazelka/nix hosts/hydra/default.nix).
+    __impureHostDeps = ["/usr/share/icu"];
+
     nativeBuildInputs =
       [
         makeBinaryWrapper
