@@ -14,6 +14,7 @@
   };
 
   outputs = {
+    nixpkgs,
     index,
     hyperion,
     ...
@@ -35,14 +36,11 @@
     # machine that types `nix build` contributes a builder, not an identity.
     # Without this the command above is a missing-attribute error on the Mac it
     # is most likely to be typed on.
-    packages = builtins.listToAttrs (map (system: {
-        name = system;
-        value = fleet.systemPackages;
-      }) [
-        "aarch64-darwin"
-        "aarch64-linux"
-        "x86_64-darwin"
-        "x86_64-linux"
-      ]);
+    packages = nixpkgs.lib.genAttrs [
+      "aarch64-darwin"
+      "aarch64-linux"
+      "x86_64-darwin"
+      "x86_64-linux"
+    ] (_: fleet.systemPackages);
   };
 }
