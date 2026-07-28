@@ -145,23 +145,40 @@ Open:
   proxies is the new system and `systemctl --failed` lists nothing. The name is
   load bearing (see above), so an address here would fail the TLS handshake
   instead.
-- ~~**The proxies have no public address.**~~ ENG-10846, closed. The
-  declaration moved into `proxy.nix` as `ix.networking.ipv4 = true`, which is
-  what `ix apply` reads off the evaluated system, and the lock bumped to an
-  index that has the option. `deployment.ipv4` is gone from `default.ix`: it
-  now works too (index#4328 gives it a path into the evaluated config), but a
-  public address is a property of being the entrypoint, so it belongs to the
-  module.
+- ~~**The proxies have no public address because the declaration was in the
+  wrong place.**~~ ENG-10846, closed. `ix.networking.ipv4` is what `ix apply`
+  reads off the evaluated system, so the declaration belongs in `proxy.nix`
+  rather than on the deployment, and the lock is bumped to an index that has
+  the option. Two things had to be fixed to get there and both are worth
+  knowing: `deployment.ipv4` reached only the fleet plan, which `ix apply`
+  never reads (index#4328 gives it a path into the evaluated config), and the
+  `ix` CLI itself has to be newer than 2026-07-27, because an older one ignores
+  the option and creates the VM exactly as if nothing had been declared
+  (ENG-10883).
 
-  Each proxy takes one real address out of `us-west-1`'s ingress block
-  `15.204.22.192/26`. It is routed, not translated: the VM holds the address
+  When it works, it is routed rather than translated: the VM holds the address
   itself on `eth0` as a `/32`, OVH ARPs for it on the host's `bond-vrack`, the
-  host proxy-ARPs and forwards to `br-north`. There is no DNAT rule anywhere in
-  the fleet and port 25565 needs no host-side configuration, only
-  `ix.networking.expose` opening the guest firewall.
+  host proxy-ARPs and forwards to `br-north`. No DNAT anywhere, and port 25565
+  needs no host-side configuration, only `ix.networking.expose` opening the
+  guest firewall.
 
-  The address is allocated once, at create, so turning this on means recreating
-  the proxies; there is no `ix vm set --ipv4`.
+- **A public IPv4 currently disconnects the VM, so it is off.** ENG-10881. The
+  region's ingress block is not delivered to the vRack: `15.204.22.254`, the
+  block's gateway, is `FAILED` in the host's neighbour table. Because the host
+  source-routes VIP traffic out of that gateway, a VM that takes an address
+  from the block can send nothing at all. Both proxies came up unable to
+  resolve `cache.ix.dev`, unable to substitute their own closure, and unable to
+  finish `switch-to-configuration`:
+
+  ```
+  hyperion-proxy-0  (VIP 15.204.22.195/32)  ping 1.1.1.1 -> 0 received, +2 errors
+  hyperion-game     (no VIP, 10.0.0.59)     ping 1.1.1.1 -> 2 received, 0.700ms
+  ```
+
+  `ix.networking.ipv4` is therefore commented out in `proxy.nix` with the
+  reasoning in place. Turn it back on and recreate the proxies once OVH
+  delivers the block; the address is allocated at create and there is no
+  `ix vm set --ipv4`.
 - **A fleet cannot boot its own published image.** ENG-10839. `mkFleet` renders
   one per node at `packages.<node>`, and nothing outside the private ix repo can
   build it, which is why the 27 minutes above is a per-VM export rather than a
