@@ -30,7 +30,8 @@ in
       # shell
       wrapProgram $out/bin/upstream-pr \
         --prefix PATH : ${lib.makeBinPath [git gh coreutils]} \
-        --set-default UPSTREAM_SYNC_FORK_PACKAGES ${forkData}
+        --set-default UPSTREAM_SYNC_FORK_PACKAGES ${forkData} \
+        --set-default UPSTREAM_SYNC_ORG_MEMBERS ${ix.orgMembersFile}
     '';
     meta = {
       description = "Contribute one fork patch upstream (its fork-repo commit ancestry) via a fork branch + compare URL";

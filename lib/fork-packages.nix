@@ -83,6 +83,21 @@
 #                                      tool refuses to open any PR against it.
 #                      citation      : URL backing `aiPrsAllowed` (the policy doc).
 #                      notes         : one line of contribution nuance (CLA, disclosure).
+#                      autoContribute: { enabled, reason }. OPT-IN to unattended
+#                                      contribution: may the scheduled lane open a PR
+#                                      here with no human in the loop. Distinct from
+#                                      `prsWelcome`/`aiPrsAllowed`, which say whether a
+#                                      PR is acceptable at all; this says whether it is
+#                                      acceptable UNINVITED and UNWATCHED. A repo can
+#                                      welcome our AI-assisted PRs and still be out:
+#                                      ghostty's vouch system auto-closes a first-time
+#                                      contributor's PR until a maintainer comments
+#                                      `!vouch`, which only a human can go and ask for.
+#                                      `reason` is required on every fork (asserted
+#                                      below) and states why the repo is in or out, so
+#                                      the stance is auditable without re-reading the
+#                                      upstream's CONTRIBUTING. Default is OUT: a repo
+#                                      nobody has reviewed never gets an uninvited PR.
 #   patches        : per-patch intent, keyed by the patch commit's SUBJECT
 #                    line (the identity that survives rebases; jj evolves the
 #                    commit but the subject is the patch's name of record).
@@ -137,6 +152,10 @@
         aiPrsAllowed = "unknown";
         citation = "https://github.com/openai/codex/blob/main/docs/contributing.md";
         notes = "Invitation-only: 'does not accept unsolicited code contributions... will be closed without review.' CLA required. External help goes to issues, not PRs.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: unsolicited PRs are closed without review, so an uninvited one is guaranteed waste. The upstream issue is the channel.";
+        };
       };
       patches = {
         "mcp: route channel notifications into chat" = {
@@ -165,6 +184,10 @@
         aiPrsAllowed = "true";
         citation = "https://github.com/aristocratos/btop/blob/master/CONTRIBUTING.md";
         notes = "AI code allowed but must be disclosed ([AI generated] tag); undisclosed AI = closed PR / block. Feature PRs: open a feature request first.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: a feature PR must be preceded by a feature request the maintainer accepts, and only a human can hold that conversation. Flip this once a feature request lands.";
+        };
       };
       patches = {
         "Add macOS process disk IO sorting" = {
@@ -201,6 +224,10 @@
         aiPrsAllowed = "unknown";
         citation = "https://nix-community.github.io/home-manager/#ch-contributing";
         notes = "PRs welcome. Commit subject `{module}: summary` <= 50 chars, body explains motivation; changes should carry tests. No CLA.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out pending review: PRs are welcome and the one attempt patch looks ready, but nobody has checked our commits against the subject-length and test conventions. A one-line flip once someone has.";
+        };
       };
       patches = {
         "files: batch symlink creation and target checks in activation" = {
@@ -227,6 +254,10 @@
         aiPrsAllowed = "unknown";
         citation = "https://github.com/git/git/blob/master/Documentation/SubmittingPatches.adoc";
         notes = "Mailing-list workflow (git@vger.kernel.org / GitGitGadget); DCO sign-off required; no AI-specific policy found as of 2026-07-18.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: contributions go by mail, not by PR, so there is no PR for this lane to open.";
+        };
       };
       patches = {
         "submodule--helper: borrow common-dir module store in linked worktrees" = {
@@ -247,6 +278,10 @@
         aiPrsAllowed = "unknown";
         citation = "https://github.com/nushell/nushell/blob/main/CONTRIBUTING.md";
         notes = "PRs welcome for focused changes; CONTRIBUTING has no AI-specific policy as of 2026-07-07. Include tests and user-facing release-note context.";
+        autoContribute = {
+          enabled = true;
+          reason = "In: PRs are welcome for focused changes, no CLA, and no policy restricting AI-assisted work. Our PR body discloses AI assistance and links the patch of record.";
+        };
       };
       patches = {
         "Add xattrs column to ls -l" = {
@@ -284,6 +319,10 @@
         aiPrsAllowed = "true";
         citation = "https://github.com/ghostty-org/ghostty/blob/main/AI_POLICY.md";
         notes = "AI-assisted PRs welcome with disclosure (AI_POLICY.md) but gated by CONTRIBUTING.md's vouch system: unvouched contributors are auto-closed, so a human must request and receive a maintainer's `!vouch` before upstream-sync can open a PR.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: AI-assisted PRs are welcome, but CONTRIBUTING's vouch system auto-closes a first-time contributor's PR until a maintainer comments !vouch on a Vouch Request discussion. Asking for that vouch is a human conversation, so an unattended PR here would open into an auto-close.";
+        };
       };
       patches = {
         "macos: fire undo-close expiry via main-queue GCD timer" = {
@@ -333,6 +372,10 @@
         aiPrsAllowed = "false";
         citation = "https://github.com/rust-lang/rust-forge/blob/master/src/policies/llm-usage.md";
         notes = "rust LLM policy: fine to analyze/review, NOT to create code/comments/docs/diagnostics except under experiment rules. New lints also need a proposal issue + discussion. The clippy quality pass is a human-driven follow-up.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: the rust LLM policy forbids AI-created code, and a new lint additionally needs a proposal issue and discussion first.";
+        };
       };
       patches = {
         # The nightly-sync commit is our rebase mechanism onto the pinned
@@ -436,6 +479,10 @@
         aiPrsAllowed = "false";
         citation = "https://docs.mesa3d.org/submittingpatches.html";
         notes = "GitLab MR workflow, not GitHub; upstream-sync's gh path cannot open a mesa MR. Also bans autonomous-agent submissions (human must drive the MR). Contribute by hand via gitlab.freedesktop.org with Assisted-by/Generated-by trailers.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out twice over: the upstream is GitLab, so there is no gh path to open anything, and autonomous-agent submissions are banned outright.";
+        };
       };
       patches = {
         "venus: handle temporary sync fd semaphore imports driver-side" = {
@@ -489,6 +536,10 @@
         aiPrsAllowed = "false";
         citation = "https://github.com/NixOS/nix/pull/15984";
         notes = "AI policy (#15984): human must author PR communication, no unreviewed automated submissions, disclose AI assistance with an Assisted-by trailer. Agent-filed PRs are out; a human submits with the patches' Assisted-by trailers.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: the AI policy requires a human to author the PR communication and bans unreviewed automated submissions, which is this lane by definition.";
+        };
       };
       # All nix patches are HOLD: the repo-level `aiPrsAllowed = false` (see the
       # policy above) already blocks the outward act, and the per-patch marks
@@ -885,6 +936,10 @@
         aiPrsAllowed = "unknown";
         citation = "https://github.com/Mic92/nix-fast-build";
         notes = "No CONTRIBUTING or AI policy published as of 2026-07-19; small focused PRs with tests are the observed norm.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: with no published contribution or AI policy there is nothing granting permission for an uninvited automated PR. A human sends the first one and learns the reception.";
+        };
       };
       patches = {
         "workers: make --skip-cached skip locally-realized outputs" = {
@@ -916,6 +971,10 @@
         aiPrsAllowed = "unknown";
         citation = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library";
         notes = "No CONTRIBUTING or AI policy; the CA gap is tracked upstream as issue #28 with PR #26 proposing a sum-type DerivationOutput.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: no published policy, and the gap this fork covers already has upstream PR #26 in flight, so a second PR would compete rather than help.";
+        };
       };
       patches = {
         "Parser: accept empty output paths in floating-CA derivations" = {
@@ -946,6 +1005,10 @@
         aiPrsAllowed = "unknown";
         citation = "https://github.com/nix-community/rnix-parser";
         notes = "nix-community project, PRs welcome, no stated AI policy; the patched dialect is gated on the Nix language itself changing, and 0.12 is a historical tag that upstream would not amend anyway.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: 0.12 is a historical tag upstream would not amend, so there is nothing here to send.";
+        };
       };
       patches = {
         "tokenizer: accept underscore digit separators in numeric literals" = {
@@ -968,6 +1031,10 @@
         aiPrsAllowed = "unknown";
         citation = "https://github.com/nix-community/rnix-parser";
         notes = "nix-community project, PRs welcome, no stated AI policy; the patched dialect is gated on the Nix language itself changing.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: the patched dialect only becomes upstreamable if the Nix language itself adopts it, so the trigger is a language change and not a schedule.";
+        };
       };
       patches = {
         "tokenizer: accept underscore digit separators in numeric literals" = {

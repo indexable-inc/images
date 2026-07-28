@@ -60,6 +60,20 @@ pub struct PatchIntent {
     pub pr_extra: Option<String>,
 }
 
+/// The complete per-patch stance vocabulary.
+///
+/// A value outside this set is a typo, and a typo is dangerous in the quiet
+/// direction: every gate in the tool asks `== "attempt"`, so `atempt` reads
+/// as "do not send" and the patch silently stops being contributed while its
+/// registry entry still says it should be. [`validate`] rejects the whole
+/// mapping instead.
+///
+/// `never` and `rejected` both stop a patch from being sent, and they are
+/// separate words because they answer different questions: `never` is our
+/// judgement that the patch does not belong upstream, `rejected` is the
+/// upstream's judgement, already delivered.
+pub const STANCES: [&str; 4] = ["attempt", "hold", "never", "rejected"];
+
 /// Per-repo contribution policy from the mapping.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +86,38 @@ pub struct Policy {
     pub citation: String,
     #[serde(default)]
     pub notes: String,
+    #[serde(default)]
+    pub auto_contribute: AutoContribute,
+}
+
+/// Whether the unattended lane may open a PR against this upstream.
+///
+/// Separate from `prs_welcome` and `ai_prs_allowed`.
+///
+/// Those say whether a PR is acceptable at all. This says whether it is
+/// acceptable UNINVITED and UNWATCHED, which is a different question:
+/// ghostty welcomes AI-assisted PRs and still auto-closes a first-time
+/// contributor's until a maintainer vouches, so an unattended PR there
+/// opens straight into a close.
+///
+/// Defaults to disabled. A fork nobody has reviewed never sends an uninvited
+/// PR, and [`validate`] refuses a mapping that leaves the reason blank, so
+/// the default cannot be reached by silence.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutoContribute {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+
+impl Default for AutoContribute {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            reason: "no autoContribute declared in lib/fork-packages.nix".to_owned(),
+        }
+    }
 }
 
 const fn default_true() -> bool {
@@ -89,6 +135,7 @@ impl Default for Policy {
             ai_prs_allowed: default_unknown(),
             citation: String::new(),
             notes: String::new(),
+            auto_contribute: AutoContribute::default(),
         }
     }
 }
@@ -208,6 +255,59 @@ impl Slug {
     }
 }
 
+/// Check the whole registry, so a bad entry fails the run rather than
+/// quietly changing what gets contributed.
+///
+/// Two classes, both of which fail silently without this:
+///   - an unknown stance word reads as "not attempt" everywhere, so a typo
+///     retires a patch from contribution while its entry still claims
+///     otherwise;
+///   - an `autoContribute` with no reason leaves the stance unexplained, and
+///     an unexplained gate is one the next person deletes or flips without
+///     knowing what it defended.
+///
+/// # Errors
+/// Fails listing every problem found, not just the first: a registry edit
+/// usually breaks several entries the same way.
+pub fn validate(forks: &[Fork]) -> Result<()> {
+    let mut problems: Vec<String> = Vec::new();
+    for fork in forks {
+        let policy = fork.policy();
+        if policy.auto_contribute.reason.trim().is_empty() {
+            problems.push(format!(
+                "{}: upstreamPolicy.autoContribute has no reason; state why this repo is in or out of unattended contribution",
+                fork.name
+            ));
+        }
+        for (subject, intent) in &fork.patches {
+            let Some(stance) = intent.upstream.as_deref() else {
+                continue;
+            };
+            if !STANCES.contains(&stance) {
+                problems.push(format!(
+                    "{}: patch '{subject}' has upstream = \"{stance}\", which is not one of {}",
+                    fork.name,
+                    STANCES.join(" | ")
+                ));
+            }
+            if stance == "rejected" && intent.reason.as_deref().unwrap_or("").trim().is_empty() {
+                problems.push(format!(
+                    "{}: patch '{subject}' is rejected but states no reason; record what upstream said and where",
+                    fork.name
+                ));
+            }
+        }
+    }
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(eyre!(
+        "lib/fork-packages.nix has {} problem(s):\n  - {}",
+        problems.len(),
+        problems.join("\n  - ")
+    ))
+}
+
 /// Is this upstream a GitHub repo? The gh-based PR + search path only works
 /// for github.com; a non-github host (e.g. mesa on gitlab.freedesktop.org)
 /// has no gh path, so we cannot track or open there.
@@ -242,6 +342,60 @@ mod tests {
         assert!(is_github("https://github.com/o/r.git"));
         assert!(!is_github("https://gitlab.freedesktop.org/mesa/mesa"));
         assert!(is_gitlab("https://gitlab.freedesktop.org/mesa/mesa"));
+    }
+
+    fn fork_with(patches: &str, policy: &str) -> Fork {
+        serde_json::from_str(&format!(
+            r#"{{"name":"fake","input":"fake-src","forkRepo":"indexable-inc/fakerepo",
+                "upstreamUrl":"https://github.com/fakeorg/fakerepo.git",
+                "patches":{patches},"upstreamPolicy":{policy}}}"#
+        ))
+        .unwrap()
+    }
+
+    const GOOD_POLICY: &str =
+        r#"{"autoContribute":{"enabled":false,"reason":"out: they close unsolicited PRs"}}"#;
+
+    #[test]
+    fn auto_contribute_defaults_off_and_says_it_was_never_declared() {
+        let fork = fork_with("{}", "{}");
+        let auto = fork.policy().auto_contribute;
+        assert!(!auto.enabled);
+        assert!(auto.reason.contains("no autoContribute declared"));
+    }
+
+    #[test]
+    fn a_mapping_that_states_its_stances_and_reasons_passes() {
+        let fork = fork_with(
+            r#"{"a: keep":{"upstream":"never","reason":"repo-specific"},
+                "b: turned down":{"upstream":"rejected","reason":"upstream closed it as out of scope in #12"}}"#,
+            GOOD_POLICY,
+        );
+        validate(&[fork]).unwrap();
+    }
+
+    #[test]
+    fn an_unexplained_gate_and_a_misspelled_stance_both_fail_together() {
+        // Both problems in one mapping: validate reports every one, because
+        // a registry edit usually breaks several entries the same way.
+        let fork = fork_with(
+            r#"{"a: typo":{"upstream":"atempt","reason":"r"}}"#,
+            r#"{"autoContribute":{"enabled":true,"reason":"  "}}"#,
+        );
+        let err = validate(&[fork]).unwrap_err().to_string();
+        assert!(err.contains("2 problem(s)"), "{err}");
+        assert!(err.contains("autoContribute has no reason"), "{err}");
+        assert!(
+            err.contains("not one of attempt | hold | never | rejected"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_rejection_must_record_what_upstream_said() {
+        let fork = fork_with(r#"{"a: turned down":{"upstream":"rejected"}}"#, GOOD_POLICY);
+        let err = validate(&[fork]).unwrap_err().to_string();
+        assert!(err.contains("rejected but states no reason"), "{err}");
     }
 
     #[test]

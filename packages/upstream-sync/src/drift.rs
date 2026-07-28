@@ -19,10 +19,10 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use lazy_regex::regex;
 use serde::Serialize;
 
+use crate::gh;
 use crate::mapping::{self, Fork, Slug};
 use crate::status;
 use crate::style::{CYAN, YELLOW, paint};
-use crate::gh;
 
 /// One fork's drift facts (the `--json` row shape).
 #[derive(Debug, Serialize)]
@@ -39,6 +39,7 @@ pub struct Row {
     pub attempt: usize,
     pub hold: usize,
     pub never: usize,
+    pub rejected: usize,
     pub retired: usize,
     pub action: String,
     pub note: String,
@@ -204,6 +205,7 @@ struct StanceCounts {
     attempt: usize,
     hold: usize,
     never: usize,
+    rejected: usize,
 }
 
 fn stance_counts(fork: &Fork) -> StanceCounts {
@@ -213,6 +215,7 @@ fn stance_counts(fork: &Fork) -> StanceCounts {
         attempt: count("attempt"),
         hold: count("hold"),
         never: count("never"),
+        rejected: count("rejected"),
     }
 }
 
@@ -288,6 +291,7 @@ fn row(fork: &Fork) -> Result<Row> {
         attempt: stances.attempt,
         hold: stances.hold,
         never: stances.never,
+        rejected: stances.rejected,
         retired,
         action: action.to_owned(),
         note: note.to_owned(),
@@ -300,7 +304,7 @@ fn row(fork: &Fork) -> Result<Row> {
 /// it in step summaries and PR bodies). The action column sits before the
 /// stance counts so an 80-column pipe still shows the verdict.
 fn render_table(rows: &[Row]) -> String {
-    const HEADERS: [&str; 10] = [
+    const HEADERS: [&str; 11] = [
         "fork",
         "base",
         "behind",
@@ -309,11 +313,12 @@ fn render_table(rows: &[Row]) -> String {
         "attempt",
         "hold",
         "never",
+        "rejected",
         "retired",
         "note",
     ];
     let unknown = || "?".to_owned();
-    let cells: Vec<[String; 10]> = rows
+    let cells: Vec<[String; 11]> = rows
         .iter()
         .map(|r| {
             [
@@ -327,6 +332,7 @@ fn render_table(rows: &[Row]) -> String {
                 r.attempt.to_string(),
                 r.hold.to_string(),
                 r.never.to_string(),
+                r.rejected.to_string(),
                 r.retired.to_string(),
                 r.note.clone(),
             ]
@@ -390,6 +396,7 @@ mod tests {
             attempt: 0,
             hold: 0,
             never: 0,
+            rejected: 0,
             retired: 0,
             action: action.to_owned(),
             note: note.to_owned(),
@@ -412,10 +419,10 @@ mod tests {
             row_stub("bad", None, None, None, "unknown", "x"),
         ];
         let expected = "\
-| fork | base         | behind | age (days) | action             | attempt | hold | never | retired | note |
-| ---- | ------------ | ------ | ---------- | ------------------ | ------- | ---- | ----- | ------- | ---- |
-| fake | aaaaaaaaaaaa | 123    | 194        | rebase-recommended | 0       | 0    | 0     | 0       |      |
-| bad  | ?            | ?      | ?          | unknown            | 0       | 0    | 0     | 0       | x    |";
+| fork | base         | behind | age (days) | action             | attempt | hold | never | rejected | retired | note |
+| ---- | ------------ | ------ | ---------- | ------------------ | ------- | ---- | ----- | -------- | ------- | ---- |
+| fake | aaaaaaaaaaaa | 123    | 194        | rebase-recommended | 0       | 0    | 0     | 0        | 0       |      |
+| bad  | ?            | ?      | ?          | unknown            | 0       | 0    | 0     | 0        | 0       | x    |";
         assert_eq!(render_table(&rows), expected);
     }
 }
