@@ -42,8 +42,14 @@ Rewriting the shebang to the absolute interpreter moved the status from 2 to
 8 and no further. nixpkgs ships `bin/elixir` as a bash script:
 
 ```
-#! /nix/store/c9mv5v53f7vy3wd00ah0f77k509mzmn7-bash-5.3p15/bin/bash -e
+#! /nix/store/<hash>-bash-5.3p15/bin/bash -e
 ```
+
+The hash is redacted on purpose. This repo is fetched whole as a fixed-output
+derivation wherever it is a git dependency, and nix refuses an FOD whose output
+names a store path in the fetch's own closure: a real `bash` path pasted into
+any tracked file fails that fetch with `fixed-output derivations must not
+reference store paths`, which breaks every consumer's eval, not this page.
 
 No kernel follows a shebang into another shebang. The test now writes a
 `/bin/sh` trampoline into its temp store and spawns that. `/bin/sh` is the
