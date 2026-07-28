@@ -145,12 +145,23 @@ Open:
   proxies is the new system and `systemctl --failed` lists nothing. The name is
   load bearing (see above), so an address here would fail the TLS handshake
   instead.
-- **The proxies have no public address.** ENG-10846. `default.ix` asks for one
-  with `deployment.ipv4`, which only the deprecated `ix-fleet` reads;
-  `ix apply` reads `ix.networking.ipv4` off the evaluated system, and this
-  directory's `flake.lock` pins an index that has no such option yet. The fix is
-  a lock bump plus a one-line move into `proxy.nix`, and it wants its own change
-  because it moves every node's closure.
+- ~~**The proxies have no public address.**~~ ENG-10846, closed. The
+  declaration moved into `proxy.nix` as `ix.networking.ipv4 = true`, which is
+  what `ix apply` reads off the evaluated system, and the lock bumped to an
+  index that has the option. `deployment.ipv4` is gone from `default.ix`: it
+  now works too (index#4328 gives it a path into the evaluated config), but a
+  public address is a property of being the entrypoint, so it belongs to the
+  module.
+
+  Each proxy takes one real address out of `us-west-1`'s ingress block
+  `15.204.22.192/26`. It is routed, not translated: the VM holds the address
+  itself on `eth0` as a `/32`, OVH ARPs for it on the host's `bond-vrack`, the
+  host proxy-ARPs and forwards to `br-north`. There is no DNAT rule anywhere in
+  the fleet and port 25565 needs no host-side configuration, only
+  `ix.networking.expose` opening the guest firewall.
+
+  The address is allocated once, at create, so turning this on means recreating
+  the proxies; there is no `ix vm set --ipv4`.
 - **A fleet cannot boot its own published image.** ENG-10839. `mkFleet` renders
   one per node at `packages.<node>`, and nothing outside the private ix repo can
   build it, which is why the 27 minutes above is a per-VM export rather than a

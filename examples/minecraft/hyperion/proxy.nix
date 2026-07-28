@@ -21,12 +21,25 @@
 in {
   hyperion.pki.serverName = "${config.ix.networking.eastWest.hostName}.ix.internal";
 
-  ix.networking.expose.minecraft = {
-    port = 25565;
-    description = "public Minecraft entrypoint";
-  };
+  ix = {
+    networking = {
+      # A real address out of the region's IPv4 ingress block, allocated once
+      # when the VM is created. It belongs to the image rather than to the
+      # deployment because "this VM is the entrypoint" is what the image is: a
+      # proxy without a public address has nothing to proxy. IPv4 specifically,
+      # not the public IPv6 every VM already carries, because the Java client
+      # resolves through the JDK, which prefers IPv4, and a large share of
+      # players have no IPv6 at all.
+      ipv4 = true;
 
-  ix.healthChecks.hyperion-proxy.unit = "hyperion-proxy.service";
+      expose.minecraft = {
+        port = 25565;
+        description = "public Minecraft entrypoint";
+      };
+    };
+
+    healthChecks.hyperion-proxy.unit = "hyperion-proxy.service";
+  };
 
   # Pinned only when the group is unavailable. Group members are supposed to
   # resolve each other by name, and the name is load bearing: the proxy uses it
