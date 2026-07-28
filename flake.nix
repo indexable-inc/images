@@ -180,15 +180,20 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      # Megamerge 6520ebcb (49 patches on 2c6d06e9387c): the 48-patch series
-      # plus the mid-build output-validity fix. Before it, `registerOutputs`
-      # asserted that only a content-addressed output can find its path
-      # already valid -- true only where a store's output locks cover every
-      # writer of its validity, which a local-overlay store's lower store
-      # breaks by design. The ephemeral-upper CI lane (ix#8445) publishes each
-      # job's closure into the shared durable lower store other jobs are
-      # building against, so a concurrent job's nix aborted outright.
-      url = "github:indexable-inc/nix/6520ebcbdd790ee2b20081c66f0630fc381aa268";
+      # Megamerge eee1b71d (50 patches on 2c6d06e9387c): the 48-patch series
+      # that 3e68babb pinned, plus the two halves of the local-overlay
+      # validity fix (ENG-10582). A CI job builds in an ephemeral overlay over
+      # a /nix/store the host's own daemon keeps writing, and the kernel does
+      # not promise to show a lower-store addition through an already-mounted
+      # overlay: a lookup that missed first leaves a negative dentry nothing
+      # revalidates. `don't abort when an output path becomes valid mid-build`
+      # stops `registerOutputs` aborting when the race is real, and `a
+      # local-overlay store must not call a path it cannot read valid` stops
+      # the store copying up a registration for an object it cannot reach,
+      # which is what turned that mount quirk into nine "missing" paths in one
+      # build. Neither is safe without the other: the first alone keeps a
+      # registered path the mount cannot show.
+      url = "github:indexable-inc/nix/eee1b71d0547b940364d51123828f835d989780c";
       flake = false;
     };
 
