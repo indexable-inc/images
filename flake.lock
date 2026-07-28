@@ -217,6 +217,23 @@
         "type": "github"
       }
     },
+    "jj-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785212716,
+        "narHash": "sha256-uypz70OifGkGp2gcAUHrFFh1UUvmlVBiqjS7FkR8X3M=",
+        "owner": "indexable-inc",
+        "repo": "jj",
+        "rev": "c1e8eece663170df3f461ee7a085721e535426e1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "indexable-inc",
+        "repo": "jj",
+        "rev": "c1e8eece663170df3f461ee7a085721e535426e1",
+        "type": "github"
+      }
+    },
     "launchk-src": {
       "flake": false,
       "locked": {
@@ -559,6 +576,7 @@
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
         "home-manager-src": "home-manager-src",
+        "jj-src": "jj-src",
         "launchk-src": "launchk-src",
         "mesa-src": "mesa-src",
         "nix-derivation-src": "nix-derivation-src",

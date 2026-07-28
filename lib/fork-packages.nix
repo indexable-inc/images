@@ -275,6 +275,69 @@
       };
     }
     {
+      # The series is large and reaches into working-copy internals, so a
+      # rebase onto upstream main conflicts easily and a conflicted jj commit
+      # must never be pushed to the bookmark. The input is pinned BY REV in
+      # flake.nix and autoUpdate is off: the rev moves only under a deliberate
+      # rebase a human resolves, never under the scheduled fork-sync.
+      name = "jj";
+      input = "jj-src";
+      upstreamUrl = "https://github.com/jj-vcs/jj.git";
+      forkRepo = "indexable-inc/jj";
+      bookmark = "ix-patched";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "true";
+        citation = "https://github.com/jj-vcs/jj/blob/main/.github/PULL_REQUEST_TEMPLATE.md";
+        notes = "PR template requires the submitter to fully understand the submitted code including anything drafted by an LLM, and to proof-read LLM prose; Google's CLA required. Commits are reviewed individually and never squash-merged, so each commit must stand alone.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: the PR checklist is a personal attestation that the submitter understands every line including LLM-drafted code and has copy-edited any LLM prose, and Google's CLA is signed by a person. An unattended PR would tick boxes nobody stood behind.";
+        };
+      };
+      patches = {
+        "docs/design: record the submodule storage decision and guiding principles" = {
+          upstream = "attempt";
+          reason = "Records a decision jj already made: git-submodule-storage.md reached a proposal in 2023 and says it 'will be recorded in ./git-submodules.md', which never happened, so the main design doc still reads 'under discussion' and a user said so on jj-vcs/jj#494. Also lands the guiding principles from the author's own unmerged PR #1611 and states honestly that none of Phase 1 is implemented.";
+          prExtra = "Records the decision from docs/design/git-submodule-storage.md as its own Objective asks. Guiding-principles content is adapted from jj-vcs/jj#1611 by the original design author. Confusion this resolves: jj-vcs/jj#494 (comment of 2025-12-22).";
+        };
+        "diff: emit Git submodules as gitlinks in git-format diffs" = {
+          upstream = "attempt";
+          reason = "Standalone upstream bug fix: `jj diff --git` gave a gitlink git's TREE mode 040000 and an empty body, so `git apply` rejects the patch with 'corrupt patch for submodule'. The upstream source carried a TODO asking what it should do. Fix verified by applying the emitted patches with `git apply --cached`.";
+        };
+        "cli: name a submodule conflict as one and say what can resolve it" = {
+          upstream = "attempt";
+          reason = "Fixes the 'incorrect suggestion' half of jj-vcs/jj#7806: a conflict whose every term is a gitlink was bucketed as generic and jj pointed at a merge tool that cannot resolve it. Now jj names it and points at `jj restore`, which was verified to actually clear the conflict.";
+          prExtra = "Partially addresses jj-vcs/jj#7806. The other half of that report, the working copy dropping the submodule on the next snapshot, is not fixed here.";
+        };
+        "working_copy: report ignored Git submodules through checkout stats" = {
+          upstream = "attempt";
+          reason = "Three eprintln! calls in jj-lib printed submodule notices straight to stderr, bypassing the Ui, so they ignored --quiet, colour and formatter labels and could only be tested by scraping raw stderr. Reports them as data on CheckoutStats instead, which is the channel jj already uses for skipped files.";
+        };
+        "git: read `.gitmodules` through gix" = {
+          upstream = "hold";
+          reason = "Restores a capability jj deliberately deleted in #5954 as 'redundant with gix's native API and not used by anything', this time built on gix-submodule. Sound on its own but pointless upstream without the series that consumes it, so it goes as part of the Phase 1 proposal rather than alone.";
+        };
+        "submodule_store: give the store a name-keyed CRUD surface" = {
+          upstream = "hold";
+          reason = "Implements jj-vcs/jj#1698 and the storage decision, and picks the on-disk layout the design never specified (hex-encoded names, because a submodule name may contain a slash and the 2023 prototype's slash-to-underscore sanitising is lossy). That layout choice wants maintainer agreement before a PR, per jj's design-doc process.";
+        };
+        "cli: add `jj git submodule clone`" = {
+          upstream = "hold";
+          reason = "Implements jj-vcs/jj#1755. Depends on the store layout above, so it waits on the same design conversation.";
+        };
+        "git submodule: report declared submodules and how the store disagrees" = {
+          upstream = "hold";
+          reason = "Implements jj-vcs/jj#1754. Depends on the store layout above.";
+        };
+        "working_copy: populate Git submodule contents on checkout" = {
+          upstream = "hold";
+          reason = "The Phase 1 headline outcome (jj-vcs/jj#1757), but it changes the public LockedWorkingCopy::check_out signature to take CheckoutOptions, which upstream will want to review on its own terms. Wants the design conversation on jj-vcs/jj#494 first, where a maintainer said in 2025-12 that submodules 'will probably require large design changes' and that the 2023 design's fit with current jj is unclear.";
+        };
+      };
+    }
+    {
       name = "nushell";
       input = "nushell-src";
       upstreamUrl = "https://github.com/nushell/nushell.git";

@@ -14,6 +14,7 @@
   btop-src,
   nushell-src,
   git-src,
+  jj-src,
   drgn-src,
   perftest-src,
   fff-src,
@@ -757,6 +758,7 @@
     btopSrc = btop-src;
     home-managerSrc = home-manager-src;
     gitSrc = git-src;
+    jjSrc = jj-src;
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
