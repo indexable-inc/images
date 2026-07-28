@@ -69,8 +69,9 @@
   #   java.nio.DirectByteBuffer.<init>(long, int) not available".
   # - `java.io.tmpdir` is pinned to the on-disk state dir because Gluten extracts
   #   ~270 MiB of native libraries (libvelox.so et al.) per JVM out of the jar at
-  #   startup; the default `/tmp` is RAM-backed tmpfs here, so leaving it there
-  #   would burn that much RAM per executor on top of the off-heap budget.
+  #   startup; that belongs in this service's own state dir, not in the shared
+  #   /tmp that every other workload on the VM is also writing to and that
+  #   systemd-tmpfiles ages out from under a long-lived executor.
   nativeJavaOpts = lib.concatStringsSep " " [
     "-XX:+IgnoreUnrecognizedVMOptions"
     "--add-opens=java.base/java.nio=ALL-UNNAMED"

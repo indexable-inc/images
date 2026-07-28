@@ -631,24 +631,58 @@ in {
       # astlog-ignore: no-mkforce container-config.nix sets this unconditionally for isContainer; ix#8408
       modprobeConfig.enable = lib.mkForce true;
 
-      # /tmp on tmpfs (RAM-backed). The default on-disk /tmp grows
-      # without bound on long-running VMs, and ix VMs have plenty of RAM
-      # to spare for ephemeral working space (see AGENTS.md "VM
-      # assumptions"). Default tmpfs size is 50% of RAM, allocated lazily
-      # so unused space costs nothing. Workloads that genuinely need
-      # persistent or oversized temp scratch should write to /var/tmp,
-      # which stays on the rootfs and is not affected by this.
+      # /tmp lives on the rootfs, like a normal machine. It used to be a
+      # tmpfs on the theory that an ix VM has RAM to spare and an on-disk
+      # /tmp grows without bound. Both halves of that theory are wrong
+      # here.
+      #
+      # `size=50%` is not half of the VM's memory. The kernel resolves the
+      # percentage exactly once, when the filesystem is mounted, against
+      # `totalram_pages()` (mm/shmem.c, the `*rest == '%'` branch of
+      # `shmem_parse_one`), and stores the answer as a fixed block count.
+      # Memory that shows up afterwards never raises it. An ix guest
+      # mounts /tmp while only the unpluggable virtio-mem base is present
+      # (`VIRTIO_MEM_BOOT_BASE_MIB`, 3 GiB), well before the host's
+      # post-health-check resize, so the cap is taken against a ~3 GiB
+      # total and then frozen for the life of the VM. A restored VM
+      # inherits whatever cap its golden capture happened to mount.
+      #
+      # Measured on two live hil guests (2026-07-29): /tmp mounted
+      # `size=1491832k` -- an absolute 1.42 GiB, not a percentage -- while
+      # the guest reported MemTotal 256 GiB. That is 0.55% of the VM's
+      # RAM, and one of the two guests had that /tmp 100% full. /dev/shm
+      # on the same guests resolved its own 50% against a slightly larger
+      # total (1749884k), so the mount-time freeze is visible twice in one
+      # mount table.
+      #
+      # A build whose scratch exceeds the cap dies ENOSPC on a machine
+      # advertising far more memory (index#4332) -- the exact failure
+      # nixpkgs warns about in the `boot.tmp.useTmpfs` description.
+      # Raising `tmpfsSize` does not fix it: the cap is bounded by the
+      # 3 GiB boot base either way, and spending a larger fraction of that
+      # unpluggable floor only trades the ENOSPC for an OOM kill.
+      #
+      # An on-disk /tmp is not unbounded either. NixOS ships systemd's own
+      # `q /tmp 1777 root root 10d` tmpfiles rule and enables
+      # systemd-tmpfiles-clean.timer, so idle scratch ages out on its own.
+      # What it does cost is disk: temp files now occupy the rootfs and
+      # ride along in snapshots until they are deleted. An image that
+      # genuinely wants RAM-backed scratch sets `boot.tmp.useTmpfs = true`
+      # for itself; mkDefault here restates the nixpkgs default so a
+      # future upstream flip cannot silently reintroduce the cap.
       tmp = {
-        useTmpfs = true;
-        # Do NOT set cleanOnBoot here. It is not a no-op under useTmpfs:
-        # nixpkgs nixos/modules/system/boot/tmp.nix emits
-        # `D! /tmp 1777 root root` for cleanOnBoot unconditionally, so
+        useTmpfs = lib.mkDefault false;
+        # Do NOT set cleanOnBoot here. nixpkgs
+        # nixos/modules/system/boot/tmp.nix turns it into an unconditional
+        # `D! /tmp 1777 root root` tmpfiles rule, so
         # systemd-tmpfiles-setup.service deletes the CONTENTS of /tmp
         # partway through boot. ix guests accept exec/shell before systemd
         # activation settles (ENG-5440), so early workload writes to /tmp
         # were destroyed mid-run: SQLite "disk I/O error" + ENOENT on a
-        # near-empty tmpfs (ix#7905, ix#7908). A fresh tmpfs per boot has
-        # nothing to clean; the rule only ever deletes live data.
+        # near-empty /tmp (ix#7905, ix#7908). Now that /tmp survives a
+        # reboot the same rule would also destroy scratch written by an
+        # earlier boot. The 10d age rule above reclaims the same space
+        # without racing the workload.
       };
     };
 
