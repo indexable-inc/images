@@ -356,10 +356,39 @@ fn run_sync(args: &SyncArgs) -> Result<()> {
     mapping::validate(&all)?;
     let forks = mapping::select(all, args.pkg.as_deref(), "upstream-sync")?;
     let mut plan: Vec<PlanEntry> = Vec::new();
+    // Per-fork isolation. A fork whose series cannot be read is a data
+    // problem in that fork, and aborting the loop there hides every fork
+    // after it: mesa's series carries two commits with the same subject,
+    // which halted the whole run at fork 8 of 13, so nix and the four small
+    // forks were never looked at and the failure read as "the tool is
+    // broken" rather than "mesa needs a retitle". Collect and report them
+    // all, then fail, so one bad fork costs one row and not the run.
+    let mut failures: Vec<(String, String)> = Vec::new();
     for fork in &forks {
-        process_fork(fork, args, &mut plan)?;
+        if let Err(err) = process_fork(fork, args, &mut plan) {
+            println!(
+                "{}",
+                paint(
+                    RED,
+                    &format!("upstream-sync: {}: FAILED: {err:#}", fork.name)
+                )
+            );
+            failures.push((fork.name.clone(), format!("{err:#}")));
+        }
     }
     print_plan(&plan, args);
+    if !failures.is_empty() {
+        return Err(eyre!(
+            "upstream-sync: {} of {} fork(s) failed:\n  - {}",
+            failures.len(),
+            forks.len(),
+            failures
+                .iter()
+                .map(|(name, err)| format!("{name}: {err}"))
+                .collect::<Vec<_>>()
+                .join("\n  - ")
+        ));
+    }
     Ok(())
 }
 
