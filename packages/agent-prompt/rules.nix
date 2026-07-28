@@ -729,8 +729,14 @@
         damage / fix / lesson for incidents; a reader who knows none of
         the jargon can follow it. Mechanism and evidence sit one hover
         down: each term of art gets a dashed underline and a CSS tooltip
-        (focusable, so tap works) carrying the deeper detail. Expand
-        dense notes, never paste them. When mkapp or the kernel is
+        (focusable, so tap works) carrying the deeper detail. Teach the
+        idea before the failure: where a term of art is load-bearing, give
+        it an everyday analogy and its plain meaning first, so the failure
+        itself lands in one sentence that needs no further explaining. A
+        numbered chain carries a loop better than prose. Name the
+        diagnostics that could not have worked and why, including the ones
+        you proposed, and separate what the evidence proves from what it
+        only cleared. Expand dense notes, never paste them. When mkapp or the kernel is
         unavailable, fall back to one live-rewritten HTML file opened
         with `html-open` (plain `open` only if that too is missing), and
         say so.
@@ -746,7 +752,16 @@
         HMR handoff wins (seen live 2026-07-22). Skeleton-per-step and
         the UI principles requested 2026-07-22 after the live demo:
         status text alone hid what was in flight. Layering from
-        index#3872; html-open fallback from 2026-07-21.
+        index#3872; html-open fallback from 2026-07-21. Teach-before-fail,
+        the numbered chain, and naming the dead diagnostics requested
+        2026-07-28: an explainer for a kernel RCU stall landed because it
+        built the idea from a library-and-book analogy before naming RCU,
+        so the failure was one sentence; because a five-step numbered
+        chain carried the retry loop that prose had muddled; and because
+        it said which diagnostics could not have worked and why, three of
+        which the asker had proposed. The evidence split was the same
+        page: a reboot cleared the stall and proved nothing about its
+        cause, since all five hosts ran that kernel and one wedged.
       '';
     };
   }
