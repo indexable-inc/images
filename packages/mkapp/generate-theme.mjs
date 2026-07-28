@@ -2,14 +2,12 @@
 // block for the mkapp template from two ghostty theme files, so the hex values
 // have one source of truth (modules/home/ghostty/themes/) and are never
 // hand-copied. Auto light/dark comes from light-dark() + `color-scheme`, no
-// `.dark` class to toggle. Runs at package build time from default.nix.
+// `.dark` class to toggle. Runs at package build time from default.nix, and is
+// imported by cli.mjs when scaffolding from a checkout, where that build-time
+// output does not exist (index#4288).
 import { readFileSync } from 'node:fs';
-
-const [lightPath, darkPath] = process.argv.slice(2);
-if (!lightPath || !darkPath) {
-  console.error('usage: generate-theme.mjs <light-theme> <dark-theme>');
-  process.exit(1);
-}
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Ghostty themes are `key = value` lines; palette entries are `palette = N=RRGGBB`.
 function parseTheme(path) {
@@ -33,61 +31,78 @@ function parseTheme(path) {
   return colors;
 }
 
-const light = parseTheme(lightPath);
-const dark = parseTheme(darkPath);
+// The whole CSS block for one light/dark theme pair, as a string. Exported so
+// cli.mjs can regenerate it in-process when scaffolding from a checkout,
+// against the same inputs the Nix build uses.
+export function renderTheme(lightPath, darkPath) {
+  const light = parseTheme(lightPath);
+  const dark = parseTheme(darkPath);
 
-// One shadcn variable from the light and dark values of one ghostty key.
-const pair = (pick) => `light-dark(${pick(light)}, ${pick(dark)})`;
-const bg = pair((t) => t.background);
-const fg = pair((t) => t.foreground);
-const selection = pair((t) => t['selection-background']);
-const ansi = (index) => pair((t) => t.palette[index]);
+  // One shadcn variable from the light and dark values of one ghostty key.
+  const pair = (pick) => `light-dark(${pick(light)}, ${pick(dark)})`;
+  const bg = pair((t) => t.background);
+  const fg = pair((t) => t.foreground);
+  const selection = pair((t) => t['selection-background']);
+  const ansi = (index) => pair((t) => t.palette[index]);
 
-const vars = {
-  // Surfaces share the terminal background; borders separate them, exactly
-  // like shadcn's own light theme where card and popover equal background.
-  '--background': bg,
-  '--foreground': fg,
-  '--card': 'var(--background)',
-  '--card-foreground': 'var(--foreground)',
-  '--popover': 'var(--background)',
-  '--popover-foreground': 'var(--foreground)',
-  // ANSI blue is the accent of both palettes; the opposite-mode background
-  // already is the right text color on it in each mode.
-  '--primary': ansi(4),
-  '--primary-foreground': 'var(--background)',
-  // The selection color is the theme's own "highlight a region" answer, which
-  // is what secondary/muted/accent are for in shadcn.
-  '--secondary': selection,
-  '--secondary-foreground': 'var(--foreground)',
-  '--muted': selection,
-  '--muted-foreground': 'color-mix(in oklab, var(--foreground) 65%, var(--background))',
-  '--accent': selection,
-  '--accent-foreground': 'var(--foreground)',
-  '--destructive': ansi(1),
-  '--destructive-foreground': 'var(--background)',
-  '--border': selection,
-  '--input': selection,
-  '--ring': ansi(4),
-  '--chart-1': ansi(4),
-  '--chart-2': ansi(2),
-  '--chart-3': ansi(3),
-  '--chart-4': ansi(1),
-  '--chart-5': ansi(5),
-  '--sidebar': 'var(--background)',
-  '--sidebar-foreground': 'var(--foreground)',
-  '--sidebar-primary': 'var(--primary)',
-  '--sidebar-primary-foreground': 'var(--background)',
-  '--sidebar-accent': selection,
-  '--sidebar-accent-foreground': 'var(--foreground)',
-  '--sidebar-border': selection,
-  '--sidebar-ring': 'var(--ring)',
-};
+  const vars = {
+    // Surfaces share the terminal background; borders separate them, exactly
+    // like shadcn's own light theme where card and popover equal background.
+    '--background': bg,
+    '--foreground': fg,
+    '--card': 'var(--background)',
+    '--card-foreground': 'var(--foreground)',
+    '--popover': 'var(--background)',
+    '--popover-foreground': 'var(--foreground)',
+    // ANSI blue is the accent of both palettes; the opposite-mode background
+    // already is the right text color on it in each mode.
+    '--primary': ansi(4),
+    '--primary-foreground': 'var(--background)',
+    // The selection color is the theme's own "highlight a region" answer, which
+    // is what secondary/muted/accent are for in shadcn.
+    '--secondary': selection,
+    '--secondary-foreground': 'var(--foreground)',
+    '--muted': selection,
+    '--muted-foreground': 'color-mix(in oklab, var(--foreground) 65%, var(--background))',
+    '--accent': selection,
+    '--accent-foreground': 'var(--foreground)',
+    '--destructive': ansi(1),
+    '--destructive-foreground': 'var(--background)',
+    '--border': selection,
+    '--input': selection,
+    '--ring': ansi(4),
+    '--chart-1': ansi(4),
+    '--chart-2': ansi(2),
+    '--chart-3': ansi(3),
+    '--chart-4': ansi(1),
+    '--chart-5': ansi(5),
+    '--sidebar': 'var(--background)',
+    '--sidebar-foreground': 'var(--foreground)',
+    '--sidebar-primary': 'var(--primary)',
+    '--sidebar-primary-foreground': 'var(--background)',
+    '--sidebar-accent': selection,
+    '--sidebar-accent-foreground': 'var(--foreground)',
+    '--sidebar-border': selection,
+    '--sidebar-ring': 'var(--ring)',
+  };
 
-const lines = Object.entries(vars).map(([name, value]) => `  ${name}: ${value};`);
-process.stdout.write(
-  `/* Generated by packages/mkapp/generate-theme.mjs from the ghostty palettes\n` +
+  const lines = Object.entries(vars).map(([name, value]) => `  ${name}: ${value};`);
+  return (
+    `/* Generated by packages/mkapp/generate-theme.mjs from the ghostty palettes\n` +
     `   (modules/home/ghostty/themes/custom-light, custom-dark). Do not edit:\n` +
     `   change the ghostty themes and rebuild mkapp instead. */\n` +
-    `:root {\n  color-scheme: light dark;\n${lines.join('\n')}\n}\n`,
-);
+    `:root {\n  color-scheme: light dark;\n${lines.join('\n')}\n}\n`
+  );
+}
+
+// Run directly (default.nix) it writes to stdout; imported (cli.mjs) only
+// renderTheme is used. `import.meta.main` needs Node 24 and the build invokes
+// this as `node <store path> <light> <dark>`, so compare argv[1] instead.
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const [lightPath, darkPath] = process.argv.slice(2);
+  if (!lightPath || !darkPath) {
+    console.error('usage: generate-theme.mjs <light-theme> <dark-theme>');
+    process.exit(1);
+  }
+  process.stdout.write(renderTheme(lightPath, darkPath));
+}
