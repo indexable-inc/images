@@ -1249,7 +1249,7 @@ fn edits_in_place(args: &[String]) -> bool {
                 .filter(|rest| !rest.starts_with('-'))
                 .is_some_and(|rest| {
                     rest.chars()
-                        .take_while(|c| c.is_ascii_alphanumeric())
+                        .take_while(char::is_ascii_alphanumeric)
                         .any(|c| c == 'i')
                 })
         })
@@ -1396,12 +1396,10 @@ struct Write {
 /// is what the guard needs; one that begins with an expansion (`$OUT/x`) yields
 /// no directory at all and is left alone rather than guessed at.
 fn literal_prefix(tok: &str) -> Option<&str> {
-    match tok.find(['$', '`']) {
-        None => Some(tok),
-        // Without a `/` the expansion is the whole path component, so there is
-        // no directory left to judge.
-        Some(at) => tok[..at].rfind('/').map(|slash| &tok[..=slash]),
-    }
+    // Without a `/` the expansion is the whole path component, so there is no
+    // directory left to judge.
+    tok.find(['$', '`'])
+        .map_or(Some(tok), |at| tok[..at].rfind('/').map(|slash| &tok[..=slash]))
 }
 
 /// Resolve a write target token against the statement's working directory,
@@ -1411,10 +1409,10 @@ fn write_target(cwd: &std::path::Path, tok: &str) -> Option<std::path::PathBuf> 
     if literal.is_empty() {
         return None;
     }
-    let expanded = match literal.strip_prefix("~/") {
-        Some(rest) => crate::home().join(rest),
-        None => std::path::PathBuf::from(literal),
-    };
+    let expanded = literal.strip_prefix("~/").map_or_else(
+        || std::path::PathBuf::from(literal),
+        |rest| crate::home().join(rest),
+    );
     Some(resolve(cwd, &expanded.to_string_lossy()))
 }
 
@@ -1456,19 +1454,16 @@ fn writes_of(stmt: &Statement, cwd: &std::path::Path) -> Vec<Write> {
     };
     let mut operands = operands(name, run.args);
     match kind {
-        Writes::Operands => {}
         Writes::OperandsAfterMode if !operands.is_empty() => {
             operands.remove(0);
         }
-        Writes::OperandsAfterMode => {}
         Writes::LastOperand => {
-            operands = match target_directory(run.args) {
-                Some(dir) => vec![dir.to_owned()],
-                None => operands.split_off(operands.len().saturating_sub(1)),
-            };
+            // `split_off` unconditionally, so the fallback borrow ends before the
+            // assignment; the truncated `operands` is overwritten either way.
+            let last = operands.split_off(operands.len().saturating_sub(1));
+            operands = target_directory(run.args).map_or(last, |dir| vec![dir.to_owned()]);
         }
         Writes::InPlaceOperands if !edits_in_place(run.args) => operands.clear(),
-        Writes::InPlaceOperands => {}
         Writes::Unnamed => {
             out.push(Write {
                 subject: format!("with `{name}` in {}", cwd.display()),
@@ -1476,6 +1471,10 @@ fn writes_of(stmt: &Statement, cwd: &std::path::Path) -> Vec<Write> {
             });
             operands.clear();
         }
+        // `Operands` writes its operands as given, and the two guarded kinds
+        // above land here when their guard does not hold. Last so the guards
+        // are tried first.
+        Writes::Operands | Writes::OperandsAfterMode | Writes::InPlaceOperands => {}
     }
     out.extend(operands.iter().filter_map(|tok| {
         write_target(cwd, tok).map(|path| Write {
@@ -1534,13 +1533,13 @@ fn write_guard_decision(env: &WriteGuardEnv, payload: &Value) -> Option<String> 
     for stmt in expanded_statements(&command_of(payload)) {
         // Track `cd` across the chain: `cd <primary> && echo x > f` must be
         // judged against the cd target, not the payload cwd.
-        if let Some(run) = invocation(&stmt) {
-            if run.head == "cd" {
-                if let Some(target) = run.args.iter().find(|a| !a.starts_with('-')) {
-                    cwd = resolve(&cwd, target);
-                }
-                continue;
+        if let Some(run) = invocation(&stmt)
+            && run.head == "cd"
+        {
+            if let Some(target) = run.args.iter().find(|a| !a.starts_with('-')) {
+                cwd = resolve(&cwd, target);
             }
+            continue;
         }
         for write in writes_of(&stmt, &cwd) {
             if let Some(toplevel) =
@@ -1585,6 +1584,7 @@ fn refusal(subject: &str, toplevel: &str) -> String {
 ///     build tool that writes where its own config says (`make`, `npm`, `nix
 ///     build --out-link`);
 ///   - anything reached over ssh or through a container.
+///
 /// Those stay the parent prompt's job. `git` is excluded on purpose: `git-guard`
 /// already owns it.
 pub fn write_guard() {
