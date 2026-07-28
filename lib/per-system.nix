@@ -1948,6 +1948,13 @@
               hmModule = paths.packagesRoot + "/agent/home-manager/claude-code.nix";
             };
             run-records-session = repoPackages.run.passthru.tests.recordsSession;
+            # Scaffolds an app both ways mkapp is run -- from the store output
+            # and from a checkout -- and asserts each one satisfies every
+            # @import its src/app.css makes, plus that the CLI refuses to emit a
+            # scaffold it cannot complete. Nothing between scaffold and first
+            # paint resolves a CSS import, so without this a missing stylesheet
+            # reaches a browser before it reaches a check (index#4288).
+            mkapp-scaffold = repoPackages.mkapp.passthru.tests.scaffold;
             # hive's quality lane through the same shared ix.buildElixirCheck:
             # `mix compile --warnings-as-errors` (Elixir 1.18's set-theoretic type
             # checker) plus format, `mix credo --strict`, and test. The lint half
