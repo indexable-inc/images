@@ -39,6 +39,11 @@ pub struct Shape {
     pub median_level_width: u32,
     /// Levels no wider than two nodes: the stretches more builders cannot help.
     pub serial_levels: usize,
+    /// Derivations per level, indexed by depth. The whole parallelism curve,
+    /// so a caller can chart it or gate on a shape the summary flattens: ix's
+    /// CI plan spends 124 of its 318 levels carrying 328 derivations and then
+    /// puts 8,408 into three.
+    pub level_widths: Vec<u32>,
     /// Derivations whose outputs are content-addressed, so their paths are not
     /// known before the build and nothing can be attributed to them.
     pub unresolved_outputs: usize,
@@ -112,6 +117,7 @@ impl Report {
                     .copied()
                     .unwrap_or(0),
                 serial_levels: metrics.widths.iter().filter(|&&width| width <= 2).count(),
+                level_widths: metrics.widths.clone(),
                 unresolved_outputs: plan.unresolved_outputs,
             },
             top: entries,
