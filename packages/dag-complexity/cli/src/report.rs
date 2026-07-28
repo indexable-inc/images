@@ -17,13 +17,15 @@ pub fn analysis(subject: &str, analysis: &Analysis, top: usize) -> String {
     ));
 
     let path = &analysis.critical_path;
-    out.push_str(&format!(
-        "  critical path   {} nodes{}\n",
-        path.nodes,
-        path.cost
-            .map(|cost| format!(", {cost:.0} cost"))
-            .unwrap_or_default(),
-    ));
+    out.push_str(&match path.cost {
+        // Two different floors, and they disagree: the heaviest chain by cost
+        // is not always the longest one by steps.
+        Some(cost) => format!(
+            "  critical path   {} nodes and {cost:.0} cost, the heaviest chain; {} nodes on the longest\n",
+            path.nodes, path.longest_chain,
+        ),
+        None => format!("  critical path   {} nodes, the longest chain\n", path.nodes),
+    });
     if let (Some(total), Some(speedup)) = (path.total_cost, path.ideal_speedup) {
         out.push_str(&format!(
             "                  {total:.0} cost in total, so {speedup:.1}x is the ceiling on any amount of parallelism\n",

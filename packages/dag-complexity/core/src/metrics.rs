@@ -54,8 +54,13 @@ pub struct Ranked {
 /// The floor on wall clock: no amount of parallelism beats the longest chain.
 #[derive(Debug, Clone, Serialize)]
 pub struct CriticalPath {
-    /// Length in nodes.
+    /// Length of `path` in nodes.
     pub nodes: usize,
+    /// The longest chain by node count, which is not always the heaviest one by
+    /// cost. Reported separately because it is the floor on *steps*, and a
+    /// scheduler that cannot overlap steps is bound by this rather than by
+    /// cost. Equals the number of levels in the width profile.
+    pub longest_chain: usize,
     /// Length in cost, when every node on the path carries one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<f64>,
@@ -347,6 +352,7 @@ impl Dag {
         };
         CriticalPath {
             nodes: path.len(),
+            longest_chain: levels.depth.iter().copied().max().map_or(0, |max| max + 1),
             cost,
             total_cost,
             ideal_speedup: match (total_cost, cost) {
