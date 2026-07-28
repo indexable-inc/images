@@ -233,7 +233,6 @@
       (import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
         indexPackages = homeAgentIndexPackages;
         promptModule = paths.packagesRoot + "/agent-prompt";
-        mutableJsonModule = ix.mutableJson.homeModule;
       })
       (import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
         indexPackages = homeAgentIndexPackages;
@@ -4557,7 +4556,6 @@
             "NotebookEdit"
             "Glob"
             "Grep"
-            "Monitor"
             "CronCreate"
             "CronDelete"
             "CronList"
@@ -4632,20 +4630,22 @@
         message = "Codex Home Manager module should install the shared hook policy under the configured Codex home";
       }
       {
-        # #3180: the wrapper injects no --settings flag; the Home Manager
-        # module materializes the package's computed render into the writable
-        # user settings.json through the mutable-json 3-way merge. Pin the
-        # target and that the render actually carries the controlled hook
-        # policy, so a refactor can't silently drop settings delivery.
+        # #4312: nothing may write the user settings.json, which Claude Code
+        # rewrites from memory on any /model or /config toggle. Policy rides
+        # the managed layer instead, so pin that the Home Manager module
+        # declares no file under the configured Claude home beyond the PATH
+        # pin, and that the policy render a host hands the managed layer still
+        # carries the controlled hook and deny policy.
         assertion = let
-          entry = homeAgentConfig.home.mutableJsonFiles.claude-code-settings;
+          policy = homeAgentConfig.programs.claude-code.package.passthru.settingsPolicy;
         in
-          entry.target
-          == "/home/agent/.claude/settings.json"
-          && entry.value == homeAgentConfig.programs.claude-code.package.passthru.settings
-          && entry.value ? hooks
-          && entry.value ? statusLine;
-        message = "Claude Code Home Manager module should materialize the wrapper's settings render into the writable user settings.json";
+          !(homeAgentConfig.home.file ? ".claude/settings.json")
+          && policy ? hooks
+          && policy ? statusLine
+          && builtins.elem "Artifact" policy.permissions.deny
+          && !(policy ? theme)
+          && !(policy ? model);
+        message = "Claude Code Home Manager module must leave settings.json app-owned, and the policy render must carry hooks/permissions without the app-owned preference keys";
       }
       {
         assertion =

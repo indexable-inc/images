@@ -1786,10 +1786,6 @@
     inherit pkgs mkCheck;
     inherit (ix) formatProvenance artifacts;
   };
-  libServiceChecks = import ./services/checks.nix {
-    inherit pkgs mkCheck;
-    inherit (ix.mutableJson) mergeProgram;
-  };
   crossDarwinChecks = import ./darwin/cross-checks.nix {
     inherit pkgs mkCheck crossPackages;
   };
@@ -1974,7 +1970,6 @@
           // blastRadiusChecks
           // crossDarwinChecks
           // netTraceChecks
-          // libServiceChecks
           // libUtilChecks
           // personalConfigChecks
           // repoPolicyChecks

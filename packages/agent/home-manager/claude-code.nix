@@ -3,13 +3,6 @@
   # Path to the house prompt module (packages/agent-prompt), injected by the
   # importing flake so this module never climbs the tree with `../`.
   promptModule,
-  # The mutable-json home module (lib/services/mutable-json.nix), injected by
-  # the importing flake; carries the last-applied 3-way merge that
-  # materializes the wrapper's settings render into the writable user
-  # settings.json (#3180). Keyed, so a config importing
-  # `homeModules.mutable-json` alongside this module still declares the
-  # option once.
-  mutableJsonModule,
 }: {
   config,
   lib,
@@ -64,6 +57,7 @@
   #   systemTools.ExitPlanMode = true;  plan-mode exit
   #   systemTools.ExitWorktree = false;  session worktree switching (exit)
   #   systemTools.ListMcpResourcesTool = false;  MCP resource browser; kernel-superseded
+  #   systemTools.Monitor = false;  event-stream watches; kernel-superseded (Jobs.watch)
   #   systemTools.PushNotification = false;  mobile push via Remote Control
   #   systemTools.ReadMcpResourceDirTool = false;  MCP resource browser; kernel-superseded
   #   systemTools.ReadMcpResourceTool = false;  MCP resource browser; kernel-superseded
@@ -446,8 +440,6 @@
     // optionalOverride (cfg.systemPrompt.source == "stock") "systemPrompt" null;
   defaultedPackage = cfg.basePackage.override packageOverrides;
 in {
-  imports = [mutableJsonModule];
-
   options.programs.claude-code = {
     basePackage = lib.mkOption {
       type = lib.types.package;
@@ -462,27 +454,13 @@ in {
       description = ''
         Claude Code settings folded into the wrapper's computed render
         (between the house posture defaults and the controlled keys the
-        package owns). With {option}`programs.claude-code.materializeSettings`
-        the merged render lands in the writable
-        {file}`~/.claude/settings.json`, so these stay user-overridable at
-        runtime and the live config is explainable from disk.
-      '';
-    };
-
-    materializeSettings = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Materialize the wrapper package's computed settings render
-        (`passthru.settings`: house posture defaults, {option}`defaults`,
-        then the controlled hooks/permissions/env keys) into the writable
-        {file}`settings.json` under {option}`programs.claude-code.configDir`.
-        Reconciled on activation with a last-applied 3-way merge
-        (`homeModules.mutable-json`): declared keys are enforced, keys the
-        render stops declaring are pruned, and Claude Code's own runtime
-        writes (`/config` toggles, plugin state) survive. Requires
-        {option}`programs.claude-code.package` to be the index wrapper (or
-        any package exposing `passthru.settings`).
+        package owns). The render surfaces as the package's
+        `passthru.settingsPolicy`, which a host declares through Claude
+        Code's managed layer: on darwin
+        {option}`programs.claude-code.managedSettings` in
+        `darwinModules.claude-managed-settings`, on NixOS
+        `environment.etc."claude-code/managed-settings.json"`. Nothing is
+        written to {file}`~/.claude/settings.json`, which stays app-owned.
       '';
     };
 
@@ -704,12 +682,16 @@ in {
         message = "programs.claude-code.systemPrompt.omitRules is ignored when package is set explicitly; pass omitRules to that package's override instead (index#3537).";
       }
       {
-        # The upstream module renders settings.json as a read-only store
-        # symlink whenever these options are set (settings, marketplaces, or
-        # any disabled MCP server); the materialized file needs a single
-        # declarative owner (see lib/services/mutable-json.nix).
+        # Setting any of these makes the upstream module render settings.json
+        # as a read-only store symlink, which Claude Code's own runtime writes
+        # then fight (#3180): it rewrites the whole file from memory on a
+        # /model or /config toggle, replacing the symlink and stranding the
+        # declaration until the next switch. Nix declares policy through the
+        # managed layer instead (darwinModules.claude-managed-settings, or
+        # environment.etc on NixOS), which outranks every writable scope and
+        # needs no file in the user's directory at all (#4312).
         assertion =
-          !(cfg.enable && cfg.materializeSettings)
+          !cfg.enable
           || (
             cfg.settings
             == {}
@@ -718,7 +700,7 @@ in {
               lib.attrValues cfg.mcpServers
             )
           );
-        message = "programs.claude-code.materializeSettings owns settings.json; move settings/marketplaces/disabled MCP servers into programs.claude-code.defaults (or disable materializeSettings).";
+        message = "programs.claude-code: settings.json is app-owned; declare settings/marketplaces/disabled MCP servers through programs.claude-code.defaults, which renders into the package's passthru.settingsPolicy for the managed layer.";
       }
     ];
 
@@ -738,15 +720,6 @@ in {
     home.file.".local/bin/claude" = lib.mkIf cfg.enable {
       source = "${cfg.finalPackage}/bin/claude";
       force = true;
-    };
-
-    # The wrapper injects no `--settings` flag (#3180): its computed render is
-    # seeded into the writable user settings.json instead, where Claude Code's
-    # own runtime writes survive the merge and every key stays overridable by
-    # a project/local scope or a runtime toggle.
-    home.mutableJsonFiles.claude-code-settings = lib.mkIf (cfg.enable && cfg.materializeSettings) {
-      target = "${cfg.configDir}/settings.json";
-      value = cfg.package.passthru.settings;
     };
   };
 }

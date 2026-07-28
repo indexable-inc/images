@@ -89,7 +89,6 @@
   };
 
   claudeHouseDeniedTools = [
-    "Monitor"
     "CronCreate"
     "CronDelete"
     "CronList"

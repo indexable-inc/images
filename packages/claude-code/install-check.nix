@@ -20,7 +20,7 @@
   repoPackages,
   hookRunner,
   launchSpec,
-  settingsDefaultsFile,
+  settingsPolicyFile,
   wrapperFlags,
   subcommands,
   wrapperEnvDefaults,
@@ -90,7 +90,7 @@
     for tool in "''${disabled_system_tools[@]}"
     do
       if ! ${lib.getExe jq} -e --arg tool "$tool" '.permissions.deny | index($tool)' \
-        ${settingsDefaultsFile} >/dev/null; then
+        ${settingsPolicyFile} >/dev/null; then
         printf 'system tool deny check failed: %s is not denied in settings defaults\n' "$tool" >&2
         exit 1
       fi
@@ -127,16 +127,16 @@
     # overridden builds too.
     if ! ${lib.getExe jq} -e --argjson want ${lib.escapeShellArg (builtins.toJSON featureSettingsEnv)} \
       '.env as $env | $want | to_entries | all($env[.key] == .value)' \
-      ${settingsDefaultsFile} >/dev/null; then
+      ${settingsPolicyFile} >/dev/null; then
       printf 'feature settings env check failed: want %s within .env of %s\n' \
-        ${lib.escapeShellArg (builtins.toJSON featureSettingsEnv)} ${settingsDefaultsFile} >&2
+        ${lib.escapeShellArg (builtins.toJSON featureSettingsEnv)} ${settingsPolicyFile} >&2
       exit 1
     fi
     if ! ${lib.getExe jq} -e --argjson want ${lib.escapeShellArg (builtins.toJSON houseSettingsRender)} \
       '. as $doc | $want | to_entries | all($doc[.key] == .value)' \
-      ${settingsDefaultsFile} >/dev/null; then
+      ${settingsPolicyFile} >/dev/null; then
       printf 'house settings default check failed: want %s within %s\n' \
-        ${lib.escapeShellArg (builtins.toJSON houseSettingsRender)} ${settingsDefaultsFile} >&2
+        ${lib.escapeShellArg (builtins.toJSON houseSettingsRender)} ${settingsPolicyFile} >&2
       exit 1
     fi
 
