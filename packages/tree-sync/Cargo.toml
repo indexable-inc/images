@@ -1,0 +1,27 @@
+[package]
+name = "tree-sync"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Sync a source tree to a remote host or another checkout using git's view of the tree"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+ignore.workspace = true
+shlex.workspace = true
+tar.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lib]
+name = "tree_sync"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tree-sync"
+path = "src/main.rs"

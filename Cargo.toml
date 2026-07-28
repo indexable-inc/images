@@ -117,6 +117,7 @@ members = [
   "packages/mirror",
   "packages/mynoise",
   "packages/net-trace",
+  "packages/tree-sync",
   "packages/ix2nix",
   "packages/ix2nix/wasm",
   "packages/nix-web-monitor/parser",

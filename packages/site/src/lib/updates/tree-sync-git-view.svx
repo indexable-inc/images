@@ -1,0 +1,76 @@
+---
+id: tree-sync-git-view
+postedAt: 2026-07-27T14:20:00-07:00
+title: "tree-sync: pushing a source tree no longer deletes files at the wrong depth"
+tags: [tree-sync, tooling, agent-prompt, rust]
+---
+
+An agent syncing an ix worktree to a dev box ran this, and lost a source file:
+
+```
+rsync -a --delete --exclude '.git' --exclude 'target' --exclude 'result*' ./ dc3:/tmp/eng10623-ix/
+```
+
+`--exclude 'result*'` names the `result` and `result-*` symlinks a Nix build
+leaves at the top of the tree. An rsync pattern with no slash in it matches at
+every path depth, so the same flag also removed
+`crates/codec/src/impls/result.rs` from the destination. rsync said nothing about
+it. The failure surfaced ten minutes later as `error[E0583]: file not found for
+module 'result'` partway through a Rust build, which points at the compiler and
+not at the sync. Two more traps sat in the same command line: `--exclude 'target'`
+eats any nested `target/` directory, and `--exclude '.git'` misses the case where
+`.git` is a file, which is every linked worktree and every submodule.
+
+`nix run .#tree-sync -- <source> <host>:<path>` replaces that command. The
+package is `packages/tree-sync`.
+
+The file set is not a glob at all. It is `git ls-files --cached --others
+--exclude-standard`, so `target/`, `result` and everything else drops out because
+the repo's own `.gitignore` says so. Whether the tree is a git tree is decided by
+asking git, not by looking for a `.git` directory, which is what makes a linked
+worktree and a submodule work; submodule contents are listed by recursing into
+each gitlink. Outside git the tool falls back to a gitignore-aware walk that
+skips `.git` by name whatever type it is.
+
+Extra `--exclude` patterns are anchored at the source root. `result*` is matched
+as `/result*`, so it cannot reach a subdirectory. A pattern that genuinely wants
+every depth says so, either as `**/result*` or through `--exclude-any-depth`.
+Every rule prints the pattern it was actually matched with and how many paths it
+removed, including zero, so both an over-broad rule and a typo are visible in the
+output rather than in a build failure:
+
+```
+tree-sync  /Users/andrewgazelka/Projects/indexable-inc/index -> /tmp/ts-smoke  (dry run)
+  source    git ls-files (tracked + untracked, gitignored excluded)
+            4339 files, 46.5 MiB
+  exclude   "result*" matched as "/result*": 0 paths  (matched nothing)
+  exclude   "target" matched as "/target": 0 paths  (matched nothing)
+  selected  4339 files, 46.5 MiB
+  sent      4339 files, 46.5 MiB (0 already current)
+```
+
+Deletion is opt-in and confined. `--delete` computes the destination's own
+listing minus the source, refuses any path that is absolute or climbs through
+`..`, and runs `rm` after a `cd` into the destination root. It also refuses
+outright when the source selected no files, which is what a mistyped source path
+looks like right before it empties the destination.
+
+The remote needs nothing installed beyond `tar`, `find`, `xargs` and a shell: the
+archive is built in process and streamed into `ssh <host> tar -x`. Which program
+carries the command is `TREE_SYNC_SSH`, defaulting to `ssh`, which is how the
+tests drive the real far-end commands without a network hop.
+
+What this does not do, stated plainly. It sends whole files, not deltas. An
+unchanged file is skipped by size and mtime, the same quick check rsync uses by
+default, so a repeat sync moves only what changed, but a one-line edit to a large
+file still moves the whole file. If that becomes the bottleneck the answer is
+[zsync](https://github.com/andrewgazelka/zsync), which already does FastCDC
+chunking and content-addressed dedup over the same ssh shape; this package is
+deliberately the small, dependency-light half of that idea, aimed at the
+correctness bug rather than at the wire. `--delete` does not prune directories
+that become empty. And the file set honours a global gitignore, which is correct
+and occasionally surprising: a developer whose `~/.gitignore_global` lists
+`result` will not see that symlink in the set at all.
+
+The global agent instructions now say to reach for this instead of rsync when
+syncing a source tree.
