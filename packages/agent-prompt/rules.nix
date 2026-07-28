@@ -670,6 +670,24 @@
     };
   }
   {
+    readableQuantities = {
+      topics = ["writing"];
+      text = ''
+        A number carries its base and unit where it appears: "8s of a 97s
+        eval", not "25%". Never nest proportions; "half of a 25% slice"
+        makes the reader multiply and guess the denominator. Shorthand you
+        coin is defined at first use or not used.
+      '';
+      reason = ''
+        2026-07-27: "a reflink can remove at most half of a 25% slice" cost
+        two rounds of clarification. Three faults in eleven words: a share
+        with no denominator, a ratio of a ratio, and "slice" used as though
+        it were a defined term. "An eighth of the eval, 12s of 97s" says the
+        same thing and needs no reply (index#4301).
+      '';
+    };
+  }
+  {
     generativeUiOutput = {
       topics = ["writing" "comms" "tooling"];
       text = ''
