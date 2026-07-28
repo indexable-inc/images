@@ -187,6 +187,26 @@
     };
   }
   {
+    nixPlanShape = {
+      topics = ["verification" "tooling"];
+      text = ''
+        A Nix build that is slow or rebuilds more than it should: `nix-dag
+        <installable>` scores the plan from evaluation alone, no builder, and
+        prints the critical path, the width per level, and a ranking of what
+        invalidates the rest. Rank on the sole count, not fan-out. A compiler
+        with thousands of dependents is normal; a node those dependents reach
+        only through an environment variable holding a store path is a rebuild
+        nobody asked for.
+      '';
+      reason = ''
+        Store paths injected into every cargo unit's env cost 4,477 rebuilds
+        and ~19.7 CPU-hours per ghostty change (ENG-10647). A session found
+        that by hand over hours; nix-dag ranks it first in two seconds, so the
+        rule only has to say which column to read.
+      '';
+    };
+  }
+  {
     provenanceLookup = {
       topics = ["verification" "tooling"];
       text = ''
