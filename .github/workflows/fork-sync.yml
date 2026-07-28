@@ -247,7 +247,16 @@ jobs:
       # body, so "the contribution lane did nothing again" is visible where
       # somebody actually looks, rather than only in a ::notice:: nobody
       # scrolls to.
+      # Runs even when an earlier step failed. Contributing a patch upstream
+      # has nothing to do with rebasing our fork bookmarks, and coupling
+      # them means one breakage hides the other: on 2026-07-28 the btop
+      # rebase could not push (the mirror App lacks Workflows:write and
+      # upstream btop touched .github/workflows/cmake-netbsd.yml, #4045
+      # again), the job died there, and the contribution lane below never
+      # ran at all. `!cancelled()` rather than `always()` so a cancelled run
+      # still stops.
       - name: Open authorized upstream PRs
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
         run: |
@@ -269,6 +278,7 @@ jobs:
       # safe to run on every scheduled pass. Editing a PR body needs the
       # authoring identity, which is the same token as above.
       - name: Reconcile upstream PR mentions
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
         run: |
@@ -283,10 +293,12 @@ jobs:
           } >> "$RUNNER_TEMP/upstream-lane.md"
 
       - name: Resolve triggering human
+        if: ${{ !cancelled() }}
         id: trigger
         uses: ./.github/actions/triggering-actor
 
       - name: Fork drift report
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGER_MENTION: ${{ steps.trigger.outputs.mention }}
