@@ -75,6 +75,27 @@ scope names the layer being touched, such as `platform:`, `minecraft:`, or
 fixes a tracked GitHub issue, include `Fixes #123`, `Closes #123`, or
 `Resolves #123` in the body. Use `Refs #123` for related or partial work.
 
+The same verb choice is load-bearing for Linear, and getting it wrong strands
+issues. In a PR description, `Fixes ENG-1234` or `Closes ENG-1234` creates a
+closing link: Linear moves the issue to In Progress when the PR opens and to
+Done when it merges. `Refs ENG-1234`, `Part of ENG-1234`, and a bare
+`ENG-1234` mention create a non-closing link: the issue still jumps to In
+Progress when the PR opens, but merging never moves it to Done, so it sits In
+Progress forever. Pick the verb by outcome:
+
+- The PR resolves the issue: write `Fixes ENG-1234` (or `Closes`) in the PR
+  description. One closing verb per resolved issue; a mention in a commit body
+  or a section heading does not count.
+- The PR is partial or related work: write `Refs ENG-1234` and say in the PR
+  body what remains.
+
+Two traps follow from the automation. Opening any linked PR, even a `Refs`
+one, drags an already-Done issue back to In Progress, and if that PR carries
+no closing verb, nothing ever re-closes it; after merging a follow-up that
+references a Done issue, check the issue and re-close it. And the merge
+automation occasionally misses even a proper closing link, so after a `Fixes`
+PR merges, verify the issue actually reached Done.
+
 Every commit must reference the site page that explains it. Include a repo
 path such as `packages/site/src/lib/updates/<slug>.svx` (pages under `plans/`
 and `stories/` count too) anywhere in the message; the long-form description

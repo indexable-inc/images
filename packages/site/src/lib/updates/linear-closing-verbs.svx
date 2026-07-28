@@ -1,0 +1,31 @@
+---
+id: linear-closing-verbs
+postedAt: 2026-07-28T03:30:00-07:00
+title: PR descriptions now distinguish Linear's closing verbs from Refs
+tags: [agent, workflow, linear]
+links:
+  - label: workflow skill
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent/skills/workflow/SKILL.md
+---
+
+An audit of the ENG team's In Progress column found 39 issues stuck there with
+merged PRs attached; roughly two thirds were actually finished. The cause was a
+single word: the PRs referenced their issues as `Refs ENG-1234`, which Linear
+treats as a non-closing link. A non-closing link still fires the "PR opened"
+automation, so the issue jumps to In Progress, but the "PR merged" automation
+never fires for it, so nothing ever moves the issue to Done. The workflow skill
+taught this verb split for GitHub issue numbers and said nothing about Linear
+identifiers, so agents applied the conservative `Refs` everywhere.
+
+Two second-order failure modes surfaced in the same audit. A follow-up PR that
+merely refs an already-Done issue drags it back to In Progress on open, and
+with no closing verb of its own, nothing re-closes it after merge; two issues
+were reopened this way within hours of being correctly auto-closed. And in one
+observed case Linear's merge automation missed a properly formed closes-link
+entirely, leaving the issue In Progress after the fixing PR merged.
+
+The workflow skill now spells out the contract: `Fixes ENG-1234` or
+`Closes ENG-1234` in the PR description when the PR resolves the issue, `Refs
+ENG-1234` only for partial or related work, a state check after merging any PR
+that references a Done issue, and a verification that the issue actually
+reached Done after a closing PR merges.
