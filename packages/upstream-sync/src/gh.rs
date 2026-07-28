@@ -115,6 +115,87 @@ fn tally(entries: &[RollupEntry]) -> Option<Checks> {
     Some(checks)
 }
 
+/// The PR already open FROM OUR OWN fork branch for this patch, if any.
+///
+/// Asked before the duplicate search, because "have we already sent this?"
+/// and "did someone else propose this?" are different questions and the
+/// fuzzy search cannot tell them apart. It could not: on 2026-07-27 a PR
+/// opened minutes earlier by `upstream-pr --open` came back from
+/// [`find_duplicates`] as a competing PR, and the patch was skipped as a
+/// duplicate of itself with `pr: null` left in the status file.
+///
+/// The head branch plus its owning repo is the identity. `upstream-pr`
+/// derives the branch from the patch subject, so it names this patch and no
+/// other. `gh pr list --head` matches on the bare branch NAME and silently
+/// returns nothing for an `owner:branch` argument, so the owner is checked
+/// here instead: without that check, an unrelated contributor pushing a
+/// branch of the same name would be adopted as ours.
+///
+/// # Errors
+/// Fails only when `gh` cannot be spawned.
+pub fn find_ours(slug: &Slug, fork_owner: &str, branch: &str) -> Result<Option<Pr>> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Listed {
+        number: u64,
+        url: String,
+        state: String,
+        is_draft: bool,
+        head_repository_owner: Option<Owner>,
+    }
+
+    #[derive(Deserialize)]
+    struct Owner {
+        login: String,
+    }
+
+    let res = cmd::complete(
+        "gh",
+        &[
+            "pr",
+            "list",
+            "--repo",
+            &format!("{}/{}", slug.owner, slug.repo),
+            "--head",
+            branch,
+            "--state",
+            "all",
+            "--json",
+            "number,url,state,isDraft,headRepositoryOwner",
+        ],
+    )?;
+    if !res.ok() {
+        return Ok(None);
+    }
+    let Ok(hits) = serde_json::from_str::<Vec<Listed>>(&res.stdout) else {
+        return Ok(None);
+    };
+    let mut hits: Vec<Listed> = hits
+        .into_iter()
+        .filter(|h| {
+            h.head_repository_owner
+                .as_ref()
+                .is_some_and(|o| o.login.eq_ignore_ascii_case(fork_owner))
+        })
+        .collect();
+    // Newest first: a re-pushed branch can carry a closed PR and a later
+    // open one, and the live one is the one to track.
+    hits.sort_by_key(|h| std::cmp::Reverse(h.number));
+    Ok(hits.into_iter().next().map(|h| Pr {
+        url: h.url,
+        number: h.number,
+        state: match h.state.as_str() {
+            "MERGED" => "merged".to_owned(),
+            "CLOSED" => "closed".to_owned(),
+            _ if h.is_draft => "draft".to_owned(),
+            _ => "open".to_owned(),
+        },
+        // Filled in by the next refresh; this call does not read the rollup.
+        checks: None,
+        checked_at: utc_stamp(),
+    }))
+}
+
 /// Distinctive lowercase tokens of a patch subject.
 ///
 /// Alphanumerics, min length 4, minus generic contribution/domain filler

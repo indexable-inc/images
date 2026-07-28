@@ -225,14 +225,18 @@
         citation = "https://nix-community.github.io/home-manager/#ch-contributing";
         notes = "PRs welcome. Commit subject `{module}: summary` <= 50 chars, body explains motivation; changes should carry tests. No CLA.";
         autoContribute = {
-          enabled = false;
-          reason = "Out pending review: PRs are welcome and the one attempt patch looks ready, but nobody has checked our commits against the subject-length and test conventions. A one-line flip once someone has.";
+          enabled = true;
+          reason = "In: the conventions were checked against a real submission on 2026-07-27 (nix-community/home-manager#9718). Their treefmt reports our files clean, tests/modules/files passes on the patched tree, and their full CI went green. The one thing a submission must do by hand is rebase onto master first: our base was 45 commits behind and the merge conflicted until it was rebased.";
         };
       };
       patches = {
-        "files: batch symlink creation and target checks in activation" = {
+        # Subject shortened from "files: batch symlink creation and target
+        # checks in activation" (61 chars) to fit home-manager's documented
+        # 50-char limit; the tree was untouched. The intent key follows the
+        # commit subject, so it moved with it.
+        "files: batch link creation and target checks" = {
           upstream = "attempt";
-          reason = "General activation performance fix (per-file fork+exec dominates linkGeneration/checkLinkTargets on darwin, 3.4s -> 0.2s for 365 links); behavior-preserving and upstream-quality.";
+          reason = "General activation performance fix (per-file fork+exec dominates linkGeneration/checkLinkTargets on darwin, 3.4s -> 0.2s for 365 links); behavior-preserving and upstream-quality. Internal context: indexable-inc/index#3689, deliberately not in the commit body because their reviewers cannot open it.";
         };
       };
     }
