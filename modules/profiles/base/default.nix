@@ -61,15 +61,30 @@ in {
         substituters = lib.mkBefore [ix.cache.url];
         trusted-public-keys = lib.mkAfter [ix.cache.publicKey];
 
-        # The guest's writable layer (`/`, incl. `/nix/var/nix/db`) is a virtiofs
-        # FUSE mount with no DAX cache capability, so a memory-mapped file is served
-        # through FUSE writeback rather than a coherent shared window. SQLite's WAL
-        # mode needs exactly that: an mmap'd `*-shm` for cross-connection shared
-        # state plus strict WAL/main fsync ordering on checkpoint. Neither holds on
-        # this layer, so the nix DB's WAL silently corrupts and `nix` degrades to
-        # `database disk image is malformed`. Rollback-journal mode drops the `-shm`
-        # mmap dependency and keeps the DB intact. Mitigation for the VCFS layer bug
-        # tracked in indexable-inc/ix#6259; drop this once that layer honors mmap+fsync.
+        # Rollback-journal mode for `/nix/var/nix/db/db.sqlite`, against nix's
+        # own default of WAL.
+        #
+        # The reason this was added no longer exists. It compensated for a
+        # guest whose writable layer was a virtiofs+FUSE mount with no DAX:
+        # SQLite's WAL needs an mmap'd `*-shm` that is a coherent shared window
+        # plus strict WAL/main fsync ordering on checkpoint, that layer gave
+        # neither, and the DB degraded to `database disk image is malformed`
+        # (indexable-inc/ix#6259). ix#7192 then deleted that layer -- VCFS root
+        # serving is channel-only and VCFS carries no `fuse`/`fuser` dependency
+        # at all -- and ix#6259 was closed NOT_PLANNED on 2026-07-25 because the
+        # thing it described was gone. A guest today boots xfs on a virtio-blk
+        # device, where WAL is safe and faster:
+        #
+        #   $ ix shell <vm> -- sh -lc 'grep " / " /proc/self/mountinfo; grep -c virtiofs /proc/self/mountinfo'
+        #   26 1 254:0 / / rw,noatime - xfs /dev/root rw,...
+        #   0
+        #
+        # It stays for now only because `Rootfs::Virtiofs` is still a live
+        # variant in ix (legacy per-VM `config.json` recovery, and golden-capture
+        # topology), so "no guest root is ever FUSE-backed" is not something the
+        # tree currently proves. Retiring this needs that established, or better,
+        # needs the mode derived from the filesystem the DB actually sits on
+        # rather than assumed fleet-wide here. ENG-10689.
         use-sqlite-wal = false;
       };
     };
