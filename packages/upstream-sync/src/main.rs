@@ -136,21 +136,36 @@ struct SyncArgs {
     pkg: Option<String>,
     /// restrict to one patch (commit subject / prefix / substring)
     patch: Option<String>,
-    /// OPEN real upstream PRs for attempt patches (the outward act; default: refresh + plan only)
-    #[arg(long)]
-    open: bool,
+    #[command(flatten)]
+    act: ActArgs,
     /// plan only: refresh + search but write NO status files (pure validation)
     #[arg(long)]
     dry_run: bool,
     /// warn if a fork has attempt patches but no status file, or a stale lastChecked
     #[arg(long)]
     check_stale: bool,
-    /// unattended mode: act only on forks that opted in via upstreamPolicy.autoContribute
-    #[arg(long)]
-    auto: bool,
     /// fork-package JSON to drive (default: the baked-in list)
     #[arg(long)]
     mapping: Option<PathBuf>,
+}
+
+// The two flags that authorize the outward act, together because they are
+// read together: `--open` is the invocation gate a human passes, `--auto`
+// narrows the same act to repos that opted in. Every decision to open a PR
+// consults both, so they travel as one value rather than two booleans
+// threaded separately.
+//
+// A plain comment, not a doc comment: clap renders a flattened struct's doc
+// comment as a group heading in `--help`, so five lines of rationale would
+// land in front of the user every time they asked for usage.
+#[derive(Args, Clone, Copy)]
+struct ActArgs {
+    /// OPEN real upstream PRs for attempt patches (the outward act; default: refresh + plan only)
+    #[arg(long)]
+    open: bool,
+    /// unattended mode: act only on forks that opted in via upstreamPolicy.autoContribute
+    #[arg(long)]
+    auto: bool,
 }
 
 /// One row of the run's decision summary.
@@ -458,7 +473,7 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     let RepoGate {
         blocked: repo_blocked,
         reason: repo_block_reason,
-    } = repo_gate(fork, &slug, gh_ok, args.auto);
+    } = repo_gate(fork, &slug, gh_ok, args.act.auto);
 
     println!(
         "{}",
@@ -539,7 +554,7 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
         repo_blocked,
         repo_block_reason: &repo_block_reason,
         mapping: args.mapping.as_deref(),
-        open: args.open,
+        open: args.act.open,
     };
     for subject in &selected {
         handle_patch(&ctx, subject, &mut doc, plan)?;
@@ -956,7 +971,7 @@ fn print_plan(plan: &[PlanEntry], args: &SyncArgs) {
         for r in &ready {
             println!("  - {} / {}", r.fork, r.patch);
         }
-        if !args.open {
+        if !args.act.open {
             println!(
                 "{}",
                 paint(

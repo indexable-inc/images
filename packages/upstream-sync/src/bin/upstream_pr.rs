@@ -106,31 +106,7 @@ fn main() -> Result<()> {
         )
     );
 
-    // Reason of record, checked before ANY push in every mode: the commit
-    // body becomes the upstream PR description, so a body-less commit has
-    // nothing to say upstream.
-    let commit_body = repo.body(&target.sha)?;
-    if commit_body.trim().is_empty() {
-        bail!(
-            "upstream-pr: {}: '{subject}' has no commit-message body; write the why in the commit body (it becomes the upstream PR description).",
-            cli.pkg
-        );
-    }
-
-    // A patch that no longer merges into the upstream head is dead on
-    // arrival: the forge reports the conflict before a human reads the
-    // change. Checked in every mode including --dry-run, and BEFORE the
-    // push, so nothing lands on the fork branch either.
-    if let Some(paths) = repo.conflicts_with_upstream(&target.sha)? {
-        bail!(
-            "upstream-pr: {}: '{subject}' no longer merges into {}; a PR would open conflicted.\nConflicting paths:\n  {}\n\nRebase the series onto the upstream tip first (the fork is at {}, upstream at {}), then re-run.",
-            cli.pkg,
-            repo.upstream_branch,
-            paths.replace('\n', "\n  "),
-            &repo.base[..12.min(repo.base.len())],
-            &repo.upstream_tip[..12.min(repo.upstream_tip.len())]
-        );
-    }
+    let commit_body = refuse_unsendable(&cli.pkg, &repo, &target)?;
 
     let closure = report_closure(&cli.pkg, &repo, &target)?;
     let branch = format!("upstream/{}", series::slug(&subject));
@@ -203,6 +179,37 @@ fn main() -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Refuse a patch that must not be sent, and return its commit body.
+///
+/// Both refusals run before ANY push, in every mode including `--dry-run`,
+/// so a patch that cannot be contributed leaves nothing behind on the fork
+/// branch either.
+///
+/// # Errors
+/// Fails when the commit states no reason (its body becomes the upstream PR
+/// description, so a body-less commit has nothing to say), or when the patch
+/// no longer merges into the upstream head (the forge reports the conflict
+/// before a human reads the change).
+fn refuse_unsendable(pkg: &str, repo: &series::Repo, target: &series::Commit) -> Result<String> {
+    let subject = &target.subject;
+    let commit_body = repo.body(&target.sha)?;
+    if commit_body.trim().is_empty() {
+        bail!(
+            "upstream-pr: {pkg}: '{subject}' has no commit-message body; write the why in the commit body (it becomes the upstream PR description)."
+        );
+    }
+    if let Some(paths) = repo.conflicts_with_upstream(&target.sha)? {
+        bail!(
+            "upstream-pr: {pkg}: '{subject}' no longer merges into {}; a PR would open conflicted.\nConflicting paths:\n  {}\n\nRebase the series onto the upstream tip first (the fork is at {}, upstream at {}), then re-run.",
+            repo.upstream_branch,
+            paths.replace('\n', "\n  "),
+            &repo.base[..12.min(repo.base.len())],
+            &repo.upstream_tip[..12.min(repo.upstream_tip.len())]
+        );
+    }
+    Ok(commit_body)
 }
 
 /// The contribution closure (the commit's ancestry back to the base), with
