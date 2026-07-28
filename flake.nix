@@ -193,7 +193,7 @@
       # which is what turned that mount quirk into nine "missing" paths in one
       # build. Neither is safe without the other: the first alone keeps a
       # registered path the mount cannot show.
-      url = "github:indexable-inc/nix/eee1b71d0547b940364d51123828f835d989780c";
+      url = "github:indexable-inc/nix/8db4d38059196456fb94f00f04259053c8afa026";
       flake = false;
     };
 
