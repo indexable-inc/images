@@ -216,15 +216,42 @@
             No hash was found while vendoring the git dependency ${pkg.name}-${pkg.version}.
             Add outputHashes."${pkg.source}".
           '');
+        # A whole-repository fetch, so its result is prose and fixtures as much
+        # as it is code, and any of that may quote a `/nix/store/...` path.
+        # Nix scans a fixed-output result for paths drawn from the fetch's own
+        # closure and refuses to register one that hits, which turns a string
+        # in someone else's README into
+        #
+        #   error: fixed-output derivations must not reference store paths:
+        #   '...-<repo>-<rev>.drv' references 1 distinct paths, e.g.
+        #   '...-bash-5.3p15'
+        #
+        # That fires during evaluation, so it takes down every workflow that
+        # touches the flake rather than just the build that wanted the crate,
+        # and the cure is a commit in a repository we may not own. It also
+        # hides until the fetch is cold: any store or cache already holding the
+        # result skips the build and the scan with it, so it lands on CI and
+        # not on the machine that moved the pin (indexable-inc/ix#8916,
+        # indexable-inc/ix#8923).
+        #
+        # A source tree does not depend on what it quotes. Discarding the
+        # scan's findings does not touch the NAR, so `hash` and the output path
+        # are the ones every existing pin already records and nothing refetches.
+        discardSourceReferences = drv:
+          drv.overrideAttrs (_: {
+            __structuredAttrs = true;
+            unsafeDiscardReferences.out = true;
+          });
+
         tree =
           sourceOverrides.${
             pkg.source
-          } or (pkgs.fetchgit {
+          } or (discardSourceReferences (pkgs.fetchgit {
             inherit (git) url;
             rev = git.sha;
             hash = gitHash;
             nativeBuildInputs = lib.optional (lib.hasPrefix "ssh://" git.url) pkgs.openssh;
-          });
+          }));
       in
         pkgs.runCommand "${pkg.name}-${pkg.version}"
         {
