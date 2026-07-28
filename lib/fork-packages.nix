@@ -657,6 +657,17 @@
           upstream = "hold";
           reason = "`registerOutputs` asserts that only a content-addressed output can find its path already valid, an invariant that holds only where a store's output locks cover every writer of its validity. A local-overlay store answers isValidPath from its lower store, whose writers its locks do not cover, and the manual permits that lower store to grow while mounted -- so a documented configuration aborts the process. Diagnosed from a core dump on vin-compute-1's ephemeral-upper lane (ix#8445) and reproduced deterministically by the new local-overlay functional test. A human submits it with the core-dump evidence and a note on #15868, per this fork's aiPrsAllowed = false.";
         };
+        # The other half of the patch above, and neither works alone. `lowerdir`
+        # may grow while an overlay is mounted, but the kernel does not promise
+        # to show the additions: a lookup that missed before the entry appeared
+        # leaves a negative dentry that nothing revalidates, and the new mount
+        # API refuses to reconfigure an overlay mount, so `remount-hook` is no
+        # escape. Keeping the registered path is the right answer only when the
+        # mount can show it, which is what this gates.
+        "fix(libstore): a local-overlay store must not call a path it cannot read valid" = {
+          upstream = "hold";
+          reason = "A local-overlay store answered isValidPath from its lower store without checking that the merged directory can show the object, then copied that registration up, so every later reader was sent to bytes that are not there (ENG-10582: nine paths in one CI build, reported as store corruption). The fix gates both the copy-up and the lower fallthrough on visibility, which is self-healing -- the caller rebuilds into the upper layer, where it is readable. Verified A/B on one host and kernel: the deployed client calls the path valid, the patched client calls it invalid. Genuinely upstream, but it is the other half of the registerOutputs patch above and a human submits the pair with that framing; hold per NixOS/nix#15984.";
+        };
         # Fork-local test adaptations: they exist because fork patches changed
         # failure propagation / added features, so they are meaningless upstream.
         "tests/functional: update failure expectations for preserved leaf errors" = {
