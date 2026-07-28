@@ -43,6 +43,13 @@ export default ({ index, hyperion }) => {
       "hyperion-game": { modules: [import("./game.nix")] },
       // Interchangeable. Players land on whichever one their address resolves
       // to; both hold their own connections and multiplex onto the one link.
+      //
+      // `deployment.ipv4` is read by the deprecated `ix-fleet`, not by
+      // `ix apply`, which reads `ix.networking.ipv4` off the evaluated system.
+      // So an `ix apply` of this fleet brings the proxies up with no public
+      // address. Moving the declaration into proxy.nix is the fix and needs an
+      // index newer than this directory's flake.lock, which has no such
+      // option yet.
       "hyperion-proxy-0": { modules: [import("./proxy.nix")], deployment: { ipv4: true } },
       "hyperion-proxy-1": { modules: [import("./proxy.nix")], deployment: { ipv4: true } },
     },
