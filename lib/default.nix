@@ -185,11 +185,6 @@
   # consumers as `homeModules.portable-services` from the flake.
   portableServices = import ./services/portable-services.nix {inherit lib deepMerge;};
 
-  # Declarative-but-writable JSON config files (last-applied 3-way merge for
-  # files an app rewrites at runtime). Also a home-manager module, not a NixOS
-  # one, so it stays outside `modules/`. Exposed as `homeModules.mutable-json`.
-  mutableJson = import ./services/mutable-json.nix {inherit lib;};
-
   # Eval-provenance walker (whence, #2413): map an evaluated home-manager /
   # nix-darwin configuration's deployed files back to their defining nix
   # sites via `definitionsWithLocations` + per-key `unsafeGetAttrPos`.
@@ -724,7 +719,6 @@
       mkMinecraftNbtFormat
       wrapPackage
       mkMinecraftSyncManaged
-      mutableJson
       netCidr
       paths
       patchedSrc

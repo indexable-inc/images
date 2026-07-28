@@ -39,7 +39,6 @@
   claudeCodeHomeModule = importApply (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
     inherit indexPackages;
     promptModule = paths.packagesRoot + "/agent-prompt";
-    mutableJsonModule = ix.mutableJson.homeModule;
   };
   codexHomeModule = importApply (paths.packagesRoot + "/agent/home-manager/codex.nix") {
     inherit indexPackages;
@@ -75,6 +74,11 @@ in {
     mutable-files = importApply (paths.modules + "/darwin/mutable-files.nix") {
       inherit indexPackages;
     };
+    # Claude Code's managed-settings policy layer: root-owned, read-only, and
+    # unreachable from any writable scope, so the wrapper's settings render is
+    # enforced rather than merged into a file the app rewrites (#4312). Feed it
+    # `passthru.settingsPolicy`. See modules/darwin/claude-managed-settings.nix.
+    claude-managed-settings = paths.modules + "/darwin/claude-managed-settings.nix";
     # Declarative NFS automounts via macOS autofs: each entry renders a
     # direct-map line, /etc/auto_master gains the include idempotently, and
     # activation reloads automountd. See modules/darwin/nfs.nix.
@@ -111,11 +115,6 @@ in {
     # reset around every prompt/command). Import it and set
     # `zshViCursor.enable = true`. See modules/home/zsh-vi-cursor.nix.
     zsh-vi-cursor = paths.modules + "/home/zsh-vi-cursor.nix";
-    # Declarative-but-writable JSON config files (last-applied 3-way merge),
-    # for config an app rewrites at runtime. See lib/mutable-json.nix.
-    # Prefer `mutable-files` below for new config: it never auto-merges,
-    # covers more formats, and queues drift for explicit resolution.
-    mutable-json = ix.mutableJson.homeModule;
     # Declarative-but-writable files with logical (format-aware) drift
     # tracking and a model-oriented resolution queue -- no auto-merge.
     # Declared content seeds a plain writable file; ephemeral files reset

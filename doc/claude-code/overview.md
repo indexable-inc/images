@@ -102,22 +102,41 @@ positional). Both rules are learned from real breakage; see the long comment at
   rather than appending to it.
 - `--mcp-config=<file>`: the baked MCP server set (below).
 
-### Computed settings render (`passthru.settings`, materialized, not injected)
+### Computed settings render (`passthru.settingsPolicy`, enforced through the managed layer)
 
-The wrapper computes a settings render but injects no `--settings` flag: a CLI
-arg outranks the local/project/user settings files, so an injected file
-silently shadowed the user's own writable settings (#3180). Instead the render
-is exposed as `passthru.settings` (and `passthru.settingsFile`, the same value
-as a store JSON file) and delivered at the USER layer: the Home Manager module
-(`packages/agent/home-manager/claude-code.nix`, `materializeSettings`, default
-on) reconciles it into the writable `~/.claude/settings.json` on activation
-with the mutable-json last-applied 3-way merge, so declared keys are enforced,
-dropped keys are pruned, and Claude Code's runtime writes survive. Bare
-consumers (`nix run`, no Home Manager) get the wrapper flags/env but no
-settings defaults; they can seed from `passthru.settingsFile` or enforce it
-via Claude's managed layer (`/etc/claude-code/managed-settings.json`, see
-`lib/dev/agents.nix`). The render is a deep-merge of caller `extraSettings`
-UNDER the computed defaults so package-owned keys always win:
+The wrapper computes a settings render and delivers it nowhere itself: no
+`--settings` flag, and nothing written under `~/.claude`. A host declares the
+render through Claude Code's **managed** layer, the one scope no writable
+scope can reach:
+
+- darwin: `darwinModules.claude-managed-settings`, which writes
+  `/Library/Application Support/ClaudeCode/managed-settings.json` root-owned
+  and read-only.
+- NixOS: `environment.etc."claude-code/managed-settings.json"`, as
+  `lib/dev/agents.nix` already does for the dev images.
+
+Both read `passthru.settingsPolicy` (or `passthru.settingsPolicyFile`, the same
+value as a store JSON file).
+
+Two earlier designs failed, and the reasons are why this one looks like it
+does. An injected `--settings` flag shadowed the user's own writable settings,
+because a CLI arg outranks the user file (#3180). Merging the render *into*
+`~/.claude/settings.json` then raced the app: Claude Code rewrites that whole
+file from memory whenever a `/model` or `/config` toggle lands, so between two
+switches the file could disagree with the declaration and win, silently. It did:
+four denied tools were live on a workstation for at least two days because the
+file had dropped their deny entries (#4312). The managed layer removes the
+race rather than arbitrating it: managed keys outrank user, project and CLI
+scope, and permission arrays union across scopes, so a managed `deny` can never
+be allowed back.
+
+The consequence for the render: it carries **policy only**. The keys Claude
+Code writes back itself (`theme`, `verbose`, `model`) are deliberately absent,
+because declaring one in the managed layer freezes a toggle the app offers.
+`effortLevel` and `fastMode` are in, as behavioral posture rather than taste.
+
+The render is a deep-merge of caller `extraSettings` UNDER the computed
+defaults so package-owned keys always win:
 
 - `cleanupPeriodDays = 365`: keep transcripts and `--debug` logs ~1yr.
 - `skipDangerousModePermissionPrompt = true` (when

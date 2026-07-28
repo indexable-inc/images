@@ -149,12 +149,11 @@
     '';
   };
 
-  # Personal-only Claude config, folded into the wrapper's settings render
-  # via `extraSettings` (see the claudeCode override below): the index
-  # claude-code Home Manager module materializes the full render into the
-  # writable ~/.claude/settings.json with a last-applied 3-way merge, so
-  # Claude's own runtime edits (/config, plugin toggles) survive and these
-  # keys still land in the app's native default layer (#3180).
+  # Personal-only Claude config, folded into the wrapper's settings render via
+  # `extraSettings` (see the claudeCode override below). The render reaches
+  # Claude through the MANAGED layer, declared by hosts/hydra from
+  # `passthru.settingsPolicy` (#4312): unoverridable, so nothing in it can
+  # drift. ~/.claude/settings.json is app-owned and Nix writes nothing there.
   # House posture lives in the index wrapper itself now: attribution, worktree
   # baseRef, effort/fast/theme runtime-toggle defaults, auto-updates channel,
   # the version-aware statusline, the 1M/cron/autocompact clamps (typed
@@ -231,9 +230,30 @@
     inherit primaryCheckouts;
     # Personal settings keys (memory dir, plugins, marketplaces), merged into
     # the wrapper's computed render between the house defaults and the
-    # controlled keys; the module materializes the result into the writable
-    # ~/.claude/settings.json.
+    # controlled keys; the render is enforced through the managed layer.
     extraSettings = claudeSettings;
+    # Personal opt-ins to tools the house denies. Until #4312 these four were
+    # denied by the render and allowed by the live settings.json, which had
+    # dropped their deny entries; the file won, so they were in force here
+    # anyway. The managed layer removes that escape hatch, so the choice has to
+    # be stated:
+    #   SendMessage - the harness's own tool descriptions prescribe it for
+    #     redirecting a running agent, and without it the only fallback left is
+    #     the duplicate spawn those same descriptions forbid one paragraph
+    #     later (ENG-10401). The Fable 5 ProgramBench case against the peer
+    #     mesh measured multi-agent problem solving, not redirecting one agent.
+    #   ScheduleWakeup - /loop dynamic pacing has no other way to set its own
+    #     next wake-up.
+    #   ReportFindings - the code-review skills render through it.
+    #   Monitor - the kernel's Jobs.watch covers job liveness, not tailing an
+    #     arbitrary log or polling a remote API, which is what this is used for
+    #     here.
+    systemTools = {
+      Monitor = true;
+      ReportFindings = true;
+      ScheduleWakeup = true;
+      SendMessage = true;
+    };
     # Personal opt-outs from the fleet posture: run the model's native 1M
     # window (no DISABLE_1M clamp, no AUTO_COMPACT_WINDOW override) and keep
     # the harness subagent/task tool schemas loaded. Pairs with the
@@ -1190,11 +1210,12 @@ in {
   # catalog), delivered bare to ~/.claude/skills/<name> and invoked as
   # `/<skill>` (no `index:` namespace): the same source Codex gets via
   # programs.codex below. This replaces the old baked `--plugin-dir` plugin.
-  # settings.json is NOT declared through the module's native `settings`
-  # option (it would render as a read-only store symlink): the index module's
-  # materializeSettings default reconciles the wrapper's full render
-  # (house posture + claudeSettings via extraSettings + controlled keys) into
-  # the writable file, because Claude edits it at runtime. .claude.json
+  # settings.json is declared NOWHERE: not through the module's native
+  # `settings` option (a read-only store symlink the app replaces on its first
+  # /model toggle) and no longer through a merge into the writable file either.
+  # Claude rewrites that file from memory at runtime, so every Nix owner of it
+  # raced the app; policy rides the managed layer instead, declared by
+  # hosts/hydra from `passthru.settingsPolicy` (#4312). .claude.json
   # remains app-owned runtime state because Claude stores account and session
   # metadata beside user choices there. CLAUDE.md is generation-owned and
   # module-rendered: the house context render (packages/agent-prompt) plus the

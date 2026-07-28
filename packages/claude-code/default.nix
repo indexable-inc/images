@@ -307,6 +307,11 @@
     };
   wrapperEnvDefaults = disabledFeatureEnv;
 
+  # Whether the index kernel rides along, which decides both the tools the
+  # kernel supersedes (shared policy below) and the `Monitor` default in the
+  # tool table.
+  indexKernelBaked = mcpServers ? index;
+
   # Disabling a tool here puts its BARE name in `permissions.deny`, which
   # strips the tool's schema from the model context entirely; Claude Code has
   # no lazy/deferred-description mode for built-in tools (scoped patterns
@@ -337,6 +342,12 @@
     ExitPlanMode = true;
     ExitWorktree = false;
     ListMcpResourcesTool = false;
+    # Off with the kernel present: a Monitor watch is a supervised job the
+    # kernel already owns (Jobs.watch), and the tool's schema buys nothing
+    # beside it. Lives here rather than in the shared deny policy so a
+    # consumer can flip it back with `systemTools` like any other tool
+    # (#4312); the default tracks the kernel exactly as the policy gate did.
+    Monitor = !indexKernelBaked;
     PushNotification = false;
     ReadMcpResourceDirTool = false;
     ReadMcpResourceTool = false;
@@ -384,7 +395,7 @@
   # House posture defaults every wrapped session starts from: agent-neutral
   # preferences that used to live in per-machine extraSettings. They form the
   # LOWEST-priority layer of the computed settings (under the caller's
-  # extraSettings, which sits under the controlled keys in settingsDefaults),
+  # extraSettings, which sits under the controlled keys in settingsPolicy),
   # so a consumer can override any of them without this package losing its
   # invariants.
   houseEffortLevel = "high";
@@ -396,10 +407,14 @@
     };
     worktree.baseRef = "fresh";
     autoMemoryEnabled = true;
+    # Behavioral posture, not taste: these ride the managed layer with the rest
+    # of the render, so a session cannot quietly drop its own effort. The
+    # preference keys Claude Code writes back itself (`theme`, `verbose`,
+    # `model`) are deliberately absent -- declaring one would either freeze a
+    # toggle the app offers or need a writable file for Nix to fight over
+    # (#4312).
     effortLevel = houseEffortLevel;
     fastMode = true;
-    theme = "auto";
-    verbose = false;
     fileCheckpointingEnabled = false;
     autoUpdatesChannel = "latest";
     skipAutoPermissionPrompt = true;
@@ -456,8 +471,7 @@
   # `index` kernel present the stock shell/file/search tools are denied, and
   # the overlay build (no kernel) keeps them.
   sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
-    inherit lib;
-    indexKernelBaked = mcpServers ? index;
+    inherit lib indexKernelBaked;
     exaSearchBaked = mcpServers ? exa;
     inherit protectedMergeGuard;
   };
@@ -492,7 +506,7 @@
   # caller's extraSettings, then the controlled keys this package always owns.
   # The caller's other keys (hooks aside — enabledPlugins, marketplaces, ...)
   # pass through untouched.
-  settingsDefaults = ix.deepMerge.rhs (ix.deepMerge.rhs houseSettingsDefaults extraSettings) controlledSettings;
+  settingsPolicy = ix.deepMerge.rhs (ix.deepMerge.rhs houseSettingsDefaults extraSettings) controlledSettings;
 
   # What the installCheck expects the settings file to carry from the two
   # lower layers: the merged house+extraSettings render, minus any top-level
@@ -501,9 +515,9 @@
   houseSettingsRender =
     builtins.removeAttrs (ix.deepMerge.rhs houseSettingsDefaults extraSettings)
     (builtins.attrNames controlledSettings);
-  settingsDefaultsFile =
+  settingsPolicyFile =
     (formats.json {}).generate "claude-code-default-settings.json"
-    settingsDefaults;
+    settingsPolicy;
 
   mcpConfigFile = (formats.json {}).generate "claude-code-mcp-config.json" {
     inherit mcpServers;
@@ -789,7 +803,7 @@ in
         repoPackages
         hookRunner
         launchSpec
-        settingsDefaultsFile
+        settingsPolicyFile
         wrapperFlags
         subcommands
         wrapperEnvDefaults
@@ -804,13 +818,19 @@ in
     passthru =
       {
         # The computed settings render (house posture defaults, then the
-        # caller's extraSettings, then the controlled keys), exposed for
-        # consumers to materialize into the writable user layer (#3180): the
-        # Home Manager module seeds ~/.claude/settings.json from this via a
-        # mutable-json merge. `settingsFile` is the same render as a store
-        # JSON file for non-HM consumers and the install checks.
-        settings = settingsDefaults;
-        settingsFile = settingsDefaultsFile;
+        # caller's extraSettings, then the controlled keys), for a host to
+        # declare through Claude Code's MANAGED layer: root-owned,
+        # highest-precedence, and unreachable from any writable scope
+        # (darwinModules.claude-managed-settings on darwin,
+        # environment.etc."claude-code/managed-settings.json" on NixOS).
+        # Nothing writes ~/.claude/settings.json anymore: Claude Code rewrites
+        # that file from memory whenever a /model or /config toggle lands, so
+        # every declarative owner of it was reduced to racing the app (#4312,
+        # replacing the mutable-json merge of #3180). Consequently this render
+        # carries policy only -- no `theme`, `verbose` or `model`.
+        # `settingsPolicyFile` is the same render as a store JSON file for the
+        # install checks and non-module consumers.
+        inherit settingsPolicy settingsPolicyFile;
 
         # The single fetched upstream binary (a fixed-output derivation) and its
         # runnable stock wrapping. Exposed so sibling packages that customize or
