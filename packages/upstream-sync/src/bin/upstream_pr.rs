@@ -26,8 +26,9 @@
 //! The PR's title and body come FROM THE COMMIT ITSELF: subject = title,
 //! message body = PR body, plus an optional `patches.<subject>.prExtra`
 //! from the mapping (upstream-specific PR-template content: issue refs,
-//! checklists), AI attribution, and a patch-of-record link to the commit in
-//! the fork repo.
+//! checklists), AI attribution, a patch-of-record link to the commit in the
+//! fork repo, and a `/cc` of the fork's maintainers so review comments reach
+//! someone who can act on them (see `upstream_sync::notify`).
 //!
 //! `--dry-run` resolves the patch and runs the reason-of-record check but
 //! pushes nothing and opens nothing, printing what it WOULD push.
@@ -39,7 +40,7 @@ use clap::Parser;
 use color_eyre::eyre::{Result, bail};
 use upstream_sync::mapping::{self, Fork, Slug};
 use upstream_sync::style::{CYAN, GREEN, YELLOW, paint};
-use upstream_sync::{cmd, series};
+use upstream_sync::{cmd, notify, series};
 
 #[derive(Parser)]
 #[command(name = "upstream-pr")]
@@ -57,6 +58,9 @@ struct Cli {
     /// fork-package JSON to drive (default: the baked-in list)
     #[arg(long)]
     mapping: Option<PathBuf>,
+    /// org roster JSON driving the @-mention block (default: the baked-in one)
+    #[arg(long)]
+    members: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -163,7 +167,18 @@ fn main() -> Result<()> {
     println!("  {compare}");
 
     if cli.open {
-        open_draft_pr(&fork, &repo, &slug, &branch, &target, &commit_body)?;
+        // Rendered before the PR exists so a missing or malformed roster
+        // fails here, rather than leaving a PR open with nobody subscribed.
+        let block = notify::Roster::load(&notify::path(cli.members.as_deref())?)?.block();
+        open_draft_pr(
+            &fork,
+            &repo,
+            &slug,
+            &branch,
+            &target,
+            &commit_body,
+            block.as_deref(),
+        )?;
     } else {
         println!(
             "upstream-pr: prepare-only. Re-run with `--open` to open a DRAFT PR upstream, or open the compare URL by hand."
@@ -181,10 +196,12 @@ fn report_closure(
     target: &series::Commit,
 ) -> Result<Vec<series::Commit>> {
     let closure = repo.closure(&target.sha)?;
-    let ancestors: Vec<&series::Commit> =
-        closure.iter().filter(|c| c.sha != target.sha).collect();
+    let ancestors: Vec<&series::Commit> = closure.iter().filter(|c| c.sha != target.sha).collect();
     if ancestors.is_empty() {
-        println!("upstream-pr: {pkg}: '{}' is independent; contributing it alone.", target.subject);
+        println!(
+            "upstream-pr: {pkg}: '{}' is independent; contributing it alone.",
+            target.subject
+        );
     } else {
         println!(
             "{}",
@@ -220,6 +237,7 @@ fn open_draft_pr(
     branch: &str,
     target: &series::Commit,
     commit_body: &str,
+    notify_block: Option<&str>,
 ) -> Result<()> {
     // Optional upstream-specific PR-template content (issue refs,
     // checklists) that does not belong in a commit message, declared as
@@ -244,6 +262,10 @@ fn open_draft_pr(
     let mut parts = vec![commit_body.trim().to_owned()];
     parts.extend(pr_extra);
     parts.push(attribution);
+    // Last, so the mention sits at the end of the description where a /cc
+    // conventionally goes, and so re-rendering it later (upstream-sync
+    // notify) never disturbs the prose above it.
+    parts.extend(notify_block.map(ToOwned::to_owned));
     let body = parts.join("\n\n");
 
     println!(

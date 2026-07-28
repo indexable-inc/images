@@ -43,7 +43,8 @@ in
       # shell
       wrapProgram $out/bin/upstream-sync \
         --prefix PATH : ${lib.makeBinPath [git gh coreutils upstream-pr]} \
-        --set-default UPSTREAM_SYNC_FORK_PACKAGES ${forkData}
+        --set-default UPSTREAM_SYNC_FORK_PACKAGES ${forkData} \
+        --set-default UPSTREAM_SYNC_ORG_MEMBERS ${ix.orgMembersFile}
     '';
     inherit (bin) meta;
     passthru = builtins.removeAttrs bin.passthru ["unchecked"];

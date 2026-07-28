@@ -231,6 +231,43 @@ jobs:
       # Notify the human behind a manual dispatch: review request + assignee
       # + body mention, all empty (a no-op) on the scheduled runs, which
       # have no triggering human.
+      # Open the PRs the registry authorizes, for the repos that opted in.
+      # `--auto` adds a third gate to the two upstream-sync already applied:
+      # prsWelcome and aiPrsAllowed say whether a PR is acceptable at all,
+      # autoContribute says whether it is acceptable with nobody watching.
+      # Every repo except nushell is currently out, each with its reason in
+      # lib/fork-packages.nix.
+      #
+      # UPSTREAM_PR_TOKEN, not GITHUB_TOKEN: these PRs live on repos we do
+      # not own, so the token has to be a user token that can push our fork
+      # branch and open a PR upstream. Absent, the step skips loudly rather
+      # than half-running.
+      - name: Open authorized upstream PRs
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::UPSTREAM_PR_TOKEN is not configured; skipping upstream PR opening. See packages/upstream-sync."
+            exit 0
+          fi
+          nix run .#upstream-sync -- --auto --open --check-stale
+
+      # Keep the team @-mention current on every PR we track. Change-gated on
+      # the rendered block, so an unchanged PR costs one read and no write:
+      # safe to run on every scheduled pass. Editing a PR body needs the
+      # authoring identity, which is the same token as above.
+      - name: Reconcile upstream PR mentions
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::UPSTREAM_PR_TOKEN is not configured; skipping mention reconciliation."
+            exit 0
+          fi
+          nix run .#upstream-sync -- notify --apply
+
       - name: Resolve triggering human
         id: trigger
         uses: ./.github/actions/triggering-actor

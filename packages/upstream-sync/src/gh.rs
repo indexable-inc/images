@@ -7,8 +7,24 @@ use serde::Deserialize;
 
 use crate::cmd;
 use crate::mapping::Slug;
-use crate::status::{Duplicate, Pr, utc_stamp};
+use crate::status::{Checks, Duplicate, Pr, utc_stamp};
 use crate::style::{YELLOW, paint};
+
+/// One entry of a PR's check rollup.
+///
+/// The rollup mixes two node types: Actions check runs carry `status` plus
+/// `conclusion`, older commit statuses carry `state`. Every field is
+/// optional so either kind deserializes into this one shape.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RollupEntry {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+}
 
 /// Refresh a tracked PR's live state, or `None` if the PR can no longer be
 /// read (deleted/renamed).
@@ -26,6 +42,8 @@ pub fn refresh_pr(slug: &Slug, number: u64) -> Result<Option<Pr>> {
         is_draft: bool,
         url: String,
         number: u64,
+        #[serde(default)]
+        status_check_rollup: Vec<RollupEntry>,
     }
 
     let res = cmd::complete(
@@ -37,7 +55,7 @@ pub fn refresh_pr(slug: &Slug, number: u64) -> Result<Option<Pr>> {
             "--repo",
             &format!("{}/{}", slug.owner, slug.repo),
             "--json",
-            "state,isDraft,url,number",
+            "state,isDraft,url,number,statusCheckRollup",
         ],
     )?;
     if !res.ok() {
@@ -56,8 +74,45 @@ pub fn refresh_pr(slug: &Slug, number: u64) -> Result<Option<Pr>> {
         url: view.url,
         number: view.number,
         state: state.to_owned(),
+        checks: tally(&view.status_check_rollup),
         checked_at: utc_stamp(),
     }))
+}
+
+/// Fold a check rollup into counts, or `None` when the PR has no checks.
+///
+/// A check run that is queued or running counts as pending; a commit status
+/// with no verdict yet reads the same way. NEUTRAL, SKIPPED and CANCELLED
+/// count as neither pass nor fail: a cancelled job says nothing about the
+/// change, and counting it red would make every superseded run look like a
+/// regression.
+fn tally(entries: &[RollupEntry]) -> Option<Checks> {
+    if entries.is_empty() {
+        return None;
+    }
+    let mut checks = Checks {
+        passing: 0,
+        failing: 0,
+        pending: 0,
+    };
+    for entry in entries {
+        let running = matches!(entry.status.as_deref(), Some("QUEUED" | "IN_PROGRESS"));
+        let verdict = entry
+            .conclusion
+            .as_deref()
+            .or(entry.state.as_deref())
+            .unwrap_or("");
+        match verdict {
+            _ if running => checks.pending += 1,
+            "SUCCESS" => checks.passing += 1,
+            "FAILURE" | "ERROR" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => {
+                checks.failing += 1;
+            }
+            "PENDING" | "EXPECTED" | "" => checks.pending += 1,
+            _ => {}
+        }
+    }
+    Some(checks)
 }
 
 /// Distinctive lowercase tokens of a patch subject.
@@ -169,5 +224,39 @@ mod tests {
     #[test]
     fn tokenless_subject_yields_empty() {
         assert!(subject_tokens("fix the a of").is_empty());
+    }
+
+    fn entry(status: Option<&str>, conclusion: Option<&str>, state: Option<&str>) -> RollupEntry {
+        RollupEntry {
+            status: status.map(ToOwned::to_owned),
+            conclusion: conclusion.map(ToOwned::to_owned),
+            state: state.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn no_checks_is_distinct_from_all_green() {
+        assert!(tally(&[]).is_none());
+        let green = tally(&[entry(Some("COMPLETED"), Some("SUCCESS"), None)]).unwrap();
+        assert_eq!((green.passing, green.failing), (1, 0));
+        assert!(!green.red());
+    }
+
+    #[test]
+    fn cancelled_is_not_red_but_failure_is() {
+        // The real shape of nushell#18549: two failures, several cancelled
+        // runs superseded by them, and some passes.
+        let t = tally(&[
+            entry(Some("COMPLETED"), Some("FAILURE"), None),
+            entry(Some("COMPLETED"), Some("FAILURE"), None),
+            entry(Some("COMPLETED"), Some("SUCCESS"), None),
+            entry(Some("COMPLETED"), Some("CANCELLED"), None),
+            entry(Some("IN_PROGRESS"), None, None),
+            entry(None, None, Some("PENDING")),
+        ])
+        .unwrap();
+        assert_eq!((t.passing, t.failing, t.pending), (1, 2, 2));
+        assert!(t.red());
+        assert_eq!(t.summary(), "1 passing, 2 failing, 2 pending");
     }
 }

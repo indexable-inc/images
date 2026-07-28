@@ -131,6 +131,12 @@
   # index's own forks migrated to jj megamerge fork repos (no in-repo series),
   # but ix still keeps patch-dir forks and consumes this via `mkForkChecks`.
   forkDagCheckSrc = paths.root + "/lib/util/fork-dag-check";
+  # The generated GitHub-org roster driving the @-mention block on upstream
+  # PRs. Live org membership cannot be read at eval time, so it is generated
+  # (`nix run .#upstream-sync -- members --write`) and committed like a lock
+  # file; both upstreaming wrappers bake this path in. Exposed here rather
+  # than reached for with `../` from packages/upstream-pr.
+  orgMembersFile = paths.root + "/packages/upstream-sync/org-members.json";
   secretRefs = import ./util/secret-refs.nix {inherit lib;};
   selfVersionFor = self: import ./util/self-version.nix {inherit lib self;};
   checks = import ./checks.nix {inherit lib;};
@@ -698,6 +704,7 @@
       evaluatorGate
       forkPackages
       forkDagCheckSrc
+      orgMembersFile
       formatProvenance
       gitDefaults
       goUnit

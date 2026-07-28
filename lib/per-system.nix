@@ -235,6 +235,9 @@
           # Live upstreaming state written by upstream-sync (PR urls, states,
           # retirement); generated, never hand-written. See that package.
           '^packages/upstream-sync/status/.*\.json$'
+          # Generated GitHub-org roster read by `upstream-sync members`;
+          # live membership cannot be evaluated, so it is committed.
+          '^packages/upstream-sync/org-members\.json$'
           '^tests/.*\.json$'
         ]
         let candidates = (
@@ -1448,6 +1451,18 @@
       name = "clippy";
       src = ix.clippySrc;
     };
+
+    # The registry's upstreaming intent is prose in nix, and nothing else in
+    # the build would notice it going wrong. Every gate in upstream-sync asks
+    # `== "attempt"`, so a stance typed `atempt` reads as "do not send" and
+    # silently retires a patch from contribution while its entry still says
+    # otherwise; an `autoContribute` with no reason leaves a gate nobody can
+    # tell from a fossil. `upstream-sync validate` owns both rules, and this
+    # check is only the CI seam that runs it, so there is one implementation
+    # rather than a nix copy that drifts from the tool's.
+    upstream-intent = pkgs.runCommand "upstream-intent" {} ''
+      ${lib.getExe repoPackages.upstream-sync} validate > $out
+    '';
   };
 
   # One general updater for every content source in the repo, run in parallel

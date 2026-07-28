@@ -57,7 +57,7 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use lazy_regex::regex;
 use upstream_sync::mapping::{self, Fork, Slug};
 use upstream_sync::style::{CYAN, GREEN, RED, YELLOW, paint};
-use upstream_sync::{cmd, drift, gh, series, status};
+use upstream_sync::{cmd, drift, gh, notify, series, status};
 
 #[derive(Parser)]
 #[command(name = "upstream-sync")]
@@ -72,6 +72,47 @@ struct Cli {
 enum Command {
     /// Read-only drift report: pinned base vs upstream default branch
     Drift(DriftArgs),
+    /// Regenerate the committed org roster that drives PR @-mentions
+    Members(MembersArgs),
+    /// Bring every tracked PR's @-mention block in line with the roster
+    Notify(NotifyArgs),
+    /// Check lib/fork-packages.nix for unknown stances and unexplained gates
+    Validate(ValidateArgs),
+}
+
+#[derive(Args)]
+struct MembersArgs {
+    /// GitHub org to read
+    #[arg(long, default_value = "indexable-inc")]
+    org: String,
+    /// write the roster file; default is to print what would change
+    #[arg(long)]
+    write: bool,
+    /// roster path to write (default: the baked-in one)
+    #[arg(long)]
+    members: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct NotifyArgs {
+    /// one fork package (nix | btop | ...); all if omitted
+    pkg: Option<String>,
+    /// EDIT the PR bodies; default is to report what would change
+    #[arg(long)]
+    apply: bool,
+    /// fork-package JSON to drive (default: the baked-in list)
+    #[arg(long)]
+    mapping: Option<PathBuf>,
+    /// roster JSON to drive (default: the baked-in one)
+    #[arg(long)]
+    members: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct ValidateArgs {
+    /// fork-package JSON to check (default: the baked-in list)
+    #[arg(long)]
+    mapping: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -104,6 +145,9 @@ struct SyncArgs {
     /// warn if a fork has attempt patches but no status file, or a stale lastChecked
     #[arg(long)]
     check_stale: bool,
+    /// unattended mode: act only on forks that opted in via upstreamPolicy.autoContribute
+    #[arg(long)]
+    auto: bool,
     /// fork-package JSON to drive (default: the baked-in list)
     #[arg(long)]
     mapping: Option<PathBuf>,
@@ -137,17 +181,180 @@ fn main() -> Result<()> {
             args.json,
             args.markdown,
         ),
+        Some(Command::Members(args)) => run_members(&args),
+        Some(Command::Notify(args)) => run_notify(&args),
+        Some(Command::Validate(args)) => run_validate(&args),
         None => run_sync(&cli.sync),
     }
 }
 
+/// Regenerate the committed roster. Writing is change-gated on the rendered
+/// bytes so a re-run with no membership change leaves the file, and the
+/// commit history, untouched.
+fn run_members(args: &MembersArgs) -> Result<()> {
+    let path = notify::path(args.members.as_deref())?;
+    let previous = notify::Roster::load(&path).ok();
+    // Carry the old stamp forward when nothing else moved, so an unchanged
+    // roster produces byte-identical output instead of a timestamp-only diff.
+    let stamp = previous
+        .as_ref()
+        .map_or_else(status::utc_stamp, |p| p.generated_at.clone());
+    let mut fresh = notify::Roster::fetch(&args.org, stamp)?;
+
+    let changed = previous
+        .as_ref()
+        .is_none_or(|p| p.members.len() != fresh.members.len() || p.humans() != fresh.humans());
+    if changed {
+        fresh.generated_at = status::utc_stamp();
+    }
+
+    let humans = fresh.humans();
+    println!(
+        "upstream-sync: members: {} in {}, {} human: {}",
+        fresh.members.len(),
+        fresh.org,
+        humans.len(),
+        humans.join(", ")
+    );
+    if !changed {
+        println!(
+            "{}",
+            paint(
+                GREEN,
+                "upstream-sync: members: roster unchanged; nothing written."
+            )
+        );
+        return Ok(());
+    }
+    if !args.write {
+        println!(
+            "{}",
+            paint(
+                YELLOW,
+                "upstream-sync: members: roster CHANGED; re-run with --write to commit it."
+            )
+        );
+        return Ok(());
+    }
+    std::fs::write(&path, fresh.to_bytes()?)
+        .wrap_err_with(|| format!("cannot write {}", path.display()))?;
+    println!(
+        "{}",
+        paint(
+            GREEN,
+            &format!("upstream-sync: members: wrote {}", path.display())
+        )
+    );
+    Ok(())
+}
+
+/// Reconcile the mention block on every PR this repo tracks.
+///
+/// Reads the committed status files rather than the forks' series: a PR we
+/// opened is tracked there whatever the patch's stance has since become, so
+/// a patch marked `rejected` still gets its block kept current while the
+/// conversation on it continues.
+fn run_notify(args: &NotifyArgs) -> Result<()> {
+    let roster = notify::Roster::load(&notify::path(args.members.as_deref())?)?;
+    let Some(block) = roster.block() else {
+        println!(
+            "{}",
+            paint(
+                YELLOW,
+                "upstream-sync: notify: roster has no human members; nothing to mention."
+            )
+        );
+        return Ok(());
+    };
+    let forks = mapping::select(
+        mapping::load(&mapping::path(args.mapping.as_deref())?)?,
+        args.pkg.as_deref(),
+        "upstream-sync notify",
+    )?;
+
+    let mut seen = 0_u32;
+    let mut wrote = 0_u32;
+    for fork in &forks {
+        if !mapping::is_github(&fork.upstream_url) {
+            continue;
+        }
+        let path = status::path(fork);
+        if !path.exists() {
+            continue;
+        }
+        let slug = Slug::parse(&fork.upstream_url)?;
+        let mut doc = status::Doc::load(&path)?;
+        let tracked: Vec<(String, u64)> = doc
+            .patches
+            .iter()
+            .filter_map(|(subject, e)| e.pr.as_ref().map(|pr| (subject.clone(), pr.number)))
+            .collect();
+        let mut touched = false;
+        for (subject, number) in tracked {
+            seen += 1;
+            let outcome = notify::reconcile(&slug, number, &block, args.apply)?;
+            let line = format!(
+                "upstream-sync: notify: {}#{number} ({subject}): {}",
+                fork.name,
+                outcome.word()
+            );
+            if outcome == notify::Outcome::Unchanged {
+                println!("{line}");
+                continue;
+            }
+            if !args.apply {
+                println!(
+                    "{}",
+                    paint(YELLOW, &format!("{line} (would; pass --apply)"))
+                );
+                continue;
+            }
+            println!("{}", paint(GREEN, &line));
+            doc.append_log(&format!(
+                "{subject}: notify block {} on PR #{number}",
+                outcome.word()
+            ));
+            touched = true;
+            wrote += 1;
+        }
+        if touched {
+            doc.save(&fork.name, &path, false)?;
+        }
+    }
+    println!(
+        "{}",
+        paint(
+            CYAN,
+            &format!("upstream-sync: notify: {seen} tracked PR(s), {wrote} edited.")
+        )
+    );
+    Ok(())
+}
+
+/// Check the registry and say so, so the gate has a command a check can run.
+fn run_validate(args: &ValidateArgs) -> Result<()> {
+    let forks = mapping::load(&mapping::path(args.mapping.as_deref())?)?;
+    mapping::validate(&forks)?;
+    println!(
+        "{}",
+        paint(
+            GREEN,
+            &format!(
+                "upstream-sync: validate: {} fork(s) OK: every stance known, every autoContribute explained.",
+                forks.len()
+            )
+        )
+    );
+    Ok(())
+}
+
 fn run_sync(args: &SyncArgs) -> Result<()> {
     let mapping_path = mapping::path(args.mapping.as_deref())?;
-    let forks = mapping::select(
-        mapping::load(&mapping_path)?,
-        args.pkg.as_deref(),
-        "upstream-sync",
-    )?;
+    let all = mapping::load(&mapping_path)?;
+    // A bad registry changes what gets contributed silently, so it fails the
+    // run before any forge call rather than after some of them.
+    mapping::validate(&all)?;
+    let forks = mapping::select(all, args.pkg.as_deref(), "upstream-sync")?;
     let mut plan: Vec<PlanEntry> = Vec::new();
     for fork in &forks {
         process_fork(fork, args, &mut plan)?;
@@ -164,9 +371,15 @@ struct RepoGate {
     reason: String,
 }
 
-fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool) -> RepoGate {
+fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool, auto: bool) -> RepoGate {
     let policy = fork.policy();
-    let blocked = !policy.prs_welcome || policy.ai_prs_allowed == "false" || !gh_ok;
+    // Unattended mode adds one gate to the two that already existed. The
+    // others ask whether a PR is acceptable at all; this one asks whether it
+    // is acceptable with nobody watching, which a repo can answer
+    // differently: ghostty welcomes AI-assisted PRs and still auto-closes an
+    // unvouched contributor's.
+    let auto_blocked = auto && !policy.auto_contribute.enabled;
+    let blocked = !policy.prs_welcome || policy.ai_prs_allowed == "false" || !gh_ok || auto_blocked;
     let reason = if !gh_ok {
         format!(
             "upstream is not GitHub ({}/{}); gh path N/A",
@@ -176,6 +389,11 @@ fn repo_gate(fork: &Fork, slug: &Slug, gh_ok: bool) -> RepoGate {
         "policy: prsWelcome = false".to_owned()
     } else if policy.ai_prs_allowed == "false" {
         format!("policy: aiPrsAllowed = false; see {}", policy.citation)
+    } else if auto_blocked {
+        format!(
+            "policy: autoContribute.enabled = false. {}",
+            policy.auto_contribute.reason
+        )
     } else {
         String::new()
     };
@@ -211,7 +429,7 @@ fn process_fork(fork: &Fork, args: &SyncArgs, plan: &mut Vec<PlanEntry>) -> Resu
     let RepoGate {
         blocked: repo_blocked,
         reason: repo_block_reason,
-    } = repo_gate(fork, &slug, gh_ok);
+    } = repo_gate(fork, &slug, gh_ok, args.auto);
 
     println!(
         "{}",
@@ -327,10 +545,18 @@ fn handle_patch(
 
     if stance != "attempt" {
         // Not authorized for the outward act; record intent, no action.
+        // `rejected` gets its own row because it is the one stance that
+        // records an answer already received, and a reader scanning the plan
+        // should be able to see how many patches upstream has turned down
+        // without reading every reason.
         plan.push(PlanEntry {
             fork: ctx.fork.name.clone(),
             patch: subject.to_owned(),
-            action: "skip".to_owned(),
+            action: if stance == "rejected" {
+                "rejected".to_owned()
+            } else {
+                "skip".to_owned()
+            },
             detail: ctx.fork.reason(subject),
         });
         return Ok(());
@@ -434,8 +660,51 @@ fn refresh_tracked(
         doc.append_log(&format!("{subject}: merged upstream in PR #{}; marked retired. Verify the next rebase drops it as an empty commit.", fresh.number));
     }
 
+    // Closed without merging is upstream's answer, and leaving the stance at
+    // `attempt` records the opposite of what happened. Nothing reopens the
+    // PR (a tracked PR is never re-created), so this is a report, not a
+    // block: mark it `rejected` and the plan stops claiming we are still
+    // trying.
+    if fresh.state == "closed" && ctx.fork.stance(subject) == "attempt" {
+        println!(
+            "{}",
+            paint(
+                RED,
+                &format!(
+                    "upstream-sync: {}: PR #{} for '{subject}' was CLOSED unmerged. Set upstream = \"rejected\" with the reason in lib/fork-packages.nix so the registry stops claiming we are still attempting it.",
+                    ctx.fork.name, fresh.number
+                )
+            )
+        );
+    }
+
+    // A PR we opened and left red is the failure mode this tool could not
+    // see before: nushell#18549 sat with two failing checks and no reply for
+    // weeks. Say it every run, in the colour that means act.
+    if let Some(checks) = fresh
+        .checks
+        .as_ref()
+        .filter(|c| c.red() && fresh.state != "merged")
+    {
+        println!(
+            "{}",
+            paint(
+                RED,
+                &format!(
+                    "upstream-sync: {}: PR #{} for '{subject}' is RED upstream ({}). {}",
+                    ctx.fork.name,
+                    fresh.number,
+                    checks.summary(),
+                    fresh.url
+                )
+            )
+        );
+    }
+
     let action = if fresh.state == "merged" {
         "retired".to_owned()
+    } else if fresh.checks.as_ref().is_some_and(status::Checks::red) {
+        format!("tracked:{}:RED", fresh.state)
     } else {
         format!("tracked:{}", fresh.state)
     };
@@ -514,6 +783,10 @@ fn open_one(
             url: url.trim().to_owned(),
             number,
             state: "draft".to_owned(),
+            // A PR seconds old has no checks yet; the next run's refresh
+            // fills them in. Recording an empty tally here would read as
+            // "no CI on this repo".
+            checks: None,
             checked_at: status::utc_stamp(),
         };
         let opened_url = fresh.url.clone();

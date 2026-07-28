@@ -44,13 +44,46 @@ pub struct Entry {
 }
 
 /// A tracked PR's last-known state: open|draft|merged|closed.
+///
+/// `checks` carries the upstream CI verdict because a PR we opened and left
+/// red is invisible from here otherwise: nushell#18549 sat with two failing
+/// checks and no reply from 2026-07-08, and nothing in this tool said so.
+/// `None` means the forge reported no checks at all, which is different from
+/// checks that all passed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pr {
     pub url: String,
     pub number: u64,
     pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Checks>,
     #[serde(rename = "checkedAt")]
     pub checked_at: String,
+}
+
+/// Counts from a PR's check rollup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Checks {
+    pub passing: u32,
+    pub failing: u32,
+    pub pending: u32,
+}
+
+impl Checks {
+    /// Is anything red? A failing check is the one state that needs a human.
+    #[must_use]
+    pub const fn red(&self) -> bool {
+        self.failing > 0
+    }
+
+    /// One-line summary for logs and the plan table.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        format!(
+            "{} passing, {} failing, {} pending",
+            self.passing, self.failing, self.pending
+        )
+    }
 }
 
 /// A detected possibly-duplicate upstream PR (field order matches gh's

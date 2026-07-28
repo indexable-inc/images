@@ -11,6 +11,7 @@ pub mod cmd;
 pub mod drift;
 pub mod gh;
 pub mod mapping;
+pub mod notify;
 pub mod series;
 pub mod status;
 pub mod style;
