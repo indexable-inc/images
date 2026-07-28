@@ -152,6 +152,57 @@ impl Repo {
         Ok(parse_log(&out))
     }
 
+    /// Does `sha` still merge into the tracked upstream branch?
+    ///
+    /// Returns the conflicting paths, or `None` when the merge is clean.
+    ///
+    /// Asked before the outward act because a patch is written against the
+    /// base its fork sat on, and that base ages. On 2026-07-27 the
+    /// home-manager patch was 45 commits behind master, both files it
+    /// touched had moved, and the PR it opened was dead on arrival: the
+    /// upstream CI reported "merge conflicts with base branch" before any
+    /// human read it. An unattended lane doing that repeatedly is how a
+    /// contributor gets ignored.
+    ///
+    /// This forces trees into the scratch clone, which the series reader
+    /// deliberately avoids fetching. That is the price of the check, and it
+    /// is paid once, only for a patch about to be submitted.
+    ///
+    /// # Errors
+    /// Fails when git cannot run the merge.
+    pub fn conflicts_with_upstream(&self, sha: &str) -> Result<Option<String>> {
+        let out = cmd::complete_in(
+            &self.dir,
+            "git",
+            &[
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                &self.upstream_tip,
+                sha,
+            ],
+        )?;
+        // git 2.38+: 0 clean, 1 conflicted, >1 a real error. A broken check
+        // must not read as a clean merge, so anything else is an error.
+        match out.status {
+            0 => Ok(None),
+            1 => Ok(Some(
+                out.stdout
+                    .lines()
+                    .skip_while(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .trim()
+                    .to_owned(),
+            )),
+            _ => Err(eyre!(
+                "cannot test-merge {sha} into {}: {}",
+                self.upstream_branch,
+                out.stderr.trim()
+            )),
+        }
+    }
+
     /// Force-push `sha` to `refs/heads/<branch>` on the fork repo. Pushing
     /// to OUR fork is not the outward act; force because a jj rebase
     /// rewrites the series by design.
