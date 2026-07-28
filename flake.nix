@@ -146,6 +146,19 @@
       flake = false;
     };
 
+    # jj megamerge fork of jj-vcs/jj. Pinned BY REV, never branch-loose: the
+    # series is large and touches working-copy internals, so a rebase onto
+    # upstream main conflicts easily, and a conflicted jj commit must never
+    # reach the bookmark (git-based readers cannot parse jj's conflict
+    # encoding). The rev therefore moves only under a deliberate rebase a
+    # human resolves, never under the scheduled fork-sync (autoUpdate = false
+    # in lib/fork-packages.nix). Bump it by hand: jj-rebase indexable-inc/jj,
+    # push bookmark + pin ref, repin here, then build `.#jj`.
+    jj-src = {
+      url = "github:indexable-inc/jj/29e2ad873c2c5d4bbe7a41237e1f642ec2580b4a";
+      flake = false;
+    };
+
     # jj megamerge fork of openai/codex. Pinned BY REV: importCargoLock
     # removes the aggregate cargoHash, but git dependencies still carry fixed
     # output hashes in the package. A branch-loose URL lets a blanket
@@ -375,6 +388,7 @@
     btop-src,
     nushell-src,
     git-src,
+    jj-src,
     drgn-src,
     perftest-src,
     pg-uint128-src,
@@ -460,6 +474,7 @@
         btop-src
         nushell-src
         git-src
+        jj-src
         drgn-src
         perftest-src
         fff-src

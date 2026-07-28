@@ -271,6 +271,33 @@
       };
     }
     {
+      # The series is large and reaches into working-copy internals, so a
+      # rebase onto upstream main conflicts easily and a conflicted jj commit
+      # must never be pushed to the bookmark. The input is pinned BY REV in
+      # flake.nix and autoUpdate is off: the rev moves only under a deliberate
+      # rebase a human resolves, never under the scheduled fork-sync.
+      name = "jj";
+      input = "jj-src";
+      upstreamUrl = "https://github.com/jj-vcs/jj.git";
+      forkRepo = "indexable-inc/jj";
+      bookmark = "ix-patched";
+      autoUpdate = false;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "true";
+        citation = "https://github.com/jj-vcs/jj/blob/main/.github/PULL_REQUEST_TEMPLATE.md";
+        notes = "PR template requires the submitter to fully understand the submitted code including anything drafted by an LLM, and to proof-read LLM prose; Google's CLA required. Commits are reviewed individually and never squash-merged, so each commit must stand alone.";
+        autoContribute = {
+          enabled = false;
+          reason = "Out: the PR checklist is a personal attestation that the submitter understands every line including LLM-drafted code and has copy-edited any LLM prose, and Google's CLA is signed by a person. An unattended PR would tick boxes nobody stood behind.";
+        };
+      };
+      # The series lands in a follow-up commit; each patch subject gets its
+      # upstreaming intent then. Empty until those commits exist: an invented
+      # subject matches no commit on the bookmark and upstream-sync fails loud.
+      patches = {};
+    }
+    {
       name = "nushell";
       input = "nushell-src";
       upstreamUrl = "https://github.com/nushell/nushell.git";
