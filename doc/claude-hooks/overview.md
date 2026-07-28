@@ -10,6 +10,7 @@ noisy or broken hook is strictly worse than no hook
 ```
 claude-hooks session-digest    # SessionStart
 claude-hooks worktree-guard    # PreToolUse
+claude-hooks write-guard       # PreToolUse (Bash)
 claude-hooks prompt-priors     # UserPromptSubmit
 ```
 
@@ -162,6 +163,77 @@ and the recommended rescue commands allow, both deny messages name what the
 caller needs, and the kill switch allows silently. The unit tests in
 `packages/claude-hooks/src/guards.rs` build a throwaway checkout and a linked
 worktree in a tempdir and drive `git_guard_decision` against them directly.
+
+## write-guard (PreToolUse, Bash)
+
+Refuses a shell command whose write targets land in a protected primary
+checkout. Same protected list and same worktree prescription as
+`worktree-guard`, and the same kill switch --
+`CLAUDE_CODE_DISABLE_WORKTREE_GUARD` -- because it is one policy ("never write
+in a primary checkout") enforced at a second seam, and an operator who stands it
+down means it for both.
+
+It exists because a fence with a gate beside it is not a fence (index#4310). A
+subagent whose tool list was `Bash, Read, WebFetch, WebSearch` -- no `Edit`, no
+`Write` -- answered a documentation question and then created a module, wrote a
+doc, deleted its own module and added a 55-line option to
+`packages/agent/home-manager/claude-code.nix`, all inside
+`~/.config/nix/ix/index`, all through heredoc redirects, `cp` and `rm`. Nothing
+fired: `worktree-guard` judges an edit tool's `file_path` and never sees Bash,
+and `git-guard` only classifies `git`. That checkout is a `path:` flake
+submodule a workstation evals from, so the dirty tracked files would have
+entered the next `hms` switch.
+
+What it sees, per statement of the parsed command (reusing `git-guard`'s
+quote-aware tokenizer, its `sh -c` unwrapping and its `cd` tracking):
+
+- **Output redirections**, attached or detached, appending or clobbering: `>`,
+  `>>`, `>|`, `2>`, and the `>` that opens a heredoc write (`cat > f <<'EOF'`).
+  Input redirections and fd duplications (`2>&1`, `>&2`) write no file and are
+  skipped.
+- **A closed table of writing commands**, classified by how each one names its
+  targets: every operand (`rm`, `mv`, `tee`, `truncate`, `touch`, `mkdir`,
+  `mkfifo`, `rmdir`, `unlink`, `shred`), every operand but the mode
+  (`chmod`, `chown`, `chgrp`), the last operand only (`cp`, `install`, `ln`,
+  `rsync` -- the earlier ones are sources, and reading in a primary checkout is
+  always fine), the operands only in the in-place form (`sed -i`, `perl -pi`),
+  and the working directory alone where the targets arrive on stdin (`patch`,
+  `xargs <writer>`). Like `mutates_checkout`, the table is closed: a command
+  nobody has classified allows rather than refuses.
+- **A directory target judged from inside itself**, so `rm -rf <primary>` is
+  refused rather than measured against whatever repo the parent sits in.
+
+`git` is deliberately absent from the table. `git-guard` already refuses `git
+apply`, `git checkout` and every other mutating subcommand in a protected
+checkout, and two guards firing on one command would print two refusals with two
+prescriptions.
+
+**What it cannot see**, and no shell-free parse ever will:
+
+- a path whose first component is an expansion (`> "$OUT/x"`,
+  `> $(dirname "$f")/x`) or a glob. A path whose *literal prefix* has a `/`
+  still resolves (`> doc/$name.md` is refused);
+- a write performed by an interpreter rather than the shell: `python -c`,
+  `node -e`, `awk '{print > "f"}'`, a redirection inside a quoted program, or a
+  script file the command merely names;
+- `find -delete`/`-exec`, `tar -x`, `unzip`, `dd of=`, `$EDITOR`, and build
+  tools that write where their own config says (`make`, `npm`,
+  `nix build --out-link`);
+- anything reached over ssh or through a container.
+
+Those remain the parent prompt's job, and the guard is a net for accidents
+rather than a sandbox. It also fails open on its edges (kill switch, non-Bash
+tool, no protected list, unparseable payload, unresolvable target), on the same
+principle as every other hook here.
+
+Behavioral coverage lives in `packages/claude-code/install-check.nix` next to
+`git-guard`'s, reusing the same real primary checkout and linked worktree: every
+write shape above denies in the primary checkout, the
+absolute/`cd`/`sh -c`/buried-in-a-chain evasions deny, reads and writes aimed
+outside the checkout allow, the same commands in the linked worktree allow, the
+refusal names the offending token and the worktree recipe, and the kill switch
+allows silently. The unit tests in `packages/claude-hooks/src/guards.rs` drive
+`write_guard_decision` against a tempdir checkout and worktree directly.
 
 ## prompt-priors (UserPromptSubmit)
 

@@ -640,6 +640,93 @@
       exit 1
     fi
 
+    # Behavioral net for write-guard (index#4310). A subagent holding only
+    # `Bash` wrote a module, a doc and a 55-line option into the shared
+    # checkout through heredoc redirects, `cp` and `rm`: `worktree-guard`
+    # judges an edit tool's `file_path` and never sees Bash, and `git-guard`
+    # only classifies git. Reuses the same primary/worktree pair.
+    write_guard() {
+      local desc="$1" expect="$2" got verdict
+      got="$(git_payload "$3" "$4" \
+        | CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" IX_GIT=${lib.getExe git} \
+          ${hookRunner}/bin/claude-hooks write-guard)"
+      case "$got" in
+      ''') verdict=allow ;;
+      *'"permissionDecision":"deny"'*) verdict=deny ;;
+      *) verdict="unparsed: $got" ;;
+      esac
+      if [ "$verdict" != "$expect" ]; then
+        printf 'write-guard check failed (%s): expected %s, got %s\n' \
+          "$desc" "$expect" "$verdict" >&2
+        exit 1
+      fi
+    }
+
+    # A multi-line payload is built with printf, never written inline: a
+    # column-0 line inside this Nix indented string would reset the common
+    # indentation prefix, re-indenting every other line of the script and
+    # stranding the terminator of the python here-document further down.
+    heredoc_doc="$(printf '%s\n' "cat > doc/note.md <<'EOF'" hello EOF)"
+    heredoc_wt="$(printf '%s\n' "cat > a.txt <<'EOF'" hello EOF)"
+
+    # The write vocabulary a shell command reaches for, aimed at the primary
+    # checkout.
+    write_guard "heredoc redirect"        deny "$primary" "$heredoc_doc"
+    write_guard "append redirect"         deny "$primary" "echo x >> tracked.txt"
+    write_guard "clobber-anyway redirect" deny "$primary" "echo x >| tracked.txt"
+    write_guard "cp into primary"         deny "$primary" "cp /tmp/x tracked.txt"
+    write_guard "mv out of primary"       deny "$primary" "mv tracked.txt /tmp/x"
+    write_guard "rm in primary"           deny "$primary" "rm -f scratch.txt"
+    write_guard "rm of the checkout"      deny /tmp "rm -rf $primary"
+    write_guard "install into primary"    deny "$primary" "install -m 0644 /tmp/x doc/x"
+    write_guard "tee into primary"        deny "$primary" "cat /tmp/x | tee tracked.txt"
+    write_guard "sed -i in primary"       deny "$primary" "sed -i -e s/a/b/ tracked.txt"
+    write_guard "truncate in primary"     deny "$primary" "truncate -s 0 tracked.txt"
+    write_guard "patch reading stdin"     deny "$primary" "patch -p1 < /tmp/x.diff"
+    write_guard "xargs rm from a pipe"    deny "$primary" "fd -e bak | xargs rm"
+    # The evasions git-guard already has to handle, now for plain writes.
+    write_guard "absolute target"         deny /tmp "echo x > $primary/tracked.txt"
+    write_guard "cd evasion"              deny /tmp "cd $primary && echo x > tracked.txt"
+    write_guard "sh -c wrapper"           deny /tmp "sh -c 'echo x > $primary/tracked.txt'"
+    write_guard "buried in a chain"       deny "$primary" "make build && echo ok; rm tracked.txt"
+    # Reads in the primary checkout stay usable, or the guard becomes noise and
+    # gets switched off. Every one of these writes only OUTSIDE the checkout.
+    write_guard "read piped out"          allow "$primary" "grep -n x tracked.txt > /tmp/hits"
+    write_guard "sed filter to stdout"    allow "$primary" "sed -e s/a/b/ tracked.txt"
+    write_guard "cp out of primary"       allow "$primary" "cp tracked.txt /tmp/backup"
+    write_guard "stderr duplication"      allow "$primary" "make > /tmp/out 2>&1"
+    write_guard "quoted mention"          allow "$primary" "echo 'rm tracked.txt'"
+    write_guard "unclassified command"    allow "$primary" "nix build .#claude-hooks"
+    # git is git-guard's; a second refusal here would carry a second
+    # prescription for one command.
+    write_guard "git left to git-guard"   allow "$primary" "git apply /tmp/x.diff"
+    # The caller's own linked worktree is theirs to write.
+    write_guard "heredoc in worktree"     allow "$wt" "$heredoc_wt"
+    write_guard "rm in worktree"          allow "$wt" "rm -f tracked.txt"
+    write_guard "patch in worktree"       allow "$wt" "patch -p1 < /tmp/x.diff"
+    write_guard "outside any repo"        allow /tmp "rm -rf /tmp/whatever"
+    write_guard "empty command"           allow "$primary" ""
+    # The refusal has to name the token that tripped it, the worktree to use,
+    # and the switch to turn it off, or the caller cannot act on it.
+    wmsg="$(git_payload "$primary" "echo x > doc/note.md" \
+      | CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" IX_GIT=${lib.getExe git} \
+        ${hookRunner}/bin/claude-hooks write-guard)"
+    for want in "doc/note.md" "$primary" "worktree add <dir>" index#4310 \
+      CLAUDE_CODE_DISABLE_WORKTREE_GUARD=1; do
+      case "$wmsg" in
+      *"$want"*) : ;;
+      *) printf 'write-guard message missing %s:\n%s\n' "$want" "$wmsg" >&2; exit 1 ;;
+      esac
+    done
+    # One policy, one switch: the same export that stands the typed-tool guard
+    # down stands this one down too.
+    if [ -n "$(git_payload "$primary" "rm -f tracked.txt" \
+      | CLAUDE_CODE_DISABLE_WORKTREE_GUARD=1 CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" \
+        IX_GIT=${lib.getExe git} ${hookRunner}/bin/claude-hooks write-guard)" ]; then
+      printf 'write-guard check failed: kill switch must allow silently\n' >&2
+      exit 1
+    fi
+
     # Review pair: log-edit records an edited path, the Stop gate then blocks once
     # (JSON decision:block) and consumes the marker; a stop_hook_active re-entry
     # allows silently (the loop guard).

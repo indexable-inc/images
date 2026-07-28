@@ -254,6 +254,11 @@ fn statements(cmd: &str) -> Vec<Statement> {
                     out.push(std::mem::take(&mut stmt));
                 }
             }
+            // `>|` is one operator, the clobber-anyway form of `>`. Splitting on
+            // its `|` would strand the redirection target in the next statement,
+            // where `write-guard` reads it as a bare word rather than a file
+            // about to be overwritten (index#4310).
+            '|' if tok.ends_with('>') => tok.push(c),
             '&' | '|' => {
                 if chars.peek() == Some(&c) {
                     chars.next();
@@ -1151,6 +1156,448 @@ fn resolve(base: &std::path::Path, arg: &str) -> std::path::PathBuf {
     }
 }
 
+// --- write-guard ---
+
+/// How a command names the paths it writes.
+///
+/// A closed, enumerated table like `mutates_checkout` above, and for the same
+/// reason: a command nobody has classified must allow rather than refuse, so an
+/// unfamiliar tool cannot turn into a refusal the first time someone runs it.
+#[derive(Clone, Copy)]
+enum Writes {
+    /// Every operand is a path it writes: `rm a b`, `tee a b`, `touch a`. `mv`
+    /// belongs here rather than below because a move destroys its sources.
+    Operands,
+    /// Every operand but the first, which is a mode or an owner rather than a
+    /// path: `chmod 755 a`, `chown me:staff a`.
+    OperandsAfterMode,
+    /// Only the last operand; the earlier ones are sources it reads, and
+    /// reading inside a primary checkout is always fine: `cp a b dst`.
+    LastOperand,
+    /// Operands are written only in the in-place form: `sed -i`, `perl -pi -e`.
+    /// Without it these are filters that write to stdout.
+    InPlaceOperands,
+    /// It writes paths the command line never names, so only the working
+    /// directory can be judged: `patch` takes its file list from the diff on
+    /// stdin.
+    Unnamed,
+}
+
+fn writes(name: &str) -> Option<Writes> {
+    match name {
+        "rm" | "rmdir" | "unlink" | "shred" | "truncate" | "touch" | "mkdir" | "mkfifo"
+        | "tee" | "mv" => Some(Writes::Operands),
+        "chmod" | "chown" | "chgrp" => Some(Writes::OperandsAfterMode),
+        "cp" | "install" | "ln" | "rsync" => Some(Writes::LastOperand),
+        "sed" | "gsed" | "perl" => Some(Writes::InPlaceOperands),
+        "patch" => Some(Writes::Unnamed),
+        // git is deliberately absent even though `git apply` and `git checkout`
+        // write: `git-guard` already refuses every mutating subcommand in a
+        // protected checkout, and two guards firing on one command would print
+        // two refusals with two prescriptions.
+        _ => None,
+    }
+}
+
+/// Options that consume the next token as a value, so the operand scan does not
+/// read that value as a path it is about to write. Per command, because `-s` is
+/// a byte count to `truncate` and a symlink flag to `ln`.
+fn value_opts(name: &str) -> &'static [&'static str] {
+    match name {
+        "truncate" => &["-s", "--size", "-r", "--reference"],
+        "shred" => &["-n", "--iterations", "-s", "--size"],
+        // `-e`/`-f` carry the script, which routinely looks like a path
+        // (`s|a/b|c/d|`) and is not one.
+        "sed" | "gsed" => &["-e", "--expression", "-f", "--file", "-l", "--line-length"],
+        "perl" => &["-e", "-E"],
+        "install" => &["-m", "--mode", "-o", "--owner", "-g", "--group", "-S", "--suffix"],
+        "cp" | "mv" | "ln" => &["-S", "--suffix"],
+        "rsync" => &["--exclude", "--include", "--filter", "-e", "--rsh"],
+        "chmod" | "chown" | "chgrp" => &["--reference"],
+        _ => &[],
+    }
+}
+
+/// The value of `-t DIR`/`--target-directory=DIR`, which replaces the trailing
+/// operand as the destination: with it, every operand including the last is a
+/// source being read.
+fn target_directory(args: &[String]) -> Option<&str> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if let Some(v) = a.strip_prefix("--target-directory=") {
+            return Some(v);
+        }
+        if a == "-t" || a == "--target-directory" {
+            return it.next().map(String::as_str);
+        }
+    }
+    None
+}
+
+/// True when a `sed`/`perl` argument selects in-place editing: `-i`,
+/// `--in-place`, the suffix form (`-i.bak`), or a bundled group (`-pi`).
+fn edits_in_place(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|a| a.as_str() != "--")
+        .any(|a| {
+            if a == "--in-place" || a.starts_with("--in-place=") {
+                return true;
+            }
+            // A backup suffix rides attached to the flag (`-i.bak`), so only the
+            // leading alphanumerics of a short group are flags.
+            a.strip_prefix('-')
+                .filter(|rest| !rest.starts_with('-'))
+                .is_some_and(|rest| {
+                    rest.chars()
+                        .take_while(|c| c.is_ascii_alphanumeric())
+                        .any(|c| c == 'i')
+                })
+        })
+}
+
+/// The target part of a token that opens an output redirection (`>`, `>>`,
+/// `1>`, `>|`), empty when the target is the following token. `None` when the
+/// token is not an output redirection.
+///
+/// An input redirection writes nothing, so `<` and a heredoc's `<<EOF` are not
+/// here. `>&2` and `2>&1` are file-descriptor duplications rather than files;
+/// `statements` splits on `&`, so those arrive as a bare `>`/`2>` whose target
+/// token never comes, which the scan below then finds nothing to judge.
+fn write_redirection(tok: &str) -> Option<&str> {
+    let after_fd = tok.trim_start_matches(|c: char| c.is_ascii_digit());
+    let rest = after_fd
+        .strip_prefix(">>")
+        .or_else(|| after_fd.strip_prefix('>'))?;
+    // `>|` is the clobber-anyway form of `>`.
+    let rest = rest.strip_prefix('|').unwrap_or(rest);
+    if rest.starts_with('&') {
+        return None;
+    }
+    Some(rest)
+}
+
+/// Every path a statement's redirections write.
+///
+/// Token-level, not a real parse: `statements` leaves `>` and `>>` in the token
+/// stream, which is enough to see the target but not enough to tell code from a
+/// heredoc's body, so a literal `>` inside a here-document is read as a
+/// redirection too. That direction is deliberate -- a possible false refusal
+/// beats a missed write -- and the body of a heredoc written INTO a primary
+/// checkout is already refused by the `>` that opens it.
+fn redirect_targets(stmt: &Statement) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut it = stmt.iter();
+    while let Some(tok) = it.next() {
+        let Some(attached) = write_redirection(tok) else {
+            continue;
+        };
+        if attached.is_empty() {
+            out.extend(it.next().cloned());
+        } else {
+            out.push(attached.to_owned());
+        }
+    }
+    out
+}
+
+/// A statement's operands: the tokens after the command word that are neither
+/// flags, nor the value of a flag that takes one, nor part of a redirection.
+fn operands(name: &str, args: &[String]) -> Vec<String> {
+    let takes_value = value_opts(name);
+    let mut out = Vec::new();
+    let mut it = args.iter();
+    let mut only_operands_now = false;
+    while let Some(tok) = it.next() {
+        if write_redirection(tok).is_some() {
+            // `> out` holds its target in the next token; `>out` carries it.
+            if tok.ends_with('>') {
+                it.next();
+            }
+            continue;
+        }
+        if !only_operands_now {
+            if tok == "--" {
+                only_operands_now = true;
+                continue;
+            }
+            // A lone `-` is stdin or stdout by convention, never a path.
+            if tok.starts_with('-') && tok.len() > 1 {
+                if takes_value.contains(&tok.as_str()) {
+                    it.next();
+                }
+                continue;
+            }
+            if tok == "-" {
+                continue;
+            }
+        }
+        out.push(tok.clone());
+    }
+    out
+}
+
+/// Wrapper options that consume the next token, so the search for the command
+/// `xargs` will actually run does not stop on a flag's value.
+const XARGS_VALUE_OPTS: &[&str] = &[
+    "-n",
+    "--max-args",
+    "-P",
+    "--max-procs",
+    "-I",
+    "-i",
+    "--replace",
+    "-L",
+    "-l",
+    "--max-lines",
+    "-s",
+    "--max-chars",
+    "-d",
+    "--delimiter",
+    "-a",
+    "--arg-file",
+    "-E",
+    "-e",
+    "--eof",
+];
+
+/// The command `xargs` will run, if this invocation is an `xargs`.
+fn xargs_child(run: &Invocation<'_>) -> Option<String> {
+    if std::path::Path::new(run.head).file_name()?.to_str()? != "xargs" {
+        return None;
+    }
+    let mut it = run.args.iter();
+    while let Some(a) = it.next() {
+        if XARGS_VALUE_OPTS.contains(&a.as_str()) {
+            it.next();
+            continue;
+        }
+        if a.starts_with('-') {
+            continue;
+        }
+        return std::path::Path::new(a)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_owned);
+    }
+    None
+}
+
+/// One write the guard located: what the refusal should name, and the path whose
+/// repo decides.
+struct Write {
+    subject: String,
+    path: std::path::PathBuf,
+}
+
+/// The literal prefix of a token, up to the first shell expansion.
+///
+/// Nothing here runs a shell, so `$VAR` and `` `cmd` `` cannot be expanded. A
+/// target like `doc/$name.md` still resolves to the directory it lands in, which
+/// is what the guard needs; one that begins with an expansion (`$OUT/x`) yields
+/// no directory at all and is left alone rather than guessed at.
+fn literal_prefix(tok: &str) -> Option<&str> {
+    match tok.find(['$', '`']) {
+        None => Some(tok),
+        // Without a `/` the expansion is the whole path component, so there is
+        // no directory left to judge.
+        Some(at) => tok[..at].rfind('/').map(|slash| &tok[..=slash]),
+    }
+}
+
+/// Resolve a write target token against the statement's working directory,
+/// expanding a leading `~/` the way the shell would.
+fn write_target(cwd: &std::path::Path, tok: &str) -> Option<std::path::PathBuf> {
+    let literal = literal_prefix(tok)?;
+    if literal.is_empty() {
+        return None;
+    }
+    let expanded = match literal.strip_prefix("~/") {
+        Some(rest) => crate::home().join(rest),
+        None => std::path::PathBuf::from(literal),
+    };
+    Some(resolve(cwd, &expanded.to_string_lossy()))
+}
+
+/// Every write in one statement that the guard can locate.
+fn writes_of(stmt: &Statement, cwd: &std::path::Path) -> Vec<Write> {
+    let mut out: Vec<Write> = redirect_targets(stmt)
+        .iter()
+        .filter_map(|tok| {
+            write_target(cwd, tok).map(|path| Write {
+                subject: tok.clone(),
+                path,
+            })
+        })
+        .collect();
+
+    let Some(run) = invocation(stmt) else {
+        return out;
+    };
+    // Match on the file name so `/bin/rm` and `/usr/bin/env cp` count.
+    let Some(name) = std::path::Path::new(run.head)
+        .file_name()
+        .and_then(|n| n.to_str())
+    else {
+        return out;
+    };
+    // `fd -e bak | xargs rm` names its writer but takes every path from the
+    // pipe, so the command line holds nothing to resolve.
+    if let Some(child) = xargs_child(&run) {
+        if writes(&child).is_some() {
+            out.push(Write {
+                subject: format!("with `xargs {child}` in {}", cwd.display()),
+                path: cwd.to_path_buf(),
+            });
+        }
+        return out;
+    }
+    let Some(kind) = writes(name) else {
+        return out;
+    };
+    let mut operands = operands(name, run.args);
+    match kind {
+        Writes::Operands => {}
+        Writes::OperandsAfterMode if !operands.is_empty() => {
+            operands.remove(0);
+        }
+        Writes::OperandsAfterMode => {}
+        Writes::LastOperand => {
+            operands = match target_directory(run.args) {
+                Some(dir) => vec![dir.to_owned()],
+                None => operands.split_off(operands.len().saturating_sub(1)),
+            };
+        }
+        Writes::InPlaceOperands if !edits_in_place(run.args) => operands.clear(),
+        Writes::InPlaceOperands => {}
+        Writes::Unnamed => {
+            out.push(Write {
+                subject: format!("with `{name}` in {}", cwd.display()),
+                path: cwd.to_path_buf(),
+            });
+            operands.clear();
+        }
+    }
+    out.extend(operands.iter().filter_map(|tok| {
+        write_target(cwd, tok).map(|path| Write {
+            subject: tok.clone(),
+            path,
+        })
+    }));
+    out
+}
+
+/// Everything `write_guard` reads from the process environment, so the decision
+/// below is a pure function of its inputs and the tests can drive it without a
+/// real hook invocation and without mutating the environment.
+struct WriteGuardEnv {
+    /// Kill switch, shared with the typed-tool guard: one policy, one switch.
+    disabled: bool,
+    /// The `git` to shell out to: `IX_GIT` from the wrapper, else PATH.
+    git: String,
+    /// The `primaryCheckouts` globs. Empty means the guard is not installed.
+    protected: Vec<String>,
+    /// Where a statement runs when the payload carries no `cwd`.
+    fallback_cwd: std::path::PathBuf,
+}
+
+impl WriteGuardEnv {
+    fn read() -> Self {
+        Self {
+            disabled: crate::flag_set(crate::WORKTREE_GUARD_KILL_SWITCH),
+            git: std::env::var("IX_GIT").unwrap_or_else(|_| "git".to_owned()),
+            protected: crate::primary_checkouts(),
+            fallback_cwd: std::path::PathBuf::from(
+                std::env::var("PWD").unwrap_or_else(|_| ".".to_owned()),
+            ),
+        }
+    }
+}
+
+/// The whole decision: `Some(reason)` refuses the Bash call, `None` allows it.
+///
+/// Every early return is a fail-open: kill switch, non-Bash tool, no protected
+/// list, a payload carrying no command, a command whose writer is not in the
+/// table, a target the guard cannot resolve.
+fn write_guard_decision(env: &WriteGuardEnv, payload: &Value) -> Option<String> {
+    if env.disabled || env.protected.is_empty() {
+        return None;
+    }
+    if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
+        return None;
+    }
+    let mut cwd = payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map_or_else(|| env.fallback_cwd.clone(), std::path::PathBuf::from);
+
+    for stmt in expanded_statements(&command_of(payload)) {
+        // Track `cd` across the chain: `cd <primary> && echo x > f` must be
+        // judged against the cd target, not the payload cwd.
+        if let Some(run) = invocation(&stmt) {
+            if run.head == "cd" {
+                if let Some(target) = run.args.iter().find(|a| !a.starts_with('-')) {
+                    cwd = resolve(&cwd, target);
+                }
+                continue;
+            }
+        }
+        for write in writes_of(&stmt, &cwd) {
+            if let Some(toplevel) =
+                crate::protected_toplevel(&env.git, &write.path, &env.protected)
+            {
+                return Some(refusal(&write.subject, &toplevel));
+            }
+        }
+    }
+    None
+}
+
+/// The typed-tool refusal, plus what a shell caller needs that an edit-tool
+/// caller does not: which token tripped it, and the switch to turn it off.
+fn refusal(subject: &str, toplevel: &str) -> String {
+    format!(
+        "{}\n\n(bash write guard, index#4310; kill switch {}=1)",
+        crate::primary_checkout_refusal(
+            &format!("Refusing to write {subject}: {toplevel}"),
+            toplevel,
+        ),
+        crate::WORKTREE_GUARD_KILL_SWITCH,
+    )
+}
+
+/// `PreToolUse(Bash)`: refuse a shell command whose write targets land in a
+/// protected primary checkout (index#4310).
+///
+/// Why here and not in `worktree-guard`: that guard judges the `file_path` of an
+/// edit tool and never sees Bash, so a subagent holding only `Bash` wrote a
+/// module, a doc and a 55-line option into the shared checkout through heredoc
+/// redirects, `cp` and `rm`, with nothing to stop it. The class is "any write
+/// reaching a primary checkout", not "any `Edit` reaching one".
+///
+/// What it cannot see, and no shell-free parse ever will:
+///   - a path built by expansion whose first component is the expansion
+///     (`> "$OUT/x"`, `> $(dirname "$f")/x`) or by a glob;
+///   - a write performed by an interpreter rather than the shell -- `python -c`,
+///     `node -e`, `awk '{print > "f"}'`, `jq > ` inside a quoted program, a
+///     script file the command merely names;
+///   - `find -delete`/`-exec`, `tar -x`, `unzip`, `dd of=`, `$EDITOR`, and every
+///     build tool that writes where its own config says (`make`, `npm`, `nix
+///     build --out-link`);
+///   - anything reached over ssh or through a container.
+/// Those stay the parent prompt's job. `git` is excluded on purpose: `git-guard`
+/// already owns it.
+pub fn write_guard() {
+    let env = WriteGuardEnv::read();
+    if env.disabled {
+        return;
+    }
+    let Some(payload) = payload() else { return };
+    if let Some(reason) = write_guard_decision(&env, &payload) {
+        deny(reason);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt as _;
@@ -1160,9 +1607,10 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        GitGuardEnv, discards_worktree, expanded_statements, git_guard_decision, grep_walks_tree,
-        has_flag, is_recursive_flag, mutates_checkout, parse_git_call, reads_other_revision,
-        statements,
+        GitGuardEnv, WriteGuardEnv, discards_worktree, edits_in_place, expanded_statements,
+        git_guard_decision, grep_walks_tree, has_flag, is_recursive_flag, mutates_checkout,
+        operands, parse_git_call, reads_other_revision, redirect_targets, statements,
+        write_guard_decision,
     };
 
     fn toks(v: &[&str]) -> Vec<String> {
@@ -1270,6 +1718,11 @@ mod tests {
         assert_eq!(statements("a | b ; c\nd").len(), 4);
         // An operator inside quotes is literal text, not a split.
         assert_eq!(statements("echo 'a && b'"), vec![toks(&["echo", "a && b"])]);
+        // `>|` is one redirection operator, not a redirect then a pipe.
+        assert_eq!(
+            statements("echo x >| a"),
+            vec![toks(&["echo", "x", ">|", "a"])]
+        );
     }
 
     #[test]
@@ -2033,5 +2486,231 @@ mod tests {
         assert!(!grep_walks_tree("grep foo"));
         // -- ends flags
         assert!(!grep_walks_tree("grep -- -r"));
+    }
+
+    // --- write-guard (index#4310) ---
+
+    fn write_env(protected: &[&str]) -> WriteGuardEnv {
+        WriteGuardEnv {
+            disabled: false,
+            git: "git".to_owned(),
+            protected: protected.iter().map(|s| (*s).to_owned()).collect(),
+            // Distinct from any fixture path: a test that accidentally relied
+            // on the fallback must not silently land inside a protected glob.
+            fallback_cwd: PathBuf::from("/nonexistent/fallback"),
+        }
+    }
+
+    /// A primary checkout, a linked worktree of it, and the environment that
+    /// protects only the former. `None` where `git` is absent, so the
+    /// repo-backed tests skip rather than fail.
+    struct WriteFixture {
+        fx: Fixture,
+        worktree: PathBuf,
+        env: WriteGuardEnv,
+    }
+
+    fn write_fixture() -> Option<WriteFixture> {
+        if !git_available() {
+            return None;
+        }
+        let fx = fixture();
+        let worktree = fx.root.join("wt");
+        run_git(
+            &fx.primary,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                worktree.to_str().expect("utf8"),
+                "-b",
+                "scratch",
+            ],
+        );
+        let env = write_env(&[fx.primary.to_str().expect("utf8")]);
+        Some(WriteFixture { fx, worktree, env })
+    }
+
+    #[test]
+    fn redirections_are_read_off_the_token_stream() {
+        let targets = |cmd: &str| {
+            statements(cmd)
+                .iter()
+                .flat_map(redirect_targets)
+                .collect::<Vec<_>>()
+        };
+        // Attached and detached targets, append, and the clobber-anyway form.
+        assert_eq!(targets("echo x > a"), toks(&["a"]));
+        assert_eq!(targets("echo x >a"), toks(&["a"]));
+        assert_eq!(targets("echo x >> a"), toks(&["a"]));
+        assert_eq!(targets("echo x >| a"), toks(&["a"]));
+        assert_eq!(targets("cat > a <<'EOF'"), toks(&["a"]));
+        // An explicit fd, and both fds of one command.
+        assert_eq!(targets("make 2> err"), toks(&["err"]));
+        assert_eq!(targets("make > out 2> err"), toks(&["out", "err"]));
+        // Input redirection writes nothing.
+        assert!(targets("patch -p1 < d.diff").is_empty());
+        // An fd duplication is not a file: `statements` splits on `&`, so the
+        // `1` of `2>&1` must not be mistaken for a path.
+        assert_eq!(targets("make > out 2>&1"), toks(&["out"]));
+        assert!(targets("echo boom >&2").is_empty());
+        // A redirection inside quotes is literal text.
+        assert!(targets("echo 'x > a'").is_empty());
+    }
+
+    #[test]
+    fn operand_scan_skips_flags_and_their_values() {
+        let ops = |name: &str, a: &[&str]| operands(name, &toks(a));
+        assert_eq!(ops("rm", &["-rf", "a", "b"]), toks(&["a", "b"]));
+        // A size is not a path.
+        assert_eq!(ops("truncate", &["-s", "0", "f"]), toks(&["f"]));
+        // A sed script routinely looks like a path and is not one.
+        assert_eq!(ops("sed", &["-i", "-e", "s|a/b|c/d|", "f"]), toks(&["f"]));
+        // The redirection and its target are not operands of the command.
+        assert_eq!(ops("tee", &["f", ">", "g"]), toks(&["f"]));
+        assert_eq!(ops("tee", &["-a", "f", ">g"]), toks(&["f"]));
+        // `--` ends the flags; a lone `-` is stdin, never a path.
+        assert_eq!(ops("rm", &["--", "-weird"]), toks(&["-weird"]));
+        assert_eq!(ops("tee", &["-"]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn in_place_flag_forms() {
+        for a in [
+            &["-i"][..],
+            &["--in-place"][..],
+            &["-i.bak"][..],
+            &["-pi"][..],
+            &["-pi.bak"][..],
+        ] {
+            assert!(edits_in_place(&toks(a)), "{a:?}");
+        }
+        // A filter writes to stdout, not to its operands.
+        for a in [&["-n"][..], &["-e", "s/i/x/"][..], &["--expression=i"][..]] {
+            assert!(!edits_in_place(&toks(a)), "{a:?}");
+        }
+    }
+
+    #[test]
+    fn shell_writes_into_a_primary_checkout_are_refused() {
+        let Some(WriteFixture { fx, env, .. }) = write_fixture() else {
+            return;
+        };
+        let p = fx.primary.display();
+        // Every shape the stray subagent used (index#4310), plus the rest of
+        // the write vocabulary a shell command reaches for.
+        for cmd in [
+            "cat > doc/note.md <<'EOF'\nhello\nEOF".to_owned(),
+            "echo x >> flake.nix".to_owned(),
+            "cp /tmp/elsewhere.nix modules/new.nix".to_owned(),
+            "mv modules/new.nix /tmp/elsewhere.nix".to_owned(),
+            "rm -rf modules/new.nix".to_owned(),
+            "install -m 0644 /tmp/x doc/x.md".to_owned(),
+            "cat /tmp/x | tee flake.nix".to_owned(),
+            "sed -i -e 's/a/b/' flake.nix".to_owned(),
+            "truncate -s 0 flake.nix".to_owned(),
+            "touch doc/new.md".to_owned(),
+            "mkdir -p modules/home".to_owned(),
+            "chmod 0755 flake.nix".to_owned(),
+            "ln -s /tmp/x doc/link".to_owned(),
+            // Targets that arrive on stdin, so only the cwd can be judged.
+            "patch -p1 < /tmp/x.diff".to_owned(),
+            "fd -e bak | xargs rm".to_owned(),
+            // A path built by expansion still resolves to the directory it
+            // lands in, as long as the first component is literal.
+            "echo x > doc/$name.md".to_owned(),
+            // Absolute target, from a cwd that is nowhere near it.
+            format!("echo x > {p}/flake.nix"),
+            // The evasions git-guard already has to handle.
+            format!("cd {p} && echo x > flake.nix"),
+            format!("bash -c 'echo x > {p}/flake.nix'"),
+            format!("make build && echo ok; rm {p}/flake.nix"),
+            // Deleting the checkout itself, whose parent is not in any repo.
+            format!("rm -rf {p}"),
+        ] {
+            let payload = bash(&fx.primary, &cmd);
+            let reason = write_guard_decision(&env, &payload);
+            assert!(reason.is_some(), "expected a refusal for: {cmd}");
+        }
+    }
+
+    #[test]
+    fn the_refusal_names_the_worktree_prescription_and_the_kill_switch() {
+        let Some(WriteFixture { fx, env, .. }) = write_fixture() else {
+            return;
+        };
+        let reason = write_guard_decision(&env, &bash(&fx.primary, "echo x > flake.nix"))
+            .expect("a refusal");
+        assert!(reason.contains("Refusing to write flake.nix"));
+        assert!(reason.contains("is a primary checkout, not a worktree"));
+        assert!(reason.contains("worktree add <dir> -b <branch> origin/main"));
+        assert!(reason.contains("CLAUDE_CODE_DISABLE_WORKTREE_GUARD=1"));
+    }
+
+    #[test]
+    fn reads_and_worktree_writes_stay_allowed() {
+        let Some(WriteFixture { fx, worktree, env }) = write_fixture() else {
+            return;
+        };
+        let p = fx.primary.display();
+        for (cwd, cmd) in [
+            // Reading inside a primary checkout is always fine, including a
+            // read whose OUTPUT goes somewhere else entirely.
+            (&fx.primary, "rg -n pattern flake.nix > /tmp/hits.txt".to_owned()),
+            (&fx.primary, "cat flake.nix | sed -e 's/a/b/' > /tmp/x".to_owned()),
+            (&fx.primary, "sed -e 's/a/b/' flake.nix".to_owned()),
+            (&fx.primary, "cp flake.nix /tmp/backup.nix".to_owned()),
+            (&fx.primary, "truncate -s 0 /tmp/log".to_owned()),
+            (&fx.primary, "chmod 0755 /tmp/script.sh".to_owned()),
+            (&fx.primary, "make 2>&1 | tee /tmp/build.log".to_owned()),
+            // The caller's own linked worktree is theirs to write.
+            (&worktree, "cat > doc/note.md <<'EOF'\nhello\nEOF".to_owned()),
+            (&worktree, "rm -rf modules/new.nix".to_owned()),
+            (&worktree, "patch -p1 < /tmp/x.diff".to_owned()),
+            // git is git-guard's, so this guard stays silent on it rather than
+            // producing a second refusal with a second prescription.
+            (&fx.primary, format!("git -C {p} apply /tmp/x.diff")),
+            (&fx.primary, "git checkout -- .".to_owned()),
+            // A command outside the closed table fails open.
+            (&fx.primary, "nix build .#claude-hooks".to_owned()),
+            (&fx.primary, "python3 build.py".to_owned()),
+        ] {
+            let payload = bash(cwd, &cmd);
+            assert_eq!(
+                write_guard_decision(&env, &payload),
+                None,
+                "expected no refusal for: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_guard_fails_open_on_its_edges() {
+        let Some(WriteFixture { fx, env, .. }) = write_fixture() else {
+            return;
+        };
+        let danger = "echo x > flake.nix";
+        // Kill switch and an empty protected list are both "not installed".
+        for env in [
+            WriteGuardEnv {
+                disabled: true,
+                ..write_env(&[fx.primary.to_str().expect("utf8")])
+            },
+            write_env(&[]),
+        ] {
+            assert_eq!(
+                write_guard_decision(&env, &bash(&fx.primary, danger)),
+                None
+            );
+        }
+        // Another tool's payload, and a payload carrying no command at all.
+        assert_eq!(
+            write_guard_decision(&env, &json!({"tool_name": "Edit"})),
+            None
+        );
+        assert_eq!(
+            write_guard_decision(&env, &json!({"tool_name": "Bash"})),
+            None
+        );
     }
 }

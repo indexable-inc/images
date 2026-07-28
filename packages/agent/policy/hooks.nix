@@ -28,6 +28,7 @@
     nixCargoGuard = hookRunnerSubcommand "cargo-guard";
     shellHabitGuard = hookRunnerSubcommand "bash-habits-guard";
     destructiveGitGuard = hookRunnerSubcommand "git-guard";
+    protectedCheckoutBashGuard = hookRunnerSubcommand "write-guard";
     indexedSearchGuard = hookRunnerSubcommand "search-guard";
     promptPriors = hookRunnerSubcommand "prompt-priors";
     subagentCacheLookup = hookRunnerSubcommand "subagent-cache-lookup";
@@ -109,6 +110,17 @@
       {
         matcher = "Bash";
         command = hookCommands.destructiveGitGuard;
+        timeout = 10;
+        enable = primaryCheckouts != [];
+      }
+      # The same protected list again, for the writes that reach a shared
+      # checkout without going through git or through a typed edit tool. The
+      # edit guard above judges `file_path` and never sees Bash, so a subagent
+      # holding only `Bash` wrote a module, a doc and a 55-line option into the
+      # primary checkout through heredoc redirects, `cp` and `rm` (index#4310).
+      {
+        matcher = "Bash";
+        command = hookCommands.protectedCheckoutBashGuard;
         timeout = 10;
         enable = primaryCheckouts != [];
       }
