@@ -182,7 +182,11 @@ impl fmt::Display for Report {
             writeln!(
                 f,
                 "Top {} by avoidable invalidation: dependents that reach a node ONLY because an\n\
-                 environment variable names it, and would stop rebuilding if it did not.\n",
+                 environment variable names it, and would stop rebuilding if it did not.\n\n\
+                 This is cost per change, not cost. Multiply it by how often the node actually\n\
+                 moves, which a single plan cannot show. A node built from this repo is the\n\
+                 expensive case; one pinned to an upstream input that already invalidates the\n\
+                 graph another way is free however high it ranks here.\n",
                 self.top.len()
             )?;
         }

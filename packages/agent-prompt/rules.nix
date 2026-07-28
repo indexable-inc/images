@@ -196,13 +196,18 @@
         invalidates the rest. Rank on the sole count, not fan-out. A compiler
         with thousands of dependents is normal; a node those dependents reach
         only through an environment variable holding a store path is a rebuild
-        nobody asked for.
+        nobody asked for. The ranking is cost per change and cannot see how
+        often a node moves, so confirm the top entry is built here before
+        calling it a defect; a pinned upstream one is free.
       '';
       reason = ''
         Store paths injected into every cargo unit's env cost 4,477 rebuilds
         and ~19.7 CPU-hours per ghostty change (ENG-10647). A session found
         that by hand over hours; nix-dag ranks it first in two seconds, so the
-        rule only has to say which column to read.
+        rule only has to say which column to read. The volatility clause is
+        there because the same session then read the ranking straight and
+        filed ENG-10662 against a JDK that is pinned to nixpkgs and costs
+        nothing; retracted after checking `nativeCcEnv`.
       '';
     };
   }
