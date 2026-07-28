@@ -151,6 +151,28 @@
           default = pkgs.stdenv.hostPlatform.isDarwin;
           description = "Link with lld on macOS (the default cctools ld64 is single-threaded and slow).";
         };
+        buildId = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Emit a GNU build-id note into every ELF this policy links.
+
+            The 20-byte `.note.gnu.build-id` is the join key every symbol
+            consumer looks an address up by: the debuginfod protocol, a
+            separate `.debug` file, `coredumpctl debug`, a continuous
+            profiler's symbol cache, and Antithesis's coverage symbolization.
+            Neither rustc nor mold emits one unless asked, so without this a
+            linked binary is unsymbolizable by anything that does not already
+            know its store path. Measured absent on every ix fleet binary
+            before this option existed (ix#8936).
+
+            `sha1` over the linked output rather than `uuid`, so the note is a
+            function of the bytes and a reproducible build keeps a reproducible
+            build-id. 20 bytes is also the length every consumer is actually
+            tested against; mold computes sha256 and truncates either way, so
+            the shorter note is not the slower one.
+          '';
+        };
       };
     };
   };
@@ -212,6 +234,13 @@
     lib.optionals (policy.linker.useMold && lib.hasInfix "-linux-" platform) [
       "-C"
       "link-arg=-fuse-ld=mold"
+    ]
+    # Gated on the ELF-producing triple rather than on the linker choice: both
+    # mold and bfd/lld accept `--build-id` and neither emits the note by
+    # default, so the flag belongs to the platform, not to `useMold`.
+    ++ lib.optionals (policy.linker.buildId && lib.hasInfix "-linux-" platform) [
+      "-C"
+      "link-arg=-Wl,--build-id=sha1"
     ]
     ++ lib.optionals
     (policy.linker.useLld && pkgs.stdenv.hostPlatform.isDarwin && lib.hasInfix "-apple-darwin" platform)
