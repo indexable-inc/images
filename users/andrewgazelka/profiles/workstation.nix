@@ -232,33 +232,18 @@
     # the wrapper's computed render between the house defaults and the
     # controlled keys; the render is enforced through the managed layer.
     extraSettings = claudeSettings;
-    # Personal opt-ins to tools the house denies. Until #4312 these four were
-    # denied by the render and allowed by the live settings.json, which had
-    # dropped their deny entries; the file won, so they were in force here
-    # anyway. The managed layer removes that escape hatch, so the choice has to
-    # be stated:
-    #   SendMessage - the harness's own tool descriptions prescribe it for
-    #     redirecting a running agent, and without it the only fallback left is
-    #     the duplicate spawn those same descriptions forbid one paragraph
-    #     later (ENG-10401). The Fable 5 ProgramBench case against the peer
-    #     mesh measured multi-agent problem solving, not redirecting one agent.
+    # One personal opt-in left. SendMessage, ReportFindings and Monitor used to
+    # be stated here too; #4224 made them house defaults, since each is named
+    # by a tool description every session receives, so restating them would
+    # only hide the day the default changes back.
     #   ScheduleWakeup - /loop dynamic pacing has no other way to set its own
-    #     next wake-up.
-    #   ReportFindings - the code-review skills render through it.
-    #   Monitor - the kernel's Jobs.watch covers job liveness, not tailing an
-    #     arbitrary log or polling a remote API, which is what this is used for
-    #     here.
+    #     next wake-up, and nothing in the house prompt or tool set asks for it,
+    #     which is why the house default leaves it off.
     systemTools = {
-      Monitor = true;
-      ReportFindings = true;
       ScheduleWakeup = true;
-      SendMessage = true;
     };
     # Personal opt-outs from the fleet posture: run the model's native 1M
-    # window (no DISABLE_1M clamp, no AUTO_COMPACT_WINDOW override) and keep
-    # the harness subagent/task tool schemas loaded. Pairs with the
-    # `backgroundSubagents` omit in `omitRules` below, whose rule text
-    # declares these tools absent.
+    # window (no DISABLE_1M clamp, no AUTO_COMPACT_WINDOW override).
     features = {
       context1M = true;
       autoCompactWindow = null;
@@ -269,12 +254,11 @@
     # claudeCode` below discards the defaulted package, so the option
     # silently shipped prompts WITH the forceMerge rule while
     # protectedMergeGuard below already allowed force-merging (index#3537).
-    # The task-list tools below are re-enabled (progress boards use them),
-    # so the backgroundSubagents rule (which claims subagent AND task tools
-    # absent) stays omitted. Agent is re-enabled below too: native subagents
-    # are preferred here over routing every delegation through the kernel's
-    # depth-1 Agents.* surface (reverses the index#3700 default). The kernel
-    # still owns shell/file/search.
+    # backgroundSubagents is omitted because this machine wants the opposite
+    # preference: native harness subagents over the kernel's depth-1 Agents.*
+    # surface (reverses the index#3700 default), with the kernel still owning
+    # shell/file/search. Until #4224 the rule also claimed those harness tools
+    # were absent, which is no longer why it is dropped.
     omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
     # SessionStart memory digest from the weave store; replaces the retired
     # MEMORY.md load (index#3849).
@@ -337,7 +321,6 @@
     shell_environment_policy = {
       "inherit" = "all";
       ignore_default_excludes = true;
-      set.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
     };
   };
 
@@ -538,8 +521,9 @@ in {
       #    ToolSearch fetch (default would defer once MCP defs cross a char cap).
       #  - CLAUDE_CODE_DISABLE_CRON=1 → drops the scheduling/loop tools
       #    (CronCreate/CronDelete/CronList).
-      # Agent teams follow the index claude-code wrapper's env_defaults
-      # (index#1786 bakes CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1); the context
+      # Agent teams follow the index claude-code wrapper's env_defaults, which
+      # derive CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS from the SendMessage tool
+      # row so the var and the permission cannot disagree (#4224); the context
       # window clamp is baked into the wrapper's settings render (index#2167).
       # No per-machine override for either here.
       ENABLE_TOOL_SEARCH = "false";

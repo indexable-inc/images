@@ -469,17 +469,20 @@
     backgroundSubagents = {
       topics = ["tooling"];
       text = ''
-        The harness subagent and task tools are absent by design. Delegate
-        through the index kernel to named background agents: one worktree per
-        editor, main session on orchestration, model strength matched to
-        difficulty. Fan out when subtasks are independent; iterating
-        serially over independent items forfeits the win.
+        Prefer the index kernel's named background agents over the harness
+        subagent tools: one worktree per editor, main session on
+        orchestration, model strength matched to difficulty. Fan out when
+        subtasks are independent; iterating serially over independent items
+        forfeits the win.
       '';
       reason = ''
-        Harness Agent/Task schemas were denied to reclaim context (#2404);
-        briefs promising them produced relay swarms (index#2153). Fable 5
-        system card sec 8.15: async-subagent fan-out beats single-agent on
-        both score and latency.
+        Briefs promising tools an agent lacks produced relay swarms
+        (index#2153), and a kernel agent outlives the turn that spawned it.
+        Fable 5 system card sec 8.15: async-subagent fan-out beats
+        single-agent on both score and latency. Said the harness subagent and
+        task tools were "absent by design" until #4224, which was two tool
+        table revisions stale: #4095 turned Agent and Task* back on and this
+        text kept telling every session they were gone.
       '';
     };
   }

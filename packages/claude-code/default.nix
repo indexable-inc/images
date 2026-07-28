@@ -302,14 +302,22 @@
   # feature for one session).
   featureSettingsEnv =
     disabledFeatureEnv
+    // agentTeamsEnv
     // lib.optionalAttrs (effectiveFeatures.autoCompactWindow != null) {
       CLAUDE_CODE_AUTO_COMPACT_WINDOW = toString effectiveFeatures.autoCompactWindow;
     };
-  wrapperEnvDefaults = disabledFeatureEnv;
+  # SendMessage is gated on this env var as well as on its permission row:
+  # agent teams is experimental, so a permission row without the var renders a
+  # deny-free tool the session never actually shows. Derived from the tool row
+  # (defined below) so the two cannot drift, which is how the row came to
+  # promise a tool no consumer had (#4224).
+  agentTeamsEnv = lib.optionalAttrs effectiveSystemTools.SendMessage {
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
+  };
+  wrapperEnvDefaults = disabledFeatureEnv // agentTeamsEnv;
 
-  # Whether the index kernel rides along, which decides both the tools the
-  # kernel supersedes (shared policy below) and the `Monitor` default in the
-  # tool table.
+  # Whether the index kernel rides along, which decides the tools the kernel
+  # supersedes (shared policy below).
   indexKernelBaked = mcpServers ? index;
 
   # Disabling a tool here puts its BARE name in `permissions.deny`, which
@@ -342,26 +350,43 @@
     ExitPlanMode = true;
     ExitWorktree = false;
     ListMcpResourcesTool = false;
-    # Off with the kernel present: a Monitor watch is a supervised job the
-    # kernel already owns (Jobs.watch), and the tool's schema buys nothing
-    # beside it. Lives here rather than in the shared deny policy so a
-    # consumer can flip it back with `systemTools` like any other tool
-    # (#4312); the default tracks the kernel exactly as the policy gate did.
-    Monitor = !indexKernelBaked;
+    # On, kernel or not: the Bash tool description tells the model that
+    # foreground `sleep` is blocked and to use Monitor with an until-loop to
+    # wait on a condition. Jobs.watch does not supersede that. It watches jobs
+    # the kernel spawned, not an arbitrary log tail or a polled remote API,
+    # which is what the instruction is for, so gating this on the kernel left a
+    # native instruction with no satisfiable form and produced the foreground
+    # sleep loops it forbids (#4224). Lives here rather than in the shared deny
+    # policy so a consumer can still turn it off with `systemTools` like any
+    # other tool (#4312).
+    Monitor = true;
     PushNotification = false;
     ReadMcpResourceDirTool = false;
     ReadMcpResourceTool = false;
     RemoteTrigger = true;
-    ReportFindings = false;
+    # On: how a subagent hands structured findings back to its caller, which
+    # is what the code-review skills render through. Same agent-to-caller
+    # family as SendMessage below, and cheap (#4224).
+    ReportFindings = true;
+    # Off, and unlike its neighbours here for a reason that holds: nothing the
+    # model is told names it. The wakeup hooks in agent/policy/hooks.nix speak
+    # only after a wakeup was armed, so with the tool absent that path is
+    # unreachable rather than false. Consumers whose loops pace themselves opt
+    # in through `systemTools`.
     ScheduleWakeup = false;
-    # Off: agent-teams peer messaging (needs env
-    # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS too). The Claude Fable 5 system
-    # card's Multi-Agent ProgramBench (sec. 8.15.2) found the SendMessage
-    # peer mesh reaches similar solutions faster in wall clock but with no
-    # better final quality and much worse token efficiency than one agent
-    # working sequentially, so subagents (Agent, Task*) are on and the mesh
-    # stays off (#4095).
-    SendMessage = false;
+    # On, against a measured cost: the Claude Fable 5 system card's
+    # Multi-Agent ProgramBench (sec. 8.15.2) found the SendMessage peer mesh
+    # reaches similar solutions faster in wall clock but with no better final
+    # quality and much worse token efficiency than one agent working
+    # sequentially (#4095). It is on anyway because the Agent tool's own
+    # description tells the model to use SendMessage to continue a running
+    # subagent, so with the tool denied the model follows that instruction into
+    # the only fallback it has left and spawns a SECOND agent on the files the
+    # first one is editing (observed, ENG-10401). A wasteful tool beats an
+    # instruction whose only available fallback corrupts state. Turn this back
+    # off once the Agent description stops naming a tool the permission set may
+    # deny (#4224).
+    SendMessage = true;
     SendUserFile = true;
     ShareOnboardingGuide = true;
     Skill = true;
