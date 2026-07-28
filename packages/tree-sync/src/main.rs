@@ -1,7 +1,7 @@
 //! `tree-sync`: push a source tree to a remote host or another checkout.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use color_eyre::Result;
@@ -38,13 +38,13 @@ struct Args {
     #[arg(long = "exclude-any-depth", value_name = "PATTERN")]
     exclude_any_depth: Vec<String>,
 
-    /// Remove destination files the source no longer has.
-    #[arg(long)]
-    delete: bool,
-
-    /// Send every file, skipping the size and mtime up-to-date check.
-    #[arg(long)]
-    all: bool,
+    // --all and --delete are one decision: how much of what the destination
+    // reports about itself the sync honours. --all discards its claim that a
+    // file is already current; --delete discards its right to keep a file the
+    // source does not have. Flattened behind a plain comment, because clap
+    // renders a doc comment on a flattened field as a --help group heading.
+    #[command(flatten)]
+    reconcile: ReconcileArgs,
 
     /// Report what would move, and move nothing.
     #[arg(short = 'n', long)]
@@ -57,6 +57,18 @@ struct Args {
     /// Print only errors.
     #[arg(short, long)]
     quiet: bool,
+}
+
+/// How far the destination's own account of itself is allowed to limit the sync.
+#[derive(Debug, clap::Args)]
+struct ReconcileArgs {
+    /// Send every file, skipping the size and mtime up-to-date check.
+    #[arg(long)]
+    all: bool,
+
+    /// Remove destination files the source no longer has.
+    #[arg(long)]
+    delete: bool,
 }
 
 fn main() -> Result<()> {
@@ -122,7 +134,7 @@ fn run(args: &Args) -> Result<()> {
         ));
     }
 
-    if selected.is_empty() && args.delete {
+    if selected.is_empty() && args.reconcile.delete {
         return Err(eyre!(
             "the source tree selected no files, so --delete would empty {}; \
              check the source path and the exclude patterns",
@@ -139,8 +151,8 @@ fn run(args: &Args) -> Result<()> {
     let dest = target.path();
 
     let moved = match remote.as_ref() {
-        Some(remote) => remote.push(&source, &selected, dest, args.all, args.dry_run)?,
-        None => transfer::push_local(&source, &selected, dest, args.all, args.dry_run)?,
+        Some(remote) => remote.push(&source, &selected, dest, args.reconcile.all, args.dry_run)?,
+        None => transfer::push_local(&source, &selected, dest, args.reconcile.all, args.dry_run)?,
     };
 
     if moved.manifest_unavailable {
@@ -156,35 +168,52 @@ fn run(args: &Args) -> Result<()> {
         moved.unchanged
     ));
 
-    if args.delete {
-        let keep: HashSet<PathBuf> = selected
-            .iter()
-            .map(|entry| entry.relative.clone())
-            .collect();
-        let present = transfer::manifest_for(remote.as_ref(), dest)?.ok_or_else(|| {
-            eyre!(
-                "--delete needs the destination to list itself, and {} could not; \
-                 refusing to guess at what to remove",
-                target.describe()
-            )
-        })?;
-        let doomed = transfer::plan_deletions(&present, &keep)?;
-        match remote.as_ref() {
-            Some(remote) => remote.delete(dest, &doomed, args.dry_run)?,
-            None => transfer::delete_local(dest, &doomed, args.dry_run)?,
-        }
-        say(&format!("  deleted   {} paths", doomed.len()));
-        for path in doomed.iter().take(DELETION_SAMPLE) {
-            say(&format!("            {}", path.display()));
-        }
-        if doomed.len() > DELETION_SAMPLE {
-            say(&format!(
-                "            ... and {} more",
-                doomed.len() - DELETION_SAMPLE
-            ));
-        }
+    if args.reconcile.delete {
+        delete_removed(remote.as_ref(), dest, &target, &selected, args.dry_run, say)?;
     }
 
+    Ok(())
+}
+
+/// Remove the paths the destination holds that the source no longer selects.
+///
+/// Split out of `run` so the sync's two halves, sending and removing, each read
+/// on their own. A destination that cannot list itself is an error rather than
+/// an empty deletion set: guessing here removes the operator's files.
+fn delete_removed(
+    remote: Option<&transfer::Remote>,
+    dest: &Path,
+    target: &Target,
+    selected: &[tree::Entry],
+    dry_run: bool,
+    say: impl Fn(&str),
+) -> Result<()> {
+    let keep: HashSet<PathBuf> = selected
+        .iter()
+        .map(|entry| entry.relative.clone())
+        .collect();
+    let present = transfer::manifest_for(remote, dest)?.ok_or_else(|| {
+        eyre!(
+            "--delete needs the destination to list itself, and {} could not; \
+             refusing to guess at what to remove",
+            target.describe()
+        )
+    })?;
+    let doomed = transfer::plan_deletions(&present, &keep)?;
+    match remote {
+        Some(remote) => remote.delete(dest, &doomed, dry_run)?,
+        None => transfer::delete_local(dest, &doomed, dry_run)?,
+    }
+    say(&format!("  deleted   {} paths", doomed.len()));
+    for path in doomed.iter().take(DELETION_SAMPLE) {
+        say(&format!("            {}", path.display()));
+    }
+    if doomed.len() > DELETION_SAMPLE {
+        say(&format!(
+            "            ... and {} more",
+            doomed.len() - DELETION_SAMPLE
+        ));
+    }
     Ok(())
 }
 
