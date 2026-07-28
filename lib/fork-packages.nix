@@ -880,7 +880,7 @@
         # No host sets it today. hydra was the one that did, 2026-07-19 to
         # 2026-07-27, and turned it back off: on a 698k-file flake tree the
         # mutation fix that lazy mounting requires (0032, below) costs more
-        # than lazy mounting saves, measured 3.7x wall clock
+        # than lazy mounting saves: 13x the system CPU, interleaved arms
         # (indexable-inc/index#4297). This gate is what made that a one-line
         # revert; keep it until 0032 filters by the git file set.
         "libexpr: gate lazy input mounting behind an off-by-default lazy-trees setting" = {
@@ -927,8 +927,11 @@
         # is unfiltered, because treeRoot is widened to the repo root to
         # carry .git. hydra's flake tree is 698,301 files against 18,299
         # tracked, so every nix invocation cloned and deleted 680,002
-        # gitignored files: 62s of teardown, 3.7x wall clock, and 707
-        # abandoned snapshots holding 22M entries, because _deletePath is
+        # gitignored files: 62s of teardown, 13x the system CPU (118.1s /
+        # 123.2s / 118.9s with the setting on against 6.6s / 12.2s off, arms
+        # interleaved; wall clock on a busy box is too noisy to quote, ~4x),
+        # and 712 abandoned snapshots holding 22M entries, because
+        # _deletePath is
         # interruptible and a Ctrl-C during a multi-minute teardown strands
         # the tree. Darwin-only (cloneTreeSnapshot is #ifdef __APPLE__), so
         # Linux always took the git-filtered content-addressed eager copy,

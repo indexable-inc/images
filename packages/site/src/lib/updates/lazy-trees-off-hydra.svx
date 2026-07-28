@@ -1,7 +1,7 @@
 ---
 id: lazy-trees-off-hydra
 postedAt: 2026-07-27T23:05:00-07:00
-title: "lazy trees is off again: its own mutation fix made hydra 3.7x slower"
+title: "lazy trees is off again: its own mutation fix costs hydra 13x the kernel time"
 tags: [nix, fork, performance, flakes]
 links:
   - label: index#4297
@@ -12,7 +12,11 @@ links:
     href: https://github.com/indexable-inc/index/issues/3645
 ---
 
-`lazy-trees` is back to `false` on hydra, the only host that had it on. Measured on the flake it was enabled for, the setting costs 3.7x wall clock: the same warm-cache `nix eval` of `homeConfigurations."andrewgazelka@hydra".activationPackage.drvPath` runs in 362s on average with it on and 97s with it off, and system CPU drops from 119s to 7.5s. Evaluation itself barely moves, 21.8s to 16.0s, so none of the difference is the evaluator.
+`lazy-trees` is back to `false` on hydra, the only host that had it on. Measured on the flake it was enabled for, with the arms interleaved so machine load cannot favour one: the same warm-cache `nix eval` of `homeConfigurations."andrewgazelka@hydra".activationPackage.drvPath` spends **118.1s, 123.2s and 118.9s of system CPU** with the setting on, against **6.6s and 12.2s** with it off. Roughly 13x, and the three readings with it on agree within 4%.
+
+Wall clock is the number people ask for and the one worth refusing to quote precisely here: it ranged 222-328s on and 36-92s off, about 4x, on a box that other agent sessions keep busy and whose flake tree they keep writing to mid-measurement. System CPU is the work itself rather than time spent waiting, which is why it holds steady while wall clock does not. User CPU is 17-22s either way, so none of the gap is the evaluator.
+
+Two measurements taken a different way agree with the kernel time. A stack sample of a live `nix eval` caught 3131 of 3131 samples in `AutoDelete` -> `_deletePath` -> `unlinkat`, after evaluation had already finished. And unlink runs at 11,257 entries/s on this host, so a 698,301-file clone is about 62 seconds of teardown per invocation on its own.
 
 Lazy trees exists to avoid copying source trees into the store. On hydra it now performs a larger copy than the one it avoids.
 
