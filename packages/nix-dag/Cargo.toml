@@ -1,0 +1,19 @@
+[package]
+name = "nix-dag"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Score a Nix build plan's shape: blast radius, fan-out, critical path, and env-carrier invalidation"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[[bin]]
+name = "nix-dag"
+path = "src/main.rs"

@@ -549,6 +549,7 @@ in {
       indexPkgs.htmlpage # `htmlpage`: render one-file TSX reports to self-contained HTML and open them; same pinned `index` input
       indexPkgs.vcs-prompt # `vcs-prompt`: the prompt's VCS segment (jj state in a jj workspace, git branch/status elsewhere), called by custom.vcs in home/starship.nix; same pinned `index` input
       indexPkgs.whence # `whence <path>`: deployed file -> defining nix file:line, read from the generation's provenance.json manifest; same pinned `index` input
+      indexPkgs.nix-dag # `nix-dag <installable>`: score a build plan's critical path, width, and which derivations invalidate the rest for nothing. Named by the agent prompt's nixPlanShape rule, so it has to be on PATH to be reachable; same pinned `index` input
       cfg.packages.ix # `ix`: fleet/VM CLI (ix apply/shell/ls/snapshot); pinned via the `ix` flake input, bump with `nix flake update ix`
       (callPackage (configRoot + "/home/ssh-hosts") {}) # `ssh-hosts`: list SSH aliases + recent ssh targets; backs the ssh-hosts Claude skill
       # fish: installed by programs.fish below (package = fishNoTests), not here
