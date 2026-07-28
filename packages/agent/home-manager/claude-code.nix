@@ -57,14 +57,14 @@
   #   systemTools.ExitPlanMode = true;  plan-mode exit
   #   systemTools.ExitWorktree = false;  session worktree switching (exit)
   #   systemTools.ListMcpResourcesTool = false;  MCP resource browser; kernel-superseded
-  #   systemTools.Monitor = false;  event-stream watches; kernel-superseded (Jobs.watch)
+  #   systemTools.Monitor = true;  event-stream watches; on because the Bash tool description names it as the way to wait on a condition
   #   systemTools.PushNotification = false;  mobile push via Remote Control
   #   systemTools.ReadMcpResourceDirTool = false;  MCP resource browser; kernel-superseded
   #   systemTools.ReadMcpResourceTool = false;  MCP resource browser; kernel-superseded
   #   systemTools.RemoteTrigger = true;  remote-control trigger surface
-  #   systemTools.ReportFindings = false;  subagent findings reporting
+  #   systemTools.ReportFindings = true;  subagent findings reporting; the code-review skills render through it
   #   systemTools.ScheduleWakeup = false;  timed wakeups (cron orchestration surface)
-  #   systemTools.SendMessage = false;  agent-team teammate messaging (pair with env CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)
+  #   systemTools.SendMessage = true;  agent-team teammate messaging; on because the Agent tool description names it, and it derives env CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
   #   systemTools.SendUserFile = true;  send a file to the user's device
   #   systemTools.ShareOnboardingGuide = true;  onboarding guide sharing
   #   systemTools.Skill = true;  skill invocation
@@ -232,7 +232,7 @@
   #   CLAUDE_CODE_ENABLE_TASKS = "";  Controls whether sessions use the structured Task tools (`TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`) or the legacy `TodoWrite` tool.
   #   CLAUDE_CODE_ENABLE_TELEMETRY = "";  Set to `1` to enable OpenTelemetry data collection for metrics and logging.
   #   CLAUDE_CODE_EXIT_AFTER_STOP_DELAY = "";  Time in milliseconds to wait after the query loop becomes idle before automatically exiting.
-  #   CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "";  enable experimental agent teams; also re-enable the SendMessage/Task* systemTools the wrapper denies
+  #   CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "";  enable experimental agent teams; the wrapper already bakes this from the SendMessage systemTools row
   #   CLAUDE_CODE_EXTRA_BODY = "";  JSON object to merge into the top level of every API request body.
   #   CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS = "";  Override the default token limit for file reads.
   #   CLAUDE_CODE_FORCE_SESSION_PERSISTENCE = "";  Set to `1` to force transcript persistence, prompt history, and `claude agents` registration even when this `claude` was launched from inside another Claude Code session.

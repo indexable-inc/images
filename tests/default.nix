@@ -4667,6 +4667,27 @@
         message = "Claude Code Home Manager module must leave settings.json app-owned, and the policy render must carry hooks/permissions without the app-owned preference keys";
       }
       {
+        # #4224: denying a tool that another tool's description tells the model
+        # to use does not stop the model, it picks the fallback that
+        # description forbids one paragraph later. The Agent description names
+        # SendMessage for redirecting a running subagent, and without it the
+        # only move left is a second Agent call on the first one's files
+        # (observed, ENG-10401); the Bash description names Monitor for waiting
+        # on a condition. Pin both out of the deny list, and pin that the
+        # experimental agent-teams env var rides along with SendMessage: the
+        # tool stays hidden without it, so the permission row alone is a lie.
+        assertion = let
+          policy = homeAgentConfig.programs.claude-code.package.passthru.settingsPolicy;
+        in
+          builtins.all (tool: !(builtins.elem tool policy.permissions.deny)) [
+            "Monitor"
+            "ReportFindings"
+            "SendMessage"
+          ]
+          && policy.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS == "1";
+        message = "claude-code must not deny tools its own tool descriptions tell the model to use, and SendMessage must bake the agent-teams env var it needs";
+      }
+      {
         assertion =
           builtins.elem {
             key = "agents.max_depth";
