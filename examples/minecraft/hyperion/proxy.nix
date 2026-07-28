@@ -23,14 +23,24 @@ in {
 
   ix = {
     networking = {
-      # A real address out of the region's IPv4 ingress block, allocated once
-      # when the VM is created. It belongs to the image rather than to the
-      # deployment because "this VM is the entrypoint" is what the image is: a
-      # proxy without a public address has nothing to proxy. IPv4 specifically,
-      # not the public IPv6 every VM already carries, because the Java client
-      # resolves through the JDK, which prefers IPv4, and a large share of
-      # players have no IPv6 at all.
-      ipv4 = true;
+      # `ipv4 = true` belongs here and is deliberately off, because in
+      # `us-west-1` today it does not add an address, it removes the VM from
+      # the network.
+      #
+      # The region's ingress block `15.204.22.192/26` is not delivered to the
+      # OVH vRack: its gateway `15.204.22.254` is `FAILED` in the host's
+      # neighbour table. A VM with no public address sources from `10.0.0.x`,
+      # is masqueraded, and leaves over the host's own uplink. A VM that takes
+      # one sources from the public block, matches the host's
+      # `from 15.204.22.192/26 iif br-north lookup 200` rule, and is handed to
+      # that dead gateway, so everything it sends is blackholed. Both proxies
+      # came up unable to resolve, unable to substitute, and unable to complete
+      # their switch at all. ENG-10881.
+      #
+      # Turn it back on, and recreate the proxies, once OVH delivers the block.
+      # A public IPv4 is what this example wants: the Java client resolves
+      # through the JDK, which prefers IPv4, and a large share of players have
+      # no IPv6 at all.
 
       expose.minecraft = {
         port = 25565;
