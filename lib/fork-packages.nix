@@ -583,6 +583,17 @@
           upstream = "hold";
           reason = "Use-after-free in upstream `Store::queryMissing`: the frame's `Sync<State>` and work-item lambdas are destroyed before `~ThreadPool` joins the workers that reference them, and the enqueue loop sits outside `ThreadPool::process()`'s exception guard. Diagnosed from 117 of 123 core dumps on our CI dispatchers (ENG-9972). Upstream-worthy and standalone; a human submits it with the core-dump evidence, per this fork's aiPrsAllowed = false.";
         };
+        # Same class as the queryMissing fix and found the same way: nix
+        # SIGABRTing on the CI dispatchers. Upstream-shaped and standalone --
+        # the assertion is byte-identical on master and 2.35-maintenance, and
+        # the manual's own "this store only grow" allowance for the lower store
+        # is what makes the invariant it asserts false. Recurring upstream
+        # reports (#4256 closed with no root cause, #15868 open against
+        # 2.34.7) never name a mechanism, so the report is most of the value.
+        "fix(libstore): don't abort when an output path becomes valid mid-build" = {
+          upstream = "hold";
+          reason = "`registerOutputs` asserts that only a content-addressed output can find its path already valid, an invariant that holds only where a store's output locks cover every writer of its validity. A local-overlay store answers isValidPath from its lower store, whose writers its locks do not cover, and the manual permits that lower store to grow while mounted -- so a documented configuration aborts the process. Diagnosed from a core dump on vin-compute-1's ephemeral-upper lane (ix#8445) and reproduced deterministically by the new local-overlay functional test. A human submits it with the core-dump evidence and a note on #15868, per this fork's aiPrsAllowed = false.";
+        };
         # Fork-local test adaptations: they exist because fork patches changed
         # failure propagation / added features, so they are meaningless upstream.
         "tests/functional: update failure expectations for preserved leaf errors" = {
