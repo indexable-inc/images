@@ -1855,6 +1855,10 @@
         env = "FLEET_DEFAULT";
       };
     };
+    deployment.sources.grim_tooling = {
+      path = ".ix/artifacts/grim-tooling";
+      destination = "/var/lib/grim/releases/default";
+    };
 
     nodes = {
       db = {
@@ -1868,12 +1872,26 @@
           destination = "fleet-web:latest";
           ipv4 = true;
           secrets.github_token.env = "GH_TOKEN";
+          sources.grim_tooling = {
+            destination = "/var/lib/grim/releases/web";
+            activateServices = ["grim-build-worker"];
+          };
         };
         modules = [
           (
-            {nodes, ...}: {
+            {
+              nodes,
+              pkgs,
+              ...
+            }: {
               services.remote-desktop.enable = true;
               environment.etc.db-host.text = nodes.db.config.networking.hostName;
+              systemd.services.grim-build-worker.serviceConfig = {
+                Type = "oneshot";
+                ExecStart = "${pkgs.coreutils}/bin/true";
+                RemainAfterExit = true;
+              };
+              systemd.services.grim-build-worker.unitConfig.ConditionPathExists = "/var/lib/grim/config";
             }
           )
         ];
@@ -2024,6 +2042,117 @@
       };
     }).planValue.nodes.web.region
     true
+  );
+
+  tryFleetSourceManifest = sources:
+    builtins.tryEval (
+      builtins.deepSeq
+      (ix.mkFleet {
+        nodes.web = {
+          deployment.sources = sources;
+          modules = [{}];
+        };
+      }).nodes.web.environment.etc."ix/deployment-sources.json".text
+      true
+    );
+
+  fleetInvalidSourceEval = tryFleetSourceManifest {
+    artifact = {
+      path = "../private/bundle";
+      destination = "/var/lib/web/bundle";
+    };
+  };
+
+  fleetSelfLockingSourceEval = tryFleetSourceManifest {
+    artifact = {
+      path = ".";
+      destination = "/var/lib/web/bundle";
+    };
+  };
+
+  fleetUnknownSourceKeyEval = tryFleetSourceManifest {
+    artifact = {
+      path = ".ix/artifacts/bundle";
+      destination = "/var/lib/web/bundle";
+      activateService = ["web"];
+    };
+  };
+
+  fleetDuplicateSourceDestinationEval = tryFleetSourceManifest {
+    first = {
+      path = ".ix/artifacts/first";
+      destination = "/var/lib/web/bundle";
+    };
+    second = {
+      path = ".ix/artifacts/second";
+      destination = "/var//lib/web/./bundle/";
+    };
+  };
+
+  fleetNestedSourceDestinationEval = tryFleetSourceManifest {
+    tree = {
+      path = ".ix/artifacts/tree";
+      destination = "/var/lib/web";
+    };
+    nested = {
+      path = ".ix/artifacts/nested";
+      destination = "/var/lib/web/config";
+    };
+  };
+
+  fleetProtectedSourceAncestorEval = tryFleetSourceManifest {
+    artifact = {
+      path = ".ix/artifacts/nix";
+      destination = "/nix";
+    };
+  };
+
+  fleetMissingSourceServiceEval = builtins.tryEval (
+    builtins.deepSeq
+    (ix.mkFleet {
+      nodes.web = {
+        deployment.sources.artifact = {
+          path = ".ix/artifacts/bundle";
+          destination = "/var/lib/web/bundle";
+          activateServices = ["missing-worker"];
+        };
+        modules = [{}];
+      };
+    }).nodes.web.system.build.toplevel.drvPath
+    true
+  );
+
+  fleetEmptySourceServiceEval = builtins.tryEval (
+    builtins.deepSeq
+    (ix.mkFleet {
+      nodes.web = {
+        deployment.sources.artifact = {
+          path = ".ix/artifacts/bundle";
+          destination = "/var/lib/web/bundle";
+          activateServices = ["empty-worker"];
+        };
+        modules = [
+          {
+            systemd.services.empty-worker.serviceConfig.ExecStart = [""];
+          }
+        ];
+      };
+    }).nodes.web.system.build.toplevel.drvPath
+    true
+  );
+
+  fleetSourceSelectorOverrideManifest = builtins.fromJSON (
+    (ix.mkFleet {
+      deployment.sources.artifact = {
+        path = ".ix/artifacts/bundle";
+        destination = "/var/lib/web/bundle";
+        activateServices = ["web"];
+      };
+      nodes.web = {
+        deployment.sources.artifact.sourceId = "019c8f64-dc72-7bda-bdf6-b55119d37667";
+        modules = [{}];
+      };
+    }).nodes.web.environment.etc."ix/deployment-sources.json".text
   );
 
   fleetDependencyCycleEval = builtins.tryEval (
@@ -5940,6 +6069,52 @@
         message = "fleet plans should reject unknown deployment keys during eval";
       }
       {
+        assertion = !fleetInvalidSourceEval.success;
+        message = "fleet plans should reject Source paths that escape the apply source root";
+      }
+      {
+        assertion = !fleetSelfLockingSourceEval.success;
+        message = "fleet plans should reject Source paths that contain their own generated lock";
+      }
+      {
+        assertion = !fleetUnknownSourceKeyEval.success;
+        message = "fleet plans should reject unknown Source attachment keys";
+      }
+      {
+        assertion = !fleetDuplicateSourceDestinationEval.success;
+        message = "fleet plans should compare normalized Source destination paths";
+      }
+      {
+        assertion = !fleetNestedSourceDestinationEval.success;
+        message = "fleet plans should reject nested Source destination paths";
+      }
+      {
+        assertion = !fleetProtectedSourceAncestorEval.success;
+        message = "fleet plans should reject ancestors of protected Source destination paths";
+      }
+      {
+        assertion = !fleetMissingSourceServiceEval.success;
+        message = "fleet plans should reject Source gates for missing systemd services";
+      }
+      {
+        assertion = !fleetEmptySourceServiceEval.success;
+        message = "fleet plans should reject Source gates whose ExecStart list contains no command";
+      }
+      {
+        assertion =
+          fleetSourceSelectorOverrideManifest.sources
+          == [
+            {
+              name = "artifact";
+              path = null;
+              sourceId = "019c8f64-dc72-7bda-bdf6-b55119d37667";
+              destination = "/var/lib/web/bundle";
+              activateServices = ["web"];
+            }
+          ];
+        message = "node Source selector overrides should replace inherited path/sourceId keys";
+      }
+      {
         assertion = !fleetDependencyCycleEval.success;
         message = "fleet plans should reject cyclic dependsOn entries during eval";
       }
@@ -5973,6 +6148,34 @@
             }
           ];
         message = "per-VM secret attachments should merge fleet-wide and node-level refs";
+      }
+      {
+        assertion = let
+          manifest = builtins.fromJSON fleet.nodes.web.environment.etc."ix/deployment-sources.json".text;
+        in
+          manifest.version
+          == 1
+          && manifest.sources
+          == [
+            {
+              name = "grim_tooling";
+              path = ".ix/artifacts/grim-tooling";
+              sourceId = null;
+              destination = "/var/lib/grim/releases/web";
+              activateServices = ["grim-build-worker"];
+            }
+          ]
+          && lib.length fleet.nodes.web.systemd.services.grim-build-worker.unitConfig.ConditionPathExists
+          == 2
+          && lib.elem
+          "/var/lib/grim/config"
+          fleet.nodes.web.systemd.services.grim-build-worker.unitConfig.ConditionPathExists
+          && lib.elem
+          "/run/ix/sources-ready"
+          fleet.nodes.web.systemd.services.grim-build-worker.unitConfig.ConditionPathExists
+          && lib.hasInfix "grim-build-worker.service" fleet.nodes.web.system.activationScripts.ixSourceGate.text
+          && fleetPlan.web.sources == manifest.sources;
+        message = "Source attachments should merge into the guest closure and gate declared services until ix apply materializes them";
       }
       {
         assertion = fleetPlan.worker-0.baseName == "worker" && fleetPlan.worker-1.replicaIndex == 1;

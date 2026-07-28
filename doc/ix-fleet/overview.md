@@ -81,7 +81,9 @@ each node key matches its `name`; and that every `dependsOn` names a real node.
   (`ReplacementImage`), `region`, `ipv4`, `snapshot`, `recreateOnUp` (default
   false), an optional `updateStrategy` (`UpdateStrategy`: `maxUnavailable`,
   int >= 1), and the lists/maps `tags`, `groups`, `env`, `secrets`,
-  `l7ProxyPorts`, `dependsOn`, `healthChecks` (name -> `HealthCheck`).
+  `sources`, `l7ProxyPorts`, `dependsOn`, `healthChecks` (name ->
+  `HealthCheck`). `up`/`replace` reject nodes with `sources`; materialization
+  belongs to source-aware `ix apply`.
 - **`SwitchSpec`** (`:44`): `target`, `buildOn` (`auto`|`local`|`remote`,
   default `auto`), optional `buildVm`, `sourceInstallable`, `overrideInputs`.
   `sourceInstallable` defaults to the bare node name `.#<node>` (not

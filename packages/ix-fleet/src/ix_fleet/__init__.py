@@ -111,6 +111,10 @@ class FleetNode(BaseModel):
     # Secret store keys plus per-VM delivery targets. References only, never
     # values: plaintext belongs in the ix store, not the fleet plan.
     secrets: list[SecretAttachment] = Field(default_factory=list)
+    # Immutable artifact references. Source-aware convergence is implemented
+    # by `ix apply`; legacy image workflows inspect this field only to reject
+    # deployments they cannot safely materialize.
+    sources: list[dict[str, typing.Any]] = Field(default_factory=list)
     l7ProxyPorts: list[int] = Field(default_factory=empty_int_list)
     dependsOn: list[str] = Field(default_factory=empty_str_list)
     healthChecks: dict[str, HealthCheck] = Field(default_factory=dict)
@@ -200,6 +204,30 @@ def selected_in_order(plan: FleetPlan, selectors: list[str]) -> list[FleetNode]:
     `worker` should not silently report on `web` too."""
     selected = selected_names(plan, selectors)
     return [plan.nodes[name] for name in plan.order if name in selected]
+
+
+def reject_source_image_deploy(nodes: list[FleetNode], operation: str) -> None:
+    unsupported = [node.name for node in nodes if node.sources]
+    if not unsupported:
+        return
+    raise RuntimeError(
+        f"ix-fleet {operation} cannot deploy nodes with deployment.sources through "
+        f"the image path: {', '.join(unsupported)}; use source-aware `ix apply`"
+    )
+
+
+def reject_local_source_switch(nodes: list[FleetNode]) -> None:
+    unsupported = [
+        node.name
+        for node in nodes
+        if node.sources and node.switch.buildOn != "remote"
+    ]
+    if not unsupported:
+        return
+    raise RuntimeError(
+        "ix-fleet switch cannot materialize deployment.sources for non-remote "
+        f"switch nodes: {', '.join(unsupported)}; use source-aware `ix apply`"
+    )
 
 
 def step(message: str) -> None:
@@ -915,6 +943,7 @@ async def cmd_diff(plan: FleetPlan, args: argparse.Namespace) -> None:
 
 
 async def run_switch_node_workflow(node: FleetNode, args: argparse.Namespace) -> None:
+    reject_local_source_switch([node])
     source_root = (args.source_root or default_source_root(Path.cwd())).resolve()
     source_workdir = args.source_workdir or default_source_workdir(Path.cwd(), source_root)
     created = await ensure_node(node, dry_run=args.dry_run)
@@ -935,6 +964,7 @@ async def run_switch_node_workflow(node: FleetNode, args: argparse.Namespace) ->
 
 
 async def run_replace_node_workflow(node: FleetNode, args: argparse.Namespace) -> None:
+    reject_source_image_deploy([node], "replace")
     image = node.replacementImage.destination
     if not args.skip_push:
         image = await push_replacement_image(node, dry_run=args.dry_run)
@@ -945,6 +975,7 @@ async def run_replace_node_workflow(node: FleetNode, args: argparse.Namespace) -
 
 
 async def run_up_node_workflow(node: FleetNode, args: argparse.Namespace) -> None:
+    reject_source_image_deploy([node], "up")
     image = node.replacementImage.destination
     if not args.skip_push:
         image = await push_replacement_image(node, dry_run=args.dry_run)
@@ -1059,6 +1090,7 @@ async def switch_group_workflow(
 
 
 async def cmd_switch(plan: FleetPlan, args: argparse.Namespace) -> None:
+    reject_local_source_switch(selected_nodes(plan, args.on))
     if not args.dry_run:
         await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
     source_root = (args.source_root or default_source_root(Path.cwd())).resolve()
@@ -1097,6 +1129,8 @@ async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
 
 
 async def run_deploy_dag(plan: FleetPlan, args: argparse.Namespace, command: str) -> None:
+    operation = command.removeprefix("_").removesuffix("-node")
+    reject_source_image_deploy(selected_nodes(plan, args.on), operation)
     await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
     extra_args: list[str] = []
     if args.skip_push:
