@@ -21,6 +21,61 @@ fn base_envs(fixture: &Fixture) -> Vec<(&'static str, String)> {
     envs
 }
 
+/// A patch that no longer merges into the upstream branch is refused, and
+/// refused before anything is pushed.
+///
+/// The live failure: on 2026-07-27 the home-manager patch was 45 commits
+/// behind master and both files it touched had moved. The PR opened, and
+/// the upstream CI answered "merge conflicts with base branch" before a
+/// human read a line of it. Unattended, that repeats.
+#[test]
+fn a_patch_that_no_longer_merges_is_refused_before_any_push() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let fixture = Fixture::new(root, &[(SUBJECT, BODY)]);
+
+    // Upstream moves the same file the patch adds, with different content.
+    let upstream_file = fixture.upstream.join("patch-0.txt");
+    fs::write(&upstream_file, "upstream wrote something else here\n").unwrap();
+    common::git(&fixture.upstream, &["add", "."]);
+    common::git(
+        &fixture.upstream,
+        &["commit", "--quiet", "-m", "upstream: touch the same file"],
+    );
+
+    let mapping = root.join("mapping.json");
+    fs::write(&mapping, mapping_json("fake", "{}")).unwrap();
+
+    // --dry-run, the mode that pushes nothing anyway, so a pass here proves
+    // the check runs BEFORE the push rather than instead of it.
+    let run = run_bin(
+        env!("CARGO_BIN_EXE_upstream-pr"),
+        &[
+            "--dry-run",
+            "--mapping",
+            &mapping.display().to_string(),
+            "fake",
+            "frobnicator",
+        ],
+        root,
+        &base_envs(&fixture),
+    );
+    assert_ne!(run.status, 0, "stale patch was accepted:\n{}", run.stdout);
+    let out = format!("{}{}", run.stdout, run.stderr);
+    assert!(
+        out.contains("no longer merges into"),
+        "wrong refusal:\n{out}"
+    );
+    assert!(
+        out.contains("patch-0.txt"),
+        "refusal did not name the conflicting path:\n{out}"
+    );
+    assert!(
+        out.contains("Rebase the series"),
+        "refusal did not say what to do:\n{out}"
+    );
+}
+
 #[test]
 fn dry_run_resolves_closure_and_pushes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
@@ -99,7 +154,10 @@ fn prepare_pushes_the_patch_commit_to_the_fork_branch() {
     // The branch on the fork repo points at the patch commit itself: its
     // ancestry is the contribution.
     let branch = "upstream/fakefix-repair-the-frobnicator-widget-alignment";
-    let pushed = common::git(&fixture.fork, &["rev-parse", &format!("refs/heads/{branch}")]);
+    let pushed = common::git(
+        &fixture.fork,
+        &["rev-parse", &format!("refs/heads/{branch}")],
+    );
     assert_eq!(pushed, fixture.sha_of(SUBJECT), "{}", run.stdout);
     assert!(
         run.stdout.contains(&format!(

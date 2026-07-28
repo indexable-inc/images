@@ -12,12 +12,15 @@
 //!      becomes the upstream PR description (one fact, one home; the fork
 //!      mapping deliberately has no duplicate description field). This runs
 //!      BEFORE anything is pushed, in every mode including --dry-run.
-//!   3. Push the commit to branch `upstream/<slug-of-subject>` on the fork
+//!   3. Refuse a patch that no longer merges into the upstream branch. A
+//!      conflicted PR is rejected by the forge before a human reads it, so
+//!      this runs before the push, in every mode.
+//!   4. Push the commit to branch `upstream/<slug-of-subject>` on the fork
 //!      repo. The commit's git ancestry IS its dependency closure, so the
 //!      branch carries exactly the patches the contribution needs; when
 //!      that is more than the patch itself we warn, listing the ancestors.
 //!      Pushing to OUR fork is fine; it is not the outward act.
-//!   4. Prints the ready-to-open compare URL. With `--open`, additionally
+//!   5. Prints the ready-to-open compare URL. With `--open`, additionally
 //!      opens a DRAFT PR upstream against its default branch, from the fork
 //!      (`--head <fork-owner>:<branch>`). Default is prepare-only: opening
 //!      the upstream PR is the outward act and stays behind an explicit
@@ -111,6 +114,21 @@ fn main() -> Result<()> {
         bail!(
             "upstream-pr: {}: '{subject}' has no commit-message body; write the why in the commit body (it becomes the upstream PR description).",
             cli.pkg
+        );
+    }
+
+    // A patch that no longer merges into the upstream head is dead on
+    // arrival: the forge reports the conflict before a human reads the
+    // change. Checked in every mode including --dry-run, and BEFORE the
+    // push, so nothing lands on the fork branch either.
+    if let Some(paths) = repo.conflicts_with_upstream(&target.sha)? {
+        bail!(
+            "upstream-pr: {}: '{subject}' no longer merges into {}; a PR would open conflicted.\nConflicting paths:\n  {}\n\nRebase the series onto the upstream tip first (the fork is at {}, upstream at {}), then re-run.",
+            cli.pkg,
+            repo.upstream_branch,
+            paths.replace('\n', "\n  "),
+            &repo.base[..12.min(repo.base.len())],
+            &repo.upstream_tip[..12.min(repo.upstream_tip.len())]
         );
     }
 

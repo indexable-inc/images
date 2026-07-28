@@ -242,16 +242,27 @@ jobs:
       # not own, so the token has to be a user token that can push our fork
       # branch and open a PR upstream. Absent, the step skips loudly rather
       # than half-running.
+      # A skipped step reads as a passing step. The lane's state goes in a
+      # file the drift report folds into the step summary and the rolling PR
+      # body, so "the contribution lane did nothing again" is visible where
+      # somebody actually looks, rather than only in a ::notice:: nobody
+      # scrolls to.
       - name: Open authorized upstream PRs
         env:
           GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::notice::UPSTREAM_PR_TOKEN is not configured; skipping upstream PR opening. See packages/upstream-sync."
+            {
+              echo "**The upstream contribution lane is inert.** \`UPSTREAM_PR_TOKEN\` is not set, so no upstream PR was opened or updated this run."
+              echo ""
+              echo "It cannot be a \`GITHUB_TOKEN\` or a GitHub App token: opening or editing a PR on a repo we do not own needs \`pull_requests: write\` on THAT repo, and an App installation only carries permissions for repos in its own installation. It has to be a user PAT with \`public_repo\`, and PRs then carry that person's name, which is what upstreams like NixOS/nix ask for anyway."
+            } > "$RUNNER_TEMP/upstream-lane.md"
+            echo "::warning::UPSTREAM_PR_TOKEN is not configured; the upstream contribution lane did nothing."
             exit 0
           fi
           nix run .#upstream-sync -- --auto --open --check-stale
+          echo "Upstream contribution lane ran with \`--auto --open\`." > "$RUNNER_TEMP/upstream-lane.md"
 
       # Keep the team @-mention current on every PR we track. Change-gated on
       # the rendered block, so an unchanged PR costs one read and no write:
@@ -263,10 +274,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::notice::UPSTREAM_PR_TOKEN is not configured; skipping mention reconciliation."
             exit 0
           fi
-          nix run .#upstream-sync -- notify --apply
+          nix run .#upstream-sync -- notify --apply | tee "$RUNNER_TEMP/notify.txt"
+          {
+            echo ""
+            tail -1 "$RUNNER_TEMP/notify.txt"
+          } >> "$RUNNER_TEMP/upstream-lane.md"
 
       - name: Resolve triggering human
         id: trigger
@@ -283,6 +297,10 @@ jobs:
             echo "## Fork drift"
             echo ""
             cat "$RUNNER_TEMP/drift.md"
+            echo ""
+            echo "## Upstream contribution"
+            echo ""
+            cat "$RUNNER_TEMP/upstream-lane.md"
           } >> "$GITHUB_STEP_SUMMARY"
           {
             cat <<'BODY'
@@ -298,6 +316,10 @@ jobs:
 
           BODY
             cat "$RUNNER_TEMP/drift.md"
+            echo ""
+            echo "### Upstream contribution"
+            echo ""
+            cat "$RUNNER_TEMP/upstream-lane.md"
             echo ""
             echo "Auto-bump, made with Claude Opus 4.8."
             if [ -n "${TRIGGER_MENTION}" ]; then
