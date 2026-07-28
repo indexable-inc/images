@@ -2377,6 +2377,16 @@ in {
       examplePackages
       // healthChecks.lifecyclePackages
     )
+    // {
+      #   nix eval .#legacyPackages.<system>.rustUnits.<crate-version-hash>.drvPath
+      # Every rustc unit in the workspace graph, keyed `<crate>-<version>-<hash>`.
+      # Surfaced so a derivation-input audit can read a third-party crate's drv
+      # path straight off the flake instead of reconstructing the workspace by
+      # hand: perturb an input, re-evaluate, and diff the paths to see exactly
+      # which units that input invalidates (ENG-10672). IFD-backed, hence
+      # `legacyPackages`.
+      rustUnits = (ix.rustWorkspaceFor pkgs).units.units;
+    }
     // lib.optionalAttrs (system == "x86_64-linux") {
       kernel-unit = (ix.kernelUnitFor pkgs).buildKernel {
         inherit (pkgs.linux_6_12) src;
