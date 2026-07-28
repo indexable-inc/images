@@ -98,6 +98,62 @@ rendered fleet plan, image attrset, and wrapped CLI app.
       secrets = lib.foldl' lib.recursiveUpdate {} (map (part: part.secrets or {}) parts);
     };
 
+  # Deployment keys split by who reads them, because the two answers have
+  # different failure modes.
+  #
+  # `ix apply` is the supported path and it reads only the evaluated system:
+  # `ix.networking.groups` and `ix.networking.ipv4`, nothing else (ix's
+  # `DECLARED_NETWORKING`, `crates/ix/cli/src/run/client_command/apply_command.rs`).
+  # The plan this file renders is read by the deprecated `ix-fleet` alone. So a
+  # key describing the VM that gets created, rather than the workflow that
+  # deploys it, is a key `ix apply` cannot see unless something puts it into a
+  # module. That is how ENG-10846 shipped: `deployment.ipv4 = true` produced
+  # proxies with no public address, no warning, and no way to tell the result
+  # apart from a fleet that never asked.
+  #
+  # `identityModule` below is the path into the evaluated config, and
+  # `unwiredIdentityKeys` is the assertion that every create-identity key has
+  # one. Adding a key to `createIdentityDeploymentKeys` without wiring it fails
+  # the eval instead of shipping another silent drop.
+  createIdentityDeploymentKeys = ["ipv4"];
+
+  # Create-identity keys with no evaluated-config path today, listed so the
+  # gap is in the source rather than in someone's memory. `region` is one:
+  # `ix apply` takes it as `--region` and defaults it, so a fleet declaring
+  # `deployment.region` and applied without the flag lands in the default
+  # region and says nothing. There is no `ix.networking.region` to map it to,
+  # so closing it needs an option in `lib/image/platform.nix` first (ENG-10846).
+  # A reviewer has to catch this class for these keys; for everything in
+  # `createIdentityDeploymentKeys` the eval catches it.
+  unmappedIdentityDeploymentKeys = ["region"];
+
+  # Read by `ix-fleet`'s deploy loop, not by the created VM. No
+  # evaluated-config analogue by design.
+  workflowDeploymentKeys = [
+    "bootstrapImage"
+    "destination"
+    "env"
+    "l7ProxyPorts"
+    "recreateOnUp"
+    "secrets"
+    "snapshot"
+    "switch"
+  ];
+
+  # The module fragment each create-identity key contributes to its node's
+  # evaluated configuration, so `ix apply` reads the same answer the plan does.
+  # `mkIf` rather than a plain assignment because `false` is both the default
+  # and the "no opinion" value, and must never override a module that asked for
+  # an address itself.
+  identityModule = deploy: {
+    ipv4 = {ix.networking.ipv4 = lib.mkIf deploy.ipv4 true;};
+  };
+
+  unwiredIdentityKeys =
+    lib.subtractLists
+    (attrNames (identityModule deploymentDefaults) ++ unmappedIdentityDeploymentKeys)
+    createIdentityDeploymentKeys;
+
   # Every deployment key the plan consumes. `deployment` is a plain attrset
   # (not a NixOS module), so a typo or an imagined option would otherwise be
   # merged and silently dropped. `healthChecks` gets a dedicated message
@@ -106,18 +162,15 @@ rendered fleet plan, image attrset, and wrapped CLI app.
   # modules via `ix.healthChecks.<name>` (with `from`, `command`, retries)
   # and `ix-fleet up` always waits for every declared check, so there is no
   # per-deployment selector.
-  knownDeploymentKeys = [
-    "bootstrapImage"
-    "destination"
-    "env"
-    "ipv4"
-    "l7ProxyPorts"
-    "recreateOnUp"
-    "region"
-    "secrets"
-    "snapshot"
-    "switch"
-  ];
+  knownDeploymentKeys = assert lib.assertMsg (unwiredIdentityKeys == []) ''
+    fleet deployment key(s) describe the created VM but have no path into the evaluated
+    configuration, so `ix apply` would ignore them silently: ${lib.concatStringsSep ", " unwiredIdentityKeys}
+      add each one to `identityModule` in lib/image/fleet.nix, or, if no `ix.*` option exists
+      to carry it yet, list it in `unmappedIdentityDeploymentKeys` with the reason.
+  '';
+    createIdentityDeploymentKeys
+    ++ unmappedIdentityDeploymentKeys
+    ++ workflowDeploymentKeys;
   checkedDeployment = name: deploy: let
     unknown = lib.subtractLists knownDeploymentKeys (attrNames deploy);
   in
@@ -276,6 +329,9 @@ rendered fleet plan, image attrset, and wrapped CLI app.
                 networking.hostName = lib.mkDefault name;
               }
             ]
+            # Every create-identity deployment key, one module each, so the
+            # thing `ix apply` reads agrees with the plan `ix-fleet` reads.
+            ++ lib.attrValues (identityModule spec.deployment)
             ++ spec.modules;
         }
     )
@@ -318,20 +374,19 @@ rendered fleet plan, image attrset, and wrapped CLI app.
         # fleet-level `nodes.<name>.groups`: the image carries its own network
         # identity, the fleet adds deployment-specific memberships on top.
         nodeGroups = lib.unique (spec.groups ++ config.ix.networking.groups);
-        # Same two sources for the public address: the image can declare it
-        # travels with a public IPv4 (`ix.networking.ipv4`, which is also what
-        # `ix apply` reads on the flake path), and a deployment can add one to
-        # an image that does not ask for it. Either source turns it on; no
-        # source can turn the other off, because an address is allocated once
-        # at create.
-        nodeIpv4 = deploy.ipv4 || config.ix.networking.ipv4;
+        # Read off the evaluated system, not off the plan. A deployment can
+        # still add an address to an image that does not ask for one, but
+        # `deployment.ipv4` reaches here by way of `ix.networking.ipv4` (see
+        # `nodeConfigs`) rather than as a second input, so the plan and
+        # `ix apply` cannot disagree about whether this node is public.
+        nodeIpv4 = config.ix.networking.ipv4;
         # Mirrors the server's validate_group_slug rule (63 = the DNS label
         # octet limit) so a bad slug fails the eval, not the create RPC
         # mid-deploy.
         invalidGroups = filter (slug: builtins.match "[a-z0-9_-]{1,63}" slug == null) nodeGroups;
       in
         assert lib.assertMsg (nodeIpv4 || ipv4HealthChecks == {})
-        "fleet node '${name}' has health checks that require a public IPv4 (set deployment.ipv4 = true or ix.networking.ipv4 = true): ${lib.concatStringsSep ", " (lib.attrNames ipv4HealthChecks)}";
+        "fleet node '${name}' has health checks that require a public IPv4 (set ix.networking.ipv4 = true in a module, or deployment.ipv4 = true, which now sets it): ${lib.concatStringsSep ", " (lib.attrNames ipv4HealthChecks)}";
         assert lib.assertMsg (invalidGroups == [])
         "fleet node '${name}' has invalid east-west group slug(s) (allowed: [a-z0-9_-], max 63 chars): ${lib.concatStringsSep ", " invalidGroups}"; {
           inherit

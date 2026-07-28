@@ -5962,6 +5962,17 @@
         message = "deployment.ipv4 should still turn the public address on for an image that does not declare one";
       }
       {
+        # The plan alone is not enough: `ix apply` never reads it. This is the
+        # assertion that would have caught ENG-10846, where two proxies came up
+        # with no address because `deployment.ipv4` stopped at the plan.
+        assertion = declaredIpv4Fleet.nodes.deployed.ix.networking.ipv4;
+        message = "deployment.ipv4 must reach the evaluated system as ix.networking.ipv4, which is the only place ix apply looks";
+      }
+      {
+        assertion = !declaredIpv4Fleet.nodes.internal.ix.networking.ipv4;
+        message = "a node whose deployment does not ask for an address must not have one forced into its evaluated system";
+      }
+      {
         assertion = !declaredIpv4Plan.internal.ipv4;
         message = "a node that declares no public address anywhere should not be given one";
       }
