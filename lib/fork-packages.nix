@@ -203,13 +203,17 @@
     {
       # Home Manager is consumed as a FLAKE by workstation config repos, not
       # as a package built here, so the series' consumer is the maintained
-      # fork repo: `mirror fork-branch --name home-manager --push` keeps
-      # indexable-inc/home-manager's `ix-patched` branch equal to the pinned
-      # base plus this series, and a config repo points its `home-manager`
-      # flake input at that branch. Pinned by rev (autoUpdate = false): there
-      # is no `.#home-manager.updateScript` package for the fork-sync cron to
-      # drive; bump by hand with `nix flake update home-manager-src` + `nix
-      # jj-rebase indexable-inc/home-manager, push bookmark + pin ref, repin.
+      # fork repo: a config repo points its `home-manager` flake input at
+      # indexable-inc/home-manager's `ix-patched` bookmark. Pinned by rev
+      # (autoUpdate = false): there is no `.#home-manager.updateScript` for
+      # the fork-sync cron to drive, so bump by hand with the steps
+      # .github/workflows/fork-sync.yml runs. Clone the fork colocated (`jj
+      # git clone --colocate`), `jj rebase` the series onto the upstream tip,
+      # push nothing if a commit came out conflicted, then move the bookmark
+      # and mint the pin ref in ONE push (`git push --force origin
+      # "$sha:refs/heads/ix-patched" "$sha:refs/pins/<date>-<sha12>"`), in the
+      # same change that bumps flake.lock. The pin ref keeps the previously
+      # locked megamerge fetchable after jj rewrites history.
       name = "home-manager";
       input = "home-manager-src";
       upstreamUrl = "https://github.com/nix-community/home-manager.git";

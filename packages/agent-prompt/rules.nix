@@ -352,7 +352,8 @@
       reason = ''
         Diagnosis ended at "upstream's problem" inside our own forks
         (index#3559, #3566). Authoring mechanics live in fork-patch memories
-        and `nix run .#rebase-patches` (index#3594).
+        and the `jjMegamergeForks` rule (index#3594); the `rebase-patches`
+        driver that used to own them went with the megamerge migration.
       '';
     };
   }
