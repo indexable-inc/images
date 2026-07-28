@@ -24,6 +24,15 @@ pub struct CarrierCounts {
     pub sole: u32,
 }
 
+/// The carrier variable most of a node's carried dependents name it through.
+#[derive(Clone, Copy)]
+pub struct TopCarrier {
+    /// Index into [`Plan::env_keys`].
+    pub key: usize,
+    /// Direct dependents naming the node through that key.
+    pub count: u32,
+}
+
 /// Per-node structural numbers.
 pub struct Metrics {
     /// Direct dependents.
@@ -37,7 +46,7 @@ pub struct Metrics {
     pub carrier: Vec<CarrierCounts>,
     /// The carrier variable most dependents use to reach this node, with its
     /// count. `None` when nothing carries it.
-    pub top_carrier_key: Vec<Option<(usize, u32)>>,
+    pub top_carrier_key: Vec<Option<TopCarrier>>,
     /// Nodes per level, indexed by depth. The parallelism actually available.
     pub widths: Vec<u32>,
     /// Longest chain, root first. Its length is the floor on wall clock: no
@@ -54,7 +63,7 @@ struct Reachability {
 impl Reachability {
     fn new(nodes: usize) -> Self {
         let words = nodes.div_ceil(64);
-        Reachability {
+        Self {
             words,
             data: vec![0; words * nodes],
         }
@@ -170,23 +179,34 @@ impl Metrics {
             widths[level as usize] += 1;
         }
 
-        let (carrier, top_carrier_key) = carrier_counts(plan, &closure);
+        let carriers = carrier_counts(plan, &closure);
         let critical_path = critical_path(plan, &depth);
 
-        Ok(Metrics {
-            fan_out: plan
-                .dependents
-                .iter()
-                .map(|dependents| dependents.len() as u32)
-                .collect(),
+        // `MAX_NODES` is far below `u32::MAX`, so no dependent list can overflow
+        // the count; the conversion is propagated rather than clamped because a
+        // clamp would silently understate a fan-out.
+        let fan_out = plan
+            .dependents
+            .iter()
+            .map(|dependents| u32::try_from(dependents.len()))
+            .collect::<Result<Vec<u32>, _>>()?;
+
+        Ok(Self {
+            fan_out,
             blast,
             own_closure,
-            carrier,
-            top_carrier_key,
+            carrier: carriers.per_node,
+            top_carrier_key: carriers.top,
             widths,
             critical_path,
         })
     }
+}
+
+/// What one pass over the plan's environment references yields per node.
+struct CarrierAnalysis {
+    per_node: Vec<CarrierCounts>,
+    top: Vec<Option<TopCarrier>>,
 }
 
 /// For every node, how many direct dependents only ever name it in a carrier
@@ -198,10 +218,7 @@ impl Metrics {
 /// through stdenv, so deleting the variable would not save a single rebuild. A
 /// library injected into every unit's environment and reached no other way is
 /// pure invalidation: nothing consumes it, and everything rebuilds when it moves.
-fn carrier_counts(
-    plan: &Plan,
-    closure: &Reachability,
-) -> (Vec<CarrierCounts>, Vec<Option<(usize, u32)>>) {
+fn carrier_counts(plan: &Plan, closure: &Reachability) -> CarrierAnalysis {
     let mut counts = vec![CarrierCounts::default(); plan.len()];
     // (target, key) tallies, collected flat and folded once, so the common case
     // of a node nothing carries costs no allocation.
@@ -239,21 +256,27 @@ fn carrier_counts(
     }
 
     key_tally.sort_unstable();
-    let mut top: Vec<Option<(usize, u32)>> = vec![None; plan.len()];
+    let mut top: Vec<Option<TopCarrier>> = vec![None; plan.len()];
     let mut at = 0;
     while at < key_tally.len() {
         let (target, key) = key_tally[at];
         let mut end = at;
+        // Counted in the run rather than differenced afterwards, so the tally
+        // width never has to be narrowed from a `usize`.
+        let mut count: u32 = 0;
         while end < key_tally.len() && key_tally[end] == (target, key) {
             end += 1;
+            count += 1;
         }
-        let count = (end - at) as u32;
-        if top[target].is_none_or(|(_, best)| count > best) {
-            top[target] = Some((key, count));
+        if top[target].is_none_or(|best| count > best.count) {
+            top[target] = Some(TopCarrier { key, count });
         }
         at = end;
     }
-    (counts, top)
+    CarrierAnalysis {
+        per_node: counts,
+        top,
+    }
 }
 
 /// The longest chain in the plan, deepest node first down to a source.
@@ -345,9 +368,9 @@ mod tests {
         let carried = id(&plan, "carried");
         assert_eq!(metrics.carrier[carried].carried, 2);
         assert_eq!(metrics.carrier[carried].sole, 1);
-        let (key, count) = metrics.top_carrier_key[carried].expect("a carrier key");
-        assert_eq!(plan.env_keys[key], "IX_LIB");
-        assert_eq!(count, 2);
+        let top = metrics.top_carrier_key[carried].expect("a carrier key");
+        assert_eq!(plan.env_keys[top.key], "IX_LIB");
+        assert_eq!(top.count, 2);
     }
 
     #[test]
@@ -357,7 +380,8 @@ mod tests {
         // root -> mid-b -> used -> carried is 4 nodes; the base branch is 3.
         assert_eq!(metrics.critical_path.len(), 4);
         assert_eq!(plan.nodes[metrics.critical_path[0]].name, "root");
-        assert_eq!(metrics.widths.iter().sum::<u32>(), plan.len() as u32);
+        let nodes = u32::try_from(plan.len()).expect("the fixture is small");
+        assert_eq!(metrics.widths.iter().sum::<u32>(), nodes);
     }
 
     // A cycle is not a build plan; say so instead of reporting numbers computed
@@ -367,9 +391,8 @@ mod tests {
         let nodes = [drv("a", &["b"], ""), drv("b", &["a"], "")].join(",");
         let plan = Plan::from_json(&format!(r#"{{"version":4,"derivations":{{{nodes}}}}}"#))
             .expect("parses");
-        let error = match Metrics::compute(&plan) {
-            Err(error) => error,
-            Ok(_) => panic!("a cycle must be rejected"),
+        let Err(error) = Metrics::compute(&plan) else {
+            panic!("a cycle must be rejected")
         };
         assert!(error.to_string().contains("not a DAG"), "{error}");
     }

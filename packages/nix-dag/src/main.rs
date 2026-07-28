@@ -70,7 +70,7 @@ fn main() -> Result<()> {
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print!("{}", report.render());
+        print!("{report}");
     }
     Ok(())
 }

@@ -1,6 +1,8 @@
 //! Turn the metrics into the two shapes a reader wants: a short human summary
 //! ranked by what is worth fixing, and the same facts as JSON for a gate.
 
+use std::fmt;
+
 use serde::Serialize;
 
 use crate::graph::Metrics;
@@ -73,8 +75,8 @@ impl Report {
             .into_iter()
             .take(top)
             .map(|id| {
-                let carrier_key = metrics.top_carrier_key[id]
-                    .map(|(key, _)| plan.env_keys[key].clone());
+                let carrier_key =
+                    metrics.top_carrier_key[id].map(|top| plan.env_keys[top.key].clone());
                 Entry {
                     name: plan.nodes[id].name.clone(),
                     drv_path: plan.nodes[id].drv_path.clone(),
@@ -98,7 +100,7 @@ impl Report {
             .max_by_key(|&(_, &width)| width)
             .map_or(0, |(level, _)| level);
 
-        Report {
+        Self {
             target: target.to_owned(),
             shape: Shape {
                 derivations: plan.len(),
@@ -123,38 +125,46 @@ impl Report {
             top: entries,
         }
     }
+}
 
-    pub fn render(&self) -> String {
-        let mut out = String::new();
+/// The human summary. `Display` rather than a `-> String` builder so each line
+/// is one `write!` into the caller's sink instead of a per-line allocation.
+impl fmt::Display for Report {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let shape = &self.shape;
-        out.push_str(&format!("{}\n", self.target));
-        out.push_str(&format!(
-            "  {} derivations, {} edges\n\n",
+        writeln!(f, "{}", self.target)?;
+        writeln!(
+            f,
+            "  {} derivations, {} edges\n",
             shape.derivations, shape.edges
-        ));
+        )?;
 
-        out.push_str("Shape\n");
-        out.push_str(&format!(
-            "  critical path  {} nodes; no width of builders finishes this plan in fewer steps\n",
+        writeln!(f, "Shape")?;
+        writeln!(
+            f,
+            "  critical path  {} nodes; no width of builders finishes this plan in fewer steps",
             shape.critical_path_nodes
-        ));
+        )?;
         if !shape.critical_path.is_empty() {
-            out.push_str(&format!("                 {}\n", elide_chain(&shape.critical_path)));
+            writeln!(f, "                 {}", elide_chain(&shape.critical_path))?;
         }
-        out.push_str(&format!(
-            "  parallelism    {} levels, widest {} at level {}, median {}\n",
+        writeln!(
+            f,
+            "  parallelism    {} levels, widest {} at level {}, median {}",
             shape.levels, shape.widest_level_nodes, shape.widest_level, shape.median_level_width
-        ));
-        out.push_str(&format!(
-            "                 {} levels are 2 nodes or narrower; more builders do nothing there\n",
+        )?;
+        writeln!(
+            f,
+            "                 {} levels are 2 nodes or narrower; more builders do nothing there",
             shape.serial_levels
-        ));
+        )?;
         if shape.unresolved_outputs > 0 {
-            out.push_str(&format!(
+            writeln!(
+                f,
                 "  note           {} derivations are content-addressed, so their output paths are\n\
-                 \x20                unknown before the build and nothing is attributed to them\n",
+                 \x20                unknown before the build and nothing is attributed to them",
                 shape.unresolved_outputs
-            ));
+            )?;
         }
 
         let flagged = self
@@ -162,23 +172,25 @@ impl Report {
             .iter()
             .filter(|entry| entry.sole_carrier_fan_out > 0)
             .count();
-        out.push('\n');
+        writeln!(f)?;
         if flagged == 0 {
-            out.push_str(
+            f.write_str(
                 "No derivation is reached only through an environment variable. Ranked by\n\
                  fan-out instead; these are hubs, which is normal unless one is trivial.\n\n",
-            );
+            )?;
         } else {
-            out.push_str(&format!(
+            writeln!(
+                f,
                 "Top {} by avoidable invalidation: dependents that reach a node ONLY because an\n\
-                 environment variable names it, and would stop rebuilding if it did not.\n\n",
+                 environment variable names it, and would stop rebuilding if it did not.\n",
                 self.top.len()
-            ));
+            )?;
         }
 
         for (rank, entry) in self.top.iter().enumerate() {
-            out.push_str(&format!(
-                "{:>3}. {}\n     sole {} of {} direct  blast {}  own deps {}\n     {}\n",
+            writeln!(
+                f,
+                "{:>3}. {}\n     sole {} of {} direct  blast {}  own deps {}\n     {}",
                 rank + 1,
                 entry.name,
                 entry.sole_carrier_fan_out,
@@ -186,9 +198,9 @@ impl Report {
                 entry.blast_radius,
                 entry.own_closure,
                 entry.why
-            ));
+            )?;
         }
-        out
+        Ok(())
     }
 }
 
@@ -247,7 +259,7 @@ mod tests {
 
     #[test]
     fn short_chains_are_not_elided() {
-        let path: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let path: Vec<String> = ["a", "b", "c"].iter().map(ToString::to_string).collect();
         assert_eq!(elide_chain(&path), "a <- b <- c");
     }
 

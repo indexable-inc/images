@@ -115,7 +115,7 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.nodes.len()
     }
 
@@ -166,10 +166,10 @@ impl Plan {
     pub fn from_json(text: &str) -> Result<Self> {
         let shown: ShowOutput =
             serde_json::from_str(text).context("parse nix derivation show output")?;
-        Ok(Self::build(shown.derivations))
+        Ok(Self::build(&shown.derivations))
     }
 
-    fn build(derivations: BTreeMap<String, ShowDrv>) -> Self {
+    fn build(derivations: &BTreeMap<String, ShowDrv>) -> Self {
         let index: HashMap<&str, usize> = derivations
             .keys()
             .enumerate()
@@ -185,7 +185,7 @@ impl Plan {
         // joins them whichever spelling a given Nix emits.
         let mut producer: HashMap<&str, usize> = HashMap::new();
         let mut unresolved_outputs = 0;
-        for (key, drv) in &derivations {
+        for (key, drv) in derivations {
             let id = index[key.as_str()];
             let mut resolved = false;
             for out in drv.outputs.values() {
@@ -203,7 +203,7 @@ impl Plan {
         let mut key_ids: HashMap<&str, usize> = HashMap::new();
         let mut nodes: Vec<Node> = Vec::with_capacity(derivations.len());
 
-        for (key, drv) in &derivations {
+        for (key, drv) in derivations {
             // Sorted so `carrier_counts` can binary-search for a direct edge.
             let mut deps: Vec<usize> = drv
                 .inputs
@@ -255,7 +255,7 @@ impl Plan {
             }
         }
 
-        Plan {
+        Self {
             nodes,
             dependents,
             env_keys,
@@ -286,7 +286,7 @@ fn is_hash_prefixed(base: &str) -> bool {
 
 const STORE_PREFIX: &str = "/nix/store/";
 
-fn is_store_name_char(ch: char) -> bool {
+const fn is_store_name_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.' | '_' | '?' | '=')
 }
 
