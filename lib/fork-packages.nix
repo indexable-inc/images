@@ -865,9 +865,16 @@
         # keeps the fork byte-identical to eager evaluation unless opted in;
         # flipping the fleet on is a separate decision with its own drv-hash
         # and eval-result equivalence sweeps (indexable-inc/index#3645).
+        #
+        # No host sets it today. hydra was the one that did, 2026-07-19 to
+        # 2026-07-27, and turned it back off: on a 698k-file flake tree the
+        # mutation fix that lazy mounting requires (0032, below) costs more
+        # than lazy mounting saves, measured 3.7x wall clock
+        # (indexable-inc/index#4297). This gate is what made that a one-line
+        # revert; keep it until 0032 filters by the git file set.
         "libexpr: gate lazy input mounting behind an off-by-default lazy-trees setting" = {
           upstream = "hold";
-          reason = "Fork policy gate for the 0025-0028 backports (indexable-inc/index#3645): upstream ships the behavior unconditionally, we default it off pending fleet-wide equivalence sweeps. Retire together with the backports when the base reaches 2.35+.";
+          reason = "Fork policy gate for the 0025-0028 backports (indexable-inc/index#3645): upstream ships the behavior unconditionally, we default it off pending fleet-wide equivalence sweeps. Earned its keep in indexable-inc/index#4297, where turning the setting back off on hydra was the whole fix. Retire together with the backports when the base reaches 2.35+.";
         };
         # 0030: a relative path input that is a git submodule of its parent
         # is a pinned tree, but its lock node carried no metadata; consumers
@@ -901,9 +908,26 @@
         # Snapshot such trees at mount time via clonefile(2) (~70ms) and
         # evaluate from the snapshot; fall back to an eager copy where
         # cloning is unavailable.
+        #
+        # KNOWN COST, unfixed (indexable-inc/index#4297). The ~70ms is a
+        # 4k-file worktree and covers only the clone. clonefile(2) on a
+        # directory is copy-on-write, so creating is near-free, but teardown
+        # is one unlinkat per file (11,257/s measured on hydra) and the clone
+        # is unfiltered, because treeRoot is widened to the repo root to
+        # carry .git. hydra's flake tree is 698,301 files against 18,299
+        # tracked, so every nix invocation cloned and deleted 680,002
+        # gitignored files: 62s of teardown, 3.7x wall clock, and 707
+        # abandoned snapshots holding 22M entries, because _deletePath is
+        # interruptible and a Ctrl-C during a multi-minute teardown strands
+        # the tree. Darwin-only (cloneTreeSnapshot is #ifdef __APPLE__), so
+        # Linux always took the git-filtered content-addressed eager copy,
+        # which is strictly cheaper on trees this shape. Fix before any host
+        # sets lazy-trees again: walk the accessor (readDirectory is already
+        # filtered, getPhysicalPath gives the source path) cloning per file
+        # plus .git, and make teardown survive a kill.
         "libexpr: snapshot mutable source trees at mount time (lazy-trees)" = {
           upstream = "hold";
-          reason = "Fixes the lazy-trees mid-eval mutation race for mutable local trees (indexable-inc/index#3749). Upstream-nix candidate once lazy trees settle there, held: humans submit Nix patches upstream per NixOS/nix#15984.";
+          reason = "Fixes the lazy-trees mid-eval mutation race for mutable local trees (indexable-inc/index#3749). Carries an unfixed cost on large trees: the snapshot is unfiltered, so its teardown dominated eval on hydra and the setting was turned back off (indexable-inc/index#4297). Upstream-nix candidate once lazy trees settle there and the snapshot filters by the git file set, held: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
         # 0033: a daemon worker whose client dies can sleep forever in
         # waitForInput's poll (interrupt delivery is edge-triggered; a
