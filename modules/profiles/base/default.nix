@@ -113,7 +113,11 @@ in {
     # NixOS module per AGENTS.md). Nushell's config.nu ships as a real
     # `.nu` file next to this module; HM writes it to the right XDG path
     # under /root/.config/nushell/ and follow-up tool integrations
-    # (atuin, zoxide, starship) hang off the same root user attrset.
+    # (atuin, zoxide, direnv, fzf) hang off the same root user attrset.
+    #
+    # The prompt deliberately does NOT live here; see `programs.starship`
+    # further down for why anything an operator sees on their first line
+    # has to survive activation not running.
     home-manager.users.root = {
       home.stateVersion = "25.11";
 
@@ -144,8 +148,8 @@ in {
           '';
         };
         # Let Home Manager own root's bash/zsh/fish rc files. Without this
-        # the `enable*Integration` flags below (starship, atuin, zoxide,
-        # direnv, fzf) are inert for these shells: Home Manager only writes
+        # the `enable*Integration` flags below (atuin, zoxide, direnv, fzf)
+        # are inert for these shells: Home Manager only writes
         # the init snippets into a shell's rc when that shell's module is
         # enabled, so an operator who `chsh`-ed into bash or fish would land
         # at a bare prompt with none of the wiring. The NixOS
@@ -274,16 +278,6 @@ in {
             custom_gpu_name4 = "";
             custom_gpu_name5 = "";
           };
-        };
-        # Shared prompt across every shell on the system, so the same
-        # rendering follows the operator whether they stay in Nushell or
-        # chsh into bash/zsh/fish.
-        starship = {
-          enable = true;
-          enableNushellIntegration = true;
-          enableBashIntegration = true;
-          enableZshIntegration = true;
-          enableFishIntegration = true;
         };
         # SQLite-backed, searchable shell history that follows the
         # operator across bash/zsh/fish/nushell. Local-only by default;
@@ -549,6 +543,79 @@ in {
           return 127
         }
       '';
+
+      # The prompt, at system level rather than in Home Manager, because a
+      # prompt must not depend on activation having run. Home Manager writes
+      # its shell rc files during `home-manager-<user>.service`, which is an
+      # activation step that can fail (in an ix guest it does: the service's
+      # first act is a nix store sanity check, and a VM whose image lacks
+      # /nix/var/nix/daemon-socket has no nix-daemon to answer it), leaving
+      # /root with no .zshrc at all and every shell on the stock
+      # `prompt suse` from /etc/zshrc. The NixOS module instead renders the
+      # init into programs.{bash,zsh,fish}.promptInit, i.e. into /etc/zshrc
+      # and /etc/bashrc, which are plain files in the toplevel: present the
+      # moment the image boots, for every user and every shell, with nothing
+      # to activate and no daemon to wait for.
+      #
+      # Glyphs are deliberately ASCII. The prompt renders in whatever
+      # terminal the operator attached with (ix shell, ix console, ssh, a
+      # browser terminal), and a nerd-font symbol in a font-less terminal is
+      # a replacement box, not a prompt.
+      starship = {
+        enable = true;
+        settings = {
+          # Timeouts, not defaults (2000/500 ms): the prompt renders on a
+          # guest disk that can be faulting chunks in from CAS, and a prompt
+          # that stalls on a slow `git status` is worse than one that omits
+          # the branch for one redraw.
+          scan_timeout = 30;
+          command_timeout = 500;
+          add_newline = false;
+          format = lib.concatStrings [
+            "$directory"
+            "$git_branch"
+            "$git_status"
+            "$nix_shell"
+            "$cmd_duration"
+            "$line_break"
+            "$character"
+          ];
+          # No username or hostname module: every ix VM shell is root on a
+          # host called "nixos", so both would print the same two words on
+          # every line forever. The `#` in the character module below is the
+          # root cue that actually carries information.
+          directory = {
+            style = "bold cyan";
+            truncation_length = 4;
+            truncation_symbol = ".../";
+          };
+          git_branch = {
+            symbol = "";
+            format = "[git:$branch]($style) ";
+            style = "bold magenta";
+          };
+          git_status = {
+            format = "([$all_status$ahead_behind]($style) )";
+            style = "bold yellow";
+          };
+          nix_shell = {
+            symbol = "";
+            format = "[nix:$state]($style) ";
+            style = "bold blue";
+          };
+          # Only annotate commands slow enough that the number is news.
+          cmd_duration = {
+            min_time = 2000;
+            format = "[took $duration]($style) ";
+            style = "yellow";
+          };
+          character = {
+            success_symbol = "[#](bold green)";
+            error_symbol = "[#](bold red)";
+            vimcmd_symbol = "[#](bold blue)";
+          };
+        };
+      };
 
       # nixpkgs' channel-DB command-not-found defines these same three
       # handler functions when enabled; its default is only false here
