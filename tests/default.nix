@@ -3032,6 +3032,22 @@
     builtins.deepSeq (patchedSrcFixture {}).patches true
   );
 
+  # The rust build policy's link-arg surface. Imported directly rather than
+  # reached through `ix.cargoUnit`, because the resolved args are not on any
+  # public attribute and the point is to pin what rustc is told, not to build
+  # anything. `pins` and the check builders are unused by
+  # `rustcArgsForPolicyForPlatform`, so they are stubbed.
+  rustPolicy = import (paths.root + "/lib/rust/policy.nix") {
+    inherit lib pkgs;
+    clippyPackage = pkgs.hello;
+    vendorConfigScript = _: "";
+    cargoLockFile = _: null;
+    pins = {loadPins = _: {};};
+  };
+  rustPolicyLinkArgs = userPolicy: platform:
+    rustPolicy.rustcArgsForPolicyForPlatform (rustPolicy.resolvePolicy userPolicy) platform;
+  buildIdArg = ["-C" "link-arg=-Wl,--build-id=sha1"];
+
   groups = {
     macos-guests = [
       {
@@ -3052,6 +3068,41 @@
           && macosGuestAgent.config.RunAtLoad
           && macosGuestAgent.config.ExitTimeOut == 20;
         message = "launchd should keep the guest alive with the SIGKILL backstop above vmkit's 10s+5s shutdown escalation (index#3766)";
+      }
+    ];
+    # A GNU build-id is the key debuginfod, a separate .debug file,
+    # `coredumpctl debug`, a continuous profiler's symbol cache and Antithesis's
+    # coverage symbolization all look an address up by, and none of them has a
+    # fallback. Neither rustc nor mold emits it unless asked, so these assertions
+    # pin the ask itself: ix's build gate fails naming the binary when the note
+    # is missing, and its error message points here (indexable-inc/ix#8936).
+    rust-build-id = [
+      {
+        assertion = rustPolicyLinkArgs {} "x86_64-unknown-linux-gnu" == buildIdArg;
+        # useMold defaults to the *host* platform, so on a darwin host this is
+        # the build-id arg alone. The assertion is equality rather than
+        # containment so a stray extra arg is caught too.
+        message = "a linux-gnu link should be told to emit a sha1 GNU build-id";
+      }
+      {
+        assertion = rustPolicyLinkArgs {} "x86_64-unknown-linux-musl" == buildIdArg;
+        message = "a linux-musl link should be told to emit a sha1 GNU build-id";
+      }
+      {
+        # Mach-O has no GNU build-id (it carries an LC_UUID), so the flag would
+        # be an unrecognized linker argument rather than a no-op.
+        assertion = !(lib.elem "link-arg=-Wl,--build-id=sha1" (rustPolicyLinkArgs {} "aarch64-apple-darwin"));
+        message = "a darwin link should not be told to emit a GNU build-id";
+      }
+      {
+        assertion = rustPolicyLinkArgs {linker.buildId = false;} "x86_64-unknown-linux-gnu" == [];
+        message = "linker.buildId = false should emit no build-id arg";
+      }
+      {
+        # No freeformType on the policy schema, so a misspelled knob throws
+        # rather than silently defaulting the real one back on.
+        assertion = !(builtins.tryEval (rustPolicyLinkArgs {linker.buidlId = true;} "x86_64-unknown-linux-gnu")).success;
+        message = "a misspelled linker option should fail evaluation";
       }
     ];
     security-roots = [
