@@ -2,20 +2,45 @@
 # ssh push, launchd bootstrap) is modules/home/macos-guests.nix, imported
 # alongside this module by profiles/darwin-home.nix.
 #
-# macos-primary runs the Beeper iMessage bridge (Linear ENG-7746; an interim
-# consumer increment of index#2682). The agent below mirrors the runtime
-# state validated live on the guest 2026-07-14. Bridge registration with
-# secrets (`~/Library/Application Support/bbctl/prod/sh-imessage/`) lives
-# only on the guest and is never rendered from nix; see README.md for the
-# one-time bootstrap (bbctl login, TCC grants).
-{indexPackages}: {
-  lib,
-  pkgs,
-  ...
-}: let
-  # bbctl is aarch64-darwin only; this module is imported by the
-  # darwin-only home profile, so the reference never forces on Linux.
-  indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
+# macos-primary is the agent's own mac: signed into iMessage under the
+# agent's Apple ID rather than the user's, so it has an identity of its own
+# that can be added to group chats. It runs one resource, a BEAM node the
+# host kernel calls into over distributed Erlang. The Messages sign-in, the
+# contact card and the TCC grants are guest state, never rendered from nix
+# (see README.md).
+_: {pkgs, ...}: let
+  # The node runs on the guest's own Elixir, at a path this module cannot
+  # manage: nix has no store on the guest -- its installer cannot create
+  # /etc/fstab there, even as root -- so the interpreter comes from
+  # Homebrew and is named here as a plain guest path.
+  guestElixir = "/opt/homebrew/bin/elixir";
+
+  # A long name, not a short one: `-sname` needs both ends to share a DNS
+  # suffix, which the vmnet bridge does not give us.
+  nodeName = "ixagent@192.168.64.6";
+
+  # Distribution picks an ephemeral port per node unless pinned, and the
+  # host has to reach it across the bridge, so pin one and leave epmd on
+  # its own 4369.
+  distPort = 9100;
+
+  # A store shebang would name a /nix path the guest does not have, so the
+  # script is written with the guest's own bash.
+  nodeScript = pkgs.writeTextFile {
+    name = "ix-agent-node";
+    executable = true;
+    text = ''
+      #!/bin/bash
+      # launchd agents get the bare system PATH, and elixir execs `erl` off
+      # PATH: without this the agent dies with "exec: erl: not found".
+      export PATH="/opt/homebrew/bin:$PATH"
+      exec ${guestElixir} \
+        --erl "-kernel inet_dist_listen_min ${toString distPort} inet_dist_listen_max ${toString distPort}" \
+        --name ${nodeName} \
+        --cookie "$(cat "$HOME/.erlang.cookie")" \
+        -e 'Process.sleep(:infinity)'
+    '';
+  };
 in {
   macosGuests.macos-primary = {
     lifecycle.macAddress = "0e:c9:c7:6c:25:a8";
@@ -23,30 +48,26 @@ in {
       host = "192.168.64.6";
       user = "ix";
     };
-    launchAgents."com.beeper.sh-imessage".config = {
-      ProgramArguments = [
-        "/Users/ix/.local/bin/bbctl"
-        "run"
-        "--param"
-        "imessage_platform=mac"
-        "-n"
-        "sh-imessage"
-      ];
+
+    # The cookie the script reads is a shared secret and stays guest state:
+    # a nix-rendered cookie would be world-readable in /nix/store.
+    binaries.ix-agent-node.source = nodeScript;
+
+    launchAgents."dev.ix.agent-node".config = {
+      ProgramArguments = ["/Users/ix/.local/bin/ix-agent-node"];
       EnvironmentVariables = {
         HOME = "/Users/ix";
-        # launchd agents get the bare system PATH; bbctl re-execs the bridge
-        # binary it manages out of ~/.local/bin, so that must come first.
-        PATH = "/Users/ix/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+        PATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
       };
       RunAtLoad = true;
       KeepAlive = true;
       ProcessType = "Background";
-      # launchd block-buffers this log, so silence in it is normal.
-      StandardOutPath = "/tmp/imsg.log";
-      StandardErrorPath = "/tmp/imsg.log";
+      # macOS privacy consent attaches to the process that runs, so the
+      # grants this node needs (Full Disk Access to read Messages,
+      # Automation to script it) follow the fixed path above and survive a
+      # content update in place.
+      StandardOutPath = "/tmp/ix-agent-node.log";
+      StandardErrorPath = "/tmp/ix-agent-node.log";
     };
-    # Version + hash pin: packages/bbctl/pins.json (bump version/url there,
-    # then `nix run .#update` re-pins the hash).
-    binaries.bbctl.source = lib.getExe indexPkgs.bbctl;
   };
 }

@@ -23,6 +23,7 @@ defmodule IxMcp.Imsg do
   `Contacts.search/2` maps names to handles.
   """
 
+  alias IxMcp.Mac
   alias IxMcp.Sqlite
 
   @osascript "/usr/bin/osascript"
@@ -35,6 +36,10 @@ defmodule IxMcp.Imsg do
   Send `text` over iMessage to the handle `to`. Returns as soon as
   Messages.app accepts the message; delivery is asynchronous, so when it
   matters check the message's `error` flag via `recent/1` a moment later.
+
+  `mac:` picks which machine sends: `Mac.local()` (the default, the mac the
+  kernel runs on, signed in as the user) or `Mac.guest(node)` for a macOS
+  guest VM signed in as the agent's own Apple ID.
 
   Formatting options -- `italic:`, `bold:`, `underline:`, `strike:` --
   apply to the whole message and set the same rich-text attributes
@@ -53,17 +58,36 @@ defmodule IxMcp.Imsg do
   """
   @spec send(String.t(), String.t(), keyword()) :: :ok | {:error, String.t()}
   def send(to, text, opts \\ []) do
-    with :ok <- osascript_present(),
-         :ok <- deliver(to, text, opts) do
-      notify(to, text, opts)
+    mac = Mac.from_opts(opts)
+
+    with :ok <- osascript_present(mac),
+         :ok <- deliver(mac, to, text, opts) do
+      notify(mac, to, text, opts)
     end
   end
 
-  defp deliver(to, text, opts) do
+  defp deliver(mac, to, text, opts) do
     case Enum.filter(@formats, fn {opt, _} -> opts[opt] end) do
-      [] -> osascript(plain_script(to, text))
-      formats -> send_formatted(to, text, Enum.map(formats, &elem(&1, 1)))
+      [] -> osascript(mac, plain_script(to, text))
+      formats -> formatted(mac, to, text, formats)
     end
+  end
+
+  defp formatted(mac, to, text, formats) do
+    if Mac.local?(mac),
+      do: send_formatted(to, text, Enum.map(formats, &elem(&1, 1))),
+      else: {:error, formatting_unsupported(mac)}
+  end
+
+  # A formatted send reads the message back out of chat.db to prove the
+  # keystrokes landed, and that read runs through the exqlite NIF, which a
+  # guest node running bare Elixir does not carry. Refusing is better than
+  # sending unconfirmed: the UI path is the one that can silently type into
+  # the wrong window. Lifting this means shipping the full kernel release to
+  # the guest instead of a bare node.
+  defp formatting_unsupported(mac) do
+    "formatted sends run only on this mac, not on #{Mac.describe(mac)}: " <>
+      "confirming one needs a chat.db read the guest node cannot do"
   end
 
   # Messages posts no banner for a message this machine sent, so an agent
@@ -71,9 +95,10 @@ defmodule IxMcp.Imsg do
   # is the only signal that it happened; pass `notify: false` where a burst
   # of sends would make it noise. A banner that fails never fails the send,
   # because by then the message is already gone.
-  defp notify(to, text, opts) do
+  defp notify(mac, to, text, opts) do
     if Keyword.get(opts, :notify, true) do
       osascript(
+        mac,
         "display notification #{applescript_str(text)} " <>
           "with title #{applescript_str("Agent sent an iMessage")} " <>
           "subtitle #{applescript_str(to)} sound name \"Glass\""
@@ -98,7 +123,7 @@ defmodule IxMcp.Imsg do
     try do
       File.write!(path, rtf(text, controls))
 
-      with :ok <- osascript(paste_script(to, path)), do: confirm_sent(to, text)
+      with :ok <- osascript(Mac.local(), paste_script(to, path)), do: confirm_sent(to, text)
     after
       File.rm(path)
     end
@@ -188,17 +213,14 @@ defmodule IxMcp.Imsg do
   defp signed16(c) when c > 0x7FFF, do: c - 0x10000
   defp signed16(c), do: c
 
-  defp osascript_present do
-    if File.exists?(@osascript),
+  defp osascript_present(mac) do
+    if Mac.exists?(mac, @osascript),
       do: :ok,
-      else: {:error, "#{@osascript} not found: sending needs the macOS host"}
+      else: {:error, "#{@osascript} not found on #{Mac.describe(mac)}: sending needs macOS"}
   end
 
-  defp osascript(script) do
-    case System.cmd(@osascript, ["-e", script], stderr_to_stdout: true) do
-      {_, 0} -> :ok
-      {out, code} -> {:error, "osascript exit #{code}: #{String.trim(out)}"}
-    end
+  defp osascript(mac, script) do
+    with {:ok, _} <- Mac.cmd(mac, @osascript, ["-e", script]), do: :ok
   end
 
   @doc """
