@@ -491,6 +491,49 @@
           > "$out"
       '';
 
+    # Drop fortify for a dev-profile graph, and only for one.
+    #
+    # The property: glibc refuses to fortify below `-O`. `features.h` answers
+    # `-D_FORTIFY_SOURCE` at `-O0` with `#warning _FORTIFY_SOURCE requires
+    # compiling with optimization (-O)`, nixpkgs enables `fortify`/`fortify3`
+    # by default, and a C dependency whose configure probes run under `-Werror`
+    # therefore cannot configure at all in a dev-profile build. Measured on
+    # x86_64-linux, same source, only the optimisation level differing:
+    #
+    #     == -O0 (dev profile CFLAGS) ==
+    #     features.h:435:4: error: #warning _FORTIFY_SOURCE requires compiling
+    #       with optimization (-O) [-Werror=cpp]
+    #     cc1: all warnings being treated as errors
+    #     O0 FAILED
+    #     == -O3 (release profile CFLAGS) ==
+    #     O3 OK
+    #
+    # The instance that found this was tikv-jemalloc-sys, whose two
+    # `strerror_r` probes both failed and produced `configure: error: cannot
+    # determine return type of strerror_r` -- an error naming neither
+    # optimisation nor hardening, in a build that is green on every release
+    # profile. hyperion's `bedwars-dev-boot-e2e` and `smash-dev-boot-e2e` were
+    # red on that for a day. jemalloc is the instance; autoconf probing under
+    # `-Werror` is the class, so this belongs here and not in one Cargo.toml.
+    #
+    # What is given up: fortify is a real hardening measure, and this turns it
+    # off for the C dependencies of dev-profile builds. That is acceptable
+    # because a dev-profile artifact is not shipped -- it exists for
+    # `debug_assertions`, tests and boot gates. Do not widen this to release,
+    # where the artifact does ship and where `-O` satisfies glibc anyway so
+    # there is nothing to fix. If you are reading this because a hardening
+    # audit flagged it, that is the reason; the alternative is forcing an
+    # optimisation level on dev builds, which papers over the conflict at the
+    # wrong layer and leaves the next C dependency to rediscover it.
+    #
+    # If glibc ever stops warning below `-O`, `tests/dev-profile-fortify.nix`
+    # is the guard: it builds a C dependency whose configure probes under
+    # `-Werror` and fails if this seam has become unnecessary or insufficient.
+    unitHardeningDisable =
+      if (rawArgs.profile or "release") == "dev"
+      then ["fortify" "fortify3"]
+      else [];
+
     perUnitClippyEnabled = args.policy.clippy.enable;
     # Workspace-level policy checks: audit + machete only. Clippy is NOT here;
     # it runs per unit in the renderer (`clippyByPackage`), so a whole-workspace
@@ -565,6 +608,7 @@
             rust.clippyLintFlagsFromManifest (args.src + "/Cargo.toml") ++ effects.clippyLintArgs;
           clippyEnabled = perUnitClippyEnabled;
           extraPolicyChecks = extraPolicyChecksFromRust;
+          inherit unitHardeningDisable;
         }
         // seam
       );

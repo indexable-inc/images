@@ -57,6 +57,17 @@
   # the output is byte-identical to a graph rendered without the seam.
   extraUnits ? {},
   extraLibraries ? {},
+  # nixpkgs hardening flags to drop from every unit in this graph.
+  #
+  # Exists for one property: glibc refuses to fortify below `-O`. Its
+  # `features.h` answers `-D_FORTIFY_SOURCE` at `-O0` with
+  # `#warning _FORTIFY_SOURCE requires compiling with optimization (-O)`, and
+  # nixpkgs turns `fortify`/`fortify3` on by default, so a C dependency that
+  # probes under `-Werror` -- which autoconf routinely does -- cannot configure
+  # in a dev-profile build. cargo-unit.nix passes `[ "fortify" "fortify3" ]`
+  # here when `profile = "dev"` and nothing otherwise; see the comment there
+  # for the measurement and for what is given up.
+  unitHardeningDisable ? [],
 }:
 
 let
@@ -166,10 +177,24 @@ let
   # is not a derivation attribute, so strip it before `mkDerivation`; for a
   # package with no `packageBuildEnv` entry the resulting derivation is
   # byte-identical to one rendered without the tag.
+  # `hardeningDisable` is added only when there is something to disable, and
+  # that is load-bearing rather than tidy: `hardeningDisable = []` and no
+  # `hardeningDisable` at all are two different derivations, because
+  # mkDerivation passes the attribute through to the builder environment.
+  # Measured, same stdenv, same everything else:
+  #
+  #     absent : /nix/store/i5fjihjqvlhykvcs7i4i1b1iwr6vfkhn-hd-probe.drv
+  #     [] : /nix/store/94ypk9vaafvisgm859vi4smw5gdnvd57-hd-probe.drv
+  #
+  # Setting it unconditionally would therefore change the hash of every unit
+  # in every release graph in the monorepo and rebuild the world for a flag
+  # that does nothing there.
   mkUnit = attrs: pkgs.stdenv.mkDerivation ((builtins.removeAttrs attrs [ "packageName" ]) // {
     dontUnpack = true;
     dontConfigure = true;
     env = (attrs.env or {}) // extraEnv // (packageBuildEnv.${attrs.packageName or ""} or {});
+  } // pkgs.lib.optionalAttrs (unitHardeningDisable != []) {
+    hardeningDisable = (attrs.hardeningDisable or []) ++ unitHardeningDisable;
   });
 
   # `extraUnits` is merged over the generated set (not inside the `rec`) so a
