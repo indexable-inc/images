@@ -53,7 +53,7 @@ defmodule IxMcp.SessionWatchTest do
     assert direct_params["content"] =~ "argazelka-fixture direct"
     assert direct_params["content"] =~ "message from session dispatcher"
     assert direct_params["content"] =~ "reply: Sessions.send(#{sender}"
-    assert direct_params["meta"]["from_id"] == sender
+    assert direct_params["meta"]["from_id"] == Integer.to_string(sender)
 
     assert_receive {:mcp_send, %{"params" => %{"meta" => %{"to" => "broadcast"}} = blast_params}},
                    5_000
@@ -62,8 +62,10 @@ defmodule IxMcp.SessionWatchTest do
 
     # Several more sweeps run inside this window; the watermark must swallow
     # both delivered rows and the pre-boot one instead of re-announcing.
+    sender_id = Integer.to_string(sender)
+
     refute_receive {:mcp_send,
-                    %{"params" => %{"meta" => %{"source" => "sessions", "from_id" => ^sender}}}},
+                    %{"params" => %{"meta" => %{"source" => "sessions", "from_id" => ^sender_id}}}},
                    200
   end
 
@@ -80,8 +82,10 @@ defmodule IxMcp.SessionWatchTest do
 
     {:ok, _blast} = ActionLog.send_session_message(me, nil, "soliloquist-fixture", log)
 
+    me_id = Integer.to_string(me)
+
     refute_receive {:mcp_send,
-                    %{"params" => %{"meta" => %{"source" => "sessions", "from_id" => ^me}}}},
+                    %{"params" => %{"meta" => %{"source" => "sessions", "from_id" => ^me_id}}}},
                    200
   end
 
@@ -105,7 +109,7 @@ defmodule IxMcp.SessionWatchTest do
     {:ok, request} =
       ActionLog.post_request(:adhoc, nil, "argazelka-fixture offer", "the body", poster, log)
 
-    rid = request.id
+    rid = Integer.to_string(request.id)
 
     assert_receive {:mcp_send,
                     %{
