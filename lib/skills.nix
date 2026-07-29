@@ -28,10 +28,27 @@
 
   vendoredNames = lib.attrNames vendoredSources;
 
+  # The same names again as plain data, for the one consumer that cannot
+  # evaluate Nix: the SessionStart materializer in
+  # `.claude/hooks/agent-instructions.sh`. That hook copies the checkout's own
+  # `paths.skills` over the prebuilt store copy the Claude wrapper baked
+  # (ENG-11189), which leaves it deciding, for each entry the store carries and
+  # the tree does not, whether it is a skill that comes from a package (keep) or
+  # one this checkout has deleted since the wrapper was built (drop). Only the
+  # keys are mirrored, because the values are functions of the consumer's
+  # package set; the assert below is what stops the mirror going stale, so a
+  # vendored skill added to `vendoredSources` alone fails every eval instead of
+  # silently vanishing from `.claude/skills` in every checkout.
+  manifestNames =
+    lib.filter (name: name != "" && !lib.hasPrefix "#" name)
+    (lib.splitString "\n" (builtins.readFile (paths.skills + "/vendored-skills.txt")));
+
   vendorCollisions = lib.intersectLists skillNames vendoredNames;
 
   allSkills = assert lib.assertMsg (vendorCollisions == [])
   "skills: vendored skill name(s) shadow repo skills: ${lib.concatStringsSep ", " vendorCollisions}";
+  assert lib.assertMsg (manifestNames == vendoredNames)
+  "skills: packages/agent/skills/vendored-skills.txt lists [${lib.concatStringsSep ", " manifestNames}] but vendoredSources defines [${lib.concatStringsSep ", " vendoredNames}]; the SessionStart materializer reads the file, so they must match";
     lib.sort lib.lessThan (skillNames ++ vendoredNames);
 
   partitioned = lib.partition (lib.hasPrefix "antithesis") allSkills;

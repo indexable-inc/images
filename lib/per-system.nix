@@ -1794,7 +1794,7 @@
     inherit (repoPackages) astlog;
   };
   agentSurfaceChecks = import (paths.packagesRoot + "/agent/checks.nix") {
-    inherit mkCheck skillsDir agentsDir;
+    inherit pkgs paths mkCheck skillsDir agentsDir;
   };
   blastRadiusChecks = import (paths.packagesRoot + "/blast-radius/checks.nix") {
     inherit lib pkgs paths mkCheck;
