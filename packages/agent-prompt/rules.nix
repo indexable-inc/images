@@ -530,6 +530,26 @@
     };
   }
   {
+    subagentVerification = {
+      topics = ["tooling" "verification"];
+      text = ''
+        Verify with a separate agent, not with the context that did the
+        work: after finishing a change, spawn a fresh subagent to check it
+        against the requirement and report what it found. A context that
+        just produced the work shares its blind spots. Where the right
+        decomposition is unclear, run the fan-out and the inline attempt
+        and compare, rather than reasoning about which would have won.
+      '';
+      reason = ''
+        Requested 2026-07-28 (index#4338): the delegation rules covered
+        spawning agents to do work and said nothing about spawning them to
+        check it, so verification stayed inside the context that had
+        already convinced itself. Pairs with validate (evidence at the
+        strongest source) and experiments (baseline, one change, compare).
+      '';
+    };
+  }
+  {
     wallTime = {
       topics = ["workflow" "agency"];
       text = ''
@@ -678,8 +698,7 @@
       text = ''
         A number carries its base and unit where it appears: "8s of a 97s
         eval", not "25%". Never nest proportions; "half of a 25% slice"
-        makes the reader multiply and guess the denominator. Shorthand you
-        coin is defined at first use or not used.
+        makes the reader multiply and guess the denominator.
       '';
       reason = ''
         2026-07-27: "a reflink can remove at most half of a 25% slice" cost
@@ -783,6 +802,26 @@
     };
   }
   {
+    defineAcronyms = {
+      topics = ["writing"];
+      text = ''
+        Expand an acronym, initialism, or coined shorthand at first use and
+        use the short form after: "pressure stall information (PSI)", never
+        a bare `PSI`. This covers every surface you write, including labels
+        you invent for one document. Only forms a general programmer reads
+        without expanding (`CPU`, `HTTP`, `JSON`) stay bare.
+      '';
+      reason = ''
+        Requested 2026-07-28, reopening index#1616 (previously closed not
+        planned): agent prose kept introducing project-local initialisms
+        with no expansion, and a reader outside the originating thread
+        cannot look them up. readableQuantities owned the coined-shorthand
+        half of this; that sentence moved here so definition-at-first-use
+        is stated once.
+      '';
+    };
+  }
+  {
     byteExact = {
       topics = ["writing"];
       text = ''
@@ -801,6 +840,25 @@
       '';
       reason = ''
         Silent scope drift surfaced only at review.
+      '';
+    };
+  }
+  {
+    firstPrinciples = {
+      topics = ["agency" "verification"];
+      text = ''
+        Reason from the mechanism, not from precedent: derive what must be
+        true from how the system actually works, then check the established
+        practice against that. A convention, an analogy, or what the
+        surrounding code already does is a hypothesis to test, never an
+        argument for keeping it.
+      '';
+      reason = ''
+        Requested 2026-07-28 (index#4338). redesignAtTheRoot covers judging
+        a system's shape once you are designing it; this covers the step
+        before, where an answer is inherited from the nearest example
+        instead of derived. That is how a wrong convention survives every
+        review that only asks whether a change matches its neighbors.
       '';
     };
   }
