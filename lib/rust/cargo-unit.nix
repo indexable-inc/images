@@ -162,7 +162,10 @@
   `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
   `policyChecks`, plus the intermediate `plannerSource`, `unitGraphJson`,
   `unitsNix`, and `vendorDir` derivations for inspection (`unitGraphJson`'s
-  paths carry the planner stub's store prefix, not `src`'s).
+  paths are templated: `@workspaceRoot@` for the planner stub, which stands in
+  for `src`, and `@vendorRoot@` for the vendor dir. The render stage fills both
+  in. Templating is what keeps this metadata file's closure its own size rather
+  than the vendor dir's).
 
   `testPolicyByPackage.<package>` accepts structured test-runner policy:
   `{ skip = [ "case_name" ]; testThreads = "1"; }`. `buildWorkspace` renders
@@ -434,7 +437,21 @@
           wait "$pid"
         done
 
-        nix-cargo-unit merge ${lib.concatStringsSep " " (lib.genList unitGraphFile (length cargoTargets))} > "$out"
+        nix-cargo-unit merge ${lib.concatStringsSep " " (lib.genList unitGraphFile (length cargoTargets))} > "$TMPDIR/merged.json"
+
+        # Template the two store prefixes cargo bakes into every `src_path` out
+        # of the emitted graph, so this 500 KB metadata file does not declare a
+        # runtime reference on the 600 MB vendor dir. Nix derives an output's
+        # references by scanning its bytes for store hashes, so the only way to
+        # drop the reference is for the text to leave the file; the render stage
+        # substitutes both placeholders back before feeding the graph to
+        # `nix-cargo-unit render`, which still wants absolute paths. Neither
+        # placeholder can collide with real content: cargo emits filesystem
+        # paths here, and `@` is not a path prefix cargo ever produces.
+        sed \
+          -e 's|${plannerSource}|@workspaceRoot@|g' \
+          -e 's|${args.vendorDir}|@vendorRoot@|g' \
+          "$TMPDIR/merged.json" > "$out"
       '';
 
     # The workspace's toolchain id, handed to the renderer and baked into
@@ -473,13 +490,20 @@
         cargoLockForRender = context.cargoLockPath;
       }
       ''
-        # The graph was planned in the content-stubbed `plannerSource`;
-        # rewrite that store prefix to the real `src` so the renderer slices
-        # unit paths from, and include-scans the contents of, the tree the
-        # units actually compile from. Planning is content-independent, so
-        # the rewritten graph is byte-identical to one planned in `src`
-        # directly. `|` and `&` never appear in a store path.
-        sed -e 's|${plannerSource}|${srcRoot}|g' ${unitGraphJson} > "$TMPDIR/unit-graph.json"
+        # Fill in the two roots the planner templated out. `@workspaceRoot@`
+        # becomes the real `src`: the graph was planned in the content-stubbed
+        # `plannerSource`, and the renderer slices unit paths from, and
+        # include-scans the contents of, the tree the units actually compile
+        # from. Planning is content-independent, so the filled graph is
+        # byte-identical to one planned in `src` directly. `@vendorRoot@`
+        # becomes the vendor dir this derivation already depends on for the
+        # include scan, so nothing is reachable here that was not before --
+        # only the metadata file's own reference went away. `|` and `&` never
+        # appear in a store path.
+        sed \
+          -e 's|@workspaceRoot@|${srcRoot}|g' \
+          -e 's|@vendorRoot@|${args.vendorDir}|g' \
+          ${unitGraphJson} > "$TMPDIR/unit-graph.json"
 
         nix-cargo-unit render \
           --workspace-root ${escapeShellArg srcRoot} \
